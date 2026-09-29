@@ -4,8 +4,11 @@ This is the agreed architecture for a separately authorized native host egress
 installer. The `.251` [grant, stopped-workload and journal foundation](native-egress-installation.md)
 now joins the `.252` [kernel transaction/readback pipeline](native-egress-kernel.md)
 and `.254` [durable precreation admission](native-egress-creation.md) through the
-[public v3 client](native-egress-client.md). Exec/start, network attachment,
-persistent supervision and combined CA-plus-egress orchestration remain open.
+[public v3 client](native-egress-client.md). The additive
+[public v4 attachment path](native-network-attachment-client.md) adds a separate
+grant, fixed child network policy, static dual-stack veth/bridge plan and retained
+raw readback. Exec/start, persistent supervision and combined CA-plus-egress
+orchestration remain open.
 Source integration is not
 a successful firewall transaction or runtime evidence. Existing native
 enrollment, CA installation and legacy firewall profiles remain unchanged.

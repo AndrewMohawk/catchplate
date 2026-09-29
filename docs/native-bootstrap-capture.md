@@ -6,10 +6,12 @@ packet within that evidence. `native_bootstrap_capture.extract_packet` connects
 these representations without promoting the diagnostic to authority.
 
 The extractor explicitly accepts the closed nine-field
-`serverware.nativeBootstrapClientCapture/v1` and separate ten-field v2 and v3
-profiles. V2 retains the same exact bootstrap evidence and adds `installation`;
-v3 instead adds `egress`. V1 rejects both children, v2 rejects `egress`, and v3
-rejects `installation`, including null. These clients can preserve their original
+`serverware.nativeBootstrapClientCapture/v1`, separate ten-field v2 and v3,
+and eleven-field v4 profiles. V2 retains the same exact bootstrap evidence and
+adds `installation`; v3 instead adds `egress`; v4 adds `egress` and `attachment`.
+V1 rejects all three children, v2 rejects `egress` and `attachment`, v3 rejects
+`installation` and `attachment`, and v4 rejects `installation`, including null.
+These clients can preserve their original
 evidence for later native identity submission without another bootstrap attempt.
 No new extraction CLI mode or automatic acquisition is needed.
 
@@ -48,6 +50,21 @@ and then tears down its never-executed child. No execution, network attachment,
 CA installation or continuing kernel state follows from this public capture.
 Combined CA installation plus egress is not a supported client profile.
 
+The [v4 capture](../schemas/native-bootstrap-client-capture.v4.schema.json)
+retains that same egress child and exact unsigned workload identifiers, and adds
+the closed eight-field
+[attachment observation](../schemas/native-network-attachment-observation.v1.schema.json).
+Its scope is `local-authorized-network-attachment-observed-before-owner-teardown`,
+its only status is `observed-attached`, and `okForAction` remains false at every
+level. The helper checks only the four digest spellings, constants and bounded
+shape. Each child is at most 8191 compact UTF-8 bytes; the complete capture remains
+at most 1.5 MiB including its final LF. It does not read the attachment journal,
+authenticate its grant, inspect link/address/route/neighbor state, or infer
+connectivity. The [v4 client](native-network-attachment-client.md) retains actual
+owners through output; application start and persistent supervision remain
+separate work. Neither an UP-link observation nor a copied digest authorizes
+network effects, recovery, a retry or CA installation.
+
 The packet's embedded target request must equal the supplied request original.
 Reconstructing the exact delegation/setup/target exchange must also reproduce
 the capture's request digest. Both are data-association checks, not independent
@@ -70,9 +87,9 @@ Keep the bootstrap producer exit status separately. A parseable capture from a
 failed producer is not proof of successful acquisition, and extraction cannot
 recover that missing fact. An installation receipt in a parseable v2 capture also
 cannot prove final producer success or that the installed file remains present.
-Likewise a v3 observation cannot prove producer success or live workload/kernel
-state after capture. Old extractors that support only v1/v2 refuse v3; there is
-no relabeling or automatic downgrade.
+Likewise v3/v4 observations cannot prove producer success or live workload/kernel/
+attachment state after capture. Extractors that do not support a newer explicit
+profile refuse it; there is no relabeling or automatic downgrade.
 Extraction starts no network request, reads no private
 key, renews no signed lifetime, installs no CA and supplies no automatic retry.
 An external watchdog is still needed for blocked filesystem calls. This is

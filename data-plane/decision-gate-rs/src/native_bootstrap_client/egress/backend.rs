@@ -158,7 +158,7 @@ impl<'a> Backend<'a> {
         })
     }
 
-    fn current(&self) -> Result<(), String> {
+    pub(super) fn current(&self) -> Result<(), String> {
         let meta = self.io(|| self.socket.metadata())?;
         require((meta.dev(), meta.ino(), meta.mode(), meta.uid(), meta.gid()) == self.socket_identity)?;
         let flags = self.io(|| {

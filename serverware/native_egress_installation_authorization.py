@@ -27,6 +27,8 @@ SCHEMA = "serverware.signedNativeEgressInstallationAuthorization/v1"
 PAYLOAD_SCHEMA = "serverware.nativeEgressInstallationAuthorization/v1"
 CREATION_SCHEMA = "serverware.signedNativeEgressInstallationAuthorization/v2"
 CREATION_PAYLOAD_SCHEMA = "serverware.nativeEgressInstallationAuthorization/v2"
+NETWORK_SCHEMA = "serverware.signedNativeEgressInstallationAuthorization/v3"
+NETWORK_PAYLOAD_SCHEMA = "serverware.nativeEgressInstallationAuthorization/v3"
 PURPOSE = "native-egress-installation"
 WORKLOAD_PROFILE = "native-egress-create-new-workload-v1"
 RULESET_PROFILE = "nft-inet-output-tcp-create-v1"
@@ -45,6 +47,7 @@ _FIELDS = frozenset({
     "ruleset", "capability", "journal", "issuedAtEpochNs", "expiresAtEpochNs",
 })
 _CREATION_FIELDS = _FIELDS | {"creationJournal"}
+_NETWORK_FIELDS = _CREATION_FIELDS | {"childNetworkPolicy"}
 _DIGEST_FIELDS = (
     "setupSha256", "delegationSha256", "targetRequestSha256", "policyRequirementsSha256",
     "releaseRecordSha256", "policyHash", "configurationSha256",
@@ -184,9 +187,10 @@ def _proxy_rules(value, budget):
 def _payload(value, budget):
     if type(value) is not dict:
         _fail()
-    creation = value.get("schema") == CREATION_PAYLOAD_SCHEMA
-    shared._object(value, _CREATION_FIELDS if creation else _FIELDS)
-    if (value["schema"] not in (PAYLOAD_SCHEMA, CREATION_PAYLOAD_SCHEMA)
+    network = value.get("schema") == NETWORK_PAYLOAD_SCHEMA
+    creation = network or value.get("schema") == CREATION_PAYLOAD_SCHEMA
+    shared._object(value, _NETWORK_FIELDS if network else (_CREATION_FIELDS if creation else _FIELDS))
+    if (value["schema"] not in (PAYLOAD_SCHEMA, CREATION_PAYLOAD_SCHEMA, NETWORK_PAYLOAD_SCHEMA)
             or value["sourceRevision"] != shared.authority.SOURCE_REVISION
             or value["purpose"] != PURPOSE or value["trustMode"] != "trusted-host-local"):
         _fail()
@@ -237,6 +241,8 @@ def _payload(value, budget):
                 or (launch["device"], launch["inode"]) == (kernel["device"], kernel["inode"])
                 or launch["namespace"] == kernel["namespace"]):
             _fail()
+    if network and value["childNetworkPolicy"] != "manual-dual-stack-no-autoconfiguration-v1":
+        _fail()
     issued = shared._integer(value["issuedAtEpochNs"], minimum=1)
     expires = shared._integer(value["expiresAtEpochNs"], minimum=issued + 1)
     if expires - issued > MAX_LIFETIME_NS or expires > expiry_ms * 1_000_000:
@@ -252,6 +258,8 @@ def _admit(original, public, root_pin, budget):
         schema, payload_schema = SCHEMA, PAYLOAD_SCHEMA
     elif outer["schema"] == CREATION_SCHEMA:
         schema, payload_schema = CREATION_SCHEMA, CREATION_PAYLOAD_SCHEMA
+    elif outer["schema"] == NETWORK_SCHEMA:
+        schema, payload_schema = NETWORK_SCHEMA, NETWORK_PAYLOAD_SCHEMA
     else:
         _fail()
     payload = shared._signed(original, schema, payload_schema, public, MAX_BYTES, budget)
@@ -302,8 +310,10 @@ def _produce_on_work(*, payload_bytes, root_private_key_bytes, root_public_key_b
                     serialization.NoEncryption()) != root_private_key_bytes
                 or shared._spki(private.public_key(), budget) != shared._spki(public, budget)):
             _fail()
-        schema, payload_schema = ((CREATION_SCHEMA, CREATION_PAYLOAD_SCHEMA)
-            if payload["schema"] == CREATION_PAYLOAD_SCHEMA else (SCHEMA, PAYLOAD_SCHEMA))
+        schema, payload_schema = ((NETWORK_SCHEMA, NETWORK_PAYLOAD_SCHEMA)
+            if payload["schema"] == NETWORK_PAYLOAD_SCHEMA else
+            ((CREATION_SCHEMA, CREATION_PAYLOAD_SCHEMA)
+                if payload["schema"] == CREATION_PAYLOAD_SCHEMA else (SCHEMA, PAYLOAD_SCHEMA)))
         original = shared._produce(payload_bytes, schema, payload_schema,
             private, public, MAX_BYTES, budget)
         admitted = _admit(original, public, expected_root_pem_sha256, budget)

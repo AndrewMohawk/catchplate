@@ -27,12 +27,15 @@ _CAPTURE_FIELDS = frozenset({"apiVersion", "resultScope", "okForAction",
     "evidenceBase64url", "verification"})
 _CAPTURE_V2_FIELDS = _CAPTURE_FIELDS | {"installation"}
 _CAPTURE_V3_FIELDS = _CAPTURE_FIELDS | {"egress"}
+_CAPTURE_V4_FIELDS = _CAPTURE_FIELDS | {"egress", "attachment"}
 _INSTALLATION_FIELDS = frozenset({"apiVersion", "resultScope", "okForAction", "status",
     "authorizationSha256", "operationSha256", "reservationSha256", "setupSha256",
     "capabilityId", "runtimeCaCertificateSha256", "destinationPath"})
 _EGRESS_FIELDS = frozenset({"apiVersion", "resultScope", "okForAction", "status",
     "authorizationSha256", "creationSlotSha256", "creationRecordSha256",
     "kernelSemanticSha256", "kernelEvidenceSha256", "workload"})
+_ATTACHMENT_FIELDS = frozenset({"apiVersion", "resultScope", "okForAction", "status",
+    "authorizationSha256", "planSha256", "evidenceSha256", "semanticSha256"})
 _WORKLOAD_U32_FIELDS = frozenset({"launcherProcessId", "launcherThreadId",
     "childProcessId", "backendPortId"})
 _WORKLOAD_U64_FIELDS = frozenset({"pidfdDevice", "pidfdInode", "namespaceDevice",
@@ -127,6 +130,26 @@ def _egress_data(value, budget):
     budget.check()
 
 
+def _attachment_data(value, budget):
+    """Check observation shape only; no link, route or connectivity authority."""
+    budget.check()
+    value = _object(value, _ATTACHMENT_FIELDS)
+    if (value["apiVersion"] != "serverware.nativeNetworkAttachmentObservation/v1"
+            or value["resultScope"] != "local-authorized-network-attachment-observed-before-owner-teardown"
+            or value["okForAction"] is not False
+            or value["status"] != "observed-attached"):
+        _fail()
+    for name in ("authorizationSha256", "planSha256", "evidenceSha256", "semanticSha256"):
+        if type(value[name]) is not str or _DIGEST.fullmatch(value[name]) is None:
+            _fail()
+    raw = json.dumps(value, sort_keys=True, separators=(",", ":"),
+        ensure_ascii=False, allow_nan=False).encode("utf-8")
+    if not 1 <= len(raw) <= 8191:
+        _fail()
+    packets._charge(budget, input_bytes=len(raw))
+    budget.check()
+
+
 def _packet_on_budget(capture_bytes, target_request_bytes, budget):
     """Return unverified data only; this function never returns a verdict."""
     budget.check()
@@ -154,6 +177,11 @@ def _packet_on_budget(capture_bytes, target_request_bytes, budget):
         value = _object(value, _CAPTURE_V3_FIELDS)
         expected_scope = "local-fixed-endpoint-bootstrap-and-egress-observation"
         _egress_data(value["egress"], budget)
+    elif value.get("apiVersion") == "serverware.nativeBootstrapClientCapture/v4":
+        value = _object(value, _CAPTURE_V4_FIELDS)
+        expected_scope = "local-fixed-endpoint-bootstrap-and-network-attachment-observation"
+        _egress_data(value["egress"], budget)
+        _attachment_data(value["attachment"], budget)
     else:
         _fail()
     if (value["resultScope"] != expected_scope or value["okForAction"] is not False

@@ -4,8 +4,8 @@ mod config;
 mod http;
 mod transport;
 mod install;
-// V3 uses independent cold creation authority and retains the never-executed
-// workload through observation output. No workload start/attachment API exists.
+// V3 retains a never-executed child through firewall observation; V4 adds
+// separately authorized network attachment. Neither profile starts a workload.
 #[allow(dead_code)]
 mod egress;
 #[path = "../native_ingress_client/identity.rs"]
@@ -218,8 +218,15 @@ pub(super) fn run() -> Result<(), String> {
         Some(inputs) => Some(install::prepare(inputs, &clock, &mut held)?),
         None => None,
     };
+    let attachment = match config.attachment {
+        Some(inputs) => Some(egress::attachment::prepare(inputs, &clock, &mut held)?),
+        None => None,
+    };
     let egress = match config.egress {
-        Some(inputs) => Some(egress::prepare(inputs, &clock, &mut held)?),
+        Some(inputs) => Some(match attachment.as_ref() {
+            Some(network) => egress::prepare_for_attachment(inputs, network, &clock, &mut held)?,
+            None => egress::prepare(inputs, &clock, &mut held)?,
+        }),
         None => None,
     };
     let authority = if prepared.host().contains(':') {
@@ -258,8 +265,14 @@ pub(super) fn run() -> Result<(), String> {
             "verification":json::parse(proof.diagnostic(), 4095)?,
             "egress":null,
         });
+        let observation_capacity = if attachment.is_some() {
+            capture["apiVersion"] = json!("serverware.nativeBootstrapClientCapture/v4");
+            capture["resultScope"] = json!("local-fixed-endpoint-bootstrap-and-network-attachment-observation");
+            capture["attachment"] = json!(null);
+            16 * 1024
+        } else { 8192 };
         let provisional = serde_json::to_vec(&capture).map_err(|_| "encode egress capture reservation")?;
-        ensure(!provisional.is_empty() && provisional.len() < MAX_CAPTURE_BYTES - 8192,
+        ensure(!provisional.is_empty() && provisional.len() < MAX_CAPTURE_BYTES - observation_capacity,
             "egress capture cannot reserve its bounded observation")?;
         recheck(&mut held, &mut private_original, &clock)?;
         let guard = egress::bind(pending, proof, connection, clock, held, private_original,
@@ -286,6 +299,9 @@ pub(super) fn run() -> Result<(), String> {
         ensure(!observation_raw.is_empty() && observation_raw.len() <= 8191,
             "native egress observation exceeds its bound")?;
         capture["egress"] = observation;
+        if let Some(pending) = attachment {
+            return egress::attachment::execute(pending, &guard, installed, capture);
+        }
         let mut encoded = serde_json::to_vec(&capture).map_err(|_| "encode native egress capture")?;
         ensure(!encoded.is_empty() && encoded.len() < MAX_CAPTURE_BYTES
             && !encoded.contains(&b'\n') && !encoded.contains(&b'\r'),

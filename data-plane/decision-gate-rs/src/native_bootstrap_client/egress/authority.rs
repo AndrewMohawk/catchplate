@@ -18,6 +18,8 @@ const SCHEMA: &str = "serverware.nativeEgressInstallationAuthorization/v1";
 const ENVELOPE: &str = "serverware.signedNativeEgressInstallationAuthorization/v1";
 const CREATION_SCHEMA: &str = "serverware.nativeEgressInstallationAuthorization/v2";
 const CREATION_ENVELOPE: &str = "serverware.signedNativeEgressInstallationAuthorization/v2";
+const NETWORK_SCHEMA: &str = "serverware.nativeEgressInstallationAuthorization/v3";
+const NETWORK_ENVELOPE: &str = "serverware.signedNativeEgressInstallationAuthorization/v3";
 const MAX_EPOCH_MS: u64 = 9_223_372_036_854;
 
 #[derive(Serialize)]
@@ -89,6 +91,9 @@ pub(super) struct Journal {
     pub(super) namespace: String,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum ChildNetworkPolicy { ManualDualStackV1 }
+
 // Admission creates signed constraints only. The parent must join genuine
 // same-session originals, independent roles, token and actual retained owners.
 // The type is deliberately neither Clone nor Debug nor serializable authority.
@@ -119,6 +124,7 @@ pub(super) struct Authorization {
     pub(super) capability: Capability,
     pub(super) journal: Journal,
     pub(super) creation_journal: Option<Journal>,
+    pub(super) child_network_policy: Option<ChildNetworkPolicy>,
     pub(super) issued_at_epoch_ns: u64,
     pub(super) expires_at_epoch_ns: u64,
 }
@@ -365,6 +371,7 @@ pub(super) fn admit(raw: &[u8], root_pem: &[u8], root_pem_sha: &str,
     let schema = match outer["schema"].as_str() {
         Some(ENVELOPE) => SCHEMA,
         Some(CREATION_ENVELOPE) => CREATION_SCHEMA,
+        Some(NETWORK_ENVELOPE) => NETWORK_SCHEMA,
         _ => return Err("native egress authorization envelope profile refused".to_owned()),
     };
     let mut fields = vec!["schema", "sourceRevision", "purpose", "trustMode", "authorizationId",
@@ -374,7 +381,8 @@ pub(super) fn admit(raw: &[u8], root_pem: &[u8], root_pem_sha: &str,
         "clientChallengeSha256", "targetPrincipalId", "targetNonce", "targetSpkiSha256", "proxy",
         "networkOwner", "machineIdSha256", "workload", "ruleset", "capability", "journal",
         "issuedAtEpochNs", "expiresAtEpochNs"];
-    if schema == CREATION_SCHEMA { fields.push("creationJournal"); }
+    if schema != SCHEMA { fields.push("creationJournal"); }
+    if schema == NETWORK_SCHEMA { fields.push("childNetworkPolicy"); }
     let p = object(&outer["payload"], &fields)?;
     require(p["schema"] == schema && p["purpose"] == "native-egress-installation"
         && p["trustMode"] == "trusted-host-local"
@@ -402,12 +410,16 @@ pub(super) fn admit(raw: &[u8], root_pem: &[u8], root_pem_sha: &str,
     let ruleset = ruleset(&p["ruleset"], rules)?;
     let capability = capability(&p["capability"])?;
     let kernel_journal = journal(&p["journal"])?;
-    let creation_journal = if schema == CREATION_SCHEMA {
+    let creation_journal = if schema != SCHEMA {
         let creation = journal(&p["creationJournal"])?;
         require(creation.path != kernel_journal.path
             && (creation.device, creation.inode) != (kernel_journal.device, kernel_journal.inode)
             && creation.namespace != kernel_journal.namespace)?;
         Some(creation)
+    } else { None };
+    let child_network_policy = if schema == NETWORK_SCHEMA {
+        require(p["childNetworkPolicy"] == "manual-dual-stack-no-autoconfiguration-v1")?;
+        Some(ChildNetworkPolicy::ManualDualStackV1)
     } else { None };
     let issued = integer(&p["issuedAtEpochNs"], 1, i64::MAX as u64)?;
     let expires = integer(&p["expiresAtEpochNs"], 1, i64::MAX as u64)?;
@@ -427,7 +439,7 @@ pub(super) fn admit(raw: &[u8], root_pem: &[u8], root_pem_sha: &str,
         machine_id_sha256: digest(&p["machineIdSha256"])?, target_principal_id: principal.to_owned(),
         target_nonce: nonce.to_owned(), proxy, network_owner: network_owner(&p["networkOwner"])?,
         workload: workload(&p["workload"])?, ruleset, capability, journal: kernel_journal,
-        creation_journal,
+        creation_journal, child_network_policy,
         issued_at_epoch_ns: issued, expires_at_epoch_ns: expires };
     clock.restrict_until_epoch_ns(expires)?;
     let (closing_wall, _) = sample()?;

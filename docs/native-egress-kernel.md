@@ -4,6 +4,8 @@ This `.252` slice connects the source-only kernel pipeline. The later
 [public v3 client](native-egress-client.md) invokes it only after a separate
 [durable precreation claim](native-egress-creation.md); neither supplies workload
 start or network-attachment permission. The
+[v4 attachment path](native-network-attachment-client.md) uses separate authority
+and a distinct journal without broadening this nftables ruleset. The
 [independent egress grant and retained owners](native-egress-installation.md)
 remain required. Kernel submission, an ACK, a parser result or a digest alone
 cannot supply missing launch admission, installation authority or runtime proof.

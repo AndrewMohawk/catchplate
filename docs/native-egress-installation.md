@@ -5,6 +5,9 @@ The `.251` authority/workload/journal foundation and `.252`
 separate [durable precreation claim](native-egress-creation.md) and explicit
 [public v3 client profile](native-egress-client.md). These are source integration,
 not an executed firewall transaction, a started workload or a production gate.
+The additive [v4 attachment client](native-network-attachment-client.md) uses
+egress authorization v3 and an independent attachment grant; v3 client behavior
+and earlier signed profiles are unchanged.
 The original hash-only
 `native_bootstrap_client/egress/reservation.rs` and the new raw-custody
 `kernel_reservation.rs` have distinct formats. Neither reuses the CA installation
@@ -24,9 +27,36 @@ The additive signed authorization v2 contains all 29 v1 fields plus a required
 `creationJournal` with exact path, device, inode and namespace. Envelope and
 payload both use v2; the signing domain is the exact v2 payload schema followed
 by NUL and canonical payload bytes. Paired Python/Rust admission preserves v1
-bytes, refuses unknown fields and forbids mixing versions. Public launch
-preparation requires v2 before workload admission or effects; v1 parsing grants
+bytes, refuses unknown fields and forbids mixing versions. Public client v3
+requires v2 before workload admission or effects; v1 parsing grants
 no fallback creation route.
+
+Egress authorization v3 adds the exact `childNetworkPolicy` value
+`manual-dual-stack-no-autoconfiguration-v1` to v2's 30 fields. Both envelope and
+payload use v3 with their own domain; old profiles reject this field. Public
+client v4 requires v3 plus the separate attachment grant, while client v3
+requires v2 and rejects child network policy. This fixed policy permits only
+the following child-namespace controls after the durable creation claim and
+`CLONE_NEWNET`, before the child sends its READY descriptors. It grants no
+host sysctl, caller path/value or application execution authority.
+
+The syscall-only child first sets IPv4 `ip_forward=0`, then sets IPv4
+`all`/`default` forwarding, accept_redirects, secure_redirects and send_redirects
+to zero. It sets IPv6 `all`/`default` forwarding, accept_redirects, accept_ra,
+autoconf, router_solicitations and use_tempaddr to zero. Each fixed procfs path
+is opened componentwise without following symlinks, checked for procfs/root
+ownership and read back exactly. Missing IPv6 support or any failure prevents
+READY. Ordering matters because changing `ip_forward` resets configuration;
+IPv6 address-generation mode alone does not replace RA/autoconfiguration
+controls. See the pinned [Linux v6.12 sysctl definitions](https://github.com/torvalds/linux/blob/v6.12/Documentation/networking/ip-sysctl.rst).
+
+The attachment plan separately selects IPv6 address-generation `NONE`, manual
+host addresses and permanent neighbors before exact proxy-only routes. Its
+preprovisioned bridge/gateway and permanent host return-neighbor requirements
+avoid adding an implicit DNS, ICMP or wider nftables allowance. Those signed
+network effects have their own journal and authority; the child policy alone
+permits none of them. This implementation is source-only, not tested kernel or
+connectivity evidence.
 
 The creation journal must differ from the kernel journal in path, device/inode
 pair **and** namespace. Both are separately preprovisioned protected directories,

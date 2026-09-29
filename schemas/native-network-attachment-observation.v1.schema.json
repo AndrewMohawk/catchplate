@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-network-attachment-observation.v1.schema.json",
+  "title": "Local pre-teardown native network attachment observation v1",
+  "description": "Closed eight-field public observation, at most 8191 compact UTF-8 bytes. It is emitted while genuine owners are held and is not an authenticated receipt, live capability, persistent state or connectivity proof. Digests commit exact admitted authority, intended plan, observed raw transcript and readback semantics respectively; copying or parsing them grants no attachment, retry, recovery, application-start or teardown permission.",
+  "type": "object", "additionalProperties": false,
+  "required": ["apiVersion", "resultScope", "okForAction", "status", "authorizationSha256", "planSha256", "evidenceSha256", "semanticSha256"],
+  "properties": {
+    "apiVersion": {"const": "serverware.nativeNetworkAttachmentObservation/v1"},
+    "resultScope": {"const": "local-authorized-network-attachment-observed-before-owner-teardown"},
+    "okForAction": {"const": false},
+    "status": {"const": "observed-attached"},
+    "authorizationSha256": {"$ref": "#/$defs/digest"},
+    "planSha256": {"$ref": "#/$defs/digest"},
+    "evidenceSha256": {"$ref": "#/$defs/digest"},
+    "semanticSha256": {"$ref": "#/$defs/digest"}
+  },
+  "$defs": {
+    "digest": {"type": "string", "minLength": 71, "maxLength": 71, "pattern": "^sha256:[0-9a-f]{64}(?![\\s\\S])"}
+  }
+}

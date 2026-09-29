@@ -261,6 +261,7 @@ pub(super) struct LaunchSpec {
     actual_launcher: File,
     host_namespace: File,
     host_identity: Identity,
+    manual_network_policy: bool,
 }
 
 pub(super) fn admit(authorization: &Authorization, manifest_pin: &ArtifactV1,
@@ -307,7 +308,8 @@ pub(super) fn admit(authorization: &Authorization, manifest_pin: &ArtifactV1,
     manifest.recheck()?;
     let mut spec = LaunchSpec { clock: clock as *const OriginalClock as usize, pid, tid, proc,
         manifest, manifest_path: manifest_pin.path.clone(), manifest_fingerprint,
-        executable, launcher, actual_launcher, host_namespace, host_identity };
+        executable, launcher, actual_launcher, host_namespace, host_identity,
+        manual_network_policy: authorization.child_network_policy.is_some() };
     spec.check(clock)?;
     Ok(spec)
 }
@@ -346,7 +348,8 @@ struct CloneArgs {
 }
 
 #[repr(C)]
-struct Rights { header: libc::cmsghdr, descriptors: [RawFd; 2] }
+struct Rights { header: libc::cmsghdr, descriptors: [RawFd; 3] }
+const RIGHTS_LENGTH: usize = std::mem::size_of::<libc::cmsghdr>() + 3 * std::mem::size_of::<RawFd>();
 
 // Child path: stack-only scalar/ABI operations and direct syscalls. All signals
 // except unblockable KILL/STOP remain masked from before clone. Never unwind,
@@ -358,7 +361,8 @@ unsafe fn child_exit() -> ! {
     }
 }
 
-unsafe fn child_trampoline(gate: RawFd, parent_pid: u32, parent_tid: libc::pid_t) -> ! {
+unsafe fn child_trampoline(gate: RawFd, parent_pid: u32, parent_tid: libc::pid_t,
+    manual_network_policy: bool) -> ! {
     if libc::syscall(libc::SYS_prctl, libc::PR_SET_PDEATHSIG, libc::SIGKILL, 0, 0, 0) != 0
         || libc::syscall(libc::SYS_getppid) != parent_pid as libc::c_long
         || libc::syscall(libc::SYS_tgkill, parent_pid, parent_tid, 0) != 0 { child_exit(); }
@@ -366,6 +370,7 @@ unsafe fn child_trampoline(gate: RawFd, parent_pid: u32, parent_tid: libc::pid_t
     // retained in the child. close_range support is mandatory, never emulated.
     if gate > 0 && libc::syscall(libc::SYS_close_range, 0u32, gate as u32 - 1, 0u32) != 0 { child_exit(); }
     if libc::syscall(libc::SYS_close_range, gate as u32 + 1, u32::MAX, 0u32) != 0 { child_exit(); }
+    if manual_network_policy && !super::child_network_policy::apply() { child_exit(); }
     let ns = libc::syscall(libc::SYS_openat, libc::AT_FDCWD, b"/proc/self/ns/net\0".as_ptr(),
         libc::O_RDONLY | libc::O_CLOEXEC, 0) as RawFd;
     if ns < 0 { child_exit(); }
@@ -376,13 +381,17 @@ unsafe fn child_trampoline(gate: RawFd, parent_pid: u32, parent_tid: libc::pid_t
     address.nl_family = libc::AF_NETLINK as u16;
     if libc::syscall(libc::SYS_bind, socket, &address as *const libc::sockaddr_nl,
         std::mem::size_of::<libc::sockaddr_nl>()) != 0 { child_exit(); }
+    let route = libc::syscall(libc::SYS_socket, libc::AF_NETLINK,
+        libc::SOCK_RAW | libc::SOCK_CLOEXEC | libc::SOCK_NONBLOCK, libc::NETLINK_ROUTE) as RawFd;
+    if route < 0 || libc::syscall(libc::SYS_bind, route, &address as *const libc::sockaddr_nl,
+        std::mem::size_of::<libc::sockaddr_nl>()) != 0 { child_exit(); }
     let mut byte = READY;
     let mut vector = libc::iovec { iov_base: (&mut byte as *mut u8).cast(), iov_len: 1 };
     let mut rights: Rights = std::mem::zeroed();
-    rights.header.cmsg_len = std::mem::size_of::<Rights>() as _;
+    rights.header.cmsg_len = RIGHTS_LENGTH as _;
     rights.header.cmsg_level = libc::SOL_SOCKET;
     rights.header.cmsg_type = libc::SCM_RIGHTS;
-    rights.descriptors = [ns, socket];
+    rights.descriptors = [ns, socket, route];
     let mut message: libc::msghdr = std::mem::zeroed();
     message.msg_iov = &mut vector;
     message.msg_iovlen = 1;
@@ -486,9 +495,13 @@ fn socket_option(socket: &File, option: i32, clock: &OriginalClock) -> Result<i3
 }
 
 fn backend(socket: &File, ns: Identity, clock: &OriginalClock) -> Result<u32, String> {
+    netlink_socket(socket, ns, libc::NETLINK_NETFILTER, clock)
+}
+
+fn netlink_socket(socket: &File, ns: Identity, protocol: i32, clock: &OriginalClock) -> Result<u32, String> {
     require(socket_option(socket, libc::SO_DOMAIN, clock)? == libc::AF_NETLINK
         && socket_option(socket, libc::SO_TYPE, clock)? == libc::SOCK_RAW
-        && socket_option(socket, libc::SO_PROTOCOL, clock)? == libc::NETLINK_NETFILTER)?;
+        && socket_option(socket, libc::SO_PROTOCOL, clock)? == protocol)?;
     let socket_namespace = checked(clock, || descriptor(unsafe { libc::ioctl(socket.as_raw_fd(), SIOCGSKNS as _) }))?;
     require(namespace(&socket_namespace, clock)? == ns)?;
     let address = checked(clock, || {
@@ -503,13 +516,13 @@ fn backend(socket: &File, ns: Identity, clock: &OriginalClock) -> Result<u32, St
     Ok(address.nl_pid)
 }
 
-fn receive(gate: &File, clock: &OriginalClock) -> Result<(File, File), String> {
+fn receive(gate: &File, clock: &OriginalClock) -> Result<(File, File, File), String> {
     loop {
         clock.check()?;
         let mut byte = 0u8;
         let mut vector = libc::iovec { iov_base: (&mut byte as *mut u8).cast(), iov_len: 1 };
         let mut rights: Rights = unsafe { std::mem::zeroed() };
-        rights.descriptors = [-1, -1];
+        rights.descriptors = [-1, -1, -1];
         let mut message: libc::msghdr = unsafe { std::mem::zeroed() };
         message.msg_iov = &mut vector;
         message.msg_iovlen = 1;
@@ -531,12 +544,13 @@ fn receive(gate: &File, clock: &OriginalClock) -> Result<(File, File), String> {
         // closes them; no authority is inferred from message text or fd numbers.
         let ns = descriptor(rights.descriptors[0]).map_err(|_| "native workload namespace absent")?;
         let socket = descriptor(rights.descriptors[1]).map_err(|_| "native workload backend absent")?;
+        let route = descriptor(rights.descriptors[2]).map_err(|_| "native workload route backend absent")?;
         require(result == 1 && byte == READY && message.msg_flags & (libc::MSG_TRUNC | libc::MSG_CTRUNC) == 0
             && message.msg_controllen as usize == std::mem::size_of::<Rights>()
-            && rights.header.cmsg_len as usize == std::mem::size_of::<Rights>()
+            && rights.header.cmsg_len as usize == RIGHTS_LENGTH
             && rights.header.cmsg_level == libc::SOL_SOCKET && rights.header.cmsg_type == libc::SCM_RIGHTS)?;
         clock.check()?;
-        return Ok((ns, socket));
+        return Ok((ns, socket, route));
     }
 }
 
@@ -566,9 +580,13 @@ pub(super) struct WorkloadOwner {
     namespace_identity: Identity,
     socket: File,
     socket_identity: Identity,
+    route: File,
+    route_identity: Identity,
+    route_port_id: u32,
     pidfd_identity: Identity,
     identity: WorkloadIdentity,
     backend_duplicated: bool,
+    attachment_duplicated: bool,
     stopped: bool,
 }
 
@@ -578,14 +596,14 @@ impl WorkloadOwner {
         require(std::ptr::eq(Arc::as_ptr(&precreation.clock), clock))?;
         permit.require_owner(&precreation)?;
         permit.check()?;
-        let (parent_pid, parent_tid, host_identity) = {
+        let (parent_pid, parent_tid, host_identity, manual_network_policy) = {
             let spec = precreation.launch.try_borrow().map_err(|_| "native launch original already borrowed")?;
-            (spec.pid, spec.tid, spec.host_identity)
+            (spec.pid, spec.tid, spec.host_identity, spec.manual_network_policy)
         };
         // This ABI profile is deliberately Linux 64-bit, with no emulation or
         // fallback to a numeric-PID/open-existing-namespace construction.
         require(cfg!(all(target_os = "linux", target_pointer_width = "64"))
-            && std::mem::size_of::<Rights>() == std::mem::size_of::<libc::cmsghdr>() + 8)?;
+            && RIGHTS_LENGTH == 28 && std::mem::size_of::<Rights>() == 32)?;
         let mut pair = [-1; 2];
         require(unsafe { libc::socketpair(libc::AF_UNIX,
             libc::SOCK_SEQPACKET | libc::SOCK_CLOEXEC | libc::SOCK_NONBLOCK, 0, pair.as_mut_ptr()) } == 0)?;
@@ -604,7 +622,9 @@ impl WorkloadOwner {
         clock.check()?;
         let child_pid = unsafe { libc::syscall(libc::SYS_clone3, &args as *const CloneArgs,
             std::mem::size_of::<CloneArgs>()) };
-        if child_pid == 0 { unsafe { child_trampoline(child_gate.as_raw_fd(), parent_pid, parent_tid) } }
+        if child_pid == 0 {
+            unsafe { child_trampoline(child_gate.as_raw_fd(), parent_pid, parent_tid, manual_network_policy) }
+        }
         // Install pidfd-only cleanup before any fallible post-clone operation.
         if child_pid < 0 { mask.restore()?; return Err("native workload clone3 unavailable or refused".to_owned()); }
         let child = Child { pidfd: descriptor(pidfd).map_err(|_| "native workload clone3 pidfd absent; cleanup uncertain")?,
@@ -612,7 +632,7 @@ impl WorkloadOwner {
         mask.restore()?;
         drop(child_gate);
         require(child_pid <= i32::MAX as libc::c_long)?;
-        let (namespace_file, socket) = receive(&gate, clock)?;
+        let (namespace_file, socket, route) = receive(&gate, clock)?;
         loop {
             if child.stopped(clock)? { break; }
             let remaining = clock.instant_deadline()?.saturating_duration_since(Instant::now())
@@ -623,14 +643,17 @@ impl WorkloadOwner {
         require((ns_identity.0, ns_identity.1) != (host_identity.0, host_identity.1))?;
         let port = backend(&socket, ns_identity, clock)?;
         let socket_identity = identity(&metadata(&socket, clock)?);
+        let route_identity = identity(&metadata(&route, clock)?);
+        let route_port_id = netlink_socket(&route, ns_identity, libc::NETLINK_ROUTE, clock)?;
         let pidfd_identity = identity(&metadata(&child.pidfd, clock)?);
         let observed = WorkloadIdentity { launcher_process_id: parent_pid, launcher_thread_id: parent_tid as u32,
             child_process_id: child.pid as u32, pidfd_device: pidfd_identity.0, pidfd_inode: pidfd_identity.1,
             namespace_device: ns_identity.0, namespace_inode: ns_identity.1,
             backend_socket_device: socket_identity.0, backend_socket_inode: socket_identity.1, backend_port_id: port };
         let mut owner = Self { child, permit, precreation, gate, gate_identity, namespace: namespace_file,
-            namespace_identity: ns_identity, socket, socket_identity, pidfd_identity, identity: observed,
-            backend_duplicated: false, stopped: false };
+            namespace_identity: ns_identity, socket, socket_identity, route, route_identity, route_port_id,
+            pidfd_identity, identity: observed, backend_duplicated: false,
+            attachment_duplicated: false, stopped: false };
         owner.check(clock)?;
         Ok(owner)
     }
@@ -644,6 +667,8 @@ impl WorkloadOwner {
             && identity(&metadata(&self.child.pidfd, clock)?) == self.pidfd_identity
             && namespace(&self.namespace, clock)? == self.namespace_identity
             && identity(&metadata(&self.socket, clock)?) == self.socket_identity
+            && identity(&metadata(&self.route, clock)?) == self.route_identity
+            && netlink_socket(&self.route, self.namespace_identity, libc::NETLINK_ROUTE, clock)? == self.route_port_id
             && identity(&metadata(&self.gate, clock)?) == self.gate_identity
             && socket_option(&self.gate, libc::SO_DOMAIN, clock)? == libc::AF_UNIX
             && socket_option(&self.gate, libc::SO_TYPE, clock)? == libc::SOCK_SEQPACKET
@@ -664,6 +689,29 @@ impl WorkloadOwner {
 
     pub(super) fn creation_slot_sha256(&self) -> [u8; 32] { self.permit.slot_sha256() }
     pub(super) fn creation_record_sha256(&self) -> [u8; 32] { self.permit.record_sha256() }
+
+    /// Source-owned aliases only; no external namespace or socket enters.
+    pub(super) fn duplicate_attachment(&mut self, clock: &OriginalClock) -> Result<AttachmentDescriptors, String> {
+        self.check(clock)?;
+        require(!std::mem::replace(&mut self.attachment_duplicated, true))?;
+        let (host_namespace, host_identity) = {
+            let launch = self.precreation.launch.try_borrow().map_err(|_| "native launch original already borrowed")?;
+            require(launch.manual_network_policy)?;
+            (duplicate(&launch.host_namespace, clock)?, launch.host_identity)
+        };
+        let child_namespace = duplicate(&self.namespace, clock)?;
+        let child_route = duplicate(&self.route, clock)?;
+        require(namespace(&host_namespace, clock)? == host_identity
+            && namespace(&child_namespace, clock)? == self.namespace_identity
+            && identity(&metadata(&child_route, clock)?) == self.route_identity
+            && netlink_socket(&child_route, self.namespace_identity, libc::NETLINK_ROUTE, clock)? == self.route_port_id)?;
+        self.check(clock)?;
+        Ok(AttachmentDescriptors { host_namespace, child_namespace, child_route,
+            host_namespace_device: host_identity.0, host_namespace_inode: host_identity.1,
+            child_namespace_device: self.namespace_identity.0, child_namespace_inode: self.namespace_identity.1,
+            route_socket_device: self.route_identity.0, route_socket_inode: self.route_identity.1,
+            route_port_id: self.route_port_id })
+    }
 
     /// Exactly one private backend obtains a checked CLOEXEC alias of the
     /// actual child-created socket. The original remains under this owner.
@@ -691,4 +739,23 @@ impl WorkloadOwner {
     /// Explicit closing path can report uncertainty. Drop is the final safety
     /// net; neither path starts the target or mutates an existing namespace.
     pub(super) fn terminate(mut self) -> Result<(), String> { self.child.terminate() }
+}
+
+fn duplicate(original: &File, clock: &OriginalClock) -> Result<File, String> {
+    let result = checked(clock, || descriptor(unsafe { libc::fcntl(original.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 3) }))?;
+    require(identity(&metadata(&result, clock)?) == identity(&metadata(original, clock)?))?;
+    Ok(result)
+}
+
+pub(super) struct AttachmentDescriptors {
+    pub(super) host_namespace: File,
+    pub(super) child_namespace: File,
+    pub(super) child_route: File,
+    pub(super) host_namespace_device: u64,
+    pub(super) host_namespace_inode: u64,
+    pub(super) child_namespace_device: u64,
+    pub(super) child_namespace_inode: u64,
+    pub(super) route_socket_device: u64,
+    pub(super) route_socket_inode: u64,
+    pub(super) route_port_id: u32,
 }

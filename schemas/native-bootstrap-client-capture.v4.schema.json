@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-bootstrap-client-capture.v4.schema.json",
+  "title": "Local native bootstrap client capture with pre-teardown network attachment observation v4",
+  "description": "Closed eleven-field public local capture, not authority. One UTF-8 JSON line including exactly one final LF, at most 1572864 bytes. Both observation children are bounded at 8191 compact UTF-8 bytes. Exact bootstrap evidence is retained for later packet extraction without another bootstrap attempt. Genuine owners are held through output and then the never-executed child is torn down. Both new links being UP is not application execution, connectivity proof, persistent deployment, CA installation or retry/recovery permission. Earlier capture profiles remain strict and are not relabeled.",
+  "type": "object", "additionalProperties": false,
+  "required": ["apiVersion", "resultScope", "okForAction", "configurationSha256", "requestSha256", "endpoint", "challengeSource", "evidenceBase64url", "verification", "egress", "attachment"],
+  "properties": {
+    "apiVersion": {"const": "serverware.nativeBootstrapClientCapture/v4"},
+    "resultScope": {"const": "local-fixed-endpoint-bootstrap-and-network-attachment-observation"},
+    "okForAction": {"const": false},
+    "configurationSha256": {"$ref": "native-bootstrap-client-capture.v2.schema.json#/properties/configurationSha256"},
+    "requestSha256": {"$ref": "native-bootstrap-client-capture.v2.schema.json#/properties/requestSha256"},
+    "endpoint": {"$ref": "native-bootstrap-client-capture.v2.schema.json#/properties/endpoint"},
+    "challengeSource": {"const": "independently-pinned"},
+    "evidenceBase64url": {"$ref": "native-bootstrap-client-capture.v2.schema.json#/properties/evidenceBase64url"},
+    "verification": {"$ref": "native-bootstrap-client-capture.v2.schema.json#/properties/verification"},
+    "egress": {"$ref": "native-egress-observation.v1.schema.json", "description": "Existing closed ten-field nonactionable observation. Workload identifiers remain exact u32/u64 JSON integers, never floats or booleans."},
+    "attachment": {"$ref": "native-network-attachment-observation.v1.schema.json"}
+  }
+}

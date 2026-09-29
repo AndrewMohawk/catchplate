@@ -1,11 +1,19 @@
 //! Separate grant, genuine proof, host and never-executed workload ownership.
 //!
 //! Creation is preceded by a distinct irreversible cross-invocation claim.
-//! This remains a never-executed child owner, not workload start authority or
-//! permission to attach a network. No generic effect API is exposed.
+//! This remains a never-executed child owner, not workload start authority.
+//! Network attachment requires its separate admitted grant and durable claim;
+//! no generic effect API is exposed.
 
 mod authority;
+pub(super) mod attachment;
+mod attachment_authority;
+mod attachment_backend;
+mod attachment_readback;
+mod attachment_reservation;
+mod attachment_wire;
 mod backend;
+mod child_network_policy;
 mod creation_reservation;
 mod effect;
 mod kernel_reservation;
@@ -153,6 +161,15 @@ impl EgressGuard {
         Ok(duplicate)
     }
 
+    pub(super) fn duplicate_attachment(&self) -> Result<workload::AttachmentDescriptors, String> {
+        self.check()?;
+        let descriptors = self.workload.try_borrow_mut()
+            .map_err(|_| "native egress workload already borrowed")?
+            .duplicate_attachment(&self.precreation.clock)?;
+        self.check()?;
+        Ok(descriptors)
+    }
+
     pub(super) fn check(&self) -> Result<(), String> {
         ensure(!self.stopped.replace(true), "native egress owner is stopped")?;
         self.precreation.check()?;
@@ -190,6 +207,16 @@ fn digest_text(bytes: &[u8; 32]) -> String {
 /// and grants no action merely by returning. No independent proof is skipped.
 pub(super) fn prepare(inputs: Inputs, clock: &OriginalClock,
     originals: &mut Vec<HeldOriginal>) -> Result<Pending, String> {
+    prepare_profile(inputs, None, clock, originals)
+}
+
+pub(super) fn prepare_for_attachment(inputs: Inputs, attachment: &attachment::Pending,
+    clock: &OriginalClock, originals: &mut Vec<HeldOriginal>) -> Result<Pending, String> {
+    prepare_profile(inputs, Some(attachment), clock, originals)
+}
+
+fn prepare_profile(inputs: Inputs, attachment: Option<&attachment::Pending>, clock: &OriginalClock,
+    originals: &mut Vec<HeldOriginal>) -> Result<Pending, String> {
     inputs.validate()?;
     clock.check()?;
     ensure(unsafe { libc::getuid() } == 0 && unsafe { libc::geteuid() } == 0
@@ -202,7 +229,12 @@ pub(super) fn prepare(inputs: Inputs, clock: &OriginalClock,
     let authorization = authority::admit(&raw, &root, &root_pin,
         crate::authority_source_revision_v1::SOURCE_REVISION, clock)?;
     ensure(authorization.creation_journal.is_some(),
-        "native egress requires v2 durable precreation authority")?;
+        "native egress requires versioned durable precreation authority")?;
+    match attachment {
+        Some(pending) => pending.require_egress(&authorization, clock)?,
+        None => ensure(authorization.child_network_policy.is_none(),
+            "native egress v3 network policy requires the explicit attachment client profile")?,
+    }
     let (mut token, secret) = HeldOriginal::read_private(inputs.capability_token, 256)?;
     clock.check()?;
     ensure((32..=256).contains(&secret.len()) && secret.iter().all(|byte|

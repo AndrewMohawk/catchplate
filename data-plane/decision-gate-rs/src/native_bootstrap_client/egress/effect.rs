@@ -42,6 +42,14 @@ pub(in super::super) struct Installed<'a> {
 }
 
 impl Installed<'_> {
+    /// Query-free ownership admission for the separately authorized network
+    /// attachment path. It does not replace boundary semantic readbacks.
+    pub(super) fn require_owner(&self, guard: &EgressGuard) -> Result<(), String> {
+        super::ensure(!self.stopped && std::ptr::eq(self.guard, guard),
+            "native installed egress owner differs or is stopped")?;
+        self.backend.current()
+    }
+
     pub(in super::super) fn check(&mut self) -> Result<(), String> {
         super::ensure(!std::mem::replace(&mut self.stopped, true), "native installed egress owner stopped")?;
         self.guard.check()?;

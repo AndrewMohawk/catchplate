@@ -1231,6 +1231,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/native_workload_identity_originals.py \
 	serverware/native_ca_installation_authorization.py \
 	serverware/native_egress_installation_authorization.py \
+	serverware/native_network_attachment_authorization.py \
 	serverware/workload_identity_trust_authorization.py \
 	serverware/native_enrollment_assignment.py \
 	serverware/native_enrollment_bootstrap_delegation.py \
@@ -3495,6 +3496,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/native_workload_identity_originals.py \
 				serverware/native_ca_installation_authorization.py \
 				serverware/native_egress_installation_authorization.py \
+				serverware/native_network_attachment_authorization.py \
 				serverware/workload_identity_trust_authorization.py \
 				serverware/native_enrollment_assignment.py \
 				serverware/native_enrollment_bootstrap_delegation.py \
@@ -3716,6 +3718,14 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/native_bootstrap_client/install/destination.rs \
 				data-plane/decision-gate-rs/src/native_bootstrap_client/egress/mod.rs \
 				data-plane/decision-gate-rs/src/native_bootstrap_client/egress/authority.rs \
+				data-plane/decision-gate-rs/src/native_bootstrap_client/egress/attachment.rs \
+				data-plane/decision-gate-rs/src/native_bootstrap_client/egress/attachment_authority.rs \
+				data-plane/decision-gate-rs/src/native_bootstrap_client/egress/attachment_backend.rs \
+				data-plane/decision-gate-rs/src/native_bootstrap_client/egress/attachment_readback.rs \
+				data-plane/decision-gate-rs/src/native_bootstrap_client/egress/attachment_readback_links.rs \
+				data-plane/decision-gate-rs/src/native_bootstrap_client/egress/attachment_reservation.rs \
+				data-plane/decision-gate-rs/src/native_bootstrap_client/egress/attachment_wire.rs \
+				data-plane/decision-gate-rs/src/native_bootstrap_client/egress/child_network_policy.rs \
 				data-plane/decision-gate-rs/src/native_bootstrap_client/egress/creation_reservation.rs \
 				data-plane/decision-gate-rs/src/native_bootstrap_client/egress/backend.rs \
 				data-plane/decision-gate-rs/src/native_bootstrap_client/egress/effect.rs \
@@ -3775,12 +3785,17 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-bootstrap-client.v1.schema.json \
 				schemas/native-bootstrap-client.v2.schema.json \
 				schemas/native-bootstrap-client.v3.schema.json \
+				schemas/native-bootstrap-client.v4.schema.json \
 				schemas/native-bootstrap-client-capture.v1.schema.json \
 				schemas/native-bootstrap-client-capture.v2.schema.json \
 				schemas/native-bootstrap-client-capture.v3.schema.json \
+				schemas/native-bootstrap-client-capture.v4.schema.json \
 				schemas/native-ca-installation-authorization.v1.schema.json \
 				schemas/native-egress-installation-authorization.v1.schema.json \
 				schemas/native-egress-installation-authorization.v2.schema.json \
+				schemas/native-egress-installation-authorization.v3.schema.json \
+				schemas/native-network-attachment-authorization.v1.schema.json \
+				schemas/native-network-attachment-observation.v1.schema.json \
 				schemas/native-egress-observation.v1.schema.json \
 				schemas/native-egress-launch-manifest.v1.schema.json \
 				schemas/native-ca-installation-receipt.v1.schema.json \

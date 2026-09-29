@@ -1252,6 +1252,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/control_plane_workload_identity_approval.py \
 	serverware/control_plane_approval_verification.py \
 	serverware/control_plane_admin_token_publication.py \
+	serverware/control_plane_admin_token_resolution.py \
 	serverware/control_plane_workload_identity_routes.py \
 	serverware/portal_workload_issuance.py \
 	serverware_agent_trust/workload_identity_submission.py \
@@ -3519,6 +3520,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/control_plane_workload_identity_approval.py \
 				serverware/control_plane_approval_verification.py \
 				serverware/control_plane_admin_token_publication.py \
+				serverware/control_plane_admin_token_resolution.py \
 				serverware/control_plane_workload_identity_routes.py \
 				serverware/portal_workload_issuance.py \
 				serverware_agent_trust/workload_identity_originals.py \
@@ -3681,6 +3683,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/Cargo.lock \
 				data-plane/decision-gate-rs/src/authority_source_revision_v1.rs \
 				data-plane/decision-gate-rs/src/erofs_loop_v1.rs \
+				data-plane/decision-gate-rs/src/cgroup_control_v1.rs \
 				data-plane/decision-gate-rs/src/workload_identity_trust.rs \
 				data-plane/decision-gate-rs/src/workload_identity_trust_crypto.rs \
 				data-plane/decision-gate-rs/src/native_enrollment_assignment_v1.rs \

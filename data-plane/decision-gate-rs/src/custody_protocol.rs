@@ -49,6 +49,8 @@ pub mod native_lease_profile_v1;
 pub mod release_profile_v1;
 #[cfg(target_os = "linux")]
 pub mod erofs_loop_v1;
+#[cfg(target_os = "linux")]
+pub mod cgroup_control_v1;
 use release_profile_v1::{ReleaseOperation, ReleaseProfile, StatementKind};
 pub mod native_upstream_relays_v1;
 use enclave_runtime_identity_v1::{

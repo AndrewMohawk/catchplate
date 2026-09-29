@@ -1827,6 +1827,16 @@ class AdminTokenRotateRequest(BaseModel):
     mfa: dict[str, Any] | None = None
 
 
+class AdminTokenPublicationResolveRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    publication_id: str = Field(alias="publicationId", pattern=r"^[0-9a-f]{32}$")
+    intent_sha256: str = Field(alias="intentSha256", pattern=r"^sha256:[0-9a-f]{64}$")
+    outcome: Literal["finalize-installed", "abandon-uninstalled"]
+    reason: str | None = Field(max_length=500)
+    mfa: dict[str, Any]
+
+
 class WebAuthnRegistrationStart(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
@@ -4713,6 +4723,11 @@ def _control_plane_mutation_authn_policy() -> dict[str, Any]:
     return policy
 
 
+def _control_plane_mutation_webauthn_required(action: str) -> bool:
+    # A separate recovery purpose; this does not alter ordinary mutation policy.
+    return action == "control_plane.token.publication.resolve" or CONTROL_PLANE_MUTATION_WEBAUTHN_REQUIRED
+
+
 def _require_control_plane_mutation_mfa(
     *,
     action: str,
@@ -4722,9 +4737,9 @@ def _require_control_plane_mutation_mfa(
     identity: AdminIdentity,
     approval_context: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
-    if not CONTROL_PLANE_MUTATION_WEBAUTHN_REQUIRED:
+    if not _control_plane_mutation_webauthn_required(action):
         return None
-    if isinstance(mfa, dict) and {
+    if action != "control_plane.token.publication.resolve" and isinstance(mfa, dict) and {
         "authorityChallengeId",
         "credentialRecordId",
         "assertion",
@@ -4780,7 +4795,7 @@ def _require_control_plane_mutation_mfa(
 
 
 def _control_plane_two_person_required(action: str) -> bool:
-    if action == "workload.identity.issue":
+    if action in {"workload.identity.issue", "control_plane.token.publication.resolve"}:
         return True
     if not CONTROL_PLANE_TWO_PERSON_REQUIRED:
         return False
@@ -4880,7 +4895,7 @@ def _require_control_plane_two_person(
 
     if not _control_plane_two_person_required(action):
         return None
-    require_webauthn = action == "workload.identity.issue" or CONTROL_PLANE_MUTATION_WEBAUTHN_REQUIRED
+    require_webauthn = action == "workload.identity.issue" or _control_plane_mutation_webauthn_required(action)
     approval_id = _control_plane_approval_id(mfa)
     if approval_id:
         result = db.consume_control_plane_approval(
@@ -7901,6 +7916,21 @@ def control_plane_admin_token_rotate(
     return rotate_on_request(request, request_payload)
 
 
+@app.post("/api/control-plane/tokens/admin/publication/resolve")
+def control_plane_admin_token_publication_resolve(
+    request: Request,
+    response: Response,
+    payload: AdminTokenPublicationResolveRequest,
+    identity: AdminIdentity = Depends(require_role("admin")),
+) -> dict[str, Any]:
+    from serverware.control_plane_admin_token_resolution import resolve_on_request
+
+    del identity  # Retained owner reauthenticates and checks CSRF independently.
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Pragma"] = "no-cache"
+    return resolve_on_request(request, payload)
+
+
 @app.get("/api/control-plane/tokens/admin/publication")
 def control_plane_admin_token_publication(
     response: Response,
@@ -7986,6 +8016,7 @@ def control_plane_approval_approve(
             detail=f"control-plane approval is already {approval['status']}",
         )
     workload_issuance = approval["action"] == "workload.identity.issue"
+    mandatory_webauthn = _control_plane_mutation_webauthn_required(approval["action"])
     if workload_issuance:
         from serverware import control_plane_workload_identity_routes as workload_routes
 
@@ -8001,7 +8032,7 @@ def control_plane_approval_approve(
     if workload_issuance:
         identity, workload_receipt = workload_routes._approve_assertion(
             request, approval, decision.mfa if decision else None)
-    elif CONTROL_PLANE_MUTATION_WEBAUTHN_REQUIRED:
+    elif mandatory_webauthn:
         from serverware import control_plane_approval_verification as approval_verification
 
         try:
@@ -8018,12 +8049,12 @@ def control_plane_approval_approve(
             approval_id,
             actor_id=identity.user_id,
             note=decision.note if decision else None,
-            authn=None if workload_issuance or CONTROL_PLANE_MUTATION_WEBAUTHN_REQUIRED else {
+            authn=None if workload_issuance or mandatory_webauthn else {
                 "method": identity.auth_method,
                 "user_id": identity.user_id,
             },
             challenge_id=None,
-            require_webauthn=workload_issuance or CONTROL_PLANE_MUTATION_WEBAUTHN_REQUIRED,
+            require_webauthn=workload_issuance or mandatory_webauthn,
             workload_approval=workload_receipt,
             verified_approval=verified_receipt,
             required_approver_roles=_control_plane_approval_roles(

@@ -83,7 +83,7 @@ def _policy(action):
 
     policy = application._control_plane_mutation_authn_policy()
     roles = tuple(sorted(application._control_plane_approval_roles(action)))
-    if (application.CONTROL_PLANE_MUTATION_WEBAUTHN_REQUIRED is not True
+    if (application._control_plane_mutation_webauthn_required(action) is not True
             or policy.get("userVerification") != "required" or not roles):
         _fail()
     return (policy["userVerification"], tuple(policy.get("allowedAuthenticatorClasses", ())),

@@ -33,7 +33,7 @@ _RESOURCE = "admin-token"
 _JOURNAL = ".serverware-admin-token-publications"
 _MAX_ATTEMPTS = 64
 _MAX_RECORD = 16 * 1024
-_NAME = re.compile(r"([0-9a-f]{32})\.(intent|authorized|claimed|complete|settled|old|new)")
+_NAME = re.compile(r"([0-9a-f]{32})\.(intent|authorized|claimed|complete|settled|old|new|resolution-claimed|resolution-complete|resolution-settled)")
 _TOKEN = re.compile(rb"[A-Za-z0-9_-]{43}\n")
 _DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 _READ_FLAGS = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK
@@ -167,7 +167,7 @@ def _records(directory):
     names = []
     with os.scandir(directory) as entries:
         for entry in entries:
-            _require(len(names) < _MAX_ATTEMPTS * 7 and _NAME.fullmatch(entry.name) is not None)
+            _require(len(names) < _MAX_ATTEMPTS * 10 and _NAME.fullmatch(entry.name) is not None)
             names.append(entry.name)
     attempts = {}
     for name in sorted(names):
@@ -187,6 +187,62 @@ def _records(directory):
             item[phase] = value
             item[phase + "Sha256"] = _sha(raw)
     return attempts
+
+
+def _resolution_history(identifier, item):
+    """Validate new terminal evidence without relabeling an old publication."""
+    claim = item.get("resolution-claimed")
+    complete = item.get("resolution-complete")
+    settled = item.get("resolution-settled")
+    if claim is None:
+        _require(complete is None and settled is None)
+        return
+    intent = item["intent"]
+    _require("settled" not in item and set(claim) == {"schema", "attemptId",
+        "intentSha256", "outcome", "actorId", "payloadDigest", "approvalId",
+        "reason", "fileSha256", "fileIdentity", "priorCompletionSha256", "auditId"}
+        and claim["schema"] == "serverware.adminTokenPublicationResolutionClaim/v1"
+        and claim["intentSha256"] == item["intentSha256"]
+        and claim["outcome"] in {"finalize-installed", "abandon-uninstalled"}
+        and type(claim["actorId"]) is str and 0 < len(claim["actorId"]) <= 4096
+        and type(claim["approvalId"]) is str and 0 < len(claim["approvalId"]) <= 128
+        and type(claim["payloadDigest"]) is str and _DIGEST.fullmatch(claim["payloadDigest"])
+        and (claim["reason"] is None or type(claim["reason"]) is str and len(claim["reason"]) <= 500)
+        and type(claim["fileIdentity"]) is list and len(claim["fileIdentity"]) == 9
+        and all(type(part) is int for part in claim["fileIdentity"])
+        and claim["priorCompletionSha256"] == item.get("completeSha256")
+        and claim["auditId"] == "admin-token-resolution-intent:" + identifier)
+    _require(claim["payloadDigest"] == _sha(_json({"token": "admin", "publicationId": identifier,
+        "intentSha256": item["intentSha256"], "outcome": claim["outcome"], "reason": claim["reason"]})))
+    if claim["outcome"] == "finalize-installed":
+        _require("claimed" in item and "new" not in item
+            and claim["fileSha256"] == intent["newFileSha256"]
+            and claim["fileIdentity"][:8] == intent["newFileIdentity"][:8])
+        if "complete" in item:
+            _require(claim["fileIdentity"] == item["complete"]["fileIdentity"])
+    else:
+        _require("complete" not in item and "new" in item
+            and claim["fileSha256"] == intent["previousFileSha256"]
+            and claim["fileIdentity"] == intent["previousFileIdentity"])
+    if complete is not None:
+        _require(complete == {"schema": "serverware.adminTokenPublicationResolutionComplete/v1",
+            "attemptId": identifier, "intentSha256": item["intentSha256"],
+            "resolutionClaimSha256": item["resolution-claimedSha256"],
+            "outcome": claim["outcome"], "fileSha256": claim["fileSha256"],
+            "fileIdentity": claim["fileIdentity"]})
+    if settled is not None:
+        _require(complete is not None and settled == {
+            "schema": "serverware.adminTokenPublicationResolutionSettled/v1",
+            "attemptId": identifier, "resolutionCompletionSha256": item["resolution-completeSha256"],
+            "auditId": "admin-token-resolution-complete:" + identifier})
+
+
+def _terminal(item):
+    if "resolution-settled" in item:
+        return item["resolution-completeSha256"], item["resolution-complete"]
+    if "settled" in item:
+        return item["completeSha256"], item["complete"]
+    return None, None
 
 
 def _history(directory, token_path):
@@ -230,6 +286,7 @@ def _history(directory, token_path):
                 "schema": "serverware.adminTokenPublicationSettled/v1", "attemptId": identifier,
                 "completionSha256": item["completeSha256"],
                 "auditId": "admin-token-complete:" + identifier})
+        _resolution_history(identifier, item)
     # A single append-only predecessor chain; no counter reset or journal repair.
     predecessor = None
     previous_complete = None
@@ -246,11 +303,11 @@ def _history(directory, token_path):
             _require(item["intent"]["previousFileSha256"] == previous_complete["fileSha256"]
                 and item["intent"]["previousFileIdentity"] == previous_complete["fileIdentity"])
         visited.add(identifier)
-        if "settled" not in item:
+        terminal_sha, terminal = _terminal(item)
+        if terminal is None:
             _require(len(visited) == len(attempts))
             return attempts, item, None
-        predecessor = item["completeSha256"]
-        previous_complete = item["complete"]
+        predecessor, previous_complete = terminal_sha, terminal
     _require(len(visited) == len(attempts))
     return attempts, None, predecessor
 
@@ -399,6 +456,7 @@ class _Publication:
         self.executing = True
         self._verify()
         self.path, self.basename, self.parent, self.parent_identity = _parent()
+        fcntl.flock(self.parent, fcntl.LOCK_EX | fcntl.LOCK_NB)
         self.directory, self.journal_identity, created = _journal(self.parent, create=True)
         if created:
             # Our mkdir may add one parent link (some filesystems do not count
@@ -419,9 +477,9 @@ class _Publication:
         self.original_descriptor = os.open(self.basename, _READ_FLAGS, dir_fd=self.parent)
         _require(_file_identity(os.fstat(self.original_descriptor)) == _file_identity(old_identity))
         if predecessor is not None:
-            latest = next(item for item in attempts.values() if item.get("completeSha256") == predecessor)
-            _require(_sha(old) == latest["complete"]["fileSha256"]
-                and _file_identity(old_identity) == latest["complete"]["fileIdentity"])
+            latest = next(_terminal(item)[1] for item in attempts.values() if _terminal(item)[0] == predecessor)
+            _require(_sha(old) == latest["fileSha256"]
+                and _file_identity(old_identity) == latest["fileIdentity"])
         self.attempt = secrets.token_hex(16)
         token = secrets.token_urlsafe(32)
         new = (token + "\n").encode("ascii")
@@ -575,7 +633,9 @@ def inspect_publication():
             elif _sha(current) == intent["previousFileSha256"]:
                 observed = "previous-original"
             rows.append({"publicationId": identifier, "intentSha256": item["intentSha256"],
-                "state": next((phase for phase in ("settled", "complete", "claimed", "authorized") if phase in item), "intent"),
+                "state": next((phase for phase in ("resolution-settled", "resolution-complete", "resolution-claimed",
+                    "settled", "complete", "claimed", "authorized") if phase in item), "intent"),
+                "resolutionOutcome": item.get("resolution-claimed", {}).get("outcome"),
                 "currentFileMatches": observed, "approvalId": intent.get("approvalId")})
         closing, closing_identity = _read(parent, basename, 256)
         _require(closing == current and _file_identity(closing_identity) == _file_identity(current_identity))

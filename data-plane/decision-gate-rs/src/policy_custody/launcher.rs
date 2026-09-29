@@ -31,6 +31,9 @@ use serverware_decision_gate::erofs_loop_v1::{
     self, DescriptorObservationV1, ErofsLoopErrorV1,
     ErofsLoopExpectationV1, ErofsLoopObservationV1,
 };
+use serverware_decision_gate::cgroup_control_v1::{
+    self, EventsV1, PreparedKillV1,
+};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -92,7 +95,6 @@ const MAX_ARGUMENTS: usize = 64;
 const MAX_ENVIRONMENT: usize = 64;
 const MAX_INHERITED_FDS: usize = 32;
 const MAX_PIDFD_INFO_BYTES: usize = 4096;
-const MAX_CGROUP_EVENTS_BYTES: usize = 4096;
 const MAX_PROC_MAPS_BYTES: usize = 1024 * 1024;
 const MAX_ELF_PROGRAM_HEADERS: usize = 256;
 const MAX_EXECUTABLE_BYTES: u64 = 256 * 1024 * 1024;
@@ -111,7 +113,6 @@ const PF_X: u32 = 1;
 const PF_W: u32 = 2;
 const DT_NULL: i64 = 0;
 const DT_NEEDED: i64 = 1;
-const CGROUP2_SUPER_MAGIC: libc::c_long = 0x6367_7270;
 const ST_RDONLY_FLAG: libc::c_ulong = 1;
 const BLKROGET: libc::c_ulong = 0x125e;
 const DM_IOCTL_TYPE: u64 = 0xfd;
@@ -138,8 +139,6 @@ const WATCHDOG_PROTOCOL_VERSION: u8 = 1;
 const WATCHDOG_CLEANUP_KIND: u8 = 3;
 const WATCHDOG_CLEANUP_ACK_KIND: u8 = 4;
 const HARD_UNREADY_MESSAGE_BYTES: usize = 72;
-const CGROUP_KILL_NAME: &[u8] = b"cgroup.kill\0";
-const CGROUP_EVENTS_NAME: &[u8] = b"cgroup.events\0";
 const REQUIRED_MEMFD_SEALS: libc::c_int = libc::F_SEAL_SEAL
     | libc::F_SEAL_SHRINK
     | libc::F_SEAL_GROW
@@ -4566,21 +4565,16 @@ fn reap_pidfd_exact(
     })
 }
 
+fn cgroup_control_error(error: cgroup_control_v1::Error) -> LauncherError {
+    match error {
+        cgroup_control_v1::Error::Io(error) => LauncherError::Io(error),
+        cgroup_control_v1::Error::Invalid(message) => LauncherError::Invalid(message),
+    }
+}
+
 fn verify_cgroup2_descriptor(fd: RawFd) -> Result<(), LauncherError> {
-    let identity = directory_identity(fd)?;
-    let mut filesystem: libc::statfs = unsafe { zeroed() };
-    if unsafe { libc::fstatfs(fd, &mut filesystem) } != 0 {
-        return Err(io::Error::last_os_error().into());
-    }
-    if filesystem.f_type != CGROUP2_SUPER_MAGIC as _
-        || identity.uid != 0
-        || identity.mode & 0o022 != 0
-    {
-        return Err(LauncherError::Invalid(
-            "launch cgroup descriptor is not a protected cgroup-v2 directory",
-        ));
-    }
-    Ok(())
+    cgroup_control_v1::verify_directory(unsafe { BorrowedFd::borrow_raw(fd) })
+        .map(|_| ()).map_err(cgroup_control_error)
 }
 
 fn cgroup_identity_sha256(
@@ -4599,22 +4593,9 @@ fn cgroup_identity_sha256(
     ]))
 }
 
-fn prepare_cgroup_kill(fd: RawFd) -> Result<OwnedFd, LauncherError> {
-    verify_cgroup2_descriptor(fd)?;
-    let descriptor = openat_control_file(
-        fd,
-        CGROUP_KILL_NAME,
-        libc::O_WRONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
-    )?;
-    let mut stat: libc::stat = unsafe { zeroed() };
-    if unsafe { libc::fstat(descriptor.as_raw_fd(), &mut stat) } != 0
-        || stat.st_mode & libc::S_IFMT != libc::S_IFREG
-    {
-        return Err(LauncherError::Invalid(
-            "launch cgroup lacks a writable cgroup.kill control",
-        ));
-    }
-    Ok(descriptor)
+fn prepare_cgroup_kill(fd: RawFd) -> Result<PreparedKillV1, LauncherError> {
+    PreparedKillV1::open(unsafe { BorrowedFd::borrow_raw(fd) })
+        .map_err(cgroup_control_error)
 }
 
 fn verify_cgroup_kill_available(fd: RawFd) -> Result<(), LauncherError> {
@@ -4622,41 +4603,25 @@ fn verify_cgroup_kill_available(fd: RawFd) -> Result<(), LauncherError> {
 }
 
 fn cgroup_populated_now(fd: RawFd) -> Result<bool, LauncherError> {
-    let events = openat_control_file(
-        fd,
-        CGROUP_EVENTS_NAME,
-        libc::O_RDONLY
-            | libc::O_CLOEXEC
-            | libc::O_NONBLOCK
-            | libc::O_NOFOLLOW,
-    )?;
-    read_cgroup_populated(events.as_raw_fd())
+    EventsV1::open(unsafe { BorrowedFd::borrow_raw(fd) })
+        .map_err(cgroup_control_error)?.populated().map_err(cgroup_control_error)
 }
 
 fn wait_cgroup_empty_until(
     cgroup_fd: RawFd,
     deadline: BoottimeDeadline,
 ) -> Result<(), LauncherError> {
-    verify_cgroup2_descriptor(cgroup_fd)?;
-    let events = openat_control_file(
-        cgroup_fd,
-        CGROUP_EVENTS_NAME,
-        libc::O_RDONLY
-            | libc::O_CLOEXEC
-            | libc::O_NONBLOCK
-            | libc::O_NOFOLLOW,
-    )?;
+    let mut events = EventsV1::open(unsafe { BorrowedFd::borrow_raw(cgroup_fd) })
+        .map_err(cgroup_control_error)?;
     loop {
-        if !read_cgroup_populated(events.as_raw_fd())? {
+        if !events.populated().map_err(cgroup_control_error)? {
             deadline.require_live()?;
             return Ok(());
         }
-        let descriptor =
-            unsafe { BorrowedFd::borrow_raw(events.as_raw_fd()) };
         match poll_until(
             deadline,
             &[PollTarget::socket(
-                descriptor,
+                events.poll_fd(),
                 PollInterest::PRIORITY,
             )],
         )? {
@@ -4668,79 +4633,6 @@ fn wait_cgroup_empty_until(
             }
         }
     }
-}
-
-fn read_cgroup_populated(fd: RawFd) -> Result<bool, LauncherError> {
-    if unsafe { libc::lseek(fd, 0, libc::SEEK_SET) } < 0 {
-        return Err(io::Error::last_os_error().into());
-    }
-    let mut bytes = [0_u8; MAX_CGROUP_EVENTS_BYTES];
-    let mut length = 0_usize;
-    loop {
-        if length == bytes.len() {
-            return Err(LauncherError::Invalid(
-                "cgroup.events exceeds its fixed bound",
-            ));
-        }
-        let read = unsafe {
-            libc::read(
-                fd,
-                bytes[length..].as_mut_ptr() as *mut libc::c_void,
-                bytes.len() - length,
-            )
-        };
-        if read > 0 {
-            length = length.checked_add(read as usize).ok_or(
-                LauncherError::Invalid(
-                    "cgroup.events length overflow",
-                ),
-            )?;
-            continue;
-        }
-        if read == 0 {
-            break;
-        }
-        let error = io::Error::last_os_error();
-        match error.raw_os_error() {
-            Some(libc::EINTR) => continue,
-            Some(libc::EAGAIN) if length > 0 => break,
-            _ => return Err(error.into()),
-        }
-    }
-    if !bytes[..length].is_ascii() {
-        return Err(LauncherError::Invalid(
-            "cgroup.events contains non-ASCII data",
-        ));
-    }
-    let text = std::str::from_utf8(&bytes[..length]).map_err(|_| {
-        LauncherError::Invalid("cgroup.events is not valid ASCII")
-    })?;
-    let mut populated = None;
-    for line in text.lines() {
-        let mut fields = line.split_ascii_whitespace();
-        let name = fields.next().ok_or(LauncherError::Invalid(
-            "cgroup.events contains an empty record",
-        ))?;
-        let value = fields.next().ok_or(LauncherError::Invalid(
-            "cgroup.events record lacks a value",
-        ))?;
-        if fields.next().is_some() {
-            return Err(LauncherError::Invalid(
-                "cgroup.events record has extra fields",
-            ));
-        }
-        if name == "populated" {
-            if populated.is_some() || !matches!(value, "0" | "1") {
-                return Err(LauncherError::Invalid(
-                    "cgroup.events populated record is invalid",
-                ));
-            }
-            populated = Some(value == "1");
-        }
-    }
-    populated.ok_or(LauncherError::Invalid(
-        "cgroup.events lacks a populated record",
-    ))
 }
 
 fn openat_control_file(

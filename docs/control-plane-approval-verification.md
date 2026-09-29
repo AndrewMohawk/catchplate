@@ -101,13 +101,23 @@ The effect sequence is fixed:
 
 The journal is `.serverware-admin-token-publications` beside the generated token:
 service-owned mode `0700`, with no-follow, single-link, mode `0600` originals.
-It is bounded to 64 attempts, seven fixed file kinds per attempt, 16 KiB per
-record and 256 bytes per token original. Records are create-exclusive and form
+It is bounded to 64 attempts and ten fixed file kinds per attempt (the original
+seven plus three separately authorized resolution records), 16 KiB per record
+and 256 bytes per token original. Records are create-exclusive and form
 one predecessor chain. No runtime pruning, repair, rollback, replay of token
 plaintext, or retry after an uncertain commit/publication exists. Partial or
 inconsistent files fail closed. A complete record without the final settled
 record distinguishes an observed durable file outcome from an uncertain audit
 acknowledgment and still blocks another rotation.
+
+The separate [publication-resolution path](control-plane-admin-token-publication-resolution.md)
+can finalize an exact already-installed new original or abandon an intact,
+not-installed attempt with the exact unchanged old original. Its new purpose
+always requires genuine requester WebAuthn and a distinct WebAuthn approver;
+ordinary rotation's optional policies are unchanged. It never repeats a rename
+or returns token plaintext. Only its settled append-only terminal anchor permits
+a later, independently authorized rotation; an interrupted resolution remains
+consumed and blocked.
 
 Generated-token authentication now reads the current protected file rather than
 retaining an old per-process cached credential. Initial generation remains
@@ -131,9 +141,10 @@ operator can inspect the protected journal directly under the existing service
 UID/ownership boundary and correlate `admin-token-intent:<publicationId>` and
 `admin-token-complete:<publicationId>` with metadata/audit records. The `.old`
 and `.new` files contain secrets: do not print, upload, replay, delete, or rename
-them as a recovery procedure. Read-only observation is not a repair procedure;
-recovery authority, journal archival/pruning, multi-host coordination and an
-independent rollback witness remain open. Local filesystem/DB flushes are not
+them as a recovery procedure. Read-only observation is not a repair procedure.
+The narrow HTTP resolution above does not cover malformed/unknown histories,
+partial resolution, journal archival/pruning, multi-host coordination or an
+independent rollback witness. Local filesystem/DB flushes are not
 off-host rollback protection or proof against a hostile service UID/kernel.
 Blocking calls still require an external watchdog; the original interval does
 not preempt them or renew after interruption.

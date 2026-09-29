@@ -26,13 +26,13 @@ Checkpoint: **2026-09-29 — pre-production, source-only.**
 
 ### Current work: native enrollment, workload trust and protected operations
 
-[`.253` source / d9e7d0b](https://github.com/example/private-deployment)
-connects explicit opt-in ordinary [PolicyAware authorization](docs/policy-aware-release-authorization.md)
-across preparation/lifecycle, [credential leases](docs/policy-aware-credential-leases.md)
-and response proofs, with cold signer capabilities and pinned receiving expectations.
-Legacy bytes remain unchanged; Native stays distinct. Prior native installation,
-preflight/leases and private egress kernel source credit remains. Public native-egress
-cold configuration/CLI, durable precreation admission, exec/start/network attachment,
+[`.254` source / c461050](https://github.com/example/private-deployment)
+connects the explicit [native egress client v3](docs/native-egress-client.md):
+separate signed v2 creation authority, durable pre-clone claim, retained actual
+owners and guarded kernel installation through nonactionable capture/SDK extraction.
+Output observes a never-executed child before teardown, not a persistent deployment.
+Prior native trust and separate ordinary PolicyAware source credit remains.
+Exec/start, network attachment, persistent supervision, combined CA+egress,
 provider/egress/canaries, Kubernetes, lifecycle and independent acceptance stay open.
 Source is unbuilt, unexecuted and unprovisioned; no build/test/runtime, tested pilot,
 NSM or AWS/spend acceptance is claimed.
@@ -56,10 +56,12 @@ The four active checkpoints remain partial:
   reservation/token/destination ownership. Quote-bound target-principal preflight
   now retains actual source/header/token/mTLS admission on the CONNECT transport;
   explicit native response/receipt/binding/lifecycle, signed preparation and
-  quoted native credential leases are source-connected. The private egress
-  transaction/backend/readback and raw-custody completion are now source-connected,
-  not public configuration, start or runtime proof. Ordinary PolicyAware compatibility
+  quoted native credential leases are source-connected. The egress client v3 now
+  joins signed creation authority and durable pre-clone ownership to the guarded
+  kernel pipeline and observation-before-teardown capture, not workload start or
+  persistent deployment. Ordinary PolicyAware compatibility
   is separately source-connected, not provisioned or runtime-accepted. Actual
+  execution/network attachment, persistent supervision, combined CA+egress,
   CONNECT/provider policy, Kubernetes ownership, scoped proxy/egress/canaries,
   lifecycle/cross-session recovery, off-host rollback witnessing and independent
   service/exact-source verification remain open.
@@ -133,7 +135,7 @@ lists every remaining item and its evidence.
 | --- | --- | --- |
 | H05 | Historical authority across source/configuration/key changes | In progress |
 | N04 | Workload identity provisioning and authenticated channels | In progress |
-| N05 | Native enrollment, verified CA installation and proxy setup | In progress / partial; native installation/preflight/leases, private egress kernel pipeline and separate opt-in ordinary PolicyAware compatibility source-landed; public egress invocation/precreation/start, provider/canaries and independent acceptance open |
+| N05 | Native enrollment, verified CA installation and proxy setup | In progress / partial; native trust/leases, egress v3 durable creation/guarded kernel observation and separate ordinary PolicyAware compatibility source-landed; start/attachment/persistent supervision, combined CA+egress, provider/canaries and independent acceptance open |
 | N06 | Enclave TLS/proxy execution and credential custody | Todo |
 | O01 | OAuth ownership across deployments and applications | Todo |
 | O02 | Measured provider issuance and interrupted-exchange recovery | Todo |

@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-enrollment-bootstrap-setup.v1.schema.json",
+  "title": "Independently signed native enrollment bootstrap setup v1",
+  "description": "Closed canonical sorted compact ensure_ascii JSON plus exactly one LF, at most 32768 bytes and depth4. Ed25519 signs domain ASCII(serverware/native-enrollment-bootstrap-setup/v1) plus NUL plus canonical setup JSON without LF. Shape does not establish signature validity, current runtime policy, protected reservation/token ownership, namespace ownership, installation or enrollment permission. The setup is a public selected association; actual reservation, durable claims and final native receiving remain mandatory separate gates.",
+  "type": "object", "additionalProperties": false,
+  "required": ["apiVersion", "setup", "signatureBase64url"],
+  "properties": {
+    "apiVersion": {"const": "serverware.signedNativeEnrollmentBootstrapSetup/v1"},
+    "setup": {"$ref": "#/$defs/setup"},
+    "signatureBase64url": {"type": "string", "minLength": 86, "maxLength": 86, "pattern": "^[A-Za-z0-9_-]{85}[AQgw](?![\\s\\S])"}
+  },
+  "$defs": {
+    "setup": {
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "purpose", "authorizerKeyId", "setupId", "delegationSha256", "targetRequestSha256", "releaseRecordSha256", "policyHash", "configurationSha256", "runtimeCaCertificateSha256", "runtimeCaSpkiSha256", "policyRequirementsSha256", "targetPrincipalId", "targetNonce", "controlPlaneOrigin", "proxy", "caInstall", "kubernetes", "networkOwner", "notBeforeUnixSeconds", "expiresAtUnixSeconds"],
+      "properties": {
+        "apiVersion": {"const": "serverware.nativeEnrollmentBootstrapSetup/v1"},
+        "purpose": {"const": "native-enrollment-bootstrap-setup"},
+        "authorizerKeyId": {"$ref": "#/$defs/sha256", "description": "Actual setup-authorizer DER SPKI digest, distinct from the delegation, runtime CA, caller issuer/key and target issuer/key roles. Actual policy and response key separation is enforced by the cold owner; this field is not the independent exact-PEM input pin."},
+        "setupId": {"type": "string", "minLength": 43, "maxLength": 43, "pattern": "^(?!A{43}(?![\\s\\S]))[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048](?![\\s\\S])"},
+        "delegationSha256": {"$ref": "#/$defs/sha256"},
+        "targetRequestSha256": {"$ref": "#/$defs/sha256"},
+        "releaseRecordSha256": {"$ref": "#/$defs/sha256"},
+        "policyHash": {"$ref": "#/$defs/sha256"},
+        "configurationSha256": {"$ref": "#/$defs/sha256"},
+        "runtimeCaCertificateSha256": {"$ref": "#/$defs/sha256"},
+        "runtimeCaSpkiSha256": {"$ref": "#/$defs/sha256"},
+        "policyRequirementsSha256": {"$ref": "#/$defs/sha256", "description": "Hash of exact selected requirements original, at most 65536 bytes. Python signature verification does not establish runtime provenance; the native constructor derives the complete original from its actual current Snapshot and compares this commitment."},
+        "targetPrincipalId": {"type": "string", "minLength": 1, "maxLength": 1024, "description": "Additionally bounded to 1024 UTF-8 bytes, exactly matching the genuinely admitted delegation and target request; not the authenticated caller identity."},
+        "targetNonce": {"type": "string", "minLength": 32, "maxLength": 256, "pattern": "^[A-Za-z0-9_-]{32,256}(?![\\s\\S])"},
+        "controlPlaneOrigin": {"$ref": "#/$defs/origin"},
+        "proxy": {"$ref": "#/$defs/proxy"},
+        "caInstall": {"$ref": "#/$defs/caInstall"},
+        "kubernetes": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/kubernetes"}]},
+        "networkOwner": {"$ref": "#/$defs/networkOwner"},
+        "notBeforeUnixSeconds": {"$ref": "#/$defs/seconds"},
+        "expiresAtUnixSeconds": {"$ref": "#/$defs/seconds", "description": "Current positive interval at most300 seconds, wholly within genuine delegation, target request and public capability-association expiry. Original processing is at most30 seconds and never renews this interval."}
+      }
+    },
+    "sha256": {"type": "string", "minLength": 71, "maxLength": 71, "pattern": "^sha256:(?!0{64})[0-9a-f]{64}(?![\\s\\S])"},
+    "seconds": {"type": "integer", "minimum": 1, "maximum": 9223372036},
+    "uid": {"type": "integer", "minimum": 0, "maximum": 4294967294},
+    "origin": {"type": "string", "minLength": 1, "maxLength": 2048, "pattern": "^https://[!-~]+(?![\\s\\S])", "description": "Exact canonical HTTPS origin, lowercase DNS or canonical unicast literal IP, no credentials/path/trailing slash/query/fragment; omit default443 and include a canonical nondefault port. Runtime performs semantic parsing and exact re-encoding."},
+    "proxy": {
+      "type": "object", "additionalProperties": false,
+      "required": ["origin", "endpoint", "egressCidrs", "hostAddresses"],
+      "properties": {
+        "origin": {"$ref": "#/$defs/origin", "description": "Host equals genuine delegation ingressHost, port equals the signed/cold endpoint port; IP origins require the sole selected endpoint address."},
+        "endpoint": {"type": "string", "minLength": 3, "maxLength": 64, "description": "Exact canonical unicast literal SocketAddr, equal to genuine delegation and independent cold public TCP pin, never a vsock CID-derived client IP."},
+        "egressCidrs": {"type": "array", "minItems": 1, "maxItems": 32, "uniqueItems": true, "items": {"type": "string", "minLength": 3, "maxLength": 80}, "description": "Strict ASCII order, canonical IPv4/IPv6 network spelling with host bits zero and prefix greater than0; mapped IPv4 uses native dotted suffix."},
+        "hostAddresses": {"type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 64}, "description": "Strict ASCII order of canonical unicast IPs inside allowed CIDRs; includes actual selected endpoint IP. No resolution or resource-existence claim."}
+      }
+    },
+    "caInstall": {
+      "type": "object", "additionalProperties": false,
+      "required": ["profile", "capabilityId", "capabilityTokenSha256", "expiresAtEpochMs", "destinationPath", "ownerUid", "ownerGid", "fileMode", "replaceExisting", "expectedExistingCertificateSha256"],
+      "properties": {
+        "profile": {"const": "native-ca-install-association-v1"},
+        "capabilityId": {"type": "string", "minLength": 24, "maxLength": 128, "pattern": "^[A-Za-z0-9_-]{24,128}(?![\\s\\S])"},
+        "capabilityTokenSha256": {"$ref": "#/$defs/sha256", "description": "Public selected association only; no raw token and no assertion that protected reservation/token ownership was verified."},
+        "expiresAtEpochMs": {"type": "integer", "minimum": 1, "maximum": 9223372036854},
+        "destinationPath": {"type": "string", "minLength": 2, "maxLength": 4096, "pattern": "^/[!-~]+(?![\\s\\S])", "description": "Canonical absolute file path: no backslash, empty/dot/dotdot segments or trailing slash. No filesystem owner or existence claim."},
+        "ownerUid": {"$ref": "#/$defs/uid"}, "ownerGid": {"$ref": "#/$defs/uid"},
+        "fileMode": {"const": 420}, "replaceExisting": {"type": "boolean"},
+        "expectedExistingCertificateSha256": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/sha256"}]}
+      },
+      "allOf": [{"if": {"properties": {"replaceExisting": {"const": false}}}, "then": {"properties": {"expectedExistingCertificateSha256": {"type": "null"}}}, "else": {"properties": {"expectedExistingCertificateSha256": {"$ref": "#/$defs/sha256"}}}}]
+    },
+    "kubernetes": {
+      "type": "object", "additionalProperties": false, "required": ["namespace", "podSelector"],
+      "properties": {
+        "namespace": {"type": "string", "minLength": 1, "maxLength": 63, "pattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?![\\s\\S])"},
+        "podSelector": {"type": "object", "minProperties": 1, "maxProperties": 16, "propertyNames": {"type": "string", "minLength": 1, "maxLength": 317}, "additionalProperties": {"type": "string", "maxLength": 63}, "description": "Actual paired verifier enforces Kubernetes label syntax: optional canonical lowercase DNS prefix then slash, name1..63 with alphanumeric ends and dash/dot/underscore interior; values empty or same name syntax. No resource-existence or namespace ownership claim."}
+      }
+    },
+    "networkOwner": {
+      "type": "object", "additionalProperties": false,
+      "required": ["hostId", "bootId", "namespaceDevice", "namespaceInode", "ownerUid"],
+      "properties": {
+        "hostId": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9._:-]{1,128}(?![\\s\\S])"},
+        "bootId": {"type": "string", "minLength": 36, "maxLength": 36, "pattern": "^(?!00000000-0000-0000-0000-000000000000)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?![\\s\\S])"},
+        "namespaceDevice": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615},
+        "namespaceInode": {"type": "integer", "minimum": 1, "maximum": 18446744073709551615},
+        "ownerUid": {"$ref": "#/$defs/uid"}
+      }
+    }
+  }
+}

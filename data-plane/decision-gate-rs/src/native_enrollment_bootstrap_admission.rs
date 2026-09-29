@@ -3,19 +3,25 @@
 //! The caller's real TLS identity is not the target's prospective identity.
 //! A separate signed delegation binds both scopes; the target proves possession
 //! through its original CSR/request, not an existing certificate or Python DTO.
-//! This owner does not reconstruct/sign a packet, reserve a one-use claim,
-//! authorize CA issuance, expose a route or install trust.
+//! Packet preparation additionally requires a separate cold setup signature and
+//! actual Snapshot-derived requirements. It creates unsigned original bytes,
+//! not a one-use claim, signing authority, CA issuance, route or installation.
 
 use super::*;
 use super::native_enrollment_admission::{self as peer, AdmissionClock,
     NativeEnrollmentPeerScope};
 use super::native_enrollment_authorizer::{NativeEnrollmentAuthorizer,
-    VerifiedNativeEnrollmentBootstrapDelegationV1};
+    VerifiedNativeEnrollmentBootstrapDelegationV1, VerifiedNativeEnrollmentBootstrapSetupV1};
+use super::native_enrollment_policy_requirements as requirements;
 use super::native_workload_bootstrap_request_v1::{self as request,
     VerifiedWorkloadBootstrapRequestV1};
+use base64::Engine as _;
 
 const MAX_DELEGATION_BYTES: usize = 32 * 1024;
 const MAX_REQUEST_BYTES: usize = 64 * 1024;
+const MAX_SETUP_BYTES: usize = 32 * 1024;
+const MAX_ISSUER_BYTES: usize = 64 * 1024;
+const MAX_PACKET_BYTES: usize = 512 * 1024;
 
 fn require(condition: bool, message: &'static str) -> Result<(), String> {
     if condition { Ok(()) } else { Err(message.to_owned()) }
@@ -82,7 +88,7 @@ fn target_scope(snapshot: &Snapshot, delegation: &VerifiedNativeEnrollmentBootst
 }
 
 /// Borrowed original request/session owners, not a serializable permission.
-/// No payload, key, signature, packet or issuance getters are provided.
+/// No caller-supplied verified DTO, key, signature or issuance getter exists.
 pub(super) struct NativeBootstrapAdmission<'a> {
     state: &'a GateState,
     head: &'a RequestHead,
@@ -104,7 +110,7 @@ pub(super) struct NativeBootstrapAdmission<'a> {
     stopped: bool,
 }
 
-impl NativeBootstrapAdmission<'_> {
+impl<'a> NativeBootstrapAdmission<'a> {
     pub(super) fn check(&mut self) -> Result<(), String> {
         require(!std::mem::replace(&mut self.stopped, true),
             "native bootstrap admission owner is stopped")?;
@@ -154,9 +160,112 @@ impl NativeBootstrapAdmission<'_> {
         self.stopped = false;
         Ok(())
     }
+
+    /// Deterministic public originals only. The separate setup root explicitly
+    /// authorizes deployment scope and the exact current requirements digest;
+    /// neither a signature nor a live installation capability is produced.
+    pub(super) fn prepare_packet(mut self, setup_original: &'a [u8])
+        -> Result<PreparedNativeBootstrapPacket<'a>, String> {
+        self.check()?;
+        require(!setup_original.is_empty() && setup_original.len() <= MAX_SETUP_BYTES,
+            "native bootstrap setup exceeds its fixed bound")?;
+        let policy_requirements = requirements::project(&self.snapshot,
+            &self.delegation.payload().target_principal_id, self.clock.deadline)?;
+        self.check()?;
+        let mut setup = self.authorizer.verify_bootstrap_setup(setup_original,
+            self.delegation_original, self.request_original, &policy_requirements,
+            &self.snapshot.policy_verifying_key, self.clock.deadline)?;
+        self.clock.check(setup.deadline())?;
+        self.clock.restrict_until(setup.payload().expires_at_unix_seconds as u128 * 1000)?;
+        setup.check(self.clock.deadline)?;
+        self.check()?;
+        let original = packet_original(self.delegation_original, setup_original,
+            self.request_original, self.target_issuer_original, &policy_requirements)?;
+        let original_sha256 = hash(&original);
+        setup.check(self.clock.deadline)?;
+        self.check()?;
+        let mut prepared = PreparedNativeBootstrapPacket { admission: self, setup,
+            setup_original, policy_requirements: policy_requirements.into_boxed_slice(),
+            original: original.into_boxed_slice(), original_sha256, stopped: false };
+        prepared.check()?;
+        Ok(prepared)
+    }
 }
 
-/// The eventual route must begin this deadline before reading either body.
+fn packet_original(delegation: &[u8], setup: &[u8], target_request: &[u8],
+    target_issuer: &[u8], policy_requirements: &[u8]) -> Result<Vec<u8>, String> {
+    for (original, limit) in [(delegation, MAX_DELEGATION_BYTES), (setup, MAX_SETUP_BYTES),
+        (target_request, MAX_REQUEST_BYTES), (target_issuer, MAX_ISSUER_BYTES),
+        (policy_requirements, requirements::MAX_BYTES)] {
+        require(!original.is_empty() && original.len() <= limit,
+            "native bootstrap packet component exceeds its fixed bound")?;
+    }
+    // This flat container has only fixed ASCII field names/values and canonical
+    // base64url strings. Its encoding is therefore identical to ensure_ascii
+    // JSON, without changing either legacy or request/delegation codecs.
+    let encode = |original: &[u8]| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(original);
+    let value = json!({
+        "apiVersion":"serverware.nativeEnrollmentPacket/v2",
+        "purpose":"workload-bootstrap",
+        "delegationBase64url":encode(delegation),
+        "setupAuthorizationBase64url":encode(setup),
+        "targetRequestBase64url":encode(target_request),
+        "targetIssuerCertificateDerBase64url":encode(target_issuer),
+        "policyRequirementsBase64url":encode(policy_requirements),
+    });
+    let mut original = serverware_decision_gate::canonical_json_bytes(&value)
+        .map_err(|_| "native bootstrap packet canonical encoding failed")?;
+    require(original.is_ascii() && original.len() < MAX_PACKET_BYTES,
+        "native bootstrap packet exceeds its fixed original bound")?;
+    original.push(b'\n');
+    Ok(original)
+}
+
+/// No Clone, deserializer or successful-carrier constructor. This owner retains
+/// the real admission and original setup signature while exposing unsigned
+/// packet bytes only. It cannot call the enrollment signer or install trust.
+pub(super) struct PreparedNativeBootstrapPacket<'a> {
+    admission: NativeBootstrapAdmission<'a>,
+    setup: VerifiedNativeEnrollmentBootstrapSetupV1,
+    setup_original: &'a [u8],
+    policy_requirements: Box<[u8]>,
+    original: Box<[u8]>,
+    original_sha256: [u8; 32],
+    stopped: bool,
+}
+
+impl PreparedNativeBootstrapPacket<'_> {
+    pub(super) fn check(&mut self) -> Result<(), String> {
+        require(!std::mem::replace(&mut self.stopped, true),
+            "native bootstrap packet owner is stopped")?;
+        self.admission.clock.check(self.setup.deadline())?;
+        self.admission.check()?;
+        self.setup.check(self.admission.clock.deadline)?;
+        require(hash(self.setup_original) == self.setup.original_sha256()
+            && self.setup.payload().delegation_sha256 == self.admission.delegation.original_sha256()
+            && self.setup.payload().target_request_sha256 == self.admission.target.original_sha256()
+            && self.setup.payload().policy_requirements_sha256 == hash(&self.policy_requirements)
+            && self.original_sha256 == hash(&self.original),
+            "native bootstrap packet lost its exact admitted original association")?;
+        // The requirements were projected once from this retained immutable
+        // Snapshot. Admission rechecks that actual Arc is still current; no
+        // caller-supplied requirements or refreshed policy is substituted.
+        self.setup.check(self.admission.clock.deadline)?;
+        self.admission.check()?;
+        self.stopped = false;
+        Ok(())
+    }
+
+    /// Returning bytes is not a signed packet, evidence verdict, installation
+    /// receipt or reusable authorization. Later receivers need real originals.
+    pub(super) fn original_bytes(&mut self) -> Result<&[u8], String> {
+        self.check()?;
+        Ok(&self.original)
+    }
+}
+
+/// The eventual route must begin this deadline before reading any bootstrap
+/// body, including the setup original later supplied to packet preparation.
 /// This private seam has no route or signer caller and grants no CA operation.
 pub(super) fn admit<'a>(state: &'a GateState, head: &'a RequestHead,
     stream: &'a DirectProxyStream, trusted_mtls: &'a TrustedMtlsEvidence,

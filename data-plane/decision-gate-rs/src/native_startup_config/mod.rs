@@ -91,6 +91,26 @@ struct ConfigurationV2 {
     enrollment_proxy_endpoint: String,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ConfigurationV3 {
+    api_version: String,
+    gate: gate::GateConfigV1,
+    native: parameters::NativeSettingsV1,
+    shadow: shadow::ShadowConfigV1,
+    response_observation_v2: NativeResponseObservationV2ConfigV1,
+    policy: ArtifactV1,
+    enrollment_authorizer: EnrollmentAuthorizerV1,
+    enrollment_setup_authorizer: EnrollmentAuthorizerV1,
+    enrollment_proxy_endpoint: String,
+}
+
+struct EnrollmentParts {
+    authorizer: EnrollmentAuthorizerV1,
+    endpoint: String,
+    setup_authorizer: Option<EnrollmentAuthorizerV1>,
+}
+
 // This is only a source-local decomposition after exact version-specific
 // decoding. It is never accepted as configuration or verification authority.
 struct ConfigurationParts {
@@ -99,7 +119,7 @@ struct ConfigurationParts {
     shadow: shadow::ShadowConfigV1,
     response_observation_v2: NativeResponseObservationV2ConfigV1,
     policy: ArtifactV1,
-    enrollment: Option<(EnrollmentAuthorizerV1, String)>,
+    enrollment: Option<EnrollmentParts>,
 }
 
 fn configuration(raw: &[u8]) -> Result<ConfigurationParts, String> {
@@ -123,7 +143,22 @@ fn configuration(raw: &[u8]) -> Result<ConfigurationParts, String> {
             Ok(ConfigurationParts { gate: original.gate, native: original.native,
                 shadow: original.shadow, response_observation_v2: original.response_observation_v2,
                 policy: original.policy,
-                enrollment: Some((original.enrollment_authorizer, original.enrollment_proxy_endpoint)) })
+                enrollment: Some(EnrollmentParts { authorizer: original.enrollment_authorizer,
+                    endpoint: original.enrollment_proxy_endpoint, setup_authorizer: None }) })
+        },
+        Some("serverware.nativeStartupConfiguration/v3") => {
+            let original: ConfigurationV3 = serde_json::from_value(value)
+                .map_err(|_| "native v3 configuration violates its closed contract")?;
+            ensure(original.api_version == "serverware.nativeStartupConfiguration/v3"
+                && original.enrollment_authorizer.api_version == "serverware.nativeEnrollmentAuthorizer/v1"
+                && original.enrollment_setup_authorizer.api_version == "serverware.nativeEnrollmentSetupAuthorizer/v1",
+                "native startup v3 authorizer version differs")?;
+            Ok(ConfigurationParts { gate: original.gate, native: original.native,
+                shadow: original.shadow, response_observation_v2: original.response_observation_v2,
+                policy: original.policy,
+                enrollment: Some(EnrollmentParts { authorizer: original.enrollment_authorizer,
+                    endpoint: original.enrollment_proxy_endpoint,
+                    setup_authorizer: Some(original.enrollment_setup_authorizer) }) })
         },
         _ => Err("native startup configuration version differs".to_owned()),
     }

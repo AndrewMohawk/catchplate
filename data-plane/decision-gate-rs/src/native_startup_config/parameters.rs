@@ -79,7 +79,7 @@ fn timestamp(seconds: i64) -> Result<OffsetDateTime, String> {
 impl NativeSettingsV1 {
     pub(super) fn into_parameters(self, launch: LaunchV1, configuration_pin: &str,
         checkpoint: &PolicyHighWater, control_plane_tls: ControlPlaneClientConfig,
-        policy_bytes: Vec<u8>, enrollment: Option<(super::EnrollmentAuthorizerV1, String)>)
+        policy_bytes: Vec<u8>, enrollment: Option<super::EnrollmentParts>)
         -> Result<NativeStartupParametersV1, String>
     {
         ensure((1..=32).contains(&self.ingress_client_roots_der_base64url.len())
@@ -107,13 +107,22 @@ impl NativeSettingsV1 {
             "native startup response public key differs from its key ID")?;
         let enrollment_authorizer = match enrollment {
             None => None,
-            Some((original, endpoint)) => {
+            Some(super::EnrollmentParts { authorizer: original, endpoint, setup_authorizer }) => {
                 ensure(original.api_version == "serverware.nativeEnrollmentAuthorizer/v1",
                     "native enrollment authorizer version differs")?;
-                Some(native_enrollment_authorizer::NativeEnrollmentAuthorizer::from_original(
+                let authorizer = native_enrollment_authorizer::NativeEnrollmentAuthorizer::from_original(
                     original.public_key_pem.as_bytes(), &original.public_key_pem_sha256, &endpoint,
                     self.listener_port, &response_key, &self.expected_policy_signing_key_id,
-                    launch.deadline_boottime_ns)?)
+                    launch.deadline_boottime_ns)?;
+                Some(match setup_authorizer {
+                    None => authorizer,
+                    Some(setup) => {
+                        ensure(setup.api_version == "serverware.nativeEnrollmentSetupAuthorizer/v1",
+                            "native enrollment setup authorizer version differs")?;
+                        authorizer.with_setup_original(setup.public_key_pem.as_bytes(),
+                            &setup.public_key_pem_sha256)?
+                    },
+                })
             },
         };
         bounded_absolute_path(&self.attempt_ledger_directory)?;

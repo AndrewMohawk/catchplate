@@ -12,6 +12,9 @@ pub(super) use assignment::VerifiedNativeEnrollmentAssignmentV1;
 #[path = "native_enrollment_bootstrap_delegation_v1.rs"]
 mod bootstrap_delegation;
 pub(super) use bootstrap_delegation::VerifiedNativeEnrollmentBootstrapDelegationV1;
+#[path = "native_enrollment_bootstrap_setup_v1.rs"]
+mod bootstrap_setup;
+pub(super) use bootstrap_setup::VerifiedNativeEnrollmentBootstrapSetupV1;
 
 use ed25519_dalek::VerifyingKey;
 use sha2::{Digest as _, Sha256};
@@ -24,6 +27,14 @@ const SPKI_PREFIX: &[u8] = &[0x30, 0x2a, 0x30, 0x05, 0x06, 0x03,
 
 struct ClockState { wall_ns: u64, boot_ns: u64, failed: bool }
 
+// Public originals only, admitted exclusively by explicit cold startup v3.
+// A delegation key never acquires host setup authority through a fallback.
+struct SetupPublicRoot {
+    public_key_pem: Box<[u8]>,
+    public_key_pem_sha256: String,
+    key_id: [u8; 32],
+}
+
 /// No Clone, Debug, deserializer, private key or root-selection callback. Only
 /// startup can construct it; only the genuinely checked prepared state serves
 /// it. Every assignment repeats the current actual policy signing-key join.
@@ -33,6 +44,7 @@ pub(super) struct NativeEnrollmentAuthorizer {
     key_id: [u8; 32],
     response_key_id: [u8; 32],
     policy_key_id: [u8; 32],
+    setup: Option<SetupPublicRoot>,
     proxy_endpoint: SocketAddr,
     listener_port: u32,
     deadline: u64,
@@ -95,10 +107,28 @@ impl NativeEnrollmentAuthorizer {
         let proxy_endpoint = assignment::validate_proxy_endpoint_original(proxy_endpoint)?;
         let result = Self { public_key_pem: public_key_pem.into(),
             public_key_pem_sha256: public_key_pem_sha256.to_owned(), key_id, response_key_id, policy_key_id,
-            proxy_endpoint, listener_port, deadline, owner_pid,
+            setup: None, proxy_endpoint, listener_port, deadline, owner_pid,
             clock: Mutex::new(ClockState { wall_ns, boot_ns, failed: false }) };
         result.check()?;
         Ok(result)
+    }
+
+    /// Cold, consuming construction only. Existing v1/v2 startup never calls
+    /// this method; a missing setup root leaves setup/packet preparation shut.
+    pub(super) fn with_setup_original(mut self, public_key_pem: &[u8],
+        public_key_pem_sha256: &str) -> Result<Self, String> {
+        self.check()?;
+        if self.setup.is_some() {
+            return Err("native enrollment setup root was already attached".to_owned());
+        }
+        let key_id = assignment::validate_authorizer_original(public_key_pem, public_key_pem_sha256)?;
+        if [self.key_id, self.response_key_id, self.policy_key_id].contains(&key_id) {
+            return Err("native enrollment setup root must have a separate key role".to_owned());
+        }
+        self.setup = Some(SetupPublicRoot { public_key_pem: public_key_pem.into(),
+            public_key_pem_sha256: public_key_pem_sha256.to_owned(), key_id });
+        self.check()?;
+        Ok(self)
     }
 
     pub(super) fn deadline(&self) -> u64 { self.deadline }
@@ -125,7 +155,8 @@ impl NativeEnrollmentAuthorizer {
     pub(super) fn require_policy_key(&self, actual_policy_key: &VerifyingKey) -> Result<(), String> {
         self.check()?;
         let actual = key_id(actual_policy_key)?;
-        if actual != self.policy_key_id || actual == self.key_id {
+        if actual != self.policy_key_id || actual == self.key_id
+            || self.setup.as_ref().is_some_and(|setup| setup.key_id == actual) {
             return Err("native enrollment actual policy key differs or shares its role".to_owned());
         }
         self.check()?;
@@ -135,7 +166,8 @@ impl NativeEnrollmentAuthorizer {
     pub(super) fn require_response_key(&self, actual_response_key: &VerifyingKey) -> Result<(), String> {
         self.check()?;
         let actual = key_id(actual_response_key)?;
-        if actual != self.response_key_id || actual == self.key_id {
+        if actual != self.response_key_id || actual == self.key_id
+            || self.setup.as_ref().is_some_and(|setup| setup.key_id == actual) {
             return Err("native enrollment actual response key differs or shares its role".to_owned());
         }
         self.check()?;
@@ -169,6 +201,28 @@ impl NativeEnrollmentAuthorizer {
             &self.public_key_pem, &self.public_key_pem_sha256, target_request_original, deadline)?;
         if verified.payload().proxy_endpoint != self.proxy_endpoint {
             return Err("native bootstrap delegation differs from the cold proxy endpoint".to_owned());
+        }
+        self.require_policy_key(actual_policy_key)?;
+        verified.check(deadline)?;
+        Ok(verified)
+    }
+
+    /// Both roots are retained cold originals. The setup verifier replays the
+    /// delegation; the consuming native owner must still prove actual caller,
+    /// request/issuer and current Snapshot-derived requirements on this bound.
+    pub(super) fn verify_bootstrap_setup(&self, setup_original: &[u8],
+        delegation_original: &[u8], target_request_original: &[u8],
+        policy_requirements_original: &[u8], actual_policy_key: &VerifyingKey, deadline: u64)
+        -> Result<VerifiedNativeEnrollmentBootstrapSetupV1, String> {
+        self.require_policy_key(actual_policy_key)?;
+        let setup = self.setup.as_ref().ok_or("native enrollment setup root is absent")?;
+        let deadline = deadline.min(self.deadline);
+        let mut verified = bootstrap_setup::verify_original(setup_original,
+            &setup.public_key_pem, &setup.public_key_pem_sha256, delegation_original,
+            &self.public_key_pem, &self.public_key_pem_sha256, target_request_original,
+            policy_requirements_original, deadline)?;
+        if verified.payload().proxy_endpoint != self.proxy_endpoint {
+            return Err("native bootstrap setup differs from the cold proxy endpoint".to_owned());
         }
         self.require_policy_key(actual_policy_key)?;
         verified.check(deadline)?;

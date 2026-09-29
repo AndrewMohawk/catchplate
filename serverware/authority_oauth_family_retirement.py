@@ -43,6 +43,10 @@ def pending_query(operation, provider, subject):
 
 def require_open_from_population(context, provider, subject):
     """Caller must acquire this complete population in its same proved transaction."""
+    if context.operation in {"oauth.pending.stage", "oauth.measured-exchange.stage", "oauth.measured-setup.stage",
+            "oauth.pending.activate", "oauth.setup.activate"}:
+        from serverware.authority_transition_oauth_reconnect_rows import block_pending_family
+        block_pending_family(context, provider, subject)
     key = family_id(provider, subject)
     for selected in context.present_rows(TABLE):
         row = shared._row(selected, "complete OAuth family retirement inventory")

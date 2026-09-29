@@ -78,6 +78,7 @@ from serverware.portal_oauth_measured_consent import (
 )
 from serverware.portal_oauth_activation import OAUTH_ACTIVATION_HTML, OAUTH_ACTIVATION_SCRIPT
 from serverware.portal_oauth_setup import OAUTH_SETUP_HTML, OAUTH_SETUP_SCRIPT
+from serverware.portal_oauth_reconnect import OAUTH_RECONNECT_HTML, OAUTH_RECONNECT_SCRIPT
 from serverware.portal_registration_handoff import (
     REGISTRATION_HANDOFF_CSS,
     REGISTRATION_HANDOFF_HTML,
@@ -14849,6 +14850,41 @@ async def _native_oauth_original(request: Request, maximum: int) -> bytes:
     return bytes(body)
 
 
+@app.post("/api/oauth/reconnect/inventory")
+@app.post("/api/oauth/reconnect/authorize/options")
+@app.post("/api/oauth/reconnect/authorize")
+@app.post("/api/oauth/reconnect/activation/options")
+@app.post("/api/oauth/reconnect/activation")
+async def controlled_oauth_reconnect(request: Request) -> Response:
+    from serverware import control_plane_oauth_reconnect as reconnect
+    from starlette.concurrency import run_in_threadpool
+    raw = await _native_oauth_original(request, reconnect.profile.MAX_HTTP_REQUEST)
+    try:
+        result = await run_in_threadpool(reconnect.human_on_request, request, raw)
+        body = _canonical_json(result).encode("utf-8")
+        if len(body) > reconnect.profile.MAX_HTTP_RESPONSE:
+            raise ValueError("reconnect response bound")
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=409, detail="reconnect refused or outcome unknown; inspect, never automatically resubmit") from None
+    return Response(content=body, media_type="application/json", headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/oauth/reconnect/{authorization_id}")
+def controlled_oauth_reconnect_inspect(authorization_id: str, request: Request) -> Response:
+    from serverware import control_plane_oauth_reconnect as reconnect
+    try:
+        body = _canonical_json(reconnect.inspect_on_request(request, authorization_id)).encode("utf-8")
+        if len(body) > reconnect.profile.MAX_HTTP_RESPONSE:
+            raise ValueError("reconnect observation bound")
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=409, detail="reconnect retained association unavailable or uncertain") from None
+    return Response(content=body, media_type="application/json", headers={"Cache-Control": "no-store"})
+
+
 @app.post("/api/setup/oauth/create/draft")
 @app.post("/api/setup/oauth/create/options")
 @app.post("/api/setup/oauth/create")
@@ -18991,6 +19027,26 @@ async def data_plane_measured_oauth_issuance(request: Request) -> Response:
     return Response(content=body, media_type="application/json", headers={"Cache-Control": "no-store"})
 
 
+@app.post("/api/data-plane/oauth-reconnect")
+@app.post("/api/data-plane/oauth-reconnect/original")
+async def data_plane_measured_oauth_reconnect(request: Request) -> Response:
+    from serverware import control_plane_oauth_reconnect as reconnect
+    from starlette.concurrency import run_in_threadpool
+    _require_data_plane_token(request.headers.get("X-Serverware-Data-Plane-Token"), DATA_PLANE_CREDENTIAL_LEASE_TOKEN)
+    recovery = request.url.path == reconnect.profile.HTTP_PATH + "/original"
+    raw = await _native_oauth_original(request, 1024 if recovery else reconnect.profile.MAX_HTTP_REQUEST)
+    try:
+        def dispatch():
+            return reconnect.recovery_original_on_request(request, raw) if recovery else reconnect.Opening(request, raw).dispatch()
+        result = await run_in_threadpool(dispatch)
+        body = _canonical_json(result).encode("utf-8")
+        if len(body) > reconnect.profile.MAX_HTTP_RESPONSE:
+            raise ValueError("reconnect native response bound")
+    except Exception:
+        raise HTTPException(status_code=503, detail="reconnect native outcome unavailable or uncertain; no contact retry authorized") from None
+    return Response(content=body, media_type="application/json", headers={"Cache-Control": "no-store"})
+
+
 @app.post("/api/data-plane/oauth-setup-issuance")
 @app.post("/api/data-plane/oauth-setup-issuance/original")
 async def data_plane_measured_oauth_setup(request: Request) -> Response:
@@ -22690,6 +22746,7 @@ UI_HTML = r"""
           __SERVERWARE_OAUTH_CONSENT_HTML__
           __SERVERWARE_MEASURED_OAUTH_CONSENT_HTML__
           __SERVERWARE_OAUTH_SETUP_HTML__
+          __SERVERWARE_OAUTH_RECONNECT_HTML__
           <div id="oauth-connected-section" class="pending-oauth-list connected-oauth-list" hidden>
             <h3>Connected provider accounts</h3>
             <div id="oauth-connected-accounts"></div>
@@ -26027,7 +26084,7 @@ UI_HTML = r"""
       return completed;
     }
     async function reconnectOAuthCredential(id) {
-      if (enrolledOAuthProfile !== 'development') throw new Error('Controlled enrolled reconnect is not implemented. No request or new-credential fallback was sent.');
+      if (enrolledOAuthProfile !== 'development') return reconnectRead(true, id);
       const item = state.credentials.find((candidate) => candidate.id === id);
       if (!item || item.kind !== 'oauth2' || item.metadata?.oauth !== true) throw new Error('Managed OAuth credential is unavailable');
       if ((item.lifecycle_status || 'active') !== 'active') throw new Error('Complete provider revocation before reconnecting this credential');
@@ -26385,6 +26442,7 @@ UI_HTML = r"""
     __SERVERWARE_OAUTH_CONSENT_SCRIPT__
     __SERVERWARE_MEASURED_OAUTH_CONSENT_SCRIPT__
     __SERVERWARE_OAUTH_SETUP_SCRIPT__
+    __SERVERWARE_OAUTH_RECONNECT_SCRIPT__
     __SERVERWARE_OAUTH_ACTIVATION_SCRIPT__
     initWorkloadIdentityEditor();
     initWorkloadEnrollmentRequirements();
@@ -26467,6 +26525,8 @@ for _portal_placeholder, _portal_fragment in (
     ("__SERVERWARE_MEASURED_OAUTH_CONSENT_SCRIPT__", MEASURED_OAUTH_CONSENT_SCRIPT),
     ("__SERVERWARE_OAUTH_SETUP_HTML__", OAUTH_SETUP_HTML),
     ("__SERVERWARE_OAUTH_SETUP_SCRIPT__", OAUTH_SETUP_SCRIPT),
+    ("__SERVERWARE_OAUTH_RECONNECT_HTML__", OAUTH_RECONNECT_HTML),
+    ("__SERVERWARE_OAUTH_RECONNECT_SCRIPT__", OAUTH_RECONNECT_SCRIPT),
     ("__SERVERWARE_OAUTH_ACTIVATION_HTML__", OAUTH_ACTIVATION_HTML),
     ("__SERVERWARE_OAUTH_ACTIVATION_SCRIPT__", OAUTH_ACTIVATION_SCRIPT),
     ("__SERVERWARE_REGISTRATION_HANDOFF_CSS__", REGISTRATION_HANDOFF_CSS),

@@ -10,7 +10,7 @@ from serverware import authority_complete_query
 from serverware.authority_query_read_work import _ValidationWork
 
 
-SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.298"
+SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.299"
 SCHEMA_VERSION = 9
 CONTRACT_SCHEMA = "serverware.policyAuthorityOperationContract/v3"
 BUSINESS_INTENT_SCHEMA = "serverware.policyAuthorityBusinessIntent/v2"
@@ -273,6 +273,9 @@ _AUDIT_COUNTER_REPLACEMENT_OPERATIONS = frozenset({
     "oauth.measured-setup.prepare", "oauth.measured-setup.claim", "oauth.measured-setup.capture",
     "oauth.measured-setup.stage", "oauth.measured-setup.recover", "oauth.measured-setup.cancel",
     "oauth.setup.create", "oauth.setup.activation-request", "oauth.setup.activation-decide", "oauth.setup.activate", "oauth.setup.audit-settle",
+    "oauth.reconnect.authorize", "oauth.reconnect.fence", "oauth.reconnect.activation-request", "oauth.reconnect.activation-decide", "oauth.reconnect.activate",
+    "oauth.measured-reconnect.prepare", "oauth.measured-reconnect.claim", "oauth.measured-reconnect.capture",
+    "oauth.measured-reconnect.stage", "oauth.measured-reconnect.recover", "oauth.measured-reconnect.cancel",
     "oauth.refresh.claim", "oauth.refresh.retain", "oauth.refresh.commit",
     "oauth.measured-refresh.inspect", "oauth.measured-refresh.claim", "oauth.measured-refresh.capture",
     "oauth.measured-refresh.commit", "oauth.measured-refresh.recover",
@@ -1466,6 +1469,8 @@ V9_ADDITIONAL_PROTECTED_TABLES = tuple(sorted({
     "oauth_measured_exchange_custody",
     "oauth_measured_setup_custody",
     "oauth_setup_audit_links",
+    "oauth_reconnect_authorizations",
+    "oauth_measured_reconnect_custody",
     "setup_session_events",
     "credential_currentness_roots",
     "credential_currentness_holders",
@@ -1911,6 +1916,26 @@ _OPERATIONS = {
             proof_primitives=("primary-key-row", "bounded-limit-plus-one", "aggregate-high-water", "capacity-reservation"),
             maximum_query_rows=256, maximum_mutations=32, maximum_work_units=4096,
         ) for operation in ("oauth.setup.create", "oauth.setup.activation-request", "oauth.setup.activation-decide", "oauth.setup.activate", "oauth.setup.audit-settle")
+    },
+    **{
+        operation: _spec(
+            "serverware_policy_authority_" + operation.replace(".", "_").replace("-", "_"),
+            reads=("oauth_reconnect_authorizations", "oauth_measured_reconnect_custody", "oauth_exchange_reservations",
+                "credentials", "credential_generations", "credential_currentness_roots", "credential_currentness_barriers",
+                "rbac_role_bindings", "control_plane_approvals", "oauth_family_retirements", "oauth_pending_family_retirements",
+                "oauth_provider_retirements") + (("pending_oauth_credentials", "setup_sessions") if operation == "oauth.reconnect.fence" else ()) + _PHASE2_AGGREGATE,
+            writes=("metadata_audit_outbox",) +
+                (("oauth_reconnect_authorizations",) if operation in {"oauth.reconnect.authorize", "oauth.reconnect.fence"} else ()) +
+                (("credentials", "credential_currentness_roots", "credential_currentness_barriers") if operation == "oauth.reconnect.fence" else ()) +
+                (("oauth_measured_reconnect_custody", "oauth_exchange_reservations") if operation.startswith("oauth.measured-reconnect.") else ()) +
+                (("control_plane_approvals",) if operation in {"oauth.reconnect.activation-request", "oauth.reconnect.activation-decide", "oauth.reconnect.activate"} else ()) +
+                (("credentials", "credential_generations", "credential_currentness_roots", "oauth_measured_reconnect_custody") if operation == "oauth.reconnect.activate" else ()) + _PHASE2_AGGREGATE,
+            webauthn="bound-verified-assertion-receipt" if operation in {"oauth.reconnect.authorize", "oauth.reconnect.activation-request", "oauth.reconnect.activation-decide", "oauth.reconnect.activate"} else "not-required",
+            proof_primitives=("primary-key-row", "bounded-limit-plus-one", "aggregate-high-water", "capacity-reservation"),
+            maximum_query_rows=256, maximum_mutations=72, maximum_work_units=4096,
+        ) for operation in ("oauth.reconnect.authorize", "oauth.reconnect.fence", "oauth.reconnect.activation-request", "oauth.reconnect.activation-decide", "oauth.reconnect.activate",
+            "oauth.measured-reconnect.prepare", "oauth.measured-reconnect.claim", "oauth.measured-reconnect.capture",
+            "oauth.measured-reconnect.stage", "oauth.measured-reconnect.recover", "oauth.measured-reconnect.cancel")
     },
     **{
         operation: _spec(

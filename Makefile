@@ -1366,6 +1366,13 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/native_oauth_capture_retirement.py \
 	serverware/native_oauth_capture_retirement_owner.py \
 	serverware/native_oauth_capture_retirement_receipts.py \
+	serverware/authority_oauth_reconnect.py \
+	serverware/authority_oauth_reconnect_policy.py \
+	serverware/authority_transition_oauth_reconnect.py \
+	serverware/authority_transition_oauth_reconnect_rows.py \
+	serverware/control_plane_oauth_reconnect.py \
+	serverware/oauth_reconnect_owner.py \
+	serverware/portal_oauth_reconnect.py \
 	serverware/authority_oauth_measured_cleanup_policy.py \
 	serverware/authority_oauth_measured_cleanup.py \
 	serverware/authority_transition_oauth_measured_cleanup.py \
@@ -3786,6 +3793,13 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/native_oauth_capture_retirement.py \
 				serverware/native_oauth_capture_retirement_owner.py \
 				serverware/native_oauth_capture_retirement_receipts.py \
+				serverware/authority_oauth_reconnect.py \
+				serverware/authority_oauth_reconnect_policy.py \
+				serverware/authority_transition_oauth_reconnect.py \
+				serverware/authority_transition_oauth_reconnect_rows.py \
+				serverware/control_plane_oauth_reconnect.py \
+				serverware/oauth_reconnect_owner.py \
+				serverware/portal_oauth_reconnect.py \
 				serverware/authority_oauth_measured_cleanup_policy.py \
 				serverware/authority_oauth_measured_cleanup.py \
 				serverware/authority_transition_oauth_measured_cleanup.py \
@@ -4340,6 +4354,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-startup-configuration.v16.schema.json \
 				schemas/native-oauth-capture-retirement.v1.schema.json \
 				schemas/oauth-measured-capture-retirement-authority.v1.schema.json \
+				schemas/oauth-measured-reconnect-authority.v1.schema.json \
 				schemas/native-oauth-measured-setup.v1.schema.json \
 				schemas/native-gate-cgroup.v1.schema.json \
 				schemas/native-shadow-workers.v1.schema.json \

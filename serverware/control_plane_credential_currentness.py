@@ -410,6 +410,24 @@ def admit_capture_retirement_barriers(opening, affected_originals):
     opening.check(); owner.check()
     return pending.barriers(result, grant["affectedLineages"])
 
+def admit_reconnect_barriers(opening):
+    from serverware.control_plane_oauth_reconnect import _Authorization
+    from serverware import authority_oauth_reconnect as reconnect
+    from serverware import authority_transition_oauth_reconnect_rows as reconnect_rows
+    profile.require(type(opening) is _Authorization and opening.sent and opening.authorized and not opening.fenced)
+    opening.check()
+    owner = _Owner(deadline=opening.deadline, expires=opening.expires)
+    profile.require(opening.custody is owner.custody and opening.binding is owner.binding)
+    members = reconnect_rows.affected(opening.journal, opening.grant)
+    result = []
+    for (credential, generation), pin in zip(members, opening.grant["affectedLineages"]):
+        opening.check(); owner.check()
+        digest = _coordinate(owner, credential, generation, opening)
+        result.append({"credentialId": pin["credentialId"], "credentialVersion": pin["credentialVersion"], "barrierSha256": digest})
+    opening.check(); owner.check()
+    return reconnect.barriers(result, opening.grant["affectedLineages"])
+
+
 def admit_cleanup_barrier(operation):
     from serverware.control_plane_oauth_refresh_cleanup import _Operation
     profile.require(type(operation) is _Operation)

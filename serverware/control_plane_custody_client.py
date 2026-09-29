@@ -2124,6 +2124,27 @@ class ControlPlaneCustodyClient:
             raise CustodyClientError("Setup has no exact committed originals")
         return originals
 
+    def _request_measured_reconnect(self, *, operation, input_value, deadline_ns):
+        """Purpose-fixed actual response originals; never a retry operation."""
+        from serverware import authority_oauth_reconnect as reconnect
+        if operation not in reconnect.OPERATIONS or type(deadline_ns) is not int:
+            raise CustodyClientError("reconnect custody purpose differs")
+        binding = _snapshot(self)
+        runtime = binding.runtime_client
+        if type(runtime) is not service.AuthorityRuntimeClient:
+            raise CustodyClientError("reconnect lacks actual cold runtime client")
+        _receipt_now(binding)
+        originals = service.AuthorityRuntimeClient.request_measured_reconnect(runtime,
+            operation=operation, input_value=input_value, deadline_ns=deadline_ns)
+        _process(binding); _receipt_now(binding)
+        if _snapshot(self) is not binding:
+            raise CustodyClientError("reconnect custody changed")
+        journal.CustodyJournal._require_ready(binding.journal)
+        transport._check_deadline(deadline_ns)
+        if type(originals) is not tuple or len(originals) != 2 or any(type(raw) is not bytes for raw in originals):
+            raise CustodyClientError("reconnect has no exact committed originals")
+        return originals
+
     def forward_once(self, localdigest, *, deadline_ns=None):
         """Claim one durable attempt, then make one fixed relay exchange.
 

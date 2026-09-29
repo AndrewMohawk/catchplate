@@ -4,9 +4,12 @@
 def provider_status_with_custody():
     from serverware.oauth import provider_status
     from serverware import oauth_application_owner
+    from serverware import oauth_reconnect_owner
     result = provider_status()
     for provider in result:
-        if oauth_application_owner.setup_selected(provider["id"]):
+        if oauth_reconnect_owner.selected() and oauth_application_owner.measured_selected(provider["id"]):
+            provider["consentProfile"] = "serverware.oauthReconnectApprovalOptions/v1"
+        elif oauth_application_owner.setup_selected(provider["id"]):
             provider["consentProfile"] = "serverware.nativeOAuthSetupConsentOptions/v1"
         elif oauth_application_owner.measured_selected(provider["id"]):
             provider["consentProfile"] = "serverware.nativeOAuthConsentOptions/v1"

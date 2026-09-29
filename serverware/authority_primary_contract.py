@@ -46,6 +46,8 @@ PRIMARY_KEY_COLUMNS: Mapping[str, tuple[str, ...]] = MappingProxyType({
     "oauth_measured_exchange_custody": ("id",),
     "oauth_measured_setup_custody": ("id",),
     "oauth_setup_audit_links": ("id",),
+    "oauth_reconnect_authorizations": ("id",),
+    "oauth_measured_reconnect_custody": ("id",),
     "setup_session_events": ("id",),
     "oauth_refresh_reservations": ("id",),
     "oauth_measured_refresh_custody": ("id",),

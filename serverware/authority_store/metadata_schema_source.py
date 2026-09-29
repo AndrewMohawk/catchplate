@@ -430,6 +430,64 @@ def metadata_base_schema_source() -> str:
                 created_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS oauth_reconnect_authorizations (
+                id TEXT PRIMARY KEY,
+                authorization_original TEXT NOT NULL,
+                authorization_sha256 TEXT NOT NULL UNIQUE,
+                enrollment_original TEXT NOT NULL,
+                actor_id TEXT NOT NULL,
+                credential_policy_json TEXT NOT NULL,
+                original_affected_json TEXT NOT NULL,
+                authorize_arguments_json TEXT NOT NULL,
+                authorize_request_digest TEXT NOT NULL UNIQUE,
+                currentness_barriers_json TEXT,
+                fence_arguments_json TEXT,
+                fence_request_digest TEXT UNIQUE,
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                admission_expires_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                CHECK (status IN ('authorized', 'fenced')),
+                CHECK ((status = 'authorized') = (fence_request_digest IS NULL)),
+                CHECK ((fence_request_digest IS NULL) = (fence_arguments_json IS NULL)
+                    AND (fence_request_digest IS NULL) = (currentness_barriers_json IS NULL))
+            );
+
+            CREATE TABLE IF NOT EXISTS oauth_measured_reconnect_custody (
+                id TEXT PRIMARY KEY,
+                prepare_request_digest TEXT NOT NULL,
+                preparation_arguments_json TEXT NOT NULL,
+                claim_arguments_json TEXT,
+                capture_arguments_json TEXT,
+                stage_arguments_json TEXT,
+                cancel_arguments_json TEXT,
+                owner_nonce_sha256 TEXT,
+                received_at_epoch_ns BIGINT,
+                recovery_request_digest TEXT,
+                recovery_expires_at_epoch_ns BIGINT,
+                recovery_arguments_json TEXT,
+                recovery_owner_nonce_sha256 TEXT,
+                candidate_original_json TEXT,
+                commit_request_digest TEXT UNIQUE,
+                committed_credential_json TEXT,
+                predecessor_original_json TEXT,
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                CHECK (status IN ('prepared', 'claimed', 'captured', 'staged', 'cancelled', 'committed')),
+                CHECK ((claim_arguments_json IS NULL) = (owner_nonce_sha256 IS NULL)),
+                CHECK ((capture_arguments_json IS NULL) = (received_at_epoch_ns IS NULL)),
+                CHECK ((stage_arguments_json IS NULL) = (candidate_original_json IS NULL)),
+                CHECK ((recovery_request_digest IS NULL) = (recovery_expires_at_epoch_ns IS NULL)
+                    AND (recovery_request_digest IS NULL) = (recovery_arguments_json IS NULL)
+                    AND (recovery_request_digest IS NULL) = (recovery_owner_nonce_sha256 IS NULL)),
+                CHECK ((status = 'committed') = (commit_request_digest IS NOT NULL)),
+                CHECK ((commit_request_digest IS NULL) = (committed_credential_json IS NULL)
+                    AND (commit_request_digest IS NULL) = (predecessor_original_json IS NULL)),
+                CHECK (cancel_arguments_json IS NULL OR claim_arguments_json IS NULL)
+            );
+
             CREATE TABLE IF NOT EXISTS oauth_measured_setup_custody (
                 id TEXT PRIMARY KEY,
                 prepare_request_digest TEXT NOT NULL,

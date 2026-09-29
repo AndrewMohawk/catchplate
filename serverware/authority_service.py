@@ -66,6 +66,8 @@ from serverware import authority_oauth_measured_exchange_policy as oauth_measure
 from serverware import authority_oauth_measured_setup as oauth_measured_setup
 from serverware import authority_oauth_setup as oauth_setup
 from serverware import authority_oauth_measured_setup_policy as oauth_measured_setup_policy
+from serverware import authority_oauth_reconnect as oauth_reconnect
+from serverware import authority_oauth_reconnect_policy as oauth_reconnect_policy
 from serverware import authority_credential_currentness as credential_currentness
 from serverware import authority_credential_currentness_policy as credential_currentness_policy
 from serverware import authority_oauth_revocation as oauth_revocation
@@ -119,6 +121,7 @@ PENDING_RETIREMENT_RESPONSE_SCHEMA = oauth_pending_retirement.RUNTIME_RESPONSE
 CAPTURE_RETIREMENT_RESPONSE_SCHEMA = oauth_capture_retirement.RUNTIME_RESPONSE
 MEASURED_EXCHANGE_RESPONSE_SCHEMA = "serverware.policyAuthorityMeasuredExchangeRuntimeResponse/v1"
 MEASURED_SETUP_RESPONSE_SCHEMA = "serverware.policyAuthorityMeasuredSetupRuntimeResponse/v1"
+MEASURED_RECONNECT_RESPONSE_SCHEMA = "serverware.policyAuthorityMeasuredReconnectRuntimeResponse/v1"
 INTERNAL_ENVELOPE_SCHEMA = authority_contract.INTERNAL_ENVELOPE_SCHEMA
 RUNTIME_TRUST_SCHEMA = "serverware.policyAuthorityRuntimeTrust/v1"
 SIGNED_RUNTIME_TRUST_SCHEMA = (
@@ -1182,7 +1185,7 @@ class MeasuredConfiguration:
                 "authority configuration root signature is invalid"
             ) from exc
         if (
-            set(payload) - {evidence_policy.FIELD, transition_policy.FIELD, enrollment_policy.FIELD, oauth_activation_policy.FIELD, oauth_exchange_policy.FIELD, oauth_revocation_policy.FIELD, oauth_refresh_policy.FIELD, credential_currentness_policy.FIELD, oauth_refresh_cleanup_policy.FIELD, oauth_measured_refresh_policy.FIELD, oauth_measured_exchange_policy.FIELD, oauth_measured_setup_policy.FIELD, oauth_measured_cleanup_policy.FIELD, oauth_pending_retirement_policy.FIELD, oauth_capture_retirement_policy.FIELD}
+            set(payload) - {evidence_policy.FIELD, transition_policy.FIELD, enrollment_policy.FIELD, oauth_activation_policy.FIELD, oauth_exchange_policy.FIELD, oauth_revocation_policy.FIELD, oauth_refresh_policy.FIELD, credential_currentness_policy.FIELD, oauth_refresh_cleanup_policy.FIELD, oauth_measured_refresh_policy.FIELD, oauth_measured_exchange_policy.FIELD, oauth_measured_setup_policy.FIELD, oauth_reconnect_policy.FIELD, oauth_measured_cleanup_policy.FIELD, oauth_pending_retirement_policy.FIELD, oauth_capture_retirement_policy.FIELD}
                 != required_payload_fields
             or payload.get("schema") != CONFIG_SCHEMA
             or payload.get("sourceRevision") != SOURCE_REVISION
@@ -1291,6 +1294,7 @@ class MeasuredConfiguration:
         try:
             oauth_measured_exchange_policy.validate_policy(payload.get(oauth_measured_exchange_policy.FIELD), payload=payload, root_key=root_key)
             oauth_measured_setup_policy.validate_policy(payload.get(oauth_measured_setup_policy.FIELD), payload=payload, root_key=root_key)
+            oauth_reconnect_policy.validate_policy(payload.get(oauth_reconnect_policy.FIELD), payload=payload, root_key=root_key)
         except (TypeError, ValueError) as exc:
             raise AuthorityServiceError("authority measured initial OAuth issuance policy is invalid") from exc
         try:
@@ -2162,9 +2166,15 @@ def _socket_request(
     measured_setup_response: bool = False,
     measured_pending_retirement_response: bool = False,
     measured_capture_retirement_response: bool = False,
+    measured_reconnect_response: bool = False,
 ) -> dict[str, Any]:
+    if measured_reconnect_response and (measured_setup_response or measured_refresh_response or measured_exchange_response
+            or measured_pending_retirement_response or measured_capture_retirement_response
+            or value.get("operation") not in oauth_reconnect.OPERATIONS or deadline_ns is None):
+        raise AuthorityServiceError("expanded reconnect response requires its independently selected purpose")
     if measured_capture_retirement_response and (measured_refresh_response or measured_exchange_response or measured_setup_response
-            or measured_pending_retirement_response or value.get("operation") not in oauth_capture_retirement.OPERATIONS or deadline_ns is None):
+            or measured_pending_retirement_response or measured_reconnect_response
+            or value.get("operation") not in oauth_capture_retirement.OPERATIONS or deadline_ns is None):
         raise AuthorityServiceError("expanded capture retirement originals require their separate exact purpose")
     if measured_setup_response and (measured_refresh_response or measured_exchange_response or measured_pending_retirement_response
             or value.get("operation") not in oauth_measured_setup.OPERATIONS or deadline_ns is None):
@@ -2195,7 +2205,7 @@ def _socket_request(
             return _recv_message(connection)
         _send_message_until(connection, value, deadline_ns=deadline_ns)
         size = int.from_bytes(writer_transport._recv_exact_until(connection, 8, deadline_ns=deadline_ns), "big")
-        maximum = 6 * 1024 * 1024 if measured_refresh_response or measured_exchange_response or measured_setup_response or measured_pending_retirement_response or measured_capture_retirement_response else 128 * 1024
+        maximum = 6 * 1024 * 1024 if measured_refresh_response or measured_exchange_response or measured_setup_response or measured_pending_retirement_response or measured_capture_retirement_response or measured_reconnect_response else 128 * 1024
         if not 2 <= size <= maximum:
             raise AuthorityServiceError("publication authority response exceeds its fixed bound")
         raw = writer_transport._recv_exact_until(connection, size, deadline_ns=deadline_ns)
@@ -3067,8 +3077,14 @@ class AuthorityRuntimeClient:
         return self._request_result(operation=operation, input_value=input_value, deadline_ns=deadline_ns,
             measured_originals=True)
 
+    def request_measured_reconnect(self, *, operation, input_value, deadline_ns):
+        if operation not in oauth_reconnect.OPERATIONS or type(deadline_ns) is not int:
+            raise AuthorityServiceError("reconnect has no generic signed-original export")
+        return self._request_result(operation=operation, input_value=input_value, deadline_ns=deadline_ns,
+            measured_originals=True)
+
     def _request_result(self, *, operation, input_value, deadline_ns, measured_originals):
-        measured = operation in oauth_measured_refresh.OPERATIONS | oauth_measured_exchange.OPERATIONS | oauth_measured_setup.OPERATIONS | oauth_measured_cleanup.OPERATIONS | oauth_pending_retirement.OPERATIONS | oauth_capture_retirement.OPERATIONS
+        measured = operation in oauth_measured_refresh.OPERATIONS | oauth_measured_exchange.OPERATIONS | oauth_measured_setup.OPERATIONS | oauth_reconnect.OPERATIONS | oauth_measured_cleanup.OPERATIONS | oauth_pending_retirement.OPERATIONS | oauth_capture_retirement.OPERATIONS
         if measured_originals and not measured or measured and type(deadline_ns) is not int:
             raise AuthorityServiceError("generic authority original export is unavailable")
         response_schema = (CAPTURE_RETIREMENT_RESPONSE_SCHEMA if operation in oauth_capture_retirement.OPERATIONS else
@@ -3076,6 +3092,7 @@ class AuthorityRuntimeClient:
             MEASURED_CLEANUP_RESPONSE_SCHEMA if operation in oauth_measured_cleanup.OPERATIONS else
             MEASURED_EXCHANGE_RESPONSE_SCHEMA if operation in oauth_measured_exchange.OPERATIONS else
             MEASURED_SETUP_RESPONSE_SCHEMA if operation in oauth_measured_setup.OPERATIONS else
+            MEASURED_RECONNECT_RESPONSE_SCHEMA if operation in oauth_reconnect.OPERATIONS else
             MEASURED_REFRESH_RESPONSE_SCHEMA if measured else RUNTIME_RESPONSE_SCHEMA)
         if (
             operation
@@ -3121,6 +3138,7 @@ class AuthorityRuntimeClient:
             measured_setup_response=operation in oauth_measured_setup.OPERATIONS,
             measured_pending_retirement_response=operation in oauth_pending_retirement.OPERATIONS,
             measured_capture_retirement_response=operation in oauth_capture_retirement.OPERATIONS,
+            measured_reconnect_response=operation in oauth_reconnect.OPERATIONS,
         )
         signature = _b64url_decode(response.get("signature"), size=64)
         unsigned = dict(response)
@@ -6311,7 +6329,7 @@ class AuthorityProcess:
                 ),
         }
         response_schema = RUNTIME_RESPONSE_SCHEMA
-        if operation in oauth_measured_refresh.OPERATIONS | oauth_measured_exchange.OPERATIONS | oauth_measured_setup.OPERATIONS | oauth_measured_cleanup.OPERATIONS | oauth_pending_retirement.OPERATIONS | oauth_capture_retirement.OPERATIONS:
+        if operation in oauth_measured_refresh.OPERATIONS | oauth_measured_exchange.OPERATIONS | oauth_measured_setup.OPERATIONS | oauth_reconnect.OPERATIONS | oauth_measured_cleanup.OPERATIONS | oauth_pending_retirement.OPERATIONS | oauth_capture_retirement.OPERATIONS:
             original = self.configuration.original_bytes
             if (type(original) is not bytes or not 0 < len(original) <= 1024 * 1024
                     or _sha256(original) != self.configuration.file_digest):
@@ -6321,6 +6339,7 @@ class AuthorityProcess:
                 else MEASURED_CLEANUP_RESPONSE_SCHEMA if operation in oauth_measured_cleanup.OPERATIONS
                 else MEASURED_EXCHANGE_RESPONSE_SCHEMA if operation in oauth_measured_exchange.OPERATIONS
                 else MEASURED_SETUP_RESPONSE_SCHEMA if operation in oauth_measured_setup.OPERATIONS
+                else MEASURED_RECONNECT_RESPONSE_SCHEMA if operation in oauth_reconnect.OPERATIONS
                 else MEASURED_REFRESH_RESPONSE_SCHEMA)
             unsigned["schema"] = response_schema
             unsigned["authorityConfigurationOriginal"] = _b64url_encode(original)
@@ -8165,16 +8184,21 @@ class AuthorityProcess:
             operation_id=operation_id,
         )
         from serverware import authority_publication_approval as publication_approval
-        if operation in (publication_approval.assertion_operations() | oauth_activation.ASSERTION_OPERATIONS | oauth_exchange.ASSERTION_OPERATIONS | oauth_measured_exchange.ASSERTION_OPERATIONS | oauth_measured_setup.ASSERTION_OPERATIONS | oauth_setup.ASSERTION_OPERATIONS):
+        if operation in (publication_approval.assertion_operations() | oauth_activation.ASSERTION_OPERATIONS | oauth_exchange.ASSERTION_OPERATIONS | oauth_measured_exchange.ASSERTION_OPERATIONS | oauth_measured_setup.ASSERTION_OPERATIONS | oauth_setup.ASSERTION_OPERATIONS | oauth_reconnect.ASSERTION_OPERATIONS):
             # This is a new, independently admitted purpose. Legacy argument
             # adapters and physical-evidence receipt families are not relabeled.
-            selected_profile = (oauth_measured_setup if operation in oauth_measured_setup.OPERATIONS else
+            selected_profile = (oauth_reconnect if operation in oauth_reconnect.OPERATIONS else
+                oauth_measured_setup if operation in oauth_measured_setup.OPERATIONS else
                 oauth_setup if operation in oauth_setup.OPERATIONS else
                 oauth_measured_exchange if operation in oauth_measured_exchange.OPERATIONS else
                 oauth_exchange if operation in oauth_exchange.OPERATIONS else
                 oauth_activation if operation in oauth_activation.OPERATIONS else publication_approval.operation_profile(operation))
             values = selected_profile.arguments(operation,
                 {name: value for name, value in arguments.items() if name != "authn_evidence"})
+            if operation in oauth_reconnect.OPERATIONS:
+                oauth_reconnect_policy.verify_original(operation, values,
+                    configuration_payload=self.configuration.payload, root_key=self.configuration.root_key,
+                    now_epoch_ns=time.time_ns())
             if operation in oauth_measured_setup.OPERATIONS | oauth_setup.OPERATIONS:
                 oauth_measured_setup_policy.verify_original(operation, values,
                     configuration_payload=self.configuration.payload, root_key=self.configuration.root_key,
@@ -8456,6 +8480,12 @@ class AuthorityProcess:
             selected_profile = oauth_measured_setup if operation in oauth_measured_setup.OPERATIONS else oauth_setup
             if selected_profile.request_digest(operation, original_values) != request_digest:
                 raise AuthorityServiceError("Setup purpose original commitment differs")
+        if operation in oauth_reconnect.OPERATIONS:
+            original_values = {name: value for name, value in arguments.items() if name != "authn_evidence"}
+            oauth_reconnect_policy.verify_original(operation, original_values,
+                configuration_payload=self.configuration.payload, root_key=self.configuration.root_key, now_epoch_ns=time.time_ns())
+            if oauth_reconnect.request_digest(operation, original_values) != request_digest:
+                raise AuthorityServiceError("reconnect original commitment differs")
         if operation in credential_currentness.OPERATIONS:
             credential_currentness_policy.verify_original(operation, arguments,
                 configuration_payload=self.configuration.payload, root_key=self.configuration.root_key,
@@ -9001,6 +9031,10 @@ class AuthorityProcess:
                 root_key=self.configuration.root_key, now_epoch_ns=time.time_ns())
         if planner_request["operation"] in oauth_measured_setup.OPERATIONS | oauth_setup.OPERATIONS:
             oauth_measured_setup_policy.verify_original(planner_request["operation"],
+                planner_request["typedRequest"]["arguments"], configuration_payload=self.configuration.payload,
+                root_key=self.configuration.root_key, now_epoch_ns=time.time_ns())
+        if planner_request["operation"] in oauth_reconnect.OPERATIONS:
+            oauth_reconnect_policy.verify_original(planner_request["operation"],
                 planner_request["typedRequest"]["arguments"], configuration_payload=self.configuration.payload,
                 root_key=self.configuration.root_key, now_epoch_ns=time.time_ns())
         if planner_request["operation"] in credential_currentness.OPERATIONS:

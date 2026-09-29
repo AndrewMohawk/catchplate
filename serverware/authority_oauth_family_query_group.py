@@ -9,6 +9,7 @@ TABLES = ("oauth_family_retirements", "oauth_pending_family_retirements")
 MAX_ROWS = 32
 DECLARED_ROWS = 34
 OPERATIONS = frozenset({
+    "oauth.reconnect.fence",
     "oauth.pending.activate", "oauth.pending.stage", "oauth.measured-exchange.stage",
     "oauth.measured-setup.stage", "oauth.setup.activate",
     "oauth.refresh.claim", "oauth.refresh.retain", "oauth.refresh.commit",

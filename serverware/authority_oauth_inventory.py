@@ -21,6 +21,12 @@ def maximum_rows(table):
 
 
 def tables_for(operation):
+    if operation == "oauth.reconnect.authorize":
+        return ("oauth_reconnect_authorizations",)
+    if operation == "oauth.reconnect.fence":
+        return TABLES
+    if operation == "oauth.measured-reconnect.prepare":
+        return ("oauth_exchange_reservations",)
     if operation in {"oauth.measured-capture-retirement.inspect", "oauth.measured-capture-retirement.claim"}:
         return ("credentials", "pending_oauth_credentials", "oauth_exchange_reservations", "oauth_refresh_reservations")
     if operation == "oauth.setup.create":

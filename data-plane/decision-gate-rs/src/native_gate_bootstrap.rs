@@ -118,8 +118,9 @@ pub(super) fn prepare_native_tls_gate_state(
     // Both values originate only from the closed v5 cold configuration. Keep
     // actual generated-key owners; no caller-provided readiness result enters
     // the state, and neither operation renews the cohort's original deadline.
-    let secret_broker = match inputs.secret_broker.take() {
-        Some(config) => Some(serverware_decision_gate::native_secret_broker_v1::prepare(config, &mut identity, deadline)?),
+    let secret_broker = match inputs.prepared_secret_broker.take() {
+        Some(prepared) => Some(prepared.bind(&mut identity,
+            inputs.native_serving_privileges.as_ref().ok_or("native serving privilege owner absent")?, deadline)?),
         None => None,
     };
     let measured_audit = match inputs.measured_audit.take() {

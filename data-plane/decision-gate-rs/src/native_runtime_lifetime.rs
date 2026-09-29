@@ -24,6 +24,7 @@ pub(super) struct NativeRuntimeLifetimeV1 {
     stopped: AtomicBool,
     state: Mutex<State>,
     wake: Condvar,
+    serving_privileges: Option<Arc<serverware_decision_gate::native_serving_privileges::Owner>>,
 }
 
 fn now() -> Result<u64, &'static str> {
@@ -54,7 +55,20 @@ impl NativeRuntimeLifetimeV1 {
         Ok(Arc::new(Self {
             deadline, creator_pid, stopped: AtomicBool::new(false),
             state: Mutex::new(State { failure: None }), wake: Condvar::new(),
+            serving_privileges: None,
         }))
+    }
+
+    pub(super) fn bind_serving_privileges(owner: &mut Arc<Self>,
+        privileges: Arc<serverware_decision_gate::native_serving_privileges::Owner>) -> Result<(), String> {
+        owner.require_creator()?;
+        privileges.check()?;
+        let actual = Arc::get_mut(owner).ok_or("native lifetime shared before privilege attachment")?;
+        if actual.serving_privileges.is_some() || actual.deadline != privileges.deadline() {
+            return Err("native lifetime privilege owner or original deadline differs".to_owned());
+        }
+        actual.serving_privileges = Some(privileges);
+        actual.require_creator()
     }
 
     pub(super) fn deadline(&self) -> u64 { self.deadline }
@@ -65,6 +79,12 @@ impl NativeRuntimeLifetimeV1 {
         if unsafe { libc::getpid() } != self.creator_pid {
             self.stopped.store(true, Ordering::Release);
             return Err("native runtime lifetime crossed its creator process".to_owned());
+        }
+        if let Some(owner) = &self.serving_privileges {
+            if let Err(error) = owner.check() {
+                self.stopped.store(true, Ordering::Release);
+                return Err(error);
+            }
         }
         Ok(())
     }

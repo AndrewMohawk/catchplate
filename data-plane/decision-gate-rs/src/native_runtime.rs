@@ -35,7 +35,13 @@ pub(super) fn run(listener: VsockListenerV1, prepared: NativeTlsGateV1,
 {
     let NativeTlsGateV1 { mut state, ingress, deadline } = prepared;
     let ingress = Arc::new(ingress);
-    let lifetime = NativeRuntimeLifetimeV1::new(deadline)?;
+    let mut lifetime = NativeRuntimeLifetimeV1::new(deadline)?;
+    if let Some(owner) = &state.native_serving_privileges {
+        NativeRuntimeLifetimeV1::bind_serving_privileges(&mut lifetime, Arc::clone(owner))?;
+    }
+    if state.native_secret_broker.is_some() != state.native_serving_privileges.is_some() {
+        return Err("native runtime broker and permanent serving owner differ".to_owned());
+    }
     // The cold constructor creates a fresh unshared Arc. Install cancellation
     // before any background or serving clone can acquire this state.
     let cold = Arc::get_mut(&mut state)

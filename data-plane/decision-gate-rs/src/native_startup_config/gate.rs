@@ -142,6 +142,8 @@ impl GateConfigV1 {
             Some((_, certificates)) => certificates,
         };
         let inputs = GateStateInputs {
+            native_serving_privileges: None,
+            prepared_secret_broker: None,
             secret_broker,
             measured_audit,
             credential_currentness: None,

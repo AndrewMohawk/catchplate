@@ -27,6 +27,7 @@ pub use credential_recipient_v1::CredentialRecipientV1;
 pub use enclave_bootstrap_enrollment_key_v1::BootstrapEnrollmentOriginalV1;
 pub(crate) use enclave_bootstrap_enrollment_key_v1::GeneratedBootstrapEnrollmentV1;
 pub use enclave_response_proof_key_v1::{PendingResponseProofKeyV1, QuotedResponseProofKeyV1};
+pub use enclave_nsm_v1::PreparedNativeDeviceV1;
 pub use tls_authority_v1::{GeneratedMutualTlsV1, TlsAuthorityV1};
 use enclave_nsm_v1::NsmDeviceV1;
 use crate::release_profile_v1::ReleaseProfile;
@@ -169,6 +170,7 @@ pub struct EnclaveRuntimeIdentityV1 {
     deadline: u64,
     owner_pid: libc::pid_t,
     poisoned: bool,
+    serving_privileges: Option<Arc<crate::native_serving_privileges::Owner>>,
 }
 
 fn live(deadline: u64) -> Result<(), String> {
@@ -196,13 +198,34 @@ impl EnclaveRuntimeIdentityV1 {
         let authority = TlsAuthorityV1::generate_in_memory(not_before, not_after)?;
         live(deadline)?;
         Ok(Self { nsm, authority, scope, ca_not_before: not_before, ca_not_after: not_after,
-            deadline, owner_pid: unsafe { libc::getpid() }, poisoned: false })
+            deadline, owner_pid: unsafe { libc::getpid() }, poisoned: false, serving_privileges: None })
+    }
+
+    /// Only the actual prepared device and permanent-drop owner can take this
+    /// path. No previously created NSM/CA identity is changed or rebound.
+    pub fn open_prepared(prepared: PreparedNativeDeviceV1,
+        privileges: &Arc<crate::native_serving_privileges::Owner>,
+        scope: RuntimeScopeCommitmentsV1, not_before: OffsetDateTime,
+        not_after: OffsetDateTime, deadline: u64) -> Result<Self, String> {
+        privileges.check()?;
+        live(deadline)?;
+        if not_after <= not_before || not_after - not_before > Duration::hours(24) {
+            return Err("native TLS authority validity must fit one positive 24-hour interval".to_owned());
+        }
+        let nsm = prepared.consume(privileges, deadline)?;
+        let authority = TlsAuthorityV1::generate_in_memory(not_before, not_after)?;
+        privileges.check()?;
+        live(deadline)?;
+        Ok(Self { nsm, authority, scope, ca_not_before: not_before, ca_not_after: not_after,
+            deadline, owner_pid: unsafe { libc::getpid() }, poisoned: false,
+            serving_privileges: Some(Arc::clone(privileges)) })
     }
 
     fn begin(&mut self, deadline: u64) -> Result<u64, String> {
         if std::mem::replace(&mut self.poisoned, true) {
             return Err("native runtime identity is poisoned".to_owned());
         }
+        if let Some(owner) = &self.serving_privileges { owner.check()?; }
         let deadline = deadline.min(self.deadline);
         live(deadline)?;
         if unsafe { libc::getpid() } != self.owner_pid {
@@ -212,6 +235,7 @@ impl EnclaveRuntimeIdentityV1 {
     }
 
     fn finish(&mut self, deadline: u64) -> Result<(), String> {
+        if let Some(owner) = &self.serving_privileges { owner.check()?; }
         live(deadline)?;
         if unsafe { libc::getpid() } != self.owner_pid {
             return Err("native runtime identity crossed its creating process".to_owned());
@@ -222,6 +246,15 @@ impl EnclaveRuntimeIdentityV1 {
 
     /// Retained nonrenewing owner bound; inspecting it does not admit the runtime.
     pub fn deadline(&self) -> u64 { self.deadline }
+
+    pub(crate) fn require_serving_privileges(&mut self,
+        owner: &Arc<crate::native_serving_privileges::Owner>, deadline: u64) -> Result<(), String> {
+        let deadline = self.begin(deadline)?;
+        if !self.serving_privileges.as_ref().is_some_and(|actual| Arc::ptr_eq(actual, owner)) {
+            return Err("native identity belongs to another permanent serving owner".to_owned());
+        }
+        self.finish(deadline)
+    }
 
     /// Permanently narrow the owner to its prepared serving scope. Previously
     /// issued Arc configurations still require actual session cancellation.

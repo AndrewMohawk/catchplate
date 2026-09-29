@@ -2562,6 +2562,7 @@ impl MitmAuthority {
 }
 
 struct GateState {
+    native_serving_privileges: Option<Arc<serverware_decision_gate::native_serving_privileges::Owner>>,
     native_secret_broker: Option<Mutex<serverware_decision_gate::native_secret_broker_v1::Owner>>,
     upstream_dispatch_authority: UpstreamDispatchAuthority,
     credential_currentness: credential_currentness::LocalHolder,
@@ -21036,6 +21037,10 @@ fn verify_native_credential_lease_scope(state: &GateState, policy_hash: &str) ->
 }
 
 fn native_runtime_live(state: &GateState) -> Result<(), String> {
+    if let Some(owner) = &state.native_serving_privileges { owner.check()?; }
+    if state.native_secret_broker.is_some() && state.native_serving_privileges.is_none() {
+        return Err("native broker serving lost its permanent privilege owner".to_owned());
+    }
     match &state.native_runtime_lifetime {
         Some(lifetime) => lifetime.check(),
         None => Ok(()), // Legacy and not-yet-running cold native preparation.
@@ -51864,6 +51869,8 @@ fn main() -> Result<(), String> {
     let credential_lease_client = build_control_plane_client(Duration::from_secs(3))?;
     let mitm_authority = build_mitm_authority()?;
     let state = Arc::new(GateStateInputs {
+        native_serving_privileges: None,
+        prepared_secret_broker: None,
         secret_broker: None,
         measured_audit: None,
         credential_currentness: None,
@@ -53203,6 +53210,7 @@ mod tests {
             key_id: response_proof_signing_key_id,
         } = local_response_proof_signing_material().expect("test response proof key");
         GateState {
+            native_serving_privileges: None,
             native_secret_broker: None,
             upstream_dispatch_authority: UpstreamDispatchAuthority::new(),
             credential_currentness: credential_currentness::LocalHolder::new(None),

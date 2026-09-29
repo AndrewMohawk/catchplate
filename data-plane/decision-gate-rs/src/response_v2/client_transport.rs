@@ -775,6 +775,21 @@ fn validate_response_observation_v2_client_config_inner(
     config: &ResponseObservationV2ClientConfig,
     require_production: bool,
 ) -> Result<(), String> {
+    validate_response_observation_v2_client_config_as_uid(config, require_production, unsafe { libc::geteuid() })
+}
+
+/// Shape preflight under the source-fixed FINAL native identity. Actual
+/// initialization still repeats its own current-euid check after the drop.
+pub(super) fn validate_response_observation_v2_client_config_for_native_serving(
+    config: &ResponseObservationV2ClientConfig,
+) -> Result<(), String> {
+    validate_response_observation_v2_client_config_as_uid(config, true,
+        serverware_decision_gate::native_serving_privileges::UID)
+}
+
+fn validate_response_observation_v2_client_config_as_uid(
+    config: &ResponseObservationV2ClientConfig, require_production: bool, caller_uid: libc::uid_t,
+) -> Result<(), String> {
     let socket_bytes = config.socket_path.as_os_str().as_bytes();
     let address: libc::sockaddr_un = unsafe { std::mem::zeroed() };
     if !config.socket_path.is_absolute()
@@ -792,7 +807,7 @@ fn validate_response_observation_v2_client_config_inner(
     }
     if require_production
         && (config.attestation_mode != V2AttestationMode::TeeHardware
-            || config.expected_uid == unsafe { libc::geteuid() })
+            || config.expected_uid == caller_uid)
     {
         return Err(
             "explicit response-observation v2 startup requires hardware TEE mode and a distinct custody UID"

@@ -144,9 +144,10 @@ pub(super) fn run(
     if env::var_os(RESPONSE_PROOF_RELEASE_PROFILE_ENV).is_some() {
         return Err("ordinary response release profile cannot override native startup".to_owned());
     }
-    let startup = NativeRuntimeLifetimeV1::new(parameters.deadline_boottime_ns)?;
+    let mut startup = NativeRuntimeLifetimeV1::new(parameters.deadline_boottime_ns)?;
     if inputs.policy_shadow_generation_control.is_some()
         || inputs.response_observation_v2_client.is_some()
+        || inputs.native_serving_privileges.is_some() || inputs.prepared_secret_broker.is_some()
     {
         return Err("native startup requires cold inputs without shadow or observation owners".to_owned());
     }
@@ -160,7 +161,9 @@ pub(super) fn run(
             return Err("native enrollment authorizer lost its original deadline or listener port".to_owned());
         }
     }
-    validate_response_observation_v2_client_config(&v2_config)?;
+    if inputs.secret_broker.is_some() {
+        validate_response_observation_v2_client_config_for_native_serving(&v2_config)?;
+    } else { validate_response_observation_v2_client_config(&v2_config)?; }
     if !matches!(&inputs.policy_trust_root_source,
         PolicyTrustRootSource::AttestedControlPlane {
             verifier: Some(ControlPlaneAttestationVerifier::Pinned(_)), native_transport: None, ..
@@ -173,6 +176,23 @@ pub(super) fn run(
     {
         return Err("native startup cannot install a pending shadow generation".to_owned());
     }
+    startup.check()?;
+    // Root-only image/mount/child/device setup precedes every long-lived gate
+    // identity, service owner and thread. No failed step selects legacy mode.
+    let prepared_device = if let Some(config) = inputs.secret_broker.take() {
+        use serverware_decision_gate::{native_serving_privileges,
+            native_secret_broker_v1::PreparedBroker,
+            enclave_runtime_identity_v1::PreparedNativeDeviceV1};
+        let privileged = native_serving_privileges::Prepared::open(parameters.deadline_boottime_ns)?;
+        let device = PreparedNativeDeviceV1::open(&privileged)?;
+        let mut broker = PreparedBroker::open(config, &privileged)?;
+        let owner = privileged.drop_permanently()?;
+        NativeRuntimeLifetimeV1::bind_serving_privileges(&mut startup, Arc::clone(&owner))?;
+        broker.check(&owner)?;
+        inputs.native_serving_privileges = Some(owner);
+        inputs.prepared_secret_broker = Some(broker);
+        Some(device)
+    } else { None };
     startup.check()?;
     // These are real constructors, not caller-provided healthy flags. The
     // attested-trust classification above is required; true is not quote proof.
@@ -188,8 +208,13 @@ pub(super) fn run(
     );
     startup.check()?;
 
-    let mut identity = EnclaveRuntimeIdentityV1::open(parameters.scope,
-        parameters.ca_not_before, parameters.ca_not_after, parameters.deadline_boottime_ns)?;
+    let mut identity = match prepared_device {
+        Some(device) => EnclaveRuntimeIdentityV1::open_prepared(device,
+            inputs.native_serving_privileges.as_ref().ok_or("native permanent serving owner absent")?,
+            parameters.scope, parameters.ca_not_before, parameters.ca_not_after, parameters.deadline_boottime_ns)?,
+        None => EnclaveRuntimeIdentityV1::open(parameters.scope,
+            parameters.ca_not_before, parameters.ca_not_after, parameters.deadline_boottime_ns)?,
+    };
     startup.check()?;
     let custody = CustodyRuntime::generate_native_with_control_plane_response_public_key(
         &mut identity, parameters.control_plane_response_key,

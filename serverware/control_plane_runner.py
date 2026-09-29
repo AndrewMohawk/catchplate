@@ -12,6 +12,7 @@ def main() -> None:
     oauth_revocation_startup = None
     oauth_refresh_cleanup_startup = None
     measured_audit_startup = None
+    rbac_currentness_startup = None
 
     try:
         custody_startup.initialize_from_environment()
@@ -29,6 +30,8 @@ def main() -> None:
         oauth_refresh_cleanup_startup.initialize_from_environment()
         from serverware import control_plane_data_plane_audit as measured_audit_startup
         measured_audit_startup.initialize_from_environment()
+        from serverware import control_plane_rbac_currentness as rbac_currentness_startup
+        rbac_currentness_startup.initialize_from_environment()
 
         import uvicorn
         from serverware.config import WEB_HOST, WEB_PORT, WEB_TLS_CERT_FILE, WEB_TLS_KEY_FILE
@@ -54,7 +57,7 @@ def main() -> None:
         uvicorn.Server(configuration).run()
     except BaseException:
         # Preserve the original launch/runtime error if cleanup also fails.
-        for owner in (measured_audit_startup, oauth_refresh_cleanup_startup, oauth_revocation_startup, oauth_application_startup, workload_identity_startup, enrollment_startup, custody_startup):
+        for owner in (rbac_currentness_startup, measured_audit_startup, oauth_refresh_cleanup_startup, oauth_revocation_startup, oauth_application_startup, workload_identity_startup, enrollment_startup, custody_startup):
             try:
                 if owner is not None:
                     owner.close()
@@ -62,23 +65,21 @@ def main() -> None:
                 pass
         raise
     else:
-        measured_audit_startup.close()
+        _close_remaining(rbac_currentness_startup, measured_audit_startup,
+            oauth_refresh_cleanup_startup, oauth_revocation_startup, oauth_application_startup,
+            workload_identity_startup, enrollment_startup, custody_startup)
+
+
+def _close_remaining(*owners):
+    first_error = None
+    for owner in owners:
         try:
-            oauth_refresh_cleanup_startup.close()
-        finally:
-            try:
-                oauth_revocation_startup.close()
-            finally:
-                try:
-                    oauth_application_startup.close()
-                finally:
-                    try:
-                        workload_identity_startup.close()
-                    finally:
-                        try:
-                            enrollment_startup.close()
-                        finally:
-                            custody_startup.close()
+            owner.close()
+        except BaseException as exc:
+            if first_error is None:
+                first_error = exc
+    if first_error is not None:
+        raise first_error
 
 
 if __name__ == "__main__":

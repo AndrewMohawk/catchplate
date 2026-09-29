@@ -634,6 +634,9 @@ class KernelContext:
     request_digest: str
     verified_webauthn_evidence: Mapping[str, Any] | None = None
     query_reads: tuple[authority_query_reads.QueryRead, ...] = ()
+    # Only the RBAC source program receives these actual admitted originals;
+    # they are not arguments or an independently current authority token.
+    rbac_primary_inputs: tuple | None = None
 
     def observed_query_rows(self, *, query_id: str) -> tuple[dict[str, Any], ...]:
         """Return the retained ordered SQL observation, not completeness proof.

@@ -15,6 +15,8 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
+use std::sync::Arc;
+use crate::native_serving_privileges;
 use zeroize::Zeroizing;
 
 const MAX_FRAME: usize = 8 * 1024 * 1024;
@@ -175,7 +177,7 @@ impl PendingBroker {
         self.process.check(self.deadline)?;
         Ok(Owner { process: self.process, deadline: self.deadline,
             owner_ca: self.owner_ca.ok_or("native broker CA association absent")?,
-            secret_kek_id: self.config.secret_kek_id, poisoned: false, _quote: quote })
+            secret_kek_id: self.config.secret_kek_id, poisoned: false, _quote: quote, serving: None })
     }
 }
 
@@ -184,6 +186,38 @@ impl PendingBroker {
 pub struct Owner {
     process: process::Process, deadline: u64, owner_ca: [u8; 32], secret_kek_id: String,
     poisoned: bool, _quote: RuntimeKeyQuoteV1,
+    serving: Option<Arc<native_serving_privileges::Owner>>,
+}
+
+/// Privileged image/child setup only. The helper is already unprivileged; no
+/// KMS contact, KEK admission, gate identity or attestation is created here.
+pub struct PreparedBroker {
+    pending: PendingBroker,
+    association: native_serving_privileges::Association,
+}
+impl PreparedBroker {
+    pub fn open(config: Configuration, privileges: &native_serving_privileges::Prepared) -> Result<Self, String> {
+        let association = native_serving_privileges::Association::capture(privileges)?;
+        let pending = PendingBroker::spawn(config, privileges.deadline())?;
+        privileges.check()?;
+        Ok(Self { pending, association })
+    }
+    pub fn check(&mut self, privileges: &native_serving_privileges::Owner) -> Result<(), String> {
+        self.association.require(privileges)?;
+        self.pending.process.check(privileges.deadline())
+    }
+    pub fn bind(mut self, identity: &mut EnclaveRuntimeIdentityV1,
+        privileges: &Arc<native_serving_privileges::Owner>, deadline: u64) -> Result<Owner, String> {
+        self.check(privileges)?;
+        ensure(deadline == self.pending.deadline && deadline == privileges.deadline()
+            && deadline == identity.deadline(), "native prepared broker original deadline differs")?;
+        identity.require_serving_privileges(privileges, deadline)?;
+        let quote = identity.quote_broker_recipient(&mut self.pending, deadline)?;
+        let mut owner = self.pending.provision(quote)?;
+        owner.serving = Some(Arc::clone(privileges));
+        owner.check(deadline)?;
+        Ok(owner)
+    }
 }
 
 pub fn prepare(config: Configuration, identity: &mut EnclaveRuntimeIdentityV1, deadline: u64) -> Result<Owner, String> {
@@ -214,7 +248,8 @@ impl hkdf::KeyType for AesKey { fn len(&self) -> usize { 32 } }
 impl Owner {
     pub fn check(&mut self, deadline: u64) -> Result<(), String> {
         ensure(!self.poisoned, "native broker owner is poisoned")?;
-        let result = self.process.check(deadline.min(self.deadline));
+        let result = self.serving.as_ref().map_or(Ok(()), |owner| owner.check())
+            .and_then(|_| self.process.check(deadline.min(self.deadline)));
         if result.is_err() { self.poisoned = true; self.process.terminate(); }
         result
     }

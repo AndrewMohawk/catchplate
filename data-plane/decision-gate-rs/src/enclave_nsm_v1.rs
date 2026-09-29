@@ -20,6 +20,8 @@
 //! https://docs.aws.amazon.com/enclaves/latest/user/verify-root.html
 
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::sync::Arc;
+use crate::native_serving_privileges;
 
 pub(super) const MAX_REQUEST_BYTES: usize = 0x1000;
 pub(super) const MAX_RESPONSE_BYTES: usize = 0x3000;
@@ -147,29 +149,25 @@ fn descriptor_flags(fd: RawFd, access: libc::c_int, deadline: u64) -> Result<lib
     Ok(flags)
 }
 
-/// One retained device owner. Any failed attestation permanently poisons it,
-/// including deadline, process, input, transport, identity and response errors.
-/// No descriptor, generic ioctl, reset or clone operation is exposed.
-pub(super) struct NsmDeviceV1 {
+// Device originals are not an attesting identity and contain no key. Keeping
+// them separate permits a one-way privileged open followed by NEW identity
+// construction under final credentials; no Process snapshot is rebound.
+struct DeviceOriginals {
     directory: OwnedFd,
     device: OwnedFd,
     directory_node: Node,
     device_node: Node,
     directory_flags: libc::c_int,
     device_flags: libc::c_int,
-    process: Process,
-    deadline: u64,
-    poisoned: bool,
 }
 
-impl NsmDeviceV1 {
-    pub(super) fn open(deadline: u64) -> Result<Self, String> {
+impl DeviceOriginals {
+    fn open(deadline: u64) -> Result<Self, String> {
         if !cfg!(all(target_os = "linux", target_pointer_width = "64",
             any(target_arch = "x86_64", target_arch = "aarch64"))) {
             return Err("NSM fixed ioctl ABI requires Linux x86_64 or aarch64".into());
         }
         live(deadline)?;
-        let process = Process::current();
         let directory = unsafe { libc::open(DEVICE_DIRECTORY.as_ptr().cast(),
             libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC) };
         if directory < 0 { return Err("NSM device directory open failed".into()); }
@@ -191,13 +189,12 @@ impl NsmDeviceV1 {
         let directory_flags = descriptor_flags(directory.as_raw_fd(), libc::O_RDONLY, deadline)?;
         let device_flags = descriptor_flags(device.as_raw_fd(), libc::O_RDWR, deadline)?;
         let owner = Self { directory, device, directory_node, device_node,
-            directory_flags, device_flags, process, deadline, poisoned: false };
+            directory_flags, device_flags };
         owner.verify(deadline)?;
         Ok(owner)
     }
 
     fn verify(&self, deadline: u64) -> Result<(), String> {
-        if Process::current() != self.process { return Err("NSM owner process or identity changed".into()); }
         live(deadline)?;
         if !self.directory_node.same_directory(&held_node(self.directory.as_raw_fd(), deadline)?)
             || !self.directory_node.same_directory(&named_node(libc::AT_FDCWD, DEVICE_DIRECTORY, deadline)?)
@@ -208,6 +205,64 @@ impl NsmDeviceV1 {
             return Err("NSM held or named device custody changed".into());
         }
         live(deadline)
+    }
+}
+
+/// Genuine root-opened originals only: no attestation, FD getter/import,
+/// identity constructor, caller-supplied success or Clone implementation.
+pub struct PreparedNativeDeviceV1 {
+    originals: DeviceOriginals,
+    association: native_serving_privileges::Association,
+    deadline: u64,
+}
+
+impl PreparedNativeDeviceV1 {
+    pub fn open(prepared: &native_serving_privileges::Prepared) -> Result<Self, String> {
+        let association = native_serving_privileges::Association::capture(prepared)?;
+        let deadline = prepared.deadline();
+        let originals = DeviceOriginals::open(deadline)?;
+        prepared.check()?;
+        Ok(Self { originals, association, deadline })
+    }
+
+    pub(super) fn consume(self, owner: &Arc<native_serving_privileges::Owner>, deadline: u64)
+        -> Result<NsmDeviceV1, String> {
+        self.association.require(owner)?;
+        if deadline > self.deadline || owner.deadline() != self.deadline {
+            return Err("prepared NSM original deadline differs".to_owned());
+        }
+        self.originals.verify(deadline)?;
+        let device = NsmDeviceV1 { originals: self.originals, process: Process::current(),
+            deadline, poisoned: false, serving: Some(Arc::clone(owner)) };
+        device.verify(deadline)?;
+        Ok(device)
+    }
+}
+
+/// One retained device owner. Any failed attestation permanently poisons it,
+/// including deadline, process, input, transport, identity and response errors.
+/// No descriptor, generic ioctl, reset or clone operation is exposed.
+pub(super) struct NsmDeviceV1 {
+    originals: DeviceOriginals,
+    process: Process,
+    deadline: u64,
+    poisoned: bool,
+    serving: Option<Arc<native_serving_privileges::Owner>>,
+}
+
+impl NsmDeviceV1 {
+    pub(super) fn open(deadline: u64) -> Result<Self, String> {
+        let process = Process::current();
+        let originals = DeviceOriginals::open(deadline)?;
+        let owner = Self { originals, process, deadline, poisoned: false, serving: None };
+        owner.verify(deadline)?;
+        Ok(owner)
+    }
+
+    fn verify(&self, deadline: u64) -> Result<(), String> {
+        if Process::current() != self.process { return Err("NSM owner process or identity changed".into()); }
+        if let Some(owner) = &self.serving { owner.check()?; }
+        self.originals.verify(deadline)
     }
 
     pub(super) fn attest(&mut self, public_key: &[u8], nonce: &[u8], user_data: &[u8],
@@ -226,7 +281,7 @@ impl NsmDeviceV1 {
         self.verify(deadline)?;
         // Intentionally one fixed synchronous operation, never retry EINTR or
         // use O_NONBLOCK as a claim that the kernel ioctl can be cancelled.
-        let status = unsafe { libc::ioctl(self.device.as_raw_fd(), NSM_IOCTL_RAW as _, &mut raw) };
+        let status = unsafe { libc::ioctl(self.originals.device.as_raw_fd(), NSM_IOCTL_RAW as _, &mut raw) };
         if status != 0 { return Err("NSM Attestation ioctl failed".into()); }
         self.verify(deadline)?;
         if raw.request.addr != request_address || raw.request.len != request.len() as u64

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://serverware.invalid/schemas/native-startup-configuration.v5.schema.json",
   "title": "Cold native full proxy with measured secret-broker and audit owners",
-  "$comment": "Explicit additive v5, original <=16MiB integer-only duplicate-free JSON. This configuration is not independent release admission. Runtime retains actual generated native identity, private broker helper and measured audit owner before publication; old versions do not select these owners. Full image/runtime provisioning and original-deadline validation are mandatory source checks beyond JSON Schema.",
+  "$comment": "Explicit additive v5, original <=16MiB integer-only duplicate-free JSON. This configuration is not independent release admission. Source finishes privileged device/image/child preparation, permanently drops to fixed UID/GID65534 with no groups/capabilities, and only then creates serving identities/clients. Actual NSM/broker resources require the same retained private owner; no identity rebinding or deadline renewal. Old versions do not select these owners. Private service tokens, real ledger/socket/file permissions, full image provisioning and original-deadline checks remain mandatory beyond JSON Schema.",
   "type": "object",
   "additionalProperties": false,
   "required": ["apiVersion", "gate", "native", "shadow", "responseObservationV2", "policy", "enrollmentAuthorizer", "enrollmentSetupAuthorizer", "enrollmentProxyEndpoint", "credentialCurrentness", "secretBroker", "measuredAudit"],

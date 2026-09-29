@@ -1,0 +1,28 @@
+# Native permanent serving privilege separation
+
+The explicit native v5 path now finishes privileged local setup before constructing the long-lived gate identities and service clients. This is source integration, not a built or observed enclave, a secretless startup artifact, provider custody closure or N06 completion. No runtime, AWS or adverse-case verification has been performed.
+
+## Actual one-way startup
+
+The original closed configuration and launch deadline select the path; there is no environment switch, caller-selected UID or successful-check receipt. Older versioned startup contracts are not reinterpreted, and a v5 failure never enters them.
+
+1. Under the actual single-threaded root process, `native_serving_privileges::Prepared` retains the PID and original absolute boottime deadline. It inventories the supported capability range with a fixed bound.
+2. `PreparedNativeDeviceV1` opens and retains the actual root-owned NSM node and directory originals. It cannot attest, generate an identity or export a descriptor. `PreparedBroker` constructs the sealed image, read-only loop/detached root and real private helper child; that helper already runs as UID/GID 65534. The preparation creates no gate CA, proof key, KMS contact or admitted KEK.
+3. The same process removes supplementary groups, clears ambient and bounding capabilities, locks securebits, sets no-new-privileges, permanently sets real/effective/saved UID and GID to 65534, clears effective/permitted/inheritable capabilities and disables dumpability. A failure aborts startup; no root restoration or retry exists.
+4. Only afterward are shadow and response-observation clients constructed. The actual prepared NSM original is consumed into a **new** device owner whose process snapshot contains the final credentials; an old root-created identity is never rebound. The new CA, response-proof key, ingress and relay owners retain their existing original scopes and deadlines.
+5. The broker's later `bind` requires the same actual permanent-drop owner and native identity, then performs the existing role6/KMS association. Measured audit preparation and signed epoch initialization still precede GateState publication and serving.
+
+Prepared resources and the final owner share a private pointer-identity origin. Only the real drop operation constructs the final owner. No raw descriptor, supplied UID, callback, readiness boolean or copied metadata can substitute for it. Startup and serving lifetimes, native identity, proof-key operations and the broker retain and check that owner. Checks cover the calling thread's IDs, groups, capability sets, securebits, no-new-privileges, dumpability, creator PID and unchanged deadline; failure poisons the owner.
+
+Linux capabilities are per-thread, so the transition refuses an already multithreaded gate and precedes HTTP/tunnel/background worker construction. No-new-privileges and locked capability state prevent an executable from restoring privilege; disabling dumpability is separate from dropping UID. [Linux capabilities](https://man7.org/linux/man-pages/man7/capabilities.7.html), [no-new-privileges](https://man7.org/linux/man-pages/man2/PR_SET_NO_NEW_PRIVS.2const.html), [dumpability](https://man7.org/linux/man-pages/man2/PR_SET_DUMPABLE.2const.html)
+
+## Provisioning requirements remain real
+
+- The configured attempt ledger must already be correctly initialized and owned by UID/GID 65534, with its existing 0700 directory and 0600 file rules. Startup does not create permission shortcuts, chown existing records, migrate history or treat a new ledger as production rollback protection.
+- Root-owned shadow trust/configuration originals and pinned executable closures must be selectively readable and traversable by the final serving identity, while preserving existing integrity checks. Inaccessible root-only files fail; startup never widens their access.
+- Response-observation custody remains a distinct actual UID. Both its fixed socket permissions and independently admitted caller assignment must permit this serving identity. The preflight checks the final fixed UID; actual post-drop initialization repeats the current-euid and genuine peer/evidence checks. No same-UID or generic transport fallback is introduced.
+- NSM retains its root-owned node and exact original open descriptor. No world-writable device permission or imported descriptor is needed. Actual unprivileged NSM and read-only loop ioctl operation still require runtime verification on the released kernel.
+
+The helper and gate use the same fixed UID for owned child termination without retaining CAP_KILL. This is not a UID-isolation claim between them: their boundary remains the immutable helper, private inherited channel, purpose-fixed protocol and non-dumpable processes. The broker construction mount and names are removed before serving; held detached descriptors and read-only loop autoclear need no privileged teardown worker. Existing root-owned image hashes, seals and mapping checks remain intact.
+
+The private startup configuration still contains real credential/management and conditional service tokens. It is read under the existing owner-only original-file contract before the drop; this work does not make those bytes public, remove them from gate memory or solve confidential artifact delivery. Fresh release/launch references, nonces and deadlines still need independent provisioning. Measured OAuth issuance/refresh/cleanup, packaging acceptance and the rest of N06 remain separate work.

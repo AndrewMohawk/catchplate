@@ -1,0 +1,151 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/rbac-witness.v1.schema.json",
+  "title": "Independent RBAC witness originals (data only)",
+  "description": "Shape validation is not authority. Runtime validates canonical original bytes, independent signatures, actual TLS and cluster identity, the source-fixed root recipe, original deadlines, CAS predecessors and definite commits.",
+  "oneOf": [
+    {"$ref": "#/$defs/signedEnrollment"}, {"$ref": "#/$defs/startup"},
+    {"$ref": "#/$defs/head"}, {"$ref": "#/$defs/intent"}, {"$ref": "#/$defs/completion"}
+  ],
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "integer": {"type": "integer", "minimum": 0, "maximum": 9223372036854775807},
+    "positive": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807},
+    "identity": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[!-~]+$"},
+    "root": {
+      "type": "object", "additionalProperties": false,
+      "required": ["table", "rootRevision", "rootDigest", "leafCount"],
+      "properties": {
+        "table": {"enum": ["rbac_authority_state", "rbac_role_bindings"]},
+        "rootRevision": {"$ref": "#/$defs/integer"}, "rootDigest": {"$ref": "#/$defs/digest"},
+        "leafCount": {"$ref": "#/$defs/integer"}
+      }
+    },
+    "state": {
+      "type": "object", "additionalProperties": false,
+      "required": ["generation", "stateDigest", "roots"],
+      "properties": {
+        "generation": {"$ref": "#/$defs/integer"}, "stateDigest": {"$ref": "#/$defs/digest"},
+        "roots": {
+          "type": "array", "minItems": 2, "maxItems": 2,
+          "prefixItems": [
+            {"allOf": [{"$ref": "#/$defs/root"}, {"properties": {"table": {"const": "rbac_authority_state"}}}]},
+            {"allOf": [{"$ref": "#/$defs/root"}, {"properties": {"table": {"const": "rbac_role_bindings"}}}]}
+          ]
+        }
+      }
+    },
+    "head": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "enrollmentSha256", "sequence", "previousHeadSha256", "state"],
+      "properties": {
+        "schema": {"const": "serverware.rbacWitnessHead/v1"}, "enrollmentSha256": {"$ref": "#/$defs/digest"},
+        "sequence": {"$ref": "#/$defs/integer"},
+        "previousHeadSha256": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/digest"}]},
+        "state": {"$ref": "#/$defs/state"}
+      },
+      "allOf": [{"if": {"properties": {"sequence": {"const": 0}}},
+        "then": {"properties": {"previousHeadSha256": {"type": "null"}}},
+        "else": {"properties": {"previousHeadSha256": {"$ref": "#/$defs/digest"}}}}]
+    },
+    "tlsIdentity": {
+      "type": "object", "additionalProperties": false,
+      "required": ["role", "clientDn", "clientSerial", "issuerDn", "certificateSha256"],
+      "properties": {
+        "role": {"enum": ["serverware_rbac_witness_reader", "serverware_rbac_witness_writer"]},
+        "clientDn": {"type": "string", "minLength": 1, "maxLength": 1024, "pattern": "^[^\u0000]+$"},
+        "clientSerial": {"type": "string", "minLength": 1, "maxLength": 1024, "pattern": "^[^\u0000]+$"},
+        "issuerDn": {"type": "string", "minLength": 1, "maxLength": 1024, "pattern": "^[^\u0000]+$"},
+        "certificateSha256": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "endpoint": {
+      "type": "object", "additionalProperties": false, "required": ["host", "address", "port", "database"],
+      "properties": {
+        "host": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,252}$"},
+        "address": {"type": "string", "minLength": 2, "maxLength": 45},
+        "port": {"type": "integer", "minimum": 1, "maximum": 65535},
+        "database": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,252}$"}
+      }
+    },
+    "enrollment": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "sourceRevision", "enrollmentId", "databaseId", "deploymentId", "configurationDigests",
+        "metadataClusterId", "metadataDatabase", "witnessClusterId", "metadataFaultDomain", "witnessFaultDomain",
+        "reader", "writer", "initialState", "issuedAtEpochNs", "expiresAtEpochNs", "maximumRecords", "endpoint", "tlsRootSha256"],
+      "properties": {
+        "schema": {"const": "serverware.rbacWitnessEnrollment/v1"}, "sourceRevision": {"$ref": "#/$defs/identity"},
+        "enrollmentId": {"$ref": "#/$defs/identity"}, "databaseId": {"$ref": "#/$defs/digest"},
+        "deploymentId": {"$ref": "#/$defs/identity"},
+        "configurationDigests": {"type": "array", "minItems": 1, "maxItems": 8, "uniqueItems": true, "items": {"$ref": "#/$defs/digest"}},
+        "metadataClusterId": {"type": "string", "pattern": "^[1-9][0-9]{0,19}$"},
+        "metadataDatabase": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$"},
+        "witnessClusterId": {"type": "string", "pattern": "^[1-9][0-9]{0,19}$"},
+        "metadataFaultDomain": {"$ref": "#/$defs/identity"}, "witnessFaultDomain": {"$ref": "#/$defs/identity"},
+        "reader": {"allOf": [{"$ref": "#/$defs/tlsIdentity"}, {"properties": {"role": {"const": "serverware_rbac_witness_reader"}}}]},
+        "writer": {"allOf": [{"$ref": "#/$defs/tlsIdentity"}, {"properties": {"role": {"const": "serverware_rbac_witness_writer"}}}]},
+        "initialState": {"$ref": "#/$defs/state"}, "issuedAtEpochNs": {"$ref": "#/$defs/integer"},
+        "expiresAtEpochNs": {"$ref": "#/$defs/positive"}, "maximumRecords": {"type": "integer", "minimum": 2, "maximum": 4096},
+        "endpoint": {"$ref": "#/$defs/endpoint"}, "tlsRootSha256": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "signedEnrollment": {
+      "type": "object", "additionalProperties": false, "required": ["schema", "payload", "signatureBase64Url"],
+      "properties": {
+        "schema": {"const": "serverware.signedRbacWitnessEnrollment/v1"}, "payload": {"$ref": "#/$defs/enrollment"},
+        "signatureBase64Url": {"type": "string", "pattern": "^[A-Za-z0-9_-]{86}$"}
+      }
+    },
+    "original": {
+      "type": "object", "additionalProperties": false, "required": ["fd", "sha256"],
+      "properties": {"fd": {"type": "integer", "minimum": 32, "maximum": 1023}, "sha256": {"$ref": "#/$defs/digest"}}
+    },
+    "startup": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "sourceRevision", "configurationDigest", "root", "enrollment", "tlsRoot", "clientCertificate", "clientKey"],
+      "properties": {
+        "schema": {"const": "serverware.rbacWitnessStartup/v1"}, "sourceRevision": {"$ref": "#/$defs/identity"},
+        "configurationDigest": {"$ref": "#/$defs/digest"}, "root": {"$ref": "#/$defs/original"},
+        "enrollment": {"$ref": "#/$defs/signedEnrollment"}, "tlsRoot": {"$ref": "#/$defs/original"},
+        "clientCertificate": {"$ref": "#/$defs/original"}, "clientKey": {"$ref": "#/$defs/original"}
+      }
+    },
+    "intent": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "enrollmentSha256", "requestSha256", "capabilityId", "beforeHeadSha256", "beforeHead", "afterHead", "expiresAtEpochNs", "planSha256"],
+      "properties": {
+        "schema": {"const": "serverware.rbacWitnessIntent/v1"}, "enrollmentSha256": {"$ref": "#/$defs/digest"},
+        "requestSha256": {"$ref": "#/$defs/digest"}, "capabilityId": {"$ref": "#/$defs/digest"},
+        "beforeHeadSha256": {"$ref": "#/$defs/digest"}, "beforeHead": {"$ref": "#/$defs/head"},
+        "afterHead": {"$ref": "#/$defs/head"}, "expiresAtEpochNs": {"$ref": "#/$defs/positive"}, "planSha256": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "writerReceipt": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "capabilityId", "envelopeId", "plannerTransactionId", "authorizationProjectionDigest", "operation", "handlerName", "requestDigest", "resultDigest", "authorityRootSetBeforeDigest", "authorityRootSetAfterDigest", "authoritySnapshotDigest", "operationManifestDigest", "queryManifestDigest", "witnessReservationDigest", "witnessSequence", "deadlineMonotonicNs", "fence", "committedAtEpochNs", "sourceRevision"],
+      "properties": {
+        "schema": {"const": "serverware.policyAuthorityWriterCommitReceipt/v2"},
+        "capabilityId": {"$ref": "#/$defs/digest"}, "envelopeId": {"$ref": "#/$defs/digest"},
+        "plannerTransactionId": {"$ref": "#/$defs/digest"}, "authorizationProjectionDigest": {"$ref": "#/$defs/digest"},
+        "operation": {"const": "rbac.binding.mutate"}, "handlerName": {"$ref": "#/$defs/identity"},
+        "requestDigest": {"$ref": "#/$defs/digest"}, "resultDigest": {"$ref": "#/$defs/digest"},
+        "authorityRootSetBeforeDigest": {"$ref": "#/$defs/digest"}, "authorityRootSetAfterDigest": {"$ref": "#/$defs/digest"},
+        "authoritySnapshotDigest": {"$ref": "#/$defs/digest"}, "operationManifestDigest": {"$ref": "#/$defs/digest"},
+        "queryManifestDigest": {"$ref": "#/$defs/digest"}, "witnessReservationDigest": {"$ref": "#/$defs/digest"},
+        "witnessSequence": {"$ref": "#/$defs/positive"}, "deadlineMonotonicNs": {"$ref": "#/$defs/positive"},
+        "fence": {"$ref": "#/$defs/positive"}, "committedAtEpochNs": {"$ref": "#/$defs/positive"}, "sourceRevision": {"$ref": "#/$defs/identity"}
+      }
+    },
+    "completion": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "enrollmentSha256", "intentSha256", "requestSha256", "writerReceipt", "writerReceiptSha256", "resultBase64Url", "resultSha256"],
+      "properties": {
+        "schema": {"const": "serverware.rbacWitnessCompletion/v1"}, "enrollmentSha256": {"$ref": "#/$defs/digest"},
+        "intentSha256": {"$ref": "#/$defs/digest"}, "requestSha256": {"$ref": "#/$defs/digest"},
+        "writerReceipt": {"$ref": "#/$defs/writerReceipt"}, "writerReceiptSha256": {"$ref": "#/$defs/digest"},
+        "resultBase64Url": {"type": "string", "minLength": 1, "maxLength": 8388608, "pattern": "^[A-Za-z0-9_-]+$"},
+        "resultSha256": {"$ref": "#/$defs/digest"}
+      }
+    }
+  }
+}

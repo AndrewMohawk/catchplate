@@ -21,6 +21,7 @@ struct HeldResponseProofKeyV1 {
     owner_pid: libc::pid_t,
     deadline: u64,
     poisoned: bool,
+    serving_privileges: Option<std::sync::Arc<crate::native_serving_privileges::Owner>>,
 }
 
 impl HeldResponseProofKeyV1 {
@@ -28,6 +29,7 @@ impl HeldResponseProofKeyV1 {
         if std::mem::replace(&mut self.poisoned, true) {
             return Err("native response-proof key is poisoned".to_owned());
         }
+        if let Some(owner) = &self.serving_privileges { owner.check()?; }
         let deadline = deadline.min(self.deadline);
         live(deadline)?;
         if self.owner_pid <= 0 || unsafe { libc::getpid() } != self.owner_pid {
@@ -37,6 +39,7 @@ impl HeldResponseProofKeyV1 {
     }
 
     fn finish(&mut self, deadline: u64) -> Result<(), String> {
+        if let Some(owner) = &self.serving_privileges { owner.check()?; }
         live(deadline)?;
         if unsafe { libc::getpid() } != self.owner_pid {
             return Err("native response-proof key crossed its creating process".to_owned());
@@ -178,6 +181,7 @@ impl EnclaveRuntimeIdentityV1 {
         let owner_ca_sha256 = Sha256::digest(self.authority.certificate_der()).into();
         let mut key = HeldResponseProofKeyV1 {
             signing_key, owner_pid: self.owner_pid, deadline, poisoned: false,
+            serving_privileges: self.serving_privileges.as_ref().map(std::sync::Arc::clone),
         };
         key.public_key_bytes()?;
         self.finish(deadline)?;

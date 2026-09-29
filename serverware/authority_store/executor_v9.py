@@ -1860,6 +1860,15 @@ def install_authority_v9_executor(
                 END IF;
             END IF;
 
+            IF capability.operation = 'rbac.binding.mutate' THEN
+                IF NULLIF(pg_catalog.current_setting('serverware.policy_authority_rbac_operation_id', true), '') IS NOT NULL THEN
+                    RAISE EXCEPTION 'nested RBAC revision ownership is forbidden';
+                END IF;
+                -- The admitted plan explicitly mutates the authority revision.
+                -- Suppress only the legacy automatic revision increment while
+                -- applying this verified, exact RBAC operation's mutation set.
+                PERFORM pg_catalog.set_config('serverware.policy_authority_rbac_operation_id', capability.operation_id, true);
+            END IF;
             FOR mutation IN
                 SELECT planned.value
                 FROM pg_catalog.jsonb_array_elements(
@@ -1944,6 +1953,9 @@ def install_authority_v9_executor(
                 {apply_mutation_sql(namespace)}
             END LOOP;
 
+            IF capability.operation = 'rbac.binding.mutate' THEN
+                PERFORM pg_catalog.set_config('serverware.policy_authority_rbac_operation_id', '', true);
+            END IF;
             now_epoch_ns := pg_catalog.floor(
                 EXTRACT(
                     EPOCH FROM pg_catalog.clock_timestamp()

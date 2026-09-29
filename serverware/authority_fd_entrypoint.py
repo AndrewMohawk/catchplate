@@ -24,6 +24,8 @@ MEASURED_AUDIT_CONFIG_NAME = "SERVERWARE_MEASURED_AUDIT_CONFIG_FD"
 MEASURED_AUDIT_CONFIG_MAX_BYTES = 3 * 1024 * 1024
 OAUTH_REFRESH_CLEANUP_CONFIG_NAME = "SERVERWARE_OAUTH_REFRESH_CLEANUP_CONFIG_FD"
 OAUTH_REFRESH_CLEANUP_CONFIG_MAX_BYTES = 2 * 1024 * 1024
+RBAC_WITNESS_CONFIG_NAME = "SERVERWARE_RBAC_WITNESS_CONFIG_FD"
+RBAC_WITNESS_CONFIG_MAX_BYTES = 96 * 1024
 CONTROL_PLANE_ENROLLMENT_BOOTSTRAP_NAME = "SERVERWARE_CONTROL_PLANE_ENROLLMENT_BOOTSTRAP_FD"
 CONTROL_PLANE_ENROLLMENT_BOOTSTRAP_SCHEMA = "serverware.signedControlPlaneEnrollmentBootstrap/v2"
 CONTROL_PLANE_ENROLLMENT_PAYLOAD_SCHEMA = "serverware.controlPlaneEnrollmentBootstrap/v2"
@@ -216,6 +218,7 @@ ROLE_SOURCES = {
             "/run/serverware/authority-trust/oauth-revocations.json",
         ),
         (OAUTH_REFRESH_CLEANUP_CONFIG_NAME, "/run/serverware/authority-trust/oauth-refresh-cleanups.json"),
+        (RBAC_WITNESS_CONFIG_NAME, "/run/serverware/authority-trust/rbac-witness.json"),
         (MEASURED_AUDIT_CONFIG_NAME, "/run/serverware/authority-trust/measured-audit.json"),
     ),
     "runtime": (
@@ -401,6 +404,15 @@ ROLE_SOURCES = {
         ),
     ),
 }
+
+for _rbac_role in ("verifier", "planner", "executor"):
+    ROLE_SOURCES[_rbac_role] += (
+        (RBAC_WITNESS_CONFIG_NAME, "/run/secrets/serverware-rbac-witness-" + _rbac_role + "-config"),
+        ("SERVERWARE_RBAC_WITNESS_ROOT_FD", "/run/secrets/serverware-rbac-witness-root-public-key"),
+        ("SERVERWARE_RBAC_WITNESS_TLS_ROOT_FD", "/run/secrets/serverware-rbac-witness-tls-root"),
+        ("SERVERWARE_RBAC_WITNESS_CLIENT_CERTIFICATE_FD", "/run/secrets/serverware-rbac-witness-" + _rbac_role + "-certificate"),
+        ("SERVERWARE_RBAC_WITNESS_CLIENT_KEY_FD", "/run/secrets/serverware-rbac-witness-" + _rbac_role + "-key"),
+    )
 
 PROCESS_MODES = {
     "control-plane": "serverware-control-plane",
@@ -677,6 +689,43 @@ def _open_oauth_refresh_cleanup_material(config_fd, *, occupied_descriptors):
     except BaseException:
         for descriptor in opened:
             os.close(descriptor)
+        raise
+
+
+def _open_rbac_witness_material(config_fd, *, occupied_descriptors):
+    """CP delivery only; authority roles use their signed descriptor inventory."""
+    from serverware import authority_rbac_currentness as profile
+    config = profile.document(os.pread(config_fd, RBAC_WITNESS_CONFIG_MAX_BYTES + 1, 0), RBAC_WITNESS_CONFIG_MAX_BYTES)
+    profile.require(type(config) is dict and set(config) == {"schema", "sourceRevision", "configurationDigest",
+        "root", "enrollment", "tlsRoot", "clientCertificate", "clientKey"} and config["schema"] == profile.STARTUP_SCHEMA)
+    selected = (("root", "/run/serverware/authority-trust/rbac-witness-root-public-key", 4096, False),
+        ("tlsRoot", "/run/serverware/authority-trust/rbac-witness-tls-root", 65536, False),
+        ("clientCertificate", "/run/serverware/authority-trust/rbac-witness-reader-certificate", 65536, False),
+        ("clientKey", "/run/secrets/serverware-rbac-witness-reader-key", 16384, True))
+    targets = []
+    for name, _, _, _ in selected:
+        item = config[name]
+        profile.require(type(item) is dict and set(item) == {"fd", "sha256"}
+            and type(item["fd"]) is int and 32 <= item["fd"] <= 1023)
+        profile.digest(item["sha256"]); targets.append(item["fd"])
+    profile.require(len(set(targets)) == 4 and not set(targets) & set(occupied_descriptors))
+    for target in targets:
+        try: os.fstat(target)
+        except OSError as exc:
+            if exc.errno != errno.EBADF: raise
+        else: raise RuntimeError("RBAC original descriptor slot is occupied")
+    opened = []
+    try:
+        for (name, path, maximum, private), target in zip(selected, targets):
+            descriptor = _open_source(path, expected_owner_uid=0, maximum_bytes=maximum, required_mode=0o400 if private else None)
+            try:
+                profile.require(profile.sha256(os.pread(descriptor, maximum + 1, 0)) == config[name]["sha256"])
+                os.dup2(descriptor, target, inheritable=True); opened.append(target)
+            finally:
+                if descriptor != target: os.close(descriptor)
+        return tuple(opened)
+    except BaseException:
+        for descriptor in opened: os.close(descriptor)
         raise
 
 
@@ -2550,7 +2599,7 @@ def _normal_main(role: str) -> int:
             )
     for name in tuple(environment):
         if name.startswith(("SERVERWARE_CONTROL_PLANE_CUSTODY_",
-                "SERVERWARE_CONTROL_PLANE_ENROLLMENT_", "SERVERWARE_OAUTH_APPLICATION_", "SERVERWARE_OAUTH_REVOCATION_", "SERVERWARE_OAUTH_REFRESH_CLEANUP_", "SERVERWARE_MEASURED_AUDIT_")):
+                "SERVERWARE_CONTROL_PLANE_ENROLLMENT_", "SERVERWARE_OAUTH_APPLICATION_", "SERVERWARE_OAUTH_REVOCATION_", "SERVERWARE_OAUTH_REFRESH_CLEANUP_", "SERVERWARE_MEASURED_AUDIT_", "SERVERWARE_RBAC_WITNESS_")):
             environment.pop(name, None)
     environment.pop("SERVERWARE_AUTHORITY_BOOTSTRAP_FD", None)
     environment.pop("SERVERWARE_PROCESS_MODE", None)
@@ -2567,6 +2616,7 @@ def _normal_main(role: str) -> int:
     oauth_application_descriptor: int | None = None
     oauth_revocation_descriptor: int | None = None
     oauth_refresh_cleanup_descriptor: int | None = None
+    rbac_witness_descriptor: int | None = None
     measured_audit_descriptor: int | None = None
     control_plane_source_limits = {
         CONTROL_PLANE_CUSTODY_CONFIG_NAME: CONTROL_PLANE_CUSTODY_CONFIG_MAX_BYTES,
@@ -2574,6 +2624,7 @@ def _normal_main(role: str) -> int:
         OAUTH_APPLICATION_CONFIG_NAME: OAUTH_APPLICATION_CONFIG_MAX_BYTES,
         OAUTH_REVOCATION_CONFIG_NAME: OAUTH_REVOCATION_CONFIG_MAX_BYTES,
         OAUTH_REFRESH_CLEANUP_CONFIG_NAME: OAUTH_REFRESH_CLEANUP_CONFIG_MAX_BYTES,
+        RBAC_WITNESS_CONFIG_NAME: RBAC_WITNESS_CONFIG_MAX_BYTES,
         MEASURED_AUDIT_CONFIG_NAME: MEASURED_AUDIT_CONFIG_MAX_BYTES,
     }
     try:
@@ -2599,6 +2650,8 @@ def _normal_main(role: str) -> int:
                     oauth_revocation_descriptor = descriptor
                 elif environment_name == OAUTH_REFRESH_CLEANUP_CONFIG_NAME:
                     oauth_refresh_cleanup_descriptor = descriptor
+                elif environment_name == RBAC_WITNESS_CONFIG_NAME:
+                    rbac_witness_descriptor = descriptor
                 elif environment_name == MEASURED_AUDIT_CONFIG_NAME:
                     measured_audit_descriptor = descriptor
             else:
@@ -2621,6 +2674,9 @@ def _normal_main(role: str) -> int:
                 )
             )
         if role == "control-plane":
+            if rbac_witness_descriptor is None:
+                raise RuntimeError("RBAC witness cold configuration is unavailable")
+            descriptors.extend(_open_rbac_witness_material(rbac_witness_descriptor, occupied_descriptors=set(descriptors)))
             if oauth_application_descriptor is None:
                 raise RuntimeError("OAuth cold startup configuration is unavailable")
             descriptors.extend(_open_oauth_application_material(

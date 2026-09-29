@@ -5252,30 +5252,17 @@ class _RbacBindingMutateKernel:
             generation=next_generation,
             updated_at=now_iso,
         )
-        previous_digest = (
-            None if previous is None else previous["binding_digest"]
-        )
         next_revision = core.require_integer(
             authority["binding_table_revision"],
             "RBAC binding table revision",
             minimum=0,
             maximum=_SIGNED_BIGINT_MAX - 1,
         ) + 1
-        state_material = {
-            "schema": "serverware.rbacAuthenticatedRootDelta/v2",
-            "authorityId": 1,
-            "generation": next_generation,
-            "previousGeneration": current_generation,
-            "previousStateDigest": authority["state_digest"],
-            "bindingTableRevision": next_revision,
-            "subjectId": values["subject_id"],
-            "previousBindingDigest": previous_digest,
-            "bindingDigest": binding["binding_digest"],
-        }
-        state_digest = core.framed_digest(
-            "serverware.rbacAuthenticatedRootDelta/v2",
-            core.canonical_bytes(state_material),
-        )
+        from serverware import authority_rbac_currentness as rbac_currentness
+        binding_mutation = core.mutation(operation=self.operation, selected=binding_selected, row=binding)
+        binding_root, manifest_digest = rbac_currentness.binding_after(context, binding_mutation)
+        state_material = rbac_currentness.state_material(next_generation, binding_root, manifest_digest)
+        state_digest = rbac_currentness.state_digest(state_material)
         authority_after = {
             **authority,
             "generation": next_generation,

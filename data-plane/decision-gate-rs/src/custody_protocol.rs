@@ -52,6 +52,7 @@ pub mod release_profile_v1;
 #[cfg(target_os = "linux")]
 pub mod erofs_loop_v1;
 pub mod native_secret_broker_v1;
+pub mod native_serving_privileges;
 #[cfg(target_os = "linux")]
 pub mod cgroup_control_v1;
 use release_profile_v1::{ReleaseOperation, ReleaseProfile, StatementKind};

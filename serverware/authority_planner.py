@@ -461,6 +461,7 @@ class PlanningState:
     query_program: tuple[authority_transition_core.Query, ...] = ()
     query_reads: tuple[authority_query_reads.QueryRead, ...] = ()
     complete_query_evidence: authority_complete_acquisition.CompleteAcquisitionEvidence | None = None
+    rbac_primary_inputs: tuple | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1043,7 +1044,7 @@ class TypedTransitionPlanningProgram:
             # observation or synthesize the framework marker required at close.
             observed_business, observed_authorization, _ = _read_root_set(
                 cursor, operation=operation, manifest=owned["manifest"],
-                trace=trace, work=query_work)
+                trace=trace, work=query_work, deadline_epoch_ns=owned["deadlineEpochNs"])
             authority_revocation_semantics._canonical_equal(
                 (observed_business, observed_authorization),
                 (owned["businessBeforeRoots"], owned["authorizationBeforeRoots"]),
@@ -1321,6 +1322,7 @@ class TypedTransitionPlanningProgram:
                 request_digest=str(request["requestDigest"]),
                 verified_webauthn_evidence=state.verified_webauthn_evidence,
                 query_reads=state.query_reads,
+                rbac_primary_inputs=state.rbac_primary_inputs,
             )
             transition = self.kernel.transition(context)
         except authority_transition_core.TransitionKernelError as exc:
@@ -1940,6 +1942,8 @@ def _read_root_set(
     operation: str,
     manifest: tuple[dict[str, Any], ...],
     trace: PlannerTrace,
+    deadline_epoch_ns: int,
+    deadline_monotonic_ns: int | None = None,
     work: _ValidationWork | None = None,
 ) -> tuple[
     tuple[dict[str, Any], ...],
@@ -2017,6 +2021,9 @@ def _read_root_set(
 
     business_roots = read_roots(business_tables)
     authorization_roots = read_roots(authorization_tables)
+    from serverware import control_plane_rbac_currentness as rbac_currentness
+    callback(lambda: rbac_currentness.require_roots(tuple(business_roots) + tuple(authorization_roots), cursor=cursor,
+        deadline_epoch_ns=deadline_epoch_ns, deadline_ns=deadline_monotonic_ns))
     if {
         entry["table"] for entry in business_roots
     } & {
@@ -2235,7 +2242,8 @@ def _acquire_registration_transition_on_work(
             raise AuthorityPlannerError("registration acquisition operation id changed")
         with acquisition.read_phase(cursor, trace, query_work):
             observed_business, observed_authorization, _ = _read_root_set(
-                cursor, operation=operation, manifest=owned["manifest"], trace=trace, work=query_work)
+                cursor, operation=operation, manifest=owned["manifest"], trace=trace, work=query_work,
+                deadline_epoch_ns=owned["deadlineEpochNs"])
             authority_revocation_semantics._canonical_equal(
                 (observed_business, observed_authorization),
                 (owned["businessBeforeRoots"], owned["authorizationBeforeRoots"]),
@@ -2412,7 +2420,8 @@ def _acquire_trust_stage_transition_on_work(
         verified = dict(verified)
         with acquisition.read_phase(cursor, trace, query_work):
             observed_business, observed_authorization, _ = _read_root_set(
-                cursor, operation=operation, manifest=owned["manifest"], trace=trace, work=query_work)
+                cursor, operation=operation, manifest=owned["manifest"], trace=trace, work=query_work,
+                deadline_epoch_ns=owned["deadlineEpochNs"])
             authority_revocation_semantics._canonical_equal(
                 (observed_business, observed_authorization),
                 (owned["businessBeforeRoots"], owned["authorizationBeforeRoots"]), work=query_work,
@@ -2590,7 +2599,8 @@ def _acquire_trust_completion_transition_on_work(
         queries = authority_audit_capacity.add_capacity_query(operation, queries)
         with acquisition.read_phase(cursor, trace, query_work):
             observed_business, observed_authorization, _ = _read_root_set(
-                cursor, operation=operation, manifest=owned["manifest"], trace=trace, work=query_work)
+                cursor, operation=operation, manifest=owned["manifest"], trace=trace, work=query_work,
+                deadline_epoch_ns=owned["deadlineEpochNs"])
             authority_revocation_semantics._canonical_equal(
                 (observed_business, observed_authorization),
                 (owned["businessBeforeRoots"], owned["authorizationBeforeRoots"]), work=query_work,
@@ -4134,6 +4144,8 @@ class MeasuredPlanner:
                         operation=operation,
                         manifest=selection_manifest,
                         trace=trace,
+                        deadline_epoch_ns=request["deadlineEpochNs"],
+                        deadline_monotonic_ns=request["deadlineMonotonicNs"],
                     )
                     try:
                         query_sources = (
@@ -4183,6 +4195,9 @@ class MeasuredPlanner:
                         )
                         selected = verified_inputs.selected_rows
                         multiproofs = verified_inputs.before_proofs
+                        if operation == "rbac.binding.mutate":
+                            planning_state = replace(planning_state,
+                                rbac_primary_inputs=(tuple(roots), tuple(authorization_roots), tuple(multiproofs)))
                         if operation in {oauth_activation.OP_ACTIVATE, oauth_exchange.OP_PREPARE, oauth_exchange.OP_STAGE,
                                 "oauth.refresh.claim", "oauth.refresh.retain", "oauth.refresh.commit",
                                 "credential.currentness.challenge", "credential.currentness.register", "credential.currentness.quiesce", "credential.currentness.admit",

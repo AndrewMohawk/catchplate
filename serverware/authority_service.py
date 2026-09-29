@@ -3503,6 +3503,9 @@ class AuthorityProcess:
             self.attestation_consumption_receipt = (
                 self._consume_attestation_release()
             )
+        from serverware import control_plane_rbac_currentness as rbac_currentness
+        self.rbac_currentness_owner = (rbac_currentness.initialize_authority(self)
+            if role in {"verifier", "planner", "executor"} else None)
 
     def _trusted_host_local_consumption_receipt(
         self,
@@ -8487,6 +8490,9 @@ class AuthorityProcess:
             raise AuthorityServiceError(
                 "measured plan or persistence receipt binding changed"
             )
+        from serverware import control_plane_rbac_currentness as rbac_currentness
+        rbac_attempt = rbac_currentness.reserve_plan(self, plan_payload, request_digest,
+            capability_id, deadline_monotonic_ns, deadline_epoch_ns)
         witness_reservation_digest = _domain_digest(
             WITNESS_RECEIPT_SCHEMA_V2,
             _canonical(reservation),
@@ -8697,6 +8703,10 @@ class AuthorityProcess:
             raise AuthorityServiceError(
                 "v9 executor result binding changed"
             )
+        # Only the genuine validated executor return can terminalize this
+        # separate head. A lost/late result leaves the original pending; no
+        # absence proof, generic replay witness, or fresh timer clears it.
+        rbac_currentness.complete_plan(self, rbac_attempt, executed)
         committed_late = time.monotonic_ns() >= deadline_monotonic_ns
         terminal = self._witness_transition(
             phase="reconcile" if committed_late else "commit",
@@ -9310,33 +9320,23 @@ class AuthorityProcess:
             )
         from serverware import db
 
-        with db._policy_authority_executor_pg_connect_raw() as raw:
-            with raw.transaction():
-                with raw.cursor() as cursor:
-                    cursor.execute(
-                        "SET TRANSACTION ISOLATION LEVEL SERIALIZABLE"
-                    )
-                connection = db.PostgresMetadataConnection(raw)
-                receipt_json = db.execute_authority_v9(
-                    capability_id=payload["capabilityId"],
-                    envelope_id=payload["envelopeId"],
-                    planner_transaction_id=payload[
-                        "plannerTransactionId"
-                    ],
-                    exact_request_bytes=exact_request,
-                    exact_result_bytes=exact_result,
-                    deadline_monotonic_ns=payload[
-                        "deadlineMonotonicNs"
-                    ],
-                    connection=connection,
-                )
-                if (
-                    time.monotonic_ns()
-                    >= payload["deadlineMonotonicNs"]
-                ):
-                    raise AuthorityServiceError(
-                        "v9 executor transaction crossed its deadline"
-                    )
+        from serverware import control_plane_rbac_currentness as rbac_currentness
+        with rbac_currentness.execution_guard(typed_request, result, payload["capabilityId"], payload["deadlineMonotonicNs"]) as rbac_guard:
+            with db._policy_authority_executor_pg_connect_raw() as raw:
+                with raw.transaction():
+                    with raw.cursor() as cursor:
+                        cursor.execute("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
+                        if rbac_guard is not None:
+                            rbac_owner, rbac_head = rbac_guard
+                            rbac_roots = rbac_currentness.metadata_roots(cursor, rbac_owner)
+                            rbac_currentness._matching_roots(rbac_head, rbac_roots)
+                    connection = db.PostgresMetadataConnection(raw)
+                    receipt_json = db.execute_authority_v9(
+                        capability_id=payload["capabilityId"], envelope_id=payload["envelopeId"],
+                        planner_transaction_id=payload["plannerTransactionId"], exact_request_bytes=exact_request,
+                        exact_result_bytes=exact_result, deadline_monotonic_ns=payload["deadlineMonotonicNs"], connection=connection)
+                    if time.monotonic_ns() >= payload["deadlineMonotonicNs"]:
+                        raise AuthorityServiceError("v9 executor transaction crossed its deadline")
         try:
             receipt = json.loads(receipt_json)
         except json.JSONDecodeError as exc:

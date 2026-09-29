@@ -1287,6 +1287,10 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	scripts/package_native_broker_runtime.py \
 	serverware/data_plane_audit_authority.py \
 	serverware/data_plane_audit_store.py \
+	serverware/authority_rbac_currentness.py \
+	serverware/authority_rbac_witness.py \
+	serverware/control_plane_rbac_currentness.py \
+	serverware/authority_store/rbac_witness_sql.py \
 	serverware/control_plane_data_plane_audit.py \
 	serverware/native_kms_cms.py \
 	serverware/native_secret_broker_helper.py \
@@ -3608,6 +3612,10 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				scripts/package_native_broker_runtime.py \
 				serverware/data_plane_audit_authority.py \
 				serverware/data_plane_audit_store.py \
+				serverware/authority_rbac_currentness.py \
+				serverware/authority_rbac_witness.py \
+				serverware/control_plane_rbac_currentness.py \
+				serverware/authority_store/rbac_witness_sql.py \
 				serverware/control_plane_data_plane_audit.py \
 				serverware/native_kms_cms.py \
 				serverware/native_secret_broker_helper.py \
@@ -3793,6 +3801,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/native_audit_transport.rs \
 				data-plane/decision-gate-rs/src/native_secret_broker.rs \
 				data-plane/decision-gate-rs/src/native_secret_broker_v1.rs \
+				data-plane/decision-gate-rs/src/native_serving_privileges.rs \
 				data-plane/decision-gate-rs/src/native_secret_broker_v1/image.rs \
 				data-plane/decision-gate-rs/src/native_secret_broker_v1/process.rs \
 				data-plane/decision-gate-rs/src/credential_currentness.rs \
@@ -4000,6 +4009,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-current-credential-lease-request.v2.schema.json \
 				schemas/native-current-credential-lease-envelope.v2.schema.json \
 				schemas/measured-data-plane-audit.v1.schema.json \
+				schemas/rbac-witness.v1.schema.json \
 				schemas/native-secret-broker.v1.schema.json \
 				schemas/native-startup-configuration.v5.schema.json \
 				schemas/native-startup-configuration.v4.schema.json \

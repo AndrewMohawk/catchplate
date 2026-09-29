@@ -68,6 +68,12 @@ pub(super) fn validate_response_observation_v2_client_config(
     client_transport::validate_response_observation_v2_client_config(config)
 }
 
+pub(super) fn validate_response_observation_v2_client_config_for_native_serving(
+    config: &ResponseObservationV2ClientConfig,
+) -> Result<(), String> {
+    client_transport::validate_response_observation_v2_client_config_for_native_serving(config)
+}
+
 pub(super) fn initialize_response_observation_v2_client_from_config(
     config: ResponseObservationV2ClientConfig,
     absolute_deadline: u64,

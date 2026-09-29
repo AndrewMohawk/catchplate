@@ -20,6 +20,13 @@ use std::time::Duration;
 pub(super) fn validate_native_gate_inputs(inputs: &GateStateInputs,
     proof: &ResponseProofSigningMaterial) -> Result<(), String> {
     validate_native_gate_static_inputs(inputs)?;
+    if inputs.measured_audit.is_some() {
+        inputs.native_serving_privileges.as_ref()
+            .ok_or("native v5 requires actual permanent serving privileges")?.check()?;
+        if inputs.secret_broker.is_some() || inputs.prepared_secret_broker.is_none() {
+            return Err("native v5 bootstrap requires its actual pre-drop broker preparation".to_owned());
+        }
+    }
     let shadow = inputs.policy_shadow_generation_control.as_ref()
         .ok_or("native bootstrap requires actual production shadow control")?;
     if !shadow.is_production() {
@@ -57,7 +64,10 @@ pub(super) fn validate_native_gate_inputs(inputs: &GateStateInputs,
 /// keys or contacting startup services. Actual-owner checks remain separate.
 pub(super) fn validate_native_gate_static_inputs(inputs: &GateStateInputs) -> Result<(), String> {
     let measured = inputs.measured_audit.is_some();
-    if measured != inputs.secret_broker.is_some() {
+    let configured = inputs.secret_broker.is_some();
+    let prepared = inputs.prepared_secret_broker.is_some();
+    if (configured && prepared) || measured != (configured || prepared)
+        || prepared != inputs.native_serving_privileges.is_some() {
         return Err("native measured audit and secret broker must share the explicit v5 cold profile".to_owned());
     }
     if let Some(config) = &inputs.secret_broker { config.validate()?; }

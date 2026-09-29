@@ -2531,9 +2531,9 @@ def _install_rbac_binding_revision_triggers(conn: Any) -> None:
             CREATE OR REPLACE FUNCTION serverware_rbac_binding_revision()
             RETURNS trigger LANGUAGE plpgsql AS $$
             BEGIN
-                IF pg_catalog.current_setting(
+                IF NULLIF(pg_catalog.current_setting(
                     'serverware.policy_authority_rbac_operation_id', true
-                ) IS NULL THEN
+                ), '') IS NULL THEN
                     UPDATE rbac_authority_state
                     SET binding_table_revision =
                             binding_table_revision + 1
@@ -2610,18 +2610,16 @@ def _rbac_authenticated_state_material(
         raise RBACBindingStoreError(
             "RBAC authenticated relation root is unavailable"
         )
-    return {
-        "schema": "serverware.rbacAuthenticatedState/v1",
-        "generation": generation,
-        "rootRevision": int(root["root_revision"]),
-        "rootDigest": str(root["root_digest"]),
-        "leafCount": int(root["leaf_count"]),
-        "manifestDigest": str(root["manifest_digest"]),
-    }
+    from serverware import authority_rbac_currentness as rbac_currentness
+    return rbac_currentness.state_material(generation, {
+        "table": "rbac_role_bindings", "rootRevision": int(root["root_revision"]),
+        "rootDigest": str(root["root_digest"]), "leafCount": int(root["leaf_count"]),
+    }, str(root["manifest_digest"]))
 
 
 def _rbac_authenticated_state_digest(material: dict[str, Any]) -> str:
-    return "sha256:" + hashlib.sha256(dumps(material).encode("utf-8")).hexdigest()
+    from serverware import authority_rbac_currentness as rbac_currentness
+    return rbac_currentness.state_digest(material)
 
 
 def _rbac_authority_validation_key(authority: Any) -> tuple[int, str, int]:
@@ -2662,6 +2660,8 @@ def _rbac_authority_state_from_conn(
         raise RBACBindingStoreError(
             "RBAC authenticated state digest is invalid"
         )
+    from serverware import control_plane_rbac_currentness as rbac_currentness
+    rbac_currentness.require_metadata(conn, authority)
     rows = conn.execute(
         "SELECT * FROM rbac_role_bindings ORDER BY subject_id ASC"
     ).fetchall()
@@ -2669,6 +2669,7 @@ def _rbac_authority_state_from_conn(
         str(row["subject_id"]): _rbac_binding_from_row(row)
         for row in rows
     }
+    rbac_currentness.require_metadata(conn, authority)
     return {
         "version": "serverware.rbacBindings/v3",
         "generation": generation,
@@ -2693,6 +2694,8 @@ def _validate_rbac_authority_from_conn(conn: Any, authority: Any) -> None:
         raise RBACBindingStoreError(
             "RBAC authenticated authority digest is invalid"
         )
+    from serverware import control_plane_rbac_currentness as rbac_currentness
+    rbac_currentness.require_metadata(conn, authority)
 
 
 def _lock_rbac_authority(conn: Any) -> None:
@@ -4149,6 +4152,12 @@ def _seal_postgres_schema_acl(
                     + executor_role_name
                 )
         if completion_enabled:
+            # Read-only actual cluster identity, already used by independent
+            # recovery admission. No table DML, role membership or generic
+            # SECURITY DEFINER SQL is added for RBAC witness consumers.
+            for identity_role in (runtime_role, executor_role, verifier_role):
+                cur.execute("GRANT EXECUTE ON FUNCTION pg_catalog.pg_control_system() TO "
+                    + _policy_candidate_authority_identifier(identity_role))
             for successor_role, function in successor_functions.items():
                 successor_role_name = _policy_candidate_authority_identifier(successor_role)
                 function_name = _policy_candidate_authority_identifier(function)

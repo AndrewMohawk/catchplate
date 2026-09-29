@@ -157,6 +157,13 @@ ROLE_CREDENTIAL_DESCRIPTOR_NAMES = {
 }
 
 
+for _rbac_role in ("verifier", "planner", "executor"):
+    ROLE_CREDENTIAL_DESCRIPTOR_NAMES[_rbac_role] |= frozenset({
+        "SERVERWARE_RBAC_WITNESS_CONFIG_FD", "SERVERWARE_RBAC_WITNESS_ROOT_FD", "SERVERWARE_RBAC_WITNESS_TLS_ROOT_FD",
+        "SERVERWARE_RBAC_WITNESS_CLIENT_CERTIFICATE_FD", "SERVERWARE_RBAC_WITNESS_CLIENT_KEY_FD",
+    })
+
+
 class LaunchError(RuntimeError):
     pass
 

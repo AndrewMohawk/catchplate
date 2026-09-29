@@ -18,7 +18,7 @@ The fixed ELF `/usr/local/bin/python3.11` and helper `/opt/serverware/serverware
 
 The gate launches and retains the actual child, pidfd, anonymous inherited socketpair and image descriptors. The helper chroots into that retained root, drops supplementary groups and its capability bounding set, runs as UID/GID65534, uses no-new-privileges and bounded resources, and inherits only its private FD3 protocol channel. The gate executes the held ELF descriptor, not a reopened pathname. The helper checks the actual parent PID/peer identity. Parent death, malformed frames, process exit, clock expiry or uncertain exchange poison the owner. Owned teardown kills and reaps the child; this is not a hard-realtime scheduling guarantee.
 
-The runtime needs source-owned mount/device/credential-drop privileges for this construction. It creates and removes only its own random workspace below protected `/run/serverware-native-broker`; `/dev/loop-control` is supplied by the native entrypoint. No parent-accessible helper socket, key file or plaintext-returning RPC is provided.
+The runtime needs source-owned mount/device/credential-drop privileges for this construction. It creates and removes only its own random workspace below protected `/run/serverware-native-broker`; `/dev/loop-control` is supplied by the native entrypoint. The v5 gate now [drops permanently before constructing serving identities](native-serving-privilege-separation.md); the actual prepared NSM and helper owners cross that one-way boundary without rebinding old identities or renewing deadlines. No parent-accessible helper socket, key file or plaintext-returning RPC is provided.
 
 ## KMS and private material
 

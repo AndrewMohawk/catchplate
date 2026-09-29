@@ -24,17 +24,17 @@ Checkpoint: **2026-09-29 — pre-production, source-only.**
 
 [![Project checkpoints, one segment per task: 35 of 46 source-landed; 4 active and 7 todo. Evidence handoff 10/10; historical recovery 4/5; permissions and grants 10/10; finalization and sessions 8/8; workloads and native 3/6; providers and operations 0/7. F08 is source-landed in 170d0ac; H05, N04, N05 and O04 are in progress. Production acceptance remains 0/6. Source only; unbuilt, unexecuted and unprovisioned.](docs/images/project-progress.svg)](docs/production-status.md#next-source-milestones)
 
-### Current work: private native start claims and containment
+### Current work: controlled approvals and a blocked native child
 
-[`.259` source / 09d73a8](https://github.com/example/private-deployment)
-connects [execution-profile parents](docs/native-egress-execution-parents.md) to
-the actual [retained start owner and durable start/creation claims](docs/native-start-claim.md),
-then [claimed cgroup containment](docs/native-execution-containment.md).
-These are private source paths, not public execution, a child, transferred
-network ownership, an independent guardian or a running pilot. Prior H05
-retained recovery and [admin-token resolution](docs/control-plane-admin-token-publication-resolution.md)
-retain source credit. The production approval ACL/controlled-writer mismatch
-remains open; its bridge is in progress and the portal panel is held, not landed.
+[`.260` source / ce757ce](https://github.com/example/private-deployment)
+connects the [purpose-bound publication approval writer](docs/control-plane-publication-approval-authority.md)
+and [operator portal](docs/portal-admin-token-publication.md), plus an actual
+private [blocked executable child](docs/native-executable-child.md) and
+[guardian with separate reap/leaf-empty cleanup](docs/native-execution-guardian.md).
+The approval path uses genuine assertion verification, planner and cold clients,
+not generic runtime metadata writes; independent custody and physical trust
+remain unprovisioned. Native exec release, same-child network transfer and public
+start remain open. Prior H05 recovery and native admission retain source credit.
 Source remains unbuilt, unexecuted and unprovisioned; no runtime or pilot credit.
 
 The four active checkpoints remain partial:
@@ -53,15 +53,15 @@ The four active checkpoints remain partial:
   protected host CA installation, principal preflight, response/lease authority
   and separately authorized dual-stack attachment retain source credit.
   Client/capture v4 remains an observation before teardown. Immutable
-  filesystem/ELF admission now joins actual `StartOwner`, durable start/creation
-  claims and cgroup preparation; old diagnostics/static-launcher constraints stay unchanged.
-  Public execution, executable child, network-owner transfer, independent guardian,
-  supervision and combined CA+egress remain open, alongside actual
+  filesystem/ELF admission, actual `StartOwner`, durable claims and containment
+  now join a private blocked child and guardian; old diagnostic owners remain distinct.
+  Exec release, same-child network transfer, public start, running supervision
+  and combined CA+egress remain open, alongside actual
   CONNECT/provider/canary, Kubernetes, lifecycle/recovery/off-host rollback and
   independent service/exact-source acceptance.
 - **O04 · Protected operations:** [genuine approval verification](docs/control-plane-approval-verification.md)
   and durable publication now join [separately authorized exact-state resolution](docs/control-plane-admin-token-publication-resolution.md).
-  Production approval ACL/controlled-writer integration and the held portal remain open.
+  The purpose-bound approval writer and portal are source-connected, not provisioned or tested.
   Other provider/filesystem effects, ambiguous or malformed-history recovery,
   journal archival, multi-host coordination and independent rollback witnessing remain open.
 

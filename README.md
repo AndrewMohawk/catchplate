@@ -24,12 +24,13 @@ Checkpoint: **2026-09-29 — pre-production, source-only.**
 
 [![Project checkpoints, one segment per task: 36 of 46 source-landed; 10 active and 0 todo. Evidence handoff 10/10; historical recovery 4/5; permissions and grants 10/10; finalization and sessions 8/8; workloads and native 3/6; providers and operations 1/7. H05, N04, N05, N06 and O01 through O06 are in progress. Production acceptance remains 0/6. Source only; unbuilt, unexecuted and unprovisioned.](docs/images/project-progress.svg)](docs/production-status.md#next-source-milestones)
 
-Latest [`.310` source](https://github.com/example/private-deployment) connects
-[protected canary delivery](docs/policy-canary-durable-delivery.md): durable exact
-request bytes, verified write/read completions, irreversible claim and atomic
-intake consumption. It also fixes the circular configuration digest without
-excluding signed fields. Actual native sending/exporters, guest result transport,
-native services, later Setup, succession and independent acceptance remain open.
+Latest [`.311` source](https://github.com/example/private-deployment) adds
+[retired-credential succession](docs/oauth-retired-scope-succession.md):
+independent authorization, complete bounded history acquisition, real holder
+drains and an atomic fence before replacement. Old retirement fences stay in
+place; refresh appends successor history. Native succession custody/startup,
+canary sending/exporters, verifier transport, later Setup and independent
+acceptance remain open.
 
 The bar shows **committed source, not tested readiness or remaining effort**.
 Green means source-landed; amber means partial implementation. No current pilot

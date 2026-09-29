@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.dev/schemas/oauth-refresh-authority.v1.schema.json",
+  "title": "Explicit due-only OAuth refresh authority and original-bound transitions",
+  "description": "Closed data projections, not effect authority. The actual signed measured configuration, independent enrollment verification, original SQL roots, held owner, byte bounds and original deadlines are enforced by code. No provider-authorship or cached-send invalidation proof is encoded here.",
+  "$ref": "#/$defs/policy",
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "uuid": {"type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"},
+    "text": {"type": "string", "minLength": 1},
+    "epoch": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807},
+    "expectedVersion": {"type": "integer", "minimum": 1, "maximum": 9223372036854775806},
+    "nonce": {"type": "string", "pattern": "^[A-Za-z0-9_-]{43}$"},
+    "limits": {
+      "type": "object", "additionalProperties": false,
+      "required": ["dueWithinSeconds", "operationMaxSeconds", "revocationCapacity"],
+      "properties": {"dueWithinSeconds": {"type": "integer", "minimum": 1, "maximum": 300}, "operationMaxSeconds": {"type": "integer", "minimum": 1, "maximum": 30}, "revocationCapacity": {"type": "integer", "minimum": 1, "maximum": 64}}
+    },
+    "policy": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "enrollmentRootPublicKeyBase64Url", "enrollmentRootSpkiSha256", "controlPlaneConfigurationDigest", "deploymentId", "dueWithinSeconds", "operationMaxSeconds", "revocationCapacity"],
+      "properties": {
+        "schema": {"const": "serverware.oauthRefreshAuthorityPolicy/v1"},
+        "enrollmentRootPublicKeyBase64Url": {"type": "string", "pattern": "^[A-Za-z0-9_-]{43}$"},
+        "enrollmentRootSpkiSha256": {"$ref": "#/$defs/digest"},
+        "controlPlaneConfigurationDigest": {"$ref": "#/$defs/digest"},
+        "deploymentId": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"},
+        "dueWithinSeconds": {"type": "integer", "minimum": 1, "maximum": 300},
+        "operationMaxSeconds": {"type": "integer", "minimum": 1, "maximum": 30},
+        "revocationCapacity": {"type": "integer", "minimum": 1, "maximum": 64}
+      }
+    },
+    "envelope": {
+      "type": "object", "additionalProperties": false,
+      "required": ["encrypted_secret", "encrypted_dek", "secret_nonce", "secret_ciphertext", "secret_kek_id", "credential_version", "secret_updated_at"],
+      "properties": {
+        "encrypted_secret": {"const": "envelope:v2"},
+        "encrypted_dek": {"$ref": "#/$defs/text", "maxLength": 262144},
+        "secret_nonce": {"$ref": "#/$defs/text", "maxLength": 262144},
+        "secret_ciphertext": {"$ref": "#/$defs/text", "maxLength": 262144},
+        "secret_kek_id": {"$ref": "#/$defs/text", "maxLength": 262144},
+        "credential_version": {"$ref": "#/$defs/epoch"},
+        "secret_updated_at": {"$ref": "#/$defs/text", "maxLength": 262144}
+      }
+    },
+    "artifactEnvelope": {"$ref": "#/$defs/envelope", "properties": {"credential_version": {"const": 1}}},
+    "nullableArtifactEnvelope": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/artifactEnvelope"}]},
+    "nullableDigest": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/digest"}]},
+    "claimRequest": {
+      "type": "object", "additionalProperties": false,
+      "required": ["expectedVersion", "limits", "credentialRowSha256", "generationRowSha256", "ownerNonceSha256", "issuedAtEpochNs", "contactExpiresAtEpochNs", "retentionExpiresAtEpochNs", "contactRequestSha256", "reservedIssuedEnvelope", "reservedSupersededEnvelope"],
+      "properties": {
+        "expectedVersion": {"$ref": "#/$defs/expectedVersion"}, "limits": {"$ref": "#/$defs/limits"},
+        "credentialRowSha256": {"$ref": "#/$defs/digest"}, "generationRowSha256": {"$ref": "#/$defs/digest"},
+        "ownerNonceSha256": {"$ref": "#/$defs/digest"}, "issuedAtEpochNs": {"$ref": "#/$defs/epoch"},
+        "contactExpiresAtEpochNs": {"$ref": "#/$defs/epoch"}, "retentionExpiresAtEpochNs": {"$ref": "#/$defs/epoch"},
+        "contactRequestSha256": {"$ref": "#/$defs/digest"}, "reservedIssuedEnvelope": {"$ref": "#/$defs/artifactEnvelope"},
+        "reservedSupersededEnvelope": {"$ref": "#/$defs/nullableArtifactEnvelope"}
+      }
+    },
+    "retainRequest": {
+      "type": "object", "additionalProperties": false,
+      "required": ["expectedVersion", "limits", "refreshRowSha256", "ownerNonce", "receivedAtEpochNs", "rawResponseSha256", "rawResponseEnvelope", "issuedMaterialSha256", "issuedMaterialEnvelope"],
+      "properties": {
+        "expectedVersion": {"$ref": "#/$defs/expectedVersion"}, "limits": {"$ref": "#/$defs/limits"},
+        "refreshRowSha256": {"$ref": "#/$defs/digest"}, "ownerNonce": {"$ref": "#/$defs/nonce"},
+        "receivedAtEpochNs": {"$ref": "#/$defs/epoch"}, "rawResponseSha256": {"$ref": "#/$defs/digest"},
+        "rawResponseEnvelope": {"$ref": "#/$defs/artifactEnvelope"}, "issuedMaterialSha256": {"$ref": "#/$defs/nullableDigest"},
+        "issuedMaterialEnvelope": {"$ref": "#/$defs/nullableArtifactEnvelope"}
+      },
+      "allOf": [{"if": {"properties": {"issuedMaterialEnvelope": {"type": "null"}}}, "then": {"properties": {"issuedMaterialSha256": {"type": "null"}}}, "else": {"properties": {"issuedMaterialSha256": {"$ref": "#/$defs/digest"}}}}]
+    },
+    "commitRequest": {
+      "type": "object", "additionalProperties": false,
+      "required": ["expectedVersion", "limits", "refreshRowSha256", "ownerNonce", "replacementSecretSha256", "replacementEnvelope", "replacementMetadata", "supersededMaterialSha256", "supersededEnvelope"],
+      "properties": {
+        "expectedVersion": {"$ref": "#/$defs/expectedVersion"}, "limits": {"$ref": "#/$defs/limits"},
+        "refreshRowSha256": {"$ref": "#/$defs/digest"}, "ownerNonce": {"$ref": "#/$defs/nonce"},
+        "replacementSecretSha256": {"$ref": "#/$defs/digest"}, "replacementEnvelope": {"$ref": "#/$defs/envelope"},
+        "replacementMetadata": {"type": "object"}, "supersededMaterialSha256": {"$ref": "#/$defs/nullableDigest"},
+        "supersededEnvelope": {"$ref": "#/$defs/nullableArtifactEnvelope"}
+      },
+      "allOf": [{"if": {"properties": {"supersededEnvelope": {"type": "null"}}}, "then": {"properties": {"supersededMaterialSha256": {"type": "null"}}}, "else": {"properties": {"supersededMaterialSha256": {"$ref": "#/$defs/digest"}}}}]
+    },
+    "arguments": {
+      "type": "object", "additionalProperties": false, "required": ["credential_id", "enrollment_original", "request"],
+      "properties": {"credential_id": {"$ref": "#/$defs/uuid"}, "enrollment_original": {"type": "string", "minLength": 1, "maxLength": 87382, "pattern": "^[A-Za-z0-9_-]+$"}, "request": {"oneOf": [{"$ref": "#/$defs/claimRequest"}, {"$ref": "#/$defs/retainRequest"}, {"$ref": "#/$defs/commitRequest"}]}}
+    },
+    "refreshObservation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "credentialId", "expectedVersion", "status", "rowSha256", "contactExpiresAtEpochNs", "retentionExpiresAtEpochNs"],
+      "properties": {"id": {"$ref": "#/$defs/uuid"}, "credentialId": {"$ref": "#/$defs/uuid"}, "expectedVersion": {"$ref": "#/$defs/expectedVersion"}, "status": {"enum": ["claimed", "retained", "committed"]}, "rowSha256": {"$ref": "#/$defs/digest"}, "contactExpiresAtEpochNs": {"$ref": "#/$defs/epoch"}, "retentionExpiresAtEpochNs": {"$ref": "#/$defs/epoch"}}
+    },
+    "credentialObservation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "name", "kind", "secret_kek_id", "credential_version", "secret_updated_at", "metadata", "lifecycle_status", "revocation_error", "revocation_requested_at", "created_at", "updated_at"],
+      "properties": {"id": {"$ref": "#/$defs/uuid"}, "name": {"$ref": "#/$defs/text"}, "kind": {"const": "oauth2"}, "secret_kek_id": {"$ref": "#/$defs/text"}, "credential_version": {"$ref": "#/$defs/epoch"}, "secret_updated_at": {"$ref": "#/$defs/text"}, "metadata": {"type": "object"}, "lifecycle_status": {"const": "active"}, "revocation_error": {"type": "null"}, "revocation_requested_at": {"type": "null"}, "created_at": {"$ref": "#/$defs/text"}, "updated_at": {"$ref": "#/$defs/text"}}
+    },
+    "result": {
+      "type": "object", "additionalProperties": false,
+      "required": ["ok", "refresh", "operation", "requestDigest", "auditEventDigest", "idempotentReplay"],
+      "properties": {"ok": {"const": true}, "refresh": {"$ref": "#/$defs/refreshObservation"}, "operation": {"enum": ["oauth.refresh.claim", "oauth.refresh.retain", "oauth.refresh.commit"]}, "requestDigest": {"$ref": "#/$defs/digest"}, "auditEventDigest": {"$ref": "#/$defs/digest"}, "idempotentReplay": {"const": false}, "credential": {"$ref": "#/$defs/credentialObservation"}},
+      "allOf": [{"if": {"properties": {"operation": {"const": "oauth.refresh.commit"}}}, "then": {"required": ["credential"]}, "else": {"not": {"required": ["credential"]}}}]
+    }
+  }
+}

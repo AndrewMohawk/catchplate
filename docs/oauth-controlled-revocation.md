@@ -171,8 +171,11 @@ show retained states without invoking expiry writers or discarding evidence.
 Terminal originals remain retained and still occupy the existing sixty-four-row
 work inventory, which also bounds these per-work journals and their two attempts.
 An independently authorized retirement/capacity-reclamation contract
-is not supplied here. Pending-cancellation, superseded/disconnected credential
-cleanup, issuance-without-retained-token reconciliation, refresh, reconnect,
+is not supplied here. The separate [refresh client](oauth-controlled-refresh-client.md)
+retains issued/superseded work under distinct source purposes; those labels do
+not grant admission to this exchange-only cleanup worker. Pending-cancellation,
+superseded/disconnected credential cleanup, issuance-without-retained-token
+reconciliation, refresh-specific cleanup and cached-send fencing, reconnect,
 setup, larger inventories and cross-deployment coordination remain required
 successor work, not a permanently reduced product scope. This slice does not
 lift unrelated enrolled-path guards or claim O01/O02/production completion.

@@ -51,6 +51,8 @@ from serverware import authority_oauth_activation as oauth_activation
 from serverware import authority_oauth_activation_policy as oauth_activation_policy
 from serverware import authority_oauth_exchange as oauth_exchange
 from serverware import authority_oauth_exchange_policy as oauth_exchange_policy
+from serverware import authority_oauth_refresh as oauth_refresh
+from serverware import authority_oauth_refresh_policy as oauth_refresh_policy
 from serverware import authority_oauth_revocation as oauth_revocation
 from serverware import authority_oauth_revocation_policy as oauth_revocation_policy
 from serverware import authority_planner
@@ -1156,7 +1158,7 @@ class MeasuredConfiguration:
                 "authority configuration root signature is invalid"
             ) from exc
         if (
-            set(payload) - {evidence_policy.FIELD, transition_policy.FIELD, enrollment_policy.FIELD, oauth_activation_policy.FIELD, oauth_exchange_policy.FIELD, oauth_revocation_policy.FIELD}
+            set(payload) - {evidence_policy.FIELD, transition_policy.FIELD, enrollment_policy.FIELD, oauth_activation_policy.FIELD, oauth_exchange_policy.FIELD, oauth_revocation_policy.FIELD, oauth_refresh_policy.FIELD}
                 != required_payload_fields
             or payload.get("schema") != CONFIG_SCHEMA
             or payload.get("sourceRevision") != SOURCE_REVISION
@@ -1247,6 +1249,10 @@ class MeasuredConfiguration:
             oauth_exchange_policy.validate_policy(payload.get(oauth_exchange_policy.FIELD), payload=payload, root_key=root_key)
         except (TypeError, ValueError) as exc:
             raise AuthorityServiceError("authority OAuth exchange policy is invalid") from exc
+        try:
+            oauth_refresh_policy.validate_policy(payload.get(oauth_refresh_policy.FIELD), payload=payload, root_key=root_key)
+        except (TypeError, ValueError) as exc:
+            raise AuthorityServiceError("authority OAuth due-refresh policy is invalid") from exc
         try:
             oauth_revocation_policy.validate_policy(payload.get(oauth_revocation_policy.FIELD), payload=payload, root_key=root_key)
         except (TypeError, ValueError) as exc:
@@ -8230,6 +8236,12 @@ class AuthorityProcess:
                 now_epoch_ns=time.time_ns())
             if oauth_exchange.request_digest(operation, original_values) != request_digest:
                 raise AuthorityServiceError("OAuth exchange original commitment differs from actual authority recipe")
+        if operation in oauth_refresh.OPERATIONS:
+            oauth_refresh_policy.verify_original(operation, arguments,
+                configuration_payload=self.configuration.payload, root_key=self.configuration.root_key,
+                now_epoch_ns=time.time_ns())
+            if oauth_refresh.request_digest(operation, arguments) != request_digest:
+                raise AuthorityServiceError("OAuth refresh original commitment differs from actual authority recipe")
         if operation in oauth_revocation.OPERATIONS:
             oauth_revocation_policy.verify_original(operation, arguments,
                 configuration_payload=self.configuration.payload, root_key=self.configuration.root_key,
@@ -8729,6 +8741,10 @@ class AuthorityProcess:
                 root_key=self.configuration.root_key, now_epoch_ns=time.time_ns())
         if planner_request["operation"] in oauth_exchange.OPERATIONS:
             oauth_exchange_policy.verify_original(planner_request["operation"],
+                planner_request["typedRequest"]["arguments"], configuration_payload=self.configuration.payload,
+                root_key=self.configuration.root_key, now_epoch_ns=time.time_ns())
+        if planner_request["operation"] in oauth_refresh.OPERATIONS:
+            oauth_refresh_policy.verify_original(planner_request["operation"],
                 planner_request["typedRequest"]["arguments"], configuration_payload=self.configuration.payload,
                 root_key=self.configuration.root_key, now_epoch_ns=time.time_ns())
         if planner_request["operation"] in oauth_revocation.OPERATIONS:

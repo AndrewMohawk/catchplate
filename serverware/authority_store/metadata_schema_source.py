@@ -311,6 +311,38 @@ def metadata_base_schema_source() -> str:
                 CHECK (status IN ('prepared', 'claimed', 'retained', 'staged'))
             );
 
+            CREATE TABLE IF NOT EXISTS oauth_refresh_reservations (
+                id TEXT PRIMARY KEY,
+                credential_id TEXT NOT NULL,
+                credential_version BIGINT NOT NULL,
+                provider_id TEXT NOT NULL,
+                enrollment_original TEXT NOT NULL,
+                credential_original_json TEXT NOT NULL,
+                generation_original_json TEXT NOT NULL,
+                limits_json TEXT NOT NULL,
+                claim_request_digest TEXT NOT NULL,
+                owner_nonce_sha256 TEXT NOT NULL,
+                status TEXT NOT NULL,
+                contact_request_sha256 TEXT NOT NULL,
+                issued_work_id TEXT NOT NULL,
+                superseded_work_id TEXT,
+                issued_at_epoch_ns BIGINT NOT NULL,
+                contact_expires_at_epoch_ns BIGINT NOT NULL,
+                retention_expires_at_epoch_ns BIGINT NOT NULL,
+                received_at_epoch_ns BIGINT,
+                raw_response_sha256 TEXT,
+                raw_response_envelope_json TEXT,
+                issued_material_sha256 TEXT,
+                issued_material_envelope_json TEXT,
+                replacement_secret_sha256 TEXT,
+                replacement_credential_sha256 TEXT,
+                superseded_material_sha256 TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE (credential_id, credential_version),
+                CHECK (status IN ('claimed', 'retained', 'committed'))
+            );
+
             CREATE TABLE IF NOT EXISTS oauth_revocation_reservations (
                 id TEXT PRIMARY KEY,
                 authorization_original TEXT NOT NULL,

@@ -17223,6 +17223,9 @@ def _should_record_credential_lease_issuance(
 
 
 def _credential_for_lease(credential_id: str) -> dict[str, Any] | None:
+    from serverware import oauth_application_owner
+    if oauth_application_owner.require_started() is not None:
+        raise HTTPException(status_code=503, detail="enrolled credentials require the current fenced lease opening")
     credential: dict[str, Any] | None = None
     provider_id: str | None = None
     refreshed: dict[str, Any] | None = None
@@ -18433,10 +18436,16 @@ def _claim_credential_lease_release_authorization(
 
 @app.post("/api/data-plane/credential-leases")
 def data_plane_credential_leases(
+    request: Request,
     payload: CredentialLeaseRequest = Depends(_bounded_credential_lease_request),
 ) -> Response:
     authenticated = True
+    refresh_opening = None
     try:
+        from serverware import oauth_application_owner
+        if oauth_application_owner.require_started() is not None:
+            from serverware.control_plane_oauth_refresh import LeaseOpening
+            refresh_opening = LeaseOpening(request, payload)
         profile, bound_dispatch = lease_profiles.request_representation(payload.api_version)
         native, policy_aware = profile == "native", profile == "policy-aware"
         snapshot = get_policy_snapshot()
@@ -18451,6 +18460,8 @@ def data_plane_credential_leases(
         )
         release_authorization = dispatch_authority["releaseAuthorization"]
         request_authority = dispatch_authority["requestAuthority"]
+        if refresh_opening is not None:
+            refresh_opening.bind_authority(request_authority)
         request_authority_sha256 = dispatch_authority[
             "requestAuthoritySha256"
         ]
@@ -18539,8 +18550,16 @@ def data_plane_credential_leases(
         )
 
         prepared_credential: dict[str, Any] | None = None
+        if payload.purpose == "generationMetadata" and refresh_opening is not None:
+            # Refresh is a separate, definite controlled transition BEFORE
+            # this response pins the version. It cannot renew a dispatch pin.
+            refresh_opening.generation_metadata()
         if payload.purpose == "dispatchSecret":
-            prepared_credential = _credential_for_lease(payload.credential_id)
+            prepared_credential = (
+                refresh_opening.dispatch_credential()
+                if refresh_opening is not None
+                else _credential_for_lease(payload.credential_id)
+            )
             if not prepared_credential:
                 raise HTTPException(
                     status_code=404, detail="requested credential is unavailable"
@@ -18653,6 +18672,8 @@ def data_plane_credential_leases(
                 raise HTTPException(
                     status_code=404, detail="requested credential became unavailable"
                 )
+            if refresh_opening is not None:
+                refresh_opening.require_current(current_credential)
             if prepared_credential is not None and int(
                 current_credential.get("credential_version") or 0
             ) != int(prepared_credential.get("credential_version") or 0):
@@ -18767,6 +18788,8 @@ def data_plane_credential_leases(
                 raise HTTPException(
                     status_code=503, detail="credential lease response exceeds 8 MiB"
                 )
+            if refresh_opening is not None:
+                refresh_opening.require_current(current_credential)
         if dispatch_authority["controlled"]:
             final_snapshot = get_policy_snapshot()
             if final_snapshot is None:
@@ -18835,6 +18858,11 @@ def data_plane_credential_leases(
             raise HTTPException(
                 status_code=503, detail="credential lease issuance audit is unavailable"
             ) from exc
+    if refresh_opening is not None:
+        try:
+            refresh_opening.require_current()
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="credential generation or refresh fence changed before lease output") from exc
     return Response(
         content=response_body,
         media_type="application/json",

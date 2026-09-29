@@ -12,6 +12,7 @@ from serverware import authority_transition_release
 from serverware import authority_transition_publication_approval
 from serverware import authority_transition_oauth_activation
 from serverware import authority_transition_oauth_exchange
+from serverware import authority_transition_oauth_refresh
 from serverware import authority_transition_oauth_revocation
 from serverware import authority_transition_policy_file_approval
 
@@ -39,6 +40,7 @@ def _merge_kernels() -> dict[
         authority_transition_publication_approval.KERNELS,
         authority_transition_oauth_activation.KERNELS,
         authority_transition_oauth_exchange.KERNELS,
+        authority_transition_oauth_refresh.KERNELS,
         authority_transition_oauth_revocation.KERNELS,
         authority_transition_policy_file_approval.KERNELS,
     ):

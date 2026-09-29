@@ -114,8 +114,10 @@ Other recovery sources and protected history retirement remain separate work.
 
 The consent and [activation portal](oauth-enrolled-activation-portal.md) now
 connect these options and exact request, fresh WebAuthn, explicit consent start,
-distinct-person approval and fresh-requester activation in source. Reconnect, refresh, setup
-sessions, cross-deployment subject fencing, external application coordination
+distinct-person approval and fresh-requester activation in source. A separate
+[controlled refresh client](oauth-controlled-refresh-client.md) joins due refresh
+before generation pinning; its cached-send fence and cleanup consumers remain
+open. Reconnect, setup sessions, cross-deployment subject fencing, external application coordination
 and measured provider issuance (O02) are not closed by this API. Independent
 enrollment/configuration roots and current physical authenticator trust still
 must be provisioned. No build, test, browser, provider or runtime execution is

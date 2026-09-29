@@ -18,6 +18,8 @@ def tables_for(operation):
         return TABLES
     if operation == "oauth.exchange.prepare":
         return ("oauth_exchange_reservations", "oauth_revocation_work", "pending_oauth_credentials")
+    if operation == "oauth.refresh.claim":
+        return ("oauth_refresh_reservations", "oauth_revocation_work")
     raise ValueError("operation has no complete OAuth population contract")
 
 

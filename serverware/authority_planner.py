@@ -4183,7 +4183,7 @@ class MeasuredPlanner:
                         )
                         selected = verified_inputs.selected_rows
                         multiproofs = verified_inputs.before_proofs
-                        if operation in {oauth_activation.OP_ACTIVATE, oauth_exchange.OP_PREPARE, oauth_exchange.OP_STAGE}:
+                        if operation in {oauth_activation.OP_ACTIVATE, oauth_exchange.OP_PREPARE, oauth_exchange.OP_STAGE, "oauth.refresh.claim"}:
                             authority_oauth_inventory.require_complete_populations(
                                 selected_rows=selected, before_roots=tuple(roots) + tuple(authorization_roots),
                                 work=query_work, deadline_ns=request["deadlineMonotonicNs"], operation=operation,

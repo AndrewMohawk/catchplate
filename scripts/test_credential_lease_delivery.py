@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey, X25519PublicKey
@@ -2743,7 +2743,12 @@ def main() -> None:
         try:
             try:
                 app_module.data_plane_credential_leases(
-                    app_module.CredentialLeaseRequest.model_validate(policy_race_payload)
+                    request=Request({
+                        "type": "http", "method": "POST",
+                        "path": "/api/data-plane/credential-leases",
+                        "query_string": b"", "headers": [],
+                    }),
+                    payload=app_module.CredentialLeaseRequest.model_validate(policy_race_payload),
                 )
             except HTTPException as exc:
                 if exc.status_code != 409 or "policy hash is not active" not in str(exc.detail):

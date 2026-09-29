@@ -58,6 +58,30 @@ network effects have their own journal and authority; the child policy alone
 permits none of them. This implementation is source-only, not tested kernel or
 connectivity evidence.
 
+### Explicit execution-profile parent constraints
+
+The additive [egress authorization v4](../schemas/native-egress-installation-authorization.v4.schema.json)
+keeps v3's exact 31 fields, including fixed child network policy, but requires
+`workload.profile = native-egress-new-execution-v1`. Its envelope and payload
+have separate v4 labels and signing domain: exact payload-schema ASCII, NUL,
+then canonical ASCII payload without LF. The paired Python `_produce_on_work`
+and `_verify_on_work` require the caller's explicit independent
+`requested_profile=EXECUTION_WORKLOAD_PROFILE` to select v4. Their unchanged
+default `WORKLOAD_PROFILE` accepts only the existing strict v1-v3 families.
+Cross-version/profile combinations fail; incoming payloads, journal records and
+successful diagnostics never choose or upgrade the cold profile.
+
+The new [launch manifest v2](../schemas/native-egress-launch-manifest.v2.schema.json)
+is exactly `apiVersion`, `profile`, `executionManifestSha256`, and
+`launcherBinarySha256`, canonical ASCII without LF and at most 4096 bytes.
+It binds the separately admitted [execution filesystem/ELF manifest](native-execution-filesystem-admission.md)
+and actual launcher original, not fabricated legacy executable/argv/environment
+fields. Pre-start `create-new`, `never-executed` and `terminate-before-start`
+constraints remain. These are authenticated parent constraints only, not child
+creation, a [start permit](native-workload-start-admission.md), attachment,
+guardian or observed runtime success. The old public clients/never-exec owner
+have no v4 fallback, and no historical child is converted into an executable one.
+
 The creation journal must differ from the kernel journal in path, device/inode
 pair **and** namespace. Both are separately preprovisioned protected directories,
 not directories the launcher creates or repairs. The durable `SWNEGCR1` claim

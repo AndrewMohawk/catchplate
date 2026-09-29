@@ -20,6 +20,8 @@ const CREATION_SCHEMA: &str = "serverware.nativeEgressInstallationAuthorization/
 const CREATION_ENVELOPE: &str = "serverware.signedNativeEgressInstallationAuthorization/v2";
 const NETWORK_SCHEMA: &str = "serverware.nativeEgressInstallationAuthorization/v3";
 const NETWORK_ENVELOPE: &str = "serverware.signedNativeEgressInstallationAuthorization/v3";
+const EXECUTION_SCHEMA: &str = "serverware.nativeEgressInstallationAuthorization/v4";
+const EXECUTION_ENVELOPE: &str = "serverware.signedNativeEgressInstallationAuthorization/v4";
 const MAX_EPOCH_MS: u64 = 9_223_372_036_854;
 
 #[derive(Serialize)]
@@ -98,6 +100,8 @@ pub(super) enum ChildNetworkPolicy { ManualDualStackV1 }
 // same-session originals, independent roles, token and actual retained owners.
 // The type is deliberately neither Clone nor Debug nor serializable authority.
 pub(super) struct Authorization {
+    // Derived only from the authenticated closed schema, never a request hint.
+    pub(super) execution_profile: bool,
     pub(super) root_key_id: [u8; 32],
     pub(super) original_sha256: [u8; 32],
     pub(super) authorization_id: String,
@@ -314,13 +318,15 @@ fn proxy(value: &Value, clock: &OriginalClock) -> Result<(Proxy, Vec<Rule>), Str
     Ok((result, rules))
 }
 
-fn workload(value: &Value) -> Result<Workload, String> {
+fn workload(value: &Value, execution: bool) -> Result<Workload, String> {
     let p = object(value, &["profile", "launchManifestSha256", "launcherBinarySha256",
         "namespaceMode", "beforeCompletion", "failureMode"])?;
-    require(p["profile"] == "native-egress-create-new-workload-v1" && p["namespaceMode"] == "create-new"
+    let profile = if execution { "native-egress-new-execution-v1" }
+        else { "native-egress-create-new-workload-v1" };
+    require(p["profile"] == profile && p["namespaceMode"] == "create-new"
         && p["beforeCompletion"] == "never-executed" && p["failureMode"] == "terminate-before-start")?;
     digest(&p["launchManifestSha256"])?; digest(&p["launcherBinarySha256"])?;
-    Ok(Workload { profile: "native-egress-create-new-workload-v1".to_owned(),
+    Ok(Workload { profile: profile.to_owned(),
         launch_manifest_sha256: text(&p["launchManifestSha256"], 71)?.to_owned(),
         launcher_binary_sha256: text(&p["launcherBinarySha256"], 71)?.to_owned(),
         namespace_mode: "create-new".to_owned(), before_completion: "never-executed".to_owned(),
@@ -372,6 +378,7 @@ pub(super) fn admit(raw: &[u8], root_pem: &[u8], root_pem_sha: &str,
         Some(ENVELOPE) => SCHEMA,
         Some(CREATION_ENVELOPE) => CREATION_SCHEMA,
         Some(NETWORK_ENVELOPE) => NETWORK_SCHEMA,
+        Some(EXECUTION_ENVELOPE) => EXECUTION_SCHEMA,
         _ => return Err("native egress authorization envelope profile refused".to_owned()),
     };
     let mut fields = vec!["schema", "sourceRevision", "purpose", "trustMode", "authorizationId",
@@ -382,7 +389,7 @@ pub(super) fn admit(raw: &[u8], root_pem: &[u8], root_pem_sha: &str,
         "networkOwner", "machineIdSha256", "workload", "ruleset", "capability", "journal",
         "issuedAtEpochNs", "expiresAtEpochNs"];
     if schema != SCHEMA { fields.push("creationJournal"); }
-    if schema == NETWORK_SCHEMA { fields.push("childNetworkPolicy"); }
+    if matches!(schema, NETWORK_SCHEMA | EXECUTION_SCHEMA) { fields.push("childNetworkPolicy"); }
     let p = object(&outer["payload"], &fields)?;
     require(p["schema"] == schema && p["purpose"] == "native-egress-installation"
         && p["trustMode"] == "trusted-host-local"
@@ -417,7 +424,7 @@ pub(super) fn admit(raw: &[u8], root_pem: &[u8], root_pem_sha: &str,
             && creation.namespace != kernel_journal.namespace)?;
         Some(creation)
     } else { None };
-    let child_network_policy = if schema == NETWORK_SCHEMA {
+    let child_network_policy = if matches!(schema, NETWORK_SCHEMA | EXECUTION_SCHEMA) {
         require(p["childNetworkPolicy"] == "manual-dual-stack-no-autoconfiguration-v1")?;
         Some(ChildNetworkPolicy::ManualDualStackV1)
     } else { None };
@@ -425,7 +432,8 @@ pub(super) fn admit(raw: &[u8], root_pem: &[u8], root_pem_sha: &str,
     let expires = integer(&p["expiresAtEpochNs"], 1, i64::MAX as u64)?;
     require(issued <= opening_wall && opening_wall < expires && expires > issued
         && expires - issued <= 300_000_000_000 && expires <= capability.expires_at_epoch_ms * 1_000_000)?;
-    let result = Authorization { root_key_id, original_sha256: Sha256::digest(raw).into(),
+    let result = Authorization { execution_profile: schema == EXECUTION_SCHEMA,
+        root_key_id, original_sha256: Sha256::digest(raw).into(),
         authorization_id: identifier(&p["authorizationId"])?, setup_sha256: digest(&p["setupSha256"])?,
         delegation_sha256: digest(&p["delegationSha256"])?, target_request_sha256: digest(&p["targetRequestSha256"])?,
         policy_requirements_sha256: digest(&p["policyRequirementsSha256"])?,
@@ -438,7 +446,7 @@ pub(super) fn admit(raw: &[u8], root_pem: &[u8], root_pem_sha: &str,
         client_challenge_sha256: digest(&p["clientChallengeSha256"])?, target_spki_sha256: digest(&p["targetSpkiSha256"])?,
         machine_id_sha256: digest(&p["machineIdSha256"])?, target_principal_id: principal.to_owned(),
         target_nonce: nonce.to_owned(), proxy, network_owner: network_owner(&p["networkOwner"])?,
-        workload: workload(&p["workload"])?, ruleset, capability, journal: kernel_journal,
+        workload: workload(&p["workload"], schema == EXECUTION_SCHEMA)?, ruleset, capability, journal: kernel_journal,
         creation_journal, child_network_policy,
         issued_at_epoch_ns: issued, expires_at_epoch_ns: expires };
     clock.restrict_until_epoch_ns(expires)?;

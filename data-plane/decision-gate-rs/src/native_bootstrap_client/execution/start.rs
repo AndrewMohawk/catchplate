@@ -1,15 +1,16 @@
-//! Protected preparation for a separately authorized future native start.
+//! Protected preparation and genuine pre-start ownership.
 //!
 //! Retains actual originals and filesystem owners, not serialized successful
-//! checks. There is deliberately no start/exec method or durable StartPermit:
-//! native parent-proof joins, precreation/start journals, new-child creation,
-//! network-owner handoff and independent guardian are still required.
+//! checks. Separate executable-profile network parents and actual start/creation
+//! journals precede cgroup effects. There is no child/exec/guardian operation.
 
-use super::{filesystem::PreparedFilesystem, host, start_authority};
+use super::{filesystem::PreparedFilesystem, host, parent::ParentOwner, start_authority};
+use super::super::egress::ExecutionParents;
 use super::super::{config, ensure, originals::{ArtifactV1, HeldOriginal}, OriginalClock};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::cell::{Cell, RefCell};
+use std::os::fd::BorrowedFd;
 use std::sync::Arc;
 
 #[derive(Deserialize)]
@@ -35,8 +36,8 @@ impl Inputs {
     }
 }
 
-/// This is admission preparation, not a live StartOwner or a transferable
-/// execution permission. Only a later same-module owner may consume its fields.
+/// Preparation is not a transferable execution permission. StartOwner consumes
+/// this exact owner only after genuine executable-parent admission joins.
 pub(super) struct PreparedStart {
     clock: Arc<OriginalClock>,
     originals: RefCell<Vec<HeldOriginal>>,
@@ -138,4 +139,82 @@ impl PreparedStart {
         self.stopped.set(false);
         Ok(())
     }
+}
+
+/// Genuine retained parents and preparation, never a caller-built success
+/// carrier. It owns neither a child nor a journal permit, so checks cannot
+/// recurse through a lifecycle owner or create an Arc cycle.
+pub(super) struct StartOwner {
+    prepared: PreparedStart,
+    parents: Arc<ExecutionParents>,
+    parent: ParentOwner,
+    operation: [u8; 32],
+    pid: u32,
+    claimed: Cell<bool>,
+    stopped: Cell<bool>,
+}
+
+impl StartOwner {
+    pub(super) fn bind(prepared: PreparedStart, parents: Arc<ExecutionParents>)
+        -> Result<Arc<Self>, String>
+    {
+        prepared.check()?;
+        parents.require_start(&prepared.authorization, &prepared.clock)?;
+        let parent = ParentOwner::open(&prepared.authorization.constraints.containment,
+            &prepared.clock)?;
+        let mut hash = Sha256::new();
+        hash.update(b"serverware.nativeWorkloadStartOperation/v1\0");
+        for original in [prepared.authorization.original_sha256,
+            prepared.authorization.root_key_id, parents.operation_sha256(),
+            prepared.filesystem.manifest_sha256()] { hash.update(original); }
+        let owner = Arc::new(Self { prepared, parents, parent, operation: hash.finalize().into(),
+            pid: std::process::id(), claimed: Cell::new(false), stopped: Cell::new(false) });
+        owner.check_admission()?;
+        Ok(owner)
+    }
+
+    pub(super) fn check_admission(&self) -> Result<(), String> {
+        ensure(!self.stopped.replace(true), "native start admission owner is stopped")?;
+        self.prepared.check()?;
+        self.check_cleanup_scope()?;
+        self.parents.require_start(&self.prepared.authorization, &self.prepared.clock)?;
+        self.parent.check(&self.prepared.clock)?;
+        self.prepared.check()?;
+        self.stopped.set(false);
+        Ok(())
+    }
+
+    /// Identity-only association for retained claim diagnostics. It never
+    /// authorizes creation or extends expired/revoked admission. The leaf owner
+    /// must still attempt exact-owned emergency termination if this fails.
+    pub(super) fn check_cleanup_scope(&self) -> Result<(), String> {
+        ensure(self.pid == std::process::id() && thread_id()? == self.prepared.thread_id
+            && unsafe { libc::getuid() } == 0 && unsafe { libc::geteuid() } == 0
+            && unsafe { libc::getgid() } == 0 && unsafe { libc::getegid() } == 0,
+            "native start retained claim crossed process/thread/privilege boundary")
+    }
+
+    pub(super) fn containment_parent(&self) -> BorrowedFd<'_> { self.parent.fd() }
+    pub(super) fn constraints(&self) -> &start_authority::Constraints {
+        &self.prepared.authorization.constraints
+    }
+    pub(super) fn cleanup_boottime_ns(&self) -> u64 { self.prepared.authorization.cleanup_boottime_ns }
+    pub(super) fn operation_sha256(&self) -> [u8; 32] { self.operation }
+    pub(super) fn clock(&self) -> &OriginalClock { &self.prepared.clock }
+    pub(super) fn parents(&self) -> &Arc<ExecutionParents> { &self.parents }
+
+    pub(super) fn begin_claim(&self) -> Result<(), String> {
+        self.check_admission()?;
+        ensure(!self.claimed.replace(true), "native start owner already attempted its irreversible claim")
+    }
+}
+
+/// Source-private orchestration: real parent admission, durable start and
+/// creation claims, then one new cgroup leaf. This does not spawn a workload.
+pub(super) fn prepare_containment(prepared: PreparedStart, parents: Arc<ExecutionParents>)
+    -> Result<super::containment::ContainmentOwner, String>
+{
+    let owner = StartOwner::bind(prepared, parents)?;
+    let permit = super::start_reservation::claim(Arc::clone(&owner))?;
+    super::containment::ContainmentOwner::create(owner, permit)
 }

@@ -8,7 +8,8 @@ mod install;
 // separately authorized network attachment. Neither profile starts a workload.
 #[allow(dead_code)]
 mod egress;
-// Admission mechanism only; there is no execution configuration or caller.
+// Private start admission and claimed cgroup preparation only; no public
+// execution configuration, executable child or independent guardian yet.
 #[allow(dead_code)]
 mod execution;
 #[path = "../native_ingress_client/identity.rs"]

@@ -1,14 +1,17 @@
-//! Filesystem/entry admission only. No public configuration or start operation.
+//! Retained executable-parent admission and claimed cgroup preparation.
 //!
-//! A future StartOwner must independently admit its signed authority, retain
-//! this exact owner, and consume separate creation/start permissions. Neither
-//! the manifest nor these observations authorize executing a workload.
+//! No public configuration, executable child or independent guardian yet.
+//! Actual owners and distinct durable claims precede cgroup creation; the old
+//! diagnostic workload cannot be promoted by these observations.
 
 mod elf;
 mod manifest;
 pub(super) mod filesystem;
-mod start_authority;
+pub(super) mod start_authority;
 mod start;
+mod parent;
+mod start_reservation;
+mod containment;
 // Reuse actual host observation, never CA-install permission or its journal.
 #[path = "../install/host.rs"]
 mod host;

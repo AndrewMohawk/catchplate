@@ -4,7 +4,7 @@
 //! deletion or second creation API. The permit retains the actual precreation
 //! owner, protected directory lock and exact original inode throughout the child.
 
-use super::PrecreationOwner;
+use super::{ExecutionParents, PrecreationOwner};
 use super::reservation::{directory, file_identity, hex, open_directory, stat_at,
     Directory, DirectoryStream, FileIdentity};
 use sha2::{Digest, Sha256};
@@ -35,8 +35,21 @@ pub(super) struct Spec {
     pub(super) scope_sha256: [u8; 32],
 }
 
+// Closed source-owned alternatives only. No trait, callback, supplied Spec or
+// serialized success can substitute for either actual retained owner.
+enum Owner { Legacy(Arc<PrecreationOwner>), Execution(Arc<ExecutionParents>) }
+impl Owner {
+    fn check(&self) -> Result<(), String> {
+        match self { Self::Legacy(owner) => owner.check(), Self::Execution(owner) => owner.check() }
+    }
+    fn creation_spec(&self) -> Result<Spec, String> {
+        match self { Self::Legacy(owner) => owner.creation_spec(),
+            Self::Execution(owner) => owner.creation_spec() }
+    }
+}
+
 struct Journal {
-    owner: Arc<PrecreationOwner>,
+    owner: Owner,
     spec: Spec,
     directories: Vec<Directory>,
     slot: [u8; 32],
@@ -53,6 +66,10 @@ pub(super) struct CreationPermit {
     original: [u8; RECORD_BYTES],
     stopped: Cell<bool>,
 }
+
+/// Distinct linear permission for a new execution lifecycle. It cannot be
+/// passed to the old never-executed-child API or recovered from old records.
+pub(in super::super) struct ExecutionCreationPermit { inner: CreationPermit }
 
 fn require(value: bool, reason: &'static str) -> Result<(), String> {
     if value { Ok(()) } else { Err(reason.to_owned()) }
@@ -124,6 +141,37 @@ impl Journal {
                 "native egress creation path no longer names its held directory")?;
         }
         self.owner.check()
+    }
+
+    // Cleanup seal only: no current proof, admission clock or new permission.
+    // Bounded held/named originals are still checked; legacy permits have no
+    // public path to this independent cleanup-integrity operation.
+    fn cleanup_integrity(&self) -> Result<(), String> {
+        let owner = match &self.owner {
+            Owner::Execution(owner) => owner,
+            Owner::Legacy(_) => return Err("legacy creation permit has no execution cleanup seal".to_owned()),
+        };
+        require(owner.sealed_creation_spec()? == self.spec,
+            "execution creation sealed owner association changed")?;
+        require(self.pid == std::process::id() && unsafe { libc::geteuid() } == 0
+            && unsafe { libc::getegid() } == 0 && !self.directories.is_empty(),
+            "execution creation cleanup crossed process or privilege identity")?;
+        for (index, held) in self.directories.iter().enumerate() {
+            let metadata = held.file.metadata().map_err(|_| "creation cleanup directory metadata failed")?;
+            require(metadata.is_dir() && metadata.dev() == held.device && metadata.ino() == held.inode
+                && metadata.uid() == 0 && metadata.gid() == held.gid && metadata.mode() == held.mode,
+                "creation cleanup held directory changed")?;
+            let root = CString::new("/").expect("literal root path");
+            let (parent, name) = if index == 0 { (libc::AT_FDCWD, root.as_c_str()) } else {
+                (self.directories[index - 1].file.as_raw_fd(),
+                    held.name.as_ref().ok_or("creation cleanup ancestor is absent")?.as_c_str())
+            };
+            let named = stat_at(parent, name)?.ok_or("creation cleanup named directory disappeared")?;
+            require(named.st_dev == held.device && named.st_ino == held.inode && named.st_uid == 0
+                && named.st_gid == held.gid && named.st_mode == held.mode,
+                "creation cleanup named directory changed")?;
+        }
+        Ok(())
     }
 
     fn read(&self, file: &File, name: &CStr, expected: Option<&FileIdentity>)
@@ -265,7 +313,7 @@ impl CreationPermit {
     }
 
     pub(super) fn require_owner(&self, owner: &Arc<PrecreationOwner>) -> Result<(), String> {
-        if !Arc::ptr_eq(&self.journal.owner, owner) {
+        if !matches!(&self.journal.owner, Owner::Legacy(held) if Arc::ptr_eq(held, owner)) {
             self.stopped.set(true);
             return Err("native egress creation permit belongs to another actual owner".to_owned());
         }
@@ -278,6 +326,45 @@ impl CreationPermit {
 }
 
 pub(super) fn claim(owner: Arc<PrecreationOwner>) -> Result<CreationPermit, String> {
+    claim_owned(Owner::Legacy(owner))
+}
+
+pub(super) fn claim_execution(owner: Arc<ExecutionParents>) -> Result<ExecutionCreationPermit, String> {
+    let inner = claim_owned(Owner::Execution(owner))?;
+    Ok(ExecutionCreationPermit { inner })
+}
+
+impl ExecutionCreationPermit {
+    pub(in super::super) fn require_owner(&self, owner: &Arc<ExecutionParents>) -> Result<(), String> {
+        if !matches!(&self.inner.journal.owner, Owner::Execution(held) if Arc::ptr_eq(held, owner)) {
+            self.inner.stopped.set(true);
+            return Err("execution creation permit belongs to another actual owner".to_owned());
+        }
+        self.inner.check()
+    }
+
+    pub(in super::super) fn check_cleanup_integrity(&self) -> Result<(), String> {
+        let held = &self.inner;
+        held.journal.cleanup_integrity()?;
+        let before = file_identity(&held.record, held.journal.spec.journal_device, RECORD_BYTES as u64)?;
+        require(before == held.identity, "execution creation cleanup record identity changed")?;
+        let mut raw = [0u8; RECORD_BYTES];
+        require(held.record.read_at(&mut raw, 0).map_err(|_| "creation cleanup read failed")? == raw.len(),
+            "execution creation cleanup record is incomplete")?;
+        require(raw == held.original && raw == held.journal.original()
+            && file_identity(&held.record, held.journal.spec.journal_device, RECORD_BYTES as u64)? == before,
+            "execution creation cleanup original changed")?;
+        let named = stat_at(held.journal.fd(), &held.journal.name)?
+            .ok_or("execution creation cleanup named record disappeared")?;
+        require(named.st_dev == before.device && named.st_ino == before.inode && named.st_uid == 0
+            && named.st_gid == 0 && named.st_nlink == 1 && named.st_mode & libc::S_IFMT == libc::S_IFREG
+            && named.st_mode & 0o7777 == 0o600 && named.st_size == RECORD_BYTES as i64,
+            "execution creation cleanup named original changed")?;
+        held.journal.cleanup_integrity()
+    }
+}
+
+fn claim_owned(owner: Owner) -> Result<CreationPermit, String> {
     owner.check()?;
     let spec = owner.creation_spec()?;
     validate_spec(&spec)?;

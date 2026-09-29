@@ -29,8 +29,11 @@ CREATION_SCHEMA = "serverware.signedNativeEgressInstallationAuthorization/v2"
 CREATION_PAYLOAD_SCHEMA = "serverware.nativeEgressInstallationAuthorization/v2"
 NETWORK_SCHEMA = "serverware.signedNativeEgressInstallationAuthorization/v3"
 NETWORK_PAYLOAD_SCHEMA = "serverware.nativeEgressInstallationAuthorization/v3"
+EXECUTION_SCHEMA = "serverware.signedNativeEgressInstallationAuthorization/v4"
+EXECUTION_PAYLOAD_SCHEMA = "serverware.nativeEgressInstallationAuthorization/v4"
 PURPOSE = "native-egress-installation"
 WORKLOAD_PROFILE = "native-egress-create-new-workload-v1"
+EXECUTION_WORKLOAD_PROFILE = "native-egress-new-execution-v1"
 RULESET_PROFILE = "nft-inet-output-tcp-create-v1"
 MAX_BYTES = 32 * 1024
 MAX_KEY_BYTES = 16 * 1024
@@ -184,13 +187,25 @@ def _proxy_rules(value, budget):
         for address in sorted(effective, key=lambda address: (address.version, address.packed))]
 
 
-def _payload(value, budget):
+def _execution_profile(requested_profile):
+    # This is an independently supplied caller selection, never a value read
+    # from the signed payload, a journal record or a diagnostic response.
+    if type(requested_profile) is not str or requested_profile not in (
+            WORKLOAD_PROFILE, EXECUTION_WORKLOAD_PROFILE):
+        _fail()
+    return requested_profile == EXECUTION_WORKLOAD_PROFILE
+
+
+def _payload(value, budget, *, requested_profile=WORKLOAD_PROFILE):
+    execution = _execution_profile(requested_profile)
     if type(value) is not dict:
         _fail()
-    network = value.get("schema") == NETWORK_PAYLOAD_SCHEMA
+    network = execution or value.get("schema") == NETWORK_PAYLOAD_SCHEMA
     creation = network or value.get("schema") == CREATION_PAYLOAD_SCHEMA
     shared._object(value, _NETWORK_FIELDS if network else (_CREATION_FIELDS if creation else _FIELDS))
-    if (value["schema"] not in (PAYLOAD_SCHEMA, CREATION_PAYLOAD_SCHEMA, NETWORK_PAYLOAD_SCHEMA)
+    allowed = (EXECUTION_PAYLOAD_SCHEMA,) if execution else (
+        PAYLOAD_SCHEMA, CREATION_PAYLOAD_SCHEMA, NETWORK_PAYLOAD_SCHEMA)
+    if (value["schema"] not in allowed
             or value["sourceRevision"] != shared.authority.SOURCE_REVISION
             or value["purpose"] != PURPOSE or value["trustMode"] != "trusted-host-local"):
         _fail()
@@ -203,7 +218,7 @@ def _payload(value, budget):
         _fail()
     workload = shared._object(value["workload"], {"profile", "launchManifestSha256",
         "launcherBinarySha256", "namespaceMode", "beforeCompletion", "failureMode"})
-    if (workload["profile"] != WORKLOAD_PROFILE or workload["namespaceMode"] != "create-new"
+    if (workload["profile"] != requested_profile or workload["namespaceMode"] != "create-new"
             or workload["beforeCompletion"] != "never-executed"
             or workload["failureMode"] != "terminate-before-start"):
         _fail()
@@ -250,11 +265,16 @@ def _payload(value, budget):
     budget.interval(issued, expires)
 
 
-def _admit(original, public, root_pin, budget):
+def _admit(original, public, root_pin, budget, *, requested_profile=WORKLOAD_PROFILE):
+    execution = _execution_profile(requested_profile)
     _structure(original, budget)
     outer = shared._decode(original, MAX_BYTES, budget)
     shared._object(outer, {"schema", "payload", "signature"})
-    if outer["schema"] == SCHEMA:
+    if execution:
+        if outer["schema"] != EXECUTION_SCHEMA:
+            _fail()
+        schema, payload_schema = EXECUTION_SCHEMA, EXECUTION_PAYLOAD_SCHEMA
+    elif outer["schema"] == SCHEMA:
         schema, payload_schema = SCHEMA, PAYLOAD_SCHEMA
     elif outer["schema"] == CREATION_SCHEMA:
         schema, payload_schema = CREATION_SCHEMA, CREATION_PAYLOAD_SCHEMA
@@ -263,7 +283,7 @@ def _admit(original, public, root_pin, budget):
     else:
         _fail()
     payload = shared._signed(original, schema, payload_schema, public, MAX_BYTES, budget)
-    _payload(payload, budget)
+    _payload(payload, budget, requested_profile=requested_profile)
     result = _EgressAuthorizationMaterial(
         authorization_bytes=original, authorization_digest=packets._digest(original, budget),
         payload_bytes=packets._canonical(payload, MAX_BYTES, budget), root_pem_digest=root_pin,
@@ -276,14 +296,17 @@ def _admit(original, public, root_pin, budget):
 
 
 def _verify_on_work(*, authorization_bytes, root_public_key_bytes, expected_root_pem_sha256,
-        work, live_window, transport_deadline_ns, _current=None, _additional_original_bytes=0):
-    """Authenticate a grant original; never accept an installation/proof verdict."""
+        work, live_window, transport_deadline_ns, _current=None, _additional_original_bytes=0,
+        requested_profile=WORKLOAD_PROFILE):
+    """Authenticate cold-selected constraints, never an installation/start verdict."""
     try:
+        _execution_profile(requested_profile)
         _preflight(((authorization_bytes, MAX_BYTES), (root_public_key_bytes, MAX_KEY_BYTES)),
             work, _additional_original_bytes)
         budget = shared._Budget(work, live_window, transport_deadline_ns, _current)
         public = assignment._public_key(root_public_key_bytes, expected_root_pem_sha256, budget)
-        return _admit(authorization_bytes, public, expected_root_pem_sha256, budget)
+        return _admit(authorization_bytes, public, expected_root_pem_sha256, budget,
+            requested_profile=requested_profile)
     except NativeEgressInstallationAuthorizationError:
         raise
     except Exception:
@@ -292,16 +315,17 @@ def _verify_on_work(*, authorization_bytes, root_public_key_bytes, expected_root
 
 def _produce_on_work(*, payload_bytes, root_private_key_bytes, root_public_key_bytes,
         expected_root_pem_sha256, work, live_window, transport_deadline_ns,
-        _current=None, _additional_original_bytes=0):
+        _current=None, _additional_original_bytes=0, requested_profile=WORKLOAD_PROFILE):
     """Explicit protected canonical PKCS8 original; no files, keygen or network."""
     try:
+        execution = _execution_profile(requested_profile)
         _preflight(((payload_bytes, MAX_BYTES), (root_private_key_bytes, MAX_KEY_BYTES),
             (root_public_key_bytes, MAX_KEY_BYTES)), work, _additional_original_bytes, producing=True)
         budget = shared._Budget(work, live_window, transport_deadline_ns, _current)
         public = assignment._public_key(root_public_key_bytes, expected_root_pem_sha256, budget)
         _structure(payload_bytes, budget)
         payload = shared._decode(payload_bytes, MAX_BYTES, budget)
-        _payload(payload, budget)
+        _payload(payload, budget, requested_profile=requested_profile)
         budget.charge(input_bytes=len(root_private_key_bytes))
         private = serialization.load_pem_private_key(root_private_key_bytes, password=None)
         budget.check()
@@ -310,13 +334,17 @@ def _produce_on_work(*, payload_bytes, root_private_key_bytes, root_public_key_b
                     serialization.NoEncryption()) != root_private_key_bytes
                 or shared._spki(private.public_key(), budget) != shared._spki(public, budget)):
             _fail()
-        schema, payload_schema = ((NETWORK_SCHEMA, NETWORK_PAYLOAD_SCHEMA)
-            if payload["schema"] == NETWORK_PAYLOAD_SCHEMA else
-            ((CREATION_SCHEMA, CREATION_PAYLOAD_SCHEMA)
-                if payload["schema"] == CREATION_PAYLOAD_SCHEMA else (SCHEMA, PAYLOAD_SCHEMA)))
+        if execution:
+            schema, payload_schema = EXECUTION_SCHEMA, EXECUTION_PAYLOAD_SCHEMA
+        else:
+            schema, payload_schema = ((NETWORK_SCHEMA, NETWORK_PAYLOAD_SCHEMA)
+                if payload["schema"] == NETWORK_PAYLOAD_SCHEMA else
+                ((CREATION_SCHEMA, CREATION_PAYLOAD_SCHEMA)
+                    if payload["schema"] == CREATION_PAYLOAD_SCHEMA else (SCHEMA, PAYLOAD_SCHEMA)))
         original = shared._produce(payload_bytes, schema, payload_schema,
             private, public, MAX_BYTES, budget)
-        admitted = _admit(original, public, expected_root_pem_sha256, budget)
+        admitted = _admit(original, public, expected_root_pem_sha256, budget,
+            requested_profile=requested_profile)
         admitted.live()
         budget.check()
         return original

@@ -3725,12 +3725,16 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/native_bootstrap_client/execution/filesystem.rs \
 				data-plane/decision-gate-rs/src/native_bootstrap_client/execution/start_authority.rs \
 				data-plane/decision-gate-rs/src/native_bootstrap_client/execution/start.rs \
+				data-plane/decision-gate-rs/src/native_bootstrap_client/execution/parent.rs \
+				data-plane/decision-gate-rs/src/native_bootstrap_client/execution/start_reservation.rs \
+				data-plane/decision-gate-rs/src/native_bootstrap_client/execution/containment.rs \
 				data-plane/decision-gate-rs/src/native_bootstrap_client/install/mod.rs \
 				data-plane/decision-gate-rs/src/native_bootstrap_client/install/authority.rs \
 				data-plane/decision-gate-rs/src/native_bootstrap_client/install/host.rs \
 				data-plane/decision-gate-rs/src/native_bootstrap_client/install/reservation.rs \
 				data-plane/decision-gate-rs/src/native_bootstrap_client/install/destination.rs \
 				data-plane/decision-gate-rs/src/native_bootstrap_client/egress/mod.rs \
+				data-plane/decision-gate-rs/src/native_bootstrap_client/egress/execution_parents.rs \
 				data-plane/decision-gate-rs/src/native_bootstrap_client/egress/authority.rs \
 				data-plane/decision-gate-rs/src/native_bootstrap_client/egress/attachment.rs \
 				data-plane/decision-gate-rs/src/native_bootstrap_client/egress/attachment_authority.rs \
@@ -3808,12 +3812,14 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-egress-installation-authorization.v1.schema.json \
 				schemas/native-egress-installation-authorization.v2.schema.json \
 				schemas/native-egress-installation-authorization.v3.schema.json \
+				schemas/native-egress-installation-authorization.v4.schema.json \
 				schemas/native-network-attachment-authorization.v1.schema.json \
 				schemas/native-network-attachment-observation.v1.schema.json \
 				schemas/oidc-session-activation-retained-ri-delivery.v1.schema.json \
 				schemas/oidc-session-activation-retained-outcome-recovery.v1.schema.json \
 				schemas/native-egress-observation.v1.schema.json \
 				schemas/native-egress-launch-manifest.v1.schema.json \
+				schemas/native-egress-launch-manifest.v2.schema.json \
 				schemas/native-execution-manifest.v1.schema.json \
 				schemas/native-workload-start-authorization.v1.schema.json \
 				schemas/native-ca-installation-receipt.v1.schema.json \

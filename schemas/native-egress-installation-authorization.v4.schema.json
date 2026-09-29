@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-egress-installation-authorization.v4.schema.json",
+  "title": "Explicit new-execution native egress parent constraints v4",
+  "description": "Closed canonical sorted compact ensure_ascii JSON including escaped DEL, no LF, at most 32768 bytes and depth 6. Ed25519 signs the exact v4 payload-schema ASCII, NUL, then canonical payload bytes. An independently supplied cold profile selects v4; incoming fields, old journal records and diagnostics cannot select or upgrade authority. Versions 1-3 remain unchanged and reject the new workload profile. These authenticated parent constraints are not child creation, start, attachment, guardian or runtime-success authority.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "payload", "signature"],
+  "properties": {
+    "schema": {"const": "serverware.signedNativeEgressInstallationAuthorization/v4"},
+    "payload": {"$ref": "#/$defs/payload"},
+    "signature": {"$ref": "native-egress-installation-authorization.v1.schema.json#/properties/signature"}
+  },
+  "$defs": {
+    "digest": {"$ref": "native-egress-installation-authorization.v1.schema.json#/$defs/digest"},
+    "identifier": {"$ref": "native-egress-installation-authorization.v1.schema.json#/$defs/identifier"},
+    "positive": {"$ref": "native-egress-installation-authorization.v1.schema.json#/$defs/positive"},
+    "journal": {"$ref": "native-egress-installation-authorization.v3.schema.json#/$defs/journal"},
+    "workload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profile", "launchManifestSha256", "launcherBinarySha256", "namespaceMode", "beforeCompletion", "failureMode"],
+      "properties": {
+        "profile": {"const": "native-egress-new-execution-v1"},
+        "launchManifestSha256": {"$ref": "#/$defs/digest"},
+        "launcherBinarySha256": {"$ref": "#/$defs/digest"},
+        "namespaceMode": {"const": "create-new"},
+        "beforeCompletion": {"const": "never-executed"},
+        "failureMode": {"const": "terminate-before-start"}
+      },
+      "description": "Exact separate execution-profile association. launchManifestSha256 binds the original nativeEgressLaunchManifest/v2 bytes, whose execution-manifest and launcher pins must be joined to genuine retained originals by the new admission owner. No executable/argv/environment padding, old-child conversion, start permit or permission derived from a successful parse. The pre-start create-new/never-executed/terminate-before-start semantics remain fixed."
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "sourceRevision", "purpose", "trustMode", "authorizationId", "setupSha256", "delegationSha256", "targetRequestSha256", "policyRequirementsSha256", "releaseRecordSha256", "policyHash", "configurationSha256", "runtimeCaCertificateSha256", "runtimeCaSpkiSha256", "ingressLeafCertificateSha256", "clientTrustBundleSha256", "clientChallengeSha256", "targetPrincipalId", "targetNonce", "targetSpkiSha256", "proxy", "networkOwner", "machineIdSha256", "workload", "ruleset", "capability", "journal", "creationJournal", "childNetworkPolicy", "issuedAtEpochNs", "expiresAtEpochNs"],
+      "properties": {
+        "schema": {"const": "serverware.nativeEgressInstallationAuthorization/v4"},
+        "sourceRevision": {"$ref": "native-egress-installation-authorization.v1.schema.json#/$defs/payload/properties/sourceRevision"},
+        "purpose": {"const": "native-egress-installation"},
+        "trustMode": {"const": "trusted-host-local"},
+        "authorizationId": {"$ref": "#/$defs/identifier"},
+        "setupSha256": {"$ref": "#/$defs/digest"},
+        "delegationSha256": {"$ref": "#/$defs/digest"},
+        "targetRequestSha256": {"$ref": "#/$defs/digest"},
+        "policyRequirementsSha256": {"$ref": "#/$defs/digest"},
+        "releaseRecordSha256": {"$ref": "#/$defs/digest"},
+        "policyHash": {"$ref": "#/$defs/digest"},
+        "configurationSha256": {"$ref": "#/$defs/digest"},
+        "runtimeCaCertificateSha256": {"$ref": "#/$defs/digest"},
+        "runtimeCaSpkiSha256": {"$ref": "#/$defs/digest"},
+        "ingressLeafCertificateSha256": {"$ref": "#/$defs/digest"},
+        "clientTrustBundleSha256": {"$ref": "#/$defs/digest"},
+        "clientChallengeSha256": {"$ref": "#/$defs/digest"},
+        "targetPrincipalId": {"$ref": "native-egress-installation-authorization.v1.schema.json#/$defs/payload/properties/targetPrincipalId"},
+        "targetNonce": {"$ref": "native-egress-installation-authorization.v1.schema.json#/$defs/payload/properties/targetNonce"},
+        "targetSpkiSha256": {"$ref": "#/$defs/digest"},
+        "proxy": {"$ref": "native-egress-installation-authorization.v1.schema.json#/$defs/proxy"},
+        "networkOwner": {"$ref": "native-egress-installation-authorization.v1.schema.json#/$defs/networkOwner"},
+        "machineIdSha256": {"$ref": "#/$defs/digest"},
+        "workload": {"$ref": "#/$defs/workload"},
+        "ruleset": {"$ref": "native-egress-installation-authorization.v1.schema.json#/$defs/ruleset"},
+        "capability": {"$ref": "native-egress-installation-authorization.v1.schema.json#/$defs/capability"},
+        "journal": {"$ref": "#/$defs/journal"},
+        "creationJournal": {"$ref": "#/$defs/journal"},
+        "childNetworkPolicy": {"const": "manual-dual-stack-no-autoconfiguration-v1"},
+        "issuedAtEpochNs": {"$ref": "#/$defs/positive"},
+        "expiresAtEpochNs": {"$ref": "#/$defs/positive"}
+      },
+      "description": "Exactly the v3 31-field inventory with distinct v4 envelope/payload and execution workload profile. All unchanged shape and semantic limits remain: nonzero digest pins, exact current shared source revision, genuine setup/delegation/request/runtime/host associations, recomputed exact ordered effective proxy rules, distinct creation/kernel journal path/device-inode/namespace, protected capability possession, and a positive current i64-nanosecond interval at most 300 seconds contained in capability expiry. Independent parent owners further narrow the original lifetime. No version fallback, renewal, historical-record-selected execution profile or public-client upgrade is implied."
+    }
+  }
+}

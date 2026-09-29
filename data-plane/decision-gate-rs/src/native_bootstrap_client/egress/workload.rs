@@ -23,6 +23,8 @@ use std::time::{Duration, Instant};
 
 const PROFILE: &str = "native-egress-create-new-workload-v1";
 const MANIFEST_SCHEMA: &str = "serverware.nativeEgressLaunchManifest/v1";
+const EXECUTION_PROFILE: &str = "native-egress-new-execution-v1";
+const EXECUTION_MANIFEST_SCHEMA: &str = "serverware.nativeEgressLaunchManifest/v2";
 const MAX_MANIFEST: usize = 4096;
 const MAX_EXECUTABLE: usize = 16 * 1024 * 1024;
 const DIRECTORY: i32 = libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW
@@ -269,7 +271,7 @@ pub(super) fn admit(authorization: &Authorization, manifest_pin: &ArtifactV1,
 {
     clock.check()?;
     let workload = &authorization.workload;
-    require(workload.profile == PROFILE && workload.namespace_mode == "create-new"
+    require(!authorization.execution_profile && workload.profile == PROFILE && workload.namespace_mode == "create-new"
         && workload.before_completion == "never-executed"
         && workload.failure_mode == "terminate-before-start"
         && manifest_pin.sha256 == workload.launch_manifest_sha256)?;
@@ -339,6 +341,114 @@ impl LaunchSpec {
         require(source_process(clock)? == (self.pid, self.tid))?;
         clock.check()
     }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ExecutionLaunchManifest {
+    api_version: String,
+    profile: String,
+    execution_manifest_sha256: String,
+    launcher_binary_sha256: String,
+}
+
+/// Distinct pre-start admission. No placeholder executable and no conversion
+/// into the legacy never-executed LaunchSpec or WorkloadOwner are available.
+pub(super) struct ExecutionLaunchSpec {
+    clock: usize,
+    pid: u32,
+    tid: libc::pid_t,
+    proc: ProcOwner,
+    manifest: HeldOriginal,
+    manifest_path: PathBuf,
+    manifest_fingerprint: Fingerprint,
+    manifest_sha256: String,
+    execution_manifest_sha256: String,
+    launcher: Executable,
+    actual_launcher: File,
+    host_namespace: File,
+    host_identity: Identity,
+}
+
+pub(super) fn admit_for_start(authorization: &Authorization, manifest_pin: &ArtifactV1,
+    clock: &OriginalClock) -> Result<ExecutionLaunchSpec, String>
+{
+    clock.check()?;
+    let workload = &authorization.workload;
+    require(authorization.execution_profile && authorization.creation_journal.is_some()
+        && authorization.child_network_policy.is_some()
+        && workload.profile == EXECUTION_PROFILE && workload.namespace_mode == "create-new"
+        && workload.before_completion == "never-executed"
+        && workload.failure_mode == "terminate-before-start"
+        && manifest_pin.sha256 == workload.launch_manifest_sha256)?;
+    digest_pin(&manifest_pin.sha256)?;
+    digest_pin(&workload.launcher_binary_sha256)?;
+    path_text(&manifest_pin.path)?;
+    let manifest_file = protected_open(&manifest_pin.path, clock)?;
+    let (mut manifest, raw) = HeldOriginal::read(ArtifactV1 {
+        path: manifest_pin.path.clone(), sha256: manifest_pin.sha256.clone(),
+    }, MAX_MANIFEST)?;
+    manifest.require_private()?;
+    let manifest_fingerprint = fingerprint(&metadata(&manifest_file, clock)?);
+    require(manifest_fingerprint.0.3 == 0 && raw.is_ascii())?;
+    let value = json::parse(&raw, MAX_MANIFEST)?;
+    require(canonical_ascii_bytes(&value)? == raw)?;
+    let parsed: ExecutionLaunchManifest = serde_json::from_value(value)
+        .map_err(|_| "native execution launch manifest is not closed")?;
+    require(parsed.api_version == EXECUTION_MANIFEST_SCHEMA && parsed.profile == EXECUTION_PROFILE
+        && parsed.launcher_binary_sha256 == workload.launcher_binary_sha256)?;
+    digest_pin(&parsed.execution_manifest_sha256)?;
+    digest_pin(&parsed.launcher_binary_sha256)?;
+    let (pid, tid) = source_process(clock)?;
+    let proc = ProcOwner::open(pid, tid, clock)?;
+    let host_namespace = proc.net(clock)?;
+    let host_identity = namespace(&host_namespace, clock)?;
+    require(host_identity.0 == authorization.network_owner.namespace_device
+        && host_identity.1 == authorization.network_owner.namespace_inode
+        && authorization.network_owner.owner_uid == 0)?;
+    let (launcher_path, mut actual_launcher) = proc.executable(clock)?;
+    let launcher = Executable::open(ArtifactV1 { path: launcher_path,
+        sha256: parsed.launcher_binary_sha256 }, clock)?;
+    require(fingerprint(&metadata(&actual_launcher, clock)?) == launcher.fingerprint
+        && file_hash(&mut actual_launcher, MAX_EXECUTABLE, clock)? == launcher.pin)?;
+    manifest.recheck()?;
+    let mut result = ExecutionLaunchSpec { clock: clock as *const OriginalClock as usize,
+        pid, tid, proc, manifest, manifest_path: manifest_pin.path.clone(), manifest_fingerprint,
+        manifest_sha256: manifest_pin.sha256.clone(), execution_manifest_sha256: parsed.execution_manifest_sha256,
+        launcher, actual_launcher, host_namespace, host_identity };
+    result.check(clock)?;
+    Ok(result)
+}
+
+impl ExecutionLaunchSpec {
+    pub(super) fn check(&mut self, clock: &OriginalClock) -> Result<(), String> {
+        require(self.clock == clock as *const OriginalClock as usize
+            && source_process(clock)? == (self.pid, self.tid))?;
+        self.proc.check(self.pid, self.tid, clock)?;
+        self.manifest.require_private()?;
+        self.manifest.recheck()?;
+        self.manifest.require_private()?;
+        let named_manifest = protected_open(&self.manifest_path, clock)?;
+        require(fingerprint(&metadata(&named_manifest, clock)?) == self.manifest_fingerprint)?;
+        self.launcher.check(clock)?;
+        let (path, named_launcher) = self.proc.executable(clock)?;
+        require(path == self.launcher.path
+            && fingerprint(&metadata(&named_launcher, clock)?) == self.launcher.fingerprint
+            && fingerprint(&metadata(&self.actual_launcher, clock)?) == self.launcher.fingerprint
+            && file_hash(&mut self.actual_launcher, MAX_EXECUTABLE, clock)? == self.launcher.pin)?;
+        require(fingerprint(&metadata(&self.actual_launcher, clock)?) == self.launcher.fingerprint)?;
+        let current_namespace = self.proc.net(clock)?;
+        require(namespace(&self.host_namespace, clock)? == self.host_identity
+            && namespace(&current_namespace, clock)? == self.host_identity)?;
+        self.proc.check(self.pid, self.tid, clock)?;
+        require(source_process(clock)? == (self.pid, self.tid))?;
+        clock.check()
+    }
+
+    // These strings are original associations only, not execution permission.
+    pub(super) fn manifest_sha256(&self) -> &str { &self.manifest_sha256 }
+    pub(super) fn execution_manifest_sha256(&self) -> &str { &self.execution_manifest_sha256 }
+    pub(super) fn launcher_binary_sha256(&self) -> &str { &self.launcher.pin }
 }
 
 #[repr(C)]

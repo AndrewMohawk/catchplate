@@ -36,6 +36,9 @@ pub(in super::super) struct Pending {
 }
 
 impl Pending {
+    /// Exact retained signed constraints, not an attachment or effect verdict.
+    pub(super) fn authorization(&self) -> &attachment_authority::Authorization { &self.authorization }
+
     pub(super) fn require_egress(&self, egress: &authority::Authorization,
         clock: &OriginalClock) -> Result<(), String> {
         clock.check()?;

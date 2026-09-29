@@ -12,7 +12,7 @@ use serde_json::Value;
 use serverware_decision_gate::native_response_profile_v1::canonical_ascii_bytes;
 use sha2::{Digest, Sha256};
 
-pub(super) const MAX_BYTES: usize = 32 * 1024;
+pub(in super::super) const MAX_BYTES: usize = 32 * 1024;
 const SCHEMA: &str = "serverware.nativeWorkloadStartAuthorization/v1";
 const ENVELOPE: &str = "serverware.signedNativeWorkloadStartAuthorization/v1";
 const SECOND: u64 = 1_000_000_000;
@@ -24,102 +24,102 @@ struct Envelope { schema: String, payload: Value, signature: String }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct Host {
-    pub(super) host_id: String,
-    pub(super) boot_id: String,
-    pub(super) namespace_device: u64,
-    pub(super) namespace_inode: u64,
-    pub(super) owner_uid: u32,
+pub(in super::super) struct Host {
+    pub(in super::super) host_id: String,
+    pub(in super::super) boot_id: String,
+    pub(in super::super) namespace_device: u64,
+    pub(in super::super) namespace_inode: u64,
+    pub(in super::super) owner_uid: u32,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct Isolation {
-    pub(super) profile: String,
-    pub(super) uid: u32,
-    pub(super) gid: u32,
-    pub(super) supplementary_groups: Vec<u32>,
-    pub(super) no_new_privileges: bool,
-    pub(super) namespaces: Vec<String>,
-    pub(super) umask: u32,
-    pub(super) stdio: String,
+pub(in super::super) struct Isolation {
+    pub(in super::super) profile: String,
+    pub(in super::super) uid: u32,
+    pub(in super::super) gid: u32,
+    pub(in super::super) supplementary_groups: Vec<u32>,
+    pub(in super::super) no_new_privileges: bool,
+    pub(in super::super) namespaces: Vec<String>,
+    pub(in super::super) umask: u32,
+    pub(in super::super) stdio: String,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct Resources {
-    pub(super) memory_max_bytes: u64,
-    pub(super) memory_swap_max_bytes: u64,
-    pub(super) pids_max: u32,
-    pub(super) cpu_max_quota_us: u64,
-    pub(super) cpu_max_period_us: u64,
-    pub(super) output_max_bytes: u64,
+pub(in super::super) struct Resources {
+    pub(in super::super) memory_max_bytes: u64,
+    pub(in super::super) memory_swap_max_bytes: u64,
+    pub(in super::super) pids_max: u32,
+    pub(in super::super) cpu_max_quota_us: u64,
+    pub(in super::super) cpu_max_period_us: u64,
+    pub(in super::super) output_max_bytes: u64,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct Containment {
-    pub(super) profile: String,
-    pub(super) parent_path: String,
-    pub(super) parent_device: u64,
-    pub(super) parent_inode: u64,
-    pub(super) child_name: String,
-    pub(super) guardian_profile: String,
+pub(in super::super) struct Containment {
+    pub(in super::super) profile: String,
+    pub(in super::super) parent_path: String,
+    pub(in super::super) parent_device: u64,
+    pub(in super::super) parent_inode: u64,
+    pub(in super::super) child_name: String,
+    pub(in super::super) guardian_profile: String,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct Capability {
-    pub(super) capability_id: String,
-    pub(super) capability_token_sha256: String,
-    pub(super) expires_at_epoch_ms: u64,
+pub(in super::super) struct Capability {
+    pub(in super::super) capability_id: String,
+    pub(in super::super) capability_token_sha256: String,
+    pub(in super::super) expires_at_epoch_ms: u64,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct Journal {
-    pub(super) path: String,
-    pub(super) device: u64,
-    pub(super) inode: u64,
-    pub(super) namespace: String,
+pub(in super::super) struct Journal {
+    pub(in super::super) path: String,
+    pub(in super::super) device: u64,
+    pub(in super::super) inode: u64,
+    pub(in super::super) namespace: String,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct Constraints {
+pub(in super::super) struct Constraints {
     schema: String,
     source_revision: String,
     purpose: String,
     trust_mode: String,
     creation_mode: String,
-    pub(super) authorization_id: String,
-    pub(super) egress_authorization_sha256: String,
-    pub(super) attachment_authorization_sha256: String,
-    pub(super) launch_manifest_sha256: String,
-    pub(super) execution_manifest_sha256: String,
-    pub(super) launcher_binary_sha256: String,
-    pub(super) machine_id_sha256: String,
-    pub(super) network_owner: Host,
-    pub(super) isolation: Isolation,
-    pub(super) resources: Resources,
-    pub(super) containment: Containment,
-    pub(super) capability: Capability,
-    pub(super) journal: Journal,
-    pub(super) issued_at_epoch_ns: u64,
-    pub(super) start_before_epoch_ns: u64,
-    pub(super) stop_at_epoch_ns: u64,
-    pub(super) cleanup_before_epoch_ns: u64,
+    pub(in super::super) authorization_id: String,
+    pub(in super::super) egress_authorization_sha256: String,
+    pub(in super::super) attachment_authorization_sha256: String,
+    pub(in super::super) launch_manifest_sha256: String,
+    pub(in super::super) execution_manifest_sha256: String,
+    pub(in super::super) launcher_binary_sha256: String,
+    pub(in super::super) machine_id_sha256: String,
+    pub(in super::super) network_owner: Host,
+    pub(in super::super) isolation: Isolation,
+    pub(in super::super) resources: Resources,
+    pub(in super::super) containment: Containment,
+    pub(in super::super) capability: Capability,
+    pub(in super::super) journal: Journal,
+    pub(in super::super) issued_at_epoch_ns: u64,
+    pub(in super::super) start_before_epoch_ns: u64,
+    pub(in super::super) stop_at_epoch_ns: u64,
+    pub(in super::super) cleanup_before_epoch_ns: u64,
 }
 
 /// Signature-derived constraints only, neither Clone nor a serialized verdict.
-pub(super) struct Authorization {
-    pub(super) constraints: Constraints,
-    pub(super) root_key_id: [u8; 32],
-    pub(super) original_sha256: [u8; 32],
+pub(in super::super) struct Authorization {
+    pub(in super::super) constraints: Constraints,
+    pub(in super::super) root_key_id: [u8; 32],
+    pub(in super::super) original_sha256: [u8; 32],
     // Absolute projections from one original admission sample, never now+TTL.
     // Only a later actual start owner may transfer them into its guardian.
-    pub(super) stop_boottime_ns: u64,
-    pub(super) cleanup_boottime_ns: u64,
+    pub(in super::super) stop_boottime_ns: u64,
+    pub(in super::super) cleanup_boottime_ns: u64,
 }
 
 fn require(value: bool) -> Result<(), String> {
@@ -238,7 +238,7 @@ fn validate(value: &Constraints, opening_wall: u64) -> Result<(), String> {
             &(value.cleanup_before_epoch_ns - value.stop_at_epoch_ns)))
 }
 
-pub(super) fn admit_constraints(raw: &[u8], root_pem: &[u8], root_pem_sha: &str,
+pub(in super::super) fn admit_constraints(raw: &[u8], root_pem: &[u8], root_pem_sha: &str,
     clock: &OriginalClock) -> Result<Authorization, String> {
     clock.check()?;
     let (opening_wall, opening_boot) = sample()?;

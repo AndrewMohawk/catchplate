@@ -34,7 +34,7 @@ authority. Schema matching alone establishes none of them.
 ## Exact signed scope
 
 The payload binds separate egress and attachment authorization originals, the
-never-executed creation manifest and the new execution manifest, actual launcher
+explicit executable-profile construction manifest and the execution manifest, actual launcher
 binary and machine identity. Egress/attachment digests must differ, as must the
 two manifest digests. `creationMode` is exactly `new-execution-child-v1`.
 The host association pins host ID, boot ID and the launcher-host network
@@ -85,18 +85,21 @@ It invokes signature admission, joins the signed token/manifest pins, retains
 actual protected root/grant/private-token originals and host ownership, and opens
 and retains the non-Clone `PreparedFilesystem` under that same clock.
 `check(&self)` repeats original, host, token and filesystem checks and poisons the
-owner on failure. This is protected preparation, not transferable permission;
-it does not yet join network parents, claim journals or arm cgroup/guardian control.
+owner on failure. This is protected preparation, not transferable permission.
+The separate [retained start owner and claims](native-start-claim.md) now join
+actual v4 executable-profile parents and protected cgroup-parent admission;
+the real start/creation claims precede [new-leaf containment](native-execution-containment.md).
+These source-private connections still do not create an executable child or arm
+an independent guardian. Legacy v1-v3 diagnostic grants cannot enter them.
 
 Content closure for an ordinary dynamically linked application cannot follow from executable SHA-256
 or a read-only mount alone: its interpreter, libraries and other code lookup
 must remain inside the independently admitted runtime-filesystem contract.
 
-Before any executable child can run, a separate actual owner must join native
-proof/network ownership, protected durable creation/start claims, exact cgroup
-controls and membership, child isolation and filesystem installation, and an
-independent guardian that can stop and clean up the whole workload. Constraints
-or a prepared filesystem cannot substitute for those joins. No old never-exec
+Before any executable child can run, the retained actual owners and claims must
+also join exact child cgroup membership, isolation and filesystem installation,
+network effects and an independent guardian that can stop and clean up the whole
+workload. Constraints or a prepared filesystem cannot substitute for those joins. No old never-exec
 PID migration, callback-based success assertion, reset/retry, automatic rollback
 or running/health claim is introduced here.
 

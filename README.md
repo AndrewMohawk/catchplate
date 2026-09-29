@@ -26,14 +26,14 @@ Checkpoint: **2026-09-28 — pre-production, source-only.**
 
 ### Current work: native enrollment, workload trust and protected operations
 
-[`.247` source / e96a23f](https://github.com/example/private-deployment)
-connects [native target-principal preflight](docs/native-principal-preflight-verification.md)
-to actual Snapshot/socket source, header, token and mTLS authentication. A secret
-exporter binds the exact request; the role-3 quote binds the statement, and its
-original receiver retains proof on the same CONNECT transport. Old profiles stay
-unchanged. Actual CONNECT/provider authorization, egress/canaries, Kubernetes,
-lifecycle/recovery and independent acceptance remain separate; legacy provider
-response profiles still cap principal IDs at 256 bytes, not native v3's 1024.
+[`.248` source / 2dd433b](https://github.com/example/private-deployment)
+adds client/server mode-specific response-principal refusal before provider
+effects, without widening old profiles. [Quote-bound principal preflight](docs/native-principal-preflight-verification.md)
+and protected host CA installation remain source-connected; wide native response
+statement/receipt/binding support remains open. The [native egress design](docs/native-egress-installation-design.md)
+is architecture only, not an installer. Actual CONNECT/provider authorization,
+egress/canaries, Kubernetes, lifecycle/recovery and independent acceptance remain
+separate; native v3's 1024-byte expectation does not widen legacy 256-byte principal limits.
 No build, test, runtime, NSM or AWS/spend acceptance is claimed.
 
 The four active checkpoints remain partial:
@@ -53,7 +53,8 @@ The four active checkpoints remain partial:
   installation with actual native CA/host-namespace admission and protected local
   reservation/token/destination ownership. Quote-bound target-principal preflight
   now retains actual source/header/token/mTLS admission on the CONNECT transport;
-  actual CONNECT/provider policy, Kubernetes ownership, scoped proxy/egress/canaries,
+  wide native response statement/receipt/binding support, actual CONNECT/provider
+  policy, Kubernetes ownership, scoped proxy/egress/canaries,
   lifecycle/cross-session recovery, off-host rollback witnessing and independent
   service/exact-source verification remain open.
 - **O04 · Protected operations:** [genuine approval verification](docs/control-plane-approval-verification.md)

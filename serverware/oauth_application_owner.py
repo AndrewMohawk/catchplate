@@ -23,6 +23,7 @@ STARTUP_SCHEMA = "serverware.oauthApplicationStartup/v1"
 MEASURED_STARTUP_SCHEMA = "serverware.oauthApplicationStartup/v2"
 SETUP_STARTUP_SCHEMA = "serverware.oauthApplicationStartup/v3"
 RECONNECT_STARTUP_SCHEMA = "serverware.oauthApplicationStartup/v4"
+SUCCESSION_STARTUP_SCHEMA = "serverware.oauthApplicationStartup/v5"
 ENVELOPE_SCHEMA = "serverware.signedOAuthApplicationEnrollment/v1"
 ENROLLMENT_SCHEMA = "serverware.oauthApplicationEnrollment/v1"
 CLIENT_SCHEMA = "serverware.oauthClientMaterial/v1"
@@ -230,7 +231,7 @@ def provider_configuration(provider):
 
 class OAuthApplicationOwner:
     __slots__ = ("_custody", "_binding", "_originals", "_applications", "_identity", "_poisoned", "_closed",
-        "_epoch", "_mono", "_deadline", "_expires", "_measured", "_setup", "_reconnect")
+        "_epoch", "_mono", "_deadline", "_expires", "_measured", "_setup", "_reconnect", "_succession")
 
     def __init__(self):
         raise OAuthApplicationError("OAuth owner requires fixed cold admission")
@@ -395,8 +396,9 @@ def initialize_from_environment():
             config_original = _Original(descriptor, MAX_CONFIG_BYTES)
             config = _json(config_original.raw, MAX_CONFIG_BYTES)
             _require(type(config) is dict and set(config) == ({"schema", "sourceRevision", "configurationDigest",
-                "authorityRootFd", "authorityRootSha256", "applications"} | ({"reconnect"} if config.get("schema") == RECONNECT_STARTUP_SCHEMA else set()))
-                and config["schema"] in {STARTUP_SCHEMA, MEASURED_STARTUP_SCHEMA, SETUP_STARTUP_SCHEMA, RECONNECT_STARTUP_SCHEMA} and config["sourceRevision"] == authority_contract.SOURCE_REVISION
+                "authorityRootFd", "authorityRootSha256", "applications"} | ({"reconnect"} if config.get("schema") == RECONNECT_STARTUP_SCHEMA else
+                    {"retiredScopeSuccession"} if config.get("schema") == SUCCESSION_STARTUP_SCHEMA else set()))
+                and config["schema"] in {STARTUP_SCHEMA, MEASURED_STARTUP_SCHEMA, SETUP_STARTUP_SCHEMA, RECONNECT_STARTUP_SCHEMA, SUCCESSION_STARTUP_SCHEMA} and config["sourceRevision"] == authority_contract.SOURCE_REVISION
                 and config["configurationDigest"] == binding.configuration_digest
                 and type(config["applications"]) is list and len(config["applications"]) <= 2)
             originals, applications, used = [config_original], {}, {descriptor}
@@ -437,7 +439,7 @@ def initialize_from_environment():
                 material_fd = _fd(item["clientMaterialFd"])
                 _require(material_fd not in used and material_fd in binding.inherited_descriptors)
                 used.add(material_fd)
-                measured = config["schema"] in {MEASURED_STARTUP_SCHEMA, SETUP_STARTUP_SCHEMA, RECONNECT_STARTUP_SCHEMA}
+                measured = config["schema"] in {MEASURED_STARTUP_SCHEMA, SETUP_STARTUP_SCHEMA, RECONNECT_STARTUP_SCHEMA, SUCCESSION_STARTUP_SCHEMA}
                 material = _Original(material_fd, MAX_ENCRYPTED_CLIENT_BYTES if measured else MAX_CLIENT_BYTES, True)
                 originals.append(material)
                 raw_envelope = canonical(envelope)
@@ -459,14 +461,20 @@ def initialize_from_environment():
                 from serverware.oauth_reconnect_owner import admit
                 reconnect = admit(config, binding=binding, used=used, originals=originals, applications=applications,
                     enrollment_key=root, opening=opening, source_revision=authority_contract.SOURCE_REVISION)
+            succession = None
+            if config["schema"] == SUCCESSION_STARTUP_SCHEMA:
+                from serverware.oauth_retirement_succession_owner import admit
+                succession = admit(config, binding=binding, used=used, originals=originals, applications=applications,
+                    enrollment_key=root, opening=opening, source_revision=authority_contract.SOURCE_REVISION)
             client._receipt_now(binding)
             _require(time.monotonic_ns() < admission_deadline)
             value = object.__new__(OAuthApplicationOwner)
             value._custody, value._binding = actual, binding
             value._originals, value._applications = tuple(originals), applications
-            value._measured = config["schema"] in {MEASURED_STARTUP_SCHEMA, SETUP_STARTUP_SCHEMA, RECONNECT_STARTUP_SCHEMA}
+            value._measured = config["schema"] in {MEASURED_STARTUP_SCHEMA, SETUP_STARTUP_SCHEMA, RECONNECT_STARTUP_SCHEMA, SUCCESSION_STARTUP_SCHEMA}
             value._setup = config["schema"] == SETUP_STARTUP_SCHEMA
             value._reconnect = reconnect
+            value._succession = succession
             value._identity = os.geteuid(), os.getegid()
             value._expires = min([binding.attestation_interval[1]]
                 + [entry[0]["expiresAtEpochNs"] for entry in applications.values()])

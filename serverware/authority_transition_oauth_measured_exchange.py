@@ -19,6 +19,7 @@ from serverware import authority_oauth_activation_policy as enrollment
 from serverware import authority_oauth_inventory as inventory
 from serverware import authority_oauth_family_retirement as family
 from serverware import authority_oauth_provider_retirement as provider_retirement
+from serverware import authority_oauth_retirement_succession_current as succession
 from serverware import authority_transition_core as core
 from serverware import authority_transition_quota as shared
 from serverware import authority_transition_webauthn as assertion
@@ -83,6 +84,8 @@ class MeasuredExchangeKernel:
             require_absence=self.operation == profile.OP_PREPARE) for name, table in
             (("exchange", exchange.TABLE), ("custody", profile.TABLE), ("work", "oauth_revocation_work"))]
         queries.append(provider_retirement.query(self.operation, provider))
+        if self.operation in succession.GUARDED_OPERATIONS:
+            queries.append(succession.query(self.operation, provider))
         if self.operation == profile.OP_PREPARE:
             queries.append(shared._role_query(self.operation, "actor_role", values["actor_id"]))
             for name, table, field in (("assertion_credential", "webauthn_credentials", "credentialRecordId"),
@@ -121,6 +124,8 @@ class MeasuredExchangeKernel:
         stamp, now_ns = now.isoformat(), shared._database_epoch_ns(now)
         raw = activation.enrollment_bytes(values["enrollment_original"])
         payload = enrollment.enrollment_document(raw)["payload"]
+        if self.operation in succession.GUARDED_OPERATIONS:
+            succession.require_unassigned(context, payload["providerId"])
         if self.operation not in {profile.OP_CAPTURE, profile.OP_CANCEL}:
             provider_retirement.require_open(context, payload["providerId"])
         association = enrollment.association(raw)

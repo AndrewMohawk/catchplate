@@ -15,6 +15,7 @@ from serverware import authority_credential_currentness as currentness
 from serverware import authority_transition_credential_currentness as currentness_kernel
 from serverware import authority_oauth_family_retirement as family_retirement
 from serverware import authority_oauth_provider_retirement as provider_retirement
+from serverware import authority_oauth_retirement_succession_current as succession
 
 _HANDLERS = {name: "serverware_policy_authority_" + name.replace(".", "_") for name in profile.OPERATIONS}
 _MUTABLE_METADATA = frozenset({"refreshable", "token_type", "scopes", "expires_at_epoch_ms", "refresh_token_expires_at_epoch_ms"})
@@ -144,6 +145,8 @@ class OAuthRefreshKernel:
             shared._query(operation=self.operation, name="refresh", table=profile.TABLE, key={"id": item_id}, require_absence=self.operation == profile.OP_CLAIM)]
         queries.extend(currentness_kernel.effect_queries(self.operation, values["credential_id"], values["request"]["expectedVersion"],
             next_root=self.operation == profile.OP_COMMIT))
+        queries.append(succession.query(self.operation, payload["providerId"]))
+        queries.extend(succession.association_queries(self.operation, values["credential_id"], values["request"]["expectedVersion"]))
         for purpose in ("issued", "superseded") if payload["providerId"] == "x" else ("issued",):
             queries.append(shared._query(operation=self.operation, name=purpose, table="oauth_revocation_work",
                 key={"id": profile.artifact_id(item_id, purpose)}, require_absence=self.operation == profile.OP_CLAIM))
@@ -161,9 +164,7 @@ class OAuthRefreshKernel:
         request = values["request"]
         now_s, now_ns = context.database_now.isoformat(), shared._database_epoch_ns(context.database_now)
         credential_selected, credential, generation_selected, generation, metadata, payload = _heads(context, values)
-        if self.operation != profile.OP_RETAIN:
-            provider_retirement.require_open(context, payload["providerId"])
-        family_retirement.require_open_from_population(context, metadata["provider_id"], metadata["provider_subject"])
+        succession.require_current(context, credential, values["enrollment_original"])
         item_id = profile.refresh_id(credential["id"], request["expectedVersion"])
         selected = context.exact(profile.TABLE, {"id": item_id})
         issued_id = profile.artifact_id(item_id, "issued")
@@ -236,6 +237,7 @@ class OAuthRefreshKernel:
                 _replacement_metadata(metadata, request["replacementMetadata"], row["received_at_epoch_ns"], now_ns)
                 next_row = {**credential, **request["replacementEnvelope"], "metadata": profile.canonical(request["replacementMetadata"]).decode("ascii"), "updated_at": now_s}
                 profile.credential_original(next_row)
+                mutations.extend(succession.propagate(context, credential, next_row, values["enrollment_original"]))
                 next_root_selected = context.exact(currentness.ROOT_TABLE, {"id": currentness.root_id(credential["id"], request["expectedVersion"] + 1)})
                 profile.require(next_root_selected["present"] is False)
                 mutations.extend((core.mutation(operation=self.operation, selected=credential_selected, row=next_row),

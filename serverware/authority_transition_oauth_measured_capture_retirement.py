@@ -5,6 +5,7 @@ permanent provider fence and burns the retained work. No subject is guessed and
 no old consent window is renewed. Provider contact is a later one-use phase.
 """
 from dataclasses import dataclass
+from serverware import authority_oauth_retirement_succession_current as succession
 from types import MappingProxyType
 
 from serverware import authority_transition_core as core
@@ -192,6 +193,8 @@ class CaptureRetirementKernel:
         values = p.arguments(self.operation, dict(arguments), typed=True); grant = _grant(values)
         contract = _contract(grant)
         queries = [provider.query(self.operation, grant["providerId"])]
+        if self.operation in succession.GUARDED_OPERATIONS:
+            queries.append(succession.query(self.operation, grant["providerId"]))
         if self.operation in {p.OP_INSPECT, p.OP_CLAIM}:
             for table in POPULATIONS:
                 queries.append(core.BoundedQuery(query_id=core.query_program_id(self.operation, "complete_population", table),
@@ -225,6 +228,8 @@ class CaptureRetirementKernel:
 
     def transition(self, context):
         values = p.arguments(self.operation, dict(context.arguments), typed=True); grant = _grant(values)
+        if self.operation in succession.GUARDED_OPERATIONS:
+            succession.require_unassigned(context, grant["providerId"])
         request = values["request"]; statement = values["evidence"]["statement"]
         now, stamp = shared._database_epoch_ns(context.database_now), context.database_now.isoformat()
         p.require(statement["issuedAtEpochNs"] <= now < statement["expiresAtEpochNs"])

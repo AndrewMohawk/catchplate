@@ -21,6 +21,13 @@ def maximum_rows(table):
 
 
 def tables_for(operation):
+    from serverware import authority_oauth_retirement_succession as succession
+    if operation in succession.SNAPSHOT_OPERATIONS:
+        return (succession.SNAPSHOT_PARTS[succession.SNAPSHOT_OPERATIONS[operation]],)
+    if operation == succession.OP_AUTHORIZE:
+        return (succession.JOURNAL_TABLE,)
+    if operation == succession.OP_PREPARE:
+        return ("oauth_exchange_reservations",)
     if operation == "oauth.reconnect.authorize":
         return ("oauth_reconnect_authorizations",)
     if operation == "oauth.reconnect.fence":
@@ -73,7 +80,9 @@ def require_complete_populations(*, selected_rows, before_roots, work, deadline_
         check()
         work.prepare_scan(selected_rows)
         rows = [entry for entry in selected_rows if entry["table"] == table and entry["present"]]
-        maximum = 32 if operation in {"oauth.measured-capture-retirement.inspect", "oauth.measured-capture-retirement.claim"} else maximum_rows(table)
+        from serverware import authority_oauth_retirement_succession as succession
+        maximum = (succession.snapshot_limit(succession.SNAPSHOT_OPERATIONS[operation]) if operation in succession.SNAPSHOT_OPERATIONS
+            else 32 if operation in {"oauth.measured-capture-retirement.inspect", "oauth.measured-capture-retirement.claim"} else maximum_rows(table))
         profile.require(table in roots and len(rows) <= maximum, "OAuth complete inventory exceeds its source-fixed table bound")
         nodes = {}
         # Each cold empty_digest(depth) separately computes its suffix ladder.

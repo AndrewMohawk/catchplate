@@ -12,6 +12,7 @@ from serverware import authority_transition_quota as shared
 from serverware import authority_transition_webauthn as assertion
 from serverware import authority_transition_oauth_activation as activation
 from serverware import authority_transition_oauth_setup_rows as rows
+from serverware import authority_oauth_retirement_succession_current as succession
 
 
 def _handler(operation):
@@ -38,11 +39,13 @@ class CreateKernel:
         del database_now
         values = profile.arguments(self.operation, arguments, typed=True)
         session_id = values["resource_id"]
+        provider = enrollment.enrollment_document(profile.activation.enrollment_bytes(values["enrollment_original"]))["payload"]["providerId"]
         queries = [shared._query(operation=self.operation, name="setup", table="setup_sessions", key={"id": session_id}, require_absence=True),
             shared._role_query(self.operation, "actor_role", values["actor_id"]),
             core.BoundedQuery(query_id=core.query_program_id(self.operation, "complete_population", "setup_sessions"),
                 table="setup_sessions", predicates=(), order_by=(core.QueryOrder("id"),), maximum_rows=65,
                 proof_primitive="bounded-limit-plus-one", work_units=65)]
+        queries.append(succession.query(self.operation, provider))
         for name, table, field in (("assertion_credential", "webauthn_credentials", "credentialRecordId"),
                 ("assertion_challenge", "webauthn_challenges", "challengeId")):
             core.require_text(evidence.get(field), field, maximum_bytes=1024)
@@ -71,6 +74,7 @@ class CreateKernel:
             and evidence["expiresAtEpochNs"] - evidence["verifiedAtEpochNs"] <= values["credential_policy"]["maxAssertionAgeSeconds"] * 1_000_000_000)
         raw = profile.activation.enrollment_bytes(values["enrollment_original"])
         application = enrollment.enrollment_document(raw)["payload"]
+        succession.require_unassigned(context, application["providerId"])
         profile.require(application["providerId"] == request["providerId"]
             and application["issuedAtEpochNs"] <= now < application["expiresAtEpochNs"]
             and request["expiresAtEpochNs"] <= application["expiresAtEpochNs"])

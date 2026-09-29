@@ -83,6 +83,7 @@ from serverware import control_plane_policy_candidate
 from serverware import control_plane_policy_canary
 from serverware import control_plane_policy_canary_delivery
 from serverware.portal_oauth_reconnect import OAUTH_RECONNECT_HTML, OAUTH_RECONNECT_SCRIPT
+from serverware.portal_oauth_succession import OAUTH_SUCCESSION_HTML, OAUTH_SUCCESSION_SCRIPT
 from serverware.portal_registration_handoff import (
     REGISTRATION_HANDOFF_CSS,
     REGISTRATION_HANDOFF_HTML,
@@ -14901,6 +14902,40 @@ async def _native_oauth_original(request: Request, maximum: int) -> bytes:
     return bytes(body)
 
 
+@app.post("/api/oauth/succession/inventory")
+@app.post("/api/oauth/succession/ceremony/options")
+@app.post("/api/oauth/succession/ceremony")
+@app.post("/api/oauth/succession/fence")
+async def controlled_oauth_succession(request: Request) -> Response:
+    from serverware import control_plane_oauth_succession_ceremony as succession
+    from starlette.concurrency import run_in_threadpool
+    raw = await _native_oauth_original(request, succession.p.MAX_HTTP_REQUEST)
+    try:
+        result = await run_in_threadpool(succession.human_on_request, request, raw)
+        body = _canonical_json(result).encode("utf-8")
+        if len(body) > succession.p.MAX_HTTP_RESPONSE:
+            raise ValueError("succession response bound")
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=409, detail="succession refused or outcome unknown; inspect only, never resubmit") from None
+    return Response(content=body, media_type="application/json", headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/oauth/succession/{authorization_id}")
+def controlled_oauth_succession_inspect(authorization_id: str, request: Request) -> Response:
+    from serverware import control_plane_oauth_succession as succession
+    try:
+        body = _canonical_json(succession.inspect_on_request(request, authorization_id)).encode("utf-8")
+        if len(body) > succession.p.MAX_HTTP_RESPONSE:
+            raise ValueError("succession observation bound")
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=409, detail="succession retained association unavailable or unknown") from None
+    return Response(content=body, media_type="application/json", headers={"Cache-Control": "no-store"})
+
+
 @app.post("/api/oauth/reconnect/inventory")
 @app.post("/api/oauth/reconnect/authorize/options")
 @app.post("/api/oauth/reconnect/authorize")
@@ -19078,6 +19113,26 @@ async def data_plane_measured_oauth_issuance(request: Request) -> Response:
     return Response(content=body, media_type="application/json", headers={"Cache-Control": "no-store"})
 
 
+@app.post("/api/data-plane/oauth-succession")
+@app.post("/api/data-plane/oauth-succession/original")
+async def data_plane_measured_oauth_succession(request: Request) -> Response:
+    from serverware import control_plane_oauth_succession as succession
+    from starlette.concurrency import run_in_threadpool
+    _require_data_plane_token(request.headers.get("X-Serverware-Data-Plane-Token"), DATA_PLANE_CREDENTIAL_LEASE_TOKEN)
+    recovery = request.url.path == succession.p.HTTP_PATH + "/original"
+    raw = await _native_oauth_original(request, 1024 if recovery else succession.p.MAX_HTTP_REQUEST)
+    try:
+        def dispatch():
+            return succession.recovery_original_on_request(request, raw) if recovery else succession.Opening(request, raw).dispatch()
+        result = await run_in_threadpool(dispatch)
+        body = _canonical_json(result).encode("utf-8")
+        if len(body) > succession.p.MAX_HTTP_RESPONSE:
+            raise ValueError("succession native response bound")
+    except Exception:
+        raise HTTPException(status_code=503, detail="succession native outcome unknown; no provider retry authorized") from None
+    return Response(content=body, media_type="application/json", headers={"Cache-Control": "no-store"})
+
+
 @app.post("/api/data-plane/oauth-reconnect")
 @app.post("/api/data-plane/oauth-reconnect/original")
 async def data_plane_measured_oauth_reconnect(request: Request) -> Response:
@@ -22798,6 +22853,7 @@ UI_HTML = r"""
           __SERVERWARE_MEASURED_OAUTH_CONSENT_HTML__
           __SERVERWARE_OAUTH_SETUP_HTML__
           __SERVERWARE_OAUTH_RECONNECT_HTML__
+          __SERVERWARE_OAUTH_SUCCESSION_HTML__
           <div id="oauth-connected-section" class="pending-oauth-list connected-oauth-list" hidden>
             <h3>Connected provider accounts</h3>
             <div id="oauth-connected-accounts"></div>
@@ -26496,6 +26552,7 @@ UI_HTML = r"""
     __SERVERWARE_OAUTH_SETUP_SCRIPT__
     __SERVERWARE_POLICY_CANDIDATE_SCRIPT__
     __SERVERWARE_OAUTH_RECONNECT_SCRIPT__
+    __SERVERWARE_OAUTH_SUCCESSION_SCRIPT__
     __SERVERWARE_OAUTH_ACTIVATION_SCRIPT__
     initWorkloadIdentityEditor();
     initWorkloadEnrollmentRequirements();
@@ -26582,6 +26639,8 @@ for _portal_placeholder, _portal_fragment in (
     ("__SERVERWARE_POLICY_CANDIDATE_SCRIPT__", POLICY_CANDIDATE_SCRIPT),
     ("__SERVERWARE_OAUTH_RECONNECT_HTML__", OAUTH_RECONNECT_HTML),
     ("__SERVERWARE_OAUTH_RECONNECT_SCRIPT__", OAUTH_RECONNECT_SCRIPT),
+    ("__SERVERWARE_OAUTH_SUCCESSION_HTML__", OAUTH_SUCCESSION_HTML),
+    ("__SERVERWARE_OAUTH_SUCCESSION_SCRIPT__", OAUTH_SUCCESSION_SCRIPT),
     ("__SERVERWARE_OAUTH_ACTIVATION_HTML__", OAUTH_ACTIVATION_HTML),
     ("__SERVERWARE_OAUTH_ACTIVATION_SCRIPT__", OAUTH_ACTIVATION_SCRIPT),
     ("__SERVERWARE_REGISTRATION_HANDOFF_CSS__", REGISTRATION_HANDOFF_CSS),

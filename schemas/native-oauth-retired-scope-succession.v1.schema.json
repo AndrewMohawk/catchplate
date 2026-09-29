@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-oauth-retired-scope-succession.v1.schema.json",
+  "title": "Separate native retired-scope succession producer contract",
+  "$comment": "Native implementation is a required separate join. This closed contract and the control-plane v5 selector do not implement or construct a native owner. Historical material must be admitted by exact signed enrollment and native assignment, not an incoming provider alias.",
+  "$ref": "#/$defs/configuration",
+  "$defs": {
+    "configuration": {
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "sourceRevision", "authorityRootPublicKey", "authorityRootSpkiSha256", "authorityConfigurationOriginal", "controlPlaneConfigurationDigest", "deploymentId", "instanceId", "limits", "successionLimits", "windows", "applications", "historicalApplications", "recoveryTargets", "callbackOrigin", "portalOrigin", "browserVsockPort"],
+      "properties": {
+        "apiVersion": {"const": "serverware.nativeOAuthSuccessionConfiguration/v1"},
+        "sourceRevision": {"$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/configuration/properties/sourceRevision"},
+        "authorityRootPublicKey": {"$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/bytes32"},
+        "authorityRootSpkiSha256": {"$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/digest"},
+        "authorityConfigurationOriginal": {"$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/encoded", "maxLength": 1398102},
+        "controlPlaneConfigurationDigest": {"$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/digest"},
+        "deploymentId": {"type": "string", "minLength": 1, "maxLength": 128},
+        "instanceId": {"$ref": "native-oauth-measured-refresh.v1.schema.json#/$defs/instance"},
+        "limits": {"const": {"pendingCapacity": 64, "revocationCapacity": 64}},
+        "successionLimits": {"$ref": "oauth-retired-scope-succession.v1.schema.json#/$defs/successionLimits"},
+        "windows": {"const": {"contactMaxSeconds": 600, "retentionMaxSeconds": 600, "pendingMaxSeconds": 3600, "operationMaxSeconds": 30, "recoveryMaxSeconds": 30}},
+        "applications": {"type": "object", "additionalProperties": false, "minProperties": 1, "maxProperties": 2,
+          "properties": {"google": {"$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/application"}, "x": {"$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/application"}}},
+        "historicalApplications": {"type": "array", "maxItems": 16, "items": {"$ref": "#/$defs/historicalApplication"}},
+        "recoveryTargets": {"type": "array", "maxItems": 64, "uniqueItems": true, "items": {"$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/uuid"}},
+        "callbackOrigin": {"$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/origin"},
+        "portalOrigin": {"$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/origin"},
+        "browserVsockPort": {"type": "integer", "minimum": 1024, "maximum": 4294967294}
+      },
+      "$comment": "Exact17, canonical <=2MiB. Current applications are independently current target enrollments for fresh issuance only. Historical list is sorted unique by enrollment SHA, excludes duplicate current entries, and covers every actual old material selected in a grant. No arbitrary import path, private key or plaintext token. Actual owner supplies identity and both ingress leaf commitments in place of browserVsockPort, producing exact19 private configure fields; COMPLETE configure/browser/receipt frames remain <=8MiB. Original grant windows clip every operation; no later begin/recover renews them."
+    },
+    "historicalApplication": {
+      "type": "object", "additionalProperties": false,
+      "required": ["enrollmentSha256", "enrollmentRootSpkiSha256", "application"],
+      "properties": {
+        "enrollmentSha256": {"$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/digest"},
+        "enrollmentRootSpkiSha256": {"$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/digest"},
+        "application": {"$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/application"}
+      },
+      "$comment": "Exact original signed historical enrollment, encrypted application material, actual cold TLS PEM and independently signed assignment pair(holderId,enrollmentSha256). Root pin must exist in the successor policy historicalEnrollmentRoots or exact target root. Match original enrollment SHA, root/key/signature, applicationMaterialSha256, providerTlsRootSha256, native owner and genuine retained secretKekId/key. Expired historical enrollment proves provenance only; the NEW successor grant authorizes retirement effects. Missing old key/material/root fails closed and remains implementation/provisioning work, never reencrypt-as-validity or provider-only fallback."
+    },
+    "intent": {"$ref": "oauth-retired-scope-succession.v1.schema.json#/$defs/intent"},
+    "successionBinding": {"$ref": "oauth-retired-scope-succession.v1.schema.json#/$defs/successionBinding"},
+    "statement": {"$ref": "oauth-retired-scope-succession.v1.schema.json#/$defs/statement"},
+    "evidence": {"$ref": "oauth-retired-scope-succession.v1.schema.json#/$defs/evidence"},
+    "httpRequest": {"$ref": "oauth-retired-scope-succession.v1.schema.json#/$defs/httpRequest"},
+    "httpResponse": {"$ref": "oauth-retired-scope-succession.v1.schema.json#/$defs/httpResponse"},
+    "recoveryOriginalRequest": {"$ref": "oauth-retired-scope-succession.v1.schema.json#/$defs/recoveryOriginalRequest"},
+    "recoveryOriginalResponse": {"$ref": "oauth-retired-scope-succession.v1.schema.json#/$defs/recoveryOriginalResponse"}
+  }
+}

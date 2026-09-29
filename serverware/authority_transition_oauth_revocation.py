@@ -1,5 +1,6 @@
 """Current-grant cleanup metadata transitions; never provider success proof."""
 from dataclasses import dataclass
+from serverware import authority_oauth_retirement_succession_current as succession
 from types import MappingProxyType
 
 from serverware import authority_oauth_revocation as profile
@@ -80,6 +81,8 @@ class OAuthRevocationKernel:
         queries = [shared._query(operation=self.operation, name="exchange", table=profile.exchange.TABLE, key={"id": item_id}),
             shared._query(operation=self.operation, name="work", table="oauth_revocation_work", key={"id": item_id}),
             shared._query(operation=self.operation, name="journal", table=profile.JOURNAL_TABLE, key={"id": item_id}, require_absence=self.operation == profile.OP_CLAIM)]
+        if self.operation in succession.GUARDED_OPERATIONS:
+            queries.append(succession.query(self.operation, grant["providerId"]))
         for purpose in grant["tokenPurposes"]:
             queries.append(shared._query(operation=self.operation, name="attempt_" + purpose, table=profile.ATTEMPT_TABLE,
                 key={"id": profile.attempt_id(item_id, purpose)}, require_absence=self.operation == profile.OP_CLAIM))
@@ -89,6 +92,8 @@ class OAuthRevocationKernel:
     def transition(self, context):
         values = _values(self.operation, context.arguments)
         grant, request = _grant(values), values["request"]
+        if self.operation in succession.GUARDED_OPERATIONS:
+            succession.require_unassigned(context, grant["providerId"])
         now_ns = shared._database_epoch_ns(context.database_now)
         if not grant["issuedAtEpochNs"] <= now_ns < grant["expiresAtEpochNs"]:
             raise core.TransitionKernelError("original cleanup grant deadline expired")

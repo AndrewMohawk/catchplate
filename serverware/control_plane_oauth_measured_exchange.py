@@ -72,6 +72,8 @@ def _originals(owner, operation, arguments):
 class _Consent:
     def __init__(self, request, arguments, *, contract=profile):
         from serverware.oauth_reconnect_owner import selected as reconnect_selected
+        from serverware.oauth_retirement_succession_owner import selected as succession_selected
+        setup.require(not succession_selected(), "retired-scope succession has a distinct cold purpose")
         setup.require(not reconnect_selected(), "reconnect has a distinct cold purpose")
         setup.require(contract is LEGACY_PROFILE or contract is setup_profile)
         self.contract = contract
@@ -137,6 +139,8 @@ class _Consent:
 
 def intent_on_request(request, raw):
     from serverware.oauth_reconnect_owner import selected as reconnect_selected
+    from serverware.oauth_retirement_succession_owner import selected as succession_selected
+    profile.require(not succession_selected(), "retired-scope succession cannot use unbound issuance")
     profile.require(not reconnect_selected(), "reconnect cannot use unbound issuance")
     value = _body(request, raw, "/api/oauth/native/intent")
     profile.require(set(value) == {"provider", "credentialName", "scopes", "metadata"} and applications.measured_selected(value["provider"]))
@@ -197,6 +201,8 @@ def consent_on_request(request, raw, *, contract=profile):
 class Opening:
     def __init__(self, request, raw, *, contract=profile):
         from serverware.oauth_reconnect_owner import selected as reconnect_selected
+        from serverware.oauth_retirement_succession_owner import selected as succession_selected
+        setup.require(not succession_selected(), "retired-scope succession has a distinct machine purpose")
         setup.require(not reconnect_selected(), "reconnect has a distinct machine purpose")
         setup.require(contract is LEGACY_PROFILE or contract is setup_profile)
         self.contract = contract

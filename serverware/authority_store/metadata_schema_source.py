@@ -636,6 +636,167 @@ def metadata_base_schema_source() -> str:
                 CHECK (cancel_arguments_json IS NULL OR claim_arguments_json IS NULL)
             );
 
+            CREATE TABLE IF NOT EXISTS oauth_retirement_scope_heads (
+                id TEXT PRIMARY KEY,
+                provider_id TEXT NOT NULL UNIQUE,
+                scope_kind TEXT NOT NULL,
+                provider_subject TEXT,
+                sequence BIGINT NOT NULL CHECK (sequence > 0),
+                scope_id TEXT NOT NULL UNIQUE,
+                scope_sha256 TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                CHECK (provider_id IN ('google', 'x')),
+                CHECK (scope_kind IN ('family', 'provider')),
+                CHECK ((scope_kind = 'provider') = (provider_subject IS NULL))
+            );
+
+            CREATE TABLE IF NOT EXISTS oauth_retirement_scopes (
+                id TEXT PRIMARY KEY,
+                provider_id TEXT NOT NULL,
+                sequence BIGINT NOT NULL CHECK (sequence > 0),
+                authorization_sha256 TEXT NOT NULL UNIQUE,
+                previous_head_json TEXT,
+                predecessors_json TEXT NOT NULL,
+                affected_originals_json TEXT NOT NULL,
+                inventory_original_json TEXT NOT NULL,
+                currentness_barriers_json TEXT NOT NULL,
+                fence_request_digest TEXT NOT NULL UNIQUE,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                UNIQUE (provider_id, sequence)
+            );
+
+            CREATE TABLE IF NOT EXISTS oauth_retirement_successions (
+                id TEXT PRIMARY KEY,
+                provider_id TEXT NOT NULL,
+                authorization_original TEXT NOT NULL,
+                authorization_sha256 TEXT NOT NULL UNIQUE,
+                enrollment_original TEXT NOT NULL,
+                actor_id TEXT NOT NULL,
+                credential_policy_json TEXT NOT NULL,
+                authorize_arguments_json TEXT NOT NULL,
+                authorize_request_digest TEXT NOT NULL UNIQUE,
+                approval_id TEXT NOT NULL UNIQUE,
+                requester_credential_id TEXT NOT NULL,
+                requester_evidence_expires_at TEXT NOT NULL,
+                fence_arguments_json TEXT,
+                fence_request_digest TEXT UNIQUE,
+                scope_original_json TEXT,
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                admission_expires_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                CHECK (status IN ('requested', 'approved', 'fenced', 'committed')),
+                CHECK ((status IN ('requested', 'approved')) = (fence_request_digest IS NULL)),
+                CHECK ((fence_request_digest IS NULL) = (fence_arguments_json IS NULL)
+                    AND (fence_request_digest IS NULL) = (scope_original_json IS NULL))
+            );
+
+            CREATE TABLE IF NOT EXISTS oauth_retirement_succession_snapshots (
+                id TEXT PRIMARY KEY,
+                authorization_id TEXT NOT NULL,
+                authorization_sha256 TEXT NOT NULL,
+                part TEXT NOT NULL,
+                root_original_json TEXT NOT NULL,
+                rows_original_json TEXT NOT NULL,
+                acquisition_request_digest TEXT NOT NULL UNIQUE,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                UNIQUE (authorization_id, part)
+            );
+
+            CREATE TABLE IF NOT EXISTS oauth_retirement_succession_materials (
+                id TEXT PRIMARY KEY,
+                material_id TEXT NOT NULL,
+                scope_id TEXT NOT NULL,
+                provider_id TEXT NOT NULL,
+                scope_json TEXT NOT NULL,
+                authorization_sha256 TEXT NOT NULL,
+                material_original_json TEXT NOT NULL,
+                claim_arguments_json TEXT NOT NULL,
+                claim_request_digest TEXT NOT NULL UNIQUE,
+                owner_nonce_sha256 TEXT NOT NULL,
+                status TEXT NOT NULL CHECK (status = 'claimed'),
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE (scope_id, material_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS oauth_retirement_succession_attempts (
+                id TEXT PRIMARY KEY,
+                material_id TEXT NOT NULL,
+                material_claim_id TEXT NOT NULL,
+                scope_id TEXT NOT NULL,
+                token_purpose TEXT NOT NULL CHECK (token_purpose IN ('access', 'refresh')),
+                contact_request_sha256 TEXT NOT NULL,
+                contact_arguments_json TEXT NOT NULL,
+                contact_request_digest TEXT NOT NULL UNIQUE,
+                finish_arguments_json TEXT,
+                finish_request_digest TEXT UNIQUE,
+                transport_original TEXT,
+                prior_contact_json TEXT,
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE (material_claim_id, token_purpose),
+                CHECK (status IN ('contact-claimed', 'accepted', 'accepted-existing', 'rejected', 'unknown')),
+                CHECK ((status IN ('contact-claimed', 'accepted-existing')) = (finish_request_digest IS NULL)),
+                CHECK ((finish_request_digest IS NULL) = (finish_arguments_json IS NULL)
+                    AND (finish_request_digest IS NULL) = (transport_original IS NULL)),
+                CHECK ((status = 'accepted-existing') = (prior_contact_json IS NOT NULL))
+            );
+
+            CREATE TABLE IF NOT EXISTS oauth_retirement_successor_generations (
+                id TEXT PRIMARY KEY,
+                credential_id TEXT NOT NULL,
+                credential_version BIGINT NOT NULL CHECK (credential_version > 0),
+                scope_id TEXT NOT NULL,
+                scope_sha256 TEXT NOT NULL,
+                provider_id TEXT NOT NULL,
+                provider_subject TEXT NOT NULL,
+                enrollment_sha256 TEXT NOT NULL,
+                credential_sha256 TEXT NOT NULL,
+                root_origin_request_digest TEXT NOT NULL UNIQUE,
+                previous_association_sha256 TEXT,
+                created_at TEXT NOT NULL,
+                UNIQUE (credential_id, credential_version)
+            );
+
+            CREATE TABLE IF NOT EXISTS oauth_measured_succession_custody (
+                id TEXT PRIMARY KEY,
+                prepare_request_digest TEXT NOT NULL UNIQUE,
+                preparation_arguments_json TEXT NOT NULL,
+                claim_arguments_json TEXT,
+                capture_arguments_json TEXT,
+                stage_arguments_json TEXT,
+                cancel_arguments_json TEXT,
+                owner_nonce_sha256 TEXT,
+                received_at_epoch_ns BIGINT,
+                recovery_request_digest TEXT,
+                recovery_expires_at_epoch_ns BIGINT,
+                recovery_arguments_json TEXT,
+                recovery_owner_nonce_sha256 TEXT,
+                candidate_original_json TEXT,
+                commit_request_digest TEXT UNIQUE,
+                committed_credential_json TEXT,
+                predecessor_original_json TEXT,
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                CHECK (status IN ('prepared', 'claimed', 'captured', 'staged', 'cancelled', 'committed')),
+                CHECK ((claim_arguments_json IS NULL) = (owner_nonce_sha256 IS NULL)),
+                CHECK ((capture_arguments_json IS NULL) = (received_at_epoch_ns IS NULL)),
+                CHECK ((stage_arguments_json IS NULL) = (candidate_original_json IS NULL)),
+                CHECK (recovery_request_digest IS NULL AND recovery_expires_at_epoch_ns IS NULL
+                    AND recovery_arguments_json IS NULL AND recovery_owner_nonce_sha256 IS NULL),
+                CHECK ((status = 'committed') = (commit_request_digest IS NOT NULL)),
+                CHECK ((commit_request_digest IS NULL) = (committed_credential_json IS NULL)
+                    AND (commit_request_digest IS NULL) = (predecessor_original_json IS NULL)),
+                CHECK (cancel_arguments_json IS NULL OR claim_arguments_json IS NULL)
+            );
+
             CREATE TABLE IF NOT EXISTS oauth_measured_setup_custody (
                 id TEXT PRIMARY KEY,
                 prepare_request_digest TEXT NOT NULL,

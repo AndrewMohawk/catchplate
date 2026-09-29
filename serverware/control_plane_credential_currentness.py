@@ -428,6 +428,29 @@ def admit_reconnect_barriers(opening):
     return reconnect.barriers(result, opening.grant["affectedLineages"])
 
 
+def admit_succession_barriers(opening):
+    from serverware.control_plane_oauth_succession_ceremony import _Fence
+    from serverware import authority_oauth_retirement_succession as succession
+    from serverware import authority_oauth_measured_pending_retirement as scalars
+    profile.require(type(opening) is _Fence and not opening.sent and not opening.drain_attempted)
+    opening.check(); opening.drain_attempted = True
+    owner = _Owner(deadline=opening.deadline, expires=opening.expires)
+    profile.require(owner.custody is opening.custody and owner.binding is opening.binding)
+    active = [pin for pin in opening.grant["affectedLineages"] if pin["predecessorKind"] == "active"]
+    result = []
+    for pin in active:
+        opening.check(); owner.check()
+        credential, generation, _ = _rows(pin["credentialId"], pin["credentialVersion"])
+        profile.require(succession.sha256(refresh.credential_original(credential)) == pin["credentialRowSha256"]
+            and succession.sha256(refresh.generation_original(generation)) == pin["generationRowSha256"])
+        digest = _coordinate(owner, credential, generation, opening)
+        result.append({"credentialId": pin["credentialId"], "credentialVersion": pin["credentialVersion"], "barrierSha256": digest})
+    opening.check(); owner.check()
+    # Historical consumed roots are independently re-admitted by FENCE. They
+    # never enter this fresh coordination or reopen because a new grant exists.
+    return scalars.barriers(result, [{name: pin[name] for name in scalars.LINEAGE_FIELDS} for pin in active])
+
+
 def admit_cleanup_barrier(operation):
     from serverware.control_plane_oauth_refresh_cleanup import _Operation
     profile.require(type(operation) is _Operation)

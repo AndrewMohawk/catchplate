@@ -498,6 +498,7 @@ class PlanningState:
     query_reads: tuple[authority_query_reads.QueryRead, ...] = ()
     complete_query_evidence: authority_complete_acquisition.CompleteAcquisitionEvidence | None = None
     rbac_primary_inputs: tuple | None = None
+    retirement_succession_primary_roots: tuple | None = None
     canary_delivery_admission: Any = None
 
 
@@ -1361,6 +1362,7 @@ class TypedTransitionPlanningProgram:
                 verified_webauthn_evidence=state.verified_webauthn_evidence,
                 query_reads=state.query_reads,
                 rbac_primary_inputs=state.rbac_primary_inputs,
+                retirement_succession_primary_roots=state.retirement_succession_primary_roots,
                 canary_delivery_admission=state.canary_delivery_admission,
             )
             transition = self.kernel.transition(context)
@@ -4264,6 +4266,19 @@ class MeasuredPlanner:
                         if operation == "rbac.binding.mutate":
                             planning_state = replace(planning_state,
                                 rbac_primary_inputs=(tuple(roots), tuple(authorization_roots), tuple(multiproofs)))
+                        from serverware import authority_oauth_retirement_succession as succession
+                        from serverware import authority_oauth_retirement_succession_snapshots as succession_snapshots
+                        if operation in succession_snapshots.ROOT_OPERATIONS:
+                            planning_state = replace(planning_state,
+                                retirement_succession_primary_roots=tuple(roots) + tuple(authorization_roots))
+                            if operation in succession.SNAPSHOT_OPERATIONS:
+                                authority_oauth_inventory.require_complete_populations(
+                                    selected_rows=selected, before_roots=tuple(roots) + tuple(authorization_roots),
+                                    work=query_work, deadline_ns=request["deadlineMonotonicNs"], operation=operation)
+                            else:
+                                succession_snapshots.validate_fence_inputs(selected_rows=selected,
+                                    before_roots=tuple(roots) + tuple(authorization_roots), work=query_work,
+                                    deadline_ns=request["deadlineMonotonicNs"])
                         if operation in authority_policy_canary_delivery.OPERATIONS:
                             self.canary_delivery_admission.verify(operation, request["typedRequest"]["arguments"],
                                 int(planning_state.database_now.timestamp()) * 1_000_000_000 + planning_state.database_now.microsecond * 1000)
@@ -4272,6 +4287,7 @@ class MeasuredPlanner:
                                 oauth_measured_exchange.OP_PREPARE, oauth_measured_exchange.OP_STAGE,
                                 "oauth.setup.create", "oauth.setup.activate", "oauth.measured-setup.prepare", "oauth.measured-setup.stage",
                                 "oauth.reconnect.authorize", "oauth.reconnect.fence", "oauth.measured-reconnect.prepare",
+                                succession.OP_AUTHORIZE, succession.OP_PREPARE,
                                 "oauth.refresh.claim", "oauth.refresh.retain", "oauth.refresh.commit",
                                 "oauth.measured-refresh.inspect", "oauth.measured-refresh.claim", "oauth.measured-refresh.capture",
                                 "oauth.measured-refresh.commit", "oauth.measured-refresh.recover",

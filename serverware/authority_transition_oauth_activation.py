@@ -24,6 +24,7 @@ from serverware import authority_credential_currentness as currentness
 from serverware import authority_transition_credential_currentness as currentness_kernel
 from serverware import authority_oauth_family_retirement as family_retirement
 from serverware import authority_oauth_provider_retirement as provider_retirement
+from serverware import authority_oauth_retirement_succession_current as succession
 
 _PROVENANCE = frozenset({"schema", "requestDigest", "requestEvidenceDigest", "credentialPolicy", "decisionDigest", "decisionEvidenceDigest", "consumptionDigest", "consumptionEvidenceDigest"})
 _CREDENTIAL_COPY = ("id", "name", "kind", "encrypted_secret", "encrypted_dek", "secret_nonce", "secret_ciphertext", "secret_kek_id", "credential_version", "secret_updated_at", "metadata")
@@ -193,6 +194,8 @@ class OAuthActivationKernel:
             provider_retirement.query(self.operation, provider),
             shared._role_query(self.operation, "actor_role", values["actor_id"]),
             shared._query(operation=self.operation, name="pending", table="pending_oauth_credentials", key={"id": values["resource_id"]})]
+        if self.operation in succession.GUARDED_OPERATIONS:
+            queries.append(succession.query(self.operation, provider))
         if self.operation == profile.OP_REQUEST:
             queries.append(shared._aggregate_query(self.operation, "approval_capacity", "control-plane-approvals", "global"))
         else:
@@ -225,6 +228,8 @@ class OAuthActivationKernel:
         profile = _contract(self.operation)
         values = _values(self.operation, context.arguments)
         pending_selected, pending, metadata, original_enrollment = _pending(context, values)
+        if self.operation in succession.GUARDED_OPERATIONS:
+            succession.require_unassigned(context, original_enrollment["providerId"])
         provider_retirement.require_open(context, original_enrollment["providerId"])
         setup_before = _setup_pending(context, values, pending, original_enrollment) if profile is setup_profile else None
         setup_after = setup_updates = None

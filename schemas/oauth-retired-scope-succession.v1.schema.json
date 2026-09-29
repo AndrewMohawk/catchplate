@@ -1,0 +1,3296 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/oauth-retired-scope-succession.v1.schema.json",
+  "title": "Append-only independently authorized retired-scope succession originals",
+  "$comment": "Closed source-only producer/consumer contract; schema acceptance is not permission. No old fence mutation, retry, absent-row completion, global completeness claim, proof ceiling increase or automatic non-target reopening.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/signedAuthorization"
+    },
+    {
+      "$ref": "#/$defs/policy"
+    },
+    {
+      "$ref": "#/$defs/startup"
+    },
+    {
+      "$ref": "#/$defs/inventory"
+    },
+    {
+      "$ref": "#/$defs/intent"
+    },
+    {
+      "$ref": "#/$defs/httpRequest"
+    },
+    {
+      "$ref": "#/$defs/httpResponse"
+    },
+    {
+      "$ref": "#/$defs/recoveryOriginalRequest"
+    },
+    {
+      "$ref": "#/$defs/recoveryOriginalResponse"
+    }
+  ],
+  "$defs": {
+    "digest": {
+      "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/digest"
+    },
+    "uuid": {
+      "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/uuid"
+    },
+    "epoch": {
+      "$ref": "oauth-measured-reconnect-authority.v1.schema.json#/$defs/epoch"
+    },
+    "version": {
+      "$ref": "oauth-measured-reconnect-authority.v1.schema.json#/$defs/version"
+    },
+    "bytes32": {
+      "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/bytes32"
+    },
+    "origin": {
+      "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/origin"
+    },
+    "provider": {
+      "enum": [
+        "google",
+        "x"
+      ]
+    },
+    "actor": {
+      "$ref": "oauth-measured-reconnect-authority.v1.schema.json#/$defs/actor"
+    },
+    "encoded": {
+      "$ref": "oauth-measured-reconnect-authority.v1.schema.json#/$defs/encoded"
+    },
+    "nullableDigest": {
+      "$ref": "oauth-measured-reconnect-authority.v1.schema.json#/$defs/nullableDigest"
+    },
+    "credentialPolicy": {
+      "$ref": "oauth-measured-reconnect-authority.v1.schema.json#/$defs/credentialPolicy"
+    },
+    "envelope": {
+      "$ref": "oauth-measured-reconnect-authority.v1.schema.json#/$defs/envelope"
+    },
+    "replacementEnvelope": {
+      "$ref": "oauth-measured-reconnect-authority.v1.schema.json#/$defs/replacementEnvelope"
+    },
+    "scopes": {
+      "$ref": "oauth-measured-reconnect-authority.v1.schema.json#/$defs/scopes"
+    },
+    "limits": {
+      "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/limits"
+    },
+    "authorizationOriginal": {
+      "$ref": "#/$defs/encoded",
+      "maxLength": 174763
+    },
+    "enrollmentOriginal": {
+      "$ref": "#/$defs/encoded",
+      "maxLength": 87382
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "providerId",
+        "providerSubject",
+        "externalImpactAuthorized"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "family",
+            "provider"
+          ]
+        },
+        "providerId": {
+          "$ref": "#/$defs/provider"
+        },
+        "providerSubject": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            }
+          ]
+        },
+        "externalImpactAuthorized": {
+          "const": true
+        }
+      }
+    },
+    "predecessor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "id",
+        "rowSha256",
+        "journalSha256"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "refresh-family",
+            "pending-family",
+            "provider-capture",
+            "reconnect-fence",
+            "succession"
+          ]
+        },
+        "id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "rowSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "journalSha256": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "lineage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "credentialId",
+        "credentialVersion",
+        "credentialRowSha256",
+        "generationRowSha256",
+        "predecessorKind",
+        "predecessorId",
+        "predecessorSha256"
+      ],
+      "properties": {
+        "credentialId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "credentialVersion": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9223372036854775807
+        },
+        "credentialRowSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "generationRowSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "predecessorKind": {
+          "enum": [
+            "refresh-family",
+            "pending-family",
+            "provider-capture",
+            "reconnect-fence",
+            "succession",
+            "active"
+          ]
+        },
+        "predecessorId": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/uuid"
+            }
+          ]
+        },
+        "predecessorSha256": {
+          "$ref": "#/$defs/nullableDigest"
+        }
+      }
+    },
+    "materialPin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "materialId",
+        "sourceKind",
+        "sourceId",
+        "sourceVersion",
+        "sourceRowSha256",
+        "custodyRowSha256",
+        "tokenSecretSha256",
+        "tokenEnvelopeSha256",
+        "enrollmentSha256",
+        "tokenPurposes"
+      ],
+      "properties": {
+        "materialId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "sourceKind": {
+          "enum": [
+            "initial-capture",
+            "setup-capture",
+            "reconnect-capture",
+            "succession-capture",
+            "initial-pending",
+            "setup-pending",
+            "reconnect-candidate",
+            "succession-candidate",
+            "refresh-issued",
+            "refresh-superseded",
+            "credential-current"
+          ]
+        },
+        "sourceId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "sourceVersion": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9223372036854775807
+        },
+        "sourceRowSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "custodyRowSha256": {
+          "$ref": "#/$defs/nullableDigest"
+        },
+        "tokenSecretSha256": {
+          "$ref": "#/$defs/nullableDigest"
+        },
+        "tokenEnvelopeSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "enrollmentSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "tokenPurposes": {
+          "enum": [
+            [
+              "access"
+            ],
+            [
+              "refresh"
+            ],
+            [
+              "access",
+              "refresh"
+            ]
+          ]
+        }
+      }
+    },
+    "inventoryRoot": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "part",
+            "root"
+          ],
+          "properties": {
+            "part": {
+              "const": "capture-attempts"
+            },
+            "root": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "table",
+                "rootRevision",
+                "rootDigest",
+                "leafCount"
+              ],
+              "properties": {
+                "table": {
+                  "const": "oauth_capture_retirement_attempts"
+                },
+                "rootRevision": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9223372036854775807
+                },
+                "rootDigest": {
+                  "$ref": "#/$defs/digest"
+                },
+                "leafCount": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 64
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "part",
+            "root"
+          ],
+          "properties": {
+            "part": {
+              "const": "capture-cleanup"
+            },
+            "root": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "table",
+                "rootRevision",
+                "rootDigest",
+                "leafCount"
+              ],
+              "properties": {
+                "table": {
+                  "const": "oauth_capture_retirement_reservations"
+                },
+                "rootRevision": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9223372036854775807
+                },
+                "rootDigest": {
+                  "$ref": "#/$defs/digest"
+                },
+                "leafCount": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 64
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "part",
+            "root"
+          ],
+          "properties": {
+            "part": {
+              "const": "capture-cleanup-custody"
+            },
+            "root": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "table",
+                "rootRevision",
+                "rootDigest",
+                "leafCount"
+              ],
+              "properties": {
+                "table": {
+                  "const": "oauth_measured_capture_retirement_custody"
+                },
+                "rootRevision": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9223372036854775807
+                },
+                "rootDigest": {
+                  "$ref": "#/$defs/digest"
+                },
+                "leafCount": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 64
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "part",
+            "root"
+          ],
+          "properties": {
+            "part": {
+              "const": "credentials"
+            },
+            "root": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "table",
+                "rootRevision",
+                "rootDigest",
+                "leafCount"
+              ],
+              "properties": {
+                "table": {
+                  "const": "credentials"
+                },
+                "rootRevision": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9223372036854775807
+                },
+                "rootDigest": {
+                  "$ref": "#/$defs/digest"
+                },
+                "leafCount": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 16
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "part",
+            "root"
+          ],
+          "properties": {
+            "part": {
+              "const": "exchange-attempts"
+            },
+            "root": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "table",
+                "rootRevision",
+                "rootDigest",
+                "leafCount"
+              ],
+              "properties": {
+                "table": {
+                  "const": "oauth_revocation_attempts"
+                },
+                "rootRevision": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9223372036854775807
+                },
+                "rootDigest": {
+                  "$ref": "#/$defs/digest"
+                },
+                "leafCount": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 64
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "part",
+            "root"
+          ],
+          "properties": {
+            "part": {
+              "const": "exchange-cleanup"
+            },
+            "root": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "table",
+                "rootRevision",
+                "rootDigest",
+                "leafCount"
+              ],
+              "properties": {
+                "table": {
+                  "const": "oauth_revocation_reservations"
+                },
+                "rootRevision": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9223372036854775807
+                },
+                "rootDigest": {
+                  "$ref": "#/$defs/digest"
+                },
+                "leafCount": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 64
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "part",
+            "root"
+          ],
+          "properties": {
+            "part": {
+              "const": "exchanges"
+            },
+            "root": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "table",
+                "rootRevision",
+                "rootDigest",
+                "leafCount"
+              ],
+              "properties": {
+                "table": {
+                  "const": "oauth_exchange_reservations"
+                },
+                "rootRevision": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9223372036854775807
+                },
+                "rootDigest": {
+                  "$ref": "#/$defs/digest"
+                },
+                "leafCount": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 16
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "part",
+            "root"
+          ],
+          "properties": {
+            "part": {
+              "const": "family-fences"
+            },
+            "root": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "table",
+                "rootRevision",
+                "rootDigest",
+                "leafCount"
+              ],
+              "properties": {
+                "table": {
+                  "const": "oauth_family_retirements"
+                },
+                "rootRevision": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9223372036854775807
+                },
+                "rootDigest": {
+                  "$ref": "#/$defs/digest"
+                },
+                "leafCount": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 32
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "part",
+            "root"
+          ],
+          "properties": {
+            "part": {
+              "const": "initial-custody"
+            },
+            "root": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "table",
+                "rootRevision",
+                "rootDigest",
+                "leafCount"
+              ],
+              "properties": {
+                "table": {
+                  "const": "oauth_measured_exchange_custody"
+                },
+                "rootRevision": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9223372036854775807
+                },
+                "rootDigest": {
+                  "$ref": "#/$defs/digest"
+                },
+                "leafCount": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 64
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "part",
+            "root"
+          ],
+          "properties": {
+            "part": {
+              "const": "pending"
+            },
+            "root": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "table",
+                "rootRevision",
+                "rootDigest",
+                "leafCount"
+              ],
+              "properties": {
+                "table": {
+                  "const": "pending_oauth_credentials"
+                },
+                "rootRevision": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9223372036854775807
+                },
+                "rootDigest": {
+                  "$ref": "#/$defs/digest"
+                },
+                "leafCount": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 16
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "part",
+            "root"
+          ],
+          "properties": {
+            "part": {
+              "const": "pending-attempts"
+            },
+            "root": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "table",
+                "rootRevision",
+                "rootDigest",
+                "leafCount"
+              ],
+              "properties": {
+                "table": {
+                  "const": "oauth_pending_retirement_attempts"
+                },
+                "rootRevision": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9223372036854775807
+                },
+                "rootDigest": {
+                  "$ref": "#/$defs/digest"
+                },
+                "leafCount": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 64
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "part",
+            "root"
+          ],
+          "properties": {
+            "part": {
+              "const": "pending-cleanup"
+            },
+            "root": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "table",
+                "rootRevision",
+                "rootDigest",
+                "leafCount"
+              ],
+              "properties": {
+                "table": {
+                  "const": "oauth_pending_retirement_reservations"
+                },
+                "rootRevision": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9223372036854775807
+                },
+                "rootDigest": {
+                  "$ref": "#/$defs/digest"
+                },
+                "leafCount": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 64
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "part",
+            "root"
+          ],
+          "properties": {
+            "part": {
+              "const": "pending-cleanup-custody"
+            },
+            "root": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "table",
+                "rootRevision",
+                "rootDigest",
+                "leafCount"
+              ],
+              "properties": {
+                "table": {
+                  "const": "oauth_measured_pending_retirement_custody"
+                },
+                "rootRevision": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9223372036854775807
+                },
+                "rootDigest": {
+                  "$ref": "#/$defs/digest"
+                },
+                "leafCount": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 64
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "part",
+            "root"
+          ],
+          "properties": {
+            "part": {
+              "const": "pending-fences"
+            },
+            "root": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "table",
+                "rootRevision",
+                "rootDigest",
+                "leafCount"
+              ],
+              "properties": {
+                "table": {
+                  "const": "oauth_pending_family_retirements"
+                },
+                "rootRevision": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9223372036854775807
+                },
+                "rootDigest": {
+                  "$ref": "#/$defs/digest"
+                },
+                "leafCount": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 32
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "part",
+            "root"
+          ],
+          "properties": {
+            "part": {
+              "const": "provider-fences"
+            },
+            "root": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "table",
+                "rootRevision",
+                "rootDigest",
+                "leafCount"
+              ],
+              "properties": {
+                "table": {
+                  "const": "oauth_provider_retirements"
+                },
+                "rootRevision": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9223372036854775807
+                },
+                "rootDigest": {
+                  "$ref": "#/$defs/digest"
+                },
+                "leafCount": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 64
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "part",
+            "root"
+          ],
+          "properties": {
+            "part": {
+              "const": "reconnect-authorizations"
+            },
+            "root": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "table",
+                "rootRevision",
+                "rootDigest",
+                "leafCount"
+              ],
+              "properties": {
+                "table": {
+                  "const": "oauth_reconnect_authorizations"
+                },
+                "rootRevision": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9223372036854775807
+                },
+                "rootDigest": {
+                  "$ref": "#/$defs/digest"
+                },
+                "leafCount": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 64
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "part",
+            "root"
+          ],
+          "properties": {
+            "part": {
+              "const": "reconnect-custody"
+            },
+            "root": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "table",
+                "rootRevision",
+                "rootDigest",
+                "leafCount"
+              ],
+              "properties": {
+                "table": {
+                  "const": "oauth_measured_reconnect_custody"
+                },
+                "rootRevision": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9223372036854775807
+                },
+                "rootDigest": {
+                  "$ref": "#/$defs/digest"
+                },
+                "leafCount": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 64
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "part",
+            "root"
+          ],
+          "properties": {
+            "part": {
+              "const": "refresh-attempts"
+            },
+            "root": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "table",
+                "rootRevision",
+                "rootDigest",
+                "leafCount"
+              ],
+              "properties": {
+                "table": {
+                  "const": "oauth_refresh_cleanup_attempts"
+                },
+                "rootRevision": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9223372036854775807
+                },
+                "rootDigest": {
+                  "$ref": "#/$defs/digest"
+                },
+                "leafCount": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 64
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "part",
+            "root"
+          ],
+          "properties": {
+            "part": {
+              "const": "refresh-cleanup"
+            },
+            "root": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "table",
+                "rootRevision",
+                "rootDigest",
+                "leafCount"
+              ],
+              "properties": {
+                "table": {
+                  "const": "oauth_refresh_cleanup_reservations"
+                },
+                "rootRevision": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9223372036854775807
+                },
+                "rootDigest": {
+                  "$ref": "#/$defs/digest"
+                },
+                "leafCount": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 64
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "part",
+            "root"
+          ],
+          "properties": {
+            "part": {
+              "const": "refresh-cleanup-custody"
+            },
+            "root": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "table",
+                "rootRevision",
+                "rootDigest",
+                "leafCount"
+              ],
+              "properties": {
+                "table": {
+                  "const": "oauth_measured_refresh_cleanup_custody"
+                },
+                "rootRevision": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9223372036854775807
+                },
+                "rootDigest": {
+                  "$ref": "#/$defs/digest"
+                },
+                "leafCount": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 64
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "part",
+            "root"
+          ],
+          "properties": {
+            "part": {
+              "const": "refresh-custody"
+            },
+            "root": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "table",
+                "rootRevision",
+                "rootDigest",
+                "leafCount"
+              ],
+              "properties": {
+                "table": {
+                  "const": "oauth_measured_refresh_custody"
+                },
+                "rootRevision": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9223372036854775807
+                },
+                "rootDigest": {
+                  "$ref": "#/$defs/digest"
+                },
+                "leafCount": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 64
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "part",
+            "root"
+          ],
+          "properties": {
+            "part": {
+              "const": "refreshes"
+            },
+            "root": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "table",
+                "rootRevision",
+                "rootDigest",
+                "leafCount"
+              ],
+              "properties": {
+                "table": {
+                  "const": "oauth_refresh_reservations"
+                },
+                "rootRevision": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9223372036854775807
+                },
+                "rootDigest": {
+                  "$ref": "#/$defs/digest"
+                },
+                "leafCount": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 16
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "part",
+            "root"
+          ],
+          "properties": {
+            "part": {
+              "const": "setup"
+            },
+            "root": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "table",
+                "rootRevision",
+                "rootDigest",
+                "leafCount"
+              ],
+              "properties": {
+                "table": {
+                  "const": "setup_sessions"
+                },
+                "rootRevision": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9223372036854775807
+                },
+                "rootDigest": {
+                  "$ref": "#/$defs/digest"
+                },
+                "leafCount": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 16
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "part",
+            "root"
+          ],
+          "properties": {
+            "part": {
+              "const": "setup-custody"
+            },
+            "root": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "table",
+                "rootRevision",
+                "rootDigest",
+                "leafCount"
+              ],
+              "properties": {
+                "table": {
+                  "const": "oauth_measured_setup_custody"
+                },
+                "rootRevision": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9223372036854775807
+                },
+                "rootDigest": {
+                  "$ref": "#/$defs/digest"
+                },
+                "leafCount": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 64
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "part",
+            "root"
+          ],
+          "properties": {
+            "part": {
+              "const": "succession-attempts"
+            },
+            "root": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "table",
+                "rootRevision",
+                "rootDigest",
+                "leafCount"
+              ],
+              "properties": {
+                "table": {
+                  "const": "oauth_retirement_succession_attempts"
+                },
+                "rootRevision": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9223372036854775807
+                },
+                "rootDigest": {
+                  "$ref": "#/$defs/digest"
+                },
+                "leafCount": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 64
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "part",
+            "root"
+          ],
+          "properties": {
+            "part": {
+              "const": "succession-custody"
+            },
+            "root": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "table",
+                "rootRevision",
+                "rootDigest",
+                "leafCount"
+              ],
+              "properties": {
+                "table": {
+                  "const": "oauth_measured_succession_custody"
+                },
+                "rootRevision": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9223372036854775807
+                },
+                "rootDigest": {
+                  "$ref": "#/$defs/digest"
+                },
+                "leafCount": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 64
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "part",
+            "root"
+          ],
+          "properties": {
+            "part": {
+              "const": "succession-materials"
+            },
+            "root": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "table",
+                "rootRevision",
+                "rootDigest",
+                "leafCount"
+              ],
+              "properties": {
+                "table": {
+                  "const": "oauth_retirement_succession_materials"
+                },
+                "rootRevision": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9223372036854775807
+                },
+                "rootDigest": {
+                  "$ref": "#/$defs/digest"
+                },
+                "leafCount": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 64
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "part",
+            "root"
+          ],
+          "properties": {
+            "part": {
+              "const": "work"
+            },
+            "root": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "table",
+                "rootRevision",
+                "rootDigest",
+                "leafCount"
+              ],
+              "properties": {
+                "table": {
+                  "const": "oauth_revocation_work"
+                },
+                "rootRevision": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9223372036854775807
+                },
+                "rootDigest": {
+                  "$ref": "#/$defs/digest"
+                },
+                "leafCount": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 16
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "authorization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "sourceRevision",
+        "purpose",
+        "authorizationId",
+        "configurationDigest",
+        "deploymentId",
+        "providerId",
+        "scope",
+        "predecessors",
+        "previousHeadSha256",
+        "credentialId",
+        "credentialVersion",
+        "credentialRowSha256",
+        "generationRowSha256",
+        "providerSubject",
+        "providerAccount",
+        "clientId",
+        "enrollmentSha256",
+        "requesterId",
+        "scopes",
+        "metadataSha256",
+        "affectedLineages",
+        "materials",
+        "exchangeOrigins",
+        "inventoryRoots",
+        "issuedAtEpochNs",
+        "admissionExpiresAtEpochNs",
+        "contactExpiresAtEpochNs",
+        "retentionExpiresAtEpochNs",
+        "pendingExpiresAtEpochNs",
+        "expiresAtEpochNs"
+      ],
+      "properties": {
+        "schema": {
+          "const": "serverware.oauthRetiredScopeSuccessionAuthorization/v1"
+        },
+        "sourceRevision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "purpose": {
+          "const": "measured-oauth-retired-scope-succession"
+        },
+        "authorizationId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "configurationDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "deploymentId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "providerId": {
+          "$ref": "#/$defs/provider"
+        },
+        "scope": {
+          "$ref": "#/$defs/scope"
+        },
+        "predecessors": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 10,
+          "items": {
+            "$ref": "#/$defs/predecessor"
+          }
+        },
+        "previousHeadSha256": {
+          "$ref": "#/$defs/nullableDigest"
+        },
+        "credentialId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "credentialVersion": {
+          "$ref": "#/$defs/version"
+        },
+        "credentialRowSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "generationRowSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "providerSubject": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "providerAccount": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "clientId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "enrollmentSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "requesterId": {
+          "$ref": "#/$defs/actor"
+        },
+        "scopes": {
+          "$ref": "#/$defs/scopes"
+        },
+        "metadataSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "affectedLineages": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 7,
+          "items": {
+            "$ref": "#/$defs/lineage"
+          }
+        },
+        "materials": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 16,
+          "items": {
+            "$ref": "#/$defs/materialPin"
+          }
+        },
+        "exchangeOrigins": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 16,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "exchangeId",
+              "sourceKind",
+              "custodyRowSha256"
+            ],
+            "properties": {
+              "exchangeId": {
+                "$ref": "#/$defs/uuid"
+              },
+              "sourceKind": {
+                "enum": [
+                  "initial",
+                  "setup",
+                  "reconnect",
+                  "succession"
+                ]
+              },
+              "custodyRowSha256": {
+                "$ref": "#/$defs/digest"
+              }
+            }
+          }
+        },
+        "inventoryRoots": {
+          "type": "array",
+          "minItems": 28,
+          "maxItems": 28,
+          "items": {
+            "$ref": "#/$defs/inventoryRoot"
+          }
+        },
+        "issuedAtEpochNs": {
+          "$ref": "#/$defs/epoch"
+        },
+        "admissionExpiresAtEpochNs": {
+          "$ref": "#/$defs/epoch"
+        },
+        "contactExpiresAtEpochNs": {
+          "$ref": "#/$defs/epoch"
+        },
+        "retentionExpiresAtEpochNs": {
+          "$ref": "#/$defs/epoch"
+        },
+        "pendingExpiresAtEpochNs": {
+          "$ref": "#/$defs/epoch"
+        },
+        "expiresAtEpochNs": {
+          "$ref": "#/$defs/epoch"
+        }
+      },
+      "$comment": "Exact31, canonical ASCII payload <=130560 bytes; signed envelope <=131072. Ordered complete roots, origins, materials, predecessors and lineages are source-verified. Target member/pins and scope provider/subject must match. issued < admission <= contact <= retention <= pending <= expires <= issued+3600s; contact-issued <=600s and retention-contact <=600s. Google material selects exactly one token purpose. No timeout, missing row or new grant settles an unknown prior contact."
+    },
+    "signedAuthorization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "payload",
+        "signatureBase64Url"
+      ],
+      "properties": {
+        "schema": {
+          "const": "serverware.signedOAuthRetiredScopeSuccessionAuthorization/v1"
+        },
+        "payload": {
+          "$ref": "#/$defs/authorization"
+        },
+        "signatureBase64Url": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{86}$"
+        }
+      },
+      "$comment": "Independent successor root signs authorization schema ASCII + NUL + canonical ASCII payload."
+    },
+    "inventory": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "authorizations"
+      ],
+      "properties": {
+        "schema": {
+          "const": "serverware.oauthRetiredScopeSuccessionInventory/v1"
+        },
+        "authorizations": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "items": {
+            "$ref": "#/$defs/signedAuthorization"
+          }
+        }
+      },
+      "$comment": "Actual sealed root-owned original <=2105344 bytes. Sorted unique authorization IDs. Browser cannot choose root or inventory."
+    },
+    "successionLimits": {
+      "const": {
+        "materialCapacity": 16,
+        "affectedLineageCapacity": 7,
+        "populationCapacity": 16,
+        "historyCapacity": 64,
+        "authorizationMaxSeconds": 3600
+      }
+    },
+    "assignment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "holderId",
+        "bootId",
+        "keyId",
+        "controlPlaneResponseSigningKeyId",
+        "releaseRecordSha256",
+        "policyHash",
+        "configurationSha256",
+        "caCertificateSha256",
+        "caPublicKeySpkiSha256",
+        "expectedBinaryDigest",
+        "expectedPcrs",
+        "expectedEif",
+        "expectedModuleId",
+        "maxAgeSeconds",
+        "futureSkewSeconds",
+        "instanceId",
+        "providerId",
+        "enrollmentSha256",
+        "applicationMaterialSha256",
+        "secretKekId",
+        "providerTlsRootSha256",
+        "portalOrigin",
+        "callbackOrigin",
+        "enrollmentRootSpkiSha256"
+      ],
+      "properties": {
+        "holderId": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/assignment/properties/holderId"
+        },
+        "bootId": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/assignment/properties/bootId"
+        },
+        "keyId": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/assignment/properties/keyId"
+        },
+        "controlPlaneResponseSigningKeyId": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/assignment/properties/controlPlaneResponseSigningKeyId"
+        },
+        "releaseRecordSha256": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/assignment/properties/releaseRecordSha256"
+        },
+        "policyHash": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/assignment/properties/policyHash"
+        },
+        "configurationSha256": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/assignment/properties/configurationSha256"
+        },
+        "caCertificateSha256": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/assignment/properties/caCertificateSha256"
+        },
+        "caPublicKeySpkiSha256": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/assignment/properties/caPublicKeySpkiSha256"
+        },
+        "expectedBinaryDigest": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/assignment/properties/expectedBinaryDigest"
+        },
+        "expectedPcrs": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/assignment/properties/expectedPcrs"
+        },
+        "expectedEif": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/assignment/properties/expectedEif"
+        },
+        "expectedModuleId": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/assignment/properties/expectedModuleId"
+        },
+        "maxAgeSeconds": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/assignment/properties/maxAgeSeconds"
+        },
+        "futureSkewSeconds": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/assignment/properties/futureSkewSeconds"
+        },
+        "instanceId": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/assignment/properties/instanceId"
+        },
+        "providerId": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/assignment/properties/providerId"
+        },
+        "enrollmentSha256": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/assignment/properties/enrollmentSha256"
+        },
+        "applicationMaterialSha256": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/assignment/properties/applicationMaterialSha256"
+        },
+        "secretKekId": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/assignment/properties/secretKekId"
+        },
+        "providerTlsRootSha256": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/assignment/properties/providerTlsRootSha256"
+        },
+        "portalOrigin": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/assignment/properties/portalOrigin"
+        },
+        "callbackOrigin": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/assignment/properties/callbackOrigin"
+        },
+        "enrollmentRootSpkiSha256": {
+          "$ref": "#/$defs/digest"
+        }
+      },
+      "$comment": "Actual signed assignment selected by exact (holderId,enrollmentSha256), not provider alone. Historical root, native key/boot/role-4 measurements, application ciphertext, KEK and provider TLS roots all independently match."
+    },
+    "policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "enrollmentRootPublicKeyBase64Url",
+        "enrollmentRootSpkiSha256",
+        "controlPlaneConfigurationDigest",
+        "deploymentId",
+        "pendingCapacity",
+        "revocationCapacity",
+        "contactMaxSeconds",
+        "retentionMaxSeconds",
+        "pendingMaxSeconds",
+        "operationMaxSeconds",
+        "recoveryMaxSeconds",
+        "trustRoots",
+        "assignments",
+        "successionRootPublicKeyBase64Url",
+        "successionRootSpkiSha256",
+        "historicalEnrollmentRoots",
+        "materialCapacity",
+        "affectedLineageCapacity",
+        "populationCapacity",
+        "historyCapacity",
+        "authorizationMaxSeconds"
+      ],
+      "properties": {
+        "schema": {
+          "const": "serverware.oauthRetiredScopeSuccessionAuthorityPolicy/v1"
+        },
+        "enrollmentRootPublicKeyBase64Url": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/policy/properties/enrollmentRootPublicKeyBase64Url"
+        },
+        "enrollmentRootSpkiSha256": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/policy/properties/enrollmentRootSpkiSha256"
+        },
+        "controlPlaneConfigurationDigest": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/policy/properties/controlPlaneConfigurationDigest"
+        },
+        "deploymentId": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/policy/properties/deploymentId"
+        },
+        "pendingCapacity": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/policy/properties/pendingCapacity"
+        },
+        "revocationCapacity": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/policy/properties/revocationCapacity"
+        },
+        "contactMaxSeconds": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/policy/properties/contactMaxSeconds"
+        },
+        "retentionMaxSeconds": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/policy/properties/retentionMaxSeconds"
+        },
+        "pendingMaxSeconds": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/policy/properties/pendingMaxSeconds"
+        },
+        "operationMaxSeconds": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/policy/properties/operationMaxSeconds"
+        },
+        "recoveryMaxSeconds": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/policy/properties/recoveryMaxSeconds"
+        },
+        "trustRoots": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/policy/properties/trustRoots"
+        },
+        "assignments": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "items": {
+            "$ref": "#/$defs/assignment"
+          }
+        },
+        "successionRootPublicKeyBase64Url": {
+          "$ref": "#/$defs/bytes32"
+        },
+        "successionRootSpkiSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "historicalEnrollmentRoots": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 16,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "publicKeyBase64Url",
+              "spkiSha256"
+            ],
+            "properties": {
+              "publicKeyBase64Url": {
+                "$ref": "#/$defs/bytes32"
+              },
+              "spkiSha256": {
+                "$ref": "#/$defs/digest"
+              }
+            }
+          }
+        },
+        "materialCapacity": {
+          "const": 16
+        },
+        "affectedLineageCapacity": {
+          "const": 7
+        },
+        "populationCapacity": {
+          "const": 16
+        },
+        "historyCapacity": {
+          "const": 64
+        },
+        "authorizationMaxSeconds": {
+          "const": 3600
+        }
+      }
+    },
+    "startup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "sourceRevision",
+        "configurationDigest",
+        "authorityRootFd",
+        "authorityRootSha256",
+        "applications",
+        "retiredScopeSuccession"
+      ],
+      "properties": {
+        "schema": {
+          "const": "serverware.oauthApplicationStartup/v5"
+        },
+        "sourceRevision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "configurationDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "authorityRootFd": {
+          "$ref": "oauth-application-enrollment.v1.schema.json#/$defs/descriptor"
+        },
+        "authorityRootSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "applications": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 2,
+          "items": {
+            "$ref": "oauth-application-enrollment.v1.schema.json#/$defs/application"
+          }
+        },
+        "retiredScopeSuccession": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "rootFd",
+            "rootSha256",
+            "grantsFd",
+            "grantsSha256"
+          ],
+          "properties": {
+            "rootFd": {
+              "$ref": "oauth-application-enrollment.v1.schema.json#/$defs/descriptor"
+            },
+            "rootSha256": {
+              "$ref": "#/$defs/digest"
+            },
+            "grantsFd": {
+              "$ref": "oauth-application-enrollment.v1.schema.json#/$defs/descriptor"
+            },
+            "grantsSha256": {
+              "$ref": "#/$defs/digest"
+            }
+          }
+        }
+      }
+    },
+    "statement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "phase",
+        "holderId",
+        "bootId",
+        "keyId",
+        "controlPlaneResponseSigningKeyId",
+        "deploymentId",
+        "instanceId",
+        "providerId",
+        "enrollmentSha256",
+        "exchangeId",
+        "inputSha256",
+        "challenge",
+        "policyHash",
+        "dataPlaneBinarySha256",
+        "callbackOrigin",
+        "portalOrigin",
+        "ingressLeafCertificateSha256",
+        "ingressLeafSpkiSha256",
+        "issuedAtEpochNs",
+        "expiresAtEpochNs",
+        "authorizationSha256",
+        "scopeRowSha256",
+        "materialId"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeOAuthSuccessionStatement/v1"
+        },
+        "phase": {
+          "enum": [
+            "inspect",
+            "material-claim",
+            "contact",
+            "finish",
+            "recover",
+            "prepare",
+            "claim",
+            "capture",
+            "stage",
+            "cancel"
+          ]
+        },
+        "holderId": {
+          "$ref": "oauth-measured-reconnect-authority.v1.schema.json#/$defs/statement/properties/holderId"
+        },
+        "bootId": {
+          "$ref": "oauth-measured-reconnect-authority.v1.schema.json#/$defs/statement/properties/bootId"
+        },
+        "keyId": {
+          "$ref": "oauth-measured-reconnect-authority.v1.schema.json#/$defs/statement/properties/keyId"
+        },
+        "controlPlaneResponseSigningKeyId": {
+          "$ref": "oauth-measured-reconnect-authority.v1.schema.json#/$defs/statement/properties/controlPlaneResponseSigningKeyId"
+        },
+        "deploymentId": {
+          "$ref": "oauth-measured-reconnect-authority.v1.schema.json#/$defs/statement/properties/deploymentId"
+        },
+        "instanceId": {
+          "$ref": "oauth-measured-reconnect-authority.v1.schema.json#/$defs/statement/properties/instanceId"
+        },
+        "providerId": {
+          "$ref": "oauth-measured-reconnect-authority.v1.schema.json#/$defs/statement/properties/providerId"
+        },
+        "enrollmentSha256": {
+          "$ref": "oauth-measured-reconnect-authority.v1.schema.json#/$defs/statement/properties/enrollmentSha256"
+        },
+        "exchangeId": {
+          "$ref": "oauth-measured-reconnect-authority.v1.schema.json#/$defs/statement/properties/exchangeId"
+        },
+        "inputSha256": {
+          "$ref": "oauth-measured-reconnect-authority.v1.schema.json#/$defs/statement/properties/inputSha256"
+        },
+        "challenge": {
+          "$ref": "oauth-measured-reconnect-authority.v1.schema.json#/$defs/statement/properties/challenge"
+        },
+        "policyHash": {
+          "$ref": "oauth-measured-reconnect-authority.v1.schema.json#/$defs/statement/properties/policyHash"
+        },
+        "dataPlaneBinarySha256": {
+          "$ref": "oauth-measured-reconnect-authority.v1.schema.json#/$defs/statement/properties/dataPlaneBinarySha256"
+        },
+        "callbackOrigin": {
+          "$ref": "oauth-measured-reconnect-authority.v1.schema.json#/$defs/statement/properties/callbackOrigin"
+        },
+        "portalOrigin": {
+          "$ref": "oauth-measured-reconnect-authority.v1.schema.json#/$defs/statement/properties/portalOrigin"
+        },
+        "ingressLeafCertificateSha256": {
+          "$ref": "oauth-measured-reconnect-authority.v1.schema.json#/$defs/statement/properties/ingressLeafCertificateSha256"
+        },
+        "ingressLeafSpkiSha256": {
+          "$ref": "oauth-measured-reconnect-authority.v1.schema.json#/$defs/statement/properties/ingressLeafSpkiSha256"
+        },
+        "issuedAtEpochNs": {
+          "$ref": "oauth-measured-reconnect-authority.v1.schema.json#/$defs/statement/properties/issuedAtEpochNs"
+        },
+        "expiresAtEpochNs": {
+          "$ref": "oauth-measured-reconnect-authority.v1.schema.json#/$defs/statement/properties/expiresAtEpochNs"
+        },
+        "authorizationSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "scopeRowSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "materialId": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/uuid"
+            }
+          ]
+        }
+      },
+      "$comment": "Exact24. Literal prepare (never draft). Own nativeOAuthRetiredScopeSuccession.sign/v1; signature domain schema+NUL. NSM nonce SHA256(serverware/native-oauth-retired-scope-succession-attestation/v1+NUL || challenge32 || SHA256(statement) || signature64). Phase input SHA binds exact arguments except native_evidence. Whole original operation <=30s, clipped to grant."
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "statement",
+        "signature",
+        "nativeKeyEvidence"
+      ],
+      "properties": {
+        "statement": {
+          "$ref": "#/$defs/statement"
+        },
+        "signature": {
+          "type": "string",
+          "pattern": "^ed25519:[A-Za-z0-9_-]{86}$"
+        },
+        "nativeKeyEvidence": {
+          "$ref": "credential-currentness-authority.v1.schema.json#/$defs/nativeKeyEvidence"
+        }
+      }
+    },
+    "inspect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scopeRowSha256",
+        "materialId",
+        "issuedAtEpochNs",
+        "expiresAtEpochNs"
+      ],
+      "properties": {
+        "scopeRowSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "materialId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "issuedAtEpochNs": {
+          "$ref": "#/$defs/epoch"
+        },
+        "expiresAtEpochNs": {
+          "$ref": "#/$defs/epoch"
+        }
+      }
+    },
+    "material-claim": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scopeRowSha256",
+        "materialId",
+        "materialOriginalSha256",
+        "ownerNonceSha256"
+      ],
+      "properties": {
+        "scopeRowSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "materialId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "materialOriginalSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "ownerNonceSha256": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "contact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scopeRowSha256",
+        "materialId",
+        "materialRowSha256",
+        "ownerNonce",
+        "tokenPurpose",
+        "contactRequestSha256"
+      ],
+      "properties": {
+        "scopeRowSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "materialId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "materialRowSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "ownerNonce": {
+          "$ref": "#/$defs/bytes32"
+        },
+        "tokenPurpose": {
+          "enum": [
+            "access",
+            "refresh"
+          ]
+        },
+        "contactRequestSha256": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "finish": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scopeRowSha256",
+        "materialId",
+        "attemptRowSha256",
+        "ownerNonce",
+        "tokenPurpose",
+        "transportOriginal"
+      ],
+      "properties": {
+        "scopeRowSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "materialId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "attemptRowSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "ownerNonce": {
+          "$ref": "#/$defs/bytes32"
+        },
+        "tokenPurpose": {
+          "enum": [
+            "access",
+            "refresh"
+          ]
+        },
+        "transportOriginal": {
+          "$ref": "#/$defs/encoded",
+          "maxLength": 524288
+        }
+      }
+    },
+    "recover": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scopeRowSha256",
+        "materialId",
+        "custodyRowSha256",
+        "issuedAtEpochNs",
+        "expiresAtEpochNs"
+      ],
+      "properties": {
+        "scopeRowSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "materialId": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/uuid"
+            }
+          ]
+        },
+        "custodyRowSha256": {
+          "$ref": "#/$defs/nullableDigest"
+        },
+        "issuedAtEpochNs": {
+          "$ref": "#/$defs/epoch"
+        },
+        "expiresAtEpochNs": {
+          "$ref": "#/$defs/epoch"
+        }
+      }
+    },
+    "prepare": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "exchangeId",
+        "stateSha256",
+        "browserNonceSha256",
+        "pkceVerifierSha256",
+        "stateOriginalSha256",
+        "stateEnvelope",
+        "reservedEnvelope",
+        "providerId",
+        "redirectUri",
+        "credentialName",
+        "scopes",
+        "metadata",
+        "issuedAtEpochNs",
+        "contactExpiresAtEpochNs",
+        "retentionExpiresAtEpochNs",
+        "pendingExpiresAtEpochNs",
+        "enrollmentSha256",
+        "limits",
+        "pkceChallenge",
+        "portalOrigin",
+        "callbackOrigin",
+        "scopeRowSha256"
+      ],
+      "properties": {
+        "exchangeId": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/prepare/properties/exchangeId"
+        },
+        "stateSha256": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/prepare/properties/stateSha256"
+        },
+        "browserNonceSha256": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/prepare/properties/browserNonceSha256"
+        },
+        "pkceVerifierSha256": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/prepare/properties/pkceVerifierSha256"
+        },
+        "stateOriginalSha256": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/prepare/properties/stateOriginalSha256"
+        },
+        "stateEnvelope": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/prepare/properties/stateEnvelope"
+        },
+        "reservedEnvelope": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/prepare/properties/reservedEnvelope"
+        },
+        "providerId": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/prepare/properties/providerId"
+        },
+        "redirectUri": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/prepare/properties/redirectUri"
+        },
+        "credentialName": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/prepare/properties/credentialName"
+        },
+        "scopes": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/prepare/properties/scopes"
+        },
+        "metadata": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/prepare/properties/metadata"
+        },
+        "issuedAtEpochNs": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/prepare/properties/issuedAtEpochNs"
+        },
+        "contactExpiresAtEpochNs": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/prepare/properties/contactExpiresAtEpochNs"
+        },
+        "retentionExpiresAtEpochNs": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/prepare/properties/retentionExpiresAtEpochNs"
+        },
+        "pendingExpiresAtEpochNs": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/prepare/properties/pendingExpiresAtEpochNs"
+        },
+        "enrollmentSha256": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/prepare/properties/enrollmentSha256"
+        },
+        "limits": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/prepare/properties/limits"
+        },
+        "pkceChallenge": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/prepare/properties/pkceChallenge"
+        },
+        "portalOrigin": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/prepare/properties/portalOrigin"
+        },
+        "callbackOrigin": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/prepare/properties/callbackOrigin"
+        },
+        "scopeRowSha256": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "claim": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "exchangeId",
+        "exchangeRowSha256",
+        "ownerNonceSha256",
+        "callbackSha256",
+        "callbackEnvelope",
+        "codeSha256",
+        "contactRequestSha256",
+        "limits",
+        "scopeRowSha256"
+      ],
+      "properties": {
+        "exchangeId": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/claim/properties/exchangeId"
+        },
+        "exchangeRowSha256": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/claim/properties/exchangeRowSha256"
+        },
+        "ownerNonceSha256": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/claim/properties/ownerNonceSha256"
+        },
+        "callbackSha256": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/claim/properties/callbackSha256"
+        },
+        "callbackEnvelope": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/claim/properties/callbackEnvelope"
+        },
+        "codeSha256": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/claim/properties/codeSha256"
+        },
+        "contactRequestSha256": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/claim/properties/contactRequestSha256"
+        },
+        "limits": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/claim/properties/limits"
+        },
+        "scopeRowSha256": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "capture": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "exchangeId",
+        "exchangeRowSha256",
+        "ownerNonce",
+        "rawResponseSha256",
+        "rawResponseEnvelope",
+        "issuedMaterialSha256",
+        "issuedMaterialEnvelope",
+        "receivedAtEpochNs",
+        "limits",
+        "scopeRowSha256"
+      ],
+      "properties": {
+        "exchangeId": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/capture/properties/exchangeId"
+        },
+        "exchangeRowSha256": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/capture/properties/exchangeRowSha256"
+        },
+        "ownerNonce": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/capture/properties/ownerNonce"
+        },
+        "rawResponseSha256": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/capture/properties/rawResponseSha256"
+        },
+        "rawResponseEnvelope": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/capture/properties/rawResponseEnvelope"
+        },
+        "issuedMaterialSha256": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/capture/properties/issuedMaterialSha256"
+        },
+        "issuedMaterialEnvelope": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/capture/properties/issuedMaterialEnvelope"
+        },
+        "receivedAtEpochNs": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/capture/properties/receivedAtEpochNs"
+        },
+        "limits": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/capture/properties/limits"
+        },
+        "scopeRowSha256": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "stage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "exchangeId",
+        "exchangeRowSha256",
+        "ownerNonce",
+        "tokenSecretSha256",
+        "tokenEnvelope",
+        "identityRawSha256",
+        "identityRawEnvelope",
+        "metadata",
+        "review",
+        "payloadDigest",
+        "recoveryRequestDigest",
+        "limits",
+        "scopeRowSha256"
+      ],
+      "properties": {
+        "exchangeId": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/stage/properties/exchangeId"
+        },
+        "exchangeRowSha256": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/stage/properties/exchangeRowSha256"
+        },
+        "ownerNonce": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/stage/properties/ownerNonce"
+        },
+        "tokenSecretSha256": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/stage/properties/tokenSecretSha256"
+        },
+        "tokenEnvelope": {
+          "$ref": "#/$defs/replacementEnvelope"
+        },
+        "identityRawSha256": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/stage/properties/identityRawSha256"
+        },
+        "identityRawEnvelope": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/stage/properties/identityRawEnvelope"
+        },
+        "metadata": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/stage/properties/metadata"
+        },
+        "review": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/stage/properties/review"
+        },
+        "payloadDigest": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/stage/properties/payloadDigest"
+        },
+        "recoveryRequestDigest": {
+          "type": "null"
+        },
+        "limits": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/stage/properties/limits"
+        },
+        "scopeRowSha256": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "cancel": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "exchangeId",
+        "exchangeRowSha256",
+        "callbackSha256",
+        "callbackEnvelope",
+        "limits",
+        "scopeRowSha256"
+      ],
+      "properties": {
+        "exchangeId": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/cancel/properties/exchangeId"
+        },
+        "exchangeRowSha256": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/cancel/properties/exchangeRowSha256"
+        },
+        "callbackSha256": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/cancel/properties/callbackSha256"
+        },
+        "callbackEnvelope": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/cancel/properties/callbackEnvelope"
+        },
+        "limits": {
+          "$ref": "native-oauth-measured-exchange.v1.schema.json#/$defs/cancel/properties/limits"
+        },
+        "scopeRowSha256": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "barrier": {
+      "$ref": "oauth-measured-pending-retirement-authority.v1.schema.json#/$defs/barrier"
+    },
+    "authorize": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "authorizationSha256",
+        "credentialId",
+        "credentialVersion"
+      ],
+      "properties": {
+        "authorizationSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "credentialId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "credentialVersion": {
+          "$ref": "#/$defs/version"
+        }
+      }
+    },
+    "decide": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "authorizationSha256",
+        "authorizationRowSha256"
+      ],
+      "properties": {
+        "authorizationSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "authorizationRowSha256": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "fence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "authorizationRowSha256",
+        "currentnessBarriers",
+        "issuedAtEpochNs",
+        "expiresAtEpochNs"
+      ],
+      "properties": {
+        "authorizationRowSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "currentnessBarriers": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 7,
+          "items": {
+            "$ref": "#/$defs/barrier"
+          }
+        },
+        "issuedAtEpochNs": {
+          "$ref": "#/$defs/epoch"
+        },
+        "expiresAtEpochNs": {
+          "$ref": "#/$defs/epoch"
+        }
+      }
+    },
+    "snapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "authorizationRowSha256"
+      ],
+      "properties": {
+        "authorizationRowSha256": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "activation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "authorizationSha256",
+        "candidateSha256"
+      ],
+      "properties": {
+        "authorizationSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "candidateSha256": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "humanArguments": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "action",
+        "resource_id",
+        "payload_digest",
+        "actor_id",
+        "request",
+        "approval_id",
+        "credential_policy",
+        "enrollment_original",
+        "authorization_original"
+      ],
+      "properties": {
+        "action": {
+          "const": "credential.oauth.retirement-succession"
+        },
+        "resource_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "payload_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "actor_id": {
+          "$ref": "#/$defs/actor"
+        },
+        "request": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/authorize"
+            },
+            {
+              "$ref": "#/$defs/decide"
+            },
+            {
+              "$ref": "#/$defs/fence"
+            },
+            {
+              "$ref": "#/$defs/snapshot"
+            },
+            {
+              "$ref": "#/$defs/activation"
+            }
+          ]
+        },
+        "approval_id": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/uuid"
+            }
+          ]
+        },
+        "credential_policy": {
+          "$ref": "#/$defs/credentialPolicy"
+        },
+        "enrollment_original": {
+          "$ref": "#/$defs/enrollmentOriginal"
+        },
+        "authorization_original": {
+          "$ref": "#/$defs/authorizationOriginal"
+        }
+      }
+    },
+    "arguments": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "action",
+        "resource_id",
+        "payload_digest",
+        "actor_id",
+        "request",
+        "approval_id",
+        "credential_policy",
+        "enrollment_original",
+        "authorization_original",
+        "control_plane_configuration_digest",
+        "assignment_original",
+        "native_evidence"
+      ],
+      "properties": {
+        "action": {
+          "const": "credential.oauth.measured-succession"
+        },
+        "resource_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "payload_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "actor_id": {
+          "$ref": "#/$defs/actor"
+        },
+        "request": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/inspect"
+            },
+            {
+              "$ref": "#/$defs/material-claim"
+            },
+            {
+              "$ref": "#/$defs/contact"
+            },
+            {
+              "$ref": "#/$defs/finish"
+            },
+            {
+              "$ref": "#/$defs/recover"
+            },
+            {
+              "$ref": "#/$defs/prepare"
+            },
+            {
+              "$ref": "#/$defs/claim"
+            },
+            {
+              "$ref": "#/$defs/capture"
+            },
+            {
+              "$ref": "#/$defs/stage"
+            },
+            {
+              "$ref": "#/$defs/cancel"
+            }
+          ]
+        },
+        "approval_id": {
+          "type": "null"
+        },
+        "credential_policy": {
+          "$ref": "#/$defs/credentialPolicy"
+        },
+        "enrollment_original": {
+          "$ref": "#/$defs/enrollmentOriginal"
+        },
+        "authorization_original": {
+          "$ref": "#/$defs/authorizationOriginal"
+        },
+        "control_plane_configuration_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "assignment_original": {
+          "$ref": "#/$defs/assignment"
+        },
+        "native_evidence": {
+          "$ref": "#/$defs/evidence"
+        }
+      }
+    },
+    "httpRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "operation",
+        "arguments"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeOAuthSuccessionRequest/v1"
+        },
+        "operation": {
+          "enum": [
+            "oauth.measured-succession.inspect",
+            "oauth.measured-succession.material-claim",
+            "oauth.measured-succession.contact",
+            "oauth.measured-succession.finish",
+            "oauth.measured-succession.recover",
+            "oauth.measured-succession.prepare",
+            "oauth.measured-succession.claim",
+            "oauth.measured-succession.capture",
+            "oauth.measured-succession.stage",
+            "oauth.measured-succession.cancel"
+          ]
+        },
+        "arguments": {
+          "$ref": "#/$defs/arguments"
+        }
+      },
+      "$comment": "Complete canonical request <=3MiB, arguments <=2MiB; exact operation/request/phase equality is independently enforced. Fixed actual data-plane transport owner and native proof both mandatory."
+    },
+    "httpResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "requestOriginal",
+        "responseOriginal"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeOAuthSuccessionResponse/v1"
+        },
+        "requestOriginal": {
+          "$ref": "#/$defs/encoded",
+          "maxLength": 4194304
+        },
+        "responseOriginal": {
+          "$ref": "#/$defs/encoded",
+          "maxLength": 3844779
+        }
+      },
+      "$comment": "Complete envelope <=8MiB; actual raw runtime response <=2883584 bytes. No response or result DTO grants effects."
+    },
+    "original": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 4194304
+    },
+    "nullableOriginal": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/original"
+        }
+      ]
+    },
+    "nullableCandidateOriginal": {
+      "oneOf": [
+        {"type": "null"},
+        {"$ref": "#/$defs/original", "maxLength": 524288}
+      ]
+    },
+    "resultOriginals": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "journalOriginal",
+        "scopeOriginal",
+        "headOriginal",
+        "exchangeOriginal",
+        "custodyOriginal",
+        "candidateOriginal",
+        "associationOriginal",
+        "materialOriginals",
+        "attemptOriginals"
+      ],
+      "properties": {
+        "journalOriginal": {
+          "$ref": "#/$defs/original"
+        },
+        "scopeOriginal": {
+          "$ref": "#/$defs/nullableOriginal"
+        },
+        "headOriginal": {
+          "$ref": "#/$defs/nullableOriginal"
+        },
+        "exchangeOriginal": {
+          "$ref": "#/$defs/nullableOriginal"
+        },
+        "custodyOriginal": {
+          "$ref": "#/$defs/nullableOriginal"
+        },
+        "candidateOriginal": {
+          "$ref": "#/$defs/nullableCandidateOriginal"
+        },
+        "associationOriginal": {
+          "$ref": "#/$defs/nullableOriginal"
+        },
+        "materialOriginals": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 16,
+          "items": {
+            "$ref": "#/$defs/original"
+          }
+        },
+        "attemptOriginals": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 32,
+          "items": {
+            "$ref": "#/$defs/original"
+          }
+        }
+      }
+    },
+    "observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "approval",
+        "snapshotOriginal",
+        "materialOriginal",
+        "contactDisposition",
+        "closureSha256"
+      ],
+      "properties": {
+        "status": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            }
+          ]
+        },
+        "approval": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+            "$ref": "#/$defs/publicApproval"
+            }
+          ]
+        },
+        "snapshotOriginal": {
+          "$ref": "#/$defs/nullableOriginal"
+        },
+        "materialOriginal": {
+          "$ref": "#/$defs/nullableOriginal"
+        },
+        "contactDisposition": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "enum": [
+                "observation-only",
+                "not-contact-authority",
+                "contact-claimed",
+                "accepted-existing",
+                "observed-accepted",
+                "observed-rejected",
+                "observed-unknown"
+              ]
+            }
+          ]
+        },
+        "closureSha256": {
+          "$ref": "#/$defs/nullableDigest"
+        }
+      }
+    },
+    "result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ok",
+        "operation",
+        "requestDigest",
+        "auditEventDigest",
+        "idempotentReplay",
+        "originals",
+        "observation"
+      ],
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "operation": {
+          "enum": [
+            "oauth.succession.authorize",
+            "oauth.succession.decide",
+            "oauth.succession.fence",
+            "oauth.succession.activation-request",
+            "oauth.succession.activation-decide",
+            "oauth.succession.activate",
+            "oauth.succession.snapshot.credentials",
+            "oauth.succession.snapshot.pending",
+            "oauth.succession.snapshot.setup",
+            "oauth.succession.snapshot.exchanges",
+            "oauth.succession.snapshot.refreshes",
+            "oauth.succession.snapshot.work",
+            "oauth.succession.snapshot.initial-custody",
+            "oauth.succession.snapshot.setup-custody",
+            "oauth.succession.snapshot.reconnect-custody",
+            "oauth.succession.snapshot.succession-custody",
+            "oauth.succession.snapshot.refresh-custody",
+            "oauth.succession.snapshot.exchange-cleanup",
+            "oauth.succession.snapshot.exchange-attempts",
+            "oauth.succession.snapshot.refresh-cleanup",
+            "oauth.succession.snapshot.refresh-attempts",
+            "oauth.succession.snapshot.refresh-cleanup-custody",
+            "oauth.succession.snapshot.pending-cleanup",
+            "oauth.succession.snapshot.pending-attempts",
+            "oauth.succession.snapshot.pending-cleanup-custody",
+            "oauth.succession.snapshot.capture-cleanup",
+            "oauth.succession.snapshot.capture-attempts",
+            "oauth.succession.snapshot.capture-cleanup-custody",
+            "oauth.succession.snapshot.family-fences",
+            "oauth.succession.snapshot.pending-fences",
+            "oauth.succession.snapshot.provider-fences",
+            "oauth.succession.snapshot.reconnect-authorizations",
+            "oauth.succession.snapshot.succession-materials",
+            "oauth.succession.snapshot.succession-attempts",
+            "oauth.measured-succession.inspect",
+            "oauth.measured-succession.material-claim",
+            "oauth.measured-succession.contact",
+            "oauth.measured-succession.finish",
+            "oauth.measured-succession.recover",
+            "oauth.measured-succession.prepare",
+            "oauth.measured-succession.claim",
+            "oauth.measured-succession.capture",
+            "oauth.measured-succession.stage",
+            "oauth.measured-succession.cancel"
+          ]
+        },
+        "requestDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "auditEventDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "idempotentReplay": {
+          "const": false
+        },
+        "originals": {
+          "$ref": "#/$defs/resultOriginals"
+        },
+        "observation": {
+          "$ref": "#/$defs/observation"
+        }
+      },
+      "$comment": "Exact7 with originals9 and observation6; canonical kernel result <=1MiB BEFORE protected effects commit. Raw originals are canonical ASCII strings, never base64. Actual signed response verifies whole request frame/result/configuration. Missing association means unknown, never completion."
+    },
+    "recoveryOriginalRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "authorizationId"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeOAuthSuccessionRecoveryOriginalRequest/v1"
+        },
+        "authorizationId": {
+          "$ref": "#/$defs/uuid"
+        }
+      }
+    },
+    "recoveryOriginalResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "okForAction",
+        "journalOriginal",
+        "scopeOriginal",
+        "materialOriginals",
+        "attemptOriginals",
+        "exchangeOriginal",
+        "custodyOriginal",
+        "candidateOriginal"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeOAuthSuccessionRecoveryOriginalResponse/v1"
+        },
+        "okForAction": {
+          "const": false
+        },
+        "journalOriginal": {
+          "$ref": "#/$defs/original"
+        },
+        "scopeOriginal": {
+          "$ref": "#/$defs/original"
+        },
+        "materialOriginals": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 16,
+          "items": {
+            "$ref": "#/$defs/original"
+          }
+        },
+        "attemptOriginals": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 32,
+          "items": {
+            "$ref": "#/$defs/original"
+          }
+        },
+        "exchangeOriginal": {
+          "$ref": "#/$defs/nullableOriginal"
+        },
+        "custodyOriginal": {
+          "$ref": "#/$defs/nullableOriginal"
+        },
+        "candidateOriginal": {
+          "$ref": "#/$defs/nullableCandidateOriginal"
+        }
+      },
+      "$comment": "Read-only <=1MiB. Fresh recover native proof observes retained state only. It cannot reconstruct a lost fence/contact acknowledgement, processing nonce or contact authority."
+    },
+    "intent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "providerId",
+        "requesterId",
+        "credentialName",
+        "scopes",
+        "metadata",
+        "credentialPolicy",
+        "authorizationOriginal",
+        "scopeRequestOriginal",
+        "scopeResponseOriginal"
+      ],
+      "properties": {
+        "schema": {
+          "const": "serverware.nativeOAuthSuccessionIntent/v1"
+        },
+        "providerId": {
+          "$ref": "#/$defs/provider"
+        },
+        "requesterId": {
+          "$ref": "#/$defs/actor"
+        },
+        "credentialName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "scopes": {
+          "$ref": "#/$defs/scopes"
+        },
+        "metadata": {
+          "type": "object"
+        },
+        "credentialPolicy": {
+          "$ref": "#/$defs/credentialPolicy"
+        },
+        "authorizationOriginal": {
+          "$ref": "#/$defs/authorizationOriginal"
+        },
+        "scopeRequestOriginal": {
+          "$ref": "#/$defs/encoded",
+          "maxLength": 4194304
+        },
+        "scopeResponseOriginal": {
+          "$ref": "#/$defs/encoded",
+          "maxLength": 3844779
+        }
+      },
+      "$comment": "Direct purpose-selected /oauth/begin#original=base64url(canonical intent), complete <=8MiB including outer helper framing (no generic frame widening). Native independently verifies original root/configuration/signatures, full FENCE request/result/journal/scope/all-before-roots binding, and original grant. Scope closure requires every exact material contact accepted or genuinely accepted-existing before PKCE/fresh PREPARE; no old-purpose conversion. Trusted-host-local controlled-writer receipt is not native TEE custody evidence."
+    },
+    "successionBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "authorizationSha256",
+        "scopeRowSha256",
+        "materialClosureSha256",
+        "credentialId",
+        "credentialVersion",
+        "providerSubject",
+        "providerAccount",
+        "expiresAtEpochNs"
+      ],
+      "properties": {
+        "authorizationSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "scopeRowSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "materialClosureSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "credentialId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "credentialVersion": {
+          "$ref": "#/$defs/version"
+        },
+        "providerSubject": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "providerAccount": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "expiresAtEpochNs": {
+          "$ref": "#/$defs/epoch"
+        }
+      },
+      "$comment": "Private nativeOAuthSuccessionState/v1 uses unchanged21 scalar names plus successionBinding8. Full grant/fence/material originals stay separately retained, not squeezed into private64KiB state. Credential sealing AAD is exact target UUID and N+1."
+    },
+    "publicApproval": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "action", "resource_id", "payload_digest", "status", "requester_id", "requested_at", "expires_at", "approved_by", "approved_at", "consumed_by", "consumed_at", "decision_note", "approver_webauthn_credential_id", "request"],
+      "properties": {
+        "id": {"$ref": "#/$defs/uuid"}, "action": {"const": "credential.oauth.retirement-succession"},
+        "resource_id": {"$ref": "#/$defs/uuid"}, "payload_digest": {"$ref": "#/$defs/digest"},
+        "status": {"enum": ["pending", "approved", "consumed"]}, "requester_id": {"$ref": "#/$defs/actor"},
+        "requested_at": {"type": "string", "minLength": 1, "maxLength": 128}, "expires_at": {"type": "string", "minLength": 1, "maxLength": 128},
+        "approved_by": {"type": ["null", "string"], "maxLength": 512}, "approved_at": {"type": ["null", "string"], "maxLength": 128},
+        "consumed_by": {"type": ["null", "string"], "maxLength": 512}, "consumed_at": {"type": ["null", "string"], "maxLength": 128},
+        "decision_note": {"type": ["null", "string"], "maxLength": 4096}, "approver_webauthn_credential_id": {"type": ["null", "string"], "maxLength": 1024},
+        "request": {"type": "object", "additionalProperties": false, "required": ["purpose", "authorizationSha256", "candidateSha256"],
+          "properties": {"purpose": {"enum": ["scope-fence", "activate-generation"]}, "authorizationSha256": {"$ref": "#/$defs/digest"}, "candidateSha256": {"$ref": "#/$defs/nullableDigest"}}}
+      }
+    },
+    "transport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "requestSha256",
+        "receivedAtEpochNs",
+        "status",
+        "rawResponseSha256",
+        "rawResponseEnvelope"
+      ],
+      "properties": {
+        "schema": {
+          "const": "serverware.nativeOAuthSuccessionTransport/v1"
+        },
+        "requestSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "receivedAtEpochNs": {
+          "$ref": "#/$defs/epoch"
+        },
+        "status": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "integer",
+              "minimum": 200,
+              "maximum": 599
+            }
+          ]
+        },
+        "rawResponseSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "rawResponseEnvelope": {
+          "$ref": "#/$defs/envelope"
+        }
+      },
+      "$comment": "Canonical <=384KiB. Actual measured fixed provider TLS determines accepted/rejected/unknown. Neither status DTO nor unchanged/unequal token bytes is isolation authority."
+    }
+  }
+}

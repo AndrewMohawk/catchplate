@@ -8,6 +8,7 @@ from serverware import authority_oauth_exchange as exchange
 from serverware import authority_oauth_inventory as inventory
 from serverware import authority_oauth_family_retirement as family
 from serverware import authority_oauth_provider_retirement as provider_retirement
+from serverware import authority_oauth_retirement_succession_current as succession
 from serverware import authority_credential_currentness as current
 from serverware import authority_transition_credential_currentness as currentness
 from serverware import authority_transition_core as core
@@ -104,6 +105,8 @@ class ReconnectKernel:
             key={"id": identifier}, require_absence=self.operation == profile.OP_AUTHORIZE),
             shared._role_query(self.operation, "actor_role", values["actor_id"]),
             provider_retirement.query(self.operation, expected["providerId"])]
+        if self.operation in succession.GUARDED_OPERATIONS:
+            result.append(succession.query(self.operation, expected["providerId"]))
         if self.operation == profile.OP_AUTHORIZE:
             result.append(_population(self.operation, profile.JOURNAL_TABLE))
         if self.operation == profile.OP_FENCE:
@@ -156,6 +159,8 @@ class ReconnectKernel:
         values = profile.arguments(self.operation, context.arguments, typed=True); expected = rows.grant(values)
         now = shared._database_epoch_ns(context.database_now); stamp = context.database_now.isoformat()
         profile.require(expected["issuedAtEpochNs"] <= now < expected["expiresAtEpochNs"])
+        if self.operation in succession.GUARDED_OPERATIONS:
+            succession.require_unassigned(context, expected["providerId"])
         provider_retirement.require_open(context, expected["providerId"])
         shared._require_role(context, subject_id=values["actor_id"], required_role="credential_owner")
         mutations, custody, exchanged, candidate, extra = [], None, None, None, {}

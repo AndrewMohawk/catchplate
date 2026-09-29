@@ -521,13 +521,14 @@ def _open_oauth_application_material(config_fd, *, occupied_descriptors):
         return result
     config = json.loads(raw.decode("ascii"), object_pairs_hook=pairs)
     if (type(config) is not dict or set(config) != ({"schema", "sourceRevision", "configurationDigest",
-            "authorityRootFd", "authorityRootSha256", "applications"} | ({"reconnect"} if config.get("schema") == "serverware.oauthApplicationStartup/v4" else set()))
-            or config["schema"] not in {"serverware.oauthApplicationStartup/v1", "serverware.oauthApplicationStartup/v2", "serverware.oauthApplicationStartup/v3", "serverware.oauthApplicationStartup/v4"}
+            "authorityRootFd", "authorityRootSha256", "applications"} | ({"reconnect"} if config.get("schema") == "serverware.oauthApplicationStartup/v4" else
+                {"retiredScopeSuccession"} if config.get("schema") == "serverware.oauthApplicationStartup/v5" else set()))
+            or config["schema"] not in {"serverware.oauthApplicationStartup/v1", "serverware.oauthApplicationStartup/v2", "serverware.oauthApplicationStartup/v3", "serverware.oauthApplicationStartup/v4", "serverware.oauthApplicationStartup/v5"}
             or json.dumps(config, ensure_ascii=True, allow_nan=False, sort_keys=True, separators=(",", ":")).encode("ascii") != raw
             or type(config["applications"]) is not list or len(config["applications"]) > 2):
         raise RuntimeError("OAuth application startup shape is not exact")
     if not config["applications"]:
-        if config["authorityRootFd"] is not None or config["authorityRootSha256"] is not None or config["schema"] == "serverware.oauthApplicationStartup/v4":
+        if config["authorityRootFd"] is not None or config["authorityRootSha256"] is not None or config["schema"] in {"serverware.oauthApplicationStartup/v4", "serverware.oauthApplicationStartup/v5"}:
             raise RuntimeError("disabled OAuth startup has an authority root")
         return ()
     selected = [(config["authorityRootFd"], "/run/serverware/authority-trust/oauth-application-root-public-key", 4096, False)]
@@ -537,6 +538,12 @@ def _open_oauth_application_material(config_fd, *, occupied_descriptors):
             raise RuntimeError("reconnect cold inventory shape differs")
         selected.extend(((item["rootFd"], "/run/serverware/authority-trust/oauth-reconnect-root-public-key", 4096, False),
             (item["grantsFd"], "/run/serverware/authority-trust/oauth-reconnect-authorizations.json", 1024 * 1024, False)))
+    if config["schema"] == "serverware.oauthApplicationStartup/v5":
+        item = config["retiredScopeSuccession"]
+        if type(item) is not dict or set(item) != {"rootFd", "rootSha256", "grantsFd", "grantsSha256"}:
+            raise RuntimeError("retired-scope succession cold inventory shape differs")
+        selected.extend(((item["rootFd"], "/run/serverware/authority-trust/oauth-retired-scope-succession-root-public-key", 4096, False),
+            (item["grantsFd"], "/run/serverware/authority-trust/oauth-retired-scope-succession-authorizations.json", 2 * 1024 * 1024 + 8192, False)))
     providers = set()
     for entry in config["applications"]:
         if type(entry) is not dict or set(entry) != {"enrollment", "clientMaterialFd"}:

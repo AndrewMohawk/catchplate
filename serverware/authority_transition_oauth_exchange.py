@@ -17,6 +17,7 @@ from serverware import authority_oauth_exchange as profile
 from serverware import authority_oauth_inventory as inventory
 from serverware import authority_oauth_family_retirement as family
 from serverware import authority_oauth_provider_retirement as provider_retirement
+from serverware import authority_oauth_retirement_succession_current as succession
 from serverware import authority_transition_core as core
 from serverware import authority_transition_oauth_activation as activation_kernel
 from serverware import authority_transition_quota as shared
@@ -179,6 +180,8 @@ class OAuthExchangeKernel:
             provider_retirement.query(self.operation, provider),
             shared._query(operation=self.operation, name="work", table="oauth_revocation_work", key={"id": item_id}, require_absence=self.operation == profile.OP_PREPARE),
             shared._role_query(self.operation, "actor_role", values["actor_id"])]
+        if self.operation in succession.GUARDED_OPERATIONS:
+            queries.append(succession.query(self.operation, provider))
         if self.operation == profile.OP_PREPARE:
             for name, table, field in (("assertion_credential", "webauthn_credentials", "credentialRecordId"), ("assertion_challenge", "webauthn_challenges", "challengeId")):
                 core.require_text(evidence.get(field), field, maximum_bytes=1024)
@@ -201,6 +204,8 @@ class OAuthExchangeKernel:
         now = context.database_now.astimezone(timezone.utc)
         now_s, now_ns = now.isoformat(), shared._database_epoch_ns(now)
         payload, association = _enrollment(values, now_ns)
+        if self.operation in succession.GUARDED_OPERATIONS:
+            succession.require_unassigned(context, payload["providerId"])
         if self.operation != profile.OP_RETAIN:
             provider_retirement.require_open(context, payload["providerId"])
         shared._require_role(context, subject_id=actor, required_role="credential_owner")

@@ -5,6 +5,7 @@ There is no provider call here; a contact reservation is irreversible even when
 the helper/transport subsequently disappears. Recovery cannot create a contact.
 """
 from dataclasses import dataclass
+from serverware import authority_oauth_retirement_succession_current as succession
 from types import MappingProxyType
 
 from serverware import authority_oauth_measured_pending_retirement as profile
@@ -234,6 +235,8 @@ class PendingRetirementKernel:
         # + exact history/journal/custody/pending/fences7 + attempts2 + audit1
         # =246, plus the separately source-owned audit-capacity read if selected.
         queries = list(family.population_queries(self.operation))
+        if self.operation in succession.GUARDED_OPERATIONS:
+            queries.append(succession.query(self.operation, grant["providerId"]))
         for table in ("credentials", "pending_oauth_credentials"):
             queries.append(core.BoundedQuery(query_id=core.query_program_id(self.operation, "complete_population", table),
                 table=table, predicates=(), order_by=(core.QueryOrder("id"),), maximum_rows=65,
@@ -264,6 +267,8 @@ class PendingRetirementKernel:
 
     def transition(self, context):
         values = _values(self.operation, context.arguments); grant = _grant(values); request = values["request"]
+        if self.operation in succession.GUARDED_OPERATIONS:
+            succession.require_unassigned(context, grant["providerId"])
         now = shared._database_epoch_ns(context.database_now); stamp = context.database_now.isoformat()
         statement = values["evidence"]["statement"]
         profile.require(statement["issuedAtEpochNs"] <= now < statement["expiresAtEpochNs"])

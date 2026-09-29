@@ -725,6 +725,7 @@ override CODER_ISOLATED_TEST_SCRIPTS := \
 	scripts/test_authority_transition_registry.py \
 	scripts/test_webauthn_attestation_core.py \
 	scripts/test_oauth_retirement_values.py \
+	scripts/test_oauth_retirement_succession_contract.py \
 	scripts/test_webauthn_credential_trust.py \
 	scripts/test_webauthn_revoke_authorization.py \
 	scripts/test_webauthn_assertion_work.py \
@@ -1387,6 +1388,26 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/control_plane_oauth_reconnect.py \
 	serverware/oauth_reconnect_owner.py \
 	serverware/portal_oauth_reconnect.py \
+	serverware/authority_oauth_retirement_succession.py \
+	serverware/authority_oauth_retirement_succession_approvals.py \
+	serverware/authority_oauth_retirement_succession_catalog.py \
+	serverware/authority_oauth_retirement_succession_contacts.py \
+	serverware/authority_oauth_retirement_succession_current.py \
+	serverware/authority_oauth_retirement_succession_fresh.py \
+	serverware/authority_oauth_retirement_succession_inventory.py \
+	serverware/authority_oauth_retirement_succession_lineages.py \
+	serverware/authority_oauth_retirement_succession_materials.py \
+	serverware/authority_oauth_retirement_succession_policy.py \
+	serverware/authority_oauth_retirement_succession_queries.py \
+	serverware/authority_oauth_retirement_succession_records.py \
+	serverware/authority_oauth_retirement_succession_retire.py \
+	serverware/authority_oauth_retirement_succession_snapshots.py \
+	serverware/authority_transition_oauth_retirement_succession.py \
+	serverware/control_plane_oauth_succession.py \
+	serverware/control_plane_oauth_succession_ceremony.py \
+	serverware/oauth_retirement_succession_owner.py \
+	serverware/portal_oauth_succession.py \
+	scripts/test_oauth_retirement_succession_contract.py \
 	serverware/authority_oauth_measured_cleanup_policy.py \
 	serverware/authority_oauth_measured_cleanup.py \
 	serverware/authority_transition_oauth_measured_cleanup.py \
@@ -3867,6 +3888,26 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/control_plane_oauth_reconnect.py \
 				serverware/oauth_reconnect_owner.py \
 				serverware/portal_oauth_reconnect.py \
+				serverware/authority_oauth_retirement_succession.py \
+				serverware/authority_oauth_retirement_succession_approvals.py \
+				serverware/authority_oauth_retirement_succession_catalog.py \
+				serverware/authority_oauth_retirement_succession_contacts.py \
+				serverware/authority_oauth_retirement_succession_current.py \
+				serverware/authority_oauth_retirement_succession_fresh.py \
+				serverware/authority_oauth_retirement_succession_inventory.py \
+				serverware/authority_oauth_retirement_succession_lineages.py \
+				serverware/authority_oauth_retirement_succession_materials.py \
+				serverware/authority_oauth_retirement_succession_policy.py \
+				serverware/authority_oauth_retirement_succession_queries.py \
+				serverware/authority_oauth_retirement_succession_records.py \
+				serverware/authority_oauth_retirement_succession_retire.py \
+				serverware/authority_oauth_retirement_succession_snapshots.py \
+				serverware/authority_transition_oauth_retirement_succession.py \
+				serverware/control_plane_oauth_succession.py \
+				serverware/control_plane_oauth_succession_ceremony.py \
+				serverware/oauth_retirement_succession_owner.py \
+				serverware/portal_oauth_succession.py \
+				scripts/test_oauth_retirement_succession_contract.py \
 				serverware/authority_oauth_measured_cleanup_policy.py \
 				serverware/authority_oauth_measured_cleanup.py \
 				serverware/authority_transition_oauth_measured_cleanup.py \
@@ -4489,6 +4530,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-policy-canary-sender.v1.schema.json \
 				schemas/native-oauth-measured-setup.v1.schema.json \
 				schemas/native-oauth-measured-reconnect.v1.schema.json \
+				schemas/native-oauth-retired-scope-succession.v1.schema.json \
+				schemas/oauth-retired-scope-succession.v1.schema.json \
 				schemas/native-gate-cgroup.v1.schema.json \
 				schemas/native-shadow-workers.v1.schema.json \
 				schemas/policy-custody-guest-delivery.v1.schema.json \

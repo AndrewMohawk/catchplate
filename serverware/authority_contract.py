@@ -7,10 +7,11 @@ from types import MappingProxyType
 from typing import Any, Mapping
 
 from serverware import authority_complete_query
+from serverware import authority_oauth_retirement_succession_catalog as retirement_catalog
 from serverware.authority_query_read_work import _ValidationWork
 
 
-SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.310"
+SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.311"
 SCHEMA_VERSION = 9
 CONTRACT_SCHEMA = "serverware.policyAuthorityOperationContract/v3"
 BUSINESS_INTENT_SCHEMA = "serverware.policyAuthorityBusinessIntent/v2"
@@ -296,6 +297,7 @@ _AUDIT_COUNTER_REPLACEMENT_OPERATIONS = frozenset({
     "public-revocation-approval.decide-identity", "public-revocation-approval.decide-asserted",
     "jit.review-receipt.issue", "jit.decide", "jit.deny",
 })
+_AUDIT_COUNTER_REPLACEMENT_OPERATIONS = _AUDIT_COUNTER_REPLACEMENT_OPERATIONS | retirement_catalog.OPERATIONS
 _AUDIT_NEW_AGGREGATE_ROOT_OPERATIONS = frozenset({
     "webauthn.trust.stage", "webauthn.trust.complete", "webauthn.registration.create",
     "webauthn.registration.finalize", "webauthn.credential.revoke", "oidc.session.activate",
@@ -1475,6 +1477,7 @@ V9_ADDITIONAL_PROTECTED_TABLES = tuple(sorted({
     "oauth_setup_audit_links",
     "oauth_reconnect_authorizations",
     "oauth_measured_reconnect_custody",
+    *retirement_catalog.NEW_TABLES,
     "setup_session_events",
     "credential_currentness_roots",
     "credential_currentness_holders",
@@ -1910,7 +1913,7 @@ _OPERATIONS = {
         operation: _spec(
             handler,
             reads=("control_plane_approvals", "rbac_role_bindings", "pending_oauth_credentials", "oauth_provider_retirements") +
-                (("credentials", "credential_generations", "setup_sessions", "credential_currentness_roots", "oauth_family_retirements", "oauth_pending_family_retirements") if operation == "oauth.pending.activate" else ()) + _PHASE2_AGGREGATE,
+                (("credentials", "credential_generations", "setup_sessions", "credential_currentness_roots", "oauth_family_retirements", "oauth_pending_family_retirements") if operation == "oauth.pending.activate" else ()) + retirement_catalog.consumer_reads(operation) + _PHASE2_AGGREGATE,
             writes=("control_plane_approvals", "metadata_audit_outbox") +
                 (("credentials", "credential_generations", "pending_oauth_credentials", "credential_currentness_roots") if operation == "oauth.pending.activate" else ()) + _PHASE2_AGGREGATE,
             webauthn="bound-verified-assertion-receipt",
@@ -1929,7 +1932,7 @@ _OPERATIONS = {
             handler,
             reads=("oauth_exchange_reservations", "oauth_revocation_work", "rbac_role_bindings", "oauth_provider_retirements") +
                 (("pending_oauth_credentials",) if operation == "oauth.exchange.prepare" else ()) +
-                (("credentials", "credential_generations", "pending_oauth_credentials", "setup_sessions", "oauth_family_retirements", "oauth_pending_family_retirements") if operation == "oauth.pending.stage" else ()) + _PHASE2_AGGREGATE,
+                (("credentials", "credential_generations", "pending_oauth_credentials", "setup_sessions", "oauth_family_retirements", "oauth_pending_family_retirements") if operation == "oauth.pending.stage" else ()) + retirement_catalog.consumer_reads(operation) + _PHASE2_AGGREGATE,
             writes=("oauth_exchange_reservations", "oauth_revocation_work", "metadata_audit_outbox") +
                 (("pending_oauth_credentials",) if operation == "oauth.pending.stage" else ()) + _PHASE2_AGGREGATE,
             webauthn="bound-verified-assertion-receipt" if operation == "oauth.exchange.prepare" else "not-required",
@@ -1948,7 +1951,7 @@ _OPERATIONS = {
             reads=("oauth_exchange_reservations", "oauth_measured_exchange_custody", "oauth_revocation_work", "rbac_role_bindings", "oauth_provider_retirements") +
                 (("pending_oauth_credentials",) if operation in {"oauth.measured-exchange.prepare", "oauth.measured-exchange.recover"} else ()) +
                 (("credentials", "credential_generations", "pending_oauth_credentials", "setup_sessions", "oauth_family_retirements", "oauth_pending_family_retirements")
-                    if operation == "oauth.measured-exchange.stage" else ()) + _PHASE2_AGGREGATE,
+                    if operation == "oauth.measured-exchange.stage" else ()) + retirement_catalog.consumer_reads(operation) + _PHASE2_AGGREGATE,
             writes=("oauth_exchange_reservations", "oauth_measured_exchange_custody", "oauth_revocation_work", "metadata_audit_outbox") +
                 (("pending_oauth_credentials",) if operation == "oauth.measured-exchange.stage" else ()) + _PHASE2_AGGREGATE,
             webauthn="bound-verified-assertion-receipt" if operation == "oauth.measured-exchange.prepare" else "not-required",
@@ -1964,7 +1967,7 @@ _OPERATIONS = {
                 "setup_sessions", "setup_session_events", "oauth_setup_audit_links", "oauth_provider_retirements") +
                 (("pending_oauth_credentials",) if operation in {"oauth.measured-setup.prepare", "oauth.measured-setup.recover"} else ()) +
                 (("credentials", "credential_generations", "pending_oauth_credentials", "oauth_family_retirements", "oauth_pending_family_retirements")
-                    if operation == "oauth.measured-setup.stage" else ()) + _PHASE2_AGGREGATE,
+                    if operation == "oauth.measured-setup.stage" else ()) + retirement_catalog.consumer_reads(operation) + _PHASE2_AGGREGATE,
             writes=("oauth_exchange_reservations", "oauth_measured_setup_custody", "oauth_revocation_work", "metadata_audit_outbox") +
                 (("setup_sessions", "setup_session_events", "oauth_setup_audit_links")
                     if operation in {"oauth.measured-setup.prepare", "oauth.measured-setup.stage", "oauth.measured-setup.cancel"} else ()) +
@@ -1982,7 +1985,7 @@ _OPERATIONS = {
                 (("control_plane_approvals", "pending_oauth_credentials", "oauth_measured_setup_custody", "oauth_provider_retirements")
                     if operation in {"oauth.setup.activation-request", "oauth.setup.activation-decide", "oauth.setup.activate"} else ()) +
                 (("credentials", "credential_generations", "credential_currentness_roots", "oauth_family_retirements", "oauth_pending_family_retirements")
-                    if operation == "oauth.setup.activate" else ()) + _PHASE2_AGGREGATE,
+                    if operation == "oauth.setup.activate" else ()) + retirement_catalog.consumer_reads(operation) + _PHASE2_AGGREGATE,
             writes=("metadata_audit_outbox",) +
                 (("setup_sessions", "setup_session_events", "oauth_setup_audit_links") if operation in {"oauth.setup.create", "oauth.setup.activate"} else ()) +
                 (("setup_session_events",) if operation == "oauth.setup.audit-settle" else ()) +
@@ -1999,7 +2002,7 @@ _OPERATIONS = {
             reads=("oauth_reconnect_authorizations", "oauth_measured_reconnect_custody", "oauth_exchange_reservations",
                 "credentials", "credential_generations", "credential_currentness_roots", "credential_currentness_barriers",
                 "rbac_role_bindings", "control_plane_approvals", "oauth_family_retirements", "oauth_pending_family_retirements",
-                "oauth_provider_retirements") + (("pending_oauth_credentials", "setup_sessions") if operation == "oauth.reconnect.fence" else ()) + _PHASE2_AGGREGATE,
+                "oauth_provider_retirements") + (("pending_oauth_credentials", "setup_sessions") if operation == "oauth.reconnect.fence" else ()) + retirement_catalog.consumer_reads(operation) + _PHASE2_AGGREGATE,
             writes=("metadata_audit_outbox",) +
                 (("oauth_reconnect_authorizations",) if operation in {"oauth.reconnect.authorize", "oauth.reconnect.fence"} else ()) +
                 (("credentials", "credential_currentness_roots", "credential_currentness_barriers") if operation == "oauth.reconnect.fence" else ()) +
@@ -2016,10 +2019,11 @@ _OPERATIONS = {
     **{
         operation: _spec(
             handler,
-            reads=("credentials", "credential_generations", "oauth_refresh_reservations", "oauth_revocation_work", "credential_currentness_roots", "credential_currentness_barriers", "oauth_family_retirements", "oauth_pending_family_retirements", "oauth_provider_retirements") + _PHASE2_AGGREGATE,
+            reads=("credentials", "credential_generations", "oauth_refresh_reservations", "oauth_revocation_work", "credential_currentness_roots", "credential_currentness_barriers", "oauth_family_retirements", "oauth_pending_family_retirements", "oauth_provider_retirements") + retirement_catalog.consumer_reads(operation) + _PHASE2_AGGREGATE,
             writes=("oauth_refresh_reservations", "oauth_revocation_work", "metadata_audit_outbox") +
                 (("credentials", "credential_generations", "credential_currentness_roots") if operation == "oauth.refresh.commit" else ()) +
-                (("credential_currentness_roots", "credential_currentness_barriers") if operation == "oauth.refresh.claim" else ()) + _PHASE2_AGGREGATE,
+                (("credential_currentness_roots", "credential_currentness_barriers") if operation == "oauth.refresh.claim" else ()) + retirement_catalog.consumer_writes(operation) + _PHASE2_AGGREGATE,
+            mutation_kinds={"oauth_retirement_successor_generations": ("INSERT",)} if operation == "oauth.refresh.commit" else None,
             webauthn="not-required",
             proof_primitives=("primary-key-row", "bounded-limit-plus-one", "aggregate-high-water", "capacity-reservation"),
             maximum_query_rows=224, maximum_mutations=12, maximum_work_units=2048,
@@ -2033,11 +2037,12 @@ _OPERATIONS = {
         operation: _spec(
             handler,
             reads=("credentials", "credential_generations", "oauth_refresh_reservations", "oauth_measured_refresh_custody",
-                "oauth_revocation_work", "credential_currentness_roots", "credential_currentness_barriers", "oauth_family_retirements", "oauth_pending_family_retirements", "oauth_provider_retirements") + _PHASE2_AGGREGATE,
+                "oauth_revocation_work", "credential_currentness_roots", "credential_currentness_barriers", "oauth_family_retirements", "oauth_pending_family_retirements", "oauth_provider_retirements") + retirement_catalog.consumer_reads(operation) + _PHASE2_AGGREGATE,
             writes=("metadata_audit_outbox",) + (() if operation == "oauth.measured-refresh.inspect" else
                 ("oauth_measured_refresh_custody", "oauth_refresh_reservations", "oauth_revocation_work")) +
                 (("credentials", "credential_generations", "credential_currentness_roots") if operation == "oauth.measured-refresh.commit" else ()) +
-                (("credential_currentness_roots", "credential_currentness_barriers") if operation == "oauth.measured-refresh.claim" else ()) + _PHASE2_AGGREGATE,
+                (("credential_currentness_roots", "credential_currentness_barriers") if operation == "oauth.measured-refresh.claim" else ()) + retirement_catalog.consumer_writes(operation) + _PHASE2_AGGREGATE,
+            mutation_kinds={"oauth_retirement_successor_generations": ("INSERT",)} if operation == "oauth.measured-refresh.commit" else None,
             webauthn="not-required",
             proof_primitives=("primary-key-row", "bounded-limit-plus-one", "aggregate-high-water", "capacity-reservation"),
             maximum_query_rows=256, maximum_mutations=16, maximum_work_units=4096,
@@ -2055,7 +2060,7 @@ _OPERATIONS = {
             reads=("credentials", "credential_generations", "oauth_refresh_reservations", "oauth_measured_refresh_custody",
                 "oauth_revocation_work", "oauth_refresh_cleanup_reservations", "oauth_refresh_cleanup_attempts",
                 "oauth_measured_refresh_cleanup_custody", "credential_currentness_roots", "credential_currentness_barriers",
-                "oauth_family_retirements", "oauth_pending_family_retirements") + _PHASE2_AGGREGATE,
+                "oauth_family_retirements", "oauth_pending_family_retirements") + retirement_catalog.consumer_reads(operation) + _PHASE2_AGGREGATE,
             writes=("metadata_audit_outbox",) + (() if operation in {"oauth.measured-refresh-cleanup.inspect", "oauth.measured-refresh-cleanup.recover"}
                 else ("credentials", "oauth_revocation_work", "oauth_refresh_cleanup_reservations", "oauth_refresh_cleanup_attempts",
                     "oauth_measured_refresh_cleanup_custody", "credential_currentness_roots", "credential_currentness_barriers",
@@ -2072,7 +2077,7 @@ _OPERATIONS = {
             reads=("credentials", "credential_generations", "pending_oauth_credentials", "oauth_exchange_reservations",
                 "oauth_measured_exchange_custody", "oauth_pending_retirement_reservations", "oauth_pending_retirement_attempts",
                 "oauth_measured_pending_retirement_custody", "credential_currentness_roots", "credential_currentness_barriers",
-                "oauth_family_retirements", "oauth_pending_family_retirements") + _PHASE2_AGGREGATE,
+                "oauth_family_retirements", "oauth_pending_family_retirements") + retirement_catalog.consumer_reads(operation) + _PHASE2_AGGREGATE,
             writes=("metadata_audit_outbox",) + (() if operation in {"oauth.measured-pending-retirement.inspect", "oauth.measured-pending-retirement.recover"}
                 else ("credentials", "pending_oauth_credentials", "oauth_pending_retirement_reservations", "oauth_pending_retirement_attempts",
                     "oauth_measured_pending_retirement_custody", "credential_currentness_roots", "credential_currentness_barriers",
@@ -2090,7 +2095,7 @@ _OPERATIONS = {
                 "oauth_exchange_reservations", "oauth_refresh_reservations", "oauth_measured_exchange_custody",
                 "oauth_measured_setup_custody", "oauth_revocation_work", "oauth_provider_retirements",
                 "oauth_capture_retirement_reservations", "oauth_capture_retirement_attempts",
-                "oauth_measured_capture_retirement_custody", "credential_currentness_roots", "credential_currentness_barriers") + _PHASE2_AGGREGATE,
+                "oauth_measured_capture_retirement_custody", "credential_currentness_roots", "credential_currentness_barriers") + retirement_catalog.consumer_reads(operation) + _PHASE2_AGGREGATE,
             writes=("metadata_audit_outbox",) + (() if operation in {"oauth.measured-capture-retirement.inspect", "oauth.measured-capture-retirement.recover"}
                 else ("credentials", "oauth_revocation_work", "oauth_provider_retirements", "oauth_capture_retirement_reservations",
                     "oauth_capture_retirement_attempts", "oauth_measured_capture_retirement_custody",
@@ -2104,7 +2109,7 @@ _OPERATIONS = {
     **{
         operation: _spec(
             handler,
-            reads=("oauth_exchange_reservations", "oauth_revocation_work", "oauth_revocation_reservations", "oauth_revocation_attempts") + _PHASE2_AGGREGATE,
+            reads=("oauth_exchange_reservations", "oauth_revocation_work", "oauth_revocation_reservations", "oauth_revocation_attempts") + retirement_catalog.consumer_reads(operation) + _PHASE2_AGGREGATE,
             writes=("oauth_revocation_work", "oauth_revocation_reservations", "oauth_revocation_attempts", "metadata_audit_outbox") + _PHASE2_AGGREGATE,
             webauthn="not-required",
             proof_primitives=("primary-key-row", "aggregate-high-water"),
@@ -2132,7 +2137,7 @@ _OPERATIONS = {
             handler,
             reads=("credentials", "credential_generations", "oauth_refresh_reservations", "oauth_revocation_work",
                 "oauth_refresh_cleanup_reservations", "oauth_refresh_cleanup_attempts", "oauth_family_retirements", "oauth_pending_family_retirements",
-                "credential_currentness_roots", "credential_currentness_barriers") + _PHASE2_AGGREGATE,
+                "credential_currentness_roots", "credential_currentness_barriers") + retirement_catalog.consumer_reads(operation) + _PHASE2_AGGREGATE,
             writes=("credentials", "oauth_revocation_work", "oauth_refresh_cleanup_reservations", "oauth_refresh_cleanup_attempts",
                 "oauth_family_retirements", "credential_currentness_roots", "credential_currentness_barriers", "metadata_audit_outbox") + _PHASE2_AGGREGATE,
             webauthn="not-required", proof_primitives=("primary-key-row", "bounded-limit-plus-one", "aggregate-high-water"),
@@ -3147,6 +3152,18 @@ _OPERATIONS = {
         writes=("webauthn_challenges",),
     ),
 }
+
+_OPERATIONS.update({
+    operation: _spec(
+        "serverware_policy_authority_" + operation.replace(".", "_").replace("-", "_"),
+        reads=retirement_catalog.read_tables(operation) + _PHASE2_AGGREGATE,
+        writes=retirement_catalog.write_tables(operation) + _PHASE2_AGGREGATE,
+        mutation_kinds=retirement_catalog.mutation_kinds(operation),
+        webauthn="bound-verified-assertion-receipt" if operation in retirement_catalog.ASSERTION_OPERATIONS else "not-required",
+        proof_primitives=("primary-key-row", "bounded-limit-plus-one", "aggregate-high-water", "capacity-reservation"),
+        maximum_query_rows=192, maximum_mutations=48, maximum_work_units=8192,
+    ) for operation in sorted(retirement_catalog.OPERATIONS)
+})
 
 OPERATION_REGISTRY = MappingProxyType(_OPERATIONS)
 OPERATIONS = MappingProxyType(

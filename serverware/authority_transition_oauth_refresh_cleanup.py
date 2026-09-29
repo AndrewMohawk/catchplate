@@ -1,5 +1,6 @@
 """One irreversible family retirement, competing with refresh and activation."""
 from dataclasses import dataclass
+from serverware import authority_oauth_retirement_succession_current as succession
 from types import MappingProxyType
 
 from serverware import authority_oauth_refresh_cleanup as profile
@@ -102,6 +103,8 @@ class OAuthRefreshCleanupKernel:
                 ("work", "oauth_revocation_work", {"id": grant["workId"]}, False),
                 ("generation", "credential_generations", {"credential_id": grant["credentialId"]}, False),
                 ("journal", profile.JOURNAL_TABLE, {"id": grant["workId"]}, self.operation == profile.OP_CLAIM))]
+        if self.operation in succession.GUARDED_OPERATIONS:
+            queries.append(succession.query(self.operation, grant["providerId"]))
         queries.append(core.BoundedQuery(query_id=core.query_program_id(self.operation, "complete_population", "credentials"),
             table="credentials", predicates=(), order_by=(core.QueryOrder("id"),), maximum_rows=inventory.MAX_ROWS + 1,
             proof_primitive="bounded-limit-plus-one", work_units=inventory.MAX_ROWS + 1))
@@ -122,6 +125,8 @@ class OAuthRefreshCleanupKernel:
 
     def transition(self, context):
         values = _values(self.operation, context.arguments); grant = _grant(values); request = values["request"]
+        if self.operation in succession.GUARDED_OPERATIONS:
+            succession.require_unassigned(context, grant["providerId"])
         now = shared._database_epoch_ns(context.database_now); stamp = context.database_now.isoformat()
         profile.require(grant["issuedAtEpochNs"] <= now < grant["expiresAtEpochNs"])
         history, work_selected, work, credential_selected, credential, generation = _originals(context, values, grant)

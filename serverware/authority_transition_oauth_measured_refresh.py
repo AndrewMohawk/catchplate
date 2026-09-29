@@ -13,6 +13,7 @@ from serverware import authority_oauth_activation_policy as enrollment
 from serverware import authority_oauth_inventory as inventory
 from serverware import authority_oauth_family_retirement as family
 from serverware import authority_oauth_provider_retirement as provider_retirement
+from serverware import authority_oauth_retirement_succession_current as succession
 from serverware import authority_transition_core as core
 from serverware import authority_transition_quota as shared
 from serverware import authority_transition_oauth_refresh as common
@@ -83,6 +84,11 @@ class MeasuredRefreshKernel:
         queries = [shared._query(operation=self.operation, name="credential", table="credentials", key={"id": values["credential_id"]}),
             provider_retirement.query(self.operation, provider),
             shared._query(operation=self.operation, name="generation", table="credential_generations", key={"credential_id": values["credential_id"]})]
+        queries.append(succession.query(self.operation, provider))
+        if self.operation == profile.OP_INSPECT:
+            queries.extend(succession.inspection_queries(self.operation, values["credential_id"]))
+        else:
+            queries.extend(succession.association_queries(self.operation, values["credential_id"], request["expectedVersion"]))
         if self.operation == profile.OP_INSPECT and request["recoveryVersion"] is not None:
             item_id = refresh.refresh_id(values["credential_id"], request["recoveryVersion"])
             for name, table in (("refresh", refresh.TABLE), ("custody", profile.TABLE)):
@@ -113,14 +119,12 @@ class MeasuredRefreshKernel:
         request = values["request"]
         stamp, now = context.database_now.isoformat(), shared._database_epoch_ns(context.database_now)
         statement = values["evidence"]["statement"]
-        if self.operation != profile.OP_CAPTURE:
-            provider = enrollment.enrollment_document(refresh.enrollment_bytes(values["enrollment_original"]))["payload"]["providerId"]
-            provider_retirement.require_open(context, provider)
         profile.require(statement["issuedAtEpochNs"] <= now < statement["expiresAtEpochNs"])
         mutations = []
         if self.operation == profile.OP_INSPECT:
             profile.require(request["issuedAtEpochNs"] <= now < request["expiresAtEpochNs"])
             if request["recoveryVersion"] is not None:
+                succession.require_observation(context, values["enrollment_original"])
                 item_id = refresh.refresh_id(values["credential_id"], request["recoveryVersion"])
                 row = shared._row(context.exact(refresh.TABLE, {"id": item_id}), "recovery inspection reservation")
                 custody = shared._row(context.exact(profile.TABLE, {"id": item_id}), "recovery inspection custody")
@@ -136,7 +140,7 @@ class MeasuredRefreshKernel:
                 current = shared._row(context.exact("credentials", {"id": values["credential_id"]}), "measured inspection credential")
                 effective = {**values, "request": {**request, "expectedVersion": current["credential_version"]}}
                 _, credential, _, generation, metadata, application = _heads(context, effective)
-                family.require_open_from_population(context, metadata["provider_id"], metadata["provider_subject"])
+                succession.require_current(context, credential, values["enrollment_original"])
                 result_payload = {"mode": "refresh", "credentialOriginal": refresh.credential_original(credential).decode("ascii"),
                     "generationOriginal": refresh.generation_original(generation).decode("ascii"),
                     "enrollmentOriginal": values["enrollment_original"], "applicationMaterialSha256": request["applicationMaterialSha256"],
@@ -148,11 +152,12 @@ class MeasuredRefreshKernel:
             custody_selected = context.exact(profile.TABLE, {"id": item_id})
             existing = None if not custody_selected["present"] else shared._row(custody_selected, "measured custody")
             if self.operation == profile.OP_RECOVER and existing is not None and existing["status"] == "committed":
+                succession.require_observation(context, values["enrollment_original"])
                 result_payload = self._completed(context, values, selected, existing)
             else:
                 historical = self.operation == profile.OP_RECOVER or self.operation == profile.OP_COMMIT and request["recoveryRequestDigest"] is not None
                 credential_selected, credential, generation_selected, generation, metadata, application = _heads(context, values, historical=historical)
-                family.require_open_from_population(context, metadata["provider_id"], metadata["provider_subject"])
+                succession.require_current(context, credential, values["enrollment_original"])
                 assignment = values["assignment_original"]
                 profile.require(credential["secret_kek_id"] == assignment["secretKekId"])
                 _envelopes_key(request, assignment["secretKekId"])
@@ -208,6 +213,7 @@ class MeasuredRefreshKernel:
                             common._replacement_metadata(metadata, request["replacementMetadata"], row["received_at_epoch_ns"], now)
                             next_row = {**credential, **request["replacementEnvelope"], "metadata": profile.canonical(request["replacementMetadata"]).decode("ascii"), "updated_at": stamp}
                             refresh.credential_original(next_row)
+                            mutations.extend(succession.propagate(context, credential, next_row, values["enrollment_original"]))
                             next_selected = context.exact(currentness.ROOT_TABLE, {"id": currentness.root_id(credential["id"], request["expectedVersion"] + 1)})
                             profile.require(not next_selected["present"])
                             mutations.extend((core.mutation(operation=self.operation, selected=credential_selected, row=next_row),

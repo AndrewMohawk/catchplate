@@ -1,3 +1,5 @@
+> Publication note: deployment-specific addresses, identities and paths in this document are example placeholders, not a public service or release-verification evidence.
+
 # Serverware
 
 Keep upstream credentials out of your applications. Control how they are used.
@@ -22,11 +24,12 @@ Checkpoint: **2026-09-29 — pre-production, source-only.**
 
 [![Project checkpoints, one segment per task: 35 of 46 source-landed; 6 active and 5 todo. Evidence handoff 10/10; historical recovery 4/5; permissions and grants 10/10; finalization and sessions 8/8; workloads and native 3/6; providers and operations 0/7. F08 is source-landed in 170d0ac; H05, N04, N05, O01, O04 and O05 are in progress. Production acceptance remains 0/6. Source only; unbuilt, unexecuted and unprovisioned.](docs/images/project-progress.svg)](docs/production-status.md#next-source-milestones)
 
-Latest source connects [native application execution](docs/native-execution-lifecycle.md)
-and [signed OAuth application ownership](docs/oauth-application-ownership.md).
-OAuth activation and lifecycle writers are still being integrated; the enrolled
-production flow is not yet usable. Combined CA installation, provider journeys,
-enclave custody and independent production verification remain open.
+Latest [`.264` source](https://github.com/example/private-deployment) connects
+[atomic OAuth activation](docs/oauth-atomic-activation-authority.md) for new credentials
+without setup sessions, using separate enrollment policy and hardware/two-person
+approval. Exchange, staging, refresh/reconnect and setup writers remain unfinished;
+the pre-contact gate stays closed. Prior [native execution](docs/native-execution-lifecycle.md)
+retains source credit; combined CA installation and production verification remain open.
 
 The bar shows **committed source, not tested readiness or remaining effort**.
 Green means source-landed; amber means partial implementation. No current pilot

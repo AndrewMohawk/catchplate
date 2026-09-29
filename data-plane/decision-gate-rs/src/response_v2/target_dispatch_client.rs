@@ -9,7 +9,7 @@ fn invalid()->ResponseObservationV2TransactionError {ResponseObservationV2Transa
 fn same<T:Serialize>(a:&T,b:&T)->Result<bool,ResponseObservationV2TransactionError> {
     Ok(profile::canonical(a).map_err(|_|invalid())?==profile::canonical(b).map_err(|_|invalid())?)
 }
-fn signed<T:Serialize>(client:&ResponseObservationV2Client,role:&str,key:&str,domain:&[u8],value:&T,signature:&str)
+pub(super) fn signed<T:Serialize>(client:&ResponseObservationV2Client,role:&str,key:&str,domain:&[u8],value:&T,signature:&str)
     ->Result<(),ResponseObservationV2TransactionError> {
     let pin=client.role_keys.get(role).ok_or_else(invalid)?;
     let public=STANDARD.decode(&pin.public_key_base64).map_err(|_|invalid())?;
@@ -23,7 +23,7 @@ fn signed<T:Serialize>(client:&ResponseObservationV2Client,role:&str,key:&str,do
     let mut original=domain.to_vec();original.extend(custody_canonical_json_bytes(value).map_err(|_|invalid())?);
     ring::signature::UnparsedPublicKey::new(&ring::signature::ED25519,public).verify(&original,&signature_bytes).map_err(|_|invalid())
 }
-fn scope(client:&ResponseObservationV2Client,value:&serverware_decision_gate::ProviderAuthorityScopeV2,
+pub(super) fn scope(client:&ResponseObservationV2Client,value:&serverware_decision_gate::ProviderAuthorityScopeV2,
     attempt:&str,operation:&str,revision:u64,fence:u64)->Result<(),ResponseObservationV2TransactionError> {
     let pin=client.role_keys.get("linearizable-store").ok_or_else(invalid)?;
     let mut unsigned=value.clone();unsigned.operation_binding_sha256.clear();
@@ -104,7 +104,10 @@ impl ResponseObservationV2Session<'_> {
             original.binding.attempt_revision,original.binding.fencing_token,u64::try_from(now_epoch_ms()).map_err(|_|invalid())?)?;
         let frame=&permit.dispatch_request;
         let rpc::MutationPayload::BeginDispatch(intent)=&frame.request.payload else {return Err(invalid());};
+        let operation=format!("dispatch:{}",&profile::sha256(&profile::canonical(original).map_err(|_|invalid())?)[7..]);
         if frame.request.generation_id.0!=original.generation_id || frame.request.attempt_id.0!=original.binding.attempt_id
+            || frame.request.operation_id.0!=operation || permit.credential_use.body.operation_id.0!=operation
+            || permit.credential_use.body.artifact_id.0!=operation
             || frame.request.request_id.0!=original.binding.request_id || frame.request.expected_revision!=original.binding.attempt_revision
             || frame.request.expected_state!=lifecycle::AttemptState::Staged || frame.request.operation!=lifecycle::OperationKind::DispatchBegin
             || frame.request.fence.fence_token.as_ref().map(|v|v.0.as_str())!=Some(original.binding.fencing_token.to_string().as_str())

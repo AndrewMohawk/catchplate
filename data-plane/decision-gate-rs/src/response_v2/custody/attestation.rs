@@ -1622,7 +1622,7 @@ pub(crate) fn expected_operation_signer(
     }
 }
 
-fn verify_logical_role_signature<T: Serialize>(
+pub(super) fn verify_logical_role_signature<T: Serialize>(
     topology: &SignedCustodyTopologyV1,
     service_role: CustodyServiceRole,
     logical_role: &str,

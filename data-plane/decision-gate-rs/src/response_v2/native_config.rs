@@ -44,6 +44,8 @@ pub(super) struct NativeResponseObservationV2ConfigV1 {
     api_version: String,
     #[serde(default, deserialize_with = "guest_profile")]
     guest_listener: Option<serverware_decision_gate::GuestResponseV2ListenerProfile>,
+    #[serde(default, deserialize_with = "staging_profile")]
+    native_staging: Option<NativeStagingProfile>,
     socket_path: PathBuf,
     expected_uid: libc::uid_t,
     startup_timeout_ms: u64,
@@ -63,10 +65,16 @@ pub(super) struct NativeResponseObservationV2ConfigV1 {
 }
 
 impl NativeResponseObservationV2ConfigV1 {
+    pub(super) fn uses_native_staging(&self) -> bool {
+        self.native_staging.is_some()
+    }
+
     pub(super) fn into_config(self, allow_guest: bool) -> Result<ResponseObservationV2ClientConfig, String> {
         let selected = match self.api_version.as_str() {
-            VERSION => self.guest_listener.is_none(),
-            "serverware.nativeResponseObservationV2Config/v2" => allow_guest && self.guest_listener.is_some(),
+            VERSION => self.guest_listener.is_none() && self.native_staging.is_none(),
+            "serverware.nativeResponseObservationV2Config/v2" => allow_guest && self.guest_listener.is_some() && self.native_staging.is_none(),
+            "serverware.nativeResponseObservationV2Config/v3" => allow_guest && self.guest_listener.is_some()
+                && self.native_staging.as_ref().is_some_and(|value|value.api_version=="serverware.responseV2.nativeStaging/v1"),
             _ => false,
         };
         if !selected
@@ -131,6 +139,7 @@ impl NativeResponseObservationV2ConfigV1 {
         let config = ResponseObservationV2ClientConfig {
             socket_path: self.socket_path,
             guest_listener: self.guest_listener,
+            native_staging: self.native_staging.is_some(),
             expected_uid: self.expected_uid,
             startup_timeout: Duration::from_millis(self.startup_timeout_ms),
             attestation_mode: V2AttestationMode::TeeHardware,
@@ -162,6 +171,13 @@ fn guest_profile<'de, D: serde::Deserializer<'de>>(deserializer: D)
     -> Result<Option<serverware_decision_gate::GuestResponseV2ListenerProfile>, D::Error> {
     // Absence selects old v1; explicit null never widens that closed profile.
     serverware_decision_gate::GuestResponseV2ListenerProfile::deserialize(deserializer).map(Some)
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all="camelCase",deny_unknown_fields)]
+struct NativeStagingProfile { api_version:String }
+fn staging_profile<'de,D:serde::Deserializer<'de>>(deserializer:D)->Result<Option<NativeStagingProfile>,D::Error> {
+    NativeStagingProfile::deserialize(deserializer).map(Some)
 }
 
 fn account_text(value: &str, maximum: usize, remaining: &mut usize) -> Result<(), String> {

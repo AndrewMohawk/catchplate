@@ -54,10 +54,11 @@ bytes, including LF. `native_gate_cgroup::proc_cgroup_sha256()` provides the
 source-fixed data recipe, not an accepted measurement or assignment signature.
 
 The existing inspector continues to measure the real same-guest gate through
-socket credentials/PIDFDs and hashes its actual proc record. Public staging is
-still being implemented separately: its selected owner must read its own real
-PIDFD/start time/proc record, and the router must compare that signature-bound
-owner with the actual inspector. This cgroup slice does not land that caller. The
+socket credentials/PIDFDs and hashes its actual proc record. The separately
+selected [native public staging](response-v2-native-public-staging.md) caller
+reads its real PIDFD/start time/proc record; the router compares its
+signature-bound owner with the actual inspector. Nested staging v3 requires
+outer v14/v15 and this actual retained cgroup owner before serving. The
 state authority's `LinuxCgroupV2Observer` resolves the relative ID under its
 real `/sys/fs/cgroup`, checks the live PID/start time and reads actual
 `cgroup.events`. Cgroup preparation does not manufacture Reserve originals,

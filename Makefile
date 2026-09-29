@@ -4030,6 +4030,24 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/response_v2/state_authority/postgres/sequence_originals.rs \
 				data-plane/decision-gate-rs/src/response_v2/state_authority/postgres/staged_originals.rs \
 				data-plane/decision-gate-rs/src/native_target_dispatch.rs \
+				data-plane/decision-gate-rs/src/native_staging.rs \
+				data-plane/decision-gate-rs/src/native_staging_v1.rs \
+				data-plane/decision-gate-rs/src/native_staging_v1/config.rs \
+				data-plane/decision-gate-rs/src/response_v2/custody/services/state_native_staging.rs \
+				data-plane/decision-gate-rs/src/response_v2/custody/staging/inputs.rs \
+				data-plane/decision-gate-rs/src/response_v2/custody/staging/ledger.rs \
+				data-plane/decision-gate-rs/src/response_v2/custody/staging/ledger_store.rs \
+				data-plane/decision-gate-rs/src/response_v2/custody/staging/ledger_wire.rs \
+				data-plane/decision-gate-rs/src/response_v2/custody/staging/mod.rs \
+				data-plane/decision-gate-rs/src/response_v2/custody/staging/policy.rs \
+				data-plane/decision-gate-rs/src/response_v2/custody/staging/process.rs \
+				data-plane/decision-gate-rs/src/response_v2/custody/staging/transport.rs \
+				data-plane/decision-gate-rs/src/response_v2/custody/staging/verification.rs \
+				data-plane/decision-gate-rs/src/response_v2/custody/staging/wire.rs \
+				data-plane/decision-gate-rs/src/response_v2/staging_client.rs \
+				data-plane/decision-gate-rs/src/response_v2/state_authority/postgres/native_staging_journal.rs \
+				data-plane/decision-gate-rs/src/response_v2/state_authority/postgres/native_staging_predecessor.rs \
+				data-plane/decision-gate-rs/src/response_v2/state_authority/postgres/native_staging_profile.rs \
 				data-plane/decision-gate-rs/src/native_target_dispatch_v1.rs \
 				data-plane/decision-gate-rs/src/native_target_dispatch_v1/config.rs \
 				data-plane/decision-gate-rs/src/response_v2/custody/target_dispatch/mod.rs \
@@ -4272,6 +4290,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/response-v2-ledger-raw-persistence.v1.schema.json \
 				schemas/response-v2-staged-original.v1.schema.json \
 				schemas/response-v2-target-dispatch.v1.schema.json \
+				schemas/response-v2-native-staging.v1.schema.json \
 				schemas/rbac-witness-recovery.v1.schema.json \
 				schemas/native-secret-broker.v1.schema.json \
 				schemas/native-startup-configuration.v5.schema.json \

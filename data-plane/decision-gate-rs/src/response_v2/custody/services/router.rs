@@ -51,6 +51,7 @@ pub(crate) fn handle_response_data_request(
     use crate::response_observation_v2_api::
         V2ResponseDataRequest;
     let (role, operation) = match &request {
+        V2ResponseDataRequest::NativeStaging {..}=>(CustodyServiceRole::StateAuthority,ServiceOperationV1::StateCas),
         V2ResponseDataRequest::TargetDispatchBegin {..}|V2ResponseDataRequest::CapturePersist {..}=>(
             CustodyServiceRole::CredentialTransport,ServiceOperationV1::TargetDispatch),
         V2ResponseDataRequest::AppendReleaseTransparency { .. } => (

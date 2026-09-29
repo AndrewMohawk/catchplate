@@ -192,7 +192,18 @@ impl ServiceConnection {
         value: &T,
         raw_fds: &[RawFd],
     ) -> Result<(), V2RuntimeError> {
-        if raw_fds.is_empty() || raw_fds.len() > 1 {
+        self.send_with_fds_bounded(value,raw_fds,1)
+    }
+    pub(crate) fn send_native_staging_with_fds(&mut self,config:&super::RootOwnedResponseObservationV2Config,
+        role:super::config::CustodyServiceRole,value:&super::protocol::ServiceRpcEnvelopeV1,raw_fds:&[RawFd])
+        ->Result<(),V2RuntimeError>{
+        let count=super::staging::transport::selection(config,role,value)?
+            .ok_or_else(||super::staging::fail("no selected staging descriptor transport"))?;
+        if count!=raw_fds.len(){return Err(super::staging::fail("staging transfer descriptor inventory differs"));}
+        self.send_with_fds_bounded(value,raw_fds,count)
+    }
+    fn send_with_fds_bounded<T:Serialize>(&mut self,value:&T,raw_fds:&[RawFd],maximum:usize)->Result<(),V2RuntimeError>{
+        if raw_fds.is_empty() || raw_fds.len() > maximum || maximum>5 {
             return Err(V2RuntimeError::new(
                 "custody_service_exact_object_count_invalid",
                 "exact-object service response must carry exactly one descriptor",
@@ -270,6 +281,18 @@ impl ServiceConnection {
                 "service exact-object receive bound is invalid",
             ));
         }
+        self.receive_with_fds_bounded(max_fds)
+    }
+    pub(crate) fn receive_native_staging_with_fds<T:DeserializeOwned>(&mut self,
+        config:&super::RootOwnedResponseObservationV2Config,role:super::config::CustodyServiceRole)
+        ->Result<(T,Vec<OwnedFd>),V2RuntimeError>{
+        super::staging::validate_configuration(config)?;
+        if config.native_staging.is_none(){return Err(super::staging::fail("native staging cold transport absent"));}
+        let count=match role{super::config::CustodyServiceRole::StateAuthority=>3,
+            super::config::CustodyServiceRole::PolicyProofVerifier=>5,_=>1};
+        self.receive_with_fds_bounded(count)
+    }
+    fn receive_with_fds_bounded<T:DeserializeOwned>(&mut self,max_fds:usize)->Result<(T,Vec<OwnedFd>),V2RuntimeError>{
         let mut length = [0u8; 4];
         let (prefix_bytes, fds) = receive_prefix_with_fds(
             &self.stream,

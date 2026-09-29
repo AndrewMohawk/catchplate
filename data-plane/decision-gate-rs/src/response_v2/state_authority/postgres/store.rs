@@ -1,6 +1,11 @@
 use super::statements;
 #[path = "staged_originals.rs"]
 mod staged_originals;
+#[path = "native_staging_journal.rs"]
+mod native_staging_journal;
+pub(crate) use native_staging_journal::{NativeStagingClaim,NativeStagingClaimResult};
+#[path = "native_staging_predecessor.rs"]
+mod native_staging_predecessor;
 pub use staged_originals::{CommittedRequestOriginalV1, StagedAttemptOriginalV1};
 use super::super::canonical::{
     canonical_jcs_bytes, decode_base64url, encode_base64url, sha256_digest,
@@ -397,7 +402,7 @@ where
         &self,
         frame: &RpcRequestFrame,
     ) -> AuthorityResult<ExactSignedResultBytes> {
-        self.execute_mutation_profile(frame, false)
+        self.execute_mutation_profile(frame, false, None)
     }
 
     /// Additive custody profile; reject a legacy database before any mutation.
@@ -405,13 +410,14 @@ where
         &self,
         frame: &RpcRequestFrame,
     ) -> AuthorityResult<ExactSignedResultBytes> {
-        self.execute_mutation_profile(frame, true)
+        self.execute_mutation_profile(frame, true, None)
     }
 
     fn execute_mutation_profile(
         &self,
         frame: &RpcRequestFrame,
         require_sequence_originals: bool,
+        native_stage: Option<&native_staging_predecessor::StageCompanion<'_>>,
     ) -> AuthorityResult<ExactSignedResultBytes> {
         frame.request.validate()?;
         if frame.request.generation_id
@@ -434,15 +440,13 @@ where
         let (generation, generation_status) =
             self.lock_generation(transaction.as_mut())?;
         if require_sequence_originals
-            && super::sequence_originals::profile(&generation.migration_sha256)?
-                != super::sequence_originals::Profile::SequenceOriginalsV2
+            && !super::sequence_originals::profile(&generation.migration_sha256)?.retains_originals()
         {
             return Err(super::sequence_originals::refused(
                 "sequence custody execution requires the independently pinned fresh database profile",
             ));
         }
-        let retains_original = super::sequence_originals::profile(&generation.migration_sha256)?
-            == super::sequence_originals::Profile::SequenceOriginalsV2
+        let retains_original = super::sequence_originals::profile(&generation.migration_sha256)?.retains_originals()
             && matches!(frame.request.operation, OperationKind::AttemptReserve
                 | OperationKind::AttemptStage | OperationKind::DispatchBegin);
         if retains_original && exact_request_bytes.len() > super::sequence_originals::MAX_ORIGINAL_BYTES {
@@ -637,6 +641,7 @@ where
             locked_attempt.as_ref(),
             locked_fence.as_ref(),
             trusted_epoch_millis,
+            native_stage,
         );
         let applied = match applied_result {
             Ok(applied) => {
@@ -2524,6 +2529,7 @@ where
         attempt: Option<&LockedAttempt>,
         fence: Option<&LockedFence>,
         trusted_epoch_millis: Option<u64>,
+        native_stage: Option<&native_staging_predecessor::StageCompanion<'_>>,
     ) -> AuthorityResult<AppliedMutation> {
         match &request.payload {
             MutationPayload::Reserve(mutation) => self.apply_reserve(
@@ -2698,17 +2704,16 @@ where
                     request,
                     &mutation.staged_request_object,
                 )?;
-                let mut artifact_ids = Vec::new();
-                for artifact in &mutation.transition_artifacts {
-                    self.verify_nested(
-                        generation,
-                        artifact,
-                        request.operation,
-                        request,
-                        trusted_epoch_millis,
-                    )?;
-                    artifact_ids.push(artifact.body.artifact_id.clone());
-                }
+                let artifact_ids = if let Some(companion)=native_stage {
+                    self.require_native_stage_predecessor(transaction,generation,request,mutation,companion)?
+                } else {
+                    let mut ids=Vec::new();
+                    for artifact in &mutation.transition_artifacts {
+                        self.verify_nested(generation,artifact,request.operation,request,trusted_epoch_millis)?;
+                        ids.push(artifact.body.artifact_id.clone());
+                    }
+                    ids
+                };
                 self.transition(
                     transaction,
                     request,
@@ -3202,7 +3207,8 @@ where
                 let digest = sha256_digest(&fence_material);
                 Identifier(format!("fence:{}", &digest.0["sha256:".len()..]))
             }
-            super::sequence_originals::Profile::SequenceOriginalsV2 => {
+            super::sequence_originals::Profile::SequenceOriginalsV2
+            | super::sequence_originals::Profile::NativeStagingV3 => {
                 super::sequence_originals::canonical_fence(&allocation.to_string(), allocation)?;
                 self.assert_deadline(&mutation.attempt_deadline)?;
                 if mutation.attempt_deadline.boot_id!=request.deadline.boot_id

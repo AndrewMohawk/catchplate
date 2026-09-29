@@ -12,6 +12,7 @@ mod native_audit_owner;
 mod native_audit_transport;
 mod native_secret_broker;
 mod native_target_dispatch;
+mod native_staging;
 mod native_oauth_refresh;
 mod native_oauth_cleanup;
 mod native_oauth_pending_retirement;

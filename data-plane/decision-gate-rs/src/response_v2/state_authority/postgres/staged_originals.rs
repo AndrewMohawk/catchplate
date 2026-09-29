@@ -97,7 +97,7 @@ where B:PostgresBackend,S:AuthorityResultSigner,O:ImmutableObjectStore,C:BootClo
         let (generation,status)=self.lock_generation(transaction)?;
         self.enforce_generation_status(status,OperationKind::DispatchBegin)?;
         self.verify_local_signer(&generation)?;
-        if profile::profile(&generation.migration_sha256)?!=profile::Profile::SequenceOriginalsV2 {
+        if !profile::profile(&generation.migration_sha256)?.retains_originals() {
             return Err(profile::refused("numeric custody observation requires the explicit sequence profile; no legacy migration"));
         }
         Ok(())
@@ -166,7 +166,7 @@ where B:PostgresBackend,S:AuthorityResultSigner,O:ImmutableObjectStore,C:BootClo
         self.configure_transaction(transaction.as_mut())?;
         let (generation,status)=self.lock_generation(transaction.as_mut())?;
         self.enforce_generation_status(status,OperationKind::DispatchBegin)?;
-        if profile::profile(&generation.migration_sha256)?!=profile::Profile::SequenceOriginalsV2 {
+        if !profile::profile(&generation.migration_sha256)?.retains_originals() {
             return Err(profile::refused("legacy attempts have no authenticated staged-original profile; migration is separate"));
         }
         self.verify_local_signer(&generation)?;

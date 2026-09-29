@@ -64,6 +64,7 @@ pub(crate) struct Observation {
 }
 impl Observation {
     pub(crate) fn uid(&self)->u32 { self.measurement.uid }
+    pub(crate) fn process_binding_sha256(&self)->&str { &self.measurement.process_binding_sha256 }
     pub(crate) fn cgroup(&self)->&str { &self.measurement.cgroup_sha256 }
     pub(crate) fn label(&self)->&str { &self.measurement.security_label_sha256 }
     pub(crate) fn executable(&self)->&str { &self.measurement.executable_sha256 }

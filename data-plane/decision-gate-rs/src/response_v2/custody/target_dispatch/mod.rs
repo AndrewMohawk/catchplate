@@ -109,9 +109,12 @@ pub(crate) fn begin_request(config:&Config,original:&DispatchOriginal,
     let rpc::NestedAuthorityPayload::CredentialUse(use_original)=&credential_use.body.payload
         else {return Err(fail("dispatch permit lacks its credential-use original"));};
     let digest=original_sha256(original)?;
+    let operation=begin_operation_id(original)?;
     let credential=binding.transaction.credential_binding_sha256.as_ref()
         .ok_or_else(||fail("credential dispatch lacks its actual credential binding"))?;
-    if use_original.credential_binding_sha256.0 != *credential
+    if credential_use.body.operation!=lifecycle::OperationKind::DispatchBegin
+        || credential_use.body.operation_id.0!=operation || credential_use.body.artifact_id.0!=operation
+        || use_original.credential_binding_sha256.0 != *credential
         || use_original.target_effect_id.0 != format!("effect:{}",&digest[7..])
         || use_original.credential_use_id.0 != format!("credential-use:{}",&digest[7..])
         || use_original.one_use_nonce_sha256.0 != digest {
@@ -125,7 +128,7 @@ pub(crate) fn begin_request(config:&Config,original:&DispatchOriginal,
         schema_version:contract::STATE_AUTHORITY_SCHEMA_VERSION.to_owned(),
         generation_id:contract::Identifier(original.generation_id.clone()),
         request_id:contract::Identifier(binding.request_id.clone()),
-        operation_id:contract::Identifier(begin_operation_id(original)?),
+        operation_id:contract::Identifier(operation),
         caller_role_id:contract::Identifier(role.service_id.clone()),
         operation:lifecycle::OperationKind::DispatchBegin,
         attempt_id:contract::Identifier(binding.attempt_id.clone()),

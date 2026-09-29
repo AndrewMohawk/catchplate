@@ -340,6 +340,8 @@ pub enum V2ControlResponse {
     deny_unknown_fields
 )]
 pub enum V2ResponseDataRequest {
+    #[serde(rename = "responseObservationV2.nativeStaging/v1")]
+    NativeStaging {api_version:String,request_id:String,boot_id:String,params:V2NativeStagingParams},
     #[serde(rename = "responseObservationV2.targetDispatchBegin/v1")]
     TargetDispatchBegin {api_version:String,request_id:String,boot_id:String,
         params:crate::response_observation_v2::custody::target_dispatch::wire::BeginRequest},
@@ -424,6 +426,8 @@ pub enum V2ResponseDataControlResponse {
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 pub enum V2ResponseDataOperation {
+    #[serde(rename = "responseObservationV2.nativeStaging/v1")]
+    NativeStaging,
     #[serde(rename = "responseObservationV2.targetDispatchBegin/v1")]
     TargetDispatchBegin,
     #[serde(rename = "responseObservationV2.capturePersist/v1")]
@@ -451,6 +455,8 @@ pub enum V2ResponseDataOperation {
     deny_unknown_fields
 )]
 pub enum V2ResponseDataResult {
+    #[serde(rename = "responseObservationV2.nativeStaging/v1")]
+    NativeStaging(crate::response_observation_v2::custody::staging::wire::SignedStagingResult),
     #[serde(rename = "responseObservationV2.targetDispatchBegin/v1")]
     TargetDispatchBegin(crate::response_observation_v2::custody::target_dispatch::wire::SignedTargetDispatchPermit),
     #[serde(rename = "responseObservationV2.capturePersist/v1")]
@@ -1288,6 +1294,14 @@ pub struct V2ReserveParams {
     pub route_semantics: ExactByteObjectDescriptor,
     pub policy_decision: ExactByteObjectDescriptor,
     pub runtime_attestation: ExactByteObjectDescriptor,
+}
+
+#[derive(Debug,Clone,Deserialize,Serialize)]
+#[serde(rename_all="camelCase",deny_unknown_fields)]
+pub struct V2NativeStagingParams {
+    pub binding:V2OperationBinding,
+    pub stable_resume_id:String,
+    pub request:crate::response_observation_v2::custody::staging::wire::StagingRequest,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -2710,6 +2724,7 @@ pub fn result_exact_object_descriptors(
 impl V2ResponseDataRequest {
     pub fn operation(&self) -> V2ResponseDataOperation {
         match self {
+            Self::NativeStaging {..}=>V2ResponseDataOperation::NativeStaging,
             Self::TargetDispatchBegin {..}=>V2ResponseDataOperation::TargetDispatchBegin,
             Self::CapturePersist {..}=>V2ResponseDataOperation::CapturePersist,
             Self::AppendReleaseTransparency { .. } => {
@@ -2738,6 +2753,7 @@ impl V2ResponseDataRequest {
 
     pub fn operation_name(&self) -> &'static str {
         match self.operation() {
+            V2ResponseDataOperation::NativeStaging=>"responseObservationV2.nativeStaging/v1",
             V2ResponseDataOperation::TargetDispatchBegin=>"responseObservationV2.targetDispatchBegin/v1",
             V2ResponseDataOperation::CapturePersist=>"responseObservationV2.capturePersist/v1",
             V2ResponseDataOperation::AppendReleaseTransparency => {
@@ -2766,6 +2782,7 @@ impl V2ResponseDataRequest {
 
     pub fn request_id(&self) -> &str {
         match self {
+            Self::NativeStaging {request_id,..}=>request_id,
             Self::TargetDispatchBegin {request_id,..}|Self::CapturePersist {request_id,..}=>request_id,
             Self::AppendReleaseTransparency { request_id, .. }
             | Self::InspectImmutableResponse { request_id, .. }
@@ -2779,6 +2796,7 @@ impl V2ResponseDataRequest {
 
     pub fn boot_id(&self) -> &str {
         match self {
+            Self::NativeStaging {boot_id,..}=>boot_id,
             Self::TargetDispatchBegin {boot_id,..}|Self::CapturePersist {boot_id,..}=>boot_id,
             Self::AppendReleaseTransparency { boot_id, .. }
             | Self::InspectImmutableResponse { boot_id, .. }
@@ -2792,6 +2810,7 @@ impl V2ResponseDataRequest {
 
     pub fn attempt_id(&self) -> &str {
         match self {
+            Self::NativeStaging {params,..}=>&params.binding.attempt_id,
             Self::TargetDispatchBegin {params,..}=>&params.original.binding.attempt_id,
             Self::CapturePersist {params,..}=>&params.permit.original.binding.attempt_id,
             Self::AppendReleaseTransparency { params, .. } => {
@@ -2829,6 +2848,7 @@ impl V2ResponseDataRequest {
 
     pub fn stable_resume_id(&self) -> &str {
         match self {
+            Self::NativeStaging {params,..}=>&params.stable_resume_id,
             Self::TargetDispatchBegin {params,..}=>&params.original.stable_resume_id,
             Self::CapturePersist {params,..}=>&params.stable_resume_id,
             Self::AppendReleaseTransparency { params, .. } => {
@@ -2866,6 +2886,7 @@ impl V2ResponseDataRequest {
 
     pub fn fencing_token(&self) -> u64 {
         match self {
+            Self::NativeStaging {params,..}=>params.binding.fencing_token,
             Self::TargetDispatchBegin {params,..}=>params.original.binding.fencing_token,
             Self::CapturePersist {params,..}=>params.permit.original.binding.fencing_token,
             Self::AppendReleaseTransparency { params, .. } => {
@@ -2903,6 +2924,7 @@ impl V2ResponseDataRequest {
 
     pub fn deadline(&self) -> (&V2MonotonicDeadlineV1, u64) {
         match self {
+            Self::NativeStaging {params,..}=>(&params.binding.monotonic_deadline,params.binding.deadline_at_epoch_ms),
             Self::TargetDispatchBegin {params,..}=>(&params.original.binding.monotonic_deadline,params.original.binding.deadline_at_epoch_ms),
             Self::CapturePersist {params,..}=>(&params.permit.original.binding.monotonic_deadline,params.permit.original.binding.deadline_at_epoch_ms),
             Self::AppendReleaseTransparency { params, .. } => (
@@ -2954,6 +2976,7 @@ impl V2ResponseDataRequest {
         &self,
     ) -> Vec<ExactByteObjectDescriptor> {
         match self {
+            Self::NativeStaging {params,..}=>params.request.evidence.statement.original.request.exact_object_descriptors(),
             Self::TargetDispatchBegin {..}=>Vec::new(),
             Self::CapturePersist {params,..}=>vec![params.raw_response.clone()],
             Self::ValidateFinalEnvelope { params, .. } => {
@@ -2972,6 +2995,7 @@ impl V2ResponseDataRequest {
 impl V2ResponseDataResult {
     pub fn operation(&self) -> V2ResponseDataOperation {
         match self {
+            Self::NativeStaging(_)=>V2ResponseDataOperation::NativeStaging,
             Self::TargetDispatchBegin(_)=>V2ResponseDataOperation::TargetDispatchBegin,
             Self::CapturePersist(_)=>V2ResponseDataOperation::CapturePersist,
             Self::AppendReleaseTransparency(_) => {

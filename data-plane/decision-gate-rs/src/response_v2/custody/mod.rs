@@ -905,6 +905,8 @@ pub struct RootOwnedResponseObservationV2Config {
     guest_public_artifacts: Option<guest_public_artifacts::Profile>,
     #[serde(default, deserialize_with = "target_dispatch::configuration_profile")]
     target_dispatch: Option<crate::native_target_dispatch_v1::Configuration>,
+    #[serde(default, deserialize_with = "staging::configuration_profile")]
+    native_staging: Option<crate::native_staging_v1::Configuration>,
     // Only the explicit guest loader can construct this retained authority.
     #[serde(skip)]
     guest_delivery: Option<std::sync::Arc<guest_delivery::Delivery>>,
@@ -2799,6 +2801,7 @@ fn validate_config(
     if let Some(profile) = &config.ledger_raw_persistence { profile.validate(config)?; }
     if let Some(profile) = &config.guest_public_artifacts { profile.validate(config)?; }
     target_dispatch::validate_configuration(config)?;
+    staging::validate_configuration(config)?;
     if let Some(authority) = &config.guest_delivery_authority {
         authority.validate()?;
         authority.require_separate_assignment(config)?;

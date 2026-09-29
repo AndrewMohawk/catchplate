@@ -1,4 +1,6 @@
 use super::common::ServiceRuntime;
+#[path="state_native_staging.rs"]
+pub(in super::super) mod native_staging;
 use super::common::provider_authority_scope;
 use std::fs;
 use std::os::unix::fs::MetadataExt;

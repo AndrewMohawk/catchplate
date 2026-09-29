@@ -391,7 +391,11 @@ pub(super) fn execute_response_observation_v2_transaction(
                 reserve_objects[2].descriptor.clone(),
         },
     };
-    let reserve_reply = match session.execute(&reserve, reserve_objects) {
+    let mut staging_previous=None;
+    let reserve_result = if client.native_staging {
+        super::staging_client::execute(state,snapshot,decision,&session,&mut cursor,&reserve,reserve_objects,
+            &mut staging_previous,&stable_resume_id)?
+    } else { (match session.execute(&reserve, reserve_objects) {
         Ok(reply) => reply,
         Err(_) => {
             let replay_session = ResponseObservationV2Session::open(
@@ -432,14 +436,14 @@ pub(super) fn execute_response_observation_v2_transaction(
                     error.with_resume(&attempt_id, &stable_resume_id)
                 })?
         }
-    };
-    let reservation_evidence = match reserve_reply.result {
+    }).result };
+    let reservation_evidence = match reserve_result {
             V2OperationResult::Reserve(
                 V2ReserveResult::Reserved {
                     attempt,
                     reservation_evidence,
                 },
-            ) if cursor.advance(
+            ) if client.native_staging || cursor.advance(
                 &reserve,
                 V2AttemptState::Reserved,
                 &reservation_evidence.evidence_sha256,
@@ -538,15 +542,19 @@ pub(super) fn execute_response_observation_v2_transaction(
                 authority_objects[1].descriptor.clone(),
         },
     };
+    let authority_result=if client.native_staging {
+        super::staging_client::execute(state,snapshot,decision,&session,&mut cursor,&authority,authority_objects,
+            &mut staging_previous,&stable_resume_id)?
+    }else{session.execute(&authority,authority_objects)?.result};
     let (authority_evidence_root, authority_state) =
-        match session.execute(&authority, authority_objects)?.result {
+        match authority_result {
             V2OperationResult::Authority(
                 V2AuthorityResult::Ready {
                     attempt,
                     authority_evidence_root,
                     authority_state,
                 },
-            ) if cursor.advance(
+            ) if client.native_staging || cursor.advance(
                 &authority,
                 V2AttemptState::AuthorityReady,
                 &authority_state.evidence_sha256,
@@ -599,6 +607,11 @@ pub(super) fn execute_response_observation_v2_transaction(
             upstream_url,
             provider_headers,
         )?;
+    // The selected real ledger requires its source-created content address;
+    // the exact descriptor retained by Stage and target dispatch uses that ID.
+    let staged_object_id=if client.native_staging {
+        format!("obj:{}",&sha256_prefixed(&credential_free_request)[7..])
+    }else{format!("{attempt_id}-credential-free-request")};
     let stage_objects = vec![
         response_observation_v2_exact_input(
             &format!("{attempt_id}-credential-template"),
@@ -608,7 +621,7 @@ pub(super) fn execute_response_observation_v2_transaction(
             lifecycle_deadline,
         )?,
         response_observation_v2_exact_input(
-            &format!("{attempt_id}-credential-free-request"),
+            &staged_object_id,
             ExactObjectMediaType::Http11Request,
             1,
             &credential_free_request,
@@ -646,13 +659,17 @@ pub(super) fn execute_response_observation_v2_transaction(
                 stage_objects[1].descriptor.clone(),
         },
     };
+    let stage_result=if client.native_staging {
+        super::staging_client::execute(state,snapshot,decision,&session,&mut cursor,&stage,stage_objects,
+            &mut staging_previous,&stable_resume_id)?
+    }else{session.execute(&stage,stage_objects)?.result};
     let (staged_request, staging_evidence) =
-        match session.execute(&stage, stage_objects)?.result {
+        match stage_result {
             V2OperationResult::Stage(V2StageResult {
                 attempt,
                 staged_request,
                 staging_evidence,
-            }) if cursor.advance(
+            }) if client.native_staging || cursor.advance(
                 &stage,
                 V2AttemptState::Staged,
                 &staging_evidence.evidence_sha256,

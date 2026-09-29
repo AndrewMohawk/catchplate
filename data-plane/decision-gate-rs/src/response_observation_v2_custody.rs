@@ -61,6 +61,8 @@ pub(crate) mod state;
 pub(crate) mod services;
 #[path = "response_v2/custody/target_dispatch/mod.rs"]
 pub mod target_dispatch;
+#[path = "response_v2/custody/staging/mod.rs"]
+pub mod staging;
 
 pub use config::{
     CustodyServiceRole, SignedCustodyTopologyV1,

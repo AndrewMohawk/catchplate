@@ -294,21 +294,24 @@ impl ServiceRuntime {
         )?;
         let (request, request_exact_object_fds):
             (ServiceRpcEnvelopeV1, Vec<std::os::fd::OwnedFd>) =
-            connection.receive_with_fds(1)?;
+            if self.config.native_staging.is_some(){connection.receive_native_staging_with_fds(&self.config,self.scoped.role)?}
+            else{connection.receive_with_fds(1)?};
         validate_service_request(
             &self.config,
             &self.scoped,
             &request,
             hello.deadline_boottime_ns,
         )?;
-        validate_nested_authority_request(
+        let staging_fds=super::super::staging::transport::selection(&self.config,self.scoped.role,&request)?;
+        if staging_fds.is_none(){validate_nested_authority_request(
             &self.topology,
             &request,
-        )?;
-        if (!request_exact_object_fds.is_empty()
+        )?;}
+        if staging_fds.is_some_and(|expected|expected!=request_exact_object_fds.len())
+            || (staging_fds.is_none()&& ((!request_exact_object_fds.is_empty()
             && !matches!(request.operation,ServiceOperationV1::FinalEnvelopeVerify | ServiceOperationV1::ImmutablePut)
             && !(request.operation==ServiceOperationV1::TargetDispatch && self.config.target_dispatch.is_some()))
-            || request_exact_object_fds.len() > 1
+            || request_exact_object_fds.len() > 1))
         {
             return Err(V2RuntimeError::new(
                 "custody_service_request_exact_object_invalid",
@@ -1010,6 +1013,7 @@ fn sign_nested_authority_result(
     result: serde_json::Value,
     signer: &RoleSigningKey,
 ) -> Result<serde_json::Value, V2RuntimeError> {
+    if super::super::staging::transport::preserve(operation,request,&result)?{return Ok(result);}
     if operation == ServiceOperationV1::ImmutablePut {
         return super::ledger_put::preserve_result(result);
     }

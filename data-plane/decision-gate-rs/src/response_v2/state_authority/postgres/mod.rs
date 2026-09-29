@@ -8,6 +8,7 @@ pub mod schema;
 pub mod statements;
 pub mod store;
 pub mod sequence_originals;
+pub mod native_staging_profile;
 
 pub use store::{
     ExactSignedResultBytes, ImmutableObjectStore, PgRow, PgValue,

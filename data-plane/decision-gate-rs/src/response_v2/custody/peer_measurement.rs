@@ -151,6 +151,7 @@ pub(super) struct StableProcessIdentity {
 
 impl StableProcessIdentity {
     pub(super) fn pid(&self) -> libc::pid_t { self.pidfd.pid }
+    pub(super) fn start_time_ticks(&self) -> u64 { self.start_time_ticks }
     pub(super) fn binding_sha256(&self) -> String {
         let mut hash = Sha256::new();
         hash.update(b"serverware.responseV2.guestInspectorProcess/v1\0");

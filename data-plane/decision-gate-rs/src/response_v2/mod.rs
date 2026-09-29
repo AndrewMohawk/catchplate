@@ -14,6 +14,7 @@ mod release;
 mod transparency_contract;
 mod transaction;
 mod target_dispatch_client;
+mod staging_client;
 
 pub(super) use attestation::*;
 use client_transport::*;
@@ -50,6 +51,10 @@ pub(super) struct NativeResponseObservationV2ConfigV1(
 );
 
 impl NativeResponseObservationV2ConfigV1 {
+    pub(super) fn uses_native_staging(&self) -> bool {
+        self.0.uses_native_staging()
+    }
+
     pub(super) fn into_config(self, allow_guest: bool) -> Result<ResponseObservationV2ClientConfig, String> {
         self.0.into_config(allow_guest)
     }
@@ -349,6 +354,7 @@ impl ResponseObservationV2AttemptCursor {
 pub(super) struct ResponseObservationV2Client {
     pub(super) socket_path: PathBuf,
     pub(super) guest_listener: Option<serverware_decision_gate::GuestResponseV2ListenerProfile>,
+    pub(super) native_staging: bool,
     pub(super) expected_uid: libc::uid_t,
     pub(super) boot_id: String,
     pub(super) authenticated_client_identity_sha256: String,
@@ -376,6 +382,7 @@ pub(super) struct ResponseObservationV2Client {
 pub(super) struct ResponseObservationV2ClientConfig {
     pub(super) socket_path: PathBuf,
     pub(super) guest_listener: Option<serverware_decision_gate::GuestResponseV2ListenerProfile>,
+    pub(super) native_staging: bool,
     pub(super) expected_uid: libc::uid_t,
     pub(super) startup_timeout: Duration,
     pub(super) attestation_mode: V2AttestationMode,

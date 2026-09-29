@@ -170,6 +170,24 @@ pub(super) fn execute(
     signing_keys: &BTreeMap<String, RoleSigningKey>,
     request_exact_object_fds: Vec<OwnedFd>,
 ) -> Result<EngineResult, V2RuntimeError> {
+    if super::super::staging::transport::selection(config,scoped.role,request)?.is_some(){
+        let label=request.payload.get("apiVersion").and_then(serde_json::Value::as_str);
+        if label==Some("serverware.responseV2.nativeStagingPolicy/v1"){
+            return super::super::staging::policy::execute(config,scoped,request,signing_keys,request_exact_object_fds);
+        }
+        if label==Some("serverware.responseV2.nativeStagedPut/v1"){
+            return super::super::staging::ledger::execute(config,scoped,request,signing_keys,request_exact_object_fds);
+        }
+        let public:crate::response_observation_v2_api::V2ResponseDataRequest=serde_json::from_value(request.payload.clone())
+            .map_err(|_|super::super::staging::fail("native public staging request shape"))?;
+        let selected=super::super::staging::transport::public(config,&public)?;
+        let mut inner=request.clone();inner.payload=serde_json::to_value(&selected.request)
+            .map_err(|_|super::super::staging::fail("native staging role request encoding"))?;
+        let result=super::state_authority::native_staging::execute(config,scoped,&inner,signing_keys,request_exact_object_fds)?;
+        let terminal=serde_json::from_value(result.result).map_err(|_|super::super::staging::fail("actual staging terminal shape"))?;
+        return Ok(EngineResult{result:serde_json::to_value(crate::response_observation_v2_api::V2ResponseDataResult::NativeStaging(terminal))
+            .map_err(|_|super::super::staging::fail("native staging public result encoding"))?,exact_object_fds:Vec::new()});
+    }
     if scoped.role == CustodyServiceRole::ImmutableArtifactLedger
         && request.operation == ServiceOperationV1::ImmutablePut {
         return super::ledger_put::execute(config,scoped,request,signing_keys,request_exact_object_fds);
@@ -285,6 +303,7 @@ fn execute_response_data_request(
         return Ok(EngineResult {result:serde_json::to_value(result).map_err(|_|V2RuntimeError::new("target_dispatch_encoding","encode actual result"))?,exact_object_fds:Vec::new()});
     }
     let expected = match &request {
+        Request::NativeStaging {..}=>return Err(super::super::staging::fail("native staging must use its selected actual owner")),
         Request::TargetDispatchBegin {..}|Request::CapturePersist {..}=>unreachable!("source fixed target dispatch branch above"),
         Request::AppendReleaseTransparency { .. } => (
             CustodyServiceRole::ReleaseAttestorPublisher,
@@ -333,6 +352,7 @@ fn execute_response_data_request(
     }
     let public_request_sha256 = canonical_sha256(&request)?;
     match request {
+        Request::NativeStaging {..}=>Err(super::super::staging::fail("native staging cannot enter legacy response-data handler")),
         Request::TargetDispatchBegin {..}|Request::CapturePersist {..}=>unreachable!("source fixed target dispatch branch above"),
         Request::AppendReleaseTransparency {
             api_version,
@@ -5524,6 +5544,33 @@ pub(in super::super) fn signed_state_authority_frame(
     intent: &UnsignedStateAuthorityIntentV1,
     signing_keys: &BTreeMap<String, RoleSigningKey>,
 ) -> Result<RpcRequestFrame, V2RuntimeError> {
+    signed_state_authority_frame_profile(config,scoped,request_id,operation_id,attempt_id,
+        expected_revision,fencing_token,deadline_boottime_ns,intent,signing_keys,false)
+}
+
+pub(super) fn signed_native_staging_frame(
+    config:&RootOwnedResponseObservationV2Config,scoped:&ScopedCustodyServiceConfig,
+    value:&super::super::staging::VerifiedRequest,operation_id:&str,expected_revision:u64,
+    intent:&UnsignedStateAuthorityIntentV1,keys:&BTreeMap<String,RoleSigningKey>,
+) -> Result<RpcRequestFrame,V2RuntimeError> {
+    value.check(config)?;
+    if scoped.role!=super::super::CustodyServiceRole::StateAuthority {
+        return Err(super::super::staging::fail("native staging frame requires its actual state owner"));
+    }
+    signed_state_authority_frame_profile(config,scoped,&value.binding().request_id,operation_id,&value.binding().attempt_id,
+        expected_revision,value.binding().fencing_token,value.deadline().deadline_boot_millis*1_000_000,intent,keys,
+        value.phase()=="RESERVE")
+}
+
+fn signed_state_authority_frame_profile(
+    config:&RootOwnedResponseObservationV2Config,scoped:&ScopedCustodyServiceConfig,request_id:&str,operation_id:&str,
+    attempt_id:&str,expected_revision:u64,fencing_token:u64,deadline_boottime_ns:u64,
+    intent:&UnsignedStateAuthorityIntentV1,signing_keys:&BTreeMap<String,RoleSigningKey>,allocate:bool,
+) -> Result<RpcRequestFrame,V2RuntimeError> {
+    if allocate&&(config.native_staging.is_none()||expected_revision!=0||fencing_token!=0
+        ||!matches!(intent.payload,super::super::super::state_authority::rpc::MutationPayload::Reserve(_))) {
+        return Err(super::super::staging::fail("native Reserve allocation profile differs"));
+    }
     let signer_role = readiness_signer_role(scoped.role).ok_or_else(|| {
         V2RuntimeError::new(
             "state_authority_caller_signer_unassigned",
@@ -5560,8 +5607,8 @@ pub(in super::super) fn signed_state_authority_frame(
         expected_revision,
         expected_state: intent.expected_state,
         fence: FenceExpectation {
-            mode: FenceExpectationMode::Exact,
-            fence_token: Some(Identifier(fencing_token.to_string())),
+            mode: if allocate {FenceExpectationMode::Allocate} else {FenceExpectationMode::Exact},
+            fence_token: if allocate {None} else {Some(Identifier(fencing_token.to_string()))},
         },
         deadline,
         payload: intent.payload.clone(),

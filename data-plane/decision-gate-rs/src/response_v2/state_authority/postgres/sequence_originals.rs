@@ -59,21 +59,26 @@ pub fn schema_metadata_parameters() -> [PgValue; 2] {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub enum Profile { LegacyV1, SequenceOriginalsV2 }
+pub enum Profile { LegacyV1, SequenceOriginalsV2, NativeStagingV3 }
+impl Profile {
+    pub fn retains_originals(self)->bool { matches!(self,Self::SequenceOriginalsV2|Self::NativeStagingV3) }
+}
 pub fn profile(pin: &Digest) -> AuthorityResult<Profile> {
     if pin == &sha256_digest(super::schema::BOOTSTRAP_SQL.as_bytes()) { Ok(Profile::LegacyV1) }
     else if pin == &migration_sha256() { Ok(Profile::SequenceOriginalsV2) }
+    else if pin == &super::native_staging_profile::migration_sha256() { Ok(Profile::NativeStagingV3) }
     else { Err(AuthorityError::InvalidContract { field:"generation.migrationSha256",
         reason:"unknown explicitly pinned state database profile".into() }) }
 }
 
 pub fn require_database(transaction:&mut dyn PostgresTransaction, pin:&Digest) -> AuthorityResult<Profile> {
     let selected=profile(pin)?;
-    if selected==Profile::SequenceOriginalsV2 {
+    if selected.retains_originals() {
         let row=transaction.query_optional(super::statements::LOCK_SCHEMA_METADATA_SQL,&[])?
             .ok_or_else(|| refused("explicit v2 schema metadata is absent"))?;
-        if row.require_u64("schema_version")?!=2 || row.require_text("migration_sha256")?!=pin.0 {
-            return Err(refused("actual database is not the independently selected v2 profile"));
+        let version=if selected==Profile::NativeStagingV3 {3} else {2};
+        if row.require_u64("schema_version")?!=version || row.require_text("migration_sha256")?!=pin.0 {
+            return Err(refused("actual database is not the independently selected originals profile"));
         }
     }
     Ok(selected)

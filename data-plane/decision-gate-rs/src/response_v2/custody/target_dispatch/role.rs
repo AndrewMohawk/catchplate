@@ -80,7 +80,7 @@ pub(crate) fn execute(config:&Config,scoped:&ScopedCustodyServiceConfig,request:
             let credential_signer=keys.get("credential-authority").filter(|key|key.logical_role()=="credential-authority")
                 .ok_or_else(||fail("actual credential-authority role key unavailable"))?;
             let artifact=engine::sign_nested_artifact(config,CustodyServiceRole::CredentialTransport,credential_signer,
-                lifecycle::OperationKind::DispatchBegin,&format!("use-artifact:{}",&digest[7..]),&original.binding.attempt_id,
+                lifecycle::OperationKind::DispatchBegin,&operation,&original.binding.attempt_id,
                 original.binding.attempt_revision,original.binding.fencing_token,original.binding.deadline_at_epoch_ms,
                 rpc::NestedAuthorityPayload::CredentialUse(rpc::CredentialUseArtifact {
                     credential_use_id:contract::Identifier(format!("credential-use:{}",&digest[7..])),

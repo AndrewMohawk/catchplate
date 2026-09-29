@@ -564,7 +564,7 @@ pub(crate) fn invoke_response_data_service(
     Ok((result, validated))
 }
 
-fn invoke_service_wire<P>(
+pub(super) fn invoke_service_wire<P>(
     config: &RootOwnedResponseObservationV2Config,
     role: CustodyServiceRole,
     operation: ServiceOperationV1,
@@ -676,7 +676,8 @@ where
     if request_exact_objects.is_empty() {
         connection.send(&envelope)?;
     } else {
-        if request_exact_objects.len() != 1 {
+        let staging=super::staging::transport::selection(config,role,&envelope)?;
+        if staging.is_none()&&request_exact_objects.len() != 1 {
             return Err(V2RuntimeError::new(
                 "custody_service_request_exact_object_count_invalid",
                 "service request may carry only its one declared sealed input descriptor",
@@ -686,7 +687,8 @@ where
             .iter()
             .map(std::os::fd::AsRawFd::as_raw_fd)
             .collect::<Vec<_>>();
-        connection.send_with_fds(&envelope, &raw_fds)?;
+        if staging.is_some(){connection.send_native_staging_with_fds(config,role,&envelope,&raw_fds)?;}
+        else{connection.send_with_fds(&envelope, &raw_fds)?;}
     }
     let (result, exact_object_fds):
         (ServiceRpcResultV1, Vec<OwnedFd>) =

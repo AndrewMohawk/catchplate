@@ -27,6 +27,7 @@ pub(super) fn probe_response_observation_v2_once(
                         socket_path:
                             client.socket_path.clone(),
                         guest_listener: client.guest_listener.clone(),
+                        native_staging: client.native_staging,
                         expected_uid: client.expected_uid,
                         startup_timeout: max_duration,
                         attestation_mode:

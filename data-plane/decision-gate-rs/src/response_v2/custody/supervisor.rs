@@ -878,6 +878,13 @@ mod linux_runtime {
                 config.whole_operation_timeout(),
             )?;
             let descriptors = request.exact_object_descriptors();
+            if let V2ResponseDataRequest::NativeStaging{..}=&request{
+                let selected=super::super::staging::transport::public(config,&request).map_err(runtime_io_error)?;
+                let PeerOwner::Guest{observation,..}=&peer.measurement else{
+                    return Err(io::Error::new(io::ErrorKind::PermissionDenied,"native staging requires actual guest inspector ownership"));};
+                super::super::staging::require_session(config,&selected.request,&peer.identity,&session_identity,
+                    observation.process_binding_sha256(),observation.cgroup()).map_err(runtime_io_error)?;
+            }
             super::super::target_dispatch::require_session(config,&request,&peer.identity,&session_identity)
                 .map_err(runtime_io_error)?;
             let validated = super::super::validate_exact_object_files(
@@ -972,6 +979,8 @@ mod linux_runtime {
         use crate::response_observation_v2_api::
             V2ResponseDataRequest as Request;
         let (api_version, binding) = match request {
+            Request::NativeStaging{api_version,params,..}=>(api_version,Some((params.binding.request_id.as_str(),
+                params.binding.custody_boot_id.as_str(),params.binding.client_identity_sha256.as_str()))),
             Request::TargetDispatchBegin {api_version,params,..}=>(api_version,Some((params.original.binding.request_id.as_str(),
                 params.original.binding.custody_boot_id.as_str(),params.original.binding.client_identity_sha256.as_str()))),
             Request::CapturePersist {api_version,request_id,params,..}=>(api_version,Some((request_id.as_str(),
@@ -1069,7 +1078,10 @@ mod linux_runtime {
             || request.request_id().len() > 256
             || request.attempt_id().is_empty()
             || request.stable_resume_id().is_empty()
-            || request.fencing_token() == 0
+            || (request.fencing_token() == 0&&!matches!(request,Request::NativeStaging{params,..}
+                if matches!(&params.request.evidence.statement.original.request,
+                    crate::response_observation_v2_api::V2OperationRequest::Reserve{..})
+                    &&params.binding.attempt_revision==0))
             || !seen_request_ids.insert(request.request_id().to_owned())
             || binding.is_some_and(
                 |(binding_request_id, custody_boot_id, client_sha256)| {

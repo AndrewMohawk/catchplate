@@ -743,6 +743,7 @@ pub(super) fn response_observation_v2_client_config(
     Ok(Some(ResponseObservationV2ClientConfig {
         socket_path,
         guest_listener: None,
+        native_staging: false,
         expected_uid,
         startup_timeout:
             Duration::from_millis(startup_timeout_ms),
@@ -977,6 +978,7 @@ fn initialize_response_observation_v2_client_until(
                 let client = ResponseObservationV2Client {
                     socket_path: config.socket_path,
                     guest_listener: config.guest_listener,
+                    native_staging: config.native_staging,
                     expected_uid: config.expected_uid,
                     boot_id: status.boot_id,
                     authenticated_client_identity_sha256:
@@ -1241,6 +1243,7 @@ impl ResponseObservationV2Client {
         ResponseObservationV2ClientConfig {
             socket_path: self.socket_path.clone(),
             guest_listener: self.guest_listener.clone(),
+            native_staging: self.native_staging,
             expected_uid: self.expected_uid,
             startup_timeout: Duration::from_millis(
                 RESPONSE_OBSERVATION_V2_MAX_OPERATION_MS,

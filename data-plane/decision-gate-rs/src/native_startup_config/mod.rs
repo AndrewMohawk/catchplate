@@ -815,6 +815,11 @@ fn run(configuration: ArtifactV1, launch: ArtifactV1, public_identity_stdout: bo
     let raw_configuration = zeroize::Zeroizing::new(raw_configuration);
     configuration_original.require_private()?;
     let configuration = self::configuration(&raw_configuration, mode)?;
+    // Only v14/v15 retain the actual gate-cgroup producer and bind its owner
+    // before serving. A nested staging marker cannot supply that custody.
+    ensure(!configuration.response_observation_v2.uses_native_staging()
+        || configuration.gate_cgroup.is_some(),
+        "native staging requires explicit gate-cgroup startup")?;
     let (mut launch_original, raw_launch) = HeldOriginal::read(launch, MAX_LAUNCH_BYTES)?;
     let launch: parameters::LaunchV1 = decode(&raw_launch, MAX_LAUNCH_BYTES)?;
     launch.validate(&configuration_pin)?;

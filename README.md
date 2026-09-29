@@ -24,12 +24,12 @@ Checkpoint: **2026-09-29 — pre-production, source-only.**
 
 [![Project checkpoints, one segment per task: 36 of 46 source-landed; 8 active and 2 todo. Evidence handoff 10/10; historical recovery 4/5; permissions and grants 10/10; finalization and sessions 8/8; workloads and native 3/6; providers and operations 1/7. H05, N04, N05, N06, O01, O04, O05 and O06 are in progress. Production acceptance remains 0/6. Source only; unbuilt, unexecuted and unprovisioned.](docs/images/project-progress.svg)](docs/production-status.md#next-source-milestones)
 
-Latest [`.276` source](https://github.com/example/private-deployment) adds
-[permanent gate privilege separation](docs/native-serving-privilege-separation.md)
-and [independent RBAC currentness](docs/rbac-independent-currentness.md).
-Encrypted service-token startup is authored but not yet integrated. Provider
-issuance/refresh, guest service startup, recovery, deployment and end-to-end
-verification remain open. N06 and O06 remain partial.
+Latest [`.277` source](https://github.com/example/private-deployment) connects
+[encrypted service-token startup](docs/native-encrypted-service-startup.md)
+through the actual enclave broker, after permanent gate privilege separation.
+Tokens are bound to the actual gate, policy and service endpoints before serving.
+Provider issuance/refresh, guest service startup, recovery, deployment and
+end-to-end verification remain open. N06 and O06 remain partial.
 
 The bar shows **committed source, not tested readiness or remaining effort**.
 Green means source-landed; amber means partial implementation. No current pilot

@@ -207,6 +207,9 @@ pub(crate) struct Delivery {
     startup_complete: AtomicBool,
     poisoned: AtomicBool,
     verified_generation: std::sync::OnceLock<String>,
+    // Some only for the fixed root-admission -> final-role transition. These
+    // owners check held originals, never reopen root-private configuration.
+    retained_process: Option<libc::pid_t>,
 }
 impl std::fmt::Debug for Delivery {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -214,6 +217,17 @@ impl std::fmt::Debug for Delivery {
     }
 }
 impl Delivery {
+    // Lightweight monitor check. This is never a substitute for check() at
+    // credential/generation consumers; it grants no current generation right.
+    pub(crate) fn check_scope(&self) -> Result<(),V2RuntimeError> {
+        if self.poisoned.load(Ordering::Acquire) || super::recovery::kernel_boot_id()? != self.boot_id
+            || unsafe {libc::geteuid()} != self.scoped.process.uid || unsafe {libc::getegid()} != self.scoped.process.gid
+            || self.retained_process.is_some_and(|pid|unsafe {libc::getpid()} != pid) {
+            return Err(fail("guest delivery process/boot/poison scope changed"));
+        }
+        if !self.startup_complete.load(Ordering::Acquire) {self.check_deadline()?;}
+        Ok(())
+    }
     pub(crate) fn check(&self) -> Result<(), V2RuntimeError> {
         let result = (|| {
             if self.poisoned.load(Ordering::Acquire) { return Err(fail("delivery owner poisoned")); }
@@ -222,9 +236,16 @@ impl Delivery {
                 || unsafe { libc::getegid() } != self.scoped.process.gid
             { return Err(fail("guest delivery process/boot changed")); }
             if !self.startup_complete.load(Ordering::Acquire) { self.check_deadline()?; }
-            self.config.check()?;
-            self.envelope.check()?;
-            for original in self.originals.values() { original.check()?; }
+            if let Some(pid) = self.retained_process {
+                if unsafe { libc::getpid() } != pid { return Err(fail("retained role delivery crossed process")); }
+                self.config.check_held()?;
+                self.envelope.check_held()?;
+                for original in self.originals.values() { original.check_held()?; }
+            } else {
+                self.config.check()?;
+                self.envelope.check()?;
+                for original in self.originals.values() { original.check()?; }
+            }
             if !self.startup_complete.load(Ordering::Acquire) { self.check_deadline()?; }
             Ok(())
         })();
@@ -423,7 +444,100 @@ impl InspectionOriginals {
 
 pub(crate) fn load(config_path: &Path, role: CustodyServiceRole, path: &Path, sha256: &str)
     -> Result<Config, V2RuntimeError> {
-    let (mut config, config_original, envelope_original, payload, scoped) = admission(config_path, role, path, sha256)?;
+    let admitted = admission(config_path, role, path, sha256)?;
+    load_admitted(admitted, None)
+}
+
+// Root admits only public signed configuration/delivery originals. No role
+// credential (in particular no seed) is opened by this owner or its getters.
+#[cfg(target_os="linux")]
+pub(crate) struct PreparedRoleDelivery {
+    config: Config, configuration: Original, envelope: Original,
+    payload: Payload, scoped: ScopedCustodyServiceConfig, pid: libc::pid_t,
+    configuration_sha256: String, delivery_sha256: String,
+}
+#[cfg(target_os="linux")]
+impl PreparedRoleDelivery {
+    pub(crate) fn open(configuration_path: &Path, configuration_sha256: &str,
+        role: CustodyServiceRole, delivery_path: &Path, delivery_sha256: &str)
+        -> Result<Self, V2RuntimeError> {
+        if unsafe { libc::geteuid() } != 0 || unsafe { libc::getegid() } != 0 {
+            return Err(fail("role delivery preparation requires actual root"));
+        }
+        let (config, configuration, envelope, payload, scoped) =
+            admission(configuration_path, role, delivery_path, delivery_sha256)?;
+        if digest(&configuration.bytes) != configuration_sha256
+            || scoped.process.uid == 0 || scoped.process.gid == 0
+            || [64990,65534].contains(&scoped.process.uid) || [64990,65534].contains(&scoped.process.gid)
+        { return Err(fail("independent configuration pin or dedicated role identity differs")); }
+        config.guest_listener.as_ref().ok_or_else(|| fail("fixed guest cohort requires guest listener profile"))?.validate(&config)?;
+        let owner = Self { config,configuration,envelope,payload,scoped,pid:unsafe { libc::getpid() },
+            configuration_sha256:configuration_sha256.to_owned(),delivery_sha256:delivery_sha256.to_owned() };
+        owner.check()?;
+        Ok(owner)
+    }
+    pub(crate) fn check(&self) -> Result<(), V2RuntimeError> {
+        if unsafe { libc::geteuid() } != 0 || unsafe { libc::getegid() } != 0 {
+            return Err(fail("root role preparation changed identity"));
+        }
+        self.check_phase()?;
+        self.configuration.check()?;
+        self.envelope.check()
+    }
+    fn check_phase(&self) -> Result<(), V2RuntimeError> {
+        if unsafe { libc::getpid() } != self.pid || super::recovery::kernel_boot_id()? != self.payload.boot_id
+            || super::recovery::boottime_ns()? >= self.startup_deadline_boottime_ns()? {
+            return Err(fail("role preparation crossed process, boot or original startup deadline"));
+        }
+        self.configuration.check_held()?;
+        self.envelope.check_held()
+    }
+    pub(crate) fn scoped(&self) -> &ScopedCustodyServiceConfig { &self.scoped }
+    pub(crate) fn configuration_sha256(&self) -> &str { &self.configuration_sha256 }
+    pub(crate) fn delivery_sha256(&self) -> &str { &self.delivery_sha256 }
+    pub(crate) fn boot_id(&self) -> &str { &self.payload.boot_id }
+    pub(crate) fn startup_deadline_boottime_ns(&self) -> Result<u64,V2RuntimeError> {
+        ns(&self.payload.deadline_boottime_ns)
+    }
+    pub(crate) fn load_after_drop(self) -> Result<Config,V2RuntimeError> {
+        self.check_phase()?;
+        super::guest_role::privileges::require_role(self.scoped.process.uid,self.scoped.process.gid)
+            .map_err(|_| fail("permanent signed role identity was not established"))?;
+        let pid = self.pid;
+        load_admitted((self.config,self.configuration,self.envelope,self.payload,self.scoped),Some(pid))
+    }
+    // Parent-side phase transition only. Actual progress/kernel-child checks
+    // belong to the owning native cohort; this owner grants no readiness.
+    pub(crate) fn into_lifetime(self) -> Result<RoleDeliveryOriginals,V2RuntimeError> {
+        self.check()?;
+        Ok(RoleDeliveryOriginals {configuration:self.configuration,envelope:self.envelope,
+            pid:self.pid,boot_id:self.payload.boot_id,scoped:self.scoped,
+            configuration_sha256:self.configuration_sha256,delivery_sha256:self.delivery_sha256})
+    }
+}
+#[cfg(target_os="linux")]
+pub(crate) struct RoleDeliveryOriginals {
+    configuration:Original,envelope:Original,pid:libc::pid_t,boot_id:String,
+    scoped:ScopedCustodyServiceConfig,configuration_sha256:String,delivery_sha256:String,
+}
+#[cfg(target_os="linux")]
+impl RoleDeliveryOriginals {
+    pub(crate) fn check(&self)->Result<(),V2RuntimeError> {
+        if unsafe {libc::getpid()}!=self.pid || super::recovery::kernel_boot_id()?!=self.boot_id {
+            return Err(fail("retained role originals crossed process or boot"));
+        }
+        self.configuration.check_held()?;
+        self.envelope.check_held()
+    }
+    pub(crate) fn scoped(&self)->&ScopedCustodyServiceConfig {&self.scoped}
+    pub(crate) fn configuration_sha256(&self)->&str {&self.configuration_sha256}
+    pub(crate) fn delivery_sha256(&self)->&str {&self.delivery_sha256}
+}
+
+fn load_admitted(admitted: (Config, Original, Original, Payload, ScopedCustodyServiceConfig),
+    retained_process: Option<libc::pid_t>) -> Result<Config,V2RuntimeError> {
+    let (mut config, config_original, envelope_original, payload, scoped) = admitted;
+    let role = scoped.role;
     if unsafe { libc::geteuid() } != scoped.process.uid || unsafe { libc::getegid() } != scoped.process.gid {
         return Err(fail("guest delivery requires the actual final service UID/GID"));
     }
@@ -464,7 +578,7 @@ pub(crate) fn load(config_path: &Path, role: CustodyServiceRole, path: &Path, sh
     drop(names);
     let owner = Arc::new(Delivery { config:config_original, envelope:envelope_original, originals, credentials,
         scoped, boot_id:payload.boot_id, deadline, startup_complete:AtomicBool::new(false), poisoned:AtomicBool::new(false),
-        verified_generation:std::sync::OnceLock::new() });
+        verified_generation:std::sync::OnceLock::new(), retained_process });
     let trust = owner.credential(&owner.credentials.trust_anchor_public_key.path)?;
     if trust.len() != 32 || trust.as_slice() == public.as_slice() {
         return Err(fail("generation root must be exact32 and distinct from delivery authority"));

@@ -16,6 +16,15 @@ pub(crate) mod guest_listener;
 #[path = "response_v2/custody/guest_inspector/mod.rs"]
 pub(crate) mod guest_inspector;
 #[cfg(target_os = "linux")]
+#[path = "response_v2/custody/guest_role/mod.rs"]
+pub(crate) mod guest_role;
+#[cfg(target_os = "linux")]
+#[path = "response_v2/custody/guest_cohort.rs"]
+pub(crate) mod guest_cohort;
+#[cfg(target_os = "linux")]
+#[path = "response_v2/custody/guest_cohort_process.rs"]
+mod guest_cohort_process;
+#[cfg(target_os = "linux")]
 #[path = "response_v2/custody/guest_inspector_parent.rs"]
 pub(crate) mod guest_inspector_parent;
 #[cfg(target_os = "linux")]
@@ -48,6 +57,10 @@ pub use guest_listener::{GuestResponseV2ListenerProfile, GuestResponseV2ClientPa
     PreparedGuestResponseV2Listener, GUEST_RESPONSE_V2_SOCKET};
 #[cfg(target_os = "linux")]
 pub use guest_inspector::run_guest_inspector;
+#[cfg(target_os = "linux")]
+pub use guest_role::run_guest_role;
+#[cfg(target_os = "linux")]
+pub use guest_cohort::{GuestCohortConfiguration, StartedGuestCohort};
 #[cfg(target_os = "linux")]
 pub use guest_inspector_parent::{GuestInspectorConfiguration, PreparedGuestInspector,
     InitializedGuestInspector, GuestInspectorRouterEndpoint};

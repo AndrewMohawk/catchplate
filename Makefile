@@ -3915,6 +3915,11 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/response_v2/custody/guest_inspector_parent.rs \
 				data-plane/decision-gate-rs/src/response_v2/custody/guest_inspector_parent_image.rs \
 				data-plane/decision-gate-rs/src/response_v2/custody/guest_inspector_parent_process.rs \
+				data-plane/decision-gate-rs/src/bin/serverware-response-v2-guest-role.rs \
+				data-plane/decision-gate-rs/src/response_v2/custody/guest_role/mod.rs \
+				data-plane/decision-gate-rs/src/response_v2/custody/guest_role/privileges.rs \
+				data-plane/decision-gate-rs/src/response_v2/custody/guest_cohort.rs \
+				data-plane/decision-gate-rs/src/response_v2/custody/guest_cohort_process.rs \
 				data-plane/decision-gate-rs/src/response_v2/integration.rs \
 				data-plane/decision-gate-rs/src/response_v2/mod.rs \
 				data-plane/decision-gate-rs/src/response_v2/native_config.rs \
@@ -4141,12 +4146,14 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/response-v2-guest-credential-delivery.v1.schema.json \
 				schemas/response-v2-guest-listener.v1.schema.json \
 				schemas/response-v2-guest-inspector.v1.schema.json \
+				schemas/response-v2-guest-role.v1.schema.json \
 				schemas/rbac-witness-recovery.v1.schema.json \
 				schemas/native-secret-broker.v1.schema.json \
 				schemas/native-startup-configuration.v5.schema.json \
 				schemas/native-startup-configuration.v6.schema.json \
 				schemas/native-startup-configuration.v7.schema.json \
 				schemas/native-startup-configuration.v8.schema.json \
+				schemas/native-guest-cohort.v1.schema.json \
 				schemas/native-oauth-measured-refresh.v1.schema.json \
 				schemas/native-service-tokens.v1.schema.json \
 				schemas/native-startup-configuration.v4.schema.json \

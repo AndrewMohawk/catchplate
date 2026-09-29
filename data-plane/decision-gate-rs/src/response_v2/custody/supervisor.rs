@@ -43,21 +43,42 @@ fn run_loaded_custody_service(
     config: RootOwnedResponseObservationV2Config,
     service_role: super::config::CustodyServiceRole,
 ) -> Result<(), super::V2RuntimeError> {
+    run_loaded_service(config,service_role,None)
+}
+
+#[cfg(target_os = "linux")]
+pub(super) fn run_fixed_guest_role(
+    config: RootOwnedResponseObservationV2Config,
+    service_role: super::config::CustodyServiceRole,
+    owner: std::sync::Arc<super::guest_role::Lifetime>,
+) -> Result<(),super::V2RuntimeError> {
+    run_loaded_service(config,service_role,Some(owner))
+}
+
+#[cfg(target_os = "linux")]
+fn run_loaded_service(
+    config: RootOwnedResponseObservationV2Config,
+    service_role: super::config::CustodyServiceRole,
+    guest: Option<std::sync::Arc<super::guest_role::Lifetime>>,
+) -> Result<(), super::V2RuntimeError> {
     super::guest_delivery::check(&config)?;
     if service_role == super::config::CustodyServiceRole::CustodyRouter {
         super::guest_inspector::client::require_attached(&config)?;
     }
     let service_config = config.clone();
+    let fixed_guest = guest.is_some();
     let service = std::thread::Builder::new()
         .name(format!(
             "response-v2-{}-runtime",
             service_role.as_str()
         ))
         .spawn(move || {
-            super::services::run_service(
+            let result = super::services::run_service(
                 service_config,
                 service_role,
-            )
+            );
+            if fixed_guest { super::guest_role::stop(); }
+            result
         })
         .map_err(|_| {
             super::V2RuntimeError::new(
@@ -70,10 +91,28 @@ fn run_loaded_custody_service(
         service_role,
         &service,
     )?;
+    if let Some(owner)=&guest {owner.progress(super::guest_role::Phase::Listening)?;}
+    // State activation publishes the genuine context and then awaits all seven
+    // role artifacts. Run it alongside this same process's local publisher;
+    // sequential activation-before-publication would deadlock on its own role.
+    let activation = if fixed_guest && service_role==super::config::CustodyServiceRole::StateAuthority {
+        let activation_config=config.clone();
+        Some(std::thread::Builder::new().name("guest-generation-activation".to_owned()).spawn(move || {
+            if super::generation::activate_generation_from_systemd_credentials(&activation_config).is_err() {
+                super::guest_role::stop();
+            }
+        }).map_err(|_|super::V2RuntimeError::new("guest_generation_thread_failed","start actual generation activation"))?)
+    } else {None};
     super::generation::publish_service_generation_readiness(
         &config,
         service_role,
     )?;
+    if let Some(activation)=activation {
+        activation.join().map_err(|_|super::V2RuntimeError::new("guest_generation_activation_failed","actual activation thread failed"))?;
+    }
+    // In the state role this follows actual activation success; for every role
+    // it follows publication of the real local readiness artifact, not a DTO.
+    if let Some(owner)=&guest {owner.progress(super::guest_role::Phase::Started)?;}
     if let Some(owner) = &config.guest_delivery {
         // This means only this process completed real local readiness publication.
         // Generation activation still requires its existing independent quorum.

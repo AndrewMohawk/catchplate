@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/response-v2-guest-role.v1.schema.json",
+  "title": "Fixed guest custody role startup",
+  "$comment": "Data grammar only. Canonical UTF8 sorted JSON without LF, bootstrap <=16384 bytes and passive startup notice <=1024 bytes. Actual private parent/child PIDFD custody, independently signed role/config/delivery/generation, current boot, immutable originals and original deadlines are enforced by source owners. No input command, readiness permission, retry or host fallback is defined.",
+  "oneOf": [{"$ref": "#/$defs/bootstrap"}, {"$ref": "#/$defs/startup"}],
+  "$defs": {
+    "sha": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$", "not": {"const": "sha256:0000000000000000000000000000000000000000000000000000000000000000"}},
+    "nonce": {"type": "string", "pattern": "^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$", "not": {"const": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}},
+    "ns": {"type": "string", "pattern": "^[1-9][0-9]{0,19}$", "$comment": "Actual parser also enforces <=u64::MAX, canonical positive decimal, and the original absolute CLOCK_BOOTTIME deadline."},
+    "path": {"type": "string", "minLength": 2, "maxLength": 4096, "pattern": "^/[^\u0000]+$", "$comment": "Source bounds UTF8 bytes and rejects empty/dot/dotdot components. These are cold consistency inputs only; the independent signed configuration and delivery bind exact original bytes."},
+    "role": {"enum": ["custody-router", "state-authority", "credential-transport", "policy-proof-verifier", "immutable-artifact-ledger", "release-attestor-publisher", "cleanup-watchdog"]},
+    "bootstrap": {
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "configurationPath", "configurationSha256", "deliveryPath", "deliverySha256", "serviceRole", "gateLifetimeDeadlineBoottimeNs", "channelNonce"],
+      "properties": {
+        "apiVersion": {"const": "serverware.responseV2.guestRoleBootstrap/v1"},
+        "configurationPath": {"$ref": "#/$defs/path"},
+        "configurationSha256": {"$ref": "#/$defs/sha"},
+        "deliveryPath": {"$ref": "#/$defs/path"},
+        "deliverySha256": {"$ref": "#/$defs/sha"},
+        "serviceRole": {"$ref": "#/$defs/role"},
+        "gateLifetimeDeadlineBoottimeNs": {"$ref": "#/$defs/ns"},
+        "channelNonce": {"$ref": "#/$defs/nonce"}
+      },
+      "$comment": "FD5 root:root0600, regular memfd, nlink0, all four immutable seals. FD3 actual root launch-parent AF_UNIX SOCK_SEQPACKET with real parent SO_PEERPIDFD/getppid join; FD4 absent. Only router receives complete listener6/7 + inspector8/9/10 originals. Unsigned sealed bootstrap cannot invent or renew the signed delivery startup window or actual source-owned parent lifetime."
+    },
+    "startup": {
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "channelNonce", "bootstrapSha256", "serviceRole", "phase"],
+      "properties": {
+        "apiVersion": {"const": "serverware.responseV2.guestRoleStartup/v1"},
+        "channelNonce": {"$ref": "#/$defs/nonce"},
+        "bootstrapSha256": {"$ref": "#/$defs/sha"},
+        "serviceRole": {"$ref": "#/$defs/role"},
+        "phase": {"enum": ["listening", "started"]}
+      },
+      "$comment": "Exactly one listening then one started, no replay/restart. Parent independently authenticates actual final signed role SCM_CREDENTIALS and SCM_PIDFD against its owned child. Listening follows real local service readiness; started follows local generation artifact publication, and for state-authority also actual full activation success. A passive notice does not substitute for the signed backend generation result or establish whole product readiness."
+    }
+  }
+}

@@ -103,6 +103,10 @@ impl PreparedGuestInspector {
 }
 impl InitializedGuestInspector {
     pub fn deadline_boottime_ns(&self) -> u64 { self.prepared.deadline }
+    pub(crate) fn require_preparation(&self, prepared: &Prepared) -> Result<(), String> {
+        self.prepared.association.require_preparation(prepared)?;
+        self.check()
+    }
     pub fn require_serving(&self, owner: &Owner) -> Result<(), String> {
         self.prepared.association.require(owner)?;
         self.check()

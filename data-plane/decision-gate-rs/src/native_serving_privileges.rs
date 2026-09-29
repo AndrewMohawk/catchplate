@@ -144,4 +144,8 @@ impl Association {
         require(Arc::ptr_eq(&self.origin, &owner.origin))?;
         owner.check()
     }
+    pub(crate) fn require_preparation(&self, prepared: &Prepared) -> Result<(), String> {
+        require(Arc::ptr_eq(&self.origin, &prepared.origin))?;
+        prepared.check()
+    }
 }

@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-guest-cohort.v1.schema.json",
+  "title": "Fixed native guest cohort cold configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "executable", "configuration", "deliveries"],
+  "properties": {
+    "apiVersion": { "const": "serverware.nativeGuestCohort/v1" },
+    "executable": {
+      "allOf": [
+        { "$ref": "#/$defs/artifact" },
+        { "properties": { "path": { "const": "/usr/local/bin/serverware-response-v2-guest-role" } } }
+      ]
+    },
+    "configuration": { "$ref": "#/$defs/artifact" },
+    "deliveries": {
+      "type": "array", "minItems": 7, "maxItems": 7,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["serviceRole", "path", "sha256"],
+        "properties": {
+          "serviceRole": { "enum": ["custody-router", "state-authority", "credential-transport", "policy-proof-verifier", "immutable-artifact-ledger", "release-attestor-publisher", "cleanup-watchdog"] },
+          "path": { "$ref": "#/$defs/path" },
+          "sha256": { "$ref": "#/$defs/sha256" }
+        }
+      },
+      "description": "Runtime requires each closed role exactly once and distinct delivery paths, separate from configuration and executable. Signed originals, shared generation/trust/boot and actual fixed executable hashes are independently admitted."
+    }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$", "not": { "const": "sha256:0000000000000000000000000000000000000000000000000000000000000000" } },
+    "path": { "type": "string", "maxLength": 4096, "pattern": "^/(?!\\.{1,2}(?:/|$))[^/\\u0000]+(?:/(?!\\.{1,2}(?:/|$))[^/\\u0000]+)*$" },
+    "artifact": {
+      "type": "object", "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": { "path": { "$ref": "#/$defs/path" }, "sha256": { "$ref": "#/$defs/sha256" } }
+    }
+  }
+}

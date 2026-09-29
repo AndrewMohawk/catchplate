@@ -103,6 +103,10 @@ pub use response_observation_v2::custody::{
 #[cfg(target_os = "linux")]
 pub use response_observation_v2::custody::run_guest_inspector;
 #[cfg(target_os = "linux")]
+pub use response_observation_v2::custody::run_guest_role;
+#[cfg(target_os = "linux")]
+pub use response_observation_v2::custody::{GuestCohortConfiguration, StartedGuestCohort};
+#[cfg(target_os = "linux")]
 pub use response_observation_v2::custody::{GuestInspectorConfiguration, PreparedGuestInspector,
     InitializedGuestInspector, GuestInspectorRouterEndpoint};
 pub use response_observation_v2_api::{

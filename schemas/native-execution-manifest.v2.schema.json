@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.dev/schemas/native-execution-manifest.v2.schema.json",
+  "title": "Native immutable-image ELF execution manifest with pinned application trust",
+  "description": "Data only, not execution permission. Exact canonical ASCII JSON with no LF, at most 32768 bytes. The eight v1 fields plus required nonnull applicationTrust; the explicit combined client v6 selects v2, while client v5 retains v1. The actual owner verifies the immutable in-image file and genuine native CA association; a schema, readonly mount or environment string alone cannot establish that an application uses this trust.",
+  "type": "object", "additionalProperties": false,
+  "required": ["apiVersion", "profile", "rootfs", "entry", "argv", "environment", "cwd", "loaderPolicy", "applicationTrust"],
+  "properties": {
+    "apiVersion": {"const": "serverware.nativeExecutionManifest/v2"},
+    "profile": {"const": "native-elf-erofs-v1"},
+    "rootfs": {"$ref": "native-execution-manifest.v1.schema.json#/properties/rootfs"},
+    "entry": {"$ref": "native-execution-manifest.v1.schema.json#/properties/entry"},
+    "argv": {"$ref": "native-execution-manifest.v1.schema.json#/properties/argv"},
+    "environment": {
+      "$ref": "native-execution-manifest.v1.schema.json#/properties/environment",
+      "required": ["SSL_CERT_FILE"],
+      "description": "Complete explicit environment under the unchanged bounds and loader-variable exclusions. SSL_CERT_FILE must equal applicationTrust.path; this exact cross-field equality is enforced by the native owner, not by JSON Schema. No ambient environment or writable image trust is inherited."
+    },
+    "cwd": {"$ref": "native-execution-manifest.v1.schema.json#/properties/cwd"},
+    "loaderPolicy": {"const": "in-image-system-loader-v1"},
+    "applicationTrust": {
+      "type": "object", "additionalProperties": false,
+      "required": ["profile", "path", "sha256", "certificateSha256"],
+      "description": "Exactly one canonical runtime-CA PEM inside the retained immutable image, 64..65536 bytes, root:root and mode 0444 or 0644; decoded DER at most 16384 bytes. The path must differ from the entry and any interpreter path. These actual filesystem/content and cross-field checks are runtime obligations, not facts proved by this object. The entire PEM and DER certificate have separately pinned nonzero SHA-256 digests.",
+      "properties": {
+        "profile": {"const": "in-image-runtime-ca-pem-v1"},
+        "path": {"$ref": "native-execution-manifest.v1.schema.json#/$defs/path"},
+        "sha256": {"$ref": "native-execution-manifest.v1.schema.json#/$defs/digest"},
+        "certificateSha256": {"$ref": "native-execution-manifest.v1.schema.json#/$defs/digest"}
+      }
+    }
+  }
+}

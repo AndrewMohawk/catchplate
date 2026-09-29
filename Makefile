@@ -3772,6 +3772,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/native_bootstrap_client/install/host.rs \
 				data-plane/decision-gate-rs/src/native_bootstrap_client/install/reservation.rs \
 				data-plane/decision-gate-rs/src/native_bootstrap_client/install/destination.rs \
+				data-plane/decision-gate-rs/src/native_bootstrap_client/install/execution.rs \
 				data-plane/decision-gate-rs/src/native_bootstrap_client/egress/mod.rs \
 				data-plane/decision-gate-rs/src/native_bootstrap_client/egress/execution_parents.rs \
 				data-plane/decision-gate-rs/src/native_bootstrap_client/egress/native_execution.rs \
@@ -3846,11 +3847,13 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-bootstrap-client.v3.schema.json \
 				schemas/native-bootstrap-client.v4.schema.json \
 				schemas/native-bootstrap-client.v5.schema.json \
+				schemas/native-bootstrap-client.v6.schema.json \
 				schemas/native-bootstrap-client-capture.v1.schema.json \
 				schemas/native-bootstrap-client-capture.v2.schema.json \
 				schemas/native-bootstrap-client-capture.v3.schema.json \
 				schemas/native-bootstrap-client-capture.v4.schema.json \
 				schemas/native-bootstrap-client-capture.v5.schema.json \
+				schemas/native-bootstrap-client-capture.v6.schema.json \
 				schemas/native-execution-observation.v1.schema.json \
 				schemas/native-ca-installation-authorization.v1.schema.json \
 				schemas/native-egress-installation-authorization.v1.schema.json \
@@ -3865,6 +3868,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-egress-launch-manifest.v1.schema.json \
 				schemas/native-egress-launch-manifest.v2.schema.json \
 				schemas/native-execution-manifest.v1.schema.json \
+				schemas/native-execution-manifest.v2.schema.json \
 				schemas/native-workload-start-authorization.v1.schema.json \
 				schemas/control-plane-publication-approval.v1.schema.json \
 				schemas/control-plane-policy-file-publication.v1.schema.json \

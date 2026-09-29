@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-bootstrap-client-capture.v6.schema.json",
+  "title": "Combined native CA installation and completed execution capture v6",
+  "description": "Closed eleven-field local capture, one JSON line plus one LF at most 1572864 bytes. The ten v5 fields plus the unchanged local CA installation receipt. Execution observation is at most 16384 compact UTF-8 bytes and installation is at most 8191 bytes. Only definite terminal execution/cleanup produces this data; nonzero workload exit can produce a capture while the CLI still fails. It authenticates neither installation nor execution and grants no action, restart or recovery permission. Old captures cannot be relabeled as v6.",
+  "type": "object", "additionalProperties": false,
+  "required": ["apiVersion", "resultScope", "okForAction", "configurationSha256", "requestSha256", "endpoint", "challengeSource", "evidenceBase64url", "verification", "execution", "installation"],
+  "properties": {
+    "apiVersion": {"const": "serverware.nativeBootstrapClientCapture/v6"},
+    "resultScope": {"const": "local-fixed-endpoint-bootstrap-ca-and-execution-observation"},
+    "okForAction": {"const": false},
+    "configurationSha256": {"$ref": "native-bootstrap-client-capture.v2.schema.json#/properties/configurationSha256"},
+    "requestSha256": {"$ref": "native-bootstrap-client-capture.v2.schema.json#/properties/requestSha256"},
+    "endpoint": {"$ref": "native-bootstrap-client-capture.v2.schema.json#/properties/endpoint"},
+    "challengeSource": {"const": "independently-pinned"},
+    "evidenceBase64url": {"$ref": "native-bootstrap-client-capture.v2.schema.json#/properties/evidenceBase64url"},
+    "verification": {"$ref": "native-bootstrap-client-capture.v2.schema.json#/properties/verification"},
+    "execution": {"$ref": "native-execution-observation.v1.schema.json"},
+    "installation": {"$ref": "native-ca-installation-receipt.v1.schema.json"}
+  }
+}

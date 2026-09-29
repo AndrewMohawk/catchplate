@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-bootstrap-client.v6.schema.json",
+  "title": "Explicit combined native CA installation and executable-workload bootstrap client v6",
+  "description": "Closed independently pinned configuration, at most 16384 bytes: the original 18 fields plus required nonnull installation, egress, attachment and execution objects. Explicit v6 selects execution manifest v2 with immutable in-image application trust; v1-v5 remain unchanged. Actual same-session proof, independent installation/start/network grants, retained originals, one-use claims and terminal cleanup remain mandatory. Schema acceptance is neither installation nor execution permission.",
+  "type": "object", "additionalProperties": false,
+  "required": ["apiVersion", "endpoint", "timeoutMilliseconds", "startupEvidence", "startupExpectations", "sessionScope", "trustRoots", "clientCertificate", "clientPrivateKey", "callerIssuer", "delegationAuthorizer", "setupAuthorizer", "request", "clientChallengeBase64url", "expectedCallerPrincipal", "expectedTargetPrincipal", "expectedTargetNonce", "expectedTargetRequestSha256", "installation", "egress", "attachment", "execution"],
+  "properties": {
+    "apiVersion": {"const": "serverware.nativeBootstrapClient/v6"},
+    "endpoint": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/endpoint"},
+    "timeoutMilliseconds": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/timeoutMilliseconds"},
+    "startupEvidence": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/startupEvidence"},
+    "startupExpectations": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/startupExpectations"},
+    "sessionScope": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/sessionScope"},
+    "trustRoots": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/trustRoots"},
+    "clientCertificate": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/clientCertificate"},
+    "clientPrivateKey": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/clientPrivateKey"},
+    "callerIssuer": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/callerIssuer"},
+    "delegationAuthorizer": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/delegationAuthorizer"},
+    "setupAuthorizer": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/setupAuthorizer"},
+    "request": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/request"},
+    "clientChallengeBase64url": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/clientChallengeBase64url"},
+    "expectedCallerPrincipal": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/expectedCallerPrincipal"},
+    "expectedTargetPrincipal": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/expectedTargetPrincipal"},
+    "expectedTargetNonce": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/expectedTargetNonce"},
+    "expectedTargetRequestSha256": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/expectedTargetRequestSha256"},
+    "installation": {"$ref": "native-bootstrap-client.v2.schema.json#/properties/installation"},
+    "egress": {"$ref": "native-bootstrap-client.v5.schema.json#/properties/egress"},
+    "attachment": {"$ref": "native-bootstrap-client.v4.schema.json#/properties/attachment"},
+    "execution": {
+      "$ref": "native-bootstrap-client.v5.schema.json#/properties/execution",
+      "description": "The same four protected artifact roles, explicitly requiring nativeExecutionManifest/v2. The manifest's immutable in-image single runtime CA PEM and DER certificate pins must join the genuine native CA and the separately authorized host installation. No writable image trust injection or record-selected downgrade is allowed."
+    }
+  }
+}

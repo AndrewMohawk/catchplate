@@ -8,8 +8,8 @@ mod install;
 // separately authorized network attachment. Neither profile starts a workload.
 #[allow(dead_code)]
 mod egress;
-// V5 alone selects actual executable parents, claimed containment, same-child
-// networking, guardian, consuming exec release and terminal cleanup.
+// V5/v6 explicitly select actual executable parents, claimed containment,
+// same-child networking, guardian, consuming exec release and terminal cleanup.
 #[allow(dead_code)]
 mod execution;
 #[path = "../native_ingress_client/identity.rs"]
@@ -226,10 +226,12 @@ pub(super) fn run() -> Result<(), String> {
         Some(inputs) => Some(egress::attachment::prepare(inputs, &clock, &mut held)?),
         None => None,
     };
-    // Explicit v5 selects execution before any network contact. V1-v4 cannot
+    // Explicit v5/v6 selects execution before any network contact. V1-v4 cannot
     // obtain it by presenting newer signed bytes or a successful diagnostic.
     let (execution, egress) = if let Some(inputs) = config.execution {
-        let start = execution::PreparedStart::open(inputs, Arc::clone(&clock))?;
+        let start = if installation.is_some() {
+            execution::PreparedStart::open_with_trust(inputs, Arc::clone(&clock))?
+        } else { execution::PreparedStart::open(inputs, Arc::clone(&clock))? };
         let network = attachment.take().ok_or("native execution requires its actual attachment original")?;
         let egress = config.egress.ok_or("native execution requires its actual egress original")?;
         let parents = egress::prepare_for_start(egress, network, &clock, &mut held)?;
@@ -257,15 +259,18 @@ pub(super) fn run() -> Result<(), String> {
     connection.check()?;
     let evidence = http::post(&mut connection, &authority, config.challenge, &request_raw)?;
     connection.check()?;
-    if let Some((start, pending)) = execution {
+    if let Some((mut start, pending)) = execution {
+        let combined = installation.is_some();
         let proof = connection.admit_installation(&evidence, &delegation_root, &delegation_pin,
             &setup_root, &setup_pin, &caller_issuer_der, &config.expected_caller_principal,
             &config.expected_target_principal, &config.expected_target_nonce,
             &config.expected_target_request_sha256, sent.delegation_original(),
             sent.setup_original(), sent.target_request_original())?;
         let mut capture = json!({
-            "apiVersion":"serverware.nativeBootstrapClientCapture/v5",
-            "resultScope":"local-fixed-endpoint-bootstrap-and-execution-observation",
+            "apiVersion":if combined { "serverware.nativeBootstrapClientCapture/v6" }
+                else { "serverware.nativeBootstrapClientCapture/v5" },
+            "resultScope":if combined { "local-fixed-endpoint-bootstrap-ca-and-execution-observation" }
+                else { "local-fixed-endpoint-bootstrap-and-execution-observation" },
             "okForAction":false,
             "configurationSha256":super::sha256_prefixed(&configuration_raw),
             "requestSha256":super::sha256_prefixed(&request_raw),
@@ -275,13 +280,21 @@ pub(super) fn run() -> Result<(), String> {
             "verification":json::parse(proof.diagnostic(), 4095)?,
             "execution":null,
         });
+        if combined { capture["installation"] = serde_json::Value::Null; }
         let provisional = serde_json::to_vec(&capture).map_err(|_| "encode execution capture reservation")?;
-        ensure(!provisional.is_empty() && provisional.len() < MAX_CAPTURE_BYTES - 16 * 1024,
+        let reserved = if combined { 24 * 1024 } else { 16 * 1024 };
+        ensure(!provisional.is_empty() && provisional.len() < MAX_CAPTURE_BYTES - reserved,
             "native execution capture cannot reserve its bounded terminal observation")?;
         recheck(&mut held, &mut private_original, &clock)?;
         let parents = egress::bind_for_start(pending, proof, connection, clock, held,
             private_original, &configuration_raw)?;
-        let observation = execution::execute(start, parents)?;
+        if let Some(pending) = installation {
+            let pending = install::bind_for_execution(pending, Arc::clone(&parents), &configuration_raw)?;
+            capture["installation"] = start.install_ca(pending)?;
+        }
+        let observation = execution::execute(start, parents).map_err(|error| if combined {
+            format!("native CA installation completed; execution failed without rollback or retry: {error}")
+        } else { error })?;
         let succeeded = observation.workload_succeeded();
         let observed = serde_json::to_value(observation).map_err(|_| "encode native execution observation")?;
         ensure(serde_json::to_vec(&observed).map_err(|_| "measure native execution observation")?.len() <= 16 * 1024,

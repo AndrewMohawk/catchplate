@@ -8,6 +8,9 @@ mod authority;
 mod destination;
 mod host;
 mod reservation;
+mod execution;
+
+pub(super) use execution::{bind_for_execution, InstalledCa, PreparedInstallation};
 
 use super::{config, ensure, native_verifier, originals::{ArtifactV1, HeldOriginal},
     transport::Connection, OriginalClock};
@@ -47,41 +50,63 @@ pub(super) struct Pending {
 /// a supplied callback/verdict or create another clock allowance.
 pub(super) struct InstallGuard {
     clock: Arc<OriginalClock>,
-    connection: Connection,
-    proof: RefCell<native_verifier::BootstrapInstallationOriginals>,
+    parent: ParentOriginals,
     host: RefCell<host::HostOwner>,
-    originals: RefCell<Vec<HeldOriginal>>,
-    client_private: RefCell<HeldOriginal>,
     token: RefCell<HeldOriginal>,
     stopped: Cell<bool>,
+}
+
+enum ParentOriginals {
+    Standalone {
+        connection: Connection,
+        proof: RefCell<native_verifier::BootstrapInstallationOriginals>,
+        originals: RefCell<Vec<HeldOriginal>>,
+        client_private: RefCell<HeldOriginal>,
+    },
+    Execution(Arc<super::egress::ExecutionParents>),
 }
 
 impl InstallGuard {
     pub(super) fn check(&self) -> Result<(), String> {
         ensure(!self.stopped.replace(true), "native installation owner is stopped")?;
         self.clock.check()?;
-        self.connection.check()?;
-        self.proof.try_borrow_mut().map_err(|_| "native installation proof is already borrowed")?
-            .check(self.clock.boottime_deadline()?)?;
+        match &self.parent {
+            ParentOriginals::Standalone { connection, proof, originals, client_private } => {
+                connection.check()?;
+                proof.try_borrow_mut().map_err(|_| "native installation proof is already borrowed")?
+                    .check(self.clock.boottime_deadline()?)?;
+                self.host.try_borrow_mut().map_err(|_| "native installation host is already borrowed")?
+                    .check(&self.clock)?;
+                let mut originals = originals.try_borrow_mut()
+                    .map_err(|_| "native installation originals are already borrowed")?;
+                for original in originals.iter_mut() {
+                    self.clock.check()?;
+                    original.recheck()?;
+                }
+                let mut private = client_private.try_borrow_mut()
+                    .map_err(|_| "native installation private original is already borrowed")?;
+                private.require_private()?;
+                self.clock.check()?;
+                private.recheck()?;
+                private.require_private()?;
+                connection.check()?;
+            },
+            ParentOriginals::Execution(parents) => parents.check()?,
+        }
+        {
+            let mut token = self.token.try_borrow_mut()
+                .map_err(|_| "native installation token is already borrowed")?;
+            token.require_private()?;
+            self.clock.check()?;
+            token.recheck()?;
+            token.require_private()?;
+        }
         self.host.try_borrow_mut().map_err(|_| "native installation host is already borrowed")?
             .check(&self.clock)?;
-        let mut originals = self.originals.try_borrow_mut()
-            .map_err(|_| "native installation originals are already borrowed")?;
-        for original in originals.iter_mut() {
-            self.clock.check()?;
-            original.recheck()?;
+        match &self.parent {
+            ParentOriginals::Standalone { connection, .. } => connection.check()?,
+            ParentOriginals::Execution(parents) => parents.check()?,
         }
-        for held in [&self.client_private, &self.token] {
-            let mut original = held.try_borrow_mut()
-                .map_err(|_| "native installation private original is already borrowed")?;
-            original.require_private()?;
-            self.clock.check()?;
-            original.recheck()?;
-            original.require_private()?;
-        }
-        self.host.try_borrow_mut().map_err(|_| "native installation host is already borrowed")?
-            .check(&self.clock)?;
-        self.connection.check()?;
         self.clock.check()?;
         self.stopped.set(false);
         Ok(())
@@ -187,15 +212,16 @@ pub(super) fn execute(pending: Pending, mut proof: native_verifier::BootstrapIns
     for commitment in [grant.original_sha256, proof.setup_sha256(), proof.evidence_sha256(),
         proof.packet_sha256(), digest(configuration_raw), digest(&ca_der)] { association.update(commitment); }
     let association_sha256: [u8; 32] = association.finalize().into();
-    let guard = InstallGuard { clock, connection, proof: RefCell::new(proof), host: RefCell::new(observed),
-        originals: RefCell::new(originals), client_private: RefCell::new(client_private),
-        token: RefCell::new(pending.token), stopped: Cell::new(false) };
+    let guard = Arc::new(InstallGuard { clock,
+        parent: ParentOriginals::Standalone { connection, proof: RefCell::new(proof),
+            originals: RefCell::new(originals), client_private: RefCell::new(client_private) },
+        host: RefCell::new(observed), token: RefCell::new(pending.token), stopped: Cell::new(false) });
     guard.check()?;
     let mut reservation = reservation::reserve(reservation::Spec {
         journal_path: PathBuf::from(&grant.journal.path), journal_device: grant.journal.device,
         journal_inode: grant.journal.inode, reservation_id, association_sha256,
         token_sha256: pending.token_sha256,
-    }, &guard)?;
+    }, Arc::clone(&guard))?;
     let destination_spec = destination::Spec {
         destination: grant.ca_install.destination_path.clone(), uid: grant.ca_install.owner_uid,
         gid: grant.ca_install.owner_gid, mode: grant.ca_install.file_mode,
@@ -203,7 +229,7 @@ pub(super) fn execute(pending: Pending, mut proof: native_verifier::BootstrapIns
         expected_existing_certificate_sha256: grant.ca_install.expected_existing_certificate_sha256
             .as_deref().map(parse_digest).transpose()?,
     };
-    let mut destination = destination::Destination::prepare(&destination_spec, &guard)?;
+    let mut destination = destination::Destination::prepare(&destination_spec, Arc::clone(&guard))?;
     let status = match reservation.claim()? {
         reservation::ClaimState::Fresh => {
             destination.install(&ca_der, grant.runtime_ca_certificate_sha256)?;

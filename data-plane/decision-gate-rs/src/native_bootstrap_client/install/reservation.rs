@@ -12,6 +12,7 @@ use std::io::{Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd, RawFd};
 use std::os::unix::fs::MetadataExt;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 const MAX_SLOTS: usize = 64;
 const MAX_RECORDS: usize = 3 * MAX_SLOTS;
@@ -57,9 +58,9 @@ struct FileIdentity {
 }
 
 /// Non-Clone, non-Debug, same-guard owner of the held directory lock.
-pub(super) struct Reservation<'a> {
+pub(super) struct Reservation {
     spec: Spec,
-    guard: &'a InstallGuard,
+    guard: Arc<InstallGuard>,
     directories: Vec<Directory>,
     slot: String,
     pid: u32,
@@ -120,7 +121,7 @@ impl Drop for DirectoryStream {
     fn drop(&mut self) { unsafe { libc::closedir(self.0); } }
 }
 
-impl Reservation<'_> {
+impl Reservation {
     fn fd(&self) -> RawFd { self.directories.last().expect("held journal directory").file.as_raw_fd() }
 
     fn current(&self) -> Result<(), String> {
@@ -347,7 +348,11 @@ impl Reservation<'_> {
 
     /// Called only after the parent's genuine destination operation/readback.
     /// This method performs no installation and accepts no callback or receipt.
-    pub(super) fn complete(mut self) -> Result<(), String> {
+    pub(super) fn complete(self) -> Result<(), String> {
+        self.complete_retained().map(|_| ())
+    }
+
+    pub(super) fn complete_retained(mut self) -> Result<Self, String> {
         self.check()?;
         ensure(self.state == State::Claimed, "native install completion requires this fresh claimed owner")?;
         self.stopped.set(true);
@@ -355,11 +360,12 @@ impl Reservation<'_> {
         self.publish(Stage::Complete)?;
         self.state = State::Completed;
         self.stopped.set(false);
-        self.check()
+        self.check()?;
+        Ok(self)
     }
 }
 
-pub(super) fn reserve(spec: Spec, guard: &InstallGuard) -> Result<Reservation<'_>, String> {
+pub(super) fn reserve(spec: Spec, guard: Arc<InstallGuard>) -> Result<Reservation, String> {
     guard.check()?;
     ensure(unsafe { libc::geteuid() } == 0 && spec.journal_inode != 0
         && spec.reservation_id.iter().any(|b| *b != 0)

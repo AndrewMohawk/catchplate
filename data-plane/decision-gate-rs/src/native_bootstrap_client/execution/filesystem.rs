@@ -7,6 +7,7 @@
 use super::{elf, manifest::{self, Manifest, MAX_EXECUTABLE, MAX_IMAGE, MAX_MANIFEST}};
 use super::super::{originals::{ArtifactV1, HeldOriginal}, OriginalClock};
 use serverware_decision_gate::erofs_loop_v1::{self, ErofsLoopExpectationV1};
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use sha2::{Digest, Sha256};
 use std::cell::{Cell, RefCell};
 use std::ffi::CString;
@@ -256,6 +257,57 @@ impl ImageFile {
     }
 }
 
+/// A read-only selected certificate, not an executable and not a writable
+/// trust overlay. Its exact DER is joined to the live TLS original separately.
+struct TrustFile {
+    file: File,
+    fingerprint: Fingerprint,
+    der: Vec<u8>,
+}
+
+impl TrustFile {
+    fn open(root: &File, identity: &Identity, selected: &manifest::ApplicationTrust,
+        clock: &OriginalClock) -> Result<Self, String>
+    {
+        let file = in_root(root, &selected.path, false, clock)?;
+        let (metadata, fingerprint) = inspect(&file, clock)?;
+        require(metadata.is_file() && metadata.uid() == 0 && metadata.gid() == 0
+            && matches!(metadata.mode() & 0o7777, 0o444 | 0o644)
+            && (64..=64 * 1024).contains(&metadata.len())
+            && fingerprint.identity.device == identity.device && fingerprint.identity.mount == identity.mount)?;
+        let mut raw = vec![0u8; metadata.len() as usize];
+        elf::read_exact(&file, &mut raw, 0, clock)?;
+        require(<[u8; 32]>::from(Sha256::digest(&raw)) == manifest::digest(&selected.sha256)?)?;
+        let text = std::str::from_utf8(&raw).map_err(|_| "immutable CA PEM is not UTF-8")?;
+        let body = text.strip_prefix("-----BEGIN CERTIFICATE-----\n")
+            .and_then(|value| value.strip_suffix("-----END CERTIFICATE-----\n"))
+            .ok_or("immutable trust is not one canonical PEM certificate")?;
+        let encoded: String = body.chars().filter(|value| *value != '\n').collect();
+        let der = STANDARD.decode(encoded.as_bytes()).map_err(|_| "immutable CA encoding differs")?;
+        require(!der.is_empty() && der.len() <= 16 * 1024)?;
+        let (rest, _) = x509_parser::parse_x509_certificate(&der)
+            .map_err(|_| "immutable CA certificate is malformed")?;
+        require(rest.is_empty())?;
+        let encoded = STANDARD.encode(&der);
+        let mut canonical = b"-----BEGIN CERTIFICATE-----\n".to_vec();
+        for line in encoded.as_bytes().chunks(64) { canonical.extend_from_slice(line); canonical.push(b'\n'); }
+        canonical.extend_from_slice(b"-----END CERTIFICATE-----\n");
+        require(raw == canonical
+            && <[u8; 32]>::from(Sha256::digest(&der)) == manifest::digest(&selected.certificate_sha256)?
+            && inspect(&file, clock)?.1 == fingerprint)?;
+        Ok(Self { file, fingerprint, der })
+    }
+
+    fn check(&self, root: &File, identity: &Identity, selected: &manifest::ApplicationTrust,
+        clock: &OriginalClock) -> Result<(), String>
+    {
+        let named = Self::open(root, identity, selected, clock)?;
+        require(named.fingerprint == self.fingerprint && named.der == self.der
+            && inspect(&self.file, clock)?.1 == self.fingerprint
+            && bytes_sha256(&self.file, self.fingerprint.length, clock)? == manifest::digest(&selected.sha256)?)
+    }
+}
+
 fn u16_at(raw: &[u8], offset: usize) -> u16 {
     u16::from_le_bytes(raw[offset..offset + 2].try_into().expect("fixed EROFS field"))
 }
@@ -310,12 +362,21 @@ pub(super) struct PreparedFilesystem {
     detached_fingerprint: Fingerprint,
     entry: ImageFile,
     interpreter: Option<ImageFile>,
+    application_trust: Option<TrustFile>,
     cwd: File,
     cwd_fingerprint: Fingerprint,
 }
 
 impl PreparedFilesystem {
     pub(super) fn open(pin: &ArtifactV1, clock: Arc<OriginalClock>) -> Result<Self, String> {
+        Self::open_profile(pin, clock, false)
+    }
+
+    pub(super) fn open_with_trust(pin: &ArtifactV1, clock: Arc<OriginalClock>) -> Result<Self, String> {
+        Self::open_profile(pin, clock, true)
+    }
+
+    fn open_profile(pin: &ArtifactV1, clock: Arc<OriginalClock>, combined_trust: bool) -> Result<Self, String> {
         let creator = source(&clock)?;
         let manifest_sha256 = manifest::digest(&pin.sha256)?;
         let named_path = pin.path.to_str().ok_or("native manifest path is not UTF-8")?;
@@ -324,7 +385,7 @@ impl PreparedFilesystem {
             path: pin.path.clone(), sha256: pin.sha256.clone(),
         }, MAX_MANIFEST)?;
         clock.check()?;
-        let manifest = manifest::decode(&manifest_raw)?;
+        let manifest = manifest::decode(&manifest_raw, combined_trust)?;
         require(bytes_sha256(&manifest_named.file, manifest_named.fingerprint.length, &clock)?
             == manifest_sha256)?;
         let root = NamedOriginal::open(&manifest.rootfs.mount_path, Kind::Root, &clock)?;
@@ -355,6 +416,8 @@ impl PreparedFilesystem {
             elf::admit(&file.file, file.fingerprint.length, None, &clock)?;
             Some(file)
         } else { None };
+        let application_trust = manifest.application_trust.as_ref().map(|selected|
+            TrustFile::open(&detached, &detached_fingerprint.identity, selected, &clock)).transpose()?;
         let cwd = in_root(&detached, &manifest.cwd, true, &clock)?;
         let (cwd_metadata, cwd_fingerprint) = inspect(&cwd, &clock)?;
         require(cwd_metadata.is_dir() && cwd_metadata.uid() == 0 && cwd_metadata.gid() == 0
@@ -364,7 +427,7 @@ impl PreparedFilesystem {
         let owner = Self { clock, creator, stopped: Cell::new(false),
             manifest_original: RefCell::new(manifest_original), manifest_named, manifest_raw,
             manifest_sha256, manifest, root, block, image, expectation, detached,
-            detached_fingerprint, entry, interpreter, cwd, cwd_fingerprint };
+            detached_fingerprint, entry, interpreter, application_trust, cwd, cwd_fingerprint };
         owner.check()?;
         Ok(owner)
     }
@@ -372,6 +435,22 @@ impl PreparedFilesystem {
     /// Data projection only. The actual StartOwner must authenticate the
     /// selected original independently and retain this same live owner.
     pub(super) fn manifest_sha256(&self) -> [u8; 32] { self.manifest_sha256 }
+
+    pub(super) fn require_application_trust(&self, actual_ca_der: &[u8], host_destination: &str)
+        -> Result<(), String>
+    {
+        self.check()?;
+        let trust = self.application_trust.as_ref().ok_or("combined execution requires immutable application trust")?;
+        require(trust.der.as_slice() == actual_ca_der)?;
+        // The host side effect must never target this image, mount, block or
+        // manifest. No host certificate is mounted/copied into the child.
+        let destination = std::path::Path::new(host_destination);
+        for path in [&self.manifest.rootfs.mount_path, &self.manifest.rootfs.block_device_path,
+            &self.manifest.rootfs.image_path, &self.manifest_named.path] {
+            require(!destination.starts_with(path) && !std::path::Path::new(path).starts_with(destination))?;
+        }
+        self.check()
+    }
 
     /// A separate anonymous mount for exactly one consuming child attempt.
     /// No host mountpoint, mount propagation or original owner's tree changes.
@@ -387,6 +466,8 @@ impl PreparedFilesystem {
         let interpreter = self.interpreter.as_ref().map(|file|
             ImageFile::open(&root, &fingerprint.identity, &file.path, file.sha256, &self.clock))
             .transpose()?;
+        let application_trust = self.manifest.application_trust.as_ref().map(|selected|
+            TrustFile::open(&root, &fingerprint.identity, selected, &self.clock)).transpose()?;
         let cwd = in_root(&root, &self.manifest.cwd, true, &self.clock)?;
         let cwd_fingerprint = inspect(&cwd, &self.clock)?.1;
         require(cwd_fingerprint.identity.inode == self.cwd_fingerprint.identity.inode
@@ -402,7 +483,7 @@ impl PreparedFilesystem {
         argv.push(std::ptr::null());
         let mut envp = environment.iter().map(|value| value.as_ptr()).collect::<Vec<_>>();
         envp.push(std::ptr::null());
-        let result = ChildFilesystem { root, fingerprint, entry, interpreter, cwd,
+        let result = ChildFilesystem { root, fingerprint, entry, interpreter, application_trust, cwd,
             cwd_fingerprint, arguments, environment, argv, envp };
         result.check(self)?;
         self.check()?;
@@ -442,6 +523,12 @@ impl PreparedFilesystem {
             interpreter.check(&self.detached, &self.detached_fingerprint.identity, &self.clock)?;
             elf::admit(&interpreter.file, interpreter.fingerprint.length, None, &self.clock)?;
         }
+        match (&self.application_trust, &self.manifest.application_trust) {
+            (Some(file), Some(selected)) => file.check(&self.detached, &self.detached_fingerprint.identity,
+                selected, &self.clock)?,
+            (None, None) => {},
+            _ => return Err("immutable application trust profile changed".to_owned()),
+        }
         let current_cwd = in_root(&self.detached, &self.manifest.cwd, true, &self.clock)?;
         require(inspect(&self.cwd, &self.clock)?.1 == self.cwd_fingerprint
             && inspect(&current_cwd, &self.clock)?.1 == self.cwd_fingerprint)?;
@@ -465,6 +552,7 @@ pub(super) struct ChildFilesystem {
     fingerprint: Fingerprint,
     entry: ImageFile,
     interpreter: Option<ImageFile>,
+    application_trust: Option<TrustFile>,
     cwd: File,
     cwd_fingerprint: Fingerprint,
     arguments: Vec<CString>,
@@ -484,6 +572,14 @@ impl ChildFilesystem {
         self.entry.check(&self.root, &self.fingerprint.identity, &original.clock)?;
         if let Some(loader) = &self.interpreter {
             loader.check(&self.root, &self.fingerprint.identity, &original.clock)?;
+        }
+        match (&self.application_trust, &original.application_trust, &original.manifest.application_trust) {
+            (Some(file), Some(parent), Some(selected)) => {
+                file.check(&self.root, &self.fingerprint.identity, selected, &original.clock)?;
+                require(file.der == parent.der)?;
+            },
+            (None, None, None) => {},
+            _ => return Err("native child lost its admitted immutable application trust".to_owned()),
         }
         let named_cwd = in_root(&self.root, &original.manifest.cwd, true, &original.clock)?;
         require(inspect(&self.cwd, &original.clock)?.1 == self.cwd_fingerprint

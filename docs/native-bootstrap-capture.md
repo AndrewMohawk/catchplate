@@ -5,12 +5,20 @@ evidence plus a diagnostic. The issuance API instead consumes the exact native
 packet within that evidence. `native_bootstrap_capture.extract_packet` connects
 these representations without promoting the diagnostic to authority.
 
-The extractor explicitly accepts the closed nine-field
-`serverware.nativeBootstrapClientCapture/v1`, separate ten-field v2 and v3,
-and eleven-field v4 profiles. V2 retains the same exact bootstrap evidence and
-adds `installation`; v3 instead adds `egress`; v4 adds `egress` and `attachment`.
-V1 rejects all three children, v2 rejects `egress` and `attachment`, v3 rejects
-`installation` and `attachment`, and v4 rejects `installation`, including null.
+The extractor explicitly accepts six closed
+`serverware.nativeBootstrapClientCapture` profiles. Each retains the same nine
+base fields and permits only the children shown here, never additional fields
+or null substitutes:
+
+| Version | Required children | Total fields |
+| --- | --- | --- |
+| v1 | None | 9 |
+| v2 | `installation` | 10 |
+| v3 | `egress` | 10 |
+| v4 | `egress`, `attachment` | 11 |
+| v5 | `execution` | 10 |
+| v6 | `execution`, `installation` | 11 |
+
 These clients can preserve their original
 evidence for later native identity submission without another bootstrap attempt.
 No new extraction CLI mode or automatic acquisition is needed.
@@ -48,7 +56,8 @@ socket, inspect rules, infer current namespace membership, or authorize a retry.
 The [v3 client](native-egress-client.md) retains genuine owners through output
 and then tears down its never-executed child. No execution, network attachment,
 CA installation or continuing kernel state follows from this public capture.
-Combined CA installation plus egress is not a supported client profile.
+V3 does not combine CA installation with egress; explicit v6 is the separate
+combined CA-and-execution profile described below.
 
 The [v4 capture](../schemas/native-bootstrap-client-capture.v4.schema.json)
 retains that same egress child and exact unsigned workload identifiers, and adds
@@ -61,9 +70,45 @@ shape. Each child is at most 8191 compact UTF-8 bytes; the complete capture rema
 at most 1.5 MiB including its final LF. It does not read the attachment journal,
 authenticate its grant, inspect link/address/route/neighbor state, or infer
 connectivity. The [v4 client](native-network-attachment-client.md) retains actual
-owners through output; application start and persistent supervision remain
-separate work. Neither an UP-link observation nor a copied digest authorizes
+owners through output; this v4 capture supplies no application-start or
+persistent-supervision evidence. Neither an UP-link observation nor a copied digest authorizes
 network effects, recovery, a retry or CA installation.
+
+The [v5 capture](../schemas/native-bootstrap-client-capture.v5.schema.json)
+instead contains the exact eight-field
+[execution observation](../schemas/native-execution-observation.v1.schema.json),
+at most 16384 compact UTF-8 bytes. Its nested exit, output and cleanup objects
+have exactly nine, five and five fields. The extractor checks digest spellings,
+exact unsigned 64-bit boottime integers, bounded exit code/status and output
+counts, actual JSON booleans, `actionAuthorization: null`, and
+`okForAction: false`. The reported `workloadSucceeded` must agree with code 1
+and status 0. It does not verify an EXEC event, a reap, leaf emptiness, output
+hashes, network state or application health. Raw stdout/stderr are absent.
+
+The [v6 capture](../schemas/native-bootstrap-client-capture.v6.schema.json)
+adds the unchanged installation receipt to that same execution observation.
+Its scope is exactly
+`local-fixed-endpoint-bootstrap-ca-and-execution-observation`; no separate
+`egress` or `attachment` children are accepted. The whole capture remains at
+most 1.5 MiB including LF, with the same 8191-byte installation and 16384-byte
+execution ceilings. A nonzero workload exit can produce terminal data while
+the producer still exits unsuccessfully. Uncertain execution or cleanup does
+not have a successful-capture fallback.
+The independently authorized host CA installation can remain after a later
+execution failure without a capture; neither capture absence nor extraction
+failure rolls that effect back or authorizes a retry.
+
+The explicit [v6 client configuration](../schemas/native-bootstrap-client.v6.schema.json)
+requires all four `installation`, `egress`, `attachment` and `execution` inputs.
+It selects [execution manifest v2](../schemas/native-execution-manifest.v2.schema.json),
+whose additional `applicationTrust` pins a single runtime-CA PEM already inside
+the immutable image, with separate whole-PEM and DER certificate hashes. The
+signed `SSL_CERT_FILE` value must equal that in-image path. The actual runtime
+owner, not this extractor or JSON Schema, checks the file, native CA and
+independent installation association. Neither a writable image trust injection
+nor a claim that arbitrary applications use that environment variable is
+introduced. V5 still selects manifest v1; old profiles are not upgraded by
+reading newer capture or receipt fields.
 
 The packet's embedded target request must equal the supplied request original.
 Reconstructing the exact delegation/setup/target exchange must also reproduce
@@ -88,7 +133,10 @@ failed producer is not proof of successful acquisition, and extraction cannot
 recover that missing fact. An installation receipt in a parseable v2 capture also
 cannot prove final producer success or that the installed file remains present.
 Likewise v3/v4 observations cannot prove producer success or live workload/kernel/
-attachment state after capture. Extractors that do not support a newer explicit
+attachment state after capture. V5/v6 terminal observations cannot prove those
+events occurred, establish persistent supervision, or authorize restart; a v6
+receipt also cannot prove that the host CA remains installed or an application
+used its in-image trust. Extractors that do not support a newer explicit
 profile refuse it; there is no relabeling or automatic downgrade.
 Extraction starts no network request, reads no private
 key, renews no signed lifetime, installs no CA and supplies no automatic retry.

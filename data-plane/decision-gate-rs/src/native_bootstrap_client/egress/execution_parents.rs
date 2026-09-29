@@ -222,6 +222,61 @@ impl ExecutionParents {
     pub(in super::super) fn attachment_pending(&self) -> &attachment::Pending { &self.attachment }
     pub(in super::super) fn original_clock(&self) -> &OriginalClock { &self.clock }
 
+    // Narrow actual-original borrows for the separately authorized CA effect.
+    // The installation guard retains this same owner; no proof is cloned and
+    // no data projection or local receipt substitutes for check().
+    pub(in super::super) fn installation_proof(&self)
+        -> Result<std::cell::Ref<'_, native_verifier::BootstrapInstallationOriginals>, String>
+    {
+        self.check()?;
+        self.proof.try_borrow().map_err(|_| "execution installation proof already borrowed".to_owned())
+    }
+
+    pub(in super::super) fn installation_ca_original(&self) -> Result<&[u8], String> {
+        self.check()?;
+        self.connection.admitted_ca_original()
+    }
+
+    pub(in super::super) fn retain_original_clock(&self) -> Arc<OriginalClock> {
+        Arc::clone(&self.clock)
+    }
+
+    pub(in super::super) fn require_ca_separation(&self, root_key: [u8; 32],
+        capability_id: &str, token_sha256: &str, journal_path: &str,
+        journal_device: u64, journal_inode: u64, journal_namespace: &str,
+        destination: &str) -> Result<(), String>
+    {
+        self.check()?;
+        let egress = &self.authorization;
+        let attachment = self.attachment.authorization();
+        ensure(root_key != egress.root_key_id && root_key != attachment.root_key_id,
+            "combined CA authorizer reuses egress or attachment authority")?;
+        for (id, token) in [(&egress.capability.capability_id, &egress.capability.capability_token_sha256),
+            (&attachment.capability.capability_id, &attachment.capability.capability_token_sha256)] {
+            ensure(capability_id != id && token_sha256 != token,
+                "combined CA reuses a network capability or protected token")?;
+        }
+        let creation = egress.creation_journal.as_ref().ok_or("execution creation journal absent")?;
+        for (path, device, inode, namespace) in [
+            (&egress.journal.path, egress.journal.device, egress.journal.inode, &egress.journal.namespace),
+            (&creation.path, creation.device, creation.inode, &creation.namespace),
+            (&attachment.journal.path, attachment.journal.device, attachment.journal.inode, &attachment.journal.namespace),
+        ] {
+            ensure(!PathBuf::from(journal_path).starts_with(path)
+                && !PathBuf::from(path).starts_with(journal_path)
+                && (journal_device, journal_inode) != (device, inode) && journal_namespace != namespace
+                && !PathBuf::from(destination).starts_with(path)
+                && !PathBuf::from(path).starts_with(destination),
+                "combined CA journal overlaps an independent network journal")?;
+        }
+        ensure(!PathBuf::from(&attachment.bridge.lock.path).starts_with(journal_path)
+            && !PathBuf::from(journal_path).starts_with(&attachment.bridge.lock.path)
+            && !PathBuf::from(destination).starts_with(&attachment.bridge.lock.path)
+            && !PathBuf::from(&attachment.bridge.lock.path).starts_with(destination),
+            "combined CA journal overlaps the actual bridge lock")?;
+        self.check()
+    }
+
     pub(in super::super) fn claim_creation(self: &Arc<Self>)
         -> Result<creation_reservation::ExecutionCreationPermit, String>
     {

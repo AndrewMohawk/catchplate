@@ -28,6 +28,8 @@ _CAPTURE_FIELDS = frozenset({"apiVersion", "resultScope", "okForAction",
 _CAPTURE_V2_FIELDS = _CAPTURE_FIELDS | {"installation"}
 _CAPTURE_V3_FIELDS = _CAPTURE_FIELDS | {"egress"}
 _CAPTURE_V4_FIELDS = _CAPTURE_FIELDS | {"egress", "attachment"}
+_CAPTURE_V5_FIELDS = _CAPTURE_FIELDS | {"execution"}
+_CAPTURE_V6_FIELDS = _CAPTURE_V5_FIELDS | {"installation"}
 _INSTALLATION_FIELDS = frozenset({"apiVersion", "resultScope", "okForAction", "status",
     "authorizationSha256", "operationSha256", "reservationSha256", "setupSha256",
     "capabilityId", "runtimeCaCertificateSha256", "destinationPath"})
@@ -36,6 +38,14 @@ _EGRESS_FIELDS = frozenset({"apiVersion", "resultScope", "okForAction", "status"
     "kernelSemanticSha256", "kernelEvidenceSha256", "workload"})
 _ATTACHMENT_FIELDS = frozenset({"apiVersion", "resultScope", "okForAction", "status",
     "authorizationSha256", "planSha256", "evidenceSha256", "semanticSha256"})
+_EXECUTION_FIELDS = frozenset({"schema", "resultScope", "execution", "output", "cleanup",
+    "workloadSucceeded", "actionAuthorization", "okForAction"})
+_EXIT_FIELDS = frozenset({"operationSha256", "execObservedBoottimeNs", "exitObservedBoottimeNs",
+    "code", "status", "firewallSemanticSha256", "firewallEvidenceSha256",
+    "attachmentSemanticSha256", "attachmentEvidenceSha256"})
+_OUTPUT_FIELDS = frozenset({"stdoutBytes", "stdoutSha256", "stderrBytes", "stderrSha256", "complete"})
+_CLEANUP_FIELDS = frozenset({"leaderReaped", "leafEmptyBoottimeNs", "leafKillAcknowledged",
+    "guardianEmptyBoottimeNs", "guardianKillAcknowledged"})
 _WORKLOAD_U32_FIELDS = frozenset({"launcherProcessId", "launcherThreadId",
     "childProcessId", "backendPortId"})
 _WORKLOAD_U64_FIELDS = frozenset({"pidfdDevice", "pidfdInode", "namespaceDevice",
@@ -150,6 +160,49 @@ def _attachment_data(value, budget):
     budget.check()
 
 
+def _execution_data(value, budget):
+    """Check reported terminal data only; never verify execution or cleanup."""
+    budget.check()
+    value = _object(value, _EXECUTION_FIELDS)
+    if (value["schema"] != "serverware.nativeExecutionObservation/v1"
+            or value["resultScope"] != "local-single-attempt-execution-and-cleanup-observation"
+            or value["okForAction"] is not False or value["actionAuthorization"] is not None
+            or type(value["workloadSucceeded"]) is not bool):
+        _fail()
+    execution = _object(value["execution"], _EXIT_FIELDS)
+    output = _object(value["output"], _OUTPUT_FIELDS)
+    cleanup = _object(value["cleanup"], _CLEANUP_FIELDS)
+    for original, names in ((execution, ("operationSha256", "firewallSemanticSha256",
+            "firewallEvidenceSha256", "attachmentSemanticSha256", "attachmentEvidenceSha256")),
+            (output, ("stdoutSha256", "stderrSha256"))):
+        for name in names:
+            if type(original[name]) is not str or _DIGEST.fullmatch(original[name]) is None:
+                _fail()
+    for original, names in ((execution, ("execObservedBoottimeNs", "exitObservedBoottimeNs")),
+            (cleanup, ("leafEmptyBoottimeNs", "guardianEmptyBoottimeNs"))):
+        for name in names:
+            if type(original[name]) is not int or not 1 <= original[name] <= (1 << 64) - 1:
+                _fail()
+    code, status = execution["code"], execution["status"]
+    if (type(code) is not int or code not in (1, 2, 3)
+            or type(status) is not int or not 0 <= status <= 255
+            or (code in (2, 3) and not 1 <= status <= 64)
+            or value["workloadSucceeded"] is not (code == 1 and status == 0)
+            or output["complete"] is not True or cleanup["leaderReaped"] is not True
+            or type(cleanup["leafKillAcknowledged"]) is not bool
+            or type(cleanup["guardianKillAcknowledged"]) is not bool):
+        _fail()
+    for name in ("stdoutBytes", "stderrBytes"):
+        if type(output[name]) is not int or not 0 <= output[name] <= 64 * 1024 * 1024:
+            _fail()
+    raw = json.dumps(value, sort_keys=True, separators=(",", ":"),
+        ensure_ascii=False, allow_nan=False).encode("utf-8")
+    if not 1 <= len(raw) <= 16 * 1024:
+        _fail()
+    packets._charge(budget, input_bytes=len(raw))
+    budget.check()
+
+
 def _packet_on_budget(capture_bytes, target_request_bytes, budget):
     """Return unverified data only; this function never returns a verdict."""
     budget.check()
@@ -182,6 +235,15 @@ def _packet_on_budget(capture_bytes, target_request_bytes, budget):
         expected_scope = "local-fixed-endpoint-bootstrap-and-network-attachment-observation"
         _egress_data(value["egress"], budget)
         _attachment_data(value["attachment"], budget)
+    elif value.get("apiVersion") == "serverware.nativeBootstrapClientCapture/v5":
+        value = _object(value, _CAPTURE_V5_FIELDS)
+        expected_scope = "local-fixed-endpoint-bootstrap-and-execution-observation"
+        _execution_data(value["execution"], budget)
+    elif value.get("apiVersion") == "serverware.nativeBootstrapClientCapture/v6":
+        value = _object(value, _CAPTURE_V6_FIELDS)
+        expected_scope = "local-fixed-endpoint-bootstrap-ca-and-execution-observation"
+        _execution_data(value["execution"], budget)
+        _installation_data(value["installation"], budget)
     else:
         _fail()
     if (value["resultScope"] != expected_scope or value["okForAction"] is not False

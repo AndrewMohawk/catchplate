@@ -12,6 +12,7 @@ use std::fs::{File, Metadata};
 use std::io;
 use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::fs::{FileExt, MetadataExt};
+use std::sync::Arc;
 
 const RECOVERY_NAME: &str = ".serverware-native-ca-install";
 const LOCK_NAME: &str = "destination.lock";
@@ -232,8 +233,8 @@ fn recovery_capacity(directory: &File, files: usize, bytes: usize, guard: &Insta
     guard.check()
 }
 
-pub(super) struct Destination<'a> {
-    guard: &'a InstallGuard,
+pub(super) struct Destination {
+    guard: Arc<InstallGuard>,
     directories: Vec<Directory>,
     recovery: Directory,
     lock: File,
@@ -250,8 +251,9 @@ pub(super) struct Destination<'a> {
     failed: bool,
 }
 
-impl<'a> Destination<'a> {
-    pub(super) fn prepare(spec: &Spec, guard: &'a InstallGuard) -> Result<Self, String> {
+impl Destination {
+    pub(super) fn prepare(spec: &Spec, owner: Arc<InstallGuard>) -> Result<Self, String> {
+        let guard = owner.as_ref();
         guard.check()?;
         ensure(unsafe { libc::geteuid() } == 0 && unsafe { libc::getegid() } == 0,
             "native install destination requires its actual privileged process")?;
@@ -297,7 +299,7 @@ impl<'a> Destination<'a> {
         guard.check()?;
         let current = open_at(parent, &leaf, FILE_FLAGS, guard)?
             .map(|file| Certificate::capture(file, guard)).transpose()?;
-        let mut result = Self { guard, directories,
+        let mut result = Self { guard: owner, directories,
             recovery: Directory { name: recovery_name, file: recovery, stamp: recovery_stamp },
             lock, lock_stamp: file_stamp(&lock_metadata), leaf, destination: spec.destination.clone(),
             uid: spec.uid, gid: spec.gid, replace_existing: spec.replace_existing,
@@ -308,9 +310,9 @@ impl<'a> Destination<'a> {
     }
 
     fn named_certificate(&self, parent: i32, name: &CStr, original: &Certificate) -> Result<(), String> {
-        original.check(self.guard)?;
-        let named = required_at(parent, name, FILE_FLAGS, self.guard)?;
-        ensure(file_stamp(&metadata(&named, self.guard)?) == original.stamp,
+        original.check(&self.guard)?;
+        let named = required_at(parent, name, FILE_FLAGS, &self.guard)?;
+        ensure(file_stamp(&metadata(&named, &self.guard)?) == original.stamp,
             "native install named certificate differs from its retained inode")?;
         self.guard.check()
     }
@@ -319,25 +321,25 @@ impl<'a> Destination<'a> {
         self.guard.check()?;
         let mut parent = libc::AT_FDCWD;
         for directory in &self.directories {
-            ensure(directory_stamp(&metadata(&directory.file, self.guard)?, false)? == directory.stamp,
+            ensure(directory_stamp(&metadata(&directory.file, &self.guard)?, false)? == directory.stamp,
                 "native install retained ancestor changed")?;
-            let named = required_at(parent, &directory.name, DIRECTORY_FLAGS, self.guard)?;
-            ensure(directory_stamp(&metadata(&named, self.guard)?, false)? == directory.stamp,
+            let named = required_at(parent, &directory.name, DIRECTORY_FLAGS, &self.guard)?;
+            ensure(directory_stamp(&metadata(&named, &self.guard)?, false)? == directory.stamp,
                 "native install ancestor name changed")?;
             parent = directory.file.as_raw_fd();
         }
-        ensure(directory_stamp(&metadata(&self.recovery.file, self.guard)?, true)? == self.recovery.stamp,
+        ensure(directory_stamp(&metadata(&self.recovery.file, &self.guard)?, true)? == self.recovery.stamp,
             "native install recovery owner changed")?;
-        let recovery = required_at(parent, &self.recovery.name, DIRECTORY_FLAGS, self.guard)?;
-        ensure(directory_stamp(&metadata(&recovery, self.guard)?, true)? == self.recovery.stamp,
+        let recovery = required_at(parent, &self.recovery.name, DIRECTORY_FLAGS, &self.guard)?;
+        ensure(directory_stamp(&metadata(&recovery, &self.guard)?, true)? == self.recovery.stamp,
             "native install recovery name changed")?;
-        let lock = required_at(self.recovery.file.as_raw_fd(), &name(LOCK_NAME)?, FILE_FLAGS, self.guard)?;
-        ensure(file_stamp(&metadata(&self.lock, self.guard)?) == self.lock_stamp
-            && file_stamp(&metadata(&lock, self.guard)?) == self.lock_stamp,
+        let lock = required_at(self.recovery.file.as_raw_fd(), &name(LOCK_NAME)?, FILE_FLAGS, &self.guard)?;
+        ensure(file_stamp(&metadata(&self.lock, &self.guard)?) == self.lock_stamp
+            && file_stamp(&metadata(&lock, &self.guard)?) == self.lock_stamp,
             "native install destination lock original changed")?;
         match &self.current {
             Some(original) => self.named_certificate(parent, &self.leaf, original)?,
-            None => ensure(open_at(parent, &self.leaf, FILE_FLAGS, self.guard)?.is_none(),
+            None => ensure(open_at(parent, &self.leaf, FILE_FLAGS, &self.guard)?.is_none(),
                 "native install absent destination became occupied")?,
         }
         for (name, original) in &self.recovery_originals {
@@ -373,7 +375,7 @@ impl<'a> Destination<'a> {
         self.guard.check()?;
         let file = required_at(self.recovery.file.as_raw_fd(), name,
             libc::O_RDWR | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
-            self.guard)?;
+            &self.guard)?;
         let mut offset = 0;
         while offset < raw.len() {
             self.guard.check()?;
@@ -393,18 +395,18 @@ impl<'a> Destination<'a> {
         self.guard.check()?;
         ensure(unsafe { libc::fchmod(file.as_raw_fd(), mode as libc::mode_t) } == 0,
             "set native install exact file mode")?;
-        sync(&file, self.guard)?;
-        let held = Certificate::capture(file, self.guard)?;
+        sync(&file, &self.guard)?;
+        let held = Certificate::capture(file, &self.guard)?;
         ensure(held.raw == raw && held.stamp.3 == uid && held.stamp.4 == gid
             && held.stamp.2 & 0o7777 == mode,
             "native install staged original readback differs")?;
         self.named_certificate(self.recovery.file.as_raw_fd(), name, &held)?;
-        sync(&self.recovery.file, self.guard)?;
+        sync(&self.recovery.file, &self.guard)?;
         Ok(held)
     }
 
     fn install_inner(&mut self, der: &[u8], expected: [u8; 32]) -> Result<(), String> {
-        let raw = canonical_pem(der, self.guard)?;
+        let raw = canonical_pem(der, &self.guard)?;
         ensure(expected != [0; 32] && <[u8; 32]>::from(Sha256::digest(der)) == expected,
             "native install actual certificate differs from the admitted original")?;
         match (&self.current, self.replace_existing, self.expected_old) {
@@ -414,7 +416,7 @@ impl<'a> Destination<'a> {
         }
         let old_length = self.current.as_ref().map_or(0, |old| old.raw.len());
         recovery_capacity(&self.recovery.file, if self.replace_existing { 2 } else { 1 },
-            raw.len() + old_length, self.guard)?;
+            raw.len() + old_length, &self.guard)?;
         let mut hash = Sha256::new();
         hash.update(b"serverware/native-install-destination-operation/v1\0");
         hash.update((self.destination.len() as u64).to_be_bytes());
@@ -441,15 +443,15 @@ impl<'a> Destination<'a> {
             parent, self.leaf.as_ptr(), flags) } == 0,
             "native install atomic publication failed; outcome is not retry authority")?;
         self.guard.check()?;
-        staged.renamed(self.guard)?;
+        staged.renamed(&self.guard)?;
         if let Some(mut old) = self.current.take() {
-            old.renamed(self.guard)?;
+            old.renamed(&self.guard)?;
             self.named_certificate(self.recovery.file.as_raw_fd(), &pending_name, &old)?;
             self.recovery_originals.push((pending_name, old));
         }
         self.current = Some(staged);
-        sync(&self.recovery.file, self.guard)?;
-        sync(&self.directories.last().unwrap().file, self.guard)?;
+        sync(&self.recovery.file, &self.guard)?;
+        sync(&self.directories.last().unwrap().file, &self.guard)?;
         self.check()?;
         ensure(self.installed_certificate_der_sha256()? == Some(expected),
             "native install final original certificate differs")?;

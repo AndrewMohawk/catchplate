@@ -113,7 +113,10 @@ impl Configuration {
                     && wire.egress.is_some() && wire.attachment.is_some() && !has_installation && !has_execution)
                 || (wire.api_version == "serverware.nativeBootstrapClient/v5"
                     && wire.egress.is_some() && wire.attachment.is_some() && wire.execution.is_some()
-                    && !has_installation))
+                    && !has_installation)
+                || (wire.api_version == "serverware.nativeBootstrapClient/v6"
+                    && wire.egress.is_some() && wire.attachment.is_some() && wire.execution.is_some()
+                    && wire.installation.is_some()))
             && (100..=30_000).contains(&wire.timeout_milliseconds),
             "bootstrap client profile or timeout differs")?;
         if let Some(inputs) = &wire.installation { inputs.validate()?; }

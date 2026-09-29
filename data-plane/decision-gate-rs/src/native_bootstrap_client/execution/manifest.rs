@@ -39,6 +39,15 @@ pub(super) struct Entry {
 
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct ApplicationTrust {
+    pub(super) profile: String,
+    pub(super) path: String,
+    pub(super) sha256: String,
+    pub(super) certificate_sha256: String,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct Manifest {
     pub(super) api_version: String,
     pub(super) profile: String,
@@ -48,6 +57,8 @@ pub(super) struct Manifest {
     pub(super) environment: BTreeMap<String, String>,
     pub(super) cwd: String,
     pub(super) loader_policy: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) application_trust: Option<ApplicationTrust>,
 }
 
 fn require(condition: bool) -> Result<(), String> {
@@ -77,13 +88,14 @@ pub(super) fn path(value: &str, allow_root: bool) -> Result<(), String> {
         !part.is_empty() && *part != "." && *part != ".." && part.len() <= 255))
 }
 
-pub(super) fn decode(raw: &[u8]) -> Result<Manifest, String> {
+pub(super) fn decode(raw: &[u8], combined_trust: bool) -> Result<Manifest, String> {
     require(!raw.is_empty() && raw.len() <= MAX_MANIFEST && raw.is_ascii())?;
     let value = super::super::json::parse(raw, MAX_MANIFEST)?;
     let manifest: Manifest = serde_json::from_value(value)
         .map_err(|_| "native execution manifest fields are invalid")?;
     require(canonical_ascii_bytes(&manifest)?.as_slice() == raw)?;
-    require(manifest.api_version == "serverware.nativeExecutionManifest/v1"
+    require(manifest.api_version == (if combined_trust { "serverware.nativeExecutionManifest/v2" }
+            else { "serverware.nativeExecutionManifest/v1" })
         && manifest.profile == "native-elf-erofs-v1"
         && manifest.loader_policy == "in-image-system-loader-v1"
         && manifest.rootfs.profile == "single-device-erofs-loop-fsverity-v1"
@@ -119,5 +131,15 @@ pub(super) fn decode(raw: &[u8]) -> Result<Manifest, String> {
             .ok_or("native environment size overflow")?;
     }
     require(total <= 16 * 1024)?;
+    require(manifest.application_trust.is_some() == combined_trust)?;
+    if let Some(trust) = &manifest.application_trust {
+        require(trust.profile == "in-image-runtime-ca-pem-v1")?;
+        path(&trust.path, false)?;
+        digest(&trust.sha256)?;
+        digest(&trust.certificate_sha256)?;
+        require(manifest.environment.get("SSL_CERT_FILE") == Some(&trust.path)
+            && trust.path != manifest.entry.path
+            && manifest.entry.interpreter.as_ref().map_or(true, |entry| entry.path != trust.path))?;
+    }
     Ok(manifest)
 }

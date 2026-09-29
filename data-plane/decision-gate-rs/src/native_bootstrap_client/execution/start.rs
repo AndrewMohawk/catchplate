@@ -8,6 +8,7 @@
 use super::{filesystem::PreparedFilesystem, host, parent::ParentOwner, start_authority};
 use super::super::egress::ExecutionParents;
 use super::super::{config, ensure, originals::{ArtifactV1, HeldOriginal}, OriginalClock};
+use super::super::install::{InstalledCa, PreparedInstallation};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::cell::{Cell, RefCell};
@@ -44,6 +45,8 @@ pub(in super::super) struct PreparedStart {
     originals: RefCell<Vec<HeldOriginal>>,
     token: RefCell<HeldOriginal>,
     filesystem: PreparedFilesystem,
+    combined_trust: bool,
+    installation: Option<Arc<InstalledCa>>,
     host: RefCell<host::HostOwner>,
     authorization: start_authority::Authorization,
     thread_id: libc::pid_t,
@@ -61,6 +64,14 @@ fn digest_text(raw: &[u8]) -> String { format!("sha256:{:x}", Sha256::digest(raw
 
 impl PreparedStart {
     pub(in super::super) fn open(inputs: Inputs, clock: Arc<OriginalClock>) -> Result<Self, String> {
+        Self::open_profile(inputs, clock, false)
+    }
+
+    pub(in super::super) fn open_with_trust(inputs: Inputs, clock: Arc<OriginalClock>) -> Result<Self, String> {
+        Self::open_profile(inputs, clock, true)
+    }
+
+    fn open_profile(inputs: Inputs, clock: Arc<OriginalClock>, combined_trust: bool) -> Result<Self, String> {
         clock.check()?;
         inputs.validate()?;
         ensure(unsafe { libc::getuid() } == 0 && unsafe { libc::geteuid() } == 0
@@ -101,17 +112,37 @@ impl PreparedStart {
         }, &clock)?;
         // Signature, exact cold pin and actual host admission precede detached
         // immutable-root preparation. This creates no child or visible mount.
-        let filesystem = PreparedFilesystem::open(&inputs.execution_manifest, Arc::clone(&clock))?;
+        let filesystem = if combined_trust {
+            PreparedFilesystem::open_with_trust(&inputs.execution_manifest, Arc::clone(&clock))?
+        } else { PreparedFilesystem::open(&inputs.execution_manifest, Arc::clone(&clock))? };
         clock.check()?;
         let held_manifest = filesystem.manifest_sha256();
         ensure(format!("sha256:{}", held_manifest.iter().map(|byte| format!("{byte:02x}"))
             .collect::<String>()) == manifest_pin,
             "native start retained manifest differs from independently signed original")?;
         let prepared = Self { clock, originals: RefCell::new(originals), token: RefCell::new(token),
-            filesystem, host: RefCell::new(observed_host), authorization,
+            filesystem, combined_trust, installation: None, host: RefCell::new(observed_host), authorization,
             thread_id: owner_thread, stopped: Cell::new(false) };
         prepared.check()?;
         Ok(prepared)
+    }
+
+    /// Only v6 can reach this consuming, separately authorized host effect.
+    /// Join actual image trust and all start/parent authorities BEFORE its claim.
+    pub(in super::super) fn install_ca(&mut self, pending: PreparedInstallation)
+        -> Result<serde_json::Value, String>
+    {
+        ensure(self.combined_trust && self.installation.is_none(),
+            "native combined CA installation was not cold-selected or was already consumed")?;
+        self.check()?;
+        pending.require_start(&self.authorization, &self.clock)?;
+        self.filesystem.require_application_trust(pending.actual_ca_original()?, pending.destination_path())?;
+        pending.require_start(&self.authorization, &self.clock)?;
+        let installed = pending.install()?;
+        let receipt = installed.receipt().clone();
+        self.installation = Some(installed);
+        self.check()?;
+        Ok(receipt)
     }
 
     pub(super) fn check(&self) -> Result<(), String> {
@@ -134,6 +165,10 @@ impl PreparedStart {
             token.require_private()?;
         }
         self.filesystem.check()?;
+        if let Some(installation) = &self.installation {
+            ensure(self.combined_trust, "legacy execution acquired combined CA ownership")?;
+            installation.require_start(&self.authorization, &self.clock)?;
+        }
         self.clock.check()?;
         self.host.try_borrow_mut().map_err(|_| "native start host already borrowed")?.check(&self.clock)?;
         self.clock.check()?;
@@ -160,6 +195,9 @@ impl StartOwner {
         -> Result<Arc<Self>, String>
     {
         prepared.check()?;
+        ensure(prepared.combined_trust == prepared.installation.is_some(),
+            "combined execution requires actual completed CA installation before any start claim")?;
+        if let Some(installation) = &prepared.installation { installation.require_parents(&parents)?; }
         parents.require_start(&prepared.authorization, &prepared.clock)?;
         let parent = ParentOwner::open(&prepared.authorization.constraints.containment,
             &prepared.clock)?;

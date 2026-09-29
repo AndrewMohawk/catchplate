@@ -26,14 +26,14 @@ Checkpoint: **2026-09-28 — pre-production, source-only.**
 
 ### Current work: native enrollment, workload trust and protected operations
 
-[`.239` source / ce91975](https://github.com/example/private-deployment)
-adds [request-first local workload bootstrap](docs/workload-identity-bootstrap.md):
-SDK/CLI key and CSR preparation plus canonical original proof-of-possession
-verification, **without a prior target certificate or enrollment packet**.
-Protected no-overwrite files, an independently pinned issuer, a five-minute request
-cap and the original 30-second processing limit stay enforced. This is target-key
-possession, not caller delegation or CA permission. Native signing and the request
-route remain inaccessible; no complete bootstrap or runtime success is claimed.
+[`.240` source / 23f47f4](https://github.com/example/private-deployment)
+adds [independent caller-to-target bootstrap delegation](docs/native-enrollment-bootstrap-delegation.md),
+native original CSR/possession verification and private admission against the
+actual caller policy/TLS connection and installed target issuer. The target needs
+no prior certificate, but **configured-target existence is not full target-selector
+or packet authorization**. Signing and the request route remain inaccessible.
+Only bounded Cargo lock resolution and checksum-matched dependency-source downloads
+ran; no build, test, application/runtime, NSM or AWS/spend acceptance is claimed.
 
 The four active checkpoints remain partial:
 
@@ -43,11 +43,11 @@ The four active checkpoints remain partial:
   authenticated service/sidecar journeys and runtime verification remain open.
 - **H05 · Historical recovery:** [retained intent/proof readmission](docs/control-plane-retained-intent-history.md)
   is source-connected; historical release delivery, migration and older-source replay remain open.
-- **N05 · Native enrollment:** cold authority, existing-identity policy/TLS admission,
-  original-evidence receiving and request-first target CSR/possession preparation
-  are source-connected. Authenticated caller-to-target delegation, separate issuer
-  grants, packet semantics, durable claims/recovery, request/acquisition, SDK/issuer,
-  scoped CA installation and proxy/egress/canary setup remain open; signing stays inaccessible.
+- **N05 · Native enrollment:** cold authority, caller policy/TLS admission,
+  independent target delegation and original target CSR/possession verification
+  are source-connected. Full target selectors, packet v2 semantics, durable claims/recovery,
+  bootstrap role-5 receiving, request/acquisition, separate issuer grants, SDK/issuer,
+  scoped CA installation and proxy/egress/canaries remain open; signing stays inaccessible.
 - **O04 · Protected operations:** [genuine approval verification](docs/control-plane-approval-verification.md)
   is source-connected; protected provider/filesystem effects and durable
   interruption outcomes remain open.
@@ -117,7 +117,7 @@ lists every remaining item and its evidence.
 | --- | --- | --- |
 | H05 | Historical authority across source/configuration/key changes | In progress |
 | N04 | Workload identity provisioning and authenticated channels | In progress |
-| N05 | Native enrollment, verified CA installation and proxy setup | In progress / partial; existing-identity admission and local request-first preparation source-connected |
+| N05 | Native enrollment, verified CA installation and proxy setup | In progress / partial; caller-to-target delegation and native CSR/PoP admission source-connected |
 | N06 | Enclave TLS/proxy execution and credential custody | Todo |
 | O01 | OAuth ownership across deployments and applications | Todo |
 | O02 | Measured provider issuance and interrupted-exchange recovery | Todo |

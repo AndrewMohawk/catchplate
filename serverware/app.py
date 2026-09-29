@@ -55,6 +55,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from serverware import __version__
+from serverware import release_authorization_profiles as release_profiles
 from serverware.portal_workload_identity import (
     WORKLOAD_IDENTITY_FORM_HTML,
     WORKLOAD_IDENTITY_SCRIPT,
@@ -2596,12 +2597,14 @@ class DataPlaneReleaseAuthorizationReserve(BaseModel):
     api_version: Literal[
         "serverware.releaseAuthorizationReserve/v1",
         "serverware.releaseAuthorizationReserve/v2",
+        "serverware.nativeReleaseAuthorizationReserve/v1",
+        "serverware.nativeReleaseAuthorizationReserve/v2",
     ] = Field(
         alias="apiVersion"
     )
     attempt_id: str = Field(alias="attemptId", min_length=1, max_length=256)
     flow_id: str = Field(alias="flowId", min_length=1, max_length=256)
-    principal_id: str = Field(alias="principalId", min_length=1, max_length=256)
+    principal_id: str = Field(alias="principalId", min_length=1, max_length=1024)
     route_id: str = Field(alias="routeId", min_length=1, max_length=256)
     credential_ref: str | None = Field(
         alias="credentialRef", max_length=256
@@ -2629,11 +2632,25 @@ class DataPlaneReleaseAuthorizationReserve(BaseModel):
     durable_policy: DataPlaneReleaseAuthorizationDurablePolicyReserve | None = Field(
         default=None, alias="durablePolicy"
     )
+    approver_policy_sha256: str | None = Field(
+        default=None, alias="approverPolicySha256", pattern=r"^sha256:[0-9a-f]{64}$"
+    )
 
     @model_validator(mode="after")
     def validate_canonical_payload_sizes(
         self,
     ) -> DataPlaneReleaseAuthorizationReserve:
+        preparing = self.api_version in {
+            "serverware.nativeReleaseAuthorizationPrepare/v1",
+            "serverware.nativeReleaseAuthorizationPrepare/v2",
+        }
+        native, durable = release_profiles.request_profile(
+            self.api_version, "Prepare" if preparing else "Reserve"
+        )
+        if native:
+            release_profiles.native_principal(self.principal_id)
+        elif len(self.principal_id) > 256:
+            raise ValueError("legacy release principal exceeds 256 characters")
         base_fields = {
             "api_version",
             "attempt_id",
@@ -2650,14 +2667,16 @@ class DataPlaneReleaseAuthorizationReserve(BaseModel):
         }
         expected_fields = (
             base_fields
-            if self.api_version
-            == "serverware.releaseAuthorizationReserve/v1"
+            if not durable
             else base_fields | {"durable_policy"}
         )
+        if native and not preparing:
+            expected_fields |= {"approver_policy_sha256"}
         if self.model_fields_set != expected_fields or (
-            self.api_version
-            == "serverware.releaseAuthorizationReserve/v2"
+            durable
             and self.durable_policy is None
+        ) or (
+            native and not preparing and self.approver_policy_sha256 is None
         ):
             raise ValueError(
                 "release authorization reserve fields do not match its version"
@@ -2692,6 +2711,13 @@ class DataPlaneReleaseAuthorizationReserve(BaseModel):
         return self
 
 
+class DataPlaneReleaseAuthorizationPrepare(DataPlaneReleaseAuthorizationReserve):
+    api_version: Literal[
+        "serverware.nativeReleaseAuthorizationPrepare/v1",
+        "serverware.nativeReleaseAuthorizationPrepare/v2",
+    ] = Field(alias="apiVersion")
+
+
 class DataPlaneReleaseAuthorizationDispatch(BaseModel):
     model_config = ConfigDict(
         extra="forbid", validate_by_alias=True, validate_by_name=False
@@ -2700,6 +2726,8 @@ class DataPlaneReleaseAuthorizationDispatch(BaseModel):
     api_version: Literal[
         "serverware.releaseAuthorizationDispatch/v1",
         "serverware.releaseAuthorizationDispatch/v2",
+        "serverware.nativeReleaseAuthorizationDispatch/v1",
+        "serverware.nativeReleaseAuthorizationDispatch/v2",
     ] = Field(
         alias="apiVersion"
     )
@@ -2715,6 +2743,7 @@ class DataPlaneReleaseAuthorizationDispatch(BaseModel):
     def validate_versioned_dispatch(
         self,
     ) -> DataPlaneReleaseAuthorizationDispatch:
+        _, durable = release_profiles.request_profile(self.api_version, "Dispatch")
         base_fields = {
             "api_version",
             "attempt_id",
@@ -2722,13 +2751,11 @@ class DataPlaneReleaseAuthorizationDispatch(BaseModel):
         }
         expected_fields = (
             base_fields
-            if self.api_version
-            == "serverware.releaseAuthorizationDispatch/v1"
+            if not durable
             else base_fields | {"durable_policy"}
         )
         if self.model_fields_set != expected_fields or (
-            self.api_version
-            == "serverware.releaseAuthorizationDispatch/v2"
+            durable
             and self.durable_policy is None
         ):
             raise ValueError(
@@ -2767,6 +2794,8 @@ class DataPlaneReleaseAuthorizationComplete(BaseModel):
     api_version: Literal[
         "serverware.releaseAuthorizationComplete/v1",
         "serverware.releaseAuthorizationComplete/v2",
+        "serverware.nativeReleaseAuthorizationComplete/v1",
+        "serverware.nativeReleaseAuthorizationComplete/v2",
     ] = Field(
         alias="apiVersion"
     )
@@ -2783,6 +2812,7 @@ class DataPlaneReleaseAuthorizationComplete(BaseModel):
     def validate_versioned_completion(
         self,
     ) -> DataPlaneReleaseAuthorizationComplete:
+        _, durable = release_profiles.request_profile(self.api_version, "Complete")
         base_fields = {
             "api_version",
             "attempt_id",
@@ -2791,13 +2821,11 @@ class DataPlaneReleaseAuthorizationComplete(BaseModel):
         }
         expected_fields = (
             base_fields
-            if self.api_version
-            == "serverware.releaseAuthorizationComplete/v1"
+            if not durable
             else base_fields | {"durable_policy"}
         )
         if self.model_fields_set != expected_fields or (
-            self.api_version
-            == "serverware.releaseAuthorizationComplete/v2"
+            durable
             and self.durable_policy is None
         ):
             raise ValueError(
@@ -4312,6 +4340,18 @@ async def _bounded_credential_lease_request(request: Request) -> CredentialLease
         expected_token=DATA_PLANE_CREDENTIAL_LEASE_TOKEN,
         maximum_bytes=_CREDENTIAL_LEASE_REQUEST_MAX_BYTES,
         label="credential lease request",
+    )
+
+
+async def _bounded_release_authorization_prepare_request(
+    request: Request,
+) -> DataPlaneReleaseAuthorizationPrepare:
+    return await _bounded_exact_data_plane_model(
+        request,
+        model_type=DataPlaneReleaseAuthorizationPrepare,
+        expected_token=DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN,
+        maximum_bytes=_RELEASE_AUTHORIZATION_REQUEST_MAX_BYTES,
+        label="native release authorization preparation request",
     )
 
 
@@ -19075,8 +19115,24 @@ def _release_authorization_api_response(
     api_version: Literal[
         "serverware.releaseAuthorization/v1",
         "serverware.releaseAuthorization/v2",
+        "serverware.nativeReleaseAuthorizationResponse/v1",
+        "serverware.nativeReleaseAuthorizationResponse/v2",
     ] = "serverware.releaseAuthorization/v1",
 ) -> dict[str, Any]:
+    native = api_version in {
+        "serverware.nativeReleaseAuthorizationResponse/v1",
+        "serverware.nativeReleaseAuthorizationResponse/v2",
+    }
+    durable_profile = api_version in {
+        "serverware.releaseAuthorization/v2",
+        "serverware.nativeReleaseAuthorizationResponse/v2",
+    }
+    expected_binding = release_profiles.binding_version(native=native, durable=durable_profile)
+    if "binding_api_version" in result:
+        if result["binding_api_version"] != expected_binding:
+            raise HTTPException(status_code=503, detail="retained release response profile changed")
+    elif native and (result.get("authorized") or result.get("state") not in {"denied", "absent"}):
+        raise HTTPException(status_code=503, detail="native release response lacks its retained profile")
     quotas = []
     for item in result.get("quotas") or []:
         window_kind = str(item.get("window_kind") or "")
@@ -19129,7 +19185,7 @@ def _release_authorization_api_response(
                 "approvalCreated": bool(result.get("approval_created")),
             }
         )
-    if api_version == "serverware.releaseAuthorization/v2":
+    if durable_profile:
         durable = result.get("durable_policy")
         if not isinstance(durable, dict):
             raise HTTPException(
@@ -20045,18 +20101,29 @@ def _release_authorization_maintenance() -> None:
         return
 
 
-@app.post("/api/data-plane/release-authorizations/reserve")
-def data_plane_release_authorization_reserve(
-    payload: DataPlaneReleaseAuthorizationReserve = Depends(
-        _bounded_release_authorization_reserve_request
-    ),
-    x_serverware_data_plane_token: str | None = Header(
-        default=None, alias="X-Serverware-Data-Plane-Token"
-    ),
-) -> dict[str, Any]:
+def _release_authorization_inputs(
+    payload: DataPlaneReleaseAuthorizationReserve,
+    token: str | None,
+) -> tuple[Any, ...]:
+    # All operations here are authority reads and original request validation.
+    # Preparation deliberately does not invoke maintenance or reservation.
     authenticated_actor_id = _require_data_plane_token(
-        x_serverware_data_plane_token, DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN
+        token, DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN
     )
+    if payload.api_version.startswith("serverware.nativeReleaseAuthorization"):
+        # Reuse the actual legacy DB identifier predicate for all non-principal
+        # IDs; preparation must not advertise a broader routing profile.
+        try:
+            for label, value in (
+                ("attempt_id", payload.attempt_id),
+                ("flow_id", payload.flow_id),
+                ("route_id", payload.route_id),
+            ):
+                db._release_text(f"release authorization {label}", value)
+            if payload.credential_ref:
+                db._release_text("release authorization credential_id", payload.credential_ref)
+        except db.ReleaseAuthorizationError as exc:
+            raise _release_authorization_db_error(exc, operation="prepare") from exc
     snapshot, route, shared_quotas, require_jit_grant = (
         _release_authorization_route_claims(payload)
     )
@@ -20070,6 +20137,69 @@ def data_plane_release_authorization_reserve(
         route,
         authenticated_actor_id=authenticated_actor_id,
     )
+    return (
+        authenticated_actor_id, snapshot, route, shared_quotas,
+        require_jit_grant, approval_review, durable_policy,
+    )
+
+
+@app.post("/api/data-plane/release-authorizations/native-prepare")
+def data_plane_release_authorization_prepare(
+    payload: DataPlaneReleaseAuthorizationPrepare = Depends(
+        _bounded_release_authorization_prepare_request
+    ),
+    x_serverware_data_plane_token: str | None = Header(
+        default=None, alias="X-Serverware-Data-Plane-Token"
+    ),
+) -> dict[str, Any]:
+    _, _, route, _, require_jit_grant, _, _ = _release_authorization_inputs(
+        payload, x_serverware_data_plane_token
+    )
+    policy, _ = db.release_approver_policy_for_route(
+        route.jit or {}, require_jit_grant=require_jit_grant
+    )
+    try:
+        release_profiles.require_native_approver_policy(policy)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {
+        "apiVersion": "serverware.nativeReleaseAuthorizationPreparation/v1",
+        "principalId": payload.principal_id,
+        "routeId": payload.route_id,
+        "policyHash": payload.policy_hash,
+        "requestDigest": payload.request_digest,
+        "operationDigest": payload.operation_digest,
+        "approverPolicy": policy,
+        "approverPolicySha256": release_profiles.approver_policy_sha256(policy),
+    }
+
+
+@app.post("/api/data-plane/release-authorizations/reserve")
+def data_plane_release_authorization_reserve(
+    payload: DataPlaneReleaseAuthorizationReserve = Depends(
+        _bounded_release_authorization_reserve_request
+    ),
+    x_serverware_data_plane_token: str | None = Header(
+        default=None, alias="X-Serverware-Data-Plane-Token"
+    ),
+) -> dict[str, Any]:
+    native, durable = release_profiles.request_profile(payload.api_version, "Reserve")
+    (
+        authenticated_actor_id, snapshot, route, shared_quotas,
+        require_jit_grant, approval_review, durable_policy,
+    ) = _release_authorization_inputs(payload, x_serverware_data_plane_token)
+    policy, approver_arguments = db.release_approver_policy_for_route(
+        route.jit or {}, require_jit_grant=require_jit_grant
+    )
+    if native:
+        try:
+            release_profiles.require_native_approver_policy(policy)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if native and not hmac.compare_digest(
+        payload.approver_policy_sha256 or "", release_profiles.approver_policy_sha256(policy)
+    ):
+        raise HTTPException(status_code=409, detail="native release approver policy changed before reservation")
     jit = route.jit or {}
     jit_approval_request = None
     if require_jit_grant:
@@ -20114,11 +20244,11 @@ def data_plane_release_authorization_reserve(
             "actor_id": authenticated_actor_id,
             "authority_policy_hash": payload.policy_hash,
             "authority_route_id": route.id,
+            "native_profile": native,
+            "expected_approver_policy_sha256": payload.approver_policy_sha256,
         }
         if require_jit_grant:
-            reserve_arguments.update(
-                db.jit_approver_policy_arguments(jit)
-            )
+            reserve_arguments.update(approver_arguments)
         if durable_policy is not None:
             reserve_arguments["durable_policy_binding"] = durable_policy
         result = reserve(**reserve_arguments)
@@ -20131,11 +20261,7 @@ def data_plane_release_authorization_reserve(
     _release_authorization_maintenance()
     return _release_authorization_api_response(
         result,
-        api_version=(
-            "serverware.releaseAuthorization/v2"
-            if durable_policy is not None
-            else "serverware.releaseAuthorization/v1"
-        ),
+        api_version=release_profiles.response_version(native=native, durable=durable),
     )
 
 
@@ -20148,6 +20274,7 @@ def data_plane_release_authorization_dispatch(
         default=None, alias="X-Serverware-Data-Plane-Token"
     ),
 ) -> dict[str, Any]:
+    native, durable = release_profiles.request_profile(payload.api_version, "Dispatch")
     authenticated_actor_id = _require_data_plane_token(
         x_serverware_data_plane_token, DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN
     )
@@ -20165,6 +20292,7 @@ def data_plane_release_authorization_dispatch(
                 ),
                 actor_id=authenticated_actor_id,
                 required_approver_roles={"approver"},
+                native_profile=native,
             )
         else:
             result = db.dispatch_release_authorization_v2(
@@ -20173,6 +20301,7 @@ def data_plane_release_authorization_dispatch(
                 durable_policy_transition=durable_policy,
                 actor_id=authenticated_actor_id,
                 required_approver_roles={"approver"},
+                native_profile=native,
             )
     except (db.ReleaseAuthorizationError, db.PolicyStateBundleStoreError) as exc:
         raise _release_authorization_db_error(
@@ -20181,11 +20310,7 @@ def data_plane_release_authorization_dispatch(
     _release_authorization_maintenance()
     return _release_authorization_api_response(
         result,
-        api_version=(
-            "serverware.releaseAuthorization/v2"
-            if durable_policy is not None
-            else "serverware.releaseAuthorization/v1"
-        ),
+        api_version=release_profiles.response_version(native=native, durable=durable),
     )
 
 
@@ -20198,6 +20323,7 @@ def data_plane_release_authorization_complete(
         default=None, alias="X-Serverware-Data-Plane-Token"
     ),
 ) -> dict[str, Any]:
+    native, durable = release_profiles.request_profile(payload.api_version, "Complete")
     authenticated_actor_id = _require_data_plane_token(
         x_serverware_data_plane_token, DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN
     )
@@ -20213,12 +20339,14 @@ def data_plane_release_authorization_complete(
                 outcome=payload.outcome,
                 durable_policy_transition=durable_policy,
                 actor_id=authenticated_actor_id,
+                native_profile=native,
             )
         elif payload.outcome == "not_forwarded":
             result = db.cancel_release_authorization_if_present(
                 attempt_id=payload.attempt_id,
                 binding_digest=payload.binding_digest,
                 actor_id=authenticated_actor_id,
+                native_profile=native,
             )
         else:
             result = db.complete_release_authorization(
@@ -20226,6 +20354,7 @@ def data_plane_release_authorization_complete(
                 binding_digest=payload.binding_digest,
                 outcome=payload.outcome,
                 actor_id=authenticated_actor_id,
+                native_profile=native,
             )
     except (db.ReleaseAuthorizationError, db.PolicyStateBundleStoreError) as exc:
         raise _release_authorization_db_error(
@@ -20234,11 +20363,7 @@ def data_plane_release_authorization_complete(
     _release_authorization_maintenance()
     return _release_authorization_api_response(
         result,
-        api_version=(
-            "serverware.releaseAuthorization/v2"
-            if durable_policy is not None
-            else "serverware.releaseAuthorization/v1"
-        ),
+        api_version=release_profiles.response_version(native=native, durable=durable),
     )
 
 

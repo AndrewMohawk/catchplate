@@ -2,8 +2,9 @@
 //!
 //! The independently admitted static x86-64 ELF must implement the exact four
 //! configuration flags and stdin/stdout contract of
-//! scripts/verify_native_response_attestation.py. The separate Rust verifier
-//! now has a static production packaging target; this adapter still requires
+//! scripts/verify_native_response_attestation.py. That Python diagnostic remains
+//! old-expectations/v1 only; explicit expectations/v2 requires the Rust verifier.
+//! The Rust verifier has a static production packaging target; this adapter requires
 //! an independently admitted executable and pin. There is no interpreter fallback.
 //! Digests authenticate supplied bytes, not their release provenance. The child
 //! verdict remains local signature/quote evidence, not HTTP/exporter truth.
@@ -17,6 +18,7 @@ use ed25519_dalek::Signature;
 use serde::de::{self, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 use serde_json::{json, Map, Value};
+use serverware_decision_gate::native_response_profile_v1 as response_profile;
 use sha2::{Digest, Sha256};
 use std::ffi::CString;
 use std::fmt;
@@ -64,6 +66,7 @@ pub(super) struct NativeResponseVerifierV1 {
     inputs: [HeldInput; 3],
     executable: File,
     expected: Value,
+    native_principal_profile: bool,
     nonce: Vec<u8>,
     control_plane_key_id: String,
     ca_certificate_sha256: String,
@@ -91,7 +94,7 @@ impl NativeResponseVerifierV1 {
             config.expectations, config.expectations_sha256, MAX_EXPECTATIONS_BYTES, true, deadline,
         )?;
         let expected = strict_json(&expected_bytes, MAX_EXPECTATIONS_BYTES, deadline)?;
-        let nonce = validate_expectations(&expected)?;
+        let (nonce, native_principal_profile) = validate_expectations(&expected)?;
         let control_plane_key_id = text(&expected, "controlPlaneResponseSigningKeyId")?.to_owned();
         let ca_certificate_sha256 = text(&expected, "caCertificateSha256")?.to_owned();
         let ca_public_key_spki_sha256 = text(&expected, "caPublicKeySpkiSha256")?.to_owned();
@@ -102,6 +105,7 @@ impl NativeResponseVerifierV1 {
         live(deadline)?;
         Ok(Self {
             inputs: [executable_input, expectations, trust_roots], executable, expected,
+            native_principal_profile,
             nonce, control_plane_key_id, ca_certificate_sha256, ca_public_key_spki_sha256,
             deadline, owner_pid: std::process::id(),
         })
@@ -113,6 +117,10 @@ impl NativeResponseVerifierV1 {
     }
 
     pub(super) fn control_plane_key_id(&self) -> &str { &self.control_plane_key_id }
+
+    /// Selection from the independently pinned, retained expectations original;
+    /// this is not a verdict or authority to accept a different signed family.
+    pub(super) fn native_principal_profile(&self) -> bool { self.native_principal_profile }
 
     // This only rejects mismatched independently pinned configurations. It
     // does not treat a supplied scope as a quote or an admission capability.
@@ -167,7 +175,8 @@ impl NativeResponseVerifierV1 {
             return Err("native verifier expectations differ from the actual client nonce".to_owned());
         }
         value_bounds(proof, MAX_INPUT_BYTES, deadline)?;
-        let expected_result = expected_verdict(proof, &self.expected, session_nonce)?;
+        let expected_result = expected_verdict(proof, &self.expected, session_nonce,
+            self.native_principal_profile)?;
         let original = serde_json::to_vec(proof).map_err(|_| "encode actual native proof")?;
         if original.is_empty() || original.len() > MAX_INPUT_BYTES {
             return Err("native proof exceeds the verifier input bound".to_owned());
@@ -337,15 +346,23 @@ fn b64(value: &str, minimum: usize, maximum: usize) -> Result<Vec<u8>, String> {
     Ok(decoded)
 }
 
-fn validate_expectations(expected: &Value) -> Result<Vec<u8>, String> {
-    object(expected, &[
+fn validate_expectations(expected: &Value) -> Result<(Vec<u8>, bool), String> {
+    let native_principal_profile = match text(expected, "apiVersion")? {
+        "serverware.nativeResponseAttestationExpectations/v1" => false,
+        response_profile::NATIVE_EXPECTATIONS => true,
+        _ => return Err("native verifier expectations version mismatch".to_owned()),
+    };
+    let mut fields = vec![
         "apiVersion", "releaseRecordSha256", "policyHash", "configurationSha256",
         "caCertificateSha256", "caPublicKeySpkiSha256", "expectedBinaryDigest",
         "expectedPcrs", "expectedEif", "expectedModuleId", "maxAgeSeconds", "futureSkewSeconds",
         "bootId", "keyId", "controlPlaneResponseSigningKeyId", "nonce",
-    ], "native verifier expectations")?;
-    if text(expected, "apiVersion")? != "serverware.nativeResponseAttestationExpectations/v1" {
-        return Err("native verifier expectations version mismatch".to_owned());
+    ];
+    if native_principal_profile { fields.push("statementProfile"); }
+    object(expected, &fields, "native verifier expectations")?;
+    if native_principal_profile
+        && text(expected, "statementProfile")? != response_profile::NATIVE_STATEMENT_PROFILE {
+        return Err("native verifier expectations statement profile mismatch".to_owned());
     }
     for field in ["releaseRecordSha256", "policyHash", "configurationSha256", "caCertificateSha256",
         "caPublicKeySpkiSha256", "expectedBinaryDigest", "keyId", "controlPlaneResponseSigningKeyId"] {
@@ -378,7 +395,7 @@ fn validate_expectations(expected: &Value) -> Result<Vec<u8>, String> {
         || pcrs.get("PCR0").and_then(Value::as_str) != Some(text(expected, "expectedEif")?) {
         return Err("native verifier core PCR/EIF pins disagree".to_owned());
     }
-    Ok(nonce)
+    Ok((nonce, native_principal_profile))
 }
 
 fn validate_trust(trust: &Value) -> Result<(), String> {
@@ -412,22 +429,33 @@ fn fresh(issued: u64, now: u64, expected: &Value) -> Result<(), String> {
     Ok(())
 }
 
-fn expected_verdict(proof: &Value, expected: &Value, nonce: &[u8]) -> Result<Value, String> {
+fn expected_verdict(proof: &Value, expected: &Value, nonce: &[u8], native_principal_profile: bool)
+    -> Result<Value, String> {
     object(proof, &["apiVersion", "kind", "server_statement", "server_statement_sha256",
         "server_signature", "native_attestation"], "native proof envelope")?;
-    if text(proof, "apiVersion")? != "serverware.nativeResponseRuntimeProof/v1"
+    let envelope_version = if native_principal_profile { response_profile::NATIVE_ENVELOPE }
+        else { "serverware.nativeResponseRuntimeProof/v1" };
+    if text(proof, "apiVersion")? != envelope_version
         || text(proof, "kind")? != "ServerwareNativeResponseRuntimeProof" {
         return Err("native proof envelope discriminator mismatch".to_owned());
     }
     let statement = proof.get("server_statement").ok_or("native statement absent")?;
     let version = text(statement, "apiVersion")?;
-    if !matches!(version, "serverware.proxyResponseStatement/v2" | "serverware.streamingResponseStatement/v1"
-        | "serverware.responseObservationStatement/v1")
-        || (version != "serverware.proxyResponseStatement/v2" && nonce.len() != 32)
+    let families = if native_principal_profile {
+        [response_profile::NATIVE_BUFFERED, response_profile::NATIVE_STREAMING, response_profile::NATIVE_OBSERVATION]
+    } else {
+        ["serverware.proxyResponseStatement/v2", "serverware.streamingResponseStatement/v1",
+            "serverware.responseObservationStatement/v1"]
+    };
+    if !families.contains(&version)
+        || (version != families[0] && nonce.len() != 32)
         || text(statement, "client_nonce")? != general_purpose::URL_SAFE_NO_PAD.encode(nonce) {
         return Err("native statement family or actual session nonce mismatch".to_owned());
     }
-    let policy = if version == "serverware.responseObservationStatement/v1" {
+    if native_principal_profile && !response_profile::valid_principal(text(statement, "principal_id")?) {
+        return Err("native statement principal is outside its selected profile".to_owned());
+    }
+    let policy = if version == families[2] {
         text(statement.get("policy").ok_or("native observation policy absent")?, "digest")?
     } else { text(statement, "policy_digest")? };
     if policy != text(expected, "policyHash")?
@@ -474,7 +502,8 @@ fn expected_verdict(proof: &Value, expected: &Value, nonce: &[u8]) -> Result<Val
     let statement_issued = uint(statement, "issued_at_unix")?;
     fresh(statement_issued, epoch_seconds()?, expected)?;
     Ok(json!({
-        "apiVersion":"serverware.nativeResponseAttestationVerification/v1", "ok":true, "debug":false,
+        "apiVersion":if native_principal_profile { response_profile::NATIVE_VERDICT }
+            else { "serverware.nativeResponseAttestationVerification/v1" }, "ok":true, "debug":false,
         "resultScope":"local-signature-and-native-quote-only", "okForAction":false,
         "statementApiVersion":version, "serverStatementSha256":statement_digest,
         "signatureSha256":super::sha256_prefixed(&signature), "clientNonce":text(expected,"nonce")?,

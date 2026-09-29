@@ -3682,6 +3682,9 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/native_verifier/principal_session.rs \
 				data-plane/decision-gate-rs/src/native_principal_preflight_v1.rs \
 				data-plane/decision-gate-rs/src/response_principal_compatibility_v1.rs \
+				data-plane/decision-gate-rs/src/native_response_profile_v1.rs \
+				data-plane/decision-gate-rs/src/native_approver_policy_v1.rs \
+				serverware/release_authorization_profiles.py \
 				data-plane/decision-gate-rs/src/native_target_principal_preflight.rs \
 				data-plane/decision-gate-rs/src/native_enrollment_authorizer.rs \
 				data-plane/decision-gate-rs/src/native_enrollment_admission.rs \
@@ -3713,6 +3716,11 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-ingress-session-evidence.v2.schema.json \
 				schemas/native-ingress-session-evidence.v3.schema.json \
 				schemas/native-principal-preflight.v1.schema.json \
+				schemas/native-response-statements.v1.schema.json \
+				schemas/native-response-runtime-proof.v2.schema.json \
+				schemas/native-response-capture.v2.schema.json \
+				schemas/native-response-attestation-expectations.v2.schema.json \
+				schemas/native-release-authorization-preparation.v1.schema.json \
 				schemas/native-proxy-ingress.v2.schema.json \
 				schemas/native-proxy-ingress.v3.schema.json \
 				schemas/native-enrollment-assignment.v1.schema.json \

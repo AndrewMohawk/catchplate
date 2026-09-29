@@ -2,9 +2,11 @@
 
 use super::{decode_b64, ensure, exact, fixed_b64, json, parse_digest, pem_der, text, uint};
 use serde_json::Value;
+use serverware_decision_gate::native_response_profile_v1 as response_profile;
 use std::collections::BTreeMap;
 
 pub(super) struct Expectations {
+    pub(super) native_principal_profile: bool,
     pub(super) release_record: [u8; 32],
     pub(super) policy: [u8; 32],
     pub(super) configuration: [u8; 32],
@@ -24,14 +26,23 @@ pub(super) struct Expectations {
 impl Expectations {
     pub(super) fn parse(raw: &[u8]) -> Result<Self, String> {
         let value = json::parse(raw, 16 * 1024)?;
-        exact(&value, &[
+        let native_principal_profile = match text(&value, "apiVersion")? {
+            "serverware.nativeResponseAttestationExpectations/v1" => false,
+            response_profile::NATIVE_EXPECTATIONS => true,
+            _ => return Err("native expectations version differs".to_owned()),
+        };
+        let mut fields = vec![
             "apiVersion", "releaseRecordSha256", "policyHash", "configurationSha256",
             "caCertificateSha256", "caPublicKeySpkiSha256", "expectedBinaryDigest",
             "expectedPcrs", "expectedEif", "expectedModuleId", "maxAgeSeconds",
             "futureSkewSeconds", "bootId", "keyId", "controlPlaneResponseSigningKeyId", "nonce",
-        ])?;
-        ensure(text(&value, "apiVersion")? == "serverware.nativeResponseAttestationExpectations/v1",
-            "native expectations version differs")?;
+        ];
+        if native_principal_profile { fields.push("statementProfile"); }
+        exact(&value, &fields)?;
+        if native_principal_profile {
+            ensure(text(&value, "statementProfile")? == response_profile::NATIVE_STATEMENT_PROFILE,
+                "native expectations statement profile differs")?;
+        }
         let pin = |field| parse_digest::<32>(text(&value, field)?, "sha256:", true);
         let pcrs = parse_pcr_inventory(&value["expectedPcrs"])?;
         let eif = parse_digest::<48>(text(&value, "expectedEif")?, "sha384:", true)?;
@@ -48,6 +59,7 @@ impl Expectations {
         let nonce = decode_b64(text(&value, "nonce")?, 64)?;
         ensure(nonce.len() >= 32, "native expected nonce is too short")?;
         Ok(Self {
+            native_principal_profile,
             release_record: pin("releaseRecordSha256")?, policy: pin("policyHash")?,
             configuration: pin("configurationSha256")?, ca_certificate: pin("caCertificateSha256")?,
             ca_spki: pin("caPublicKeySpkiSha256")?, binary: pin("expectedBinaryDigest")?,

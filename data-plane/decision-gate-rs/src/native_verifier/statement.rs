@@ -1,10 +1,11 @@
-//! Existing three signed statement families plus a genuine same-key role-4
-//! quote. Nested HTTP/receipt/witness semantics remain the proof client's job.
+//! Independently selected legacy or native-principal statement families plus a
+//! genuine same-key role-4 quote. Nested semantics remain the proof client's job.
 
 use super::{b64, config::{Expectations, TrustRoots}, decode_b64, digest, digest_text,
     ensure, exact, fixed_b64, fresh, json, nitro, now_seconds, parse_digest, pem_der, text, uint};
 use ed25519_dalek::{Signature, VerifyingKey};
 use serde_json::{json, Value};
+use serverware_decision_gate::native_response_profile_v1 as response_profile;
 use sha2::{Digest, Sha256};
 
 const COMMON: &[&str] = &[
@@ -29,24 +30,34 @@ pub(super) fn verify(raw: &[u8], expected: &Expectations, roots: &TrustRoots) ->
     exact(&envelope, &[
         "apiVersion", "kind", "server_statement", "server_statement_sha256", "server_signature", "native_attestation",
     ])?;
-    ensure(text(&envelope, "apiVersion")? == "serverware.nativeResponseRuntimeProof/v1"
+    let envelope_version = if expected.native_principal_profile { response_profile::NATIVE_ENVELOPE }
+        else { "serverware.nativeResponseRuntimeProof/v1" };
+    ensure(text(&envelope, "apiVersion")? == envelope_version
         && text(&envelope, "kind")? == "ServerwareNativeResponseRuntimeProof", "native envelope version/kind differs")?;
     let statement = envelope.get("server_statement").ok_or("native statement is missing")?;
     let version = text(statement, "apiVersion")?;
     let mut fields = COMMON.to_vec();
-    match version {
-        BUFFERED => { fields.extend_from_slice(AUTHORIZED); fields.push("response"); }
-        STREAMING => {
+    match (expected.native_principal_profile, version) {
+        (false, BUFFERED) | (true, response_profile::NATIVE_BUFFERED) => {
+            fields.extend_from_slice(AUTHORIZED); fields.push("response");
+        }
+        (false, STREAMING) | (true, response_profile::NATIVE_STREAMING) => {
             fields.extend_from_slice(AUTHORIZED);
             fields.extend_from_slice(&["authorization_binding_validation", "control_plane_authorization_receipt_sha256", "released_response"]);
         }
-        OBSERVATION => fields.extend_from_slice(&[
+        (false, OBSERVATION) | (true, response_profile::NATIVE_OBSERVATION) => fields.extend_from_slice(&[
             "observation_id", "request", "policy", "credential", "authorization", "response_path",
             "upstream_attempt", "upstream_observation", "emitted_response", "observation_authority",
         ]),
         _ => return Err("native statement family is unsupported".to_owned()),
     }
     exact(statement, &fields)?;
+    if expected.native_principal_profile {
+        ensure(response_profile::valid_principal(text(statement, "principal_id")?),
+            "native statement principal is outside its selected profile")?;
+    }
+    let buffered = version == if expected.native_principal_profile { response_profile::NATIVE_BUFFERED } else { BUFFERED };
+    let observation = version == if expected.native_principal_profile { response_profile::NATIVE_OBSERVATION } else { OBSERVATION };
     // serde_json's map is sorted in the locked closure. Strings retain the same
     // valid UTF-8 scalars signed by custody; there is no ASCII re-encoding.
     let statement_bytes = serde_json::to_vec(statement).map_err(|_| "encode native statement")?;
@@ -56,9 +67,9 @@ pub(super) fn verify(raw: &[u8], expected: &Expectations, roots: &TrustRoots) ->
     ensure(parse_digest::<32>(text(&envelope, "server_statement_sha256")?, "sha256:", true)? == statement_digest,
         "native statement digest differs")?;
     let nonce = decode_b64(text(statement, "client_nonce")?, 64)?;
-    ensure(nonce.len() >= 32 && (version == BUFFERED || nonce.len() == 32)
+    ensure(nonce.len() >= 32 && (buffered || nonce.len() == 32)
         && nonce == expected.nonce, "native statement nonce differs from independent expectations")?;
-    let policy = if version == OBSERVATION {
+    let policy = if observation {
         let value = statement.get("policy").ok_or("native observation policy is missing")?;
         exact(value, &["digest", "snapshot_epoch", "decision_state", "completion_state"])?;
         text(value, "digest")?
@@ -118,7 +129,8 @@ pub(super) fn verify(raw: &[u8], expected: &Expectations, roots: &TrustRoots) ->
     fresh(statement_issued, finished, expected)?;
     fresh(issued, finished, expected)?;
     Ok(json!({
-        "apiVersion": "serverware.nativeResponseAttestationVerification/v1",
+        "apiVersion": if expected.native_principal_profile { response_profile::NATIVE_VERDICT }
+            else { "serverware.nativeResponseAttestationVerification/v1" },
         "ok": true, "debug": false, "resultScope": "local-signature-and-native-quote-only", "okForAction": false,
         "statementApiVersion": version, "serverStatementSha256": digest_text(&statement_digest),
         "signatureSha256": digest_text(&digest(&signature)), "clientNonce": b64(&expected.nonce),

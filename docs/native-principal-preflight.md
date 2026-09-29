@@ -70,8 +70,9 @@ The preflight authenticates a principal under the current full identity policy;
 it does not authorize any particular provider route, credential, request body,
 response handling or JIT grant. Those existing gates still run separately.
 Legacy provider-response proof schemas and validators keep their own identity
-limits. The capture client now checks compatibility after genuinely opening its
-pinned ingress profile and before loading private capture inputs or connecting.
+limits. Under legacy response expectations the capture client checks compatibility
+after genuinely opening its pinned ingress profile and before loading private
+capture inputs or connecting.
 The server checks the actual selected principal before response-proof setup or
 provider effects, including the selected mode on each inner request. Buffered
 proofs require a trim-stable, control-free identity of at most 256 UTF-8 bytes.
@@ -81,12 +82,15 @@ refusals, not a change to the signed legacy contracts; the full existing respons
 validators still run. Errors do not echo the principal or authentication headers.
 
 Standalone preflight still supports its own 1024-byte contract. A successful
-preflight must not be presented as provider-proof compatibility. Full native
-compatibility requires explicit new statement profiles and coordinated
-principal-bearing authorization receipts and bindings across the producer,
-custody signer, control plane and independent verifier. Those remain open; no
-identity is truncated, renamed or silently remapped to pass the old profiles.
-Public captures remain supporting local evidence with no new action authority.
+preflight must not be presented as provider-proof compatibility. Separately
+pinned [response expectations v2](native-response-principal-profiles.md) select
+new native statement, receipt and binding profiles, with genuine control-plane
+preparation/reservation and native custody signing. They do not reinterpret
+legacy signed bytes or truncate, rename or remap identities. Credential leases
+still require their own explicit native producer/broker/recipient integration;
+incompatible credentialed requests remain refused before reservation/provider
+effects. Egress and canaries are also separate open work. Public captures remain
+supporting local evidence with no new action authority.
 
 The separate [native egress installation design](native-egress-installation-design.md)
 records the next ownership and authorization boundary. It is a design, not an

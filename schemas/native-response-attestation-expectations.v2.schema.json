@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-response-attestation-expectations.v2.schema.json",
+  "title": "Serverware native response attestation expectations v2",
+  "description": "Independently pinned, closed 17-field opt-in to native-principal response statements. At most 16 KiB of original JSON. Shape is not signature, Nitro, HTTP, policy or action authority. Runtime rejects duplicate keys and checks canonical base64url, byte bounds, complete PCR pins and expectedEif equality to PCR0. V1 remains old-family-only and rejects statementProfile; v2 never falls back to an old family.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion", "statementProfile", "releaseRecordSha256", "policyHash",
+    "configurationSha256", "caCertificateSha256", "caPublicKeySpkiSha256",
+    "expectedBinaryDigest", "expectedPcrs", "expectedEif", "expectedModuleId",
+    "maxAgeSeconds", "futureSkewSeconds", "bootId", "keyId",
+    "controlPlaneResponseSigningKeyId", "nonce"
+  ],
+  "properties": {
+    "apiVersion": {"const": "serverware.nativeResponseAttestationExpectations/v2"},
+    "statementProfile": {"const": "serverware.nativeResponseStatements/v1"},
+    "releaseRecordSha256": {"$ref": "#/$defs/sha256"},
+    "policyHash": {"$ref": "#/$defs/sha256"},
+    "configurationSha256": {"$ref": "#/$defs/sha256"},
+    "caCertificateSha256": {"$ref": "#/$defs/sha256"},
+    "caPublicKeySpkiSha256": {"$ref": "#/$defs/sha256"},
+    "expectedBinaryDigest": {"$ref": "#/$defs/sha256"},
+    "expectedPcrs": {
+      "type": "object", "minProperties": 3, "maxProperties": 32,
+      "required": ["PCR0", "PCR1", "PCR2"],
+      "propertyNames": {"pattern": "^PCR(?:[0-9]|[12][0-9]|3[01])$"},
+      "properties": {
+        "PCR0": {"$ref": "#/$defs/nonzeroSha384"},
+        "PCR1": {"$ref": "#/$defs/nonzeroSha384"},
+        "PCR2": {"$ref": "#/$defs/nonzeroSha384"}
+      },
+      "additionalProperties": {"$ref": "#/$defs/sha384"}
+    },
+    "expectedEif": {"$ref": "#/$defs/nonzeroSha384"},
+    "expectedModuleId": {
+      "type": "string", "minLength": 1, "maxLength": 256,
+      "pattern": "^[\\u0020-\\u007e]+$"
+    },
+    "maxAgeSeconds": {"type": "integer", "minimum": 1, "maximum": 300},
+    "futureSkewSeconds": {"type": "integer", "minimum": 0, "maximum": 30},
+    "bootId": {
+      "description": "Canonical unpadded base64url decoding to exactly 32 bytes.",
+      "type": "string", "minLength": 43, "maxLength": 43,
+      "pattern": "^[A-Za-z0-9_-]{43}$"
+    },
+    "keyId": {"$ref": "#/$defs/sha256"},
+    "controlPlaneResponseSigningKeyId": {"$ref": "#/$defs/sha256"},
+    "nonce": {
+      "description": "Canonical unpadded base64url of 32..64 independently chosen bytes; native streaming and observation statements require exactly 32 and every statement must match this original nonce.",
+      "type": "string", "minLength": 43, "maxLength": 86,
+      "pattern": "^[A-Za-z0-9_-]+$"
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string", "minLength": 71, "maxLength": 71,
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "not": {"pattern": "^sha256:0{64}$"}
+    },
+    "sha384": {
+      "type": "string", "minLength": 103, "maxLength": 103,
+      "pattern": "^sha384:[0-9a-f]{96}$"
+    },
+    "nonzeroSha384": {
+      "allOf": [
+        {"$ref": "#/$defs/sha384"},
+        {"not": {"pattern": "^sha384:0{96}$"}}
+      ]
+    }
+  }
+}

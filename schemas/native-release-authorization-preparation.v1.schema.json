@@ -1,0 +1,96 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-release-authorization-preparation.v1.schema.json",
+  "title": "Native release authorization preparation v1",
+  "description": "Exact read-only preparation body, authenticated by the existing responseSignature/v3 contract over this body and its original timestamp. Shape is not authority. Runtime joins actual principal/route/policy/request/operation, verifies the independent CP key and original deadline, and compares approverPolicySha256 to SHA256 of compact sorted ensure_ascii=True JSON of approverPolicy including null. No new time allowance. Null is allowed only for a genuinely non-JIT route. The native normalized policy is at most 64 KiB after ASCII escaping.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion", "principalId", "routeId", "policyHash", "requestDigest",
+    "operationDigest", "approverPolicy", "approverPolicySha256"
+  ],
+  "properties": {
+    "apiVersion": {"const": "serverware.nativeReleaseAuthorizationPreparation/v1"},
+    "principalId": {
+      "description": "Native principal: runtime additionally requires trim-stable UTF-8 of at most 1024 bytes, with no control characters.",
+      "type": "string", "minLength": 1, "maxLength": 1024,
+      "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+    },
+    "routeId": {
+      "description": "Unchanged legacy route scalar: runtime requires trim-stable UTF-8 of at most 256 bytes, with no U+0000..001F or U+007F. No new ASCII-only alphabet.",
+      "type": "string", "minLength": 1, "maxLength": 256,
+      "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+    },
+    "policyHash": {"$ref": "#/$defs/sha256"},
+    "requestDigest": {"$ref": "#/$defs/sha256"},
+    "operationDigest": {"$ref": "#/$defs/sha256"},
+    "approverPolicy": {
+      "anyOf": [{"type": "null"}, {"$ref": "#/$defs/normalizedApproverPolicy"}]
+    },
+    "approverPolicySha256": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$", "minLength": 71, "maxLength": 71},
+    "normalizedText512": {
+      "description": "Runtime requires nonempty Python-strip-stable UTF-8 of at most 512 bytes; no extra alphabet or blanket control-character rule is imposed.",
+      "type": "string", "minLength": 1, "maxLength": 512
+    },
+    "normalizedText64": {
+      "description": "Runtime requires nonempty Python-strip-stable UTF-8 of at most 64 bytes.",
+      "type": "string", "minLength": 1, "maxLength": 64
+    },
+    "normalizedText128": {
+      "description": "Runtime requires nonempty Python-strip-stable UTF-8 of at most 128 bytes.",
+      "type": "string", "minLength": 1, "maxLength": 128
+    },
+    "normalizedApproverPolicy": {
+      "description": "Exact CP-normalized top-level eight fields and credential twelve fields; all text arrays must be strictly sorted and unique. Entire compact ensure_ascii encoding is <=65536 bytes, including DEL and supplementary-character escaping. Shape alone does not establish actual route restrictions, configured RP/origin, credential currentness, role/trust admission or approval. Actual route JIT additionally requires its exact users/quorum/authenticator/hardware restrictions, requiredRoles=['approver'] and allowAnyApproverId=false.",
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "requiredRoles", "roleMatch", "allowedApproverIds", "allowAnyApproverId", "requireWebAuthn", "threshold", "credentialPolicy"],
+      "properties": {
+        "schema": {"const": "serverware.jitApproverPolicy/v1"},
+        "requiredRoles": {
+          "type": "array", "maxItems": 8, "uniqueItems": true,
+          "items": {"enum": ["admin", "approver", "attestation_operator", "attestation_reviewer", "auditor", "credential_owner", "policy_author", "policy_publisher"]}
+        },
+        "roleMatch": {"const": "any"},
+        "allowedApproverIds": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/normalizedText512"}},
+        "allowAnyApproverId": {"type": "boolean"},
+        "requireWebAuthn": {"const": true},
+        "threshold": {"type": "integer", "minimum": 1, "maximum": 16},
+        "credentialPolicy": {"$ref": "#/$defs/credentialPolicy"}
+      },
+      "allOf": [{
+        "if": {"properties": {"allowAnyApproverId": {"const": true}}},
+        "then": {"properties": {"allowedApproverIds": {"maxItems": 0}}},
+        "else": {"properties": {"allowedApproverIds": {"minItems": 1}}, "description": "Runtime also requires threshold <= the exact allowedApproverIds length."}
+      }]
+    },
+    "credentialPolicy": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "allowedCredentialRecordIds", "allowedAuthenticatorClasses", "allowedAaguids",
+        "requireAttestationTrusted", "requiredTrustBundleDigest", "minimumTrustBundleSequence",
+        "rpId", "origins", "requireUserPresence", "requireUserVerification",
+        "counterPolicy", "maxAssertionAgeSeconds"
+      ],
+      "properties": {
+        "allowedCredentialRecordIds": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/normalizedText512"}},
+        "allowedAuthenticatorClasses": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/normalizedText64"}},
+        "allowedAaguids": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/normalizedText128"}},
+        "requireAttestationTrusted": {"type": "boolean"},
+        "requiredTrustBundleDigest": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/sha256"}]},
+        "minimumTrustBundleSequence": {
+          "description": "Explicit new-native bound; legacy normalization is unchanged.",
+          "anyOf": [{"type": "null"}, {"type": "integer", "minimum": 1, "maximum": 18446744073709551615}]
+        },
+        "rpId": {"type": "string", "description": "Exact deployment value authenticated by preparation; this shape adds no URL, nonempty or DNS restriction."},
+        "origins": {"type": "array", "minItems": 1, "maxItems": 1, "items": {"type": "string"}, "description": "Singleton exact configured origin; provenance/currentness are not shape checks."},
+        "requireUserPresence": {"const": true},
+        "requireUserVerification": {"const": true},
+        "counterPolicy": {"enum": ["strict", "strict-or-zero"]},
+        "maxAssertionAgeSeconds": {"type": "integer", "minimum": 1, "maximum": 30}
+      }
+    }
+  }
+}

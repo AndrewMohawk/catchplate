@@ -1,0 +1,146 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-response-capture.v2.schema.json",
+  "title": "Native wide-principal response capture v2",
+  "description": "Local evidence only. Collector signs exact canonical artifact with collector_signature omitted, including original runtime proof and independently invoked verifier result. Shape never supplies authority or proof of actual response capture.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion",
+    "kind",
+    "resultScope",
+    "okForAction",
+    "environment",
+    "captureMode",
+    "external_capture",
+    "runtime_proof",
+    "native_verification",
+    "collector_signature"
+  ],
+  "properties": {
+    "apiVersion": {
+      "const": "serverware.nativeResponseCapture/v2"
+    },
+    "kind": {
+      "const": "ServerwareNativeResponseCapture"
+    },
+    "resultScope": {
+      "const": "local-capture-and-native-quote-only"
+    },
+    "okForAction": {
+      "const": false
+    },
+    "environment": {
+      "const": "native-unadmitted"
+    },
+    "captureMode": {
+      "enum": [
+        "buffered",
+        "streaming",
+        "observation"
+      ]
+    },
+    "external_capture": {
+      "type": "object"
+    },
+    "runtime_proof": {
+      "$ref": "native-response-runtime-proof.v2.schema.json"
+    },
+    "native_verification": {
+      "$ref": "#/$defs/nativeVerification"
+    },
+    "collector_signature": {
+      "$ref": "native-response-capture.v1.schema.json#/$defs/collectorSignature"
+    }
+  },
+  "$defs": {
+    "nativeVerification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "ok",
+        "debug",
+        "resultScope",
+        "okForAction",
+        "statementApiVersion",
+        "serverStatementSha256",
+        "signatureSha256",
+        "clientNonce",
+        "quoteChallenge",
+        "bootId",
+        "keyId",
+        "controlPlaneResponseSigningKeyId",
+        "policyHash",
+        "dataPlaneBinaryDigest",
+        "requestBindingSha256",
+        "attestationDocumentSha256",
+        "issuedAtUnix",
+        "statementIssuedAtUnix"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeResponseAttestationVerification/v2"
+        },
+        "ok": {
+          "const": true
+        },
+        "debug": {
+          "const": false
+        },
+        "resultScope": {
+          "const": "local-signature-and-native-quote-only"
+        },
+        "okForAction": {
+          "const": false
+        },
+        "statementApiVersion": {
+          "enum": [
+            "serverware.nativeProxyResponseStatement/v1",
+            "serverware.nativeStreamingResponseStatement/v1",
+            "serverware.nativeResponseObservationStatement/v1"
+          ]
+        },
+        "serverStatementSha256": {
+          "$ref": "streaming-response-proof.v1.schema.json#/$defs/sha256"
+        },
+        "signatureSha256": {
+          "$ref": "streaming-response-proof.v1.schema.json#/$defs/sha256"
+        },
+        "clientNonce": {
+          "$ref": "native-response-runtime-proof.v1.schema.json#/$defs/bufferedNonce"
+        },
+        "quoteChallenge": {
+          "$ref": "streaming-response-proof.v1.schema.json#/$defs/nonce"
+        },
+        "bootId": {
+          "$ref": "streaming-response-proof.v1.schema.json#/$defs/nonce"
+        },
+        "keyId": {
+          "$ref": "streaming-response-proof.v1.schema.json#/$defs/sha256"
+        },
+        "controlPlaneResponseSigningKeyId": {
+          "$ref": "streaming-response-proof.v1.schema.json#/$defs/sha256"
+        },
+        "policyHash": {
+          "$ref": "streaming-response-proof.v1.schema.json#/$defs/sha256"
+        },
+        "dataPlaneBinaryDigest": {
+          "$ref": "streaming-response-proof.v1.schema.json#/$defs/sha256"
+        },
+        "requestBindingSha256": {
+          "$ref": "streaming-response-proof.v1.schema.json#/$defs/sha256"
+        },
+        "attestationDocumentSha256": {
+          "$ref": "streaming-response-proof.v1.schema.json#/$defs/sha256"
+        },
+        "issuedAtUnix": {
+          "$ref": "streaming-response-proof.v1.schema.json#/$defs/positiveUint64"
+        },
+        "statementIssuedAtUnix": {
+          "$ref": "streaming-response-proof.v1.schema.json#/$defs/positiveUint64"
+        }
+      }
+    }
+  }
+}

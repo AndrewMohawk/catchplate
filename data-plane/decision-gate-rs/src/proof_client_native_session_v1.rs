@@ -137,7 +137,13 @@ impl NativeCaptureSessionV1 {
         } else {
             ResponseProofPrincipalProfile::Buffered
         };
-        require_response_principal_compatible(response_profile, &args.expected_principal_id)?;
+        if verifier.native_principal_profile() {
+            if !native_profile::valid_principal(&args.expected_principal_id) {
+                return Err("native response principal is outside its pinned profile".to_owned());
+            }
+        } else {
+            require_response_principal_compatible(response_profile, &args.expected_principal_id)?;
+        }
         let nonce = args.client_nonce.ok_or("native capture requires explicit --nonce")?;
         if verifier.expected_nonce()?.as_slice() != nonce {
             return Err("native independently pinned nonce differs from --nonce".to_string());
@@ -280,6 +286,8 @@ impl NativeCaptureSessionV1 {
         Ok(())
     }
 
+    pub(super) fn native_principal_profile(&self) -> bool { self.verifier.native_principal_profile() }
+
     pub(super) fn require_original(&self, proof: &Value, encoded: &str, digest: &str,
         max_bytes: usize) -> Result<(), String>
     {
@@ -308,7 +316,8 @@ impl NativeCaptureSessionV1 {
         let verification = self.verifier.verify(proof, nonce, self.deadline)?;
         capture["runtime_proof_sha256"] = json!(runtime_digest);
         let mut artifact = json!({
-            "apiVersion":"serverware.nativeResponseCapture/v1",
+            "apiVersion":if self.native_principal_profile() { "serverware.nativeResponseCapture/v2" }
+                else { "serverware.nativeResponseCapture/v1" },
             "kind":"ServerwareNativeResponseCapture",
             "resultScope":"local-capture-and-native-quote-only",
             "okForAction":false,

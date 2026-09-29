@@ -65,6 +65,24 @@ for an empty request body.
 No environment switch silently selects native evidence or falls back to legacy
 verification when native verification fails.
 
+### Explicit native principal response profile
+
+The [native-principal response profile](native-response-principal-profiles.md)
+adds independently pinned expectations v2 with the fixed
+`statementProfile=serverware.nativeResponseStatements/v1`. It selects only the
+new native statement families, runtime-proof v2, verifier verdict v2 and capture
+v2. Expectations v1 still requires the old statement families and cannot accept
+these new versions. Neither a server response nor a successful ingress preflight
+can change the independently selected response profile.
+
+Only principal text changes to the native 1024-byte UTF-8 bound. All actual
+request/response, signature, control-plane receipt, TLS-exporter and original
+Nitro checks remain, as do the existing bounds on other identifiers. For wider
+principal arguments the separately pinned ingress v3 is also required. This does
+not complete credentialed wide-principal integration: credential leases still
+need explicit native producer/broker/recipient profiles; incompatible credentialed
+requests must be refused before reservation or provider effects in the interim.
+
 ## Retained native proxy connection
 
 Native mode now requires `--proxy` to name a literal, concrete unicast IP and

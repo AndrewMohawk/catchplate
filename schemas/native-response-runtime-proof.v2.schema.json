@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-response-runtime-proof.v2.schema.json",
+  "title": "Native response runtime proof v2",
+  "description": "Native-wide only; the independently pinned expectations v2 must select this profile. Shape is not signature, original quote, current policy, response capture or action authorization. Runtime retains the existing 128 KiB canonical envelope bound.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion",
+    "kind",
+    "server_statement",
+    "server_statement_sha256",
+    "server_signature",
+    "native_attestation"
+  ],
+  "properties": {
+    "apiVersion": {
+      "const": "serverware.nativeResponseRuntimeProof/v2"
+    },
+    "kind": {
+      "const": "ServerwareNativeResponseRuntimeProof"
+    },
+    "server_statement": {
+      "$ref": "native-response-statements.v1.schema.json"
+    },
+    "server_statement_sha256": {
+      "$ref": "streaming-response-proof.v1.schema.json#/$defs/sha256"
+    },
+    "server_signature": {
+      "$ref": "streaming-response-proof.v1.schema.json#/$defs/ed25519Signature"
+    },
+    "native_attestation": {
+      "$ref": "native-response-proof-key-evidence.v1.schema.json"
+    }
+  }
+}

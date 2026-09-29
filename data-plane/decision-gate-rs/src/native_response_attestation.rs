@@ -6,7 +6,7 @@
 
 use super::*;
 
-const NATIVE_RESPONSE_PROOF_VERSION: &str = "serverware.nativeResponseRuntimeProof/v1";
+const NATIVE_RESPONSE_PROOF_VERSION: &str = native_response_profile::NATIVE_ENVELOPE;
 const MAX_NATIVE_RESPONSE_PROOF_BYTES: usize = 128 * 1024;
 
 pub(super) fn response_attestation_available(state: &GateState) -> bool {
@@ -25,7 +25,8 @@ pub(super) fn response_attestation_available(state: &GateState) -> bool {
 /// The supplied statement/signature come from the existing closed signing path;
 /// custody independently checks the exact bytes under its own actual public key.
 pub(super) fn native_response_runtime_proof(state: &GateState, statement: &Value,
-    signature: &str, client_nonce: &[u8]) -> Result<Option<SensitiveJsonValue>, String> {
+    signature: &str, client_nonce: &[u8], original_deadline: Option<Instant>)
+    -> Result<Option<SensitiveJsonValue>, String> {
     let ResponseProofSigner::Custody(signer) = &state.response_proof_signer else {
         return Ok(None);
     };
@@ -39,7 +40,10 @@ pub(super) fn native_response_runtime_proof(state: &GateState, statement: &Value
         || signer.public_key_pem != state.response_proof_public_key_pem {
         return Err("native response proof metadata differs from the held signer".to_owned());
     }
-    let operation_deadline = custody_deadline_after(CUSTODY_IO_DEADLINE)?;
+    let local_deadline = custody_deadline_after(CUSTODY_IO_DEADLINE)?;
+    let operation_deadline = original_deadline.map_or(local_deadline,
+        |original| original.min(local_deadline));
+    custody_deadline_remaining(operation_deadline, "native response original deadline")?;
     let canonical_statement = Zeroizing::new(custody_canonical_json_bytes(statement)
         .map_err(|_| "canonicalize native response statement".to_owned())?);
     let statement_digest = sha256_prefixed(&canonical_statement);

@@ -43,6 +43,8 @@ pub mod enclave_public_identity_v1;
 pub mod native_ingress_challenge_v1;
 pub mod native_principal_preflight_v1;
 pub mod response_principal_compatibility_v1;
+pub mod native_response_profile_v1;
+pub mod native_approver_policy_v1;
 pub mod native_upstream_relays_v1;
 use enclave_runtime_identity_v1::{
     EnclaveRuntimeIdentityV1, QuotedResponseProofKeyV1, RuntimeKeyQuoteV1,
@@ -224,6 +226,9 @@ pub const POLICY_SHADOW_CUSTODY_STARTUP_DEADLINE_BOOTTIME_NANOS_ENV:
 pub const RESPONSE_STATEMENT_API_VERSION: &str = "serverware.proxyResponseStatement/v2";
 pub const HELLO_OPERATION: &str = "hello/v1";
 pub const RESPONSE_PROOF_SIGN_OPERATION: &str = "responseProof.sign/v2";
+pub const NATIVE_RESPONSE_PROOF_SIGN_OPERATION: &str = "nativeResponseProof.sign/v1";
+pub const NATIVE_STREAMING_RESPONSE_PROOF_SIGN_OPERATION: &str = "nativeStreamingResponseProof.sign/v1";
+pub const NATIVE_RESPONSE_OBSERVATION_PROOF_SIGN_OPERATION: &str = "nativeResponseObservationProof.sign/v1";
 pub const STREAMING_RESPONSE_PROOF_SIGN_OPERATION: &str = "streamingResponseProof.sign/v1";
 pub const STREAMING_RESPONSE_STATEMENT_API_VERSION: &str =
     "serverware.streamingResponseStatement/v1";
@@ -280,6 +285,16 @@ const RELEASE_AUTHORIZATION_DISPATCH_V1: &str = "serverware.releaseAuthorization
 const RELEASE_AUTHORIZATION_DISPATCH_V2: &str = "serverware.releaseAuthorizationDispatch/v2";
 const RELEASE_AUTHORIZATION_RESPONSE_V1: &str = "serverware.releaseAuthorization/v1";
 const RELEASE_AUTHORIZATION_RESPONSE_V2: &str = "serverware.releaseAuthorization/v2";
+pub const NATIVE_RELEASE_AUTHORIZATION_BINDING_V1: &str = "serverware.nativeReleaseAuthorizationBinding/v1";
+pub const NATIVE_RELEASE_AUTHORIZATION_BINDING_V2: &str = "serverware.nativeReleaseAuthorizationBinding/v2";
+pub const NATIVE_RELEASE_AUTHORIZATION_RESERVE_V1: &str = "serverware.nativeReleaseAuthorizationReserve/v1";
+pub const NATIVE_RELEASE_AUTHORIZATION_RESERVE_V2: &str = "serverware.nativeReleaseAuthorizationReserve/v2";
+pub const NATIVE_RELEASE_AUTHORIZATION_DISPATCH_V1: &str = "serverware.nativeReleaseAuthorizationDispatch/v1";
+pub const NATIVE_RELEASE_AUTHORIZATION_DISPATCH_V2: &str = "serverware.nativeReleaseAuthorizationDispatch/v2";
+pub const NATIVE_RELEASE_AUTHORIZATION_COMPLETE_V1: &str = "serverware.nativeReleaseAuthorizationComplete/v1";
+pub const NATIVE_RELEASE_AUTHORIZATION_COMPLETE_V2: &str = "serverware.nativeReleaseAuthorizationComplete/v2";
+pub const NATIVE_RELEASE_AUTHORIZATION_RESPONSE_V1: &str = "serverware.nativeReleaseAuthorizationResponse/v1";
+pub const NATIVE_RELEASE_AUTHORIZATION_RESPONSE_V2: &str = "serverware.nativeReleaseAuthorizationResponse/v2";
 const RELEASE_AUTHORIZATION_DISPATCH_PATH: &str = "/api/data-plane/release-authorizations/dispatch";
 const CONTROL_PLANE_RESPONSE_PUBLIC_KEY_ENV: &str =
     "SERVERWARE_CONTROL_PLANE_RESPONSE_SIGNING_PUBLIC_KEY";
@@ -711,6 +726,10 @@ struct AuthorizationBindingValidation {
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 struct AuthorizationBindingCommitment {
+    #[serde(rename = "apiVersion", default, skip_serializing_if = "Option::is_none")]
+    api_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    approver_policy_sha256: Option<String>,
     attempt_id: String,
     flow_id: String,
     principal_id: String,
@@ -896,6 +915,8 @@ struct ReleaseAuthorizationBinding {
     operation_digest: Option<String>,
     operation_context: Value,
     require_jit_grant: bool,
+    #[serde(default, deserialize_with = "deserialize_present_optional", skip_serializing_if = "Option::is_none")]
+    approver_policy: Option<Value>,
     shared_quotas: Vec<ReleaseAuthorizationBindingQuota>,
     #[serde(
         default,
@@ -1505,9 +1526,9 @@ impl CustodyRuntime {
 
         let value: Value = decode_canonical_json(canonical_statement)?;
         let family = match value.get("apiVersion").and_then(Value::as_str) {
-            Some(RESPONSE_STATEMENT_API_VERSION) => 0,
-            Some(STREAMING_RESPONSE_STATEMENT_API_VERSION) => 1,
-            Some(RESPONSE_OBSERVATION_STATEMENT_API_VERSION) => 2,
+            Some(native_response_profile_v1::NATIVE_BUFFERED) => 0,
+            Some(native_response_profile_v1::NATIVE_STREAMING) => 1,
+            Some(native_response_profile_v1::NATIVE_OBSERVATION) => 2,
             _ => return Err(invalid_statement("native quotation requires an existing closed statement family")),
         };
         let (encoded, statement_nonce, policy, issued_at, fixed_nonce) = match family {
@@ -1730,10 +1751,16 @@ impl CustodyRuntime {
                         .as_deref(),
                     capabilities: [
                         HELLO_OPERATION,
-                        RESPONSE_PROOF_SIGN_OPERATION,
-                        STREAMING_RESPONSE_PROOF_SIGN_OPERATION,
+                        if matches!(&self.signing_backend, CustodySigningBackend::Native { .. }) {
+                            NATIVE_RESPONSE_PROOF_SIGN_OPERATION
+                        } else { RESPONSE_PROOF_SIGN_OPERATION },
+                        if matches!(&self.signing_backend, CustodySigningBackend::Native { .. }) {
+                            NATIVE_STREAMING_RESPONSE_PROOF_SIGN_OPERATION
+                        } else { STREAMING_RESPONSE_PROOF_SIGN_OPERATION },
                         RESPONSE_OBSERVATION_PROOF_RESERVE_OPERATION,
-                        RESPONSE_OBSERVATION_PROOF_SIGN_OPERATION,
+                        if matches!(&self.signing_backend, CustodySigningBackend::Native { .. }) {
+                            NATIVE_RESPONSE_OBSERVATION_PROOF_SIGN_OPERATION
+                        } else { RESPONSE_OBSERVATION_PROOF_SIGN_OPERATION },
                     ],
                     limits: RuntimeLimits {
                         max_frame_bytes: MAX_FRAME_BYTES,
@@ -1751,8 +1778,10 @@ impl CustodyRuntime {
                     )
                 })
             }
-            RESPONSE_PROOF_SIGN_OPERATION => {
-                self.validate_sign_request_envelope(request, RESPONSE_PROOF_SIGN_OPERATION)?;
+            RESPONSE_PROOF_SIGN_OPERATION | NATIVE_RESPONSE_PROOF_SIGN_OPERATION => {
+                let native = request.operation == NATIVE_RESPONSE_PROOF_SIGN_OPERATION;
+                self.require_response_signing_profile(native)?;
+                self.validate_sign_request_envelope(request, &request.operation)?;
                 let params = from_value_strict::<SignParams>(
                     request.params.clone(),
                     "responseProof.sign/v2 params",
@@ -1774,11 +1803,12 @@ impl CustodyRuntime {
                 })?;
                 let validation_epoch_ms = current_epoch_ms()?;
                 let validated = (|| {
-                    validate_response_statement_authenticated_at(
+                    validate_response_statement_authenticated_profile_at(
                         &params.statement,
                         control_plane_response_verifying_key,
                         &params.authorization_binding,
                         validation_epoch_ms,
+                        native,
                     )?;
                     self.validate_native_policy_commitment(&params.statement.policy_digest)?;
                     let canonical_statement = canonical_json_bytes(&params.statement)?;
@@ -1809,10 +1839,12 @@ impl CustodyRuntime {
                     validation_epoch_ms,
                 )
             }
-            STREAMING_RESPONSE_PROOF_SIGN_OPERATION => {
+            STREAMING_RESPONSE_PROOF_SIGN_OPERATION | NATIVE_STREAMING_RESPONSE_PROOF_SIGN_OPERATION => {
+                let native = request.operation == NATIVE_STREAMING_RESPONSE_PROOF_SIGN_OPERATION;
+                self.require_response_signing_profile(native)?;
                 self.validate_sign_request_envelope(
                     request,
-                    STREAMING_RESPONSE_PROOF_SIGN_OPERATION,
+                    &request.operation,
                 )?;
                 let params = from_value_strict::<StreamingSignParams>(
                     request.params.clone(),
@@ -1835,11 +1867,12 @@ impl CustodyRuntime {
                 })?;
                 let validation_epoch_ms = current_epoch_ms()?;
                 let validated = (|| {
-                    validate_streaming_response_statement_with_control_plane_response_key_at(
+                    validate_streaming_response_statement_profile_at(
                         &params.statement,
                         &params.authorization_binding,
                         control_plane_response_verifying_key,
                         validation_epoch_ms,
+                        native,
                     )?;
                     self.validate_native_policy_commitment(&params.statement.policy_digest)?;
                     let canonical_statement = canonical_json_bytes(&params.statement)?;
@@ -1917,10 +1950,12 @@ impl CustodyRuntime {
                     )
                 })
             }
-            RESPONSE_OBSERVATION_PROOF_SIGN_OPERATION => {
+            RESPONSE_OBSERVATION_PROOF_SIGN_OPERATION | NATIVE_RESPONSE_OBSERVATION_PROOF_SIGN_OPERATION => {
+                let native = request.operation == NATIVE_RESPONSE_OBSERVATION_PROOF_SIGN_OPERATION;
+                self.require_response_signing_profile(native)?;
                 self.validate_sign_request_envelope(
                     request,
-                    RESPONSE_OBSERVATION_PROOF_SIGN_OPERATION,
+                    &request.operation,
                 )?;
                 let params = from_value_strict::<ResponseObservationSignParams>(
                     request.params.clone(),
@@ -1934,11 +1969,12 @@ impl CustodyRuntime {
                 })?;
                 let validation_epoch_ms = current_epoch_ms()?;
                 let validated = (|| {
-                    validate_response_observation_statement_at(
+                    validate_response_observation_statement_profile_at(
                         &params.statement,
                         params.authorization_binding.as_ref(),
                         self.control_plane_response_verifying_key.as_ref(),
                         validation_epoch_ms,
+                        native,
                     )?;
                     self.validate_native_policy_commitment(&params.statement.policy.digest)?;
                     let ledger_key = params
@@ -1993,6 +2029,14 @@ impl CustodyRuntime {
                 "operation must be hello/v1, responseProof.sign/v2, streamingResponseProof.sign/v1, responseObservationProof.reserve/v1, or responseObservationProof.sign/v1",
             )),
         }
+    }
+
+    fn require_response_signing_profile(&self, native: bool) -> Result<(), ProtocolError> {
+        if native != matches!(&self.signing_backend, CustodySigningBackend::Native { .. }) {
+            return Err(invalid_statement("response signing profile differs from the retained backend"));
+        }
+        if native { self.verify_native_live()?; }
+        Ok(())
     }
 
     fn validate_sign_request_envelope(
@@ -3841,15 +3885,28 @@ fn validate_response_statement_authenticated_at(
     authorization_binding: &ReleaseAuthorizationBinding,
     now_epoch_ms: u64,
 ) -> Result<(), ProtocolError> {
+    validate_response_statement_authenticated_profile_at(statement,
+        control_plane_response_verifying_key, authorization_binding, now_epoch_ms, false)
+}
+
+fn validate_response_statement_authenticated_profile_at(
+    statement: &ProxyResponseStatement,
+    control_plane_response_verifying_key: &VerifyingKey,
+    authorization_binding: &ReleaseAuthorizationBinding,
+    now_epoch_ms: u64,
+    native: bool,
+) -> Result<(), ProtocolError> {
     validate_response_statement_inner(
         statement,
         control_plane_response_verifying_key,
         authorization_binding,
         now_epoch_ms,
+        native,
     )?;
-    validate_release_authorization_binding(
+    validate_release_authorization_binding_profile(
         &ResponseStatementAuthorityView::from(statement),
         authorization_binding,
+        native,
     )
 }
 
@@ -3858,8 +3915,10 @@ fn validate_response_statement_inner(
     control_plane_response_verifying_key: &VerifyingKey,
     authorization_binding: &ReleaseAuthorizationBinding,
     now_epoch_ms: u64,
+    native: bool,
 ) -> Result<(), ProtocolError> {
-    if statement.api_version != RESPONSE_STATEMENT_API_VERSION {
+    if statement.api_version != if native { native_response_profile_v1::NATIVE_BUFFERED }
+        else { RESPONSE_STATEMENT_API_VERSION } {
         return Err(invalid_statement(
             "apiVersion must be serverware.proxyResponseStatement/v2",
         ));
@@ -3878,7 +3937,7 @@ fn validate_response_statement_inner(
         MIN_CLIENT_NONCE_BYTES,
         MAX_CLIENT_NONCE_BYTES,
     )?;
-    validate_bounded_identity("principal_id", &statement.principal_id)?;
+    validate_response_principal("principal_id", &statement.principal_id, native)?;
     validate_bounded_identity("route_id", &statement.route_id)?;
     for (name, digest) in [
         ("client_request_digest", &statement.client_request_digest),
@@ -3945,11 +4004,12 @@ fn validate_response_statement_inner(
     }
     let authority_view = ResponseStatementAuthorityView::from(statement);
     validate_release_authority(&authority_view)?;
-    validate_control_plane_authorization_receipt(
+    validate_control_plane_authorization_receipt_profile(
         &authority_view,
         control_plane_response_verifying_key,
         authorization_binding,
         now_epoch_ms,
+        native,
     )?;
     if statement.upstream_response.status != statement.response.status {
         return Err(invalid_statement(
@@ -4064,7 +4124,19 @@ fn validate_response_observation_statement_at(
     control_plane_response_verifying_key: Option<&VerifyingKey>,
     now_epoch_ms: u64,
 ) -> Result<(), ProtocolError> {
-    if statement.api_version != RESPONSE_OBSERVATION_STATEMENT_API_VERSION {
+    validate_response_observation_statement_profile_at(statement, authorization_binding,
+        control_plane_response_verifying_key, now_epoch_ms, false)
+}
+
+fn validate_response_observation_statement_profile_at(
+    statement: &ResponseObservationStatement,
+    authorization_binding: Option<&ReleaseAuthorizationBinding>,
+    control_plane_response_verifying_key: Option<&VerifyingKey>,
+    now_epoch_ms: u64,
+    native: bool,
+) -> Result<(), ProtocolError> {
+    if statement.api_version != if native { native_response_profile_v1::NATIVE_OBSERVATION }
+        else { RESPONSE_OBSERVATION_STATEMENT_API_VERSION } {
         return Err(invalid_statement(
             "apiVersion must be serverware.responseObservationStatement/v1",
         ));
@@ -4096,7 +4168,8 @@ fn validate_response_observation_statement_at(
         ("route_id", statement.route_id.as_deref()),
     ] {
         if let Some(value) = value {
-            validate_bounded_identity(name, value)?;
+            if name == "principal_id" { validate_response_principal(name, value, native)?; }
+            else { validate_bounded_identity(name, value)?; }
         }
     }
     for (name, digest) in [
@@ -4164,6 +4237,7 @@ fn validate_response_observation_statement_at(
         authorization_binding,
         control_plane_response_verifying_key,
         now_epoch_ms,
+        native,
     )
 }
 
@@ -4400,6 +4474,7 @@ fn validate_observation_authorization(
     authorization_binding: Option<&ReleaseAuthorizationBinding>,
     control_plane_response_verifying_key: Option<&VerifyingKey>,
     now_epoch_ms: u64,
+    native: bool,
 ) -> Result<(), ProtocolError> {
     let authorization = &statement.authorization;
     let has_no_dispatch_evidence = authorization.binding_digest.is_none()
@@ -4435,7 +4510,8 @@ fn validate_observation_authorization(
             let value = value.ok_or_else(|| {
                 invalid_statement(format!("authorized observation is missing {name}"))
             })?;
-            validate_bounded_identity(name, value)?;
+            if name == "principal_id" { validate_response_principal(name, value, native)?; }
+            else { validate_bounded_identity(name, value)?; }
         }
         for (name, value) in [
             ("request_digest", statement.request_digest.as_deref()),
@@ -4502,7 +4578,10 @@ fn validate_observation_authorization(
         .control_plane_authorization_receipt
         .as_ref()
         .expect("complete dispatch evidence checked above");
-    let binding_digest = sha256_prefixed(&canonical_json_ensure_ascii_bytes(binding)?);
+    let canonical_binding = if native {
+        native_response_profile_v1::canonical_ascii_bytes(binding).map_err(invalid_statement)?
+    } else { canonical_json_ensure_ascii_bytes(binding)? };
+    let binding_digest = sha256_prefixed(&canonical_binding);
     if authorization.binding_digest.as_deref() != Some(binding_digest.as_str()) {
         return Err(invalid_statement(
             "authorization.binding_digest does not match authorization_binding",
@@ -4570,13 +4649,14 @@ fn validate_observation_authorization(
         release_digest: &statement.release_digest,
     };
     validate_release_authority(&authority_view)?;
-    validate_control_plane_authorization_receipt(
+    validate_control_plane_authorization_receipt_profile(
         &authority_view,
         verifying_key,
         binding,
         now_epoch_ms,
+        native,
     )?;
-    validate_release_authorization_binding(&authority_view, binding)
+    validate_release_authorization_binding_profile(&authority_view, binding, native)
 }
 
 fn validate_http_method(method: &str) -> Result<(), ProtocolError> {
@@ -4627,7 +4707,19 @@ fn validate_streaming_response_statement_with_control_plane_response_key_at(
     control_plane_response_verifying_key: &VerifyingKey,
     now_epoch_ms: u64,
 ) -> Result<(), ProtocolError> {
-    if statement.api_version != STREAMING_RESPONSE_STATEMENT_API_VERSION {
+    validate_streaming_response_statement_profile_at(statement, authorization_binding,
+        control_plane_response_verifying_key, now_epoch_ms, false)
+}
+
+fn validate_streaming_response_statement_profile_at(
+    statement: &StreamingResponseStatement,
+    authorization_binding: &ReleaseAuthorizationBinding,
+    control_plane_response_verifying_key: &VerifyingKey,
+    now_epoch_ms: u64,
+    native: bool,
+) -> Result<(), ProtocolError> {
+    if statement.api_version != if native { native_response_profile_v1::NATIVE_STREAMING }
+        else { STREAMING_RESPONSE_STATEMENT_API_VERSION } {
         return Err(invalid_statement(
             "apiVersion must be serverware.streamingResponseStatement/v1",
         ));
@@ -4642,7 +4734,8 @@ fn validate_streaming_response_statement_with_control_plane_response_key_at(
         ));
     }
     validate_base64url("client_nonce", &statement.client_nonce, 32, 32)?;
-    validate_streaming_identifier("principal_id", &statement.principal_id)?;
+    if native { validate_response_principal("principal_id", &statement.principal_id, true)?; }
+    else { validate_streaming_identifier("principal_id", &statement.principal_id)?; }
     validate_streaming_identifier("route_id", &statement.route_id)?;
     for (name, digest) in [
         ("client_request_digest", &statement.client_request_digest),
@@ -4692,12 +4785,13 @@ fn validate_streaming_response_statement_with_control_plane_response_key_at(
 
     let authority_view = ResponseStatementAuthorityView::from(statement);
     validate_release_authority(&authority_view)?;
-    validate_streaming_release_identifiers(statement, authorization_binding)?;
-    validate_control_plane_authorization_receipt(
+    validate_streaming_release_identifiers(statement, authorization_binding, native)?;
+    validate_control_plane_authorization_receipt_profile(
         &authority_view,
         control_plane_response_verifying_key,
         authorization_binding,
         now_epoch_ms,
+        native,
     )?;
     let receipt_digest = sha256_prefixed(&canonical_json_bytes(
         &statement.control_plane_authorization_receipt,
@@ -4707,8 +4801,8 @@ fn validate_streaming_response_statement_with_control_plane_response_key_at(
             "control_plane_authorization_receipt_sha256 does not match the receipt",
         ));
     }
-    validate_release_authorization_binding(&authority_view, authorization_binding)?;
-    validate_streaming_authorization_binding(statement, authorization_binding)?;
+    validate_release_authorization_binding_profile(&authority_view, authorization_binding, native)?;
+    validate_streaming_authorization_binding(statement, authorization_binding, native)?;
     validate_streaming_upstream_response(&statement.upstream_response)?;
     validate_streaming_released_response(&statement.released_response)?;
     if statement.upstream_response.status != statement.released_response.status {
@@ -4753,6 +4847,7 @@ fn validate_streaming_identifier(name: &str, value: &str) -> Result<(), Protocol
 fn validate_streaming_release_identifiers(
     statement: &StreamingResponseStatement,
     binding: &ReleaseAuthorizationBinding,
+    native: bool,
 ) -> Result<(), ProtocolError> {
     for (name, value) in [
         (
@@ -4772,7 +4867,8 @@ fn validate_streaming_release_identifiers(
             validate_streaming_identifier(name, value)?;
         }
     }
-    validate_streaming_identifier("binding.principal_id", &binding.principal_id)?;
+    if native { validate_response_principal("binding.principal_id", &binding.principal_id, true)?; }
+    else { validate_streaming_identifier("binding.principal_id", &binding.principal_id)?; }
     validate_streaming_identifier("binding.route_id", &binding.route_id)?;
     if !binding.credential_id.is_empty() {
         validate_streaming_identifier("binding.credential_id", &binding.credential_id)?;
@@ -4789,6 +4885,7 @@ fn validate_streaming_release_identifiers(
 fn validate_streaming_authorization_binding(
     statement: &StreamingResponseStatement,
     binding: &ReleaseAuthorizationBinding,
+    native: bool,
 ) -> Result<(), ProtocolError> {
     let operation_digest = binding.operation_digest.clone().ok_or_else(|| {
         invalid_statement("streaming authorization binding is missing operation_digest")
@@ -4797,6 +4894,12 @@ fn validate_streaming_authorization_binding(
         &binding.operation_context,
     )?);
     let expected_commitment = AuthorizationBindingCommitment {
+        api_version: native.then(|| native_response_profile_v1::NATIVE_COMMITMENT.to_owned()),
+        approver_policy_sha256: if native {
+            Some(sha256_prefixed(&native_response_profile_v1::canonical_ascii_bytes(
+                binding.approver_policy.as_ref().ok_or_else(|| invalid_statement("native approver policy is absent"))?)
+                .map_err(invalid_statement)?))
+        } else { None },
         attempt_id: binding.attempt_id.clone(),
         flow_id: binding.flow_id.clone(),
         principal_id: binding.principal_id.clone(),
@@ -4810,7 +4913,10 @@ fn validate_streaming_authorization_binding(
         require_jit_grant: binding.require_jit_grant,
         shared_quotas: binding.shared_quotas.clone(),
     };
-    let binding_digest = sha256_prefixed(&canonical_json_ensure_ascii_bytes(binding)?);
+    let canonical_binding = if native {
+        native_response_profile_v1::canonical_ascii_bytes(binding).map_err(invalid_statement)?
+    } else { canonical_json_ensure_ascii_bytes(binding)? };
+    let binding_digest = sha256_prefixed(&canonical_binding);
     let validation = &statement.authorization_binding_validation;
     if validation.status != "validated"
         || validation.binding_digest != binding_digest
@@ -5034,11 +5140,35 @@ fn validate_release_authorization_binding(
     statement: &ResponseStatementAuthorityView<'_>,
     binding: &ReleaseAuthorizationBinding,
 ) -> Result<(), ProtocolError> {
+    validate_release_authorization_binding_profile(statement, binding, false)
+}
+
+fn native_release_binding(binding: &ReleaseAuthorizationBinding) -> bool {
+    matches!(binding.api_version.as_deref(), Some(NATIVE_RELEASE_AUTHORIZATION_BINDING_V1
+        | NATIVE_RELEASE_AUTHORIZATION_BINDING_V2))
+}
+
+fn validate_release_authorization_binding_profile(
+    statement: &ResponseStatementAuthorityView<'_>,
+    binding: &ReleaseAuthorizationBinding,
+    native: bool,
+) -> Result<(), ProtocolError> {
     let authority = &statement.release_authority;
+    if native {
+        let policy = binding.approver_policy.as_ref()
+            .ok_or_else(|| invalid_statement("native release binding omits approver_policy"))?;
+        native_approver_policy_v1::require_policy(policy, binding.require_jit_grant)
+            .map_err(invalid_statement)?;
+        validate_response_principal("binding.principal_id", &binding.principal_id, true)?;
+    } else if binding.approver_policy.is_some() {
+        return Err(invalid_statement("legacy release binding cannot contain native approver policy"));
+    }
     match (&binding.api_version, &binding.durable_policy) {
-        (None, None) => {},
+        (None, None) if !native => {},
+        (Some(api_version), None) if native && api_version == NATIVE_RELEASE_AUTHORIZATION_BINDING_V1 => {},
         (Some(api_version), Some(durable))
-            if api_version == RELEASE_AUTHORIZATION_BINDING_V2 =>
+            if api_version == if native { NATIVE_RELEASE_AUTHORIZATION_BINDING_V2 }
+                else { RELEASE_AUTHORIZATION_BINDING_V2 } =>
         {
             validate_bounded_identity(
                 "release authorization durable policy actor_id",
@@ -5119,7 +5249,9 @@ fn validate_release_authorization_binding(
         previous_counter_key = Some(quota.counter_key.as_str());
     }
     validate_dispatch_quotas_against_binding(statement, binding)?;
-    let canonical_binding = canonical_json_ensure_ascii_bytes(binding)?;
+    let canonical_binding = if native {
+        native_response_profile_v1::canonical_ascii_bytes(binding).map_err(invalid_statement)?
+    } else { canonical_json_ensure_ascii_bytes(binding)? };
     if canonical_binding.len() > MAX_RELEASE_AUTHORIZATION_BINDING_BYTES {
         return Err(invalid_statement(format!(
             "release authorization binding exceeds {MAX_RELEASE_AUTHORIZATION_BINDING_BYTES} bytes"
@@ -5269,9 +5401,11 @@ fn parse_dispatch_request_body(
     let request: DispatchRequestBody = serde_json::from_value(value)
         .map_err(|_| invalid_statement("dispatch request body contract is invalid"))?;
     let expected_api_version = if durable_binding.is_some() {
-        RELEASE_AUTHORIZATION_DISPATCH_V2
+        if native_release_binding(binding) { NATIVE_RELEASE_AUTHORIZATION_DISPATCH_V2 }
+        else { RELEASE_AUTHORIZATION_DISPATCH_V2 }
     } else {
-        RELEASE_AUTHORIZATION_DISPATCH_V1
+        if native_release_binding(binding) { NATIVE_RELEASE_AUTHORIZATION_DISPATCH_V1 }
+        else { RELEASE_AUTHORIZATION_DISPATCH_V1 }
     };
     if request.api_version != expected_api_version
         || request.attempt_id != authority.attempt_id
@@ -5394,9 +5528,11 @@ fn parse_dispatch_response_body(
     let response: DispatchResponseBody = serde_json::from_value(value)
         .map_err(|_| invalid_statement("dispatch response body contract is invalid"))?;
     let expected_api_version = if durable_binding.is_some() {
-        RELEASE_AUTHORIZATION_RESPONSE_V2
+        if native_release_binding(binding) { NATIVE_RELEASE_AUTHORIZATION_RESPONSE_V2 }
+        else { RELEASE_AUTHORIZATION_RESPONSE_V2 }
     } else {
-        RELEASE_AUTHORIZATION_RESPONSE_V1
+        if native_release_binding(binding) { NATIVE_RELEASE_AUTHORIZATION_RESPONSE_V1 }
+        else { RELEASE_AUTHORIZATION_RESPONSE_V1 }
     };
     if response.api_version != expected_api_version
         || response.durable_policy.is_some() != durable_binding.is_some()
@@ -5507,7 +5643,8 @@ fn validate_dispatch_quotas_against_binding(
     let dispatch_started_at_epoch_ms = dispatch_response
         .dispatch_started_at_epoch_ms
         .ok_or_else(|| invalid_statement("dispatch response is missing dispatch start"))?;
-    let durable_v2 = dispatch_response.api_version == RELEASE_AUTHORIZATION_RESPONSE_V2;
+    let durable_v2 = matches!(dispatch_response.api_version.as_str(),
+        RELEASE_AUTHORIZATION_RESPONSE_V2 | NATIVE_RELEASE_AUTHORIZATION_RESPONSE_V2);
     let mut previous_counter_key: Option<&str> = None;
     for actual in &dispatch_response.quotas {
         let counter_key = actual
@@ -5630,9 +5767,23 @@ fn validate_control_plane_authorization_receipt(
     authorization_binding: &ReleaseAuthorizationBinding,
     now_epoch_ms: u64,
 ) -> Result<(), ProtocolError> {
+    validate_control_plane_authorization_receipt_profile(statement,
+        control_plane_response_verifying_key, authorization_binding, now_epoch_ms, false)
+}
+
+fn validate_control_plane_authorization_receipt_profile(
+    statement: &ResponseStatementAuthorityView<'_>,
+    control_plane_response_verifying_key: &VerifyingKey,
+    authorization_binding: &ReleaseAuthorizationBinding,
+    now_epoch_ms: u64,
+    native: bool,
+) -> Result<(), ProtocolError> {
     let receipt = &statement.control_plane_authorization_receipt;
-    if receipt.api_version != AUTHORIZATION_RECEIPT_API_VERSION
-        || receipt.kind != "ControlPlaneAuthorizationReceipt"
+    if native_release_binding(authorization_binding) != native
+        || receipt.api_version != if native { native_response_profile_v1::NATIVE_RECEIPT }
+            else { AUTHORIZATION_RECEIPT_API_VERSION }
+        || receipt.kind != if native { native_response_profile_v1::NATIVE_RECEIPT_KIND }
+            else { "ControlPlaneAuthorizationReceipt" }
         || receipt.principal_id != statement.principal_id
         || receipt.route_id != statement.route_id
         || &receipt.release_authority != statement.release_authority
@@ -5641,7 +5792,7 @@ fn validate_control_plane_authorization_receipt(
             "control-plane authorization receipt authority substitution",
         ));
     }
-    validate_bounded_identity("receipt.principal_id", &receipt.principal_id)?;
+    validate_response_principal("receipt.principal_id", &receipt.principal_id, native)?;
     validate_bounded_identity("receipt.route_id", &receipt.route_id)?;
     let request = &receipt.request;
     if request.method != "POST"
@@ -6047,6 +6198,14 @@ fn validate_server_instance(instance: &ServerInstance) -> Result<(), ProtocolErr
         return Err(invalid_statement(
             "server_instance.identity_digest does not match server_instance.id",
         ));
+    }
+    Ok(())
+}
+
+fn validate_response_principal(name: &str, value: &str, native: bool) -> Result<(), ProtocolError> {
+    if !native { return validate_bounded_identity(name, value); }
+    if !native_response_profile_v1::valid_principal(value) {
+        return Err(invalid_statement(format!("{name} is invalid for the native profile")));
     }
     Ok(())
 }
@@ -6515,6 +6674,7 @@ mod tests {
         let route_id = "route:custody-test".to_string();
         let authorization_binding = ReleaseAuthorizationBinding {
             api_version: None,
+            approver_policy: None,
             attempt_id: attempt_id.clone(),
             flow_id: attempt_id.clone(),
             principal_id: principal_id.clone(),
@@ -6774,6 +6934,7 @@ mod tests {
     ) -> ReleaseAuthorizationBinding {
         ReleaseAuthorizationBinding {
             api_version: None,
+            approver_policy: None,
             attempt_id: statement.release_authority.attempt_id.clone(),
             flow_id: statement.release_authority.attempt_id.clone(),
             principal_id: statement.principal_id.clone(),
@@ -6939,6 +7100,8 @@ mod tests {
                 .expect("canonical streaming authorization binding"),
         );
         let binding_commitment = AuthorizationBindingCommitment {
+            api_version: None,
+            approver_policy_sha256: None,
             attempt_id: authorization_binding.attempt_id.clone(),
             flow_id: authorization_binding.flow_id.clone(),
             principal_id: authorization_binding.principal_id.clone(),

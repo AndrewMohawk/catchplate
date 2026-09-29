@@ -41,6 +41,7 @@ pub mod enclave_parent_relay_v1;
 pub mod enclave_parent_ingress_v1;
 pub mod enclave_public_identity_v1;
 pub mod native_ingress_challenge_v1;
+pub mod native_principal_preflight_v1;
 pub mod native_upstream_relays_v1;
 use enclave_runtime_identity_v1::{
     EnclaveRuntimeIdentityV1, QuotedResponseProofKeyV1, RuntimeKeyQuoteV1,

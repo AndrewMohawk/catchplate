@@ -21,6 +21,9 @@ const MAX_CONTINUATION_LIFETIME: Duration = Duration::from_secs(120);
 pub(super) const CONTINUATION_HEADER: &str = "x-serverware-ingress-continuation";
 const EVIDENCE_HEADER: &str = "x-serverware-ingress-evidence";
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum EvidenceProfile { LegacyV1, ClientTrustV2, PrincipalV3 }
+
 pub(super) enum Outcome {
     Closed,
     Connect { deadline: Instant },
@@ -41,7 +44,7 @@ pub(super) fn handle(state: &GateState, head: &RequestHead,
         return Outcome::Closed;
     };
     let prepared = continuation_requested(head).and_then(|continued| {
-        let client_trust_v2 = client_trust_requested(head)?;
+        let profile = evidence_profile(head)?;
         let continuation_deadline = if continued {
             let lifetime = state.native_runtime_lifetime.as_ref().ok_or(Failure::Unavailable)?;
             // Both bounds start at this original Instant. The later BOOTTIME
@@ -57,20 +60,20 @@ pub(super) fn handle(state: &GateState, head: &RequestHead,
             None
         };
         stream.set_terminal_write_deadline(Some(operation_deadline));
-        let bytes = original(state, head, stream, trusted_mtls,
-            management_listener, proxy_ingress, operation_deadline, client_trust_v2)?;
+        let (bytes, principal) = original(state, head, stream, trusted_mtls,
+            management_listener, proxy_ingress, operation_deadline, profile)?;
         if continued { reject_buffered_plaintext(stream)?; }
-        Ok((bytes, continuation_deadline))
+        Ok((bytes, continuation_deadline, principal))
     });
     // Invalid opt-in requests still receive only the existing bounded close
     // response. No error or partial success can produce a continuation token.
     stream.set_terminal_write_deadline(Some(operation_deadline));
-    let (status, body, continuation_deadline) = match prepared {
-        Ok((original, deadline)) => (StatusCode::OK, original, deadline),
+    let (status, body, continuation_deadline, mut principal) = match prepared {
+        Ok((original, deadline, principal)) => (StatusCode::OK, original, deadline, principal),
         Err(Failure::BadRequest) => (StatusCode::BAD_REQUEST,
-            br#"{"error":"invalid_native_ingress_attestation_request"}"#.to_vec(), None),
+            br#"{"error":"invalid_native_ingress_attestation_request"}"#.to_vec(), None, None),
         Err(Failure::Unavailable) => (StatusCode::SERVICE_UNAVAILABLE,
-            br#"{"error":"native_ingress_attestation_unavailable"}"#.to_vec(), None),
+            br#"{"error":"native_ingress_attestation_unavailable"}"#.to_vec(), None, None),
     };
     let response = if continuation_deadline.is_some() {
         let mut response = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: keep-alive\r\nContent-Type: application/json\r\nCache-Control: no-store\r\n\r\n",
@@ -87,16 +90,36 @@ pub(super) fn handle(state: &GateState, head: &RequestHead,
     {
         return Outcome::Closed;
     }
-    // The helper adds no body LF. The successful original already carries its
-    // sole LF, counted in Content-Length.
-    if stream.write_all(&response).is_err() || stream.flush().is_err() {
-        return Outcome::Closed;
+    if let Some(owner) = principal.as_mut() {
+        // The owner holds the actual Snapshot and no stream borrow. Every
+        // bounded plaintext write/flush retains full original policy/TLS checks.
+        let mut offset = 0;
+        while offset < response.len() {
+            if owner.check(stream).is_err() { return Outcome::Closed; }
+            let end = response.len().min(offset.saturating_add(4096));
+            match stream.write(&response[offset..end]) {
+                Ok(0) | Err(_) => return Outcome::Closed,
+                Ok(written) => offset += written,
+            }
+            if owner.check(stream).is_err() { return Outcome::Closed; }
+        }
+        if owner.check(stream).is_err() || stream.flush().is_err()
+            || owner.check(stream).is_err() { return Outcome::Closed; }
+    } else {
+        // The helper adds no body LF. The successful original already carries its
+        // sole LF, counted in Content-Length.
+        if stream.write_all(&response).is_err() || stream.flush().is_err() {
+            return Outcome::Closed;
+        }
     }
     if let Some(deadline) = continuation_deadline {
         if custody_deadline_remaining(operation_deadline, "native ingress continuation").is_err()
             || !state.native_runtime_lifetime.as_ref().is_some_and(|owner| owner.check().is_ok())
             || !trusted_mtls.is_some_and(|evidence| evidence.is_live_at(now_epoch_ms()))
         {
+            return Outcome::Closed;
+        }
+        if principal.as_mut().is_some_and(|owner| owner.check(stream).is_err()) {
             return Outcome::Closed;
         }
         // No close_notify and no second quotation. The caller clears only the
@@ -106,10 +129,16 @@ pub(super) fn handle(state: &GateState, head: &RequestHead,
     // The client requires authenticated TLS EOF after the exact body. Queue
     // close_notify only after the original response completed; never attempt
     // a second response after a partial write or deadline failure.
+    if principal.as_mut().is_some_and(|owner| owner.check(stream).is_err()) {
+        return Outcome::Closed;
+    }
     if let DirectProxyStream::MutualTls(tls) = stream {
         tls.conn.send_close_notify();
     }
-    let _ = stream.flush();
+    if stream.flush().is_err() { return Outcome::Closed; }
+    if principal.as_mut().is_some_and(|owner| owner.check(stream).is_err()) {
+        return Outcome::Closed;
+    }
     Outcome::Closed
 }
 
@@ -122,12 +151,13 @@ fn continuation_requested(head: &RequestHead) -> Result<bool, Failure> {
     }
 }
 
-fn client_trust_requested(head: &RequestHead) -> Result<bool, Failure> {
+fn evidence_profile(head: &RequestHead) -> Result<EvidenceProfile, Failure> {
     // The actual HTTP-head parser rejects repeated physical names before
     // constructing this lower-case map, including case-variant duplicates.
     match head.headers.get(EVIDENCE_HEADER).map(String::as_str) {
-        None => Ok(false),
-        Some("client-trust-v2") => Ok(true),
+        None => Ok(EvidenceProfile::LegacyV1),
+        Some("client-trust-v2") => Ok(EvidenceProfile::ClientTrustV2),
+        Some("principal-v3") => Ok(EvidenceProfile::PrincipalV3),
         Some(_) => Err(Failure::BadRequest),
     }
 }
@@ -175,10 +205,10 @@ fn challenge(head: &RequestHead) -> Result<[u8; 32], Failure> {
     Ok(challenge)
 }
 
-fn original(state: &GateState, head: &RequestHead, stream: &DirectProxyStream,
-    trusted_mtls: Option<&TrustedMtlsEvidence>, management_listener: bool,
-    proxy_ingress: &ProxyIngressConfig, operation_deadline: Instant, client_trust_v2: bool)
-    -> Result<Vec<u8>, Failure>
+fn original<'a>(state: &'a GateState, head: &'a RequestHead, stream: &DirectProxyStream,
+    trusted_mtls: Option<&'a TrustedMtlsEvidence>, management_listener: bool,
+    proxy_ingress: &'a ProxyIngressConfig, operation_deadline: Instant, profile: EvidenceProfile)
+    -> Result<(Vec<u8>, Option<native_target_principal_preflight::PrincipalPreflight<'a>>), Failure>
 {
     if management_listener || !state.is_production
         || !trusted_mtls.is_some_and(|evidence| evidence.verified_by_trusted_ingress
@@ -217,7 +247,13 @@ fn original(state: &GateState, head: &RequestHead, stream: &DirectProxyStream,
     let challenge = challenge(head)?;
     let exporter = tls.conn.export_keying_material([0u8; 32], EXPORTER_LABEL, Some(&challenge))
         .map_err(|_| Failure::Unavailable)?;
-    let nonce = derive_nonce(challenge, exporter).map_err(|_| Failure::Unavailable)?;
+    let mut principal = if profile == EvidenceProfile::PrincipalV3 {
+        Some(native_target_principal_preflight::admit(state, head, stream,
+            trusted_mtls.ok_or(Failure::Unavailable)?, proxy_ingress, challenge, operation_deadline)
+            .map_err(|_| Failure::Unavailable)?)
+    } else { None };
+    let nonce = if let Some(owner) = principal.as_ref() { owner.quote_nonce() }
+        else { derive_nonce(challenge, exporter).map_err(|_| Failure::Unavailable)? };
     let ResponseProofSigner::Custody(signer) = &state.response_proof_signer else {
         return Err(Failure::Unavailable);
     };
@@ -242,6 +278,11 @@ fn original(state: &GateState, head: &RequestHead, stream: &DirectProxyStream,
         // request budget must not permanently shorten the shared proof owner.
         signer.transport.verify_native_identity(identity, deadline)
             .map_err(|_| Failure::Unavailable)?;
+        if let Some(owner) = principal.as_mut() {
+            owner.check(stream).map_err(|_| Failure::Unavailable)?;
+            identity.verify_policy_commitment(owner.policy_sha256(), deadline)
+                .map_err(|_| Failure::Unavailable)?;
+        }
         lifetime.check().map_err(|_| Failure::Unavailable)?;
         custody_deadline_remaining(operation_deadline, "native ingress quotation")
             .map_err(|_| Failure::Unavailable)?;
@@ -249,22 +290,29 @@ fn original(state: &GateState, head: &RequestHead, stream: &DirectProxyStream,
             .map_err(|_| Failure::Unavailable)?;
         custody_deadline_remaining(operation_deadline, "native ingress quotation")
             .map_err(|_| Failure::Unavailable)?;
-        let original = if client_trust_v2 {
+        let original = if profile != EvidenceProfile::LegacyV1 {
             encode_native_ingress_quote_public_evidence_v2(identity, ingress, &quote, deadline)
         } else {
             encode_native_ingress_quote_public_evidence_v1(identity, ingress, &quote, deadline)
         }.map_err(|_| Failure::Unavailable)?;
         identity.verify_tls_scope(OffsetDateTime::now_utc(), deadline)
             .map_err(|_| Failure::Unavailable)?;
+        if let Some(owner) = principal.as_mut() {
+            identity.verify_policy_commitment(owner.policy_sha256(), deadline)
+                .map_err(|_| Failure::Unavailable)?;
+            owner.check(stream).map_err(|_| Failure::Unavailable)?;
+        }
         original
     };
-    let original = session_original(&public_identity, challenge, exporter, client_trust_v2)?;
+    let original = session_original(&public_identity, challenge, exporter,
+        profile != EvidenceProfile::LegacyV1, principal.as_ref().map(|owner| owner.statement_original()))?;
     custody_deadline_remaining(operation_deadline, "native ingress evidence assembly")
         .map_err(|_| Failure::Unavailable)?;
     signer.transport.require_native().map_err(|_| Failure::Unavailable)?;
     ingress.verify_live(deadline).map_err(|_| Failure::Unavailable)?;
     lifetime.check().map_err(|_| Failure::Unavailable)?;
-    Ok(original)
+    if let Some(owner) = principal.as_mut() { owner.check(stream).map_err(|_| Failure::Unavailable)?; }
+    Ok((original, principal))
 }
 
 /// Public originals from the actual admitted bootstrap owners. This does not
@@ -297,7 +345,7 @@ pub(super) fn bootstrap_original(identity: &mut EnclaveRuntimeIdentityV1,
     custody_deadline_remaining(operation_deadline, "native bootstrap ingress quotation")?;
     let public_identity = encode_native_ingress_quote_public_evidence_v2(
         identity, ingress, &quote, runtime_deadline)?;
-    let original = session_original(&public_identity, challenge, exporter, true)
+    let original = session_original(&public_identity, challenge, exporter, true, None)
         .map_err(|_| unavailable())?;
     identity.verify_tls_scope(OffsetDateTime::now_utc(), runtime_deadline)?;
     ingress.verify_live(runtime_deadline)?;
@@ -306,7 +354,7 @@ pub(super) fn bootstrap_original(identity: &mut EnclaveRuntimeIdentityV1,
 }
 
 fn session_original(public_identity: &[u8], challenge: [u8; 32], exporter: [u8; 32],
-    client_trust_v2: bool) -> Result<Vec<u8>, Failure> {
+    client_trust_v2: bool, principal: Option<&[u8]>) -> Result<Vec<u8>, Failure> {
     if public_identity.is_empty() || public_identity.len() > MAX_PUBLIC_IDENTITY_BYTES
         || public_identity.last() != Some(&b'\n')
         || public_identity[..public_identity.len() - 1].contains(&b'\n')
@@ -320,13 +368,23 @@ fn session_original(public_identity: &[u8], challenge: [u8; 32], exporter: [u8; 
     let encoded_identity = public_identity.len().checked_mul(4)
         .and_then(|size| size.checked_add(2)).map(|size| size / 3)
         .ok_or(Failure::Unavailable)?;
-    if encoded_identity.checked_add(1024).is_none_or(|size| size > MAX_SESSION_EVIDENCE_BYTES) {
+    let encoded_principal = match principal {
+        Some(original) if !original.is_empty() && original.len()
+            <= serverware_decision_gate::native_principal_preflight_v1::MAX_STATEMENT_BYTES
+            && client_trust_v2 => original.len().checked_mul(4).and_then(|size| size.checked_add(2))
+                .map(|size| size / 3).ok_or(Failure::Unavailable)?,
+        Some(_) => return Err(Failure::Unavailable),
+        None => 0,
+    };
+    if encoded_identity.checked_add(encoded_principal).and_then(|size| size.checked_add(1024))
+        .is_none_or(|size| size >= MAX_SESSION_EVIDENCE_BYTES) {
         return Err(Failure::Unavailable);
     }
     // Every variable-length input is already source-bounded before encoding.
     // The embedded publicIdentity preserves A's exact JSON original and LF.
-    let evidence = json!({
-        "apiVersion":if client_trust_v2 { "serverware.nativeIngressSessionEvidence/v2" }
+    let mut evidence = json!({
+        "apiVersion":if principal.is_some() { "serverware.nativeIngressSessionEvidence/v3" }
+            else if client_trust_v2 { "serverware.nativeIngressSessionEvidence/v2" }
             else { "serverware.nativeIngressSessionEvidence/v1" },
         "evidenceScope":"unverified-session-public-material",
         "okForAction":false,
@@ -334,6 +392,10 @@ fn session_original(public_identity: &[u8], challenge: [u8; 32], exporter: [u8; 
         "tlsExporterBase64url":general_purpose::URL_SAFE_NO_PAD.encode(exporter),
         "publicIdentityBase64url":general_purpose::URL_SAFE_NO_PAD.encode(&public_identity),
     });
+    if let Some(original) = principal {
+        evidence.as_object_mut().ok_or(Failure::Unavailable)?.insert("principalPreflightBase64url".to_owned(),
+            Value::String(general_purpose::URL_SAFE_NO_PAD.encode(original)));
+    }
     let mut original = serde_json::to_vec(&evidence).map_err(|_| Failure::Unavailable)?;
     if original.is_empty() || original.len() >= MAX_SESSION_EVIDENCE_BYTES
         || original.contains(&b'\n') || original.contains(&b'\r')

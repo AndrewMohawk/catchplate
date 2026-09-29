@@ -43,6 +43,64 @@ pub(super) fn exchange_for_connect_client_trust<T: Read + Write>(connection: &mu
     exchange_fixed(connection, authority, challenge, Completion::ConnectContinuation, true)
 }
 
+/// Explicit principal-v3 only. The same exact normalized header map is sent
+/// and committed; no metadata assertion stands in for the server's policy
+/// authentication. The caller must protect the returned request original,
+/// which contains identity headers, and never publish it in public evidence.
+pub(super) fn exchange_for_connect_principal<T: Read + Write>(connection: &mut T,
+    authority: &str, challenge: [u8; 32], identity_headers: &[(String, String)])
+    -> Result<(Vec<u8>, Vec<u8>), String> {
+    use serverware_decision_gate::native_principal_preflight_v1::{
+        request_original, EVIDENCE_SELECTOR, MAX_REQUEST_BYTES,
+    };
+    validate_authority(authority)?;
+    if challenge == [0; 32] || identity_headers.len() > 123 {
+        return Err("native principal HTTP challenge or header count differs".into());
+    }
+    let mut headers = BTreeMap::from([
+        ("host".to_owned(), authority.to_owned()),
+        (CHALLENGE_HEADER.to_owned(), URL_SAFE_NO_PAD.encode(challenge)),
+        ("x-serverware-ingress-evidence".to_owned(), EVIDENCE_SELECTOR.to_owned()),
+        ("x-serverware-ingress-continuation".to_owned(), "connect-v1".to_owned()),
+        ("connection".to_owned(), "keep-alive".to_owned()),
+    ]);
+    let mut total = 512usize;
+    for (name, value) in identity_headers {
+        if name.is_empty() || name.len() > 128 || value.is_empty() || value.len() > 8192 {
+            return Err("native principal HTTP identity header exceeds its bound".into());
+        }
+        total = total.checked_add(name.len()).and_then(|size| size.checked_add(value.len()))
+            .and_then(|size| size.checked_add(4)).ok_or("native principal HTTP request size overflow")?;
+        if total > MAX_REQUEST_BYTES {
+            return Err("native principal HTTP identity headers exceed their total bound".into());
+        }
+        let name = name.to_ascii_lowercase();
+        if matches!(name.as_str(), "host" | "connection" | "content-length" | "transfer-encoding"
+            | "upgrade" | "te" | "trailer" | "expect" | "proxy-connection")
+            || name.starts_with("x-serverware-ingress-")
+            || headers.insert(name, value.clone()).is_some()
+        {
+            return Err("native principal HTTP identity headers override or repeat a reserved field".into());
+        }
+    }
+    let original = request_original("GET", "/attestation", "HTTP/1.1", &headers)?;
+    let mut request = String::from("GET /attestation HTTP/1.1\r\n");
+    for (name, value) in &headers {
+        request.push_str(name);
+        request.push_str(": ");
+        request.push_str(value);
+        request.push_str("\r\n");
+    }
+    request.push_str("\r\n");
+    if request.len() > MAX_REQUEST_BYTES {
+        return Err("native principal HTTP wire request exceeds its bound".into());
+    }
+    connection.write_all(request.as_bytes()).map_err(|_| "write native principal attestation request")?;
+    connection.flush().map_err(|_| "flush native principal attestation request")?;
+    let evidence = read_fixed_response(connection, Completion::ConnectContinuation)?;
+    Ok((evidence, original))
+}
+
 fn exchange_fixed<T: Read + Write>(connection: &mut T, authority: &str,
     challenge: [u8; 32], completion: Completion, client_trust: bool) -> Result<Vec<u8>, String> {
     validate_authority(authority)?;
@@ -67,6 +125,10 @@ fn exchange_fixed<T: Read + Write>(connection: &mut T, authority: &str,
         .map_err(|_| "write fixed native ingress attestation request".to_owned())?;
     connection.flush().map_err(|_| "flush native ingress attestation request".to_owned())?;
 
+    read_fixed_response(connection, completion)
+}
+
+fn read_fixed_response<T: Read>(connection: &mut T, completion: Completion) -> Result<Vec<u8>, String> {
     // Byte reads prevent the header reader from discarding any original body
     // or surplus plaintext. The source bound includes the terminating CRLFCRLF.
     let mut head = Vec::with_capacity(1024);

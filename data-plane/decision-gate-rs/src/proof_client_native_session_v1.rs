@@ -100,7 +100,22 @@ impl NativeCaptureSessionV1 {
         // CA-only transport. All public startup checks precede private keys.
         let ingress = args.native_ingress_configuration.as_ref()
             .map(|(path, pin)| super::proof_client_native_ingress_v1::NativeIngressAdmission::open(
-                path, pin, deadline)).transpose()?;
+                path, pin, &args.expected_principal_id, deadline)).transpose()?;
+        // Argument parsing only provisionally permits the wider identity when
+        // native ingress is requested. The pinned, genuinely opened v3 profile
+        // must select it before private inputs, output staging or any contact.
+        let maximum_principal = if ingress.as_ref().is_some_and(|item| item.principal_preflight()) {
+            1024
+        } else { 256 };
+        if args.expected_principal_id.is_empty()
+            || args.expected_principal_id != args.expected_principal_id.trim()
+            || args.expected_principal_id.len() > maximum_principal
+            || args.expected_principal_id.chars().any(char::is_control)
+            || args.proxy_headers.iter().any(|(name, value)| name.eq_ignore_ascii_case("x-serverware-agent")
+                && (value.is_empty() || value != value.trim() || value.len() > maximum_principal
+                    || value.chars().any(char::is_control))) {
+            return Err("native principal arguments exceed the admitted ingress profile".to_owned());
+        }
         if let Some(admission) = ingress.as_ref() {
             let instance = args.expected_server_instance_id.as_deref()
                 .ok_or("native ingress requires expected server instance")?;
@@ -214,7 +229,7 @@ impl NativeCaptureSessionV1 {
         self.check_live()
     }
 
-    pub(super) fn connect_proxy(&self)
+    pub(super) fn connect_proxy(&self, identity_headers: &[(String, String)])
         -> Result<super::proof_client_native_transport_v1::NativeProxyTransportV1, String>
     {
         self.recheck()?;
@@ -224,7 +239,7 @@ impl NativeCaptureSessionV1 {
             let authority = if ingress.host().contains(':') {
                 format!("[{}]:{}", ingress.host(), self.outer_endpoint.port())
             } else { format!("{}:{}", ingress.host(), self.outer_endpoint.port()) };
-            ingress.attest(&mut transport, &authority)?;
+            ingress.attest(&mut transport, &authority, identity_headers)?;
         }
         self.recheck()?;
         Ok(transport)

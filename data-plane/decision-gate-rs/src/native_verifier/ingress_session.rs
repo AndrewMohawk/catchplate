@@ -55,7 +55,7 @@ pub(super) struct VerifiedEnrollmentSession {
     failed: bool,
 }
 
-fn clocks() -> Result<(u64, u64), String> {
+pub(super) fn clocks() -> Result<(u64, u64), String> {
     let wall = SystemTime::now().duration_since(UNIX_EPOCH)
         .map_err(|_| "native enrollment session wall clock is invalid")?.as_nanos();
     let wall = u64::try_from(wall).map_err(|_| "native enrollment session wall clock overflow")?;

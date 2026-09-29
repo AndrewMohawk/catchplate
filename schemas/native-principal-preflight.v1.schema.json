@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-principal-preflight.v1.schema.json",
+  "title": "Native target principal preflight statement",
+  "description": "Exact eight-field compact sorted UTF-8 JSON original, no LF, at most 4096 bytes. Shape is not authentication. Only a paired principal-v3 role-3 quote bound to the actual TLS session, actual sent request and independent principal/policy expectations authenticates this statement. It grants no CONNECT, route, provider, egress, canary or enrollment authority.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "principalId", "identityPolicySha256", "policySha256", "clientCertificateSha256", "clientSpkiSha256", "sourceAddress", "requestBindingSha256"],
+  "properties": {
+    "apiVersion": {"const": "serverware.nativePrincipalPreflight/v1"},
+    "principalId": {
+      "type": "string", "minLength": 1, "maxLength": 1024,
+      "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+(?![\\s\\S])",
+      "description": "Actual first matching runtime principal; runtime additionally enforces at most 1024 UTF-8 bytes and trim-stable text. The receiver compares its independent expected principal."
+    },
+    "identityPolicySha256": {"$ref": "#/$defs/digest"},
+    "policySha256": {"$ref": "#/$defs/digest"},
+    "clientCertificateSha256": {"$ref": "#/$defs/digest"},
+    "clientSpkiSha256": {"$ref": "#/$defs/digest"},
+    "sourceAddress": {
+      "oneOf": [{"type": "null"}, {"type": "string", "minLength": 2, "maxLength": 45}],
+      "description": "Canonical actual TCP peer IP, or null for vsock. The runtime rejects CIDR-constrained principals when no actual IP exists; forwarded headers and vsock CIDs cannot substitute."
+    },
+    "requestBindingSha256": {
+      "$ref": "#/$defs/digest",
+      "description": "HMAC-SHA256 under the separate, non-exported actual TLS request exporter, over the fixed domain, u64-BE original length and exact canonical request. No header/token values or raw guessable header hashes are published."
+    }
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^sha256:(?!0{64}(?![\\s\\S]))[0-9a-f]{64}(?![\\s\\S])"}
+  }
+}

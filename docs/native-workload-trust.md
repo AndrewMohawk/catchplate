@@ -47,6 +47,13 @@ that same socket. A missing or inconsistent selected-chain capture rejects v2.
 The standalone client instead publishes a bounded local-only capture after
 authenticated TLS close; it never sends CONNECT or an application operation.
 
+The separate [principal preflight](native-principal-preflight.md) adds explicit
+`nativeProxyIngress/v3` to the proof client. It uses the target's actual issued
+identity and authentication headers, joins current runtime principal policy to
+a new statement-bound role-3 nonce, and retains the independent result through
+the same transport. It does not change the v1/v2 evidence contracts below or
+the standalone client. Normal CONNECT and provider authorization still run.
+
 ## What is actually verified
 
 The runtime encoder uses the exact ordered DER root vector held by its generated

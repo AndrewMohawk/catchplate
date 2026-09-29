@@ -19,6 +19,7 @@ mod native_startup;
 mod native_startup_config;
 mod native_public_identity;
 mod native_ingress_attestation;
+mod native_target_principal_preflight;
 mod native_enrollment_authorizer;
 mod native_enrollment_admission;
 mod native_workload_bootstrap_request_v1;

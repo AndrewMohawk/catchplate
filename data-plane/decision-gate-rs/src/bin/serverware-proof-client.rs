@@ -558,6 +558,9 @@ where
     }
     let mut has_agent_identity = false;
     let mut normalized_proxy_headers = BTreeMap::new();
+    // Provisional intake only: NativeCaptureSessionV1 must open the exact
+    // pinned v3 profile before a wider principal can reach network contact.
+    let maximum_principal = if native_ingress_options.is_empty() { 256 } else { 1024 };
     for (name, value) in &proxy_headers {
         let lowered = name.to_ascii_lowercase();
         if normalized_proxy_headers
@@ -571,7 +574,7 @@ where
         if lowered == "x-serverware-agent" {
             if value.is_empty()
                 || value != value.trim()
-                || value.len() > 256
+                || value.len() > maximum_principal
                 || value.chars().any(char::is_control)
             {
                 return Err("X-Serverware-Agent proxy identity is invalid".to_string());
@@ -589,7 +592,7 @@ where
         .ok_or("response proof collection requires --expected-principal-id")?;
     if expected_principal_id.is_empty()
         || expected_principal_id != expected_principal_id.trim()
-        || expected_principal_id.len() > 256
+        || expected_principal_id.len() > maximum_principal
         || expected_principal_id.chars().any(char::is_control)
     {
         return Err("--expected-principal-id is invalid".to_string());
@@ -7580,7 +7583,7 @@ fn collect(mut args: Args) -> Result<Value, String> {
     let timeout = Duration::from_secs(args.timeout_seconds);
     if let Some(native) = native.as_ref() { native.recheck()?; }
     let mut proxy = match native.as_ref() {
-        Some(owner) => ProxyTransport::NativeMutualTls(owner.connect_proxy()?),
+        Some(owner) => ProxyTransport::NativeMutualTls(owner.connect_proxy(&args.proxy_headers)?),
         None => connect_proxy(&args, timeout)?,
     };
     let mut connect = format!("CONNECT {authority} HTTP/1.1\r\nHost: {authority}\r\n");

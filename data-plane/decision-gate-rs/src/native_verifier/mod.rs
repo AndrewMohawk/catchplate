@@ -16,6 +16,7 @@ mod ingress_certificates;
 mod ingress_cli;
 mod ingress_config;
 mod ingress_session;
+mod principal_session;
 mod ingress_client;
 mod enrollment;
 mod enrollment_bootstrap;
@@ -34,6 +35,7 @@ mod bootstrap_setup;
 mod bootstrap_packet;
 
 pub(crate) use ingress_client::IngressClientBootstrap;
+pub(crate) use principal_session::PrincipalSession;
 
 use base64::{engine::general_purpose, Engine as _};
 use serde_json::Value;
@@ -95,6 +97,21 @@ pub(crate) fn verify_ingress_session_client_trust_with_challenge(raw: &[u8], sco
     let bytes = serde_json::to_vec(&result).map_err(|_| "encode native workload ingress verdict")?;
     ensure(!bytes.is_empty() && bytes.len() < 4096, "native workload ingress verdict exceeds its bound")?;
     Ok(bytes)
+}
+
+/// Original-only principal-v3 admission for the reviewed transport owner. The
+/// caller must supply its actual selected client chain and retain the same
+/// ClientConfig/connection; a bare ClientConnection cannot prove that history.
+/// No serialized verdict, installation receipt or caller-set source address is
+/// accepted. The private result retains the inherited deadline through use.
+pub(crate) fn verify_ingress_principal_preflight(raw: &[u8], scope_raw: &[u8],
+    roots_raw: &[u8], challenge: [u8; 32], client: &rustls::ClientConnection,
+    issuer_der: &[u8], selected_client_pem: &[u8], expected_principal: &str,
+    expected_identity_policy_sha256: &str, request_original: &[u8],
+    deadline: std::time::Instant) -> Result<PrincipalSession, String> {
+    principal_session::verify(raw, scope_raw, roots_raw, challenge, client,
+        issuer_der, selected_client_pem, expected_principal,
+        expected_identity_policy_sha256, request_original, deadline)
 }
 
 /// Authenticate original enrollment signatures/quotes against the retained

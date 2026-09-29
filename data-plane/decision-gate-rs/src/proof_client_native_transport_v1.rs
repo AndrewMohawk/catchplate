@@ -11,12 +11,13 @@
 mod deadline_tcp;
 
 use deadline_tcp::DeadlineTcp;
+use super::proof_client_native_ingress_v1::native_verifier::PrincipalSession;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use rustls::client::ResolvesClientCert;
 use rustls::pki_types::{CertificateDer, ServerName};
 use rustls::sign::CertifiedKey;
 use rustls::{ClientConfig, ClientConnection, HandshakeKind, ProtocolVersion, SignatureScheme, StreamOwned};
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::fmt;
 use std::io::{self, Read, Write};
 use std::net::SocketAddr;
@@ -104,6 +105,9 @@ pub(super) struct NativeProxyTransportV1 {
     client_identity: Arc<Mutex<ClientIdentityCapture>>,
     client_certificate_pem: Option<Vec<u8>>,
     client_identity_required: Cell<bool>,
+    principal: RefCell<Option<PrincipalSession>>,
+    principal_required: Cell<bool>,
+    poisoned: Cell<bool>,
 }
 
 fn check_lifetime(owner_pid: u32, deadline: Instant) -> io::Result<()> {
@@ -142,6 +146,8 @@ pub(super) fn connect(endpoint: SocketAddr, name: ServerName<'static>,
         tls: StreamOwned::new(client, socket), owner_pid, deadline,
         client_identity: captured, client_certificate_pem: None,
         client_identity_required: Cell::new(false),
+        principal: RefCell::new(None), principal_required: Cell::new(false),
+        poisoned: Cell::new(false),
     };
     transport.check().map_err(|error| error.to_string())?;
     while transport.tls.conn.is_handshaking() {
@@ -168,6 +174,26 @@ pub(super) fn connect(endpoint: SocketAddr, name: ServerName<'static>,
 impl NativeProxyTransportV1 {
     pub(super) fn client(&self) -> &ClientConnection { &self.tls.conn }
 
+    pub(super) fn retain_principal(&mut self, mut proof: PrincipalSession) -> Result<(), String> {
+        let result = (|| {
+            self.check().map_err(|_| "native principal transport is unavailable")?;
+            if self.principal_required.replace(true) {
+                return Err("native principal proof is already retained".to_owned());
+            }
+            // Only this typed source verifier result can activate the guard.
+            // The same actual connection and selected chain remain the owner.
+            self.client_identity_required.set(true);
+            let selected = self.client_certificate_pem.as_deref()
+                .ok_or("native principal client selection is unavailable")?;
+            proof.check(&self.tls.conn, selected)?;
+            *self.principal.get_mut() = Some(proof);
+            self.check().map_err(|_| "native principal proof did not remain current")?;
+            Ok(())
+        })();
+        if result.is_err() { self.poisoned.set(true); }
+        result
+    }
+
     pub(super) fn client_certificate_pem(&self) -> Result<&[u8], String> {
         // Once the v2 path requests this identity, absence or any later resolver
         // activity is a sticky refusal on all subsequent transport operations.
@@ -178,6 +204,16 @@ impl NativeProxyTransportV1 {
     }
 
     pub(super) fn check(&self) -> io::Result<()> {
+        if self.poisoned.get() {
+            return Err(io::Error::new(io::ErrorKind::PermissionDenied,
+                "native proxy transport is poisoned"));
+        }
+        let result = self.check_inner();
+        if result.is_err() && self.principal_required.get() { self.poisoned.set(true); }
+        result
+    }
+
+    fn check_inner(&self) -> io::Result<()> {
         check_lifetime(self.owner_pid, self.deadline)?;
         if self.client_identity_required.get()
             && (!self.client_identity.lock().ok()
@@ -185,6 +221,16 @@ impl NativeProxyTransportV1 {
                 || self.client_certificate_pem.is_none()) {
             return Err(io::Error::new(io::ErrorKind::PermissionDenied,
                 "native proxy actual client certificate capture is unavailable"));
+        }
+        if self.principal_required.get() {
+            let mut retained = self.principal.try_borrow_mut().map_err(|_| io::Error::new(
+                io::ErrorKind::PermissionDenied, "native principal proof is already borrowed"))?;
+            let proof = retained.as_mut().ok_or_else(|| io::Error::new(
+                io::ErrorKind::PermissionDenied, "native principal proof is unavailable"))?;
+            let selected = self.client_certificate_pem.as_deref().ok_or_else(|| io::Error::new(
+                io::ErrorKind::PermissionDenied, "native principal client selection is unavailable"))?;
+            proof.check(&self.tls.conn, selected).map_err(|_| io::Error::new(
+                io::ErrorKind::PermissionDenied, "native principal original proof is no longer current"))?;
         }
         self.tls.sock.check()
     }

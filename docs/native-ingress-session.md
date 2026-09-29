@@ -15,6 +15,14 @@ requires a paired v2 nested original, with `clientTrustProfile` and
 `clientTrustCertificatesDerBase64url` added to `ingress`. Startup stays v1, the
 quote domains and 64/96 KiB output limits are unchanged, and there is no downgrade.
 
+The explicit [principal-v3 preflight](native-principal-preflight.md) adds actual
+runtime principal authentication and a separate statement-bound nonce domain.
+Its seven-field outer v3 contains the unchanged client-trust nested v2 plus the
+exact authenticated statement original. A separate secret TLS exporter binds the
+sent identity request without publishing header or token values. Existing v1/v2
+recipes below are unchanged; neither preflight nor a quote grants CONNECT or
+provider permission.
+
 ## Exact request and shared challenge
 
 The request is exactly `GET /attestation`, with no query or body. The fixed

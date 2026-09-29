@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-ingress-session-evidence.v3.schema.json",
+  "title": "Native ingress principal-v3 session evidence",
+  "description": "Explicit principal-v3 only. Exact seven-field response, compact JSON plus one LF, at most 98304 bytes including LF. Existing v1/v2 profiles do not accept this evidence. Shape neither authenticates the quoted principal nor permits CONNECT or another operation. The separate request-exporter secret and original authentication headers are never included.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "evidenceScope", "okForAction", "clientChallengeBase64url", "tlsExporterBase64url", "publicIdentityBase64url", "principalPreflightBase64url"],
+  "properties": {
+    "apiVersion": {"const": "serverware.nativeIngressSessionEvidence/v3"},
+    "evidenceScope": {"const": "unverified-session-public-material"},
+    "okForAction": {"const": false},
+    "clientChallengeBase64url": {"$ref": "native-ingress-session-evidence.v2.schema.json#/$defs/nonzeroRaw32"},
+    "tlsExporterBase64url": {
+      "$ref": "native-ingress-session-evidence.v2.schema.json#/$defs/nonzeroRaw32",
+      "description": "Normal public session exporter echo. The receiver derives its own actual value; this is NOT the secret request-binding exporter."
+    },
+    "publicIdentityBase64url": {
+      "type": "string", "minLength": 2, "maxLength": 87382,
+      "pattern": "^(?:[A-Za-z0-9_-]{4})*(?:[A-Za-z0-9_-][AQgw]|[A-Za-z0-9_-]{2}[AEIMQUYcgkosw048])?(?![\\s\\S])",
+      "description": "Exact nested nativeIngressPublicEvidence/v2 original with LF, at most 65536 decoded bytes. Its genuine role-3 quote nonce uses the new principal-session domain, actual challenge/exporter and SHA256 of the exact principal preflight original. Existing client-root inventory commitment and actual peer verification remain required."
+    },
+    "principalPreflightBase64url": {
+      "type": "string", "minLength": 2, "maxLength": 5462,
+      "pattern": "^(?:[A-Za-z0-9_-]{4})*(?:[A-Za-z0-9_-][AQgw]|[A-Za-z0-9_-]{2}[AEIMQUYcgkosw048])?(?![\\s\\S])",
+      "description": "Exact nativePrincipalPreflight/v1 compact canonical UTF-8 original without LF, at most 4096 decoded bytes. The paired receiver verifies independent expected principal/identity policy, actual quoted policy, actual selected leaf/SPKI, exact sent request HMAC and the genuine quote's statement-bound nonce."
+    }
+  }
+}

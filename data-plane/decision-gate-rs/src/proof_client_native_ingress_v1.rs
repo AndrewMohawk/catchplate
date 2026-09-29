@@ -10,7 +10,7 @@ mod originals;
 #[path = "native_verifier/json.rs"]
 mod json;
 #[path = "native_verifier/mod.rs"]
-mod native_verifier;
+pub(super) mod native_verifier;
 #[path = "native_ingress_client/http.rs"]
 mod http;
 
@@ -25,6 +25,7 @@ use std::cell::{Cell, RefCell};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
+use zeroize::Zeroizing;
 
 const MAX_CONFIGURATION: usize = 16 * 1024;
 const MAX_STARTUP: usize = 64 * 1024;
@@ -41,6 +42,8 @@ struct Configuration {
     session_scope: ArtifactV1,
     trust_roots: ArtifactV1,
     workload_issuer: Option<ArtifactV1>,
+    expected_principal: Option<String>,
+    expected_identity_policy_sha256: Option<String>,
 }
 
 struct Original {
@@ -56,6 +59,7 @@ pub(super) struct NativeIngressAdmission {
     scope_original: Vec<u8>,
     roots: Vec<u8>,
     workload_issuer: Option<Vec<u8>>,
+    principal: Option<(String, String)>,
     scope: Value,
     roots_sha256: String,
     bootstrap: native_verifier::IngressClientBootstrap,
@@ -108,7 +112,7 @@ fn workload_issuer_der(original: &[u8]) -> Result<Vec<u8>, String> {
 }
 
 impl NativeIngressAdmission {
-    pub(super) fn open(configuration: &Path, pin: &str, deadline: Instant)
+    pub(super) fn open(configuration: &Path, pin: &str, expected_principal: &str, deadline: Instant)
         -> Result<Self, String> {
         let pid = std::process::id();
         live(pid, deadline)?;
@@ -117,24 +121,43 @@ impl NativeIngressAdmission {
             MAX_CONFIGURATION, &mut originals, pid, deadline)?;
         let value = json::parse(&raw, MAX_CONFIGURATION)?;
         let version = value.get("apiVersion").and_then(Value::as_str);
-        let client_trust_v2 = match version {
-            Some("serverware.nativeProxyIngress/v1") => false,
-            Some("serverware.nativeProxyIngress/v2") => true,
+        let (client_trust_v2, principal_v3, expected_version) = match version {
+            Some("serverware.nativeProxyIngress/v1") => (false, false, "serverware.nativeProxyIngress/v1"),
+            Some("serverware.nativeProxyIngress/v2") => (true, false, "serverware.nativeProxyIngress/v2"),
+            Some("serverware.nativeProxyIngress/v3") => (true, true, "serverware.nativeProxyIngress/v3"),
             _ => return Err("native ingress configuration version is unsupported".to_owned()),
         };
         let fields = value.as_object().ok_or("native ingress configuration is not an object")?;
         let required = ["apiVersion", "startupEvidence", "startupExpectations", "sessionScope", "trustRoots"];
         if required.iter().any(|name| !fields.contains_key(*name))
-            || fields.len() != required.len() + usize::from(client_trust_v2)
-            || fields.contains_key("workloadIssuer") != client_trust_v2 {
+            || fields.len() != required.len() + usize::from(client_trust_v2) + 2 * usize::from(principal_v3)
+            || fields.contains_key("workloadIssuer") != client_trust_v2
+            || fields.contains_key("expectedPrincipal") != principal_v3
+            || fields.contains_key("expectedIdentityPolicySha256") != principal_v3 {
             return Err("native ingress configuration fields differ from its exact version".to_owned());
         }
         let config: Configuration = serde_json::from_value(value)
             .map_err(|_| "native ingress configuration has an invalid closed schema")?;
-        if config.api_version != if client_trust_v2 { "serverware.nativeProxyIngress/v2" }
-            else { "serverware.nativeProxyIngress/v1" } {
+        if config.api_version != expected_version {
             return Err("native ingress configuration version is unsupported".to_owned());
         }
+        let maximum_principal = if principal_v3 { 1024 } else { 256 };
+        if expected_principal.is_empty() || expected_principal != expected_principal.trim()
+            || expected_principal.len() > maximum_principal
+            || expected_principal.chars().any(char::is_control) {
+            return Err("native ingress expected principal exceeds its exact profile".to_owned());
+        }
+        let principal = if principal_v3 {
+            let principal = config.expected_principal
+                .ok_or("native ingress v3 requires an independently expected principal")?;
+            let policy = config.expected_identity_policy_sha256
+                .ok_or("native ingress v3 requires an independent identity-policy commitment")?;
+            if principal != expected_principal || !super::is_sha256_digest(&policy)
+                || policy.as_bytes()[7..].iter().all(|byte| *byte == b'0') {
+                return Err("native ingress principal or identity-policy pin differs from its expected profile".to_owned());
+            }
+            Some((principal, policy))
+        } else { None };
         let startup = read(config.startup_evidence, MAX_STARTUP, &mut originals, pid, deadline)?;
         let expectations = read(config.startup_expectations, MAX_EXPECTATIONS,
             &mut originals, pid, deadline)?;
@@ -143,7 +166,7 @@ impl NativeIngressAdmission {
         let roots = read(config.trust_roots, MAX_ROOTS, &mut originals, pid, deadline)?;
         let workload_issuer = if client_trust_v2 {
             let artifact = config.workload_issuer
-                .ok_or("native ingress v2 requires an independently pinned workload issuer")?;
+                .ok_or("native ingress client-trust profile requires an independently pinned workload issuer")?;
             let original = read(artifact, MAX_WORKLOAD_ISSUER, &mut originals, pid, deadline)?;
             let der = workload_issuer_der(&original)?;
             live(pid, deadline)?;
@@ -162,7 +185,7 @@ impl NativeIngressAdmission {
         let scope = json::parse(&scope_original, MAX_EXPECTATIONS)?;
         let roots_sha256 = super::sha256_prefixed(&roots);
         let owner = Self { originals: RefCell::new(originals), startup, expectations,
-            scope_original, roots, workload_issuer, scope, roots_sha256, bootstrap, pid, deadline,
+            scope_original, roots, workload_issuer, principal, scope, roots_sha256, bootstrap, pid, deadline,
             poisoned: Cell::new(false), attempted: Cell::new(false) };
         owner.recheck()?;
         Ok(owner)
@@ -172,6 +195,7 @@ impl NativeIngressAdmission {
     pub(super) fn ca(&self) -> &[u8] { &self.bootstrap.ca }
     pub(super) fn scope(&self) -> &Value { &self.scope }
     pub(super) fn trust_roots_sha256(&self) -> &str { &self.roots_sha256 }
+    pub(super) fn principal_preflight(&self) -> bool { self.principal.is_some() }
 
     fn check(&self) -> Result<(), String> {
         if self.poisoned.get() {
@@ -233,7 +257,8 @@ impl NativeIngressAdmission {
         self.finish(result)
     }
 
-    pub(super) fn attest(&self, transport: &mut NativeProxyTransportV1, authority: &str)
+    pub(super) fn attest(&self, transport: &mut NativeProxyTransportV1, authority: &str,
+        identity_headers: &[(String, String)])
         -> Result<(), String> {
         let result = (|| {
             if self.attempted.replace(true) {
@@ -261,19 +286,34 @@ impl NativeIngressAdmission {
                 // guard before the sole attestation exchange, not after CONNECT.
                 transport.client_certificate_pem()?;
             }
-            let evidence = {
+            let (evidence, request_original) = {
                 let mut checked = AttestationIo { admission: self, transport: &mut *transport };
-                if self.workload_issuer.is_some() {
-                    http::exchange_for_connect_client_trust(&mut checked, authority, self.bootstrap.challenge)?
+                if self.principal.is_some() {
+                    let (evidence, original) = http::exchange_for_connect_principal(
+                        &mut checked, authority, self.bootstrap.challenge, identity_headers)?;
+                    // Authentication headers may be secret. Keep the exact sent
+                    // request only for the same-call verifier, never a capture.
+                    (evidence, Some(Zeroizing::new(original)))
+                } else if self.workload_issuer.is_some() {
+                    (http::exchange_for_connect_client_trust(
+                        &mut checked, authority, self.bootstrap.challenge)?, None)
                 } else {
-                    http::exchange_for_connect(&mut checked, authority, self.bootstrap.challenge)?
+                    (http::exchange_for_connect(&mut checked, authority, self.bootstrap.challenge)?, None)
                 }
             };
             self.check()?;
             transport.check().map_err(|_| "native ingress transport lifetime ended")?;
             transport.require_no_buffered_plaintext()
                 .map_err(|_| "native ingress continuation is not an empty live TLS boundary")?;
-            if let Some(issuer) = self.workload_issuer.as_deref() {
+            if let Some((principal, policy)) = self.principal.as_ref() {
+                let proof = native_verifier::verify_ingress_principal_preflight(&evidence,
+                    &self.scope_original, &self.roots, self.bootstrap.challenge, transport.client(),
+                    self.workload_issuer.as_deref().ok_or("native principal issuer is unavailable")?,
+                    transport.client_certificate_pem()?, principal, policy,
+                    request_original.as_deref().ok_or("native principal sent original is unavailable")?,
+                    self.deadline)?;
+                transport.retain_principal(proof)?;
+            } else if let Some(issuer) = self.workload_issuer.as_deref() {
                 native_verifier::verify_ingress_session_client_trust_with_challenge(&evidence,
                     &self.scope_original, &self.roots, self.bootstrap.challenge, transport.client(),
                     issuer, transport.client_certificate_pem()?)?;

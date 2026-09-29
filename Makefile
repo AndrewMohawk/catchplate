@@ -3679,6 +3679,9 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/enclave_bootstrap_enrollment_key_v1.rs \
 				data-plane/decision-gate-rs/src/native_verifier/enrollment.rs \
 				data-plane/decision-gate-rs/src/native_verifier/enrollment_bootstrap.rs \
+				data-plane/decision-gate-rs/src/native_verifier/principal_session.rs \
+				data-plane/decision-gate-rs/src/native_principal_preflight_v1.rs \
+				data-plane/decision-gate-rs/src/native_target_principal_preflight.rs \
 				data-plane/decision-gate-rs/src/native_enrollment_authorizer.rs \
 				data-plane/decision-gate-rs/src/native_enrollment_admission.rs \
 				data-plane/decision-gate-rs/src/native_enrollment_bootstrap_delegation_v1.rs \
@@ -3707,7 +3710,10 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/production-launch-manifest.v3.schema.json \
 				schemas/native-ingress-client.v3.schema.json \
 				schemas/native-ingress-session-evidence.v2.schema.json \
+				schemas/native-ingress-session-evidence.v3.schema.json \
+				schemas/native-principal-preflight.v1.schema.json \
 				schemas/native-proxy-ingress.v2.schema.json \
+				schemas/native-proxy-ingress.v3.schema.json \
 				schemas/native-enrollment-assignment.v1.schema.json \
 				schemas/native-enrollment-evidence.v1.schema.json \
 				schemas/native-enrollment-bootstrap-evidence.v1.schema.json \

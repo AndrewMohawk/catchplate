@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-proxy-ingress.v3.schema.json",
+  "title": "Serverware native proof-client principal preflight configuration v3",
+  "description": "Closed independently pinned configuration original, at most 16384 bytes. Opts into genuine principal preflight on the actual outer TLS connection before CONNECT. Shape is not a quote verdict, independently established pin provenance, CA installation permission, provider-request authorization or production acceptance. V1 and v2 remain separate closed profiles and cannot select these additional fields or silently fall back.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion", "startupEvidence", "startupExpectations", "sessionScope", "trustRoots",
+    "workloadIssuer", "expectedPrincipal", "expectedIdentityPolicySha256"
+  ],
+  "properties": {
+    "apiVersion": {"const": "serverware.nativeProxyIngress/v3"},
+    "startupEvidence": {
+      "description": "Held serverware.nativeIngressPublicEvidence/v1 startup original, at most 65536 bytes; genuine still-fresh verification precedes the outer client private key.",
+      "$ref": "native-ingress-client.v2.schema.json#/$defs/artifact"
+    },
+    "startupExpectations": {
+      "description": "Held serverware.nativeIngressAttestationExpectations/v1 original, at most 16384 bytes, independently binding complete startup scope and nonce.",
+      "$ref": "native-ingress-client.v2.schema.json#/$defs/artifact"
+    },
+    "sessionScope": {
+      "description": "Held nonce-free serverware.nativeIngressSessionScope/v1 original, at most 16384 bytes. Its static scope must match startup; the client owns one newly generated challenge for the live session.",
+      "$ref": "native-ingress-client.v2.schema.json#/$defs/artifact"
+    },
+    "trustRoots": {
+      "description": "Held independent native Nitro PKI trust-root original, at most 1048576 bytes; distinct from outer TLS roots and workload issuer trust.",
+      "$ref": "native-ingress-client.v2.schema.json#/$defs/artifact"
+    },
+    "workloadIssuer": {
+      "description": "Held canonical single-certificate PEM, at most 65536 bytes and DER at most 16384 bytes. Fresh evidence must authenticate its unique membership in the actual native framed-DER inventory and verify the public client chain actually selected by this TLS handshake under only that anchor. No installation receipt or copied diagnostic substitutes for these originals.",
+      "$ref": "native-ingress-client.v3.schema.json#/$defs/artifact"
+    },
+    "expectedPrincipal": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "description": "Independent expected policy principal, exactly equal to --expected-principal-id. Runtime additionally limits UTF-8 bytes to 1024 and rejects leading/trailing Unicode whitespace and control characters. This v3 preflight limit does not widen legacy provider-response proof profiles."
+    },
+    "expectedIdentityPolicySha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "not": {"const": "sha256:0000000000000000000000000000000000000000000000000000000000000000"},
+      "description": "Independent exact commitment to the principal's complete current identity policy. It is not a bearer credential, selector summary, provider route permission or canary result."
+    }
+  }
+}

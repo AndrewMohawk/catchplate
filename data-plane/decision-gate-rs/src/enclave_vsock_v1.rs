@@ -417,6 +417,21 @@ impl VsockStreamV1 {
     /// Cached routing metadata, not an authenticated principal.
     pub fn peer_cid(&self) -> u32 { self.peer.cid }
     pub fn peer_port(&self) -> u32 { self.peer.port }
+    /// Recheck the actual held connected socket without exporting its FD or
+    /// treating a routing CID as identity. A caller can only shorten the check
+    /// interval; the original stream lifetime is never changed or renewed.
+    pub fn verify_connected_original(&self, deadline: u64) -> io::Result<()> {
+        let deadline = deadline.min(self.deadline);
+        self.check(deadline)?;
+        let fd = self.socket.fd.as_raw_fd();
+        if address(fd, true)? != self.peer
+            || socket_option(fd, libc::SO_TYPE)? != libc::SOCK_STREAM
+            || socket_option(fd, libc::SO_DOMAIN)? != libc::AF_VSOCK
+            || socket_option(fd, libc::SO_ACCEPTCONN)? != 0 {
+            return Err(error(io::ErrorKind::InvalidData, "vsock connected original changed"));
+        }
+        self.check(deadline)
+    }
     /// Join this actual accepted socket to the independently retained native
     /// listener port. Vsock addresses remain routing metadata, never a client
     /// IP, authenticated principal or the client-facing TCP proxy endpoint.

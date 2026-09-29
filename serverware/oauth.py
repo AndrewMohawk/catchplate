@@ -18,7 +18,7 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 
-from serverware import db
+from serverware import db, oauth_application_owner as application_owner
 from serverware.config import (
     GOOGLE_OAUTH_CLIENT_ID,
     GOOGLE_OAUTH_CLIENT_SECRET,
@@ -90,6 +90,10 @@ class OAuthProvider:
 
 
 def _providers() -> dict[str, OAuthProvider]:
+    x_id, x_secret, x_redirect = application_owner.parameters(
+        "x", (X_OAUTH_CLIENT_ID, X_OAUTH_CLIENT_SECRET, X_OAUTH_REDIRECT_URI))
+    google_id, google_secret, google_redirect = application_owner.parameters(
+        "google", (GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET, GOOGLE_OAUTH_REDIRECT_URI))
     x_provider = OAuthProvider(
         id="x",
         display_name="X / Twitter",
@@ -97,12 +101,12 @@ def _providers() -> dict[str, OAuthProvider]:
         token_url="https://api.twitter.com/2/oauth2/token",
         revocation_url="https://api.twitter.com/2/oauth2/revoke",
         identity_url="https://api.x.com/2/users/me?user.fields=id,name,username,verified",
-        client_id=X_OAUTH_CLIENT_ID,
-        client_secret=X_OAUTH_CLIENT_SECRET,
-        redirect_uri=X_OAUTH_REDIRECT_URI,
+        client_id=x_id,
+        client_secret=x_secret,
+        redirect_uri=x_redirect,
         default_scopes=("tweet.read", "users.read", "offline.access"),
         token_response_scope_optional=True,
-        token_auth="basic" if X_OAUTH_CLIENT_SECRET else "none",
+        token_auth="basic" if x_secret else "none",
         auth_params={},
         metadata_provider="x.oauth2",
     )
@@ -114,9 +118,9 @@ def _providers() -> dict[str, OAuthProvider]:
             token_url="https://oauth2.googleapis.com/token",
             revocation_url="https://oauth2.googleapis.com/revoke",
             identity_url="https://openidconnect.googleapis.com/v1/userinfo",
-            client_id=GOOGLE_OAUTH_CLIENT_ID,
-            client_secret=GOOGLE_OAUTH_CLIENT_SECRET,
-            redirect_uri=GOOGLE_OAUTH_REDIRECT_URI,
+            client_id=google_id,
+            client_secret=google_secret,
+            redirect_uri=google_redirect,
             default_scopes=(
                 "openid",
                 "email",
@@ -144,10 +148,64 @@ def normalize_provider_id(provider_id: str) -> str:
 
 
 def provider_for(provider_id: str) -> OAuthProvider:
-    provider = _providers().get(provider_id.strip().lower())
+    try:
+        provider = _providers().get(provider_id.strip().lower())
+    except application_owner.OAuthApplicationError as exc:
+        raise OAuthError("OAuth application cold ownership is unavailable") from exc
     if not provider:
         raise OAuthError(f"unsupported OAuth provider: {provider_id}")
     return provider
+
+
+def require_application_metadata(metadata, operation=None):
+    """Require the actual independently enrolled application before local use."""
+    if not isinstance(metadata, dict):
+        raise OAuthError("OAuth application metadata is malformed")
+    provider = provider_for(str(metadata.get("provider_id") or ""))
+    try:
+        retained = application_owner.bound(provider, metadata.get(application_owner.ASSOCIATION_KEY), operation)
+        if retained is not None and metadata.get("oauth_client_id" if provider.id == "google" else "x_app_id") != provider.client_id:
+            raise OAuthError("OAuth credential client does not match its enrolled application")
+        return retained
+    except application_owner.OAuthApplicationError as exc:
+        raise OAuthError("OAuth credential does not belong to the current enrolled application") from exc
+
+
+def require_application_review(review):
+    if not isinstance(review, dict):
+        raise OAuthError("OAuth application review is malformed")
+    return _application_begin(provider_for(str(review.get("provider") or "")),
+        review.get(application_owner.ASSOCIATION_KEY), bound=True)
+
+
+def _application_begin(provider, association=None, *, bound=False):
+    try:
+        return (application_owner.bound(provider, association) if bound
+            else application_owner.begin(provider, association=association))
+    except application_owner.OAuthApplicationError as exc:
+        raise OAuthError("OAuth application ownership could not be retained") from exc
+
+
+def _application_check(operation):
+    if operation is not None:
+        try:
+            operation.check()
+        except application_owner.OAuthApplicationError as exc:
+            raise OAuthError("OAuth application ownership expired or changed") from exc
+
+
+def _require_application_lifecycle(operation):
+    if operation is not None:
+        _application_check(operation)
+        # Temporary source checkpoint: atomic approval/credential/pending/audit
+        # writes must be joined to a purpose-controlled writer, not split into
+        # approval consumption followed by runtime credential DML.
+        raise OAuthError("enrolled OAuth lifecycle requires the pending purpose-controlled atomic writer; no provider contact is authorized")
+
+
+def require_application_consent(provider_id):
+    # HTTP entry guard precedes legacy requester-assertion/approval mutations.
+    _require_application_lifecycle(_application_begin(provider_for(provider_id)))
 
 
 def provider_status() -> list[dict[str, Any]]:
@@ -245,13 +303,16 @@ def _bounded_reconnect_binding(
 ) -> dict[str, Any] | None:
     if reconnect_binding is None:
         return None
-    if not isinstance(reconnect_binding, dict) or set(reconnect_binding) != {
+    expected_fields = {
         "credential_id",
         "credential_version",
         "provider",
         "provider_subject",
         "provider_account",
-    }:
+    }
+    if application_owner.require_started() is not None:
+        expected_fields.add(application_owner.ASSOCIATION_KEY)
+    if not isinstance(reconnect_binding, dict) or set(reconnect_binding) != expected_fields:
         raise OAuthError("OAuth reconnect binding is malformed")
     credential_version = reconnect_binding.get("credential_version")
     if (
@@ -264,6 +325,7 @@ def _bounded_reconnect_binding(
         raise OAuthError(
             "OAuth reconnect provider does not match the existing credential"
         )
+    _application_begin(provider, reconnect_binding.get(application_owner.ASSOCIATION_KEY), bound=True)
     for label, key, maximum in (
         ("credential ID", "credential_id", 512),
         ("provider subject", "provider_subject", 512),
@@ -375,12 +437,25 @@ def create_authorization_url(
     provider = provider_for(provider_id)
     if not provider.configured:
         raise OAuthError(f"{provider.display_name} OAuth is not configured")
+    operation = _application_begin(provider)
+    _require_application_lifecycle(operation)
     requested_scopes = list(resolve_requested_scopes(provider_id, scopes))
     credential_label = _bounded_credential_name(
         credential_name,
         f"{provider.display_name} OAuth credential",
     )
-    metadata_value = _bounded_metadata(metadata)
+    if operation is not None and reconnect_binding is not None and isinstance(metadata, dict):
+        # Keep the old caller-metadata budget; the admitted association has its
+        # own 8 KiB bound and still fits the database's unchanged 16 KiB total.
+        metadata_value = {**_bounded_metadata({key: value for key, value in metadata.items()
+            if key != application_owner.ASSOCIATION_KEY}),
+            application_owner.ASSOCIATION_KEY: metadata.get(application_owner.ASSOCIATION_KEY)}
+    else:
+        metadata_value = _bounded_metadata(metadata)
+    if application_owner.ASSOCIATION_KEY in metadata_value:
+        if reconnect_binding is None:
+            raise OAuthError("OAuth application ownership is not caller metadata")
+        require_application_metadata(metadata_value, operation)
     reconnect_value = _bounded_reconnect_binding(provider, reconnect_binding)
     setup_session_value = _canonical_setup_session_id(setup_session_id)
     if (
@@ -410,11 +485,15 @@ def create_authorization_url(
     }
     if setup_session_value is not None:
         record["setup_session_id"] = setup_session_value
+    if operation is not None:
+        record[application_owner.ASSOCIATION_KEY] = operation.association()
+    _application_check(operation)
     with _oauth_state_lock():
         payload = _read_states()
         _prune_expired(payload)
         payload["states"][state] = record
         _write_states(payload)
+    _application_check(operation)
 
     query = {
         "response_type": "code",
@@ -436,6 +515,7 @@ def create_authorization_url(
     }
     if setup_session_value is not None:
         result["setupSessionId"] = setup_session_value
+    _application_check(operation)
     return result
 
 
@@ -524,16 +604,17 @@ def _refresh_token_request_body(
 
 
 def _post_token_request(
-    provider: OAuthProvider, body: dict[str, str], headers: dict[str, str]
+    provider: OAuthProvider, body: dict[str, str], headers: dict[str, str], *, operation=None
 ) -> dict[str, Any]:
     encoded = urllib.parse.urlencode(body).encode("utf-8")
     request = urllib.request.Request(
         provider.token_url, data=encoded, headers=headers, method="POST"
     )
     try:
+        _application_check(operation)
         response = request_bytes(
             request,
-            timeout=20,
+            timeout=20 if operation is None else operation.timeout(),
             max_bytes=MAX_OAUTH_TOKEN_RESPONSE_BYTES,
             require_https=True,
         )
@@ -561,7 +642,7 @@ def _post_token_request(
 
 
 def _fetch_provider_identity(
-    provider: OAuthProvider, access_token: str
+    provider: OAuthProvider, access_token: str, *, operation=None
 ) -> dict[str, Any]:
     request = urllib.request.Request(
         provider.identity_url,
@@ -572,13 +653,15 @@ def _fetch_provider_identity(
         method="GET",
     )
     try:
+        _application_check(operation)
         response = request_bytes(
             request,
-            timeout=20,
+            timeout=20 if operation is None else operation.timeout(),
             max_bytes=64 * 1024,
             require_https=True,
         )
         payload = json.loads(response.body.decode("utf-8"))
+        _application_check(operation)
     except urllib.error.HTTPError as exc:
         raise OAuthError(
             f"OAuth account identity lookup failed: HTTP {exc.code}"
@@ -646,6 +729,7 @@ def exchange_authorization_code(
     provider = provider_for(provider_id)
     if not provider.configured:
         raise OAuthError(f"{provider.display_name} OAuth is not configured")
+    _require_application_lifecycle(_application_begin(provider))
     if (
         not isinstance(code, str)
         or not code
@@ -655,6 +739,9 @@ def exchange_authorization_code(
     record = consume_state(
         provider_id=provider.id, state=state, browser_nonce=browser_nonce
     )
+    operation = _application_begin(provider, record.get(application_owner.ASSOCIATION_KEY), bound=True)
+    if operation is not None and record.get("redirect_uri") != provider.redirect_uri:
+        raise OAuthError("OAuth state redirect no longer matches the enrolled application")
     actor_id = str(record.get("actor_id") or "oauth-callback")
     try:
         revocation_work_id = db.reserve_oauth_revocation_work(
@@ -676,6 +763,7 @@ def exchange_authorization_code(
             provider,
             _token_request_body(provider, record, code),
             _token_request_headers(provider),
+            operation=operation,
         )
         revocable_secret = {
             key: value
@@ -686,6 +774,9 @@ def exchange_authorization_code(
             }.items()
             if isinstance(value, str) and value
         }
+        if operation is not None:
+            # Retain issued material before a post-contact deadline check can fail.
+            revocable_secret[application_owner.ASSOCIATION_KEY] = record[application_owner.ASSOCIATION_KEY]
         if "access_token" in revocable_secret or "refresh_token" in revocable_secret:
             revocable_secret_json = json.dumps(
                 revocable_secret,
@@ -724,6 +815,8 @@ def exchange_authorization_code(
                     ) from retention_exc
             material_attached = True
 
+        _application_check(operation)
+
         access_token = token_response.get("access_token")
         if not isinstance(access_token, str) or not access_token:
             raise OAuthError("OAuth token endpoint did not return access_token")
@@ -741,7 +834,7 @@ def exchange_authorization_code(
         token_type = token_response["token_type"]
         if not isinstance(token_type, str) or token_type.lower() != "bearer":
             raise OAuthError("OAuth token endpoint returned an unsupported token type")
-        provider_identity = _fetch_provider_identity(provider, access_token)
+        provider_identity = _fetch_provider_identity(provider, access_token, operation=operation)
         now = _now()
         expires_in = token_response.get("expires_in")
         if (
@@ -799,6 +892,8 @@ def exchange_authorization_code(
         token_secret = {
             key: value for key, value in token_secret.items() if value not in (None, "")
         }
+        if operation is not None:
+            token_secret[application_owner.ASSOCIATION_KEY] = operation.association()
         secret = json.dumps(token_secret, separators=(",", ":"), sort_keys=True)
         db.attach_oauth_revocation_material(
             revocation_work_id,
@@ -823,6 +918,8 @@ def exchange_authorization_code(
             metadata["x_app_id"] = provider.client_id
         elif provider.id == "google":
             metadata["oauth_client_id"] = provider.client_id
+        if operation is not None:
+            metadata[application_owner.ASSOCIATION_KEY] = operation.association()
         result = {
             "name": str(
                 record.get("credential_name")
@@ -847,6 +944,9 @@ def exchange_authorization_code(
         setup_session_id = _stored_setup_session_id(record)
         if setup_session_id is not None:
             result["setupSessionId"] = setup_session_id
+        if operation is not None:
+            result["_application_operation"] = operation
+        _application_check(operation)
         return result
     except Exception as exc:
         if material_attached:
@@ -896,6 +996,10 @@ def refresh_access_token(
         raise OAuthError(f"{provider.display_name} OAuth is not configured")
     if not isinstance(token_secret, dict) or not isinstance(metadata, dict):
         raise OAuthError("OAuth credential is malformed")
+    operation = require_application_metadata(metadata)
+    _require_application_lifecycle(operation)
+    if token_secret.get(application_owner.ASSOCIATION_KEY) != metadata.get(application_owner.ASSOCIATION_KEY):
+        raise OAuthError("OAuth token and metadata application ownership differ")
     refresh_token = token_secret.get("refresh_token")
     if not isinstance(refresh_token, str) or not refresh_token:
         raise OAuthError("OAuth credential has no refresh token; reconnect the account")
@@ -946,6 +1050,7 @@ def refresh_access_token(
             provider,
             _refresh_token_request_body(provider, refresh_token),
             _token_request_headers(provider),
+            operation=operation,
         )
         issued_secret = {
             key: value
@@ -956,6 +1061,8 @@ def refresh_access_token(
             }.items()
             if isinstance(value, str) and value
         }
+        if operation is not None:
+            issued_secret[application_owner.ASSOCIATION_KEY] = metadata[application_owner.ASSOCIATION_KEY]
         issued_secret_json = json.dumps(
             issued_secret, separators=(",", ":"), sort_keys=True
         )
@@ -991,6 +1098,8 @@ def refresh_access_token(
                         "issued OAuth refresh material was revoked because durable retention failed"
                     ) from retention_exc
             material_attached = True
+
+        _application_check(operation)
 
         access_token = token_response.get("access_token")
         if not isinstance(access_token, str) or not access_token:
@@ -1077,7 +1186,7 @@ def refresh_access_token(
             refreshed_metadata["refresh_token_expires_at_epoch_ms"] = (
                 refresh_token_expires_at_epoch_ms
             )
-        return {
+        result = {
             "secret": json.dumps(
                 refreshed_secret, separators=(",", ":"), sort_keys=True
             ),
@@ -1088,6 +1197,10 @@ def refresh_access_token(
             "revocationWorkId": revocation_work_id,
             "revocationSecret": issued_secret_json,
         }
+        if operation is not None:
+            result["_application_operation"] = operation
+        _application_check(operation)
+        return result
     except Exception as exc:
         if material_attached:
             try:
@@ -1124,6 +1237,8 @@ def revoke_oauth_token(
         raise OAuthError(f"{provider.display_name} OAuth is not configured")
     if not isinstance(token_secret, dict):
         raise OAuthError("OAuth credential is malformed")
+    operation = _application_begin(provider, token_secret.get(application_owner.ASSOCIATION_KEY), bound=True)
+    _require_application_lifecycle(operation)
     if provider.id == "x":
         token_requests: list[tuple[str, str]] = []
         for token_type_hint in ("access_token", "refresh_token"):
@@ -1159,9 +1274,10 @@ def revoke_oauth_token(
             method="POST",
         )
         try:
+            _application_check(operation)
             response = request_bytes(
                 request,
-                timeout=20,
+                timeout=20 if operation is None else operation.timeout(),
                 max_bytes=64 * 1024,
                 require_https=True,
             )
@@ -1171,6 +1287,7 @@ def revoke_oauth_token(
             raise OAuthError(f"OAuth token revocation failed: {exc}") from exc
         if response.status < 200 or response.status >= 300:
             raise OAuthError(f"OAuth token revocation failed: HTTP {response.status}")
+        _application_check(operation)
 
     token_type_hints = [token_type_hint for token_type_hint, _ in token_requests]
     return {

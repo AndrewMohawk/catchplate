@@ -16,6 +16,8 @@ CONTROL_PLANE_CUSTODY_CONFIG_MAX_BYTES = 16384
 CONTROL_PLANE_CUSTODY_DIRECTORY = "/var/lib/serverware/control-plane-custody"
 CONTROL_PLANE_CUSTODY_FD_MIN = 32
 CONTROL_PLANE_CUSTODY_FD_MAX = 1023
+OAUTH_APPLICATION_CONFIG_NAME = "SERVERWARE_OAUTH_APPLICATION_CONFIG_FD"
+OAUTH_APPLICATION_CONFIG_MAX_BYTES = 64 * 1024
 CONTROL_PLANE_ENROLLMENT_BOOTSTRAP_NAME = "SERVERWARE_CONTROL_PLANE_ENROLLMENT_BOOTSTRAP_FD"
 CONTROL_PLANE_ENROLLMENT_BOOTSTRAP_SCHEMA = "serverware.signedControlPlaneEnrollmentBootstrap/v2"
 CONTROL_PLANE_ENROLLMENT_PAYLOAD_SCHEMA = "serverware.controlPlaneEnrollmentBootstrap/v2"
@@ -198,6 +200,10 @@ ROLE_SOURCES = {
         (
             CONTROL_PLANE_ENROLLMENT_BOOTSTRAP_NAME,
             "/run/serverware/authority-trust/control-plane-enrollment.json",
+        ),
+        (
+            OAUTH_APPLICATION_CONFIG_NAME,
+            "/run/serverware/authority-trust/oauth-applications.json",
         ),
     ),
     "runtime": (
@@ -470,6 +476,74 @@ def _seal_bytes(
     finally:
         os.close(sealed)
     return descriptor_number
+
+
+def _open_oauth_application_material(config_fd, *, occupied_descriptors):
+    """Fixed root delivery only; signed purpose admission occurs in cold owner."""
+    raw = os.pread(config_fd, OAUTH_APPLICATION_CONFIG_MAX_BYTES + 1, 0)
+    if not 2 <= len(raw) <= OAUTH_APPLICATION_CONFIG_MAX_BYTES:
+        raise RuntimeError("OAuth application startup exceeds its fixed bound")
+    def pairs(values):
+        result = {}
+        for key, value in values:
+            if key in result:
+                raise RuntimeError("OAuth startup has duplicate fields")
+            result[key] = value
+        return result
+    config = json.loads(raw.decode("ascii"), object_pairs_hook=pairs)
+    if (type(config) is not dict or set(config) != {"schema", "sourceRevision", "configurationDigest",
+            "authorityRootFd", "authorityRootSha256", "applications"}
+            or config["schema"] != "serverware.oauthApplicationStartup/v1"
+            or json.dumps(config, ensure_ascii=True, allow_nan=False, sort_keys=True, separators=(",", ":")).encode("ascii") != raw
+            or type(config["applications"]) is not list or len(config["applications"]) > 2):
+        raise RuntimeError("OAuth application startup shape is not exact")
+    if not config["applications"]:
+        if config["authorityRootFd"] is not None or config["authorityRootSha256"] is not None:
+            raise RuntimeError("disabled OAuth startup has an authority root")
+        return ()
+    selected = [(config["authorityRootFd"], "/run/serverware/authority-trust/oauth-application-root-public-key", 4096, False)]
+    providers = set()
+    for entry in config["applications"]:
+        if type(entry) is not dict or set(entry) != {"enrollment", "clientMaterialFd"}:
+            raise RuntimeError("OAuth application entry is not exact")
+        envelope = entry["enrollment"]
+        if (type(envelope) is not dict or set(envelope) != {"schema", "payload", "signatureBase64Url"}
+                or envelope["schema"] != "serverware.signedOAuthApplicationEnrollment/v1"
+                or type(envelope["payload"]) is not dict):
+            raise RuntimeError("OAuth enrollment delivery shape is not exact")
+        provider = envelope["payload"].get("providerId")
+        if provider not in {"google", "x"} or provider in providers:
+            raise RuntimeError("OAuth provider delivery is not unique")
+        providers.add(provider)
+        selected.append((entry["clientMaterialFd"], "/run/secrets/serverware-oauth-" + provider + "-client", 32 * 1024, True))
+    targets = [item[0] for item in selected]
+    if (any(type(target) is not int or not 32 <= target <= 1023 for target in targets)
+            or len(set(targets)) != len(targets) or set(targets) & set(occupied_descriptors)):
+        raise RuntimeError("OAuth inherited descriptor slots overlap")
+    for target in targets:
+        try:
+            os.fstat(target)
+        except OSError as exc:
+            if exc.errno != errno.EBADF:
+                raise
+        else:
+            raise RuntimeError("OAuth inherited descriptor slot is already occupied")
+    opened = []
+    try:
+        for target, path, maximum, private in selected:
+            descriptor = _open_source(path, expected_owner_uid=0, maximum_bytes=maximum,
+                required_mode=0o400 if private else None)
+            try:
+                os.dup2(descriptor, target, inheritable=True)
+                opened.append(target)
+            finally:
+                if descriptor != target:
+                    os.close(descriptor)
+        return tuple(opened)
+    except BaseException:
+        for descriptor in opened:
+            os.close(descriptor)
+        raise
 
 
 def _open_source(
@@ -2332,7 +2406,7 @@ def _normal_main(role: str) -> int:
             )
     for name in tuple(environment):
         if name.startswith(("SERVERWARE_CONTROL_PLANE_CUSTODY_",
-                "SERVERWARE_CONTROL_PLANE_ENROLLMENT_")):
+                "SERVERWARE_CONTROL_PLANE_ENROLLMENT_", "SERVERWARE_OAUTH_APPLICATION_")):
             environment.pop(name, None)
     environment.pop("SERVERWARE_AUTHORITY_BOOTSTRAP_FD", None)
     environment.pop("SERVERWARE_PROCESS_MODE", None)
@@ -2346,9 +2420,11 @@ def _normal_main(role: str) -> int:
     launch_manifest_descriptor: int | None = None
     custody_configuration_descriptor: int | None = None
     enrollment_bootstrap_descriptor: int | None = None
+    oauth_application_descriptor: int | None = None
     control_plane_source_limits = {
         CONTROL_PLANE_CUSTODY_CONFIG_NAME: CONTROL_PLANE_CUSTODY_CONFIG_MAX_BYTES,
         CONTROL_PLANE_ENROLLMENT_BOOTSTRAP_NAME: CONTROL_PLANE_ENROLLMENT_BOOTSTRAP_MAX_BYTES,
+        OAUTH_APPLICATION_CONFIG_NAME: OAUTH_APPLICATION_CONFIG_MAX_BYTES,
     }
     try:
         for environment_name, path in ROLE_SOURCES[role]:
@@ -2367,6 +2443,8 @@ def _normal_main(role: str) -> int:
                     custody_configuration_descriptor = descriptor
                 elif environment_name == CONTROL_PLANE_ENROLLMENT_BOOTSTRAP_NAME:
                     enrollment_bootstrap_descriptor = descriptor
+                elif environment_name == OAUTH_APPLICATION_CONFIG_NAME:
+                    oauth_application_descriptor = descriptor
             else:
                 descriptor_assignments.append(
                     (environment_name, descriptor)
@@ -2387,6 +2465,10 @@ def _normal_main(role: str) -> int:
                 )
             )
         if role == "control-plane":
+            if oauth_application_descriptor is None:
+                raise RuntimeError("OAuth cold startup configuration is unavailable")
+            descriptors.extend(_open_oauth_application_material(
+                oauth_application_descriptor, occupied_descriptors=set(descriptors)))
             if custody_configuration_descriptor is None:
                 raise RuntimeError("control-plane custody startup configuration is unavailable")
             custody_configuration, custody_directory = _open_control_plane_custody(

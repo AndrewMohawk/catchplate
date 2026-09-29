@@ -1261,6 +1261,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/control_plane_policy_file_publication.py \
 	serverware/control_plane_policy_file_authority.py \
 	serverware/authority_store/policy_file_read_sql.py \
+	serverware/oauth_application_owner.py \
 	serverware/portal_admin_token_publication.py \
 	serverware/control_plane_workload_identity_routes.py \
 	serverware/portal_workload_issuance.py \
@@ -3538,6 +3539,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/control_plane_policy_file_publication.py \
 				serverware/control_plane_policy_file_authority.py \
 				serverware/authority_store/policy_file_read_sql.py \
+				serverware/oauth_application_owner.py \
 				serverware/portal_admin_token_publication.py \
 				serverware/control_plane_workload_identity_routes.py \
 				serverware/portal_workload_issuance.py \
@@ -3856,6 +3858,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-workload-start-authorization.v1.schema.json \
 				schemas/control-plane-publication-approval.v1.schema.json \
 				schemas/control-plane-policy-file-publication.v1.schema.json \
+				schemas/oauth-application-enrollment.v1.schema.json \
 				schemas/native-ca-installation-receipt.v1.schema.json \
 				schemas/native-enrollment-authorizer.v1.schema.json \
 				schemas/workload-identity-bootstrap-request.v1.schema.json \

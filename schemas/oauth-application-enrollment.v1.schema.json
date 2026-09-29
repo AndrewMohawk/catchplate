@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.dev/schemas/oauth-application-enrollment.v1.schema.json",
+  "title": "OAuth application enrollment and cold originals",
+  "description": "Data-only closed profiles. Admission additionally verifies exact canonical ASCII originals, signature, fixed independently assigned root delivery, actual inherited sealed descriptors, current custody, source/configuration pins and original deadlines. JSON Schema does not establish permission or UTF-8 byte lengths.",
+  "oneOf": [
+    {"$ref": "#/$defs/envelope"},
+    {"$ref": "#/$defs/startup"},
+    {"$ref": "#/$defs/clientMaterial"},
+    {"$ref": "#/$defs/association"}
+  ],
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$", "not": {"const": "sha256:0000000000000000000000000000000000000000000000000000000000000000"}},
+    "identifier": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"},
+    "positiveInteger": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807},
+    "descriptor": {"type": "integer", "minimum": 32, "maximum": 1023},
+    "provider": {"enum": ["google", "x"]},
+    "clientId": {"type": "string", "minLength": 1, "maxLength": 2048, "pattern": "^[^\\u0000-\\u001f\\u007f]+$", "description": "Trim-stable and at most 2048 UTF-8 bytes, enforced by the owner."},
+    "redirect": {"type": "string", "minLength": 1, "maxLength": 4096, "pattern": "^https://[^\\u0000-\\u001f\\u007f]+$", "description": "Enrollment requires an HTTPS URL with hostname, no username/password/fragment; trim-stable and at most 4096 UTF-8 bytes. Exact original, not URL-normalized."},
+    "revision": {"type": "string", "minLength": 1, "maxLength": 128, "description": "Must equal the actual common authority SOURCE_REVISION; no checkpoint is embedded in this schema."},
+    "payload": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "sourceRevision", "configurationDigest", "deploymentId", "applicationId", "providerId", "providerFamilyNamespace", "providerFamilyGeneration", "clientId", "redirectUri", "clientMaterialSha256", "providerConfigurationSha256", "issuedAtEpochNs", "expiresAtEpochNs"],
+      "properties": {
+        "schema": {"const": "serverware.oauthApplicationEnrollment/v1"},
+        "sourceRevision": {"$ref": "#/$defs/revision"},
+        "configurationDigest": {"$ref": "#/$defs/digest"},
+        "deploymentId": {"$ref": "#/$defs/identifier"},
+        "applicationId": {"$ref": "#/$defs/identifier"},
+        "providerId": {"$ref": "#/$defs/provider"},
+        "providerFamilyNamespace": {"$ref": "#/$defs/identifier"},
+        "providerFamilyGeneration": {"$ref": "#/$defs/positiveInteger"},
+        "clientId": {"$ref": "#/$defs/clientId"},
+        "redirectUri": {"$ref": "#/$defs/redirect"},
+        "clientMaterialSha256": {"$ref": "#/$defs/digest"},
+        "providerConfigurationSha256": {"$ref": "#/$defs/digest"},
+        "issuedAtEpochNs": {"$ref": "#/$defs/positiveInteger"},
+        "expiresAtEpochNs": {"$ref": "#/$defs/positiveInteger"}
+      },
+      "description": "Issued time must precede expiry. Both bind the original interval; current custody and operation lifetime can only shorten it. Provider-family namespace/generation are assigned independently by the enrollment administrator, not inferred from a client ID."
+    },
+    "envelope": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "payload", "signatureBase64Url"],
+      "properties": {
+        "schema": {"const": "serverware.signedOAuthApplicationEnrollment/v1"},
+        "payload": {"$ref": "#/$defs/payload"},
+        "signatureBase64Url": {"type": "string", "pattern": "^[A-Za-z0-9_-]{86}$", "description": "Canonical unpadded base64url of a 64-byte Ed25519 signature over payload schema ASCII, NUL, canonical ensure_ascii payload without LF."}
+      }
+    },
+    "application": {
+      "type": "object", "additionalProperties": false,
+      "required": ["enrollment", "clientMaterialFd"],
+      "properties": {"enrollment": {"$ref": "#/$defs/envelope"}, "clientMaterialFd": {"$ref": "#/$defs/descriptor"}}
+    },
+    "startup": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "sourceRevision", "configurationDigest", "authorityRootFd", "authorityRootSha256", "applications"],
+      "properties": {
+        "schema": {"const": "serverware.oauthApplicationStartup/v1"},
+        "sourceRevision": {"$ref": "#/$defs/revision"},
+        "configurationDigest": {"$ref": "#/$defs/digest"},
+        "authorityRootFd": {"anyOf": [{"$ref": "#/$defs/descriptor"}, {"type": "null"}]},
+        "authorityRootSha256": {"anyOf": [{"$ref": "#/$defs/digest"}, {"type": "null"}]},
+        "applications": {"type": "array", "maxItems": 2, "items": {"$ref": "#/$defs/application"}}
+      },
+      "allOf": [{"if": {"properties": {"applications": {"maxItems": 0}}}, "then": {"properties": {"authorityRootFd": {"type": "null"}, "authorityRootSha256": {"type": "null"}}}, "else": {"properties": {"authorityRootFd": {"$ref": "#/$defs/descriptor"}, "authorityRootSha256": {"$ref": "#/$defs/digest"}}}}],
+      "description": "Exact canonical ASCII <=64 KiB, no LF, depth<=8 and <=32 entries per container. Providers are unique; all descriptor slots are distinct and actual admitted originals. Empty applications explicitly disable enrolled OAuth, never permit environment fallback."
+    },
+    "clientMaterial": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "providerId", "clientId", "clientSecret", "redirectUri"],
+      "properties": {
+        "schema": {"const": "serverware.oauthClientMaterial/v1"},
+        "providerId": {"$ref": "#/$defs/provider"},
+        "clientId": {"$ref": "#/$defs/clientId"},
+        "clientSecret": {"type": "string", "minLength": 1, "maxLength": 8192, "pattern": "^[^\\u0000-\\u001f\\u007f]+$", "writeOnly": true, "description": "Private, trim-stable, <=8192 UTF-8 bytes; never expose in status, logs or enrollment."},
+        "redirectUri": {"$ref": "#/$defs/redirect"}
+      },
+      "description": "Exact canonical ASCII <=32 KiB, no LF, supplied only by held root-owned mode0400 sealed original. Exact original SHA256 and provider/client/redirect must match the signed enrollment."
+    },
+    "association": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "enrollmentSha256", "deploymentId", "applicationId", "providerId", "providerFamilyNamespace", "providerFamilyGeneration", "clientId", "redirectUri", "providerConfigurationSha256"],
+      "properties": {
+        "schema": {"const": "serverware.oauthApplicationAssociation/v1"},
+        "enrollmentSha256": {"$ref": "#/$defs/digest"},
+        "deploymentId": {"$ref": "#/$defs/identifier"},
+        "applicationId": {"$ref": "#/$defs/identifier"},
+        "providerId": {"$ref": "#/$defs/provider"},
+        "providerFamilyNamespace": {"$ref": "#/$defs/identifier"},
+        "providerFamilyGeneration": {"$ref": "#/$defs/positiveInteger"},
+        "clientId": {"$ref": "#/$defs/clientId"},
+        "redirectUri": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "providerConfigurationSha256": {"$ref": "#/$defs/digest"}
+      },
+      "description": "Data only, canonical ASCII <=8192 bytes. It identifies the exact full enrollment envelope original but cannot reconstruct an owner or authorize contact, persistence or renewal."
+    }
+  }
+}

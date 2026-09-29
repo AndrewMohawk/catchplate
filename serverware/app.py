@@ -193,6 +193,7 @@ from serverware.key_release import (
     status as key_release_status,
 )
 from serverware.oauth import (
+    _require_application_lifecycle,
     OAUTH_REFRESH_SKEW_SECONDS,
     OAuthError,
     browser_cookie_name,
@@ -202,6 +203,9 @@ from serverware.oauth import (
     normalize_provider_id,
     provider_status,
     refresh_access_token,
+    require_application_metadata,
+    require_application_review,
+    require_application_consent,
     revoke_oauth_token,
     resolve_requested_scopes,
 )
@@ -14174,6 +14178,7 @@ def _oauth_activation_review(
     granted_scopes: tuple[str, ...],
     reconnect_binding: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    operation = require_application_metadata(credential_metadata, exchanged.get("_application_operation"))
     try:
         provider_id, provider_subject, provider_account = (
             db.validate_managed_oauth_account_identity(credential_metadata)
@@ -14202,6 +14207,8 @@ def _oauth_activation_review(
     if reconnect_binding is not None:
         review["reconnect_credential_id"] = reconnect_binding["credential_id"]
         review["reconnect_credential_version"] = reconnect_binding["credential_version"]
+    if operation is not None:
+        review["oauth_application_owner"] = operation.association()
     return review
 
 
@@ -14219,13 +14226,17 @@ def _oauth_reconnect_binding_from_credential(
     version = credential.get("credential_version")
     if not isinstance(version, int) or isinstance(version, bool) or version < 1:
         raise OAuthError("OAuth reconnect credential version is invalid")
-    return {
+    binding = {
         "credential_id": str(credential["id"]),
         "credential_version": version,
         "provider": provider_id,
         "provider_subject": provider_subject,
         "provider_account": provider_account,
     }
+    operation = require_application_metadata(credential["metadata"])
+    if operation is not None:
+        binding["oauth_application_owner"] = operation.association()
+    return binding
 
 
 def _validate_oauth_reconnect_callback(
@@ -14235,13 +14246,17 @@ def _validate_oauth_reconnect_callback(
     reconnect_binding = exchanged.get("reconnect")
     if reconnect_binding is None:
         return None
-    if not isinstance(reconnect_binding, dict) or set(reconnect_binding) != {
+    operation = require_application_metadata(credential_metadata, exchanged.get("_application_operation"))
+    fields = {
         "credential_id",
         "credential_version",
         "provider",
         "provider_subject",
         "provider_account",
-    }:
+    }
+    if operation is not None:
+        fields.add("oauth_application_owner")
+    if not isinstance(reconnect_binding, dict) or set(reconnect_binding) != fields:
         raise OAuthError("OAuth reconnect binding is malformed")
     credential_id = reconnect_binding.get("credential_id")
     expected_version = reconnect_binding.get("credential_version")
@@ -14270,6 +14285,9 @@ def _validate_oauth_reconnect_callback(
         "provider_subject": reconnect_binding.get("provider_subject"),
         "provider_account": reconnect_binding.get("provider_account"),
     }
+    if operation is not None:
+        operation.require_association(reconnect_binding["oauth_application_owner"])
+        expected["oauth_application_owner"] = operation.association()
     if current_binding != expected:
         raise OAuthError("OAuth reconnect credential changed during authorization")
     if (provider_id, provider_subject, provider_account) != (
@@ -14493,6 +14511,10 @@ def oauth_start(
         require_role("admin", "policy_author", "credential_owner")
     ),
 ) -> dict[str, Any]:
+    try:
+        require_application_consent(payload.provider)
+    except OAuthError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     setup_session = None
     if payload.setup_session_id is not None:
         if payload.credential_id is not None:
@@ -14908,6 +14930,7 @@ def oauth_callback(
                 payload_digest=payload_digest,
                 review=activation_review,
                 ttl_seconds=OAUTH_PENDING_CREDENTIAL_TTL_SECONDS,
+                _application_operation=exchanged.get("_application_operation"),
                 target_credential_id=(
                     reconnect_binding["credential_id"] if reconnect_binding else None
                 ),
@@ -15059,6 +15082,7 @@ def oauth_callback(
                     secret=exchanged["secret"],
                     metadata=credential_metadata,
                     revocation_work_id=revocation_work_id,
+                    _application_operation=exchanged.get("_application_operation"),
                 )
             else:
                 credential = db.create_credential(
@@ -15067,6 +15091,7 @@ def oauth_callback(
                     exchanged["secret"],
                     credential_metadata,
                     revocation_work_id=revocation_work_id,
+                    _application_operation=exchanged.get("_application_operation"),
                     setup_session_id=(
                         setup_session["id"] if setup_session is not None else None
                     ),
@@ -15286,6 +15311,11 @@ def oauth_pending_credential_activate(
             detail="pending OAuth grant is not bound to that setup session",
         )
     action = "credential.oauth.activate"
+    try:
+        operation = require_application_review(pending["review"])
+        _require_application_lifecycle(operation)
+    except OAuthError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     payload_digest = pending["payload_digest"]
     mfa = _require_control_plane_mutation_mfa(
         action=action,
@@ -15323,6 +15353,7 @@ def oauth_pending_credential_activate(
             pending_credential_id,
             approval_id=approval_id,
             actor_id=identity.user_id,
+            _application_operation=operation,
             require_webauthn=CONTROL_PLANE_MUTATION_WEBAUTHN_REQUIRED,
             required_requester_roles=_control_plane_requester_roles(action),
             required_approver_roles=_control_plane_approval_roles(action),
@@ -17075,6 +17106,7 @@ def _credential_for_lease(credential_id: str) -> dict[str, Any] | None:
             metadata = credential.get("metadata")
             if not isinstance(metadata, dict) or metadata.get("oauth") is not True:
                 return credential
+            require_application_metadata(metadata)
             expires_at_epoch_ms = metadata.get("expires_at_epoch_ms")
             if not isinstance(expires_at_epoch_ms, int) or isinstance(
                 expires_at_epoch_ms, bool
@@ -17101,6 +17133,7 @@ def _credential_for_lease(credential_id: str) -> dict[str, Any] | None:
                     or metadata.get("oauth") is not True
                 ):
                     return credential
+                require_application_metadata(metadata)
                 provider_id = metadata.get("provider_id")
                 if not isinstance(provider_id, str) or not provider_id:
                     raise OAuthError("managed OAuth credential has no provider binding")
@@ -17160,6 +17193,7 @@ def _credential_for_lease(credential_id: str) -> dict[str, Any] | None:
                     secret=refreshed["secret"],
                     metadata=refreshed_metadata,
                     revocation_work_id=str(refreshed["revocationWorkId"]),
+                    _application_operation=refreshed.get("_application_operation"),
                 )
                 if not persisted:
                     raise OAuthError("OAuth credential disappeared during refresh")

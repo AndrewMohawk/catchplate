@@ -8,6 +8,7 @@ def main() -> None:
     from serverware import control_plane_custody_startup as custody_startup
     enrollment_startup = None
     workload_identity_startup = None
+    oauth_application_startup = None
 
     try:
         custody_startup.initialize_from_environment()
@@ -17,6 +18,8 @@ def main() -> None:
         enrollment_startup.initialize_from_environment()
         from serverware import control_plane_workload_identity_startup as workload_identity_startup
         workload_identity_startup.initialize_from_environment()
+        from serverware import oauth_application_owner as oauth_application_startup
+        oauth_application_startup.initialize_from_environment()
 
         import uvicorn
         from serverware.config import WEB_HOST, WEB_PORT, WEB_TLS_CERT_FILE, WEB_TLS_KEY_FILE
@@ -39,7 +42,7 @@ def main() -> None:
         )
     except BaseException:
         # Preserve the original launch/runtime error if cleanup also fails.
-        for owner in (workload_identity_startup, enrollment_startup, custody_startup):
+        for owner in (oauth_application_startup, workload_identity_startup, enrollment_startup, custody_startup):
             try:
                 if owner is not None:
                     owner.close()
@@ -48,12 +51,15 @@ def main() -> None:
         raise
     else:
         try:
-            workload_identity_startup.close()
+            oauth_application_startup.close()
         finally:
             try:
-                enrollment_startup.close()
+                workload_identity_startup.close()
             finally:
-                custody_startup.close()
+                try:
+                    enrollment_startup.close()
+                finally:
+                    custody_startup.close()
 
 
 if __name__ == "__main__":

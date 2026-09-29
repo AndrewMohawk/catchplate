@@ -63570,6 +63570,39 @@ def _needs_envelope_migration(row: sqlite3.Row) -> bool:
     )
 
 
+def _oauth_application_operation(metadata, operation=None):
+    from serverware import oauth
+    try:
+        retained = oauth.require_application_metadata(metadata, operation)
+        oauth._require_application_lifecycle(retained)
+        return retained
+    except oauth.OAuthError as exc:
+        raise ManagedOAuthCredentialError(str(exc)) from exc
+
+
+def _check_oauth_application_operation(operation):
+    from serverware import oauth
+    try:
+        oauth._application_check(operation)
+    except oauth.OAuthError as exc:
+        raise ManagedOAuthCredentialError(str(exc)) from exc
+
+
+def _same_oauth_application(current, replacement):
+    from serverware.oauth_application_owner import ASSOCIATION_KEY
+    if current.get(ASSOCIATION_KEY) != replacement.get(ASSOCIATION_KEY):
+        raise ManagedOAuthCredentialError("OAuth application enrollment cannot change with a credential update")
+
+
+def _oauth_application_secret(secret, metadata):
+    from serverware.oauth_application_owner import ASSOCIATION_KEY
+    value = loads(secret, {})
+    if ASSOCIATION_KEY not in metadata and (not isinstance(value, dict) or ASSOCIATION_KEY not in value):
+        return
+    if not isinstance(value, dict) or value.get(ASSOCIATION_KEY) != metadata.get(ASSOCIATION_KEY):
+        raise ManagedOAuthCredentialError("OAuth token and metadata application ownership differ")
+
+
 def create_credential(
     name: str,
     kind: str,
@@ -63583,9 +63616,14 @@ def create_credential(
     setup_oauth_provider: str | None = None,
     setup_oauth_state_digest: str | None = None,
     _connection: Any | None = None,
+    _application_operation=None,
 ) -> dict[str, Any]:
     secret = validate_credential_secret(secret)
     metadata = validate_credential_metadata(metadata)
+    operation = (_oauth_application_operation(metadata, _application_operation)
+        if kind == "oauth2" and metadata.get("oauth") is True else None)
+    if kind == "oauth2" and metadata.get("oauth") is True:
+        _oauth_application_secret(secret, metadata)
     setup_binding = _prepare_setup_oauth_callback_binding(
         session_id=setup_session_id,
         expected_revision=setup_expected_revision,
@@ -63608,6 +63646,7 @@ def create_credential(
         connect() if _connection is None else contextlib.nullcontext(_connection)
     )
     with connection_scope as conn:
+        _check_oauth_application_operation(operation)
         if setup_binding is not None:
             _lock_setup_oauth_callback_binding(conn, setup_binding)
         _raise_for_google_oauth_grant_collision(conn, metadata)
@@ -63659,6 +63698,7 @@ def create_credential(
                 _connection=conn,
                 _now=now,
             )
+        _check_oauth_application_operation(operation)
     return row_to_credential(row)
 
 
@@ -63693,7 +63733,17 @@ def _validate_oauth_activation_review(
     target_credential_id: str | None,
     target_credential_version: int | None,
 ) -> None:
-    if set(review) - _OAUTH_ACTIVATION_REVIEW_FIELDS:
+    from serverware.oauth_application_owner import ASSOCIATION_KEY, validate_association
+    expected_fields = set(_OAUTH_ACTIVATION_REVIEW_FIELDS)
+    if ASSOCIATION_KEY in metadata:
+        try:
+            validate_association(metadata[ASSOCIATION_KEY])
+        except ValueError as exc:
+            raise ManagedOAuthCredentialError("pending OAuth application binding is malformed") from exc
+        expected_fields.add(ASSOCIATION_KEY)
+        if review.get(ASSOCIATION_KEY) != metadata[ASSOCIATION_KEY]:
+            raise ManagedOAuthCredentialError("pending OAuth review does not bind its application enrollment")
+    if set(review) - expected_fields:
         raise ManagedOAuthCredentialError(
             "pending OAuth credential review contains unsupported fields"
         )
@@ -63796,10 +63846,13 @@ def create_pending_oauth_credential(
     setup_actor_id: str | None = None,
     setup_oauth_provider: str | None = None,
     setup_oauth_state_digest: str | None = None,
+    _application_operation=None,
 ) -> dict[str, Any]:
     secret = validate_credential_secret(secret)
     metadata = validate_credential_metadata(metadata)
     provider_id, provider_subject = validate_managed_oauth_identity(metadata)
+    operation = _oauth_application_operation(metadata, _application_operation)
+    _oauth_application_secret(secret, metadata)
     if kind != "oauth2":
         raise ManagedOAuthCredentialError(
             "pending OAuth credential kind must be oauth2"
@@ -63923,6 +63976,7 @@ def create_pending_oauth_credential(
             target_identity = validate_managed_oauth_account_identity(
                 loads(target["metadata"], {})
             )
+            _same_oauth_application(loads(target["metadata"], {}), metadata)
             pending_identity = validate_managed_oauth_account_identity(metadata)
             if target_identity != pending_identity:
                 raise ManagedOAuthCredentialError(
@@ -63953,6 +64007,7 @@ def create_pending_oauth_credential(
             raise ManagedOAuthCredentialError(
                 "OAuth revocation backlog capacity has been reached"
             )
+        _check_oauth_application_operation(operation)
         conn.execute(
             """
             INSERT INTO pending_oauth_credentials (
@@ -64001,6 +64056,7 @@ def create_pending_oauth_credential(
                 _connection=conn,
                 _now=now,
             )
+        _check_oauth_application_operation(operation)
     return row_to_pending_oauth_credential(row)
 
 
@@ -66259,6 +66315,7 @@ def activate_pending_oauth_credential(
     require_webauthn: bool = False,
     required_requester_roles: set[str] | None = None,
     required_approver_roles: set[str] | None = None,
+    _application_operation=None,
 ) -> dict[str, Any]:
     if (setup_session_id is None) != (setup_expected_revision is None):
         raise SetupSessionValidationError(
@@ -66345,6 +66402,7 @@ def activate_pending_oauth_credential(
         ).fetchone()
         if pending is None:
             return {"ok": False, "reason": "pending_credential_not_found"}
+        operation = _oauth_application_operation(loads(pending["metadata"], {}), _application_operation)
         if pending["expires_at"] <= now_s:
             conn.execute(
                 "UPDATE pending_oauth_credentials SET status = 'expired', revocation_status = 'pending', "
@@ -66369,6 +66427,15 @@ def activate_pending_oauth_credential(
         ):
             return {"ok": False, "reason": "approval_requester_role_revoked"}
         pending_metadata = loads(pending["metadata"], {})
+        operation = _oauth_application_operation(pending_metadata, operation)
+        if operation is not None:
+            _validate_oauth_activation_review(
+                review=loads(pending["review_json"], {}), metadata=pending_metadata,
+                name=str(pending["name"]), kind=str(pending["kind"]),
+                provider_id=str(pending_metadata.get("provider_id") or ""),
+                provider_subject=str(pending_metadata.get("provider_subject") or ""),
+                target_credential_id=pending["target_credential_id"],
+                target_credential_version=pending["target_credential_version"])
         _raise_for_google_oauth_grant_collision(
             conn,
             pending_metadata,
@@ -66424,6 +66491,7 @@ def activate_pending_oauth_credential(
                 return {"ok": False, "reason": "google_reconnect_requires_disconnect"}
             if current_identity != pending_identity:
                 return {"ok": False, "reason": "reconnect_identity_mismatch"}
+            _same_oauth_application(loads(reconnect_target["metadata"], {}), pending_metadata)
             if str(reconnect_target["name"]) != str(pending["name"]):
                 return {"ok": False, "reason": "reconnect_credential_name_changed"}
 
@@ -66484,6 +66552,7 @@ def activate_pending_oauth_credential(
         ):
             return {"ok": False, "reason": "credential_already_active"}
 
+        _check_oauth_application_operation(operation)
         consumed = conn.execute(
             """
             UPDATE control_plane_approvals
@@ -66629,6 +66698,7 @@ def activate_pending_oauth_credential(
                 _connection=conn,
                 _now=now,
             )
+        _check_oauth_application_operation(operation)
     return {
         "ok": True,
         "credential": row_to_credential(credential_row),
@@ -66644,10 +66714,13 @@ def reconnect_oauth_credential(
     secret: str,
     metadata: dict[str, Any],
     revocation_work_id: str | None = None,
+    _application_operation=None,
 ) -> dict[str, Any]:
     secret = validate_credential_secret(secret)
     metadata = validate_credential_metadata(metadata)
     next_identity = validate_managed_oauth_account_identity(metadata)
+    operation = _oauth_application_operation(metadata, _application_operation)
+    _oauth_application_secret(secret, metadata)
     if (
         not isinstance(expected_version, int)
         or isinstance(expected_version, bool)
@@ -66680,6 +66753,8 @@ def reconnect_oauth_credential(
         current_identity = validate_managed_oauth_account_identity(
             loads(current["metadata"], {})
         )
+        _same_oauth_application(loads(current["metadata"], {}), metadata)
+        _check_oauth_application_operation(operation)
         if current_identity != next_identity:
             raise ManagedOAuthCredentialError(
                 "OAuth reconnect must verify the exact existing provider subject and account"
@@ -66721,6 +66796,7 @@ def reconnect_oauth_credential(
         row = conn.execute(
             "SELECT * FROM credentials WHERE id = ?", (item_id,)
         ).fetchone()
+        _check_oauth_application_operation(operation)
     return row_to_credential(row)
 
 
@@ -66931,6 +67007,7 @@ def update_credential_secret_if_version(
     secret: str,
     metadata: dict[str, Any],
     revocation_work_id: str | None = None,
+    _application_operation=None,
 ) -> tuple[dict[str, Any] | None, bool]:
     secret = validate_credential_secret(secret)
     metadata = validate_credential_metadata(metadata)
@@ -66953,6 +67030,9 @@ def update_credential_secret_if_version(
         current_metadata = loads(current["metadata"], {})
         managed_oauth_provider = None
         if current["kind"] == "oauth2" or current_metadata.get("oauth") is True:
+            operation = _oauth_application_operation(metadata, _application_operation)
+            _same_oauth_application(current_metadata, metadata)
+            _oauth_application_secret(secret, metadata)
             current_identity = validate_managed_oauth_identity(current_metadata)
             next_identity = validate_managed_oauth_identity(metadata)
             if next_identity != current_identity:
@@ -66960,7 +67040,10 @@ def update_credential_secret_if_version(
                     "OAuth refresh cannot change the verified provider account identity"
                 )
             managed_oauth_provider = current_identity[0]
+        else:
+            operation = None
         if current_secret == secret and current_metadata == metadata:
+            _check_oauth_application_operation(operation)
             if revocation_work_id is not None:
                 _consume_oauth_revocation_work(conn, revocation_work_id)
             return row_to_credential(current, include_secret=True), False
@@ -67005,6 +67088,7 @@ def update_credential_secret_if_version(
         row = conn.execute(
             "SELECT * FROM credentials WHERE id = ?", (item_id,)
         ).fetchone()
+        _check_oauth_application_operation(operation)
     return (row_to_credential(row, include_secret=True) if row else None), True
 
 

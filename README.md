@@ -26,13 +26,14 @@ Checkpoint: **2026-09-28 — pre-production, source-only.**
 
 ### Current work: native enrollment, workload trust and protected operations
 
-[`.245` source / 9900dc5](https://github.com/example/private-deployment)
-connects the [cold-selected native caller and explicit options/submission CLI](docs/native-workload-identity-submission.md)
-to [independent retained-key leaf/chain publication](docs/native-workload-identity-provisioning.md),
-with [data-only capture-to-packet extraction](docs/native-bootstrap-capture.md).
-The separate native issuance grant remains mandatory; diagnostics are never
-authority. Protected native CA installation, full runtime policy, egress/canaries,
-lifecycle/recovery and independently provisioned authorities/acceptance remain open.
+[`.246` source / 2a290ca](https://github.com/example/private-deployment)
+connects the [native host CA installer](docs/native-ca-installation.md) to an
+independent root grant, genuine same-TLS proof, observed host/network namespace
+and protected local claim/destination owners. Capture v2 preserves exact evidence
+for later submission without another bootstrap; v1 stays diagnostic-only.
+Kubernetes ownership, egress/canaries, full runtime policy, lifecycle/recovery
+and independently provisioned authorities/acceptance remain open. Diagnostics
+never replace installation permission or the separate native issuance grant.
 No build, test, runtime, NSM or AWS/spend acceptance is claimed.
 
 The four active checkpoints remain partial:
@@ -48,9 +49,10 @@ The four active checkpoints remain partial:
   and packet originals now connect to durable role-5 signing, fixed POST/full
   evidence assembly, guarded diagnostic acquisition and independently authorized
   native CA-worker issuance. Cold-selected native options/submission and retained-key
-  SDK leaf/chain publication are now source-connected. Protected native CA original
-  admission, installation reservation/token/observed host-namespace ownership,
-  full target runtime policy, scoped install/egress/canaries,
+  SDK leaf/chain publication now connect to independently authorized host CA
+  installation with actual native CA/host-namespace admission and protected local
+  reservation/token/destination ownership. Kubernetes ownership, full target
+  runtime policy, scoped proxy/egress/canaries,
   lifecycle/cross-session recovery, off-host rollback witnessing and independent
   service/exact-source verification remain open.
 - **O04 · Protected operations:** [genuine approval verification](docs/control-plane-approval-verification.md)
@@ -122,7 +124,7 @@ lists every remaining item and its evidence.
 | --- | --- | --- |
 | H05 | Historical authority across source/configuration/key changes | In progress |
 | N04 | Workload identity provisioning and authenticated channels | In progress |
-| N05 | Native enrollment, verified CA installation and proxy setup | In progress / partial; native caller/submission and retained-key leaf publication source-connected; protected CA installation open |
+| N05 | Native enrollment, verified CA installation and proxy setup | In progress / partial; native issuance and protected host CA installation source-connected; Kubernetes/egress/canaries and independent acceptance open |
 | N06 | Enclave TLS/proxy execution and credential custody | Todo |
 | O01 | OAuth ownership across deployments and applications | Todo |
 | O02 | Measured provider issuance and interrupted-exchange recovery | Todo |

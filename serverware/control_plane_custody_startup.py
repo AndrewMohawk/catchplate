@@ -32,6 +32,7 @@ _LOCK = threading.RLock()
 _state = "new"
 _namespace = None
 _owner = None
+_credential_broker_profile = None
 
 
 class CustodyStartupError(RuntimeError):
@@ -115,9 +116,11 @@ def _constant(_value):
 def _manifest(original, descriptor, *, source_revision, journal):
     try:
         value = json.loads(original.decode("ascii"), object_pairs_hook=_pairs, parse_constant=_constant)
-        if type(value) is not dict or set(value) != _FIELDS:
+        broker = type(value) is dict and value.get("schema") == "serverware.controlPlaneCustodyStartup/v2"
+        expected_fields = _FIELDS | {"credentialBrokerProfile", "signature"} if broker else _FIELDS
+        if type(value) is not dict or set(value) != expected_fields:
             raise CustodyStartupError("custody startup configuration is not closed")
-        if value["schema"] != SCHEMA or value["sourceRevision"] != source_revision:
+        if (not broker and value["schema"] != SCHEMA) or value["sourceRevision"] != source_revision:
             raise CustodyStartupError("custody startup schema or source is unsupported")
         digest = value["configurationDigest"]
         if (type(digest) is not str or len(digest) != 71 or not digest.startswith("sha256:")
@@ -138,14 +141,14 @@ def _manifest(original, descriptor, *, source_revision, journal):
         if canonical != original:
             raise CustodyStartupError("custody startup configuration bytes are not canonical")
         return (digest, value["directoryFd"], value["device"], value["inode"],
-            value["uid"], value["gid"], value["quotaBytes"], value["maximumRecords"])
+            value["uid"], value["gid"], value["quotaBytes"], value["maximumRecords"], value if broker else None)
     except (KeyError, TypeError, ValueError, UnicodeError, RecursionError) as exc:
         raise CustodyStartupError("custody startup configuration is invalid") from exc
 
 
 def initialize_from_environment():
     """Admit once before other startup opens FDs; never retry failed admission."""
-    global _state, _namespace, _owner
+    global _state, _namespace, _owner, _credential_broker_profile
     _require_pid()
     with _LOCK:
         if _state in ("started", "disabled"):
@@ -176,9 +179,22 @@ def initialize_from_environment():
             if (binding.configuration_digest != held[0] or _environment() != namespace
                     or _identity(descriptor) != identity):
                 raise CustodyStartupError("custody startup differs from its admitted runtime scope")
+            selected_profile = None
+            if held[8] is not None:
+                from serverware import control_plane_broker_startup as broker
+
+                selected_profile = broker.verify(held[8],
+                    runtime_root_public_key=binding.runtime_root_public_key,
+                    configuration_digest=binding.configuration_digest,
+                    source_revision=authority.SOURCE_REVISION)
+                client._receipt_now(binding)
+                if _identity(descriptor) != identity or _environment() != namespace:
+                    raise CustodyStartupError("broker custody original changed during admission")
+            _credential_broker_profile = selected_profile
             _owner, _state = candidate, "started"
             return candidate
         except BaseException:
+            _credential_broker_profile = None
             _owner, _state = None, "failed"
             if candidate is not None:
                 try:
@@ -213,9 +229,23 @@ def require_started():
         return owner
 
 
+def credential_broker_selected():
+    """Read only the actual cold owner; an incoming API version cannot opt in."""
+    _require_pid()
+    with _LOCK:
+        owner = require_started()
+        if owner is None:
+            if _credential_broker_profile is not None:
+                raise CustodyStartupError("disabled custody has a broker profile")
+            return False
+        if _credential_broker_profile not in (None, "enclave-ciphertext-rows-v1"):
+            raise CustodyStartupError("custody broker profile is unavailable")
+        return _credential_broker_profile == "enclave-ciphertext-rows-v1"
+
+
 def close():
     """Close only this PID's owner; shutdown never permits reinitialization."""
-    global _state, _owner
+    global _state, _owner, _credential_broker_profile
     _require_pid()
     with _LOCK:
         if _state == "closed":
@@ -223,6 +253,7 @@ def close():
         if _state == "initializing":
             raise CustodyStartupError("custody startup cannot close during admission")
         owner = _owner
+        _credential_broker_profile = None
         _owner, _state = None, "closed"
         if owner is not None:
             from serverware import control_plane_custody_client as client

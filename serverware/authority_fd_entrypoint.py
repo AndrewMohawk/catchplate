@@ -1898,10 +1898,20 @@ def _control_plane_custody_configuration(descriptor: int) -> dict:
         value = json.loads(original)
         fields = {"schema", "sourceRevision", "configurationDigest", "directoryFd",
             "device", "inode", "uid", "gid", "quotaBytes", "maximumRecords"}
+        broker = type(value) is dict and value.get("schema") == "serverware.controlPlaneCustodyStartup/v2"
+        if broker:
+            fields |= {"credentialBrokerProfile", "signature"}
         if type(value) is not dict or set(value) != fields:
             raise RuntimeError("control-plane custody startup configuration is not closed")
-        if value["schema"] != CONTROL_PLANE_CUSTODY_CONFIG_SCHEMA:
+        if not broker and value["schema"] != CONTROL_PLANE_CUSTODY_CONFIG_SCHEMA:
             raise RuntimeError("control-plane custody startup schema is not supported")
+        if broker and (value["credentialBrokerProfile"] != "enclave-ciphertext-rows-v1"
+                or type(value["signature"]) is not str or len(value["signature"]) != 94
+                or not value["signature"].startswith("ed25519:")
+                or any(char not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_" for char in value["signature"][8:])):
+            raise RuntimeError("control-plane broker startup authorization is not exact")
+        # The genuine cold runtime owner verifies this purpose-specific signature
+        # against its actually admitted root after permanent privilege drop.
         revision = value["sourceRevision"]
         allowed = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._/-"
         if (type(revision) is not str or not 1 <= len(revision) <= 256

@@ -67126,6 +67126,29 @@ def credential_lease_snapshot(item_id: str):
 
 
 @contextlib.contextmanager
+def credential_ciphertext_snapshot(item_id: str):
+    """Hold the real mutation lock; never load a KEK or open credential material."""
+    from serverware import credential_ciphertext
+
+    with connect() as conn:
+        _lock_credential_mutation(conn, item_id)
+        row = conn.execute(
+            "SELECT * FROM credentials WHERE id = ?", (item_id,),
+        ).fetchone()
+        if row is None or row["lifecycle_status"] != "active":
+            yield None
+            return
+        projection = credential_ciphertext.row_projection(row)
+        # Metadata and ciphertext come from the same locked original, not two
+        # separately cached reads. Keep all ciphertext out of ordinary models.
+        public = row_to_credential(row, include_secret=False)
+        public["metadata"] = credential_ciphertext.metadata(row["metadata"])
+        public["encryptedCredential"] = projection
+        public["storageMetadata"] = row["metadata"]
+        yield public
+
+
+@contextlib.contextmanager
 def credential_generation_snapshot(item_id: str):
     """Hold the mutation lock while reading only non-secret generation metadata."""
     with connect() as conn:

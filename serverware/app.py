@@ -2450,6 +2450,8 @@ class CredentialLeaseRequest(BaseModel):
         "serverware.credentialLeaseRequest/v4",
         "serverware.nativeCredentialLeaseRequest/v1",
         "serverware.nativeCredentialLeaseRequest/v2",
+        "serverware.nativeBrokerCredentialLeaseRequest/v1",
+        "serverware.nativeBrokerCredentialLeaseRequest/v2",
         "serverware.policyAwareCredentialLeaseRequest/v1",
         "serverware.policyAwareCredentialLeaseRequest/v2",
     ] = Field(alias="apiVersion")
@@ -2498,7 +2500,7 @@ class CredentialLeaseRequest(BaseModel):
     @model_validator(mode="after")
     def validate_recipient_attestation_size(self) -> CredentialLeaseRequest:
         profile, bound = lease_profiles.request_representation(self.api_version)
-        native, policy_aware = profile == "native", profile == "policy-aware"
+        native, policy_aware = profile in {"native", "native-broker"}, profile == "policy-aware"
         if native or policy_aware:
             if native:
                 lease_profiles.native_identity(self.principal_id, principal=True)
@@ -2592,16 +2594,22 @@ class CredentialCurrentnessDispatchPin(BaseModel):
 class NativeCurrentCredentialLeaseRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", validate_by_alias=True, validate_by_name=False)
 
-    api_version: Literal["serverware.nativeCurrentCredentialLeaseRequest/v1"] = Field(alias="apiVersion")
+    api_version: Literal[
+        "serverware.nativeCurrentCredentialLeaseRequest/v1",
+        "serverware.nativeCurrentCredentialLeaseRequest/v2",
+    ] = Field(alias="apiVersion")
     currentness: CredentialCurrentnessDispatchPin | None
     lease_request: CredentialLeaseRequest = Field(alias="leaseRequest")
 
     @model_validator(mode="after")
     def validate_native_currentness(self) -> NativeCurrentCredentialLeaseRequest:
         inner = self.lease_request
-        if inner.api_version not in {
-            "serverware.nativeCredentialLeaseRequest/v1", "serverware.nativeCredentialLeaseRequest/v2"
-        }:
+        versions = (
+            {lease_profiles.BROKER_REQUEST_V1, lease_profiles.BROKER_REQUEST_V2}
+            if self.api_version == "serverware.nativeCurrentCredentialLeaseRequest/v2"
+            else {lease_profiles.NATIVE_REQUEST_V1, lease_profiles.NATIVE_REQUEST_V2}
+        )
+        if inner.api_version not in versions:
             raise ValueError("currentness requires the explicit native lease profile")
         if inner.purpose == "generationMetadata":
             if self.currentness is not None:
@@ -4700,7 +4708,7 @@ def _verify_credential_lease_recipient_attestation(
     explicit_profile = lease_request_api_version is not None
     if explicit_profile:
         profile, bound = lease_profiles.request_representation(lease_request_api_version)
-        native, policy_aware = profile == "native", profile == "policy-aware"
+        native, policy_aware = profile in {"native", "native-broker"}, profile == "policy-aware"
         if profile == "legacy" or bound != (request_authority_sha256 is not None):
             raise HTTPException(status_code=403, detail="recipient request profile mismatch")
         if bound and purpose != "dispatchSecret":
@@ -17331,6 +17339,15 @@ def _should_record_credential_lease_issuance(
     return key
 
 
+def _broker_credential_for_lease(credential_id: str) -> dict[str, Any] | None:
+    # This preliminary read contains no secret and cannot trigger legacy
+    # refresh. The actual ciphertext is read later under the mutation lock.
+    credential = db.get_credential(credential_id, include_secret=False)
+    if credential is not None and credential.get("kind") == "oauth2":
+        raise HTTPException(status_code=503, detail="broker OAuth requires its enrolled current opening")
+    return credential
+
+
 def _credential_for_lease(
     credential_id: str, *, allow_legacy_oauth: bool = True
 ) -> dict[str, Any] | None:
@@ -17935,7 +17952,7 @@ def _assert_credential_lease_route_binding(
         )
     profile, _ = lease_profiles.request_representation(payload.api_version)
     if route.credential_ref is None or not lease_profiles.text_matches(
-        route.credential_ref, payload.credential_id, native=profile == "native", policy_aware=profile == "policy-aware"
+        route.credential_ref, payload.credential_id, native=profile in {"native", "native-broker"}, policy_aware=profile == "policy-aware"
     ):
         raise HTTPException(
             status_code=409,
@@ -18155,7 +18172,7 @@ def _assert_credential_lease_release_authorization(
     route: Any,
 ) -> dict[str, Any]:
     profile, bound = lease_profiles.request_representation(payload.api_version)
-    native, policy_aware = profile == "native", profile == "policy-aware"
+    native, policy_aware = profile in {"native", "native-broker"}, profile == "policy-aware"
     release = payload.release_authorization
     jit = route.jit if isinstance(route.jit, dict) else {}
     jit_required = jit.get("required") is True
@@ -18485,7 +18502,7 @@ def _claim_credential_lease_release_authorization(
     profile, _ = lease_profiles.request_representation(payload.api_version)
     try:
         return db.claim_release_credential_issuance(
-            native_profile=profile == "native",
+            native_profile=profile in {"native", "native-broker"},
             policy_aware_profile=profile == "policy-aware",
             release_kind=str(dispatch_authority["issuanceKind"]),
             attempt_id=request_authority.attempt_id,
@@ -18586,10 +18603,18 @@ def data_plane_credential_leases(
         payload = payload.lease_request
     try:
         from serverware import control_plane_credential_currentness as currentness
+        from serverware import control_plane_custody_startup as custody_startup
         strict_currentness = currentness.selected()
+        broker = custody_startup.credential_broker_selected()
+        profile, bound_dispatch = lease_profiles.request_representation(payload.api_version)
+        if (profile == "native-broker") != broker:
+            raise HTTPException(status_code=503, detail="credential lease differs from the independently selected broker profile")
         if strict_currentness or wrapped:
             if not strict_currentness or not wrapped:
                 raise HTTPException(status_code=503, detail="credential lease requires the configured currentness profile")
+            expected_outer = "serverware.nativeCurrentCredentialLeaseRequest/v2" if broker else "serverware.nativeCurrentCredentialLeaseRequest/v1"
+            if wire_payload.api_version != expected_outer:
+                raise HTTPException(status_code=503, detail="credential lease wrapper differs from the cold custody profile")
             _require_currentness_response_context(request, "/api/data-plane/credential-leases")
             original = _original_data_plane_request(request, _CREDENTIAL_LEASE_ORIGINAL_SCOPE_KEY, wire_payload)
             currentness_opening = currentness.LeaseOpening(request, original["leaseRequest"], original["currentness"])
@@ -18597,8 +18622,7 @@ def data_plane_credential_leases(
         if oauth_application_owner.require_started() is not None:
             from serverware.control_plane_oauth_refresh import LeaseOpening
             refresh_opening = LeaseOpening(request, payload)
-        profile, bound_dispatch = lease_profiles.request_representation(payload.api_version)
-        native, policy_aware = profile == "native", profile == "policy-aware"
+        native, policy_aware = profile in {"native", "native-broker"}, profile == "policy-aware"
         snapshot = get_policy_snapshot()
         if not snapshot:
             raise HTTPException(
@@ -18706,13 +18730,15 @@ def data_plane_credential_leases(
         if payload.purpose == "generationMetadata" and refresh_opening is not None:
             # Refresh is a separate, definite controlled transition BEFORE
             # this response pins the version. It cannot renew a dispatch pin.
-            refresh_opening.generation_metadata()
+            refresh_opening.generation_metadata(ciphertext_only=broker)
         if payload.purpose == "dispatchSecret":
             if currentness_opening is not None:
                 currentness_opening.check()
             prepared_credential = (
-                refresh_opening.dispatch_credential()
+                refresh_opening.dispatch_credential(ciphertext_only=broker)
                 if refresh_opening is not None
+                else _broker_credential_for_lease(payload.credential_id)
+                if broker
                 else _credential_for_lease(payload.credential_id, allow_legacy_oauth=currentness_opening is None)
             )
             if not prepared_credential:
@@ -18820,6 +18846,8 @@ def data_plane_credential_leases(
         credential_snapshot = (
             db.credential_generation_snapshot
             if payload.purpose == "generationMetadata"
+            else db.credential_ciphertext_snapshot
+            if broker
             else db.credential_lease_snapshot
         )
         with credential_snapshot(payload.credential_id) as current_credential:
@@ -18829,6 +18857,8 @@ def data_plane_credential_leases(
                 )
             if refresh_opening is not None:
                 refresh_opening.require_current(current_credential)
+            elif broker and current_credential.get("kind") == "oauth2":
+                raise HTTPException(status_code=503, detail="broker OAuth requires its enrolled current opening")
             if prepared_credential is not None and int(
                 current_credential.get("credential_version") or 0
             ) != int(prepared_credential.get("credential_version") or 0):
@@ -18872,13 +18902,17 @@ def data_plane_credential_leases(
                 "metadata": metadata,
             }
             if payload.purpose == "dispatchSecret":
-                credential_entry["secret"] = _credential_secret_for_lease(
-                    current_credential, current_credential_policy
-                )
+                if broker:
+                    credential_entry["encryptedCredential"] = current_credential["encryptedCredential"]
+                    credential_entry["storageMetadata"] = current_credential["storageMetadata"]
+                else:
+                    credential_entry["secret"] = _credential_secret_for_lease(
+                        current_credential, current_credential_policy
+                    )
             credentials = [credential_entry]
 
             aad = {
-                "apiVersion": lease_profiles.envelope_version(native=native, bound=bound_dispatch, policy_aware=policy_aware),
+                "apiVersion": lease_profiles.envelope_version(native=native, bound=bound_dispatch, policy_aware=policy_aware, broker=broker),
                 "algorithm": "X25519-HKDF-SHA256-AES-256-GCM",
                 "recipientKeyId": payload.recipient_key_id,
                 "recipientNonce": payload.recipient_nonce,
@@ -18899,7 +18933,7 @@ def data_plane_credential_leases(
                     }
                 )
             plaintext = {
-                "apiVersion": lease_profiles.set_version(native=native, bound=bound_dispatch, policy_aware=policy_aware),
+                "apiVersion": lease_profiles.set_version(native=native, bound=bound_dispatch, policy_aware=policy_aware, broker=broker),
                 "purpose": payload.purpose,
                 "requestBindingSha256": request_binding_sha256,
                 "releaseAuthorization": release_authorization,
@@ -18949,7 +18983,7 @@ def data_plane_credential_leases(
             if currentness_opening is not None:
                 currentness_opening.check()
                 envelope = {
-                    "apiVersion": "serverware.nativeCurrentCredentialLeaseEnvelope/v1",
+                    "apiVersion": "serverware.nativeCurrentCredentialLeaseEnvelope/v2" if broker else "serverware.nativeCurrentCredentialLeaseEnvelope/v1",
                     "currentness": currentness_context,
                     "envelope": envelope,
                 }

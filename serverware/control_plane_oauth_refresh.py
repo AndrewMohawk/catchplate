@@ -134,8 +134,9 @@ class LeaseOpening:
             self.authority, self.authority_original = authority, profile.canonical(authority)
         self.check()
 
-    def _read(self):
+    def _read(self, *, ciphertext_only=False):
         self.check()
+        profile.require(type(ciphertext_only) is bool)
         row, head = _credential_rows(self.payload.credential_id)
         profile.require(row is not None and row["lifecycle_status"] == "active")
         if row["kind"] != "oauth2":
@@ -154,28 +155,43 @@ class LeaseOpening:
         else:
             profile.require(oauth.require_application_metadata(metadata, self.operation) is self.operation)
         self.check()
-        token, admitted_metadata = material.current(row)
-        profile.require(admitted_metadata == metadata)
+        if ciphertext_only:
+            # Do not materialize refresh/access tokens in this HTTP process.
+            # Token-to-metadata checks must run inside the measured recipient;
+            # here retain only genuine enrolled identity and ciphertext scope.
+            from serverware import credential_ciphertext
+            credential_ciphertext.row_projection(row)
+            db.validate_managed_oauth_account_identity(metadata)
+            profile.require(metadata.get("oauth") is True and metadata.get("refreshable") is True)
+            material._epoch(metadata.get("expires_at_epoch_ms"))
+            token = None
+        else:
+            token, admitted_metadata = material.current(row)
+            profile.require(admitted_metadata == metadata)
         self.check()
         return row, head, token, metadata
 
-    def generation_metadata(self):
+    def generation_metadata(self, *, ciphertext_only=False):
         profile.require(self.payload.purpose == "generationMetadata")
-        row, head, token, metadata = self._read()
+        row, head, token, metadata = self._read(ciphertext_only=ciphertext_only)
         if metadata is not None and metadata["expires_at_epoch_ms"] <= time.time_ns() // 1_000_000 + _limits()["dueWithinSeconds"] * 1000:
+            if ciphertext_only:
+                # The measured refresh producer is a separate required join.
+                # Never silently downgrade to the parent-held KEK path.
+                raise ValueError("broker OAuth refresh requires measured provider custody")
             row, head = _Refresh(self, row, head, token, metadata).execute()
         self.observed, self.head = row, head
         self.require_current()
 
-    def dispatch_credential(self):
+    def dispatch_credential(self, *, ciphertext_only=False):
         profile.require(self.payload.purpose == "dispatchSecret")
-        row, head, _, metadata = self._read()
+        row, head, _, metadata = self._read(ciphertext_only=ciphertext_only)
         if metadata is not None:
             profile.require(row["credential_version"] == self.payload.expected_credential_version
                 and metadata["expires_at_epoch_ms"] > time.time_ns() // 1_000_000 + _limits()["dueWithinSeconds"] * 1000)
         self.observed, self.head = row, head
         self.require_current()
-        return db.row_to_credential(row, include_secret=True)
+        return db.row_to_credential(row, include_secret=not ciphertext_only)
 
     def require_current(self, credential=None):
         self.check()

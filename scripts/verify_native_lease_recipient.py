@@ -27,6 +27,10 @@ Independently pinned policyAwareCredentialRecipientExpectations/v1 selects a
 third ordinary policy-aware lease family. All its identities retain 256-byte
 bounds. It uses the same genuine role-2 original verifier, not native transport
 ownership, and accepts neither legacy nor native request labels as substitutes.
+
+The separate nativeBrokerCredentialRecipientExpectations/v1 admits only broker
+request v1/v2. It retains native identity bounds and genuine role-2 verification;
+old native/policy-aware expectations cannot accept broker labels or vice versa.
 """
 from __future__ import annotations
 
@@ -70,6 +74,10 @@ NATIVE_EXPECTATIONS_VERSION = "serverware.nativeCredentialRecipientExpectations/
 NATIVE_REQUEST_PROFILE = "serverware.nativeCredentialLeaseRequest"
 NATIVE_REQUEST_V1 = NATIVE_REQUEST_PROFILE + "/v1"
 NATIVE_REQUEST_V2 = NATIVE_REQUEST_PROFILE + "/v2"
+BROKER_EXPECTATIONS_VERSION = "serverware.nativeBrokerCredentialRecipientExpectations/v1"
+BROKER_REQUEST_PROFILE = "serverware.nativeBrokerCredentialLeaseRequest"
+BROKER_REQUEST_V1 = BROKER_REQUEST_PROFILE + "/v1"
+BROKER_REQUEST_V2 = BROKER_REQUEST_PROFILE + "/v2"
 POLICY_AWARE_EXPECTATIONS_VERSION = "serverware.policyAwareCredentialRecipientExpectations/v1"
 POLICY_AWARE_REQUEST_PROFILE = "serverware.policyAwareCredentialLeaseRequest"
 POLICY_AWARE_REQUEST_V1 = POLICY_AWARE_REQUEST_PROFILE + "/v1"
@@ -154,6 +162,7 @@ def _recipient_expectations(document: Any) -> dict[str, Any]:
     # choose the profile from stdin, evidence or a copied verification result.
     profiles = {
         NATIVE_EXPECTATIONS_VERSION: NATIVE_REQUEST_PROFILE,
+        BROKER_EXPECTATIONS_VERSION: BROKER_REQUEST_PROFILE,
         POLICY_AWARE_EXPECTATIONS_VERSION: POLICY_AWARE_REQUEST_PROFILE,
     }
     version = document.get("apiVersion") if isinstance(document, dict) else None
@@ -219,7 +228,8 @@ def _verify_request(raw: bytes, expected: dict[str, Any],
     require(1 <= len(raw) <= MAX_INPUT_BYTES, "native recipient verifier input exceeds its bound")
     request = parse_json(raw, "native recipient verifier input")
     require(isinstance(request, dict), "native recipient verifier input must be an object")
-    native = expected["apiVersion"] == NATIVE_EXPECTATIONS_VERSION
+    broker = expected["apiVersion"] == BROKER_EXPECTATIONS_VERSION
+    native = expected["apiVersion"] == NATIVE_EXPECTATIONS_VERSION or broker
     policy_aware = expected["apiVersion"] == POLICY_AWARE_EXPECTATIONS_VERSION
     explicit_profile = native or policy_aware
     fields = set(SCOPE_FIELDS) | {"recipientAttestation"}
@@ -232,7 +242,8 @@ def _verify_request(raw: bytes, expected: dict[str, Any],
     require(request["purpose"] in ("generationMetadata", "dispatchSecret"), "unknown credential purpose")
     if explicit_profile:
         version = request["leaseRequestApiVersion"]
-        unbound, bound = ((NATIVE_REQUEST_V1, NATIVE_REQUEST_V2) if native else
+        unbound, bound = ((BROKER_REQUEST_V1, BROKER_REQUEST_V2) if broker else
+                          (NATIVE_REQUEST_V1, NATIVE_REQUEST_V2) if native else
                           (POLICY_AWARE_REQUEST_V1, POLICY_AWARE_REQUEST_V2))
         require(version in (unbound, bound), "lease request version mismatch")
         require((version == unbound and not has_authority)

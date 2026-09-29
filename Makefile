@@ -1281,6 +1281,9 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_credential_currentness_policy.py \
 	serverware/authority_transition_credential_currentness.py \
 	serverware/control_plane_credential_currentness.py \
+	serverware/credential_ciphertext.py \
+	serverware/control_plane_broker_startup.py \
+	scripts/authority/sign_control_plane_broker_startup.py \
 	serverware/authority_oauth_family_retirement.py \
 	serverware/authority_oauth_refresh_cleanup.py \
 	serverware/authority_oauth_refresh_cleanup_policy.py \
@@ -3592,6 +3595,9 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_credential_currentness_policy.py \
 				serverware/authority_transition_credential_currentness.py \
 				serverware/control_plane_credential_currentness.py \
+				serverware/credential_ciphertext.py \
+				serverware/control_plane_broker_startup.py \
+				scripts/authority/sign_control_plane_broker_startup.py \
 				serverware/authority_oauth_family_retirement.py \
 				serverware/authority_oauth_refresh_cleanup.py \
 				serverware/authority_oauth_refresh_cleanup_policy.py \
@@ -3960,6 +3966,17 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/credential-currentness-request.v1.schema.json \
 				schemas/native-current-credential-lease-request.v1.schema.json \
 				schemas/native-current-credential-lease-envelope.v1.schema.json \
+				schemas/control-plane-custody-startup.v2.schema.json \
+				schemas/native-broker-credential-lease.common.schema.json \
+				schemas/native-broker-credential-lease-request.v1.schema.json \
+				schemas/native-broker-credential-lease-request.v2.schema.json \
+				schemas/native-broker-credential-lease-envelope.v1.schema.json \
+				schemas/native-broker-credential-lease-envelope.v2.schema.json \
+				schemas/native-broker-credential-lease-set.v1.schema.json \
+				schemas/native-broker-credential-lease-set.v2.schema.json \
+				schemas/native-broker-credential-recipient-expectations.v1.schema.json \
+				schemas/native-current-credential-lease-request.v2.schema.json \
+				schemas/native-current-credential-lease-envelope.v2.schema.json \
 				schemas/native-startup-configuration.v4.schema.json \
 				schemas/oauth-refresh-cleanup-authority.v1.schema.json \
 				schemas/native-ca-installation-receipt.v1.schema.json \

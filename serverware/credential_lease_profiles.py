@@ -10,12 +10,18 @@ from serverware import release_authorization_profiles as release_profiles
 NATIVE_REQUEST_V1 = "serverware.nativeCredentialLeaseRequest/v1"
 NATIVE_REQUEST_V2 = "serverware.nativeCredentialLeaseRequest/v2"
 NATIVE_AUTHORITY_V1 = "serverware.nativeCredentialLeaseRequestAuthority/v1"
+BROKER_REQUEST_V1 = "serverware.nativeBrokerCredentialLeaseRequest/v1"
+BROKER_REQUEST_V2 = "serverware.nativeBrokerCredentialLeaseRequest/v2"
 POLICY_AWARE_REQUEST_V1 = "serverware.policyAwareCredentialLeaseRequest/v1"
 POLICY_AWARE_REQUEST_V2 = "serverware.policyAwareCredentialLeaseRequest/v2"
 POLICY_AWARE_AUTHORITY_V1 = "serverware.policyAwareCredentialLeaseRequestAuthority/v1"
 
 
 def request_representation(api_version: str) -> tuple[str, bool]:
+    if api_version == BROKER_REQUEST_V1:
+        return "native-broker", False
+    if api_version == BROKER_REQUEST_V2:
+        return "native-broker", True
     if api_version == POLICY_AWARE_REQUEST_V1:
         return "policy-aware", False
     if api_version == POLICY_AWARE_REQUEST_V2:
@@ -57,16 +63,26 @@ def release_version(*, native: bool, durable: bool, policy_aware: bool = False) 
                     version=2 if durable else 1)
 
 
-def envelope_version(*, native: bool, bound: bool, policy_aware: bool = False) -> str:
+def envelope_version(*, native: bool, bound: bool, policy_aware: bool = False,
+                     broker: bool = False) -> str:
     if type(bound) is not bool:
         raise ValueError("credential request binding must be explicit")
+    if type(broker) is not bool or (broker and (native is not True or policy_aware is not False)):
+        raise ValueError("ciphertext delivery requires the explicit native broker profile")
+    if broker:
+        return "serverware.nativeBrokerCredentialLeaseEnvelope/v" + str(1 + int(bound))
     return _version("Envelope", native=native, policy_aware=policy_aware,
                     version=(1 if native or policy_aware else 2) + int(bound))
 
 
-def set_version(*, native: bool, bound: bool, policy_aware: bool = False) -> str:
+def set_version(*, native: bool, bound: bool, policy_aware: bool = False,
+                broker: bool = False) -> str:
     if type(bound) is not bool:
         raise ValueError("credential request binding must be explicit")
+    if type(broker) is not bool or (broker and (native is not True or policy_aware is not False)):
+        raise ValueError("ciphertext delivery requires the explicit native broker profile")
+    if broker:
+        return "serverware.nativeBrokerCredentialLeaseSet/v" + str(1 + int(bound))
     return _version("Set", native=native, policy_aware=policy_aware,
                     version=(1 if native or policy_aware else 3) + int(bound))
 

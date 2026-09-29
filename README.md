@@ -26,14 +26,14 @@ Checkpoint: **2026-09-28 — pre-production, source-only.**
 
 ### Current work: native enrollment, workload trust and protected operations
 
-[`.248` source / 2dd433b](https://github.com/example/private-deployment)
-adds client/server mode-specific response-principal refusal before provider
-effects, without widening old profiles. [Quote-bound principal preflight](docs/native-principal-preflight-verification.md)
-and protected host CA installation remain source-connected; wide native response
-statement/receipt/binding support remains open. The [native egress design](docs/native-egress-installation-design.md)
-is architecture only, not an installer. Actual CONNECT/provider authorization,
-egress/canaries, Kubernetes, lifecycle/recovery and independent acceptance remain
-separate; native v3's 1024-byte expectation does not widen legacy 256-byte principal limits.
+[`.249` source / b04ebda](https://github.com/example/private-deployment)
+connects [explicit native 1024-byte response/authorization profiles](docs/native-response-principal-profiles.md)
+and pinned Rust verifier v2. Signed policy preparation binds its hash before
+reservation; old profiles stay strict, with no downgrade or widening. Native
+credential leases remain open; incompatible credentialed principals refuse before
+effects. Prior preflight and protected CA installation remain source-connected.
+The [egress design](docs/native-egress-installation-design.md) is architecture only;
+provider/egress/canaries, Kubernetes, lifecycle and independent acceptance stay open.
 No build, test, runtime, NSM or AWS/spend acceptance is claimed.
 
 The four active checkpoints remain partial:
@@ -53,8 +53,9 @@ The four active checkpoints remain partial:
   installation with actual native CA/host-namespace admission and protected local
   reservation/token/destination ownership. Quote-bound target-principal preflight
   now retains actual source/header/token/mTLS admission on the CONNECT transport;
-  wide native response statement/receipt/binding support, actual CONNECT/provider
-  policy, Kubernetes ownership, scoped proxy/egress/canaries,
+  explicit native response/receipt/binding/lifecycle and signed preparation are
+  source-connected. Native credential leases, actual CONNECT/provider policy,
+  Kubernetes ownership, scoped proxy/egress/canaries,
   lifecycle/cross-session recovery, off-host rollback witnessing and independent
   service/exact-source verification remain open.
 - **O04 · Protected operations:** [genuine approval verification](docs/control-plane-approval-verification.md)
@@ -127,7 +128,7 @@ lists every remaining item and its evidence.
 | --- | --- | --- |
 | H05 | Historical authority across source/configuration/key changes | In progress |
 | N04 | Workload identity provisioning and authenticated channels | In progress |
-| N05 | Native enrollment, verified CA installation and proxy setup | In progress / partial; native issuance, protected host CA installation and quote-bound principal preflight source-connected; provider/egress/canaries and independent acceptance open |
+| N05 | Native enrollment, verified CA installation and proxy setup | In progress / partial; native issuance, host CA installation, principal preflight and native response/authorization source-connected; native leases, provider/egress/canaries and independent acceptance open |
 | N06 | Enclave TLS/proxy execution and credential custody | Todo |
 | O01 | OAuth ownership across deployments and applications | Todo |
 | O02 | Measured provider issuance and interrupted-exchange recovery | Todo |

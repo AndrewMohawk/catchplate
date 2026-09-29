@@ -136,6 +136,24 @@ pub(crate) fn verify_native_bootstrap_enrollment_on_stream(raw: &[u8],
         expected_target_request_sha256, endpoint, original_deadline)
 }
 
+pub(crate) use enrollment_bootstrap::Processing as BootstrapProcessing;
+
+/// Private fixed-client continuation over original inputs. The owning transport
+/// establishes reviewed ClientConfig and selected-certificate provenance; these
+/// scalar/connection parameters alone are not a configuration-admission API.
+pub(crate) fn verify_native_bootstrap_enrollment_originals(raw: &[u8],
+    delegation_pem: &[u8], delegation_pem_sha: &str, setup_pem: &[u8], setup_pem_sha: &str,
+    scope_raw: &[u8], roots_raw: &[u8], challenge: [u8; 32], client: &rustls::ClientConnection,
+    caller_issuer_der: &[u8], caller_client_pem: &[u8], expected_caller: &str,
+    expected_target: &str, expected_nonce: &str, expected_request_sha: &str,
+    endpoint: std::net::SocketAddr, sent_delegation: &[u8], sent_setup: &[u8], sent_request: &[u8],
+    processing: &mut BootstrapProcessing) -> Result<Vec<u8>, String> {
+    enrollment_bootstrap::verify_on_processing(raw, delegation_pem, delegation_pem_sha,
+        setup_pem, setup_pem_sha, scope_raw, roots_raw, challenge, client,
+        caller_issuer_der, caller_client_pem, expected_caller, expected_target, expected_nonce,
+        expected_request_sha, endpoint, Some((sent_delegation, sent_setup, sent_request)), processing)
+}
+
 pub(super) fn verify_ingress(raw: &[u8], expectations_raw: &[u8], trust_roots_raw: &[u8])
     -> Result<Vec<u8>, String> {
     let result = ingress::verify(raw, expectations_raw, trust_roots_raw)?;

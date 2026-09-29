@@ -6,7 +6,8 @@
 //! Packet preparation additionally requires a separate cold setup signature and
 //! actual Snapshot-derived requirements. Private signing retains actual policy
 //! and runtime owners through a distinct durable claim and completion path.
-//! No HTTP route, CA issuance or installation is enabled by these owners.
+//! The fixed native HTTP route consumes this owner for public evidence only;
+//! no CA issuance or installation is enabled by these owners.
 
 use super::*;
 use super::native_enrollment_admission::{self as peer, AdmissionClock,
@@ -23,6 +24,7 @@ const MAX_REQUEST_BYTES: usize = 64 * 1024;
 const MAX_SETUP_BYTES: usize = 32 * 1024;
 const MAX_ISSUER_BYTES: usize = 64 * 1024;
 const MAX_PACKET_BYTES: usize = 512 * 1024;
+const MAX_EVIDENCE_BYTES: usize = 1024 * 1024;
 
 fn require(condition: bool, message: &'static str) -> Result<(), String> {
     if condition { Ok(()) } else { Err(message.to_owned()) }
@@ -93,7 +95,7 @@ fn target_scope(snapshot: &Snapshot, delegation: &VerifiedNativeEnrollmentBootst
 pub(super) struct NativeBootstrapAdmission<'a> {
     state: &'a GateState,
     head: &'a RequestHead,
-    stream: &'a DirectProxyStream,
+    stream: &'a mut DirectProxyStream,
     trusted_mtls: &'a TrustedMtlsEvidence,
     configuration: &'a Arc<ProxyIngressTlsConfig>,
     lifetime: &'a Arc<NativeRuntimeLifetimeV1>,
@@ -187,7 +189,8 @@ impl<'a> NativeBootstrapAdmission<'a> {
         self.check()?;
         let mut prepared = PreparedNativeBootstrapPacket { admission: self, setup,
             setup_original, policy_requirements: policy_requirements.into_boxed_slice(),
-            original: original.into_boxed_slice(), original_sha256, stopped: false };
+            original: original.into_boxed_slice(), original_sha256, stopped: false,
+            signing_started: false };
         prepared.check()?;
         Ok(prepared)
     }
@@ -225,7 +228,7 @@ fn packet_original(delegation: &[u8], setup: &[u8], target_request: &[u8],
 /// No Clone, deserializer or successful-carrier constructor. This owner retains
 /// the real admission and original setup signature. Its signing path consumes
 /// this owner and calls only the claimed native bootstrap operation; no general
-/// signer, installation handle or public HTTP route is exposed.
+/// signer or installation handle is exposed.
 pub(super) struct PreparedNativeBootstrapPacket<'a> {
     admission: NativeBootstrapAdmission<'a>,
     setup: VerifiedNativeEnrollmentBootstrapSetupV1,
@@ -234,6 +237,7 @@ pub(super) struct PreparedNativeBootstrapPacket<'a> {
     original: Box<[u8]>,
     original_sha256: [u8; 32],
     stopped: bool,
+    signing_started: bool,
 }
 
 impl PreparedNativeBootstrapPacket<'_> {
@@ -270,8 +274,16 @@ impl PreparedNativeBootstrapPacket<'_> {
     /// key generation, signing, NSM and exact retained-output readback.
     pub(super) fn sign_once(mut self)
         -> Result<serverware_decision_gate::enclave_runtime_identity_v1::BootstrapEnrollmentOriginalV1, String> {
+        self.sign_original(false).map(|(original, _)| original)
+    }
+
+    fn sign_original(&mut self, include_session: bool)
+        -> Result<(serverware_decision_gate::enclave_runtime_identity_v1::BootstrapEnrollmentOriginalV1,
+            Option<Vec<u8>>), String> {
+        require(!std::mem::replace(&mut self.signing_started, true),
+            "native bootstrap signing operation was already consumed")?;
         self.check()?;
-        let original = {
+        let output = {
             let state = self.admission.state;
             let active = state.snapshot.try_read()
                 .map_err(|_| "native bootstrap signing policy is unavailable")?;
@@ -281,7 +293,7 @@ impl PreparedNativeBootstrapPacket<'_> {
             let remaining = self.admission.clock.remaining()?;
             let _trust_guard = retain_policy_window(state, remaining)?;
             let roots = self.admission.authorizer.bootstrap_public_originals(&active.policy_verifying_key)?;
-            let DirectProxyStream::MutualTls(tls) = self.admission.stream else {
+            let DirectProxyStream::MutualTls(tls) = &*self.admission.stream else {
                 return Err("native bootstrap signing lost its actual caller TLS connection".to_owned());
             };
             let ingress = self.admission.configuration.native_owner.as_ref()
@@ -318,12 +330,110 @@ impl PreparedNativeBootstrapPacket<'_> {
             self.admission.lifetime.check()?;
             self.admission.stream.check_operation_deadline()
                 .map_err(|_| "native bootstrap stream expired during signing")?;
-            original
+            // The durable claim and exact role-5 readback precede the second
+            // NSM operation. A later role-3/assembly/send failure never resets
+            // the claim or authorizes a new bootstrap signature.
+            let session = if include_session {
+                let opening = Instant::now();
+                let remaining = self.admission.clock.remaining()?;
+                let quote_deadline = opening.checked_add(remaining)
+                    .ok_or("native bootstrap quotation deadline overflow")?;
+                let session = super::native_ingress_attestation::bootstrap_original(identity,
+                    ingress, &tls.conn, self.admission.challenge,
+                    self.admission.lifetime.deadline(), quote_deadline)?;
+                self.admission.clock.check(self.setup.deadline())?;
+                self.setup.check(self.admission.clock.deadline)?;
+                self.admission.lifetime.check()?;
+                Some(session)
+            } else { None };
+            (original, session)
         };
         // Release locks before the full admission path reacquires them. A
         // failure withholds output; the consumed durable claim is never reset.
         self.check()?;
-        Ok(original)
+        Ok(output)
+    }
+
+    /// Consume the actual retained admission through the entire publication.
+    /// No caller obtains a successful DTO or swaps the connection after quote.
+    /// Any failure closes without a second response; claim state is untouched.
+    pub(super) fn deliver_once(mut self) -> Result<(), String> {
+        let (signed, session) = self.sign_original(true)?;
+        let session = session.ok_or("native bootstrap session original is absent")?;
+        self.check()?;
+        require(!session.is_empty() && session.len() <= 96 * 1024
+            && signed.signature().len() == 64 && signed.public_key().len() == 32
+            && !signed.quote_document().is_empty() && signed.quote_document().len() <= 12 * 1024,
+            "native bootstrap evidence originals exceed their fixed bounds")?;
+        let mut encoded_size = 2048usize;
+        for original in [&*self.original, session.as_slice(), signed.signature().as_slice(),
+            signed.public_key().as_slice(), signed.quote_document()] {
+            encoded_size = original.len().checked_mul(4).and_then(|size| size.checked_add(2))
+                .map(|size| size / 3).and_then(|size| encoded_size.checked_add(size))
+                .ok_or("native bootstrap evidence representation overflow")?;
+        }
+        require(encoded_size <= MAX_EVIDENCE_BYTES,
+            "native bootstrap evidence exceeds its fixed original bound")?;
+        let encode = |original: &[u8]| general_purpose::URL_SAFE_NO_PAD.encode(original);
+        let evidence = json!({
+            "apiVersion":"serverware.nativeEnrollmentBootstrapEvidence/v1",
+            "evidenceScope":"unverified-bootstrap-enrollment-public-material",
+            "okForAction":false,
+            "packetBase64url":encode(&self.original),
+            "ingressSessionEvidenceBase64url":encode(&session),
+            "enrollmentSignatureBase64url":encode(signed.signature()),
+            "enrollmentPublicKeyBase64url":encode(signed.public_key()),
+            "enrollmentQuoteBase64url":encode(signed.quote_document()),
+        });
+        let mut body = serverware_decision_gate::canonical_json_bytes(&evidence)
+            .map_err(|_| "native bootstrap evidence canonical encoding failed")?;
+        require(!body.is_empty() && body.len() < MAX_EVIDENCE_BYTES && body.is_ascii()
+            && !body.contains(&b'\n') && !body.contains(&b'\r'),
+            "native bootstrap evidence original is invalid")?;
+        body.push(b'\n');
+        self.check()?;
+        let response = http_binary_response_with_headers(StatusCode::OK,
+            Some("application/json"), body,
+            &[("Cache-Control".to_owned(), "no-store".to_owned())]);
+        let mut offset = 0usize;
+        while offset < response.len() {
+            self.restrict_send()?;
+            let end = response.len().min(offset.saturating_add(16 * 1024));
+            let written = self.admission.stream.write(&response[offset..end])
+                .map_err(|_| "native bootstrap evidence write failed")?;
+            require(written > 0 && written <= end - offset,
+                "native bootstrap evidence write made no bounded progress")?;
+            offset += written;
+            self.check()?;
+        }
+        self.restrict_send()?;
+        self.admission.stream.flush().map_err(|_| "native bootstrap evidence flush failed")?;
+        self.check()?;
+        super::native_enrollment_bootstrap_http::reject_buffered_plaintext(self.admission.stream)?;
+        self.restrict_send()?;
+        let DirectProxyStream::MutualTls(tls) = &mut *self.admission.stream else {
+            return Err("native bootstrap delivery lost its original TLS connection".to_owned());
+        };
+        tls.conn.send_close_notify();
+        self.admission.stream.flush().map_err(|_| "native bootstrap TLS close failed")?;
+        self.check()?;
+        Ok(())
+    }
+
+    fn restrict_send(&mut self) -> Result<(), String> {
+        self.check()?;
+        super::native_enrollment_bootstrap_http::reject_buffered_plaintext(self.admission.stream)?;
+        // Sample Instant before the BOOTTIME remaining sample. This can only
+        // tighten the original transport cap, including setup/certificate
+        // expiry; no phase, write or flush receives a refreshed allowance.
+        let opening = Instant::now();
+        let remaining = self.admission.clock.remaining()?;
+        let deadline = opening.checked_add(remaining)
+            .ok_or("native bootstrap final transport deadline overflow")?;
+        self.admission.stream.restrict_operation_deadline(deadline);
+        self.admission.stream.set_terminal_write_deadline(Some(deadline));
+        self.admission.stream.check_operation_deadline()
+            .map_err(|_| "native bootstrap final transport deadline expired")
     }
 }
 
@@ -344,10 +454,10 @@ fn retain_policy_window(state: &GateState, remaining: Duration)
 
 /// The eventual route must begin this deadline before reading any bootstrap
 /// body, including the setup original later supplied to packet preparation.
-/// This private seam has no route caller and grants no CA operation; signing
-/// requires consuming the subsequently prepared original owner.
+/// This seam grants no CA operation; signing and HTTP publication require
+/// consuming the subsequently prepared original owner.
 pub(super) fn admit<'a>(state: &'a GateState, head: &'a RequestHead,
-    stream: &'a DirectProxyStream, trusted_mtls: &'a TrustedMtlsEvidence,
+    stream: &'a mut DirectProxyStream, trusted_mtls: &'a TrustedMtlsEvidence,
     proxy_ingress: &'a ProxyIngressConfig, delegation_original: &'a [u8],
     request_original: &'a [u8], operation_deadline: Instant)
     -> Result<NativeBootstrapAdmission<'a>, String> {
@@ -355,7 +465,23 @@ pub(super) fn admit<'a>(state: &'a GateState, head: &'a RequestHead,
         .ok_or("native bootstrap dedicated authorizer is absent")?;
     let lifetime = state.native_runtime_lifetime.as_ref()
         .ok_or("native bootstrap actual runtime lifetime is absent")?;
-    let mut clock = AdmissionClock::open(operation_deadline, lifetime.deadline(), authorizer.deadline())?;
+    let clock = AdmissionClock::open(operation_deadline, lifetime.deadline(), authorizer.deadline())?;
+    admit_on_clock(state, head, stream, trusted_mtls, proxy_ingress,
+        delegation_original, request_original, clock)
+}
+
+/// The fixed HTTP handler transfers its original pre-body clock by value.
+/// Opening a replacement clock after capturing request bytes is not permitted.
+pub(super) fn admit_on_clock<'a>(state: &'a GateState, head: &'a RequestHead,
+    stream: &'a mut DirectProxyStream, trusted_mtls: &'a TrustedMtlsEvidence,
+    proxy_ingress: &'a ProxyIngressConfig, delegation_original: &'a [u8],
+    request_original: &'a [u8], mut clock: AdmissionClock)
+    -> Result<NativeBootstrapAdmission<'a>, String> {
+    let authorizer = state.native_enrollment_authorizer.as_ref()
+        .ok_or("native bootstrap dedicated authorizer is absent")?;
+    let lifetime = state.native_runtime_lifetime.as_ref()
+        .ok_or("native bootstrap actual runtime lifetime is absent")?;
+    clock.check(lifetime.deadline().min(authorizer.deadline()))?;
     require(!delegation_original.is_empty() && delegation_original.len() <= MAX_DELEGATION_BYTES
         && !request_original.is_empty() && request_original.len() <= MAX_REQUEST_BYTES,
         "native bootstrap originals exceed their fixed bounds")?;

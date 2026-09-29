@@ -12,6 +12,10 @@ path = "src/custody_protocol.rs"
 name = "serverware-coder-body-supervisor-v12"
 path = "src/bin/serverware-coder-body-supervisor-v12.rs"
 
+[[bin]]
+name = "serverware-native-bootstrap-client"
+path = "src/bin/serverware-native-bootstrap-client.rs"
+
 [dependencies]
 base64 = "0.22"
 csv = "1.3"

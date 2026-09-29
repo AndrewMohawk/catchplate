@@ -258,6 +258,55 @@ fn original(state: &GateState, head: &RequestHead, stream: &DirectProxyStream,
             .map_err(|_| Failure::Unavailable)?;
         original
     };
+    let original = session_original(&public_identity, challenge, exporter, client_trust_v2)?;
+    custody_deadline_remaining(operation_deadline, "native ingress evidence assembly")
+        .map_err(|_| Failure::Unavailable)?;
+    signer.transport.require_native().map_err(|_| Failure::Unavailable)?;
+    ingress.verify_live(deadline).map_err(|_| Failure::Unavailable)?;
+    lifetime.check().map_err(|_| Failure::Unavailable)?;
+    Ok(original)
+}
+
+/// Public originals from the actual admitted bootstrap owners. This does not
+/// admit a caller or authorize a quote: the consuming Prepared owner invokes it
+/// only after its durable bootstrap claim/signature readback, while retaining
+/// the original policy, runtime and TLS guards. No synthetic HTTP head or
+/// caller-provided exporter is accepted.
+pub(super) fn bootstrap_original(identity: &mut EnclaveRuntimeIdentityV1,
+    ingress: &QuotedMutualTlsIngressV1, connection: &ServerConnection,
+    challenge: [u8; 32], runtime_deadline: u64, operation_deadline: Instant)
+    -> Result<Vec<u8>, String> {
+    let unavailable = || "native bootstrap ingress quotation is unavailable".to_owned();
+    if challenge == [0; 32] || connection.is_handshaking()
+        || connection.protocol_version() != Some(rustls::ProtocolVersion::TLSv1_3)
+        || connection.peer_certificates().is_none_or(|chain| chain.is_empty())
+        || identity.deadline() != runtime_deadline || ingress.deadline() != runtime_deadline
+    {
+        return Err(unavailable());
+    }
+    custody_deadline_remaining(operation_deadline, "native bootstrap ingress quotation")?;
+    ingress.verify_live(runtime_deadline)?;
+    identity.verify_tls_scope(OffsetDateTime::now_utc(), runtime_deadline)?;
+    let exporter = connection.export_keying_material([0u8; 32], EXPORTER_LABEL, Some(&challenge))
+        .map_err(|_| unavailable())?;
+    let nonce = derive_nonce(challenge, exporter)?;
+    // Passing the retained cohort deadline must not shorten the shared native
+    // identity. The inherited request deadline brackets the device operation;
+    // a blocked device still requires the existing external watchdog.
+    let quote = identity.quote_retained_ingress(ingress, nonce, runtime_deadline)?;
+    custody_deadline_remaining(operation_deadline, "native bootstrap ingress quotation")?;
+    let public_identity = encode_native_ingress_quote_public_evidence_v2(
+        identity, ingress, &quote, runtime_deadline)?;
+    let original = session_original(&public_identity, challenge, exporter, true)
+        .map_err(|_| unavailable())?;
+    identity.verify_tls_scope(OffsetDateTime::now_utc(), runtime_deadline)?;
+    ingress.verify_live(runtime_deadline)?;
+    custody_deadline_remaining(operation_deadline, "native bootstrap ingress assembly")?;
+    Ok(original)
+}
+
+fn session_original(public_identity: &[u8], challenge: [u8; 32], exporter: [u8; 32],
+    client_trust_v2: bool) -> Result<Vec<u8>, Failure> {
     if public_identity.is_empty() || public_identity.len() > MAX_PUBLIC_IDENTITY_BYTES
         || public_identity.last() != Some(&b'\n')
         || public_identity[..public_identity.len() - 1].contains(&b'\n')
@@ -292,10 +341,5 @@ fn original(state: &GateState, head: &RequestHead, stream: &DirectProxyStream,
         return Err(Failure::Unavailable);
     }
     original.push(b'\n');
-    custody_deadline_remaining(operation_deadline, "native ingress evidence assembly")
-        .map_err(|_| Failure::Unavailable)?;
-    signer.transport.require_native().map_err(|_| Failure::Unavailable)?;
-    ingress.verify_live(deadline).map_err(|_| Failure::Unavailable)?;
-    lifetime.check().map_err(|_| Failure::Unavailable)?;
     Ok(original)
 }

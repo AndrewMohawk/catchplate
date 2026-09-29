@@ -14,6 +14,7 @@ pub(crate) struct IngressClientBootstrap {
     pub(crate) ca: Vec<u8>,
     pub(crate) host: String,
     pub(crate) challenge: [u8; 32],
+    pub(crate) valid_until_epoch_ns: u64,
     pub(crate) verification: Value,
 }
 
@@ -41,7 +42,11 @@ fn prepare_checked(raw: &[u8], startup_raw: &[u8], roots_raw: &[u8],
     let roots = TrustRoots::parse(roots_raw)?;
     let checked = ingress::verify_original(raw, &startup.scope, &roots,
         EvidenceProfile::Startup, &startup.nonce)?;
+    let fresh_until = checked.issued.checked_add(scope.max_age)
+        .and_then(|value| value.checked_add(1)).ok_or("native client startup quote age overflow")?;
+    let valid_until_epoch_ns = checked.valid_until.min(checked.quote_valid_until).min(fresh_until)
+        .checked_mul(1_000_000_000).ok_or("native client startup expiry overflow")?;
     let verification = checked.summary(raw, startup_raw, roots_raw, startup);
     Ok(IngressClientBootstrap { leaf: checked.leaf, ca: checked.ca, host: scope.host,
-        challenge, verification })
+        challenge, valid_until_epoch_ns, verification })
 }

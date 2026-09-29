@@ -1,8 +1,9 @@
 # Native bootstrap enrollment evidence receiving
 
-Status: partial source implementation, unbuilt and unexecuted. This explicit
-caller-to-target receiver adds no HTTP route, acquisition command, certificate
-issuance, trust installation or production acceptance. The existing same-target
+Status: partial source implementation, unbuilt and unexecuted. The explicit
+caller-to-target receiver is now joined to the bounded native server/fixed-client
+[bootstrap exchange](native-enrollment-bootstrap-exchange.md). It adds no
+certificate issuance, trust installation or production acceptance. The existing same-target
 [enrollment v1 receiver](native-enrollment-verification.md) is unchanged.
 
 ## Originals and independent inputs
@@ -106,8 +107,8 @@ The result is below 4096 bytes with
 `resultScope: "local-bootstrap-signature-and-session-only"` and
 `okForAction: false`. It records original digests, expected caller, a hash of the
 expected target principal, target nonce and actual connected endpoint. It is not
-a durable outcome or permission. Real acquisition, independent pin deployment,
-enabled serving integration, scoped installation and runtime evidence
+a durable outcome or permission. Independent pin deployment, deployed exchange
+verification, scoped installation and runtime evidence
 remain separately required. No legacy `runtimeManifestDigest` is invented.
 
 ## Private producer and journal composition
@@ -146,9 +147,17 @@ quote or reinterpret a lost reply as no signature.
 
 The journal inherits local filesystem custody, its manifest and fail-closed
 interrupted-update behavior. It is not an off-host latest-state witness or proof
-against hostile-host rollback. This private composition returns public signing
-originals, not the complete eight-field evidence envelope, an HTTP delivery,
-certificate issuance result, scoped installer result or completed enrollment.
+against hostile-host rollback. The private `sign_once` operation still returns
+only public signing originals. The consuming `deliver_once` path now retains the
+actual mutable TLS stream, completes that claimed signing/readback first, then
+obtains the role3 v2 session quote on the same stream and challenge under the
+original Snapshot/trust/runtime guards. It assembles the existing eight-field
+evidence and checks original admission around bounded writes, flush and TLS
+`close_notify`. A quotation or delivery failure never resets the claim or
+resigns. The single processing clock starts before TLS/HTTP intake, includes
+prefetched bytes, and can only tighten through the final send. This is public
+evidence delivery, not a certificate issuance result, scoped installer result or
+completed enrollment.
 
 Consolidated tests remain unexecuted: positive original chains, changed caller
 versus target, another TLS exporter/endpoint, missing or repeated target root,

@@ -3676,6 +3676,13 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/native_enrollment_bootstrap_setup_v1.rs \
 				data-plane/decision-gate-rs/src/native_enrollment_bootstrap_packet_v2.rs \
 				data-plane/decision-gate-rs/src/native_bootstrap_attempt_v1.rs \
+				data-plane/decision-gate-rs/src/native_enrollment_bootstrap_exchange_v1.rs \
+				data-plane/decision-gate-rs/src/native_enrollment_bootstrap_http.rs \
+				data-plane/decision-gate-rs/src/native_bootstrap_client/mod.rs \
+				data-plane/decision-gate-rs/src/native_bootstrap_client/config.rs \
+				data-plane/decision-gate-rs/src/native_bootstrap_client/http.rs \
+				data-plane/decision-gate-rs/src/native_bootstrap_client/transport.rs \
+				data-plane/decision-gate-rs/src/bin/serverware-native-bootstrap-client.rs \
 				data-plane/decision-gate-rs/coder-test-runner.sh \
 				ops/systemd/serverware-launch-authority-relay.service \
 				ops/systemd/serverware-launch-authority-relay.socket \
@@ -3686,6 +3693,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-enrollment-assignment.v1.schema.json \
 				schemas/native-enrollment-evidence.v1.schema.json \
 				schemas/native-enrollment-bootstrap-evidence.v1.schema.json \
+				schemas/native-enrollment-bootstrap-request.v1.schema.json \
+				schemas/native-bootstrap-client.v1.schema.json \
 				schemas/native-enrollment-authorizer.v1.schema.json \
 				schemas/workload-identity-bootstrap-request.v1.schema.json \
 				schemas/native-enrollment-bootstrap-delegation.v1.schema.json \

@@ -23,6 +23,8 @@ mod native_enrollment_authorizer;
 mod native_enrollment_admission;
 mod native_workload_bootstrap_request_v1;
 mod native_enrollment_bootstrap_admission;
+mod native_enrollment_bootstrap_exchange_v1;
+mod native_enrollment_bootstrap_http;
 mod native_enrollment_policy_requirements;
 mod workload_identity_trust;
 mod workload_identity_trust_crypto;
@@ -48476,6 +48478,10 @@ fn handle_gate_connection(
     proxy_ingress: ProxyIngressConfig,
 ) {
     let client_ip = stream.client_ip();
+    // Capture the optional bootstrap clock before TLS/HTTP intake: either
+    // parser can prefetch application bytes. Only the reserved bootstrap route
+    // consumes this original clock; ordinary proxy deadlines are unchanged.
+    let bootstrap_opening = native_enrollment_bootstrap_http::opening(&state);
     let (mut stream, trusted_mtls_evidence) = match establish_gate_listener_stream(
         stream,
         &state,
@@ -48514,6 +48520,16 @@ fn handle_gate_connection(
         );
         let _ = stream.write_all(&response);
         let _ = stream.flush();
+        return;
+    }
+    // This fixed original-evidence route performs its own full caller policy,
+    // delegation and separate setup admission. Dispatch every method/profile
+    // in this reserved path to its fail-closed handler: neither a management
+    // listener nor a missing native owner can reach a development fallback.
+    if request_target_parts(&head.target).0 == native_enrollment_bootstrap_exchange_v1::PATH {
+        native_enrollment_bootstrap_http::handle(&state, &head, &mut stream,
+            trusted_mtls_evidence.as_ref(), management_listener, &proxy_ingress,
+            bootstrap_opening);
         return;
     }
     // Native requests cannot fall through to the legacy none-dev document,

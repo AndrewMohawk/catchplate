@@ -62,6 +62,14 @@ impl DeadlineTcp {
     pub(super) fn check(&self) -> io::Result<()> {
         remaining(self.owner_pid, self.deadline).map(|_| ())
     }
+
+    /// Observe the actual retained socket, never its configured destination.
+    pub(super) fn peer_addr(&self) -> io::Result<SocketAddr> {
+        self.check()?;
+        let address = self.socket.peer_addr()?;
+        self.check()?;
+        Ok(address)
+    }
 }
 
 impl Read for DeadlineTcp {

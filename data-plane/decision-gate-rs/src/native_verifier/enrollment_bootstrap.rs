@@ -27,7 +27,9 @@ const RUNTIME_DOMAIN: &[u8] = b"serverware/enclave-runtime-key-binding/v1\0";
 const REQUEST_DOMAIN: &[u8] = b"serverware/native-enrollment-bootstrap-key-binding/v1\0";
 const SIGNATURE_DOMAIN: &[u8] = b"serverware/native-enrollment-bootstrap-packet-signature/v1\0";
 
-struct Processing {
+/// Source-owned clock continuation, not an evidence verdict. The fixed client
+/// creates it before network IO and retains it through authenticated EOF.
+pub(crate) struct Processing {
     pid: u32,
     deadline: u64,
     last_wall: u64,
@@ -52,7 +54,7 @@ fn clocks() -> Result<(u64, u64), String> {
 }
 
 impl Processing {
-    fn open(deadline: u64) -> Result<Self, String> {
+    pub(crate) fn open(deadline: u64) -> Result<Self, String> {
         let (wall, boot) = clocks()?;
         let deadline = deadline.min(boot.checked_add(PROCESSING_NS)
             .ok_or("native bootstrap original processing interval overflow")?);
@@ -61,7 +63,7 @@ impl Processing {
             valid_until: u64::MAX, stopped: false })
     }
 
-    fn check(&mut self, deadline: u64) -> Result<(), String> {
+    pub(crate) fn check(&mut self, deadline: u64) -> Result<(), String> {
         ensure(!std::mem::replace(&mut self.stopped, true), "native bootstrap processing is stopped")?;
         self.deadline = self.deadline.min(deadline);
         let (wall, boot) = clocks()?;
@@ -82,6 +84,10 @@ impl Processing {
         self.valid_until = self.valid_until.min(seconds.checked_mul(SECOND)
             .ok_or("native bootstrap certificate expiry overflow")?);
         self.check(self.deadline)
+    }
+
+    pub(crate) fn valid_until_epoch_ns(&self) -> Option<u64> {
+        (self.valid_until != u64::MAX).then_some(self.valid_until)
     }
 }
 
@@ -196,12 +202,35 @@ pub(super) fn verify(raw: &[u8], delegation_pem: &[u8], delegation_pem_sha: &str
     expected_caller: &str, expected_target: &str, expected_nonce: &str, expected_request_sha: &str,
     endpoint: SocketAddr, deadline: u64) -> Result<Vec<u8>, String> {
     let mut processing = Processing::open(deadline)?;
+    verify_on_processing(raw, delegation_pem, delegation_pem_sha, setup_pem, setup_pem_sha,
+        scope_raw, roots_raw, challenge, client, caller_issuer_der, caller_client_pem,
+        expected_caller, expected_target, expected_nonce, expected_request_sha,
+        endpoint, None, &mut processing)
+}
+
+/// The fixed acquisition owner supplies the actual selected client chain and
+/// observed endpoint, plus the exact originals it sent. This low-level function
+/// does not establish TLS-configuration or file-pin provenance by itself.
+pub(super) fn verify_on_processing(raw: &[u8], delegation_pem: &[u8], delegation_pem_sha: &str,
+    setup_pem: &[u8], setup_pem_sha: &str, scope_raw: &[u8], roots_raw: &[u8], challenge: [u8; 32],
+    client: &ClientConnection, caller_issuer_der: &[u8], caller_client_pem: &[u8],
+    expected_caller: &str, expected_target: &str, expected_nonce: &str, expected_request_sha: &str,
+    endpoint: SocketAddr, sent_originals: Option<(&[u8], &[u8], &[u8])>,
+    processing: &mut Processing) -> Result<Vec<u8>, String> {
+    processing.check(processing.deadline)?;
     let mut total = 0usize;
     for (size, maximum) in [(raw.len(), MAX_EVIDENCE_BYTES), (delegation_pem.len(), 16 * 1024),
         (setup_pem.len(), 16 * 1024), (scope_raw.len(), 16 * 1024), (roots_raw.len(), 1024 * 1024),
         (caller_issuer_der.len(), 16 * 1024), (caller_client_pem.len(), 64 * 1024)] {
         ensure(size > 0 && size <= maximum, "native bootstrap original input exceeds its bound")?;
         total = total.checked_add(size).ok_or("native bootstrap aggregate input overflow")?;
+    }
+    if let Some((delegation, setup, request)) = sent_originals {
+        for (size, maximum) in [(delegation.len(), 32 * 1024), (setup.len(), 32 * 1024),
+            (request.len(), 64 * 1024)] {
+            ensure(size > 0 && size <= maximum, "native bootstrap sent original exceeds its bound")?;
+            total = total.checked_add(size).ok_or("native bootstrap aggregate input overflow")?;
+        }
     }
     ensure(total <= MAX_INPUT_BYTES && delegation_pem_sha.len() == 71 && setup_pem_sha.len() == 71
         && challenge != [0; 32] && endpoint.port() != 0
@@ -212,10 +241,15 @@ pub(super) fn verify(raw: &[u8], delegation_pem: &[u8], delegation_pem_sha: &str
         && expected_nonce.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-')),
         "native bootstrap independent inputs exceed the fixed profile")?;
     let expected_request = parse_digest::<32>(expected_request_sha, "sha256:", true)?;
-    let original = evidence(raw, &mut processing)?;
+    let original = evidence(raw, processing)?;
     processing.check(processing.deadline)?;
     let packet = bootstrap_packet::decode_original(&original.packet)?;
     processing.check(processing.deadline)?;
+    if let Some((delegation, setup, request)) = sent_originals {
+        ensure(packet.delegation_original() == delegation && packet.setup_original() == setup
+            && packet.target_request_original() == request,
+            "native bootstrap response substituted an originally submitted authority or request")?;
+    }
     ensure(digest(packet.target_request_original()) == expected_request,
         "native bootstrap packet differs from the independently retained target request")?;
     let mut setup = bootstrap_setup::verify_original(packet.setup_original(), setup_pem, setup_pem_sha,

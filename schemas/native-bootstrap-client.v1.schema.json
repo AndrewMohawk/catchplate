@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-bootstrap-client.v1.schema.json",
+  "title": "Serverware fixed native bootstrap acquisition client v1",
+  "description": "Closed configuration original, at most 16384 bytes. Runtime retains independently pinned originals, verifies real native startup evidence before private-key loading/network, then makes one fixed bootstrap POST on a full TLS1.3 connection. Explicit challenge is independently pinned before delegation/setup issuance, never generated or learned from a response. Schema shape is not pin provenance, native verification, installation permission or enrollment completion.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion", "endpoint", "timeoutMilliseconds", "startupEvidence", "startupExpectations",
+    "sessionScope", "trustRoots", "clientCertificate", "clientPrivateKey", "callerIssuer",
+    "delegationAuthorizer", "setupAuthorizer", "request", "clientChallengeBase64url",
+    "expectedCallerPrincipal", "expectedTargetPrincipal", "expectedTargetNonce", "expectedTargetRequestSha256"
+  ],
+  "properties": {
+    "apiVersion": {"const": "serverware.nativeBootstrapClient/v1"},
+    "endpoint": {
+      "description": "Canonical literal unicast SocketAddr with nonzero port. Runtime rejects unspecified/multicast/broadcast and scoped IPv6 including mapped IPv4 exclusions; private and loopback addresses remain permitted. This is not DNS or a URL.",
+      "type": "string", "minLength": 3, "maxLength": 64,
+      "pattern": "^(?:[0-9.]+|\\[[0-9a-f:.]+\\]):[0-9]+(?![\\s\\S])"
+    },
+    "timeoutMilliseconds": {"type": "integer", "minimum": 100, "maximum": 30000},
+    "startupEvidence": {
+      "description": "Pinned genuine native startup evidence original, at most 65536 bytes; not standard host-manifest or trust-publication diagnostics.",
+      "$ref": "#/$defs/artifact"
+    },
+    "startupExpectations": {"description": "Independent native startup expectations, at most 16384 bytes.", "$ref": "#/$defs/artifact"},
+    "sessionScope": {
+      "description": "Independent nonce-free serverware.nativeIngressSessionScope/v1 original, at most 16384 bytes. Complete scope must agree with startup expectations; explicit client challenge must differ from startup nonce.",
+      "$ref": "#/$defs/artifact"
+    },
+    "trustRoots": {"description": "Independent Nitro attestation roots original, at most 1048576 bytes; not the caller issuer.", "$ref": "#/$defs/artifact"},
+    "clientCertificate": {
+      "description": "Existing bootstrap CALLER certificate chain canonical PEM, at most 65536 bytes and 1..8 certificates of at most 16384 DER bytes each. The actual TLS-selected chain must equal this retained original. No target certificate is required.",
+      "$ref": "#/$defs/artifact"
+    },
+    "clientPrivateKey": {
+      "description": "Existing caller key canonical PKCS8 PEM, at most 16384 bytes. Runtime requires owner-only single-link regular file owned by root or effective caller before reading bytes. No target key, arbitrary key export or hardware-custody claim.",
+      "$ref": "#/$defs/artifact"
+    },
+    "callerIssuer": {
+      "description": "Independently pinned single canonical issuer PEM, at most 65536 bytes/16384 DER bytes. Genuine receiver checks exact native quoted root membership and actual caller chain under this selected issuer.",
+      "$ref": "#/$defs/artifact"
+    },
+    "delegationAuthorizer": {"description": "Independent dedicated delegation Ed25519 public PEM, at most 16384 bytes; its artifact pin is retained as the expected root pin.", "$ref": "#/$defs/artifact"},
+    "setupAuthorizer": {"description": "Separate independent setup Ed25519 public PEM, at most 16384 bytes. Not selected by evidence or learned from another root.", "$ref": "#/$defs/artifact"},
+    "request": {
+      "description": "Pinned exact serverware.nativeEnrollmentBootstrapRequest/v1 original, canonical ASCII JSON plus one LF, at most 196608 bytes. Contains exact signed delegation/setup and target request originals bounded 32768/32768/65536 bytes. These same bytes are POSTed without rewriting; receiver compares all three component originals.",
+      "$ref": "#/$defs/artifact"
+    },
+    "clientChallengeBase64url": {
+      "description": "Independent preselected nonzero raw32 challenge encoded canonical unpadded base64url. Must already be bound by signed delegation; no local RNG replacement or retry renewal.",
+      "type": "string", "minLength": 43, "maxLength": 43,
+      "pattern": "^(?!A{43}(?![\\s\\S]))[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048](?![\\s\\S])"
+    },
+    "expectedCallerPrincipal": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[!-~]+(?![\\s\\S])"},
+    "expectedTargetPrincipal": {"description": "Independent exact target identity, nonempty UTF-8 of at most 1024 bytes; runtime enforces the byte bound and genuine target request profile.", "type": "string", "minLength": 1, "maxLength": 1024},
+    "expectedTargetNonce": {"type": "string", "minLength": 32, "maxLength": 256, "pattern": "^[A-Za-z0-9_-]+(?![\\s\\S])"},
+    "expectedTargetRequestSha256": {"$ref": "#/$defs/digest"}
+  },
+  "$defs": {
+    "digest": {"type": "string", "minLength": 71, "maxLength": 71, "pattern": "^sha256:(?!0{64})[0-9a-f]{64}(?![\\s\\S])"},
+    "artifact": {
+      "type": "object", "additionalProperties": false, "required": ["path", "sha256"],
+      "properties": {
+        "path": {
+          "description": "Exact absolute path without traversal, repeated/trailing separators or symlinks. Runtime enforces canonical path spelling, 4096-byte limit and anchored no-follow opens, then retains/rechecks held and named file identity plus original bytes.",
+          "type": "string", "minLength": 2, "maxLength": 4096, "pattern": "^/[^\\u0000]+(?![\\s\\S])"
+        },
+        "sha256": {"$ref": "#/$defs/digest"}
+      }
+    }
+  }
+}

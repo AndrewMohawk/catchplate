@@ -24,12 +24,12 @@ Checkpoint: **2026-09-29 — pre-production, source-only.**
 
 [![Project checkpoints, one segment per task: 35 of 46 source-landed; 6 active and 5 todo. Evidence handoff 10/10; historical recovery 4/5; permissions and grants 10/10; finalization and sessions 8/8; workloads and native 3/6; providers and operations 0/7. F08 is source-landed in 170d0ac; H05, N04, N05, O01, O04 and O05 are in progress. Production acceptance remains 0/6. Source only; unbuilt, unexecuted and unprovisioned.](docs/images/project-progress.svg)](docs/production-status.md#next-source-milestones)
 
-Latest [`.264` source](https://github.com/example/private-deployment) connects
-[atomic OAuth activation](docs/oauth-atomic-activation-authority.md) for new credentials
-without setup sessions, using separate enrollment policy and hardware/two-person
-approval. Exchange, staging, refresh/reconnect and setup writers remain unfinished;
-the pre-contact gate stays closed. Prior [native execution](docs/native-execution-lifecycle.md)
-retains source credit; combined CA installation and production verification remain open.
+Latest [`.265` source](https://github.com/example/private-deployment) connects
+[verified CA installation and native execution](docs/native-combined-ca-execution.md)
+through separate authorities and immutable in-image application trust. Installation
+can persist if later execution fails; no automatic rollback or retry is implied.
+Prior [atomic OAuth activation](docs/oauth-atomic-activation-authority.md) retains
+source credit; exchange/staging, refresh/reconnect, setup and production verification remain open.
 
 The bar shows **committed source, not tested readiness or remaining effort**.
 Green means source-landed; amber means partial implementation. No current pilot

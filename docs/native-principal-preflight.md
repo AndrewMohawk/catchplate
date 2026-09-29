@@ -70,8 +70,24 @@ The preflight authenticates a principal under the current full identity policy;
 it does not authorize any particular provider route, credential, request body,
 response handling or JIT grant. Those existing gates still run separately.
 Legacy provider-response proof schemas and validators keep their own identity
-limits, including 256-byte fields: a v3 preflight with a longer principal can
-therefore succeed while a later legacy response proof is refused. This slice
-does not claim full 1024-byte provider-proof compatibility or complete workload
-onboarding. Public captures remain the existing supporting local evidence,
-with no raw authentication headers or new action-authority flag.
+limits. The capture client now checks compatibility after genuinely opening its
+pinned ingress profile and before loading private capture inputs or connecting.
+The server checks the actual selected principal before response-proof setup or
+provider effects, including the selected mode on each inner request. Buffered
+proofs require a trim-stable, control-free identity of at most 256 UTF-8 bytes.
+Streaming and observation additionally require an ASCII alphanumeric first
+character and only ASCII alphanumerics or `._:/@-` afterward. These are early
+refusals, not a change to the signed legacy contracts; the full existing response
+validators still run. Errors do not echo the principal or authentication headers.
+
+Standalone preflight still supports its own 1024-byte contract. A successful
+preflight must not be presented as provider-proof compatibility. Full native
+compatibility requires explicit new statement profiles and coordinated
+principal-bearing authorization receipts and bindings across the producer,
+custody signer, control plane and independent verifier. Those remain open; no
+identity is truncated, renamed or silently remapped to pass the old profiles.
+Public captures remain supporting local evidence with no new action authority.
+
+The separate [native egress installation design](native-egress-installation-design.md)
+records the next ownership and authorization boundary. It is a design, not an
+implemented firewall or a successful onboarding canary.

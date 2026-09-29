@@ -59,6 +59,9 @@ use rustls::{RootCertStore, ServerConfig, ServerConnection, StreamOwned};
 use serde::de::{self, DeserializeOwned, DeserializeSeed, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{json, Map, Value};
+use serverware_decision_gate::response_principal_compatibility_v1::{
+    require_response_principal_compatible, ResponseProofPrincipalProfile,
+};
 use serverware_decision_gate::{
     canonical_json_bytes as custody_canonical_json_bytes,
     decode_canonical_json as decode_canonical_custody_json, read_frame as read_custody_frame,
@@ -46590,6 +46593,30 @@ fn forward_absolute_request_to<W: TerminalDeadlineWrite>(
         ResponseProofRequestContext::Streaming(_) => ResponseProofKind::Streaming,
         ResponseProofRequestContext::Observation(_) => ResponseProofKind::Observation,
     });
+    if let Some(kind) = proof_kind {
+        // CONNECT supplies its genuinely authenticated principal; never replace
+        // that identity with a fresh lookup over the intercepted headers.
+        let principal = if let Some(principal_id) = authenticated_principal_id {
+            snapshot.principals.iter().find(|item| item.id == principal_id)
+        } else {
+            snapshot.identify_principal(request.client_ip.as_deref(), &lower_headers(&request.headers))
+        };
+        let profile = match kind {
+            ResponseProofKind::Buffered => ResponseProofPrincipalProfile::Buffered,
+            ResponseProofKind::Streaming => ResponseProofPrincipalProfile::Streaming,
+            ResponseProofKind::Observation => ResponseProofPrincipalProfile::Observation,
+        };
+        if principal.is_some_and(|principal|
+            require_response_principal_compatible(profile, &principal.id).is_err())
+        {
+            let response = override_response_connection(json_status_response(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                json!({"error":"response_proof_principal_incompatible"}),
+            ), false);
+            let _ = write_snapshot_guarded_response(state, snapshot, writer, &response);
+            return false;
+        }
+    }
     let observation_request = match response_proof.as_ref() {
         Some(ResponseProofRequestContext::Observation(context)) => {
             Some(response_observation_request(context, &request.body))
@@ -48020,6 +48047,27 @@ fn handle_connect_request(
                 break;
             }
         };
+        if let Some(kind) = proof_kind {
+            // Recheck each inner request's independently selected proof mode
+            // after genuine CONNECT identity revalidation, before nonce/context
+            // setup, body reads, credential acquisition or provider dispatch.
+            let profile = match kind {
+                ResponseProofKind::Buffered => ResponseProofPrincipalProfile::Buffered,
+                ResponseProofKind::Streaming => ResponseProofPrincipalProfile::Streaming,
+                ResponseProofKind::Observation => ResponseProofPrincipalProfile::Observation,
+            };
+            if require_response_principal_compatible(
+                profile, &connect_authentication.principal_id).is_err()
+            {
+                let response = override_response_connection(json_status_response(
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    json!({"error":"response_proof_principal_incompatible"}),
+                ), false);
+                let _ = tls.write_all(&response);
+                let _ = tls.flush();
+                break;
+            }
+        }
         if matches!(
             proof_kind,
             Some(ResponseProofKind::Buffered | ResponseProofKind::Streaming)

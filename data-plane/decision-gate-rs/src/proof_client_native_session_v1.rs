@@ -1,6 +1,9 @@
 //! Opt-in native capture orchestration. This is local evidence, not release authority.
 use super::*;
 use super::proof_client_native_verifier_v1::NativeResponseVerifierV1;
+use serverware_decision_gate::response_principal_compatibility_v1::{
+    require_response_principal_compatible, ResponseProofPrincipalProfile,
+};
 use std::net::{IpAddr, SocketAddr};
 use zeroize::Zeroizing;
 
@@ -124,6 +127,17 @@ impl NativeCaptureSessionV1 {
                 return Err("native proxy TLS name differs from verified ingress scope".to_owned());
             }
         }
+        // Principal preflight and response proof are distinct profiles. Refuse
+        // an incompatible requested capture here, before loading private inputs
+        // or connecting, instead of failing only after a provider operation.
+        let response_profile = if args.observation {
+            ResponseProofPrincipalProfile::Observation
+        } else if args.stream {
+            ResponseProofPrincipalProfile::Streaming
+        } else {
+            ResponseProofPrincipalProfile::Buffered
+        };
+        require_response_principal_compatible(response_profile, &args.expected_principal_id)?;
         let nonce = args.client_nonce.ok_or("native capture requires explicit --nonce")?;
         if verifier.expected_nonce()?.as_slice() != nonce {
             return Err("native independently pinned nonce differs from --nonce".to_string());

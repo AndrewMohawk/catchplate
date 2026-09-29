@@ -3681,6 +3681,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/native_verifier/enrollment_bootstrap.rs \
 				data-plane/decision-gate-rs/src/native_verifier/principal_session.rs \
 				data-plane/decision-gate-rs/src/native_principal_preflight_v1.rs \
+				data-plane/decision-gate-rs/src/response_principal_compatibility_v1.rs \
 				data-plane/decision-gate-rs/src/native_target_principal_preflight.rs \
 				data-plane/decision-gate-rs/src/native_enrollment_authorizer.rs \
 				data-plane/decision-gate-rs/src/native_enrollment_admission.rs \

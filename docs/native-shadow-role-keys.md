@@ -142,8 +142,10 @@ reported as timely cancellation.
    connects independently assigned sealed key inputs to ciphertext-only C9/KMS
    transport, a fixed helper and this actual final-role owner. Its RSA-recipient
    quote precedes key acquisition; possession evidence is a separate later phase.
-   Current independent assignments, KMS ciphertext/policy, helper image packaging
-   and the actual native launcher/watchdog remain required. Legacy v1 does not
+   The fixed helper image now has an offline packaging producer, not a built or
+   admitted artifact. Current independent assignments, KMS ciphertext/policy,
+   actual image construction/admission and the native launcher/watchdog remain
+   required. Legacy v1 does not
    silently select v2. No seeds belong in EIF/configuration or parent RPC, and
    existing gate/response-v2 key permissions are not reused.
 2. **Independent verifier deployment:** the separate

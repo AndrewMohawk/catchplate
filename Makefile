@@ -724,6 +724,7 @@ override CODER_ISOLATED_TEST_SCRIPTS := \
 	scripts/test_authority_planner_writer_source.py \
 	scripts/test_authority_transition_registry.py \
 	scripts/test_webauthn_attestation_core.py \
+	scripts/test_oauth_retirement_values.py \
 	scripts/test_webauthn_credential_trust.py \
 	scripts/test_webauthn_revoke_authorization.py \
 	scripts/test_webauthn_assertion_work.py \
@@ -842,6 +843,7 @@ override CODER_EXCLUDED_TEST_SCRIPTS := \
 # Include package imports, imported independent oracles, and db.py, which the
 # existing native helper reads as source without importing its runtime facade.
 override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
+	scripts/test_oauth_retirement_values.py \
 	scripts/authority_revocation_observation_fixture.py \
 	scripts/authority_revocation_semantics_fixture.py \
 	scripts/authority_revocation_trust_fixture.py \
@@ -1299,6 +1301,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/native_role_key_provisioner.py \
 	scripts/native_role_key_kms_parent.py \
 	scripts/package_native_role_key_runtime.py \
+	scripts/package_native_shadow_key_runtime.py \
 	scripts/prepare_native_role_keys.py \
 	scripts/seal_native_service_tokens.py \
 	scripts/sign_native_guest_credential_delivery.py \
@@ -1369,6 +1372,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_transition_oauth_measured_capture_retirement.py \
 	serverware/control_plane_oauth_measured_capture_retirement.py \
 	serverware/native_oauth_capture_retirement.py \
+	serverware/oauth_retirement_values.py \
 	serverware/native_oauth_capture_retirement_owner.py \
 	serverware/native_oauth_capture_retirement_receipts.py \
 	serverware/authority_oauth_reconnect.py \
@@ -3750,6 +3754,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/native_role_key_provisioner.py \
 				scripts/native_role_key_kms_parent.py \
 				scripts/package_native_role_key_runtime.py \
+				scripts/package_native_shadow_key_runtime.py \
 				scripts/prepare_native_role_keys.py \
 				scripts/seal_native_service_tokens.py \
 				scripts/sign_native_guest_credential_delivery.py \
@@ -3820,6 +3825,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_transition_oauth_measured_capture_retirement.py \
 				serverware/control_plane_oauth_measured_capture_retirement.py \
 				serverware/native_oauth_capture_retirement.py \
+				serverware/oauth_retirement_values.py \
 				serverware/native_oauth_capture_retirement_owner.py \
 				serverware/native_oauth_capture_retirement_receipts.py \
 				serverware/authority_oauth_reconnect.py \

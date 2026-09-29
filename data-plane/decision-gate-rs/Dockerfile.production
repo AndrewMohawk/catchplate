@@ -232,6 +232,12 @@ RUN --network=none python -I -B /source/scripts/package_native_role_key_runtime.
 FROM scratch AS native-role-key-runtime-artifact
 COPY --from=native-role-key-runtime /role-key-output /role-key-output
 
+FROM native-broker-runtime AS native-shadow-key-runtime
+RUN --network=none python -I -B /source/scripts/package_native_shadow_key_runtime.py
+
+FROM scratch AS native-shadow-key-runtime-artifact
+COPY --from=native-shadow-key-runtime /shadow-key-output /shadow-key-output
+
 # The old host-side target remains explicit for migration work. The default,
 # last target below is the native-only enclave image.
 FROM gcr.io/distroless/cc-debian12:nonroot@sha256:ce0d66bc0f64aae46e6a03add867b07f42cc7b8799c949c2e898057b7f75a151 AS production-decision-gate
@@ -293,6 +299,8 @@ COPY --from=native-broker-runtime --chown=0:0 --chmod=0444 /broker-output/native
 COPY --from=native-broker-runtime --chown=0:0 --chmod=0444 /broker-output/native-broker-runtime.json /usr/share/serverware/native-broker-runtime.json
 COPY --from=native-role-key-runtime --chown=0:0 --chmod=0444 /role-key-output/native-role-key-provisioner-runtime.squashfs /opt/serverware/native-role-key-provisioner-runtime.squashfs
 COPY --from=native-role-key-runtime --chown=0:0 --chmod=0444 /role-key-output/native-role-key-provisioner-runtime.json /usr/share/serverware/native-role-key-provisioner-runtime.json
+COPY --from=native-shadow-key-runtime --chown=0:0 --chmod=0444 /shadow-key-output/native-shadow-key-delivery-runtime.squashfs /opt/serverware/native-shadow-key-delivery-runtime.squashfs
+COPY --from=native-shadow-key-runtime --chown=0:0 --chmod=0444 /shadow-key-output/native-shadow-key-delivery-runtime.json /usr/share/serverware/native-shadow-key-delivery-runtime.json
 COPY --from=build --chown=0:0 --chmod=0555 /src/target/release/serverware-native-enclave-entrypoint /usr/local/libexec/serverware-native-enclave-entrypoint
 # Native startup constructs the private broker mount and drops the helper's
 # privileges. No root key, credential, provider token or host socket is baked in.

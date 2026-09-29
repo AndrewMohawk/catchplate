@@ -8,6 +8,7 @@ import uuid
 from collections.abc import Mapping
 
 from serverware import native_oauth_refresh as material
+from serverware import oauth_retirement_values as scalar
 from serverware.native_oauth_cleanup import Contact as _Contact, request
 
 canonical, require, digest, sha256 = material.canonical, material.require, material.digest, material.sha
@@ -137,8 +138,7 @@ def payload(value):
         "externalRelatedGrantImpactAuthorized": True, "automaticReopen": False})
     # Share only the existing provider/scalar data predicates. The actual
     # signature, purpose, scope and assignment below are never translated.
-    from serverware import authority_oauth_revocation as scalar
-    scalar.payload({**{name: value[name] for name in scalar.GRANT_FIELDS - {"schema", "purpose"}},
+    scalar.revocation_payload({**{name: value[name] for name in scalar.GRANT_FIELDS - {"schema", "purpose"}},
         "schema": scalar.GRANT_SCHEMA, "purpose": "retained-oauth-revocation"})
     configuration = value["providerConfiguration"]
     from serverware.native_oauth_cleanup import ENDPOINTS
@@ -262,8 +262,7 @@ def transport(raw, request_sha256):
     material.integer(value["receivedAtEpochNs"]); digest(value["rawResponseSha256"])
     require(type(value["rawResponseEnvelope"]) is dict and set(value["rawResponseEnvelope"]) == material.ENVELOPE_FIELDS
         and value["rawResponseEnvelope"]["credential_version"] == 1)
-    from serverware import authority_oauth_exchange as envelopes
-    envelopes.envelope(value["rawResponseEnvelope"])
+    scalar.envelope(value["rawResponseEnvelope"])
     status = value["status"]
     require(status is None or type(status) is int and 200 <= status <= 599)
     return "unknown" if status is None else "accepted" if 200 <= status < 300 else "rejected"

@@ -56,6 +56,29 @@ host loader/library graph, `PYTHONPATH`, shell, pip or build tool enters the
 helper root. CPython remains a measured general-purpose interpreter, not a
 proof of language-level isolation.
 
+The explicit source allowlist includes the capture-retirement and reconnect
+owners, codecs, receipts, rows and TLS dependencies used by the actual broker
+entrypoint. Their inclusion supplies modules, not permission to select those
+purposes or call a provider. Capture retirement uses the shared standard-library
+`oauth_retirement_values` predicates for revocation-shaped scalar/provider data
+and encrypted response envelopes. The control-plane revocation/exchange APIs
+delegate to those same predicates: exact fields, UUID/digest spelling, text
+bounds, provider URLs, token purposes, original time windows and envelope limits
+are unchanged. Native signed purposes and assignment checks are not translated.
+This removes control-plane policy/storage imports from those scalar/envelope
+validation paths. It does not yet close the actual receipt-verification call
+graph: capture retirement's `policy_key` and `verify_grant` still import
+control-plane policy modules outside this image. Those exact predicates must
+be made portable, and pending-retirement helper validation must share the full
+strict control-plane predicates, before the helper runtime is ready to freeze.
+No missing authority check may be skipped or replaced with a successful marker.
+The new data-grammar regression script is listed in the isolated no-build lane;
+it is authored but has not been executed.
+
+The [shadow-key helper](native-shadow-encrypted-keys.md#real-process-and-packaging-contract)
+has a separate offline packager and image identity. Sharing the bounded copier
+does not give either helper the other's entrypoint, key inventory or authority.
+
 The image producer uses the checksum-pinned Debian SquashFS tool from
 `production-dependencies/native-broker-linux-amd64.sha256`: one worker, gzip,
 fixed timestamps and root ownership, without append, xattrs or recovery.

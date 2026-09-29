@@ -6,10 +6,9 @@ import json
 import re
 import uuid
 from collections.abc import Mapping
-from urllib.parse import urlsplit
 
 from serverware import authority_oauth_exchange as exchange
-from serverware import authority_oauth_activation_policy as enrollment
+from serverware import oauth_retirement_values as values
 
 canonical, require, digest, sha256 = exchange.canonical, exchange.require, exchange.digest, exchange.sha256
 identifier, text = exchange.identifier, exchange.text
@@ -17,22 +16,18 @@ OP_CLAIM = "oauth.revocation.claim"
 OP_CONTACT = "oauth.revocation.contact"
 OP_FINISH = "oauth.revocation.finish"
 OPERATIONS = frozenset({OP_CLAIM, OP_CONTACT, OP_FINISH})
-GRANT_SCHEMA = "serverware.oauthRevocationAuthorization/v1"
+GRANT_SCHEMA = values.GRANT_SCHEMA
 SIGNED_GRANT_SCHEMA = "serverware.signedOAuthRevocationAuthorization/v1"
 TRANSPORT_SCHEMA = "serverware.oauthRevocationTransport/v1"
-GRANT_FIELDS = frozenset({"schema", "sourceRevision", "purpose", "authorizationId", "configurationDigest", "deploymentId",
-    "exchangeId", "exchangeRowSha256", "workRowSha256", "enrollmentSha256", "historicalEnrollmentRootSpkiSha256",
-    "tokenEnvelopeSha256", "tokenSecretSha256", "providerId", "clientId", "clientMaterialSha256", "providerConfiguration",
-    "tokenPurposes", "issuedAtEpochNs", "expiresAtEpochNs"})
-PROVIDER_FIELDS = frozenset({"providerId", "authorizationUrl", "tokenUrl", "revocationUrl", "identityUrl", "tokenAuth",
-    "defaultScopes", "authParams", "metadataProvider", "tokenResponseScopeOptional"})
+GRANT_FIELDS = values.GRANT_FIELDS
+PROVIDER_FIELDS = values.PROVIDER_FIELDS
 FIELDS = frozenset({"work_id", "authorization_original", "enrollment_original", "historical_root_original", "request"})
 JOURNAL_TABLE = "oauth_revocation_reservations"
 ATTEMPT_TABLE = "oauth_revocation_attempts"
 JOURNAL_FIELDS = frozenset({"id", "authorization_original", "authorization_sha256", "exchange_row_sha256", "original_work_json", "owner_nonce_sha256", "status", "created_at", "expires_at", "updated_at"})
 ATTEMPT_FIELDS = frozenset({"id", "work_id", "token_purpose", "contact_request_sha256", "status", "transport_original", "transport_sha256", "created_at", "updated_at"})
 WORK_FIELDS = frozenset({"id", "provider_id", "actor_id", "source", "encrypted_secret", "encrypted_dek", "secret_nonce", "secret_ciphertext", "secret_kek_id", "credential_version", "secret_updated_at", "status", "attempts", "last_error", "next_attempt_at", "lease_owner", "lease_until", "created_at", "updated_at"})
-MAX_GRANT_BYTES = 64 * 1024
+MAX_GRANT_BYTES = values.MAX_GRANT_BYTES
 MAX_TRANSPORT_BYTES = 128 * 1024
 MAX_ARGUMENT_BYTES = 384 * 1024
 
@@ -78,40 +73,7 @@ def document(raw, maximum):
 
 
 def payload(value):
-    require(type(value) is dict and set(value) == GRANT_FIELDS and value["schema"] == GRANT_SCHEMA
-        and value["purpose"] == "retained-oauth-revocation" and value["providerId"] in {"google", "x"})
-    for field in ("authorizationId", "exchangeId"):
-        identifier(value[field])
-        require(str(uuid.UUID(value[field])) == value[field])
-    for field in ("configurationDigest", "exchangeRowSha256", "workRowSha256", "enrollmentSha256",
-            "historicalEnrollmentRootSpkiSha256", "tokenEnvelopeSha256", "tokenSecretSha256", "clientMaterialSha256"):
-        digest(value[field])
-        require(value[field] != "sha256:" + "0" * 64)
-    enrollment._identifier(value["deploymentId"])
-    text(value["sourceRevision"], 128)
-    text(value["clientId"], 2048)
-    purposes = value["tokenPurposes"]
-    require(type(purposes) is list and purposes in (["access_token"], ["refresh_token"], ["access_token", "refresh_token"])
-        and (value["providerId"] == "x" or len(purposes) == 1))
-    provider = value["providerConfiguration"]
-    require(type(provider) is dict and set(provider) == PROVIDER_FIELDS and provider["providerId"] == value["providerId"]
-        and provider["tokenAuth"] in {"basic", "client_secret_post", "none"} and type(provider["tokenResponseScopeOptional"]) is bool)
-    for name in ("authorizationUrl", "tokenUrl", "revocationUrl", "identityUrl"):
-        url = urlsplit(text(provider[name], 4096))
-        require(url.scheme == "https" and url.hostname and not url.username and not url.password and not url.fragment)
-    text(provider["metadataProvider"], 256)
-    require(type(provider["defaultScopes"]) is list and 1 <= len(provider["defaultScopes"]) <= 30)
-    for scope in provider["defaultScopes"]:
-        text(scope, 200)
-    require(type(provider["authParams"]) is dict and len(provider["authParams"]) <= 16)
-    for key, item in provider["authParams"].items():
-        text(key, 128)
-        text(item, 2048)
-    for field in ("issuedAtEpochNs", "expiresAtEpochNs"):
-        require(type(value[field]) is int and 1 <= value[field] <= 2**63 - 1)
-    require(value["issuedAtEpochNs"] < value["expiresAtEpochNs"] <= value["issuedAtEpochNs"] + 300_000_000_000)
-    require(len(canonical(value)) <= MAX_GRANT_BYTES - 512)
-    return value
+    return values.revocation_payload(value)
 
 
 def grant_document(raw):

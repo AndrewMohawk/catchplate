@@ -91,14 +91,33 @@ dedicated helper exits and never becomes a signing/decrypt service.
 
 ## Real process and packaging contract
 
-Required new image: `/opt/serverware/native-shadow-key-delivery-runtime.squashfs`.
+Fixed image: `/opt/serverware/native-shadow-key-delivery-runtime.squashfs`.
 The existing sealed-memfd/read-only-loop/SquashFS mechanism admits it under a
 distinct fixed purpose, <=512MiB, not legacy fs-verity/IMA. It must contain
 `/usr/local/bin/python3.11`, the fixed
 `/opt/serverware/serverware/native_shadow_key_helper.py`, this contract module,
 the shared native shadow grammar and closed CMS module, pinned cryptography
-dependencies, stdlib, loader and complete recursive DSO closure. No packaging
-producer or image existence is asserted by these source files.
+dependencies, stdlib, loader and complete recursive DSO closure.
+
+`scripts/package_native_shadow_key_runtime.py` now supplies the offline producer
+in Docker target `native-shadow-key-runtime`. It shares only the existing bounded
+file/ELF/library copier with the broker and boot-role packagers; its root,
+entrypoint, source module allowlist and output identity are separate. The source
+archive and Python wheels retain their existing independent hash admission.
+One-worker SquashFS production retains fixed timestamps, root ownership,
+read-only modes and the 512 MiB bound. A later build performs an import-only
+check inside the completed private root; it does not run the helper protocol.
+
+`native-shadow-key-runtime-artifact` exports the image and its canonical build
+inventory under `/shadow-key-output`. The native enclave image installs the
+inventory at `/usr/share/serverware/native-shadow-key-delivery-runtime.json`
+and the image at the fixed path above, both root-owned and mode0444. The manifest
+uses `serverware.nativeShadowKeyDeliveryRuntimeBuild/v1`, records every copied
+file and source-manifest hash, and emits the existing five-field `helperImage`
+pins. `releaseAuthority` is false: no seed, KEK, ciphertext inventory, cloud
+configuration or signed assignment is packaged. Independently admitting the
+actual built pins, building the EIF and provisioning the launcher remain
+required. This source producer has not been built or executed.
 
 The root-created one-shot helper runs at the SAME signed final service UID/GID,
 with groups/capabilities removed, NNP, private immutable root, empty environment,

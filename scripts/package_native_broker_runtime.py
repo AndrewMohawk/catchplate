@@ -63,8 +63,10 @@ def sha(data: bytes) -> str:
 
 class Closure:
     def __init__(self, epoch: int, *, purpose: str = "broker") -> None:
-        require(purpose in {"broker", "role-keys"}, "unknown fixed runtime closure purpose")
-        self.root = ROOT if purpose == "broker" else Path("/role-key-runtime")
+        roots = {"broker": ROOT, "role-keys": Path("/role-key-runtime"),
+                 "shadow-keys": Path("/shadow-key-runtime")}
+        require(purpose in roots, "unknown fixed runtime closure purpose")
+        self.root = roots[purpose]
         self.epoch = epoch
         self.files: dict[str, dict[str, object]] = {}
         self.elf_sources: list[Path] = []
@@ -197,7 +199,9 @@ def main() -> None:
                  "native_oauth_exchange.py", "native_oauth_exchange_receipts.py", "native_oauth_exchange_tls.py", "native_oauth_exchange_owner.py",
                  "native_oauth_setup.py", "native_oauth_setup_rows.py", "native_oauth_setup_receipts.py", "native_oauth_setup_tls.py", "native_oauth_setup_owner.py",
                  "native_oauth_cleanup.py", "native_oauth_cleanup_receipts.py", "native_oauth_cleanup_owner.py",
-                 "native_oauth_pending_retirement.py", "native_oauth_pending_retirement_receipts.py", "native_oauth_pending_retirement_owner.py"):
+                 "native_oauth_pending_retirement.py", "native_oauth_pending_retirement_receipts.py", "native_oauth_pending_retirement_owner.py",
+                 "oauth_retirement_values.py", "native_oauth_capture_retirement.py", "native_oauth_capture_retirement_receipts.py", "native_oauth_capture_retirement_owner.py",
+                 "native_oauth_reconnect.py", "native_oauth_reconnect_rows.py", "native_oauth_reconnect_receipts.py", "native_oauth_reconnect_tls.py", "native_oauth_reconnect_owner.py"):
         closure.add(SOURCE / "serverware" / name, SITE / "serverware" / name)
     closure.add(SOURCE / "serverware/native_secret_broker_helper.py", HELPER)
     closure.libraries()

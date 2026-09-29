@@ -5,9 +5,9 @@ import hashlib
 import re
 import uuid
 from collections.abc import Mapping
-from datetime import datetime, timedelta
 
 from serverware import authority_oauth_activation as activation
+from serverware import oauth_retirement_values as values
 
 canonical = activation.canonical
 require = activation.require
@@ -25,7 +25,7 @@ OPERATIONS = frozenset({OP_PREPARE, OP_CLAIM, OP_RETAIN, OP_STAGE})
 ASSERTION_OPERATIONS = frozenset({OP_PREPARE})
 FIELDS = activation.FIELDS
 TABLE = "oauth_exchange_reservations"
-ENVELOPE_FIELDS = frozenset({"encrypted_secret", "encrypted_dek", "secret_nonce", "secret_ciphertext", "secret_kek_id", "credential_version", "secret_updated_at"})
+ENVELOPE_FIELDS = values.ENVELOPE_FIELDS
 PREPARE_FIELDS = frozenset({"exchangeId", "stateSha256", "browserNonceSha256", "pkceVerifierSha256", "stateOriginalSha256", "stateEnvelope", "reservedEnvelope", "providerId", "redirectUri", "credentialName", "scopes", "metadata", "issuedAtEpochNs", "contactExpiresAtEpochNs", "retentionExpiresAtEpochNs", "pendingExpiresAtEpochNs", "enrollmentSha256", "limits"})
 POSSESSION_FIELDS = frozenset({"exchangeId", "exchangeRowSha256", "state", "browserNonce", "limits"})
 REQUEST_FIELDS = {OP_PREPARE: PREPARE_FIELDS,
@@ -34,7 +34,7 @@ REQUEST_FIELDS = {OP_PREPARE: PREPARE_FIELDS,
     OP_STAGE: POSSESSION_FIELDS | {"metadata", "review", "payloadDigest", "tokenSecretSha256"}}
 ROW_FIELDS = frozenset({"id", "provider_id", "requester_id", "enrollment_original", "credential_policy_json", "consent_json", "status", "claim_request_digest", "code_sha256", "contact_request_sha256", "raw_response_sha256", "raw_response_envelope_json", "token_secret_sha256", "token_envelope_json", "created_at", "updated_at"})
 NULLABLE = frozenset({"claim_request_digest", "code_sha256", "contact_request_sha256", "raw_response_sha256", "raw_response_envelope_json", "token_secret_sha256", "token_envelope_json"})
-MAX_ENVELOPE_BYTES = 256 * 1024
+MAX_ENVELOPE_BYTES = values.MAX_ENVELOPE_BYTES
 MAX_ARGUMENT_BYTES = 768 * 1024
 MAX_ROW_BYTES = 1024 * 1024
 
@@ -51,27 +51,15 @@ def artifact_id(exchange_id, purpose):
 
 
 def text(value, bound):
-    require(type(value) is str and value == value.strip() and 1 <= len(value.encode("utf-8")) <= bound
-        and not any(ord(c) < 32 or ord(c) == 127 for c in value))
-    return value
+    return values.text(value, bound)
 
 
 def timestamp(value):
-    require(type(value) is str)
-    result = datetime.fromisoformat(value)
-    require(result.tzinfo is not None and result.utcoffset() == timedelta(0))
-    return result
+    return values.timestamp(value)
 
 
 def envelope(value):
-    require(type(value) is dict and set(value) == ENVELOPE_FIELDS)
-    require(type(value["credential_version"]) is int and value["credential_version"] == 1)
-    require(value["encrypted_secret"] == "envelope:v2")
-    for field in ENVELOPE_FIELDS - {"credential_version"}:
-        text(value[field], MAX_ENVELOPE_BYTES)
-    timestamp(value["secret_updated_at"])
-    require(len(canonical(value)) <= MAX_ENVELOPE_BYTES)
-    return dict(value)
+    return values.envelope(value)
 
 
 def request_binding(operation, value):

@@ -24,19 +24,18 @@ Checkpoint: **2026-09-29 — pre-production, source-only.**
 
 [![Project checkpoints, one segment per task: 35 of 46 source-landed; 4 active and 7 todo. Evidence handoff 10/10; historical recovery 4/5; permissions and grants 10/10; finalization and sessions 8/8; workloads and native 3/6; providers and operations 0/7. F08 is source-landed in 170d0ac; H05, N04, N05 and O04 are in progress. Production acceptance remains 0/6. Source only; unbuilt, unexecuted and unprovisioned.](docs/images/project-progress.svg)](docs/production-status.md#next-source-milestones)
 
-### Current work: authorized publication resolution and retained cgroup observation
+### Current work: private native start claims and containment
 
-[`.258` source / 0e62dfb](https://github.com/example/private-deployment)
-connects [admin-token publication resolution](docs/control-plane-admin-token-publication-resolution.md):
-fresh requester and distinct-approver WebAuthn authorize exact installed-new
-finalization or unchanged-old abandonment. Append-only settlement anchors a later
-independent rotation; no rename, token disclosure or retry occurs, and uncertainty
-stays blocked. [Retained cgroup control preparation/observation](docs/native-cgroup-control-mechanism.md)
-joins the existing static launcher without adding kill, start or native guardian
-authority. Prior `.257` [retained-outcome recovery](docs/control-plane-retained-outcome-root-history.md)
-and private [filesystem/ELF](docs/native-execution-filesystem-admission.md)/[start admission](docs/native-workload-start-admission.md)
-remain credited, not execution or supervision. Source is unbuilt, unexecuted and
-unprovisioned; no build/test/runtime, tested pilot, NSM or AWS/spend acceptance is claimed.
+[`.259` source / 09d73a8](https://github.com/example/private-deployment)
+connects [execution-profile parents](docs/native-egress-execution-parents.md) to
+the actual [retained start owner and durable start/creation claims](docs/native-start-claim.md),
+then [claimed cgroup containment](docs/native-execution-containment.md).
+These are private source paths, not public execution, a child, transferred
+network ownership, an independent guardian or a running pilot. Prior H05
+retained recovery and [admin-token resolution](docs/control-plane-admin-token-publication-resolution.md)
+retain source credit. The production approval ACL/controlled-writer mismatch
+remains open; its bridge is in progress and the portal panel is held, not landed.
+Source remains unbuilt, unexecuted and unprovisioned; no runtime or pilot credit.
 
 The four active checkpoints remain partial:
 
@@ -53,15 +52,16 @@ The four active checkpoints remain partial:
 - **N05 · Native enrollment:** acquisition/issuance, retained-key publication,
   protected host CA installation, principal preflight, response/lease authority
   and separately authorized dual-stack attachment retain source credit.
-  Client/capture v4 remains an observation before teardown. New immutable
-  filesystem/ELF admission and `PreparedStart` are private preparation only;
-  old never-exec diagnostics and static-launcher constraints are unchanged.
-  Public start orchestration, executable child, start claims, cgroup/guardian,
+  Client/capture v4 remains an observation before teardown. Immutable
+  filesystem/ELF admission now joins actual `StartOwner`, durable start/creation
+  claims and cgroup preparation; old diagnostics/static-launcher constraints stay unchanged.
+  Public execution, executable child, network-owner transfer, independent guardian,
   supervision and combined CA+egress remain open, alongside actual
   CONNECT/provider/canary, Kubernetes, lifecycle/recovery/off-host rollback and
   independent service/exact-source acceptance.
 - **O04 · Protected operations:** [genuine approval verification](docs/control-plane-approval-verification.md)
   and durable publication now join [separately authorized exact-state resolution](docs/control-plane-admin-token-publication-resolution.md).
+  Production approval ACL/controlled-writer integration and the held portal remain open.
   Other provider/filesystem effects, ambiguous or malformed-history recovery,
   journal archival, multi-host coordination and independent rollback witnessing remain open.
 

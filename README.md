@@ -24,12 +24,12 @@ Checkpoint: **2026-09-29 — pre-production, source-only.**
 
 [![Project checkpoints, one segment per task: 36 of 46 source-landed; 10 active and 0 todo. Evidence handoff 10/10; historical recovery 4/5; permissions and grants 10/10; finalization and sessions 8/8; workloads and native 3/6; providers and operations 1/7. H05, N04, N05, N06 and O01 through O06 are in progress. Production acceptance remains 0/6. Source only; unbuilt, unexecuted and unprovisioned.](docs/images/project-progress.svg)](docs/production-status.md#next-source-milestones)
 
-Latest [`.300` source](https://github.com/example/private-deployment) connects
-[native account reconnect](docs/native-measured-oauth-reconnect.md) through the
-actual helper, browser, dedicated signer and explicit startup v17. Original
-family permission and fences precede contact; recovery cannot repeat token
-exchange. Measured custody, later Setup, retired-family succession, broader
-recovery/lifecycle, provisioning and end-to-end verification remain open.
+Latest [`.301` source](https://github.com/example/private-deployment) adds
+[native custody image ownership](docs/native-custody-closure.md) and
+[retained role keys with NSM evidence](docs/native-shadow-role-keys.md).
+Native reconnect is source-connected. Custody launch/services, encrypted key
+delivery, independent verification, later Setup and retired-family succession
+remain open, alongside provisioning and end-to-end acceptance.
 
 The bar shows **committed source, not tested readiness or remaining effort**.
 Green means source-landed; amber means partial implementation. No current pilot

@@ -3907,6 +3907,10 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/response_v2/client_transport.rs \
 				data-plane/decision-gate-rs/src/response_v2/custody/guest_listener.rs \
 				data-plane/decision-gate-rs/src/response_v2/custody/peer_measurement.rs \
+				data-plane/decision-gate-rs/src/bin/serverware-response-v2-guest-inspector.rs \
+				data-plane/decision-gate-rs/src/response_v2/custody/guest_inspector/mod.rs \
+				data-plane/decision-gate-rs/src/response_v2/custody/guest_inspector/wire.rs \
+				data-plane/decision-gate-rs/src/response_v2/custody/guest_inspector/confinement.rs \
 				data-plane/decision-gate-rs/src/response_v2/integration.rs \
 				data-plane/decision-gate-rs/src/response_v2/mod.rs \
 				data-plane/decision-gate-rs/src/response_v2/native_config.rs \
@@ -4132,6 +4136,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/public-webauthn-revocation-portal.v1.schema.json \
 				schemas/response-v2-guest-credential-delivery.v1.schema.json \
 				schemas/response-v2-guest-listener.v1.schema.json \
+				schemas/response-v2-guest-inspector.v1.schema.json \
 				schemas/rbac-witness-recovery.v1.schema.json \
 				schemas/native-secret-broker.v1.schema.json \
 				schemas/native-startup-configuration.v5.schema.json \

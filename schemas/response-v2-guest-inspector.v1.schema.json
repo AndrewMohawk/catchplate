@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/response-v2-guest-inspector.v1.schema.json",
+  "title": "Private same-guest response custody process inspection",
+  "$comment": "Closed data grammar only, not a verdict, quote, release permission or readiness. Canonical UTF8 sorted JSON without LF: bootstrap <=16384 bytes, IPC <=4096 bytes. Actual descriptors, parent/child ownership, signed cold config/delivery, kernel boot, capabilities, finite original deadlines, local context equality and sequences are independently enforced by the source owners. No public RPC or caller-selected PID/path target.",
+  "oneOf": [
+    {"$ref": "#/$defs/bootstrap"},
+    {"$ref": "#/$defs/request"},
+    {"$ref": "#/$defs/result"},
+    {"$ref": "#/$defs/initialized"}
+  ],
+  "$defs": {
+    "sha": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$", "not": {"const": "sha256:0000000000000000000000000000000000000000000000000000000000000000"}},
+    "ns": {"type": "string", "pattern": "^[1-9][0-9]{0,19}$", "$comment": "Actual parser also requires <=u64::MAX, exact decimal spelling, positive and original absolute CLOCK_BOOTTIME deadline."},
+    "nonce": {"type": "string", "pattern": "^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$", "not": {"const": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}},
+    "path": {"type": "string", "minLength": 2, "maxLength": 4096, "pattern": "^/[^\u0000]+$", "$comment": "Source bounds UTF8 bytes, rejects empty/dot/dotdot components; paths occur only in cold bootstrap, never inspection requests."},
+    "nullableSha": {"oneOf": [{"$ref": "#/$defs/sha"}, {"type": "null"}]},
+    "bootstrap": {
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "configurationPath", "configurationSha256", "deliveryPath", "deliverySha256", "gateLifetimeDeadlineBoottimeNs", "channelNonce"],
+      "properties": {
+        "apiVersion": {"const": "serverware.responseV2.guestInspectorBootstrap/v1"},
+        "configurationPath": {"$ref": "#/$defs/path"},
+        "configurationSha256": {"$ref": "#/$defs/sha"},
+        "deliveryPath": {"$ref": "#/$defs/path"},
+        "deliverySha256": {"$ref": "#/$defs/sha"},
+        "gateLifetimeDeadlineBoottimeNs": {"$ref": "#/$defs/ns"},
+        "channelNonce": {"$ref": "#/$defs/nonce"}
+      },
+      "$comment": "FD5 actual sealed memfd root:root0600/nlink0. All four immutable seals; exact signed config/delivery admission and actual parent channel required. Gate lifetime is supplied only by the original source-owned parent, not made authoritative by these unsigned bytes."
+    },
+    "request": {
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "channelNonce", "requestSequence", "phase", "frameSha256", "operation", "sessionId", "sequence", "deadlineBoottimeNs"],
+      "properties": {
+        "apiVersion": {"const": "serverware.responseV2.guestInspectorRequest/v1"},
+        "channelNonce": {"$ref": "#/$defs/nonce"},
+        "requestSequence": {"type": "integer", "minimum": 1, "maximum": 18446744073709551615},
+        "phase": {"enum": ["connection", "packet"]},
+        "frameSha256": {"$ref": "#/$defs/nullableSha"},
+        "operation": {"enum": ["connection", "before-dispatch", "before-response"]},
+        "sessionId": {"$ref": "#/$defs/nullableSha"},
+        "sequence": {"oneOf": [{"type": "integer", "minimum": 0, "maximum": 255}, {"type": "null"}]},
+        "deadlineBoottimeNs": {"$ref": "#/$defs/ns"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"phase": {"const": "connection"}}},
+          "then": {"properties": {"operation": {"const": "connection"}, "frameSha256": {"type": "null"}, "sessionId": {"type": "null"}, "sequence": {"type": "null"}}},
+          "else": {"properties": {"operation": {"enum": ["before-dispatch", "before-response"]}, "frameSha256": {"$ref": "#/$defs/sha"}, "sequence": {"type": "integer", "minimum": 0, "maximum": 255}}}
+        }
+      ],
+      "$comment": "Channel sequence starts1 and advances exactly once, never reconnects/resets. Connection SCM_RIGHTS exact2 accepted socket/connection PIDFD; packet exact3 additionally actual SCM_PIDFD of gate packet. Router supplies its actual local retained frame/session/packet context; digest is not a measurement input or independent proof of transmission."
+    },
+    "measurement": {
+      "type": "object", "additionalProperties": false,
+      "required": ["processBindingSha256", "uid", "gid", "cgroupSha256", "securityLabelSha256", "executableSha256"],
+      "properties": {
+        "processBindingSha256": {"$ref": "#/$defs/sha"},
+        "uid": {"const": 65534},
+        "gid": {"const": 65534},
+        "cgroupSha256": {"$ref": "#/$defs/sha"},
+        "securityLabelSha256": {"$ref": "#/$defs/sha"},
+        "executableSha256": {"$ref": "#/$defs/sha"}
+      },
+      "$comment": "Actual shared kernel capture result. Process digest commits retained PIDFD namespace PID list, proc directory device/inode and process start ticks under a distinct fixed domain; no numeric target or descriptors are returned. Receiver still compares independently admitted executable/cgroup/label pins."
+    },
+    "result": {
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "request", "measurement"],
+      "properties": {
+        "apiVersion": {"const": "serverware.responseV2.guestInspectorResult/v1"},
+        "request": {"$ref": "#/$defs/request"},
+        "measurement": {"$ref": "#/$defs/measurement"}
+      }
+    },
+    "initialized": {
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "channelNonce", "bootstrapSha256"],
+      "properties": {
+        "apiVersion": {"const": "serverware.responseV2.guestInspectorInitialized/v1"},
+        "channelNonce": {"$ref": "#/$defs/nonce"},
+        "bootstrapSha256": {"$ref": "#/$defs/sha"}
+      },
+      "$comment": "Private FD3 consistency only, emitted after actual final inspector UID/capability/seccomp checks. Parent must receive genuine SCM_CREDENTIALS and SCM_PIDFD and compare with its retained actual child; this is not cohort readiness."
+    }
+  }
+}

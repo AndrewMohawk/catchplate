@@ -12,6 +12,9 @@ pub(crate) mod generation;
 pub(crate) mod guest_delivery;
 #[path = "response_v2/custody/guest_listener.rs"]
 pub(crate) mod guest_listener;
+#[cfg(target_os = "linux")]
+#[path = "response_v2/custody/guest_inspector/mod.rs"]
+pub(crate) mod guest_inspector;
 #[path = "response_v2/custody/protocol.rs"]
 pub(crate) mod protocol;
 #[path = "response_v2/custody/supervisor.rs"]
@@ -34,6 +37,8 @@ pub use config::{
 };
 pub use guest_listener::{GuestResponseV2ListenerProfile, GuestResponseV2ClientPath,
     PreparedGuestResponseV2Listener, GUEST_RESPONSE_V2_SOCKET};
+#[cfg(target_os = "linux")]
+pub use guest_inspector::run_guest_inspector;
 pub use supervisor::{
     check_custody_service_readiness, dispatch_from_process_args,
     run_custody_service, run_provider_rpc_v1_compatibility,

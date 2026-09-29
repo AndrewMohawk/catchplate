@@ -182,6 +182,18 @@ impl Original {
         }
         Ok(())
     }
+
+    // After the fixed inspector drops privileges, the admitted original FD
+    // remains readable without reopening a root-private path or adding DAC
+    // capabilities. A replacement pathname cannot select a new original.
+    fn check_held(&self) -> Result<(), V2RuntimeError> {
+        let before = self.file.metadata().map_err(|_| fail("inspect retained delivery original"))?;
+        if Identity::of(&before) != self.identity
+            || read(&self.file, self.bytes.len())?.as_slice() != self.bytes.as_slice()
+            || Identity::of(&self.file.metadata().map_err(|_| fail("closing retained original"))?) != self.identity
+        { return Err(fail("retained delivery original changed")); }
+        Ok(())
+    }
 }
 
 pub(crate) struct Delivery {
@@ -377,6 +389,36 @@ impl ListenerPreparation {
         self.envelope.check()
     }
     pub(crate) fn binding(&self) -> &super::guest_listener::AuthorityBinding { &self.binding }
+
+    // Consumed only by the fixed worker after it has derived and retained its
+    // genuine parent channel/PIDFD. This removes neither the startup admission
+    // check nor the need for an actual source-owned parent lifetime.
+    pub(crate) fn into_inspection(self) -> Result<InspectionOriginals, V2RuntimeError> {
+        self.check()?;
+        let config: Config = crate::decode_canonical_json(&self.config.bytes)
+            .map_err(|_| fail("retained inspection configuration"))?;
+        let inspector = 64990;
+        if inspector == 65534 || config.custody_topology().processes.iter()
+            .any(|process| process.uid == inspector || process.gid == inspector)
+        { return Err(fail("inspector identity overlaps a signed custody role")); }
+        Ok(InspectionOriginals { config:self.config, envelope:self.envelope,
+            binding:self.binding, owner_pid:self.owner_pid })
+    }
+}
+
+pub(crate) struct InspectionOriginals {
+    config: Original, envelope: Original,
+    binding: super::guest_listener::AuthorityBinding, owner_pid: libc::pid_t,
+}
+impl InspectionOriginals {
+    pub(crate) fn binding(&self) -> &super::guest_listener::AuthorityBinding { &self.binding }
+    pub(crate) fn check(&self) -> Result<(), V2RuntimeError> {
+        if unsafe { libc::getpid() } != self.owner_pid
+            || super::recovery::kernel_boot_id()? != self.binding.boot_id
+        { return Err(fail("inspection originals crossed process or boot")); }
+        self.config.check_held()?;
+        self.envelope.check_held()
+    }
 }
 
 pub(crate) fn load(config_path: &Path, role: CustodyServiceRole, path: &Path, sha256: &str)

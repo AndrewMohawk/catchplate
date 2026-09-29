@@ -34,6 +34,7 @@ impl PeerMeasurement {
     pub(super) fn cgroup_sha256(&self) -> &str { &self.cgroup }
     pub(super) fn security_label_sha256(&self) -> &str { &self.security_label }
     pub(super) fn executable_sha256(&self) -> &str { &self.executable }
+    pub(super) fn process_binding_sha256(&self) -> String { self.process.binding_sha256() }
 }
 
 pub(super) fn capture_connection(socket: RawFd, expected_uid: libc::uid_t, cache: &ExecutableMeasurementCache)
@@ -150,6 +151,17 @@ pub(super) struct StableProcessIdentity {
 
 impl StableProcessIdentity {
     pub(super) fn pid(&self) -> libc::pid_t { self.pidfd.pid }
+    fn binding_sha256(&self) -> String {
+        let mut hash = Sha256::new();
+        hash.update(b"serverware.responseV2.guestInspectorProcess/v1\0");
+        hash.update(self.pidfd.pid.to_be_bytes());
+        hash.update((self.pidfd.namespace_pids.len() as u32).to_be_bytes());
+        for pid in &self.pidfd.namespace_pids { hash.update(pid.to_be_bytes()); }
+        hash.update(self.proc_device.to_be_bytes());
+        hash.update(self.proc_inode.to_be_bytes());
+        hash.update(self.start_time_ticks.to_be_bytes());
+        format!("sha256:{:x}", hash.finalize())
+    }
 }
 
 #[derive(Clone, Eq, Hash, PartialEq)]

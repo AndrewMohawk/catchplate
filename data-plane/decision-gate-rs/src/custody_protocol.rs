@@ -100,6 +100,8 @@ pub use response_observation_v2::custody::{
     PUBLIC_CUSTODY_API_VERSION,
     run_response_observation_v2_provider_from_env,
 };
+#[cfg(target_os = "linux")]
+pub use response_observation_v2::custody::run_guest_inspector;
 pub use response_observation_v2_api::{
     response_data_result_exact_object_descriptors,
     response_observation_v2_lifecycle_state_sha256,

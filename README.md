@@ -26,14 +26,14 @@ Checkpoint: **2026-09-28 — pre-production, source-only.**
 
 ### Current work: native enrollment, workload trust and protected operations
 
-[`.246` source / 2a290ca](https://github.com/example/private-deployment)
-connects the [native host CA installer](docs/native-ca-installation.md) to an
-independent root grant, genuine same-TLS proof, observed host/network namespace
-and protected local claim/destination owners. Capture v2 preserves exact evidence
-for later submission without another bootstrap; v1 stays diagnostic-only.
-Kubernetes ownership, egress/canaries, full runtime policy, lifecycle/recovery
-and independently provisioned authorities/acceptance remain open. Diagnostics
-never replace installation permission or the separate native issuance grant.
+[`.247` source / e96a23f](https://github.com/example/private-deployment)
+connects [native target-principal preflight](docs/native-principal-preflight-verification.md)
+to actual Snapshot/socket source, header, token and mTLS authentication. A secret
+exporter binds the exact request; the role-3 quote binds the statement, and its
+original receiver retains proof on the same CONNECT transport. Old profiles stay
+unchanged. Actual CONNECT/provider authorization, egress/canaries, Kubernetes,
+lifecycle/recovery and independent acceptance remain separate; legacy provider
+response profiles still cap principal IDs at 256 bytes, not native v3's 1024.
 No build, test, runtime, NSM or AWS/spend acceptance is claimed.
 
 The four active checkpoints remain partial:
@@ -51,12 +51,14 @@ The four active checkpoints remain partial:
   native CA-worker issuance. Cold-selected native options/submission and retained-key
   SDK leaf/chain publication now connect to independently authorized host CA
   installation with actual native CA/host-namespace admission and protected local
-  reservation/token/destination ownership. Kubernetes ownership, full target
-  runtime policy, scoped proxy/egress/canaries,
+  reservation/token/destination ownership. Quote-bound target-principal preflight
+  now retains actual source/header/token/mTLS admission on the CONNECT transport;
+  actual CONNECT/provider policy, Kubernetes ownership, scoped proxy/egress/canaries,
   lifecycle/cross-session recovery, off-host rollback witnessing and independent
   service/exact-source verification remain open.
 - **O04 · Protected operations:** [genuine approval verification](docs/control-plane-approval-verification.md)
-  is source-connected; protected provider/filesystem effects and durable
+  and its signed-assertion withdrawal fixture are source-corrected, unexecuted;
+  protected provider/filesystem effects and durable
   interruption outcomes remain open.
 
 No new parent checkpoint or tested pilot is claimed. Source remains unbuilt,
@@ -124,7 +126,7 @@ lists every remaining item and its evidence.
 | --- | --- | --- |
 | H05 | Historical authority across source/configuration/key changes | In progress |
 | N04 | Workload identity provisioning and authenticated channels | In progress |
-| N05 | Native enrollment, verified CA installation and proxy setup | In progress / partial; native issuance and protected host CA installation source-connected; Kubernetes/egress/canaries and independent acceptance open |
+| N05 | Native enrollment, verified CA installation and proxy setup | In progress / partial; native issuance, protected host CA installation and quote-bound principal preflight source-connected; provider/egress/canaries and independent acceptance open |
 | N06 | Enclave TLS/proxy execution and credential custody | Todo |
 | O01 | OAuth ownership across deployments and applications | Todo |
 | O02 | Measured provider issuance and interrupted-exchange recovery | Todo |

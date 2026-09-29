@@ -64,8 +64,10 @@ def sha(data: bytes) -> str:
 class Closure:
     def __init__(self, epoch: int, *, purpose: str = "broker") -> None:
         roots = {"broker": ROOT, "role-keys": Path("/role-key-runtime"),
-                 "shadow-keys": Path("/shadow-key-runtime")}
+                 "shadow-keys": Path("/shadow-key-runtime"),
+                 "shadow-verifier": Path("/shadow-verifier-runtime")}
         require(purpose in roots, "unknown fixed runtime closure purpose")
+        self.purpose = purpose
         self.root = roots[purpose]
         self.epoch = epoch
         self.files: dict[str, dict[str, object]] = {}
@@ -148,11 +150,30 @@ class Closure:
                 # not symlinks, in the private chroot.
                 self.add(library, target, executable=str(target).endswith("/ld-linux-x86-64.so.2"))
 
+    def shadow_verifier_mount_targets(self) -> list[dict[str, str]]:
+        """Only this offline image's fixed empty, non-authority mount targets."""
+        require(self.purpose == "shadow-verifier" and os.geteuid() == 0,
+                "mount targets belong only to the fixed external verifier image")
+        proc = self.root / "proc"
+        proc.mkdir(mode=0o555)
+        configuration = self.root / "etc/serverware/native-shadow-nitro-verifier.json"
+        configuration.parent.mkdir(parents=True)
+        with configuration.open("xb"):
+            pass
+        configuration.chmod(0o400)
+        os.utime(configuration, (self.epoch, self.epoch))
+        name = "/etc/serverware/native-shadow-nitro-verifier.json"
+        require(name not in self.files and len(self.files) < MAX_FILES,
+                "verifier mount target conflicts with the admitted file inventory")
+        self.files[name] = {"sha256": sha(b""), "size": 0, "mode": "0400"}
+        return [{"path": "/proc", "kind": "directory", "mode": "0555"},
+                {"path": name, "kind": "empty-file", "mode": "0400"}]
+
     def finish(self) -> list[dict[str, object]]:
         # Build a cache for this root only: /usr/local/lib is not a default
         # glibc search directory. -X prevents ldconfig-created symlink aliases.
         configuration = self.root / "etc/ld.so.conf"
-        configuration.parent.mkdir()
+        configuration.parent.mkdir(exist_ok=self.purpose == "shadow-verifier")
         configuration.write_text("/usr/local/lib\n/lib/x86_64-linux-gnu\n/usr/lib/x86_64-linux-gnu\n", encoding="ascii")
         subprocess.run(["/sbin/ldconfig", "-i", "-X", "-r", str(self.root)], env=ENV, check=True, timeout=30)
         for path in (configuration, self.root / "etc/ld.so.cache"):

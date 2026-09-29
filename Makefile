@@ -1302,6 +1302,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	scripts/native_role_key_kms_parent.py \
 	scripts/package_native_role_key_runtime.py \
 	scripts/package_native_shadow_key_runtime.py \
+	scripts/package_native_shadow_verifier_runtime.py \
 	scripts/prepare_native_role_keys.py \
 	scripts/seal_native_service_tokens.py \
 	scripts/sign_native_guest_credential_delivery.py \
@@ -3759,6 +3760,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				scripts/native_role_key_kms_parent.py \
 				scripts/package_native_role_key_runtime.py \
 				scripts/package_native_shadow_key_runtime.py \
+				scripts/package_native_shadow_verifier_runtime.py \
 				scripts/prepare_native_role_keys.py \
 				scripts/seal_native_service_tokens.py \
 				scripts/sign_native_guest_credential_delivery.py \

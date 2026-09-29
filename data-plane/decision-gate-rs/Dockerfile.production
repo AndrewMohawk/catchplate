@@ -197,7 +197,7 @@ COPY --from=launcher-build /src/target/release/serverware-response-v2-guest-role
 FROM scratch AS native-shadow-worker-artifact
 COPY --from=launcher-build /src/target/release/serverware-native-shadow-worker /serverware-native-shadow-worker
 
-FROM python:3.11-slim-bookworm@sha256:0030323c9ce4d6dfab5f0812577cb0abd13c806f86b3a1f5b5d8f200ebb1421c AS native-broker-runtime
+FROM python:3.11-slim-bookworm@sha256:0030323c9ce4d6dfab5f0812577cb0abd13c806f86b3a1f5b5d8f200ebb1421c AS native-python-runtime-build
 ARG SOURCE_DATE_EPOCH="0"
 ENV SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -220,8 +220,10 @@ RUN --network=none set -eu; \
     tar -xzf cache/python-wheelhouse-linux-amd64.tar.gz; \
     python -m pip install --no-cache-dir --no-compile --no-index --only-binary=:all: \
         --find-links=/dependency-cache/wheelhouse --require-hashes --target=/deps \
-        -r /dependency-cache/requirements.lock; \
-    python -I -B /source/scripts/package_native_broker_runtime.py
+        -r /dependency-cache/requirements.lock
+
+FROM native-python-runtime-build AS native-broker-runtime
+RUN --network=none python -I -B /source/scripts/package_native_broker_runtime.py
 
 FROM scratch AS native-broker-runtime-artifact
 COPY --from=native-broker-runtime /broker-output /broker-output
@@ -237,6 +239,14 @@ RUN --network=none python -I -B /source/scripts/package_native_shadow_key_runtim
 
 FROM scratch AS native-shadow-key-runtime-artifact
 COPY --from=native-shadow-key-runtime /shadow-key-output /shadow-key-output
+
+# Independently deployed verifier artifact only. Neither this root nor any
+# verifier authority/configuration is copied into the claimant enclave image.
+FROM native-python-runtime-build AS native-shadow-verifier-runtime
+RUN --network=none python -I -B /source/scripts/package_native_shadow_verifier_runtime.py
+
+FROM scratch AS native-shadow-verifier-runtime-artifact
+COPY --from=native-shadow-verifier-runtime /shadow-verifier-output /shadow-verifier-output
 
 # The old host-side target remains explicit for migration work. The default,
 # last target below is the native-only enclave image.

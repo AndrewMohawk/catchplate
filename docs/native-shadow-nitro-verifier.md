@@ -129,11 +129,18 @@ closure/configuration/current trust must match. Any failed decoding/admission
 poisons that real owner. No JSON-to-owner or JSON-to-verified-attestation shortcut
 is introduced.
 
+The [separate runtime-image producer](native-shadow-verifier-runtime.md) now
+packages the fixed Python entrypoint, its actual lazy modules, COSE/PKI
+dependencies and recursive library closure. It supplies only empty fixed
+configuration/procfs mount targets, never verifier keys, trust policy or evidence.
+The artifact is not copied into the claimant enclave and has not been built.
+
 The source still needs a real independently provisioned external launcher and
-public-result transport to that guest consumer, with original lifetime watchdog
-containment and installed interpreter/PKI dependencies. Before/after deadline
-checks are not proof of bounded termination. The encrypted KMS delivery source
-counterpart still requires genuine provisioning, packaging and launcher joins.
+public-result transport to that guest consumer, with actual immutable image/root
+admission, the same protected configuration inode and original lifetime watchdog
+containment. Before/after deadline checks are not proof of bounded termination.
+The encrypted KMS delivery counterpart has a separate helper image producer;
+its actual image construction, provisioning and launcher joins remain required.
 Actual receipt/proof endpoint servers, native guest fixed-peer/lifetime
 settlement and real positive/negative runtime verification stay open. Schema
 validity or a signed result alone is not deployment/pilot approval.

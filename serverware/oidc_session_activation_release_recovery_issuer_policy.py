@@ -16,6 +16,7 @@ from serverware import oidc_session_activation_release_client_authorization as c
 from serverware import authority_oidc_session_activation_release_intent as intents
 from serverware import authority_oidc_session_activation_release_proof as proofs
 from serverware import oidc_session_activation_release_proof_bootstrap as proof_bootstrap
+from serverware import oidc_session_activation_release_retained_authority as retained
 from serverware import authority_oidc_session_activation_consume_input_production as lifetime_source
 from serverware.authority_query_read_work import QueryReadWorkError
 
@@ -28,6 +29,8 @@ _Lifetime = lifetime_source._Lifetime
 PURPOSE = "issue-oidc-session-activation-release-recovery-grants"
 SCHEMA = "serverware.signedOidcSessionActivationReleaseRecoveryIssuerPolicy/v1"
 PAYLOAD_SCHEMA = "serverware.oidcSessionActivationReleaseRecoveryIssuerPolicy/v1"
+V2_SCHEMA = "serverware.signedOidcSessionActivationReleaseRecoveryIssuerPolicy/v2"
+V2_PAYLOAD_SCHEMA = "serverware.oidcSessionActivationReleaseRecoveryIssuerPolicy/v2"
 SIGNATURE_DOMAIN = SCHEMA
 IDENTITY_DOMAIN = "serverware.oidcSessionActivationReleaseRecoveryIssuerPolicyIdentity/v1"
 PROFILE = server.RECOVERY_PROFILE
@@ -99,8 +102,12 @@ def _canonical(original, value, work):
 
 
 def _payload_shape(payload, work):
-    shape._object(payload, PAYLOAD_FIELDS, "independent recovery issuer policy")
-    for name, expected in (("schema", PAYLOAD_SCHEMA), ("sourceRevision", authority.SOURCE_REVISION),
+    bridged = type(payload) is dict and payload.get("schema") == V2_PAYLOAD_SCHEMA
+    shape._object(payload, PAYLOAD_FIELDS | {"currentReleaseCustodyDigest"} if bridged else PAYLOAD_FIELDS,
+        "independent recovery issuer policy")
+    if bridged:
+        shape._digest(payload["currentReleaseCustodyDigest"])
+    for name, expected in (("schema", V2_PAYLOAD_SCHEMA if bridged else PAYLOAD_SCHEMA), ("sourceRevision", authority.SOURCE_REVISION),
             ("purpose", PURPOSE), ("trustMode", "trusted-host-local")):
         shape._literal(payload[name], expected)
     for name in ("proofEnrollmentDigest", "intentEnrollmentDigest", "expectedOutcomeDigest"):
@@ -133,9 +140,11 @@ def _read(original, work):
         maximum_nodes=MAX_NODES, maximum_depth=MAX_DEPTH)
     owned = _capture(decoded, work)
     shape._object(owned, _ENVELOPE_FIELDS, "signed recovery issuer policy")
-    shape._literal(owned["schema"], SCHEMA)
+    if owned["schema"] not in (SCHEMA, V2_SCHEMA):
+        _fail("unsupported recovery issuer policy profile")
     shape._base64url(owned["signatureBase64Url"], signature=True)
     _payload_shape(owned["payload"], work)
+    shape._literal(owned["schema"], V2_SCHEMA if owned["payload"]["schema"] == V2_PAYLOAD_SCHEMA else SCHEMA)
     _canonical(raw, owned, work)
     return owned
 
@@ -179,7 +188,7 @@ def _inventory(policy_bytes, originals, work):
 def _signature(envelope, root, work):
     unsigned = _wire(envelope["payload"], work)
     try:
-        capability._signature(root, envelope["signatureBase64Url"], SIGNATURE_DOMAIN,
+        capability._signature(root, envelope["signatureBase64Url"], envelope["schema"],
             unsigned, capture._SharedLedger(work))
     except InvalidSignature as exc:
         raise OidcSessionActivationReleaseRecoveryIssuerPolicyError(
@@ -201,24 +210,40 @@ def _admit(payload, originals, root, lifetime, work):
 
     lifetime.attach(policy_live)
     current()
+    bridged = payload["schema"] == V2_PAYLOAD_SCHEMA
     for actual, expected, label in (
-            (_custody_digest_on_work(custody_raw, work), payload["expectedEvidence"]["releaseCustodyDigest"], "custody"),
+            (_custody_digest_on_work(custody_raw, work), payload["currentReleaseCustodyDigest"] if bridged
+                else payload["expectedEvidence"]["releaseCustodyDigest"], "custody"),
             (_proof_enrollment_digest_on_work(proof_raw, work), payload["proofEnrollmentDigest"], "proof enrollment"),
             (_intent_enrollment_digest_on_work(intent_raw, work), payload["intentEnrollmentDigest"], "intent enrollment")):
         plan._same(actual, expected, work, "recovery issuer independent exact " + label)
         current()
-    material = custody._verify_historical_on_work(custody_bytes=custody_raw, root_public_key=root,
+    verify_custody = custody._verify_on_work if bridged else custody._verify_historical_on_work
+    material = verify_custody(custody_bytes=custody_raw, root_public_key=root,
         live_window=lifetime.window, transport_deadline_ns=lifetime.bound, work=work,
         _current=lifetime.base)
     if type(material) is not custody._ReleaseCustodyMaterial:
         _fail("recovery issuer requires actual historical custody-original admission")
     current()
+    if bridged != (material.intent_root_public_key is not None):
+        _fail("recovery policy and custody original profiles differ")
+    evidence_root = retained.root_for(material, root)
+    current_planner = retained.planner_for(material)
+    retained.require_originals(material, intent_raw, proof_raw, work)
+    if bridged:
+        plan._same(_custody_digest_on_work(retained.custody_for(material), work),
+            payload["expectedEvidence"]["releaseCustodyDigest"], work, "recovery exact RI evidence custody")
+        plan._same(material.proof_scope, payload["proofScope"], work, "recovery independently pinned RI proof scope")
+        lifetime.attach(custody.planner_bootstrap._launch_guard(material.attestation_interval,
+            material.opening_sample, lifetime.base, work))
+        lifetime.narrow(material.attestation_interval[1], current_planner.maximum_plan_age_ns,
+            current_planner.maximum_clock_skew_ns)
     nested = material.planner.bootstrap_bytes, material.planner.state_enrollment_bytes
     if MAX_BYTES + sum(map(len, (*originals, *nested))) > MAX_ORIGINAL_BYTES:
         _fail("recovery issuer decoded original inventory exceeds 64 MiB")
     work.charge(input_bytes=sum(map(len, nested)))
     state = authorization._admit_enrollment_on_work(enrollment_bytes=nested[1],
-        root_public_key=root, work=work)
+        root_public_key=evidence_root, work=work)
     current()
     scope, release, evidence = payload["proofScope"], payload["expectedRelease"], payload["expectedEvidence"]
     for actual, expected, label in (
@@ -242,10 +267,10 @@ def _admit(payload, originals, root, lifetime, work):
     intent_scope = {name: scope[name] for name in intents.SCOPE_FIELDS if name != "callerId"}
     intent_scope["callerId"] = payload["callerId"]
     intent_enrolled = intents.enrollments._admit_on_work(enrollment_bytes=intent_raw,
-        root_public_key=root, expected_scope=intent_scope, forbidden_public_keys=forbidden, work=work)
+        root_public_key=evidence_root, expected_scope=intent_scope, forbidden_public_keys=forbidden, work=work)
     current()
     proof_enrolled = proofs.enrollments._admit_on_work(enrollment_bytes=proof_raw,
-        root_public_key=root, expected_scope=scope,
+        root_public_key=evidence_root, expected_scope=scope,
         forbidden_public_keys=(*forbidden, intent_enrolled.caller_public_key), work=work)
     current()
     plan._same(intent_enrolled.enrollment_digest, payload["intentEnrollmentDigest"], work,
@@ -255,9 +280,9 @@ def _admit(payload, originals, root, lifetime, work):
     endpoint = client._endpoint(payload["endpoint"], work)
     _created, delivery_expiry = custody._scope(release["deliveryScope"], work)
     lifetime.narrow(min(expires, delivery_expiry),
-        min(material.planner.maximum_plan_age_ns, intent_enrolled.payload["maximumAgeNs"],
+        min(current_planner.maximum_plan_age_ns, intent_enrolled.payload["maximumAgeNs"],
             proof_enrolled.payload["maximumAgeNs"], endpoint[1] * 1_000_000_000),
-        min(material.planner.maximum_clock_skew_ns, intent_enrolled.payload["maximumClockSkewNs"],
+        min(current_planner.maximum_clock_skew_ns, intent_enrolled.payload["maximumClockSkewNs"],
             proof_enrolled.payload["maximumClockSkewNs"]))
     current()
     return material, proof_enrolled.proof_public_key, intent_enrolled.caller_public_key, forbidden, endpoint
@@ -315,14 +340,15 @@ def _produce_on_work(*, payload, release_custody_bytes, proof_enrollment_bytes,
     current()
     keys._pair_on_work(private, root, work)
     current()
-    envelope = {"schema": SCHEMA, "payload": owned, "signatureBase64Url": "A" * 86}
+    schema = V2_SCHEMA if owned["schema"] == V2_PAYLOAD_SCHEMA else SCHEMA
+    envelope = {"schema": schema, "payload": owned, "signatureBase64Url": "A" * 86}
     unsigned_size, unsigned_nodes = work.measure(owned)
     envelope_size, envelope_nodes = work.measure(envelope)
     if max(unsigned_size, envelope_size) > MAX_BYTES or max(unsigned_nodes, envelope_nodes) > MAX_NODES:
         _fail("recovery issuer policy signature exceeds its reserved output bound")
     work.charge(input_bytes=4 * unsigned_size + envelope_size + production._SIGNATURE_TRANSPORT_BYTES,
         json_nodes=2 * unsigned_nodes + envelope_nodes)
-    frame_bytes = 2 * len(SIGNATURE_DOMAIN) + 9 + unsigned_size + 2 * 71
+    frame_bytes = 2 * len(schema) + 9 + unsigned_size + 2 * 71
     if (work.limits.max_hashes - work.hash_work < 1
             or work.limits.max_input_bytes - work.input_bytes < frame_bytes + unsigned_size
             or work.limits.max_json_nodes - work.json_nodes < 4 + unsigned_nodes):
@@ -330,7 +356,7 @@ def _produce_on_work(*, payload, release_custody_bytes, proof_enrollment_bytes,
     unsigned = plan.core.canonical_bytes(owned)
     if len(unsigned) != unsigned_size:
         _fail("recovery issuer policy changed after measurement")
-    message = plan._ascii(plan._frame(SIGNATURE_DOMAIN, (unsigned,), work), work)
+    message = plan._ascii(plan._frame(schema, (unsigned,), work), work)
     current()
     signature = production._sign_and_verify(private, root, message, work)
     current()
@@ -338,7 +364,7 @@ def _produce_on_work(*, payload, release_custody_bytes, proof_enrollment_bytes,
         _fail("recovery issuer policy changed during signing")
     encoded = base64.urlsafe_b64encode(signature).decode("ascii").rstrip("=")
     shape._base64url(encoded, signature=True)
-    original = plan.core.canonical_bytes({"schema": SCHEMA, "payload": owned, "signatureBase64Url": encoded})
+    original = plan.core.canonical_bytes({"schema": schema, "payload": owned, "signatureBase64Url": encoded})
     if len(original) != envelope_size:
         _fail("recovery issuer policy output differs from its preallocation reservation")
     current()

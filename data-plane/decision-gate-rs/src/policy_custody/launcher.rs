@@ -27,6 +27,10 @@ use super::protocol::{
     POLICY_CUSTODY_WATCHDOG_REGISTRATION_VERSION,
 };
 use super::super::{canonical_json_bytes, Sha256Digest};
+use serverware_decision_gate::erofs_loop_v1::{
+    self, DescriptorObservationV1, ErofsLoopErrorV1,
+    ErofsLoopExpectationV1, ErofsLoopObservationV1,
+};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -35,7 +39,7 @@ use std::fmt;
 use std::io;
 use std::mem::{size_of, zeroed};
 use std::os::fd::{
-    AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd,
+    AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd,
 };
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Component, Path};
@@ -92,7 +96,6 @@ const MAX_CGROUP_EVENTS_BYTES: usize = 4096;
 const MAX_PROC_MAPS_BYTES: usize = 1024 * 1024;
 const MAX_ELF_PROGRAM_HEADERS: usize = 256;
 const MAX_EXECUTABLE_BYTES: u64 = 256 * 1024 * 1024;
-const MAX_ROOTFS_IMAGE_BYTES: u64 = 64 * 1024 * 1024 * 1024;
 const ELF_HEADER_BYTES: usize = 64;
 const ELF64_PROGRAM_HEADER_BYTES: usize = 56;
 const ELF64_DYNAMIC_ENTRY_BYTES: usize = 16;
@@ -108,14 +111,9 @@ const PF_X: u32 = 1;
 const PF_W: u32 = 2;
 const DT_NULL: i64 = 0;
 const DT_NEEDED: i64 = 1;
-const EROFS_SUPER_MAGIC: libc::c_long = 0xe0f5_e1e2_u32 as libc::c_long;
 const CGROUP2_SUPER_MAGIC: libc::c_long = 0x6367_7270;
 const ST_RDONLY_FLAG: libc::c_ulong = 1;
-const LOOP_GET_STATUS64: libc::c_ulong = 0x4c05;
-const LOOP_FLAGS_READ_ONLY: u32 = 1;
 const BLKROGET: libc::c_ulong = 0x125e;
-const FS_IOC_MEASURE_VERITY: libc::c_ulong = 0xc004_6686;
-const FS_VERITY_HASH_ALG_SHA256: u16 = 1;
 const DM_IOCTL_TYPE: u64 = 0xfd;
 const DM_TABLE_STATUS_COMMAND: u64 = 12;
 const DM_STATUS_TABLE_FLAG: u32 = 1 << 4;
@@ -201,6 +199,15 @@ impl From<io::Error> for LauncherError {
     }
 }
 
+impl From<ErofsLoopErrorV1> for LauncherError {
+    fn from(error: ErofsLoopErrorV1) -> Self {
+        match error {
+            ErofsLoopErrorV1::Io(error) => Self::Io(error),
+            ErofsLoopErrorV1::Invalid(message) => Self::Invalid(message),
+        }
+    }
+}
+
 impl From<BoottimeError> for LauncherError {
     fn from(error: BoottimeError) -> Self {
         Self::Boottime(error)
@@ -273,6 +280,35 @@ struct DescriptorIdentity {
     changed_seconds: libc::time_t,
     changed_nanoseconds: libc::c_long,
     mount_id: u64,
+}
+
+fn erofs_root_identity(observed: &DescriptorObservationV1) -> DescriptorIdentity {
+    DescriptorIdentity {
+        device: observed.device(), inode: observed.inode(), mode: observed.mode(),
+        uid: observed.uid(), gid: observed.gid(), length: observed.length(),
+        modified_seconds: observed.modified_seconds(),
+        modified_nanoseconds: observed.modified_nanoseconds(),
+        changed_seconds: observed.changed_seconds(),
+        changed_nanoseconds: observed.changed_nanoseconds(), mount_id: observed.mount_id(),
+    }
+}
+
+// The mechanism deliberately does not own this signed static-custody identity.
+// Keep the domain, field order, native scalar widths and u64BE framing unchanged.
+fn erofs_identity_sha256(observed: &ErofsLoopObservationV1) -> [u8; 32] {
+    hash_frames(&[
+        b"serverware.policyCustodyRootfs.erofs/v1",
+        &observed.root().device().to_be_bytes(),
+        &observed.root().inode().to_be_bytes(),
+        &observed.root().mount_id().to_be_bytes(),
+        &observed.block_rdev().to_be_bytes(),
+        &observed.image().device().to_be_bytes(),
+        &observed.image().inode().to_be_bytes(),
+        &observed.image().length().to_be_bytes(),
+        &observed.image_fs_verity_sha256(),
+        &observed.loop_offset().to_be_bytes(),
+        &observed.loop_size_limit().to_be_bytes(),
+    ])
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -418,66 +454,14 @@ impl VerifiedRootfs {
         image_fd: OwnedFd,
         expected: &ErofsExpectation,
     ) -> Result<Self, LauncherError> {
-        let (mount_identity, filesystem_magic) =
-            verify_read_only_mount_root(root_fd.as_raw_fd())?;
-        if filesystem_magic != EROFS_SUPER_MAGIC {
-            return Err(LauncherError::Invalid(
-                "root filesystem is not EROFS",
-            ));
-        }
-        let block = verify_read_only_block_device(loop_block_fd.as_raw_fd())?;
-        if mount_identity.device != block.rdev {
-            return Err(LauncherError::Invalid(
-                "EROFS mount device does not match the retained loop device",
-            ));
-        }
-        let image = immutable_regular_file_identity_with_limit(
-            image_fd.as_raw_fd(),
-            MAX_ROOTFS_IMAGE_BYTES,
-        )?;
-        let image_fs_verity_sha256 =
-            measure_fs_verity(image_fd.as_raw_fd())?;
-        if image_fs_verity_sha256
-            != expected.image_fs_verity_sha256
-        {
-            return Err(LauncherError::Invalid(
-                "EROFS image fs-verity identity mismatch",
-            ));
-        }
-        let mut loop_info: LoopInfo64 = unsafe { zeroed() };
-        if unsafe {
-            libc::ioctl(
-                loop_block_fd.as_raw_fd(),
-                LOOP_GET_STATUS64,
-                &mut loop_info as *mut LoopInfo64,
-            )
-        } != 0
-        {
-            return Err(io::Error::last_os_error().into());
-        }
-        if loop_info.lo_flags & LOOP_FLAGS_READ_ONLY == 0
-            || loop_info.lo_device != image.device
-            || loop_info.lo_inode != image.inode
-            || loop_info.lo_offset != expected.loop_offset
-            || loop_info.lo_sizelimit != expected.loop_size_limit
-        {
-            return Err(LauncherError::Invalid(
-                "EROFS loop backing identity mismatch",
-            ));
-        }
-        let identity_sha256 = hash_frames(&[
-            b"serverware.policyCustodyRootfs.erofs/v1",
-            &mount_identity.device.to_be_bytes(),
-            &mount_identity.inode.to_be_bytes(),
-            &mount_identity.mount_id.to_be_bytes(),
-            &block.rdev.to_be_bytes(),
-            &image.device.to_be_bytes(),
-            &image.inode.to_be_bytes(),
-            &image.length.to_be_bytes(),
-            &image_fs_verity_sha256,
-            &loop_info.lo_offset.to_be_bytes(),
-            &loop_info.lo_sizelimit.to_be_bytes(),
-        ]);
+        let observed = erofs_loop_v1::verify(root_fd.as_fd(), loop_block_fd.as_fd(), image_fd.as_fd(),
+            &ErofsLoopExpectationV1 {
+                image_fs_verity_sha256: expected.image_fs_verity_sha256,
+                loop_offset: expected.loop_offset, loop_size_limit: expected.loop_size_limit,
+            })?;
+        let mount_identity = erofs_root_identity(observed.root());
+        let filesystem_magic = observed.filesystem_magic();
+        let identity_sha256 = erofs_identity_sha256(&observed);
         if identity_sha256 != expected.identity_sha256 {
             return Err(LauncherError::Invalid(
                 "EROFS root identity binding mismatch",
@@ -491,9 +475,9 @@ impl VerifiedRootfs {
             filesystem_magic,
             identity_sha256,
             kind: VerifiedRootfsKind::Erofs {
-                image_fs_verity_sha256,
-                loop_offset: loop_info.lo_offset,
-                loop_size_limit: loop_info.lo_sizelimit,
+                image_fs_verity_sha256: observed.image_fs_verity_sha256(),
+                loop_offset: observed.loop_offset(),
+                loop_size_limit: observed.loop_size_limit(),
             },
         })
     }
@@ -588,49 +572,15 @@ impl VerifiedRootfs {
                 loop_offset,
                 loop_size_limit,
             } => {
-                let image = immutable_regular_file_identity_with_limit(
-                    self.source_proof_fd.as_raw_fd(),
-                    MAX_ROOTFS_IMAGE_BYTES,
-                )?;
-                if measure_fs_verity(self.source_proof_fd.as_raw_fd())?
-                        != *image_fs_verity_sha256
-                {
-                    return Err(LauncherError::Invalid(
-                        "EROFS image identity changed",
-                    ));
-                }
-                let mut info: LoopInfo64 = unsafe { zeroed() };
-                if unsafe {
-                    libc::ioctl(
-                        self.source_block_fd.as_raw_fd(),
-                        LOOP_GET_STATUS64,
-                        &mut info as *mut LoopInfo64,
-                    )
-                } != 0
-                    || info.lo_flags & LOOP_FLAGS_READ_ONLY == 0
-                    || info.lo_device != image.device
-                    || info.lo_inode != image.inode
-                    || info.lo_offset != *loop_offset
-                    || info.lo_sizelimit != *loop_size_limit
-                {
-                    return Err(LauncherError::Invalid(
-                        "EROFS loop mapping changed",
-                    ));
-                }
-                let current_identity = hash_frames(&[
-                    b"serverware.policyCustodyRootfs.erofs/v1",
-                    &mount_identity.device.to_be_bytes(),
-                    &mount_identity.inode.to_be_bytes(),
-                    &mount_identity.mount_id.to_be_bytes(),
-                    &block.rdev.to_be_bytes(),
-                    &image.device.to_be_bytes(),
-                    &image.inode.to_be_bytes(),
-                    &image.length.to_be_bytes(),
-                    image_fs_verity_sha256,
-                    &info.lo_offset.to_be_bytes(),
-                    &info.lo_sizelimit.to_be_bytes(),
-                ]);
-                if current_identity != self.identity_sha256 {
+                let observed = erofs_loop_v1::verify(self.root_fd.as_fd(), self.source_block_fd.as_fd(),
+                    self.source_proof_fd.as_fd(), &ErofsLoopExpectationV1 {
+                        image_fs_verity_sha256: *image_fs_verity_sha256,
+                        loop_offset: *loop_offset, loop_size_limit: *loop_size_limit,
+                    })?;
+                if erofs_root_identity(observed.root()) != mount_identity
+                    || observed.filesystem_magic() != filesystem_magic
+                    || observed.block_rdev() != block.rdev
+                    || erofs_identity_sha256(&observed) != self.identity_sha256 {
                     return Err(LauncherError::Invalid(
                         "EROFS root identity no longer matches its binding",
                     ));
@@ -3608,31 +3558,6 @@ fn sha256_descriptor(fd: RawFd) -> Result<[u8; 32], LauncherError> {
     Ok(hasher.finalize().into())
 }
 
-fn measure_fs_verity(fd: RawFd) -> Result<[u8; 32], LauncherError> {
-    let mut buffer = FsVerityDigest {
-        digest_algorithm: 0,
-        digest_size: 64,
-        digest: [0; 64],
-    };
-    if unsafe {
-        libc::ioctl(
-            fd,
-            FS_IOC_MEASURE_VERITY,
-            &mut buffer as *mut FsVerityDigest,
-        )
-    } != 0
-        || buffer.digest_algorithm != FS_VERITY_HASH_ALG_SHA256
-        || buffer.digest_size != 32
-    {
-        return Err(LauncherError::Invalid(
-            "required SHA-256 fs-verity evidence is unavailable",
-        ));
-    }
-    let mut digest = [0_u8; 32];
-    digest.copy_from_slice(&buffer.digest[..32]);
-    Ok(digest)
-}
-
 fn pread_exact(
     fd: RawFd,
     destination: *mut u8,
@@ -5956,30 +5881,6 @@ struct OpenHow {
     flags: u64,
     mode: u64,
     resolve: u64,
-}
-
-#[repr(C, align(8))]
-struct FsVerityDigest {
-    digest_algorithm: u16,
-    digest_size: u16,
-    digest: [u8; 64],
-}
-
-#[repr(C)]
-struct LoopInfo64 {
-    lo_device: u64,
-    lo_inode: u64,
-    lo_rdevice: u64,
-    lo_offset: u64,
-    lo_sizelimit: u64,
-    lo_number: u32,
-    lo_encrypt_type: u32,
-    lo_encrypt_key_size: u32,
-    lo_flags: u32,
-    lo_file_name: [u8; 64],
-    lo_crypt_name: [u8; 64],
-    lo_encrypt_key: [u8; 32],
-    lo_init: [u64; 2],
 }
 
 #[repr(C)]

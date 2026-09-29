@@ -27,7 +27,8 @@ def _fail(message):
 
 
 def _configuration(config):
-    if type(config) is not configured._RecoveryGrantAcquisitionMaterial:
+    if (type(config) is not configured._RecoveryGrantAcquisitionMaterial
+            or type(config.retained_authority) is not bool):
         _fail("retained release requires independently configured recovery originals")
     originals = (config.issuer_policy_bytes, config.release_custody_bytes,
         config.proof_enrollment_bytes, config.intent_enrollment_bytes)
@@ -37,6 +38,46 @@ def _configuration(config):
             for raw, bound in zip(originals, maxima)):
         _fail("retained release cold originals exceed their fixed bounds")
     return originals
+
+
+def _require_policy_inputs(policy, selected, config, parent, root, evidence_custody, work, current):
+    """Join fresh originals to the actual same-call RI and current cold owner."""
+    history = derivation.retained
+    material = policy.custody_material
+    bridged = config.retained_authority
+    if (bridged != (policy.payload["schema"] == issuer.V2_PAYLOAD_SCHEMA)
+            or bridged != (material.intent_root_public_key is not None)
+            or selected.retained_only and not bridged):
+        _fail("recovery current policy and independently selected RI profiles differ")
+    _same(history.custody_for(material), evidence_custody, work, "exact RI evidence custody")
+    history.require_originals(material, selected.intent_policy.enrollment_bytes,
+        selected.proof_policy.enrollment_bytes, work)
+    plan._same(issuer.server.keys._spki_on_work(history.root_for(material, root), work),
+        issuer.server.keys._spki_on_work(selected.root_public_key, work), work,
+        "recovery independently selected RI root")
+    if bridged:
+        selection = selected._retained_intent_selection
+        if selection is None or selection.authority is None or selection.prefix_pins is None:
+            _fail("recovery current bridge requires actual retained RI selection")
+        plan._same(material.intent_authority_interval, selection.authority.authority_interval,
+            work, "recovery independently selected RI interval")
+    _same(material.planner.bootstrap_bytes, selected.planner_original, work, "RI activation planner")
+    current_planner = history.planner_for(material)
+    _same(current_planner.bootstrap_bytes, parent.activation_planning.planner_bootstrap_bytes,
+        work, "current activation planner")
+    current()
+    current_state = issuer.authorization._admit_enrollment_on_work(
+        enrollment_bytes=current_planner.state_enrollment_bytes, root_public_key=root, work=work)
+    current()
+    original_state = issuer.authorization._admit_enrollment_on_work(
+        enrollment_bytes=selected.controls.enrollment_bytes,
+        root_public_key=selected.controls.root_public_key, work=work)
+    current()
+    plan._same(current_state.payload, original_state.payload, work,
+        "recovery unchanged original/current complete state payload")
+    plan._same(material.delivery_key_digest, current_planner.delivery_key_digest,
+        work, "recovery unchanged current delivery key")
+    current()
 
 
 def _acquisition_capture_bytes(prefix_lengths, config, grant_lengths):
@@ -124,7 +165,6 @@ def _acquire_and_stage(active):
             or held + capture_bound + fixed > MAX_ORIGINAL_BYTES):
         _fail("retained release acquisition exceeds its already reserved representation lane")
     # No payload decoding or socket contact precedes the actual-length bound.
-    _same(raw[1], config.release_custody_bytes, work, "independent historical custody")
     _same(raw[3], config.proof_enrollment_bytes, work, "independent proof enrollment")
     _same(selected.intent_policy.enrollment_bytes, config.intent_enrollment_bytes,
         work, "independent intent enrollment")
@@ -151,6 +191,8 @@ def _acquire_and_stage(active):
         _fail("retained release requires genuine independent issuer policy admission")
     lifetime.attach(policy.live)
     lifetime.adopt(policy.live_window, policy.deadline_ns)
+    _require_policy_inputs(policy, selected, config, active._parent, active._root,
+        raw[1], work, lifetime.current)
     evidence = {"releaseCustodyDigest": plan._frame(derivation.proofs.contract.CUSTODY_IDENTITY_DOMAIN,
             (raw[1],), work), "releaseIntentDigest": active.intent.intent_digest,
         "stateReceiptDigest": plan._frame(intent_source.state.RECEIPT_IDENTITY_DOMAIN,

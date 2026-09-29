@@ -37,6 +37,8 @@ SCHEMA = "serverware.signedOidcSessionActivationReleaseBootstrap/v1"
 PAYLOAD_SCHEMA = "serverware.oidcSessionActivationReleaseBootstrap/v1"
 V2_SCHEMA = "serverware.signedOidcSessionActivationReleaseBootstrap/v2"
 V2_PAYLOAD_SCHEMA = "serverware.oidcSessionActivationReleaseBootstrap/v2"
+V3_SCHEMA = "serverware.signedOidcSessionActivationReleaseBootstrap/v3"
+V3_PAYLOAD_SCHEMA = "serverware.oidcSessionActivationReleaseBootstrap/v3"
 LAUNCH_SCHEMA = "serverware.oidcSessionActivationReleaseLaunch/v1"
 MAX_BYTES = MAX_BOOTSTRAP_BYTES = 16 * 1024 * 1024
 MAX_ORIGINAL_BYTES = authority.MAX_RESULT_BYTES
@@ -193,18 +195,20 @@ def _release_shape(value, work):
 
 
 def _payload_shape(payload, work):
-    historical = type(payload) is dict and payload.get("schema") == V2_PAYLOAD_SCHEMA
+    historical = type(payload) is dict and payload.get("schema") in (V2_PAYLOAD_SCHEMA, V3_PAYLOAD_SCHEMA)
+    selected_schema = payload["schema"] if historical else PAYLOAD_SCHEMA
     shape._object(payload, _PAYLOAD_FIELDS | {"evidenceCustodyDigest"} if historical else _PAYLOAD_FIELDS,
         "release bootstrap payload")
-    for name, expected in (("schema", V2_PAYLOAD_SCHEMA if historical else PAYLOAD_SCHEMA), ("sourceRevision", authority.SOURCE_REVISION),
+    for name, expected in (("schema", selected_schema), ("sourceRevision", authority.SOURCE_REVISION),
             ("purpose", PURPOSE), ("role", ROLE), ("trustMode", "trusted-host-local")):
         shape._literal(payload[name], expected)
     if type(payload["profile"]) is not str or payload["profile"] not in (LIVE_PROFILE, RECOVERY_PROFILE):
         _fail("release launch profile is not one of the two fixed root purposes")
     if historical:
         shape._digest(payload["evidenceCustodyDigest"])
-        if payload["profile"] != LIVE_PROFILE:
-            _fail("retained-intent delivery does not authorize retained-outcome recovery")
+        selected_profile = RECOVERY_PROFILE if selected_schema == V3_PAYLOAD_SCHEMA else LIVE_PROFILE
+        if payload["profile"] != selected_profile:
+            _fail("current historical-delivery bootstrap has a different explicit purpose")
     for name in ("configurationDigest", "generationDigest", "runtimeClosureDigest",
             "stateReceiptDigest", "releaseCustodyDigest", "deliveryKeyDigest"):
         shape._digest(payload[name])
@@ -221,6 +225,8 @@ def _payload_shape(payload, work):
             _fail("live cold release requires the independently authorized empty checkpoint")
     else:
         recovery._scope_shape(payload["recoveryScope"], work)
+        shape._object(payload["recoveryScope"], recovery.V2_SCOPE_FIELDS if selected_schema == V3_PAYLOAD_SCHEMA
+            else recovery.SCOPE_FIELDS, "release independently selected recovery profile")
         checkpoint = payload["storageScope"]["checkpoint"]
         if checkpoint["recordCount"] != 1:
             _fail("cold recovery requires the independently authorized retained checkpoint")
@@ -271,12 +277,13 @@ def _contains(outer, inner):
 
 def _material(payload, original, root, window, bound, opening, current, work, _continuity=None):
     (custody_bytes, storage_bytes, recovery_bytes), total = _originals(payload, original, current, work)
-    verifier = custody._verify_on_work if payload["profile"] == LIVE_PROFILE else custody._verify_historical_on_work
+    current_recovery = payload["schema"] == V3_PAYLOAD_SCHEMA
+    verifier = custody._verify_on_work if payload["profile"] == LIVE_PROFILE or current_recovery else custody._verify_historical_on_work
     admitted = verifier(custody_bytes=custody_bytes, root_public_key=root,
         live_window=window, transport_deadline_ns=bound, work=work,
         _current=current if _continuity is not None else None)
     current()
-    historical = payload["schema"] == V2_PAYLOAD_SCHEMA
+    historical = payload["schema"] in (V2_PAYLOAD_SCHEMA, V3_PAYLOAD_SCHEMA)
     if historical != (admitted.intent_root_public_key is not None):
         _fail("release bootstrap and current custody historical profiles differ")
     evidence_root = retained.root_for(admitted, root)
@@ -326,8 +333,13 @@ def _material(payload, original, root, window, bound, opening, current, work, _c
         _contains(interval, admitted.attestation_interval)
     else:
         recovery_scope = payload["recoveryScope"]
-        for name in recovery.SCOPE_FIELDS - {"directory", "deliveryId", "outcomeDigest"}:
-            plan._same(recovery_scope[name], payload[name], work, "release launch independent recovery " + name)
+        if current_recovery:
+            _contains(interval, admitted.attestation_interval)
+        recovery_fields = recovery.V2_SCOPE_FIELDS if current_recovery else recovery.SCOPE_FIELDS
+        for name in recovery_fields - {"directory", "deliveryId", "outcomeDigest"}:
+            expected = (custody_digest if name == "currentReleaseCustodyDigest" else
+                evidence_digest if name == "releaseCustodyDigest" else payload[name])
+            plan._same(recovery_scope[name], expected, work, "release launch independent recovery " + name)
         plan._same(recovery_scope["directory"], directory, work, "release recovery directory pins")
         plan._same(recovery_scope["deliveryId"], slot["deliveryId"], work, "release recovery exact slot")
         recovered = recovery._verify_on_work(authorization_bytes=recovery_bytes, root_public_key=root,
@@ -381,11 +393,12 @@ def _verify_on_work(*, bootstrap_bytes, root_public_key, live_window, transport_
     current()
     envelope = _decode(original, work)
     shape._object(envelope, _ENVELOPE_FIELDS, "signed release cold bootstrap")
-    if envelope["schema"] not in (SCHEMA, V2_SCHEMA):
+    if envelope["schema"] not in (SCHEMA, V2_SCHEMA, V3_SCHEMA):
         _fail("unsupported release cold schema")
     shape._base64url(envelope["signatureBase64Url"], signature=True)
     _payload_shape(envelope["payload"], work)
     shape._literal(envelope["payload"]["schema"],
+        V3_PAYLOAD_SCHEMA if envelope["schema"] == V3_SCHEMA else
         V2_PAYLOAD_SCHEMA if envelope["schema"] == V2_SCHEMA else PAYLOAD_SCHEMA)
     _canonical(original, envelope, work)
     unsigned = _wire(envelope["payload"], work)
@@ -428,7 +441,7 @@ def _produce_on_work(*, payload, root_private_key, root_public_key,
     admitted = _material(owned, unsigned, root, window, bound, opening, live, work, _continuity)
     keys._pair_on_work(private, root, work)
     admitted.live()
-    schema = V2_SCHEMA if owned["schema"] == V2_PAYLOAD_SCHEMA else SCHEMA
+    schema = V3_SCHEMA if owned["schema"] == V3_PAYLOAD_SCHEMA else V2_SCHEMA if owned["schema"] == V2_PAYLOAD_SCHEMA else SCHEMA
     envelope = {"schema": schema, "payload": owned, "signatureBase64Url": "A" * 86}
     size, nodes = work.measure(envelope)
     payload_size, payload_nodes = work.measure(owned)

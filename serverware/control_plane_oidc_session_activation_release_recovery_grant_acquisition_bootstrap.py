@@ -15,6 +15,7 @@ from serverware import oidc_session_activation_release_recovery_issuer_policy as
 
 
 SCHEMA = "serverware.controlPlaneOidcSessionActivationReleaseRecoveryGrantAcquisition/v1"
+V2_SCHEMA = "serverware.controlPlaneOidcSessionActivationReleaseRecoveryGrantAcquisition/v2"
 SOCKET_PATH = transport.LISTENER_PATH
 MAX_BYTES = issuer.authority.MAX_REQUEST_BYTES
 MAX_NODES, MAX_DEPTH = 128, 4
@@ -44,6 +45,7 @@ class _RecoveryGrantAcquisitionMaterial:
     release_custody_bytes: bytes
     proof_enrollment_bytes: bytes
     intent_enrollment_bytes: bytes
+    retained_authority: bool = False
 
 
 class _Capture(capture._JSONCapture):
@@ -69,7 +71,8 @@ def _shape(value):
     if value is None:
         return
     shape._object(value, _FIELDS, "control-plane recovery grant acquisition")
-    shape._literal(value["schema"], SCHEMA)
+    if value["schema"] not in (SCHEMA, V2_SCHEMA):
+        _fail("unsupported recovery grant acquisition profile")
     _endpoint(value["endpoint"])
     for name, maximum in _ORIGINALS:
         original = value[name]
@@ -109,23 +112,31 @@ def _admit_on_work(*, recovery_grant_acquisition, release_intent, release_proof,
         issuer._signature(envelope, root, work)
         issuer._canonical(policy_raw, envelope, work)
         payload = envelope["payload"]
-        _same_bytes(proof_raw, held_proof.enrollment_bytes, work, "recovery exact parent proof enrollment")
-        _same_bytes(intent_raw, held_intent.enrollment_bytes, work, "recovery exact parent intent enrollment")
-        proof_scope = proof._scope_on_work(held_proof.expected_scope_bytes, work)
-        intent_scope = intent._scope_on_work(held_intent.expected_scope_bytes, work)
+        bridged = owned["schema"] == V2_SCHEMA
+        shape._literal(payload["schema"], issuer.V2_PAYLOAD_SCHEMA if bridged else issuer.PAYLOAD_SCHEMA)
+        if not bridged:
+            _same_bytes(proof_raw, held_proof.enrollment_bytes, work, "recovery exact parent proof enrollment")
+            _same_bytes(intent_raw, held_intent.enrollment_bytes, work, "recovery exact parent intent enrollment")
+            proof_scope = proof._scope_on_work(held_proof.expected_scope_bytes, work)
+            intent_scope = intent._scope_on_work(held_intent.expected_scope_bytes, work)
+            for actual, expected, label in (
+                    (payload["proofScope"], proof_scope, "independent proof scope"),
+                    (payload["callerId"], intent_scope["callerId"], "independent intent caller"),
+                    (payload["proofEnrollmentDigest"], held_proof.enrollment_digest, "parent proof enrollment"),
+                    (payload["intentEnrollmentDigest"], held_intent.enrollment_digest, "parent intent enrollment")):
+                plan._same(actual, expected, work, "recovery grant acquisition " + label)
+        # V2 independently pins RI originals. Only the actual actor's selected
+        # archive may join them; current parent enrollments cannot stand in.
         for actual, expected, label in (
-                (payload["proofScope"], proof_scope, "independent proof scope"),
-                (payload["callerId"], intent_scope["callerId"], "independent intent caller"),
-                (payload["proofEnrollmentDigest"], held_proof.enrollment_digest, "parent proof enrollment"),
-                (payload["intentEnrollmentDigest"], held_intent.enrollment_digest, "parent intent enrollment"),
                 (issuer._custody_digest_on_work(custody_raw, work),
-                    payload["expectedEvidence"]["releaseCustodyDigest"], "exact historical custody"),
+                    payload["currentReleaseCustodyDigest"] if bridged else
+                    payload["expectedEvidence"]["releaseCustodyDigest"], "exact configured custody"),
                 (issuer._proof_enrollment_digest_on_work(proof_raw, work),
                     payload["proofEnrollmentDigest"], "exact proof original"),
                 (issuer._intent_enrollment_digest_on_work(intent_raw, work),
                     payload["intentEnrollmentDigest"], "exact intent original")):
             plan._same(actual, expected, work, "recovery grant acquisition " + label)
-        return _RecoveryGrantAcquisitionMaterial(endpoint, *originals)
+        return _RecoveryGrantAcquisitionMaterial(endpoint, *originals, bridged)
     except (AttributeError, KeyError, TypeError, ValueError, OverflowError, RecursionError) as exc:
         if isinstance(exc, OidcSessionActivationReleaseRecoveryGrantAcquisitionBootstrapError):
             raise

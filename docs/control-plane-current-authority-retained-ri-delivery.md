@@ -4,7 +4,9 @@ Status: source implementation only, unbuilt and unexecuted. This extends
 [read-only retained intent/proof admission](control-plane-retained-intent-history.md)
 with an explicit current-authority grant/custody path. It does not reactivate a
 retired key, execute COMPLETE again, extend original delivery expiry or authorize
-retained-outcome recovery under a retired root.
+retained-outcome recovery under a retired root. The separate
+[current-authority retained-outcome recovery profile](control-plane-retained-outcome-root-history.md)
+uses fresh current permission plus exact protected checkpoint-one readback.
 
 ## Two custody identities, not a relabeled original
 
@@ -96,8 +98,9 @@ the unchanged aggregate original/work ceiling. Individually valid large
 wrappers can exceed that aggregate and must be refused. Serialized identities,
 operator metadata and verifier results do not substitute for actual custody.
 
-Older-source adapters, state/configuration migration and retained-outcome-root
-history remain unsupported. The new grant-only bridge is not dynamic proof
+Older-source adapters and state/configuration migration remain unsupported.
+Retained-outcome recovery requires its separate explicit current-authority
+profile; this LIVE grant-only bridge is not dynamic proof
 launch or general historical release authority. Independent provisioning,
 runtime delivery/cookie evidence, interruption acceptance and production gates
 remain open. No build, test, runtime, pilot, cloud deployment or parent-completion

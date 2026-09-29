@@ -34,6 +34,7 @@ HISTORICAL_DELIVERY_SCHEMA = "serverware.oidcSessionActivationCompletionRecovery
 DELIVERY_OPTIONS_SCHEMA = "serverware.oidcSessionActivationCompletionRecoveryDeliveryOptions/v1"
 DELIVERY_PATH = "/api/auth/session/activation/consume/completion/recovery/release"
 RETAINED_DELIVERY_SCHEMA = "serverware.oidcSessionActivationCompletionRecoveryRetainedDeliveryIntent/v1"
+HISTORICAL_RETAINED_DELIVERY_SCHEMA = "serverware.oidcSessionActivationCompletionRecoveryRetainedDeliveryIntent/v2"
 RETAINED_DELIVERY_OPTIONS_SCHEMA = "serverware.oidcSessionActivationCompletionRecoveryRetainedDeliveryOptions/v1"
 RETAINED_DELIVERY_PATH = "/api/auth/session/activation/consume/completion/recovery/retained-release"
 CONSUME_SCHEMA = "serverware.oidcSessionActivationCompletionRecoveryConsumeIntent/v1"
@@ -41,7 +42,25 @@ CONSUME_OPTIONS_SCHEMA = "serverware.oidcSessionActivationCompletionRecoveryCons
 CONSUME_PATH = "/api/auth/session/activation/completion/recovery/consume"
 # These purposes authenticate retained consume originals under independently
 # selected authority. Selection is evidence, not permission to release a token.
-_CONSUME_SELECTION_PURPOSES = frozenset({"completion", "release-intent-proof", "release"})
+_CONSUME_SELECTION_PURPOSES = frozenset({"completion", "release-intent-proof", "release", "retained-release"})
+
+
+def _current_recovery_bridge(parent):
+    from serverware import control_plane_oidc_session_activation_release_recovery_grant_acquisition_bootstrap as acquisition
+
+    selected = parent.release_recovery_grant_acquisition
+    return (type(selected) is acquisition._RecoveryGrantAcquisitionMaterial
+        and selected.retained_authority is True)
+
+
+def _intent_history_purpose(parent, purpose):
+    return (purpose in ("release-intent-proof", "release")
+        or purpose == "retained-release" and _current_recovery_bridge(parent))
+
+
+def _selects_consume(parent, purpose):
+    return (purpose in _CONSUME_SELECTION_PURPOSES
+        and (purpose != "retained-release" or _current_recovery_bridge(parent)))
 
 
 def _configuration(owner, profile):
@@ -217,12 +236,12 @@ class _CompletionActorScope(actor._ActorScope):
         self._current_configuration_pin = _configuration_pin(profile, current_configuration)
         self._configuration = self._configuration_seal = configuration
         self._configuration_pin = _configuration_pin(profile, configuration)
-        if profile == "consume" and purpose in _CONSUME_SELECTION_PURPOSES:
+        if profile == "consume" and _selects_consume(parent, purpose):
             consume_selection._require_selection(selected_consume, owner=owner, target=target, work=work)
         elif selected_consume is not None:
             actor._deny("consume history selection cannot authorize another effect purpose", 503)
         self._consume_recovery_selection = self._consume_recovery_selection_pin = selected_consume
-        if purpose in ("release-intent-proof", "release"):
+        if _intent_history_purpose(parent, purpose):
             intent_selection._require_selection(selected_intent, owner=owner, target=target, work=work)
             if selected_intent.consume_selection is not selected_consume:
                 actor._deny("retained intent selection changed its original consume prefix", 503)
@@ -268,6 +287,11 @@ class _CompletionActorScope(actor._ActorScope):
             # fallback selected by a LIVE failure or preparation permission.
             self._binding["schema"] = RETAINED_DELIVERY_SCHEMA
             self._binding["recoveryPurpose"] = purpose
+            if _current_recovery_bridge(parent):
+                self._binding["schema"] = HISTORICAL_RETAINED_DELIVERY_SCHEMA
+                self._binding["retainedIntentOnly"] = selected_intent.retained_only
+                self._binding["retainedIntentRecordDigest"] = (
+                    None if selected_intent.prefix_pins is None else selected_intent.prefix_pins[2])
         elif purpose == "consume":
             # Fresh consume continuation from acknowledged activation is not
             # activation execution permission or a completion-only assertion.
@@ -461,7 +485,7 @@ def _prepare_on_owner(owner, *, profile, request, recovery_bytes, options,
     if type(target) is not history._CompletionRecoveryTarget:
         actor._deny("completion recovery original target is unavailable", 503)
     selected_consume = None
-    if profile == "consume" and _purpose in _CONSUME_SELECTION_PURPOSES:
+    if profile == "consume" and _selects_consume(parent, _purpose):
         # The target proves R0 activation/possession. Independently authenticate
         # retained R1 consume controls before binding the new human ceremony.
         # Target accounting already includes held actor and future captures.
@@ -488,6 +512,19 @@ def _prepare_on_owner(owner, *, profile, request, recovery_bytes, options,
         selected_intent = intent_selection._select_on_owner(owner, target=target,
             consume_selection=selected_consume, work=work, current=base_current)
         _require_live_release_authority(owner, parent, target, selected_consume, work)
+    elif _purpose == "retained-release" and _current_recovery_bridge(parent):
+        selected_intent = intent_selection._select_on_owner(owner, target=target,
+            consume_selection=selected_consume, work=work, current=base_current)
+        selected = selected_intent.authority
+        if selected is None or selected_intent.prefix_pins is None:
+            actor._deny("current recovery requires its independently selected retained RI original", 503)
+        recovery_acquisition = parent.release_recovery_grant_acquisition
+        selected_policy = parent if not selected_intent.retained_only else selected
+        for actual, expected in ((recovery_acquisition.intent_enrollment_bytes, selected_policy.release_intent.enrollment_bytes),
+                (recovery_acquisition.proof_enrollment_bytes, selected_policy.release_proof.enrollment_bytes)):
+            work.charge(input_bytes=len(actual) + len(expected))
+            if actual != expected:
+                actor._deny("current recovery policy differs from independently selected RI originals", 503)
     elif _purpose not in ("completion", "consume"):
         _require_current_effect_authority(owner, parent, target)
     window = execution.clock._validate(target.live_window)

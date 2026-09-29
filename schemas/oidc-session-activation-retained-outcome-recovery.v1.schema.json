@@ -1,0 +1,200 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.dev/schemas/oidc-session-activation-retained-outcome-recovery.v1.schema.json",
+  "title": "Current-authority recovery of an unchanged retained RI outcome",
+  "description": "Three closed signed profiles and one explicit cold acquisition object. Data shape is not signature, current authority, custody, checkpoint-one storage, token possession or recovery permission. The paired owners require canonical no-LF originals, exact source revision, independently selected roots and scopes, original-byte equality, aggregate work bounds and nonrenewing lifetime checks. Legacy current-only profiles are not admitted by this bundle. No signed outcome or outcome-root field is invented.",
+  "oneOf": [
+    {"$ref": "#/$defs/recoveryIssuerPolicyEnvelopeV2"},
+    {"$ref": "#/$defs/recoveryAuthorizationEnvelopeV2"},
+    {"$ref": "#/$defs/recoveryReleaseEnvelopeV3"},
+    {"$ref": "#/$defs/recoveryGrantAcquisitionV2"}
+  ],
+  "$defs": {
+    "digest": {"$ref": "oidc-session-activation-retained-ri-delivery.v1.schema.json#/$defs/digest"},
+    "sourceRevision": {"$ref": "oidc-session-activation-retained-ri-delivery.v1.schema.json#/$defs/sourceRevision"},
+    "token": {"$ref": "oidc-session-activation-retained-ri-delivery.v1.schema.json#/$defs/token"},
+    "positiveEpochNs": {"$ref": "oidc-session-activation-retained-ri-delivery.v1.schema.json#/$defs/positiveEpochNs"},
+    "signature": {"$ref": "oidc-session-activation-retained-ri-delivery.v1.schema.json#/$defs/signature"},
+    "identity": {"$ref": "oidc-session-activation-retained-ri-delivery.v1.schema.json#/$defs/identity"},
+    "proofScope": {"$ref": "oidc-session-activation-retained-ri-delivery.v1.schema.json#/$defs/proofScope"},
+    "expectedRelease": {"$ref": "oidc-session-activation-retained-ri-delivery.v1.schema.json#/$defs/expectedRelease"},
+    "releaseEndpoint": {"$ref": "oidc-session-activation-retained-ri-delivery.v1.schema.json#/$defs/endpoint"},
+    "releaseLaunch": {"$ref": "oidc-session-activation-retained-ri-delivery.v1.schema.json#/$defs/releaseLaunch"},
+    "original16KiB": {"$ref": "oidc-session-activation-retained-ri-delivery.v1.schema.json#/$defs/original16KiB"},
+    "original8MiB": {"$ref": "oidc-session-activation-retained-ri-delivery.v1.schema.json#/$defs/original8MiB"},
+    "deliveryId": {
+      "type": "string", "minLength": 1, "maxLength": 128,
+      "description": "Paired runtime additionally requires NUL-free text and at most 128 UTF-8 bytes."
+    },
+    "directory": {
+      "type": "object", "additionalProperties": false,
+      "required": ["device", "inode", "uid", "gid"],
+      "properties": {
+        "device": {"$ref": "oidc-session-activation-retained-ri-delivery.v1.schema.json#/$defs/device"},
+        "inode": {"$ref": "oidc-session-activation-retained-ri-delivery.v1.schema.json#/$defs/inode"},
+        "uid": {"const": 65502}, "gid": {"const": 65502}
+      },
+      "description": "Independent signed pins, not observed directory ownership or permission to create, repair or replace an outcome."
+    },
+    "expectedEvidence": {
+      "type": "object", "additionalProperties": false,
+      "required": ["releaseCustodyDigest", "releaseIntentDigest", "stateReceiptDigest"],
+      "properties": {
+        "releaseCustodyDigest": {"$ref": "#/$defs/digest"},
+        "releaseIntentDigest": {"$ref": "#/$defs/digest"},
+        "stateReceiptDigest": {"$ref": "#/$defs/digest"}
+      },
+      "description": "Exact independently selected historical evidence identities. releaseCustodyDigest is the retained RI custody identity, not the current custody identity."
+    },
+    "recoveryIssuerPolicyV2": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "sourceRevision", "purpose", "trustMode", "proofEnrollmentDigest", "intentEnrollmentDigest", "proofScope", "callerId", "expectedRelease", "expectedEvidence", "expectedOutcomeDigest", "clientId", "clientIdentity", "endpoint", "releaseLaunch", "issuedAtEpochNs", "expiresAtEpochNs", "currentReleaseCustodyDigest"],
+      "properties": {
+        "schema": {"const": "serverware.oidcSessionActivationReleaseRecoveryIssuerPolicy/v2"},
+        "sourceRevision": {"$ref": "#/$defs/sourceRevision"},
+        "purpose": {"const": "issue-oidc-session-activation-release-recovery-grants"},
+        "trustMode": {"const": "trusted-host-local"},
+        "proofEnrollmentDigest": {"$ref": "#/$defs/digest"},
+        "intentEnrollmentDigest": {"$ref": "#/$defs/digest"},
+        "proofScope": {"$ref": "#/$defs/proofScope"}, "callerId": {"$ref": "#/$defs/token"},
+        "expectedRelease": {"$ref": "#/$defs/expectedRelease"},
+        "expectedEvidence": {"$ref": "#/$defs/expectedEvidence"},
+        "expectedOutcomeDigest": {"$ref": "#/$defs/digest"},
+        "clientId": {"$ref": "#/$defs/token"}, "clientIdentity": {"$ref": "#/$defs/identity"},
+        "endpoint": {"$ref": "#/$defs/releaseEndpoint"},
+        "releaseLaunch": {"$ref": "#/$defs/releaseLaunch"},
+        "issuedAtEpochNs": {"$ref": "#/$defs/positiveEpochNs"},
+        "expiresAtEpochNs": {"$ref": "#/$defs/positiveEpochNs"},
+        "currentReleaseCustodyDigest": {"$ref": "#/$defs/digest"}
+      },
+      "description": "At most 64 KiB encoded, 1024 nodes and depth 6 in the paired owner. The current root independently selects fresh custody v2 and the exact existing outcome, historical enrollments and evidence. Endpoint/launch resources and original delivery expiry must match; fresh policy cannot renew old evidence or authorize a replacement outcome."
+    },
+    "recoveryScopeV2": {
+      "type": "object", "additionalProperties": false,
+      "required": ["configurationDigest", "databaseId", "generationDigest", "runtimeClosureDigest", "receiverIdentity", "callerId", "releaseCustodyDigest", "deliveryKeyDigest", "deliveryId", "outcomeDigest", "directory", "currentReleaseCustodyDigest"],
+      "properties": {
+        "configurationDigest": {"$ref": "#/$defs/digest"}, "databaseId": {"$ref": "#/$defs/token"},
+        "generationDigest": {"$ref": "#/$defs/digest"}, "runtimeClosureDigest": {"$ref": "#/$defs/digest"},
+        "receiverIdentity": {"$ref": "#/$defs/identity"}, "callerId": {"$ref": "#/$defs/token"},
+        "releaseCustodyDigest": {"$ref": "#/$defs/digest", "description": "Historical RI evidence-custody identity."},
+        "deliveryKeyDigest": {"$ref": "#/$defs/digest"}, "deliveryId": {"$ref": "#/$defs/deliveryId"},
+        "outcomeDigest": {"$ref": "#/$defs/digest"}, "directory": {"$ref": "#/$defs/directory"},
+        "currentReleaseCustodyDigest": {"$ref": "#/$defs/digest", "description": "Independently selected fresh current delivery-custody identity."}
+      }
+    },
+    "recoveryAuthorizationV2": {
+      "type": "object", "additionalProperties": false,
+      "required": ["configurationDigest", "databaseId", "generationDigest", "runtimeClosureDigest", "receiverIdentity", "callerId", "releaseCustodyDigest", "deliveryKeyDigest", "deliveryId", "outcomeDigest", "directory", "currentReleaseCustodyDigest", "schema", "sourceRevision", "purpose", "serviceUid", "serviceGid", "processMode", "trustMode", "issuedAtEpochNs", "expiresAtEpochNs"],
+      "properties": {
+        "configurationDigest": {"$ref": "#/$defs/digest"}, "databaseId": {"$ref": "#/$defs/token"},
+        "generationDigest": {"$ref": "#/$defs/digest"}, "runtimeClosureDigest": {"$ref": "#/$defs/digest"},
+        "receiverIdentity": {"$ref": "#/$defs/identity"}, "callerId": {"$ref": "#/$defs/token"},
+        "releaseCustodyDigest": {"$ref": "#/$defs/digest"}, "deliveryKeyDigest": {"$ref": "#/$defs/digest"},
+        "deliveryId": {"$ref": "#/$defs/deliveryId"}, "outcomeDigest": {"$ref": "#/$defs/digest"},
+        "directory": {"$ref": "#/$defs/directory"}, "currentReleaseCustodyDigest": {"$ref": "#/$defs/digest"},
+        "schema": {"const": "serverware.oidcSessionActivationReleaseRecoveryAuthorization/v2"},
+        "sourceRevision": {"$ref": "#/$defs/sourceRevision"},
+        "purpose": {"const": "recover-oidc-session-activation-release"},
+        "serviceUid": {"const": 65502}, "serviceGid": {"const": 65502},
+        "processMode": {"const": "oidc-session-activation-token-release"},
+        "trustMode": {"const": "trusted-host-local"},
+        "issuedAtEpochNs": {"$ref": "#/$defs/positiveEpochNs"}, "expiresAtEpochNs": {"$ref": "#/$defs/positiveEpochNs"}
+      },
+      "description": "At most 16 KiB encoded, 256 nodes and depth 4. Fresh current-root permission for exactly the retained historical outcome and actual independently pinned resources. Both custody identities are required; no archive signature becomes current permission."
+    },
+    "recoveryStorageScope": {
+      "type": "object", "additionalProperties": false,
+      "required": ["configurationDigest", "databaseId", "generationDigest", "runtimeClosureDigest", "receiverIdentity", "deliveryId", "releaseCustodyDigest", "directory", "checkpoint"],
+      "properties": {
+        "configurationDigest": {"$ref": "#/$defs/digest"}, "databaseId": {"$ref": "#/$defs/token"},
+        "generationDigest": {"$ref": "#/$defs/digest"}, "runtimeClosureDigest": {"$ref": "#/$defs/digest"},
+        "receiverIdentity": {"$ref": "#/$defs/identity"}, "deliveryId": {"$ref": "#/$defs/deliveryId"},
+        "releaseCustodyDigest": {"$ref": "#/$defs/digest", "description": "Unchanged historical evidence-custody identity."},
+        "directory": {"$ref": "#/$defs/directory"},
+        "checkpoint": {
+          "type": "object", "additionalProperties": false, "required": ["recordCount", "outcomeDigest"],
+          "properties": {"recordCount": {"const": 1}, "outcomeDigest": {"$ref": "#/$defs/digest"}}
+        }
+      },
+      "description": "Existing storage-authorization scope, strictly checkpoint one. Runtime must join the same outcome digest in current policy, recovery scope and actual protected unchanged record readback. This object is not storage observation or a signed outcome."
+    },
+    "recoveryReleaseV3": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "sourceRevision", "purpose", "role", "profile", "configurationDigest", "databaseId", "generationDigest", "runtimeClosureDigest", "receiverIdentity", "callerId", "producerId", "producerIdentity", "stateReceiptDigest", "expectedRelease", "releaseCustodyDigest", "evidenceCustodyDigest", "deliveryKeyDigest", "storageScope", "recoveryScope", "releaseCustody", "storageAuthorization", "recoveryAuthorization", "issuedAtEpochNs", "expiresAtEpochNs", "trustMode", "launch", "hardwareBacked", "nativeStageZero", "hsmBackedKeys", "teeVerified", "externalWitnessVerified"],
+      "properties": {
+        "schema": {"const": "serverware.oidcSessionActivationReleaseBootstrap/v3"}, "sourceRevision": {"$ref": "#/$defs/sourceRevision"},
+        "purpose": {"const": "launch-oidc-session-activation-token-release"}, "role": {"const": "oidc-session-activation-token-release"},
+        "profile": {"const": "recovery"}, "configurationDigest": {"$ref": "#/$defs/digest"},
+        "databaseId": {"$ref": "#/$defs/token"}, "generationDigest": {"$ref": "#/$defs/digest"}, "runtimeClosureDigest": {"$ref": "#/$defs/digest"},
+        "receiverIdentity": {"$ref": "#/$defs/identity"}, "callerId": {"$ref": "#/$defs/token"},
+        "producerId": {"$ref": "#/$defs/token"}, "producerIdentity": {"$ref": "#/$defs/identity"},
+        "stateReceiptDigest": {"$ref": "#/$defs/digest"}, "expectedRelease": {"$ref": "#/$defs/expectedRelease"},
+        "releaseCustodyDigest": {"$ref": "#/$defs/digest", "description": "Fresh current custody, equal to recoveryScope.currentReleaseCustodyDigest."},
+        "evidenceCustodyDigest": {"$ref": "#/$defs/digest", "description": "Retained RI custody, equal to the storage and recovery releaseCustodyDigest fields."},
+        "deliveryKeyDigest": {"$ref": "#/$defs/digest"}, "storageScope": {"$ref": "#/$defs/recoveryStorageScope"},
+        "recoveryScope": {"$ref": "#/$defs/recoveryScopeV2"}, "releaseCustody": {"$ref": "#/$defs/original8MiB"},
+        "storageAuthorization": {"$ref": "#/$defs/original16KiB"}, "recoveryAuthorization": {"$ref": "#/$defs/original16KiB"},
+        "issuedAtEpochNs": {"$ref": "#/$defs/positiveEpochNs"}, "expiresAtEpochNs": {"$ref": "#/$defs/positiveEpochNs"},
+        "trustMode": {"const": "trusted-host-local"}, "launch": {"$ref": "#/$defs/releaseLaunch"},
+        "hardwareBacked": {"const": false}, "nativeStageZero": {"const": false}, "hsmBackedKeys": {"const": false},
+        "teeVerified": {"const": false}, "externalWitnessVerified": {"const": false}
+      },
+      "description": "At most 16 MiB encoded, 1024 nodes and depth 8. RECOVERY only; scope and original authorization are required and non-null, with checkpoint one. Decoded current custody must be v2 and recovery authorization v2; storage authorization retains its existing format. All signed scopes, launch pins, original delivery expiry and inherited work/window must agree before actual recovery."
+    },
+    "acquisitionOriginal": {
+      "type": "object", "additionalProperties": false, "required": ["base64Url", "byteCount"],
+      "properties": {
+        "base64Url": {"type": "string", "minLength": 3, "maxLength": 11184811, "pattern": "^[A-Za-z0-9_-]+$"},
+        "byteCount": {"type": "integer", "minimum": 2, "maximum": 8388608}
+      },
+      "description": "Exact two-field original transport in the independently signed parent. It has no bytesDigest field. Runtime verifies canonical unpadded encoding, decoded byteCount and each original signature/profile."
+    },
+    "acquisitionOriginal64KiB": {
+      "allOf": [{"$ref": "#/$defs/acquisitionOriginal"}, {"properties": {"byteCount": {"maximum": 65536}, "base64Url": {"maxLength": 87382}}}]
+    },
+    "acquisitionOriginal16KiB": {
+      "allOf": [{"$ref": "#/$defs/acquisitionOriginal"}, {"properties": {"byteCount": {"maximum": 16384}, "base64Url": {"maxLength": 21846}}}]
+    },
+    "recoveryGrantAcquisitionV2": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "endpoint", "issuerPolicy", "releaseCustody", "proofEnrollment", "intentEnrollment"],
+      "properties": {
+        "schema": {"const": "serverware.controlPlaneOidcSessionActivationReleaseRecoveryGrantAcquisition/v2"},
+        "endpoint": {
+          "type": "object", "additionalProperties": false, "required": ["path", "timeoutSeconds", "peerUid", "peerGid"],
+          "properties": {
+            "path": {"const": "/run/serverware/oidc-session-activation-token-release/recovery-grants.sock"},
+            "timeoutSeconds": {"type": "integer", "minimum": 1, "maximum": 30},
+            "peerUid": {"const": 0}, "peerGid": {"const": 0}
+          }
+        },
+        "issuerPolicy": {"$ref": "#/$defs/acquisitionOriginal64KiB"},
+        "releaseCustody": {"$ref": "#/$defs/acquisitionOriginal"},
+        "proofEnrollment": {"$ref": "#/$defs/acquisitionOriginal16KiB"},
+        "intentEnrollment": {"$ref": "#/$defs/acquisitionOriginal16KiB"}
+      },
+      "description": "Explicit non-null cold acquisition profile, not a signed envelope or public recovery permission. At most 4 MiB encoded, 128 nodes and depth 4 under the containing owner; individually valid originals may exceed that aggregate and must be refused. V2 requires policy v2/current custody v2, with historical enrollments independently matched. The actual actor freshly admits originals before the fixed issuer contact; timeout clips the original deadline and does not renew it."
+    },
+    "recoveryIssuerPolicyEnvelopeV2": {
+      "type": "object", "additionalProperties": false, "required": ["schema", "payload", "signatureBase64Url"],
+      "properties": {
+        "schema": {"const": "serverware.signedOidcSessionActivationReleaseRecoveryIssuerPolicy/v2"},
+        "payload": {"$ref": "#/$defs/recoveryIssuerPolicyV2"}, "signatureBase64Url": {"$ref": "#/$defs/signature"}
+      }
+    },
+    "recoveryAuthorizationEnvelopeV2": {
+      "type": "object", "additionalProperties": false, "required": ["schema", "payload", "signatureBase64Url"],
+      "properties": {
+        "schema": {"const": "serverware.signedOidcSessionActivationReleaseRecoveryAuthorization/v2"},
+        "payload": {"$ref": "#/$defs/recoveryAuthorizationV2"}, "signatureBase64Url": {"$ref": "#/$defs/signature"}
+      }
+    },
+    "recoveryReleaseEnvelopeV3": {
+      "type": "object", "additionalProperties": false, "required": ["schema", "payload", "signatureBase64Url"],
+      "properties": {
+        "schema": {"const": "serverware.signedOidcSessionActivationReleaseBootstrap/v3"},
+        "payload": {"$ref": "#/$defs/recoveryReleaseV3"}, "signatureBase64Url": {"$ref": "#/$defs/signature"}
+      }
+    }
+  }
+}

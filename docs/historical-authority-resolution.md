@@ -46,8 +46,10 @@ the fresh preparation ceremony, then genuinely verifies the retained originals
 without retired private keys or new proof-service contact. The separate
 [current-authority retained-RI bridge](control-plane-current-authority-retained-ri-delivery.md)
 now connects independently configured current grants/custody to LIVE delivery
-over those originals. Retained-release outcome-root history, key/state migration
-and explicit older-source replay implementations remain open.
+over those originals. The separate [retained-outcome recovery bridge](control-plane-retained-outcome-root-history.md)
+now binds fresh current custody/grants to independently archived RI evidence and
+exact protected checkpoint-one readback. Key/state migration and explicit
+older-source replay implementations remain open.
 
 ## Existing components and the actual gap
 
@@ -172,8 +174,9 @@ migration and step 5 remain open. None is runtime-verified.
    uses its explicit bridge. Fresh R2 intent/proof and separately approved LIVE
    release now preserve that evidence split. Retained intent/proof can now be
    readmitted under independently archived RI without retired private keys.
-   LIVE delivery now has an explicit fixed current-issuer/custody bridge; historical
-   retained-release outcome custody still requires its separate root-history join.
+   LIVE delivery has an explicit fixed current-issuer/custody bridge; retained
+   recovery now has a separate current policy/custody profile and exact protected
+   checkpoint-one readback, without an invented outcome signature or retired signer.
    Current signed grants are never permission to retry a spent release.
 5. Admit older source revisions only through explicit versioned replay code
    covering their original schemas and semantics. Unsupported revisions and

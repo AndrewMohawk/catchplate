@@ -61,7 +61,8 @@ def _exchange_on_active(active, *, _delivery=None):
     grants, result = active.grants, active._recovery_result
     if (inputs._purpose != "retained-release" or actor._purpose != "retained-release"
             or inputs.actor is not actor or inputs.controls is not controls or inputs.work is not work
-            or inputs.response_originals is not response or inputs.root_public_key is not root
+            or inputs.response_originals is not response
+            or (not config.retained_authority and inputs.root_public_key is not root)
             or selected_intent.inputs is not inputs or selected_proof.intent is not selected_intent
             or actor._owner is not owner or owner._material is not parent
             or owner._binding is not binding or owner._custody is not custody
@@ -86,8 +87,8 @@ def _exchange_on_active(active, *, _delivery=None):
             or type(response) is not tuple or len(response) != 6 or response[0] != b"acknowledged"
             or type(old) is not bytes or len(old) != clients.delivery.TOKEN_BYTES
             or actor._old_token is not old
-            or parent.release_proof is not inputs.proof_policy
-            or parent.release_intent is not inputs.intent_policy):
+            or (not config.retained_authority and (parent.release_proof is not inputs.proof_policy
+                or parent.release_intent is not inputs.intent_policy))):
         _fail("completion retained release requires exact existing proof, completion and possession")
     proof_scope, intent_scope, release = inputs.proof_scope, inputs.intent_scope, inputs.expected_release
     held = (actor, controls, response, inputs, selected_intent, selected_proof, grants, result,
@@ -154,7 +155,6 @@ def _exchange_on_active(active, *, _delivery=None):
     extra = held_before_exchange + capture_bytes + fixed
     receiving_extra = extra + derived + first
     # No hints or new authority are decoded before this combined preallocation.
-    _same(proof_raw[1], config.release_custody_bytes, work, "independent custody original")
     _same(proof_raw[3], config.proof_enrollment_bytes, work, "retained proof enrollment")
     _same(inputs.proof_policy.enrollment_bytes, config.proof_enrollment_bytes, work,
         "original actor proof enrollment")
@@ -197,6 +197,8 @@ def _exchange_on_active(active, *, _delivery=None):
         return lifetime.epoch, lifetime.monotonic
 
     current()
+    acquisition._require_policy_inputs(policy, inputs, config, parent, root,
+        proof_raw[1], work, current)
     _same(record, retained_outcome, work, "exact durably retained canonical outcome")
     payload = policy.payload
     evidence = {"releaseCustodyDigest": plan._frame(shared.proofs.contract.CUSTODY_IDENTITY_DOMAIN,

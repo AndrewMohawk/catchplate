@@ -83,7 +83,9 @@ def _scopes(policy, reserved, work):
         "configurationDigest", "databaseId", "generationDigest", "runtimeClosureDigest", "receiverIdentity",
         "deliveryId", "releaseCustodyDigest", "directory")}, "callerId": payload["callerId"],
         "deliveryKeyDigest": policy.custody_material.delivery_key_digest,
-        "outcomeDigest": payload["expectedOutcomeDigest"]}
+        "outcomeDigest": payload["expectedOutcomeDigest"],
+        **({"currentReleaseCustodyDigest": payload["currentReleaseCustodyDigest"]}
+            if payload["schema"] == issuer.V2_PAYLOAD_SCHEMA else {})}
     # These graphs contain only source-fixed fields and retained references.
     # Measure before capture/canonical comparison creates their representations.
     graph_bytes = sum(work.measure(graph)[0] for graph in

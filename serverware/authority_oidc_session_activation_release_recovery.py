@@ -16,6 +16,7 @@ import time
 from serverware import oidc_session_activation_release_recovery_authorization as grants
 from serverware import authority_oidc_session_activation_release_custody as release_custody
 from serverware import authority_oidc_session_activation_release_outcome_store as stores
+from serverware import oidc_session_activation_release_retained_authority as retained
 
 
 bootstrap, delivery = grants.bootstrap, grants.delivery
@@ -158,12 +159,19 @@ class OidcSessionActivationReleaseRecovery:
             _continuity=configured.ancestor)
         original_current = self._guard(configured, admitted.live, window, bound, work)
         original_current()
-        material = bootstrap._verify_historical_on_work(custody_bytes=configured.custody_bytes,
+        bridged = admitted.payload["schema"] == grants.V2_PAYLOAD_SCHEMA
+        verifier = bootstrap._verify_on_work if bridged else bootstrap._verify_historical_on_work
+        material = verifier(custody_bytes=configured.custody_bytes,
             root_public_key=configured.root_public_key, live_window=window,
             transport_deadline_ns=bound, work=work,
             _current=original_current if configured.ancestor is not None else None)
+        if bridged != (material.intent_root_public_key is not None):
+            _fail("recovery grant and current custody profiles differ")
         original_current()
-        custody_digest = plan._frame(proofs.CUSTODY_IDENTITY_DOMAIN, (configured.custody_bytes,), work)
+        if bridged:
+            plan._same(plan._frame(proofs.CUSTODY_IDENTITY_DOMAIN, (configured.custody_bytes,), work),
+                scope["currentReleaseCustodyDigest"], work, "recovery exact current custody")
+        custody_digest = plan._frame(proofs.CUSTODY_IDENTITY_DOMAIN, (retained.custody_for(material),), work)
         for observed, expected in ((custody_digest, scope["releaseCustodyDigest"]),
                 (material.planner.configuration_digest, scope["configurationDigest"]),
                 (material.planner.generation["digest"], scope["generationDigest"]),
@@ -176,23 +184,28 @@ class OidcSessionActivationReleaseRecovery:
         original_current()
         state = authorization._admit_enrollment_on_work(
             enrollment_bytes=material.planner.state_enrollment_bytes,
-            root_public_key=configured.root_public_key, work=work)
+            root_public_key=retained.root_for(material, configured.root_public_key), work=work)
         for observed, expected in ((state.enrollment_digest, material.planner.state_enrollment_digest),
                 (state.payload["databaseId"], scope["databaseId"]),
                 (state.payload["generationDigest"], scope["generationDigest"])):
             plan._same(observed, expected, work, "recovery historical state enrollment")
         original_current()
         _created, delivery_expiry = bootstrap._scope(material.delivery_scope, work)
+        planner = retained.planner_for(material)
+        custody_current = (bootstrap.planner_bootstrap._launch_guard(material.attestation_interval,
+            material.opening_sample, original_current, work) if bridged else original_current)
         window = processing._narrow(window,
-            deadline_epoch_ns=min(admitted.payload["expiresAtEpochNs"], delivery_expiry),
-            maximum_lifetime_ns=material.planner.maximum_plan_age_ns,
-            maximum_clock_skew_ns=material.planner.maximum_clock_skew_ns)
+            deadline_epoch_ns=min(admitted.payload["expiresAtEpochNs"], delivery_expiry,
+                material.attestation_interval[1] if bridged else delivery_expiry),
+            maximum_lifetime_ns=planner.maximum_plan_age_ns,
+            maximum_clock_skew_ns=planner.maximum_clock_skew_ns)
         bound = min(bound, window[4])
         window, bound = self._narrow(work, window, bound)
         narrowed = self._guard(configured, admitted.live, window, bound, work)
 
         def current():
             original_current()
+            custody_current()
             return narrowed()
 
         current()
@@ -240,6 +253,8 @@ class OidcSessionActivationReleaseRecovery:
         try:
             window, bound = self._narrow(work, window, bound)
             material, scope, forbidden, window, bound, current = self._context(configured, window, bound, work)
+            evidence_root = retained.root_for(material, configured.root_public_key)
+            retained.require_originals(material, intent_enrolled, proof_enrolled, work)
             # Only this already-admitted parent guard enters child evidence
             # admission; joined_current below must never become its own ancestor.
             evidence_continuity = bootstrap._continuity(current, work) if configured.ancestor is not None else None
@@ -261,27 +276,29 @@ class OidcSessionActivationReleaseRecovery:
             intent_scope = {name: scope[name] for name in intent_keys.SCOPE_FIELDS}
             current()
             intent = intent_admission._verify_historical_on_work(intent_bytes=intent_raw,
-                enrollment_bytes=intent_enrolled, root_public_key=configured.root_public_key,
+                enrollment_bytes=intent_enrolled, root_public_key=evidence_root,
                 forbidden_public_keys=forbidden, expected_scope=intent_scope,
                 expected_release=expected_release, old_token_bytes=old_token,
                 live_window=window, transport_deadline_ns=bound, work=work,
                 _continuity=evidence_continuity)
+            retained.contain(material, intent.payload)
             plan._same(intent.intent_digest, material.release_intent_digest, work, "recovery old custody exact intent")
             plan._same(intent.intent_digest, evidence["releaseIntentDigest"], work, "recovery retained exact intent")
             enrolled = intent_keys._admit_on_work(enrollment_bytes=intent_enrolled,
-                root_public_key=configured.root_public_key, expected_scope=intent_scope,
+                root_public_key=evidence_root, expected_scope=intent_scope,
                 forbidden_public_keys=forbidden, work=work)
             plan._same(enrolled.enrollment_digest, intent.payload["enrollmentDigest"], work,
                 "recovery actual historical intent key")
             current()
             proof = proof_admission._verify_historical_on_work(proof_bytes=proof_raw,
-                enrollment_bytes=proof_enrolled, root_public_key=configured.root_public_key,
+                enrollment_bytes=proof_enrolled, root_public_key=evidence_root,
                 forbidden_public_keys=(*forbidden, enrolled.caller_public_key),
                 expected_scope=record["scope"], expected_release=expected_release,
                 expected_evidence={name: evidence[name] for name in proof_admission.EVIDENCE_FIELDS},
                 expected_intent_interval=(intent.payload["issuedAtEpochNs"], intent.payload["expiresAtEpochNs"]),
                 live_window=window, transport_deadline_ns=bound, work=work,
                 _continuity=evidence_continuity)
+            retained.contain(material, proof.payload)
             if (type(intent) is not intent_admission._HistoricalIntentEvidence
                     or type(proof) is not proof_admission._HistoricalProofEvidence):
                 _fail("recovery requires genuine historical original admission")

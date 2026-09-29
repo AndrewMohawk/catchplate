@@ -92,7 +92,7 @@ class _DeliveryAttempt:
             execution._fail("completion RECOVERY configuration changed")
         return (self._config.endpoint, self._config.issuer_policy_bytes,
             self._config.release_custody_bytes, self._config.proof_enrollment_bytes,
-            self._config.intent_enrollment_bytes)
+            self._config.intent_enrollment_bytes, self._config.retained_authority)
 
     def _identity(self):
         observed = (self.actor, self.controls, self._owner, self._work, self._parent,

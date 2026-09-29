@@ -26,6 +26,8 @@ keys, registration = bootstrap.planner_bootstrap.keys, bootstrap.registration
 PURPOSE = "recover-oidc-session-activation-release"
 SCHEMA = "serverware.signedOidcSessionActivationReleaseRecoveryAuthorization/v1"
 PAYLOAD_SCHEMA = "serverware.oidcSessionActivationReleaseRecoveryAuthorization/v1"
+V2_SCHEMA = "serverware.signedOidcSessionActivationReleaseRecoveryAuthorization/v2"
+V2_PAYLOAD_SCHEMA = "serverware.oidcSessionActivationReleaseRecoveryAuthorization/v2"
 SIGNATURE_DOMAIN = SCHEMA
 IDENTITY_DOMAIN = "serverware.oidcSessionActivationReleaseRecoveryAuthorizationIdentity/v1"
 ROLE = PROCESS_MODE = bootstrap.PROCESS_MODE
@@ -37,6 +39,7 @@ SCOPE_FIELDS = frozenset({"configurationDigest", "databaseId", "generationDigest
     "runtimeClosureDigest", "receiverIdentity", "callerId", "releaseCustodyDigest",
     "deliveryKeyDigest", "deliveryId", "outcomeDigest", "directory"})
 DIRECTORY_FIELDS = frozenset({"device", "inode", "uid", "gid"})
+V2_SCOPE_FIELDS = SCOPE_FIELDS | {"currentReleaseCustodyDigest"}
 PAYLOAD_FIELDS = SCOPE_FIELDS | frozenset({"schema", "sourceRevision", "purpose",
     "serviceUid", "serviceGid", "processMode", "trustMode", "issuedAtEpochNs", "expiresAtEpochNs"})
 _ENVELOPE_FIELDS = frozenset({"schema", "payload", "signatureBase64Url"})
@@ -89,7 +92,10 @@ def _fixed_owner(value, uid_field, gid_field):
 
 
 def _scope_shape(value, work):
-    shape._object(value, SCOPE_FIELDS, "release recovery independent scope")
+    fields = V2_SCOPE_FIELDS if type(value) is dict and "currentReleaseCustodyDigest" in value else SCOPE_FIELDS
+    shape._object(value, fields, "release recovery independent scope")
+    if fields == V2_SCOPE_FIELDS:
+        shape._digest(value["currentReleaseCustodyDigest"])
     for name in ("configurationDigest", "generationDigest", "runtimeClosureDigest",
             "releaseCustodyDigest", "deliveryKeyDigest", "outcomeDigest"):
         shape._digest(value[name])
@@ -106,19 +112,21 @@ def _scope_shape(value, work):
 
 
 def _scope(value, work):
-    """Own independent scope11 without learning any pin from storage."""
+    """Own explicit independent scope11/12 without learning pins from storage."""
     owned = _capture(value, work)
     _scope_shape(owned, work)
     return owned
 
 
 def _payload_shape(payload, work):
-    shape._object(payload, PAYLOAD_FIELDS, "release recovery authorization")
-    for field, expected in (("schema", PAYLOAD_SCHEMA), ("sourceRevision", authority.SOURCE_REVISION),
+    bridged = type(payload) is dict and payload.get("schema") == V2_PAYLOAD_SCHEMA
+    shape._object(payload, PAYLOAD_FIELDS | {"currentReleaseCustodyDigest"} if bridged else PAYLOAD_FIELDS,
+        "release recovery authorization")
+    for field, expected in (("schema", V2_PAYLOAD_SCHEMA if bridged else PAYLOAD_SCHEMA), ("sourceRevision", authority.SOURCE_REVISION),
             ("purpose", PURPOSE), ("processMode", PROCESS_MODE), ("trustMode", "trusted-host-local")):
         shape._literal(payload[field], expected)
     _fixed_owner(payload, "serviceUid", "serviceGid")
-    _scope_shape({name: payload[name] for name in SCOPE_FIELDS}, work)
+    _scope_shape({name: payload[name] for name in (V2_SCOPE_FIELDS if bridged else SCOPE_FIELDS)}, work)
     authorization._interval(payload, MAX_RECEIPT_AGE_NS)
 
 
@@ -129,9 +137,11 @@ def _read(original, work):
         maximum_nodes=MAX_NODES, maximum_depth=MAX_DEPTH)
     owned = _capture(decoded, work)
     shape._object(owned, _ENVELOPE_FIELDS, "signed release recovery authorization")
-    shape._literal(owned["schema"], SCHEMA)
+    if owned["schema"] not in (SCHEMA, V2_SCHEMA):
+        _fail("unsupported recovery authorization profile")
     shape._base64url(owned["signatureBase64Url"], signature=True)
     _payload_shape(owned["payload"], work)
+    shape._literal(owned["schema"], V2_SCHEMA if owned["payload"]["schema"] == V2_PAYLOAD_SCHEMA else SCHEMA)
     _canonical(raw, owned, work)
     return owned
 
@@ -201,13 +211,15 @@ def _verify_on_work(*, authorization_bytes, root_public_key, expected_scope,
     unsigned = _wire(payload, work)
     current()
     try:
-        capability._signature(root, envelope["signatureBase64Url"], SIGNATURE_DOMAIN,
+        capability._signature(root, envelope["signatureBase64Url"], envelope["schema"],
             unsigned, capture._SharedLedger(work))
     except InvalidSignature as exc:
         raise OidcSessionActivationReleaseRecoveryAuthorizationError(
             "release recovery authorization root signature is invalid") from exc
     current()
-    for name in SCOPE_FIELDS:
+    fields = V2_SCOPE_FIELDS if payload["schema"] == V2_PAYLOAD_SCHEMA else SCOPE_FIELDS
+    shape._object(expected, fields, "recovery independently selected profile")
+    for name in fields:
         plan._same(payload[name], expected[name], work, "release recovery authorization " + name)
     current()
     live = bind_interval(payload["issuedAtEpochNs"], payload["expiresAtEpochNs"])
@@ -232,21 +244,23 @@ def _produce_on_work(*, payload, root_private_key, root_public_key,
     shape._integer(transport_deadline_ns, minimum=1)
     owned = _capture(payload, work)
     _payload_shape(owned, work)
-    expected = _scope({name: owned[name] for name in SCOPE_FIELDS}, work)
+    bridged = owned["schema"] == V2_PAYLOAD_SCHEMA
+    expected = _scope({name: owned[name] for name in (V2_SCOPE_FIELDS if bridged else SCOPE_FIELDS)}, work)
+    schema = V2_SCHEMA if bridged else SCHEMA
     current, bind_interval = _processing(window, transport_deadline_ns, work, _continuity)
     current()
     live = bind_interval(owned["issuedAtEpochNs"], owned["expiresAtEpochNs"])
     live()
     keys._pair_on_work(private, root, work)
     live()
-    envelope = {"schema": SCHEMA, "payload": owned, "signatureBase64Url": "A" * 86}
+    envelope = {"schema": schema, "payload": owned, "signatureBase64Url": "A" * 86}
     unsigned_size, unsigned_nodes = work.measure(owned)
     envelope_size, envelope_nodes = work.measure(envelope)
     if max(unsigned_size, envelope_size) > MAX_BYTES or max(unsigned_nodes, envelope_nodes) > MAX_NODES:
         _fail("release recovery authorization signature exceeds its output bounds")
     work.charge(input_bytes=4 * unsigned_size + envelope_size + production._SIGNATURE_TRANSPORT_BYTES,
         json_nodes=2 * unsigned_nodes + envelope_nodes)
-    frame_bytes = 2 * len(SIGNATURE_DOMAIN) + 9 + unsigned_size + 2 * 71
+    frame_bytes = 2 * len(schema) + 9 + unsigned_size + 2 * 71
     if (work.limits.max_hashes - work.hash_work < 1
             or work.limits.max_input_bytes - work.input_bytes < frame_bytes + unsigned_size
             or work.limits.max_json_nodes - work.json_nodes < 4 + unsigned_nodes):
@@ -254,7 +268,7 @@ def _produce_on_work(*, payload, root_private_key, root_public_key,
     unsigned = plan.core.canonical_bytes(owned)
     if len(unsigned) != unsigned_size:
         _fail("release recovery authorization changed after measurement")
-    message = plan._ascii(plan._frame(SIGNATURE_DOMAIN, (unsigned,), work), work)
+    message = plan._ascii(plan._frame(schema, (unsigned,), work), work)
     live()
     signature = production._sign_and_verify(private, root, message, work)
     live()
@@ -262,7 +276,7 @@ def _produce_on_work(*, payload, root_private_key, root_public_key,
         _fail("release recovery authorization changed during signing")
     encoded = base64.urlsafe_b64encode(signature).decode("ascii").rstrip("=")
     shape._base64url(encoded, signature=True)
-    original = plan.core.canonical_bytes({"schema": SCHEMA,
+    original = plan.core.canonical_bytes({"schema": schema,
         "payload": owned, "signatureBase64Url": encoded})
     if len(original) != envelope_size:
         _fail("release recovery authorization output changed after reservation")

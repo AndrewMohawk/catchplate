@@ -58,7 +58,9 @@ read-only preparation result cannot itself enter token delivery. The separate
 [current-authority retained-RI delivery bridge](control-plane-current-authority-retained-ri-delivery.md)
 now connects a fresh release actor, fixed current issuer policy, current custody
 and LIVE delivery; it does not grant retired signing or proof-service contact.
-Retained-outcome delivery across a retired release root remains unfinished.
+The separate [retained-outcome recovery bridge](control-plane-retained-outcome-root-history.md)
+now connects current custody/grants to independently selected RI originals and
+exact protected checkpoint-one readback; it does not make archived RI current.
 
 ## Bounds and remaining work
 
@@ -70,6 +72,7 @@ loader shapes, existing global attempt slots and original deadlines stay
 unchanged. Large individually valid inventories may still be refused.
 
 The fresh-current preparation and current-R2 LIVE paths keep their separate
-authority requirements. Older source-cohort adapters, migration and retained
-release-outcome root history remain H05 work. This is source integration only: no build,
+authority requirements. Older source-cohort adapters and migration remain H05
+work. The new recovery profile does not create an outcome signature or authorize
+re-execution. This is source integration only: no build,
 execution, pilot, AWS deployment or production acceptance is claimed.

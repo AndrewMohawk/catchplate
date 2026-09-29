@@ -118,7 +118,7 @@ def _identity(value):
     if retained_selection is not value._retained_intent_selection:
         _fail("completion controls changed their retained intent selection")
     if retained_selection is not None:
-        if value.profile != "consume" or actor._purpose not in ("release-intent-proof", "release"):
+        if value.profile != "consume" or not actors._intent_history_purpose(actor._parent, actor._purpose):
             _fail("completion controls borrowed retained intent history for another purpose")
         intent_selection._require_selection(retained_selection, owner=actor._owner,
             target=actor._target, work=value.work)
@@ -256,7 +256,7 @@ def _admit_on_actor(actor, *, _additional_original_bytes=0):
         inherited_reservation = selected_consume.original_reservation_bytes
     selected_intent = actor._retained_intent_selection
     if selected_intent is not None:
-        if phase != "consume" or actor._purpose not in ("release-intent-proof", "release"):
+        if phase != "consume" or not actors._intent_history_purpose(actor._parent, actor._purpose):
             _fail("completion controls received retained intent history for another purpose")
         intent_selection._require_selection(selected_intent, owner=owner, target=target, work=work)
         if selected_intent.consume_selection is not selected_consume:

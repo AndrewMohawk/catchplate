@@ -168,7 +168,8 @@ def _identity(value):
     if selection is not None:
         actors.intent_selection._require_selection(selection,
             owner=actor._owner, target=actor._target, work=value.work)
-        if value._purpose not in ("release-intent-proof", "release") or value.retained_only is not selection.retained_only:
+        if (not actors._intent_history_purpose(actor._parent, value._purpose)
+                or value.retained_only is not selection.retained_only):
             _fail("retained intent selection cannot authorize another purpose or mode")
     if value.retained_only:
         authority = selection.authority
@@ -255,7 +256,7 @@ def _admit_for_purpose(selected, *, response_originals, receiving_current, purpo
     release_authority = None
     if retained_selection is not None:
         actors.intent_selection._require_selection(retained_selection, owner=owner, target=target, work=work)
-        if (purpose not in ("release-intent-proof", "release") or selected._retained_intent_selection is not retained_selection
+        if (not actors._intent_history_purpose(parent, purpose) or selected._retained_intent_selection is not retained_selection
                 or retained_selection.consume_selection is not consume_selection):
             _fail("release preparation changed its actual retained-prefix selection")
         retained_only = retained_selection.retained_only

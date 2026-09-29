@@ -7,6 +7,8 @@ eventual recovery owner must independently read the checkpoint-one store.
 """
 from __future__ import annotations
 
+from serverware import oidc_session_activation_release_retained_authority as retained
+
 from serverware import authority_oidc_session_activation_release_grant_production as shared
 from serverware import authority_oidc_session_activation_release_intent as intents
 from serverware import authority_oidc_session_activation_release_proof as proofs
@@ -112,6 +114,8 @@ def _derive_on_work(*, request_originals, issuer_policy_bytes, release_custody_b
     material = policy.custody_material
     if type(material) is not server.custody._ReleaseCustodyMaterial:
         _fail("recovery grants require genuine historical custody-original admission")
+    evidence_root = retained.root_for(material, root)
+    retained.require_originals(material, intent_enrolled, proof_enrolled, work)
     shared._same_bytes(policy.release_custody_bytes, custody_raw, work,
         "recovery policy exact custody original")
     shared._same_bytes(request[2], proof_enrolled, work, "recovery request proof enrollment")
@@ -124,20 +128,21 @@ def _derive_on_work(*, request_originals, issuer_policy_bytes, release_custody_b
     # The expected evidence and outcome are root-policy pins, never claims
     # copied out of the incoming proof. No candidate outcome is an input.
     intent = intents._verify_historical_on_work(intent_bytes=request[3],
-        enrollment_bytes=intent_enrolled, root_public_key=root,
+        enrollment_bytes=intent_enrolled, root_public_key=evidence_root,
         forbidden_public_keys=policy.forbidden_public_keys, expected_scope=intent_scope,
         expected_release=release, old_token_bytes=request[5], live_window=lifetime.window,
         transport_deadline_ns=lifetime.bound, work=work, _continuity=lifetime.continuity)
     if type(intent) is not intents._HistoricalIntentEvidence:
         _fail("recovery grants require historical intent and actual old-token possession")
     lifetime.attach(intent.live)
+    retained.contain(material, intent.payload)
     for actual, expected, label in (
             (intent.intent_digest, material.release_intent_digest, "custody intent"),
             (intent.intent_digest, evidence["releaseIntentDigest"], "independent intent"),
             (intent.payload["enrollmentDigest"], policy.payload["intentEnrollmentDigest"], "intent enrollment")):
         plan._same(actual, expected, work, "recovery historical " + label)
     proof = proofs._verify_historical_on_work(proof_bytes=request[1],
-        enrollment_bytes=proof_enrolled, root_public_key=root,
+        enrollment_bytes=proof_enrolled, root_public_key=evidence_root,
         forbidden_public_keys=(*policy.forbidden_public_keys, policy.intent_public_key),
         expected_scope=scope, expected_release=release, expected_evidence=evidence,
         expected_intent_interval=(intent.payload["issuedAtEpochNs"], intent.payload["expiresAtEpochNs"]),
@@ -146,6 +151,7 @@ def _derive_on_work(*, request_originals, issuer_policy_bytes, release_custody_b
     if type(proof) is not proofs._HistoricalProofEvidence:
         _fail("recovery grants require genuine historical committed-release proof")
     lifetime.attach(proof.live)
+    retained.contain(material, proof.payload)
     plan._same(proof.payload["enrollmentDigest"], policy.payload["proofEnrollmentDigest"], work,
         "recovery historical proof enrollment")
     delivery._envelope(request[6], work)
@@ -177,7 +183,9 @@ def _derive_on_work(*, request_originals, issuer_policy_bytes, release_custody_b
     recovery_scope = recovery._scope({**{name: storage_scope[name] for name in (
         "configurationDigest", "databaseId", "generationDigest", "runtimeClosureDigest", "receiverIdentity",
         "deliveryId", "releaseCustodyDigest", "directory")}, "callerId": policy.payload["callerId"],
-        "deliveryKeyDigest": material.delivery_key_digest, "outcomeDigest": outcome_digest}, work)
+        "deliveryKeyDigest": material.delivery_key_digest, "outcomeDigest": outcome_digest,
+        **({"currentReleaseCustodyDigest": policy.payload["currentReleaseCustodyDigest"]}
+            if material.intent_root_public_key is not None else {})}, work)
     current()
     return request, policy, record, storage_scope, recovery_scope, request_identity, lifetime
 
@@ -233,7 +241,9 @@ def _produce_on_work(*, request_originals, issuer_policy_bytes, release_custody_
         expected_scope=storage_scope, live_window=lifetime.window, transport_deadline_ns=lifetime.bound,
         work=work, _continuity=lifetime.continuity)
     lifetime.attach(admitted_storage.live)
-    recovery_payload = {**recovery_scope, **common, "schema": recovery.PAYLOAD_SCHEMA,
+    bridged = material.intent_root_public_key is not None
+    recovery_payload = {**recovery_scope, **common,
+        "schema": recovery.V2_PAYLOAD_SCHEMA if bridged else recovery.PAYLOAD_SCHEMA,
         "purpose": recovery.PURPOSE, "serviceUid": recovery.SERVICE_UID,
         "serviceGid": recovery.SERVICE_GID, "processMode": recovery.PROCESS_MODE}
     recovery_raw = recovery._produce_on_work(payload=recovery_payload, root_private_key=private,
@@ -243,16 +253,19 @@ def _produce_on_work(*, request_originals, issuer_policy_bytes, release_custody_
         expected_scope=recovery_scope, live_window=lifetime.window, transport_deadline_ns=lifetime.bound,
         work=work, _continuity=lifetime.continuity)
     lifetime.attach(admitted_recovery.live)
-    server_payload = {**common, "schema": server.PAYLOAD_SCHEMA, "purpose": server.PURPOSE,
+    server_payload = {**common, "schema": server.V3_PAYLOAD_SCHEMA if bridged else server.PAYLOAD_SCHEMA, "purpose": server.PURPOSE,
         "role": server.ROLE, "profile": server.RECOVERY_PROFILE, **scope,
         "callerId": payload["callerId"], "stateReceiptDigest": evidence["stateReceiptDigest"],
-        "expectedRelease": release, "releaseCustodyDigest": evidence["releaseCustodyDigest"],
+        "expectedRelease": release, "releaseCustodyDigest": payload["currentReleaseCustodyDigest"] if bridged
+            else evidence["releaseCustodyDigest"],
         "deliveryKeyDigest": material.delivery_key_digest, "storageScope": storage_scope,
         "recoveryScope": recovery_scope,
         "releaseCustody": shared._wrapped(policy.release_custody_bytes, work, current),
         "storageAuthorization": shared._wrapped(storage_raw, work, current),
         "recoveryAuthorization": shared._wrapped(recovery_raw, work, current),
         "launch": policy.release_launch, **{name: False for name in server._FALSE_FIELDS}}
+    if bridged:
+        server_payload["evidenceCustodyDigest"] = evidence["releaseCustodyDigest"]
     current()
     server_raw = server._produce_on_work(payload=server_payload, root_private_key=private,
         root_public_key=root, live_window=lifetime.window, transport_deadline_ns=lifetime.bound,

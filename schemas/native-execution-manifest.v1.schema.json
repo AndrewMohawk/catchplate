@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.dev/schemas/native-execution-manifest.v1.schema.json",
+  "title": "Native immutable-image ELF execution manifest input",
+  "description": "Data only, not execution permission. Exact canonical ASCII JSON with no LF, at most 32768 bytes. A distinct signed start authority must select this original; runtime admission retains actual descriptors under the original clock. The old never-exec launch manifest and static custody contracts are unchanged.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "profile", "rootfs", "entry", "argv", "environment", "cwd", "loaderPolicy"],
+  "properties": {
+    "apiVersion": {"const": "serverware.nativeExecutionManifest/v1"},
+    "profile": {"const": "native-elf-erofs-v1"},
+    "rootfs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profile", "mountPath", "blockDevicePath", "imagePath", "imageFsVeritySha256", "loopOffset", "loopSizeLimit"],
+      "description": "Three distinct protected host paths. Actual root, loop block and fs-verity image association is observed, not inferred from these strings. Full image is 4096-byte-block baseline single-device EROFS, at most 64 GiB; device tables, chunk devices, extension slots and unknown image features are refused. No ambient submounts are copied.",
+      "properties": {
+        "profile": {"const": "single-device-erofs-loop-fsverity-v1"},
+        "mountPath": {"$ref": "#/$defs/path"},
+        "blockDevicePath": {"$ref": "#/$defs/path"},
+        "imagePath": {"$ref": "#/$defs/path"},
+        "imageFsVeritySha256": {"$ref": "#/$defs/digest"},
+        "loopOffset": {"const": 0},
+        "loopSizeLimit": {"const": 0}
+      }
+    },
+    "entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "interpreter"],
+      "description": "Actual in-image ELF64 entry, at most 16 MiB, host x86_64 or aarch64 architecture. Null interpreter requires no PT_INTERP and no DT_NEEDED. A nonnull interpreter requires exactly one equal PT_INTERP path and a separately held, pinned compatible loader. Direct scripts are not entries; an admitted in-image interpreter ELF may receive a signed script argv.",
+      "properties": {
+        "path": {"$ref": "#/$defs/path"},
+        "sha256": {"$ref": "#/$defs/digest"},
+        "interpreter": {
+          "anyOf": [
+            {"type": "null"},
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["path", "sha256"],
+              "properties": {
+                "path": {"$ref": "#/$defs/path"},
+                "sha256": {"$ref": "#/$defs/digest"}
+              }
+            }
+          ]
+        }
+      }
+    },
+    "argv": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "description": "argv[0] must equal entry.path. Each item is at most 4096 UTF-8 bytes with no NUL. argv plus environment including NULs and equals separators is at most 16384 bytes; byte and cross-field bounds are enforced by the owner, not by character-count schema validation.",
+      "items": {"$ref": "#/$defs/argument"}
+    },
+    "environment": {
+      "type": "object",
+      "maxProperties": 64,
+      "description": "The complete explicit environment; no inherited values. Loader override keys LD_* and GLIBC_TUNABLES are outside this profile. Values are bounded original input and are never logged or treated as authority.",
+      "propertyNames": {
+        "type": "string",
+        "maxLength": 128,
+        "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+        "not": {"anyOf": [{"pattern": "^LD_"}, {"const": "GLIBC_TUNABLES"}]}
+      },
+      "additionalProperties": {"$ref": "#/$defs/argument"}
+    },
+    "cwd": {
+      "description": "Explicit directory inside the same immutable root; no ambient cwd is inherited.",
+      "anyOf": [{"const": "/"}, {"$ref": "#/$defs/path"}]
+    },
+    "loaderPolicy": {"const": "in-image-system-loader-v1"}
+  },
+  "$defs": {
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "not": {"const": "sha256:0000000000000000000000000000000000000000000000000000000000000000"}
+    },
+    "path": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 4096,
+      "pattern": "^/[!-~]+$",
+      "not": {"anyOf": [{"pattern": "\\\\"}, {"pattern": "//"}, {"pattern": "/$"}, {"pattern": "(?:^|/)\\.{1,2}(?:/|$)"}]},
+      "description": "Canonical absolute visible-ASCII spelling, at most 64 nonempty components each at most 255 bytes; no backslash, dot or dotdot. In-image symlinks may resolve only within the retained root and without crossing mounts. Host originals are opened component by component without following symlinks."
+    },
+    "argument": {"type": "string", "maxLength": 4096, "pattern": "^[^\u0000]*$"}
+  }
+}

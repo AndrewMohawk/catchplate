@@ -3680,6 +3680,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/Dockerfile.production \
 				data-plane/decision-gate-rs/Cargo.lock \
 				data-plane/decision-gate-rs/src/authority_source_revision_v1.rs \
+				data-plane/decision-gate-rs/src/erofs_loop_v1.rs \
 				data-plane/decision-gate-rs/src/workload_identity_trust.rs \
 				data-plane/decision-gate-rs/src/workload_identity_trust_crypto.rs \
 				data-plane/decision-gate-rs/src/native_enrollment_assignment_v1.rs \
@@ -3715,6 +3716,12 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/native_bootstrap_client/config.rs \
 				data-plane/decision-gate-rs/src/native_bootstrap_client/http.rs \
 				data-plane/decision-gate-rs/src/native_bootstrap_client/transport.rs \
+				data-plane/decision-gate-rs/src/native_bootstrap_client/execution/mod.rs \
+				data-plane/decision-gate-rs/src/native_bootstrap_client/execution/manifest.rs \
+				data-plane/decision-gate-rs/src/native_bootstrap_client/execution/elf.rs \
+				data-plane/decision-gate-rs/src/native_bootstrap_client/execution/filesystem.rs \
+				data-plane/decision-gate-rs/src/native_bootstrap_client/execution/start_authority.rs \
+				data-plane/decision-gate-rs/src/native_bootstrap_client/execution/start.rs \
 				data-plane/decision-gate-rs/src/native_bootstrap_client/install/mod.rs \
 				data-plane/decision-gate-rs/src/native_bootstrap_client/install/authority.rs \
 				data-plane/decision-gate-rs/src/native_bootstrap_client/install/host.rs \
@@ -3801,8 +3808,11 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-network-attachment-authorization.v1.schema.json \
 				schemas/native-network-attachment-observation.v1.schema.json \
 				schemas/oidc-session-activation-retained-ri-delivery.v1.schema.json \
+				schemas/oidc-session-activation-retained-outcome-recovery.v1.schema.json \
 				schemas/native-egress-observation.v1.schema.json \
 				schemas/native-egress-launch-manifest.v1.schema.json \
+				schemas/native-execution-manifest.v1.schema.json \
+				schemas/native-workload-start-authorization.v1.schema.json \
 				schemas/native-ca-installation-receipt.v1.schema.json \
 				schemas/native-enrollment-authorizer.v1.schema.json \
 				schemas/workload-identity-bootstrap-request.v1.schema.json \

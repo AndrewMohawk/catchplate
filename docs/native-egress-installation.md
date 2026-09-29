@@ -1,11 +1,12 @@
-# Native egress authority and local claim foundation
+# Native egress authority and protected journals
 
-This `.251` source slice is a foundation for the
-[native egress design](native-egress-installation-design.md), not a completed
-firewall installer, executed transaction, workload launch or production gate.
-The purpose-specific journal lives in
-`native_bootstrap_client/egress/reservation.rs`; it does not reuse the CA
-installation journal, token, slot domain, records or receipt as egress authority.
+The `.251` authority/workload/journal foundation now has a `.252`
+[private kernel transaction and readback pipeline](native-egress-kernel.md).
+This is source integration, not an executed firewall transaction, public
+installer, workload launch or production gate. The original hash-only
+`native_bootstrap_client/egress/reservation.rs` and the new raw-custody
+`kernel_reservation.rs` have distinct formats. Neither reuses the CA installation
+journal, token, slot domain, records or receipt as egress authority.
 
 ## Authority and sequencing
 
@@ -13,7 +14,7 @@ The new independently pinned egress grant authorizes its own public runtime scop
 setup/delegation/target-request associations, exact destinations and port, host and
 controlled-workload scope, and separate capability/token/journal association.
 Expected runtime scope in the grant is not an already acquired session proof.
-Future exact packet/evidence hashes and the actual transaction are bound into the
+Exact packet/evidence hashes and the actual transaction are bound into the
 operation-side association when genuine originals are admitted. Neither capture
 JSON, a CA installation receipt nor a supplied digest substitutes for those owners.
 
@@ -37,15 +38,15 @@ The root-owned concrete `EgressGuard::check(&self)` supplies the same original
 clock, admitted authority/proof/input/token and actual host/launcher ownership
 checks through every journal phase. There is no caller-provided current time,
 success callback or generic effect command. A `Spec` by itself grants no authority.
-Acquire the journal lock before any future backend/namespace effect lock; both
+Acquire the journal lock before the protected backend lock; both
 must be nonblocking and remain held through effect, exact readback and completion.
-The concrete guard is defined, but no journal invocation or public installation
-orchestration is exposed yet. Those calls await the backend's exact intended
-transaction and actual readback ownership; a digest is not a substitute.
+The private `.252` pipeline connects those owners and retains both locks after
+completion. No public configuration/CLI or installation invocation is exposed;
+a parsed digest remains no substitute for the retained originals and guard.
 
-## Separate protected records
+## Historical hash-only records: SWNEGRS1
 
-`reserve(Spec, &EgressGuard)` returns a non-Clone, non-Debug `Reservation` holding
+The `.251` `reserve(Spec, &EgressGuard)` returns a non-Clone, non-Debug `Reservation` holding
 the original guard and directory lock. Its `Spec` contains the signed journal
 path/device/inode, stable reservation ID, exact operation-association hash,
 protected token hash and intended-transaction hash. The parent verifies the actual
@@ -88,27 +89,51 @@ readback precede success. No failure unlinks, overwrites or repairs a record.
 Completed replay is **read-only**: the parent must compare genuine current
 readback against the retained digest and all original associations, never reinstall.
 This journal stores hashes only. It does **not** retain the raw intended kernel
-transaction or observed-state originals; that exact-byte custody and semantic
-readback belong to the future kernel integration. A hash alone cannot prove them.
+transaction or observed-state originals. A hash alone cannot prove them; this
+format is not the `.252` kernel pipeline's raw-custody journal.
+
+## Kernel raw-custody records: SWNEGRS2
+
+The separate `kernel_reservation.rs` owner uses `SWNEGRS2` and a mandatory
+preprovisioned protected `backend.lock`. It refuses SWNEGRS1 records rather than
+reinterpreting them. Its 137-byte purpose/association prefix is followed by exact
+transaction bytes in reserve (bounded to 64 KiB), no added bytes in claim, raw
+transcript hash/bytes in observed (bounded to 1 MiB), and semantic/evidence hashes
+in the 201-byte completion. The closed journal permits at most 64 slots and 256
+records, apart from the fixed lock file. Raw capability tokens are not recorded.
+
+The actual sequence is journal open → backend lock → stable empty-namespace
+snapshot → exact-intent reserve → durable Fresh claim → single submission/all
+ACKs → post-effect snapshot → raw `SWNEGBE1` observation → exact semantic verify
+→ consuming completion. The retained `Installed` owner keeps the actual guard,
+backend and both locks for read-only recheck. Completed replay uses the retained
+transaction and current exact snapshot; no resubmit, repair or start is allowed.
+
+Failure observation is best effort, bounded and permitted only while the genuine
+guard remains live. It cannot promise persisted bytes after expiry, process
+death, partial publication or storage failure. Unknown/partial states stay
+consumed; a missing observed record never grants a fresh attempt.
 
 ## Remaining effect and recovery work
 
 The fixed create-only transaction, backend ownership, full ordered kernel
-expression readback and their original-byte custody still require integration.
+expression readback and original-byte custody are privately source-connected,
+not executed or publicly invocable. Cross-invocation launch admission, public
+cold configuration/CLI, network attachment and exec/start remain open.
 Only the signed setup's explicit host addresses at the delegated TCP port may
 populate the intended rules; CIDRs remain membership limits, not broad allowlists.
 No implicit traffic exception, canary or provider authority follows from this
 foundation. The launcher must not start the target on incomplete or uncertain work.
 
-The future fixed backend must explicitly exclude all IPv4 MF/nonzero-offset
+The fixed backend explicitly excludes all IPv4 MF/nonzero-offset
 fragments (DF allowed) and all IPv6 Fragment-header packets, including atomic
 fragments, before accepts. Exact semantic readback must include these exclusion
 expressions. Ordinary non-fragment IPv6 extension resolution uses `meta L4PROTO`.
 This narrower profile refuses legitimate pre-fragmented traffic and does not
 guarantee that fragmentation cannot occur after the output hook. The
 [design's Linux v6.12 source references](native-egress-installation-design.md#exact-rules-one-transaction-actual-readback)
-justify the explicit constraint, not a runtime result. No grant field changes or
-kernel codec are supplied by this clarification.
+justify the explicit constraint, not a runtime result. The `.252` codec and
+readback enforce this profile without widening the grant fields.
 
 Failure after claim leaves it consumed, even if submission or readback might not
 have completed. There is no reset, retry, automatic rollback, deletion, repair or

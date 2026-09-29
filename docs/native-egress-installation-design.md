@@ -1,10 +1,11 @@
 # Native egress installation design
 
 This is the agreed architecture for a separately authorized native host egress
-installer. The `.251` [grant, stopped-workload and journal source foundation](native-egress-installation.md)
-now supplies purpose-specific components, not a completed installer or successful
-firewall transaction. There is no current public configuration/CLI/effect path;
-the kernel backend and full guarded orchestration remain open. Existing native
+installer. The `.251` [grant, stopped-workload and journal foundation](native-egress-installation.md)
+now joins the `.252` [private kernel transaction/readback pipeline](native-egress-kernel.md).
+There is no current public configuration/CLI/installer invocation, cross-invocation
+launch admission, exec/start or network-attachment path. Source integration is not
+a successful firewall transaction or runtime evidence. Existing native
 enrollment, CA installation and legacy firewall profiles remain unchanged.
 No commands in this document authorize deployment or a canary.
 
@@ -122,7 +123,7 @@ Other hooks and networking configuration are outside this transaction, so this
 does not itself establish end-to-end connectivity or protection against host
 administrators changing routing, NAT or rules.
 
-The future private effect owner must use a bounded typed kernel transaction, not
+The private effect owner uses a bounded typed kernel transaction, not
 caller-supplied nft text or a generic shell/command runner. Retain the observed
 namespace and open the backend socket there; do not accept a caller namespace
 path or switch to an unverified namespace. Acquire the protected journal lock
@@ -130,8 +131,10 @@ before a fixed namespace/backend lock, both nonblocking. Hold them and the
 controlled workload owner through claim, effect, readback and completion.
 
 1. Verify authority and retained owners; bound all input, transaction and readback
-   sizes; require the dedicated table to be absent. A precheck alone is not enough:
-   kernel creation must also be exclusive within the single atomic batch.
+   sizes. Require a stable GETGEN-bracketed empty snapshot across all six
+   unfiltered table/chain/rule/set/object/flowtable dumps, then reserve the exact
+   encoded intent. A precheck alone is not enough: the single atomic batch also
+   uses exclusive creation and a generation pin.
 2. Persist and fsync the irreversible purpose-bound claim **before any ruleset
    mutation**. The stable slot must not change when operation inputs change;
    changed scope under an existing slot conflicts rather than allocating a retry.
@@ -143,9 +146,10 @@ controlled workload owner through claim, effect, readback and completion.
    chains, sets or rules.
    Names, comments, handles, an ACK or a matching supplied digest are insufficient.
    Kernel-generated identifiers must be separated from semantic comparison.
-5. Recheck all owners and original bounds, then durably publish completion and a
-   bounded local diagnostic. Only then may the independently controlled launcher
-   consider its separate start decision. Rule installation is not provider,
+5. Retain the actual bounded raw transcript, verify exact semantics, recheck all
+   owners and original bounds, then consume the journal into completion. The
+   private `Installed` owner retains the guard, backend and both locks for
+   read-only recheck. It supplies no start API. Rule installation is not provider,
    CONNECT, canary or application authorization.
 
 ## Uncertainty and recovery
@@ -155,6 +159,14 @@ the claim consumed. Preserve the journal, exact intended transaction and bounded
 observed state; do not reset the claim, resubmit, delete a deny policy or perform
 automatic rollback. An atomic kernel batch avoids intermediate rule sets, not the
 uncertainty between kernel commit and durable local completion.
+
+The `.252` kernel journal uses distinct `SWNEGRS2` raw-intent/observed/completion
+records and a preprovisioned protected `backend.lock`; the `.251` SWNEGRS1
+hash-only journal is neither relabeled nor accepted as raw custody. The bounded
+`SWNEGBE1` transcript includes actual requests, attempted submission and received
+replies. Failure observation still requires the live guard and is best effort;
+expiry, process death or storage failure may prevent persistence. Missing bytes
+never authorize retry or weaken the consumed-uncertainty rule.
 
 An exact completed slot permits **read-only** confirmation of the actual current
 rules and owners, never reinstallation. Missing or altered kernel state, a new boot
@@ -166,19 +178,17 @@ cross-session recovery require explicit lifecycle contracts.
 
 ## Implementation sequence and open acceptance
 
-The `.251` foundation includes original grant scope, artifact-pinned never-started
-workload ownership and a distinct protected reserve/claim/complete journal.
-Independent provisioning and genuine acquisition of all operation originals,
-public configuration/CLI selection and full guard orchestration remain open.
-Next integrate the fixed typed kernel transaction, exact raw intended/observed
-original custody and full semantic readback, then guarded completion and read-only
-recovery. The journal's digests alone do not retain those raw originals or prove
-kernel success. Keep CA installation and old enrollment profiles strict; do not
-turn a shared data projection into an authority object.
+The `.252` source connects the original grant/workload/guard foundation to typed
+exclusive kernel submission, exact raw custody, full semantic readback, guarded
+completion and read-only completed replay. It remains private: independent
+provisioning, cross-invocation launch admission, public configuration/CLI and
+separately authorized exec/start/network attachment are not supplied. One child
+per retained owner is not a durable global creation claim. Keep CA installation
+and old enrollment profiles strict; no data projection becomes authority.
 
-No firewall backend/effect path is supplied by this foundation. Backend dependency
-and capacity choices, privileged-writer exclusion, lifecycle/recovery and deployment
-compatibility still need integration and independent review. Later authorized
+The kernel pipeline has not been built or executed. Privileged-writer exclusion,
+lifecycle/recovery and deployment compatibility require independent acceptance.
+Later authorized
 acceptance must separately establish deny/allow behavior, no direct bypass, real
 CONNECT/provider policy, canaries, interruption and recovery, and Kubernetes
 ownership where applicable. No test, build, runtime/network change, AWS/spend,

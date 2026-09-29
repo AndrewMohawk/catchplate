@@ -1,11 +1,16 @@
 //! Separate grant, genuine proof, host and never-executed workload ownership.
 //!
-//! This is an internal foundation, not a callable installer. No public config
-//! selects it before the fixed kernel transaction/readback and exact-byte
-//! custody are integrated. It exposes no workload start or generic effect API.
+//! This is an internal owner, not a public launch profile. Cold cross-invocation
+//! admission and the separate start/lifecycle permission remain required. It
+//! exposes no workload start or generic effect API.
 
 mod authority;
+mod backend;
+mod effect;
+mod kernel_reservation;
+mod readback;
 mod reservation;
+mod wire;
 mod workload;
 // Reuse actual host observation, not the CA authorization or journal.
 #[path = "../install/host.rs"]
@@ -17,7 +22,9 @@ use serde::Deserialize;
 use serverware_decision_gate::native_response_profile_v1::canonical_ascii_bytes;
 use sha2::{Digest, Sha256};
 use std::cell::{Cell, RefCell};
+use std::fs::File;
 use std::sync::Arc;
+use std::time::Instant;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -63,6 +70,23 @@ pub(super) struct EgressGuard {
 }
 
 impl EgressGuard {
+    pub(super) fn install(&self) -> Result<effect::Installed<'_>, String> {
+        effect::install(self)
+    }
+
+    pub(super) fn deadline(&self) -> Result<Instant, String> {
+        self.check()?;
+        self.clock.instant_deadline()
+    }
+
+    pub(super) fn duplicate_backend(&self) -> Result<File, String> {
+        self.check()?;
+        let duplicate = self.workload.try_borrow_mut()
+            .map_err(|_| "native egress workload already borrowed")?.duplicate_backend(&self.clock)?;
+        self.check()?;
+        Ok(duplicate)
+    }
+
     pub(super) fn check(&self) -> Result<(), String> {
         ensure(!self.stopped.replace(true), "native egress owner is stopped")?;
         self.clock.check()?;

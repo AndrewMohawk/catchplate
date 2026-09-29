@@ -53,19 +53,20 @@ impl Stage {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum State { Reserved, Claimed, Completed, Unknown }
 
-struct Directory {
-    file: File,
-    name: Option<CString>,
-    device: u64,
-    inode: u64,
-    mode: u32,
-    gid: u32,
+pub(super) struct Directory {
+    pub(super) file: File,
+    pub(super) name: Option<CString>,
+    pub(super) device: u64,
+    pub(super) inode: u64,
+    pub(super) mode: u32,
+    pub(super) gid: u32,
 }
 
 #[derive(PartialEq, Eq)]
-struct FileIdentity {
-    device: u64, inode: u64, size: u64,
-    modified: i64, modified_ns: i64, changed: i64, changed_ns: i64,
+pub(super) struct FileIdentity {
+    pub(super) device: u64, pub(super) inode: u64, pub(super) size: u64,
+    pub(super) modified: i64, pub(super) modified_ns: i64,
+    pub(super) changed: i64, pub(super) changed_ns: i64,
 }
 
 /// Owns the same concrete guard and nonblocking directory lock, never a callback.
@@ -87,7 +88,7 @@ fn ensure(value: bool, message: &'static str) -> Result<(), String> {
 
 fn nonzero(value: &[u8]) -> bool { value.iter().any(|byte| *byte != 0) }
 
-fn directory(file: File, name: Option<CString>, final_directory: bool) -> Result<Directory, String> {
+pub(super) fn directory(file: File, name: Option<CString>, final_directory: bool) -> Result<Directory, String> {
     let metadata = file.metadata().map_err(|_| "egress journal directory metadata failed")?;
     ensure(metadata.is_dir() && metadata.uid() == 0 && metadata.mode() & 0o022 == 0,
         "egress journal ancestors must be root-owned nonwritable directories")?;
@@ -99,14 +100,14 @@ fn directory(file: File, name: Option<CString>, final_directory: bool) -> Result
         mode: metadata.mode(), gid: metadata.gid() })
 }
 
-fn open_directory(parent: RawFd, name: &CStr) -> Result<File, String> {
+pub(super) fn open_directory(parent: RawFd, name: &CStr) -> Result<File, String> {
     let fd = unsafe { libc::openat(parent, name.as_ptr(),
         libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC) };
     ensure(fd >= 0, "egress journal directory cannot be opened without following links")?;
     Ok(unsafe { File::from_raw_fd(fd) })
 }
 
-fn stat_at(parent: RawFd, name: &CStr) -> Result<Option<libc::stat>, String> {
+pub(super) fn stat_at(parent: RawFd, name: &CStr) -> Result<Option<libc::stat>, String> {
     let mut value: libc::stat = unsafe { std::mem::zeroed() };
     if unsafe { libc::fstatat(parent, name.as_ptr(), &mut value, libc::AT_SYMLINK_NOFOLLOW) } != 0 {
         if std::io::Error::last_os_error().raw_os_error() == Some(libc::ENOENT) { return Ok(None); }
@@ -115,7 +116,7 @@ fn stat_at(parent: RawFd, name: &CStr) -> Result<Option<libc::stat>, String> {
     Ok(Some(value))
 }
 
-fn hex(value: &[u8; 32]) -> String {
+pub(super) fn hex(value: &[u8; 32]) -> String {
     const DIGITS: &[u8; 16] = b"0123456789abcdef";
     let mut out = String::with_capacity(64);
     for byte in value {
@@ -125,7 +126,7 @@ fn hex(value: &[u8; 32]) -> String {
     out
 }
 
-fn file_identity(file: &File, device: u64, size: u64) -> Result<FileIdentity, String> {
+pub(super) fn file_identity(file: &File, device: u64, size: u64) -> Result<FileIdentity, String> {
     let m = file.metadata().map_err(|_| "egress journal record metadata failed")?;
     ensure(m.is_file() && m.dev() == device && m.uid() == 0 && m.gid() == 0
         && m.mode() & 0o7777 == 0o600 && m.nlink() == 1 && m.size() == size,
@@ -134,9 +135,49 @@ fn file_identity(file: &File, device: u64, size: u64) -> Result<FileIdentity, St
         modified: m.mtime(), modified_ns: m.mtime_nsec(), changed: m.ctime(), changed_ns: m.ctime_nsec() })
 }
 
-struct DirectoryStream(*mut libc::DIR);
+pub(super) struct DirectoryStream(pub(super) *mut libc::DIR);
 impl Drop for DirectoryStream {
     fn drop(&mut self) { unsafe { libc::closedir(self.0); } }
+}
+
+/// Shared protected filesystem observations only. Record purposes and state
+/// machines remain separate; a copied directory handle grants no new action.
+pub(super) fn check_directories(directories: &[Directory], guard: &EgressGuard,
+    pid: u32) -> Result<(), String> {
+    guard.check()?;
+    ensure(!directories.is_empty() && std::process::id() == pid
+        && unsafe { libc::geteuid() } == 0 && unsafe { libc::getegid() } == 0,
+        "egress reservation crossed a process or privilege boundary")?;
+    for (index, held) in directories.iter().enumerate() {
+        guard.check()?;
+        let m = held.file.metadata().map_err(|_| "egress held directory metadata failed")?;
+        ensure(m.is_dir() && m.dev() == held.device && m.ino() == held.inode
+            && m.uid() == 0 && m.gid() == held.gid && m.mode() == held.mode,
+            "egress held directory identity changed")?;
+        let root = CString::new("/").expect("literal root path");
+        let (parent, name) = if index == 0 { (libc::AT_FDCWD, root.as_c_str()) } else {
+            (directories[index - 1].file.as_raw_fd(),
+                held.name.as_ref().ok_or("egress directory name is absent")?.as_c_str())
+        };
+        let named = stat_at(parent, name)?.ok_or("egress named directory disappeared")?;
+        ensure(named.st_dev == held.device && named.st_ino == held.inode
+            && named.st_uid == 0 && named.st_gid == held.gid && named.st_mode == held.mode,
+            "egress journal pathname no longer names its held directory")?;
+    }
+    guard.check()
+}
+
+pub(super) fn duplicate_directories(directories: &[Directory]) -> Result<Vec<Directory>, String> {
+    ensure(!directories.is_empty() && directories.len() <= 65,
+        "egress held directory inventory is invalid")?;
+    let mut copies = Vec::with_capacity(directories.len());
+    for held in directories {
+        let fd = unsafe { libc::fcntl(held.file.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 3) };
+        ensure(fd >= 0, "egress held directory duplication failed")?;
+        copies.push(Directory { file: unsafe { File::from_raw_fd(fd) }, name: held.name.clone(),
+            device: held.device, inode: held.inode, mode: held.mode, gid: held.gid });
+    }
+    Ok(copies)
 }
 
 impl Reservation<'_> {
@@ -145,27 +186,7 @@ impl Reservation<'_> {
     }
 
     fn current(&self) -> Result<(), String> {
-        self.guard.check()?;
-        ensure(std::process::id() == self.pid && unsafe { libc::geteuid() } == 0
-            && unsafe { libc::getegid() } == 0,
-            "egress reservation crossed a process or privilege boundary")?;
-        for (index, held) in self.directories.iter().enumerate() {
-            self.guard.check()?;
-            let m = held.file.metadata().map_err(|_| "egress held directory metadata failed")?;
-            ensure(m.is_dir() && m.dev() == held.device && m.ino() == held.inode
-                && m.uid() == 0 && m.gid() == held.gid && m.mode() == held.mode,
-                "egress held directory identity changed")?;
-            let root = CString::new("/").expect("literal root path");
-            let (parent, name) = if index == 0 { (libc::AT_FDCWD, root.as_c_str()) } else {
-                (self.directories[index - 1].file.as_raw_fd(),
-                    held.name.as_ref().ok_or("egress directory name is absent")?.as_c_str())
-            };
-            let named = stat_at(parent, name)?.ok_or("egress named directory disappeared")?;
-            ensure(named.st_dev == held.device && named.st_ino == held.inode
-                && named.st_uid == 0 && named.st_gid == held.gid && named.st_mode == held.mode,
-                "egress journal pathname no longer names its held directory")?;
-        }
-        self.guard.check()
+        check_directories(&self.directories, self.guard, self.pid)
     }
 
     fn name(&self, stage: Stage) -> CString {

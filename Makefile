@@ -3714,6 +3714,11 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/native_bootstrap_client/install/destination.rs \
 				data-plane/decision-gate-rs/src/native_bootstrap_client/egress/mod.rs \
 				data-plane/decision-gate-rs/src/native_bootstrap_client/egress/authority.rs \
+				data-plane/decision-gate-rs/src/native_bootstrap_client/egress/backend.rs \
+				data-plane/decision-gate-rs/src/native_bootstrap_client/egress/effect.rs \
+				data-plane/decision-gate-rs/src/native_bootstrap_client/egress/kernel_reservation.rs \
+				data-plane/decision-gate-rs/src/native_bootstrap_client/egress/readback.rs \
+				data-plane/decision-gate-rs/src/native_bootstrap_client/egress/wire.rs \
 				data-plane/decision-gate-rs/src/native_bootstrap_client/egress/workload.rs \
 				data-plane/decision-gate-rs/src/native_bootstrap_client/egress/reservation.rs \
 				data-plane/decision-gate-rs/src/bin/serverware-native-bootstrap-client.rs \

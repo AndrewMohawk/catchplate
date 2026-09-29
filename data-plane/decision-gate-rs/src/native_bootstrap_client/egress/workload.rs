@@ -565,6 +565,7 @@ pub(super) struct WorkloadOwner {
     socket_identity: Identity,
     pidfd_identity: Identity,
     identity: WorkloadIdentity,
+    backend_duplicated: bool,
     stopped: bool,
 }
 
@@ -613,7 +614,8 @@ impl WorkloadOwner {
             namespace_device: ns_identity.0, namespace_inode: ns_identity.1,
             backend_socket_device: socket_identity.0, backend_socket_inode: socket_identity.1, backend_port_id: port };
         let mut owner = Self { spec, child, gate, gate_identity, namespace: namespace_file,
-            namespace_identity: ns_identity, socket, socket_identity, pidfd_identity, identity: observed, stopped: false };
+            namespace_identity: ns_identity, socket, socket_identity, pidfd_identity, identity: observed,
+            backend_duplicated: false, stopped: false };
         owner.check(clock)?;
         Ok(owner)
     }
@@ -641,6 +643,29 @@ impl WorkloadOwner {
 
     /// Observed association only; callers must retain and recheck this owner.
     pub(super) fn identity(&self) -> &WorkloadIdentity { &self.identity }
+
+    /// Exactly one private backend obtains a checked CLOEXEC alias of the
+    /// actual child-created socket. The original remains under this owner.
+    pub(super) fn duplicate_backend(&mut self, clock: &OriginalClock) -> Result<File, String> {
+        self.check(clock)?;
+        require(!std::mem::replace(&mut self.backend_duplicated, true))?;
+        let duplicate = checked(clock, || descriptor(unsafe {
+            libc::fcntl(self.socket.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 3)
+        }))?;
+        let descriptor_flags = checked(clock, || {
+            let value = unsafe { libc::fcntl(duplicate.as_raw_fd(), libc::F_GETFD) };
+            if value < 0 { Err(io::Error::last_os_error()) } else { Ok(value) }
+        })?;
+        let status_flags = checked(clock, || {
+            let value = unsafe { libc::fcntl(duplicate.as_raw_fd(), libc::F_GETFL) };
+            if value < 0 { Err(io::Error::last_os_error()) } else { Ok(value) }
+        })?;
+        require(descriptor_flags & libc::FD_CLOEXEC != 0 && status_flags & libc::O_NONBLOCK != 0
+            && identity(&metadata(&duplicate, clock)?) == self.socket_identity
+            && backend(&duplicate, self.namespace_identity, clock)? == self.identity.backend_port_id)?;
+        self.check(clock)?;
+        Ok(duplicate)
+    }
 
     /// Explicit closing path can report uncertainty. Drop is the final safety
     /// net; neither path starts the target or mutates an existing namespace.

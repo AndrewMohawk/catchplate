@@ -119,6 +119,7 @@ pub(crate) fn check_readiness(
     config: &RootOwnedResponseObservationV2Config,
     role: CustodyServiceRole,
 ) -> Result<(), V2RuntimeError> {
+    super::guest_delivery::check(config)?;
     let topology = config.custody_topology();
     let scoped = config.scoped_service_config(role)?;
     let record = common::read_readiness_record(
@@ -144,7 +145,7 @@ pub(crate) fn check_readiness(
                 "readiness deadline overflowed",
             )
         })?;
-    let deadline = BootDeadline::new(timeout_ns)?;
+    let deadline = BootDeadline::new(super::guest_delivery::bound_deadline_ns(config, timeout_ns)?)?;
     let mut connection = ServiceConnection::connect(
         &scoped.process.readiness_socket_path,
         deadline,
@@ -249,6 +250,7 @@ pub(crate) fn check_readiness(
             &challenge_nonce,
         )?;
     }
+    super::guest_delivery::check(config)?;
     Ok(())
 }
 

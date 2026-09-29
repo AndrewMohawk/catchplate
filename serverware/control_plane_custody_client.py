@@ -156,6 +156,14 @@ class ControlPlaneCustodyClient:
             raise CustodyClientError("public revocation options have another actual retained profile")
         return result
 
+    def lookup_public_revocation_options(self, options_digest):
+        """Read-only actual parent/child originals; no caller-supplied verdict."""
+        binding = _snapshot(self)
+        result = journal.CustodyJournal.lookup_public_revocation_options(binding.journal, options_digest)
+        if _snapshot(self) is not binding:
+            raise CustodyClientError("public revocation custody changed during parent lookup")
+        return result
+
     def claim_public_revocation(self, request_digest):
         binding = _snapshot(self)
         journal.CustodyJournal.claim_public_revocation(binding.journal, request_digest)

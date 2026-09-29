@@ -251,6 +251,7 @@ fn start_transaction_listener(
     JoinHandle<Result<(), V2RuntimeError>>,
     V2RuntimeError,
 > {
+    super::super::guest_delivery::check(config)?;
     let transaction_config = config.clone();
     let (ready_tx, ready_rx) = sync_channel(1);
     let thread = thread::Builder::new()
@@ -268,10 +269,16 @@ fn start_transaction_listener(
                 "start router transaction listener",
             )
         })?;
+    let timeout_ms = super::super::guest_delivery::bounded_timeout_ms(config, timeout_ms)?;
     match ready_rx.recv_timeout(
         transaction_listener_start_timeout(timeout_ms),
     ) {
-        Ok(()) => Ok(thread),
+        Ok(()) => {
+            super::super::guest_delivery::check(config)?;
+            Ok(thread)
+        }
+        Err(_) if config.guest_delivery.is_some() => Err(V2RuntimeError::new(
+            "guest_router_start_timeout", "guest router failed to start within its original allowance")),
         Err(_) => Err(join_startup_failure(thread)),
     }
 }
@@ -279,6 +286,7 @@ fn start_transaction_listener(
 pub(crate) fn start(
     config: &RootOwnedResponseObservationV2Config,
 ) -> Result<RouterReadinessGuard, V2RuntimeError> {
+    super::super::guest_delivery::check(config)?;
     let topology = config.custody_topology().clone();
     let scoped =
         config.scoped_service_config(CustodyServiceRole::CustodyRouter)?;

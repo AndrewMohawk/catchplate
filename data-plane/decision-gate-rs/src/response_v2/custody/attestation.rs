@@ -91,6 +91,29 @@ pub(crate) struct RoleSigningKey {
 }
 
 impl RoleSigningKey {
+    pub(crate) fn from_retained_originals(
+        descriptor: &ServiceRoleKeyDescriptorV1,
+        seed: &[u8],
+        public: &[u8],
+    ) -> Result<Self, V2RuntimeError> {
+        if seed.len() != 32 || public.len() != 32 {
+            return Err(V2RuntimeError::new("custody_service_secret_invalid",
+                "retained role seed and public key must each be exactly 32 bytes"));
+        }
+        let mut bytes = [0u8; 32];
+        bytes.copy_from_slice(seed);
+        let key = SigningKey::from_bytes(&bytes);
+        bytes.zeroize();
+        if key.verifying_key().as_bytes().as_slice() != public
+            || format!("sha256:{:x}", Sha256::digest(public)) != descriptor.public_key_sha256
+            || descriptor.key_id != descriptor.public_key_sha256
+        {
+            return Err(V2RuntimeError::new("custody_service_secret_mismatch",
+                "retained seed/public/key ID do not match the signed role assignment"));
+        }
+        Ok(Self { logical_role:descriptor.logical_role.clone(), key_id:descriptor.key_id.clone(), key })
+    }
+
     pub(crate) fn load(
         descriptor: &ServiceRoleKeyDescriptorV1,
         expected_uid: u32,

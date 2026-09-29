@@ -109,7 +109,8 @@ impl ServiceRuntime {
         let scoped = config.scoped_service_config(role)?;
         validate_service_process_identity(&scoped)?;
         validate_service_state_directory(&scoped)?;
-        let signing_keys = load_scoped_signing_keys(&scoped)?;
+        super::super::guest_delivery::check(config)?;
+        let signing_keys = load_scoped_signing_keys(config, &scoped)?;
         let readiness =
             in_process_engine_readiness(config, &topology, &scoped)?;
         let signer_role = readiness_signer_role(role).ok_or_else(|| {
@@ -199,6 +200,7 @@ impl ServiceRuntime {
     }
 
     pub(crate) fn run(mut self) -> Result<(), V2RuntimeError> {
+        super::super::guest_delivery::check(&self.config)?;
         let _lease = acquire_service_lease(&self.scoped)?;
         let listener = bind_service_socket(
             &self.scoped.process.socket_path,
@@ -237,9 +239,10 @@ impl ServiceRuntime {
         &self,
         stream: UnixStream,
     ) -> Result<(), V2RuntimeError> {
+        super::super::guest_delivery::check(&self.config)?;
         authenticate_peer(&stream, &self.topology)?;
         let handshake_deadline = BootDeadline::new(
-            boottime_ns()?
+            super::super::guest_delivery::bound_deadline_ns(&self.config, boottime_ns()?
                 .checked_add(
                     self.scoped.process.request_timeout_ms
                         * 1_000_000,
@@ -249,7 +252,7 @@ impl ServiceRuntime {
                         "custody_service_deadline_overflow",
                         "service handshake deadline overflowed",
                     )
-                })?,
+                })?)?,
         )?;
         let mut connection = ServiceConnection::from_accepted(
             stream,
@@ -380,6 +383,7 @@ impl ServiceRuntime {
         &self,
         hello: &ServiceHelloV1,
     ) -> Result<SignedServiceHandshakeV1, V2RuntimeError> {
+        super::super::guest_delivery::check(&self.config)?;
         let signer_role =
             readiness_signer_role(self.scoped.role).ok_or_else(|| {
                 V2RuntimeError::new(
@@ -2072,15 +2076,12 @@ pub(crate) fn validate_hello(
 }
 
 pub(super) fn load_scoped_signing_keys(
+    config: &RootOwnedResponseObservationV2Config,
     scoped: &ScopedCustodyServiceConfig,
 ) -> Result<BTreeMap<String, RoleSigningKey>, V2RuntimeError> {
     let mut keys = BTreeMap::new();
     for descriptor in &scoped.process.role_keys {
-        let key = RoleSigningKey::load(
-            descriptor,
-            scoped.process.uid,
-            scoped.process.gid,
-        )?;
+        let key = super::super::guest_delivery::role_key(config, scoped, descriptor)?;
         if keys.insert(descriptor.logical_role.clone(), key).is_some() {
             return Err(V2RuntimeError::new(
                 "custody_service_key_duplicate",

@@ -337,6 +337,16 @@ pub(crate) struct GenerationPublicCredentialPaths {
 }
 
 impl GenerationBootstrapCredentialPaths {
+    pub(crate) fn for_config(
+        config: &super::RootOwnedResponseObservationV2Config,
+        scoped: &ScopedCustodyServiceConfig,
+    ) -> Result<Self, V2RuntimeError> {
+        if let Some(owner) = &config.guest_delivery {
+            return owner.bootstrap_paths();
+        }
+        super::guest_delivery::require_host(config)?;
+        Self::from_systemd_credentials(scoped)
+    }
     pub(crate) fn from_systemd_credentials(
         scoped: &ScopedCustodyServiceConfig,
     ) -> Result<Self, V2RuntimeError> {
@@ -380,6 +390,16 @@ impl GenerationBootstrapCredentialPaths {
 }
 
 impl GenerationPublicCredentialPaths {
+    pub(crate) fn for_config(
+        config: &super::RootOwnedResponseObservationV2Config,
+        scoped: &ScopedCustodyServiceConfig,
+    ) -> Result<Self, V2RuntimeError> {
+        if let Some(owner) = &config.guest_delivery {
+            return owner.public_paths();
+        }
+        super::guest_delivery::require_host(config)?;
+        Self::from_readiness_credentials(scoped)
+    }
     pub(crate) fn from_readiness_credentials(
         scoped: &ScopedCustodyServiceConfig,
     ) -> Result<Self, V2RuntimeError> {

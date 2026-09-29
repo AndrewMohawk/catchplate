@@ -34,6 +34,16 @@ pub fn run_custody_service(
     config_path: PathBuf,
 ) -> Result<(), super::V2RuntimeError> {
     let config = load_root_owned_v2_config(&config_path)?;
+    super::guest_delivery::require_host(&config)?;
+    run_loaded_custody_service(config, service_role)
+}
+
+#[cfg(target_os = "linux")]
+fn run_loaded_custody_service(
+    config: RootOwnedResponseObservationV2Config,
+    service_role: super::config::CustodyServiceRole,
+) -> Result<(), super::V2RuntimeError> {
+    super::guest_delivery::check(&config)?;
     let service_config = config.clone();
     let service = std::thread::Builder::new()
         .name(format!(
@@ -61,6 +71,11 @@ pub fn run_custody_service(
         &config,
         service_role,
     )?;
+    if let Some(owner) = &config.guest_delivery {
+        // This means only this process completed real local readiness publication.
+        // Generation activation still requires its existing independent quorum.
+        owner.complete_local_startup()?;
+    }
     service.join().map_err(|_| {
         super::V2RuntimeError::new(
             "custody_service_thread_failed",
@@ -78,7 +93,7 @@ fn wait_for_custody_service_start(
     >,
 ) -> Result<(), super::V2RuntimeError> {
     let timeout_ms =
-        super::generation::generation_activation_timeout_ms()?;
+        super::generation::activation_timeout_ms(config)?;
     let deadline = std::time::Instant::now()
         .checked_add(std::time::Duration::from_millis(timeout_ms))
         .ok_or_else(|| {
@@ -88,6 +103,7 @@ fn wait_for_custody_service_start(
             )
         })?;
     loop {
+        super::guest_delivery::check(config)?;
         if service.is_finished() {
             return Err(super::V2RuntimeError::new(
                 "custody_service_start_failed",
@@ -100,6 +116,7 @@ fn wait_for_custody_service_start(
         if super::services::check_readiness(config, service_role)
             .is_ok()
         {
+            super::guest_delivery::check(config)?;
             return Ok(());
         }
         if std::time::Instant::now() >= deadline {
@@ -121,6 +138,7 @@ pub fn check_custody_service_readiness(
     config_path: PathBuf,
 ) -> Result<(), super::V2RuntimeError> {
     let config = load_root_owned_v2_config(&config_path)?;
+    super::guest_delivery::require_host(&config)?;
     super::services::check_readiness(&config, service_role)
 }
 
@@ -129,6 +147,7 @@ pub fn run_generation_bootstrap(
     config_path: PathBuf,
 ) -> Result<(), super::V2RuntimeError> {
     let config = load_root_owned_v2_config(&config_path)?;
+    super::guest_delivery::require_host(&config)?;
     super::generation::provision_generation_from_systemd_credentials(
         &config,
     )?;
@@ -140,6 +159,7 @@ pub fn run_generation_activation(
     config_path: PathBuf,
 ) -> Result<(), super::V2RuntimeError> {
     let config = load_root_owned_v2_config(&config_path)?;
+    super::guest_delivery::require_host(&config)?;
     super::generation::activate_generation_from_systemd_credentials(
         &config,
     )
@@ -206,9 +226,21 @@ pub fn dispatch_from_process_args(
     let mut bootstrap_generation = false;
     let mut activate_generation = false;
     let mut provider_compatibility = false;
+    let mut guest_path = None;
+    let mut guest_sha256 = None;
     let mut arguments = std::env::args().skip(1);
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
+            "--guest-delivery" if guest_path.is_none() => {
+                guest_path = Some(PathBuf::from(arguments.next().ok_or_else(|| {
+                    super::V2RuntimeError::new("custody_cli_invalid", "--guest-delivery requires a protected absolute path")
+                })?));
+            }
+            "--guest-delivery-sha256" if guest_sha256.is_none() => {
+                guest_sha256 = Some(arguments.next().ok_or_else(|| {
+                    super::V2RuntimeError::new("custody_cli_invalid", "--guest-delivery-sha256 requires the exact original digest")
+                })?);
+            }
             "--service" if service_role.is_none() => {
                 let value = arguments.next().ok_or_else(|| {
                     super::V2RuntimeError::new(
@@ -257,6 +289,37 @@ pub fn dispatch_from_process_args(
                 ))
             }
         }
+    }
+    if guest_path.is_some() || guest_sha256.is_some() {
+        if provider_compatibility || guest_path.is_none() || guest_sha256.is_none()
+            || (bootstrap_generation && activate_generation)
+            || ((bootstrap_generation || activate_generation) && (service_role.is_some() || check_readiness))
+        {
+            return Err(super::V2RuntimeError::new("custody_cli_invalid", "guest delivery flags must be paired with one exact custody startup mode"));
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let role = if bootstrap_generation || activate_generation {
+                super::config::CustodyServiceRole::StateAuthority
+            } else {
+                service_role.ok_or_else(|| super::V2RuntimeError::new("custody_cli_invalid", "guest service role required"))?
+            };
+            let config_path = config_path.ok_or_else(|| super::V2RuntimeError::new("custody_cli_invalid", "guest --config required"))?;
+            let config = super::guest_delivery::load(&config_path, role,
+                guest_path.as_ref().unwrap(), guest_sha256.as_ref().unwrap())?;
+            if bootstrap_generation {
+                super::generation::provision_generation_from_systemd_credentials(&config)?;
+            } else if activate_generation {
+                super::generation::activate_generation_from_systemd_credentials(&config)?;
+            } else if check_readiness {
+                super::services::check_readiness(&config, role)?;
+            } else {
+                return run_loaded_custody_service(config, role);
+            }
+            return super::guest_delivery::check(&config);
+        }
+        #[cfg(not(target_os = "linux"))]
+        { return unsupported_platform(); }
     }
     if provider_compatibility {
         if service_role.is_some()

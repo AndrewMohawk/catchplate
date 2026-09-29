@@ -8,12 +8,13 @@ Other revocation purposes, including provider OAuth cleanup and trust-wide
 revocation, remain separate. This is not a claim that all O03 work or production
 acceptance is complete.
 
-The current portal still emits legacy revocation and approval bodies. Its typed
-self/admin target review, explicit MFA/approval ceremonies and retained recovery
-UI are not connected yet. A completely lost execution response also needs an
-authenticated read-only options-to-attempt lookup before a browser can discover
-the genuine retained recovery locator. The server endpoints below do not close
-those operator-flow gaps or authorize automatic retry.
+The portal now has a dedicated self/admin target review, configured MFA/null
+and different-admin approval ceremonies, one final execution handoff, and
+read-only retained-locator recovery. It bypasses the generic legacy 412/428
+mutation resend loop. A completely lost response can be followed through the
+authenticated protected options-to-attempt association; absence remains
+unknown. These are source connections, not browser/runtime evidence or O03
+completion. Other revocation purposes and protected denial remain separate.
 
 ## Explicit admission and unchanged old profiles
 
@@ -140,6 +141,89 @@ Required nullable fields must be present.
    requester or an admin. If the revoked credential also ended the requester's
    session, use a separate still-valid authorized session/admin; the old session
    is not reactivated. An unknown response never requests automatic resubmission.
+
+## Portal operator flow and lost-response lookup
+
+The **Revoke** button on your passkey opens the dedicated panel. An administrator
+can instead enter another operator's exact record ID. **Inspect target and
+current policy** sends the closed `publicWebAuthnRevocationContextRequest/v1`
+to `POST /api/webauthn/revocation/context`, with required `recordId` (null means
+policy/own-MFA inspection only). The actual `_Operation` authenticates the
+current session/token, CSRF, same request bytes and cold owner; another user's
+target requires admin rights. The response contains a closed actor, policy,
+eligible own-passkey list and redacted target, never a key or trust root.
+Eligibility uses the existing authenticator/trust predicate on at most 64
+selected own credentials; a 65th record refuses this portal profile. The final
+ceremony still independently rechecks actual trust and configured policy.
+
+Enter the exact reason, choose your own eligible MFA key if required, and:
+
+- With two-person policy enabled, choose **Request different-admin approval
+  once**. A separate admin selects the real request in **Approvals**, reviews
+  its target owner, record/key digest, label, attestation root and reason, then
+  performs their own dedicated approval ceremony. Notes are not silently
+  discarded: this ceremony does not admit decision notes or a generic denial.
+- The requester keeps the actual approval ID, selects/inspects the target and
+  reason again if necessary, then chooses **Authorize and revoke once**. With
+  two-person policy disabled, the approval ID must be empty (explicit null).
+  Disabled MFA likewise sends null without invoking WebAuthn. Optional means
+  selected by enrolled server policy, never skipped by a browser flag.
+- Browser options are checked against the inspected target/reason's exact
+  Python-ASCII payload digest, including DEL and non-ASCII escapes. Enabled MFA
+  binds the actual selected credential ID, challenge, RP, user verification and
+  bounded original ceremony window. Each explicit click has one non-renewing
+  30-second browser budget covering context, CSRF, options, WebAuthn and handoff;
+  server admission may shorten it. There is no options retry loop, and one page
+  retains at most 64 preparation-attempt keys without resetting them.
+- Immediately before the sole effect POST, the browser retains a bounded hint
+  in session storage. The hint contains purpose, target, actor, reason, approval
+  ID, payload digest, options/attempt locators and observation status, but no
+  assertion, session cookie, bearer token, signature or request body. At most
+  32 hints/128 KiB are retained; malformed or unavailable storage disables new
+  effects, not manual read-only recovery. These hints are untrusted navigation
+  data. They never supply authority or replace the protected journal.
+- **Select retained hints** survives a tab reload. **Copy recovery locators**
+  exports only the target and options/attempt locators for another still-valid
+  requester/admin session. The browser cannot guarantee preservation after tab
+  closure, storage eviction or loss of the browser profile; operators should
+  retain the copied locators independently. The UI provides no history reset,
+  execution retry, assertion persistence or automatic resubmission.
+
+When the attempt locator was never received, explicitly select **Read retained
+options → attempt association**. This calls
+`POST /api/webauthn/credentials/{id}/revocation/lookup` with the closed
+`publicWebAuthnRevocationLookupRequest/v1` and `optionsLocalDigest`. The actual
+custody owner reads its protected options original and existing request index,
+rechecks named/held bytes and exact parent identity, and returns raw records to
+the authenticated read owner. That owner checks the retained requester (or a
+current admin), exact target, purpose, complete options/request association and
+original enrolled scope before disclosing an attempt locator. The index is
+reconstructed from bounded actual originals on startup, not browser metadata.
+No new mapping, claim, challenge or effect is written by lookup.
+
+The lookup result is `retained-association-observed` with an attempt locator, or
+`outcome-unknown` with null. Missing/malformed records and changed scope refuse
+with unresolved/unknown semantics, never "not executed". Both results have
+`committedObserved:false` and `automaticRetryAllowed:false`. Separately click
+**Read authenticated outcome** to use the existing recovery endpoint. Approval
+row observation says revocation has not executed and does not reconstruct a
+lost writer ACK; only final successor completion gives `committed-observed`.
+An authenticated fresh read allowance does not renew expired options or writer
+authority. Source/generation migration remains a separately admitted operation.
+
+All browser reads use same-origin/no-redirect transport, current existing
+session/token modes and applicable CSRF. Responses are bounded to 192 KiB and
+512 chunks under the same browser operation deadline. Authentication/target
+changes discard volatile ceremony context and cancel outstanding waits; a
+handoff already marked remains unknown. This is not preemption of server work
+and does not prove an aborted request had no effect. See the
+[portal observation schemas](../schemas/public-webauthn-revocation-portal.v1.schema.json).
+
+This panel requires the independently admitted public revocation cold profile.
+It refuses unavailable admission rather than silently invoking the old route
+contract. Existing legacy HTTP contracts and offline lost-key recovery remain
+separate and unchanged. Runtime/browser ceremonies, deployment/provisioning and
+the remaining full O03 revocation scope are still open.
 
 Approval TTL is separately configured (bounded to one hour). Each options,
 approval submission, decision and final execution has its own freshly admitted

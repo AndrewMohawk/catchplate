@@ -534,6 +534,7 @@ struct StateResultSigner<'a> {
     expected_uid: u32,
     expected_gid: u32,
     credentials_directory: Option<PathBuf>,
+    guest_delivery: Option<std::sync::Arc<super::super::guest_delivery::Delivery>>,
     identity: AuthoritySignerIdentity,
 }
 
@@ -558,13 +559,23 @@ impl AuthorityResultSigner for StateResultSigner<'_> {
         deadline.ensure_current(
             &self.clock.current_boot_instant()?,
         )?;
-        validate_signing_credential(
+        if let Some(owner) = &self.guest_delivery {
+            owner.require_signer(self.key.logical_role(), self.key.key_id(), &self.secret_key_path)
+                .map_err(|error| super::super::super::state_authority::AuthorityError::Authentication {
+                    code:"guest_signing_original_changed", reason:error.to_string(),
+                })?;
+        } else { validate_signing_credential(
             &self.secret_key_path,
             self.expected_uid,
             self.expected_gid,
             self.credentials_directory.as_deref(),
-        )?;
+        )?; }
         let signature = self.key.sign_digest_bytes(digest);
+        if let Some(owner) = &self.guest_delivery {
+            owner.check().map_err(|error| super::super::super::state_authority::AuthorityError::Authentication {
+                code:"guest_signing_original_changed", reason:error.to_string(),
+            })?;
+        }
         deadline.ensure_current(
             &self.clock.current_boot_instant()?,
         )?;
@@ -1272,6 +1283,7 @@ pub(crate) fn generation_reconciliation_cursor_postgres(
                 )
             })?,
     };
+    let deadline = bounded_generation_read_deadline(config, deadline)?;
     let statement = match domain {
         ReconciliationDomain::ProviderGenerations => {
             statements::PROVIDER_GENERATIONS_RECONCILIATION_CURSOR_SQL
@@ -1383,6 +1395,7 @@ pub(crate) fn generation_reconciliation_checkpoint_postgres(
                 )
             })?,
     };
+    let deadline = bounded_generation_read_deadline(config, deadline)?;
     let mut transaction = backend
         .begin_serializable(&deadline)
         .map_err(authority_error)?;
@@ -1424,6 +1437,19 @@ pub(crate) fn generation_reconciliation_checkpoint_postgres(
     Ok(cursor)
 }
 
+fn bounded_generation_read_deadline(
+    config: &RootOwnedResponseObservationV2Config,
+    mut deadline: BootDeadline,
+) -> Result<BootDeadline, V2RuntimeError> {
+    if config.guest_delivery.is_some() {
+        let ns = deadline.deadline_boot_millis.checked_mul(1_000_000).ok_or_else(|| {
+            V2RuntimeError::new("guest_backend_deadline", "backend BOOTTIME deadline overflow")
+        })?;
+        deadline.deadline_boot_millis = super::super::guest_delivery::bound_deadline_ns(config, ns)? / 1_000_000;
+    }
+    Ok(deadline)
+}
+
 fn trusted_host_authority<'a>(
     config: &RootOwnedResponseObservationV2Config,
     signing_key: &'a RoleSigningKey,
@@ -1431,6 +1457,7 @@ fn trusted_host_authority<'a>(
     timeout: std::time::Duration,
     signing_credential_path: Option<&Path>,
 ) -> Result<TrustedHostStateAuthority<'a>, V2RuntimeError> {
+    super::super::guest_delivery::check(config)?;
     let scoped =
         config.scoped_service_config(CustodyServiceRole::StateAuthority)?;
     let backend = postgres_backend_with_timeout(
@@ -1455,9 +1482,13 @@ fn trusted_host_authority<'a>(
     let secret_key_path = signing_credential_path
         .unwrap_or(&descriptor.secret_key_path)
         .to_path_buf();
-    let credentials_directory =
-        systemd_credentials_directory(&secret_key_path)?;
-    let pinned_generation_sha256 = std::env::var(
+    let credentials_directory = if config.guest_delivery.is_some() { None } else {
+        systemd_credentials_directory(&secret_key_path)?
+    };
+    let pinned_generation_sha256 = if let Some(owner) = &config.guest_delivery {
+        owner.require_signer(signing_key.logical_role(), signing_key.key_id(), &secret_key_path)?;
+        Digest(owner.generation_sha256()?.to_owned())
+    } else { std::env::var(
         "SERVERWARE_RESPONSE_V2_PROVIDER_GENERATION_SHA256",
     )
     .map(Digest)
@@ -1466,7 +1497,7 @@ fn trusted_host_authority<'a>(
             "state_authority_generation_pin_missing",
             "SERVERWARE_RESPONSE_V2_PROVIDER_GENERATION_SHA256 is required",
         )
-    })?;
+    })? };
     pinned_generation_sha256
         .validate("configuration.pinnedGenerationSha256")
         .map_err(authority_error)?;
@@ -1479,6 +1510,7 @@ fn trusted_host_authority<'a>(
         expected_uid: scoped.process.uid,
         expected_gid: scoped.process.gid,
         credentials_directory,
+        guest_delivery:config.guest_delivery.clone(),
         identity: AuthoritySignerIdentity {
             role_id: Identifier(scoped.process.service_id.clone()),
             process_id: Identifier(scoped.process.service_id.clone()),
@@ -1508,6 +1540,7 @@ fn trusted_host_authority<'a>(
     )
     .map_err(authority_error)?;
     let local_role_id = result_signer.identity.role_id.clone();
+    let request_timeout_ms = super::super::guest_delivery::bounded_timeout_ms(config, scoped.process.request_timeout_ms)?;
     StateAuthority::new(
         backend.clone(),
         result_signer,
@@ -1527,13 +1560,13 @@ fn trusted_host_authority<'a>(
             pinned_generation_sha256,
             local_role_id,
             statement_timeout_millis:
-                scoped.process.request_timeout_ms,
+                request_timeout_ms,
             lock_timeout_millis:
-                scoped.process.request_timeout_ms.min(5_000),
+                request_timeout_ms.min(5_000),
             idle_transaction_timeout_millis:
-                scoped.process.request_timeout_ms,
+                request_timeout_ms,
             cleanup_timeout_millis:
-                scoped.process.request_timeout_ms,
+                request_timeout_ms,
             maximum_result_bytes: 64 * 1024 * 1024,
         },
     )
@@ -1554,10 +1587,14 @@ fn postgres_backend(
 }
 
 fn postgres_backend_with_timeout(
-    _config: &RootOwnedResponseObservationV2Config,
+    config: &RootOwnedResponseObservationV2Config,
     scoped: &super::super::config::ScopedCustodyServiceConfig,
     timeout: std::time::Duration,
 ) -> Result<PostgresUdsBackend, V2RuntimeError> {
+    let timeout = if config.guest_delivery.is_some() { std::time::Duration::from_millis(
+        super::super::guest_delivery::bounded_timeout_ms(config,
+            u64::try_from(timeout.as_millis()).map_err(|_| V2RuntimeError::new("guest_backend_timeout", "backend timeout overflow"))?)?)
+    } else { timeout };
     let backend_socket_path = scoped
         .process
         .backend_socket_path
@@ -1568,11 +1605,13 @@ fn postgres_backend_with_timeout(
                 "signed state-authority process omits backendSocketPath",
             )
         })?;
-    let cgroup_root = std::env::var_os(
+    let cgroup_root = if config.guest_delivery.is_some() {
+        PathBuf::from("/sys/fs/cgroup")
+    } else { std::env::var_os(
         "SERVERWARE_RESPONSE_V2_CGROUP_ROOT",
     )
     .map(PathBuf::from)
-    .unwrap_or_else(|| PathBuf::from("/sys/fs/cgroup"));
+    .unwrap_or_else(|| PathBuf::from("/sys/fs/cgroup")) };
     PostgresUdsBackend::from_signed_backend_socket(
         backend_socket_path,
         &scoped.process.service_id,

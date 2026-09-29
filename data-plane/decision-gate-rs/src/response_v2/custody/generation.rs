@@ -525,10 +525,13 @@ fn sealed_authenticated_generation_verifier_snapshot(
 }
 
 fn run_pinned_bounded_generation_verifier(
+    config: &super::RootOwnedResponseObservationV2Config,
     command: &PinnedGenerationVerifierCommand,
     request: &serde_json::Value,
     maximum_output_bytes: usize,
 ) -> Result<Zeroizing<Vec<u8>>, String> {
+    let original_deadline = super::guest_delivery::verifier_deadline(config)
+        .map_err(|error| error.to_string())?;
     validate_pinned_generation_verifier_path(command)?;
     if maximum_output_bytes == 0
         || maximum_output_bytes > 8 * 1024 * 1024
@@ -547,6 +550,7 @@ fn run_pinned_bounded_generation_verifier(
             request,
             snapshot.as_raw_fd(),
             maximum_output_bytes,
+            original_deadline,
         );
         drop(snapshot);
         result
@@ -567,7 +571,17 @@ fn run_bounded_generation_verifier_snapshot(
     request: &serde_json::Value,
     executable_fd: std::os::fd::RawFd,
     maximum_output_bytes: usize,
+    original_deadline: Option<u64>,
 ) -> Result<Zeroizing<Vec<u8>>, String> {
+    let check_original_deadline = || -> Result<(), String> {
+        if let Some(deadline) = original_deadline {
+            if super::recovery::boottime_ns().map_err(|e| e.to_string())? >= deadline {
+                return Err("original guest generation verification deadline expired".to_owned());
+            }
+        }
+        Ok(())
+    };
+    check_original_deadline()?;
     let request_wire = Zeroizing::new(
         canonical_jcs_bytes(request).map_err(|_| {
             "serialize TEE generation verifier request".to_owned()
@@ -634,6 +648,7 @@ fn run_bounded_generation_verifier_snapshot(
             Err(io::Error::last_os_error())
         });
     }
+    check_original_deadline()?;
     let mut child = process.spawn().map_err(|error| {
         format!("start TEE generation verifier: {error}")
     })?;
@@ -738,6 +753,7 @@ fn run_bounded_generation_verifier_snapshot(
                     }
                 }
             }
+            check_original_deadline()?;
             if input_complete && output_complete {
                 if let Some(status) = status {
                     break status;
@@ -1178,6 +1194,7 @@ impl AuthorityResultSigner for ReadinessArtifactSigner<'_> {
 pub(crate) fn provision_generation_from_systemd_credentials(
     config: &super::RootOwnedResponseObservationV2Config,
 ) -> Result<GenerationBootstrapReadiness, V2RuntimeError> {
+    super::guest_delivery::check(config)?;
     let scoped =
         config.scoped_service_config(CustodyServiceRole::StateAuthority)?;
     if unsafe { libc::geteuid() } != scoped.process.uid
@@ -1189,7 +1206,8 @@ pub(crate) fn provision_generation_from_systemd_credentials(
         ));
     }
     let paths =
-        GenerationBootstrapCredentialPaths::from_systemd_credentials(
+        GenerationBootstrapCredentialPaths::for_config(
+            config,
             &scoped,
         )?;
     let descriptor = scoped
@@ -1203,7 +1221,9 @@ pub(crate) fn provision_generation_from_systemd_credentials(
                 "signed state-authority process omits its linearizable-store key",
             )
         })?;
-    let generation_authority_key = RoleSigningKey::load(
+    let generation_authority_key = if config.guest_delivery.is_some() {
+        super::guest_delivery::role_key(config, &scoped, descriptor)?
+    } else { RoleSigningKey::load(
         &ServiceRoleKeyDescriptorV1 {
             logical_role: descriptor.logical_role.clone(),
             key_id: descriptor.key_id.clone(),
@@ -1214,17 +1234,20 @@ pub(crate) fn provision_generation_from_systemd_credentials(
         },
         scoped.process.uid,
         scoped.process.gid,
-    )?;
-    bootstrap_state_authority_generation(
+    )? };
+    let result = bootstrap_state_authority_generation(
         config,
         &generation_authority_key,
-    )
+    )?;
+    super::guest_delivery::check(config)?;
+    Ok(result)
 }
 
 pub(crate) fn publish_service_generation_readiness(
     config: &super::RootOwnedResponseObservationV2Config,
     role: CustodyServiceRole,
 ) -> Result<(), V2RuntimeError> {
+    super::guest_delivery::check(config)?;
     super::services::check_readiness(config, role)?;
     let scoped = config.scoped_service_config(role)?;
     let context = wait_for_generation_activation_context(config)?;
@@ -1276,11 +1299,7 @@ pub(crate) fn publish_service_generation_readiness(
                 "service readiness key is absent from the signed topology",
             )
         })?;
-    let key = RoleSigningKey::load(
-        descriptor,
-        scoped.process.uid,
-        scoped.process.gid,
-    )?;
+    let key = super::guest_delivery::role_key(config, &scoped, descriptor)?;
     let artifact = sign_role_readiness_artifact(
         config,
         role,
@@ -1312,6 +1331,7 @@ pub(crate) fn publish_service_generation_readiness(
 pub(crate) fn activate_generation_from_systemd_credentials(
     config: &super::RootOwnedResponseObservationV2Config,
 ) -> Result<(), V2RuntimeError> {
+    super::guest_delivery::check(config)?;
     let scoped =
         config.scoped_service_config(CustodyServiceRole::StateAuthority)?;
     if unsafe { libc::geteuid() } != scoped.process.uid
@@ -1323,7 +1343,8 @@ pub(crate) fn activate_generation_from_systemd_credentials(
         ));
     }
     let paths =
-        GenerationBootstrapCredentialPaths::from_systemd_credentials(
+        GenerationBootstrapCredentialPaths::for_config(
+            config,
             &scoped,
         )?;
     let descriptor = scoped
@@ -1337,7 +1358,9 @@ pub(crate) fn activate_generation_from_systemd_credentials(
                 "signed state-authority process omits its linearizable-store key",
             )
         })?;
-    let generation_authority_key = RoleSigningKey::load(
+    let generation_authority_key = if config.guest_delivery.is_some() {
+        super::guest_delivery::role_key(config, &scoped, descriptor)?
+    } else { RoleSigningKey::load(
         &ServiceRoleKeyDescriptorV1 {
             logical_role: descriptor.logical_role.clone(),
             key_id: descriptor.key_id.clone(),
@@ -1348,7 +1371,7 @@ pub(crate) fn activate_generation_from_systemd_credentials(
         },
         scoped.process.uid,
         scoped.process.gid,
-    )?;
+    )? };
     let manifests = load_and_verify_bootstrap_manifests(
         config,
         &scoped,
@@ -1366,7 +1389,8 @@ pub(crate) fn activate_generation_from_systemd_credentials(
     let already_ready =
         proof.signed_query_result.body.generation_status
             == GenerationStatus::Ready;
-    let trust_anchor = read_trust_anchor(
+    let trust_anchor = read_generation_trust_anchor(
+        config,
         &paths.trust_anchor_public_key,
         scoped.process.uid,
         scoped.process.gid,
@@ -1520,12 +1544,24 @@ pub(crate) fn generation_activation_timeout_ms(
     Ok(value)
 }
 
+pub(crate) fn activation_timeout_ms(
+    config: &super::RootOwnedResponseObservationV2Config,
+) -> Result<u64, V2RuntimeError> {
+    if config.guest_delivery.is_some() {
+        // The guest has no environment-provided timeout authority.
+        super::guest_delivery::timeout_ms(config, MAX_GENERATION_ACTIVATION_TIMEOUT_MS)
+    } else {
+        super::guest_delivery::require_host(config)?;
+        generation_activation_timeout_ms()
+    }
+}
+
 fn wait_for_generation_activation_context(
     config: &super::RootOwnedResponseObservationV2Config,
 ) -> Result<GenerationActivationContextV1, V2RuntimeError> {
     let deadline = Instant::now()
         .checked_add(Duration::from_millis(
-            generation_activation_timeout_ms()?,
+            activation_timeout_ms(config)?,
         ))
         .ok_or_else(|| {
             V2RuntimeError::new(
@@ -1534,7 +1570,9 @@ fn wait_for_generation_activation_context(
             )
         })?;
     loop {
+        super::guest_delivery::check(config)?;
         if let Some(context) = read_existing_activation_context(config)? {
+            super::guest_delivery::check(config)?;
             return Ok(context);
         }
         if Instant::now() >= deadline {
@@ -1583,6 +1621,13 @@ fn verify_generation_activation_context(
     context: &GenerationActivationContextV1,
     require_current: bool,
 ) -> Result<(), V2RuntimeError> {
+    if let Some(owner) = &config.guest_delivery {
+        if owner.deadline_millis(context.deadline_boot_millis)? != context.deadline_boot_millis {
+            return Err(V2RuntimeError::new("guest_activation_context_refused",
+                "guest startup requires a current activation context within the original delivery deadline"));
+        }
+    }
+    let require_current = require_current || config.guest_delivery.is_some();
     let topology = config.custody_topology();
     let authority =
         config.scoped_service_config(CustodyServiceRole::StateAuthority)?;
@@ -1992,6 +2037,7 @@ fn collect_unsigned_role_readiness_set(
     for role in CustodyServiceRole::ALL {
         let scoped = config.scoped_service_config(role)?;
         let artifact = wait_for_signed_readiness_artifact(
+            config,
             &config.generation_role_readiness_artifact_path(role)?,
             scoped.process.uid,
             scoped.process.gid,
@@ -2048,8 +2094,12 @@ fn wait_for_live_service(
     deadline_boot_millis: u64,
 ) -> Result<(), V2RuntimeError> {
     loop {
+        super::guest_delivery::check(config)?;
+        if config.guest_delivery.is_some() && super::recovery::boottime_ns()? / 1_000_000 >= deadline_boot_millis {
+            return Err(V2RuntimeError::new("guest_readiness_timeout", "original activation deadline expired"));
+        }
         match super::services::check_readiness(config, role) {
-            Ok(()) => return Ok(()),
+            Ok(()) => { super::guest_delivery::check(config)?; return Ok(()); }
             Err(error) => {
                 if super::recovery::boottime_ns()? / 1_000_000
                     >= deadline_boot_millis
@@ -2086,18 +2136,19 @@ fn authoritative_reconciliation_checkpoint_sha256(
                 "state-authority process omits its signed PostgreSQL socket",
             )
         })?;
+    let timeout_ms = super::guest_delivery::bounded_timeout_ms(config, scoped.process.request_timeout_ms)?;
     let backend = PostgresUdsBackend::from_signed_backend_socket(
         backend_socket,
         &scoped.process.service_id,
-        Duration::from_millis(scoped.process.request_timeout_ms),
+        Duration::from_millis(timeout_ms),
     )
     .map_err(authority_contract_error)?;
-    let deadline = AuthorityBootDeadline {
+    let mut deadline = AuthorityBootDeadline {
         clock: "CLOCK_BOOTTIME".to_owned(),
         boot_id: Identifier(super::recovery::kernel_boot_id()?),
         deadline_boot_millis: (super::recovery::boottime_ns()?
             / 1_000_000)
-            .checked_add(scoped.process.request_timeout_ms)
+            .checked_add(timeout_ms)
             .ok_or_else(|| {
                 V2RuntimeError::new(
                     "generation_activation_deadline_overflow",
@@ -2105,6 +2156,9 @@ fn authoritative_reconciliation_checkpoint_sha256(
                 )
             })?,
     };
+    if let Some(owner) = &config.guest_delivery {
+        deadline.deadline_boot_millis = owner.deadline_millis(deadline.deadline_boot_millis)?;
+    }
     let mut transaction = backend
         .begin_serializable(&deadline)
         .map_err(authority_contract_error)?;
@@ -2163,7 +2217,7 @@ fn new_generation_activation_context(
     readiness: &GenerationBootstrapReadiness,
     reconciliation_checkpoint_sha256: &AuthorityDigest,
 ) -> Result<GenerationActivationContextV1, V2RuntimeError> {
-    let timeout_ms = generation_activation_timeout_ms()?;
+    let timeout_ms = activation_timeout_ms(config)?;
     let boot_id = Identifier(super::recovery::kernel_boot_id()?);
     let now_boot_millis = super::recovery::boottime_ns()? / 1_000_000;
     let deadline_boot_millis = now_boot_millis
@@ -2174,6 +2228,11 @@ fn new_generation_activation_context(
                 "generation activation CLOCK_BOOTTIME deadline overflowed",
             )
         })?;
+    let deadline_boot_millis = match &config.guest_delivery {
+        Some(owner) => owner.deadline_millis(deadline_boot_millis)?,
+        None => deadline_boot_millis,
+    };
+    let timeout_ms = deadline_boot_millis.saturating_sub(now_boot_millis);
     let activation_operation_id = deterministic_identifier(
         "generation-activation-ready",
         &[generation.generation_id.0.as_bytes()],
@@ -2384,6 +2443,7 @@ fn collect_and_verify_generation_readiness(
     for role in CustodyServiceRole::ALL {
         let scoped = config.scoped_service_config(role)?;
         let artifact = wait_for_signed_readiness_artifact(
+            config,
             &config.generation_role_readiness_artifact_path(role)?,
             scoped.process.uid,
             scoped.process.gid,
@@ -2435,6 +2495,7 @@ fn collect_and_verify_generation_readiness(
             .map_err(authority_contract_error)?,
     );
     let router_topology_attestation = wait_for_signed_readiness_artifact(
+        config,
         &config.generation_router_topology_attestation_path()?,
         router.process.uid,
         router.process.gid,
@@ -2495,12 +2556,17 @@ fn collect_and_verify_generation_readiness(
 }
 
 fn wait_for_signed_readiness_artifact(
+    config: &super::RootOwnedResponseObservationV2Config,
     path: &Path,
     expected_uid: u32,
     expected_gid: u32,
     deadline_boot_millis: u64,
 ) -> Result<SignedAuthorityArtifact, V2RuntimeError> {
     loop {
+        super::guest_delivery::check(config)?;
+        if config.guest_delivery.is_some() && super::recovery::boottime_ns()? / 1_000_000 >= deadline_boot_millis {
+            return Err(V2RuntimeError::new("guest_readiness_timeout", "original artifact deadline expired"));
+        }
         match read_shared_regular_file(
             path,
             expected_uid,
@@ -2509,6 +2575,7 @@ fn wait_for_signed_readiness_artifact(
             0o440,
         ) {
             Ok(bytes) => {
+                super::guest_delivery::check(config)?;
                 return crate::decode_canonical_json(&bytes).map_err(
                     |_| {
                         V2RuntimeError::new(
@@ -2917,7 +2984,8 @@ pub(crate) fn bootstrap_state_authority_generation(
     let scoped =
         config.scoped_service_config(CustodyServiceRole::StateAuthority)?;
     let paths =
-        GenerationBootstrapCredentialPaths::from_systemd_credentials(
+        GenerationBootstrapCredentialPaths::for_config(
+            config,
             &scoped,
         )?;
     let manifests = load_and_verify_bootstrap_manifests(
@@ -3108,10 +3176,12 @@ pub(crate) fn load_verified_bootstrap_readiness(
     let scoped =
         config.scoped_service_config(CustodyServiceRole::StateAuthority)?;
     let paths =
-        GenerationPublicCredentialPaths::from_readiness_credentials(
+        GenerationPublicCredentialPaths::for_config(
+            config,
             &scoped,
         )?;
-    let generation_bytes = read_credential(
+    let generation_bytes = read_generation_credential(
+        config,
         &paths.generation_manifest,
         scoped.process.uid,
         scoped.process.gid,
@@ -3124,7 +3194,8 @@ pub(crate) fn load_verified_bootstrap_readiness(
                 "provider-generation credential is not canonical closed JSON",
             )
         })?;
-    let trust_anchor = read_trust_anchor(
+    let trust_anchor = read_generation_trust_anchor(
+        config,
         &paths.trust_anchor_public_key,
         scoped.process.uid,
         scoped.process.gid,
@@ -3165,31 +3236,36 @@ fn load_and_verify_bootstrap_manifests(
     paths: &GenerationBootstrapCredentialPaths,
     generation_authority_key: &RoleSigningKey,
 ) -> Result<VerifiedBootstrapManifests, V2RuntimeError> {
-    let generation_bytes = read_credential(
+    let generation_bytes = read_generation_credential(
+        config,
         &paths.generation_manifest,
         scoped.process.uid,
         scoped.process.gid,
         MAX_BOOTSTRAP_CREDENTIAL_BYTES,
     )?;
-    let topology_bytes = read_credential(
+    let topology_bytes = read_generation_credential(
+        config,
         &paths.topology_manifest,
         scoped.process.uid,
         scoped.process.gid,
         MAX_BOOTSTRAP_CREDENTIAL_BYTES,
     )?;
-    let role_bytes = read_credential(
+    let role_bytes = read_generation_credential(
+        config,
         &paths.role_manifest,
         scoped.process.uid,
         scoped.process.gid,
         MAX_BOOTSTRAP_CREDENTIAL_BYTES,
     )?;
-    let key_bytes = read_credential(
+    let key_bytes = read_generation_credential(
+        config,
         &paths.key_manifest,
         scoped.process.uid,
         scoped.process.gid,
         MAX_BOOTSTRAP_CREDENTIAL_BYTES,
     )?;
-    let trust_anchor = read_trust_anchor(
+    let trust_anchor = read_generation_trust_anchor(
+        config,
         &paths.trust_anchor_public_key,
         scoped.process.uid,
         scoped.process.gid,
@@ -3809,6 +3885,7 @@ fn verify_tee_hardware_generation(
         expected_sha256: verifier.executable_sha256.clone(),
     };
     let result = run_pinned_bounded_generation_verifier(
+        config,
         &command,
         &request,
         128 * 1024,
@@ -4046,6 +4123,7 @@ fn signed_generation_frame(
         .scoped_service_config(CustodyServiceRole::StateAuthority)?
         .process
         .request_timeout_ms;
+    let timeout = super::guest_delivery::timeout_ms(config, timeout)?;
     let deadline_boot_millis = now_boot_millis
         .checked_add(timeout)
         .filter(|deadline| *deadline <= MAX_SAFE_INTEGER)
@@ -4055,6 +4133,10 @@ fn signed_generation_frame(
                 "generation bootstrap deadline overflowed",
             )
         })?;
+    let deadline_boot_millis = match &config.guest_delivery {
+        Some(owner) => owner.deadline_millis(deadline_boot_millis)?,
+        None => deadline_boot_millis,
+    };
     let operation = payload.operation();
     let boot_id = super::recovery::kernel_boot_id()?;
     let request_seed = canonical_jcs_bytes(&(
@@ -4611,6 +4693,51 @@ fn read_trust_anchor(
             "generation trust-anchor credential must contain exactly 32 raw Ed25519 public-key bytes",
         )
     })
+}
+
+fn read_generation_credential(
+    config: &super::RootOwnedResponseObservationV2Config,
+    path: &Path,
+    uid: u32,
+    gid: u32,
+    maximum: u64,
+) -> Result<Vec<u8>, V2RuntimeError> {
+    if let Some(owner) = &config.guest_delivery {
+        let bytes = owner.credential(path)?;
+        if bytes.len() as u64 > maximum {
+            return Err(V2RuntimeError::new("guest_credential_bound", "retained credential exceeds consumer bound"));
+        }
+        return Ok(bytes);
+    }
+    super::guest_delivery::require_host(config)?;
+    read_credential(path, uid, gid, maximum)
+}
+
+fn read_generation_trust_anchor(
+    config: &super::RootOwnedResponseObservationV2Config,
+    path: &Path,
+    uid: u32,
+    gid: u32,
+) -> Result<[u8; 32], V2RuntimeError> {
+    if config.guest_delivery.is_none() {
+        super::guest_delivery::require_host(config)?;
+        return read_trust_anchor(path, uid, gid);
+    }
+    read_generation_credential(config, path, uid, gid, 32)?.try_into().map_err(|_| {
+        V2RuntimeError::new("generation_trust_anchor_invalid", "retained generation root must be exactly32 bytes")
+    })
+}
+
+pub(crate) fn verify_guest_generation(
+    config: &super::RootOwnedResponseObservationV2Config,
+    original: &[u8],
+    trust_anchor: &[u8; 32],
+) -> Result<String, V2RuntimeError> {
+    let signed: SignedProviderGenerationCredentialV1 = crate::decode_canonical_json(original)
+        .map_err(|_| V2RuntimeError::new("generation_manifest_invalid", "invalid original signed generation"))?;
+    verify_signed_provider_generation(config, &signed, trust_anchor)?;
+    super::guest_delivery::check(config)?;
+    Ok(signed.generation_sha256.0)
 }
 
 fn read_credential(

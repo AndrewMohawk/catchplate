@@ -71,6 +71,7 @@ from serverware.portal_admin_token_publication import (
     ADMIN_TOKEN_PUBLICATION_HTML,
     ADMIN_TOKEN_PUBLICATION_SCRIPT,
 )
+from serverware.portal_public_revocation import PUBLIC_REVOCATION_HTML, PUBLIC_REVOCATION_SCRIPT
 from serverware.portal_oauth_consent import OAUTH_CONSENT_HTML, OAUTH_CONSENT_SCRIPT, enrolled_oauth_profile
 from serverware.portal_oauth_activation import OAUTH_ACTIVATION_HTML, OAUTH_ACTIVATION_SCRIPT
 from serverware.portal_registration_handoff import (
@@ -2051,6 +2052,20 @@ class PublicWebAuthnRevocationRecovery(BaseModel):
 
     api_version: Literal["serverware.publicWebAuthnRevocationRecoveryRequest/v1"] = Field(alias="apiVersion")
     local_digest: str = Field(alias="localDigest", pattern=r"^sha256:[0-9a-f]{64}$")
+
+
+class PublicWebAuthnRevocationContext(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    api_version: Literal["serverware.publicWebAuthnRevocationContextRequest/v1"] = Field(alias="apiVersion")
+    record_id: str | None = Field(alias="recordId", min_length=1, max_length=1024)
+
+
+class PublicWebAuthnRevocationLookup(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    api_version: Literal["serverware.publicWebAuthnRevocationLookupRequest/v1"] = Field(alias="apiVersion")
+    options_local_digest: str = Field(alias="optionsLocalDigest", pattern=r"^sha256:[0-9a-f]{64}$")
 
 
 class WebAuthnTrustPublish(BaseModel):
@@ -16811,6 +16826,37 @@ def webauthn_credentials(
     ]
 
 
+@app.post("/api/webauthn/revocation/context")
+def public_webauthn_revocation_context(
+    request: Request, payload: PublicWebAuthnRevocationContext,
+    identity: AdminIdentity = Depends(require_role("admin", "approver")),
+) -> dict[str, Any]:
+    from serverware import control_plane_public_revocation as public_revocation
+    from serverware import control_plane_public_revocation_lookup as lookup
+    try:
+        return lookup.context_on_request(request, public_revocation.body_original(request))
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=409, detail="public revocation context unavailable; no legacy fallback") from None
+
+
+@app.post("/api/webauthn/credentials/{record_id}/revocation/lookup")
+def public_webauthn_revocation_lookup(
+    record_id: str, request: Request, payload: PublicWebAuthnRevocationLookup,
+    identity: AdminIdentity = Depends(require_role("admin", "approver")),
+) -> dict[str, Any]:
+    from serverware import control_plane_public_revocation as public_revocation
+    from serverware import control_plane_public_revocation_lookup as lookup
+    try:
+        return lookup.lookup_on_request(request, record_id, public_revocation.body_original(request))
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=409, detail={"error": "public_revocation_lookup_unresolved",
+            "status": "outcome-unknown", "automaticRetryAllowed": False}) from None
+
+
 @app.post("/api/webauthn/credentials/{record_id}/revocation/options")
 def public_webauthn_revocation_options(
     record_id: str, request: Request, payload: PublicWebAuthnRevocationOptions,
@@ -22224,6 +22270,7 @@ UI_HTML = r"""
       __SERVERWARE_REGISTRATION_HANDOFF_HTML__
       __SERVERWARE_SESSION_ACTIVATION_HTML__
       __SERVERWARE_ADMIN_TOKEN_PUBLICATION_HTML__
+      __SERVERWARE_PUBLIC_REVOCATION_HTML__
       <section id="setup-workspace" class="setup-section">
         <div class="toolbar">
           <h2 style="margin-right:auto">Setup and Verify</h2>
@@ -22926,6 +22973,7 @@ UI_HTML = r"""
       renderWorkloadIssuance();
       renderAdminPublication();
       renderOAuthActivation();
+      publicRevocationAuthChanged();
     }
 
     async function signInWithOIDC() {
@@ -24271,6 +24319,7 @@ UI_HTML = r"""
     }
 
     function safeControlPlaneRequest(request, action = null) {
+      if (action === publicRevocationAction) return publicRevocationReview(request);
       if (action === workloadIssuanceAction) return workloadIssuanceReview(request);
       if (action === adminPublicationAction) return adminPublicationReview(request);
       if (action === oauthActivationAction && enrolledOAuthProfile !== 'development') return oauthActivationReviewBinding(request);
@@ -24301,19 +24350,20 @@ UI_HTML = r"""
         const enrolledActivation = item.action === oauthActivationAction && enrolledOAuthProfile !== 'development';
         const approveBlocked = item.can_approve !== true || enrolledActivation
           && (enrolledOAuthProfile !== 'enrolled-new-credential-v1' || !(state.authStatus?.roles || []).includes('credential_owner'));
-        const denyBlocked = item.can_deny !== true || enrolledActivation;
+        const publicRevocation = item.action === publicRevocationAction;
+        const denyBlocked = item.can_deny !== true || enrolledActivation || publicRevocation;
         const approveBlockId = `control-plane-approve-block-${item.id}`;
         const denyBlockId = `control-plane-deny-block-${item.id}`;
         const approveAttributes = approveBlocked ? `disabled aria-disabled="true" aria-describedby="${approveBlockId}"` : '';
         const denyAttributes = denyBlocked ? `disabled aria-disabled="true" aria-describedby="${denyBlockId}"` : '';
         const actions = item.status === 'pending' ? `
           <label class="sr-only" for="${decisionId}">Approval decision note</label>
-          <input id="${decisionId}" placeholder="Decision note" maxlength="500">
+          <input id="${decisionId}" placeholder="${publicRevocation ? 'This revocation ceremony does not accept decision notes' : 'Decision note'}" maxlength="500" ${publicRevocation ? 'disabled' : ''}>
           <div class="toolbar" style="margin-top:6px">
             <button type="button" onclick="runUiAction('Approve control-plane mutation', () => decideControlPlaneApproval('${item.id}', 'approve'))" ${approveAttributes}>Approve</button>
             <button class="danger" type="button" onclick="runUiAction('Deny control-plane mutation', () => decideControlPlaneApproval('${item.id}', 'deny'))" ${denyAttributes}>Deny</button>
             ${approveBlocked ? `<span id="${approveBlockId}" class="approval-block-reason">${esc(item.approve_block_reason || 'Approval is unavailable.')}</span>` : ''}
-            ${denyBlocked ? `<span id="${denyBlockId}" class="approval-block-reason">${esc(enrolledActivation ? 'Enrolled denial requires a separate controlled action; no legacy fallback.' : item.deny_block_reason || 'Denial is unavailable.')}</span>` : ''}
+            ${denyBlocked ? `<span id="${denyBlockId}" class="approval-block-reason">${esc(publicRevocation ? 'No protected denial contract in this profile. No generic fallback.' : enrolledActivation ? 'Enrolled denial requires a separate controlled action; no legacy fallback.' : item.deny_block_reason || 'Denial is unavailable.')}</span>` : ''}
           </div>
           <span class="muted">Required role: ${esc(requiredRoles || 'unavailable')}</span>` : `<span class="muted">${esc(item.decision_note || 'Decided')}</span>`;
         return `<tr id="${esc(rowId)}" tabindex="-1">
@@ -24428,6 +24478,10 @@ UI_HTML = r"""
     async function decideControlPlaneApproval(id, decision) {
       const note = $(`control-plane-note-${id}`)?.value.trim() || null;
       const item = (state.controlPlaneApprovals || []).find(value => value.id === id);
+      if (item?.action === publicRevocationAction) {
+        if (decision !== 'approve' || ($(`control-plane-note-${id}`)?.value ?? '') !== '') throw new Error('Use the dedicated revocation approval ceremony without a note; no generic fallback.');
+        return publicRevocationSelectApproval(id);
+      }
       if (item?.action === oauthActivationAction && enrolledOAuthProfile !== 'development') {
         if (enrolledOAuthProfile !== 'enrolled-new-credential-v1' || decision !== 'approve') {
           throw new Error('This enrolled OAuth decision is unavailable; no generic approval or denial fallback.');
@@ -25942,27 +25996,7 @@ UI_HTML = r"""
       return authorized;
     }
     async function revokePasskey(recordId) {
-      sessionActivationInvalidate('Passkey revocation started. Discarded activation authorization.');
-      const item = (state.webauthnCredentials || []).find((candidate) => candidate.id === recordId);
-      if (!item || item.revoked_at) throw new Error('Passkey is no longer active');
-      const activeCount = (state.webauthnCredentials || []).filter((candidate) => !candidate.revoked_at).length;
-      const warning = activeCount === 1
-        ? 'This is your last active passkey. Revocation will disable passkey-protected actions until an administrator performs recovery.\n\n'
-        : '';
-      const reason = window.prompt(`${warning}Reason for revoking ${item.label}:`, 'Retired authenticator');
-      if (reason === null) return cancelledAction('Passkey revocation');
-      if (!reason.trim()) throw new Error('A revocation reason is required');
-      const mutation = {
-        kind: 'webauthn-revoke',
-        label: `Revoke passkey ${item.label}`,
-        persist: false,
-        path: `/api/webauthn/credentials/${encodeURIComponent(recordId)}/revoke`,
-        method: 'POST',
-        body: {reason: reason.trim()}
-      };
-      const completed = await runControlPlaneMutation(mutation);
-      if (!completed.pending) await finishMutation(completed.mutation, completed.result);
-      return completed;
+      return publicRevocationSelect(recordId);
     }
     async function completePasskeyRegistration(options) {
       const credential = await navigator.credentials.create({publicKey: prepareCreationOptions(options)});
@@ -26040,6 +26074,7 @@ UI_HTML = r"""
     __SERVERWARE_SESSION_ACTIVATION_SCRIPT__
     __SERVERWARE_WORKLOAD_ISSUANCE_SCRIPT__
     __SERVERWARE_ADMIN_TOKEN_PUBLICATION_SCRIPT__
+    __SERVERWARE_PUBLIC_REVOCATION_SCRIPT__
     __SERVERWARE_OAUTH_CONSENT_SCRIPT__
     __SERVERWARE_OAUTH_ACTIVATION_SCRIPT__
     initWorkloadIdentityEditor();
@@ -26048,6 +26083,7 @@ UI_HTML = r"""
     initSessionActivation();
     initWorkloadIssuance();
     initAdminPublication();
+    initPublicRevocation();
     initOAuthConsent();
     initOAuthActivation();
     $('admin-token').value = '';
@@ -26056,6 +26092,7 @@ UI_HTML = r"""
       workloadIssuanceInvalidate('Entered operator credentials changed.');
       adminPublicationInvalidate('Entered operator credentials changed.');
       oauthActivationInvalidate('Entered operator credentials changed.');
+      publicRevocationInvalidate('Entered operator credentials changed.');
       clearCustodyView('Operator token changed. Refresh custody inventory explicitly.');
       syncCustodyAuth();
     });
@@ -26111,6 +26148,8 @@ for _portal_placeholder, _portal_fragment in (
     ("__SERVERWARE_WORKLOAD_ISSUANCE_SCRIPT__", WORKLOAD_ISSUANCE_SCRIPT),
     ("__SERVERWARE_ADMIN_TOKEN_PUBLICATION_HTML__", ADMIN_TOKEN_PUBLICATION_HTML),
     ("__SERVERWARE_ADMIN_TOKEN_PUBLICATION_SCRIPT__", ADMIN_TOKEN_PUBLICATION_SCRIPT),
+    ("__SERVERWARE_PUBLIC_REVOCATION_HTML__", PUBLIC_REVOCATION_HTML),
+    ("__SERVERWARE_PUBLIC_REVOCATION_SCRIPT__", PUBLIC_REVOCATION_SCRIPT),
     ("__SERVERWARE_OAUTH_CONSENT_HTML__", OAUTH_CONSENT_HTML),
     ("__SERVERWARE_OAUTH_CONSENT_SCRIPT__", OAUTH_CONSENT_SCRIPT),
     ("__SERVERWARE_OAUTH_ACTIVATION_HTML__", OAUTH_ACTIVATION_HTML),

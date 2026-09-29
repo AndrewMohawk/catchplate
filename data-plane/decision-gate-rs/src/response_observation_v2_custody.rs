@@ -8,6 +8,8 @@
 pub(crate) mod config;
 #[path = "response_v2/custody/generation.rs"]
 pub(crate) mod generation;
+#[path = "response_v2/custody/guest_delivery.rs"]
+pub(crate) mod guest_delivery;
 #[path = "response_v2/custody/protocol.rs"]
 pub(crate) mod protocol;
 #[path = "response_v2/custody/supervisor.rs"]

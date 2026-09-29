@@ -5,7 +5,8 @@
   "description": "Closed request shapes only, not permission. Actual HTTP authentication, CSRF, cold v23 enrollment, original options, policy, optional assertion and distinct-person approval remain required. Each admitted original is at most 65536 UTF-8 bytes. Required nullable fields must be explicitly present. A local digest never permits retry.",
   "oneOf": [
     {"$ref": "#/$defs/options"}, {"$ref": "#/$defs/execute"}, {"$ref": "#/$defs/recover"},
-    {"$ref": "#/$defs/approvalOptions"}, {"$ref": "#/$defs/approvalSubmit"}
+    {"$ref": "#/$defs/approvalOptions"}, {"$ref": "#/$defs/approvalSubmit"},
+    {"$ref": "#/$defs/context"}, {"$ref": "#/$defs/lookup"}
   ],
   "$defs": {
     "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
@@ -37,6 +38,20 @@
       "required": ["apiVersion", "localDigest"],
       "properties": {"apiVersion": {"const": "serverware.publicWebAuthnRevocationRecoveryRequest/v1"},
         "localDigest": {"$ref": "#/$defs/digest"}}
+    },
+    "context": {
+      "type": "object", "additionalProperties": false,
+      "description": "Read-only current self/admin target and independently admitted policy inspection. No challenge or effect is issued.",
+      "required": ["apiVersion", "recordId"],
+      "properties": {"apiVersion": {"const": "serverware.publicWebAuthnRevocationContextRequest/v1"},
+        "recordId": {"$ref": "#/$defs/optionalCredential"}}
+    },
+    "lookup": {
+      "type": "object", "additionalProperties": false,
+      "description": "Read-only protected options-to-attempt association lookup by its current requester or an admin. Missing association remains unknown and never grants retry.",
+      "required": ["apiVersion", "optionsLocalDigest"],
+      "properties": {"apiVersion": {"const": "serverware.publicWebAuthnRevocationLookupRequest/v1"},
+        "optionsLocalDigest": {"$ref": "#/$defs/digest"}}
     },
     "approvalOptions": {
       "type": "object", "additionalProperties": false,

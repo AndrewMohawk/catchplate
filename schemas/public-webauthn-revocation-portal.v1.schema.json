@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.dev/schemas/public-webauthn-revocation-portal.v1.schema.json",
+  "title": "Public WebAuthn revocation portal read observations and navigation hints",
+  "description": "Data only, never permission or proof of remote absence. Context requires the actual current HTTP/CSRF and cold owner. Lookup reads protected original associations; recovery separately verifies terminal originals. Browser JSON transport is bounded to 192 KiB, 512 chunks and the original 30-second operation deadline. Optional MFA/two-person policy is independently enrolled, never browser selected.",
+  "oneOf": [{"$ref": "#/$defs/context"}, {"$ref": "#/$defs/lookup"}, {"$ref": "#/$defs/hints"}],
+  "$defs": {
+    "text": {"type": "string", "minLength": 1, "maxLength": 1024},
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "nullableDigest": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/digest"}]},
+    "label": {"type": "string", "maxLength": 4096, "description": "Runtime also enforces at most 4096 UTF-8 bytes."},
+    "context": {
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "actor", "policy", "eligibleCredentials", "target", "automaticRetryAllowed"],
+      "properties": {
+        "apiVersion": {"const": "serverware.publicWebAuthnRevocationContext/v1"},
+        "actor": {"type": "object", "additionalProperties": false, "required": ["userId", "roles", "authMethod"],
+          "properties": {"userId": {"$ref": "#/$defs/text"}, "roles": {"type": "array", "minItems": 1, "maxItems": 32,
+            "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 128}},
+            "authMethod": {"type": "string", "minLength": 1, "maxLength": 128}}},
+        "policy": {"type": "object", "additionalProperties": false,
+          "required": ["mfaRequired", "twoPersonRequired", "credentialPolicy"],
+          "properties": {"mfaRequired": {"type": "boolean"}, "twoPersonRequired": {"type": "boolean"},
+            "credentialPolicy": {"type": "object", "additionalProperties": false, "required": ["userVerification"],
+              "properties": {"userVerification": {"const": "required"}, "requireHardwareAttestation": {"type": "boolean"},
+                "allowedAuthenticatorClasses": {"type": "array", "minItems": 1, "maxItems": 32, "uniqueItems": true,
+                  "items": {"type": "string", "minLength": 1, "maxLength": 128}}}}}},
+        "eligibleCredentials": {"type": "array", "maxItems": 64, "items": {"type": "object", "additionalProperties": false,
+          "required": ["recordId", "label", "credentialId"], "properties": {"recordId": {"$ref": "#/$defs/text"},
+            "label": {"$ref": "#/$defs/label"}, "credentialId": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,2048}$"}}}},
+        "target": {"oneOf": [{"type": "null"}, {"type": "object", "additionalProperties": false,
+          "required": ["recordId", "userId", "label", "credentialIdSha256", "attestationRootSha256", "revoked"],
+          "properties": {"recordId": {"$ref": "#/$defs/text"}, "userId": {"$ref": "#/$defs/text"},
+            "label": {"$ref": "#/$defs/label"}, "credentialIdSha256": {"$ref": "#/$defs/digest"},
+            "attestationRootSha256": {"$ref": "#/$defs/nullableDigest"}, "revoked": {"type": "boolean"}}}]},
+        "automaticRetryAllowed": {"const": false}
+      }
+    },
+    "lookup": {
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "recordId", "optionsLocalDigest", "attemptLocalDigest", "kind", "status", "committedObserved", "automaticRetryAllowed"],
+      "properties": {"apiVersion": {"const": "serverware.publicWebAuthnRevocationLookup/v1"},
+        "recordId": {"$ref": "#/$defs/text"}, "optionsLocalDigest": {"$ref": "#/$defs/digest"},
+        "attemptLocalDigest": {"$ref": "#/$defs/nullableDigest"}, "kind": {"enum": ["execute", "approval-request", "approval-decide"]},
+        "status": {"enum": ["retained-association-observed", "outcome-unknown"]},
+        "committedObserved": {"const": false}, "automaticRetryAllowed": {"const": false}},
+      "allOf": [{"if": {"properties": {"attemptLocalDigest": {"type": "null"}}},
+        "then": {"properties": {"status": {"const": "outcome-unknown"}}},
+        "else": {"properties": {"status": {"const": "retained-association-observed"}}}}]
+    },
+    "hints": {
+      "type": "object", "additionalProperties": false,
+      "description": "Copied recovery locator hints only. They contain no assertion, bearer token, cookie, key, trust root, endpoint or permission.",
+      "required": ["apiVersion", "recordId", "optionsLocalDigest", "attemptLocalDigest"],
+      "properties": {"apiVersion": {"const": "serverware.publicWebAuthnRevocationRecoveryHints/v1"},
+        "recordId": {"$ref": "#/$defs/text"}, "optionsLocalDigest": {"$ref": "#/$defs/digest"},
+        "attemptLocalDigest": {"$ref": "#/$defs/nullableDigest"}}
+    }
+  }
+}

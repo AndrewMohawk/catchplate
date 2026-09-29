@@ -1018,6 +1018,33 @@ class CustodyJournal:
             self._require_ready()
             return result
 
+    def lookup_public_revocation_options(self, options_digest):
+        """Read the retained parent association, never create or retry a claim.
+
+        The index is rebuilt from bounded protected originals on startup. A
+        missing child is only a local observation, not proof of remote absence.
+        Return the actual records so the authenticated HTTP owner can verify
+        requester, target, purpose and enrolled originals before disclosure.
+        """
+        digest = _digest(options_digest)
+        self._require_process()
+        with self._io.ready():
+            self._require_ready()
+            options, _encoded = self._load(digest)
+            if ((options.family, options.selector) != (public_revocation.RETENTION_FAMILY, "options")
+                    or options.source_revision != records.authority.SOURCE_REVISION):
+                raise CustodyJournalError("revocation lookup requires its actual options original")
+            child_digest = self._public_revocation_records.get((digest, "request"))
+            child = None
+            if child_digest is not None:
+                child, _encoded = self._load(child_digest)
+                if ((child.family, child.selector) != (public_revocation.REQUEST_FAMILY, "request")
+                        or child.source_revision != options.source_revision
+                        or child.originals[0] != digest.encode("ascii")):
+                    raise CustodyJournalError("revocation lookup changed its retained parent association")
+            self._require_ready()
+            return options, child
+
     def claim_public_revocation(self, request_digest):
         """Irreversibly burn this retained request before its first exchange."""
         digest = _digest(request_digest)

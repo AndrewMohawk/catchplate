@@ -893,6 +893,11 @@ pub struct RootOwnedResponseObservationV2Config {
     role_identities: Vec<RoleIdentityPin>,
     #[serde(default)]
     provider_router: Option<RootOwnedProviderRouterConfig>,
+    #[serde(default)]
+    guest_delivery_authority: Option<guest_delivery::Authority>,
+    // Only the explicit guest loader can construct this retained authority.
+    #[serde(skip)]
+    guest_delivery: Option<std::sync::Arc<guest_delivery::Delivery>>,
 }
 
 impl RootOwnedResponseObservationV2Config {
@@ -2774,6 +2779,18 @@ fn validate_config(
         ));
     }
     config::validate_signed_topology(config)?;
+    if let Some(authority) = &config.guest_delivery_authority {
+        authority.validate()?;
+        authority.require_separate_assignment(config)?;
+        if config.custody_topology.attestation_mode
+            != config::CustodyAttestationProfile::TeeHardware
+        {
+            return Err(V2RuntimeError::new(
+                "guest_delivery_profile_invalid",
+                "guest delivery requires the independently verified tee-hardware generation profile",
+            ));
+        }
+    }
     if !config.socket_path.is_absolute()
         || config.expected_client_uid == 0
         || config.max_concurrent_operations == 0

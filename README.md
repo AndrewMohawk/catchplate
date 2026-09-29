@@ -26,13 +26,13 @@ Checkpoint: **2026-09-29 — pre-production, source-only.**
 
 ### Current work: native enrollment, workload trust and protected operations
 
-[`.254` source / c461050](https://github.com/example/private-deployment)
-connects the explicit [native egress client v3](docs/native-egress-client.md):
-separate signed v2 creation authority, durable pre-clone claim, retained actual
-owners and guarded kernel installation through nonactionable capture/SDK extraction.
+[`.255` source / 53836b2](https://github.com/example/private-deployment)
+connects separately authorized [dual-stack network attachment](docs/native-network-attachment-client.md):
+fixed child policy, durable pre-effect claim and exact owner-bound kernel readback
+reach the public v4 client and strict data-only capture extraction.
 Output observes a never-executed child before teardown, not a persistent deployment.
 Prior native trust and separate ordinary PolicyAware source credit remains.
-Exec/start, network attachment, persistent supervision, combined CA+egress,
+Exec/start, persistent supervision, combined CA+egress,
 provider/egress/canaries, Kubernetes, lifecycle and independent acceptance stay open.
 Source is unbuilt, unexecuted and unprovisioned; no build/test/runtime, tested pilot,
 NSM or AWS/spend acceptance is claimed.
@@ -56,12 +56,13 @@ The four active checkpoints remain partial:
   reservation/token/destination ownership. Quote-bound target-principal preflight
   now retains actual source/header/token/mTLS admission on the CONNECT transport;
   explicit native response/receipt/binding/lifecycle, signed preparation and
-  quoted native credential leases are source-connected. The egress client v3 now
-  joins signed creation authority and durable pre-clone ownership to the guarded
-  kernel pipeline and observation-before-teardown capture, not workload start or
-  persistent deployment. Ordinary PolicyAware compatibility
+  quoted native credential leases are source-connected. Separate creation,
+  kernel and attachment authority now reach fixed dual-stack veth/address/route
+  installation and exact original-bound readback through client/capture v4,
+  observing state before teardown, not workload start or persistent deployment.
+  Ordinary PolicyAware compatibility
   is separately source-connected, not provisioned or runtime-accepted. Actual
-  execution/network attachment, persistent supervision, combined CA+egress,
+  execution, persistent supervision, combined CA+egress,
   CONNECT/provider policy, Kubernetes ownership, scoped proxy/egress/canaries,
   lifecycle/cross-session recovery, off-host rollback witnessing and independent
   service/exact-source verification remain open.
@@ -135,7 +136,7 @@ lists every remaining item and its evidence.
 | --- | --- | --- |
 | H05 | Historical authority across source/configuration/key changes | In progress |
 | N04 | Workload identity provisioning and authenticated channels | In progress |
-| N05 | Native enrollment, verified CA installation and proxy setup | In progress / partial; native trust/leases, egress v3 durable creation/guarded kernel observation and separate ordinary PolicyAware compatibility source-landed; start/attachment/persistent supervision, combined CA+egress, provider/canaries and independent acceptance open |
+| N05 | Native enrollment, verified CA installation and proxy setup | In progress / partial; native trust/leases, durable creation/guarded kernel and separately authorized dual-stack attachment observation, plus ordinary PolicyAware compatibility source-landed; start/persistent supervision, combined CA+egress, provider/canaries and independent acceptance open |
 | N06 | Enclave TLS/proxy execution and credential custody | Todo |
 | O01 | OAuth ownership across deployments and applications | Todo |
 | O02 | Measured provider issuance and interrupted-exchange recovery | Todo |

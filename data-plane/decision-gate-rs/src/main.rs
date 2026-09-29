@@ -10,6 +10,7 @@ mod control_plane_client_config;
 mod native_gate_bootstrap;
 mod native_audit_owner;
 mod native_audit_transport;
+mod native_canary_transport;
 mod native_secret_broker;
 mod native_target_dispatch;
 mod native_staging;

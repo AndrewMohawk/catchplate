@@ -59,6 +59,7 @@ pub mod native_oauth_setup_v1;
 pub mod native_oauth_reconnect_v1;
 pub mod native_oauth_browser_v1;
 pub mod native_audit_batch_v1;
+pub mod native_canary_evidence_v1;
 pub mod release_profile_v1;
 #[cfg(target_os = "linux")]
 pub mod erofs_loop_v1;
@@ -2170,6 +2171,57 @@ impl CustodyRuntime {
         Ok(serde_json::json!({"statement":statement,"signature":format!("ed25519:{}",general_purpose::URL_SAFE_NO_PAD.encode(signature)),
             "nativeKeyEvidence":{"apiVersion":"serverware.nativeResponseProofKeyEvidence/v1",
             "attestationDocumentB64":general_purpose::URL_SAFE_NO_PAD.encode(fresh.document()),"responseProofPublicKey":general_purpose::URL_SAFE_NO_PAD.encode(fresh.public_key())}}))
+    }
+
+    /// Purpose-specific canary evidence. Native transport supplies the binary
+    /// digest from its actual executable reader, not a request field. The
+    /// receiving CP still independently admits the purpose assignment and
+    /// every record; this signature is neither a durable claim nor a receipt.
+    pub fn sign_native_canary(&self, identity: &mut EnclaveRuntimeIdentityV1,
+        tls: &enclave_runtime_identity_v1::NativeCanaryTlsIdentity,
+        prepared: &native_canary_evidence_v1::PreparedEvidence, measured_binary: &str, deadline: u64)
+        -> Result<native_canary_evidence_v1::SignedEvidence, ProtocolError> {
+        self.verify_native_process()?;
+        let CustodySigningBackend::Native { owner, quote, .. } = &self.signing_backend else {
+            return Err(invalid_statement("canary evidence requires actual native custody"));
+        };
+        let deadline = deadline.min(prepared.deadline()).min(identity.deadline()).min(tls.deadline());
+        prepared.check(tls, deadline).map_err(native_proof_error)?;
+        identity.verify_canary_tls(tls, deadline).map_err(native_proof_error)?;
+        let statement = prepared.statement();
+        if statement.boot_id != self.boot_id || statement.key_id != self.key_id
+            || statement.holder_id != native_currentness_v1::holder_id(&self.boot_id, &self.key_id).map_err(native_proof_error)?
+            || Some(statement.control_plane_response_signing_key_id.as_str()) != self.control_plane_response_signing_key_id.as_deref()
+            || !native_currentness_v1::digest(measured_binary) || statement.data_plane_binary_sha256 != measured_binary {
+            return Err(invalid_statement("canary statement differs from actual native boot/key/CP key or measured binary"));
+        }
+        let mut owner = owner.lock().map_err(|_| invalid_statement("canary native key owner poisoned"))?;
+        // Joining identity must not replace the retained key lifetime with this
+        // command's short allowance. Every effect separately narrows to it.
+        let original_deadline = identity.deadline().min(owner.deadline());
+        owner.verify_identity(identity, original_deadline).map_err(native_proof_error)?;
+        let deadline = deadline.min(original_deadline);
+        let mut policy = [0u8; 32]; hex::decode_to_slice(&statement.policy_hash[7..], &mut policy)
+            .map_err(|_| invalid_statement("canary policy digest"))?;
+        owner.verify_policy_commitment(policy, deadline).map_err(native_proof_error)?;
+        identity.verify_policy_commitment(policy, deadline).map_err(native_proof_error)?;
+        let key = owner.public_key_bytes().map_err(native_proof_error)?;
+        if quote.public_key() != key.as_slice() || sha256_prefixed(&ed25519_spki_der(&key)) != self.key_id {
+            return Err(invalid_statement("canary retained native signing key changed"));
+        }
+        // Canary signs the complete canonical statement, unlike audit's
+        // digest-preimage. The subsequent role-4 quote binds that signature.
+        let signature = owner.sign(&statement.preimage().map_err(native_proof_error)?, deadline).map_err(native_proof_error)?;
+        let nonce = statement.attestation_nonce(&signature).map_err(native_proof_error)?;
+        let fresh = owner.quote_fresh(identity, nonce, deadline).map_err(native_proof_error)?;
+        if fresh.public_key() != key.as_slice() || fresh.user_data() != quote.user_data() || fresh.nonce() != &nonce
+            || fresh.document().is_empty() || fresh.document().len() > 12 * 1024 {
+            return Err(invalid_statement("canary fresh role-4 quote lost actual scope"));
+        }
+        prepared.check(tls, deadline).map_err(native_proof_error)?;
+        identity.verify_canary_tls(tls, deadline).map_err(native_proof_error)?;
+        owner.verify_live(deadline).map_err(native_proof_error)?;
+        prepared.signed(&signature, fresh.public_key(), fresh.document(), tls).map_err(native_proof_error)
     }
 
     /// Exact recipient binding under the already registered native key. This

@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-policy-canary-sender.v1.schema.json",
+  "title": "Native canary sender public original, not durable contact permission",
+  "$comment": "No new cold selector is introduced. Actual generated TLS, native role-4 signer, original process/CA/lifetime and durable precontact authority cannot be represented by a JSON object. Statement22, evidence4, batch4 and HTTP3 share the independent receiver's exact contract. Native proof signs schema ASCII plus NUL plus full canonical Python-ASCII statement including escaped DEL; audit's digest preimage is not used. No network send is implemented by this primitive.",
+  "$ref": "policy-canary-controlled-evidence.v1.schema.json#/$defs/httpRequest",
+  "$defs": {
+    "statement": {"$ref": "policy-canary-controlled-evidence.v1.schema.json#/$defs/statement"},
+    "nativeEvidence": {"$ref": "policy-canary-controlled-evidence.v1.schema.json#/$defs/nativeEvidence"},
+    "batchOriginal": {"$ref": "policy-canary-controlled-evidence.v1.schema.json#/$defs/batchOriginal"}
+  }
+}

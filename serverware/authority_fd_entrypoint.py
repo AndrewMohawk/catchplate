@@ -22,6 +22,7 @@ OAUTH_REVOCATION_CONFIG_NAME = "SERVERWARE_OAUTH_REVOCATION_CONFIG_FD"
 OAUTH_REVOCATION_CONFIG_MAX_BYTES = 2 * 1024 * 1024
 MEASURED_AUDIT_CONFIG_NAME = "SERVERWARE_MEASURED_AUDIT_CONFIG_FD"
 MEASURED_AUDIT_CONFIG_MAX_BYTES = 3 * 1024 * 1024
+POLICY_CANARY_CONFIG_NAME = "SERVERWARE_POLICY_CANARY_INTAKE_CONFIG_FD"
 OAUTH_REFRESH_CLEANUP_CONFIG_NAME = "SERVERWARE_OAUTH_REFRESH_CLEANUP_CONFIG_FD"
 OAUTH_REFRESH_CLEANUP_CONFIG_MAX_BYTES = 2 * 1024 * 1024
 RBAC_WITNESS_CONFIG_NAME = "SERVERWARE_RBAC_WITNESS_CONFIG_FD"
@@ -600,6 +601,42 @@ def _open_measured_audit_material(config_fd, *, occupied_descriptors):
     finally:
         if descriptor != target: os.close(descriptor)
     return (target,)
+
+
+def _open_policy_canary_material(config_fd, *, occupied_descriptors):
+    """Closed public configuration delivery; never caller-selected key paths."""
+    from serverware import control_plane_policy_canary_startup as cold
+    from serverware import authority_policy_canary as profile
+    value = cold.configuration(profile.document(os.pread(config_fd, cold.CONFIG_MAX + 1, 0), cold.CONFIG_MAX, exact=False))
+    selections = ((value["authorityRootFd"], "/run/serverware/authority-trust/policy-canary-root-public-key", 4096),
+        (value["authorityConfigurationFd"], "/run/serverware/authority-trust/policy-canary-authority-configuration.json", cold.AUTHORITY_MAX))
+    opened = []
+    try:
+        for target, path, maximum in selections:
+            profile.require(type(target) is int and 32 <= target <= 1023
+                and target not in occupied_descriptors and target not in opened)
+            try:
+                os.fstat(target)
+            except OSError as exc:
+                if exc.errno != errno.EBADF:
+                    raise
+            else:
+                raise RuntimeError("canary public-policy descriptor is occupied")
+            descriptor = _open_source(path, expected_owner_uid=0, maximum_bytes=maximum)
+            try:
+                if descriptor != target:
+                    os.dup2(descriptor, target, inheritable=True)
+                else:
+                    os.set_inheritable(target, True)
+                opened.append(target)
+            finally:
+                if descriptor != target:
+                    os.close(descriptor)
+        return tuple(opened)
+    except BaseException:
+        for descriptor in opened:
+            os.close(descriptor)
+        raise
 
 
 def _open_oauth_revocation_material(config_fd, *, occupied_descriptors):
@@ -2637,11 +2674,13 @@ def _control_plane_health() -> int:
     return 1
 
 
-def _normal_main(role: str, *, public_revocation: bool = False, genesis_maintenance: bool = False) -> int:
+def _normal_main(role: str, *, public_revocation: bool = False, genesis_maintenance: bool = False, policy_canary_intake: bool = False) -> int:
     if type(public_revocation) is not bool or public_revocation and role not in {"verifier", "issuer", "executor"}:
         raise RuntimeError("public revocation cold selection requires its fixed measured roles")
     if type(genesis_maintenance) is not bool or genesis_maintenance and (role != "control-plane" or public_revocation):
         raise RuntimeError("genesis maintenance cold selection requires the fixed control-plane role")
+    if type(policy_canary_intake) is not bool or policy_canary_intake and (role != "control-plane" or genesis_maintenance or public_revocation):
+        raise RuntimeError("canary intake cold selection requires the fixed normal control-plane role")
     trusted_host_local = (
         os.environ.get("SERVERWARE_AUTHORITY_TRUST_MODE")
         == "trusted-host-local"
@@ -2709,7 +2748,7 @@ def _normal_main(role: str, *, public_revocation: bool = False, genesis_maintena
             )
     for name in tuple(environment):
         if name.startswith(("SERVERWARE_CONTROL_PLANE_CUSTODY_",
-                "SERVERWARE_CONTROL_PLANE_ENROLLMENT_", "SERVERWARE_OAUTH_APPLICATION_", "SERVERWARE_OAUTH_REVOCATION_", "SERVERWARE_OAUTH_REFRESH_CLEANUP_", "SERVERWARE_MEASURED_AUDIT_", "SERVERWARE_RBAC_WITNESS_")):
+                "SERVERWARE_CONTROL_PLANE_ENROLLMENT_", "SERVERWARE_OAUTH_APPLICATION_", "SERVERWARE_OAUTH_REVOCATION_", "SERVERWARE_OAUTH_REFRESH_CLEANUP_", "SERVERWARE_MEASURED_AUDIT_", "SERVERWARE_RBAC_WITNESS_", "SERVERWARE_POLICY_CANARY_INTAKE_")):
             environment.pop(name, None)
     environment.pop("SERVERWARE_AUTHORITY_BOOTSTRAP_FD", None)
     environment.pop("SERVERWARE_PROCESS_MODE", None)
@@ -2805,6 +2844,13 @@ def _normal_main(role: str, *, public_revocation: bool = False, genesis_maintena
                 )
             )
         if role == "control-plane":
+            if policy_canary_intake:
+                from serverware import control_plane_policy_canary_startup as canary_cold
+                canary_descriptor = _open_source("/run/serverware/authority-trust/policy-canary-intake.json",
+                    expected_owner_uid=0, maximum_bytes=canary_cold.CONFIG_MAX)
+                descriptors.append(canary_descriptor)
+                environment[POLICY_CANARY_CONFIG_NAME] = str(canary_descriptor)
+                descriptors.extend(_open_policy_canary_material(canary_descriptor, occupied_descriptors=set(descriptors)))
             if rbac_witness_descriptor is None:
                 raise RuntimeError("RBAC witness cold configuration is unavailable")
             descriptors.extend(_open_rbac_witness_material(rbac_witness_descriptor, occupied_descriptors=set(descriptors)))
@@ -2916,6 +2962,8 @@ def _normal_main(role: str, *, public_revocation: bool = False, genesis_maintena
 
 
 def main() -> int:
+    if len(sys.argv) == 3 and sys.argv[1:] == ["control-plane", "--policy-canary-intake"]:
+        return _normal_main("control-plane", policy_canary_intake=True)
     if len(sys.argv) == 3 and sys.argv[1:] == ["control-plane", "--policy-file-genesis-maintenance"]:
         return _normal_main("control-plane", genesis_maintenance=True)
     if (len(sys.argv) == 3 and sys.argv[2] == "--public-webauthn-revocation"

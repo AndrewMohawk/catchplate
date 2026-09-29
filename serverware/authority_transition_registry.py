@@ -8,6 +8,7 @@ from serverware import authority_successor_programs
 from serverware import authority_transition_core
 from serverware import authority_transition_policy
 from serverware import authority_transition_policy_candidate
+from serverware import authority_transition_policy_canary
 from serverware import authority_transition_quota
 from serverware import authority_transition_release
 from serverware import authority_transition_publication_approval
@@ -47,6 +48,7 @@ def _merge_kernels() -> dict[
     for registry in (
         authority_transition_policy.KERNELS,
         authority_transition_policy_candidate.KERNELS,
+        authority_transition_policy_canary.KERNELS,
         authority_transition_quota.KERNELS,
         authority_transition_release.KERNELS,
         authority_transition_publication_approval.KERNELS,

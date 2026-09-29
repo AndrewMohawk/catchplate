@@ -80,6 +80,7 @@ from serverware.portal_oauth_activation import OAUTH_ACTIVATION_HTML, OAUTH_ACTI
 from serverware.portal_oauth_setup import OAUTH_SETUP_HTML, OAUTH_SETUP_SCRIPT
 from serverware.portal_policy_candidate import POLICY_CANDIDATE_HTML, POLICY_CANDIDATE_SCRIPT
 from serverware import control_plane_policy_candidate
+from serverware import control_plane_policy_canary
 from serverware.portal_oauth_reconnect import OAUTH_RECONNECT_HTML, OAUTH_RECONNECT_SCRIPT
 from serverware.portal_registration_handoff import (
     REGISTRATION_HANDOFF_CSS,
@@ -625,6 +626,7 @@ async def bounded_control_plane_request_middleware(request: Request, call_next):
             "/api/policy/authority/candidates/package",
             "/api/policy/authority/candidates/handoff",
             *control_plane_policy_candidate.PATHS,
+            *control_plane_policy_canary.PATHS,
             "/api/data-plane/policy-canary/evidence",
             }
             or setup_canary_request
@@ -653,6 +655,7 @@ async def bounded_control_plane_request_middleware(request: Request, call_next):
             )
     request_limit = {
         **{path: control_plane_policy_candidate.MAX_REQUEST for path in control_plane_policy_candidate.PATHS},
+        **{path: control_plane_policy_canary.MAX_REQUEST for path in control_plane_policy_canary.PATHS},
         **{path: activation_permission_contract.MAX_REQUEST_BYTES for path in activation_permission_routes.PATHS},
         **{path: handoff_contract.MAX_REQUEST_BYTES for path in (
             handoff_routes.EXECUTE_PATHS | handoff_routes.COMPLETE_PATHS)},
@@ -11092,6 +11095,18 @@ async def controlled_policy_candidate_generation(request: Request) -> dict[str, 
     except (ValueError, KeyError, TypeError, db.PolicyCandidateAuthorityError, db.MetadataStoreError) as exc:
         raise HTTPException(status_code=409,
             detail="Controlled generation unavailable or outcome unknown; inspect exact request ID, never automatically retry") from exc
+
+
+@app.post(control_plane_policy_canary.PREFIX)
+@app.post(control_plane_policy_canary.PREFIX + "/inspect")
+async def controlled_policy_canary_evidence(request: Request) -> dict[str, Any]:
+    raw = await request.body()
+    try:
+        return await _run_bounded_blocking(_POLICY_AUTHORITY_HANDOFF_SLOTS,
+            control_plane_policy_canary.on_request, request, raw)
+    except (ValueError, KeyError, TypeError, db.PolicyCandidateAuthorityError, db.MetadataStoreError) as exc:
+        raise HTTPException(status_code=409,
+            detail="Controlled canary intake unavailable or outcome unknown; inspection is data only and never resend permission") from exc
 
 
 def _policy_shadow_activation_publication_result(

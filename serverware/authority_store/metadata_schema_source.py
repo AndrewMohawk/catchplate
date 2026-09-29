@@ -12,6 +12,41 @@ def metadata_base_schema_source() -> str:
                 applied_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS policy_canary_intake_batches (
+                request_id TEXT PRIMARY KEY,
+                canary_id TEXT NOT NULL,
+                instance_id TEXT NOT NULL,
+                boot_id TEXT NOT NULL,
+                purpose_assignment_digest TEXT NOT NULL,
+                canary_assignment_digest TEXT NOT NULL,
+                configuration_digest TEXT NOT NULL,
+                batch_sha256 TEXT NOT NULL UNIQUE,
+                batch_original TEXT NOT NULL,
+                native_evidence_original TEXT NOT NULL,
+                request_digest TEXT NOT NULL UNIQUE,
+                result_original TEXT NOT NULL,
+                audit_event_digest TEXT NOT NULL UNIQUE,
+                issued_at_epoch_ns BIGINT NOT NULL,
+                expires_at_epoch_ns BIGINT NOT NULL,
+                created_at TEXT NOT NULL,
+                CHECK (length(request_id) = 36),
+                CHECK (length(canary_id) BETWEEN 1 AND 256),
+                CHECK (length(instance_id) BETWEEN 1 AND 128),
+                CHECK (length(boot_id) = 71),
+                CHECK (length(purpose_assignment_digest) = 71),
+                CHECK (length(canary_assignment_digest) = 71),
+                CHECK (length(configuration_digest) = 71),
+                CHECK (length(batch_sha256) = 71),
+                CHECK (length(batch_original) BETWEEN 2 AND 1048576),
+                CHECK (length(native_evidence_original) BETWEEN 2 AND 131072),
+                CHECK (length(request_digest) = 71),
+                CHECK (length(result_original) BETWEEN 2 AND 2097152),
+                CHECK (length(audit_event_digest) = 71),
+                CHECK (issued_at_epoch_ns > 0),
+                CHECK (expires_at_epoch_ns > issued_at_epoch_ns),
+                CHECK (expires_at_epoch_ns - issued_at_epoch_ns <= 30000000000)
+            );
+
             CREATE TABLE IF NOT EXISTS policy_shadow_generation_claims (
                 request_id TEXT PRIMARY KEY,
                 replay_id TEXT NOT NULL UNIQUE,

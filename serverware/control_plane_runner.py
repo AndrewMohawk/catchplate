@@ -12,6 +12,7 @@ def main() -> None:
     oauth_revocation_startup = None
     oauth_refresh_cleanup_startup = None
     measured_audit_startup = None
+    policy_canary_startup = None
     rbac_currentness_startup = None
 
     try:
@@ -32,6 +33,8 @@ def main() -> None:
         oauth_refresh_cleanup_startup.initialize_from_environment()
         from serverware import control_plane_data_plane_audit as measured_audit_startup
         measured_audit_startup.initialize_from_environment()
+        from serverware import control_plane_policy_canary_startup as policy_canary_startup
+        policy_canary_startup.initialize_from_environment()
         from serverware import control_plane_rbac_currentness as rbac_currentness_startup
         rbac_currentness_startup.initialize_from_environment()
 
@@ -56,10 +59,11 @@ def main() -> None:
         )
         configuration.load()
         measured_audit_startup.configure_tls(configuration.ssl)
+        policy_canary_startup.configure_tls(configuration.ssl)
         uvicorn.Server(configuration).run()
     except BaseException:
         # Preserve the original launch/runtime error if cleanup also fails.
-        for owner in (rbac_currentness_startup, measured_audit_startup, oauth_refresh_cleanup_startup, oauth_revocation_startup, oauth_application_startup, workload_identity_startup, enrollment_startup, custody_startup):
+        for owner in (rbac_currentness_startup, policy_canary_startup, measured_audit_startup, oauth_refresh_cleanup_startup, oauth_revocation_startup, oauth_application_startup, workload_identity_startup, enrollment_startup, custody_startup):
             try:
                 if owner is not None:
                     owner.close()
@@ -67,7 +71,7 @@ def main() -> None:
                 pass
         raise
     else:
-        _close_remaining(rbac_currentness_startup, measured_audit_startup,
+        _close_remaining(rbac_currentness_startup, policy_canary_startup, measured_audit_startup,
             oauth_refresh_cleanup_startup, oauth_revocation_startup, oauth_application_startup,
             workload_identity_startup, enrollment_startup, custody_startup)
 

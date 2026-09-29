@@ -1,0 +1,548 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "serverware.policyCanaryControlledEvidence/v1",
+  "title": "Native canary intake originals and cold receiver configuration",
+  "$ref": "#/$defs/httpRequest",
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "epoch": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807},
+    "component": {"type": "string", "pattern": "^[A-Za-z0-9._-]{1,128}$"},
+    "limits": {
+      "const": {"originalBytes": 1048576, "argumentBytes": 3145728, "tableRows": 32,
+        "events": 128, "queryRows": 240, "mutations": 96, "workUnits": 8192}
+    },
+    "trustRoots": {
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "awsNitroRootCertificatesPem", "awsNitroCrlsDerBase64url", "nitroCertificateProfile"],
+      "properties": {
+        "apiVersion": {"const": "serverware.policyCanaryNativeTrustRoots/v1"},
+        "awsNitroRootCertificatesPem": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+        "awsNitroCrlsDerBase64url": {"const": []},
+        "nitroCertificateProfile": {"$ref": "credential-currentness-authority.v1.schema.json#/$defs/certificateProfile"}
+      }
+    },
+    "assignment": {
+      "type": "object", "additionalProperties": false,
+      "required": ["holderId", "bootId", "keyId", "controlPlaneResponseSigningKeyId", "releaseRecordSha256", "policyHash",
+        "configurationSha256", "caCertificateSha256", "caPublicKeySpkiSha256", "expectedBinaryDigest", "expectedPcrs", "expectedEif",
+        "expectedModuleId", "maxAgeSeconds", "futureSkewSeconds", "instanceId", "canaryId", "canaryAssignmentSha256", "canaryBootId", "workloadCaCertificatePem"],
+      "properties": {
+        "holderId": {"$ref": "credential-currentness-authority.v1.schema.json#/$defs/digest"},
+        "bootId": {"$ref": "credential-currentness-authority.v1.schema.json#/$defs/bytes32"},
+        "keyId": {"$ref": "credential-currentness-authority.v1.schema.json#/$defs/digest"},
+        "controlPlaneResponseSigningKeyId": {"$ref": "credential-currentness-authority.v1.schema.json#/$defs/digest"},
+        "releaseRecordSha256": {"$ref": "credential-currentness-authority.v1.schema.json#/$defs/digest"},
+        "policyHash": {"$ref": "credential-currentness-authority.v1.schema.json#/$defs/digest"},
+        "configurationSha256": {"$ref": "credential-currentness-authority.v1.schema.json#/$defs/digest"},
+        "caCertificateSha256": {"$ref": "credential-currentness-authority.v1.schema.json#/$defs/digest"},
+        "caPublicKeySpkiSha256": {"$ref": "credential-currentness-authority.v1.schema.json#/$defs/digest"},
+        "expectedBinaryDigest": {"$ref": "credential-currentness-authority.v1.schema.json#/$defs/digest"},
+        "expectedPcrs": {"$ref": "credential-currentness-authority.v1.schema.json#/$defs/assignment/properties/expectedPcrs"},
+        "expectedEif": {"$ref": "credential-currentness-authority.v1.schema.json#/$defs/sha384"},
+        "expectedModuleId": {"type": "string", "minLength": 1, "maxLength": 256},
+        "maxAgeSeconds": {"type": "integer", "minimum": 1, "maximum": 300},
+        "futureSkewSeconds": {"type": "integer", "minimum": 0, "maximum": 30},
+        "instanceId": {"$ref": "#/$defs/component"}, "canaryId": {"type": "string", "minLength": 1, "maxLength": 256},
+        "canaryAssignmentSha256": {"$ref": "#/$defs/digest"}, "canaryBootId": {"$ref": "#/$defs/digest"},
+        "workloadCaCertificatePem": {"type": "string", "minLength": 1, "maxLength": 65536}
+      },
+      "description": "A separate purpose assignment. Shared digest/PCR/certificate data grammars do not confer credential-currentness permission. Actual role-4 quote, holder derivation, measured CA equality and independent current policy are verified."
+    },
+    "policy": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "deploymentId", "controlPlaneConfigurationDigest", "issuedAtEpochNs", "expiresAtEpochNs", "operationMaxSeconds", "limits", "trustRoots", "assignments"],
+      "properties": {
+        "schema": {"const": "serverware.policyCanaryIntakeAuthorityPolicy/v1"},
+        "deploymentId": {"$ref": "#/$defs/component"}, "controlPlaneConfigurationDigest": {"$ref": "#/$defs/digest"},
+        "issuedAtEpochNs": {"$ref": "#/$defs/epoch"}, "expiresAtEpochNs": {"$ref": "#/$defs/epoch"},
+        "operationMaxSeconds": {"type": "integer", "minimum": 1, "maximum": 30},
+        "limits": {"$ref": "#/$defs/limits"}, "trustRoots": {"$ref": "#/$defs/trustRoots"},
+        "assignments": {"type": "array", "minItems": 1, "maxItems": 32, "uniqueItems": true, "items": {"$ref": "#/$defs/assignment"}}
+      },
+      "description": "Explicit policyCanaryIntakePolicy in the original root-signed measured authority configuration, independently admitted by verifier and planner. TTL at most 24 hours; sorted unique canary/instance/holder assignments. No old audit/OAuth permission alias."
+    },
+    "arguments": {
+      "type": "object", "additionalProperties": false,
+      "required": ["control_plane_configuration_digest", "batch_original", "native_evidence", "before_original"],
+      "properties": {
+        "control_plane_configuration_digest": {"$ref": "#/$defs/digest"},
+        "batch_original": {"type": "string", "minLength": 2, "maxLength": 1048576},
+        "native_evidence": {"$ref": "#/$defs/nativeEvidence"},
+        "before_original": {"type": "string", "minLength": 2, "maxLength": 3145728}
+      },
+      "description": "Source-built controlled writer arguments, never HTTP-selected SQL. before_original is untrusted acquisition data until exact complete populations match the real transaction before-roots. Entire canonical argument encoding is bounded to 3 MiB."
+    },
+    "statement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "operation",
+        "requestId",
+        "deploymentId",
+        "instanceId",
+        "holderId",
+        "bootId",
+        "keyId",
+        "controlPlaneResponseSigningKeyId",
+        "policyHash",
+        "dataPlaneBinarySha256",
+        "purposeAssignmentSha256",
+        "canaryId",
+        "canaryAssignmentSha256",
+        "canaryBootId",
+        "batchSha256",
+        "workloadUri",
+        "clientCertificateSha256",
+        "clientSpkiSha256",
+        "nonce",
+        "issuedAtEpochNs",
+        "expiresAtEpochNs"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeCanaryEvidenceIntakeStatement/v1"
+        },
+        "operation": {
+          "enum": [
+            "policy.canary.evidence-intake",
+            "policy.canary.evidence-inspect"
+          ]
+        },
+        "requestId": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        },
+        "deploymentId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._-]{1,128}$"
+        },
+        "instanceId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._-]{1,128}$"
+        },
+        "holderId": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "bootId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{43}$"
+        },
+        "keyId": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "controlPlaneResponseSigningKeyId": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "policyHash": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "dataPlaneBinarySha256": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "purposeAssignmentSha256": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "canaryId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "canaryAssignmentSha256": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "canaryBootId": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "batchSha256": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "workloadUri": {
+          "type": "string",
+          "pattern": "^spiffe://serverware\\.policy-canary/[A-Za-z0-9._-]{1,128}/[A-Za-z0-9._-]{1,128}$"
+        },
+        "clientCertificateSha256": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "clientSpkiSha256": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "nonce": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{43}$"
+        },
+        "issuedAtEpochNs": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9223372036854775807
+        },
+        "expiresAtEpochNs": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9223372036854775807
+        }
+      }
+    },
+    "nativeEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "statement",
+        "signature",
+        "nativeKeyEvidence",
+        "clientCertificateDerBase64Url"
+      ],
+      "properties": {
+        "statement": {
+          "$ref": "#/$defs/statement"
+        },
+        "signature": {
+          "type": "string",
+          "pattern": "^ed25519:[A-Za-z0-9_-]{86}$"
+        },
+        "nativeKeyEvidence": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "apiVersion",
+            "attestationDocumentB64",
+            "responseProofPublicKey"
+          ],
+          "properties": {
+            "apiVersion": {
+              "const": "serverware.nativeResponseProofKeyEvidence/v1"
+            },
+            "attestationDocumentB64": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 16384,
+              "pattern": "^[A-Za-z0-9_-]+$"
+            },
+            "responseProofPublicKey": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{43}$"
+            }
+          }
+        },
+        "clientCertificateDerBase64Url": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 21846,
+          "pattern": "^[A-Za-z0-9_-]+$"
+        }
+      }
+    },
+    "batchOriginal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "requestId",
+        "canaryId",
+        "events"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.policyCanaryEvidenceOriginal/v1"
+        },
+        "requestId": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        },
+        "canaryId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "events": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 128,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "record"
+            ],
+            "properties": {
+              "kind": {
+                "enum": [
+                  "assignment",
+                  "canary-revision",
+                  "load-receipt",
+                  "runtime-attestation-handoff",
+                  "custody",
+                  "ingress",
+                  "active-decision",
+                  "shadow-observation",
+                  "instance-revision",
+                  "checkpoint",
+                  "compiler-analysis",
+                  "readiness"
+                ]
+              },
+              "record": {
+                "type": "object",
+                "required": ["canary_id"],
+                "propertyNames": {"pattern": "^[a-z][a-z0-9_]{0,127}$"},
+                "additionalProperties": {"type": ["string", "integer", "boolean", "null"]},
+                "description": "The exact existing kind-specific signed record. The schema does not replace the closed per-kind source inventories mapped in the paired guide. The controlled handler requires those exact fields, independent inner signatures, current/historical trust and predecessor associations. Nested originals remain canonical JSON strings, not rebuilt objects."
+              }
+            }
+          }
+        }
+      }
+    },
+    "receiverConfiguration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "sourceRevision",
+        "controlPlaneConfigurationDigest",
+        "authorityRootFd",
+        "authorityRootSha256",
+        "authorityRootSpkiSha256",
+        "authorityConfigurationFd",
+        "authorityConfigurationSha256",
+        "authorityConfigurationDigest"
+      ],
+      "properties": {
+        "schema": {
+          "const": "serverware.policyCanaryIntakeReceiverConfiguration/v1"
+        },
+        "sourceRevision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "controlPlaneConfigurationDigest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "authorityRootFd": {
+          "type": "integer",
+          "minimum": 32,
+          "maximum": 1023
+        },
+        "authorityRootSha256": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "authorityRootSpkiSha256": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "authorityConfigurationFd": {
+          "type": "integer",
+          "minimum": 32,
+          "maximum": 1023
+        },
+        "authorityConfigurationSha256": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "authorityConfigurationDigest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      }
+    },
+    "httpRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "batchOriginal",
+        "nativeEvidence"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.policyCanaryControlledEvidence/v1"
+        },
+        "batchOriginal": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 1048576,
+          "description": "Canonical Python-ASCII JSON bytes of batchOriginal, carried unchanged; not reserialized JSON numbers."
+        },
+        "nativeEvidence": {
+          "$ref": "#/$defs/nativeEvidence"
+        }
+      }
+    },
+    "committedResult": {
+      "type": "object",
+      "description": "Exact retained result, bounded to 2 MiB canonical ASCII bytes; whole response remains at most 4 MiB.",
+      "additionalProperties": false,
+      "required": [
+        "ok",
+        "operation",
+        "requestDigest",
+        "auditEventDigest",
+        "idempotentReplay",
+        "accepted",
+        "results"
+      ],
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "operation": {
+          "const": "policy.canary.evidence-intake"
+        },
+        "requestDigest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "auditEventDigest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "idempotentReplay": {
+          "const": false
+        },
+        "accepted": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 128
+        },
+        "results": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 128,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "recordSha256",
+              "storedOriginal"
+            ],
+            "properties": {
+              "kind": {
+                "enum": [
+                  "assignment",
+                  "canary-revision",
+                  "load-receipt",
+                  "runtime-attestation-handoff",
+                  "custody",
+                  "ingress",
+                  "active-decision",
+                  "shadow-observation",
+                  "instance-revision",
+                  "checkpoint",
+                  "compiler-analysis",
+                  "readiness"
+                ]
+              },
+              "recordSha256": {
+                "type": "string",
+                "pattern": "^sha256:[0-9a-f]{64}$"
+              },
+              "storedOriginal": {
+                "type": "string",
+                "minLength": 2,
+                "maxLength": 4194304
+              }
+            }
+          }
+        }
+      }
+    },
+    "response": {
+      "type": "object",
+      "description": "Intake follows definite signed controlled completion plus exact readback. Inspect is only a control-plane-authenticated observation of retained data: not a fresh protected-writer/read-proof receipt, physical proof, or permission to claim/contact/resend. Unknown is not evidence of absence. Total encoded response is bounded to 4 MiB.",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "requestId",
+        "batchSha256",
+        "status",
+        "result",
+        "recordOriginal"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.policyCanaryControlledEvidenceResult/v1"
+        },
+        "requestId": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        },
+        "batchSha256": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "status": {
+          "enum": [
+            "committed",
+            "unknown"
+          ]
+        },
+        "result": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/committedResult"
+            }
+          ]
+        },
+        "recordOriginal": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 4194304
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "committed"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "result": {
+                "$ref": "#/$defs/committedResult"
+              },
+              "recordOriginal": {
+                "type": "string",
+                "minLength": 2,
+                "maxLength": 4194304
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "result": {
+                "type": "null"
+              },
+              "recordOriginal": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

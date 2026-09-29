@@ -10,7 +10,7 @@ from serverware import authority_complete_query
 from serverware.authority_query_read_work import _ValidationWork
 
 
-SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.307"
+SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.308"
 SCHEMA_VERSION = 9
 CONTRACT_SCHEMA = "serverware.policyAuthorityOperationContract/v3"
 BUSINESS_INTENT_SCHEMA = "serverware.policyAuthorityBusinessIntent/v2"
@@ -1464,6 +1464,7 @@ PHASE2_STORE_TABLES = tuple(sorted({
 }))
 V9_ADDITIONAL_PROTECTED_TABLES = tuple(sorted({
     "policy_shadow_generation_claims",
+    "policy_canary_intake_batches",
     *PHASE2_STORE_TABLES,
     SUCCESSOR_EXECUTION_CUSTODY_TABLE,
     "credential_generations",
@@ -1543,7 +1544,45 @@ _PHASE2_MAINTENANCE_OPAQUE_PROOF_SET = (
 )
 
 
+POLICY_CANARY_INTAKE_TABLES = tuple(sorted({
+    "policy_authority_trusted_keys", "policy_authority_trusted_key_heads", "policy_authority_trusted_key_revocations",
+    "policy_authority_evidence_verifications", "policy_runtime_attestations", "policy_runtime_role_keys",
+    "policy_runtime_role_key_revocations", "policy_runtime_evidence_verifications", "policy_candidate_artifacts",
+    "policy_canaries", "policy_canary_assignments", "policy_canary_assignment_members", "policy_canary_instances",
+    "policy_canary_heads", "policy_canary_revisions", "policy_canary_load_receipts", "policy_shadow_runtime_attestation_handoffs",
+    "policy_shadow_generation_publications", "policy_canary_custody_evidence", "policy_canary_custody_heads",
+    "policy_canary_ingress_observations", "policy_canary_active_decisions", "policy_canary_shadow_observations",
+    "policy_canary_instance_revisions", "policy_canary_instance_heads", "policy_canary_checkpoints",
+    "policy_canary_checkpoint_heads", "policy_canary_checkpoint_aggregates", "policy_compiler_authority_analyses",
+    "policy_canary_readiness", "policy_canary_intake_batches", "policy_activation_rollback_authority_revocations",
+    "policy_high_water", "policy_publications", "policy_activation_preparations", "policy_activation_attempts",
+    "policy_activation_finalizations", "policy_activation_publication_receipts", "policy_activation_approval_consumptions",
+    "policy_activation_heads", "policy_activation_prepared_transitions", "policy_authority_audit_inclusion_receipts",
+    "policy_authority_genesis_finalizations", "policy_authority_genesis_preparations",
+}))
+_CANARY_INTAKE_WRITES = (
+    "policy_authority_evidence_verifications", "policy_runtime_attestations", "policy_runtime_role_keys",
+    "policy_runtime_evidence_verifications", "policy_canaries", "policy_canary_assignments",
+    "policy_canary_assignment_members", "policy_canary_instances", "policy_canary_heads", "policy_canary_revisions",
+    "policy_canary_load_receipts", "policy_shadow_runtime_attestation_handoffs", "policy_canary_custody_evidence",
+    "policy_canary_custody_heads", "policy_canary_ingress_observations", "policy_canary_active_decisions",
+    "policy_canary_shadow_observations", "policy_canary_instance_revisions", "policy_canary_instance_heads",
+    "policy_canary_checkpoints", "policy_canary_checkpoint_heads", "policy_canary_checkpoint_aggregates",
+    "policy_compiler_authority_analyses", "policy_canary_readiness", "policy_canary_intake_batches",
+) + _AUDIT
+_CANARY_INTAKE_HEADS = frozenset({"policy_canary_heads", "policy_canary_custody_heads",
+    "policy_canary_instance_heads", "policy_canary_checkpoint_heads"})
+
+
 _OPERATIONS = {
+    "policy.canary.evidence-intake": _spec(
+        "serverware_policy_authority_policy_canary_evidence_intake",
+        reads=POLICY_CANARY_INTAKE_TABLES, writes=_CANARY_INTAKE_WRITES,
+        mutation_kinds={table: (("INSERT", "UPDATE") if table in _CANARY_INTAKE_HEADS else ("INSERT",))
+            for table in _CANARY_INTAKE_WRITES},
+        proof_primitives=("primary-key-row", "bounded-limit-plus-one"),
+        maximum_query_rows=240, maximum_mutations=96, maximum_work_units=8192,
+    ),
     **{
         "policy.candidate.generation-" + phase: _spec(
             "serverware_policy_authority_policy_candidate_generation_" + phase,

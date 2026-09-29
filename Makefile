@@ -1418,6 +1418,23 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_transition_policy_candidate_publication.py \
 	serverware/authority_transition_policy_candidate_trust.py \
 	serverware/control_plane_policy_candidate.py \
+	serverware/authority_policy_canary.py \
+	serverware/authority_policy_canary_evidence.py \
+	serverware/authority_policy_canary_policy.py \
+	serverware/authority_policy_canary_tables.py \
+	serverware/authority_transition_policy_canary.py \
+	serverware/authority_transition_policy_canary_active.py \
+	serverware/authority_transition_policy_canary_compiler.py \
+	serverware/authority_transition_policy_canary_current.py \
+	serverware/authority_transition_policy_canary_custody.py \
+	serverware/authority_transition_policy_canary_handoff.py \
+	serverware/authority_transition_policy_canary_lifecycle.py \
+	serverware/authority_transition_policy_canary_membership.py \
+	serverware/authority_transition_policy_canary_reads.py \
+	serverware/authority_transition_policy_canary_shadow.py \
+	serverware/authority_transition_policy_canary_state.py \
+	serverware/control_plane_policy_canary.py \
+	serverware/control_plane_policy_canary_startup.py \
 	serverware/portal_policy_candidate.py \
 	serverware/native_service_tokens.py \
 	serverware/response_v2_guest_delivery.py \
@@ -3876,6 +3893,23 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_transition_policy_candidate_publication.py \
 				serverware/authority_transition_policy_candidate_trust.py \
 				serverware/control_plane_policy_candidate.py \
+				serverware/authority_policy_canary.py \
+				serverware/authority_policy_canary_evidence.py \
+				serverware/authority_policy_canary_policy.py \
+				serverware/authority_policy_canary_tables.py \
+				serverware/authority_transition_policy_canary.py \
+				serverware/authority_transition_policy_canary_active.py \
+				serverware/authority_transition_policy_canary_compiler.py \
+				serverware/authority_transition_policy_canary_current.py \
+				serverware/authority_transition_policy_canary_custody.py \
+				serverware/authority_transition_policy_canary_handoff.py \
+				serverware/authority_transition_policy_canary_lifecycle.py \
+				serverware/authority_transition_policy_canary_membership.py \
+				serverware/authority_transition_policy_canary_reads.py \
+				serverware/authority_transition_policy_canary_shadow.py \
+				serverware/authority_transition_policy_canary_state.py \
+				serverware/control_plane_policy_canary.py \
+				serverware/control_plane_policy_canary_startup.py \
 				serverware/portal_policy_candidate.py \
 				serverware/native_service_tokens.py \
 				serverware/response_v2_guest_delivery.py \

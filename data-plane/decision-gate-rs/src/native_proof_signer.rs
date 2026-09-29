@@ -128,6 +128,24 @@ impl CustodySignerTransport {
         prepared.statement()?;self.verify_live()?;Ok(result)
     }
 
+    pub(super) fn canary_evidence(&self, identity: &mut EnclaveRuntimeIdentityV1,
+        tls: &serverware_decision_gate::enclave_runtime_identity_v1::NativeCanaryTlsIdentity,
+        prepared: &serverware_decision_gate::native_canary_evidence_v1::PreparedEvidence, deadline: u64)
+        -> Result<serverware_decision_gate::native_canary_evidence_v1::SignedEvidence, String> {
+        let Self::Native(owner) = self else { return Err("canary refuses unmeasured UDS custody".into()); };
+        self.verify_live()?;
+        prepared.check(tls, deadline)?;
+        owner.active.fetch_update(Ordering::AcqRel, Ordering::Acquire,
+            |active| (active < CUSTODY_MAX_CONCURRENT_CONNECTIONS).then_some(active + 1))
+            .map_err(|_| "native canary custody concurrency bound")?;
+        let _permit = NativeOperationPermit(&owner.active);
+        let binary = current_binary_digest()?;
+        let result = owner.runtime.sign_native_canary(identity, tls, prepared, &binary, deadline).map_err(|e| e.to_string())?;
+        if current_binary_digest()? != binary { return Err("canary executable changed during signing".into()); }
+        prepared.check(tls, deadline)?; result.check()?; self.verify_live()?;
+        Ok(result)
+    }
+
     pub(super) fn target_dispatch_evidence(&self,identity:&mut EnclaveRuntimeIdentityV1,
         prepared:&native_target_dispatch::Prepared<'_>,deadline:u64)
         ->Result<serverware_decision_gate::native_target_dispatch_v1::NativeCaptureEnvelope,String> {

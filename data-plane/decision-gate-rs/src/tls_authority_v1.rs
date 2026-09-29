@@ -63,6 +63,14 @@ struct IssuedLeaf {
     private_key: PrivateKeyDer<'static>,
 }
 
+/// Private, purpose-fixed generated material; only the actual runtime identity
+/// may associate it with a creating process, CA and original lifetime.
+pub(super) struct CanaryClientMaterial {
+    pub(super) identity: reqwest::Identity,
+    pub(super) certificate: Vec<u8>,
+    pub(super) spki: Vec<u8>,
+}
+
 impl TlsAuthorityV1 {
     /// Compatibility loader for the existing, explicitly development PEM path.
     /// Preserve the first supplied certificate DER in the served chain, while
@@ -129,6 +137,27 @@ impl TlsAuthorityV1 {
         pem.push_str(&certificate.pem()); pem.push_str(&self.ca_cert.pem());
         let identity=reqwest::Identity::from_pem(pem.as_bytes()).map_err(|_|"install native audit client identity")?;
         Ok((identity,certificate.der().to_vec()))
+    }
+
+    pub(super) fn canary_client_identity(&self, deployment: &str, instance: &str,
+        not_before: OffsetDateTime, not_after: OffsetDateTime) -> Result<CanaryClientMaterial, String> {
+        let uri = crate::native_canary_evidence_v1::workload_uri(deployment, instance)?;
+        if self.generated_validity != Some((not_before, not_after)) {
+            return Err("canary TLS requires its actual generated CA interval".into());
+        }
+        let key = KeyPair::generate().map_err(|_| "generate dedicated native canary TLS key")?;
+        let mut params = CertificateParams::new(Vec::<String>::new()).map_err(|_| "canary TLS parameters")?;
+        params.distinguished_name = rcgen::DistinguishedName::new();
+        params.not_before = not_before; params.not_after = not_after; params.is_ca = IsCa::ExplicitNoCa;
+        params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
+        params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ClientAuth];
+        params.subject_alt_names = vec![SanType::URI(Ia5String::try_from(uri.as_str()).map_err(|_| "canary workload URI")?)];
+        let certificate = params.signed_by(&key, &self.ca_cert, &self.ca_key).map_err(|_| "sign dedicated canary TLS leaf")?;
+        let spki = key.public_key_der();
+        let mut pem = zeroize::Zeroizing::new(key.serialize_pem());
+        pem.push_str(&certificate.pem()); pem.push_str(&self.ca_cert.pem());
+        let identity = reqwest::Identity::from_pem(pem.as_bytes()).map_err(|_| "install dedicated canary TLS identity")?;
+        Ok(CanaryClientMaterial { identity, certificate: certificate.der().to_vec(), spki })
     }
 
     /// Public SubjectPublicKeyInfo of this owner's actual signing key. The

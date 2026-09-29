@@ -41860,6 +41860,30 @@ def _recompute_policy_canary_checkpoint_aggregate(
             sequence_end + 1,
         ),
     )
+    return _fold_policy_canary_checkpoint_originals(
+        conn, sequence_end=sequence_end, assertions=assertions, historical=historical,
+        contract=contract, snapshots=snapshots, observation_window=observation_window,
+        first_ingress_sequence=first_ingress_sequence, obligation_by_route=obligation_by_route,
+        authorized_cells=authorized_cells, lane_gaps=lane_gaps,
+        custody_by_ingress=custody_by_ingress, runtime_lane_records=runtime_lane_records, rows=rows,
+    )
+
+
+def _fold_policy_canary_checkpoint_originals(
+    conn: Any, *, sequence_end: int, assertions: Mapping[int, Mapping[str, Any]], historical: bool,
+    contract: Mapping[str, Any], snapshots: Mapping[str, Any], observation_window: Mapping[str, Any],
+    first_ingress_sequence: int, obligation_by_route: Mapping[str, Any], authorized_cells: Mapping[str, Any],
+    lane_gaps: int, custody_by_ingress: Mapping[int, Any], runtime_lane_records: Mapping[str, Any],
+    rows: Any, _controlled_state: Any | None = None,
+) -> dict[str, Any]:
+    # Both producers supply original rows. This fold retains the same exact
+    # signature, prefix, pilot, response, latency and Merkle checks. A controlled
+    # caller has no connection and cannot route these reads into runtime SQL.
+    from serverware import authority_transition_policy_canary_reads as controlled
+    controlled.owner(_controlled_state, conn)
+    runtime_verifier = _reverify_policy_runtime_row if _controlled_state is None else _controlled_state.reverify_runtime_row
+    custody_verifier = _reverify_policy_canary_custody_evidence if _controlled_state is None else _controlled_state.reverify_custody_row
+    verified_assertion_boundaries: set[int] = set()
     aggregate = _empty_policy_authority_aggregate()
     aggregate["gaps"] = lane_gaps
     observation_levels: list[bytes | None] = []
@@ -41937,7 +41961,7 @@ def _recompute_policy_canary_checkpoint_aggregate(
             raise PolicyCandidateAuthorityConflictError(
                 "checkpoint ingress wire digest is not exact"
             )
-        _reverify_policy_runtime_row(
+        runtime_verifier(
             conn,
             evidence_kind="ingress_observation",
             item=ingress_record,
@@ -42012,7 +42036,7 @@ def _recompute_policy_canary_checkpoint_aggregate(
                 raise PolicyCandidateAuthorityConflictError(
                     "checkpoint ingress does not bind exact verified custody"
                 )
-            _reverify_policy_canary_custody_evidence(
+            custody_verifier(
                 conn, custody, require_current_head=False
             )
             custody_evidence_digest = str(
@@ -42081,7 +42105,7 @@ def _recompute_policy_canary_checkpoint_aggregate(
             raise PolicyCandidateAuthorityConflictError(
                 "checkpoint active-decision wire is not exact"
             )
-        _reverify_policy_runtime_row(
+        runtime_verifier(
             conn,
             evidence_kind="active_decision",
             item=active_record,
@@ -42159,7 +42183,7 @@ def _recompute_policy_canary_checkpoint_aggregate(
             raise PolicyCandidateAuthorityConflictError(
                 "checkpoint shadow wire does not embed the exact lane evidence"
             )
-        _reverify_policy_runtime_row(
+        runtime_verifier(
             conn,
             evidence_kind="shadow_observation",
             item=shadow_record,
@@ -43210,7 +43234,10 @@ def _verify_policy_checkpoint_heartbeat_contract(
     item: Mapping[str, Any],
     context: Mapping[str, Any],
     heartbeat_wires: list[Any],
+    _controlled_state: Any | None = None,
 ) -> dict[str, Any]:
+    from serverware import authority_transition_policy_canary_reads as controlled
+    controlled.owner(_controlled_state, conn)
     checkpoint_payload = loads(item["checkpoint_payload_json"], None)
     cumulative_range = _candidate_authority_strict_object(
         "checkpoint cumulative range",
@@ -43343,6 +43370,8 @@ def _verify_policy_checkpoint_heartbeat_contract(
         int(window["startsAtUnixNanos"]),
     )
     cumulative_ingress_rows = iter(
+        controlled.joined_observations(_controlled_state, item, item["observation_sequence_end"])
+        if _controlled_state is not None else
         conn.execute(
             "SELECT shadow.observation_sequence, "
             "ingress.ingress_sequence, ingress.ingress_envelope_digest, "
@@ -43470,9 +43499,8 @@ def _verify_policy_checkpoint_heartbeat_contract(
             raise PolicyCandidateAuthorityConflictError(
                 "heartbeat ingress state is not the exact Rust tagged shape"
             )
-        _verify_policy_runtime_evidence(
-            conn,
-            evidence_kind="heartbeat",
+        controlled.runtime_values(
+            _controlled_state, conn, evidence_kind="heartbeat",
             assignment_envelope_digest=item[
                 "assignment_envelope_digest"
             ],
@@ -43592,9 +43620,8 @@ def _verify_policy_checkpoint_heartbeat_contract(
             "checkpoint window closure", seal["windowClosure"]
         )
         closure_payload = closure["payload"]
-        _verify_policy_runtime_evidence(
-            conn,
-            evidence_kind="window_closure",
+        controlled.runtime_values(
+            _controlled_state, conn, evidence_kind="window_closure",
             assignment_envelope_digest=item[
                 "assignment_envelope_digest"
             ],
@@ -43708,7 +43735,10 @@ def stage_policy_canary_checkpoint(
     record: Mapping[str, Any],
     *,
     _connection: Any | None = None,
+    _controlled_state: Any | None = None,
 ) -> dict[str, Any]:
+    from serverware import authority_transition_policy_canary_reads as controlled
+    controlled.owner(_controlled_state, _connection)
     item = _candidate_authority_record(
         "canary checkpoint", record, _POLICY_CANARY_CHECKPOINT_FIELDS
     )
@@ -43853,12 +43883,12 @@ def stage_policy_canary_checkpoint(
     for field in ("canary_id", "member_id", "instance_id", "boot_id"):
         _candidate_authority_text(field, item[field], maximum=256)
 
-    connection_scope = (
-        connect() if _connection is None else contextlib.nullcontext(_connection)
-    )
+    connection_scope = (contextlib.nullcontext(None) if _controlled_state is not None else
+        connect() if _connection is None else contextlib.nullcontext(_connection))
     with connection_scope as conn:
-        _lock_policy_candidate_authority(conn)
-        context = _policy_canary_runtime_context(
+        if _controlled_state is None:
+            _lock_policy_candidate_authority(conn)
+        context = _controlled_state.runtime_context(item) if _controlled_state is not None else _policy_canary_runtime_context(
             conn,
             canary_id=item["canary_id"],
             instance_id=item["instance_id"],
@@ -43882,7 +43912,7 @@ def stage_policy_canary_checkpoint(
                 "runtime_identity_digest",
             ),
         )
-        instance = conn.execute(
+        instance = controlled.instance(_controlled_state, item) if _controlled_state is not None else conn.execute(
             "SELECT instance.assignment_envelope_digest, "
             "instance.assignment_payload_digest, "
             "instance.artifact_envelope_digest, "
@@ -43936,6 +43966,7 @@ def stage_policy_canary_checkpoint(
             item=item,
             context=context,
             heartbeat_wires=heartbeat_wires,
+            _controlled_state=_controlled_state,
         )
         observation_window = loads(
             context["observation_window_json"], None
@@ -43956,8 +43987,8 @@ def stage_policy_canary_checkpoint(
             raise PolicyCandidateAuthorityConflictError(
                 "checkpoint window projection does not match signed window state"
             )
-        recomputed = _recompute_policy_canary_checkpoint_aggregate(
-            conn,
+        recomputed = controlled.recompute(
+            _controlled_state, conn,
             canary_id=item["canary_id"],
             instance_id=item["instance_id"],
             boot_id=item["boot_id"],
@@ -44043,9 +44074,8 @@ def stage_policy_canary_checkpoint(
             raise PolicyCandidateAuthorityConflictError(
                 "checkpoint signed aggregate is not the recomputed evidence prefix"
             )
-        verified = _verify_policy_runtime_evidence(
-            conn,
-            evidence_kind="checkpoint",
+        verified = controlled.runtime_values(
+            _controlled_state, conn, evidence_kind="checkpoint",
             assignment_envelope_digest=item["assignment_envelope_digest"],
             member_ordinal=item["member_ordinal"],
             canary_id=item["canary_id"],
@@ -44066,17 +44096,18 @@ def stage_policy_canary_checkpoint(
                 current_prefix="checkpoint",
             ),
         )
-        _apply_policy_authority_verification(item, verified)
+        controlled.apply_values(item, verified)
         if (
             item["window_ended_at_epoch_ns"]
-            != int(verified.values["issued_at_epoch_ns"])
-            or int(verified.values["issued_at_epoch_ns"])
+            != int(verified["issued_at_epoch_ns"])
+            or int(verified["issued_at_epoch_ns"])
             > recomputed["assignment_seal_deadline_epoch_ns"]
         ):
             raise PolicyCandidateAuthorityConflictError(
                 "checkpoint time is outside its signed observation window"
             )
-        instance_head = conn.execute(
+        instance_head = (_controlled_state.one("policy_canary_instance_heads", optional=True,
+            canary_id=item["canary_id"], instance_id=item["instance_id"], boot_id=item["boot_id"])) if _controlled_state is not None else conn.execute(
             "SELECT canary_id, instance_id, boot_id, head_revision, "
             "head_state_digest, status, updated_at_epoch_ns "
             "FROM policy_canary_instance_heads "
@@ -44087,7 +44118,8 @@ def stage_policy_canary_checkpoint(
             raise PolicyCandidateAuthorityConflictError(
                 "checkpoint append requires an observing instance head"
             )
-        head = conn.execute(
+        head = (_controlled_state.one("policy_canary_checkpoint_heads", optional=True,
+            canary_id=item["canary_id"], instance_id=item["instance_id"], boot_id=item["boot_id"])) if _controlled_state is not None else conn.execute(
             "SELECT canary_id, instance_id, boot_id, "
             "checkpoint_sequence, checkpoint_envelope_digest, "
             "checkpoint_payload_digest, observation_root_digest, "
@@ -44124,7 +44156,7 @@ def stage_policy_canary_checkpoint(
                 raise PolicyCandidateAuthorityConflictError(
                     "checkpoint head is sealed"
                 )
-            previous_checkpoint = conn.execute(
+            previous_checkpoint = controlled.checkpoint(_controlled_state, item, head["checkpoint_sequence"]) if _controlled_state is not None else conn.execute(
                 "SELECT "
                 + _policy_authority_projection(
                     tuple(
@@ -44188,9 +44220,8 @@ def stage_policy_canary_checkpoint(
                 raise PolicyCandidateAuthorityConflictError(
                     "checkpoint is not the exact contiguous successor"
                 )
-        transition_digest = _stage_policy_authority_transition(
-            conn,
-            event_type="policy.canary_checkpoint.staged",
+        transition_digest = controlled.transition(
+            _controlled_state, conn, event_type="policy.canary_checkpoint.staged",
             entity_kind="checkpoint",
             entity_id=(
                 f"{item['canary_id']}/{item['instance_id']}/"
@@ -44231,16 +44262,11 @@ def stage_policy_canary_checkpoint(
             },
             "created_transition_digest": transition_digest,
         }
-        _insert_immutable_candidate_row(
-            conn,
-            table="policy_canary_checkpoints",
-            columns=tuple(checkpoint),
-            values=checkpoint,
-            key_columns=(
-                "canary_id", "instance_id", "boot_id",
-                "checkpoint_sequence",
-            ),
-        )
+        if _controlled_state is None:
+            _insert_immutable_candidate_row(conn, table="policy_canary_checkpoints", columns=tuple(checkpoint), values=checkpoint,
+                key_columns=("canary_id", "instance_id", "boot_id", "checkpoint_sequence"))
+        else:
+            _controlled_state.put("policy_canary_checkpoints", checkpoint)
         aggregate_row = {
             "canary_id": item["canary_id"],
             "instance_id": item["instance_id"],
@@ -44262,6 +44288,14 @@ def stage_policy_canary_checkpoint(
             "sealed_at_epoch_ns":
                 heartbeat_contract["sealed_at_epoch_ns"],
         }
+        if _controlled_state is not None:
+            _controlled_state.put("policy_canary_checkpoint_aggregates", aggregate_row)
+            _controlled_state.put("policy_canary_checkpoint_heads", {
+                **{name: item[name] for name in ("canary_id", "instance_id", "boot_id", "checkpoint_sequence", "checkpoint_envelope_digest",
+                    "checkpoint_payload_digest", "observation_root_digest", "request_sequence_end", "observation_sequence_end")},
+                "sealed": heartbeat_contract["sealed"], "sealed_at_epoch_ns": heartbeat_contract["sealed_at_epoch_ns"],
+                "updated_at_epoch_ns": item["window_ended_at_epoch_ns"]}, replace=True)
+            return dict(checkpoint)
         _insert_immutable_candidate_row(
             conn,
             table="policy_canary_checkpoint_aggregates",
@@ -44769,8 +44803,13 @@ def stage_policy_canary_readiness(
     record: Mapping[str, Any],
     *,
     _connection: Any | None = None,
+    _controlled_state: Any | None = None,
 ) -> dict[str, Any]:
-    _require_postgres_policy_authority("secure canary readiness")
+    from serverware import authority_transition_policy_canary_reads as controlled
+    from serverware import authority_transition_policy_canary_current as current
+    controlled.owner(_controlled_state, _connection)
+    if _controlled_state is None:
+        _require_postgres_policy_authority("secure canary readiness")
     item = _candidate_authority_record(
         "canary readiness", record, _POLICY_CANARY_READINESS_FIELDS
     )
@@ -44829,14 +44868,13 @@ def stage_policy_canary_readiness(
             "readiness coverage, counters, or expiry are inconsistent"
         )
 
-    connection_scope = (
-        connect() if _connection is None else contextlib.nullcontext(_connection)
-    )
+    connection_scope = (contextlib.nullcontext(None) if _controlled_state is not None else
+        connect() if _connection is None else contextlib.nullcontext(_connection))
     with connection_scope as conn:
-        _lock_policy_candidate_authority(conn)
-        verified = _verify_policy_authority_evidence(
-            conn,
-            evidence_kind="readiness",
+        if _controlled_state is None:
+            _lock_policy_candidate_authority(conn)
+        verified = controlled.static_values(
+            _controlled_state, conn, evidence_kind="readiness",
             envelope_json=item["readiness_envelope_json"],
             envelope_digest=item["readiness_envelope_digest"],
             payload_json=item["readiness_payload_json"],
@@ -44850,7 +44888,7 @@ def stage_policy_canary_readiness(
                 current_prefix="readiness",
             ),
         )
-        _apply_policy_authority_verification(item, verified)
+        controlled.apply_values(item, verified)
         readiness_payload = _candidate_authority_strict_object(
             "signed readiness payload",
             loads(item["readiness_payload_json"], None),
@@ -44910,7 +44948,8 @@ def stage_policy_canary_readiness(
             raise PolicyCandidateAuthorityConflictError(
                 "readiness identity, core digest, time, or actor is not exact"
             )
-        canary = conn.execute(
+        canary = ({**_controlled_state.one("policy_canaries", canary_id=item["canary_id"]),
+            **_controlled_state.one("policy_canary_heads", canary_id=item["canary_id"])}) if _controlled_state is not None else conn.execute(
             "SELECT canary.canary_id, canary.policy_id, "
             "canary.artifact_envelope_digest, "
             "canary.artifact_payload_digest, "
@@ -44959,7 +44998,7 @@ def stage_policy_canary_readiness(
             raise PolicyCandidateAuthorityConflictError(
                 "readiness does not bind the exact sealing predecessor head"
             )
-        assignment = conn.execute(
+        assignment = controlled.assignment(_controlled_state, item["canary_id"]) if _controlled_state is not None else conn.execute(
             "SELECT assignment_envelope_digest, assignment_payload_digest, "
             "assignment_revision, fleet_id, "
             "membership_revision, membership_root_digest, "
@@ -44985,7 +45024,8 @@ def stage_policy_canary_readiness(
             raise PolicyCandidateAuthorityConflictError(
                 "readiness does not bind the exact assignment contract"
             )
-        compiler = conn.execute(
+        compiler = (_controlled_state.one("policy_compiler_authority_analyses", optional=True,
+            analysis_envelope_digest=item["compiler_analysis_envelope_digest"])) if _controlled_state is not None else conn.execute(
             "SELECT "
             + _policy_authority_projection(
                 tuple(
@@ -45020,7 +45060,7 @@ def stage_policy_canary_readiness(
             "required_approval_quorum":
                 item["required_approval_quorum"],
         }
-        now_epoch_ns = int(
+        now_epoch_ns = _controlled_state.now if _controlled_state is not None else int(
             _metadata_utcnow(conn).timestamp() * 1_000_000_000
         )
         if (
@@ -45034,9 +45074,8 @@ def stage_policy_canary_readiness(
             raise PolicyCandidateAuthorityConflictError(
                 "readiness compiler authority is not exact and current"
             )
-        _reverify_policy_static_evidence(
-            conn,
-            evidence_kind="compiler_analysis",
+        controlled.static_row(
+            _controlled_state, conn, evidence_kind="compiler_analysis",
             item={
                 field: compiler[field]
                 for field in _POLICY_COMPILER_AUTHORITY_ANALYSIS_FIELDS
@@ -45048,6 +45087,7 @@ def stage_policy_canary_readiness(
             conn,
             canary_id=item["canary_id"],
             expected_instance_count=item["expected_instance_count"],
+            _controlled_state=_controlled_state,
         )
         sealed_exact = (
             "sealed_checkpoint_root_digest",
@@ -45276,7 +45316,7 @@ def stage_policy_canary_readiness(
                 raise PolicyCandidateAuthorityConflictError(
                     "expansion approval context is not exactly derived"
                 )
-        high_water = _committed_policy_authority_row(conn)
+        high_water = _committed_policy_authority_row(conn) if _controlled_state is None else current.committed_policy(_controlled_state)
         if (
             not _policy_row_matches(
                 high_water,
@@ -45318,7 +45358,7 @@ def stage_policy_canary_readiness(
             raise PolicyCandidateAuthorityConflictError(
                 "readiness trust checkpoint is not fresh at issuance"
             )
-        expected_trust_checkpoint = (
+        expected_trust_checkpoint = current.trust_checkpoint(_controlled_state, trust_as_of) if _controlled_state is not None else (
             _policy_authority_current_trust_checkpoint(
                 conn,
                 as_of_epoch_ns=trust_as_of,
@@ -45443,9 +45483,8 @@ def stage_policy_canary_readiness(
             raise PolicyCandidateAuthorityConflictError(
                 "readiness core or activation context is not derived exactly"
             )
-        transition_digest = _stage_policy_authority_transition(
-            conn,
-            event_type="policy.canary_readiness.staged",
+        transition_digest = controlled.transition(
+            _controlled_state, conn, event_type="policy.canary_readiness.staged",
             entity_kind="readiness",
             entity_id=item["readiness_payload_digest"],
             entity_revision=item["designated_ready_revision"],
@@ -45476,6 +45515,9 @@ def stage_policy_canary_readiness(
             "status": "ready",
             "created_transition_digest": transition_digest,
         }
+        if _controlled_state is not None:
+            _controlled_state.put("policy_canary_readiness", readiness)
+            return dict(readiness)
         _insert_immutable_candidate_row(
             conn,
             table="policy_canary_readiness",
@@ -45513,12 +45555,18 @@ def _policy_canary_sealed_evidence(
     preverified_member_aggregates: (
         Mapping[tuple[str, str], Mapping[str, Any]] | None
     ) = None,
+    _controlled_state: Any | None = None,
 ) -> dict[str, Any]:
+    from serverware import authority_transition_policy_canary_reads as controlled
+    controlled.owner(_controlled_state, conn)
+    if _controlled_state is not None and preverified_member_aggregates is not None:
+        raise PolicyCandidateAuthorityConflictError("controlled readiness cannot accept preverified aggregate DTOs")
+    runtime_verifier = _reverify_policy_runtime_row if _controlled_state is None else _controlled_state.reverify_runtime_row
     if expected_instance_count > _POLICY_AUTHORITY_READ_MAX_ROWS:
         raise PolicyCandidateAuthorityConflictError(
             "canary fleet exceeds the fixed evidence bound"
         )
-    contract = conn.execute(
+    contract = controlled.assignment(_controlled_state, canary_id) if _controlled_state is not None else conn.execute(
         "SELECT expected_instance_count, readiness_thresholds_json, "
         "readiness_thresholds_digest, observation_window_json, "
         "observation_window_digest, response_obligations_json, "
@@ -45587,10 +45635,10 @@ def _policy_canary_sealed_evidence(
         raise PolicyCandidateAuthorityConflictError(
             "sealed fleet response obligations are not an exact list"
         )
-    now_epoch_ns = int(
+    now_epoch_ns = _controlled_state.now if _controlled_state is not None else int(
         _metadata_utcnow(conn).timestamp() * 1_000_000_000
     )
-    rows = conn.execute(
+    rows = controlled.sealed_rows(_controlled_state, canary_id) if _controlled_state is not None else conn.execute(
         "SELECT instance.fleet_id, instance.membership_revision, "
         "instance.member_ordinal, instance.member_id, "
         "instance.instance_id, instance.boot_id, "
@@ -45685,7 +45733,7 @@ def _policy_canary_sealed_evidence(
     member_evidence: list[dict[str, Any]] = []
     consumed_preverified_members: set[tuple[str, str]] = set()
     for row in rows:
-        checkpoint_record = conn.execute(
+        checkpoint_record = (controlled.checkpoint(_controlled_state, {**row, "canary_id": canary_id}, row["checkpoint_sequence"])) if _controlled_state is not None else conn.execute(
             "SELECT "
             + _policy_authority_projection(
                 tuple(
@@ -45710,8 +45758,8 @@ def _policy_canary_sealed_evidence(
             )
         member_key = (str(row["instance_id"]), str(row["boot_id"]))
         if preverified_member_aggregates is None:
-            recomputed = _recompute_policy_canary_checkpoint_aggregate(
-                conn,
+            recomputed = controlled.recompute(
+                _controlled_state, conn,
                 canary_id=canary_id,
                 instance_id=member_key[0],
                 boot_id=member_key[1],
@@ -45732,7 +45780,7 @@ def _policy_canary_sealed_evidence(
                 _POLICY_CANARY_CHECKPOINT_AGGREGATE_INPUT_FIELDS
             }
         )
-        runtime_context = _policy_canary_runtime_context(
+        runtime_context = (_controlled_state.runtime_context({**row, "canary_id": canary_id})) if _controlled_state is not None else _policy_canary_runtime_context(
             conn,
             canary_id=canary_id,
             instance_id=str(row["instance_id"]),
@@ -45745,8 +45793,9 @@ def _policy_canary_sealed_evidence(
             heartbeat_wires=loads(
                 checkpoint_record["heartbeat_evidence_json"], None
             ),
+            _controlled_state=_controlled_state,
         )
-        _reverify_policy_runtime_row(
+        runtime_verifier(
             conn,
             evidence_kind="checkpoint",
             item=checkpoint_item,

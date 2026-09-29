@@ -28,6 +28,8 @@ from serverware import authority_oauth_measured_exchange as oauth_measured_excha
 from serverware import authority_oauth_inventory
 from serverware import authority_policy_candidate as policy_candidate
 from serverware import authority_policy_candidate_inventory
+from serverware import authority_policy_canary
+from serverware import authority_policy_canary_tables
 from serverware import authority_complete_query
 from serverware import authority_complete_acquisition
 from serverware import authority_complete_query_batch
@@ -4241,6 +4243,10 @@ class MeasuredPlanner:
                         multiproofs = verified_inputs.before_proofs
                         if operation in policy_candidate.OPERATIONS:
                             authority_policy_candidate_inventory.require_complete_populations(
+                                selected_rows=selected, before_roots=tuple(roots) + tuple(authorization_roots),
+                                work=query_work, deadline_ns=request["deadlineMonotonicNs"], operation=operation)
+                        if operation == authority_policy_canary.OP_INTAKE:
+                            authority_policy_canary_tables.require_complete_populations(
                                 selected_rows=selected, before_roots=tuple(roots) + tuple(authorization_roots),
                                 work=query_work, deadline_ns=request["deadlineMonotonicNs"], operation=operation)
                         if operation == "rbac.binding.mutate":

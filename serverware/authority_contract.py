@@ -10,7 +10,7 @@ from serverware import authority_complete_query
 from serverware.authority_query_read_work import _ValidationWork
 
 
-SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.301"
+SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.302"
 SCHEMA_VERSION = 9
 CONTRACT_SCHEMA = "serverware.policyAuthorityOperationContract/v3"
 BUSINESS_INTENT_SCHEMA = "serverware.policyAuthorityBusinessIntent/v2"
@@ -261,6 +261,7 @@ VERIFIER_READ_TABLES = frozenset({
     "policy_authority_consumed_envelopes",
 })
 _AUDIT_COUNTER_REPLACEMENT_OPERATIONS = frozenset({
+    "policy.candidate.generation-claim", "policy.candidate.generation-publish",
     "policy.activation.prepare", "policy.activation.abort", "policy.genesis.prepare",
     "rbac.binding.mutate", "control-approval.request", "control-approval.decide",
     "control-approval.consume", "control-approval.deny", "jit.request",
@@ -1462,6 +1463,7 @@ PHASE2_STORE_TABLES = tuple(sorted({
     *_PHASE3_ACTIVATION_EVIDENCE,
 }))
 V9_ADDITIONAL_PROTECTED_TABLES = tuple(sorted({
+    "policy_shadow_generation_claims",
     *PHASE2_STORE_TABLES,
     SUCCESSOR_EXECUTION_CUSTODY_TABLE,
     "credential_generations",
@@ -1542,6 +1544,24 @@ _PHASE2_MAINTENANCE_OPAQUE_PROOF_SET = (
 
 
 _OPERATIONS = {
+    **{
+        "policy.candidate.generation-" + phase: _spec(
+            "serverware_policy_authority_policy_candidate_generation_" + phase,
+            reads=("policy_candidate_artifacts", "policy_canary_assignments", "policy_canary_assignment_members",
+                "policy_canary_load_receipts", "policy_shadow_runtime_attestation_handoffs", "policy_runtime_attestations",
+                "policy_runtime_role_keys", "policy_runtime_role_key_revocations", "policy_authority_trusted_keys",
+                "policy_authority_trusted_key_revocations", "policy_authority_evidence_verifications", "policy_canary_heads",
+                "policy_high_water", "rbac_role_bindings", "policy_shadow_generation_claims", "policy_shadow_generation_publications")
+                + (("policy_authority_trusted_key_heads",) if phase == "publish" else ())
+                + _PHASE2_AGGREGATE,
+            writes=("policy_shadow_generation_claims", "metadata_audit_outbox")
+                + (("policy_authority_evidence_verifications", "policy_shadow_generation_publications", "policy_authority_transition_audits")
+                    if phase == "publish" else ()) + _PHASE2_AGGREGATE,
+            webauthn="bound-verified-assertion-receipt" if phase == "claim" else "not-required",
+            proof_primitives=("primary-key-row", "bounded-limit-plus-one", "aggregate-high-water", "capacity-reservation"),
+            maximum_query_rows=240, maximum_mutations=12, maximum_work_units=4096,
+        ) for phase in ("claim", "publish")
+    },
     "policy.activation.prepare": _spec(
         "serverware_policy_authority_prepare",
         reads=_POLICY_COMMON

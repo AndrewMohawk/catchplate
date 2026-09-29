@@ -78,6 +78,8 @@ from serverware.portal_oauth_measured_consent import (
 )
 from serverware.portal_oauth_activation import OAUTH_ACTIVATION_HTML, OAUTH_ACTIVATION_SCRIPT
 from serverware.portal_oauth_setup import OAUTH_SETUP_HTML, OAUTH_SETUP_SCRIPT
+from serverware.portal_policy_candidate import POLICY_CANDIDATE_HTML, POLICY_CANDIDATE_SCRIPT
+from serverware import control_plane_policy_candidate
 from serverware.portal_oauth_reconnect import OAUTH_RECONNECT_HTML, OAUTH_RECONNECT_SCRIPT
 from serverware.portal_registration_handoff import (
     REGISTRATION_HANDOFF_CSS,
@@ -622,6 +624,7 @@ async def bounded_control_plane_request_middleware(request: Request, call_next):
             "/api/data-plane/policy-candidate/artifact",
             "/api/policy/authority/candidates/package",
             "/api/policy/authority/candidates/handoff",
+            *control_plane_policy_candidate.PATHS,
             "/api/data-plane/policy-canary/evidence",
             }
             or setup_canary_request
@@ -649,6 +652,7 @@ async def bounded_control_plane_request_middleware(request: Request, call_next):
                 content={"detail": "authority route requires Content-Length"},
             )
     request_limit = {
+        **{path: control_plane_policy_candidate.MAX_REQUEST for path in control_plane_policy_candidate.PATHS},
         **{path: activation_permission_contract.MAX_REQUEST_BYTES for path in activation_permission_routes.PATHS},
         **{path: handoff_contract.MAX_REQUEST_BYTES for path in (
             handoff_routes.EXECUTE_PATHS | handoff_routes.COMPLETE_PATHS)},
@@ -9034,7 +9038,10 @@ def _post_policy_shadow_generation(
     *,
     body: bytes,
     path: str = _POLICY_SHADOW_GENERATION_PATH,
+    deadline_ns: int | None = None,
 ) -> http_client.HttpJsonResponse:
+    if deadline_ns is not None and (type(deadline_ns) is not int or time.monotonic_ns() >= deadline_ns):
+        raise HTTPException(status_code=409, detail="original candidate handoff deadline expired")
     if (
         not DATA_PLANE_MANAGEMENT_TOKEN
         or len(DATA_PLANE_MANAGEMENT_TOKEN.encode("utf-8")) > 4096
@@ -9069,6 +9076,7 @@ def _post_policy_shadow_generation(
         response = http_client.request_json_bytes(
             request,
             timeout=DECISION_GATE_TIMEOUT_SECONDS,
+            deadline=None if deadline_ns is None else http_client.HttpDeadline(deadline_ns / 1_000_000_000),
             max_bytes=maximum,
             require_https=False,
             expected_statuses=(201,),
@@ -11070,6 +11078,20 @@ async def policy_authority_candidate_handoff(
         publication,
         recovered=False,
     )
+
+
+@app.post(control_plane_policy_candidate.PREFIX + "/draft")
+@app.post(control_plane_policy_candidate.PREFIX + "/options")
+@app.post(control_plane_policy_candidate.PREFIX + "/publish")
+@app.post(control_plane_policy_candidate.PREFIX + "/lookup")
+async def controlled_policy_candidate_generation(request: Request) -> dict[str, Any]:
+    raw = await request.body()
+    try:
+        return await _run_bounded_blocking(_POLICY_AUTHORITY_HANDOFF_SLOTS,
+            control_plane_policy_candidate.on_request, request, raw)
+    except (ValueError, KeyError, TypeError, db.PolicyCandidateAuthorityError, db.MetadataStoreError) as exc:
+        raise HTTPException(status_code=409,
+            detail="Controlled generation unavailable or outcome unknown; inspect exact request ID, never automatically retry") from exc
 
 
 def _policy_shadow_activation_publication_result(
@@ -22824,6 +22846,7 @@ UI_HTML = r"""
           <textarea id="policy-candidate-output" class="policy-result" readonly></textarea>
           <label for="policy-authority-package">Signed staged authority and runtime handoff package</label>
           <textarea id="policy-authority-package" class="policy-result" spellcheck="false"></textarea>
+          __SERVERWARE_POLICY_CANDIDATE_HTML__
           <label for="policy-canary-status">Staged candidate lifecycle</label>
           <textarea id="policy-canary-status" class="output" readonly></textarea>
           <div class="toolbar" style="margin-top:10px">
@@ -26442,6 +26465,7 @@ UI_HTML = r"""
     __SERVERWARE_OAUTH_CONSENT_SCRIPT__
     __SERVERWARE_MEASURED_OAUTH_CONSENT_SCRIPT__
     __SERVERWARE_OAUTH_SETUP_SCRIPT__
+    __SERVERWARE_POLICY_CANDIDATE_SCRIPT__
     __SERVERWARE_OAUTH_RECONNECT_SCRIPT__
     __SERVERWARE_OAUTH_ACTIVATION_SCRIPT__
     initWorkloadIdentityEditor();
@@ -26525,6 +26549,8 @@ for _portal_placeholder, _portal_fragment in (
     ("__SERVERWARE_MEASURED_OAUTH_CONSENT_SCRIPT__", MEASURED_OAUTH_CONSENT_SCRIPT),
     ("__SERVERWARE_OAUTH_SETUP_HTML__", OAUTH_SETUP_HTML),
     ("__SERVERWARE_OAUTH_SETUP_SCRIPT__", OAUTH_SETUP_SCRIPT),
+    ("__SERVERWARE_POLICY_CANDIDATE_HTML__", POLICY_CANDIDATE_HTML),
+    ("__SERVERWARE_POLICY_CANDIDATE_SCRIPT__", POLICY_CANDIDATE_SCRIPT),
     ("__SERVERWARE_OAUTH_RECONNECT_HTML__", OAUTH_RECONNECT_HTML),
     ("__SERVERWARE_OAUTH_RECONNECT_SCRIPT__", OAUTH_RECONNECT_SCRIPT),
     ("__SERVERWARE_OAUTH_ACTIVATION_HTML__", OAUTH_ACTIVATION_HTML),

@@ -1399,6 +1399,17 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/portal_oauth_measured_consent.py \
 	serverware/control_plane_oauth_setup.py \
 	serverware/portal_oauth_setup.py \
+	serverware/authority_policy_candidate.py \
+	serverware/authority_policy_candidate_evidence.py \
+	serverware/authority_policy_candidate_inventory.py \
+	serverware/authority_policy_candidate_policy.py \
+	serverware/authority_transition_policy_candidate.py \
+	serverware/authority_transition_policy_candidate_claim.py \
+	serverware/authority_transition_policy_candidate_context.py \
+	serverware/authority_transition_policy_candidate_publication.py \
+	serverware/authority_transition_policy_candidate_trust.py \
+	serverware/control_plane_policy_candidate.py \
+	serverware/portal_policy_candidate.py \
 	serverware/native_service_tokens.py \
 	serverware/response_v2_guest_delivery.py \
 	scripts/native_broker_kms_parent.py \
@@ -3831,6 +3842,17 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/portal_oauth_measured_consent.py \
 				serverware/control_plane_oauth_setup.py \
 				serverware/portal_oauth_setup.py \
+				serverware/authority_policy_candidate.py \
+				serverware/authority_policy_candidate_evidence.py \
+				serverware/authority_policy_candidate_inventory.py \
+				serverware/authority_policy_candidate_policy.py \
+				serverware/authority_transition_policy_candidate.py \
+				serverware/authority_transition_policy_candidate_claim.py \
+				serverware/authority_transition_policy_candidate_context.py \
+				serverware/authority_transition_policy_candidate_publication.py \
+				serverware/authority_transition_policy_candidate_trust.py \
+				serverware/control_plane_policy_candidate.py \
+				serverware/portal_policy_candidate.py \
 				serverware/native_service_tokens.py \
 				serverware/response_v2_guest_delivery.py \
 				scripts/native_broker_kms_parent.py \
@@ -4373,6 +4395,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-oauth-capture-retirement.v1.schema.json \
 				schemas/oauth-measured-capture-retirement-authority.v1.schema.json \
 				schemas/oauth-measured-reconnect-authority.v1.schema.json \
+				schemas/policy-candidate-generation-intake.v1.schema.json \
 				schemas/native-oauth-measured-setup.v1.schema.json \
 				schemas/native-oauth-measured-reconnect.v1.schema.json \
 				schemas/native-gate-cgroup.v1.schema.json \

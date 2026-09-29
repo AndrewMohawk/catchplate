@@ -12,6 +12,36 @@ def metadata_base_schema_source() -> str:
                 applied_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS policy_shadow_generation_claims (
+                request_id TEXT PRIMARY KEY,
+                replay_id TEXT NOT NULL UNIQUE,
+                management_handoff_id TEXT NOT NULL UNIQUE,
+                actor_id TEXT NOT NULL,
+                configuration_digest TEXT NOT NULL,
+                context_json TEXT NOT NULL,
+                management_request_json TEXT NOT NULL,
+                request_identity_digest TEXT NOT NULL,
+                payload_digest TEXT NOT NULL,
+                request_digest TEXT NOT NULL UNIQUE,
+                issued_at_epoch_ns BIGINT NOT NULL,
+                expires_at_epoch_ns BIGINT NOT NULL,
+                created_at TEXT NOT NULL,
+                publication_envelope_digest TEXT UNIQUE,
+                CHECK (length(request_id) = 36),
+                CHECK (length(replay_id) = 71),
+                CHECK (length(management_handoff_id) = 72),
+                CHECK (length(context_json) BETWEEN 2 AND 8192),
+                CHECK (length(management_request_json) BETWEEN 2 AND 1048576),
+                CHECK (issued_at_epoch_ns > 0),
+                CHECK (expires_at_epoch_ns > issued_at_epoch_ns),
+                CHECK (expires_at_epoch_ns - issued_at_epoch_ns <= 30000000000),
+                CHECK (length(configuration_digest) = 71),
+                CHECK (length(request_identity_digest) = 71),
+                CHECK (length(payload_digest) = 71),
+                CHECK (length(request_digest) = 71),
+                CHECK (publication_envelope_digest IS NULL OR length(publication_envelope_digest) = 71)
+            );
+
             CREATE TABLE IF NOT EXISTS credentials (
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
@@ -4410,10 +4440,6 @@ def metadata_base_schema_source() -> str:
                 verification_receipt_digest TEXT NOT NULL UNIQUE,
                 issued_at_epoch_ns BIGINT NOT NULL,
                 expires_at_epoch_ns BIGINT NOT NULL,
-                created_transition_digest TEXT NOT NULL UNIQUE
-                    REFERENCES policy_authority_transition_audits(
-                        transition_digest
-                    ) ON DELETE RESTRICT,
                 created_transition_digest TEXT NOT NULL UNIQUE
                     REFERENCES policy_authority_transition_audits(transition_digest)
                     ON DELETE RESTRICT,

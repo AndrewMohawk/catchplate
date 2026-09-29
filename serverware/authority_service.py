@@ -65,6 +65,8 @@ from serverware import authority_oauth_measured_exchange as oauth_measured_excha
 from serverware import authority_oauth_measured_exchange_policy as oauth_measured_exchange_policy
 from serverware import authority_oauth_measured_setup as oauth_measured_setup
 from serverware import authority_oauth_setup as oauth_setup
+from serverware import authority_policy_candidate as policy_candidate
+from serverware import authority_policy_candidate_policy as policy_candidate_policy
 from serverware import authority_oauth_measured_setup_policy as oauth_measured_setup_policy
 from serverware import authority_oauth_reconnect as oauth_reconnect
 from serverware import authority_oauth_reconnect_policy as oauth_reconnect_policy
@@ -1185,7 +1187,7 @@ class MeasuredConfiguration:
                 "authority configuration root signature is invalid"
             ) from exc
         if (
-            set(payload) - {evidence_policy.FIELD, transition_policy.FIELD, enrollment_policy.FIELD, oauth_activation_policy.FIELD, oauth_exchange_policy.FIELD, oauth_revocation_policy.FIELD, oauth_refresh_policy.FIELD, credential_currentness_policy.FIELD, oauth_refresh_cleanup_policy.FIELD, oauth_measured_refresh_policy.FIELD, oauth_measured_exchange_policy.FIELD, oauth_measured_setup_policy.FIELD, oauth_reconnect_policy.FIELD, oauth_measured_cleanup_policy.FIELD, oauth_pending_retirement_policy.FIELD, oauth_capture_retirement_policy.FIELD}
+            set(payload) - {evidence_policy.FIELD, transition_policy.FIELD, enrollment_policy.FIELD, oauth_activation_policy.FIELD, oauth_exchange_policy.FIELD, oauth_revocation_policy.FIELD, oauth_refresh_policy.FIELD, credential_currentness_policy.FIELD, oauth_refresh_cleanup_policy.FIELD, oauth_measured_refresh_policy.FIELD, oauth_measured_exchange_policy.FIELD, oauth_measured_setup_policy.FIELD, oauth_reconnect_policy.FIELD, oauth_measured_cleanup_policy.FIELD, oauth_pending_retirement_policy.FIELD, oauth_capture_retirement_policy.FIELD, policy_candidate_policy.FIELD}
                 != required_payload_fields
             or payload.get("schema") != CONFIG_SCHEMA
             or payload.get("sourceRevision") != SOURCE_REVISION
@@ -1277,6 +1279,10 @@ class MeasuredConfiguration:
             oauth_exchange_policy.validate_policy(payload.get(oauth_exchange_policy.FIELD), payload=payload, root_key=root_key)
         except (TypeError, ValueError) as exc:
             raise AuthorityServiceError("authority OAuth exchange policy is invalid") from exc
+        try:
+            policy_candidate_policy.validate_policy(payload.get(policy_candidate_policy.FIELD), payload=payload, root_key=root_key)
+        except (TypeError, ValueError) as exc:
+            raise AuthorityServiceError("authority candidate intake policy is invalid") from exc
         try:
             oauth_refresh_policy.validate_policy(payload.get(oauth_refresh_policy.FIELD), payload=payload, root_key=root_key)
         except (TypeError, ValueError) as exc:
@@ -8184,10 +8190,11 @@ class AuthorityProcess:
             operation_id=operation_id,
         )
         from serverware import authority_publication_approval as publication_approval
-        if operation in (publication_approval.assertion_operations() | oauth_activation.ASSERTION_OPERATIONS | oauth_exchange.ASSERTION_OPERATIONS | oauth_measured_exchange.ASSERTION_OPERATIONS | oauth_measured_setup.ASSERTION_OPERATIONS | oauth_setup.ASSERTION_OPERATIONS | oauth_reconnect.ASSERTION_OPERATIONS):
+        if operation in (publication_approval.assertion_operations() | oauth_activation.ASSERTION_OPERATIONS | oauth_exchange.ASSERTION_OPERATIONS | oauth_measured_exchange.ASSERTION_OPERATIONS | oauth_measured_setup.ASSERTION_OPERATIONS | oauth_setup.ASSERTION_OPERATIONS | oauth_reconnect.ASSERTION_OPERATIONS | policy_candidate.ASSERTION_OPERATIONS):
             # This is a new, independently admitted purpose. Legacy argument
             # adapters and physical-evidence receipt families are not relabeled.
-            selected_profile = (oauth_reconnect if operation in oauth_reconnect.OPERATIONS else
+            selected_profile = (policy_candidate if operation in policy_candidate.OPERATIONS else
+                oauth_reconnect if operation in oauth_reconnect.OPERATIONS else
                 oauth_measured_setup if operation in oauth_measured_setup.OPERATIONS else
                 oauth_setup if operation in oauth_setup.OPERATIONS else
                 oauth_measured_exchange if operation in oauth_measured_exchange.OPERATIONS else
@@ -8216,6 +8223,9 @@ class AuthorityProcess:
                     configuration_payload=self.configuration.payload, root_key=self.configuration.root_key,
                     now_epoch_ns=time.time_ns())
             policy = values["credential_policy"]
+            if operation in policy_candidate.OPERATIONS:
+                policy_candidate_policy.verify_original(operation, values,
+                    configuration_payload=self.configuration.payload, root_key=self.configuration.root_key, now_epoch_ns=time.time_ns())
             classes = {credential.get("authenticatorClass")}
             if "yubikey" in classes:
                 classes.add("hardware")
@@ -8422,6 +8432,12 @@ class AuthorityProcess:
         )
         from serverware import authority_publication_approval as publication_approval
         from serverware import authority_policy_file_approval
+        if operation in policy_candidate.OPERATIONS:
+            original_values = {name: value for name, value in arguments.items() if name != "authn_evidence"}
+            policy_candidate_policy.verify_original(operation, original_values,
+                configuration_payload=self.configuration.payload, root_key=self.configuration.root_key, now_epoch_ns=time.time_ns())
+            if policy_candidate.request_digest(operation, original_values) != request_digest:
+                raise AuthorityServiceError("candidate intake original commitment differs")
         if operation in publication_approval.OPERATIONS | authority_policy_file_approval.OPERATIONS:
             original_digest = publication_approval.request_digest(operation,
                 {name: value for name, value in arguments.items() if name != "authn_evidence"})
@@ -9005,6 +9021,9 @@ class AuthorityProcess:
             oauth_exchange_policy.verify_original(planner_request["operation"],
                 planner_request["typedRequest"]["arguments"], configuration_payload=self.configuration.payload,
                 root_key=self.configuration.root_key, now_epoch_ns=time.time_ns())
+        if planner_request["operation"] in policy_candidate.OPERATIONS:
+            policy_candidate_policy.verify_original(planner_request["operation"], planner_request["typedRequest"]["arguments"],
+                configuration_payload=self.configuration.payload, root_key=self.configuration.root_key, now_epoch_ns=time.time_ns())
         if planner_request["operation"] in oauth_refresh.OPERATIONS:
             oauth_refresh_policy.verify_original(planner_request["operation"],
                 planner_request["typedRequest"]["arguments"], configuration_payload=self.configuration.payload,

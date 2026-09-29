@@ -31979,298 +31979,40 @@ def _verify_policy_authority_evidence(
     record_binding: Mapping[str, Any],
     persist_verification: bool = True,
 ) -> _VerifiedPolicyAuthorityEvidence:
+    from serverware import authority_policy_candidate_evidence as computation
     domain = _POLICY_AUTHORITY_EVIDENCE_DOMAINS.get(evidence_kind)
     if domain is None:
-        raise PolicyCandidateAuthorityError(
-            "policy-authority evidence kind is not supported"
-        )
-    envelope_json, envelope_digest = _candidate_authority_json(
-        "signed envelope", envelope_json, envelope_digest
-    )
-    payload_json, payload_digest = _candidate_authority_json(
-        "signed payload", payload_json, payload_digest, maximum=8 * 1024 * 1024
-    )
-    _candidate_authority_signature_fields(
-        {
-            "signature_algorithm": signature_algorithm,
-            "signing_key_id": signing_key_id,
-            "signature": signature,
-            "signature_digest": signature_digest,
-        }
-    )
-    signing_key_id = _candidate_authority_digest(
-        "signing_key_id", signing_key_id
-    )
-    signature_bytes = _candidate_authority_b64url(
-        "signature", signature, expected_bytes=64
-    )
-    calculated_signature_digest = _candidate_authority_sha256(signature_bytes)
-    if not hmac.compare_digest(calculated_signature_digest, signature_digest):
-        raise PolicyCandidateAuthorityError(
-            "candidate-authority signature digest does not match"
-        )
-
-    envelope = loads(envelope_json, None)
-    payload = loads(payload_json, None)
-    expected_envelope_fields = {
-        "apiVersion",
-        "kind",
-        "canonicalProfile",
-        "signatureDomain",
-        "payload",
-        "payloadSha256",
-        "signatureAlgorithm",
-        "signingKeyId",
-        "signingKeySpkiSha256",
-        "signature",
-    }
-    if not isinstance(envelope, dict) or set(envelope) != expected_envelope_fields:
-        raise PolicyCandidateAuthorityError(
-            "signed envelope fields are not exact"
-        )
-    expected_kind = {
-        "generation_publication": "PolicyShadowGenerationPublication",
-        "generation_runtime_attestation_verification":
-            "PolicyShadowRuntimeAttestationVerification",
-        "shadow_role_authorization":
-            "PolicyShadowRoleAuthorization",
-        "candidate_artifact": "PolicyCandidateArtifact",
-        "canary_assignment": "PolicyShadowAssignment",
-        "canary_state": "PolicyCanaryState",
-        "runtime_attestation": "PolicyRuntimeAttestation",
-        "runtime_role_revocation": "PolicyRuntimeRoleKeyRevocation",
-        "compiler_analysis": "PolicyAuthorityAnalysis",
-        "readiness": "PolicyActivationReadiness",
-        "activation_state": "PolicyActivationState",
-        "publication_receipt": "PolicyPublicationReceipt",
-        "rollback_authority": "PolicyRollbackAuthority",
-        "rollback_authority_revocation":
-            "PolicyRollbackAuthorityRevocation",
-        "audit_inclusion_receipt":
-            "PolicyAuthorityAuditInclusion",
-        "authority_genesis": "PolicyAuthorityGenesis",
-    }[evidence_kind]
-    if (
-        envelope["apiVersion"] != domain
-        or envelope["kind"] != expected_kind
-        or envelope["canonicalProfile"] != _POLICY_AUTHORITY_CANONICAL_PROFILE
-        or envelope["signatureDomain"] != domain
-        or envelope["payload"] != payload
-        or envelope["payloadSha256"] != payload_digest
-        or envelope["signatureAlgorithm"] != signature_algorithm
-        or envelope["signingKeyId"] != signing_key_id
-        or envelope["signature"] != signature
-    ):
-        raise PolicyCandidateAuthorityError(
-            "signed envelope does not exactly bind its payload and signature"
-        )
-    direct_payload = (
-        evidence_kind in _POLICY_SHADOW_DIRECT_STATIC_EVIDENCE_KINDS
-    )
-    if direct_payload:
-        expected_payload_fields = _POLICY_SHADOW_DIRECT_PAYLOAD_FIELDS[
-            evidence_kind
-        ]
-        if (
-            not isinstance(payload, dict)
-            or set(payload) != expected_payload_fields
-        ):
-            raise PolicyCandidateAuthorityError(
-                "direct policy-shadow payload fields are not exact"
-            )
-        issued_at_epoch_ns = _candidate_authority_int(
-            "issuedAtUnixNanos", payload["issuedAtUnixNanos"]
-        )
-        expires_at_epoch_ns = _candidate_authority_int(
-            "expiresAtUnixNanos", payload["expiresAtUnixNanos"]
-        )
-    else:
-        if not isinstance(payload, dict) or set(payload) != {
-            "issuedAtEpochNs",
-            "expiresAtEpochNs",
-            "record",
-        }:
-            raise PolicyCandidateAuthorityError(
-                "control-plane signed payload fields are not exact"
-            )
-        issued_at_epoch_ns = _candidate_authority_int(
-            "issuedAtEpochNs", payload["issuedAtEpochNs"]
-        )
-        expires_at_epoch_ns = _candidate_authority_int(
-            "expiresAtEpochNs", payload["expiresAtEpochNs"]
-        )
-    if expires_at_epoch_ns <= issued_at_epoch_ns:
-        raise PolicyCandidateAuthorityError(
-            "signed evidence expiry does not follow issuance"
-        )
-    normalized_binding = dict(record_binding)
-    _candidate_authority_json_value(
-        "signed record binding", normalized_binding
-    )
-    if direct_payload:
-        _policy_shadow_assert_direct_record_binding(
-            evidence_kind=evidence_kind,
-            payload=payload,
-            record_binding=normalized_binding,
-        )
-    elif payload["record"] != normalized_binding:
-        raise PolicyCandidateAuthorityError(
-            "signed payload record does not match the exact staged record"
-        )
-
+        raise PolicyCandidateAuthorityError("policy-authority evidence kind is not supported")
     key = conn.execute(
-        "SELECT "
-        + _policy_authority_projection(
-            _POLICY_AUTHORITY_TRUSTED_KEY_COLUMNS
-        )
-        + " FROM policy_authority_trusted_keys "
-        "WHERE evidence_kind = ? AND signing_key_id = ? "
-        "AND signature_domain = ?",
+        "SELECT " + _policy_authority_projection(_POLICY_AUTHORITY_TRUSTED_KEY_COLUMNS)
+        + " FROM policy_authority_trusted_keys WHERE evidence_kind = ? AND signing_key_id = ? AND signature_domain = ?",
         (evidence_kind, signing_key_id, domain),
     ).fetchone()
-    if key is None:
-        raise PolicyCandidateAuthorityError(
-            "candidate-authority signing key is not pinned"
-        )
     key_head = conn.execute(
-        "SELECT "
-        + _policy_authority_projection(
-            _POLICY_AUTHORITY_TRUSTED_KEY_HEAD_COLUMNS
-        )
-        + " FROM policy_authority_trusted_key_heads "
-        "WHERE evidence_kind = ?",
-        (evidence_kind,),
+        "SELECT " + _policy_authority_projection(_POLICY_AUTHORITY_TRUSTED_KEY_HEAD_COLUMNS)
+        + " FROM policy_authority_trusted_key_heads WHERE evidence_kind = ?", (evidence_kind,),
     ).fetchone()
-    if (
-        key_head is None
-        or int(key["key_revision"]) != int(key_head["head_key_revision"])
-        or key["signing_key_id"] != key_head["head_signing_key_id"]
-        or key["public_key_digest"] != key_head["head_public_key_digest"]
-    ):
-        raise PolicyCandidateAuthorityError(
-            "candidate-authority signing key is not the exact trusted-key head"
-        )
-    public_key_bytes = _candidate_authority_b64url(
-        "trusted Ed25519 public key",
-        key["public_key_base64url"],
-        expected_bytes=32,
-    )
-    public_key = Ed25519PublicKey.from_public_bytes(public_key_bytes)
-    spki = public_key.public_bytes(
-        serialization.Encoding.DER,
-        serialization.PublicFormat.SubjectPublicKeyInfo,
-    )
-    public_key_spki_digest = _candidate_authority_sha256(spki)
-    if (
-        key["public_key_digest"] != public_key_spki_digest
-        or signing_key_id != public_key_spki_digest
-        or envelope["signingKeySpkiSha256"] != public_key_spki_digest
-    ):
-        raise PolicyCandidateAuthorityError(
-            "candidate-authority signer identity is not its pinned SPKI digest"
-        )
-
-    now = _metadata_utcnow(conn)
-    verified_at_epoch_ns = int(now.timestamp() * 1_000_000_000)
     revocation = conn.execute(
-        "SELECT revocation_sequence, revoked_at_epoch_ns "
-        "FROM policy_authority_trusted_key_revocations "
-        "WHERE evidence_kind = ? AND signing_key_id = ?",
-        (evidence_kind, signing_key_id),
+        "SELECT revocation_sequence, revoked_at_epoch_ns FROM policy_authority_trusted_key_revocations "
+        "WHERE evidence_kind = ? AND signing_key_id = ?", (evidence_kind, signing_key_id),
     ).fetchone()
-    if revocation is not None:
-        raise PolicyCandidateAuthorityError(
-            "candidate-authority signing key is revoked"
-        )
     revocation_head = conn.execute(
-        "SELECT COALESCE(MAX(revocation_sequence), 0) AS sequence "
-        "FROM policy_authority_trusted_key_revocations"
+        "SELECT COALESCE(MAX(revocation_sequence), 0) AS sequence FROM policy_authority_trusted_key_revocations"
     ).fetchone()
-    trusted_key_revocation_sequence = int(revocation_head["sequence"])
-    max_clock_skew_ns = int(key["max_clock_skew_ns"])
-    if (
-        int(key["installed_at_epoch_ns"]) > verified_at_epoch_ns
-        or verified_at_epoch_ns < int(key["not_before_epoch_ns"])
-        or verified_at_epoch_ns >= int(key["not_after_epoch_ns"])
-        or issued_at_epoch_ns < int(key["installed_at_epoch_ns"])
-        or issued_at_epoch_ns < int(key["not_before_epoch_ns"])
-        or expires_at_epoch_ns > int(key["not_after_epoch_ns"])
-        or issued_at_epoch_ns > verified_at_epoch_ns + max_clock_skew_ns
-        or verified_at_epoch_ns - issued_at_epoch_ns
-        > int(key["max_evidence_age_ns"])
-        or expires_at_epoch_ns <= verified_at_epoch_ns
-    ):
-        raise PolicyCandidateAuthorityError(
-            "candidate-authority signing key or evidence is not transaction-time valid"
-        )
-
-    message = b"\0".join(
-        (
-            _POLICY_AUTHORITY_SIGNATURE_FRAME,
-            domain.encode("ascii"),
-            _POLICY_AUTHORITY_CANONICAL_PROFILE.encode("ascii"),
-            payload_json.encode("ascii"),
-        )
-    )
+    now = _metadata_utcnow(conn)
+    delta = now - datetime(1970, 1, 1, tzinfo=timezone.utc)
+    verified_at_epoch_ns = (delta.days * 86400 + delta.seconds) * 1_000_000_000 + delta.microseconds * 1000
     try:
-        public_key.verify(signature_bytes, message)
+        values = computation.verify_static_original(
+            evidence_kind=evidence_kind, envelope_json=envelope_json, envelope_digest=envelope_digest,
+            payload_json=payload_json, payload_digest=payload_digest, signature_algorithm=signature_algorithm,
+            signing_key_id=signing_key_id, signature=signature, signature_digest=signature_digest,
+            record_binding=record_binding, key=None if key is None else dict(key),
+            key_head=None if key_head is None else dict(key_head), revocation=revocation,
+            revocation_sequence=int(revocation_head["sequence"]), verified_at_epoch_ns=verified_at_epoch_ns)
     except InvalidSignature as exc:
-        raise PolicyCandidateAuthorityError(
-            "candidate-authority Ed25519 signature is invalid"
-        ) from exc
-    signature_message_digest = _candidate_authority_sha256(message)
-    binding_json = dumps(normalized_binding)
-    record_binding_digest = _candidate_authority_sha256(
-        b"\0".join(
-            (
-                b"serverware.policyAuthorityRecordBinding/v1",
-                domain.encode("ascii"),
-                binding_json.encode("ascii"),
-            )
-        )
-    )
-    receipt_material = dumps(
-        {
-            "envelopeDigest": envelope_digest,
-            "evidenceKind": evidence_kind,
-            "expiresAtEpochNs": expires_at_epoch_ns,
-            "issuedAtEpochNs": issued_at_epoch_ns,
-            "payloadDigest": payload_digest,
-            "publicKeySpkiSha256": public_key_spki_digest,
-            "recordBindingDigest": record_binding_digest,
-            "signatureDigest": signature_digest,
-            "signatureMessageDigest": signature_message_digest,
-            "signingKeyId": signing_key_id,
-            "trustedKeyRevision": int(key["key_revision"]),
-            "trustedKeyInstalledAtEpochNs": int(key["installed_at_epoch_ns"]),
-            "trustedKeyRevocationSequence":
-                trusted_key_revocation_sequence,
-            "verifiedAtEpochNs": verified_at_epoch_ns,
-        }
-    )
-    verification_receipt_digest = _candidate_authority_sha256(
-        receipt_material.encode("ascii")
-    )
-    values = {
-        "verification_receipt_digest": verification_receipt_digest,
-        "evidence_kind": evidence_kind,
-        "signing_key_id": signing_key_id,
-        "signature_domain": domain,
-        "public_key_digest": public_key_spki_digest,
-        "signature_algorithm": signature_algorithm,
-        "signature": signature,
-        "signature_digest": signature_digest,
-        "record_binding_digest": record_binding_digest,
-        "envelope_digest": envelope_digest,
-        "payload_digest": payload_digest,
-        "signature_message_digest": signature_message_digest,
-        "trusted_key_revision": int(key["key_revision"]),
-        "trusted_key_installed_at_epoch_ns": int(key["installed_at_epoch_ns"]),
-        "trusted_key_revocation_sequence": trusted_key_revocation_sequence,
-        "issued_at_epoch_ns": issued_at_epoch_ns,
-        "expires_at_epoch_ns": expires_at_epoch_ns,
-        "verified_at_epoch_ns": verified_at_epoch_ns,
-    }
+        raise PolicyCandidateAuthorityError("candidate-authority Ed25519 signature is invalid") from exc
+    record_binding_digest = values["record_binding_digest"]
     existing = conn.execute(
         "SELECT "
         + _policy_authority_projection(

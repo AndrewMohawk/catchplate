@@ -26,14 +26,15 @@ Checkpoint: **2026-09-28 — pre-production, source-only.**
 
 ### Current work: native enrollment, workload trust and protected operations
 
-[`.240` source / 23f47f4](https://github.com/example/private-deployment)
-adds [independent caller-to-target bootstrap delegation](docs/native-enrollment-bootstrap-delegation.md),
-native original CSR/possession verification and private admission against the
-actual caller policy/TLS connection and installed target issuer. The target needs
-no prior certificate, but **configured-target existence is not full target-selector
-or packet authorization**. Signing and the request route remain inaccessible.
-Only bounded Cargo lock resolution and checksum-matched dependency-source downloads
-ran; no build, test, application/runtime, NSM or AWS/spend acceptance is claimed.
+[`.241` source / ba6f170](https://github.com/example/private-deployment)
+adds [independent setup authorization and unsigned native packet originals](docs/native-enrollment-bootstrap-setup.md).
+Startup v3 retains a separate setup-authorizer pin; current Snapshot requirements
+and genuine setup/delegation/target admission feed a deterministic seven-field
+**unsigned** packet and data-only SDK extraction. Public requirements are not a
+full target-selector verdict; a signed capability association is not a live
+installation reservation, token or namespace-ownership proof. Signing, the request
+route and installation stay closed. No build, test, runtime, NSM or AWS/spend
+acceptance is claimed.
 
 The four active checkpoints remain partial:
 
@@ -44,10 +45,11 @@ The four active checkpoints remain partial:
 - **H05 · Historical recovery:** [retained intent/proof readmission](docs/control-plane-retained-intent-history.md)
   is source-connected; historical release delivery, migration and older-source replay remain open.
 - **N05 · Native enrollment:** cold authority, caller policy/TLS admission,
-  independent target delegation and original target CSR/possession verification
-  are source-connected. Full target selectors, packet v2 semantics, durable claims/recovery,
-  bootstrap role-5 receiving, request/acquisition, separate issuer grants, SDK/issuer,
-  scoped CA installation and proxy/egress/canaries remain open; signing stays inaccessible.
+  target CSR/possession, separate setup permission, current policy requirements
+  and unsigned packet/SDK extraction are source-connected. Durable claims/recovery,
+  bootstrap role-5 receiving and acquisition, actual issuer/leaf/full target selectors,
+  separate issuer grants, protected installation reservations and scoped
+  installation/proxy/egress/canaries remain open; signing stays inaccessible.
 - **O04 · Protected operations:** [genuine approval verification](docs/control-plane-approval-verification.md)
   is source-connected; protected provider/filesystem effects and durable
   interruption outcomes remain open.
@@ -117,7 +119,7 @@ lists every remaining item and its evidence.
 | --- | --- | --- |
 | H05 | Historical authority across source/configuration/key changes | In progress |
 | N04 | Workload identity provisioning and authenticated channels | In progress |
-| N05 | Native enrollment, verified CA installation and proxy setup | In progress / partial; caller-to-target delegation and native CSR/PoP admission source-connected |
+| N05 | Native enrollment, verified CA installation and proxy setup | In progress / partial; independent setup and unsigned packet/SDK extraction source-connected |
 | N06 | Enclave TLS/proxy execution and credential custody | Todo |
 | O01 | OAuth ownership across deployments and applications | Todo |
 | O02 | Measured provider issuance and interrupted-exchange recovery | Todo |

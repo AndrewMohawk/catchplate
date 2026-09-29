@@ -1,0 +1,142 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-enrollment-bootstrap-delegation.v1.schema.json",
+  "title": "Independently signed native enrollment bootstrap delegation v1",
+  "description": "Canonical compact sorted JSON with Python ensure_ascii=True escaping, plus exactly one LF; envelope at most 32768 bytes and depth at most 4. Signature verification uses an independently pinned dedicated Ed25519 authorizer. Actual target request and independent issuer originals must be reverified; signed runtime/caller pins do not prove live policy or TLS admission. Schema shape is not signature verification, caller authentication, packet semantics, one-use state, issuer permission or enrollment completion. Existing exact-packet assignment semantics remain unchanged.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "delegation", "signatureBase64url"],
+  "properties": {
+    "apiVersion": {"const": "serverware.signedNativeEnrollmentBootstrapDelegation/v1"},
+    "delegation": {"$ref": "#/$defs/delegation"},
+    "signatureBase64url": {
+      "type": "string", "minLength": 86, "maxLength": 86,
+      "pattern": "^[A-Za-z0-9_-]{85}[AQgw](?![\\s\\S])",
+      "description": "Canonical unpadded URL-safe base64 of the raw64 Ed25519 signature over ASCII(serverware/native-enrollment-bootstrap-delegation/v1) || NUL || canonical delegation JSON, without LF."
+    }
+  },
+  "$defs": {
+    "delegation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion", "purpose", "authorizerKeyId", "delegationId", "releaseRecordSha256",
+        "policyHash", "configurationSha256", "runtimeCaCertificateSha256",
+        "runtimeCaSpkiSha256", "ingressLeafCertificateSha256", "clientTrustBundleSha256",
+        "callerPrincipalId", "callerIssuerCertificateSha256", "callerIssuerSpkiSha256",
+        "callerCertificateSha256", "callerSpkiSha256", "ingressHost", "serverInstanceId",
+        "proxyEndpoint", "clientChallengeBase64url", "targetPrincipalId", "targetNonce",
+        "targetRequestSha256", "targetCsrSha256", "targetSpkiSha256", "targetRequestedSans",
+        "targetIssuerCertificateDerSha256", "targetIssuerSpkiSha256", "targetCreatedAtEpochMs",
+        "targetExpiresAtEpochMs", "notBeforeUnixSeconds", "expiresAtUnixSeconds"
+      ],
+      "properties": {
+        "apiVersion": {"const": "serverware.nativeEnrollmentBootstrapDelegation/v1"},
+        "purpose": {"const": "native-enrollment-bootstrap"},
+        "authorizerKeyId": {
+          "$ref": "#/$defs/sha256",
+          "description": "SHA-256 of actual dedicated authorizer DER SPKI, not its independent PEM-file pin. Must differ from runtime CA, caller issuer/key and target issuer/key SPKI pins. Actual current policy/response-key separation still requires the cold owner."
+        },
+        "delegationId": {"$ref": "#/$defs/nonzeroRaw32"},
+        "releaseRecordSha256": {"$ref": "#/$defs/sha256"},
+        "policyHash": {"$ref": "#/$defs/sha256"},
+        "configurationSha256": {"$ref": "#/$defs/sha256"},
+        "runtimeCaCertificateSha256": {"$ref": "#/$defs/sha256"},
+        "runtimeCaSpkiSha256": {"$ref": "#/$defs/sha256"},
+        "ingressLeafCertificateSha256": {"$ref": "#/$defs/sha256"},
+        "clientTrustBundleSha256": {
+          "$ref": "#/$defs/sha256",
+          "description": "Existing native ordered framed-DER trust-set commitment, never the standard PEM bundle diagnostic or a legacy runtimeManifestDigest alias."
+        },
+        "callerPrincipalId": {
+          "type": "string", "minLength": 1, "maxLength": 256,
+          "pattern": "^[!-~]+(?![\\s\\S])",
+          "description": "Existing native assignment caller syntax; this caller must separately authenticate with its own existing identity, not the fresh target CSR key."
+        },
+        "callerIssuerCertificateSha256": {"$ref": "#/$defs/sha256"},
+        "callerIssuerSpkiSha256": {"$ref": "#/$defs/sha256"},
+        "callerCertificateSha256": {"$ref": "#/$defs/sha256"},
+        "callerSpkiSha256": {"$ref": "#/$defs/sha256"},
+        "ingressHost": {
+          "type": "string", "minLength": 1, "maxLength": 253,
+          "description": "Canonical lowercase DNS or literal IP under the existing native assignment host rules."
+        },
+        "serverInstanceId": {
+          "type": "string", "minLength": 1, "maxLength": 256,
+          "description": "Canonical SPIFFE URI under the existing native assignment instance rules; query, fragment, user information and port are not accepted."
+        },
+        "proxyEndpoint": {
+          "type": "string", "minLength": 3, "maxLength": 64,
+          "description": "Canonical literal unicast SocketAddr with nonzero port under the existing native assignment rules. Native vsock admission compares this independent cold public TCP pin; it is not an observed serving TCP endpoint or a client IP inferred from a CID."
+        },
+        "clientChallengeBase64url": {"$ref": "#/$defs/nonzeroRaw32"},
+        "targetPrincipalId": {
+          "type": "string", "minLength": 1, "maxLength": 1024,
+          "description": "Exact .239 target principal, additionally bounded to 1024 UTF-8 bytes. Unicode is retained semantically and encoded with lowercase ensure_ascii=True escapes, including surrogate pairs. This is not the authenticated caller identity."
+        },
+        "targetNonce": {
+          "type": "string", "minLength": 32, "maxLength": 256,
+          "pattern": "^[A-Za-z0-9_-]{32,256}(?![\\s\\S])"
+        },
+        "targetRequestSha256": {
+          "$ref": "#/$defs/sha256",
+          "description": "SHA-256 of the exact original .239 canonical signed request bytes, which have no trailing LF and are at most 65536 bytes."
+        },
+        "targetCsrSha256": {
+          "$ref": "#/$defs/sha256",
+          "description": "SHA-256 of exact canonical CSR PEM bytes, at most 16384 bytes; genuine CSR and same-key request signature must be verified independently."
+        },
+        "targetSpkiSha256": {"$ref": "#/$defs/sha256"},
+        "targetRequestedSans": {"$ref": "#/$defs/requestedSans"},
+        "targetIssuerCertificateDerSha256": {
+          "$ref": "#/$defs/sha256",
+          "description": "SHA-256 of the independently selected target issuer's actual DER certificate, not PEM-file bytes; it need not be the caller issuer."
+        },
+        "targetIssuerSpkiSha256": {"$ref": "#/$defs/sha256"},
+        "targetCreatedAtEpochMs": {
+          "type": "integer", "minimum": 1, "maximum": 9223372036854,
+          "description": "Must equal the genuine target request's exact original creation time."
+        },
+        "targetExpiresAtEpochMs": {
+          "type": "integer", "minimum": 1, "maximum": 9223372036854,
+          "description": "Must equal the genuine target request's exact expiry; positive request lifetime at most 300000 ms and entirely inside actual issuer validity."
+        },
+        "notBeforeUnixSeconds": {
+          "type": "integer", "minimum": 1, "maximum": 9223372036,
+          "description": "Current positive delegation interval, at most 300 seconds, wholly contained in the exact target request interval. Fractional target endpoints are not rounded outward."
+        },
+        "expiresAtUnixSeconds": {
+          "type": "integer", "minimum": 1, "maximum": 9223372036,
+          "description": "Strictly later than notBeforeUnixSeconds; original expiry is not renewed by processing, re-admission or a new wrapper."
+        }
+      }
+    },
+    "sha256": {
+      "type": "string", "minLength": 71, "maxLength": 71,
+      "pattern": "^sha256:(?!0{64})[0-9a-f]{64}(?![\\s\\S])"
+    },
+    "nonzeroRaw32": {
+      "type": "string", "minLength": 43, "maxLength": 43,
+      "pattern": "^(?!A{43}(?![\\s\\S]))[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048](?![\\s\\S])"
+    },
+    "requestedSans": {
+      "type": "object", "additionalProperties": false,
+      "required": ["dnsNames", "uris"],
+      "description": "Exact .239 target SAN profile: strictly sorted unique lists, 1..8 combined entries and at most 8192 aggregate UTF-8 bytes, existing canonical DNS/URI rules. Lists equal the genuine CSR and signed target request; no policy entitlement is inferred.",
+      "anyOf": [
+        {"properties": {"dnsNames": {"minItems": 1}}},
+        {"properties": {"uris": {"minItems": 1}}}
+      ],
+      "properties": {
+        "dnsNames": {
+          "type": "array", "maxItems": 8, "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1, "maxLength": 253}
+        },
+        "uris": {
+          "type": "array", "maxItems": 8, "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1, "maxLength": 2048}
+        }
+      }
+    }
+  }
+}

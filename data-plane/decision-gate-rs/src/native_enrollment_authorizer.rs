@@ -9,6 +9,9 @@ use serverware_decision_gate::{canonical_json_bytes, decode_canonical_json};
 #[path = "native_enrollment_assignment_v1.rs"]
 mod assignment;
 pub(super) use assignment::VerifiedNativeEnrollmentAssignmentV1;
+#[path = "native_enrollment_bootstrap_delegation_v1.rs"]
+mod bootstrap_delegation;
+pub(super) use bootstrap_delegation::VerifiedNativeEnrollmentBootstrapDelegationV1;
 
 use ed25519_dalek::VerifyingKey;
 use sha2::{Digest as _, Sha256};
@@ -148,6 +151,24 @@ impl NativeEnrollmentAuthorizer {
             &self.public_key_pem_sha256, packet_original, deadline)?;
         if verified.payload().proxy_endpoint != self.proxy_endpoint {
             return Err("native enrollment assignment differs from the cold proxy endpoint".to_owned());
+        }
+        self.require_policy_key(actual_policy_key)?;
+        verified.check(deadline)?;
+        Ok(verified)
+    }
+
+    /// A separate original delegation purpose, not an assignment fallback.
+    /// Target CSR/issuer possession and actual caller/runtime/TLS admission are
+    /// still required; this method accepts neither a copied result nor a key.
+    pub(super) fn verify_bootstrap_delegation(&self, delegation_original: &[u8],
+        target_request_original: &[u8], actual_policy_key: &VerifyingKey, deadline: u64)
+        -> Result<VerifiedNativeEnrollmentBootstrapDelegationV1, String> {
+        self.require_policy_key(actual_policy_key)?;
+        let deadline = deadline.min(self.deadline);
+        let mut verified = bootstrap_delegation::verify_original(delegation_original,
+            &self.public_key_pem, &self.public_key_pem_sha256, target_request_original, deadline)?;
+        if verified.payload().proxy_endpoint != self.proxy_endpoint {
+            return Err("native bootstrap delegation differs from the cold proxy endpoint".to_owned());
         }
         self.require_policy_key(actual_policy_key)?;
         verified.check(deadline)?;

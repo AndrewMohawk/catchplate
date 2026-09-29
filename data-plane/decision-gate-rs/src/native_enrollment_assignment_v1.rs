@@ -108,7 +108,7 @@ fn require(condition: bool, error: &'static str) -> Result<(), String> {
 
 fn digest(original: &[u8]) -> [u8; 32] { Sha256::digest(original).into() }
 
-fn digest_field(value: &str) -> Result<[u8; 32], String> {
+pub(crate) fn digest_field(value: &str) -> Result<[u8; 32], String> {
     let encoded = value.strip_prefix("sha256:").ok_or("native assignment digest prefix differs")?;
     require(encoded.len() == 64 && encoded.bytes().all(|byte|
         byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
@@ -119,7 +119,7 @@ fn digest_field(value: &str) -> Result<[u8; 32], String> {
     Ok(decoded)
 }
 
-fn fixed_base64<const N: usize>(value: &str) -> Result<[u8; N], String> {
+pub(crate) fn fixed_base64<const N: usize>(value: &str) -> Result<[u8; N], String> {
     require(value.len() == (N * 4 + 2) / 3, "native assignment base64url size differs")?;
     let raw = URL_SAFE_NO_PAD.decode(value).map_err(|_| "native assignment base64url is invalid")?;
     require(raw.len() == N && URL_SAFE_NO_PAD.encode(&raw) == value,
@@ -127,13 +127,13 @@ fn fixed_base64<const N: usize>(value: &str) -> Result<[u8; N], String> {
     raw.try_into().map_err(|_| "native assignment base64url size differs".to_owned())
 }
 
-fn nonzero_base64(value: &str) -> Result<[u8; 32], String> {
+pub(crate) fn nonzero_base64(value: &str) -> Result<[u8; 32], String> {
     let decoded = fixed_base64(value)?;
     require(decoded != [0; 32], "native assignment identity or challenge must be nonzero")?;
     Ok(decoded)
 }
 
-fn authorizer(original: &[u8], expected: &str) -> Result<(VerifyingKey, [u8; 32]), String> {
+pub(crate) fn authorizer(original: &[u8], expected: &str) -> Result<(VerifyingKey, [u8; 32]), String> {
     require(!original.is_empty() && original.len() <= MAX_ORIGINAL_BYTES
         && digest(original) == digest_field(expected)?, "native assignment authorizer pin differs")?;
     let text = std::str::from_utf8(original).map_err(|_| "native assignment authorizer PEM is invalid")?;
@@ -205,7 +205,7 @@ fn dns(value: &str) -> bool {
                 || byte.is_ascii_digit() || byte == b'-'))
 }
 
-fn host(value: &str) -> bool {
+pub(crate) fn host(value: &str) -> bool {
     !value.is_empty() && value.len() <= 253 && value.is_ascii()
         && value == value.to_ascii_lowercase() && !value.contains('*') && !value.ends_with('.')
         && match value.parse::<IpAddr>() {
@@ -214,7 +214,7 @@ fn host(value: &str) -> bool {
         }
 }
 
-fn instance(value: &str) -> bool {
+pub(crate) fn instance(value: &str) -> bool {
     if !value.starts_with("spiffe://") || value.len() > 256 || !value.is_ascii()
         || value.bytes().any(|byte| byte.is_ascii_whitespace() || byte.is_ascii_control()) {
         return false;
@@ -249,7 +249,7 @@ fn endpoint(value: &str) -> Result<SocketAddr, String> {
     Ok(address)
 }
 
-fn sample() -> Result<(u64, u64), String> {
+pub(crate) fn sample() -> Result<(u64, u64), String> {
     let wall = SystemTime::now().duration_since(UNIX_EPOCH)
         .map_err(|_| "native assignment wall clock is invalid")?.as_nanos();
     let wall = u64::try_from(wall).map_err(|_| "native assignment wall clock overflow")?;

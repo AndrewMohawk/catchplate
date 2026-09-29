@@ -42,17 +42,17 @@ fn clocks() -> Result<(u64, u64), String> {
     Ok((wall, boot))
 }
 
-struct AdmissionClock {
+pub(super) struct AdmissionClock {
     pid: u32,
     operation_deadline: Instant,
-    deadline: u64,
+    pub(super) deadline: u64,
     last_wall: u64,
     last_boot: u64,
     valid_until_ms: u128,
 }
 
 impl AdmissionClock {
-    fn open(operation_deadline: Instant, runtime_deadline: u64, cold_deadline: u64)
+    pub(super) fn open(operation_deadline: Instant, runtime_deadline: u64, cold_deadline: u64)
         -> Result<Self, String> {
         // BOOTTIME precedes the Instant remaining sample, so conversion cannot
         // add intervening work back to the caller's original request allowance.
@@ -69,7 +69,7 @@ impl AdmissionClock {
             last_wall: wall, last_boot: boot, valid_until_ms: u128::MAX })
     }
 
-    fn check(&mut self, deadline: u64) -> Result<u128, String> {
+    pub(super) fn check(&mut self, deadline: u64) -> Result<u128, String> {
         self.deadline = self.deadline.min(deadline);
         let (wall, boot) = clocks()?;
         require(self.pid != 0 && std::process::id() == self.pid
@@ -89,7 +89,7 @@ impl AdmissionClock {
         Ok((wall / 1_000_000) as u128)
     }
 
-    fn restrict_until(&mut self, until_ms: u128) -> Result<(), String> {
+    pub(super) fn restrict_until(&mut self, until_ms: u128) -> Result<(), String> {
         self.valid_until_ms = self.valid_until_ms.min(until_ms);
         self.check(self.deadline).map(|_| ())
     }
@@ -116,7 +116,7 @@ pub(super) struct NativeEnrollmentAdmission<'a> {
     stopped: bool,
 }
 
-fn current_snapshot_original(state: &GateState) -> Result<Arc<Snapshot>, String> {
+pub(super) fn current_snapshot_original(state: &GateState) -> Result<Arc<Snapshot>, String> {
     require(state.is_production && policy_trust_is_fresh(state),
         "native enrollment requires current production policy trust")?;
     let current = state.snapshot.try_read()
@@ -124,14 +124,14 @@ fn current_snapshot_original(state: &GateState) -> Result<Arc<Snapshot>, String>
     Ok(Arc::clone(&current))
 }
 
-fn principal_expiry(principal: &Principal) -> Option<u128> {
+pub(super) fn principal_expiry(principal: &Principal) -> Option<u128> {
     match &principal.proxy_authorization {
         Some(ProxyAuthorizationPolicy::BearerToken { expires_at_ms, .. }) => *expires_at_ms,
         _ => None,
     }
 }
 
-fn request_challenge(head: &RequestHead) -> Result<[u8; 32], String> {
+pub(super) fn request_challenge(head: &RequestHead) -> Result<[u8; 32], String> {
     require(head.headers.len() <= MAX_REQUEST_HEADER_COUNT
         && head.raw_header_count <= MAX_REQUEST_HEADER_COUNT as u64,
         "native enrollment request header count exceeds its bound")?;
@@ -236,9 +236,48 @@ fn server_identity(ingress: &QuotedMutualTlsIngressV1, connection: &ServerConnec
         "native enrollment assigned host/instance differs from actual server TLS")
 }
 
-fn tls_originals(state: &GateState, head: &RequestHead, stream: &DirectProxyStream,
+/// Comparison inputs only, never evidence, policy permission or signing custody.
+/// Each private caller retains and checks its genuine original assignment or
+/// delegation before deriving this temporary view and after the real TLS join.
+pub(super) struct NativeEnrollmentPeerScope<'a> {
+    pub(super) release_record_sha256: [u8; 32],
+    pub(super) policy_hash: [u8; 32],
+    pub(super) configuration_sha256: [u8; 32],
+    pub(super) runtime_ca_certificate_sha256: [u8; 32],
+    pub(super) runtime_ca_spki_sha256: [u8; 32],
+    pub(super) ingress_leaf_certificate_sha256: [u8; 32],
+    pub(super) client_trust_bundle_sha256: [u8; 32],
+    pub(super) workload_issuer_certificate_sha256: [u8; 32],
+    pub(super) workload_issuer_spki_sha256: [u8; 32],
+    pub(super) client_certificate_sha256: [u8; 32],
+    pub(super) client_spki_sha256: [u8; 32],
+    pub(super) ingress_host: &'a str,
+    pub(super) server_instance_id: &'a str,
+    pub(super) proxy_endpoint: std::net::SocketAddr,
+    pub(super) client_challenge: [u8; 32],
+}
+
+impl<'a> NativeEnrollmentPeerScope<'a> {
+    fn assignment(assignment: &'a VerifiedNativeEnrollmentAssignmentV1) -> Self {
+        let p = assignment.payload();
+        Self { release_record_sha256: p.release_record_sha256, policy_hash: p.policy_hash,
+            configuration_sha256: p.configuration_sha256,
+            runtime_ca_certificate_sha256: p.runtime_ca_certificate_sha256,
+            runtime_ca_spki_sha256: p.runtime_ca_spki_sha256,
+            ingress_leaf_certificate_sha256: p.ingress_leaf_certificate_sha256,
+            client_trust_bundle_sha256: p.client_trust_bundle_sha256,
+            workload_issuer_certificate_sha256: p.workload_issuer_certificate_sha256,
+            workload_issuer_spki_sha256: p.workload_issuer_spki_sha256,
+            client_certificate_sha256: p.client_certificate_sha256,
+            client_spki_sha256: p.client_spki_sha256,
+            ingress_host: &p.ingress_host, server_instance_id: &p.server_instance_id,
+            proxy_endpoint: p.proxy_endpoint, client_challenge: p.client_challenge }
+    }
+}
+
+pub(super) fn tls_originals(state: &GateState, head: &RequestHead, stream: &DirectProxyStream,
     trusted_mtls: &TrustedMtlsEvidence, configuration: &Arc<ProxyIngressTlsConfig>,
-    authorizer: &NativeEnrollmentAuthorizer, assignment: &VerifiedNativeEnrollmentAssignmentV1,
+    authorizer: &NativeEnrollmentAuthorizer, p: &NativeEnrollmentPeerScope<'_>,
     challenge: [u8; 32], deadline: u64, wall_ms: u128) -> Result<([u8; 32], u128), String> {
     let DirectProxyStream::MutualTls(tls) = stream else {
         return Err("native enrollment requires the actual mutual TLS stream".to_owned());
@@ -275,11 +314,10 @@ fn tls_originals(state: &GateState, head: &RequestHead, stream: &DirectProxyStre
         && configuration.client_trust_certificates.iter().zip(generated.client_trust_certificates())
             .all(|(actual, original)| actual.as_ref() == original.as_slice()),
         "native enrollment configuration differs from its generated native originals")?;
-    let p = assignment.payload();
-    require(state.server_instance_id.as_deref() == Some(p.server_instance_id.as_str())
+    require(state.server_instance_id.as_deref() == Some(p.server_instance_id)
         && p.proxy_endpoint == authorizer.proxy_endpoint() && p.client_challenge == challenge,
         "native enrollment assignment differs from cold endpoint or actual instance/challenge")?;
-    server_identity(ingress, &tls.conn, &p.ingress_host, &p.server_instance_id)?;
+    server_identity(ingress, &tls.conn, p.ingress_host, p.server_instance_id)?;
     let chain = tls.conn.peer_certificates().ok_or("native enrollment actual client chain is absent")?;
     require(!chain.is_empty() && chain.len() <= MAX_CHAIN_CERTIFICATES,
         "native enrollment client chain count exceeds its bound")?;
@@ -334,8 +372,8 @@ fn tls_originals(state: &GateState, head: &RequestHead, stream: &DirectProxyStre
     Ok((nonce, valid_until_ms))
 }
 
-fn runtime_originals(state: &GateState, configuration: &ProxyIngressTlsConfig,
-    lifetime: &NativeRuntimeLifetimeV1, assignment: &VerifiedNativeEnrollmentAssignmentV1,
+pub(super) fn runtime_originals(state: &GateState, configuration: &ProxyIngressTlsConfig,
+    lifetime: &NativeRuntimeLifetimeV1, p: &NativeEnrollmentPeerScope<'_>,
     deadline: u64) -> Result<(), String> {
     lifetime.check()?;
     let ingress = configuration.native_owner.as_ref()
@@ -350,7 +388,6 @@ fn runtime_originals(state: &GateState, configuration: &ProxyIngressTlsConfig,
     };
     require(identity.deadline() == lifetime.deadline(),
         "native enrollment actual identity and runtime deadlines differ")?;
-    let p = assignment.payload();
     identity.verify_enrollment_scope(ingress, p.release_record_sha256, p.policy_hash,
         p.configuration_sha256, p.runtime_ca_certificate_sha256, p.runtime_ca_spki_sha256,
         p.ingress_leaf_certificate_sha256, p.client_trust_bundle_sha256, deadline)?;
@@ -379,10 +416,11 @@ impl NativeEnrollmentAdmission<'_> {
             && hash(self.packet_original) == self.assignment.payload().packet_sha256
             && request_challenge(self.head)? == self.challenge,
             "native enrollment assignment/request originals changed")?;
+        let scope = NativeEnrollmentPeerScope::assignment(&self.assignment);
         runtime_originals(self.state, self.configuration, self.lifetime,
-            &self.assignment, self.clock.deadline)?;
+            &scope, self.clock.deadline)?;
         let (nonce, valid_until_ms) = tls_originals(self.state, self.head, self.stream, self.trusted_mtls,
-            self.configuration, self.authorizer, &self.assignment,
+            self.configuration, self.authorizer, &scope,
             self.challenge, self.clock.deadline, wall_ms)?;
         require(nonce == self.nonce, "native enrollment actual TLS session changed")?;
         self.clock.restrict_until(valid_until_ms.min(
@@ -434,9 +472,10 @@ pub(super) fn admit<'a>(state: &'a GateState, head: &'a RequestHead,
     assignment.check(clock.deadline)?;
     require(native_lease_digest_bytes(&snapshot.hash)? == assignment.payload().policy_hash,
         "native enrollment assignment does not select the actual current policy")?;
-    runtime_originals(state, configuration, lifetime, &assignment, clock.deadline)?;
+    let scope = NativeEnrollmentPeerScope::assignment(&assignment);
+    runtime_originals(state, configuration, lifetime, &scope, clock.deadline)?;
     let (nonce, valid_until_ms) = tls_originals(state, head, stream, trusted_mtls, configuration, authorizer,
-        &assignment, challenge, clock.deadline, wall_ms)?;
+        &scope, challenge, clock.deadline, wall_ms)?;
     clock.restrict_until(valid_until_ms.min(assignment.payload().expires_at_unix_seconds as u128 * 1000))?;
     let wall_ms = clock.check(assignment.deadline())?;
     let authentication = ConnectAuthentication::capture_at_with_mtls(&snapshot,

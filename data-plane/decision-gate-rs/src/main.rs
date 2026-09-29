@@ -21,6 +21,8 @@ mod native_public_identity;
 mod native_ingress_attestation;
 mod native_enrollment_authorizer;
 mod native_enrollment_admission;
+mod native_workload_bootstrap_request_v1;
+mod native_enrollment_bootstrap_admission;
 mod workload_identity_trust;
 mod workload_identity_trust_crypto;
 

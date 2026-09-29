@@ -1256,6 +1256,11 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_publication_approval.py \
 	serverware/authority_transition_publication_approval.py \
 	serverware/control_plane_publication_authorization.py \
+	serverware/authority_policy_file_approval.py \
+	serverware/authority_transition_policy_file_approval.py \
+	serverware/control_plane_policy_file_publication.py \
+	serverware/control_plane_policy_file_authority.py \
+	serverware/authority_store/policy_file_read_sql.py \
 	serverware/portal_admin_token_publication.py \
 	serverware/control_plane_workload_identity_routes.py \
 	serverware/portal_workload_issuance.py \
@@ -3528,6 +3533,11 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_publication_approval.py \
 				serverware/authority_transition_publication_approval.py \
 				serverware/control_plane_publication_authorization.py \
+				serverware/authority_policy_file_approval.py \
+				serverware/authority_transition_policy_file_approval.py \
+				serverware/control_plane_policy_file_publication.py \
+				serverware/control_plane_policy_file_authority.py \
+				serverware/authority_store/policy_file_read_sql.py \
 				serverware/portal_admin_token_publication.py \
 				serverware/control_plane_workload_identity_routes.py \
 				serverware/portal_workload_issuance.py \
@@ -3836,6 +3846,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-execution-manifest.v1.schema.json \
 				schemas/native-workload-start-authorization.v1.schema.json \
 				schemas/control-plane-publication-approval.v1.schema.json \
+				schemas/control-plane-policy-file-publication.v1.schema.json \
 				schemas/native-ca-installation-receipt.v1.schema.json \
 				schemas/native-enrollment-authorizer.v1.schema.json \
 				schemas/workload-identity-bootstrap-request.v1.schema.json \

@@ -3771,6 +3771,16 @@ def _decode_raw_policy(path: Path, payload: bytes) -> dict[str, Any]:
     return loaded
 
 
+def _require_policy_file_publication_settled(path, *, identity=None):
+    if Path(path) != POLICY_BUNDLE_PATH:
+        return  # Independently selected non-active diagnostic loaders are unchanged.
+    try:
+        from serverware.control_plane_policy_file_publication import require_loadable
+        require_loadable(path, expected_identity=identity)
+    except Exception:
+        raise PolicyBundleError("active policy publication is unresolved or unavailable") from None
+
+
 class PolicyBundleLoader:
     def __init__(self, path: Path):
         self.path = path
@@ -3781,6 +3791,7 @@ class PolicyBundleLoader:
 
     def _load_locked(self) -> PolicySnapshot | None:
         try:
+            _require_policy_file_publication_settled(self.path)
             path_stat = _read_secure_file_stat(
                 self.path,
                 label="policy bundle",
@@ -3823,6 +3834,7 @@ class PolicyBundleLoader:
                 _recheck_policy_path_identity(self.path, cached_identity)
                 _recheck_policy_signing_trust(cached_trust_identity)
                 verify_policy_high_water(cached_snapshot)
+                _require_policy_file_publication_settled(self.path, identity=cached_identity)
             except PolicyBundleError:
                 self.cache = None
                 return None
@@ -3841,6 +3853,7 @@ class PolicyBundleLoader:
             _recheck_policy_path_identity(self.path, identity)
             _recheck_policy_signing_trust(signing_trust.identity)
             verify_policy_high_water(snapshot)
+            _require_policy_file_publication_settled(self.path, identity=identity)
         except (
             OSError,
             UnicodeError,

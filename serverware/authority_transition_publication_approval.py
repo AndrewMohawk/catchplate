@@ -20,7 +20,7 @@ from serverware import authority_transition_webauthn as assertion_rows
 
 def _values(operation, arguments):
     try:
-        return profile.arguments(operation, arguments, typed=True)
+        return profile.operation_profile(operation).arguments(operation, arguments, typed=True)
     except (TypeError, ValueError) as exc:
         raise core.TransitionKernelError("publication approval input is not closed") from exc
 
@@ -39,11 +39,11 @@ def _public(row):
     return {**shared._control_public(row), "request": json.loads(row["request_json"])}
 
 
-def _authn(row):
+def _authn(row, purpose):
     value = shared._canonical_stored_mapping(row["approval_authn"], "publication approval provenance")
     if (set(value) != {"schema", "requestDigest", "requestEvidenceDigest", "credentialPolicy",
             "decisionDigest", "decisionEvidenceDigest", "consumptionDigest", "consumptionEvidenceDigest", "completionSha256"}
-            or value.get("schema") != "serverware.publicationApprovalProvenance/v1"):
+            or value.get("schema") != purpose.PROVENANCE_SCHEMA):
         raise core.TransitionKernelError("approval was not created by the publication profile")
     return value
 
@@ -55,29 +55,30 @@ class PublicationApprovalKernel:
 
     @property
     def handler(self):
-        return "serverware_policy_authority_publication_approval_" + self.operation.split(".")[-1]
+        return profile.operation_profile(self.operation).HANDLER_PREFIX + self.operation.split(".")[-1]
 
     @property
     def program_id(self):
         return core.transition_program_id(self.operation, self.handler)
 
     def queries(self, *, arguments, database_now, request_digest):
-        if self.operation in profile.ASSERTION_OPERATIONS:
+        if self.operation in profile.assertion_operations():
             raise core.TransitionKernelError("publication operation requires pinned assertion originals")
         return self._queries(arguments, database_now, request_digest, None)
 
     def queries_with_evidence(self, *, arguments, database_now, request_digest, evidence):
-        if self.operation not in profile.ASSERTION_OPERATIONS:
+        if self.operation not in profile.assertion_operations():
             raise core.TransitionKernelError("publication settlement cannot acquire assertion authority")
         return self._queries(arguments, database_now, request_digest, evidence)
 
     def _queries(self, arguments, database_now, request_digest, evidence):
+        purpose = profile.operation_profile(self.operation)
         del database_now
         values = _values(self.operation, arguments)
         item_id = _approval_id(self.operation, values, request_digest)
         queries = [shared._query(operation=self.operation, name="approval", table="control_plane_approvals", key={"id": item_id}),
             shared._role_query(self.operation, "actor_role", values["actor_id"])]
-        if self.operation == profile.PREFIX + "request":
+        if self.operation == purpose.PREFIX + "request":
             queries.append(shared._aggregate_query(self.operation, "approval_capacity", "control-plane-approvals", "global"))
         else:
             # Only exact fields of an already authenticated selected row become
@@ -95,15 +96,16 @@ class PublicationApprovalKernel:
         return tuple(queries)
 
     def transition(self, context):
+        purpose = profile.operation_profile(self.operation)
         values = _values(self.operation, context.arguments)
         item_id = _approval_id(self.operation, values, context.request_digest)
         actor = values["actor_id"]
-        shared._require_role(context, subject_id=actor, required_role="admin")
+        shared._require_role(context, subject_id=actor, required_role=purpose.ROLE)
         now = context.database_now.astimezone(timezone.utc)
         now_s = now.isoformat()
         mutations = []
         evidence = context.verified_webauthn_evidence
-        if self.operation in profile.ASSERTION_OPERATIONS:
+        if self.operation in purpose.ASSERTION_OPERATIONS:
             if evidence is None:
                 raise core.TransitionKernelError("publication requires independently pinned assertion verification")
             credential = shared._row(context.exact("webauthn_credentials", {"id": evidence["credentialRecordId"]}), "credential")
@@ -125,16 +127,16 @@ class PublicationApprovalKernel:
         elif evidence is not None:
             raise core.TransitionKernelError("settlement is not a new assertion grant")
 
-        if self.operation == profile.PREFIX + "request":
+        if self.operation == purpose.PREFIX + "request":
             selected = context.exact("control_plane_approvals", {"id": item_id})
             if selected.get("present") is not False:
                 raise core.TransitionKernelError("publication request identity is already used")
             expires = now + timedelta(seconds=300)
-            provenance = {"schema": "serverware.publicationApprovalProvenance/v1", "requestDigest": context.request_digest,
+            provenance = {"schema": purpose.PROVENANCE_SCHEMA, "requestDigest": context.request_digest,
                 "requestEvidenceDigest": evidence["verifiedAssertionReceiptDigest"], "credentialPolicy": values["credential_policy"],
                 "decisionDigest": None, "decisionEvidenceDigest": None, "consumptionDigest": None, "consumptionEvidenceDigest": None,
                 "completionSha256": None}
-            row = {"id": item_id, "action": profile.ACTION, "resource_id": profile.RESOURCE,
+            row = {"id": item_id, "action": values["action"], "resource_id": purpose.RESOURCE,
                 "payload_digest": values["payload_digest"], "requester_id": actor, "request_json": profile.canonical(values["request"]).decode("ascii"),
                 "status": "pending", "requested_at": now_s, "expires_at": expires.isoformat(), "approved_by": None,
                 "approved_at": None, "consumed_by": None, "consumed_at": None, "decision_note": None,
@@ -144,8 +146,8 @@ class PublicationApprovalKernel:
                 minimum_expiry_epoch_ns=shared._database_epoch_ns(expires)))
         else:
             selected, row = _row(context, item_id)
-            provenance = _authn(row)
-            if (row["action"] != profile.ACTION or row["resource_id"] != profile.RESOURCE
+            provenance = _authn(row, purpose)
+            if (row["action"] != values["action"] or row["resource_id"] != purpose.RESOURCE
                     or row["payload_digest"] != values["payload_digest"]
                     or row["request_json"] != profile.canonical(values["request"]).decode("ascii")
                     or row["expires_at"] <= now_s):
@@ -153,7 +155,7 @@ class PublicationApprovalKernel:
             if self.operation.endswith("decide"):
                 if row["status"] != "pending" or row["requester_id"] == actor:
                     raise core.TransitionKernelError("publication approval is not a fresh distinct-person decision")
-                shared._require_role(context, subject_id=row["requester_id"], required_role="admin")
+                shared._require_role(context, subject_id=row["requester_id"], required_role=purpose.ROLE)
                 if values["credential_policy"] != provenance["credentialPolicy"]:
                     raise core.TransitionKernelError("publication credential policy drifted")
                 provenance = {**provenance, "decisionDigest": context.request_digest,
@@ -163,7 +165,7 @@ class PublicationApprovalKernel:
             else:
                 if row["requester_id"] != actor or row["approved_by"] in (None, actor):
                     raise core.TransitionKernelError("publication approval requester/approver binding changed")
-                shared._require_role(context, subject_id=row["approved_by"], required_role="admin")
+                shared._require_role(context, subject_id=row["approved_by"], required_role=purpose.ROLE)
                 if self.operation.endswith("consume"):
                     if row["status"] != "approved" or provenance["consumptionDigest"] is not None:
                         raise core.TransitionKernelError("publication approval was already consumed or is not approved")
@@ -181,10 +183,10 @@ class PublicationApprovalKernel:
             row = {**row, "approval_authn": profile.canonical(provenance).decode("ascii")}
         mutations.append(core.mutation(operation=self.operation, selected=selected, row=row))
         audit, audit_digest, replay = shared._audit_mutations(context,
-            event_type="control_plane.publication_approval." + self.operation.split(".")[-1], actor_type="admin", actor_id=actor,
+            event_type=purpose.AUDIT_PREFIX + self.operation.split(".")[-1], actor_type="admin", actor_id=actor,
             event={"schema": "serverware.publicationApprovalAudit/v1", "operation": self.operation,
                 "requestDigest": context.request_digest, "approvalId": item_id, "actorId": actor,
-                "action": profile.ACTION, "resourceId": profile.RESOURCE, "payloadDigest": values["payload_digest"],
+                "action": values["action"], "resourceId": purpose.RESOURCE, "payloadDigest": values["payload_digest"],
                 "request": values["request"], "provenance": provenance})
         if replay:
             raise core.TransitionKernelError("publication audit cannot replay a file effect")

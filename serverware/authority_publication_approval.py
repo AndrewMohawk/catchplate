@@ -8,6 +8,10 @@ from collections.abc import Mapping
 
 ACTION = "control_plane.token.publication.resolve"
 RESOURCE = "admin-token"
+ROLE = "admin"
+PROVENANCE_SCHEMA = "serverware.publicationApprovalProvenance/v1"
+HANDLER_PREFIX = "serverware_policy_authority_publication_approval_"
+AUDIT_PREFIX = "control_plane.publication_approval."
 OPTIONS_SCHEMA = "serverware.publicationApprovalOptions/v1"
 PREFIX = "publication-approval."
 OPERATIONS = frozenset(PREFIX + phase for phase in ("request", "decide", "consume", "settle"))
@@ -16,6 +20,26 @@ FIELDS = frozenset({"action", "resource_id", "payload_digest", "actor_id", "requ
 POLICY_FIELDS = frozenset({"rpId", "origins", "allowedAuthenticatorClasses", "hardwareRequired", "requireUserPresence", "requireUserVerification", "maxAssertionAgeSeconds"})
 REQUEST_FIELDS = frozenset({"token", "publicationId", "intentSha256", "outcome", "reason"})
 _DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
+
+
+def action(value):
+    request_binding(value)
+    return ACTION
+
+
+def operation_profile(operation):
+    if operation in OPERATIONS:
+        from serverware import authority_publication_approval
+        return authority_publication_approval
+    from serverware import authority_policy_file_approval
+    if operation in authority_policy_file_approval.OPERATIONS:
+        return authority_policy_file_approval
+    raise ValueError("approval operation has no source-fixed purpose")
+
+
+def assertion_operations():
+    from serverware import authority_policy_file_approval
+    return ASSERTION_OPERATIONS | authority_policy_file_approval.ASSERTION_OPERATIONS
 
 
 def canonical(value):

@@ -1468,6 +1468,17 @@ class PublicationApprovalWebAuthnOptions(BaseModel):
     approval_id: str | None = Field(default=None, alias="approvalId", max_length=64)
 
 
+class PolicyFileApprovalWebAuthnOptions(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    api_version: Literal["serverware.policyFileApprovalOptions/v1"] = Field(alias="apiVersion")
+    action: Literal["policy.file.materialize", "policy.file.resolve"]
+    resource_id: Literal["active-policy-file"] = Field(alias="resourceId")
+    payload_digest: str = Field(alias="payloadDigest", pattern=r"^sha256:[0-9a-f]{64}$")
+    request_binding: dict[str, Any] = Field(alias="request")
+    approval_id: str | None = Field(default=None, alias="approvalId", max_length=64)
+
+
 class AuthorityWebAuthnChallengeRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
@@ -1844,6 +1855,28 @@ class AdminTokenRotateRequest(BaseModel):
 
 
 class AdminTokenPublicationResolveRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    publication_id: str = Field(alias="publicationId", pattern=r"^[0-9a-f]{32}$")
+    intent_sha256: str = Field(alias="intentSha256", pattern=r"^sha256:[0-9a-f]{64}$")
+    outcome: Literal["finalize-installed", "abandon-uninstalled"]
+    reason: str | None = Field(max_length=500)
+    mfa: dict[str, Any]
+
+
+class PolicyFileMaterializeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    publication_id: str = Field(alias="publicationId", pattern=r"^[0-9a-f]{32}$")
+    policy_original: str = Field(alias="policyOriginalBase64url", min_length=1, max_length=22369622,
+        pattern=r"^[A-Za-z0-9_-]+$")
+    artifact_sha256: str = Field(alias="artifactEnvelopeSha256", pattern=r"^sha256:[0-9a-f]{64}$")
+    expected_file_sha256: str | None = Field(alias="expectedFileSha256", pattern=r"^sha256:[0-9a-f]{64}$")
+    reason: str | None = Field(max_length=500)
+    mfa: dict[str, Any]
+
+
+class PolicyFileResolveRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     publication_id: str = Field(alias="publicationId", pattern=r"^[0-9a-f]{32}$")
@@ -4741,7 +4774,7 @@ def _control_plane_mutation_authn_policy() -> dict[str, Any]:
 
 def _control_plane_mutation_webauthn_required(action: str) -> bool:
     # A separate recovery purpose; this does not alter ordinary mutation policy.
-    return action == "control_plane.token.publication.resolve" or CONTROL_PLANE_MUTATION_WEBAUTHN_REQUIRED
+    return action in {"control_plane.token.publication.resolve", "policy.file.materialize", "policy.file.resolve"} or CONTROL_PLANE_MUTATION_WEBAUTHN_REQUIRED
 
 
 def _require_control_plane_mutation_mfa(
@@ -4811,7 +4844,7 @@ def _require_control_plane_mutation_mfa(
 
 
 def _control_plane_two_person_required(action: str) -> bool:
-    if action in {"workload.identity.issue", "control_plane.token.publication.resolve"}:
+    if action in {"workload.identity.issue", "control_plane.token.publication.resolve", "policy.file.materialize", "policy.file.resolve"}:
         return True
     if not CONTROL_PLANE_TWO_PERSON_REQUIRED:
         return False
@@ -7692,6 +7725,8 @@ def control_plane_mutation_webauthn_options(
         )
     ),
 ) -> dict[str, Any]:
+    if payload.action in {"policy.file.materialize", "policy.file.resolve"}:
+        raise HTTPException(status_code=409, detail="use the explicit policy-file approval options endpoint")
     if type(payload) is PublicationApprovalWebAuthnOptions:
         from serverware import control_plane_publication_authorization as publication_authority
         try:
@@ -7978,6 +8013,63 @@ def control_plane_admin_token_publication(
         }) from exc
 
 
+@app.get("/api/policy/file-publication")
+def policy_file_publication_observe(
+    response: Response,
+    identity: AdminIdentity = Depends(require_role("policy_publisher")),
+) -> dict[str, Any]:
+    from serverware.control_plane_policy_file_publication import inspect_publication
+
+    del identity
+    response.headers["Cache-Control"] = "no-store"
+    try:
+        return inspect_publication()
+    except Exception:
+        raise HTTPException(status_code=409, detail={"error": "policy_file_publication_not_inspectable",
+            "automaticRetryAllowed": False}) from None
+
+
+@app.post("/api/policy/file-publication/webauthn/options")
+def policy_file_publication_options(
+    request: Request, response: Response, payload: PolicyFileApprovalWebAuthnOptions,
+    identity: AdminIdentity = Depends(require_role("policy_publisher")),
+) -> dict[str, Any]:
+    from serverware import control_plane_publication_authorization as publication_authority
+
+    del identity  # The concrete ceremony reauthenticates and checks CSRF.
+    response.headers["Cache-Control"] = "no-store"
+    try:
+        return publication_authority.options_on_request(request, payload, purpose="policy-file")
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=409, detail="policy-file options unavailable; no automatic retry") from None
+
+
+@app.post("/api/policy/file-publication/materialize")
+def policy_file_publication_materialize(
+    request: Request, response: Response, payload: PolicyFileMaterializeRequest,
+    identity: AdminIdentity = Depends(require_role("policy_publisher")),
+) -> dict[str, Any]:
+    from serverware.control_plane_policy_file_publication import execute
+
+    del identity
+    response.headers["Cache-Control"] = "no-store"
+    return execute(request, payload)
+
+
+@app.post("/api/policy/file-publication/resolve")
+def policy_file_publication_resolve(
+    request: Request, response: Response, payload: PolicyFileResolveRequest,
+    identity: AdminIdentity = Depends(require_role("policy_publisher")),
+) -> dict[str, Any]:
+    from serverware.control_plane_policy_file_publication import execute
+
+    del identity
+    response.headers["Cache-Control"] = "no-store"
+    return execute(request, payload, resolving=True)
+
+
 @app.get("/api/control-plane/approvals")
 def control_plane_approvals(
     status: str | None = None,
@@ -8043,6 +8135,14 @@ def control_plane_approval_approve(
             status_code=409,
             detail=f"control-plane approval is already {approval['status']}",
         )
+    if approval["action"] in {"policy.file.materialize", "policy.file.resolve"}:
+        from serverware import control_plane_publication_authorization as publication_authority
+        try:
+            return publication_authority.decide_on_request(request, approval_id, decision, purpose="policy-file")
+        except HTTPException:
+            raise
+        except Exception:
+            raise HTTPException(status_code=409, detail="policy-file approval decision uncertain; no automatic retry") from None
     if approval["action"] == "control_plane.token.publication.resolve":
         from serverware import control_plane_custody_startup
         if (control_plane_custody_startup.require_started() is not None

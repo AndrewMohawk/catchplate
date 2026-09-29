@@ -7982,10 +7982,10 @@ class AuthorityProcess:
             operation_id=operation_id,
         )
         from serverware import authority_publication_approval as publication_approval
-        if operation in publication_approval.ASSERTION_OPERATIONS:
+        if operation in publication_approval.assertion_operations():
             # This is a new, independently admitted purpose. Legacy argument
             # adapters and physical-evidence receipt families are not relabeled.
-            values = publication_approval.arguments(operation,
+            values = publication_approval.operation_profile(operation).arguments(operation,
                 {name: value for name, value in arguments.items() if name != "authn_evidence"})
             policy = values["credential_policy"]
             classes = {credential.get("authenticatorClass")}
@@ -8184,7 +8184,8 @@ class AuthorityProcess:
             _canonical(authorization_material),
         )
         from serverware import authority_publication_approval as publication_approval
-        if operation in publication_approval.OPERATIONS:
+        from serverware import authority_policy_file_approval
+        if operation in publication_approval.OPERATIONS | authority_policy_file_approval.OPERATIONS:
             original_digest = publication_approval.request_digest(operation,
                 {name: value for name, value in arguments.items() if name != "authn_evidence"})
             if original_digest != request_digest:

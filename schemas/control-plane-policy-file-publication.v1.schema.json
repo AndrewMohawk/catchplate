@@ -1,0 +1,129 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.dev/schemas/control-plane-policy-file-publication.v1.schema.json",
+  "title": "Committed policy file materialization and explicit interruption resolution",
+  "description": "Data-only closed HTTP shapes. Actual signed policy originals, current committed authority, physical WebAuthn, distinct actors, definite commits, protected file identities and nonrenewing deadlines are verified by retained source owners, not this schema. No activation, signing, high-water advance or retry permission.",
+  "anyOf": [
+    {"$ref": "#/$defs/materializeRequest"}, {"$ref": "#/$defs/resolveRequest"},
+    {"$ref": "#/$defs/optionsRequest"}, {"$ref": "#/$defs/optionsResponse"},
+    {"$ref": "#/$defs/result"}, {"$ref": "#/$defs/observation"}
+  ],
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "nullableDigest": {"anyOf": [{"$ref": "#/$defs/digest"}, {"type": "null"}]},
+    "id": {"type": "string", "pattern": "^[0-9a-f]{32}$"},
+    "approvalId": {"type": "string", "pattern": "^[0-9a-f-]{36}$"},
+    "reason": {"type": ["string", "null"], "maxLength": 500},
+    "outcome": {"enum": ["finalize-installed", "abandon-uninstalled"]},
+    "assertion": {"$ref": "control-plane-publication-approval.v1.schema.json#/$defs/assertion"},
+    "mfa": {
+      "type": "object", "additionalProperties": false, "required": ["publicationProfile", "assertion"],
+      "properties": {
+        "publicationProfile": {"const": "serverware.policyFileApprovalOptions/v1"},
+        "assertion": {"$ref": "#/$defs/assertion"},
+        "approvalId": {"$ref": "#/$defs/approvalId"}
+      },
+      "description": "Complete canonical MFA <=16 KiB. A fresh raw assertion is required for each request, decision and consumption. The distinct approver omits approvalId; continuing requester supplies the exact approved row ID."
+    },
+    "materializeBinding": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "publicationId", "reason", "policyOriginalSha256", "policyId", "sequence", "rollbackEpoch", "policyHash", "policyBundleSha256", "artifactEnvelopeSha256", "expectedFileSha256"],
+      "properties": {
+        "kind": {"const": "materialize"}, "publicationId": {"$ref": "#/$defs/id"}, "reason": {"$ref": "#/$defs/reason"},
+        "policyOriginalSha256": {"$ref": "#/$defs/digest"},
+        "policyId": {"type": "string", "minLength": 1, "maxLength": 256, "description": "Source also enforces UTF-8 <=256 bytes."},
+        "sequence": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807},
+        "rollbackEpoch": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807},
+        "policyHash": {"$ref": "#/$defs/digest"}, "policyBundleSha256": {"$ref": "#/$defs/digest"},
+        "artifactEnvelopeSha256": {"$ref": "#/$defs/digest"}, "expectedFileSha256": {"$ref": "#/$defs/nullableDigest"}
+      }
+    },
+    "resolveBinding": {
+      "type": "object", "additionalProperties": false, "required": ["kind", "publicationId", "intentSha256", "outcome", "reason"],
+      "properties": {
+        "kind": {"const": "resolve"}, "publicationId": {"$ref": "#/$defs/id"},
+        "intentSha256": {"$ref": "#/$defs/digest"}, "outcome": {"$ref": "#/$defs/outcome"}, "reason": {"$ref": "#/$defs/reason"}
+      }
+    },
+    "binding": {
+      "oneOf": [{"$ref": "#/$defs/materializeBinding"}, {"$ref": "#/$defs/resolveBinding"}],
+      "description": "Canonical sorted compact ensure_ascii=True JSON without LF, <=8192 bytes. payloadDigest is its exact SHA256."
+    },
+    "materializeRequest": {
+      "type": "object", "additionalProperties": false,
+      "required": ["publicationId", "policyOriginalBase64url", "artifactEnvelopeSha256", "expectedFileSha256", "reason", "mfa"],
+      "properties": {
+        "publicationId": {"$ref": "#/$defs/id"},
+        "policyOriginalBase64url": {"type": "string", "minLength": 1, "maxLength": 22369622, "pattern": "^[A-Za-z0-9_-]+$", "description": "Canonical unpadded base64url of exact signed JSON PolicyBundle original, decoded <=16 MiB. Source derives and genuinely verifies all materialize binding fields; it does not recreate a signed original from a success object."},
+        "artifactEnvelopeSha256": {"$ref": "#/$defs/digest"}, "expectedFileSha256": {"$ref": "#/$defs/nullableDigest"},
+        "reason": {"$ref": "#/$defs/reason"}, "mfa": {"$ref": "#/$defs/mfa"}
+      }
+    },
+    "resolveRequest": {
+      "type": "object", "additionalProperties": false, "required": ["publicationId", "intentSha256", "outcome", "reason", "mfa"],
+      "properties": {
+        "publicationId": {"$ref": "#/$defs/id"}, "intentSha256": {"$ref": "#/$defs/digest"},
+        "outcome": {"$ref": "#/$defs/outcome"}, "reason": {"$ref": "#/$defs/reason"}, "mfa": {"$ref": "#/$defs/mfa"}
+      }
+    },
+    "optionsRequest": {
+      "type": "object", "additionalProperties": false, "required": ["apiVersion", "action", "resourceId", "payloadDigest", "request"],
+      "properties": {
+        "apiVersion": {"const": "serverware.policyFileApprovalOptions/v1"},
+        "action": {"enum": ["policy.file.materialize", "policy.file.resolve"]},
+        "resourceId": {"const": "active-policy-file"}, "payloadDigest": {"$ref": "#/$defs/digest"},
+        "request": {"$ref": "#/$defs/binding"},
+        "approvalId": {"anyOf": [{"$ref": "#/$defs/approvalId"}, {"type": "null"}]}
+      },
+      "description": "POST dedicated policy-file options route. Source checks action against binding kind. Absent/null approvalId selects request; actual actor and selected row determine decide versus consume."
+    },
+    "optionsResponse": {
+      "type": "object", "additionalProperties": false, "required": ["publicKey", "serverware"],
+      "properties": {
+        "publicKey": {"$ref": "control-plane-publication-approval.v1.schema.json#/$defs/optionsResponse/properties/publicKey"},
+        "serverware": {
+          "type": "object", "additionalProperties": false,
+          "required": ["schema", "operation", "operationId", "challengeId", "credentialRecordId", "payloadDigest", "expiresAt"],
+          "properties": {
+            "schema": {"const": "serverware.policyFileApprovalOptions/v1"},
+            "operation": {"enum": ["policy-file-approval.request", "policy-file-approval.decide", "policy-file-approval.consume"]},
+            "operationId": {"$ref": "#/$defs/digest"}, "challengeId": {"$ref": "#/$defs/digest"},
+            "credentialRecordId": {"type": "string", "minLength": 1, "maxLength": 256},
+            "payloadDigest": {"$ref": "#/$defs/digest"},
+            "expiresAt": {"type": "string", "minLength": 1, "format": "date-time"}
+          }
+        }
+      }
+    },
+    "result": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "ok", "publicationId", "completionSha256", "outcome", "automaticRetryAllowed"],
+      "properties": {
+        "schema": {"const": "serverware.policyFilePublicationResult/v1"}, "ok": {"const": true},
+        "publicationId": {"$ref": "#/$defs/id"}, "completionSha256": {"$ref": "#/$defs/digest"},
+        "outcome": {"enum": ["materialized", "finalize-installed", "abandon-uninstalled"]}, "automaticRetryAllowed": {"const": false}
+      }
+    },
+    "observation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "fileSha256", "automaticRetryAllowed", "incompletePublicationId", "terminalSha256", "attempts", "terminalMatches"],
+      "properties": {
+        "schema": {"const": "serverware.policyFilePublicationObservation/v1"}, "fileSha256": {"$ref": "#/$defs/nullableDigest"},
+        "automaticRetryAllowed": {"const": false},
+        "incompletePublicationId": {"anyOf": [{"$ref": "#/$defs/id"}, {"type": "null"}]},
+        "terminalSha256": {"$ref": "#/$defs/nullableDigest"}, "terminalMatches": {"type": "boolean"},
+        "attempts": {
+          "type": "array", "maxItems": 16,
+          "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["publicationId", "intentSha256", "binding", "resolutionClaimed"],
+            "properties": {
+              "publicationId": {"$ref": "#/$defs/id"}, "intentSha256": {"$ref": "#/$defs/digest"},
+              "binding": {"$ref": "#/$defs/materializeBinding"}, "resolutionClaimed": {"type": "boolean"}
+            }
+          }
+        }
+      }
+    }
+  }
+}

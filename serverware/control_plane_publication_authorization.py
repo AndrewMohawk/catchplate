@@ -19,12 +19,17 @@ from serverware import control_plane_custody_startup as startup
 from serverware.control_plane_approval_verification import _epoch_ns, _request_pin
 
 
-def _identity(request):
+def _purpose(name):
+    profile.require(name in {"admin-token", "policy-file"})
+    return profile.operation_profile(("publication-approval." if name == "admin-token" else "policy-file-approval.") + "request")
+
+
+def _identity(request, purpose="admin-token"):
     profile.require(type(request) is Request and request.method == "POST" and not request.url.query)
     identity = auth.require_admin(request,
         x_serverware_admin_token=request.headers.get("X-Serverware-Admin-Token"))
     auth.validate_csrf_request(request)
-    profile.require(identity.user_id.startswith("oidc:") and identity.has_any_role({"admin"}))
+    profile.require(identity.user_id.startswith("oidc:") and identity.has_any_role({_purpose(purpose).ROLE}))
     return identity
 
 
@@ -49,32 +54,34 @@ def _authenticator_policy(value):
     return translated
 
 
-def _approval(approval_id):
+def _approval(approval_id, purpose="admin-token"):
     profile.require(type(approval_id) is str and len(approval_id) == 36)
     with db.connect() as connection:
         row = connection.execute("SELECT * FROM control_plane_approvals WHERE id = ?", (approval_id,)).fetchone()
     profile.require(row is not None)
     original = dict(row)
     provenance = json.loads(original["approval_authn"])
-    profile.require(type(provenance) is dict and provenance.get("schema") == "serverware.publicationApprovalProvenance/v1")
+    profile.require(type(provenance) is dict and provenance.get("schema") == _purpose(purpose).PROVENANCE_SCHEMA)
     return original
 
 
-def _arguments(phase, identity, bound, policy, approval_id=None):
-    original = profile.request_binding(bound)
-    value = {"action": profile.ACTION, "resource_id": profile.RESOURCE,
+def _arguments(phase, identity, bound, policy, approval_id=None, *, purpose="admin-token"):
+    selected = _purpose(purpose)
+    original = selected.request_binding(bound)
+    value = {"action": selected.action(original), "resource_id": selected.RESOURCE,
         "payload_digest": "sha256:" + hashlib.sha256(profile.canonical(original)).hexdigest(),
         "actor_id": identity.user_id, "request": original, "approval_id": approval_id,
         "credential_policy": policy}
-    profile.arguments(profile.PREFIX + phase, value)
+    selected.arguments(selected.PREFIX + phase, value)
     return value
 
 
 class _Ceremony:
-    def __init__(self, request, *, deadline_ns=None, expires_epoch_ns=None):
+    def __init__(self, request, *, deadline_ns=None, expires_epoch_ns=None, purpose="admin-token"):
+        self.purpose, self.profile = purpose, _purpose(purpose)
         self.pid, self.thread = os.getpid(), threading.get_ident()
         self.request, self.scope, self.pin = request, request.scope, _request_pin(request)
-        self.identity, self.policy = _identity(request), _policy()
+        self.identity, self.policy = _identity(request, self.purpose), _policy()
         self.policy_original = profile.canonical(self.policy)
         self.mono, self.epoch = time.monotonic_ns(), time.time_ns()
         self.deadline = min(self.mono + 30_000_000_000, deadline_ns or self.mono + 30_000_000_000)
@@ -89,7 +96,8 @@ class _Ceremony:
         profile.require((os.getpid(), threading.get_ident()) == (self.pid, self.thread)
             and self.mono <= mono < self.deadline and self.epoch <= epoch < self.expires
             and self.request.scope is self.scope and _request_pin(self.request) == self.pin
-            and _identity(self.request) == self.identity and profile.canonical(_policy()) == self.policy_original
+            and self.profile is _purpose(self.purpose)
+            and _identity(self.request, self.purpose) == self.identity and profile.canonical(_policy()) == self.policy_original
             and startup.require_started() is self.custody)
         if self.credential is not None:
             current = db.get_webauthn_credential_by_record_id(self.credential["id"])
@@ -105,7 +113,7 @@ class _Ceremony:
         self.check()
         profile.require(type(mfa) is dict and {"publicationProfile", "assertion"} <= set(mfa)
             and set(mfa) <= {"publicationProfile", "assertion", "approvalId"}
-            and mfa.get("publicationProfile") == profile.OPTIONS_SCHEMA
+            and mfa.get("publicationProfile") == self.profile.OPTIONS_SCHEMA
             and len(profile.canonical(mfa)) <= 16 * 1024)
         assertion = mfa.get("assertion")
         profile.require(type(assertion) is dict and len(profile.canonical(assertion)) <= 16 * 1024)
@@ -129,10 +137,10 @@ class _Ceremony:
     def dispatch(self, phase, arguments, assertion=None):
         self.check()
         profile.require(not self.attempted)
-        operation = profile.PREFIX + phase
-        profile.arguments(operation, arguments)
+        operation = self.profile.PREFIX + phase
+        self.profile.arguments(operation, arguments)
         original = profile.canonical(arguments)
-        expected_digest = profile.request_digest(operation, arguments)
+        expected_digest = self.profile.request_digest(operation, arguments)
         inputs = dict(arguments)
         if phase != "settle":
             profile.require(type(assertion) is dict)
@@ -153,9 +161,9 @@ class _Ceremony:
             and result["requestDigest"] == expected_digest)
         profile.digest(result["requestDigest"])
         profile.digest(result["auditEventDigest"])
-        row = _approval(result["approval"]["id"])
+        row = _approval(result["approval"]["id"], self.purpose)
         profile.require(db.row_to_control_plane_approval(row) == result["approval"]
-            and row["action"] == profile.ACTION and row["resource_id"] == profile.RESOURCE
+            and row["action"] == arguments["action"] and row["resource_id"] == self.profile.RESOURCE
             and row["payload_digest"] == arguments["payload_digest"]
             and row["request_json"] == profile.canonical(arguments["request"]).decode("ascii"))
         self.expires = min(self.expires, _epoch_ns(row["expires_at"]))
@@ -164,22 +172,23 @@ class _Ceremony:
         return result
 
 
-def options_on_request(request, payload):
-    owner = _Ceremony(request)
-    profile.require(payload.api_version == profile.OPTIONS_SCHEMA and payload.action == profile.ACTION
-        and payload.resource_id == profile.RESOURCE)
-    bound = profile.request_binding(payload.request_binding)
+def options_on_request(request, payload, *, purpose="admin-token"):
+    owner = _Ceremony(request, purpose=purpose)
+    selected = owner.profile
+    bound = selected.request_binding(payload.request_binding)
+    profile.require(payload.api_version == selected.OPTIONS_SCHEMA and payload.action == selected.action(bound)
+        and payload.resource_id == selected.RESOURCE)
     approval_id = payload.approval_id
     phase = "request"
     if approval_id is not None:
-        row = _approval(approval_id)
-        profile.require(row["action"] == profile.ACTION and row["resource_id"] == profile.RESOURCE
+        row = _approval(approval_id, purpose)
+        profile.require(row["action"] == selected.action(bound) and row["resource_id"] == selected.RESOURCE
             and row["payload_digest"] == payload.payload_digest and json.loads(row["request_json"]) == bound)
         phase = "consume" if row["requester_id"] == owner.identity.user_id else "decide"
         profile.require(row["status"] == ("approved" if phase == "consume" else "pending"))
         owner.expires = min(owner.expires, _epoch_ns(row["expires_at"]))
         owner.deadline = min(owner.deadline, owner.mono + owner.expires - owner.epoch)
-    arguments = _arguments(phase, owner.identity, bound, owner.policy, approval_id)
+    arguments = _arguments(phase, owner.identity, bound, owner.policy, approval_id, purpose=purpose)
     profile.require(arguments["payload_digest"] == payload.payload_digest)
     descriptors = webauthn._credential_descriptors_for_policy(owner.identity.user_id, _authenticator_policy(owner.policy))
     profile.require(type(descriptors) is list and 1 <= len(descriptors) <= 64)
@@ -187,7 +196,7 @@ def options_on_request(request, payload):
     profile.require(type(credential) is dict and credential["user_id"] == owner.identity.user_id)
     owner.credential = credential
     owner.check()
-    operation = profile.PREFIX + phase
+    operation = selected.PREFIX + phase
     challenge = db.issue_policy_authority_webauthn_challenge(operation=operation,
         input_value=arguments, user_id=owner.identity.user_id, credential_id=credential["credential_id"], deadline_ns=owner.deadline)
     owner.check()
@@ -201,19 +210,19 @@ def options_on_request(request, payload):
     owner.check()
     return {"publicKey": {"challenge": challenge["challenge"], "rpId": value["rpId"], "allowCredentials":
         [{"type": "public-key", "id": credential["credential_id"]}], "timeout": 120000, "userVerification": "required"},
-        "serverware": {"schema": profile.OPTIONS_SCHEMA, "operation": operation, "operationId": value["operationId"],
+        "serverware": {"schema": selected.OPTIONS_SCHEMA, "operation": operation, "operationId": value["operationId"],
             "challengeId": challenge["id"], "credentialRecordId": credential["id"],
             "payloadDigest": arguments["payload_digest"], "expiresAt": challenge["expires_at"]}}
 
 
-def decide_on_request(request, approval_id, decision):
-    owner = _Ceremony(request)
-    row = _approval(approval_id)
+def decide_on_request(request, approval_id, decision, *, purpose="admin-token"):
+    owner = _Ceremony(request, purpose=purpose)
+    row = _approval(approval_id, purpose)
     profile.require(decision is not None and decision.note is None and row["requester_id"] != owner.identity.user_id
         and row["status"] == "pending")
     assertion = owner.capture_assertion(decision.mfa)
     profile.require("approvalId" not in decision.mfa)
-    arguments = _arguments("decide", owner.identity, json.loads(row["request_json"]), owner.policy, approval_id)
+    arguments = _arguments("decide", owner.identity, json.loads(row["request_json"]), owner.policy, approval_id, purpose=purpose)
     return owner.dispatch("decide", arguments, assertion)["approval"]
 
 

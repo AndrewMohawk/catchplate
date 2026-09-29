@@ -3952,6 +3952,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/native_secret_broker.rs \
 				data-plane/decision-gate-rs/src/native_secret_broker_v1.rs \
 				data-plane/decision-gate-rs/src/native_serving_privileges.rs \
+				data-plane/decision-gate-rs/src/native_gate_cgroup.rs \
+				data-plane/decision-gate-rs/src/native_gate_cgroup/filesystem.rs \
 				data-plane/decision-gate-rs/src/native_service_tokens.rs \
 				data-plane/decision-gate-rs/src/response_observation_v2_custody.rs \
 				data-plane/decision-gate-rs/src/response_v2/custody/attestation.rs \
@@ -4254,6 +4256,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-startup-configuration.v11.schema.json \
 				schemas/native-startup-configuration.v12.schema.json \
 				schemas/native-startup-configuration.v13.schema.json \
+				schemas/native-startup-configuration.v14.schema.json \
+				schemas/native-gate-cgroup.v1.schema.json \
 				schemas/native-guest-role-key-provisioner.v1.schema.json \
 				schemas/native-oauth-measured-cleanup.v1.schema.json \
 				schemas/native-oauth-measured-pending-retirement.v1.schema.json \

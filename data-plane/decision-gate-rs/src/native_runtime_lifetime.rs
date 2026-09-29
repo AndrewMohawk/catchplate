@@ -25,6 +25,7 @@ pub(super) struct NativeRuntimeLifetimeV1 {
     state: Mutex<State>,
     wake: Condvar,
     serving_privileges: Option<Arc<serverware_decision_gate::native_serving_privileges::Owner>>,
+    gate_cgroup: Option<Arc<serverware_decision_gate::native_gate_cgroup::Owner>>,
     guest_inspector: Option<Arc<serverware_decision_gate::InitializedGuestInspector>>,
     guest_cohort: Option<Arc<serverware_decision_gate::StartedGuestCohort>>,
     guest_cleanup: Mutex<Option<Result<(), String>>>,
@@ -59,6 +60,7 @@ impl NativeRuntimeLifetimeV1 {
             deadline, creator_pid, stopped: AtomicBool::new(false),
             state: Mutex::new(State { failure: None }), wake: Condvar::new(),
             serving_privileges: None,
+            gate_cgroup: None,
             guest_inspector: None,
             guest_cohort: None,
             guest_cleanup: Mutex::new(None),
@@ -80,6 +82,19 @@ impl NativeRuntimeLifetimeV1 {
     }
 
     pub(super) fn deadline(&self) -> u64 { self.deadline }
+
+    pub(super) fn bind_gate_cgroup(owner: &mut Arc<Self>,
+        cgroup: Arc<serverware_decision_gate::native_gate_cgroup::Owner>) -> Result<(), String> {
+        owner.require_creator()?;
+        let actual = Arc::get_mut(owner).ok_or("native lifetime shared before cgroup attachment")?;
+        let serving = actual.serving_privileges.as_ref().ok_or("gate cgroup has no final serving identity")?;
+        if actual.gate_cgroup.is_some() || actual.deadline != cgroup.deadline() {
+            return Err("gate cgroup lost its original native lifetime".into());
+        }
+        cgroup.require_serving(serving)?;
+        actual.gate_cgroup = Some(cgroup);
+        actual.require_creator()
+    }
 
     pub(super) fn bind_guest_inspector(owner: &mut Arc<Self>,
         inspector: Arc<serverware_decision_gate::InitializedGuestInspector>) -> Result<(), String> {
@@ -153,6 +168,13 @@ impl NativeRuntimeLifetimeV1 {
         }
         if let Some(owner) = &self.serving_privileges {
             if let Err(error) = owner.check() {
+                self.stopped.store(true, Ordering::Release);
+                self.request_guest_stop();
+                return Err(error);
+            }
+        }
+        if let Some(cgroup) = &self.gate_cgroup {
+            if let Err(error) = cgroup.check() {
                 self.stopped.store(true, Ordering::Release);
                 self.request_guest_stop();
                 return Err(error);

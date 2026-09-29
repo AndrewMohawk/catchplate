@@ -140,13 +140,14 @@ pub(super) fn run(
     guest_inspector: Option<serverware_decision_gate::GuestInspectorConfiguration>,
     guest_cohort: Option<serverware_decision_gate::GuestCohortConfiguration>,
     guest_role_key_provisioner: Option<serverware_decision_gate::GuestRoleKeyProvisionerConfiguration>,
+    gate_cgroup: Option<serverware_decision_gate::native_gate_cgroup::Configuration>,
     public_identity_stdout: bool,
 ) -> Result<(), String> {
     // Retain the original unshared lifetime through every cold error as well
     // as serving. Attachments finish before any Arc clone is given to runtime.
     let mut startup = NativeRuntimeLifetimeV1::new(parameters.deadline_boottime_ns)?;
     let result = run_owned(&mut startup, inputs, parameters, shadow_config, v2_config,
-        guest_inspector, guest_cohort, guest_role_key_provisioner, public_identity_stdout);
+        guest_inspector, guest_cohort, guest_role_key_provisioner, gate_cgroup, public_identity_stdout);
     startup.stop();
     let cleanup = startup.finish_guest_inspector();
     result?;
@@ -162,6 +163,7 @@ fn run_owned(
     guest_inspector: Option<serverware_decision_gate::GuestInspectorConfiguration>,
     guest_cohort: Option<serverware_decision_gate::GuestCohortConfiguration>,
     guest_role_key_provisioner: Option<serverware_decision_gate::GuestRoleKeyProvisionerConfiguration>,
+    gate_cgroup: Option<serverware_decision_gate::native_gate_cgroup::Configuration>,
     public_identity_stdout: bool,
 ) -> Result<(), String> {
     // This guard starts no tasks and grants no new interval. Runtime serving
@@ -212,11 +214,19 @@ fn run_owned(
     if guest_role_key_provisioner.is_some() && guest_cohort.is_none() {
         return Err("native role-key provisioning requires the actual cold guest cohort".into());
     }
+    if gate_cgroup.is_some() && (guest_cohort.is_none() || inputs.secret_broker.is_none()) {
+        return Err("native gate cgroup requires the actual broker and guest cohort".into());
+    }
     let prepared_device = if let Some(config) = inputs.secret_broker.take() {
         use serverware_decision_gate::{native_serving_privileges,
             native_secret_broker_v1::PreparedBroker,
             enclave_runtime_identity_v1::PreparedNativeDeviceV1};
         let privileged = native_serving_privileges::Prepared::open(parameters.deadline_boottime_ns)?;
+        // StateCas constructs its real system-root observer during cohort
+        // startup, so prepare the actual hierarchy first. Do not move the gate
+        // yet: every fixed role/helper child must remain outside its leaf.
+        let gate_cgroup = gate_cgroup.map(|configuration|
+            serverware_decision_gate::native_gate_cgroup::Prepared::open(configuration, &privileged)).transpose()?;
         if let Some(configuration) = guest_inspector {
             let inspector = serverware_decision_gate::PreparedGuestInspector::launch(configuration, &privileged)?;
             NativeRuntimeLifetimeV1::bind_guest_inspector(startup, Arc::clone(&inspector))?;
@@ -233,8 +243,14 @@ fn run_owned(
         }
         let device = PreparedNativeDeviceV1::open(&privileged)?;
         let mut broker = PreparedBroker::open(config, &privileged)?;
+        // The final privileged child has now been created. Only the actual
+        // gate joins the fresh leaf; the original deadline is never renewed.
+        let gate_cgroup = gate_cgroup.map(|owner| owner.attach_gate(&privileged)).transpose()?;
         let owner = privileged.drop_permanently()?;
         NativeRuntimeLifetimeV1::bind_serving_privileges(startup, Arc::clone(&owner))?;
+        if let Some(cgroup) = gate_cgroup {
+            NativeRuntimeLifetimeV1::bind_gate_cgroup(startup, cgroup.bind(Arc::clone(&owner))?)?;
+        }
         broker.check(&owner)?;
         inputs.native_serving_privileges = Some(owner);
         inputs.prepared_secret_broker = Some(broker);

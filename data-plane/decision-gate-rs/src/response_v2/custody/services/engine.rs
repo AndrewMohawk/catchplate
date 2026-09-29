@@ -170,6 +170,10 @@ pub(super) fn execute(
     signing_keys: &BTreeMap<String, RoleSigningKey>,
     request_exact_object_fds: Vec<OwnedFd>,
 ) -> Result<EngineResult, V2RuntimeError> {
+    if scoped.role == CustodyServiceRole::ImmutableArtifactLedger
+        && request.operation == ServiceOperationV1::ImmutablePut {
+        return super::ledger_put::execute(config,scoped,request,signing_keys,request_exact_object_fds);
+    }
     if let Ok(response_data_request) =
         serde_json::from_value::<
             crate::response_observation_v2_api::V2ResponseDataRequest,
@@ -273,7 +277,15 @@ fn execute_response_data_request(
 ) -> Result<EngineResult, V2RuntimeError> {
     use crate::response_observation_v2_api::
         V2ResponseDataRequest as Request;
+    if matches!(&request,Request::TargetDispatchBegin {..}|Request::CapturePersist {..}) {
+        if scoped.role!=CustodyServiceRole::CredentialTransport || envelope.operation!=ServiceOperationV1::TargetDispatch {
+            return Err(V2RuntimeError::new("target_dispatch_wrong_service","target capture must use actual CredentialTransport service"));
+        }
+        let result=super::super::target_dispatch::execute(config,scoped,&request,signing_keys,request_exact_object_fds)?;
+        return Ok(EngineResult {result:serde_json::to_value(result).map_err(|_|V2RuntimeError::new("target_dispatch_encoding","encode actual result"))?,exact_object_fds:Vec::new()});
+    }
     let expected = match &request {
+        Request::TargetDispatchBegin {..}|Request::CapturePersist {..}=>unreachable!("source fixed target dispatch branch above"),
         Request::AppendReleaseTransparency { .. } => (
             CustodyServiceRole::ReleaseAttestorPublisher,
             ServiceOperationV1::Publish,
@@ -321,6 +333,7 @@ fn execute_response_data_request(
     }
     let public_request_sha256 = canonical_sha256(&request)?;
     match request {
+        Request::TargetDispatchBegin {..}|Request::CapturePersist {..}=>unreachable!("source fixed target dispatch branch above"),
         Request::AppendReleaseTransparency {
             api_version,
             request_id,
@@ -3964,7 +3977,7 @@ fn verify_pinned_authority_envelope(
     Ok(())
 }
 
-fn verify_pinned_authority_artifact(
+pub(in super::super) fn verify_pinned_authority_artifact(
     topology: &super::super::config::SignedCustodyTopologyV1,
     artifact: &SignedAuthorityArtifact,
     attempt_id: &str,
@@ -4326,7 +4339,7 @@ fn canonical_inspection_seed(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn sign_nested_artifact(
+pub(in super::super) fn sign_nested_artifact(
     config: &RootOwnedResponseObservationV2Config,
     service_role: CustodyServiceRole,
     key: &RoleSigningKey,
@@ -4483,6 +4496,17 @@ fn execute_state_mutation(
     request: &ServiceRpcEnvelopeV1,
     signing_keys: &BTreeMap<String, RoleSigningKey>,
 ) -> Result<EngineResult, V2RuntimeError> {
+    if let Ok(query) = serde_json::from_value::<super::super::protocol::StagedOriginalQueryV1>(
+        request.payload.clone()) {
+        if query.request_id != request.request_id
+            || query.deadline_boottime_ns != request.deadline_boottime_ns {
+            return Err(V2RuntimeError::new("staged_original_envelope_mismatch",
+                "original query must retain the actual StateCas request and deadline"));
+        }
+        let signing_key = require_signing_key(signing_keys, "linearizable-store")?;
+        return encode_result(super::state_authority::query_staged_original_postgres(
+            config, &query, signing_key)?, Vec::new());
+    }
     if let Ok(query) =
         serde_json::from_value::<SettlementEvidenceContextRequestV1>(
             request.payload.clone(),
@@ -4526,6 +4550,8 @@ fn execute_state_mutation(
     let execution: StateMutationExecutionRequestV1 =
         decode_payload(request)?;
     validate_state_execution(config, &execution)?;
+    let sequence_profile = execution.api_version
+        == super::super::protocol::SEQUENCE_STATE_AUTHORITY_API_VERSION;
     let signing_key = signing_keys
         .get("linearizable-store")
         .ok_or_else(|| {
@@ -4534,7 +4560,7 @@ fn execute_state_mutation(
                 "state-authority did not load linearizable-store",
             )
         })?;
-    let state = super::state_authority::execute_postgres(
+    let state = super::state_authority::execute_profile_postgres(
         config,
         &execution.frame,
         &execution.request_id,
@@ -4544,6 +4570,7 @@ fn execute_state_mutation(
         execution.attempt_revision,
         execution.fencing_token,
         signing_key,
+        sequence_profile,
     )?;
     let response_data_result = state.response_data_result;
     let (exact_object, exact_object_fds) =
@@ -5387,19 +5414,27 @@ fn validate_state_execution(
         )
     })?;
     let frame = &request.frame.request;
-    if request.api_version != STATE_AUTHORITY_API_VERSION
+    let sequence = request.api_version
+        == super::super::protocol::SEQUENCE_STATE_AUTHORITY_API_VERSION;
+    let reserve = match &frame.payload {
+        super::super::super::state_authority::rpc::MutationPayload::Reserve(value) => {
+            sequence && request.fencing_token == 0 && request.attempt_revision == 0
+                && frame.fence.fence_token.is_none()
+                && value.stable_resume_id.0 == request.stable_resume_id
+        }
+        _ => false,
+    };
+    let exact_fence = frame.fence.fence_token.as_ref().is_some_and(|value| {
+        request.fencing_token > 0 && value.0 == request.fencing_token.to_string()
+    });
+    if (!sequence && request.api_version != STATE_AUTHORITY_API_VERSION)
         || frame.generation_id.0
             != config.custody_topology().generation_id
         || frame.request_id.0 != request.request_id
         || frame.operation_id.0 != request.operation_id
         || frame.attempt_id.0 != request.attempt_id
         || frame.expected_revision != request.attempt_revision
-        || frame
-            .fence
-            .fence_token
-            .as_ref()
-            .and_then(|value| value.0.parse::<u64>().ok())
-            != Some(request.fencing_token)
+        || (!reserve && !exact_fence)
         || frame.deadline.clock != "CLOCK_BOOTTIME"
         || frame.deadline.deadline_boot_millis
             != request.deadline_boottime_ns / 1_000_000
@@ -5477,7 +5512,7 @@ fn validate_settlement_state_intent(
     Ok(())
 }
 
-fn signed_state_authority_frame(
+pub(in super::super) fn signed_state_authority_frame(
     config: &RootOwnedResponseObservationV2Config,
     scoped: &ScopedCustodyServiceConfig,
     request_id: &str,
@@ -5565,7 +5600,7 @@ fn signed_state_authority_frame(
     })
 }
 
-fn state_execution_request(
+pub(in super::super) fn state_execution_request(
     request_id: &str,
     operation_id: &str,
     attempt_id: &str,

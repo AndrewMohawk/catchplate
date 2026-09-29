@@ -18,6 +18,12 @@ pub(crate) const READINESS_RECORD_API_VERSION: &str =
     "serverware.responseObservationV2CustodyReadiness/v1";
 pub(crate) const STATE_AUTHORITY_API_VERSION: &str =
     "serverware.responseObservationV2StateAuthority/v1";
+pub(crate) const SEQUENCE_STATE_AUTHORITY_API_VERSION: &str =
+    "serverware.responseObservationV2SequenceStateAuthority/v1";
+pub(crate) const STAGED_ORIGINAL_QUERY_API_VERSION: &str =
+    "serverware.responseObservationV2StagedOriginalQuery/v1";
+pub(crate) const STAGED_ORIGINAL_API_VERSION: &str =
+    "serverware.responseObservationV2StagedOriginal/v1";
 pub(crate) const STATE_MUTATION_RECEIPT_API_VERSION: &str =
     "serverware.responseObservationV2StateMutationReceipt/v1";
 pub(crate) const ATTEMPT_STATE_OBSERVATION_API_VERSION: &str =
@@ -574,6 +580,52 @@ impl SignedAttemptStateObservationV1 {
         unsigned.observation_sha256.clear();
         unsigned
     }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct StagedOriginalQueryV1 {
+    pub api_version: String,
+    pub generation_id: String,
+    pub generation: u64,
+    pub request_id: String,
+    pub operation_id: String,
+    pub attempt_id: String,
+    pub expected_stable_resume_id: String,
+    pub expected_revision: u64,
+    pub expected_fencing_token: u64,
+    pub expected_state: super::super::state_authority::lifecycle::AttemptState,
+    #[serde(deserialize_with = "staged_required_option")]
+    pub expected_dispatch_request_sha256: Option<String>,
+    pub deadline_boottime_ns: u64,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct SignedStagedOriginalV1 {
+    pub api_version: String,
+    pub generation_id: String,
+    pub generation: u64,
+    pub request_id: String,
+    pub operation_id: String,
+    pub body: super::super::state_authority::postgres::store::StagedAttemptOriginalV1,
+    pub authority_scope: ProviderAuthorityScopeV2,
+    pub signer_logical_role: String,
+    pub signer_key_id: String,
+    pub signature: String,
+}
+
+impl SignedStagedOriginalV1 {
+    pub(crate) fn without_signature(&self) -> Self {
+        let mut unsigned = self.clone();
+        unsigned.signature.clear();
+        unsigned
+    }
+}
+
+fn staged_required_option<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where D: serde::Deserializer<'de>, T: Deserialize<'de> {
+    Option::<T>::deserialize(deserializer)
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

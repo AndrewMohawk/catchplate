@@ -899,8 +899,12 @@ pub struct RootOwnedResponseObservationV2Config {
     guest_listener: Option<guest_listener::GuestResponseV2ListenerProfile>,
     #[serde(default, deserialize_with = "services::ledger_exact_read::configuration_profile")]
     ledger_exact_read: Option<services::ledger_exact_read::Profile>,
+    #[serde(default, deserialize_with = "services::ledger_put::configuration_profile")]
+    ledger_raw_persistence: Option<services::ledger_put::Profile>,
     #[serde(default, deserialize_with = "guest_public_artifacts::configuration_profile")]
     guest_public_artifacts: Option<guest_public_artifacts::Profile>,
+    #[serde(default, deserialize_with = "target_dispatch::configuration_profile")]
+    target_dispatch: Option<crate::native_target_dispatch_v1::Configuration>,
     // Only the explicit guest loader can construct this retained authority.
     #[serde(skip)]
     guest_delivery: Option<std::sync::Arc<guest_delivery::Delivery>>,
@@ -2792,7 +2796,9 @@ fn validate_config(
     config::validate_signed_topology(config)?;
     if let Some(profile) = &config.guest_listener { profile.validate(config)?; }
     if let Some(profile) = &config.ledger_exact_read { profile.validate(config)?; }
+    if let Some(profile) = &config.ledger_raw_persistence { profile.validate(config)?; }
     if let Some(profile) = &config.guest_public_artifacts { profile.validate(config)?; }
+    target_dispatch::validate_configuration(config)?;
     if let Some(authority) = &config.guest_delivery_authority {
         authority.validate()?;
         authority.require_separate_assignment(config)?;
@@ -3893,7 +3899,8 @@ impl InstalledProviderGeneration {
                 service_role,
             )?;
             capabilities_ready &=
-                generation::required_service_operations(
+                generation::selected_service_operations(
+                    &installed.config,
                     service_role,
                 )
                 .len()

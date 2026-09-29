@@ -1,4 +1,7 @@
 use super::statements;
+#[path = "staged_originals.rs"]
+mod staged_originals;
+pub use staged_originals::{CommittedRequestOriginalV1, StagedAttemptOriginalV1};
 use super::super::canonical::{
     canonical_jcs_bytes, decode_base64url, encode_base64url, sha256_digest,
 };
@@ -394,6 +397,22 @@ where
         &self,
         frame: &RpcRequestFrame,
     ) -> AuthorityResult<ExactSignedResultBytes> {
+        self.execute_mutation_profile(frame, false)
+    }
+
+    /// Additive custody profile; reject a legacy database before any mutation.
+    pub fn execute_sequence_mutation(
+        &self,
+        frame: &RpcRequestFrame,
+    ) -> AuthorityResult<ExactSignedResultBytes> {
+        self.execute_mutation_profile(frame, true)
+    }
+
+    fn execute_mutation_profile(
+        &self,
+        frame: &RpcRequestFrame,
+        require_sequence_originals: bool,
+    ) -> AuthorityResult<ExactSignedResultBytes> {
         frame.request.validate()?;
         if frame.request.generation_id
             != self.configuration.generation_id
@@ -414,6 +433,21 @@ where
         self.configure_transaction(transaction.as_mut())?;
         let (generation, generation_status) =
             self.lock_generation(transaction.as_mut())?;
+        if require_sequence_originals
+            && super::sequence_originals::profile(&generation.migration_sha256)?
+                != super::sequence_originals::Profile::SequenceOriginalsV2
+        {
+            return Err(super::sequence_originals::refused(
+                "sequence custody execution requires the independently pinned fresh database profile",
+            ));
+        }
+        let retains_original = super::sequence_originals::profile(&generation.migration_sha256)?
+            == super::sequence_originals::Profile::SequenceOriginalsV2
+            && matches!(frame.request.operation, OperationKind::AttemptReserve
+                | OperationKind::AttemptStage | OperationKind::DispatchBegin);
+        if retains_original && exact_request_bytes.len() > super::sequence_originals::MAX_ORIGINAL_BYTES {
+            return Err(super::sequence_originals::refused("request original exceeds the explicit custody return bound"));
+        }
         self.enforce_generation_status(
             generation_status,
             frame.request.operation,
@@ -606,6 +640,12 @@ where
         );
         let applied = match applied_result {
             Ok(applied) => {
+                if let Err(error) = self.retain_attempt_request_original(
+                    transaction.as_mut(), &generation, frame, &exact_request_sha256, &applied,
+                ) {
+                    drop(transaction);
+                    return self.handle_operation_failure(frame, &exact_request_sha256, error);
+                }
                 if let Err(error) = transaction.execute(
                     statements::RELEASE_MUTATION_SAVEPOINT_SQL,
                     &[],
@@ -668,6 +708,7 @@ where
             &exact_request_sha256,
             applied,
             &frame.request.deadline,
+            retains_original,
         ) {
             Ok(result) => Ok(result),
             Err(error) => self.handle_operation_failure(
@@ -685,6 +726,7 @@ where
         exact_request_sha256: &Digest,
         mut applied: AppliedMutation,
         completion_deadline: &BootDeadline,
+        retains_original: bool,
     ) -> AuthorityResult<ExactSignedResultBytes> {
         let immutable_inspection = applied
             .deferred_inspection
@@ -750,6 +792,7 @@ where
             )?;
         if exact_result_bytes.len()
             > self.configuration.maximum_result_bytes as usize
+            || (retains_original && exact_result_bytes.len() > super::sequence_originals::MAX_ORIGINAL_BYTES)
         {
             return Err(AuthorityError::InvalidContract {
                 field: "operationResult",
@@ -1006,6 +1049,7 @@ where
                     response_data_result: None,
                 },
                 &cleanup_deadline,
+                false,
             )
         })();
 
@@ -1104,15 +1148,15 @@ where
                     canonical_jcs_bytes(&mutation.generation)?;
                 let generation_sha256 =
                     sha256_digest(&canonical_generation);
-                let migration_sha256 = sha256_digest(
-                    super::schema::BOOTSTRAP_SQL.as_bytes(),
-                );
+                // Selection is from the independently pinned original, not a
+                // missing-column probe or a caller success/profile flag.
+                super::sequence_originals::require_database(
+                    transaction.as_mut(), &mutation.generation.migration_sha256,
+                )?;
                 if generation_sha256
                     != mutation.canonical_generation_sha256
                     || generation_sha256
                         != self.configuration.pinned_generation_sha256
-                    || mutation.generation.migration_sha256
-                        != migration_sha256
                 {
                     return Err(AuthorityError::InvalidContract {
                         field: "generationInstall",
@@ -2020,6 +2064,7 @@ where
                 ],
             });
         }
+        super::sequence_originals::require_database(transaction, &generation.migration_sha256)?;
         Ok((generation, status))
     }
 
@@ -2483,6 +2528,7 @@ where
         match &request.payload {
             MutationPayload::Reserve(mutation) => self.apply_reserve(
                 transaction,
+                generation,
                 request,
                 mutation,
             ),
@@ -2600,6 +2646,26 @@ where
                     request,
                     mutation,
                 )?;
+                // The already verified attempt-scoped artifact and object
+                // association commit atomically with this state transition.
+                // A content-addressed row may predate this attempt; that row
+                // alone must never manufacture its ArtifactCommit evidence.
+                let canonical = canonical_jcs_bytes(&mutation.artifact_commit)?;
+                let digest = sha256_digest(&canonical);
+                if transaction.execute(statements::INSERT_EVIDENCE_SQL, &[
+                    text(&request.generation_id),
+                    text(&mutation.artifact_commit.body.artifact_id),
+                    text(&request.attempt_id),
+                    PgValue::Text("ARTIFACT_COMMIT".to_owned()),
+                    text(&mutation.artifact_commit.body.producing_role_id),
+                    PgValue::Bytes(canonical), text_digest(&digest),
+                    text_digest(&mutation.expected_content_sha256),
+                ])? != 1 {
+                    return Err(AuthorityError::Conflict {
+                        code:"raw_commit_evidence_conflict",
+                        authoritative_state:Some(mutation.artifact_commit.body.artifact_id.0.clone()),
+                    });
+                }
                 self.bump(
                     transaction,
                     request,
@@ -2626,6 +2692,7 @@ where
             MutationPayload::Stage(mutation) => {
                 let attempt = require_attempt(attempt)?;
                 let fence = require_fence(fence)?;
+                self.require_original_reserve_scope(transaction, generation, request, mutation)?;
                 self.ensure_object(
                     transaction,
                     request,
@@ -3103,6 +3170,7 @@ where
     fn apply_reserve(
         &self,
         transaction: &mut dyn PostgresTransaction,
+        generation: &ProviderGeneration,
         request: &RpcRequest,
         mutation: &ReserveMutation,
     ) -> AuthorityResult<AppliedMutation> {
@@ -3128,14 +3196,23 @@ where
                 reason: "fence sequence returned no value".to_owned(),
             })?
             .require_u64("allocation_sequence")?;
-        let fence_material = canonical_jcs_bytes(&(
-            request.generation_id.clone(),
-            request.attempt_id.clone(),
-            allocation,
-        ))?;
-        let digest = sha256_digest(&fence_material);
-        let fence_token =
-            Identifier(format!("fence:{}", &digest.0["sha256:".len()..]));
+        let fence_token = match super::sequence_originals::profile(&generation.migration_sha256)? {
+            super::sequence_originals::Profile::LegacyV1 => {
+                let fence_material = canonical_jcs_bytes(&(request.generation_id.clone(), request.attempt_id.clone(), allocation))?;
+                let digest = sha256_digest(&fence_material);
+                Identifier(format!("fence:{}", &digest.0["sha256:".len()..]))
+            }
+            super::sequence_originals::Profile::SequenceOriginalsV2 => {
+                super::sequence_originals::canonical_fence(&allocation.to_string(), allocation)?;
+                self.assert_deadline(&mutation.attempt_deadline)?;
+                if mutation.attempt_deadline.boot_id!=request.deadline.boot_id
+                    || mutation.attempt_deadline.clock!=request.deadline.clock
+                    || mutation.attempt_deadline.deadline_boot_millis>request.deadline.deadline_boot_millis {
+                    return Err(super::sequence_originals::refused("Reserve cannot renew or replace its original deadline"));
+                }
+                Identifier(allocation.to_string())
+            }
+        };
         transaction.execute(
             statements::INSERT_ATTEMPT_SQL,
             &[
@@ -3265,6 +3342,7 @@ where
         mutation: &BeginDispatchMutation,
         trusted_epoch_millis: Option<u64>,
     ) -> AuthorityResult<AppliedMutation> {
+        self.require_original_stage_selection(transaction,generation,request,mutation)?;
         self.ensure_object(transaction, request, &mutation.request_object)?;
         let transport_digest = self.verify_expected_role_artifact(
             generation,
@@ -5979,6 +6057,8 @@ where
                 })?;
             if existing.require_text("object_id")?
                 != mutation.object_id.0
+                || existing.require_text("object_kind")? != mutation.object_kind.0
+                || existing.require_text("media_type")? != mutation.media_type
                 || existing.require_u64("content_length")?
                     != mutation.expected_content_length
                 || existing.require_text("storage_locator")?

@@ -115,6 +115,19 @@ impl CustodySignerTransport {
         self.verify_live()?; Ok(value)
     }
 
+    pub(super) fn target_dispatch_evidence(&self,identity:&mut EnclaveRuntimeIdentityV1,
+        prepared:&native_target_dispatch::Prepared<'_>,deadline:u64)
+        ->Result<serverware_decision_gate::native_target_dispatch_v1::NativeCaptureEnvelope,String> {
+        let Self::Native(owner)=self else {return Err("target dispatch refuses unmeasured UDS custody".into());};
+        self.verify_live()?;
+        owner.active.fetch_update(Ordering::AcqRel,Ordering::Acquire,
+            |active|(active<CUSTODY_MAX_CONCURRENT_CONNECTIONS).then_some(active+1))
+            .map_err(|_|"target dispatch custody concurrency bound")?;
+        let _permit=NativeOperationPermit(&owner.active);
+        let result=owner.runtime.sign_native_target_dispatch(identity,prepared.statement()?,deadline).map_err(|e|e.to_string())?;
+        prepared.statement()?;self.verify_live()?;Ok(result)
+    }
+
     pub(super) fn refresh_evidence(&self, identity: &mut EnclaveRuntimeIdentityV1,
         prepared: &serverware_decision_gate::native_oauth_refresh_v1::Prepared,
         binary: &str, deadline: u64) -> Result<Value, String> {

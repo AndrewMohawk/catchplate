@@ -11,6 +11,7 @@ mod native_gate_bootstrap;
 mod native_audit_owner;
 mod native_audit_transport;
 mod native_secret_broker;
+mod native_target_dispatch;
 mod native_oauth_refresh;
 mod native_oauth_cleanup;
 mod native_oauth_exchange;
@@ -1318,6 +1319,8 @@ impl UpstreamResolver for SystemUpstreamResolver {
 #[derive(Clone)]
 struct UpstreamClientConfig {
     root_certificates: Vec<reqwest::Certificate>,
+    // Present only from actual native cold PEM originals, never ambient roots.
+    native_capture_tls: Option<Arc<rustls::ClientConfig>>,
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -23551,7 +23554,7 @@ fn load_upstream_client_config() -> Result<UpstreamClientConfig, String> {
             }
         }
     }
-    Ok(UpstreamClientConfig { root_certificates })
+    Ok(UpstreamClientConfig { root_certificates, native_capture_tls: None })
 }
 
 fn build_pinned_upstream_client(
@@ -53275,6 +53278,7 @@ mod tests {
             upstream_resolver: Arc::new(TestUpstreamResolver),
             upstream_client_config: UpstreamClientConfig {
                 root_certificates: Vec::new(),
+                native_capture_tls: None,
             },
             pinned_upstream_clients: Mutex::new(PinnedUpstreamClientCache::new(
                 MAX_PINNED_UPSTREAM_CLIENTS,
@@ -61375,6 +61379,7 @@ mod tests {
         let mut state = test_gate_state(Arc::clone(&snapshot));
         state.upstream_resolver = resolver.clone();
         state.upstream_client_config = UpstreamClientConfig {
+            native_capture_tls: None,
             root_certificates: vec![
                 reqwest::Certificate::from_der(&certificate_der).expect("upstream root cert")
             ],

@@ -54,6 +54,8 @@ pub(crate) const SERVICE_RESULT_SIGNATURE_DOMAIN: &[u8] =
     b"serverware.response-v2/service-result/v1\0";
 pub(crate) const STATE_AUTHORITY_RESULT_SIGNATURE_DOMAIN: &[u8] =
     b"serverware.response-v2/state-authority-result/v1\0";
+pub(crate) const STAGED_ORIGINAL_SIGNATURE_DOMAIN: &[u8] =
+    b"serverware.response-v2/staged-request-original/v1\0";
 pub(crate) const REPLAY_SOURCE_OBSERVATION_SIGNATURE_DOMAIN: &[u8] =
     b"serverware.response-v2/replay-source-observation/v1\0";
 pub(crate) const SETTLEMENT_EVIDENCE_CONTEXT_SIGNATURE_DOMAIN: &[u8] =
@@ -308,6 +310,17 @@ pub(crate) fn verify_service_handshake(
     handshake: &SignedServiceHandshakeV1,
 ) -> Result<(), V2RuntimeError> {
     validate_post_reconciliation_handshake(topology, handshake)?;
+    verify_handshake_signature(topology,handshake)
+}
+pub(crate) fn verify_service_handshake_selected(
+    config:&super::RootOwnedResponseObservationV2Config, handshake:&SignedServiceHandshakeV1,
+) -> Result<(),V2RuntimeError> {
+    super::generation::validate_selected_handshake(config,handshake)?;
+    verify_handshake_signature(config.custody_topology(),handshake)
+}
+fn verify_handshake_signature(
+    topology:&SignedCustodyTopologyV1, handshake:&SignedServiceHandshakeV1,
+) -> Result<(),V2RuntimeError> {
     let binding = topology
         .logical_role(&handshake.signer_logical_role)
         .filter(|binding| {
@@ -451,6 +464,92 @@ pub(crate) fn verify_attempt_state_observation(
         &observation.without_signature(),
         &observation.signature,
     )
+}
+
+pub(crate) fn verify_staged_original(
+    topology: &SignedCustodyTopologyV1,
+    signed: &super::protocol::SignedStagedOriginalV1,
+) -> Result<(), V2RuntimeError> {
+    use super::super::state_authority::{canonical::{canonical_jcs_bytes, sha256_digest},
+        lifecycle::{AttemptState, OperationKind}, rpc::{MutationPayload, ResultDisposition}};
+    let refused = || V2RuntimeError::new("staged_original_invalid",
+        "state witness is not the exact authenticated current Reserve/Stage/DispatchBegin chain");
+    let body = &signed.body;
+    if signed.api_version != super::protocol::STAGED_ORIGINAL_API_VERSION
+        || signed.generation_id != topology.generation_id || signed.generation != topology.generation
+        || signed.signer_logical_role != "linearizable-store" || body.revision == 0
+        || body.fencing_token == 0 || !is_sha256(&body.stable_resume_id)
+        || !matches!(body.state, AttemptState::Staged | AttemptState::Dispatching)
+        || (body.state == AttemptState::Dispatching) != body.dispatch.is_some() {
+        return Err(refused());
+    }
+    verify_provider_authority_scope(topology, CustodyServiceRole::StateAuthority,
+        ServiceOperationV1::StateCas, &signed.authority_scope)?;
+    if signed.authority_scope.key_id != signed.signer_key_id
+        || signed.authority_scope.logical_role != signed.signer_logical_role
+        || signed.authority_scope.operation_id != signed.operation_id
+        || signed.authority_scope.attempt_id != body.attempt_id
+        || signed.authority_scope.attempt_revision != body.revision
+        || signed.authority_scope.fencing_token != body.fencing_token {
+        return Err(refused());
+    }
+    for (original, operation, state) in [
+        (Some(&body.reserve), OperationKind::AttemptReserve, AttemptState::Reserved),
+        (Some(&body.stage), OperationKind::AttemptStage, AttemptState::Staged),
+        (body.dispatch.as_ref(), OperationKind::DispatchBegin, AttemptState::Dispatching),
+    ] {
+        let Some(original) = original else { continue; };
+        let frame = canonical_jcs_bytes(&original.frame).map_err(|_| refused())?;
+        let result = canonical_jcs_bytes(&original.result).map_err(|_| refused())?;
+        let request = &original.frame.request;
+        let outcome = &original.result.body;
+        request.validate().map_err(|_| refused())?;
+        if frame.len() > super::super::state_authority::postgres::sequence_originals::MAX_ORIGINAL_BYTES
+            || result.len() > super::super::state_authority::postgres::sequence_originals::MAX_ORIGINAL_BYTES
+            || sha256_digest(&frame).0 != original.exact_request_sha256
+            || sha256_digest(&result).0 != original.exact_result_sha256
+            || request.generation_id.0 != signed.generation_id || request.attempt_id.0 != body.attempt_id
+            || request.operation != operation || outcome.operation != operation
+            || outcome.generation_id != request.generation_id || outcome.attempt_id != request.attempt_id
+            || outcome.request_id != request.request_id || outcome.operation_id != request.operation_id
+            || outcome.exact_request_sha256.0 != original.exact_request_sha256
+            || outcome.disposition != ResultDisposition::Applied || outcome.authoritative_state != state
+            || request.expected_revision.checked_add(1) != Some(outcome.authoritative_revision)
+            || outcome.stable_resume_id.0 != body.stable_resume_id
+            || outcome.fence_token.0 != body.fencing_token.to_string()
+            || request.fence.fence_token.as_ref().is_some_and(|f| f != &outcome.fence_token)
+            || outcome.conflict_code.is_some() || outcome.response_data_result.is_some()
+            || outcome.retrieved_immutable_raw.is_some() || outcome.immutable_inspection.is_some() {
+            return Err(refused());
+        }
+    }
+    let MutationPayload::Reserve(reserve) = &body.reserve.frame.request.payload else { return Err(refused()); };
+    let MutationPayload::Stage(stage) = &body.stage.frame.request.payload else { return Err(refused()); };
+    if reserve.attempt_deadline != body.original_deadline
+        || reserve.stable_resume_id.0 != body.stable_resume_id
+        || stage.credential_binding_sha256 != reserve.credential_scope_sha256
+        || stage.staged_request_object.object_kind.0 != "staged-request"
+        || body.stage.frame.request.deadline.clock != body.original_deadline.clock
+        || body.stage.frame.request.deadline.boot_id != body.original_deadline.boot_id
+        || body.stage.frame.request.deadline.deadline_boot_millis > body.original_deadline.deadline_boot_millis {
+        return Err(refused());
+    }
+    if let Some(dispatch) = &body.dispatch {
+        let MutationPayload::BeginDispatch(begin) = &dispatch.frame.request.payload else { return Err(refused()); };
+        if dispatch.frame.request.expected_state != AttemptState::Staged
+            || dispatch.frame.request.expected_revision != body.stage.result.body.authoritative_revision
+            || dispatch.result.body.authoritative_revision != body.revision
+            || begin.request_object != stage.staged_request_object
+            || begin.credential_binding_sha256 != stage.credential_binding_sha256
+            || dispatch.frame.request.deadline.clock != body.stage.frame.request.deadline.clock
+            || dispatch.frame.request.deadline.boot_id != body.stage.frame.request.deadline.boot_id
+            || dispatch.frame.request.deadline.deadline_boot_millis > body.stage.frame.request.deadline.deadline_boot_millis {
+            return Err(refused());
+        }
+    } else if body.stage.result.body.authoritative_revision != body.revision { return Err(refused()); }
+    verify_logical_role_signature(topology, CustodyServiceRole::StateAuthority,
+        &signed.signer_logical_role, &signed.signer_key_id, STAGED_ORIGINAL_SIGNATURE_DOMAIN,
+        &signed.without_signature(), &signed.signature)
 }
 
 pub fn verify_final_envelope_verification(

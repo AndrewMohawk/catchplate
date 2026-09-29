@@ -51,6 +51,8 @@ pub(crate) fn handle_response_data_request(
     use crate::response_observation_v2_api::
         V2ResponseDataRequest;
     let (role, operation) = match &request {
+        V2ResponseDataRequest::TargetDispatchBegin {..}|V2ResponseDataRequest::CapturePersist {..}=>(
+            CustodyServiceRole::CredentialTransport,ServiceOperationV1::TargetDispatch),
         V2ResponseDataRequest::AppendReleaseTransparency { .. } => (
             CustodyServiceRole::ReleaseAttestorPublisher,
             ServiceOperationV1::Publish,
@@ -181,7 +183,7 @@ pub(crate) fn public_reconciliation_snapshot(
         let record = read_readiness_record(
             &dependency.process.readiness_record_path,
         )?;
-        verify_readiness_record(topology, &dependency, &record)?;
+        verify_readiness_record(config, &dependency, &record)?;
         let handshake =
             record.service_handshake.ok_or_else(|| {
                 V2RuntimeError::new(
@@ -315,7 +317,7 @@ pub(crate) fn start(
             &dependency.process.readiness_record_path,
         )?;
         verify_readiness_record(
-            &topology,
+            config,
             &dependency,
             &record,
         )?;
@@ -477,7 +479,7 @@ fn query_live_dependencies(
         let record = read_readiness_record(
             &scoped.process.readiness_record_path,
         )?;
-        verify_readiness_record(topology, &scoped, &record)?;
+        verify_readiness_record(config, &scoped, &record)?;
         let baseline =
             record.service_handshake.as_ref().ok_or_else(|| {
                 V2RuntimeError::new(
@@ -519,7 +521,7 @@ fn query_live_dependencies(
             )
         })?;
         verify_live_handshake_against_record(
-            topology,
+            config,
             baseline,
             &live,
             &hello.request_id,

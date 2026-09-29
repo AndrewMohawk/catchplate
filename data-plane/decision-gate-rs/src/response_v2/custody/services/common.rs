@@ -15,7 +15,7 @@ use super::super::attestation::{
     expected_operation_signer, sign_service_handshake,
     verify_final_envelope_verification,
     verify_immutable_raw_inspection, verify_release_authorization,
-    verify_release_metadata, verify_service_handshake, RoleSigningKey,
+    verify_release_metadata, verify_service_handshake_selected, RoleSigningKey,
     CUSTODY_ATTESTATION_SIGNATURE_DOMAIN,
     CUSTODY_ERROR_SIGNATURE_DOMAIN,
     CUSTODY_RECOVERY_SIGNATURE_DOMAIN,
@@ -34,7 +34,7 @@ use super::super::config::{
     SignedCustodyTopologyV1,
 };
 use super::super::generation::{
-    logical_role_key_root_sha256, required_service_operations,
+    logical_role_key_root_sha256, required_service_operations, selected_service_operations,
     role_identity_root_sha256, topology_sha256,
 };
 use super::super::protocol::{
@@ -168,7 +168,7 @@ impl ServiceRuntime {
             signature: String::new(),
         };
         sign_service_handshake(signer, &mut handshake)?;
-        verify_service_handshake(&topology, &handshake)?;
+        verify_service_handshake_selected(&config, &handshake)?;
         let readiness_record = CustodyReadinessRecordV1 {
             api_version: READINESS_RECORD_API_VERSION.to_owned(),
             service_role: role,
@@ -296,7 +296,7 @@ impl ServiceRuntime {
             (ServiceRpcEnvelopeV1, Vec<std::os::fd::OwnedFd>) =
             connection.receive_with_fds(1)?;
         validate_service_request(
-            &self.topology,
+            &self.config,
             &self.scoped,
             &request,
             hello.deadline_boottime_ns,
@@ -306,13 +306,13 @@ impl ServiceRuntime {
             &request,
         )?;
         if (!request_exact_object_fds.is_empty()
-            && request.operation
-                != ServiceOperationV1::FinalEnvelopeVerify)
+            && !matches!(request.operation,ServiceOperationV1::FinalEnvelopeVerify | ServiceOperationV1::ImmutablePut)
+            && !(request.operation==ServiceOperationV1::TargetDispatch && self.config.target_dispatch.is_some()))
             || request_exact_object_fds.len() > 1
         {
             return Err(V2RuntimeError::new(
                 "custody_service_request_exact_object_invalid",
-                "only final-envelope verification may receive its one declared proof-document descriptor",
+                "exact descriptors require their separately selected operation and variant-specific cardinality",
             ));
         }
         let signer_role = expected_operation_signer(
@@ -409,7 +409,7 @@ impl ServiceRuntime {
         handshake.challenge_nonce =
             hello.challenge_nonce.clone();
         sign_service_handshake(signer, &mut handshake)?;
-        verify_service_handshake(&self.topology, &handshake)?;
+        verify_service_handshake_selected(&self.config, &handshake)?;
         Ok(handshake)
     }
 }
@@ -1010,6 +1010,9 @@ fn sign_nested_authority_result(
     result: serde_json::Value,
     signer: &RoleSigningKey,
 ) -> Result<serde_json::Value, V2RuntimeError> {
+    if operation == ServiceOperationV1::ImmutablePut {
+        return super::ledger_put::preserve_result(result);
+    }
     if serde_json::from_value::<
         crate::response_observation_v2_api::V2ResponseDataRequest,
     >(request.clone())
@@ -1835,10 +1838,11 @@ pub(crate) fn read_readiness_record(
 }
 
 pub(crate) fn verify_readiness_record(
-    topology: &SignedCustodyTopologyV1,
+    config: &RootOwnedResponseObservationV2Config,
     scoped: &ScopedCustodyServiceConfig,
     record: &CustodyReadinessRecordV1,
 ) -> Result<(), V2RuntimeError> {
+    let topology=config.custody_topology();
     if record.api_version != READINESS_RECORD_API_VERSION
         || record.service_role != scoped.role
         || record.service_id != scoped.process.service_id
@@ -1883,7 +1887,7 @@ pub(crate) fn verify_readiness_record(
                         "router readiness omits a required signed dependency handshake",
                     )
                 })?;
-            verify_service_handshake(topology, handshake)?;
+            verify_service_handshake_selected(config, handshake)?;
         }
     } else {
         if record.transaction_socket_identity_sha256.is_some() {
@@ -1899,7 +1903,7 @@ pub(crate) fn verify_readiness_record(
                     "service readiness omits its signed handshake",
                 )
             })?;
-        verify_service_handshake(topology, handshake)?;
+        verify_service_handshake_selected(config, handshake)?;
         if !record.dependency_handshakes.is_empty()
             || handshake.reconciliation_high_water
                 != record.reconciliation_high_water
@@ -1916,14 +1920,14 @@ pub(crate) fn verify_readiness_record(
 }
 
 pub(crate) fn verify_live_handshake_against_record(
-    topology: &SignedCustodyTopologyV1,
+    config: &RootOwnedResponseObservationV2Config,
     baseline: &SignedServiceHandshakeV1,
     live: &SignedServiceHandshakeV1,
     request_id: &str,
     challenge_nonce: &str,
 ) -> Result<(), V2RuntimeError> {
-    verify_service_handshake(topology, baseline)?;
-    verify_service_handshake(topology, live)?;
+    verify_service_handshake_selected(config, baseline)?;
+    verify_service_handshake_selected(config, live)?;
     let now = system_time_epoch_ms()?;
     if live.request_id != request_id
         || live.challenge_nonce != challenge_nonce
@@ -1974,7 +1978,7 @@ fn in_process_engine_readiness(
                 &authority.process.readiness_record_path,
             )?;
             verify_readiness_record(
-                topology,
+                config,
                 &authority,
                 &record,
             )?;
@@ -1994,7 +1998,7 @@ fn in_process_engine_readiness(
                 record.reconciliation_state_sha256.as_bytes(),
             );
             hasher.update(scoped.role.as_str().as_bytes());
-            for operation in required_service_operations(scoped.role) {
+            for operation in selected_service_operations(config,scoped.role) {
                 hasher.update(operation.as_str().as_bytes());
             }
             (
@@ -2011,7 +2015,7 @@ fn in_process_engine_readiness(
         configuration_sha256:
             scoped.process.configuration_sha256.clone(),
         implemented_operations:
-            required_service_operations(scoped.role)
+            selected_service_operations(config,scoped.role)
                 .into_iter()
                 .collect(),
         reconciliation_high_water,
@@ -2022,11 +2026,12 @@ fn in_process_engine_readiness(
 }
 
 fn validate_service_request(
-    topology: &SignedCustodyTopologyV1,
+    config: &RootOwnedResponseObservationV2Config,
     scoped: &ScopedCustodyServiceConfig,
     request: &ServiceRpcEnvelopeV1,
     expected_deadline_boottime_ns: u64,
 ) -> Result<(), V2RuntimeError> {
+    let topology=config.custody_topology();
     let canonical =
         crate::canonical_json_bytes(&request.payload).map_err(|_| {
             V2RuntimeError::new(
@@ -2041,7 +2046,7 @@ fn validate_service_request(
         || request.request_id.len() > 256
         || request.payload_sha256
             != format!("sha256:{:x}", Sha256::digest(canonical))
-        || !required_service_operations(scoped.role)
+        || !selected_service_operations(config,scoped.role)
             .contains(&request.operation)
         || request.operation == ServiceOperationV1::Readiness
         || request.deadline_boottime_ns <= boottime_ns()?

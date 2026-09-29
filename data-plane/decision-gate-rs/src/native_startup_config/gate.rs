@@ -28,6 +28,7 @@ use super::super::{
     MAX_INTERNAL_SERVICE_TOKEN_FILE_BYTES,
 };
 use super::super::native_gate_inputs::validate_native_gate_static_inputs;
+use super::super::native_target_dispatch;
 use serde::{Deserialize, Deserializer};
 use std::collections::BTreeSet;
 use std::time::Duration;
@@ -151,9 +152,9 @@ impl GateConfigV1 {
             None => ControlPlaneClientConfig::builtin(),
             Some((text, _)) => ControlPlaneClientConfig::from_pem(&text)?,
         };
-        let root_certificates = match tls_roots(self.upstream_tls_roots_pem, "upstream")? {
-            None => Vec::new(),
-            Some((_, certificates)) => certificates,
+        let (root_certificates,native_capture_tls) = match tls_roots(self.upstream_tls_roots_pem, "upstream")? {
+            None => (Vec::new(),None),
+            Some((text, certificates)) => (certificates,Some(native_target_dispatch::tls_configuration(&text)?)),
         };
         let inputs = GateStateInputs {
             service_tokens,
@@ -194,7 +195,7 @@ impl GateConfigV1 {
             credential_lease_renewal_workers: self.credential_lease_renewal_workers,
             credential_lease_renewal_queue_capacity: self.credential_lease_renewal_queue_capacity,
             credential_lease_cache_max: self.credential_lease_cache_max,
-            upstream_client_config: UpstreamClientConfig { root_certificates },
+            upstream_client_config: UpstreamClientConfig { root_certificates, native_capture_tls },
             audit_url: self.audit_url,
             credential_lease_token: self.credential_lease_token,
             audit_token: self.audit_token,

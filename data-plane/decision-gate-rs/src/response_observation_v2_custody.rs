@@ -59,6 +59,8 @@ pub(crate) mod recovery;
 pub(crate) mod state;
 #[path = "response_v2/custody/services/mod.rs"]
 pub(crate) mod services;
+#[path = "response_v2/custody/target_dispatch/mod.rs"]
+pub mod target_dispatch;
 
 pub use config::{
     CustodyServiceRole, SignedCustodyTopologyV1,

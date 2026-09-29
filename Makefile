@@ -3977,6 +3977,19 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/native_secret_broker_v1/service_tokens.rs \
 				data-plane/decision-gate-rs/src/native_secret_broker_v1/refresh.rs \
 				data-plane/decision-gate-rs/src/native_oauth_refresh_v1.rs \
+				data-plane/decision-gate-rs/src/response_v2/custody/services/ledger_put/mod.rs \
+				data-plane/decision-gate-rs/src/response_v2/custody/services/ledger_put/store.rs \
+				data-plane/decision-gate-rs/src/response_v2/custody/services/ledger_put/validation.rs \
+				data-plane/decision-gate-rs/src/response_v2/custody/services/ledger_put/wire.rs \
+				data-plane/decision-gate-rs/src/response_v2/state_authority/postgres/sequence_originals.rs \
+				data-plane/decision-gate-rs/src/response_v2/state_authority/postgres/staged_originals.rs \
+				data-plane/decision-gate-rs/src/native_target_dispatch.rs \
+				data-plane/decision-gate-rs/src/native_target_dispatch_v1.rs \
+				data-plane/decision-gate-rs/src/native_target_dispatch_v1/config.rs \
+				data-plane/decision-gate-rs/src/response_v2/custody/target_dispatch/mod.rs \
+				data-plane/decision-gate-rs/src/response_v2/custody/target_dispatch/role.rs \
+				data-plane/decision-gate-rs/src/response_v2/custody/target_dispatch/wire.rs \
+				data-plane/decision-gate-rs/src/response_v2/target_dispatch_client.rs \
 				data-plane/decision-gate-rs/src/native_oauth_refresh.rs \
 				data-plane/decision-gate-rs/src/native_oauth_exchange_v1.rs \
 				data-plane/decision-gate-rs/src/native_oauth_browser_v1.rs \
@@ -4204,6 +4217,9 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/response-v2-guest-listener.v1.schema.json \
 				schemas/response-v2-guest-inspector.v1.schema.json \
 				schemas/response-v2-guest-role.v1.schema.json \
+				schemas/response-v2-ledger-raw-persistence.v1.schema.json \
+				schemas/response-v2-staged-original.v1.schema.json \
+				schemas/response-v2-target-dispatch.v1.schema.json \
 				schemas/rbac-witness-recovery.v1.schema.json \
 				schemas/native-secret-broker.v1.schema.json \
 				schemas/native-startup-configuration.v5.schema.json \

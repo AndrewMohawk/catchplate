@@ -7,6 +7,7 @@
 pub mod schema;
 pub mod statements;
 pub mod store;
+pub mod sequence_originals;
 
 pub use store::{
     ExactSignedResultBytes, ImmutableObjectStore, PgRow, PgValue,

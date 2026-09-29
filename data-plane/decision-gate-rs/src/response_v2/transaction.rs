@@ -140,6 +140,9 @@ pub(super) fn execute_response_observation_v2_transaction(
             .ok_or(
                 ResponseObservationV2TransactionError::Unavailable,
             )?;
+    // State authority uses an exact millisecond BOOTTIME contract. Narrow once
+    // before Hello and retain that one original through every later owner.
+    let deadline_at_boottime_ns = deadline_at_boottime_ns / 1_000_000 * 1_000_000;
     let lifecycle_deadline =
         ResponseObservationV2Deadline::from_absolute(
             deadline_at_boottime_ns,
@@ -612,6 +615,7 @@ pub(super) fn execute_response_observation_v2_transaction(
             lifecycle_deadline,
         )?,
     ];
+    let staged_input_original = stage_objects[1].descriptor.clone();
     let credential_reference = credential_id
         .zip(credential_generation)
         .map(|(credential_id, credential_generation)| {
@@ -663,6 +667,16 @@ pub(super) fn execute_response_observation_v2_transaction(
             }
         };
 
+    let mut native_response_guard = None;
+    let (dispatch_evidence, upstream_response) = if client.guest_listener.is_some() {
+        let (evidence, object, guard) = super::target_dispatch_client::execute_native_capture(
+            state, snapshot, decision, request, upstream_url, provider_headers, injection_plan,
+            &session, &mut cursor, &stable_resume_id, &staged_request, &staged_input_original,
+            &credential_free_request, shadow_finalization, shadow_dispatch_barrier_crossed,
+        )?;
+        native_response_guard = Some(guard);
+        (evidence, object)
+    } else {
     let live_authorization_evidence =
         response_observation_v2_dispatch_authorization(
             snapshot,
@@ -841,6 +855,8 @@ pub(super) fn execute_response_observation_v2_transaction(
                 )
             }
         };
+    (dispatch_evidence, upstream_response)
+    };
     transaction.upstream_response_sha256 =
         Some(upstream_response.object_sha256.clone());
     cursor.transaction = transaction.clone();
@@ -1614,6 +1630,10 @@ pub(super) fn execute_response_observation_v2_transaction(
             ResponseObservationV2TransactionError::OutcomeUnknown
                 .with_resume(&attempt_id, &stable_resume_id),
         );
+    }
+    if native_response_guard.as_ref().is_some_and(|guard|
+        guard.detects(&response_bytes) || guard.detects(&parsed.entity_body)) {
+        return Err(ResponseObservationV2TransactionError::Denied);
     }
     if let Some(release) = release_authorization.as_mut() {
         let response_evidence = vec![json!({

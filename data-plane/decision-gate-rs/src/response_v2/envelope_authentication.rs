@@ -229,7 +229,7 @@ pub(super) fn response_observation_v2_verify_nested_authority_envelope(
     Ok(())
 }
 
-fn verify_nested_authority_signature(
+pub(super) fn verify_nested_authority_signature(
     client: &ResponseObservationV2Client,
     artifact: &serverware_decision_gate::SignedAuthorityArtifact,
     expected: &NestedArtifactExpectation,

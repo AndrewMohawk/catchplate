@@ -3,7 +3,8 @@ mod common;
 mod credential_transport;
 mod immutable_artifact_ledger;
 pub(super) mod ledger_exact_read;
-mod engine;
+pub(super) mod ledger_put;
+pub(super) mod engine;
 mod policy_proof_verifier;
 mod release_attestor_publisher;
 pub(super) mod router;
@@ -73,6 +74,30 @@ pub(super) fn query_attempt_state(
     }
     Ok(observation)
 }
+
+pub(super) fn query_staged_original(
+    config: &RootOwnedResponseObservationV2Config,
+    request: &super::protocol::StagedOriginalQueryV1,
+) -> Result<super::protocol::SignedStagedOriginalV1, V2RuntimeError> {
+    let signed: super::protocol::SignedStagedOriginalV1 = invoke_service(
+        config, CustodyServiceRole::StateAuthority, ServiceOperationV1::StateCas,
+        &request.request_id, request, request.deadline_boottime_ns)?;
+    super::attestation::verify_staged_original(config.custody_topology(), &signed)?;
+    let body = &signed.body;
+    if request.api_version != super::protocol::STAGED_ORIGINAL_QUERY_API_VERSION
+        || signed.generation_id != request.generation_id || signed.generation != request.generation
+        || signed.request_id != request.request_id || signed.operation_id != request.operation_id
+        || body.attempt_id != request.attempt_id || body.stable_resume_id != request.expected_stable_resume_id
+        || body.revision != request.expected_revision || body.fencing_token != request.expected_fencing_token
+        || body.state != request.expected_state
+        || body.dispatch.as_ref().map(|v| &v.exact_request_sha256) != request.expected_dispatch_request_sha256.as_ref()
+        || request.deadline_boottime_ns / 1_000_000 > body.original_deadline.deadline_boot_millis
+        || boottime_ns()? >= request.deadline_boottime_ns {
+        return Err(V2RuntimeError::new("staged_original_query_mismatch",
+            "authenticated original does not answer the exact current-state purpose and original deadline"));
+    }
+    Ok(signed)
+}
 use super::recovery::{
     boottime_ns, random_challenge_nonce, BootDeadline,
     ServiceConnection,
@@ -127,7 +152,7 @@ pub(crate) fn check_readiness(
         &scoped.process.readiness_record_path,
     )?;
     common::verify_readiness_record(
-        topology,
+        config,
         &scoped,
         &record,
     )?;
@@ -216,7 +241,7 @@ pub(crate) fn check_readiness(
                     )
                 })?;
             common::verify_live_handshake_against_record(
-                topology,
+                config,
                 baseline,
                 live,
                 &request_id,
@@ -244,7 +269,7 @@ pub(crate) fn check_readiness(
                 )
             })?;
         common::verify_live_handshake_against_record(
-            topology,
+            config,
             expected,
             live,
             &request_id,
@@ -554,7 +579,7 @@ where
 {
     let topology = config.custody_topology();
     let scoped = config.scoped_service_config(role)?;
-    if !super::generation::required_service_operations(role)
+    if !super::generation::selected_service_operations(config,role)
         .contains(&operation)
         || operation == super::protocol::ServiceOperationV1::Readiness
     {
@@ -567,7 +592,7 @@ where
         &scoped.process.readiness_record_path,
     )?;
     common::verify_readiness_record(
-        topology,
+        config,
         &scoped,
         &readiness_record,
     )?;
@@ -616,7 +641,7 @@ where
             )
         })?;
     common::verify_live_handshake_against_record(
-        topology,
+        config,
         baseline,
         live_handshake,
         request_id,
@@ -654,7 +679,7 @@ where
         if request_exact_objects.len() != 1 {
             return Err(V2RuntimeError::new(
                 "custody_service_request_exact_object_count_invalid",
-                "service request may carry only the one declared final-envelope proof descriptor",
+                "service request may carry only its one declared sealed input descriptor",
             ));
         }
         let raw_fds = request_exact_objects

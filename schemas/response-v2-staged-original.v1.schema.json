@@ -1,0 +1,126 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/response-v2-staged-original.v1.schema.json",
+  "title": "Response v2 fresh sequence execution and authenticated staged originals",
+  "description": "Data-only shapes. Actual generation/profile, canonical bytes, signatures, SQL/replay originals, current owner/fence/state and original deadline are checked by the runtime. Never a migration or injected credential object.",
+  "oneOf": [
+    {"$ref": "#/$defs/sequenceExecution"},
+    {"$ref": "#/$defs/query"},
+    {"$ref": "#/$defs/signedOriginal"}
+  ],
+  "$defs": {
+    "identifier": {"$ref": "response-v2-state-authority-rpc.v1.schema.json#/$defs/identifier"},
+    "digest": {"$ref": "response-v2-state-authority-rpc.v1.schema.json#/$defs/sha256"},
+    "uint": {"$ref": "response-v2-state-authority-rpc.v1.schema.json#/$defs/safeUint"},
+    "positive": {"$ref": "response-v2-state-authority-rpc.v1.schema.json#/$defs/positiveSafeUint"},
+    "deadline": {"$ref": "response-v2-state-authority-rpc.v1.schema.json#/$defs/bootDeadline"},
+    "frame": {"$ref": "response-v2-state-authority-rpc.v1.schema.json#/$defs/requestFrame"},
+    "sequenceExecution": {
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "requestId", "operationId", "attemptId", "stableResumeId", "attemptRevision", "fencingToken", "deadlineBoottimeNs", "frame"],
+      "properties": {
+        "apiVersion": {"const": "serverware.responseObservationV2SequenceStateAuthority/v1"},
+        "requestId": {"$ref": "#/$defs/identifier"},
+        "operationId": {"$ref": "#/$defs/identifier"},
+        "attemptId": {"$ref": "#/$defs/identifier"},
+        "stableResumeId": {"$ref": "#/$defs/digest"},
+        "attemptRevision": {"$ref": "#/$defs/uint"},
+        "fencingToken": {"$ref": "#/$defs/uint"},
+        "deadlineBoottimeNs": {"$ref": "#/$defs/positive"},
+        "frame": {"$ref": "#/$defs/frame"}
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "attemptRevision": {"const": 0}, "fencingToken": {"const": 0},
+            "frame": {"properties": {"request": {"properties": {
+              "operation": {"const": "responseV2.attempt.reserve/v1"},
+              "expectedRevision": {"const": 0}, "expectedState": {"const": "ABSENT"},
+              "fence": {"properties": {"mode": {"const": "ALLOCATE"}, "fenceToken": {"type": "null"}}}
+            }}}}
+          }
+        },
+        {
+          "properties": {
+            "attemptRevision": {"$ref": "#/$defs/positive"}, "fencingToken": {"$ref": "#/$defs/positive"},
+            "frame": {"properties": {"request": {"properties": {
+              "operation": {"not": {"const": "responseV2.attempt.reserve/v1"}},
+              "fence": {"properties": {"mode": {"const": "EXACT"}, "fenceToken": {"type": "string", "pattern": "^[1-9][0-9]*$"}}}
+            }}}}
+          }
+        }
+      ]
+    },
+    "query": {
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "generationId", "generation", "requestId", "operationId", "attemptId", "expectedStableResumeId", "expectedRevision", "expectedFencingToken", "expectedState", "expectedDispatchRequestSha256", "deadlineBoottimeNs"],
+      "properties": {
+        "apiVersion": {"const": "serverware.responseObservationV2StagedOriginalQuery/v1"},
+        "generationId": {"$ref": "#/$defs/identifier"}, "generation": {"$ref": "#/$defs/positive"},
+        "requestId": {"$ref": "#/$defs/identifier"}, "operationId": {"$ref": "#/$defs/identifier"},
+        "attemptId": {"$ref": "#/$defs/identifier"}, "expectedStableResumeId": {"$ref": "#/$defs/digest"},
+        "expectedRevision": {"$ref": "#/$defs/positive"}, "expectedFencingToken": {"$ref": "#/$defs/positive"},
+        "expectedState": {"enum": ["STAGED", "DISPATCHING"]},
+        "expectedDispatchRequestSha256": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/digest"}]},
+        "deadlineBoottimeNs": {"$ref": "#/$defs/positive"}
+      },
+      "oneOf": [
+        {"properties": {"expectedState": {"const": "STAGED"}, "expectedDispatchRequestSha256": {"type": "null"}}},
+        {"properties": {"expectedState": {"const": "DISPATCHING"}, "expectedDispatchRequestSha256": {"$ref": "#/$defs/digest"}}}
+      ]
+    },
+    "original": {
+      "type": "object", "additionalProperties": false,
+      "required": ["frame", "exactRequestSha256", "result", "exactResultSha256"],
+      "properties": {
+        "frame": {"$ref": "#/$defs/frame"}, "exactRequestSha256": {"$ref": "#/$defs/digest"},
+        "result": {"$ref": "response-v2-state-authority-rpc.v1.schema.json#/$defs/signedResult"},
+        "exactResultSha256": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "body": {
+      "type": "object", "additionalProperties": false,
+      "required": ["attemptId", "stableResumeId", "revision", "fencingToken", "state", "originalDeadline", "reserve", "stage", "dispatch"],
+      "properties": {
+        "attemptId": {"$ref": "#/$defs/identifier"}, "stableResumeId": {"$ref": "#/$defs/digest"},
+        "revision": {"$ref": "#/$defs/positive"}, "fencingToken": {"$ref": "#/$defs/positive"},
+        "state": {"enum": ["STAGED", "DISPATCHING"]}, "originalDeadline": {"$ref": "#/$defs/deadline"},
+        "reserve": {"$ref": "#/$defs/original"}, "stage": {"$ref": "#/$defs/original"},
+        "dispatch": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/original"}]}
+      },
+      "oneOf": [
+        {"properties": {"state": {"const": "STAGED"}, "dispatch": {"type": "null"}}},
+        {"properties": {"state": {"const": "DISPATCHING"}, "dispatch": {"$ref": "#/$defs/original"}}}
+      ]
+    },
+    "authorityScope": {
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "generationId", "generation", "serviceRole", "serviceId", "logicalRole", "roleIdentityRootSha256", "keyId", "keyMaterialSha256", "operation", "operationId", "attemptId", "attemptRevision", "fencingToken", "executableSha256", "configurationSha256", "allowedOperations", "operationBindingSha256"],
+      "properties": {
+        "apiVersion": {"const": "serverware.responseObservationV2ProviderAuthorityScope/v2"},
+        "generationId": {"$ref": "#/$defs/identifier"}, "generation": {"$ref": "#/$defs/positive"},
+        "serviceRole": {"const": "state-authority"}, "serviceId": {"$ref": "#/$defs/identifier"},
+        "logicalRole": {"const": "linearizable-store"}, "roleIdentityRootSha256": {"$ref": "#/$defs/digest"},
+        "keyId": {"$ref": "#/$defs/identifier"}, "keyMaterialSha256": {"$ref": "#/$defs/digest"},
+        "operation": {"const": "STATE_CAS"}, "operationId": {"$ref": "#/$defs/identifier"},
+        "attemptId": {"$ref": "#/$defs/identifier"}, "attemptRevision": {"$ref": "#/$defs/positive"},
+        "fencingToken": {"$ref": "#/$defs/positive"}, "executableSha256": {"$ref": "#/$defs/digest"},
+        "configurationSha256": {"$ref": "#/$defs/digest"}, "operationBindingSha256": {"$ref": "#/$defs/digest"},
+        "allowedOperations": {"type": "array", "minItems": 1, "uniqueItems": true,
+          "items": {"enum": ["READINESS", "TRANSITION_AUTHORIZE", "FINAL_ENVELOPE_VERIFY", "STATE_CAS", "COMMIT_RELEASE_METADATA", "REPLAY_RESOLVE", "CONSUME_RELEASE_AND_RETRIEVE_EXACT", "FENCE_ALLOCATE", "FENCE_REVOKE", "QUIESCENCE_OBSERVE", "IMMUTABLE_PUT", "INSPECT_IMMUTABLE_RAW", "TARGET_DISPATCH", "EXACT_RESPONSE_VALIDATE", "ATTEST", "AUTHORIZE_RELEASE", "PUBLISH", "RECOVER", "RECONCILE", "CLEANUP"]}}
+      }
+    },
+    "signedOriginal": {
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "generationId", "generation", "requestId", "operationId", "body", "authorityScope", "signerLogicalRole", "signerKeyId", "signature"],
+      "properties": {
+        "apiVersion": {"const": "serverware.responseObservationV2StagedOriginal/v1"},
+        "generationId": {"$ref": "#/$defs/identifier"}, "generation": {"$ref": "#/$defs/positive"},
+        "requestId": {"$ref": "#/$defs/identifier"}, "operationId": {"$ref": "#/$defs/identifier"},
+        "body": {"$ref": "#/$defs/body"}, "authorityScope": {"$ref": "#/$defs/authorityScope"},
+        "signerLogicalRole": {"const": "linearizable-store"}, "signerKeyId": {"$ref": "#/$defs/identifier"},
+        "signature": {"type": "string", "pattern": "^[A-Za-z0-9+/]{86}==$"}
+      }
+    }
+  }
+}

@@ -878,6 +878,8 @@ mod linux_runtime {
                 config.whole_operation_timeout(),
             )?;
             let descriptors = request.exact_object_descriptors();
+            super::super::target_dispatch::require_session(config,&request,&peer.identity,&session_identity)
+                .map_err(runtime_io_error)?;
             let validated = super::super::validate_exact_object_files(
                 &descriptors,
                 packet.files,
@@ -970,6 +972,10 @@ mod linux_runtime {
         use crate::response_observation_v2_api::
             V2ResponseDataRequest as Request;
         let (api_version, binding) = match request {
+            Request::TargetDispatchBegin {api_version,params,..}=>(api_version,Some((params.original.binding.request_id.as_str(),
+                params.original.binding.custody_boot_id.as_str(),params.original.binding.client_identity_sha256.as_str()))),
+            Request::CapturePersist {api_version,request_id,params,..}=>(api_version,Some((request_id.as_str(),
+                params.permit.original.binding.custody_boot_id.as_str(),params.permit.original.binding.client_identity_sha256.as_str()))),
             Request::AppendReleaseTransparency {
                 api_version,
                 params,

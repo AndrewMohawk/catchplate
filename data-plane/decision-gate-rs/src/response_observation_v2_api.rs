@@ -340,6 +340,12 @@ pub enum V2ControlResponse {
     deny_unknown_fields
 )]
 pub enum V2ResponseDataRequest {
+    #[serde(rename = "responseObservationV2.targetDispatchBegin/v1")]
+    TargetDispatchBegin {api_version:String,request_id:String,boot_id:String,
+        params:crate::response_observation_v2::custody::target_dispatch::wire::BeginRequest},
+    #[serde(rename = "responseObservationV2.capturePersist/v1")]
+    CapturePersist {api_version:String,request_id:String,boot_id:String,
+        params:crate::response_observation_v2::custody::target_dispatch::wire::CapturePersistRequest},
     #[serde(rename = "responseObservationV2.appendReleaseTransparency/v1")]
     AppendReleaseTransparency {
         api_version: String,
@@ -418,6 +424,10 @@ pub enum V2ResponseDataControlResponse {
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 pub enum V2ResponseDataOperation {
+    #[serde(rename = "responseObservationV2.targetDispatchBegin/v1")]
+    TargetDispatchBegin,
+    #[serde(rename = "responseObservationV2.capturePersist/v1")]
+    CapturePersist,
     #[serde(rename = "responseObservationV2.appendReleaseTransparency/v1")]
     AppendReleaseTransparency,
     #[serde(rename = "responseObservationV2.inspectImmutableResponse/v1")]
@@ -441,6 +451,10 @@ pub enum V2ResponseDataOperation {
     deny_unknown_fields
 )]
 pub enum V2ResponseDataResult {
+    #[serde(rename = "responseObservationV2.targetDispatchBegin/v1")]
+    TargetDispatchBegin(crate::response_observation_v2::custody::target_dispatch::wire::SignedTargetDispatchPermit),
+    #[serde(rename = "responseObservationV2.capturePersist/v1")]
+    CapturePersist(crate::response_observation_v2::custody::target_dispatch::wire::CompletedCapture),
     #[serde(rename = "responseObservationV2.appendReleaseTransparency/v1")]
     AppendReleaseTransparency(V2AppendReleaseTransparencyResult),
     #[serde(rename = "responseObservationV2.inspectImmutableResponse/v1")]
@@ -2696,6 +2710,8 @@ pub fn result_exact_object_descriptors(
 impl V2ResponseDataRequest {
     pub fn operation(&self) -> V2ResponseDataOperation {
         match self {
+            Self::TargetDispatchBegin {..}=>V2ResponseDataOperation::TargetDispatchBegin,
+            Self::CapturePersist {..}=>V2ResponseDataOperation::CapturePersist,
             Self::AppendReleaseTransparency { .. } => {
                 V2ResponseDataOperation::AppendReleaseTransparency
             }
@@ -2722,6 +2738,8 @@ impl V2ResponseDataRequest {
 
     pub fn operation_name(&self) -> &'static str {
         match self.operation() {
+            V2ResponseDataOperation::TargetDispatchBegin=>"responseObservationV2.targetDispatchBegin/v1",
+            V2ResponseDataOperation::CapturePersist=>"responseObservationV2.capturePersist/v1",
             V2ResponseDataOperation::AppendReleaseTransparency => {
                 V2_APPEND_RELEASE_TRANSPARENCY_OPERATION
             }
@@ -2748,6 +2766,7 @@ impl V2ResponseDataRequest {
 
     pub fn request_id(&self) -> &str {
         match self {
+            Self::TargetDispatchBegin {request_id,..}|Self::CapturePersist {request_id,..}=>request_id,
             Self::AppendReleaseTransparency { request_id, .. }
             | Self::InspectImmutableResponse { request_id, .. }
             | Self::ValidateFinalEnvelope { request_id, .. }
@@ -2760,6 +2779,7 @@ impl V2ResponseDataRequest {
 
     pub fn boot_id(&self) -> &str {
         match self {
+            Self::TargetDispatchBegin {boot_id,..}|Self::CapturePersist {boot_id,..}=>boot_id,
             Self::AppendReleaseTransparency { boot_id, .. }
             | Self::InspectImmutableResponse { boot_id, .. }
             | Self::ValidateFinalEnvelope { boot_id, .. }
@@ -2772,6 +2792,8 @@ impl V2ResponseDataRequest {
 
     pub fn attempt_id(&self) -> &str {
         match self {
+            Self::TargetDispatchBegin {params,..}=>&params.original.binding.attempt_id,
+            Self::CapturePersist {params,..}=>&params.permit.original.binding.attempt_id,
             Self::AppendReleaseTransparency { params, .. } => {
                 &params.binding.attempt_id
             }
@@ -2807,6 +2829,8 @@ impl V2ResponseDataRequest {
 
     pub fn stable_resume_id(&self) -> &str {
         match self {
+            Self::TargetDispatchBegin {params,..}=>&params.original.stable_resume_id,
+            Self::CapturePersist {params,..}=>&params.stable_resume_id,
             Self::AppendReleaseTransparency { params, .. } => {
                 &params.stable_resume_id
             }
@@ -2842,6 +2866,8 @@ impl V2ResponseDataRequest {
 
     pub fn fencing_token(&self) -> u64 {
         match self {
+            Self::TargetDispatchBegin {params,..}=>params.original.binding.fencing_token,
+            Self::CapturePersist {params,..}=>params.permit.original.binding.fencing_token,
             Self::AppendReleaseTransparency { params, .. } => {
                 params.binding.fencing_token
             }
@@ -2877,6 +2903,8 @@ impl V2ResponseDataRequest {
 
     pub fn deadline(&self) -> (&V2MonotonicDeadlineV1, u64) {
         match self {
+            Self::TargetDispatchBegin {params,..}=>(&params.original.binding.monotonic_deadline,params.original.binding.deadline_at_epoch_ms),
+            Self::CapturePersist {params,..}=>(&params.permit.original.binding.monotonic_deadline,params.permit.original.binding.deadline_at_epoch_ms),
             Self::AppendReleaseTransparency { params, .. } => (
                 &params.binding.monotonic_deadline,
                 params.binding.deadline_at_epoch_ms,
@@ -2926,6 +2954,8 @@ impl V2ResponseDataRequest {
         &self,
     ) -> Vec<ExactByteObjectDescriptor> {
         match self {
+            Self::TargetDispatchBegin {..}=>Vec::new(),
+            Self::CapturePersist {params,..}=>vec![params.raw_response.clone()],
             Self::ValidateFinalEnvelope { params, .. } => {
                 vec![params.authority_proof.clone()]
             }
@@ -2942,6 +2972,8 @@ impl V2ResponseDataRequest {
 impl V2ResponseDataResult {
     pub fn operation(&self) -> V2ResponseDataOperation {
         match self {
+            Self::TargetDispatchBegin(_)=>V2ResponseDataOperation::TargetDispatchBegin,
+            Self::CapturePersist(_)=>V2ResponseDataOperation::CapturePersist,
             Self::AppendReleaseTransparency(_) => {
                 V2ResponseDataOperation::AppendReleaseTransparency
             }

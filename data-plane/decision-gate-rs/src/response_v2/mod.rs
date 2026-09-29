@@ -13,6 +13,7 @@ mod native_config;
 mod release;
 mod transparency_contract;
 mod transaction;
+mod target_dispatch_client;
 
 pub(super) use attestation::*;
 use client_transport::*;
@@ -435,6 +436,15 @@ pub(super) struct ResponseObservationV2ResponseDataReply {
     pub(super) result: V2ResponseDataResult,
     pub(super) exact_bytes: BTreeMap<u16, Zeroizing<Vec<u8>>>,
     pub(super) canonical_response: Zeroizing<Vec<u8>>,
+}
+
+/// Produced only by the actual retained-session target-dispatch exchange,
+/// after its normal reply attestation and exact request/original joins.
+pub(super) struct AuthenticatedTargetDispatchReply {
+    permit:serverware_decision_gate::response_observation_v2::custody::target_dispatch::wire::SignedTargetDispatchPermit,
+}
+impl AuthenticatedTargetDispatchReply {
+    pub(super) fn into_permit(self)->serverware_decision_gate::response_observation_v2::custody::target_dispatch::wire::SignedTargetDispatchPermit {self.permit}
 }
 
 pub(super) struct ResponseObservationV2Session<'a> {

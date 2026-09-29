@@ -47,6 +47,7 @@ pub mod native_response_profile_v1;
 pub mod native_approver_policy_v1;
 pub mod native_lease_profile_v1;
 pub mod native_currentness_v1;
+pub mod native_target_dispatch_v1;
 pub mod native_oauth_refresh_v1;
 pub mod native_oauth_cleanup_v1;
 pub mod native_oauth_exchange_v1;
@@ -1713,6 +1714,56 @@ impl CustodyRuntime {
             "nativeKeyEvidence":{"apiVersion":"serverware.nativeResponseProofKeyEvidence/v1",
                 "attestationDocumentB64":general_purpose::URL_SAFE_NO_PAD.encode(fresh.document()),
                 "responseProofPublicKey":general_purpose::URL_SAFE_NO_PAD.encode(fresh.public_key())}}))
+    }
+
+    /// Native target capture is a separate purpose. No UDS operation or
+    /// currentness grant can select this signing family. The binary adapter
+    /// accepts only its source-owned actual gate execution preparation.
+    pub fn sign_native_target_dispatch(&self, identity:&mut EnclaveRuntimeIdentityV1,
+        statement:&native_target_dispatch_v1::NativeStatement, deadline:u64)
+        ->Result<native_target_dispatch_v1::NativeCaptureEnvelope,ProtocolError> {
+        self.verify_native_process()?;
+        let CustodySigningBackend::Native {owner,quote,..}=&self.signing_backend else {
+            return Err(invalid_statement("target dispatch requires genuine native custody"));
+        };
+        let now=||SystemTime::now().duration_since(UNIX_EPOCH).map_err(|_|invalid_statement("target dispatch epoch clock"))?
+            .as_nanos().try_into().map_err(|_|invalid_statement("target dispatch epoch overflow"));
+        native_target_dispatch_v1::validate_statement(statement,now()?).map_err(native_proof_error)?;
+        let original_deadline=statement.original.binding.monotonic_deadline.absolute_boottime_ns.parse::<u64>()
+            .map_err(|_|invalid_statement("target dispatch original deadline"))?;
+        if deadline>original_deadline || statement.boot_id!=self.boot_id || statement.key_id!=self.key_id
+            || Some(statement.control_plane_response_signing_key_id.as_str())!=self.control_plane_response_signing_key_id.as_deref() {
+            return Err(invalid_statement("target dispatch actual custody/deadline differs"));
+        }
+        let mut owner=owner.lock().map_err(|_|invalid_statement("target dispatch key owner poisoned"))?;
+        let deadline=deadline.min(identity.deadline()).min(owner.deadline());
+        owner.verify_identity(identity,deadline).map_err(native_proof_error)?;
+        let mut policy=[0;32];
+        hex::decode_to_slice(&statement.original.binding.transaction.policy_sha256[7..],&mut policy)
+            .map_err(|_|invalid_statement("target dispatch policy digest invalid"))?;
+        owner.verify_policy_commitment(policy,deadline).map_err(native_proof_error)?;
+        let key=owner.public_key_bytes().map_err(native_proof_error)?;
+        if quote.public_key()!=key.as_slice() || sha256_prefixed(&ed25519_spki_der(&key))!=self.key_id {
+            return Err(invalid_statement("target dispatch original quoted key changed"));
+        }
+        let signature=owner.sign(&native_target_dispatch_v1::preimage(statement).map_err(native_proof_error)?,deadline)
+            .map_err(native_proof_error)?;
+        let nonce=native_target_dispatch_v1::quote_nonce(statement,&signature).map_err(native_proof_error)?;
+        let fresh=owner.quote_fresh(identity,nonce,deadline).map_err(native_proof_error)?;
+        if fresh.public_key()!=key.as_slice() || fresh.user_data()!=quote.user_data() || fresh.nonce()!=&nonce
+            || fresh.document().is_empty() || fresh.document().len()>12*1024 {
+            return Err(invalid_statement("target dispatch quote lost original key/scope/challenge"));
+        }
+        native_target_dispatch_v1::validate_statement(statement,now()?).map_err(native_proof_error)?;
+        owner.verify_live(deadline).map_err(native_proof_error)?;
+        identity.verify_live(deadline).map_err(native_proof_error)?;
+        self.verify_native_process()?;
+        Ok(native_target_dispatch_v1::NativeCaptureEnvelope {statement:statement.clone(),
+            signature:format!("ed25519:{}",general_purpose::URL_SAFE_NO_PAD.encode(signature)),
+            native_key_evidence:native_target_dispatch_v1::NativeKeyEvidence {
+                api_version:"serverware.nativeResponseProofKeyEvidence/v1".to_owned(),
+                attestation_document_b64:general_purpose::URL_SAFE_NO_PAD.encode(fresh.document()),
+                response_proof_public_key:general_purpose::URL_SAFE_NO_PAD.encode(fresh.public_key())}})
     }
 
     /// Dedicated refresh command accepts only a sealed preparation returned by

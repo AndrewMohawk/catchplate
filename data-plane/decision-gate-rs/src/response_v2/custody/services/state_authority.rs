@@ -39,20 +39,38 @@ use super::super::super::state_authority::{
 };
 
 const QUERY_ATTEMPT_OBSERVATION_SQL: &str = "
-SELECT revision, state, fence_token, stable_resume_id,
-       owner_process_id, owner_pid, owner_start_time_ticks,
-       owner_cgroup_id, deadline_boot_id, deadline_boot_millis
-FROM response_v2_state_authority.attempts
-WHERE generation_id = $1 AND attempt_id = $2
-FOR SHARE";
+SELECT attempt.revision, attempt.state, attempt.fence_token, attempt.stable_resume_id,
+       attempt.owner_process_id, attempt.owner_pid, attempt.owner_start_time_ticks,
+       attempt.owner_cgroup_id, attempt.deadline_boot_id, attempt.deadline_boot_millis,
+       fence.allocation_sequence
+FROM response_v2_state_authority.attempts AS attempt
+JOIN response_v2_state_authority.fences AS fence
+  ON fence.generation_id=attempt.generation_id AND fence.attempt_id=attempt.attempt_id
+ AND fence.fence_token=attempt.fence_token
+WHERE attempt.generation_id = $1 AND attempt.attempt_id = $2
+FOR SHARE OF attempt,fence";
 const QUERY_ATTEMPT_OBJECTS_SQL: &str = "
-SELECT generation_id, object_id, object_kind, content_sha256,
-       content_length, media_type, storage_locator,
-       immutable_storage_receipt_sha256
-FROM response_v2_state_authority.immutable_objects
-WHERE generation_id = $1 AND attempt_id = $2
-ORDER BY object_id
-FOR SHARE";
+SELECT object.generation_id, object.object_id, object.object_kind, object.content_sha256,
+       object.content_length, object.media_type, object.storage_locator,
+       object.immutable_storage_receipt_sha256
+FROM response_v2_state_authority.immutable_objects AS object
+WHERE object.generation_id = $1 AND (object.attempt_id = $2 OR EXISTS (
+    SELECT 1 FROM response_v2_state_authority.evidence AS evidence
+    WHERE evidence.generation_id = object.generation_id AND evidence.attempt_id = $2
+      AND evidence.evidence_type = 'ARTIFACT_COMMIT'
+      AND evidence.object_sha256 = object.content_sha256
+      AND convert_from(evidence.canonical_artifact,'UTF8')::jsonb #>> '{body,generationId}' = object.generation_id
+      AND convert_from(evidence.canonical_artifact,'UTF8')::jsonb #>> '{body,attemptId}' = evidence.attempt_id
+      AND convert_from(evidence.canonical_artifact,'UTF8')::jsonb #>> '{body,artifactId}' = evidence.evidence_id
+      AND convert_from(evidence.canonical_artifact,'UTF8')::jsonb #>> '{body,payload,artifactType}' = 'ARTIFACT_COMMIT'
+      AND convert_from(evidence.canonical_artifact,'UTF8')::jsonb #>> '{body,payload,artifact,objectId}' = object.object_id
+      AND convert_from(evidence.canonical_artifact,'UTF8')::jsonb #>> '{body,payload,artifact,objectKind}' = object.object_kind
+      AND convert_from(evidence.canonical_artifact,'UTF8')::jsonb #>> '{body,payload,artifact,contentSha256}' = object.content_sha256
+      AND convert_from(evidence.canonical_artifact,'UTF8')::jsonb #>> '{body,payload,artifact,contentLength}' = object.content_length::text
+      AND convert_from(evidence.canonical_artifact,'UTF8')::jsonb #>> '{body,payload,artifact,immutableStorageReceiptSha256}' = object.immutable_storage_receipt_sha256
+))
+ORDER BY object.object_id
+FOR SHARE OF object";
 const QUERY_CREDENTIAL_USE_ID_SQL: &str = "
 SELECT credential_use_id
 FROM response_v2_state_authority.credential_uses
@@ -612,8 +630,35 @@ pub(super) fn execute_postgres(
     fencing_token: u64,
     signing_key: &RoleSigningKey,
 ) -> Result<StateExecution, V2RuntimeError> {
+    execute_profile_postgres(config, frame, request_id, operation_id, attempt_id,
+        stable_resume_id, attempt_revision, fencing_token, signing_key, false)
+}
+
+pub(super) fn execute_profile_postgres(
+    config: &RootOwnedResponseObservationV2Config,
+    frame: &super::super::super::state_authority::rpc::RpcRequestFrame,
+    request_id: &str,
+    operation_id: &str,
+    attempt_id: &str,
+    stable_resume_id: &str,
+    attempt_revision: u64,
+    fencing_token: u64,
+    signing_key: &RoleSigningKey,
+    sequence_profile: bool,
+) -> Result<StateExecution, V2RuntimeError> {
+    let reserve = frame.request.operation
+        == super::super::super::state_authority::lifecycle::OperationKind::AttemptReserve;
+    if reserve && (!sequence_profile || fencing_token != 0 || attempt_revision != 0) {
+        return Err(V2RuntimeError::new("sequence_reserve_profile_required",
+            "Reserve requires the explicit fresh sequence profile and unallocated zero wrapper"));
+    }
     let scoped =
         config.scoped_service_config(CustodyServiceRole::StateAuthority)?;
+    if sequence_profile && scoped.process.max_frame_bytes
+        != super::super::super::state_authority::postgres::sequence_originals::REQUIRED_CUSTODY_FRAME_BYTES {
+        return Err(V2RuntimeError::new("sequence_profile_transport_bound",
+            "new sequence execution requires the independently configured 256 KiB custody bound"));
+    }
     if signing_key.logical_role() != "linearizable-store" {
         return Err(V2RuntimeError::new(
             "state_authority_engine_signer_invalid",
@@ -639,9 +684,11 @@ pub(super) fn execute_postgres(
         timeout,
         None,
     )?;
-    let exact = authority
-        .execute_mutation(frame)
-        .map_err(authority_error)?;
+    let exact = if sequence_profile {
+        authority.execute_sequence_mutation(frame)
+    } else {
+        authority.execute_mutation(frame)
+    }.map_err(authority_error)?;
     let signed:
         super::super::super::state_authority::rpc::SignedOperationResult =
         serde_json::from_slice(&exact.canonical_bytes).map_err(|_| {
@@ -651,6 +698,12 @@ pub(super) fn execute_postgres(
             )
         })?;
     let body = &signed.body;
+    let allocated_fence = body.fence_token.0.parse::<u64>().map_err(|_| {
+        V2RuntimeError::new("state_authority_fence_profile_invalid",
+            "custody receipt requires an actual canonical sequence fence, never a hash conversion")
+    })?;
+    super::super::super::state_authority::postgres::sequence_originals::canonical_fence(
+        &body.fence_token.0, allocated_fence).map_err(authority_error)?;
     let expected_fence_token =
         frame.request.fence.fence_token.as_ref();
     if body.generation_id.0 != scoped.generation_id
@@ -660,6 +713,7 @@ pub(super) fn execute_postgres(
         || body.stable_resume_id.0 != stable_resume_id
         || body.authoritative_revision == 0
         || body.authoritative_revision < attempt_revision
+        || (!reserve && allocated_fence != fencing_token)
         || expected_fence_token
             .is_some_and(|token| token != &body.fence_token)
     {
@@ -686,7 +740,7 @@ pub(super) fn execute_postgres(
         operation_id,
         attempt_id,
         body.authoritative_revision,
-        fencing_token,
+        allocated_fence,
     )?;
     let mut receipt = SignedStateMutationReceiptV1 {
         api_version: STATE_MUTATION_RECEIPT_API_VERSION.to_owned(),
@@ -704,7 +758,7 @@ pub(super) fn execute_postgres(
         authoritative_revision: body.authoritative_revision,
         authoritative_state:
             body.authoritative_state.as_str().to_owned(),
-        fencing_token,
+        fencing_token: allocated_fence,
         signer_logical_role: signing_key.logical_role().to_owned(),
         signer_key_id: signing_key.key_id().to_owned(),
         signature: String::new(),
@@ -752,6 +806,61 @@ pub(super) fn execute_postgres(
     })
 }
 
+fn trusted_query_authority<'a>(
+    config: &RootOwnedResponseObservationV2Config,
+    signing_key: &'a RoleSigningKey,
+) -> Result<TrustedHostStateAuthority<'a>, V2RuntimeError> {
+    let scoped = config.scoped_service_config(CustodyServiceRole::StateAuthority)?;
+    let ledger = config.custody_topology().process(CustodyServiceRole::ImmutableArtifactLedger)
+        .ok_or_else(|| V2RuntimeError::new("state_authority_ledger_missing", "signed topology omits immutable ledger"))?;
+    trusted_host_authority(config, signing_key, ledger,
+        std::time::Duration::from_millis(scoped.process.request_timeout_ms), None)
+}
+
+pub(super) fn query_staged_original_postgres(
+    config: &RootOwnedResponseObservationV2Config,
+    request: &super::super::protocol::StagedOriginalQueryV1,
+    signing_key: &RoleSigningKey,
+) -> Result<super::super::protocol::SignedStagedOriginalV1, V2RuntimeError> {
+    use super::super::protocol::{SignedStagedOriginalV1, STAGED_ORIGINAL_API_VERSION,
+        STAGED_ORIGINAL_QUERY_API_VERSION};
+    let scoped = config.scoped_service_config(CustodyServiceRole::StateAuthority)?;
+    if request.api_version != STAGED_ORIGINAL_QUERY_API_VERSION
+        || request.generation_id != scoped.generation_id || request.generation != scoped.generation
+        || signing_key.logical_role() != "linearizable-store"
+        || request.expected_revision == 0 || request.expected_fencing_token == 0
+        || scoped.process.max_frame_bytes
+            != super::super::super::state_authority::postgres::sequence_originals::REQUIRED_CUSTODY_FRAME_BYTES {
+        return Err(V2RuntimeError::new("staged_original_query_invalid", "wrong exact query profile/generation/signer/head"));
+    }
+    Identifier(request.request_id.clone()).validate("stagedOriginal.requestId",128).map_err(authority_error)?;
+    Identifier(request.operation_id.clone()).validate("stagedOriginal.operationId",128).map_err(authority_error)?;
+    Digest(request.expected_stable_resume_id.clone()).validate("stagedOriginal.stableResumeId").map_err(authority_error)?;
+    if let Some(digest)=&request.expected_dispatch_request_sha256 {
+        Digest(digest.clone()).validate("stagedOriginal.dispatchRequestSha256").map_err(authority_error)?;
+    }
+    let backend = postgres_backend(config, &scoped)?;
+    let now = backend.current_boot_instant().map_err(authority_error)?;
+    let deadline = BootDeadline { clock: now.clock, boot_id: now.boot_id,
+        deadline_boot_millis: request.deadline_boottime_ns / 1_000_000 };
+    let body = trusted_query_authority(config, signing_key)?.query_staged_original(
+        &Identifier(request.attempt_id.clone()), &request.expected_stable_resume_id,
+        request.expected_revision, request.expected_fencing_token, request.expected_state,
+        request.expected_dispatch_request_sha256.as_deref(), &deadline).map_err(authority_error)?;
+    let authority_scope = provider_authority_scope(config.custody_topology(),
+        CustodyServiceRole::StateAuthority, signing_key, ServiceOperationV1::StateCas,
+        &request.operation_id, &body.attempt_id, body.revision, body.fencing_token)?;
+    let mut signed = SignedStagedOriginalV1 { api_version: STAGED_ORIGINAL_API_VERSION.into(),
+        generation_id: scoped.generation_id, generation: scoped.generation,
+        request_id: request.request_id.clone(), operation_id: request.operation_id.clone(), body,
+        authority_scope, signer_logical_role: signing_key.logical_role().into(),
+        signer_key_id: signing_key.key_id().into(), signature: String::new() };
+    signed.signature = signing_key.sign(super::super::attestation::STAGED_ORIGINAL_SIGNATURE_DOMAIN,
+        &signed.without_signature())?;
+    super::super::attestation::verify_staged_original(config.custody_topology(), &signed)?;
+    Ok(signed)
+}
+
 pub(super) fn query_attempt_observation_postgres(
     config: &RootOwnedResponseObservationV2Config,
     request: &AttemptStateQueryRequestV1,
@@ -794,6 +903,8 @@ pub(super) fn query_attempt_observation_postgres(
     let mut transaction = backend
         .begin_serializable(&deadline)
         .map_err(authority_error)?;
+    trusted_query_authority(config, signing_key)?
+        .require_sequence_database(transaction.as_mut()).map_err(authority_error)?;
     let attempt = transaction
         .query_optional(QUERY_ATTEMPT_OBSERVATION_SQL, &parameters)
         .map_err(authority_error)?
@@ -829,16 +940,10 @@ pub(super) fn query_attempt_observation_postgres(
     let stable_resume_id = attempt
         .require_text("stable_resume_id")
         .map_err(authority_error)?;
-    let fencing_token = attempt
-        .require_text("fence_token")
-        .map_err(authority_error)?
-        .parse::<u64>()
-        .map_err(|_| {
-            V2RuntimeError::new(
-                "attempt_state_query_fence_invalid",
-                "state authority fence is not canonical u64",
-            )
-        })?;
+    let fencing_token = super::super::super::state_authority::postgres::sequence_originals::canonical_fence(
+        &attempt.require_text("fence_token").map_err(authority_error)?,
+        attempt.require_u64("allocation_sequence").map_err(authority_error)?,
+    ).map_err(authority_error)?;
     if stable_resume_id != request.expected_stable_resume_id {
         return Err(V2RuntimeError::new(
             "attempt_state_query_resume_mismatch",

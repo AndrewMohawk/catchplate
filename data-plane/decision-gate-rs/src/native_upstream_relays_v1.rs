@@ -143,6 +143,19 @@ impl NativeUpstreamRelaysV1 {
         Ok(proxy)
     }
 
+    /// One selected, already policy-checked origin. The parent still receives
+    /// only TLS records and cannot select or inspect the HTTP request.
+    pub fn target_dispatch_stream(&self, host:&str, endpoint:SocketAddr, deadline:u64)
+        ->Result<crate::enclave_vsock_v1::VsockStreamV1,String> {
+        self.remaining()?;
+        let parent=*self.assignments.get(&(host.to_owned(),endpoint))
+            .ok_or("target dispatch origin has no retained native relay assignment")?;
+        let stream=crate::enclave_vsock_v1::VsockStreamV1::connect_parent(parent,deadline.min(self.deadline))
+            .map_err(|_|"target dispatch fixed TLS relay unavailable".to_owned())?;
+        self.remaining()?;
+        Ok(stream)
+    }
+
     /// Broker origins have independently configured literal endpoints; they
     /// cannot choose a destination from their request URL or ambient DNS.
     pub fn broker_proxy(&self, raw_url: &str) -> Result<reqwest::Proxy, String> {

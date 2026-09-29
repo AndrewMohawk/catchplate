@@ -1827,8 +1827,8 @@ fn read_service_readiness_record(
                     "router readiness contains an unexpected dependency role",
                 ));
             }
-            validate_post_reconciliation_handshake(
-                config.custody_topology(),
+            validate_selected_handshake(
+                config,
                 handshake,
             )?;
         }
@@ -1840,8 +1840,8 @@ fn read_service_readiness_record(
                     "service readiness omits its role-signed handshake",
                 )
             })?;
-        validate_post_reconciliation_handshake(
-            config.custody_topology(),
+        validate_selected_handshake(
+            config,
             handshake,
         )?;
         if handshake.service_role != role
@@ -2908,6 +2908,33 @@ pub(crate) fn validate_post_reconciliation_handshake(
     topology: &SignedCustodyTopologyV1,
     handshake: &SignedServiceHandshakeV1,
 ) -> Result<(), V2RuntimeError> {
+    validate_handshake_operations(topology,handshake,required_service_operations(handshake.service_role))
+}
+
+// Keep required_service_operations and the historical role/key root recipes
+// unchanged. These extra effects require actual cold configuration selection.
+pub(crate) fn selected_service_operations(
+    config:&super::RootOwnedResponseObservationV2Config, role:CustodyServiceRole,
+) -> BTreeSet<ServiceOperationV1> {
+    let mut selected=required_service_operations(role);
+    if role == CustodyServiceRole::CredentialTransport && config.target_dispatch.is_some() {
+        selected.insert(ServiceOperationV1::TargetDispatch);
+    }
+    if role == CustodyServiceRole::ImmutableArtifactLedger && config.ledger_raw_persistence.is_some() {
+        selected.insert(ServiceOperationV1::ImmutablePut);
+    }
+    selected
+}
+pub(crate) fn validate_selected_handshake(
+    config:&super::RootOwnedResponseObservationV2Config, handshake:&SignedServiceHandshakeV1,
+) -> Result<(),V2RuntimeError> {
+    validate_handshake_operations(config.custody_topology(),handshake,
+        selected_service_operations(config,handshake.service_role))
+}
+fn validate_handshake_operations(
+    topology:&SignedCustodyTopologyV1, handshake:&SignedServiceHandshakeV1,
+    required:BTreeSet<ServiceOperationV1>,
+) -> Result<(),V2RuntimeError> {
     let process = topology
         .process(handshake.service_role)
         .ok_or_else(|| {
@@ -2955,8 +2982,6 @@ pub(crate) fn validate_post_reconciliation_handshake(
             "service handshake is not bound to the exact signed generation, role keys, honest trust claim, and post-reconciliation state",
         ));
     }
-    let required =
-        required_service_operations(handshake.service_role);
     if implemented != required {
         return Err(V2RuntimeError::new(
             "custody_handshake_capability_mismatch",

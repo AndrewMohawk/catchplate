@@ -16,7 +16,7 @@ long-lived credential.
 
 ## Production status
 
-Checkpoint: **2026-09-28 — pre-production, source-only.**
+Checkpoint: **2026-09-29 — pre-production, source-only.**
 
 **35/46 source checkpoints landed · 4 active · 7 todo.**
 
@@ -26,16 +26,16 @@ Checkpoint: **2026-09-28 — pre-production, source-only.**
 
 ### Current work: native enrollment, workload trust and protected operations
 
-[`.250` source / f885504](https://github.com/example/private-deployment)
-connects [native credential leases](docs/native-credential-leases.md): producer,
-broker, quoted recipient and native authority/AAD/set, with independently pinned
-verifier v2 required even in development. Original deadlines, cache provenance and
-native parent hashes are joined; legacy profiles stay unchanged. Prior response,
-preflight and protected CA installation retain source credit. Separate signed
-egress authority and a real launcher-owned stopped-workload/claim/effect path are
-next; [egress remains design-only](docs/native-egress-installation-design.md).
-Provider/egress/canaries, Kubernetes, lifecycle and independent acceptance stay open.
-No build, test, runtime, NSM or AWS/spend acceptance is claimed.
+[`.251` source / e8a923c](https://github.com/example/private-deployment)
+adds an [internal native egress foundation](docs/native-egress-installation.md):
+separate signed grant, actual pre-exec workload owner, purpose-specific journal
+and genuine retained guard. There is no public configuration/CLI, firewall
+installer, kernel effect/readback or workload-start path. Cross-invocation launch
+admission and exact transaction/readback custody remain open. Prior credential
+leases, response/preflight and protected CA installation retain source credit;
+legacy profiles stay unchanged. Provider/egress/canaries, Kubernetes, lifecycle
+and independent acceptance stay open. No build, test, runtime, NSM or AWS/spend
+acceptance is claimed.
 
 The four active checkpoints remain partial:
 
@@ -55,8 +55,9 @@ The four active checkpoints remain partial:
   reservation/token/destination ownership. Quote-bound target-principal preflight
   now retains actual source/header/token/mTLS admission on the CONNECT transport;
   explicit native response/receipt/binding/lifecycle, signed preparation and
-  quoted native credential leases are source-connected. Actual CONNECT/provider policy,
-  Kubernetes ownership, scoped proxy/egress/canaries,
+  quoted native credential leases are source-connected. Internal egress grant,
+  pre-exec owner, journal and guard are source foundations, not a firewall/start
+  path. Actual CONNECT/provider policy, Kubernetes ownership, scoped proxy/egress/canaries,
   lifecycle/cross-session recovery, off-host rollback witnessing and independent
   service/exact-source verification remain open.
 - **O04 · Protected operations:** [genuine approval verification](docs/control-plane-approval-verification.md)
@@ -129,7 +130,7 @@ lists every remaining item and its evidence.
 | --- | --- | --- |
 | H05 | Historical authority across source/configuration/key changes | In progress |
 | N04 | Workload identity provisioning and authenticated channels | In progress |
-| N05 | Native enrollment, verified CA installation and proxy setup | In progress / partial; native issuance, host CA installation, principal preflight, response/authorization and credential leases source-connected; provider/egress/canaries and independent acceptance open |
+| N05 | Native enrollment, verified CA installation and proxy setup | In progress / partial; native issuance, host CA installation, preflight, response/leases and internal egress foundation source-landed; kernel effect/readback/start, provider/canaries and independent acceptance open |
 | N06 | Enclave TLS/proxy execution and credential custody | Todo |
 | O01 | OAuth ownership across deployments and applications | Todo |
 | O02 | Measured provider issuance and interrupted-exchange recovery | Todo |

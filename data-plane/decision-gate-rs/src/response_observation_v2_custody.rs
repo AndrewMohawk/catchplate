@@ -15,6 +15,15 @@ pub(crate) mod guest_listener;
 #[cfg(target_os = "linux")]
 #[path = "response_v2/custody/guest_inspector/mod.rs"]
 pub(crate) mod guest_inspector;
+#[cfg(target_os = "linux")]
+#[path = "response_v2/custody/guest_inspector_parent.rs"]
+pub(crate) mod guest_inspector_parent;
+#[cfg(target_os = "linux")]
+#[path = "response_v2/custody/guest_inspector_parent_image.rs"]
+mod guest_inspector_parent_image;
+#[cfg(target_os = "linux")]
+#[path = "response_v2/custody/guest_inspector_parent_process.rs"]
+mod guest_inspector_parent_process;
 #[path = "response_v2/custody/protocol.rs"]
 pub(crate) mod protocol;
 #[path = "response_v2/custody/supervisor.rs"]
@@ -39,6 +48,9 @@ pub use guest_listener::{GuestResponseV2ListenerProfile, GuestResponseV2ClientPa
     PreparedGuestResponseV2Listener, GUEST_RESPONSE_V2_SOCKET};
 #[cfg(target_os = "linux")]
 pub use guest_inspector::run_guest_inspector;
+#[cfg(target_os = "linux")]
+pub use guest_inspector_parent::{GuestInspectorConfiguration, PreparedGuestInspector,
+    InitializedGuestInspector, GuestInspectorRouterEndpoint};
 pub use supervisor::{
     check_custody_service_readiness, dispatch_from_process_args,
     run_custody_service, run_provider_rpc_v1_compatibility,

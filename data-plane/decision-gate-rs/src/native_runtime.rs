@@ -33,12 +33,34 @@ impl Drop for StopBeforeJoin {
 pub(super) fn run(listener: VsockListenerV1, prepared: NativeTlsGateV1,
     settings: NativeRuntimeSettingsV1) -> Result<(), String>
 {
-    let NativeTlsGateV1 { mut state, ingress, deadline } = prepared;
-    let ingress = Arc::new(ingress);
-    let mut lifetime = NativeRuntimeLifetimeV1::new(deadline)?;
-    if let Some(owner) = &state.native_serving_privileges {
+    let mut lifetime = NativeRuntimeLifetimeV1::new(prepared.deadline)?;
+    if let Some(owner) = &prepared.state.native_serving_privileges {
         NativeRuntimeLifetimeV1::bind_serving_privileges(&mut lifetime, Arc::clone(owner))?;
     }
+    run_with_lifetime(listener, prepared, settings, lifetime)
+}
+
+pub(super) fn run_with_lifetime(listener: VsockListenerV1, prepared: NativeTlsGateV1,
+    settings: NativeRuntimeSettingsV1, lifetime: Arc<NativeRuntimeLifetimeV1>) -> Result<(), String>
+{
+    if lifetime.deadline() != prepared.deadline {
+        return Err("native runtime cannot replace the original startup lifetime".into());
+    }
+    lifetime.require_serving_privileges(prepared.state.native_serving_privileges.as_ref())?;
+    let result = run_owned(listener, prepared, settings, Arc::clone(&lifetime));
+    // Always attempt real inspector shutdown/reap, even if serving failed.
+    // A late or unavailable reap never becomes a successful cleanup claim.
+    lifetime.stop();
+    let cleanup = lifetime.finish_guest_inspector();
+    result?;
+    cleanup
+}
+
+fn run_owned(listener: VsockListenerV1, prepared: NativeTlsGateV1,
+    settings: NativeRuntimeSettingsV1, lifetime: Arc<NativeRuntimeLifetimeV1>) -> Result<(), String>
+{
+    let NativeTlsGateV1 { mut state, ingress, deadline } = prepared;
+    let ingress = Arc::new(ingress);
     if state.native_secret_broker.is_some() != state.native_serving_privileges.is_some() {
         return Err("native runtime broker and permanent serving owner differ".to_owned());
     }

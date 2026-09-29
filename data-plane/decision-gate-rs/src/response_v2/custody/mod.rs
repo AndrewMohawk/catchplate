@@ -902,6 +902,9 @@ pub struct RootOwnedResponseObservationV2Config {
     guest_delivery: Option<std::sync::Arc<guest_delivery::Delivery>>,
     #[serde(skip)]
     guest_listener_owner: Option<guest_listener::SharedBound>,
+    #[cfg(target_os = "linux")]
+    #[serde(skip)]
+    guest_inspector_client: Option<std::sync::Arc<guest_inspector::client::Client>>,
 }
 
 impl RootOwnedResponseObservationV2Config {

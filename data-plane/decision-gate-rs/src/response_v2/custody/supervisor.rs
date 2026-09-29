@@ -44,6 +44,9 @@ fn run_loaded_custody_service(
     service_role: super::config::CustodyServiceRole,
 ) -> Result<(), super::V2RuntimeError> {
     super::guest_delivery::check(&config)?;
+    if service_role == super::config::CustodyServiceRole::CustodyRouter {
+        super::guest_inspector::client::require_attached(&config)?;
+    }
     let service_config = config.clone();
     let service = std::thread::Builder::new()
         .name(format!(
@@ -230,9 +233,21 @@ pub fn dispatch_from_process_args(
     let mut guest_sha256 = None;
     let mut guest_listener_fd = None;
     let mut guest_listener_handoff_fd = None;
+    let mut guest_inspector_fd = None;
+    let mut guest_inspector_pidfd = None;
+    let mut guest_inspector_bootstrap_fd = None;
     let mut arguments = std::env::args().skip(1);
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
+            "--guest-inspector-fd" if guest_inspector_fd.is_none() => {
+                guest_inspector_fd = Some(guest_descriptor_argument(arguments.next())?);
+            }
+            "--guest-inspector-pidfd" if guest_inspector_pidfd.is_none() => {
+                guest_inspector_pidfd = Some(guest_descriptor_argument(arguments.next())?);
+            }
+            "--guest-inspector-bootstrap-fd" if guest_inspector_bootstrap_fd.is_none() => {
+                guest_inspector_bootstrap_fd = Some(guest_descriptor_argument(arguments.next())?);
+            }
             "--guest-listener-fd" if guest_listener_fd.is_none() => {
                 guest_listener_fd = Some(guest_descriptor_argument(arguments.next())?);
             }
@@ -299,6 +314,15 @@ pub fn dispatch_from_process_args(
         }
     }
     let listener_supplied = guest_listener_fd.is_some() || guest_listener_handoff_fd.is_some();
+    let inspector_supplied = guest_inspector_fd.is_some() || guest_inspector_pidfd.is_some()
+        || guest_inspector_bootstrap_fd.is_some();
+    if (listener_supplied || inspector_supplied)
+        && (guest_listener_fd != Some(6) || guest_listener_handoff_fd != Some(7)
+            || guest_inspector_fd != Some(8) || guest_inspector_pidfd != Some(9)
+            || guest_inspector_bootstrap_fd != Some(10)) {
+        return Err(super::V2RuntimeError::new("custody_cli_invalid",
+            "guest router requires the complete source-owned listener6/7 and inspector8/9/10 handoff"));
+    }
     if listener_supplied && (guest_path.is_none() || guest_sha256.is_none()
         || guest_listener_fd.is_none() || guest_listener_handoff_fd.is_none()
         || guest_listener_fd == guest_listener_handoff_fd
@@ -310,10 +334,18 @@ pub fn dispatch_from_process_args(
     #[cfg(target_os = "linux")]
     if listener_supplied {
         // Close-on-exec precedes generation/TEE verifier children in load().
-        for fd in [guest_listener_fd, guest_listener_handoff_fd].into_iter().flatten() {
+        for fd in [guest_listener_fd, guest_listener_handoff_fd, guest_inspector_fd,
+            guest_inspector_pidfd, guest_inspector_bootstrap_fd].into_iter().flatten() {
             let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
             if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC) } != 0 {
                 return Err(super::V2RuntimeError::new("custody_cli_invalid", "guest inherited descriptor is unavailable"));
+            }
+        }
+        let mut identities = std::collections::BTreeSet::new();
+        for fd in 6..=10 {
+            let mut value: libc::stat = unsafe { std::mem::zeroed() };
+            if unsafe { libc::fstat(fd, &mut value) } != 0 || !identities.insert((value.st_dev,value.st_ino)) {
+                return Err(super::V2RuntimeError::new("custody_cli_invalid", "guest inherited descriptor aliases another original"));
             }
         }
     }
@@ -346,6 +378,7 @@ pub fn dispatch_from_process_args(
                 let socket = unsafe { OwnedFd::from_raw_fd(socket) };
                 let handoff = unsafe { OwnedFd::from_raw_fd(handoff) };
                 super::guest_listener::attach(&mut config, socket, handoff)?;
+                super::guest_inspector::client::attach(&mut config)?;
             }
             if bootstrap_generation {
                 super::generation::provision_generation_from_systemd_credentials(&config)?;
@@ -467,6 +500,7 @@ mod linux_runtime {
         socket_peer_credentials, EXECUTABLE_CACHE_ENTRIES_PER_WORKER,
         MAX_EXECUTABLE_CACHE_ENTRIES,
     };
+    use super::super::guest_inspector::client as inspector;
     use serde::{Deserialize, Serialize};
     use sha2::{Digest, Sha256};
     use std::collections::HashSet;
@@ -521,6 +555,7 @@ mod linux_runtime {
         config: RootOwnedResponseObservationV2Config,
         ready: SyncSender<()>,
     ) -> Result<(), Box<dyn Error>> {
+        inspector::require_attached(&config)?;
         probe_required_uapi()?;
         let guest = config.guest_listener.is_some();
         let mut socket_ownership = if guest { None } else {
@@ -681,10 +716,15 @@ mod linux_runtime {
         deadline: Duration,
     ) -> io::Result<()> {
         let socket = connection.socket.as_raw_fd();
+        let guest = config.guest_listener.is_some();
+        let connection_deadline = if guest {
+            inspection_deadline(deadline, connection.accepted_at, connection.accepted_at)?
+        } else { 0 };
         let peer = authenticate_peer(
             socket,
             config,
             executable_cache,
+            connection_deadline,
         )?;
         let session_identity = runtime
             .begin_authenticated_session(&peer.identity)
@@ -707,6 +747,11 @@ mod linux_runtime {
                 operation_started_at,
                 connection.accepted_at,
             )?;
+            // Sample once BEFORE receive; inspection and response checks reuse
+            // this exact absolute allowance, never now + a fresh timeout.
+            let inspection_deadline = if guest {
+                inspection_deadline(deadline, operation_started_at, connection.accepted_at)?
+            } else { 0 };
             set_socket_deadline(socket, packet_timeout)?;
             let packet = receive_packet(socket)?;
             validate_packet_sender(
@@ -715,6 +760,9 @@ mod linux_runtime {
                 &packet.credentials,
                 &packet.sender_pidfd,
                 executable_cache,
+                InspectionContext { frame:&packet.control,
+                    session:if hello_established { Some(session_identity.session_sha256()) } else { None },
+                    index:packet_index as u16, response:false, deadline:inspection_deadline },
             )?;
             if let Ok(request) =
                 decode_canonical_json::<V2OperationRequest>(
@@ -747,6 +795,9 @@ mod linux_runtime {
                         &packet.credentials,
                         &packet.sender_pidfd,
                         executable_cache,
+                        InspectionContext { frame:control,
+                            session:if hello_established { Some(session_identity.session_sha256()) } else { None },
+                            index:packet_index as u16, response:true, deadline:inspection_deadline },
                     )?;
                     set_socket_deadline(
                         socket,
@@ -778,7 +829,7 @@ mod linux_runtime {
                     "response-data operation rejected before authenticated Hello",
                 ));
             }
-            let operation_started_at = Instant::now();
+            let operation_started_at = if guest { operation_started_at } else { Instant::now() };
             validate_response_data_request(
                 runtime,
                 &peer.identity,
@@ -837,6 +888,12 @@ mod linux_runtime {
                 .iter()
                 .map(AsRawFd::as_raw_fd)
                 .collect::<Vec<_>>();
+            if guest {
+                validate_packet_sender(socket,&peer,&packet.credentials,&packet.sender_pidfd,executable_cache,
+                    InspectionContext { frame:&control,session:Some(session_identity.session_sha256()),
+                        index:packet_index as u16,response:true,deadline:inspection_deadline })?;
+                set_socket_deadline(socket,session_packet_remaining(deadline,operation_started_at,connection.accepted_at)?)?;
+            }
             send_packet(socket, &control, &raw_files)?;
         }
         Err(io::Error::new(
@@ -853,7 +910,14 @@ mod linux_runtime {
     struct AuthenticatedPeer {
         identity: AuthenticatedClientIdentity,
         pidfd: OwnedFd,
-        measurement: PeerMeasurement,
+        measurement: PeerOwner,
+    }
+    enum PeerOwner {
+        Host(PeerMeasurement),
+        Guest { client:Arc<inspector::Client>, observation:inspector::Observation },
+    }
+    struct InspectionContext<'a> {
+        frame:&'a [u8], session:Option<&'a str>, index:u16, response:bool, deadline:u64,
     }
 
     fn validate_response_data_request(
@@ -1088,6 +1152,14 @@ mod linux_runtime {
         let session_remaining =
             remaining(MAX_SESSION_LIFETIME, session_started_at)?;
         Ok(operation_remaining.min(session_remaining))
+    }
+
+    fn inspection_deadline(maximum:Duration, started:Instant, session:Instant) -> io::Result<u64> {
+        // BOOTTIME first, elapsed remaining second: sampling only narrows.
+        let sampled = super::super::recovery::boottime_ns().map_err(runtime_io_error)?;
+        let remaining = session_packet_remaining(maximum,started,session)?;
+        let ns = u64::try_from(remaining.as_nanos()).map_err(|_| io::Error::other("inspection allowance overflow"))?;
+        sampled.checked_add(ns).ok_or_else(|| io::Error::other("inspection deadline overflow"))
     }
 
     fn validate_session_operation(
@@ -2075,7 +2147,20 @@ mod linux_runtime {
         socket: RawFd,
         config: &RootOwnedResponseObservationV2Config,
         executable_cache: &ExecutableMeasurementCache,
+        inspection_deadline:u64,
     ) -> io::Result<AuthenticatedPeer> {
+        if config.guest_listener.is_some() {
+            inspector::require_attached(config).map_err(runtime_io_error)?;
+            let client = Arc::clone(config.guest_inspector_client.as_ref()
+                .ok_or_else(|| io::Error::other("guest inspector missing"))?);
+            let pidfd = open_peer_pidfd(socket)?;
+            let observed = client.connection(socket,&pidfd,inspection_deadline)?;
+            let identity = config.authenticate_peer_identity(observed.uid(),observed.cgroup(),observed.label(),observed.executable())
+                .map_err(|_| io::Error::new(io::ErrorKind::PermissionDenied,"guest measurement differs from independent root-owned pins"))?;
+            let peer = AuthenticatedPeer { identity,pidfd,measurement:PeerOwner::Guest { client,observation:observed } };
+            ensure_peer_alive(&peer)?;
+            return Ok(peer);
+        }
         let (pidfd, measurement) = capture_connection(socket, config.expected_client_uid(), executable_cache)?;
         if measurement.uid() == 0 || measurement.uid() != config.expected_client_uid() {
             return Err(io::Error::new(io::ErrorKind::PermissionDenied,
@@ -2086,7 +2171,7 @@ mod linux_runtime {
             measurement.security_label_sha256(), measurement.executable_sha256(),
         ).map_err(|_| io::Error::new(io::ErrorKind::PermissionDenied,
             "peer UID, cgroup, security label, or executable measurement does not match root-owned pins"))?;
-        let peer = AuthenticatedPeer { identity, pidfd, measurement };
+        let peer = AuthenticatedPeer { identity, pidfd, measurement:PeerOwner::Host(measurement) };
         ensure_peer_alive(&peer)?;
         Ok(peer)
     }
@@ -2123,23 +2208,33 @@ mod linux_runtime {
         credentials: &libc::ucred,
         sender_pidfd: &OwnedFd,
         executable_cache: &ExecutableMeasurementCache,
+        context:InspectionContext<'_>,
     ) -> io::Result<()> {
         ensure_peer_alive(peer)?;
         ensure_pidfd_alive(sender_pidfd)?;
-        if !peer.measurement.matches_credentials(credentials) {
-            return Err(io::Error::new(io::ErrorKind::PermissionDenied,
-                "per-packet credentials do not match the authenticated connection owner"));
+        match &peer.measurement {
+            PeerOwner::Host(measurement) => {
+                if !measurement.matches_credentials(credentials) {
+                    return Err(io::Error::new(io::ErrorKind::PermissionDenied,
+                        "per-packet credentials do not match the authenticated connection owner"));
+                }
+                let observed = capture_packet(socket,&peer.pidfd,sender_pidfd,measurement,executable_cache)?;
+                if &observed != measurement {
+                    return Err(io::Error::new(io::ErrorKind::PermissionDenied,
+                        "packet sender changed kernel identity, cgroup, security label, or executable after authentication"));
+                }
+            }
+            PeerOwner::Guest { client,observation } => {
+                client.packet(socket,&peer.pidfd,sender_pidfd,credentials,observation,context.frame,context.session,
+                    context.index,context.response,context.deadline)?;
+            }
         }
-        let observed = capture_packet(socket, &peer.pidfd, sender_pidfd, &peer.measurement, executable_cache)?;
         ensure_peer_alive(peer)?;
-        if observed != peer.measurement {
-            return Err(io::Error::new(io::ErrorKind::PermissionDenied,
-                "packet sender changed kernel identity, cgroup, security label, or executable after authentication"));
-        }
         Ok(())
     }
 
     fn ensure_peer_alive(peer: &AuthenticatedPeer) -> io::Result<()> {
+        if let PeerOwner::Guest { client,.. } = &peer.measurement { client.check()?; }
         ensure_pidfd_alive(&peer.pidfd)
     }
 

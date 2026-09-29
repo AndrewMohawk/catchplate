@@ -390,9 +390,9 @@ impl ListenerPreparation {
     }
     pub(crate) fn binding(&self) -> &super::guest_listener::AuthorityBinding { &self.binding }
 
-    // Consumed only by the fixed worker after it has derived and retained its
-    // genuine parent channel/PIDFD. This removes neither the startup admission
-    // check nor the need for an actual source-owned parent lifetime.
+    // Consumed by the source-owned parent and fixed worker (which separately
+    // derives its genuine parent channel/PIDFD). Neither can substitute these
+    // originals for the actual nonrenewable parent lifetime or signed role.
     pub(crate) fn into_inspection(self) -> Result<InspectionOriginals, V2RuntimeError> {
         self.check()?;
         let config: Config = crate::decode_canonical_json(&self.config.bytes)

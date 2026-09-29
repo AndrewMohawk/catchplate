@@ -151,7 +151,7 @@ pub(super) struct StableProcessIdentity {
 
 impl StableProcessIdentity {
     pub(super) fn pid(&self) -> libc::pid_t { self.pidfd.pid }
-    fn binding_sha256(&self) -> String {
+    pub(super) fn binding_sha256(&self) -> String {
         let mut hash = Sha256::new();
         hash.update(b"serverware.responseV2.guestInspectorProcess/v1\0");
         hash.update(self.pidfd.pid.to_be_bytes());
@@ -385,6 +385,13 @@ pub(super) fn capture_pidfd_process_identity(
         proc_inode: metadata_after.ino(),
         start_time_ticks: start_time_after,
     })
+}
+
+// Derive the selector from the actual held kernel descriptor, never a caller
+// numeric PID or an incoming measurement summary.
+pub(super) fn capture_received_pidfd(pidfd: &OwnedFd) -> io::Result<StableProcessIdentity> {
+    let actual = read_pidfd_fdinfo(pidfd)?;
+    capture_pidfd_process_identity(pidfd, actual.pid)
 }
 
 fn read_pidfd_fdinfo(

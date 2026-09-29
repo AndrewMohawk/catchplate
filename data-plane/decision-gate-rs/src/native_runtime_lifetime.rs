@@ -25,6 +25,7 @@ pub(super) struct NativeRuntimeLifetimeV1 {
     state: Mutex<State>,
     wake: Condvar,
     serving_privileges: Option<Arc<serverware_decision_gate::native_serving_privileges::Owner>>,
+    guest_inspector: Option<Arc<serverware_decision_gate::InitializedGuestInspector>>,
 }
 
 fn now() -> Result<u64, &'static str> {
@@ -56,6 +57,7 @@ impl NativeRuntimeLifetimeV1 {
             deadline, creator_pid, stopped: AtomicBool::new(false),
             state: Mutex::new(State { failure: None }), wake: Condvar::new(),
             serving_privileges: None,
+            guest_inspector: None,
         }))
     }
 
@@ -67,11 +69,40 @@ impl NativeRuntimeLifetimeV1 {
         if actual.serving_privileges.is_some() || actual.deadline != privileges.deadline() {
             return Err("native lifetime privilege owner or original deadline differs".to_owned());
         }
+        if let Some(inspector) = &actual.guest_inspector { inspector.require_serving(&privileges)?; }
         actual.serving_privileges = Some(privileges);
         actual.require_creator()
     }
 
     pub(super) fn deadline(&self) -> u64 { self.deadline }
+
+    pub(super) fn bind_guest_inspector(owner: &mut Arc<Self>,
+        inspector: Arc<serverware_decision_gate::InitializedGuestInspector>) -> Result<(), String> {
+        owner.require_creator()?;
+        inspector.check()?;
+        let actual = Arc::get_mut(owner).ok_or("native lifetime shared before inspector attachment")?;
+        if actual.guest_inspector.is_some() || actual.serving_privileges.is_some()
+            || actual.deadline != inspector.deadline_boottime_ns() {
+            return Err("native inspector lost its original pre-drop lifetime".into());
+        }
+        actual.guest_inspector = Some(inspector);
+        Ok(())
+    }
+
+    pub(super) fn require_serving_privileges(&self,
+        owner: Option<&Arc<serverware_decision_gate::native_serving_privileges::Owner>>) -> Result<(), String> {
+        self.check()?;
+        match (&self.serving_privileges, owner) {
+            (Some(held), Some(actual)) if Arc::ptr_eq(held, actual) => Ok(()),
+            (None, None) if self.guest_inspector.is_none() => Ok(()),
+            _ => Err("native serving lifetime privilege owner differs".into()),
+        }
+    }
+
+    pub(super) fn finish_guest_inspector(&self) -> Result<(), String> {
+        if unsafe { libc::getpid() } != self.creator_pid { return Err("inspector finish crossed creator".into()); }
+        match &self.guest_inspector { Some(owner) => owner.stop_and_reap(), None => Ok(()) }
+    }
 
     // Do not touch an inherited Mutex/Condvar after fork: another thread may
     // have held that lock when the process split. No operation resumes it.
@@ -83,6 +114,18 @@ impl NativeRuntimeLifetimeV1 {
         if let Some(owner) = &self.serving_privileges {
             if let Err(error) = owner.check() {
                 self.stopped.store(true, Ordering::Release);
+                if let Some(inspector) = &self.guest_inspector { inspector.request_stop(); }
+                return Err(error);
+            }
+        }
+        if let Some(inspector) = &self.guest_inspector {
+            if self.stopped.load(Ordering::Acquire) { return Ok(()); }
+            if let Err(error) = inspector.check() {
+                if self.stopped.load(Ordering::Acquire) { return Ok(()); }
+                if let Ok(mut state) = self.lock() {
+                    self.fail_locked(&mut state, "native guest inspector lifetime failed");
+                }
+                inspector.request_stop();
                 return Err(error);
             }
         }
@@ -143,7 +186,10 @@ impl NativeRuntimeLifetimeV1 {
     pub(super) fn stopped_flag(&self) -> &AtomicBool { &self.stopped }
 
     pub(super) fn stop(&self) {
-        if self.require_creator().is_err() { return; }
+        // Emergency cancellation is not conditional on unexpired admission.
+        if unsafe { libc::getpid() } != self.creator_pid { return; }
+        self.stopped.store(true, Ordering::Release);
+        if let Some(inspector) = &self.guest_inspector { inspector.request_stop(); }
         if let Ok(_state) = self.lock() {
             // The same mutex guards wait's condition, preventing a lost wake.
             self.stopped.store(true, Ordering::Release);
@@ -191,6 +237,14 @@ impl NativeRuntimeLifetimeV1 {
                     return Err("native runtime wait lock poisoned".to_owned());
                 }
             };
+        }
+    }
+}
+
+impl Drop for NativeRuntimeLifetimeV1 {
+    fn drop(&mut self) {
+        if unsafe { libc::getpid() } == self.creator_pid {
+            if let Some(inspector) = &self.guest_inspector { inspector.request_stop(); }
         }
     }
 }

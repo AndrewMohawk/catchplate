@@ -2,6 +2,7 @@
 //! launch is part of the TCB: sealed metadata is consistency, not authority.
 mod confinement;
 mod wire;
+pub(crate) mod client;
 
 use super::{guest_delivery, peer_measurement as peer};
 use std::{fs::File, io, mem::{size_of, size_of_val, zeroed}, os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd},

@@ -137,10 +137,11 @@ pub(super) fn run(
     mut parameters: NativeStartupParametersV1,
     shadow_config: PolicyShadowGenerationConfig,
     v2_config: ResponseObservationV2ClientConfig,
+    guest_inspector: Option<serverware_decision_gate::GuestInspectorConfiguration>,
     public_identity_stdout: bool,
 ) -> Result<(), String> {
     // This guard starts no tasks and grants no new interval. Runtime serving
-    // later installs its own cancellation owner with this SAME absolute bound.
+    // later retains this SAME cancellation owner and original absolute bound.
     if env::var_os(RESPONSE_PROOF_RELEASE_PROFILE_ENV).is_some() {
         return Err("ordinary response release profile cannot override native startup".to_owned());
     }
@@ -179,11 +180,19 @@ pub(super) fn run(
     startup.check()?;
     // Root-only image/mount/child/device setup precedes every long-lived gate
     // identity, service owner and thread. No failed step selects legacy mode.
+    if guest_inspector.is_some() && (inputs.secret_broker.is_none() || v2_config.guest_listener.is_none()) {
+        return Err("native inspector requires the encrypted native broker and explicit guest response listener".into());
+    }
     let prepared_device = if let Some(config) = inputs.secret_broker.take() {
         use serverware_decision_gate::{native_serving_privileges,
             native_secret_broker_v1::PreparedBroker,
             enclave_runtime_identity_v1::PreparedNativeDeviceV1};
         let privileged = native_serving_privileges::Prepared::open(parameters.deadline_boottime_ns)?;
+        if let Some(configuration) = guest_inspector {
+            let inspector = serverware_decision_gate::PreparedGuestInspector::launch(configuration, &privileged)?;
+            inspector.require_response_client(&v2_config.generation_id, v2_config.expected_uid)?;
+            NativeRuntimeLifetimeV1::bind_guest_inspector(&mut startup, inspector)?;
+        }
         let device = PreparedNativeDeviceV1::open(&privileged)?;
         let mut broker = PreparedBroker::open(config, &privileged)?;
         let owner = privileged.drop_permanently()?;
@@ -273,5 +282,5 @@ pub(super) fn run(
         parameters.deadline_boottime_ns)
         .map_err(|_| "native startup fixed-parent listener bind failed".to_owned())?;
     startup.check()?;
-    serve_native_vsock_proxy(listener, prepared, parameters.runtime)
+    super::native_runtime::run_with_lifetime(listener, prepared, parameters.runtime, startup)
 }

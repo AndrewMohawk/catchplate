@@ -3911,6 +3911,10 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/response_v2/custody/guest_inspector/mod.rs \
 				data-plane/decision-gate-rs/src/response_v2/custody/guest_inspector/wire.rs \
 				data-plane/decision-gate-rs/src/response_v2/custody/guest_inspector/confinement.rs \
+				data-plane/decision-gate-rs/src/response_v2/custody/guest_inspector/client.rs \
+				data-plane/decision-gate-rs/src/response_v2/custody/guest_inspector_parent.rs \
+				data-plane/decision-gate-rs/src/response_v2/custody/guest_inspector_parent_image.rs \
+				data-plane/decision-gate-rs/src/response_v2/custody/guest_inspector_parent_process.rs \
 				data-plane/decision-gate-rs/src/response_v2/integration.rs \
 				data-plane/decision-gate-rs/src/response_v2/mod.rs \
 				data-plane/decision-gate-rs/src/response_v2/native_config.rs \
@@ -4142,6 +4146,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-startup-configuration.v5.schema.json \
 				schemas/native-startup-configuration.v6.schema.json \
 				schemas/native-startup-configuration.v7.schema.json \
+				schemas/native-startup-configuration.v8.schema.json \
 				schemas/native-oauth-measured-refresh.v1.schema.json \
 				schemas/native-service-tokens.v1.schema.json \
 				schemas/native-startup-configuration.v4.schema.json \

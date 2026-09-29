@@ -24,11 +24,11 @@ Checkpoint: **2026-09-29 — pre-production, source-only.**
 
 [![Project checkpoints, one segment per task: 35 of 46 source-landed; 6 active and 5 todo. Evidence handoff 10/10; historical recovery 4/5; permissions and grants 10/10; finalization and sessions 8/8; workloads and native 3/6; providers and operations 0/7. F08 is source-landed in 170d0ac; H05, N04, N05, O01, O04 and O05 are in progress. Production acceptance remains 0/6. Source only; unbuilt, unexecuted and unprovisioned.](docs/images/project-progress.svg)](docs/production-status.md#next-source-milestones)
 
-Latest [`.272` source](https://github.com/example/private-deployment) connects
-[ordinary applications through an authenticated CONNECT adapter](docs/native-application-proxy.md).
-Controlled OAuth refresh, the enrolled portal and native outcomes retain source credit.
-Cached-send fencing, OAuth cleanup/reconnect/setup, broader client and lifecycle
-support, and production verification remain open.
+Latest [`.273` source](https://github.com/example/private-deployment) connects
+[measured-holder drains and signed current leases](docs/credential-currentness-http.md)
+to controlled refresh and separately authorized OAuth family cleanup.
+The ordinary-app adapter and enrolled portal retain source credit. Holder recovery,
+migration, reconnect/setup, broader lifecycle and production verification remain open.
 
 The bar shows **committed source, not tested readiness or remaining effort**.
 Green means source-landed; amber means partial implementation. No current pilot

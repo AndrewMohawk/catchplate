@@ -17,6 +17,7 @@ from serverware import authority_transition_registry
 from serverware import authority_webauthn_evidence_policy as evidence_policy
 from serverware import authority_webauthn_transition_policy as transition_policy
 from serverware import authority_webauthn_enrollment_policy as enrollment_policy
+from serverware import authority_oauth_activation_policy as oauth_activation_policy
 from serverware.authority_artifact_spec import (
     ARTIFACT_BUNDLE_SCHEMA,
     AUTHORITY_SCHEMA_VERSION,
@@ -692,7 +693,7 @@ def _validate_configuration_document(
         expected_payload_schema = SERVICE_CONFIGURATION_PAYLOAD_SCHEMA
         expected_fields = SERVICE_CONFIGURATION_FIELDS
         if isinstance(envelope["payload"], Mapping):
-            for optional_field in (evidence_policy.FIELD, transition_policy.FIELD, enrollment_policy.FIELD):
+            for optional_field in (evidence_policy.FIELD, transition_policy.FIELD, enrollment_policy.FIELD, oauth_activation_policy.FIELD):
                 if optional_field in envelope["payload"]:
                     expected_fields = expected_fields | {optional_field}
     payload = _closed(
@@ -909,6 +910,10 @@ def _validate_configuration_document(
                 raise GeneratorError(
                     "authority WebAuthn enrollment authorization policy is invalid"
                 ) from exc
+        try:
+            oauth_activation_policy.validate_policy(payload.get(oauth_activation_policy.FIELD), payload=payload)
+        except (TypeError, ValueError) as exc:
+            raise GeneratorError("authority OAuth activation policy is invalid") from exc
     payload_bytes = canonical_json_bytes(payload)
     if expected_payload_schema == SERVICE_CONFIGURATION_PAYLOAD_SCHEMA:
         # Service configuration identity uses the service protocol's NUL

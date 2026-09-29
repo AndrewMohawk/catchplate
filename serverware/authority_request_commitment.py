@@ -91,6 +91,17 @@ def publication_request_digest(operation: str, arguments: Mapping[str, Any]) -> 
         "arguments": _authorization_arguments(typed)}))
 
 
+def oauth_activation_request_digest(operation: str, arguments: Mapping[str, Any]) -> str:
+    from serverware import authority_oauth_activation as oauth
+    values = oauth.arguments(operation, arguments)
+    typed = {**values, "businessIntent": authority_contract.synthesize_business_intent(operation, values)}
+    return framed_digest("serverware.policyAuthorityV9Request/v1", canonical_bytes({
+        "schema": "serverware.policyAuthorityV9Authorization/v1", "operation": operation,
+        "handler": authority_contract.operation_spec(operation)["handler"],
+        "operationManifestDigest": authority_contract.OPERATION_MANIFEST_DIGEST,
+        "arguments": _authorization_arguments(typed)}))
+
+
 def _typed_request_digest(
     request: Mapping[str, Any], *, work: _ValidationWork | None,
 ) -> str:

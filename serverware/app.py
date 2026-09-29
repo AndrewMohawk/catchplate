@@ -1472,6 +1472,17 @@ class PublicationApprovalWebAuthnOptions(BaseModel):
     approval_id: str | None = Field(default=None, alias="approvalId", max_length=64)
 
 
+class OAuthActivationWebAuthnOptions(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    api_version: Literal["serverware.oauthActivationApprovalOptions/v1"] = Field(alias="apiVersion")
+    action: Literal["credential.oauth.activate"]
+    resource_id: str = Field(alias="resourceId", min_length=1, max_length=256)
+    payload_digest: str = Field(alias="payloadDigest", pattern=r"^sha256:[0-9a-f]{64}$")
+    request_binding: dict[str, Any] = Field(alias="request")
+    approval_id: str | None = Field(default=None, alias="approvalId", max_length=64)
+
+
 class PolicyFileApprovalWebAuthnOptions(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
@@ -7716,7 +7727,7 @@ def execute_control_plane_authority_operation(
 
 @app.post("/api/control-plane/mutations/webauthn/options")
 def control_plane_mutation_webauthn_options(
-    payload: PublicationApprovalWebAuthnOptions | ControlPlaneMutationWebAuthnOptions,
+    payload: OAuthActivationWebAuthnOptions | PublicationApprovalWebAuthnOptions | ControlPlaneMutationWebAuthnOptions,
     request: Request,
     identity: AdminIdentity = Depends(
         require_role(
@@ -7729,6 +7740,17 @@ def control_plane_mutation_webauthn_options(
         )
     ),
 ) -> dict[str, Any]:
+    if payload.action == "credential.oauth.activate":
+        from serverware import control_plane_oauth_activation as oauth_activation
+        if type(payload) is OAuthActivationWebAuthnOptions:
+            try:
+                return oauth_activation.options_on_request(request, payload)
+            except HTTPException:
+                raise
+            except Exception:
+                raise HTTPException(status_code=409, detail="OAuth activation options unavailable; no automatic retry") from None
+        if payload.api_version is not None or oauth_activation.selected():
+            raise HTTPException(status_code=409, detail="use the explicit OAuth activation approval options profile")
     if payload.action in {"policy.file.materialize", "policy.file.resolve"}:
         raise HTTPException(status_code=409, detail="use the explicit policy-file approval options endpoint")
     if type(payload) is PublicationApprovalWebAuthnOptions:
@@ -8139,6 +8161,16 @@ def control_plane_approval_approve(
             status_code=409,
             detail=f"control-plane approval is already {approval['status']}",
         )
+    if approval["action"] == "credential.oauth.activate":
+        from serverware import control_plane_oauth_activation as oauth_activation
+        if (oauth_activation.selected() or decision is not None and isinstance(decision.mfa, dict)
+                and oauth_activation.MFA_FIELD in decision.mfa):
+            try:
+                return oauth_activation.decide_on_request(request, approval_id, decision)
+            except HTTPException:
+                raise
+            except Exception:
+                raise HTTPException(status_code=409, detail="OAuth activation decision uncertain or blocked; no automatic retry") from None
     if approval["action"] in {"policy.file.materialize", "policy.file.resolve"}:
         from serverware import control_plane_publication_authorization as publication_authority
         try:
@@ -15243,14 +15275,34 @@ def oauth_pending_credentials(
     }
 
 
+@app.get("/api/oauth/pending/{pending_credential_id}/activation-original")
+def oauth_pending_activation_original(pending_credential_id: str, request: Request) -> dict[str, Any]:
+    from serverware import control_plane_oauth_activation as oauth_activation
+    try:
+        return oauth_activation.inspect_on_request(request, pending_credential_id)
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=409, detail="OAuth activation original unavailable") from None
+
+
 @app.post("/api/oauth/pending/{pending_credential_id}/activate")
 def oauth_pending_credential_activate(
     pending_credential_id: str,
     payload: OAuthPendingActivateRequest,
+    request: Request,
     identity: AdminIdentity = Depends(
         require_role("admin", "policy_author", "credential_owner")
     ),
 ) -> dict[str, Any]:
+    from serverware import control_plane_oauth_activation as oauth_activation
+    if (oauth_activation.selected() or isinstance(payload.mfa, dict) and oauth_activation.MFA_FIELD in payload.mfa):
+        try:
+            return oauth_activation.activate_on_request(request, pending_credential_id, payload)
+        except HTTPException:
+            raise
+        except Exception:
+            raise HTTPException(status_code=409, detail="OAuth activation uncertain or blocked; no automatic retry") from None
     pending = db.get_pending_oauth_credential(pending_credential_id)
     if pending is None:
         raise HTTPException(

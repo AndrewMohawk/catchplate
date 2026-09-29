@@ -10,6 +10,7 @@ from serverware import authority_transition_policy
 from serverware import authority_transition_quota
 from serverware import authority_transition_release
 from serverware import authority_transition_publication_approval
+from serverware import authority_transition_oauth_activation
 from serverware import authority_transition_policy_file_approval
 
 
@@ -34,6 +35,7 @@ def _merge_kernels() -> dict[
         authority_transition_quota.KERNELS,
         authority_transition_release.KERNELS,
         authority_transition_publication_approval.KERNELS,
+        authority_transition_oauth_activation.KERNELS,
         authority_transition_policy_file_approval.KERNELS,
     ):
         overlap = set(merged) & set(registry)

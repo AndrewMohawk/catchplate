@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.dev/schemas/oauth-activation-authority.v1.schema.json",
+  "title": "OAuth activation authority data contracts (not authority by themselves)",
+  "oneOf": [
+    {"$ref": "#/$defs/policy"},
+    {"$ref": "#/$defs/arguments"},
+    {"$ref": "#/$defs/provenance"}
+  ],
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "identifier": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"},
+    "rowId": {"type": "string", "pattern": "^[0-9a-f-]{36}$"},
+    "nullableDigest": {"anyOf": [{"$ref": "#/$defs/digest"}, {"type": "null"}]},
+    "policy": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "enrollmentRootPublicKeyBase64Url", "enrollmentRootSpkiSha256", "controlPlaneConfigurationDigest", "deploymentId"],
+      "properties": {
+        "schema": {"const": "serverware.oauthActivationAuthorityPolicy/v1"},
+        "enrollmentRootPublicKeyBase64Url": {"type": "string", "pattern": "^[A-Za-z0-9_-]{43}$"},
+        "enrollmentRootSpkiSha256": {"$ref": "#/$defs/digest"},
+        "controlPlaneConfigurationDigest": {"$ref": "#/$defs/digest"},
+        "deploymentId": {"$ref": "#/$defs/identifier"}
+      },
+      "description": "Optional oauthActivationPolicy inside genuinely root-signed measured configuration; required when any new operation is enabled. Key/SPKI equality and separation, signatures, configured source, current enrollment interval and caller's independently admitted configuration scope are runtime checks."
+    },
+    "credentialPolicy": {
+      "type": "object", "additionalProperties": false,
+      "required": ["rpId", "origins", "allowedAuthenticatorClasses", "hardwareRequired", "requireUserPresence", "requireUserVerification", "maxAssertionAgeSeconds"],
+      "properties": {
+        "rpId": {"type": "string", "minLength": 1, "maxLength": 253},
+        "origins": {"type": "array", "minItems": 1, "maxItems": 16, "items": {"type": "string", "minLength": 1, "maxLength": 2048}},
+        "allowedAuthenticatorClasses": {"type": "array", "minItems": 1, "maxItems": 2, "uniqueItems": true, "items": {"enum": ["hardware", "yubikey"]}},
+        "hardwareRequired": {"const": true}, "requireUserPresence": {"const": true}, "requireUserVerification": {"const": true},
+        "maxAssertionAgeSeconds": {"type": "integer", "minimum": 1, "maximum": 120}
+      },
+      "description": "Runtime additionally bounds UTF-8 byte lengths and sorted class order, verifies raw assertion, actual physical credential/trust originals and current withdrawal state; this policy object is not physical evidence."
+    },
+    "binding": {
+      "type": "object", "additionalProperties": false,
+      "required": ["pendingCredentialId", "pendingRowSha256", "enrollmentSha256", "payloadDigest"],
+      "properties": {
+        "pendingCredentialId": {"$ref": "#/$defs/rowId"}, "pendingRowSha256": {"$ref": "#/$defs/digest"},
+        "enrollmentSha256": {"$ref": "#/$defs/digest"}, "payloadDigest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "arguments": {
+      "type": "object", "additionalProperties": false,
+      "required": ["action", "resource_id", "payload_digest", "actor_id", "request", "approval_id", "credential_policy", "enrollment_original"],
+      "properties": {
+        "action": {"const": "credential.oauth.activate"}, "resource_id": {"$ref": "#/$defs/rowId"},
+        "payload_digest": {"$ref": "#/$defs/digest"},
+        "actor_id": {"type": "string", "pattern": "^oidc:", "maxLength": 512},
+        "request": {"$ref": "#/$defs/binding"},
+        "approval_id": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/rowId"}]},
+        "credential_policy": {"$ref": "#/$defs/credentialPolicy"},
+        "enrollment_original": {"type": "string", "minLength": 3, "maxLength": 87382, "pattern": "^[A-Za-z0-9_-]+$"}
+      },
+      "description": "Operation is selected out-of-band: oauth-activation-approval.request requires null approval_id; decide and oauth.pending.activate require its exact row ID. Runtime joins resource/payload to binding, limits actor UTF-8 to512 and trim/C0/DEL rules, verifies canonical base64url enrollment<=64KiB and total arguments<=96KiB. payload_digest preserves original pending review/token commitment; it is not SHA(request). No ciphertext is transported."
+    },
+    "provenance": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "requestDigest", "requestEvidenceDigest", "credentialPolicy", "decisionDigest", "decisionEvidenceDigest", "consumptionDigest", "consumptionEvidenceDigest"],
+      "properties": {
+        "schema": {"const": "serverware.oauthActivationApprovalProvenance/v1"},
+        "requestDigest": {"$ref": "#/$defs/digest"}, "requestEvidenceDigest": {"$ref": "#/$defs/digest"},
+        "credentialPolicy": {"$ref": "#/$defs/credentialPolicy"},
+        "decisionDigest": {"$ref": "#/$defs/nullableDigest"}, "decisionEvidenceDigest": {"$ref": "#/$defs/nullableDigest"},
+        "consumptionDigest": {"$ref": "#/$defs/nullableDigest"}, "consumptionEvidenceDigest": {"$ref": "#/$defs/nullableDigest"}
+      },
+      "description": "Phase pairs are null until the corresponding genuine controlled transition. Runtime enforces pairing/order, current distinct credential_owner actors and atomic single consumption. No legacy generic approval is promoted into this profile."
+    }
+  }
+}

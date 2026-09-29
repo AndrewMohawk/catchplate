@@ -10,7 +10,7 @@ from serverware import authority_complete_query
 from serverware.authority_query_read_work import _ValidationWork
 
 
-SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.263"
+SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.264"
 SCHEMA_VERSION = 9
 CONTRACT_SCHEMA = "serverware.policyAuthorityOperationContract/v3"
 BUSINESS_INTENT_SCHEMA = "serverware.policyAuthorityBusinessIntent/v2"
@@ -259,6 +259,7 @@ _AUDIT_COUNTER_REPLACEMENT_OPERATIONS = frozenset({
     "control-approval.consume", "control-approval.deny", "jit.request",
     "publication-approval.request", "publication-approval.decide",
     "publication-approval.consume", "publication-approval.settle",
+    "oauth-activation-approval.request", "oauth-activation-approval.decide", "oauth.pending.activate",
     "policy-file-approval.request", "policy-file-approval.decide",
     "policy-file-approval.consume", "policy-file-approval.settle",
     "jit.review-receipt.issue", "jit.decide", "jit.deny",
@@ -1432,6 +1433,8 @@ PHASE2_STORE_TABLES = tuple(sorted({
 V9_ADDITIONAL_PROTECTED_TABLES = tuple(sorted({
     *PHASE2_STORE_TABLES,
     SUCCESSOR_EXECUTION_CUSTODY_TABLE,
+    "credential_generations",
+    "setup_sessions",
     "policy_authority_authorization_dependency_manifests",
     "policy_authority_operation_mutation_templates",
 }))
@@ -1767,6 +1770,23 @@ _OPERATIONS = {
             proof_primitives=("primary-key-row", "bounded-limit-plus-one", "aggregate-high-water", "capacity-reservation"),
             maximum_query_rows=12, maximum_mutations=8, maximum_work_units=256,
         ) for phase in ("request", "decide", "consume", "settle")
+    },
+    **{
+        operation: _spec(
+            handler,
+            reads=("control_plane_approvals", "rbac_role_bindings", "pending_oauth_credentials") +
+                (("credentials", "credential_generations", "setup_sessions") if operation == "oauth.pending.activate" else ()) + _PHASE2_AGGREGATE,
+            writes=("control_plane_approvals", "metadata_audit_outbox") +
+                (("credentials", "credential_generations", "pending_oauth_credentials") if operation == "oauth.pending.activate" else ()) + _PHASE2_AGGREGATE,
+            webauthn="bound-verified-assertion-receipt",
+            proof_primitives=("primary-key-row", "bounded-limit-plus-one", "aggregate-high-water", "capacity-reservation"),
+            maximum_query_rows=224, maximum_mutations=12, maximum_work_units=1024,
+        )
+        for operation, handler in (
+            ("oauth-activation-approval.request", "serverware_policy_authority_oauth_activation_approval_request"),
+            ("oauth-activation-approval.decide", "serverware_policy_authority_oauth_activation_approval_decide"),
+            ("oauth.pending.activate", "serverware_policy_authority_oauth_pending_activate"),
+        )
     },
     "control-approval.request": _spec(
         "ensure_control_plane_approval",

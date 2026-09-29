@@ -24,10 +24,10 @@ Checkpoint: **2026-09-29 — pre-production, source-only.**
 
 [![Project checkpoints, one segment per task: 36 of 46 source-landed; 10 active and 0 todo. Evidence handoff 10/10; historical recovery 4/5; permissions and grants 10/10; finalization and sessions 8/8; workloads and native 3/6; providers and operations 1/7. H05, N04, N05, N06 and O01 through O06 are in progress. Production acceptance remains 0/6. Source only; unbuilt, unexecuted and unprovisioned.](docs/images/project-progress.svg)](docs/production-status.md#next-source-milestones)
 
-Latest [`.304` source](https://github.com/example/private-deployment) connects
-[encrypted native key delivery](docs/native-shadow-encrypted-keys.md): a
-purpose-specific KMS recipient, fixed helper and final-role key owner. Actual
-image packaging, service launch/transport, native canary evidence, later Setup
+Latest [`.305` source](https://github.com/example/private-deployment) adds the
+[native shadow-key helper image producer](docs/native-shadow-encrypted-keys.md#real-process-and-packaging-contract)
+and shared OAuth data validation. Receipt-policy dependency repair, actual image
+build/admission, service launch/transport, native canary evidence, later Setup
 and retired-family succession remain open, alongside independent provisioning
 and end-to-end acceptance.
 

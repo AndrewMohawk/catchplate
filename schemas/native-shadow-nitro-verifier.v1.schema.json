@@ -86,7 +86,10 @@
       "required": ["apiVersion", "uid", "gid", "operation", "authorization", "expectedStatement", "authorityKeys", "trustCheckpoint", "nitro", "collateralRevocation", "expectedAttestation", "maximumResultAgeNanos"],
       "properties": {
         "apiVersion": { "const": "serverware.nativeShadowNitroVerifierConfiguration/v1" }, "uid": { "$ref": "#/$defs/uid" }, "gid": { "$ref": "#/$defs/uid" },
-        "operation": { "$ref": "#/$defs/operation" }, "authorization": { "$ref": "native-shadow-role-keys.v1.schema.json#/$defs/authorization" },
+        "operation": { "$ref": "#/$defs/operation" }, "authorization": { "oneOf": [
+          { "$ref": "native-shadow-role-keys.v1.schema.json#/$defs/authorization" },
+          { "$ref": "native-shadow-encrypted-keys.v1.schema.json#/$defs/keyAuthorizationV2" }
+        ] },
         "expectedStatement": { "$ref": "native-shadow-role-keys.v1.schema.json#/$defs/statement" },
         "authorityKeys": { "type": "array", "minItems": 18, "maxItems": 18, "items": { "$ref": "#/$defs/authorityKey" } },
         "trustCheckpoint": { "$ref": "#/$defs/checkpoint" }, "nitro": { "$ref": "#/$defs/nitro" },

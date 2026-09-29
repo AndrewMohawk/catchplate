@@ -135,7 +135,7 @@ impl Drop for Workspace {
 
 // Closed source purposes share only immutable image custody, never a child,
 // key, serving phase or caller-selected executable/helper path.
-pub(crate) enum Purpose { Broker, RoleKeyProvisioner, ShadowCustody }
+pub(crate) enum Purpose { Broker, RoleKeyProvisioner, ShadowCustody, ShadowKeyDelivery }
 impl Purpose {
     fn paths(&self) -> (&'static str, &'static str, &'static str) {
         match self {
@@ -144,6 +144,8 @@ impl Purpose {
                 INTERPRETER_PATH, "/opt/serverware/serverware/native_role_key_provisioner.py"),
             Self::ShadowCustody => (super::shadow_image::IMAGE_PATH,
                 super::shadow_image::EXECUTABLE_PATH, super::shadow_image::SECCOMP_PATH),
+            Self::ShadowKeyDelivery => (super::shadow_key_delivery::IMAGE_PATH,
+                INTERPRETER_PATH, super::shadow_key_delivery::HELPER_PATH),
         }
     }
 }

@@ -241,7 +241,8 @@ impl PreparedShadowNsmV1 {
             return Err("shadow NSM final identity or original process differs".into());
         }
         self.originals.verify_retained(self.startup)?;
-        Ok(ShadowNsmV1 {originals:self.originals,process,deadline:self.lifetime,attempted:false})
+        Ok(ShadowNsmV1 {originals:self.originals,process,deadline:self.lifetime,attempted:false,
+            recipient_attempted:false,recipient_complete:false})
     }
 }
 
@@ -253,7 +254,17 @@ impl ShadowRoleKeyQuoteV1 {
     pub fn public_key(&self)->&[u8;32] {&self.public_key}
     pub fn nonce(&self)->&[u8;32] {&self.nonce}
 }
-pub struct ShadowNsmV1 {originals:DeviceOriginals,process:Process,deadline:u64,attempted:bool}
+/// Only the actual retained NSM owner constructs this original. Its RSA key
+/// comes from the actual fixed helper owner, never a caller key commitment.
+pub struct ShadowRecipientQuoteV1 {document:Vec<u8>,public_key:Vec<u8>,nonce:[u8;32],request_sha256:[u8;32]}
+impl ShadowRecipientQuoteV1 {
+    pub fn document(&self)->&[u8] {&self.document}
+    pub fn public_key(&self)->&[u8] {&self.public_key}
+    pub fn nonce(&self)->&[u8;32] {&self.nonce}
+    pub fn request_sha256(&self)->&[u8;32] {&self.request_sha256}
+}
+pub struct ShadowNsmV1 {originals:DeviceOriginals,process:Process,deadline:u64,attempted:bool,
+    recipient_attempted:bool,recipient_complete:bool}
 impl ShadowNsmV1 {
     fn check(&self,deadline:u64)->Result<(),String> {
         if Process::current()!=self.process || deadline>self.deadline {
@@ -266,7 +277,8 @@ impl ShadowNsmV1 {
     /// explicit local key-set commitment, NOT a KMS/asymmetric recipient key.
     pub fn quote_role_keys(&mut self,statement_sha256:[u8;32],full_key_set:[u8;32],local_key_set:[u8;32],
         possession_sha256:[u8;32],nonce:[u8;32],deadline:u64)->Result<ShadowRoleKeyQuoteV1,String> {
-        if self.attempted {return Err("shadow NSM attempt cannot be replayed".into());}
+        if self.attempted || (self.recipient_attempted&&!self.recipient_complete) {
+            return Err("shadow NSM attempt cannot be replayed or follow a failed recipient".into());}
         self.attempted=true;self.check(deadline)?;
         if [statement_sha256,full_key_set,local_key_set,possession_sha256,nonce].contains(&[0;32]) {
             return Err("shadow NSM binding is absent".into());
@@ -292,6 +304,34 @@ impl ShadowNsmV1 {
         let document=attestation_document(&response[..raw.response.len as usize])?;
         self.check(deadline)?;
         Ok(ShadowRoleKeyQuoteV1 {document,user_data,public_key:local_key_set,nonce})
+    }
+    /// Separate, earlier purpose. No arbitrary public-key/user-data API, no
+    /// reset, no second recipient after possession and no deadline renewal.
+    pub fn quote_shadow_recipient(&mut self,
+        recipient:&mut crate::native_secret_broker_v1::shadow_key_delivery::ShadowKeyRecipient,
+        deadline:u64)->Result<ShadowRecipientQuoteV1,String> {
+        if self.attempted||self.recipient_attempted {return Err("shadow recipient phase already consumed".into());}
+        self.recipient_attempted=true;self.check(deadline)?;
+        let (public_key,nonce,request_sha256)=recipient.quote_inputs(deadline)?;
+        let mut user_data=crate::native_secret_broker_v1::shadow_key_delivery::QUOTE_DOMAIN.to_vec();
+        user_data.extend_from_slice(&request_sha256);
+        let request=attestation_request(&public_key,&nonce,&user_data)?;
+        let mut response=[0u8;MAX_RESPONSE_BYTES];
+        let request_address=request.as_ptr() as usize as u64;let response_address=response.as_mut_ptr() as usize as u64;
+        let mut raw=NsmRaw {request:NsmIovec{addr:request_address,len:request.len() as u64},
+            response:NsmIovec{addr:response_address,len:MAX_RESPONSE_BYTES as u64}};
+        self.check(deadline)?;
+        if unsafe{libc::ioctl(self.originals.device.as_raw_fd(),NSM_IOCTL_RAW as _,&mut raw)}!=0 {
+            return Err("shadow recipient NSM ioctl failed; no retry".into());
+        }
+        self.check(deadline)?;
+        if raw.request.addr!=request_address||raw.request.len!=request.len() as u64||raw.response.addr!=response_address
+            ||raw.response.len==0||raw.response.len>MAX_RESPONSE_BYTES as u64 {
+            return Err("shadow recipient NSM original changed".into());
+        }
+        let document=attestation_document(&response[..raw.response.len as usize])?;
+        self.check(deadline)?;self.recipient_complete=true;
+        Ok(ShadowRecipientQuoteV1{document,public_key,nonce,request_sha256})
     }
 }
 

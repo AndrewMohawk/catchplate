@@ -1423,6 +1423,10 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/native_shadow_nitro_originals.py \
 	serverware/native_shadow_nitro_verifier.py \
 	scripts/verify_native_shadow_custody.py \
+	serverware/native_shadow_key_contract.py \
+	serverware/native_shadow_key_helper.py \
+	scripts/native_shadow_key_kms_parent.py \
+	scripts/encrypt_native_shadow_local_keys.py \
 	serverware/oauth_refresh_material.py \
 	serverware/authority_oauth_exchange_policy.py \
 	serverware/authority_transition_oauth_exchange.py \
@@ -3870,6 +3874,10 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/native_shadow_nitro_originals.py \
 				serverware/native_shadow_nitro_verifier.py \
 				scripts/verify_native_shadow_custody.py \
+				serverware/native_shadow_key_contract.py \
+				serverware/native_shadow_key_helper.py \
+				scripts/native_shadow_key_kms_parent.py \
+				scripts/encrypt_native_shadow_local_keys.py \
 				serverware/oauth_refresh_material.py \
 				serverware/authority_oauth_exchange_policy.py \
 				serverware/authority_transition_oauth_exchange.py \
@@ -4092,6 +4100,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/response_v2/native_config.rs \
 				data-plane/decision-gate-rs/src/native_secret_broker_v1/image.rs \
 				data-plane/decision-gate-rs/src/native_secret_broker_v1/shadow_image.rs \
+				data-plane/decision-gate-rs/src/native_secret_broker_v1/shadow_key_delivery.rs \
+				data-plane/decision-gate-rs/src/native_secret_broker_v1/shadow_key_process.rs \
 				data-plane/decision-gate-rs/src/native_secret_broker_v1/process.rs \
 				data-plane/decision-gate-rs/src/native_secret_broker_v1/service_tokens.rs \
 				data-plane/decision-gate-rs/src/native_secret_broker_v1/refresh.rs \
@@ -4118,6 +4128,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/policy_custody/native_closure.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_keys.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_verifier_result.rs \
+				data-plane/decision-gate-rs/src/policy_custody/services/native_key_delivery.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/guest_original.rs \
 				data-plane/decision-gate-rs/src/native_staging.rs \
 				data-plane/decision-gate-rs/src/native_staging_v1.rs \
@@ -4413,6 +4424,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-custody-closure.v1.schema.json \
 				schemas/native-shadow-role-keys.v1.schema.json \
 				schemas/native-shadow-nitro-verifier.v1.schema.json \
+				schemas/native-shadow-encrypted-keys.v1.schema.json \
 				schemas/native-guest-role-key-provisioner.v1.schema.json \
 				schemas/native-oauth-measured-cleanup.v1.schema.json \
 				schemas/native-oauth-measured-pending-retirement.v1.schema.json \

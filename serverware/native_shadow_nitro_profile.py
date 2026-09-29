@@ -207,8 +207,13 @@ def authorization(config, now):
     p = fields(auth["payload"], AUTH_FIELDS)
     s = fields(config["expectedStatement"], STATEMENT_FIELDS)
     checkpoint = fields(config["trustCheckpoint"], ("checkpointId", "asOfUnixNanos", "revocationGeneration", "revocationRootSha256"))
-    require(p["apiVersion"] == "serverware.nativeShadowRoleKeyAssignment/v1"
-        and p["profile"] == "preassigned-final-role-originals-v1" and p["purpose"] == "shadow-role-key-possession"
+    domains = {
+        ("serverware.nativeShadowRoleKeyAssignment/v1", "preassigned-final-role-originals-v1"): ASSIGNMENT_DOMAIN,
+        ("serverware.nativeShadowRoleKeyAssignment/v2", "preassigned-encrypted-local-v1"):
+            "serverware.nativeShadowRoleKeyAssignment.signature/v2",
+    }
+    domain = domains.get((p["apiVersion"], p["profile"]))
+    require(domain is not None and p["purpose"] == "shadow-role-key-possession"
         and s["apiVersion"] == "serverware.nativeShadowRoleKeyStatement/v1" and s["purpose"] == "local-key-possession")
     guest(p["guest"]); guest(s["guest"])
     require(canonical(s["guest"]) == canonical(p["guest"]))
@@ -240,7 +245,7 @@ def authorization(config, now):
     require(s["localKeys"] == local and key_root(local) == s["localKeySetRootSha256"])
     supervisor = keys[-1]
     require(p["signingKeyId"] == supervisor["keyId"] and p["signingKeySpkiSha256"] == supervisor["keySpkiSha256"])
-    public_key(supervisor).verify(decoded(auth["signature"], size=64), preimage(ASSIGNMENT_DOMAIN, p))
+    public_key(supervisor).verify(decoded(auth["signature"], size=64), preimage(domain, p))
     integer(config["maximumResultAgeNanos"], maximum=30_000_000_000)
     return s, keys
 

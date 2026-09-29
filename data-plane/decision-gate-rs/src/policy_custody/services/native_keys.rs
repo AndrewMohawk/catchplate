@@ -8,6 +8,9 @@ use serverware_decision_gate::enclave_runtime_identity_v1::{PreparedShadowNsmV1,
 use zeroize::Zeroizing;
 #[path="native_verifier_result.rs"]
 mod verifier_result;
+#[path="native_key_delivery.rs"]
+mod encrypted;
+pub(crate) use encrypted::NativeShadowEncryptedKeysConfiguration;
 
 const PROFILE:&str="preassigned-final-role-originals-v1";
 const ASSIGNMENT_DOMAIN:&str="serverware.nativeShadowRoleKeyAssignment.signature/v1";
@@ -67,8 +70,13 @@ fn full_bindings(assignment:&VerifiedAssignment)->Result<BTreeMap<AuthorityRole,
 fn verify(configuration:&NativeCustodyKeyConfiguration,assignment:&VerifiedAssignment,association:&GuestClosureAssociation,
     checkpoint:&AtomicTrustCheckpoint,trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime)->Result<(),ShadowError> {
     let p=&configuration.authorization.payload;let a=assignment.payload();
-    require(configuration.api_version=="serverware.nativeShadowRoleKeys/v1" && p.api_version=="serverware.nativeShadowRoleKeyAssignment/v1"
-        && p.profile==PROFILE && p.purpose=="shadow-role-key-possession" && p.assignment_id==a.assignment_id
+    let domain=match (configuration.api_version.as_str(),p.api_version.as_str(),p.profile.as_str()) {
+        ("serverware.nativeShadowRoleKeys/v1","serverware.nativeShadowRoleKeyAssignment/v1",PROFILE)=>ASSIGNMENT_DOMAIN,
+        ("serverware.nativeShadowRoleKeys/v2","serverware.nativeShadowRoleKeyAssignment/v2","preassigned-encrypted-local-v1")=>
+            "serverware.nativeShadowRoleKeyAssignment.signature/v2",
+        _=>return Err(ShadowError::BindingDrift),
+    };
+    require(p.purpose=="shadow-role-key-possession" && p.assignment_id==a.assignment_id
         && &p.assignment_payload_sha256==assignment.payload_sha256() && p.assignment_revision==a.assignment_revision
         && p.execution_closure_manifest_sha256==a.custody_authority.execution_closure_manifest_sha256
         && p.guest==association.binding() && (1..=16).contains(&p.local_roles.len())
@@ -85,7 +93,7 @@ fn verify(configuration:&NativeCustodyKeyConfiguration,assignment:&VerifiedAssig
     require(b.key_id==p.signing_key_id && b.key_spki_sha256==p.signing_key_spki_sha256)?;
     let key=trust.resolve_ed25519_key(checkpoint,authority_role_signature_domain(AuthorityRole::CustodySupervisorCapability),&b.key_id,&b.key_spki_sha256)?;
     require(ed25519_public_key_material_sha256(&key)==b.key_material_sha256)?;
-    key.verify_strict(&signature_preimage(ASSIGNMENT_DOMAIN,&canonical_json_bytes(p)?),
+    key.verify_strict(&signature_preimage(domain,&canonical_json_bytes(p)?),
         &Signature::from_bytes(&configuration.authorization.signature.decode()?)).map_err(|_|ShadowError::SignatureInvalid)?;
     require(trust.current_checkpoint()?==*checkpoint)
 }
@@ -94,11 +102,13 @@ fn verify(configuration:&NativeCustodyKeyConfiguration,assignment:&VerifiedAssig
 pub(crate) struct PreparedNativeCustodyKeys {
     configuration:NativeCustodyKeyConfiguration,assignment:VerifiedAssignment,
     association:GuestClosureAssociation,nsm:PreparedShadowNsmV1,checkpoint:AtomicTrustCheckpoint,
+    encrypted:Option<encrypted::Prepared>,
 }
 impl PreparedNativeCustodyKeys {
     pub(crate) fn open(configuration:NativeCustodyKeyConfiguration,assignment:&VerifiedAssignment,
         trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime,delivery:&PreparedGuestServiceDelivery)->Result<Self,ShadowError> {
         let association=delivery.closure_association().map_err(fail)?;
+        require(configuration.api_version=="serverware.nativeShadowRoleKeys/v1")?;
         association.check_preparation().map_err(fail)?;
         let checkpoint=trust.current_checkpoint()?;let p=&configuration.authorization.payload;
         require(p.trust_checkpoint_id==checkpoint.checkpoint_id && p.revocation_generation==checkpoint.revocation_generation
@@ -112,9 +122,9 @@ impl PreparedNativeCustodyKeys {
         }
         let nsm=PreparedShadowNsmV1::open(association.startup(),association.lifetime()).map_err(fail)?;
         association.check_preparation().map_err(fail)?;
-        Ok(Self {configuration,assignment:assignment.clone(),association,nsm,checkpoint})
+        Ok(Self {configuration,assignment:assignment.clone(),association,nsm,checkpoint,encrypted:None})
     }
-    pub(crate) fn bind(self,closure:&NativeCustodyClosureOwner,configuration:&ProductionCustodyConfiguration,
+    pub(crate) fn bind(mut self,closure:&NativeCustodyClosureOwner,configuration:&ProductionCustodyConfiguration,
         trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime)->Result<NativeCustodyKeys,ShadowError> {
         self.association.check_startup().map_err(fail)?;closure.require_origin(&self.association)?;
         require(configuration.native_execution_closure()==Some(closure) && configuration.assignment_payload_sha256()==self.assignment.payload_sha256()
@@ -122,8 +132,15 @@ impl PreparedNativeCustodyKeys {
         let checkpoint=trust.current_checkpoint()?;require(self.checkpoint.permits_successor(&checkpoint))?;
         verify(&self.configuration,&self.assignment,&self.association,&checkpoint,trust,time)?;
         configuration.validate_retained_assignment_binding()?;
-        let mut keys=BTreeMap::new();
-        for role in &self.configuration.authorization.payload.local_roles {
+        let mut nsm=self.nsm.consume().map_err(fail)?;
+        let (keys,encrypted_authorization)=if let Some(source)=self.encrypted.take() {
+            let (keys,authorization)=source.bind(&self.configuration,&self.assignment,&self.association,closure,
+                configuration,&mut nsm,&checkpoint,trust,time)?;
+            (keys,Some(authorization))
+        } else {
+            require(self.configuration.api_version=="serverware.nativeShadowRoleKeys/v1")?;
+            let mut keys=BTreeMap::new();
+            for role in &self.configuration.authorization.payload.local_roles {
             self.association.check_startup().map_err(fail)?;
             let binding=configuration.authority_binding(*role)?.clone();
             let bytes=Zeroizing::new(self.association.owner.read(credential(*role)?,32).map_err(fail)?);
@@ -135,12 +152,13 @@ impl PreparedNativeCustodyKeys {
             require(Sha256Digest::compute(&spki)==*binding.key_spki_sha256()
                 && ed25519_public_key_material_sha256(&public)==*binding.key_material_sha256())?;
             keys.insert(*role,LocalKey {key,binding,public:public.to_bytes()});
-        }
-        let nsm=self.nsm.consume().map_err(fail)?;
+            }
+            (keys,None)
+        };
         let owner=NativeCustodyKeys {configuration:self.configuration,assignment:self.assignment,association:self.association,
             closure:closure.clone(),production:configuration.clone(),keys,nsm,checkpoint:self.checkpoint,
-            evidence:None,attempted:false,admitted:false,poisoned:AtomicBool::new(false)};
-        owner.check(trust,time)?;Ok(owner)
+            evidence:None,attempted:false,admitted:false,poisoned:AtomicBool::new(false),encrypted_authorization};
+        owner.check(trust,time)?;owner.association.check_startup().map_err(fail)?;Ok(owner)
     }
 }
 struct LocalKey {key:SigningKey,binding:ProductionCustodyKeyBinding,public:[u8;32]}
@@ -170,6 +188,7 @@ pub(crate) struct NativeCustodyKeys {
     configuration:NativeCustodyKeyConfiguration,assignment:VerifiedAssignment,association:GuestClosureAssociation,
     closure:NativeCustodyClosureOwner,production:ProductionCustodyConfiguration,keys:BTreeMap<AuthorityRole,LocalKey>,nsm:ShadowNsmV1,
     checkpoint:AtomicTrustCheckpoint,evidence:Option<NativeKeyEvidence>,attempted:bool,admitted:bool,poisoned:AtomicBool,
+    encrypted_authorization:Option<NativeShadowEncryptedKeysConfiguration>,
 }
 impl NativeCustodyKeys {
     fn check(&self,trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime)->Result<(),ShadowError> {
@@ -178,6 +197,9 @@ impl NativeCustodyKeys {
             self.closure.require_origin(&self.association)?;
             let checkpoint=trust.current_checkpoint()?;require(self.checkpoint.permits_successor(&checkpoint))?;
             verify(&self.configuration,&self.assignment,&self.association,&checkpoint,trust,time)?;
+            if let Some(value)=&self.encrypted_authorization {
+                value.verify(&self.configuration,&self.assignment,&self.association,&checkpoint,trust,time)?;
+            }
             self.production.revalidate_retained_assignment_at_checkpoint(&checkpoint,trust)?;
             self.closure.freshness(time.now_unix_nanos()?)
         })();

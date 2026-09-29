@@ -6,6 +6,10 @@ It does **not** implement encrypted key provisioning, the independent verifier
 service, receipt/proof servers, or a complete measured shadow service launcher.
 Nothing here changes a `TrustedHostNoTee` report into a measured report.
 
+The additive [encrypted v2 profile](native-shadow-encrypted-keys.md) now supplies
+the source counterpart for KMS Recipient delivery into this same actual owner.
+It does not change the legacy v1 inputs or establish deployed provisioning.
+
 ## Authority and keys
 
 The closed `serverware.nativeShadowRoleKeys/v1` configuration has exactly two
@@ -133,12 +137,15 @@ reported as timely cancellation.
 
 ## Required continuations, not completed by this source slice
 
-1. **Encrypted provisioning:** implement purpose-specific KMS Recipient delivery
-   into this same actual role process, bound to its assigned role/closure/boot,
-   independent key material and original deadline. The present C9 protected seed
-   inputs are a finite ownership seam, not an encrypted delivery producer. Never
-   bake seeds into EIF/configuration, send raw keys through a parent RPC, or alias
-   response-v2 key provisioning or the gate's generic KEK handling.
+1. **Encrypted provisioning deployment:** the separate
+   [v2 encrypted-delivery producer/consumer](native-shadow-encrypted-keys.md)
+   connects independently assigned sealed key inputs to ciphertext-only C9/KMS
+   transport, a fixed helper and this actual final-role owner. Its RSA-recipient
+   quote precedes key acquisition; possession evidence is a separate later phase.
+   Current independent assignments, KMS ciphertext/policy, helper image packaging
+   and the actual native launcher/watchdog remain required. Legacy v1 does not
+   silently select v2. No seeds belong in EIF/configuration or parent RPC, and
+   existing gate/response-v2 key permissions are not reused.
 2. **Independent verifier deployment:** the separate
    [native Nitro verifier adapter](native-shadow-nitro-verifier.md) now provides
    source for actual original COSE/possession verification, independently pinned

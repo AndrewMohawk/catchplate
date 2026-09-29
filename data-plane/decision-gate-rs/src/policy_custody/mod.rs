@@ -57,7 +57,8 @@ pub(crate) use services::{
     run_recovery_target_provider_from_env,
 };
 pub(crate) use services::guest::{PreparedGuestServiceDelivery,GuestClosureAssociation,GuestClosureBinding};
-pub(crate) use services::guest::native_keys::{NativeCustodyKeyConfiguration,PreparedNativeCustodyKeys,NativeCustodyKeys};
+pub(crate) use services::guest::native_keys::{NativeCustodyKeyConfiguration,PreparedNativeCustodyKeys,NativeCustodyKeys,
+    NativeShadowEncryptedKeysConfiguration};
 
 pub(crate) fn run_production_rpc_service_from_env(
 ) -> Result<(), services::ServiceRunnerError> {

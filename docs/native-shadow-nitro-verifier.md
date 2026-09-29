@@ -55,8 +55,12 @@ external verifier role before the only fixed-purpose signature is made.
 
 ## Genuine verification and computed commitments
 
-The adapter validates the unchanged C8 key authorization's separate signature
-domain, original nonce, current checkpoint, full18 root and ordered local subset.
+The adapter validates the exact independently selected key-authorization tuple:
+legacy v1 uses `preassigned-final-role-originals-v1` and the v1 signature domain;
+[encrypted v2](native-shadow-encrypted-keys.md) uses
+`preassigned-encrypted-local-v1` and the separate v2 domain. Neither profile can
+authorize the other's key inputs. Original nonce, current checkpoint, full18
+root and ordered local subset remain mandatory.
 It verifies **each actual local possession signature** over the source-fixed
 `[role,keyId,statementSha256]` tuple, including exact public material. It derives
 the original `user_data`, local-root `public_key` commitment and nonce framing
@@ -128,7 +132,8 @@ is introduced.
 The source still needs a real independently provisioned external launcher and
 public-result transport to that guest consumer, with original lifetime watchdog
 containment and installed interpreter/PKI dependencies. Before/after deadline
-checks are not proof of bounded termination. Encrypted KMS Recipient role-key
-delivery, actual receipt/proof endpoint servers, native guest fixed-peer/lifetime
-settlement, build packaging and real positive/negative runtime verification stay
-open. Schema validity or a signed result alone is not deployment/pilot approval.
+checks are not proof of bounded termination. The encrypted KMS delivery source
+counterpart still requires genuine provisioning, packaging and launcher joins.
+Actual receipt/proof endpoint servers, native guest fixed-peer/lifetime
+settlement and real positive/negative runtime verification stay open. Schema
+validity or a signed result alone is not deployment/pilot approval.

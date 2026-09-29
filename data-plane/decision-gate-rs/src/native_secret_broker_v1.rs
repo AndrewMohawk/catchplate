@@ -3,6 +3,7 @@
 mod process;
 pub(crate) mod image;
 pub mod shadow_image;
+pub mod shadow_key_delivery;
 pub mod service_tokens;
 mod refresh;
 mod cleanup;
@@ -37,7 +38,7 @@ const INTERPRETER_PATH: &str = "/usr/local/bin/python3.11";
 const HELPER_PATH: &str = "/opt/serverware/serverware/native_secret_broker_helper.py";
 const IMAGE_PATH: &str = "/opt/serverware/native-broker-runtime.squashfs";
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ImageConfiguration {
     pub(crate) profile: String, pub(crate) image_path: String, pub(crate) image_sha256: String,

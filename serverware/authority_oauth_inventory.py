@@ -13,14 +13,22 @@ MAX_ROWS = 64
 TABLES = ("credentials", "pending_oauth_credentials", "setup_sessions")
 
 
-def require_complete_populations(*, selected_rows, before_roots, work, deadline_ns):
+def tables_for(operation):
+    if operation == "oauth.pending.activate" or operation == "oauth.pending.stage":
+        return TABLES
+    if operation == "oauth.exchange.prepare":
+        return ("oauth_exchange_reservations", "oauth_revocation_work", "pending_oauth_credentials")
+    raise ValueError("operation has no complete OAuth population contract")
+
+
+def require_complete_populations(*, selected_rows, before_roots, work, deadline_ns, operation="oauth.pending.activate"):
     # No new allowance and no arbitrary success/effect callback.
     profile.require(type(deadline_ns) is int)
     def check():
         profile.require(time.monotonic_ns() < deadline_ns, "OAuth inventory original deadline expired")
     work.prepare_copy(before_roots)
     roots = {entry["table"]: entry for entry in before_roots}
-    for table in TABLES:
+    for table in tables_for(operation):
         check()
         work.prepare_scan(selected_rows)
         rows = [entry for entry in selected_rows if entry["table"] == table and entry["present"]]

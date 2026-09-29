@@ -1324,6 +1324,14 @@ class OAuthStartRequest(BaseModel):
         return db.validate_credential_metadata(value)
 
 
+class OAuthEnrolledStartRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    api_version: Literal["serverware.oauthExchangeConsentOptions/v1"] = Field(alias="apiVersion")
+    request_binding: dict[str, Any] = Field(alias="request")
+    mfa: dict[str, Any]
+
+
 class OAuthPendingActivateRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
@@ -14535,14 +14543,36 @@ def _oauth_activation_payload_digest(
     )
 
 
+@app.post("/api/oauth/consent/options")
+def oauth_enrolled_consent_options(payload: OAuthStartRequest, request: Request, response: Response) -> dict[str, Any]:
+    from serverware import control_plane_oauth_exchange as enrolled
+    try:
+        return enrolled.options_on_request(request, response, payload)
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=409, detail="enrolled OAuth consent options unavailable; no automatic retry") from None
+
+
 @app.post("/api/oauth/start")
 def oauth_start(
-    payload: OAuthStartRequest,
+    payload: OAuthEnrolledStartRequest | OAuthStartRequest,
+    request: Request,
     response: Response,
     identity: AdminIdentity = Depends(
         require_role("admin", "policy_author", "credential_owner")
     ),
 ) -> dict[str, Any]:
+    from serverware import control_plane_oauth_exchange as enrolled
+    if type(payload) is OAuthEnrolledStartRequest:
+        try:
+            return enrolled.start_on_request(request, response, payload)
+        except HTTPException:
+            raise
+        except Exception:
+            raise HTTPException(status_code=409, detail="enrolled OAuth prepare uncertain or blocked; no automatic retry") from None
+    if enrolled.selected():
+        raise HTTPException(status_code=409, detail="use the explicit enrolled OAuth consent options and start profile")
     try:
         require_application_consent(payload.provider)
     except OAuthError as exc:
@@ -14793,6 +14823,28 @@ def oauth_callback(
     error: str | None = None,
     error_description: str | None = None,
 ) -> HTMLResponse:
+    from serverware import control_plane_oauth_exchange as enrolled
+    if enrolled.selected():
+        try:
+            result = enrolled.callback_on_request(request, provider_id, code=code, state=state,
+                error=error, error_description=error_description)
+            completed = HTMLResponse(
+                "<h1>OAuth grant staged</h1><p>The encrypted grant is not active. "
+                "Use the explicit exact-account approval ceremony for pending credential "
+                + html.escape(result["pendingCredentialId"]) + ".</p>",
+                headers={"Cache-Control": "no-store"})
+        except Exception:
+            completed = HTMLResponse(
+                "<h1>OAuth exchange blocked or uncertain</h1><p>No automatic retry is authorized.</p>",
+                status_code=409, headers={"Cache-Control": "no-store"})
+        if state:
+            try:
+                name = browser_cookie_name(state)
+            except OAuthError:
+                pass
+            else:
+                completed.delete_cookie(name, path="/", secure=True, httponly=True, samesite="lax")
+        return completed
     oauth_cookie_name = None
     browser_nonce = ""
     if state:

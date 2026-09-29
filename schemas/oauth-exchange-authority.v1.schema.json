@@ -1,0 +1,144 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.dev/schemas/oauth-exchange-authority.v1.schema.json",
+  "title": "Enrolled OAuth one-shot exchange data contracts, not authority",
+  "oneOf": [{"$ref": "#/$defs/policy"}, {"$ref": "#/$defs/arguments"}, {"$ref": "#/$defs/result"}],
+  "$defs": {
+    "digest": {"$ref": "oauth-activation-authority.v1.schema.json#/$defs/digest"},
+    "id": {"$ref": "oauth-activation-authority.v1.schema.json#/$defs/rowId"},
+    "credentialPolicy": {"$ref": "oauth-activation-authority.v1.schema.json#/$defs/credentialPolicy"},
+    "epoch": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807},
+    "capacity": {"type": "integer", "minimum": 1, "maximum": 64},
+    "possession": {"type": "string", "pattern": "^[A-Za-z0-9_-]{32,128}$"},
+    "limits": {
+      "type": "object", "additionalProperties": false,
+      "required": ["pendingCapacity", "revocationCapacity"],
+      "properties": {"pendingCapacity": {"$ref": "#/$defs/capacity"}, "revocationCapacity": {"$ref": "#/$defs/capacity"}}
+    },
+    "policy": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "enrollmentRootPublicKeyBase64Url", "enrollmentRootSpkiSha256", "controlPlaneConfigurationDigest", "deploymentId", "pendingCapacity", "revocationCapacity"],
+      "properties": {
+        "schema": {"const": "serverware.oauthExchangeAuthorityPolicy/v1"},
+        "enrollmentRootPublicKeyBase64Url": {"type": "string", "pattern": "^[A-Za-z0-9_-]{43}$"},
+        "enrollmentRootSpkiSha256": {"$ref": "#/$defs/digest"},
+        "controlPlaneConfigurationDigest": {"$ref": "#/$defs/digest"},
+        "deploymentId": {"$ref": "oauth-activation-authority.v1.schema.json#/$defs/identifier"},
+        "pendingCapacity": {"$ref": "#/$defs/capacity"}, "revocationCapacity": {"$ref": "#/$defs/capacity"}
+      },
+      "description": "oauthExchangePolicy inside genuinely root-signed measured configuration. Runtime checks key/SPKI equality, independent root roles, original enrollment signature/source/configuration/deployment/interval and equal activation enrollment scope when present. No HTTP-supplied root is admitted."
+    },
+    "envelope": {
+      "type": "object", "additionalProperties": false,
+      "required": ["encrypted_secret", "encrypted_dek", "secret_nonce", "secret_ciphertext", "secret_kek_id", "credential_version", "secret_updated_at"],
+      "properties": {
+        "encrypted_secret": {"const": "envelope:v2"},
+        "encrypted_dek": {"type": "string", "minLength": 1, "maxLength": 262144},
+        "secret_nonce": {"type": "string", "minLength": 1, "maxLength": 262144},
+        "secret_ciphertext": {"type": "string", "minLength": 1, "maxLength": 262144},
+        "secret_kek_id": {"type": "string", "minLength": 1, "maxLength": 262144},
+        "credential_version": {"const": 1},
+        "secret_updated_at": {"type": "string", "format": "date-time"}
+      },
+      "description": "Actual encrypted original, not plaintext or an encryption-verification verdict. Runtime requires trim-stable/C0+DEL-free UTF-8 fields, UTC timestamp, canonical aggregate<=256KiB. Source-owned client encrypts/decrypts with the exact artifact UUID and version1 AAD."
+    },
+    "prepare": {
+      "type": "object", "additionalProperties": false,
+      "required": ["exchangeId", "stateSha256", "browserNonceSha256", "pkceVerifierSha256", "stateOriginalSha256", "stateEnvelope", "reservedEnvelope", "providerId", "redirectUri", "credentialName", "scopes", "metadata", "issuedAtEpochNs", "contactExpiresAtEpochNs", "retentionExpiresAtEpochNs", "pendingExpiresAtEpochNs", "enrollmentSha256", "limits"],
+      "properties": {
+        "exchangeId": {"$ref": "#/$defs/id"}, "stateSha256": {"$ref": "#/$defs/digest"},
+        "browserNonceSha256": {"$ref": "#/$defs/digest"}, "pkceVerifierSha256": {"$ref": "#/$defs/digest"},
+        "stateOriginalSha256": {"$ref": "#/$defs/digest"}, "stateEnvelope": {"$ref": "#/$defs/envelope"},
+        "reservedEnvelope": {"$ref": "#/$defs/envelope"}, "providerId": {"enum": ["google", "x"]},
+        "redirectUri": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "credentialName": {"type": "string", "minLength": 1, "maxLength": 256},
+        "scopes": {"type": "array", "minItems": 1, "maxItems": 128, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 1024}},
+        "metadata": {"type": "object"}, "issuedAtEpochNs": {"$ref": "#/$defs/epoch"},
+        "contactExpiresAtEpochNs": {"$ref": "#/$defs/epoch"}, "retentionExpiresAtEpochNs": {"$ref": "#/$defs/epoch"},
+        "pendingExpiresAtEpochNs": {"$ref": "#/$defs/epoch"}, "enrollmentSha256": {"$ref": "#/$defs/digest"},
+        "limits": {"$ref": "#/$defs/limits"}
+      },
+      "description": "Fresh genuine credential_owner hardware/UP/UV ceremony, not an actor_id assertion. All absolute bounds committed before consent URL: contact<=issued+600s, retention<=contact+600s, pending<=contact+3600s, ordered and within original enrollment. Runtime checks signed limits/current30s consent age, exact application association and no setup/reconnect."
+    },
+    "claim": {
+      "type": "object", "additionalProperties": false,
+      "required": ["exchangeId", "exchangeRowSha256", "state", "browserNonce", "limits", "codeSha256", "contactRequestSha256"],
+      "properties": {
+        "exchangeId": {"$ref": "#/$defs/id"}, "exchangeRowSha256": {"$ref": "#/$defs/digest"},
+        "state": {"$ref": "#/$defs/possession"}, "browserNonce": {"$ref": "#/$defs/possession"},
+        "limits": {"$ref": "#/$defs/limits"}, "codeSha256": {"$ref": "#/$defs/digest"}, "contactRequestSha256": {"$ref": "#/$defs/digest"}
+      },
+      "description": "Exact browser/state possession and full retained row digest; code and actual contact request commitments become immutable before any token POST. Definite commit plus retained source owner is required. Unknown outcome cannot authorize another contact."
+    },
+    "retain": {
+      "type": "object", "additionalProperties": false,
+      "required": ["exchangeId", "exchangeRowSha256", "state", "browserNonce", "limits", "rawResponseSha256", "rawResponseEnvelope", "tokenSecretSha256", "tokenEnvelope"],
+      "properties": {
+        "exchangeId": {"$ref": "#/$defs/id"}, "exchangeRowSha256": {"$ref": "#/$defs/digest"},
+        "state": {"$ref": "#/$defs/possession"}, "browserNonce": {"$ref": "#/$defs/possession"}, "limits": {"$ref": "#/$defs/limits"},
+        "rawResponseSha256": {"$ref": "#/$defs/digest"}, "rawResponseEnvelope": {"$ref": "#/$defs/envelope"},
+        "tokenSecretSha256": {"anyOf": [{"$ref": "#/$defs/digest"}, {"type": "null"}]},
+        "tokenEnvelope": {"anyOf": [{"$ref": "#/$defs/envelope"}, {"type": "null"}]}
+      },
+      "allOf": [{"if": {"properties": {"tokenEnvelope": {"type": "null"}}}, "then": {"properties": {"tokenSecretSha256": {"type": "null"}}}, "else": {"properties": {"tokenSecretSha256": {"$ref": "#/$defs/digest"}}}}],
+      "description": "One immutable raw reply (canonical status/rawHeaders/bodyBase64url) and nullable normalized token envelope. Retain before provider identity GET. Null token cannot stage. Hashes and ciphertext are not independent provider-authorship or O02 proof. No overwrite or inline revoke retry."
+    },
+    "stage": {
+      "type": "object", "additionalProperties": false,
+      "required": ["exchangeId", "exchangeRowSha256", "state", "browserNonce", "limits", "metadata", "review", "payloadDigest", "tokenSecretSha256"],
+      "properties": {
+        "exchangeId": {"$ref": "#/$defs/id"}, "exchangeRowSha256": {"$ref": "#/$defs/digest"},
+        "state": {"$ref": "#/$defs/possession"}, "browserNonce": {"$ref": "#/$defs/possession"}, "limits": {"$ref": "#/$defs/limits"},
+        "metadata": {"type": "object"}, "review": {"type": "object"}, "payloadDigest": {"$ref": "#/$defs/digest"},
+        "tokenSecretSha256": {"$ref": "#/$defs/digest"}
+      },
+      "description": "Atomic pending insertion, exact retained-work consumption, expiry updates and audit under current roots; no credential activation. Runtime closes review fields and joins provider/account/scopes/application/name, prefixed token SHA and exact canonical payload recipe. Metadata<=32KiB, review<=16KiB."
+    },
+    "arguments": {
+      "type": "object", "additionalProperties": false,
+      "required": ["action", "resource_id", "payload_digest", "actor_id", "request", "approval_id", "credential_policy", "enrollment_original"],
+      "properties": {
+        "action": {"const": "credential.oauth.exchange"}, "resource_id": {"$ref": "#/$defs/id"},
+        "payload_digest": {"$ref": "#/$defs/digest"}, "actor_id": {"type": "string", "pattern": "^oidc:", "maxLength": 512},
+        "request": {"oneOf": [{"$ref": "#/$defs/prepare"}, {"$ref": "#/$defs/claim"}, {"$ref": "#/$defs/retain"}, {"$ref": "#/$defs/stage"}]},
+        "approval_id": {"type": "null"}, "credential_policy": {"$ref": "#/$defs/credentialPolicy"},
+        "enrollment_original": {"type": "string", "minLength": 3, "maxLength": 87382, "pattern": "^[A-Za-z0-9_-]+$"}
+      },
+      "description": "Operation selected out of band: oauth.exchange.prepare/claim/retain or oauth.pending.stage. Runtime requires corresponding exact request shape, resource=exchangeId, payload_digest=SHA(canonical request), same retained actor/policy/enrollment and current signed limits. Callback actor comes from protected consent plus actual possession, not a new OIDC claim. Canonical aggregate<=768KiB."
+    },
+    "exchange": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "status", "rowSha256", "contactExpiresAtEpochNs", "retentionExpiresAtEpochNs", "pendingExpiresAtEpochNs"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"}, "status": {"enum": ["prepared", "claimed", "retained", "staged"]},
+        "rowSha256": {"$ref": "#/$defs/digest"}, "contactExpiresAtEpochNs": {"$ref": "#/$defs/epoch"},
+        "retentionExpiresAtEpochNs": {"$ref": "#/$defs/epoch"}, "pendingExpiresAtEpochNs": {"$ref": "#/$defs/epoch"}
+      }
+    },
+    "pending": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "requester_id", "name", "kind", "payload_digest", "review", "target_credential_id", "target_credential_version", "status", "revocation_status", "revocation_error", "revocation_attempts", "revocation_next_attempt_at", "created_at", "expires_at", "updated_at"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"}, "requester_id": {"type": "string", "pattern": "^oidc:", "maxLength": 512},
+        "name": {"type": "string", "minLength": 1, "maxLength": 256}, "kind": {"const": "oauth2"},
+        "payload_digest": {"$ref": "#/$defs/digest"}, "review": {"type": "object"},
+        "target_credential_id": {"type": "null"}, "target_credential_version": {"type": "null"}, "status": {"const": "pending"},
+        "revocation_status": {"type": "null"}, "revocation_error": {"type": "null"}, "revocation_attempts": {"const": 0},
+        "revocation_next_attempt_at": {"type": "null"}, "created_at": {"type": "string", "format": "date-time"},
+        "expires_at": {"type": "string", "format": "date-time"}, "updated_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "result": {
+      "type": "object", "additionalProperties": false,
+      "required": ["ok", "exchange", "operation", "requestDigest", "auditEventDigest", "idempotentReplay"],
+      "properties": {
+        "ok": {"const": true}, "exchange": {"$ref": "#/$defs/exchange"},
+        "operation": {"enum": ["oauth.exchange.prepare", "oauth.exchange.claim", "oauth.exchange.retain", "oauth.pending.stage"]},
+        "requestDigest": {"$ref": "#/$defs/digest"}, "auditEventDigest": {"$ref": "#/$defs/digest"},
+        "idempotentReplay": {"const": false}, "pending": {"$ref": "#/$defs/pending"}
+      },
+      "allOf": [{"if": {"properties": {"operation": {"const": "oauth.pending.stage"}}}, "then": {"required": ["pending"]}, "else": {"not": {"required": ["pending"]}}}],
+      "description": "Exact6 result, stage adds pending. Data-only until actual signed custody response/current owner/exact readback. Never token plaintext, PKCE, cookie, raw reply or ciphertext. A replayed/unknown claim cannot grant a provider POST."
+    }
+  }
+}

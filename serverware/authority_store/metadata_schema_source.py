@@ -291,6 +291,26 @@ def metadata_base_schema_source() -> str:
             CREATE INDEX IF NOT EXISTS oidc_login_rate_buckets_expiry
                 ON oidc_login_rate_buckets (expires_at);
 
+            CREATE TABLE IF NOT EXISTS oauth_exchange_reservations (
+                id TEXT PRIMARY KEY,
+                provider_id TEXT NOT NULL,
+                requester_id TEXT NOT NULL,
+                enrollment_original TEXT NOT NULL,
+                credential_policy_json TEXT NOT NULL,
+                consent_json TEXT NOT NULL,
+                status TEXT NOT NULL,
+                claim_request_digest TEXT,
+                code_sha256 TEXT,
+                contact_request_sha256 TEXT,
+                raw_response_sha256 TEXT,
+                raw_response_envelope_json TEXT,
+                token_secret_sha256 TEXT,
+                token_envelope_json TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                CHECK (status IN ('prepared', 'claimed', 'retained', 'staged'))
+            );
+
             CREATE TABLE IF NOT EXISTS oauth_revocation_work (
                 id TEXT PRIMARY KEY,
                 provider_id TEXT NOT NULL,

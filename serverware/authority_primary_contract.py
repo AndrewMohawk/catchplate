@@ -38,6 +38,8 @@ PRIMARY_KEY_COLUMNS: Mapping[str, tuple[str, ...]] = MappingProxyType({
     "oidc_browser_sessions": ("id",),
     "oidc_session_activation_deliveries": ("id",),
     "pending_oauth_credentials": ("id",),
+    "oauth_exchange_reservations": ("id",),
+    "oauth_revocation_work": ("id",),
     "setup_sessions": ("id",),
     "policy_activation_aborts": ("preparation_digest",),
     "policy_activation_approval_consumptions": ("approval_id",),

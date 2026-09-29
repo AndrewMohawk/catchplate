@@ -10,7 +10,7 @@ from serverware import authority_complete_query
 from serverware.authority_query_read_work import _ValidationWork
 
 
-SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.266"
+SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.267"
 SCHEMA_VERSION = 9
 CONTRACT_SCHEMA = "serverware.policyAuthorityOperationContract/v3"
 BUSINESS_INTENT_SCHEMA = "serverware.policyAuthorityBusinessIntent/v2"
@@ -260,6 +260,7 @@ _AUDIT_COUNTER_REPLACEMENT_OPERATIONS = frozenset({
     "publication-approval.request", "publication-approval.decide",
     "publication-approval.consume", "publication-approval.settle",
     "oauth-activation-approval.request", "oauth-activation-approval.decide", "oauth.pending.activate",
+    "oauth.exchange.prepare", "oauth.exchange.claim", "oauth.exchange.retain", "oauth.pending.stage",
     "policy-file-approval.request", "policy-file-approval.decide",
     "policy-file-approval.consume", "policy-file-approval.settle",
     "jit.review-receipt.issue", "jit.decide", "jit.deny",
@@ -1434,6 +1435,8 @@ V9_ADDITIONAL_PROTECTED_TABLES = tuple(sorted({
     *PHASE2_STORE_TABLES,
     SUCCESSOR_EXECUTION_CUSTODY_TABLE,
     "credential_generations",
+    "oauth_exchange_reservations",
+    "oauth_revocation_work",
     "setup_sessions",
     "policy_authority_authorization_dependency_manifests",
     "policy_authority_operation_mutation_templates",
@@ -1786,6 +1789,24 @@ _OPERATIONS = {
             ("oauth-activation-approval.request", "serverware_policy_authority_oauth_activation_approval_request"),
             ("oauth-activation-approval.decide", "serverware_policy_authority_oauth_activation_approval_decide"),
             ("oauth.pending.activate", "serverware_policy_authority_oauth_pending_activate"),
+        )
+    },
+    **{
+        operation: _spec(
+            handler,
+            reads=("oauth_exchange_reservations", "oauth_revocation_work", "rbac_role_bindings") +
+                (("pending_oauth_credentials",) if operation == "oauth.exchange.prepare" else ()) +
+                (("credentials", "credential_generations", "pending_oauth_credentials", "setup_sessions") if operation == "oauth.pending.stage" else ()) + _PHASE2_AGGREGATE,
+            writes=("oauth_exchange_reservations", "oauth_revocation_work", "metadata_audit_outbox") +
+                (("pending_oauth_credentials",) if operation == "oauth.pending.stage" else ()) + _PHASE2_AGGREGATE,
+            webauthn="bound-verified-assertion-receipt" if operation == "oauth.exchange.prepare" else "not-required",
+            proof_primitives=("primary-key-row", "bounded-limit-plus-one", "aggregate-high-water", "capacity-reservation"),
+            maximum_query_rows=224, maximum_mutations=72, maximum_work_units=2048,
+        ) for operation, handler in (
+            ("oauth.exchange.prepare", "serverware_policy_authority_oauth_exchange_prepare"),
+            ("oauth.exchange.claim", "serverware_policy_authority_oauth_exchange_claim"),
+            ("oauth.exchange.retain", "serverware_policy_authority_oauth_exchange_retain"),
+            ("oauth.pending.stage", "serverware_policy_authority_oauth_pending_stage"),
         )
     },
     "control-approval.request": _spec(

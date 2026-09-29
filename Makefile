@@ -1268,6 +1268,11 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_oauth_inventory.py \
 	serverware/authority_transition_oauth_activation.py \
 	serverware/control_plane_oauth_activation.py \
+	serverware/authority_oauth_exchange.py \
+	serverware/authority_oauth_exchange_policy.py \
+	serverware/authority_transition_oauth_exchange.py \
+	serverware/control_plane_oauth_exchange.py \
+	serverware/oauth_exchange_material.py \
 	serverware/portal_admin_token_publication.py \
 	serverware/control_plane_workload_identity_routes.py \
 	serverware/portal_workload_issuance.py \
@@ -3552,6 +3557,11 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_oauth_inventory.py \
 				serverware/authority_transition_oauth_activation.py \
 				serverware/control_plane_oauth_activation.py \
+				serverware/authority_oauth_exchange.py \
+				serverware/authority_oauth_exchange_policy.py \
+				serverware/authority_transition_oauth_exchange.py \
+				serverware/control_plane_oauth_exchange.py \
+				serverware/oauth_exchange_material.py \
 				serverware/portal_admin_token_publication.py \
 				serverware/control_plane_workload_identity_routes.py \
 				serverware/portal_workload_issuance.py \
@@ -3882,6 +3892,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/control-plane-policy-file-publication.v1.schema.json \
 				schemas/oauth-application-enrollment.v1.schema.json \
 				schemas/oauth-activation-authority.v1.schema.json \
+				schemas/oauth-exchange-authority.v1.schema.json \
 				schemas/native-ca-installation-receipt.v1.schema.json \
 				schemas/native-enrollment-authorizer.v1.schema.json \
 				schemas/workload-identity-bootstrap-request.v1.schema.json \

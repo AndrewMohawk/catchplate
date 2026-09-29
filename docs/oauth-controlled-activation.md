@@ -4,9 +4,10 @@ This source profile connects an independently enrolled OAuth application to a
 purpose-controlled approval and atomic activation path. It supports a new
 credential only: the pending row must have no reconnect target and no setup
 session association. It is not a completed consent-to-credential flow or a tested
-pilot. Enrolled consent, staging, reconnect and refresh remain blocked until
-their own controlled transitions are connected; unconfigured development
-behavior remains explicitly separate.
+pilot. The separate [enrolled exchange client](oauth-controlled-exchange-client.md)
+now connects new-credential consent, one-shot exchange, retained material and
+pending staging in source. Reconnect, refresh, setup and portal ceremonies remain
+unfinished; unconfigured development behavior remains explicitly separate.
 
 ## Independently admitted originals
 

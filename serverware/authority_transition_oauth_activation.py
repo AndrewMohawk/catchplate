@@ -12,6 +12,9 @@ from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
 
 from serverware import authority_oauth_activation as profile
+from serverware import authority_oauth_setup as setup_profile
+from serverware import authority_oauth_measured_setup as measured_setup
+from serverware import authority_transition_oauth_setup_rows as setup_rows
 from serverware import authority_oauth_activation_policy as enrollment
 from serverware import authority_oauth_inventory as inventory
 from serverware import authority_transition_core as core
@@ -27,9 +30,39 @@ _CREDENTIAL_COPY = ("id", "name", "kind", "encrypted_secret", "encrypted_dek", "
 
 def _values(operation, arguments):
     try:
-        return profile.arguments(operation, arguments, typed=True)
+        return _contract(operation).arguments(operation, arguments, typed=True)
     except (KeyError, TypeError, ValueError) as exc:
         raise core.TransitionKernelError("OAuth activation arguments are not closed") from exc
+
+
+def _contract(operation):
+    if operation in {setup_profile.OP_REQUEST, setup_profile.OP_DECIDE, setup_profile.OP_ACTIVATE}:
+        return setup_profile
+    if operation in profile.OPERATIONS:
+        return profile
+    raise core.TransitionKernelError("OAuth activation operation is not selected")
+
+
+def _setup_pending(context, values, pending, enrollment_payload):
+    bound = values["request"]["setupBinding"]
+    _, row = setup_rows.current(context, bound, phase="oauth_verified", actor=pending["requester_id"])
+    custody = shared._row(context.exact(measured_setup.TABLE, {"id": pending["id"]}), "actual measured Setup custody")
+    measured_setup.row_original(custody)
+    initial = setup_rows._original(custody["setup_initial_json"])
+    final = setup_rows._original(custody["setup_final_json"])
+    preparation = measured_setup.arguments(measured_setup.OP_PREPARE,
+        shared._canonical_stored_mapping(custody["preparation_arguments_json"], "actual Setup preparation"))
+    setup_profile.require(custody["status"] == "staged" and row == final and row["revision"] == 2
+        and row["oauth_pending_credential_id"] == pending["id"] and row["oauth_provider"] == enrollment_payload["providerId"]
+        and row["credential_id"] is None and row["credential_version"] is None
+        and row["owner_id"] == initial["owner_id"] == preparation["actor_id"] == pending["requester_id"]
+        and row["current_assignee_id"] == initial["current_assignee_id"]
+        and row["id"] == initial["id"] and row["expires_at"] == initial["expires_at"]
+        and setup_profile.row_binding(initial) == preparation["request"]["setupBinding"]
+        and preparation["enrollment_original"] == values["enrollment_original"]
+        and custody["pending_original_json"] == profile.pending_original(pending).decode("ascii"),
+        "Setup activation does not consume the exact genuine staged association")
+    return row
 
 
 def _time(value):
@@ -138,6 +171,8 @@ class OAuthActivationKernel:
 
     @property
     def handler(self):
+        if _contract(self.operation) is setup_profile:
+            return "serverware_policy_authority_" + self.operation.replace(".", "_").replace("-", "_")
         return "serverware_policy_authority_oauth_" + ({profile.OP_REQUEST: "activation_approval_request", profile.OP_DECIDE: "activation_approval_decide", profile.OP_ACTIVATE: "pending_activate"}[self.operation])
 
     @property
@@ -149,6 +184,7 @@ class OAuthActivationKernel:
 
     def queries_with_evidence(self, *, arguments, database_now, request_digest, evidence):
         del database_now
+        profile = _contract(self.operation)
         values = _values(self.operation, arguments)
         item_id = _approval_id(self.operation, values, request_digest)
         queries = [shared._query(operation=self.operation, name="approval", table="control_plane_approvals", key={"id": item_id}),
@@ -163,6 +199,12 @@ class OAuthActivationKernel:
             core.require_text(evidence.get(field), field, maximum_bytes=1024)
             queries.append(shared._query(operation=self.operation, name=name, table=table, key={"id": evidence[field]}))
         queries.extend(assertion._trust_queries(self.operation, work=None))
+        if profile is setup_profile:
+            queries.extend((shared._query(operation=self.operation, name="setup", table="setup_sessions",
+                key={"id": values["request"]["setupBinding"]["sessionId"]}),
+                shared._query(operation=self.operation, name="setup_custody", table=measured_setup.TABLE, key={"id": values["resource_id"]})))
+            if self.operation == profile.OP_ACTIVATE:
+                queries.extend(setup_rows.event_queries(self.operation, values["request"]["setupBinding"]["sessionId"], 3))
         if self.operation == profile.OP_ACTIVATE:
             queries.append(currentness_kernel.root_query(self.operation, values["resource_id"], 1, absent=True))
             queries.extend((shared._query(operation=self.operation, name="new_credential", table="credentials", key={"id": values["resource_id"]}, require_absence=True),
@@ -177,8 +219,11 @@ class OAuthActivationKernel:
         return family_retirement.order_populations(self.operation, tuple(queries))
 
     def transition(self, context):
+        profile = _contract(self.operation)
         values = _values(self.operation, context.arguments)
         pending_selected, pending, metadata, original_enrollment = _pending(context, values)
+        setup_before = _setup_pending(context, values, pending, original_enrollment) if profile is setup_profile else None
+        setup_after = setup_updates = None
         item_id = _approval_id(self.operation, values, context.request_digest)
         actor, now = values["actor_id"], context.database_now.astimezone(timezone.utc)
         now_s = now.isoformat()
@@ -198,6 +243,8 @@ class OAuthActivationKernel:
             if selected.get("present") is not False or pending["requester_id"] != actor:
                 raise core.TransitionKernelError("OAuth request is not a fresh pending-owner request")
             expiry_ns = min(shared._database_epoch_ns(now + timedelta(seconds=300)), original_enrollment["expiresAtEpochNs"], shared._database_epoch_ns(_time(pending["expires_at"])))
+            if setup_before is not None:
+                expiry_ns = min(expiry_ns, setup_profile.epoch(setup_before["expires_at"]))
             expires = datetime.fromtimestamp(expiry_ns // 1_000_000_000, timezone.utc)
             if expires <= now:
                 raise core.TransitionKernelError("OAuth approval has no remaining original lifetime")
@@ -252,6 +299,7 @@ class OAuthActivationKernel:
                 _google_collisions(context, pending, metadata)
                 family_retirement.require_open_from_population(context, metadata["provider_id"], metadata["provider_subject"])
                 if any(shared._row(item, "setup session").get("oauth_pending_credential_id") == pending["id"]
+                        and (setup_before is None or item["row"]["id"] != setup_before["id"])
                         for item in context.present_rows("setup_sessions")):
                     raise core.TransitionKernelError("OAuth pending credential requires a separate atomic setup transition")
                 new_selected = context.exact("credentials", {"id": pending["id"]})
@@ -266,21 +314,32 @@ class OAuthActivationKernel:
                     core.mutation(operation=self.operation, selected=currentness_selected,
                         row=currentness.new_root(pending["id"], 1, context.request_digest, now_s)),
                     core.delete_mutation(operation=self.operation, selected=pending_selected)))
+                if setup_before is not None:
+                    setup_after, setup_updates = setup_rows.next_row(context, setup_before, transition="bind_credential", credential_id=pending["id"])
                 provenance = {**provenance, "consumptionDigest": context.request_digest, "consumptionEvidenceDigest": evidence["verifiedAssertionReceiptDigest"]}
                 row = {**row, "status": "consumed", "consumed_by": actor, "consumed_at": now_s}
             row = {**row, "approval_authn": profile.canonical(provenance).decode("ascii")}
         mutations.append(core.mutation(operation=self.operation, selected=selected, row=row))
-        audit, audit_digest, replay = shared._audit_mutations(context, event_type="credential.oauth.activation." + self.operation.split(".")[-1],
-            actor_type="admin", actor_id=actor, event={"schema": "serverware.oauthActivationAudit/v1", "operation": self.operation,
-                "requestDigest": context.request_digest, "approvalId": item_id, "actorId": actor, "request": values["request"], "provenance": provenance})
+        audit, audit_digest, replay = shared._audit_mutations(context, event_type=("credential.oauth.setup." if profile is setup_profile else "credential.oauth.activation.") + self.operation.split(".")[-1],
+            actor_type="admin", actor_id=actor, event={"schema": "serverware.oauthSetupActivationAudit/v1" if profile is setup_profile else "serverware.oauthActivationAudit/v1", "operation": self.operation,
+                "requestDigest": context.request_digest, "approvalId": item_id, "actorId": actor, "request": values["request"], "provenance": provenance,
+                **({"setupPostSha256": setup_profile.sha256(setup_profile.row_original(setup_after))} if setup_after is not None else {})})
         if replay:
             raise core.TransitionKernelError("OAuth activation audit identity was already used")
         result = {"ok": True, "approval": _public(row), "operation": self.operation, "requestDigest": context.request_digest,
             "auditEventDigest": audit_digest, "idempotentReplay": False}
+        if setup_before is not None:
+            result["setupOriginal"] = setup_profile.row_original(setup_after or setup_before).decode("ascii")
+        if setup_after is not None:
+            mutations.extend(setup_rows.mutations(context, setup_before, setup_after, transition="bind_credential", actor=actor,
+                updates=setup_updates, audit_digest=audit_digest, provider=original_enrollment["providerId"],
+                enrollment_sha256=values["request"]["enrollmentSha256"]))
+            result["setupEventId"] = setup_profile.event_id(setup_after["id"], 4)
+            result["auditState"] = "controlled_pending"
         if self.operation == profile.OP_ACTIVATE:
             result["credential"] = {name: (metadata if name == "metadata" else value) for name, value in new_row.items()
                 if name not in {"encrypted_secret", "encrypted_dek", "secret_nonce", "secret_ciphertext"}}
         return core.KernelTransition(mutations=tuple(mutations) + audit, result=result, work_units=256)
 
 
-KERNELS = MappingProxyType({operation: OAuthActivationKernel(operation) for operation in profile.OPERATIONS})
+KERNELS = MappingProxyType({operation: OAuthActivationKernel(operation) for operation in profile.OPERATIONS | {setup_profile.OP_REQUEST, setup_profile.OP_DECIDE, setup_profile.OP_ACTIVATE}})

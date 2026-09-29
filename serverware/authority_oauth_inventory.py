@@ -21,15 +21,17 @@ def maximum_rows(table):
 
 
 def tables_for(operation):
+    if operation == "oauth.setup.create":
+        return ("setup_sessions",)
     if operation in {"oauth.measured-pending-retirement.inspect", "oauth.measured-pending-retirement.claim",
             "oauth.measured-pending-retirement.contact", "oauth.measured-pending-retirement.finish", "oauth.measured-pending-retirement.recover"}:
         return ("credentials", "pending_oauth_credentials") + family_group.TABLES
     if operation in {"oauth.measured-refresh-cleanup.inspect", "oauth.measured-refresh-cleanup.claim", "oauth.measured-refresh-cleanup.contact",
             "oauth.measured-refresh-cleanup.finish", "oauth.measured-refresh-cleanup.recover"}:
         return ("credentials",) + family_group.TABLES
-    if operation in {"oauth.pending.activate", "oauth.pending.stage", "oauth.measured-exchange.stage"}:
+    if operation in {"oauth.pending.activate", "oauth.pending.stage", "oauth.measured-exchange.stage", "oauth.measured-setup.stage", "oauth.setup.activate"}:
         return TABLES
-    if operation in {"oauth.exchange.prepare", "oauth.measured-exchange.prepare"}:
+    if operation in {"oauth.exchange.prepare", "oauth.measured-exchange.prepare", "oauth.measured-setup.prepare"}:
         return ("oauth_exchange_reservations", "oauth_revocation_work", "pending_oauth_credentials")
     if operation == "oauth.refresh.claim":
         return ("oauth_refresh_reservations", "oauth_revocation_work") + family_group.TABLES

@@ -54,6 +54,7 @@ fn main() -> Result<(), String> {
         Some("--guest-role-keys-v12") => { arguments.remove(0); "--native-guest-role-keys-startup-v12" },
         Some("--measured-pending-retirement-v13") => { arguments.remove(0); "--native-measured-pending-retirement-startup-v13" },
         Some("--gate-cgroup-v14") => { arguments.remove(0); "--native-gate-cgroup-startup-v14" },
+        Some("--measured-setup-v15") => { arguments.remove(0); "--native-measured-setup-startup-v15" },
         _ => "--native-encrypted-startup",
     };
     if arguments.is_empty() || arguments.len() > 9 {

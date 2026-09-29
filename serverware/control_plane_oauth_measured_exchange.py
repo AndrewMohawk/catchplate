@@ -12,6 +12,8 @@ from urllib.parse import urlsplit
 from fastapi import Request
 from serverware import authority_contract, db, oauth, webauthn
 from serverware import authority_oauth_measured_exchange as profile
+from serverware import authority_oauth_measured_setup as setup_profile
+from serverware import authority_oauth_setup as setup
 from serverware import authority_oauth_exchange as exchange
 from serverware import control_plane_oauth_activation as activation
 from serverware import control_plane_oauth_exchange as consent
@@ -30,6 +32,7 @@ MAX_RESPONSE = 8 * 1024 * 1024
 HUMAN_PATHS = frozenset({"/api/oauth/native/intent", "/api/oauth/native/options", "/api/oauth/native/consent"})
 MACHINE_PATH = "/api/data-plane/oauth-issuance"
 RECOVERY_PATH = "/api/data-plane/oauth-issuance/original"
+LEGACY_PROFILE = profile
 
 
 def _body(request, raw, path):
@@ -44,9 +47,14 @@ def _input(operation, arguments):
 
 
 def _originals(owner, operation, arguments):
+    profile = owner.contract
     owner.check()
-    request_original, response_original = custody_client.ControlPlaneCustodyClient._request_measured_exchange(owner.custody,
-        operation=operation, input_value=_input(operation, arguments), deadline_ns=owner.deadline)
+    if profile is setup_profile:
+        request_original, response_original = custody_client.ControlPlaneCustodyClient._request_measured_setup(owner.custody,
+            operation=operation, input_value=_input(operation, arguments), deadline_ns=owner.deadline)
+    else:
+        request_original, response_original = custody_client.ControlPlaneCustodyClient._request_measured_exchange(owner.custody,
+            operation=operation, input_value=_input(operation, arguments), deadline_ns=owner.deadline)
     owner.check()
     response = profile.document(response_original, 6 * 1024 * 1024)
     result = response["result"]
@@ -55,16 +63,21 @@ def _originals(owner, operation, arguments):
         and result["ok"] is True and result["idempotentReplay"] is False and result["operation"] == operation
         and result["requestDigest"] == profile.request_digest(operation, {key: item for key, item in arguments.items() if key != "authn_evidence"}))
     profile.digest(result["auditEventDigest"])
-    reply = {"apiVersion": HTTP_RESPONSE, "requestOriginal": profile.encoded(request_original), "responseOriginal": profile.encoded(response_original)}
+    reply = {"apiVersion": setup_profile.HTTP_RESPONSE if profile is setup_profile else HTTP_RESPONSE,
+        "requestOriginal": profile.encoded(request_original), "responseOriginal": profile.encoded(response_original)}
     profile.require(len(profile.canonical(reply)) <= MAX_RESPONSE)
     return reply
 
 
 class _Consent:
-    def __init__(self, request, arguments):
+    def __init__(self, request, arguments, *, contract=profile):
+        setup.require(contract is LEGACY_PROFILE or contract is setup_profile)
+        self.contract = contract
+        profile = contract
         self.arguments = profile.arguments(profile.OP_PREPARE, arguments)
         provider = self.arguments["request"]["providerId"]
         profile.require(applications.measured_selected(provider))
+        profile.require(applications.setup_selected(provider) == (profile is setup_profile))
         # This retained owner supplies only current human/application custody;
         # none of the old plaintext state/encryption/contact methods is called.
         self.human = consent._Owner(request, provider)
@@ -78,6 +91,7 @@ class _Consent:
         self.check()
 
     def check(self):
+        profile = self.contract
         self.human.check()
         values, human = self.arguments, self.human
         request = values["request"]
@@ -92,8 +106,15 @@ class _Consent:
             and request["callbackOrigin"] != request["portalOrigin"]
             and request["scopes"] == sorted(oauth.resolve_requested_scopes(human.provider.id, request["scopes"]))
             and self.deadline <= human.deadline and time.monotonic_ns() < self.deadline)
+        if profile is setup_profile and not self.sent:
+            from serverware import control_plane_oauth_setup as owner
+            row = owner.read_session(request["setupBinding"]["sessionId"])
+            profile.require(setup.row_binding(row) == request["setupBinding"] and row["owner_id"] == human.actor
+                and row["current_assignee_id"] in {None, human.actor} and row["phase"] == "created" and row["revision"] == 0
+                and time.time_ns() < request["setupBinding"]["expiresAtEpochNs"])
 
     def assertion(self, mfa):
+        profile = self.contract
         self.check()
         profile.require(type(mfa) is dict and set(mfa) == {MFA_FIELD, "assertion"}
             and mfa[MFA_FIELD] == profile.OPTIONS_SCHEMA and len(profile.canonical(mfa)) <= 16384)
@@ -115,6 +136,7 @@ class _Consent:
 def intent_on_request(request, raw):
     value = _body(request, raw, "/api/oauth/native/intent")
     profile.require(set(value) == {"provider", "credentialName", "scopes", "metadata"} and applications.measured_selected(value["provider"]))
+    profile.require(not applications.setup_selected(value["provider"]), "unbound issuance is not the cold Setup purpose")
     owner = consent._Owner(request, value["provider"])
     metadata = oauth._bounded_metadata(value["metadata"])
     profile.require(applications.ASSOCIATION_KEY not in metadata
@@ -131,10 +153,12 @@ def intent_on_request(request, raw):
     return {"apiVersion": INTENT_RESPONSE, "callbackOrigin": callback_origin, "portalOrigin": webauthn.WEBAUTHN_ORIGIN, "intent": value}
 
 
-def options_on_request(request, raw):
-    value = _body(request, raw, "/api/oauth/native/options")
+def options_on_request(request, raw, *, contract=profile):
+    setup.require(contract is LEGACY_PROFILE or contract is setup_profile)
+    profile = contract
+    value = _body(request, raw, "/api/setup/oauth/native/options" if profile is setup_profile else "/api/oauth/native/options")
     profile.require(set(value) == {"apiVersion", "arguments"} and value["apiVersion"] == profile.OPTIONS_SCHEMA)
-    owner = _Consent(request, value["arguments"])
+    owner = _Consent(request, value["arguments"], contract=profile)
     human = owner.human
     descriptors = webauthn._credential_descriptors_for_policy(human.actor, activation._authenticator_policy(human.policy))
     profile.require(type(descriptors) is list and 1 <= len(descriptors) <= 64)
@@ -155,22 +179,29 @@ def options_on_request(request, raw):
             "payloadDigest": owner.arguments["payload_digest"], "expiresAt": challenge["expires_at"]}}
 
 
-def consent_on_request(request, raw):
-    value = _body(request, raw, "/api/oauth/native/consent")
+def consent_on_request(request, raw, *, contract=profile):
+    setup.require(contract is LEGACY_PROFILE or contract is setup_profile)
+    profile = contract
+    value = _body(request, raw, "/api/setup/oauth/native/consent" if profile is setup_profile else "/api/oauth/native/consent")
     profile.require(set(value) == {"apiVersion", "arguments", "mfa"} and value["apiVersion"] == profile.OPTIONS_SCHEMA)
-    owner = _Consent(request, value["arguments"])
+    owner = _Consent(request, value["arguments"], contract=profile)
     evidence = owner.assertion(value["mfa"])
     owner.check(); profile.require(not owner.sent); owner.sent = True
     return _originals(owner, profile.OP_PREPARE, {**owner.arguments, "authn_evidence": evidence})
 
 
 class Opening:
-    def __init__(self, request, raw):
-        self.value = _body(request, raw, MACHINE_PATH)
-        profile.require(set(self.value) == {"apiVersion", "operation", "arguments"} and self.value["apiVersion"] == HTTP_SCHEMA)
+    def __init__(self, request, raw, *, contract=profile):
+        setup.require(contract is LEGACY_PROFILE or contract is setup_profile)
+        self.contract = contract
+        profile = contract
+        self.value = _body(request, raw, setup_profile.HTTP_PATH if profile is setup_profile else MACHINE_PATH)
+        profile.require(set(self.value) == {"apiVersion", "operation", "arguments"}
+            and self.value["apiVersion"] == (setup_profile.HTTP_SCHEMA if profile is setup_profile else HTTP_SCHEMA))
         self.operation = self.value["operation"]
         profile.require(self.operation != profile.OP_PREPARE)
         self.arguments = profile.arguments(self.operation, self.value["arguments"])
+        profile.require(applications.setup_selected(self.arguments["native_evidence"]["statement"]["providerId"]) == (profile is setup_profile))
         self.request, self.scope, self.pin, self.original = request, request.scope, _request_pin(request), raw
         self.pid, self.thread = os.getpid(), threading.get_ident()
         self.mono, self.epoch = time.monotonic_ns(), time.time_ns()
@@ -183,6 +214,7 @@ class Opening:
         self.check()
 
     def check(self):
+        profile = self.contract
         try:
             mono, epoch = time.monotonic_ns(), time.time_ns()
             profile.require(not self.poisoned and (os.getpid(), threading.get_ident()) == (self.pid, self.thread)
@@ -198,6 +230,7 @@ class Opening:
             raise
 
     def dispatch(self):
+        profile = self.contract
         self.check(); profile.require(not self.sent); self.sent = True
         return _originals(self, self.operation, self.arguments)
 

@@ -142,6 +142,15 @@ pub(super) fn prepare_native_tls_gate_state(
             inputs.audit_url.as_deref().ok_or("native measured audit URL absent")?, &mut identity, deadline)?),
         None => None,
     };
+    if inputs.measured_issuance.is_some() && inputs.measured_setup.is_some() {
+        return Err("native browser/helper purpose must be selected once at cold startup".to_owned());
+    }
+    let measured_setup = match inputs.measured_setup.take() {
+        Some(config) => Some(native_oauth_setup::prepare(config, &inputs,
+            secret_broker.as_mut().ok_or("native Setup broker absent")?, &mut identity,
+            signer, &binary_digest, deadline)?),
+        None => None,
+    };
     let measured_issuance = match inputs.measured_issuance.take() {
         Some(config) => Some(native_oauth_exchange::prepare(config, &inputs,
             secret_broker.as_mut().ok_or("native initial issuance broker absent")?, &mut identity,
@@ -177,12 +186,14 @@ pub(super) fn prepare_native_tls_gate_state(
     state.measured_cleanup = measured_cleanup.map(Mutex::new);
     state.measured_pending_retirement = measured_pending_retirement.map(Mutex::new);
     state.measured_issuance = measured_issuance.map(Mutex::new);
+    state.measured_setup = measured_setup.map(Mutex::new);
     state.measured_audit = measured_audit.map(Mutex::new);
     if state.measured_audit.is_some() { native_audit_owner::initialize(&state)?; }
     if state.measured_refresh.is_some() { native_oauth_refresh::initialize(&state)?; }
     if state.measured_cleanup.is_some() { native_oauth_cleanup::initialize(&state)?; }
     if state.measured_pending_retirement.is_some() { native_oauth_pending_retirement::initialize(&state)?; }
     if state.measured_issuance.is_some() { native_oauth_exchange::initialize(&state)?; }
+    if state.measured_setup.is_some() { native_oauth_setup::initialize(&state)?; }
     ingress.verify_live(deadline)?;
     native_service_remaining(&state)?;
     Ok(NativeTlsGateV1 { state: Arc::new(state), ingress, deadline })

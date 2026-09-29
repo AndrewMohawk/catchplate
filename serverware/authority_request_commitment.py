@@ -135,6 +135,28 @@ def oauth_measured_exchange_request_digest(operation: str, arguments: Mapping[st
         "arguments": _authorization_arguments(typed)}))
 
 
+def oauth_measured_setup_request_digest(operation: str, arguments: Mapping[str, Any]) -> str:
+    from serverware import authority_oauth_measured_setup as oauth
+    values = oauth.arguments(operation, arguments, typed="businessIntent" in arguments)
+    typed = {**values, "businessIntent": authority_contract.synthesize_business_intent(operation, values)}
+    return framed_digest("serverware.policyAuthorityV9Request/v1", canonical_bytes({
+        "schema": "serverware.policyAuthorityV9Authorization/v1", "operation": operation,
+        "handler": authority_contract.operation_spec(operation)["handler"],
+        "operationManifestDigest": authority_contract.OPERATION_MANIFEST_DIGEST,
+        "arguments": _authorization_arguments(typed)}))
+
+
+def oauth_setup_request_digest(operation: str, arguments: Mapping[str, Any]) -> str:
+    from serverware import authority_oauth_setup as oauth
+    values = oauth.arguments(operation, arguments, typed="businessIntent" in arguments)
+    typed = {**values, "businessIntent": authority_contract.synthesize_business_intent(operation, values)}
+    return framed_digest("serverware.policyAuthorityV9Request/v1", canonical_bytes({
+        "schema": "serverware.policyAuthorityV9Authorization/v1", "operation": operation,
+        "handler": authority_contract.operation_spec(operation)["handler"],
+        "operationManifestDigest": authority_contract.OPERATION_MANIFEST_DIGEST,
+        "arguments": _authorization_arguments(typed)}))
+
+
 def oauth_revocation_request_digest(operation: str, arguments: Mapping[str, Any]) -> str:
     from serverware import authority_oauth_revocation as oauth
     values = oauth.arguments(operation, arguments)

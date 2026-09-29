@@ -12,18 +12,26 @@ use std::sync::Arc;
 const MAX_BODY: usize = 8 * 1024 * 1024;
 #[derive(Clone,Copy)]
 pub enum Kind { BeginPage, AuthorizePage, Draft, Authorize, Callback }
+#[derive(Clone,Copy,PartialEq,Eq)]
+enum Purpose { Unbound, Setup }
 pub struct Accepted {
     stream: StreamOwned<ServerConnection, VsockStreamV1>, ingress: Arc<BrowserTls>, deadline: u64,
-    kind: Kind, body: Vec<u8>, query: String, provider: Option<String>, cookies: BTreeMap<String,String>, responded: bool,
+    kind: Kind, purpose: Purpose, body: Vec<u8>, query: String, provider: Option<String>, cookies: BTreeMap<String,String>, responded: bool,
 }
 impl Accepted {
-    pub fn accept(mut stream: VsockStreamV1, ingress: Arc<BrowserTls>, deadline: u64) -> Result<Self,String> {
+    pub fn accept(stream: VsockStreamV1, ingress: Arc<BrowserTls>, deadline: u64) -> Result<Self,String> {
+        Self::accept_for(stream, ingress, deadline, Purpose::Unbound)
+    }
+    pub fn accept_setup(stream: VsockStreamV1, ingress: Arc<BrowserTls>, deadline: u64) -> Result<Self,String> {
+        Self::accept_for(stream, ingress, deadline, Purpose::Setup)
+    }
+    fn accept_for(mut stream: VsockStreamV1, ingress: Arc<BrowserTls>, deadline: u64, purpose: Purpose) -> Result<Self,String> {
         ingress.check(deadline)?;
         stream.narrow_deadline(deadline).map_err(|_|"browser cannot renew its socket interval")?;
         stream.verify_connected_original(deadline).map_err(|_|"browser accepted socket changed")?;
         let connection = ServerConnection::new(ingress.config()).map_err(|_|"native browser TLS unavailable")?;
         let mut owner = Self { stream: StreamOwned::new(connection,stream), ingress, deadline,
-            kind:Kind::BeginPage, body:Vec::new(),query:String::new(),provider:None,cookies:BTreeMap::new(),responded:false };
+            kind:Kind::BeginPage, purpose, body:Vec::new(),query:String::new(),provider:None,cookies:BTreeMap::new(),responded:false };
         while owner.stream.conn.is_handshaking() {
             owner.check()?;
             owner.stream.conn.complete_io(&mut owner.stream.sock).map_err(|_|"native browser TLS handshake failed")?;
@@ -98,12 +106,28 @@ impl Accepted {
         self.stream.sock.verify_connected_original(self.deadline).map_err(|_|"native browser socket original changed")
     }
     pub(crate) fn command(&self)->Result<Value,String>{
+        wire::ensure(self.purpose == Purpose::Unbound, "Setup ingress cannot become unbound issuance")?;
+        self.selected_command()
+    }
+    pub(crate) fn setup_command(&self)->Result<Value,String>{
+        wire::ensure(self.purpose == Purpose::Setup, "unbound ingress cannot become Setup issuance")?;
+        self.selected_command()
+    }
+    pub(crate) fn verify_ingress(&self, expected:&Arc<BrowserTls>)->Result<(),String>{
+        wire::ensure(Arc::ptr_eq(&self.ingress, expected), "browser request belongs to another actual TLS ingress")?;
+        self.check()
+    }
+    fn selected_command(&self)->Result<Value,String>{
         self.check()?;
+        let channel = match self.purpose {
+            Purpose::Unbound => wire::CHANNEL,
+            Purpose::Setup => crate::native_oauth_setup_v1::CHANNEL,
+        };
         match self.kind {
             Kind::Draft=>{
                 let intent=crate::native_oauth_refresh_v1::response_document(&self.body)?;
                 wire::ensure(self.body.len()<=65536,"native public intent bound")?;
-                Ok(serde_json::json!({"apiVersion":wire::CHANNEL,"phase":"draft","intent":intent,"deadlineBoottimeNs":self.deadline}))
+                Ok(serde_json::json!({"apiVersion":channel,"phase":"draft","intent":intent,"deadlineBoottimeNs":self.deadline}))
             },
             Kind::Authorize=>{
                 let value=crate::native_oauth_refresh_v1::response_document(&self.body)?;
@@ -111,7 +135,7 @@ impl Accepted {
                 let id=value["exchangeId"].as_str().ok_or("native authorization exchange")?;
                 wire::ensure(crate::native_currentness_v1::uuid(id),"native exchange identity")?;
                 wire::fields(&value["originals"],&["requestOriginal","responseOriginal"])?;
-                Ok(serde_json::json!({"apiVersion":wire::CHANNEL,"phase":"authorize","exchangeId":id,
+                Ok(serde_json::json!({"apiVersion":channel,"phase":"authorize","exchangeId":id,
                     "browserNonce":self.nonce(id)?,"originals":value["originals"],"deadlineBoottimeNs":self.deadline}))
             },
             Kind::Callback=>{
@@ -120,7 +144,7 @@ impl Accepted {
                 wire::ensure(states.next().is_none() && state.is_ascii() && state.len()==76 && state.as_bytes()[32]==b'_',"native callback state differs")?;
                 let hex=&state[..32]; wire::ensure(hex.bytes().all(|b|b.is_ascii_hexdigit() && !b.is_ascii_uppercase()),"native state identity")?;
                 let id=format!("{}-{}-{}-{}-{}",&hex[..8],&hex[8..12],&hex[12..16],&hex[16..20],&hex[20..]);
-                Ok(serde_json::json!({"apiVersion":wire::CHANNEL,"phase":"callback","exchangeId":id,
+                Ok(serde_json::json!({"apiVersion":channel,"phase":"callback","exchangeId":id,
                     "providerId":self.provider.as_deref().ok_or("native callback provider absent")?,
                     "browserNonce":self.nonce(&id)?,"query":self.query,"deadlineBoottimeNs":self.deadline}))
             },

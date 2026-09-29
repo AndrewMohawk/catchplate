@@ -113,7 +113,8 @@ OAUTH_CONSENT_SCRIPT = r"""
       oauthConsentNeed(enrolledOAuthProfile === 'enrolled-new-credential-v1' && !adminToken() && !oidcSessionStatusUnknown
         && window.isSecureContext && window.top === window && a?.authenticated === true && a.authMethod === 'oidc-session'
         && a.sessionState === 'active' && a.webauthnRequired === false && oauthConsentText(a.userId, 4096)
-        && a.userId.startsWith('oidc:') && Array.isArray(a.roles) && a.roles.includes('credential_owner') && !state.oauthSetupSessionId);
+        && a.userId.startsWith('oidc:') && Array.isArray(a.roles) && a.roles.includes('credential_owner')
+        && (!state.oauthSetupSessionId || nativeOAuthSetupSelected()));
       return a.userId;
     }
     function oauthConsentMessage(text, failed = false) {

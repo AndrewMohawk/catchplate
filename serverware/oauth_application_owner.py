@@ -21,6 +21,7 @@ import time
 
 STARTUP_SCHEMA = "serverware.oauthApplicationStartup/v1"
 MEASURED_STARTUP_SCHEMA = "serverware.oauthApplicationStartup/v2"
+SETUP_STARTUP_SCHEMA = "serverware.oauthApplicationStartup/v3"
 ENVELOPE_SCHEMA = "serverware.signedOAuthApplicationEnrollment/v1"
 ENROLLMENT_SCHEMA = "serverware.oauthApplicationEnrollment/v1"
 CLIENT_SCHEMA = "serverware.oauthClientMaterial/v1"
@@ -228,7 +229,7 @@ def provider_configuration(provider):
 
 class OAuthApplicationOwner:
     __slots__ = ("_custody", "_binding", "_originals", "_applications", "_identity", "_poisoned", "_closed",
-        "_epoch", "_mono", "_deadline", "_expires", "_measured")
+        "_epoch", "_mono", "_deadline", "_expires", "_measured", "_setup")
 
     def __init__(self):
         raise OAuthApplicationError("OAuth owner requires fixed cold admission")
@@ -394,7 +395,7 @@ def initialize_from_environment():
             config = _json(config_original.raw, MAX_CONFIG_BYTES)
             _require(type(config) is dict and set(config) == {"schema", "sourceRevision", "configurationDigest",
                 "authorityRootFd", "authorityRootSha256", "applications"}
-                and config["schema"] in {STARTUP_SCHEMA, MEASURED_STARTUP_SCHEMA} and config["sourceRevision"] == authority_contract.SOURCE_REVISION
+                and config["schema"] in {STARTUP_SCHEMA, MEASURED_STARTUP_SCHEMA, SETUP_STARTUP_SCHEMA} and config["sourceRevision"] == authority_contract.SOURCE_REVISION
                 and config["configurationDigest"] == binding.configuration_digest
                 and type(config["applications"]) is list and len(config["applications"]) <= 2)
             originals, applications, used = [config_original], {}, {descriptor}
@@ -435,7 +436,7 @@ def initialize_from_environment():
                 material_fd = _fd(item["clientMaterialFd"])
                 _require(material_fd not in used and material_fd in binding.inherited_descriptors)
                 used.add(material_fd)
-                measured = config["schema"] == MEASURED_STARTUP_SCHEMA
+                measured = config["schema"] in {MEASURED_STARTUP_SCHEMA, SETUP_STARTUP_SCHEMA}
                 material = _Original(material_fd, MAX_ENCRYPTED_CLIENT_BYTES if measured else MAX_CLIENT_BYTES, True)
                 originals.append(material)
                 raw_envelope = canonical(envelope)
@@ -457,7 +458,8 @@ def initialize_from_environment():
             value = object.__new__(OAuthApplicationOwner)
             value._custody, value._binding = actual, binding
             value._originals, value._applications = tuple(originals), applications
-            value._measured = config["schema"] == MEASURED_STARTUP_SCHEMA
+            value._measured = config["schema"] in {MEASURED_STARTUP_SCHEMA, SETUP_STARTUP_SCHEMA}
+            value._setup = config["schema"] == SETUP_STARTUP_SCHEMA
             value._identity = os.geteuid(), os.getegid()
             value._expires = min([binding.attestation_interval[1]]
                 + [entry[0]["expiresAtEpochNs"] for entry in applications.values()])
@@ -485,6 +487,22 @@ def require_started():
         _require(_state == "started" and type(_owner) is OAuthApplicationOwner)
         _owner.check()
         return _owner
+
+
+def setup_selected(provider_id):
+    owner = require_started()
+    if owner is None:
+        return False
+    owner.check()
+    return owner._setup and provider_id in owner._applications
+
+
+def setup_profile_selected():
+    owner = require_started()
+    if owner is None:
+        return False
+    owner.check()
+    return owner._setup
 
 
 def measured_selected(provider_id):

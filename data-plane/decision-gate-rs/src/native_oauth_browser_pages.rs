@@ -4,9 +4,20 @@ use base64::{engine::general_purpose::STANDARD, Engine};
 use sha2::{Digest,Sha256};
 
 pub(super) fn page(authorize:bool,portal_origin:&str)->Result<(Vec<u8>,String),String>{
+    render(authorize, portal_origin, Purpose::Unbound)
+}
+pub(super) fn setup_page(authorize:bool,portal_origin:&str)->Result<(Vec<u8>,String),String>{
+    render(authorize, portal_origin, Purpose::Setup)
+}
+enum Purpose { Unbound, Setup }
+fn render(authorize:bool,portal_origin:&str,purpose:Purpose)->Result<(Vec<u8>,String),String>{
     serverware_decision_gate::native_oauth_exchange_v1::origin(portal_origin)?;
     let portal=serde_json::to_string(portal_origin).map_err(|_|"native portal origin encoding")?;
     let action=if authorize {"authorize"} else {"begin"};
+    let (fragment, redirect_schema) = match purpose {
+        Purpose::Unbound => ("nativeOAuthDraft", "serverware.nativeOAuthAuthorizationRedirect/v1"),
+        Purpose::Setup => ("nativeOAuthSetupDraft", "serverware.nativeOAuthSetupAuthorizationRedirect/v1"),
+    };
     let script=format!(r#"'use strict';
 const portal={portal},action='{action}';
 const need=v=>{{if(!v)throw new Error('Native consent unavailable; no automatic retry.');}};
@@ -24,8 +35,8 @@ document.getElementById('continue').onclick=async()=>{{
     const reply=await fetch(path,{{method:'POST',credentials:'same-origin',redirect:'error',cache:'no-store',headers:{{'Content-Type':'application/json'}},body:raw,signal:AbortSignal.timeout(30000)}});
     need(reply.status===200&&reply.headers.get('content-type')==='application/json');
     const text=await reply.text();need(new TextEncoder().encode(text).length<=768*1024);
-    if(action==='begin'){{location.assign(portal+'/#nativeOAuthDraft='+encode(text));return;}}
-    const result=JSON.parse(text);need(Object.keys(result).sort().join(',')==='apiVersion,exchangeId,location'&&result.apiVersion==='serverware.nativeOAuthAuthorizationRedirect/v1');
+    if(action==='begin'){{location.assign(portal+'/#{fragment}='+encode(text));return;}}
+    const result=JSON.parse(text);need(Object.keys(result).sort().join(',')==='apiVersion,exchangeId,location'&&result.apiVersion==='{redirect_schema}');
     const url=new URL(result.location);need(url.protocol==='https:'&&!url.username&&!url.password&&!url.hash&&!url.port
       &&((url.hostname==='accounts.google.com'&&url.pathname==='/o/oauth2/v2/auth')||(url.hostname==='twitter.com'&&url.pathname==='/i/oauth2/authorize')));
     location.assign(url.href);

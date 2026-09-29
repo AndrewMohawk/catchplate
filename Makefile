@@ -1343,11 +1343,21 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/native_oauth_refresh_tls.py \
 	serverware/native_oauth_exchange.py \
 	serverware/authority_oauth_measured_exchange.py \
+	serverware/authority_oauth_measured_setup.py \
+	serverware/authority_oauth_measured_setup_policy.py \
+	serverware/authority_oauth_setup.py \
+	serverware/authority_transition_oauth_setup.py \
+	serverware/authority_transition_oauth_setup_rows.py \
 	serverware/authority_oauth_measured_exchange_policy.py \
 	serverware/authority_transition_oauth_measured_exchange.py \
 	serverware/native_oauth_exchange_receipts.py \
 	serverware/native_oauth_exchange_tls.py \
 	serverware/native_oauth_exchange_owner.py \
+	serverware/native_oauth_setup.py \
+	serverware/native_oauth_setup_rows.py \
+	serverware/native_oauth_setup_receipts.py \
+	serverware/native_oauth_setup_tls.py \
+	serverware/native_oauth_setup_owner.py \
 	serverware/authority_oauth_measured_cleanup_policy.py \
 	serverware/authority_oauth_measured_cleanup.py \
 	serverware/authority_transition_oauth_measured_cleanup.py \
@@ -1367,6 +1377,8 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/native_oauth_pending_retirement.py \
 	serverware/control_plane_oauth_measured_exchange.py \
 	serverware/portal_oauth_measured_consent.py \
+	serverware/control_plane_oauth_setup.py \
+	serverware/portal_oauth_setup.py \
 	serverware/native_service_tokens.py \
 	serverware/response_v2_guest_delivery.py \
 	scripts/native_broker_kms_parent.py \
@@ -3743,11 +3755,21 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/native_oauth_refresh_tls.py \
 				serverware/native_oauth_exchange.py \
 				serverware/authority_oauth_measured_exchange.py \
+				serverware/authority_oauth_measured_setup.py \
+				serverware/authority_oauth_measured_setup_policy.py \
+				serverware/authority_oauth_setup.py \
+				serverware/authority_transition_oauth_setup.py \
+				serverware/authority_transition_oauth_setup_rows.py \
 				serverware/authority_oauth_measured_exchange_policy.py \
 				serverware/authority_transition_oauth_measured_exchange.py \
 				serverware/native_oauth_exchange_receipts.py \
 				serverware/native_oauth_exchange_tls.py \
 				serverware/native_oauth_exchange_owner.py \
+				serverware/native_oauth_setup.py \
+				serverware/native_oauth_setup_rows.py \
+				serverware/native_oauth_setup_receipts.py \
+				serverware/native_oauth_setup_tls.py \
+				serverware/native_oauth_setup_owner.py \
 				serverware/authority_oauth_measured_cleanup_policy.py \
 				serverware/authority_oauth_measured_cleanup.py \
 				serverware/authority_transition_oauth_measured_cleanup.py \
@@ -3767,6 +3789,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/native_oauth_pending_retirement.py \
 				serverware/control_plane_oauth_measured_exchange.py \
 				serverware/portal_oauth_measured_consent.py \
+				serverware/control_plane_oauth_setup.py \
+				serverware/portal_oauth_setup.py \
 				serverware/native_service_tokens.py \
 				serverware/response_v2_guest_delivery.py \
 				scripts/native_broker_kms_parent.py \
@@ -4014,6 +4038,9 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/response_v2/target_dispatch_client.rs \
 				data-plane/decision-gate-rs/src/native_oauth_refresh.rs \
 				data-plane/decision-gate-rs/src/native_oauth_exchange_v1.rs \
+				data-plane/decision-gate-rs/src/native_oauth_setup_v1.rs \
+				data-plane/decision-gate-rs/src/native_oauth_setup.rs \
+				data-plane/decision-gate-rs/src/native_secret_broker_v1/setup.rs \
 				data-plane/decision-gate-rs/src/native_oauth_browser_v1.rs \
 				data-plane/decision-gate-rs/src/native_secret_broker_v1/exchange.rs \
 				data-plane/decision-gate-rs/src/native_oauth_browser_pages.rs \
@@ -4257,12 +4284,15 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-startup-configuration.v12.schema.json \
 				schemas/native-startup-configuration.v13.schema.json \
 				schemas/native-startup-configuration.v14.schema.json \
+				schemas/native-startup-configuration.v15.schema.json \
+				schemas/native-oauth-measured-setup.v1.schema.json \
 				schemas/native-gate-cgroup.v1.schema.json \
 				schemas/native-guest-role-key-provisioner.v1.schema.json \
 				schemas/native-oauth-measured-cleanup.v1.schema.json \
 				schemas/native-oauth-measured-pending-retirement.v1.schema.json \
 				schemas/oauth-measured-pending-retirement-authority.v1.schema.json \
 				schemas/native-oauth-measured-exchange.v1.schema.json \
+				schemas/oauth-measured-setup-authority.v1.schema.json \
 				schemas/native-guest-cohort.v1.schema.json \
 				schemas/native-oauth-measured-refresh.v1.schema.json \
 				schemas/native-service-tokens.v1.schema.json \

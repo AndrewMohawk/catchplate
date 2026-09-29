@@ -77,6 +77,7 @@ from serverware.portal_oauth_measured_consent import (
     MEASURED_OAUTH_CONSENT_HTML, MEASURED_OAUTH_CONSENT_SCRIPT, provider_status_with_custody,
 )
 from serverware.portal_oauth_activation import OAUTH_ACTIVATION_HTML, OAUTH_ACTIVATION_SCRIPT
+from serverware.portal_oauth_setup import OAUTH_SETUP_HTML, OAUTH_SETUP_SCRIPT
 from serverware.portal_registration_handoff import (
     REGISTRATION_HANDOFF_CSS,
     REGISTRATION_HANDOFF_HTML,
@@ -1529,6 +1530,11 @@ class OAuthActivationWebAuthnOptions(BaseModel):
     payload_digest: str = Field(alias="payloadDigest", pattern=r"^sha256:[0-9a-f]{64}$")
     request_binding: dict[str, Any] = Field(alias="request")
     approval_id: str | None = Field(default=None, alias="approvalId", max_length=64)
+
+
+class OAuthSetupActivationWebAuthnOptions(OAuthActivationWebAuthnOptions):
+    api_version: Literal["serverware.oauthSetupApprovalOptions/v1"] = Field(alias="apiVersion")
+    action: Literal["credential.oauth.setup-activate"]
 
 
 class PolicyFileApprovalWebAuthnOptions(BaseModel):
@@ -7998,6 +8004,8 @@ def control_plane_mutation_webauthn_options(
                 raise HTTPException(status_code=409, detail="OAuth activation options unavailable; no automatic retry") from None
         if payload.api_version is not None or oauth_activation.selected():
             raise HTTPException(status_code=409, detail="use the explicit OAuth activation approval options profile")
+    if payload.action in {"credential.oauth.setup-create", "credential.oauth.setup-activate"}:
+        raise HTTPException(status_code=409, detail="use the explicit controlled Setup purpose endpoint")
     if payload.action in {"policy.file.materialize", "policy.file.genesis.materialize", "policy.file.resolve"}:
         raise HTTPException(status_code=409, detail="use the explicit policy-file approval options endpoint")
     if type(payload) is PublicationApprovalWebAuthnOptions:
@@ -8436,6 +8444,15 @@ def control_plane_approval_approve(
                 raise HTTPException(status_code=409, detail="public revocation approval outcome unresolved; no automatic retry") from None
         if public_revocation.selected():
             raise HTTPException(status_code=409, detail="use the explicit public revocation approval submission")
+    if approval["action"] == "credential.oauth.setup-activate":
+        from serverware import control_plane_oauth_activation as oauth_activation
+        from serverware import authority_oauth_setup as setup_profile
+        try:
+            return oauth_activation.decide_on_request(request, approval_id, decision, contract=setup_profile)
+        except HTTPException:
+            raise
+        except Exception:
+            raise HTTPException(status_code=409, detail="Setup decision uncertain or blocked; no automatic retry") from None
     if approval["action"] == "credential.oauth.activate":
         from serverware import control_plane_oauth_activation as oauth_activation
         if (oauth_activation.selected() or decision is not None and isinstance(decision.mfa, dict)
@@ -12552,7 +12569,12 @@ def _setup_session_error(exc: db.SetupSessionError) -> None:
     raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
-def _drain_setup_session_audit_outbox(*, limit: int = 100) -> dict[str, int]:
+def _drain_setup_session_audit_outbox(*, limit: int = 100) -> dict[str, Any]:
+    from serverware import oauth_application_owner
+    if oauth_application_owner.setup_profile_selected():
+        # Protected events are settled only from the actual completed authority
+        # audit outbox. A count of zero here is not an audited/completion claim.
+        return {"claimed": 0, "audited": 0, "failed": 0, "settlement": "protected-explicit-settle-required"}
     claimed = db.claim_setup_session_audit_outbox(
         worker_id=f"api:{os.getpid()}:{threading.get_ident()}",
         limit=limit,
@@ -13352,6 +13374,9 @@ def setup_session_create(
         require_role("admin", "policy_author", "policy_publisher", "credential_owner")
     ),
 ) -> dict[str, Any]:
+    from serverware import oauth_application_owner
+    if oauth_application_owner.setup_profile_selected():
+        raise HTTPException(status_code=409, detail="use the controlled Setup create draft/options/submit ceremony")
     route_policy_digest = payload.route_policy_digest
     _require_authoritative_setup_route_binding(
         route_id=payload.route_id,
@@ -14820,6 +14845,84 @@ async def _native_oauth_original(request: Request, maximum: int) -> bytes:
             raise HTTPException(status_code=413, detail="native OAuth original exceeds its bound")
         body.extend(chunk)
     return bytes(body)
+
+
+@app.post("/api/setup/oauth/create/draft")
+@app.post("/api/setup/oauth/create/options")
+@app.post("/api/setup/oauth/create")
+@app.post("/api/setup/oauth/native/intent")
+@app.post("/api/setup/oauth/native/options")
+@app.post("/api/setup/oauth/native/consent")
+@app.post("/api/setup/oauth/audit-settle")
+async def controlled_setup_oauth(request: Request) -> Response:
+    from serverware import control_plane_oauth_setup as controlled
+    from serverware import control_plane_oauth_measured_exchange as native
+    from starlette.concurrency import run_in_threadpool
+    raw = await _native_oauth_original(request, native.MAX_REQUEST)
+    try:
+        if request.url.path.startswith("/api/setup/oauth/create"):
+            result = await run_in_threadpool(controlled.create_on_request, request, raw)
+        elif request.url.path == "/api/setup/oauth/audit-settle":
+            result = await run_in_threadpool(controlled.settle_on_request, request, raw)
+        else:
+            result = await run_in_threadpool(controlled.native_on_request, request, raw)
+        body = _canonical_json(result).encode("utf-8")
+        if len(body) > native.MAX_RESPONSE:
+            raise ValueError("bounded Setup response")
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=409, detail="Setup original changed or outcome unknown; inspect retained state, never automatically resubmit") from None
+    return Response(content=body, media_type="application/json", headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/setup/oauth/sessions/{session_id}/original")
+def controlled_setup_original(session_id: str, request: Request, response: Response) -> dict[str, Any]:
+    from serverware import control_plane_oauth_setup as controlled
+    response.headers["Cache-Control"] = "no-store"
+    try:
+        return controlled.inspect_on_request(request, session_id)
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=409, detail="retained Setup observation unavailable; no completion or retry inferred") from None
+
+
+@app.get("/api/setup/oauth/pending/{pending_id}/activation-original")
+def controlled_setup_activation_original(pending_id: str, request: Request, response: Response) -> dict[str, Any]:
+    from serverware import control_plane_oauth_activation as activation
+    from serverware import authority_oauth_setup as profile
+    response.headers["Cache-Control"] = "no-store"
+    try:
+        return activation.inspect_on_request(request, pending_id, contract=profile)
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=409, detail="exact staged Setup activation original unavailable") from None
+
+
+@app.post("/api/setup/oauth/activation/options")
+def controlled_setup_activation_options(payload: OAuthSetupActivationWebAuthnOptions, request: Request) -> dict[str, Any]:
+    from serverware import control_plane_oauth_activation as activation
+    from serverware import authority_oauth_setup as profile
+    try:
+        return activation.options_on_request(request, payload, contract=profile)
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=409, detail="Setup approval options unavailable; no automatic retry") from None
+
+
+@app.post("/api/setup/oauth/pending/{pending_id}/activate")
+def controlled_setup_activate(pending_id: str, payload: OAuthPendingActivateRequest, request: Request) -> dict[str, Any]:
+    from serverware import control_plane_oauth_activation as activation
+    from serverware import authority_oauth_setup as profile
+    try:
+        return activation.activate_on_request(request, pending_id, payload, contract=profile)
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=409, detail="Setup activation outcome unknown or refused; inspect, never automatically retry") from None
 
 
 @app.post("/api/oauth/native/intent")
@@ -18886,6 +18989,25 @@ async def data_plane_measured_oauth_issuance(request: Request) -> Response:
     return Response(content=body, media_type="application/json", headers={"Cache-Control": "no-store"})
 
 
+@app.post("/api/data-plane/oauth-setup-issuance")
+@app.post("/api/data-plane/oauth-setup-issuance/original")
+async def data_plane_measured_oauth_setup(request: Request) -> Response:
+    from serverware import control_plane_oauth_setup as controlled
+    from serverware import control_plane_oauth_measured_exchange as native
+    from starlette.concurrency import run_in_threadpool
+    _require_data_plane_token(request.headers.get("X-Serverware-Data-Plane-Token"), DATA_PLANE_CREDENTIAL_LEASE_TOKEN)
+    raw = await _native_oauth_original(request, 1024 if request.url.path == controlled.RECOVERY_PATH else native.MAX_REQUEST)
+    try:
+        handler = controlled.recovery_original_on_request if request.url.path == controlled.RECOVERY_PATH else controlled.native_on_request
+        result = await run_in_threadpool(handler, request, raw)
+        body = _canonical_json(result).encode("utf-8")
+        if len(body) > native.MAX_RESPONSE:
+            raise ValueError("bounded Setup response")
+    except Exception:
+        raise HTTPException(status_code=503, detail="native Setup unavailable or outcome unknown; no contact retry authorized") from None
+    return Response(content=body, media_type="application/json", headers={"Cache-Control": "no-store"})
+
+
 @app.post("/api/data-plane/oauth-refresh-cleanup")
 async def data_plane_measured_oauth_cleanup(request: Request) -> Response:
     from serverware import control_plane_oauth_measured_cleanup as measured
@@ -22549,6 +22671,7 @@ UI_HTML = r"""
           </form>
           __SERVERWARE_OAUTH_CONSENT_HTML__
           __SERVERWARE_MEASURED_OAUTH_CONSENT_HTML__
+          __SERVERWARE_OAUTH_SETUP_HTML__
           <div id="oauth-connected-section" class="pending-oauth-list connected-oauth-list" hidden>
             <h3>Connected provider accounts</h3>
             <div id="oauth-connected-accounts"></div>
@@ -24133,6 +24256,10 @@ UI_HTML = r"""
       if (!selection.template || !selection.principalId || !selection.routeId) {
         throw new Error('Select a template, principal, and route before creating a setup run');
       }
+      const provider = policyTemplates[selection.template]?.provider;
+      if ((state.oauthProviders || []).some(item => item.id === provider && item.consentProfile === nativeOAuthSetupSchema)) {
+        return {session: await nativeSetupCreate(), audit: {settlement: 'protected-explicit-settle-required'}};
+      }
       const activeRoute = (state.activePolicy?.bundle?.routes || []).find((item) => item.id === selection.routeId);
       const body = {
         templateId: selection.template,
@@ -25385,7 +25512,8 @@ UI_HTML = r"""
         provider: form.get('provider'),
         credentialName: form.get('credentialName'),
         scopes: form.get('scopes'),
-        metadata: form.get('metadata')
+        metadata: form.get('metadata'),
+        setupSessionId: state.oauthSetupSessionId
       }));
     }
 
@@ -25397,6 +25525,7 @@ UI_HTML = r"""
       $('oauth-credential-name').value = draft.credentialName || '';
       $('oauth-scopes').value = draft.scopes || '';
       $('oauth-metadata').value = draft.metadata || '{}';
+      if (typeof draft.setupSessionId === 'string' && nativeSetupId(draft.setupSessionId)) state.oauthSetupSessionId = draft.setupSessionId;
       renderOAuthDefaults(false);
     }
 
@@ -26237,6 +26366,7 @@ UI_HTML = r"""
     __SERVERWARE_PUBLIC_REVOCATION_SCRIPT__
     __SERVERWARE_OAUTH_CONSENT_SCRIPT__
     __SERVERWARE_MEASURED_OAUTH_CONSENT_SCRIPT__
+    __SERVERWARE_OAUTH_SETUP_SCRIPT__
     __SERVERWARE_OAUTH_ACTIVATION_SCRIPT__
     initWorkloadIdentityEditor();
     initWorkloadEnrollmentRequirements();
@@ -26247,6 +26377,7 @@ UI_HTML = r"""
     initPublicRevocation();
     initOAuthConsent();
     initNativeOAuth();
+    initNativeSetup();
     initOAuthActivation();
     $('admin-token').value = '';
     $('admin-token').addEventListener('input', () => {
@@ -26316,6 +26447,8 @@ for _portal_placeholder, _portal_fragment in (
     ("__SERVERWARE_OAUTH_CONSENT_SCRIPT__", OAUTH_CONSENT_SCRIPT),
     ("__SERVERWARE_MEASURED_OAUTH_CONSENT_HTML__", MEASURED_OAUTH_CONSENT_HTML),
     ("__SERVERWARE_MEASURED_OAUTH_CONSENT_SCRIPT__", MEASURED_OAUTH_CONSENT_SCRIPT),
+    ("__SERVERWARE_OAUTH_SETUP_HTML__", OAUTH_SETUP_HTML),
+    ("__SERVERWARE_OAUTH_SETUP_SCRIPT__", OAUTH_SETUP_SCRIPT),
     ("__SERVERWARE_OAUTH_ACTIVATION_HTML__", OAUTH_ACTIVATION_HTML),
     ("__SERVERWARE_OAUTH_ACTIVATION_SCRIPT__", OAUTH_ACTIVATION_SCRIPT),
     ("__SERVERWARE_REGISTRATION_HANDOFF_CSS__", REGISTRATION_HANDOFF_CSS),

@@ -10,6 +10,9 @@ from datetime import timezone
 from types import MappingProxyType
 
 from serverware import authority_oauth_measured_exchange as profile
+from serverware import authority_oauth_measured_setup as setup_profile
+from serverware import authority_oauth_setup as setup
+from serverware import authority_transition_oauth_setup_rows as setup_rows
 from serverware import authority_oauth_exchange as exchange
 from serverware import authority_oauth_activation as activation
 from serverware import authority_oauth_activation_policy as enrollment
@@ -26,10 +29,10 @@ def _original(value, label):
     return shared._canonical_stored_mapping(value, label)
 
 
-def _public(row, custody):
+def _public(row, custody, *, contract=profile):
     consent = _original(row["consent_json"], "native consent")
     return {"id": row["id"], "status": custody["status"], "exchangeRowSha256": exchange.row_digest(row),
-        "custodyRowSha256": profile.sha256(profile.row_original(custody)),
+        "custodyRowSha256": contract.sha256(contract.row_original(custody)),
         **{name: consent[name] for name in ("contactExpiresAtEpochNs", "retentionExpiresAtEpochNs", "pendingExpiresAtEpochNs")}}
 
 
@@ -46,6 +49,13 @@ class MeasuredExchangeKernel:
     permits_empty_mutation: bool = False
 
     @property
+    def profile(self):
+        # A source-owned closed operation selects the implementation contract.
+        # The separate verifier policy/signature admission is still mandatory.
+        profile.require(self.operation in profile.OPERATIONS | setup_profile.OPERATIONS)
+        return setup_profile if self.operation in setup_profile.OPERATIONS else profile
+
+    @property
     def handler(self):
         return "serverware_policy_authority_" + self.operation.replace(".", "_").replace("-", "_")
 
@@ -54,14 +64,17 @@ class MeasuredExchangeKernel:
         return core.transition_program_id(self.operation, self.handler)
 
     def queries(self, *, arguments, database_now, request_digest):
+        profile = self.profile
         profile.require(self.operation != profile.OP_PREPARE, "consent requires actual requester assertion")
         return self._queries(arguments, request_digest, None)
 
     def queries_with_evidence(self, *, arguments, database_now, request_digest, evidence):
+        profile = self.profile
         profile.require(self.operation == profile.OP_PREPARE)
         return self._queries(arguments, request_digest, evidence)
 
     def _queries(self, arguments, request_digest, evidence):
+        profile = self.profile
         values = profile.arguments(self.operation, arguments, typed=True)
         item_id = values["resource_id"]
         queries = [shared._query(operation=self.operation, name=name, table=table, key={"id": item_id},
@@ -84,10 +97,21 @@ class MeasuredExchangeKernel:
         if self.operation == profile.OP_STAGE:
             queries.extend((shared._query(operation=self.operation, name="credential", table="credentials", key={"id": item_id}, require_absence=True),
                 shared._query(operation=self.operation, name="generation", table="credential_generations", key={"credential_id": item_id}, require_absence=True)))
+        if profile is setup_profile:
+            session_id = values["request"]["setupBinding"]["sessionId"]
+            queries.append(shared._query(operation=self.operation, name="setup", table="setup_sessions", key={"id": session_id}))
+            if self.operation == profile.OP_PREPARE:
+                queries.append(shared._query(operation=self.operation, name="setup_creation_event", table="setup_session_events",
+                    key={"id": setup.event_id(session_id, 1)}))
+                queries.append(shared._query(operation=self.operation, name="setup_creation_link", table=setup.AUDIT_LINK_TABLE,
+                    key={"id": setup.event_id(session_id, 1)}))
+            if self.operation in {profile.OP_PREPARE, profile.OP_STAGE, profile.OP_CANCEL}:
+                queries.extend(setup_rows.event_queries(self.operation, session_id, 1 if self.operation == profile.OP_PREPARE else 2))
         queries.append(shared._audit_query(self.operation, request_digest))
         return family.order_populations(self.operation, tuple(queries))
 
     def transition(self, context):
+        profile = self.profile
         values = profile.arguments(self.operation, context.arguments, typed=True)
         request, actor = values["request"], values["actor_id"]
         now = context.database_now.astimezone(timezone.utc)
@@ -104,8 +128,17 @@ class MeasuredExchangeKernel:
         custody_selected = context.exact(profile.TABLE, {"id": values["resource_id"]})
         work_selected = context.exact("oauth_revocation_work", {"id": values["resource_id"]})
         mutations, pending, observed = [], None, False
+        setup_before = setup_after = setup_transition = setup_updates = None
         if self.operation == profile.OP_PREPARE:
+            if profile is setup_profile:
+                _, setup_before = setup_rows.created(context, values)
+                setup_after, setup_updates = setup_rows.next_row(context, setup_before, transition="bind_oauth_flow",
+                    provider=request["providerId"], state_digest=request["stateSha256"])
+                setup_transition = "bind_oauth_flow"
             row, custody, work, assertion_effects = self._prepare(context, values, payload, association, selected, custody_selected, work_selected)
+            if profile is setup_profile:
+                custody.update(setup_initial_json=setup.row_original(setup_before).decode("ascii"),
+                    setup_started_json=setup.row_original(setup_after).decode("ascii"), setup_final_json=None)
             mutations.extend(assertion_effects)
         else:
             row = shared._row(selected, "native exchange")
@@ -120,6 +153,10 @@ class MeasuredExchangeKernel:
                 and preparation["request"] == consent and consent["limits"] == request["limits"]
                 and consent["metadata"].get("oauth_application_owner") == association
                 and all(statement[name] == consent[name] for name in ("providerId", "portalOrigin", "callbackOrigin")))
+            if profile is setup_profile:
+                profile.require(request["setupBinding"] == consent["setupBinding"])
+                _, setup_before = setup_rows.held(context, values, custody, staged=custody["status"] == "staged")
+                setup_after = setup_before
             if self.operation == profile.OP_RECOVER and custody["status"] == "staged":
                 profile.require(row["status"] == "staged" and not work_selected["present"]
                     and request["custodyRowSha256"] == profile.sha256(profile.row_original(custody))
@@ -173,6 +210,10 @@ class MeasuredExchangeKernel:
                             and all(row[name] is None for name in exchange.NULLABLE))
                         custody = {**custody, "status": "cancelled", "cancel_arguments_json": profile.canonical(values).decode("ascii"), "updated_at": stamp}
                         work = {**work, "status": "cancelled_before_contact", "updated_at": stamp}
+                        if profile is setup_profile:
+                            setup_after, setup_updates = setup_rows.next_row(context, setup_before, transition="cancel")
+                            setup_transition = "cancel"
+                            custody["setup_final_json"] = setup.row_original(setup_after).decode("ascii")
                     elif self.operation == profile.OP_CAPTURE:
                         profile.require(custody["status"] == row["status"] == "claimed" and custody["capture_arguments_json"] is None
                             and consent["issuedAtEpochNs"] <= request["receivedAtEpochNs"] <= now_ns)
@@ -193,6 +234,11 @@ class MeasuredExchangeKernel:
                         row = {**row, "status": "staged", "updated_at": stamp}
                         custody = {**custody, "status": "staged", "stage_arguments_json": profile.canonical(values).decode("ascii"),
                             "pending_original_json": activation.pending_original(pending).decode("ascii"), "updated_at": stamp}
+                        if profile is setup_profile:
+                            setup_after, setup_updates = setup_rows.next_row(context, setup_before,
+                                transition="bind_pending_credential", pending_id=row["id"])
+                            setup_transition = "bind_pending_credential"
+                            custody["setup_final_json"] = setup.row_original(setup_after).decode("ascii")
                         mutations.append(core.delete_mutation(operation=self.operation, selected=work_selected))
         if not observed:
             exchange.row_original(row); profile.row_original(custody)
@@ -202,21 +248,28 @@ class MeasuredExchangeKernel:
                 if self.operation != profile.OP_STAGE:
                     mutations.append(core.mutation(operation=self.operation, selected=work_selected, row=work))
         audit, audit_digest, replay = shared._audit_mutations(context,
-            event_type="credential.oauth.measured-exchange." + self.operation.rsplit(".", 1)[1],
+            event_type=("credential.oauth.measured-setup." if profile is setup_profile else "credential.oauth.measured-exchange.") + self.operation.rsplit(".", 1)[1],
             actor_type="admin" if self.operation == profile.OP_PREPARE else "measured_oauth_exchange", actor_id=actor,
-            event={"schema": "serverware.nativeOAuthExchangeAudit/v1", "operation": self.operation,
+            event={"schema": "serverware.nativeOAuthSetupExchangeAudit/v1" if profile is setup_profile else "serverware.nativeOAuthExchangeAudit/v1", "operation": self.operation,
                 "requestDigest": context.request_digest, "exchangeId": row["id"], "custodyRowSha256": profile.sha256(profile.row_original(custody)),
-                "enrollmentSha256": association["enrollmentSha256"], "status": custody["status"], "observedComplete": observed})
+                "enrollmentSha256": association["enrollmentSha256"], "status": custody["status"], "observedComplete": observed,
+                **({"setupPostSha256": setup.sha256(setup.row_original(setup_after))} if profile is setup_profile else {})})
         profile.require(not replay, "audit original already consumed")
-        result = {"ok": True, "exchange": _public(row, custody), "operation": self.operation,
+        if setup_transition is not None:
+            mutations.extend(setup_rows.mutations(context, setup_before, setup_after, transition=setup_transition,
+                actor=actor, updates=setup_updates, audit_digest=audit_digest, provider=payload["providerId"],
+                enrollment_sha256=association["enrollmentSha256"]))
+        result = {"ok": True, "exchange": _public(row, custody, contract=profile), "operation": self.operation,
             "requestDigest": context.request_digest, "auditEventDigest": audit_digest, "idempotentReplay": False,
             "originals": {"exchangeOriginal": exchange.row_original(row).decode("ascii"),
-                "custodyOriginal": profile.row_original(custody).decode("ascii")}}
+                "custodyOriginal": profile.row_original(custody).decode("ascii"),
+                **({"setupOriginal": setup.row_original(setup_after).decode("ascii")} if profile is setup_profile else {})}}
         if pending is not None:
             result["pending"] = old._pending_public(pending)
         return core.KernelTransition(mutations=tuple(mutations) + audit, result=result, work_units=2048)
 
     def _prepare(self, context, values, payload, association, selected, custody_selected, work_selected):
+        profile = self.profile
         request, actor = values["request"], values["actor_id"]
         now_ns = shared._database_epoch_ns(context.database_now)
         stamp = context.database_now.isoformat()
@@ -262,6 +315,7 @@ class MeasuredExchangeKernel:
         return row, custody, retained, assertion._assertion_mutations(context, {"actor_id": actor})
 
     def _work(self, row, custody, consent, selected):
+        profile = self.profile
         work = shared._row(selected, "measured issued work")
         token = consent["reservedEnvelope"] if row["token_envelope_json"] is None else _original(row["token_envelope_json"], "issued envelope")
         status = {"prepared": "reserved", "claimed": "exchange_in_flight", "captured": "held" if row["token_envelope_json"] is not None else "issued_unavailable"}
@@ -275,6 +329,7 @@ class MeasuredExchangeKernel:
         return work
 
     def _stage(self, context, values, row, consent, payload, association):
+        profile = self.profile
         request = values["request"]
         metadata = old._review(request, consent, payload, association)
         family.require_open_from_population(context, metadata["provider_id"], metadata["provider_subject"])
@@ -284,6 +339,10 @@ class MeasuredExchangeKernel:
             profile.require(not context.exact(table, key)["present"])
         for item in context.present_rows("setup_sessions"):
             setup = shared._row(item, "setup population")
+            if profile is setup_profile and setup["id"] == consent["setupBinding"]["sessionId"]:
+                # The same actual context row was checked against the retained
+                # started original before entering this method, then CASed.
+                continue
             profile.require(setup.get("oauth_pending_credential_id") != row["id"]
                 and setup.get("oauth_state_digest") not in {consent["stateSha256"], consent["stateSha256"][7:]})
         mutations, active, backlog = [], 0, 0
@@ -310,4 +369,4 @@ class MeasuredExchangeKernel:
         return pending, mutations
 
 
-KERNELS = MappingProxyType({operation: MeasuredExchangeKernel(operation) for operation in profile.OPERATIONS})
+KERNELS = MappingProxyType({operation: MeasuredExchangeKernel(operation) for operation in profile.OPERATIONS | setup_profile.OPERATIONS})

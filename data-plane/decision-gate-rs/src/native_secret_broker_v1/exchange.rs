@@ -12,7 +12,7 @@ impl Owner {
         deadline: u64) -> Result<(),String> {
         let result=(|| {
             config.validate()?; self.check(deadline)?; identity.verify_browser_ingress(&ingress,deadline)?;
-            ensure(self.exchange_configuration.is_none() && !self.service_phase_closed
+            ensure(self.exchange_configuration.is_none() && self.setup_configuration.is_none() && !self.service_phase_closed
                 && config.callback_origin==ingress.origin() && Sha256::digest(identity.ca_certificate_der()).as_slice()==self.owner_ca,
                 "initial helper requires its same cold CA and browser owner")?;
             let mut scope=identity.refresh_scope(deadline)?;
@@ -36,7 +36,8 @@ impl Owner {
     }
 
     pub fn exchange_browser(&mut self, request: &Accepted, relays: &NativeUpstreamRelaysV1) -> Result<Reply,String> {
-        request.check()?;
+        let (_, ingress) = self.exchange_configuration.as_ref().ok_or("initial helper is not configured")?;
+        request.verify_ingress(ingress)?;
         self.exchange_request(request.command()?,None,request.deadline(),relays)
     }
 

@@ -4,7 +4,7 @@ use super::originals::ArtifactV1;
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-pub(super) enum Mode { Legacy, EnclaveV5, EncryptedV6, MeasuredRefreshV7, GuestInspectorV8, MeasuredIssuanceV9, GuestCohortV10, MeasuredCleanupV11, GuestRoleKeysV12, MeasuredPendingRetirementV13, GateCgroupV14 }
+pub(super) enum Mode { Legacy, EnclaveV5, EncryptedV6, MeasuredRefreshV7, GuestInspectorV8, MeasuredIssuanceV9, GuestCohortV10, MeasuredCleanupV11, GuestRoleKeysV12, MeasuredPendingRetirementV13, GateCgroupV14, MeasuredSetupV15 }
 
 pub(super) fn arguments(mut arguments: impl Iterator<Item = OsString>)
     -> Result<Option<(ArtifactV1, ArtifactV1, bool, Mode)>, String>
@@ -21,6 +21,7 @@ pub(super) fn arguments(mut arguments: impl Iterator<Item = OsString>)
         else if argument == "--native-guest-role-keys-startup-v12" { Mode::GuestRoleKeysV12 }
         else if argument == "--native-measured-pending-retirement-startup-v13" { Mode::MeasuredPendingRetirementV13 }
         else if argument == "--native-gate-cgroup-startup-v14" { Mode::GateCgroupV14 }
+        else if argument == "--native-measured-setup-startup-v15" { Mode::MeasuredSetupV15 }
         else { return Err("decision gate accepts no arguments or an explicit native startup mode".to_owned()); };
     let mut configuration = None;
     let mut configuration_pin = None;

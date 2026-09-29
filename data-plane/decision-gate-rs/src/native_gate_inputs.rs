@@ -72,6 +72,13 @@ pub(super) fn validate_native_gate_static_inputs(inputs: &GateStateInputs) -> Re
     }
     if let Some(config) = &inputs.secret_broker { config.validate()?; }
     let pending_tokens = super::native_service_tokens::pending(inputs)?;
+    if let Some(setup) = &inputs.measured_setup {
+        setup.validate()?;
+        if inputs.measured_issuance.is_some() || !pending_tokens
+            || inputs.credential_currentness.is_none() || !measured {
+            return Err("native Setup requires its distinct encrypted cold profile and one browser purpose".to_owned());
+        }
+    }
     if let Some(refresh) = &inputs.measured_refresh {
         refresh.validate()?;
         if !pending_tokens || inputs.credential_currentness.is_none() || !measured {

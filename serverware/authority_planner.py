@@ -4240,6 +4240,7 @@ class MeasuredPlanner:
                                 rbac_primary_inputs=(tuple(roots), tuple(authorization_roots), tuple(multiproofs)))
                         if operation in {oauth_activation.OP_ACTIVATE, oauth_exchange.OP_PREPARE, oauth_exchange.OP_STAGE,
                                 oauth_measured_exchange.OP_PREPARE, oauth_measured_exchange.OP_STAGE,
+                                "oauth.setup.create", "oauth.setup.activate", "oauth.measured-setup.prepare", "oauth.measured-setup.stage",
                                 "oauth.refresh.claim", "oauth.refresh.retain", "oauth.refresh.commit",
                                 "oauth.measured-refresh.inspect", "oauth.measured-refresh.claim", "oauth.measured-refresh.capture",
                                 "oauth.measured-refresh.commit", "oauth.measured-refresh.recover",

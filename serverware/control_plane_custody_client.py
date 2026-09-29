@@ -2082,6 +2082,27 @@ class ControlPlaneCustodyClient:
             raise CustodyClientError("initial issuance has no exact committed originals")
         return originals
 
+    def _request_measured_setup(self, *, operation, input_value, deadline_ns):
+        """Separate signed Setup response originals; no generic export or retry."""
+        from serverware import authority_oauth_measured_setup as setup
+        if operation not in setup.OPERATIONS or type(deadline_ns) is not int:
+            raise CustodyClientError("Setup custody purpose differs")
+        binding = _snapshot(self)
+        runtime = binding.runtime_client
+        if type(runtime) is not service.AuthorityRuntimeClient:
+            raise CustodyClientError("Setup lacks actual cold runtime client")
+        _receipt_now(binding)
+        originals = service.AuthorityRuntimeClient.request_measured_setup(runtime,
+            operation=operation, input_value=input_value, deadline_ns=deadline_ns)
+        _process(binding); _receipt_now(binding)
+        if _snapshot(self) is not binding:
+            raise CustodyClientError("Setup custody changed")
+        journal.CustodyJournal._require_ready(binding.journal)
+        transport._check_deadline(deadline_ns)
+        if type(originals) is not tuple or len(originals) != 2 or any(type(raw) is not bytes for raw in originals):
+            raise CustodyClientError("Setup has no exact committed originals")
+        return originals
+
     def forward_once(self, localdigest, *, deadline_ns=None):
         """Claim one durable attempt, then make one fixed relay exchange.
 

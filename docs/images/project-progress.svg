@@ -1,12 +1,12 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1000" height="418" viewBox="0 0 1000 418" role="img" aria-labelledby="project-title project-description">
-  <title id="project-title">Project checkpoints: 35 of 46 source-landed; 5 active and 6 todo. H05, N04, N05, O04 and O05 remain partial. Source 30947fd connects native v5 same-child networking, guarded execution and workload/guardian cleanup. Prior fenced policy-file publication remains credited. All 11 unfinished parents remain open; production acceptance 0/6. Source only, unbuilt, unexecuted and unprovisioned.</title>
-  <desc id="project-description">All 46 parent segments remain visible. Evidence handoff 10/10; historical recovery 4/5; permissions and grants 10/10; finalization and sessions 8/8; workloads and native 3/6 with two active and one todo; providers and operations 0/7 with two active and five todo. Source 30947fdfe865f43cec5b2fe989e2ce729bbc6644 joins explicit v5 execution to genuine same-child firewall/attachment ownership, one consumed exec release, positive exec acknowledgment and detach, bounded running/output observation and retained workload/guardian cleanup. Final network readback remains admission-clipped; later checks retain actual ownership, not continuous kernel snapshots. Data-only output counts/digests and separate reaps/leaf-empty observations grant no restart or retry. N05 remains partial: combined CA and egress, broader lifecycle/recovery, independently observed host-link disappearance, provider/canary/Kubernetes journeys and independent acceptance remain open. Prior b499aff controlled policy-file materialization and exact-state resolution, H05 recovery, approval/portal, response/lease and CA credits remain. Activation stays 26/26, public actions 3/3 and F08 direct children 6/6 in 170d0ac. Counts are nonadditive, not effort or readiness percentages. No build, runtime, provisioning, AWS/spend or tested-pilot credit; production acceptance remains 0/6.</desc>
+  <title id="project-title">Project checkpoints: 35 of 46 source-landed; 6 active and 5 todo. H05, N04, N05, O01, O04 and O05 remain partial. Source b39d4fe connects cold OAuth application enrollment and consumer ownership, not a working production lifecycle or cross-deployment coordinator. Prior native v5 and policy-file publication remain credited. All 11 unfinished parents remain open; production acceptance 0/6. Source only, unbuilt, unexecuted and unprovisioned.</title>
+  <desc id="project-description">All 46 parent segments remain visible. Evidence handoff 10/10; historical recovery 4/5; permissions and grants 10/10; finalization and sessions 8/8; workloads and native 3/6 with two active and one todo; providers and operations 0/7 with three active and four todo. Source b39d4fea536899a2f1a70d83b84177570373150e joins independently signed provider-family/application/client/redirect configuration to fixed protected startup/client originals and genuine consumer owners under original expiry/current custody. Runtime root signatures or association metadata alone are not enrollment authority. Enrolled production effects refuse before missing purpose-controlled writers; activation, staging, reconnect, refresh/revocation/setup and explicit enrollment transitions remain open. O01 is partial: no globally atomic subject coordinator, external-application ownership or pre-subject issuance reservation. Prior native v5 same-child networking, guarded execution/output/cleanup, O05 policy-file publication, O04 approvals and H05 recovery remain source-credited. Combined CA and egress, broader lifecycle/recovery and actual provider/canary/Kubernetes/independent acceptance remain open. Activation stays 26/26, public actions 3/3 and F08 direct children 6/6. Counts are nonadditive, not effort or readiness percentages. No build, runtime, provisioning, provider contact, AWS/spend or tested-pilot credit; production acceptance remains 0/6.</desc>
   <rect x="1" y="1" width="998" height="416" rx="16" fill="#0f172a" stroke="#475569"/>
   <g font-family="system-ui, -apple-system, Segoe UI, sans-serif">
     <text x="24" y="34" fill="#f8fafc" font-size="25" font-weight="700">Whole-project source checkpoints</text>
     <text x="976" y="34" text-anchor="end" fill="#fde68a" font-size="15" font-weight="700">0 / 6 production verified</text>
     <text x="24" y="64" fill="#6ee7b7" font-size="21" font-weight="700">35 / 46 landed</text>
-    <text x="220" y="64" fill="#cbd5e1" font-size="16">5 active · 6 todo · H05 + N04 + N05 + O04 + O05</text>
+    <text x="220" y="64" fill="#cbd5e1" font-size="16">6 active · 5 todo · H05 + N04 + N05 + O01 + O04 + O05</text>
     <text x="24" y="88" fill="#6ee7b7" font-size="13">✓ Landed source</text>
     <text x="190" y="88" fill="#fde68a" font-size="13">→ In progress, still open</text>
     <text x="405" y="88" fill="#e2e8f0" font-size="13">— Open</text>
@@ -118,11 +118,11 @@
       </g>
     </g>
 
-    <g aria-label="Providers and operations: zero of 7 landed, two active and five todo">
+    <g aria-label="Providers and operations: zero of 7 landed, three active and four todo">
       <text x="24" y="332" fill="#f8fafc" font-size="16" font-weight="600">Providers and operations</text>
-      <text x="24" y="349" fill="#cbd5e1" font-size="12">0 / 7 landed · 2 active · 5 todo</text>
+      <text x="24" y="349" fill="#cbd5e1" font-size="12">0 / 7 landed · 3 active · 4 todo</text>
       <g fill="#334155" stroke="#94a3b8">
-        <rect x="288" y="318" width="89" height="32" rx="5"><title>O01 · Cross-deployment OAuth ownership · OPEN</title></rect>
+        <a href="https://github.com/AndrewMohawk/serverware/commit/b39d4fea536899a2f1a70d83b84177570373150e"><rect x="288" y="318" width="89" height="32" rx="5" fill="#fbbf24" stroke="#f59e0b"><title>O01 · Cross-deployment OAuth ownership · ACTIVE/PARTIAL. Source b39d4fe connects dedicated signed application enrollment, protected startup/client originals and genuine consumer ownership. Enrolled lifecycle refuses before missing purpose-controlled writers; no working production OAuth flow or runtime credit. Atomic activation, staging, reconnect, refresh/revocation/setup and enrollment transitions remain open, as do global fenced subject coordination, external-application ownership and pre-subject issuance reservation. Administrative namespace assignment is not coordination. No parent closure.</title></rect></a>
         <rect x="385" y="318" width="89" height="32" rx="5"><title>O02 · Provider issuance in measured custody · OPEN</title></rect>
         <rect x="482" y="318" width="89" height="32" rx="5"><title>O03 · Public durable credential revocation · OPEN</title></rect>
         <a href="https://github.com/AndrewMohawk/serverware/commit/ce757ce6e038beb4e2078b502965aff13b9eff51"><rect x="579" y="318" width="89" height="32" rx="5" fill="#fbbf24" stroke="#f59e0b"><title>O04 · Protected provider/filesystem effects · ACTIVE/PARTIAL. Source ce757ce connects purpose-controlled publication approval kernels, actual assertion verifier/planner/cold clients and portal to exact-state resolution. No generic runtime DML widening. Fresh distinct-person WebAuthn, exact request/phase and null approver note remain; no token rename/disclosure or automatic retry. Uncertainty stays blocked. Independent custody and physical trust remain unprovisioned. Other provider effects, ambiguous/malformed-history recovery, archival, multi-host coordination and independent rollback witnessing stay open. No runtime, pilot or parent closure.</title></rect></a>
@@ -131,7 +131,7 @@
         <rect x="870" y="318" width="89" height="32" rx="5"><title>O07 · mTLS &amp; signed sequenced telemetry · OPEN</title></rect>
       </g>
       <g fill="#e2e8f0" font-size="12" font-weight="700" text-anchor="middle">
-        <text x="332.5" y="339">— O01</text><text x="429.5" y="339">— O02</text>
+        <text x="332.5" y="339" fill="#451a03">→ O01</text><text x="429.5" y="339">— O02</text>
         <text x="526.5" y="339">— O03</text><text x="623.5" y="339" fill="#451a03">→ O04</text>
         <text x="720.5" y="339" fill="#451a03">→ O05</text><text x="817.5" y="339">— O06</text>
         <text x="914.5" y="339">— O07</text>
@@ -139,6 +139,6 @@
     </g>
 
     <text x="24" y="377" fill="#cbd5e1" font-size="13">Source-only · unbuilt, unexecuted, unprovisioned · landed source is not verified production readiness</text>
-    <text x="24" y="400" fill="#94a3b8" font-size="12">Latest b499aff · fenced policy publication, O05 partial · native ce757ce blocked child + guardian; no exec release</text>
+    <text x="24" y="400" fill="#94a3b8" font-size="12">Latest b39d4fe · OAuth application ownership, O01 partial · native v5 30947fd retained; no tested pilot</text>
   </g>
 </svg>

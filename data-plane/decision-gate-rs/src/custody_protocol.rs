@@ -48,6 +48,7 @@ pub mod native_approver_policy_v1;
 pub mod native_lease_profile_v1;
 pub mod native_currentness_v1;
 pub mod native_target_dispatch_v1;
+pub mod native_shadow_workers;
 pub mod native_staging_v1;
 pub mod native_oauth_refresh_v1;
 pub mod native_oauth_cleanup_v1;

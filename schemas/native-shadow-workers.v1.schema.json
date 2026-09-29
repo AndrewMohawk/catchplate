@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-shadow-workers.v1.schema.json",
+  "title": "Explicit prestarted native pinned shadow commands",
+  "$ref": "#/$defs/configuration",
+  "$defs": {
+    "sha256": {"type":"string","pattern":"^sha256:[0-9a-f]{64}$","not":{"const":"sha256:0000000000000000000000000000000000000000000000000000000000000000"}},
+    "nonce": {"type":"string","pattern":"^[A-Za-z0-9_-]{43}$","$comment":"Runtime also requires canonical base64url decoding to nonzero 32 bytes."},
+    "uint64": {"type":"integer","minimum":1,"maximum":18446744073709551615},
+    "path": {"type":"string","minLength":2,"maxLength":4096,"pattern":"^/","$comment":"Runtime requires UTF8 byte bound, no NUL, and protected normal-component original path."},
+    "configuration": {
+      "type":"object","additionalProperties":false,
+      "required":["apiVersion","executable"],
+      "properties": {
+        "apiVersion":{"const":"serverware.nativeShadowWorkers/v1"},
+        "executable": {
+          "type":"object","additionalProperties":false,"required":["path","sha256"],
+          "properties":{"path":{"const":"/usr/local/bin/serverware-native-shadow-worker"},"sha256":{"$ref":"#/$defs/sha256"}}
+        }
+      }
+    },
+    "shadowConfiguration": {
+      "type":"object","additionalProperties":false,
+      "required":["apiVersion","trustManifest","runtimeVerifier","webauthnVerifier","publicationHandoff","custodyConfig","startupActiveAuthorization","workers"],
+      "properties": {
+        "apiVersion":{"const":"serverware.nativeShadowConfiguration/v2"},
+        "trustManifest":{"$ref":"#/$defs/artifact"},
+        "runtimeVerifier":{"$ref":"#/$defs/command"},
+        "webauthnVerifier":{"$ref":"#/$defs/command"},
+        "publicationHandoff":{"$ref":"#/$defs/command"},
+        "custodyConfig":{"$ref":"#/$defs/artifact"},
+        "startupActiveAuthorization":{"$ref":"#/$defs/artifact"},
+        "workers":{"$ref":"#/$defs/configuration"}
+      },
+      "$comment":"Outer v15 explicitly admits this closed alternative alongside unchanged ShadowConfigV1. Outer v1-v14 retain only ShadowConfigV1. Configuration does not grant runtime authority or assert that a native shadow custody backend exists."
+    },
+    "artifact": {
+      "type":"object","additionalProperties":false,"required":["path","sha256"],
+      "properties":{"path":{"$ref":"#/$defs/path"},"sha256":{"$ref":"#/$defs/sha256"}}
+    },
+    "command": {
+      "type":"object","additionalProperties":false,"required":["executable","arguments","sha256"],
+      "properties":{"executable":{"$ref":"#/$defs/path"},"arguments":{"type":"array","maxItems":0},"sha256":{"$ref":"#/$defs/sha256"}}
+    },
+    "bootstrap": {
+      "type":"object","additionalProperties":false,
+      "required":["apiVersion","channelNonce","deadlineBoottimeNs","executableSha256","executablePath"],
+      "properties": {
+        "apiVersion":{"const":"serverware.nativeShadowWorkerBootstrap/v1"},
+        "channelNonce":{"$ref":"#/$defs/nonce"},"deadlineBoottimeNs":{"$ref":"#/$defs/uint64"},
+        "executableSha256":{"type":"array","minItems":3,"maxItems":3,"items":{"$ref":"#/$defs/sha256"}},
+        "executablePath":{"type":"array","minItems":3,"maxItems":3,"items":{"$ref":"#/$defs/path"}}
+      },
+      "$comment":"Sealed root:root 0600 zero-link original <=16KiB, not a public admission token. Images are in runtime, WebAuthn, publication order. Original paths preserve argv0 only."
+    },
+    "initialized": {
+      "type":"object","additionalProperties":false,"required":["apiVersion","channelNonce","bootstrapSha256"],
+      "properties":{"apiVersion":{"const":"serverware.nativeShadowWorkerInitialized/v1"},"channelNonce":{"$ref":"#/$defs/nonce"},"bootstrapSha256":{"$ref":"#/$defs/sha256"}}
+    },
+    "request": {
+      "type":"object","additionalProperties":false,
+      "required":["apiVersion","sequence","purpose","inputSha256","inputBytes","deadlineBoottimeNs","channelNonce","bootstrapSha256"],
+      "properties": {
+        "apiVersion":{"const":"serverware.nativeShadowWorkerRequest/v1"},"sequence":{"$ref":"#/$defs/uint64"},
+        "purpose":{"enum":["runtime","webauthn","publication"]},
+        "inputSha256":{"$ref":"#/$defs/sha256"},"inputBytes":{"type":"integer","minimum":1,"maximum":33554432},
+        "deadlineBoottimeNs":{"$ref":"#/$defs/uint64"},"channelNonce":{"$ref":"#/$defs/nonce"},"bootstrapSha256":{"$ref":"#/$defs/sha256"}
+      },
+      "$comment":"Exactly one sealed gate-owned 0600 input FD. Deadline chosen once before sending, <= original lifetime and <=10s; no worker renewal. Each purpose accepts only its fixed existing request API/operation."
+    },
+    "response": {
+      "type":"object","additionalProperties":false,"required":["apiVersion","request","result"],
+      "properties": {
+        "apiVersion":{"const":"serverware.nativeShadowWorkerResponse/v1"},"request":{"$ref":"#/$defs/request"},
+        "result": {
+          "type":"object","additionalProperties":false,"required":["status","outputSha256","outputBytes"],
+          "properties":{"status":{"const":"process-exited-zero"},"outputSha256":{"$ref":"#/$defs/sha256"},"outputBytes":{"type":"integer","minimum":1,"maximum":2097152}}
+        }
+      },
+      "allOf":[{"if":{"properties":{"request":{"properties":{"purpose":{"enum":["runtime","webauthn"]}}}}},"then":{"properties":{"result":{"properties":{"outputBytes":{"maximum":65536}}}}}}],
+      "$comment":"Exact request echo and exactly one sealed 64988-owned output FD. Kernel credentials/PIDFD bind each packet to the actual owned child. Zero exit is not signed verifier or publication authority."
+    }
+  }
+}

@@ -33,7 +33,7 @@ use super::policy_shadow::install_policy_shadow_custody_generation_from_retained
 use super::{
     bind_next_active_runtime_identity, bind_shadow_active_runtime_identity,
     current_snapshot, is_sha256_digest, load_shadow_snapshot_pair,
-    policy_trust_is_fresh, run_pinned_bounded_json_command,
+    policy_trust_is_fresh,
     run_pinned_bounded_json_command_with_output_limit,
     same_exact_snapshot_identity, sha256_prefixed, strict_json_from_slice,
     verifying_key_from_spki_pem_text, verify_pinned_verifier_executable,
@@ -52,6 +52,9 @@ use std::os::unix::fs::{
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+#[path = "policy_shadow_generation_native.rs"]
+mod native;
+pub(crate) use native::PreparedNativeShadowControl;
 
 pub(crate) const INSTALL_PATH: &str = "/v1/policy-shadow/generations";
 pub(crate) const INSTALL_CONTENT_TYPE: &str = "application/json";
@@ -1447,6 +1450,7 @@ struct WebAuthnVerifierResponse {
 
 struct ExternalWebAuthnVerifier<'a> {
     command: &'a PinnedVerifierCommand,
+    native_workers: Option<&'a Arc<serverware_decision_gate::native_shadow_workers::Owner>>,
     key_trust: &'a PinnedEnvelopeKeyTrust,
     trusted_time: &'a dyn TrustedTime,
 }
@@ -1470,10 +1474,13 @@ impl WebAuthnVerification for ExternalWebAuthnVerifier<'_> {
                 self.key_trust.webauthn_verification_policy_sha256,
             "verifierExecutableSha256":expected_verifier_sha256,
         });
-        let value = run_pinned_bounded_json_command(
+        let value = native::run_command(
+            self.native_workers,
+            serverware_decision_gate::native_shadow_workers::Purpose::Webauthn,
             self.command,
             &request,
             "policy activation WebAuthn verifier",
+            64 * 1024,
         )
         .map_err(|_| ShadowError::ApprovalBindingMismatch)?;
         let response: WebAuthnVerifierResponse =
@@ -2288,6 +2295,7 @@ impl RuntimeAttestationVerification for FleetRuntimeAttestation {
 /// Paths and pins are admitted by `from_config` through the same retained-file
 /// and executable checks used by the environment-backed development entry.
 pub(crate) struct PolicyShadowGenerationConfig {
+    pub(crate) native_workers: Option<serverware_decision_gate::native_shadow_workers::Configuration>,
     pub(crate) trust_manifest_path: PathBuf,
     pub(crate) trust_manifest_sha256: Sha256Digest,
     pub(crate) runtime_verifier: PinnedVerifierCommand,
@@ -2302,6 +2310,7 @@ pub(crate) struct PolicyShadowGenerationConfig {
 }
 
 pub(crate) struct PolicyShadowGenerationControl {
+    native_workers: Option<Arc<serverware_decision_gate::native_shadow_workers::Owner>>,
     is_production: bool,
     trust_manifest_sha256: Sha256Digest,
     key_trust: Arc<PinnedEnvelopeKeyTrust>,
@@ -2365,6 +2374,7 @@ impl PolicyShadowGenerationControl {
         }
 
         let config = PolicyShadowGenerationConfig {
+            native_workers: None,
             trust_manifest_path: PathBuf::from(required_env(
                 TRUST_MANIFEST_PATH_ENV,
             )?),
@@ -2413,6 +2423,9 @@ impl PolicyShadowGenerationControl {
         policy_trust_is_attested: bool,
         config: PolicyShadowGenerationConfig,
     ) -> Result<Arc<Self>, String> {
+        if config.native_workers.is_some() {
+            return Err("native shadow workers require the retained pre-drop preparation owner".into());
+        }
         if is_production && !policy_trust_is_attested {
             return Err(
                 "production policy-shadow generation control requires an attested policy trust root"
@@ -2420,6 +2433,7 @@ impl PolicyShadowGenerationControl {
             );
         }
         let PolicyShadowGenerationConfig {
+            native_workers: _,
             trust_manifest_path,
             trust_manifest_sha256,
             runtime_verifier,
@@ -2544,6 +2558,7 @@ impl PolicyShadowGenerationControl {
         };
 
         Ok(Arc::new(Self {
+            native_workers: None,
             is_production,
             trust_manifest_sha256,
             key_trust,
@@ -2868,6 +2883,7 @@ impl PolicyShadowGenerationControl {
         }
         let webauthn = ExternalWebAuthnVerifier {
             command: &self.webauthn_verifier,
+            native_workers: self.native_workers.as_ref(),
             key_trust: self.key_trust.as_ref(),
             trusted_time: retained.trusted_time.as_ref(),
         };
@@ -3334,10 +3350,13 @@ impl PolicyShadowGenerationControl {
                 self.key_trust.runtime_attestation_policy_sha256,
             "verifierExecutableSha256":expected_verifier_sha256,
         });
-        let verifier_value = run_pinned_bounded_json_command(
+        let verifier_value = native::run_command(
+            self.native_workers.as_ref(),
+            serverware_decision_gate::native_shadow_workers::Purpose::Runtime,
             &self.runtime_verifier,
             &verifier_request,
             "policy-shadow runtime attestation verifier",
+            64 * 1024,
         )
         .map_err(|error| {
             GenerationInstallError::unavailable(error)
@@ -4070,7 +4089,9 @@ impl PolicyShadowGenerationControl {
             "body":body,
         });
         let value =
-            run_pinned_bounded_json_command_with_output_limit(
+            native::run_command(
+                self.native_workers.as_ref(),
+                serverware_decision_gate::native_shadow_workers::Purpose::Publication,
                 &self.publication_handoff,
                 &request,
                 "policy-shadow publication handoff",

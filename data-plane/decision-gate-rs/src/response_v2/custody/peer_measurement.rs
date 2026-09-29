@@ -272,7 +272,7 @@ pub(super) fn received_fd_is_cloexec(fd: RawFd) -> bool {
 }
 
 
-pub(super) fn open_peer_pidfd(socket: RawFd) -> io::Result<OwnedFd> {
+pub(crate) fn open_peer_pidfd(socket: RawFd) -> io::Result<OwnedFd> {
     let mut raw: RawFd = -1;
     let mut length = size_of::<RawFd>() as libc::socklen_t;
     // SAFETY: SO_PEERPIDFD writes one new pidfd into raw. Unsupported
@@ -341,6 +341,11 @@ pub(super) fn prove_pidfds_same_process(
         ));
     }
     Ok(process)
+}
+
+// Closed native child transport reuse: no measurement DTO escapes this core.
+pub(crate) fn prove_owned_process(left: &OwnedFd, right: &OwnedFd, pid: libc::pid_t) -> io::Result<()> {
+    prove_pidfds_same_process(left, right, pid).map(|_| ())
 }
 
 pub(super) fn capture_pidfd_process_identity(
@@ -619,7 +624,7 @@ fn parse_proc_start_time(
 }
 
 
-pub(super) fn ensure_pidfd_alive(pidfd: &OwnedFd) -> io::Result<()> {
+pub(crate) fn ensure_pidfd_alive(pidfd: &OwnedFd) -> io::Result<()> {
     let mut descriptor = libc::pollfd {
         fd: pidfd.as_raw_fd(),
         events: libc::POLLIN,

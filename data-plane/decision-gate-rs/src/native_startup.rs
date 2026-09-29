@@ -217,6 +217,12 @@ fn run_owned(
     if gate_cgroup.is_some() && (guest_cohort.is_none() || inputs.secret_broker.is_none()) {
         return Err("native gate cgroup requires the actual broker and guest cohort".into());
     }
+    if shadow_config.native_workers.is_some() && (guest_cohort.is_none() || inputs.secret_broker.is_none()) {
+        return Err("native shadow workers require the actual pre-drop broker and signed guest cohort".into());
+    }
+    let mut shadow_config = Some(shadow_config);
+    let mut prepared_shadow = None;
+    let mut native_shadow = None;
     let prepared_device = if let Some(config) = inputs.secret_broker.take() {
         use serverware_decision_gate::{native_serving_privileges,
             native_secret_broker_v1::PreparedBroker,
@@ -238,7 +244,12 @@ fn run_owned(
                     None => serverware_decision_gate::StartedGuestCohort::launch(
                         configuration, &privileged, inspector)?,
                 };
-                NativeRuntimeLifetimeV1::bind_guest_cohort(startup, cohort)?;
+                NativeRuntimeLifetimeV1::bind_guest_cohort(startup, Arc::clone(&cohort))?;
+                if shadow_config.as_ref().is_some_and(|config| config.native_workers.is_some()) {
+                    prepared_shadow = Some(policy_shadow_generation::PreparedNativeShadowControl::open(
+                        shadow_config.take().ok_or("native shadow cold configuration absent")?,
+                        &privileged, cohort)?);
+                }
             }
         }
         let device = PreparedNativeDeviceV1::open(&privileged)?;
@@ -248,6 +259,11 @@ fn run_owned(
         let gate_cgroup = gate_cgroup.map(|owner| owner.attach_gate(&privileged)).transpose()?;
         let owner = privileged.drop_permanently()?;
         NativeRuntimeLifetimeV1::bind_serving_privileges(startup, Arc::clone(&owner))?;
+        if let Some(prepared) = prepared_shadow.take() {
+            let (control, workers) = prepared.bind(Arc::clone(&owner))?;
+            NativeRuntimeLifetimeV1::bind_shadow_workers(startup, workers)?;
+            native_shadow = Some(control);
+        }
         if let Some(cgroup) = gate_cgroup {
             NativeRuntimeLifetimeV1::bind_gate_cgroup(startup, cgroup.bind(Arc::clone(&owner))?)?;
         }
@@ -259,7 +275,11 @@ fn run_owned(
     startup.check()?;
     // These are real constructors, not caller-provided healthy flags. The
     // attested-trust classification above is required; true is not quote proof.
-    let shadow = PolicyShadowGenerationControl::from_config(true, true, shadow_config)?;
+    let shadow = match native_shadow {
+        Some(owner) => owner,
+        None => PolicyShadowGenerationControl::from_config(true, true,
+            shadow_config.take().ok_or("native shadow prepared owner absent")?)?,
+    };
     if !shadow.is_production() || shadow.startup_request().is_some() {
         return Err("native startup shadow owner is not configured for production startup".to_owned());
     }

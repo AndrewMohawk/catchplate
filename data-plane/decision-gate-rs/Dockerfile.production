@@ -135,6 +135,7 @@ RUN --network=none cargo build --release --frozen \
         --bin serverware-native-bootstrap-client \
         --bin serverware-response-v2-guest-inspector \
         --bin serverware-response-v2-guest-role \
+        --bin serverware-native-shadow-worker \
         --bin serverware-native-parent-relay --bin serverware-native-parent-ingress \
     && test "$(readelf -l /src/target/release/serverware-production-launcher | grep -c INTERP)" -eq 0 \
     && test "$(readelf -d /src/target/release/serverware-production-launcher | grep -c NEEDED)" -eq 0 \
@@ -161,7 +162,10 @@ RUN --network=none cargo build --release --frozen \
     && test "$(stat -c %s /src/target/release/serverware-response-v2-guest-inspector)" -le 67108864 \
     && test "$(readelf -l /src/target/release/serverware-response-v2-guest-role | grep -c INTERP)" -eq 0 \
     && test "$(readelf -d /src/target/release/serverware-response-v2-guest-role | grep -c NEEDED)" -eq 0 \
-    && test "$(stat -c %s /src/target/release/serverware-response-v2-guest-role)" -le 67108864
+    && test "$(stat -c %s /src/target/release/serverware-response-v2-guest-role)" -le 67108864 \
+    && test "$(readelf -l /src/target/release/serverware-native-shadow-worker | grep -c INTERP)" -eq 0 \
+    && test "$(readelf -d /src/target/release/serverware-native-shadow-worker | grep -c NEEDED)" -eq 0 \
+    && test "$(stat -c %s /src/target/release/serverware-native-shadow-worker)" -le 67108864
 
 FROM scratch AS production-launcher-artifact
 COPY --from=launcher-build /src/target/release/serverware-production-launcher /serverware-production-launcher
@@ -189,6 +193,9 @@ COPY --from=launcher-build /src/target/release/serverware-response-v2-guest-insp
 
 FROM scratch AS guest-role-artifact
 COPY --from=launcher-build /src/target/release/serverware-response-v2-guest-role /serverware-response-v2-guest-role
+
+FROM scratch AS native-shadow-worker-artifact
+COPY --from=launcher-build /src/target/release/serverware-native-shadow-worker /serverware-native-shadow-worker
 
 FROM python:3.11-slim-bookworm@sha256:0030323c9ce4d6dfab5f0812577cb0abd13c806f86b3a1f5b5d8f200ebb1421c AS native-broker-runtime
 ARG SOURCE_DATE_EPOCH="0"
@@ -270,6 +277,7 @@ COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverwa
 COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-native-parent-ingress /usr/local/libexec/serverware-native-parent-ingress
 COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-response-v2-guest-inspector /usr/local/bin/serverware-response-v2-guest-inspector
 COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-response-v2-guest-role /usr/local/bin/serverware-response-v2-guest-role
+COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-native-shadow-worker /usr/local/bin/serverware-native-shadow-worker
 COPY --from=build --chown=0:0 /policy-custody-assets /usr/share/serverware/policy-custody
 COPY --from=build --chown=65531:65530 --chmod=0710 /runtime-layout/serverware-custody /run/serverware-custody
 COPY --from=build --chown=65531:65530 --chmod=0700 /runtime-layout/serverware-custody-state /var/lib/serverware-custody

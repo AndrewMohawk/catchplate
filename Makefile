@@ -4030,6 +4030,17 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/response_v2/state_authority/postgres/sequence_originals.rs \
 				data-plane/decision-gate-rs/src/response_v2/state_authority/postgres/staged_originals.rs \
 				data-plane/decision-gate-rs/src/native_target_dispatch.rs \
+				data-plane/decision-gate-rs/src/bin/serverware-native-shadow-worker.rs \
+				data-plane/decision-gate-rs/src/native_shadow_workers/elf.rs \
+				data-plane/decision-gate-rs/src/native_shadow_workers/identity.rs \
+				data-plane/decision-gate-rs/src/native_shadow_workers/image.rs \
+				data-plane/decision-gate-rs/src/native_shadow_workers/job.rs \
+				data-plane/decision-gate-rs/src/native_shadow_workers/mod.rs \
+				data-plane/decision-gate-rs/src/native_shadow_workers/process.rs \
+				data-plane/decision-gate-rs/src/native_shadow_workers/transport.rs \
+				data-plane/decision-gate-rs/src/native_shadow_workers/wire.rs \
+				data-plane/decision-gate-rs/src/native_shadow_workers/worker.rs \
+				data-plane/decision-gate-rs/src/policy_shadow_generation_native.rs \
 				data-plane/decision-gate-rs/src/native_staging.rs \
 				data-plane/decision-gate-rs/src/native_staging_v1.rs \
 				data-plane/decision-gate-rs/src/native_staging_v1/config.rs \
@@ -4306,6 +4317,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-startup-configuration.v15.schema.json \
 				schemas/native-oauth-measured-setup.v1.schema.json \
 				schemas/native-gate-cgroup.v1.schema.json \
+				schemas/native-shadow-workers.v1.schema.json \
 				schemas/native-guest-role-key-provisioner.v1.schema.json \
 				schemas/native-oauth-measured-cleanup.v1.schema.json \
 				schemas/native-oauth-measured-pending-retirement.v1.schema.json \

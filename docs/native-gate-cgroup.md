@@ -26,8 +26,9 @@ descriptor, deadline or generic control operation.
    preexisting leaf; do not adopt, chown, delegate, reset or reuse it. Retain
    actual root/leaf/control/namespace originals. The gate remains at the
    unified hierarchy root while the inspector, seven-role cohort, boot-key
-   provisioner and credential-broker child are created. StateCas can now open
-   its genuine system-root cgroup observer during cohort startup.
+   provisioner, explicitly selected [shadow worker](native-shadow-workers.md)
+   and credential-broker child are created. StateCas can now open its genuine
+   system-root cgroup observer during cohort startup.
 3. After `PreparedBroker::open` and before `drop_permanently`, write only the
    actual gate PID once to the exact held leaf's `cgroup.procs`. Check the actual
    proc record, sole process membership, domain type and absence of descendants.

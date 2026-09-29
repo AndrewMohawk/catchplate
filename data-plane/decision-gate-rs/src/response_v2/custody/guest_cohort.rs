@@ -211,6 +211,15 @@ impl StartedGuestCohort {
         Ok(result)
     }
     pub fn deadline_boottime_ns(&self) -> u64 { self.deadline }
+    pub(crate) fn require_shadow_preparation(&self, prepared: &Prepared) -> Result<(), String> {
+        self.association.require_preparation(prepared)?;
+        self.check()?;
+        if self.roles.iter().any(|role| role.original.scoped().process.uid == crate::native_shadow_workers::UID
+            || role.original.scoped().process.gid == crate::native_shadow_workers::UID) {
+            return Err("native shadow worker identity collides with independently signed guest role".into());
+        }
+        Ok(())
+    }
     pub fn require_serving(&self, owner: &Owner) -> Result<(), String> {
         self.association.require(owner)?;
         if let Some(keys)=&self.role_keys {keys.require_serving(owner)?;}

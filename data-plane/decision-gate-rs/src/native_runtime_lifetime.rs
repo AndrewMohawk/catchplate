@@ -28,6 +28,7 @@ pub(super) struct NativeRuntimeLifetimeV1 {
     gate_cgroup: Option<Arc<serverware_decision_gate::native_gate_cgroup::Owner>>,
     guest_inspector: Option<Arc<serverware_decision_gate::InitializedGuestInspector>>,
     guest_cohort: Option<Arc<serverware_decision_gate::StartedGuestCohort>>,
+    shadow_workers: Option<Arc<serverware_decision_gate::native_shadow_workers::Owner>>,
     guest_cleanup: Mutex<Option<Result<(), String>>>,
 }
 
@@ -63,6 +64,7 @@ impl NativeRuntimeLifetimeV1 {
             gate_cgroup: None,
             guest_inspector: None,
             guest_cohort: None,
+            shadow_workers: None,
             guest_cleanup: Mutex::new(None),
         }))
     }
@@ -82,6 +84,19 @@ impl NativeRuntimeLifetimeV1 {
     }
 
     pub(super) fn deadline(&self) -> u64 { self.deadline }
+
+    pub(super) fn bind_shadow_workers(owner: &mut Arc<Self>,
+        workers: Arc<serverware_decision_gate::native_shadow_workers::Owner>) -> Result<(), String> {
+        if unsafe { libc::getpid() } != owner.creator_pid { return Err("shadow worker attachment crossed creator".into()); }
+        let actual = Arc::get_mut(owner).ok_or("native lifetime shared before shadow attachment")?;
+        let serving = actual.serving_privileges.as_ref().ok_or("shadow worker has no permanent serving owner")?;
+        if actual.shadow_workers.is_some() || actual.guest_cohort.is_none() || workers.deadline() != actual.deadline {
+            return Err("shadow worker lost its original native lifetime".into());
+        }
+        actual.shadow_workers = Some(workers);
+        actual.shadow_workers.as_ref().ok_or("shadow attachment absent")?.require_serving(serving)?;
+        actual.require_creator()
+    }
 
     pub(super) fn bind_gate_cgroup(owner: &mut Arc<Self>,
         cgroup: Arc<serverware_decision_gate::native_gate_cgroup::Owner>) -> Result<(), String> {
@@ -143,16 +158,18 @@ impl NativeRuntimeLifetimeV1 {
         let mut recorded = self.guest_cleanup.lock().map_err(|_|"native guest cleanup owner poisoned")?;
         if let Some(result) = recorded.as_ref() { return result.clone(); }
         self.stop();
+        let shadow = match &self.shadow_workers { Some(owner) => owner.stop_and_reap(), None => Ok(()) };
         let roles = match &self.guest_cohort { Some(owner) => owner.stop_and_reap(), None => Ok(()) };
         // Attempt inspector cleanup even when role reaping failed. Success
         // still requires both real reaps under their original owner bounds.
         let inspector = match &self.guest_inspector { Some(owner) => owner.stop_and_reap(), None => Ok(()) };
-        let result = roles.and(inspector);
+        let result = shadow.and(roles).and(inspector);
         *recorded = Some(result.clone());
         result
     }
 
     fn request_guest_stop(&self) {
+        if let Some(workers) = &self.shadow_workers { workers.request_stop(); }
         // Keep the inspector available while roles drain. The explicit finish
         // hook stops/reaps it after the cohort's own complete cleanup attempt.
         if let Some(cohort) = &self.guest_cohort { cohort.request_stop(); }
@@ -176,6 +193,17 @@ impl NativeRuntimeLifetimeV1 {
         if let Some(cgroup) = &self.gate_cgroup {
             if let Err(error) = cgroup.check() {
                 self.stopped.store(true, Ordering::Release);
+                self.request_guest_stop();
+                return Err(error);
+            }
+        }
+        if let Some(workers) = &self.shadow_workers {
+            if self.stopped.load(Ordering::Acquire) { return Ok(()); }
+            if let Err(error) = workers.check() {
+                if self.stopped.load(Ordering::Acquire) { return Ok(()); }
+                if let Ok(mut state) = self.lock() {
+                    self.fail_locked(&mut state, "native shadow worker lifetime failed");
+                }
                 self.request_guest_stop();
                 return Err(error);
             }

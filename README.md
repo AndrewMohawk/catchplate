@@ -24,13 +24,12 @@ Checkpoint: **2026-09-29 — pre-production, source-only.**
 
 [![Project checkpoints, one segment per task: 36 of 46 source-landed; 10 active and 0 todo. Evidence handoff 10/10; historical recovery 4/5; permissions and grants 10/10; finalization and sessions 8/8; workloads and native 3/6; providers and operations 1/7. H05, N04, N05, N06 and O01 through O06 are in progress. Production acceptance remains 0/6. Source only; unbuilt, unexecuted and unprovisioned.](docs/images/project-progress.svg)](docs/production-status.md#next-source-milestones)
 
-Latest [`.292` source](https://github.com/example/private-deployment) connects
-[pending-credential retirement](docs/native-oauth-pending-retirement.md) to
-[protected family claims](docs/measured-pending-family-retirement.md), actual
-holder drains and helper-only provider contact. Prior native response capture
-and durable ledger work remain integrated. Public request staging/authorization,
-the dedicated native gate cgroup, OAuth setup/reconnect, broader lifecycle,
-provisioning and end-to-end verification remain open.
+Latest [`.293` source](https://github.com/example/private-deployment) adds
+[dedicated native gate isolation](docs/native-gate-cgroup.md): a fresh cgroup,
+gate-only placement after helper creation, and checks tied to the original
+serving lifetime. Prior capture, ledger and pending-retirement work remains
+integrated. Public request staging/authorization, OAuth setup/reconnect,
+broader lifecycle, provisioning and end-to-end verification remain open.
 
 The bar shows **committed source, not tested readiness or remaining effort**.
 Green means source-landed; amber means partial implementation. No current pilot

@@ -1,12 +1,12 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1000" height="418" viewBox="0 0 1000 418" role="img" aria-labelledby="project-title project-description">
-  <title id="project-title">Project checkpoints: 35 of 46 source-landed; 7 active and 4 todo. Source a9ed8c7 adds the ciphertext-only control-plane producer; N06 becomes active/partial. All 11 unfinished parents remain open; production acceptance 0/6. Source only, unbuilt, unexecuted and unprovisioned.</title>
-  <desc id="project-description">All 46 parent segments remain visible. Evidence handoff 10/10; historical recovery 4/5; permissions and grants 10/10; finalization and sessions 8/8; workloads and native 3/6 with three active and zero todo; providers and operations 0/7 with three active and four todo. Source a9ed8c71a18a24e411bbafcf5d475d37f1c8e46b adds root-signed cold broker selection, separate request/envelope/set and recipient-verification profiles, locked original ciphertext rows and confidential original storage metadata. Currentness, policy, one-use authority and original deadlines remain; broker refresh cannot fall back to parent decryption. Actual enclave receiver/helper, immutable measured packaging, provider custody and independent verification remain open. Existing source credit is preserved. Counts are not readiness or effort percentages. No build, browser, runtime, provider API contact, AWS/spend or pilot credit; production acceptance remains 0/6.</desc>
+  <title id="project-title">Project checkpoints: 36 of 46 source-landed; 7 active and 3 todo. Source 7cd6710 completes O07 audit source and adds the enclave broker and runtime packaging; N06 remains partial. Ten unfinished parents remain open; production acceptance 0/6. Source only, unbuilt, unexecuted and unprovisioned.</title>
+  <desc id="project-description">All 46 parent segments remain visible. Evidence handoff 10/10; historical recovery 4/5; permissions and grants 10/10; finalization and sessions 8/8; workloads and native 3/6 with three active and zero todo; providers and operations 1/7 with three active and three todo. Source 7cd671059560973739792fe0d2b308b0e6fd6c66 connects actual audit workload mTLS, measured-key batch signatures and durable sequence/replay storage, completing O07 source scope. It also joins the ciphertext-only producer to the private enclave helper, KMS recipient path, gate-encrypted access tokens, immutable runtime packaging and native-only v5 entrypoint. Gate privilege separation, measured provider issuance/refresh, remaining startup delivery, actual EIF production and independent verification remain open. Audit cross-epoch migration and independent database rollback witnessing are not claimed. Existing source credit is preserved. Counts are not readiness or effort percentages. No build, browser, runtime, provider API contact, AWS/spend or pilot credit; production acceptance remains 0/6.</desc>
   <rect x="1" y="1" width="998" height="416" rx="16" fill="#0f172a" stroke="#475569"/>
   <g font-family="system-ui, -apple-system, Segoe UI, sans-serif">
     <text x="24" y="34" fill="#f8fafc" font-size="25" font-weight="700">Whole-project source checkpoints</text>
     <text x="976" y="34" text-anchor="end" fill="#fde68a" font-size="15" font-weight="700">0 / 6 production verified</text>
-    <text x="24" y="64" fill="#6ee7b7" font-size="21" font-weight="700">35 / 46 landed</text>
-    <text x="220" y="64" fill="#cbd5e1" font-size="16">7 active · 4 todo · H05 + N04 + N05 + N06 + O01 + O04 + O05</text>
+    <text x="24" y="64" fill="#6ee7b7" font-size="21" font-weight="700">36 / 46 landed</text>
+    <text x="220" y="64" fill="#cbd5e1" font-size="16">7 active · 3 todo · H05 + N04 + N05 + N06 + O01 + O04 + O05</text>
     <text x="24" y="88" fill="#6ee7b7" font-size="13">✓ Landed source</text>
     <text x="190" y="88" fill="#fde68a" font-size="13">→ In progress, still open</text>
     <text x="405" y="88" fill="#e2e8f0" font-size="13">— Open</text>
@@ -109,7 +109,7 @@
       <g fill="#334155" stroke="#94a3b8">
         <a href="https://github.com/AndrewMohawk/serverware/commit/e1dc72bdaadca4bbbfcf83108d63305b61ec2f88"><rect x="627" y="276" width="105" height="32" rx="5" fill="#fbbf24" stroke="#f59e0b"><title>N04 · Workload identity and authenticated service channels · ACTIVE/PARTIAL. Source e1dc72b connects separately pinned target mTLS identity, actual native-principal preflight and fixed CONNECT to ordinary application transport. Bootstrap identity cannot substitute. Prior issuance, SDK/portal and trust publication remain credited. Production enrollment, independent trust provisioning, issuer lifecycle, wider channels and sidecar integration remain open. No runtime, pilot or parent closure.</title></rect></a>
         <a href="https://github.com/AndrewMohawk/serverware/commit/e1dc72bdaadca4bbbfcf83108d63305b61ec2f88"><rect x="740" y="276" width="105" height="32" rx="5" fill="#fbbf24" stroke="#f59e0b"><title>N05 · Native enrollment and proxy setup · ACTIVE/PARTIAL. Source e1dc72b joins explicit client v9, manifest/start/egress grants, actual child loopback listener, immutable CA/proxy environment, target-authenticated CONNECT and bounded nonblocking relay. Original clock, guardian, cleanup and durable outcomes remain. One CONNECT is not arbitrary client compatibility or N06. Broader lifecycle/recovery, target/provider/canary/Kubernetes and independent acceptance remain open. No runtime, pilot or parent closure.</title></rect></a>
-        <a href="https://github.com/AndrewMohawk/serverware/commit/a9ed8c71a18a24e411bbafcf5d475d37f1c8e46b"><rect x="853" y="276" width="105" height="32" rx="5" fill="#fbbf24" stroke="#f59e0b"><title>N06 · Full enclave TLS/proxy/credential path · ACTIVE/PARTIAL. Source a9ed8c7 adds the independently selected ciphertext-only control-plane producer. Actual enclave receiver/helper, immutable measured closure, provider issuance/refresh and removal of other parent-visible secrets remain unfinished. No runtime, pilot or parent closure.</title></rect></a>
+        <a href="https://github.com/AndrewMohawk/serverware/commit/7cd671059560973739792fe0d2b308b0e6fd6c66"><rect x="853" y="276" width="105" height="32" rx="5" fill="#fbbf24" stroke="#f59e0b"><title>N06 · Full enclave TLS/proxy/credential path · ACTIVE/PARTIAL. Source 7cd6710 joins the actual enclave receiver/helper, KMS recipient ciphertext, gate-encrypted access tokens, immutable runtime packaging and native-only startup. Gate privilege separation, measured provider issuance/refresh/cleanup, remaining secret and shadow/response startup delivery, EIF/startup artifact production and independent acceptance remain unfinished. No runtime, pilot or parent closure.</title></rect></a>
       </g>
       <g font-size="12" font-weight="700" text-anchor="middle">
         <text x="340.5" y="297" fill="#052e26">✓ N01</text><text x="453.5" y="297" fill="#052e26">✓ N02</text>
@@ -118,9 +118,9 @@
       </g>
     </g>
 
-    <g aria-label="Providers and operations: zero of 7 landed, three active and four todo">
+    <g aria-label="Providers and operations: one of 7 landed, three active and three todo">
       <text x="24" y="332" fill="#f8fafc" font-size="16" font-weight="600">Providers and operations</text>
-      <text x="24" y="349" fill="#cbd5e1" font-size="12">0 / 7 landed · 3 active · 4 todo</text>
+      <text x="24" y="349" fill="#cbd5e1" font-size="12">1 / 7 landed · 3 active · 3 todo</text>
       <g fill="#334155" stroke="#94a3b8">
         <a href="https://github.com/AndrewMohawk/serverware/commit/ce1e981cb9678f2ef510ff252c68b7772ef33872"><rect x="288" y="318" width="89" height="32" rx="5" fill="#fbbf24" stroke="#f59e0b"><title>O01 · Cross-deployment OAuth ownership · ACTIVE/PARTIAL. Source ce1e981 adds genuine measured-holder drains, signed current leases, refresh successor roots and separate family cleanup. Activation/staging/refresh refuse a retired local provider-subject family. Holder recovery/migration, reconnect/setup, capacity lifecycle, global ownership and measured issuance remain open. No runtime, pilot or parent closure.</title></rect></a>
         <rect x="385" y="318" width="89" height="32" rx="5"><title>O02 · Provider issuance in measured custody · OPEN</title></rect>
@@ -128,17 +128,17 @@
         <a href="https://github.com/AndrewMohawk/serverware/commit/ce1e981cb9678f2ef510ff252c68b7772ef33872"><rect x="579" y="318" width="89" height="32" rx="5" fill="#fbbf24" stroke="#f59e0b"><title>O04 · Protected provider/filesystem effects · ACTIVE/PARTIAL. Source ce1e981 joins complete actual holder barriers and distinct cleanup permission to irreversible current credential/work/family fences, one-shot contact and retained outcomes. Currentness is not effect permission; accepted HTTP is not revocation proof. Public revocation, recovery/archival, reconnect, global coordination and independent witnessing remain open. No runtime, pilot or parent closure.</title></rect></a>
         <a href="https://github.com/AndrewMohawk/serverware/commit/b499aff6b57d0844c1f121ded095b21f3a428572"><rect x="676" y="318" width="89" height="32" rx="5" fill="#fbbf24" stroke="#f59e0b"><title>O05 · Policy-publication crash recovery · ACTIVE/PARTIAL. Source b499aff joins current committed-policy and exact signed originals to dedicated hardware/two-person approval, one-shot claim, separate least-privilege authority reader holding the actual writer fence, one rename and durability, unlock, then audit-only settlement. Explicit finalize-installed/abandon-uninstalled only; loader refuses unresolved history. Genesis, superseded-history/migration, ambiguous or malformed repair, provisioning and runtime stay open. No automatic retry, activation, pilot or parent closure.</title></rect></a>
         <rect x="773" y="318" width="89" height="32" rx="5"><title>O06 · Witnessed RBAC rollback protection · OPEN</title></rect>
-        <rect x="870" y="318" width="89" height="32" rx="5"><title>O07 · mTLS &amp; signed sequenced telemetry · OPEN</title></rect>
+        <a href="https://github.com/AndrewMohawk/serverware/commit/7cd671059560973739792fe0d2b308b0e6fd6c66"><rect x="870" y="318" width="89" height="32" rx="5" fill="#34d399" stroke="#34d399"><title>O07 · mTLS &amp; signed sequenced telemetry · SOURCE LANDED in 7cd6710. Actual dedicated TLS client and measured role-4 assignment bind original signed batches to durable pending/head sequence storage, exact lost-ACK replay and explicitly authorized same-epoch restart. Cross-epoch migration, independent database rollback witnessing and runtime acceptance remain separate. No production or pilot credit.</title></rect></a>
       </g>
       <g fill="#e2e8f0" font-size="12" font-weight="700" text-anchor="middle">
         <text x="332.5" y="339" fill="#451a03">→ O01</text><text x="429.5" y="339">— O02</text>
         <text x="526.5" y="339">— O03</text><text x="623.5" y="339" fill="#451a03">→ O04</text>
         <text x="720.5" y="339" fill="#451a03">→ O05</text><text x="817.5" y="339">— O06</text>
-        <text x="914.5" y="339">— O07</text>
+        <text x="914.5" y="339" fill="#052e26">✓ O07</text>
       </g>
     </g>
 
     <text x="24" y="377" fill="#cbd5e1" font-size="13">Source-only · unbuilt, unexecuted, unprovisioned · landed source is not verified production readiness</text>
-    <text x="24" y="400" fill="#94a3b8" font-size="12">Latest a9ed8c7 · ciphertext-only control-plane producer, N06 partial · source only</text>
+    <text x="24" y="400" fill="#94a3b8" font-size="12">Latest 7cd6710 · O07 audit source landed; enclave broker and packaging, N06 partial · source only</text>
   </g>
 </svg>

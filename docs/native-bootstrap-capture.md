@@ -5,10 +5,10 @@ evidence plus a diagnostic. The issuance API instead consumes the exact native
 packet within that evidence. `native_bootstrap_capture.extract_packet` connects
 these representations without promoting the diagnostic to authority.
 
-The extractor explicitly accepts six closed
+The extractor explicitly accepts seven closed
 `serverware.nativeBootstrapClientCapture` profiles. Each retains the same nine
-base fields and permits only the children shown here, never additional fields
-or null substitutes:
+base fields and permits only the children shown here, never additional fields.
+Only v7 explicitly permits a null installation child:
 
 | Version | Required children | Total fields |
 | --- | --- | --- |
@@ -18,6 +18,7 @@ or null substitutes:
 | v4 | `egress`, `attachment` | 11 |
 | v5 | `execution` | 10 |
 | v6 | `execution`, `installation` | 11 |
+| v7 | `execution` v2, `installation` (receipt or null) | 11 |
 
 These clients can preserve their original
 evidence for later native identity submission without another bootstrap attempt.
@@ -109,6 +110,33 @@ independent installation association. Neither a writable image trust injection
 nor a claim that arbitrary applications use that environment variable is
 introduced. V5 still selects manifest v1; old profiles are not upgraded by
 reading newer capture or receipt fields.
+
+The [v7 capture](../schemas/native-bootstrap-client-capture.v7.schema.json)
+retains eleven fields with scope
+`local-fixed-endpoint-bootstrap-execution-retirement-observation`.
+Installation is required, but null means this profile did not request CA
+installation. A nonnull receipt uses the unchanged installation contract.
+Execution is the explicit nine-field
+[v2 observation](../schemas/native-execution-observation.v2.schema.json),
+at most 24 KiB; the whole capture still fits 1.5 MiB including LF.
+Its added eight-field
+[retirement observation](../schemas/native-execution-retirement-observation.v1.schema.json)
+reports the prior host veth identity, bounded absence-readback digest, exact
+removed leaf and parent identities, and original cleanup deadline.
+The extractor checks closed shapes, positive exact unsigned integers,
+nonzero retirement digests, operation equality, and reported observation times
+after cleanup and before that deadline. These are consistency checks on
+untrusted historical data, not kernel queries or proof of current absence.
+
+The [v7 configuration](../schemas/native-bootstrap-client.v7.schema.json)
+requires explicit [start authorization v2](../schemas/native-workload-start-authorization.v2.schema.json),
+including separate permission to remove only the actual owned empty leaf.
+Null installation keeps manifest v1; nonnull installation requires manifest v2
+and the same independently authorized immutable CA association as v6.
+No incoming capture selects this runtime permission. Old configurations and
+captures retain their existing exact shapes and limits. Neither successful
+extraction nor retirement data authorizes restart, retry, directory repair,
+host network deletion, journal pruning, or host CA removal.
 
 The packet's embedded target request must equal the supplied request original.
 Reconstructing the exact delegation/setup/target exchange must also reproduce

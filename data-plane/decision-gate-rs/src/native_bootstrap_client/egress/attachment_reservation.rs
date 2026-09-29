@@ -86,6 +86,38 @@ pub(super) struct AttachmentBackendLock<'guard, 'egress> {
     stopped: Cell<bool>,
 }
 
+/// The same acquired bridge flock, without an edge to a child namespace or
+/// admission clock. It admits only cleanup observation, never another effect.
+pub(super) struct CleanupBridgeLock {
+    directories: Vec<Directory>, name: CString, file: File, identity: FileIdentity,
+    pid: u32,
+}
+impl CleanupBridgeLock {
+    pub(super) fn check(&self) -> Result<(), String> {
+        ensure(self.pid == std::process::id() && unsafe { libc::getuid() } == 0
+            && unsafe { libc::geteuid() } == 0 && unsafe { libc::getgid() } == 0
+            && unsafe { libc::getegid() } == 0, "cleanup bridge lock crossed its process boundary")?;
+        for (index, held) in self.directories.iter().enumerate() {
+            let m = held.file.metadata().map_err(|_| "cleanup bridge ancestor unavailable")?;
+            ensure(m.is_dir() && m.dev() == held.device && m.ino() == held.inode
+                && m.uid() == 0 && m.gid() == held.gid && m.mode() == held.mode,
+                "cleanup bridge ancestor changed")?;
+            let root = CString::new("/").expect("fixed root");
+            let (parent, name) = if index == 0 { (libc::AT_FDCWD, root.as_c_str()) } else {
+                (self.directories[index - 1].file.as_raw_fd(),
+                    held.name.as_ref().ok_or("cleanup bridge ancestor name absent")?.as_c_str())
+            };
+            let m = stat_at(parent, name)?.ok_or("cleanup bridge ancestor disappeared")?;
+            ensure(m.st_dev == held.device && m.st_ino == held.inode && m.st_uid == 0
+                && m.st_gid == held.gid && m.st_mode == held.mode, "cleanup bridge ancestor was replaced")?;
+        }
+        ensure(file_identity(&self.file, self.identity.device, 0)? == self.identity,
+            "cleanup bridge lock changed")?;
+        named_file(self.directories.last().ok_or("cleanup bridge lock parent absent")?.file.as_raw_fd(),
+            &self.name, &self.identity)
+    }
+}
+
 fn ensure(value: bool, reason: &'static str) -> Result<(), String> {
     if value { Ok(()) } else { Err(reason.to_owned()) }
 }
@@ -132,6 +164,15 @@ fn named_file(parent: RawFd, name: &CStr, identity: &FileIdentity) -> Result<(),
 }
 
 impl<'guard, 'egress> AttachmentBackendLock<'guard, 'egress> {
+    pub(super) fn cleanup_hold(&self) -> Result<CleanupBridgeLock, String> {
+        self.check()?;
+        let file = self.file.try_clone().map_err(|_| "cleanup bridge lock duplicate failed")?;
+        let result = CleanupBridgeLock { identity: file_identity(&file, self.identity.device, 0)?,
+            file, directories: duplicate_directories(&self.directories)?, name: self.name.clone(), pid: self.pid };
+        result.check()?;
+        self.check()?;
+        Ok(result)
+    }
     pub(super) fn check(&self) -> Result<(), String> {
         self.check_phase(Phase::Admission)
     }

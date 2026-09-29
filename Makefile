@@ -1233,6 +1233,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/native_ca_installation_authorization.py \
 	serverware/native_egress_installation_authorization.py \
 	serverware/native_network_attachment_authorization.py \
+	serverware/native_workload_start_authorization.py \
 	serverware/workload_identity_trust_authorization.py \
 	serverware/native_enrollment_assignment.py \
 	serverware/native_enrollment_bootstrap_delegation.py \
@@ -3516,6 +3517,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/native_ca_installation_authorization.py \
 				serverware/native_egress_installation_authorization.py \
 				serverware/native_network_attachment_authorization.py \
+				serverware/native_workload_start_authorization.py \
 				serverware/workload_identity_trust_authorization.py \
 				serverware/native_enrollment_assignment.py \
 				serverware/native_enrollment_bootstrap_delegation.py \
@@ -3781,6 +3783,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/native_bootstrap_client/egress/attachment.rs \
 				data-plane/decision-gate-rs/src/native_bootstrap_client/egress/attachment_authority.rs \
 				data-plane/decision-gate-rs/src/native_bootstrap_client/egress/attachment_backend.rs \
+				data-plane/decision-gate-rs/src/native_bootstrap_client/egress/attachment_retirement.rs \
 				data-plane/decision-gate-rs/src/native_bootstrap_client/egress/attachment_readback.rs \
 				data-plane/decision-gate-rs/src/native_bootstrap_client/egress/attachment_readback_links.rs \
 				data-plane/decision-gate-rs/src/native_bootstrap_client/egress/attachment_reservation.rs \
@@ -3848,13 +3851,17 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-bootstrap-client.v4.schema.json \
 				schemas/native-bootstrap-client.v5.schema.json \
 				schemas/native-bootstrap-client.v6.schema.json \
+				schemas/native-bootstrap-client.v7.schema.json \
 				schemas/native-bootstrap-client-capture.v1.schema.json \
 				schemas/native-bootstrap-client-capture.v2.schema.json \
 				schemas/native-bootstrap-client-capture.v3.schema.json \
 				schemas/native-bootstrap-client-capture.v4.schema.json \
 				schemas/native-bootstrap-client-capture.v5.schema.json \
 				schemas/native-bootstrap-client-capture.v6.schema.json \
+				schemas/native-bootstrap-client-capture.v7.schema.json \
 				schemas/native-execution-observation.v1.schema.json \
+				schemas/native-execution-observation.v2.schema.json \
+				schemas/native-execution-retirement-observation.v1.schema.json \
 				schemas/native-ca-installation-authorization.v1.schema.json \
 				schemas/native-egress-installation-authorization.v1.schema.json \
 				schemas/native-egress-installation-authorization.v2.schema.json \
@@ -3870,6 +3877,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-execution-manifest.v1.schema.json \
 				schemas/native-execution-manifest.v2.schema.json \
 				schemas/native-workload-start-authorization.v1.schema.json \
+				schemas/native-workload-start-authorization.v2.schema.json \
 				schemas/control-plane-publication-approval.v1.schema.json \
 				schemas/control-plane-policy-file-publication.v1.schema.json \
 				schemas/oauth-application-enrollment.v1.schema.json \

@@ -64,14 +64,19 @@ fn digest_text(raw: &[u8]) -> String { format!("sha256:{:x}", Sha256::digest(raw
 
 impl PreparedStart {
     pub(in super::super) fn open(inputs: Inputs, clock: Arc<OriginalClock>) -> Result<Self, String> {
-        Self::open_profile(inputs, clock, false)
+        Self::open_profile(inputs, clock, false, false)
     }
 
     pub(in super::super) fn open_with_trust(inputs: Inputs, clock: Arc<OriginalClock>) -> Result<Self, String> {
-        Self::open_profile(inputs, clock, true)
+        Self::open_profile(inputs, clock, true, false)
     }
 
-    fn open_profile(inputs: Inputs, clock: Arc<OriginalClock>, combined_trust: bool) -> Result<Self, String> {
+    pub(in super::super) fn open_retiring(inputs: Inputs, clock: Arc<OriginalClock>, combined_trust: bool)
+        -> Result<Self, String> {
+        Self::open_profile(inputs, clock, combined_trust, true)
+    }
+
+    fn open_profile(inputs: Inputs, clock: Arc<OriginalClock>, combined_trust: bool, retirement: bool) -> Result<Self, String> {
         clock.check()?;
         inputs.validate()?;
         ensure(unsafe { libc::getuid() } == 0 && unsafe { libc::geteuid() } == 0
@@ -85,7 +90,9 @@ impl PreparedStart {
         let root = super::super::read(inputs.authority_root, 16 * 1024, &clock, &mut originals)?;
         let original = super::super::read(inputs.authority,
             start_authority::MAX_BYTES, &clock, &mut originals)?;
-        let authorization = start_authority::admit_constraints(&original, &root, &root_pin, &clock)?;
+        let authorization = if retirement {
+            start_authority::admit_constraints_profile(&original, &root, &root_pin, &clock, true)?
+        } else { start_authority::admit_constraints(&original, &root, &root_pin, &clock)? };
         let constraints = &authorization.constraints;
         ensure(constraints.execution_manifest_sha256 == manifest_pin
             && constraints.capability.capability_token_sha256 == token_pin,
@@ -127,7 +134,7 @@ impl PreparedStart {
         Ok(prepared)
     }
 
-    /// Only v6 can reach this consuming, separately authorized host effect.
+    /// Only explicitly combined v6/v7 can reach this separately authorized effect.
     /// Join actual image trust and all start/parent authorities BEFORE its claim.
     pub(in super::super) fn install_ca(&mut self, pending: PreparedInstallation)
         -> Result<serde_json::Value, String>

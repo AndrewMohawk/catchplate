@@ -40,6 +40,13 @@ _ATTACHMENT_FIELDS = frozenset({"apiVersion", "resultScope", "okForAction", "sta
     "authorizationSha256", "planSha256", "evidenceSha256", "semanticSha256"})
 _EXECUTION_FIELDS = frozenset({"schema", "resultScope", "execution", "output", "cleanup",
     "workloadSucceeded", "actionAuthorization", "okForAction"})
+_EXECUTION_V2_FIELDS = _EXECUTION_FIELDS | {"retirement"}
+_RETIREMENT_FIELDS = frozenset({"schema", "resultScope", "operationSha256",
+    "cleanupBeforeBoottimeNs", "hostVethAbsence", "cgroupRemoval", "actionAuthorization", "okForAction"})
+_HOST_ABSENCE_FIELDS = frozenset({"namespaceDevice", "namespaceInode", "ifindex",
+    "name", "bridgeIfindex", "observedBoottimeNs", "evidenceSha256"})
+_CGROUP_REMOVAL_FIELDS = frozenset({"parentDevice", "parentInode", "device",
+    "inode", "name", "observedBoottimeNs"})
 _EXIT_FIELDS = frozenset({"operationSha256", "execObservedBoottimeNs", "exitObservedBoottimeNs",
     "code", "status", "firewallSemanticSha256", "firewallEvidenceSha256",
     "attachmentSemanticSha256", "attachmentEvidenceSha256"})
@@ -160,11 +167,52 @@ def _attachment_data(value, budget):
     budget.check()
 
 
-def _execution_data(value, budget):
+def _retirement_data(value, execution, cleanup, budget):
+    """Check reported identities and clock consistency, never live absence."""
+    budget.check()
+    value = _object(value, _RETIREMENT_FIELDS)
+    if (value["schema"] != "serverware.nativeExecutionRetirementObservation/v1"
+            or value["resultScope"] != "local-owned-network-and-cgroup-retirement-observation"
+            or value["okForAction"] is not False or value["actionAuthorization"] is not None
+            or value["operationSha256"] != execution["operationSha256"]):
+        _fail()
+    host = _object(value["hostVethAbsence"], _HOST_ABSENCE_FIELDS)
+    cgroup = _object(value["cgroupRemoval"], _CGROUP_REMOVAL_FIELDS)
+    for digest in (value["operationSha256"], host["evidenceSha256"]):
+        if (type(digest) is not str or _DIGEST.fullmatch(digest) is None
+                or digest == "sha256:" + "0" * 64):
+            _fail()
+    for original, names in ((value, ("cleanupBeforeBoottimeNs",)),
+            (host, ("namespaceDevice", "namespaceInode", "observedBoottimeNs")),
+            (cgroup, ("parentDevice", "parentInode", "device", "inode", "observedBoottimeNs"))):
+        for name in names:
+            if type(original[name]) is not int or not 1 <= original[name] <= (1 << 64) - 1:
+                _fail()
+    for name in ("ifindex", "bridgeIfindex"):
+        if type(host[name]) is not int or not 1 <= host[name] <= (1 << 31) - 1:
+            _fail()
+    for name, pattern in ((host["name"], r"[A-Za-z0-9][A-Za-z0-9_.-]{0,14}\Z"),
+            (cgroup["name"], r"[A-Za-z0-9][A-Za-z0-9._-]{0,79}\Z")):
+        if type(name) is not str or re.fullmatch(pattern, name) is None:
+            _fail()
+    earliest = max(execution["exitObservedBoottimeNs"],
+        cleanup["leafEmptyBoottimeNs"], cleanup["guardianEmptyBoottimeNs"])
+    if (host["ifindex"] == host["bridgeIfindex"]
+            or (cgroup["parentDevice"], cgroup["parentInode"]) == (cgroup["device"], cgroup["inode"])
+            or execution["execObservedBoottimeNs"] > execution["exitObservedBoottimeNs"]
+            or not earliest <= host["observedBoottimeNs"] < value["cleanupBeforeBoottimeNs"]
+            or not earliest <= cgroup["observedBoottimeNs"] < value["cleanupBeforeBoottimeNs"]):
+        _fail()
+    budget.check()
+
+
+def _execution_data(value, budget, *, retirement=False):
     """Check reported terminal data only; never verify execution or cleanup."""
     budget.check()
-    value = _object(value, _EXECUTION_FIELDS)
-    if (value["schema"] != "serverware.nativeExecutionObservation/v1"
+    value = _object(value, _EXECUTION_V2_FIELDS if retirement else _EXECUTION_FIELDS)
+    expected_schema = ("serverware.nativeExecutionObservation/v2" if retirement
+        else "serverware.nativeExecutionObservation/v1")
+    if (value["schema"] != expected_schema
             or value["resultScope"] != "local-single-attempt-execution-and-cleanup-observation"
             or value["okForAction"] is not False or value["actionAuthorization"] is not None
             or type(value["workloadSucceeded"]) is not bool):
@@ -195,9 +243,11 @@ def _execution_data(value, budget):
     for name in ("stdoutBytes", "stderrBytes"):
         if type(output[name]) is not int or not 0 <= output[name] <= 64 * 1024 * 1024:
             _fail()
+    if retirement:
+        _retirement_data(value["retirement"], execution, cleanup, budget)
     raw = json.dumps(value, sort_keys=True, separators=(",", ":"),
         ensure_ascii=False, allow_nan=False).encode("utf-8")
-    if not 1 <= len(raw) <= 16 * 1024:
+    if not 1 <= len(raw) <= (24 * 1024 if retirement else 16 * 1024):
         _fail()
     packets._charge(budget, input_bytes=len(raw))
     budget.check()
@@ -244,6 +294,12 @@ def _packet_on_budget(capture_bytes, target_request_bytes, budget):
         expected_scope = "local-fixed-endpoint-bootstrap-ca-and-execution-observation"
         _execution_data(value["execution"], budget)
         _installation_data(value["installation"], budget)
+    elif value.get("apiVersion") == "serverware.nativeBootstrapClientCapture/v7":
+        value = _object(value, _CAPTURE_V6_FIELDS)
+        expected_scope = "local-fixed-endpoint-bootstrap-execution-retirement-observation"
+        _execution_data(value["execution"], budget, retirement=True)
+        if value["installation"] is not None:
+            _installation_data(value["installation"], budget)
     else:
         _fail()
     if (value["resultScope"] != expected_scope or value["okForAction"] is not False

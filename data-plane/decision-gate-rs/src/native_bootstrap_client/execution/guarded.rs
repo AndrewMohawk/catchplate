@@ -3,7 +3,8 @@
 use super::{child::{BlockedChild, ChildCleanup, Execution, ExitObservation, OutputObservation},
     guardian::{Guardian, GuardianObservation}, network::{PreparedNetwork, NetworkReady},
     start::{self, PreparedStart}};
-use super::super::egress::ExecutionParents;
+use super::super::egress::{ExecutionParents, HostRetirement, HostVethAbsence};
+use super::containment::CgroupRemoval;
 use std::sync::Arc;
 
 pub(super) struct GuardedChild {
@@ -14,6 +15,7 @@ pub(super) struct GuardedChild {
 }
 
 pub(super) struct GuardedCleanup {
+    operation: [u8; 32],
     child: ChildCleanup,
     guardian: GuardianObservation,
     output: OutputObservation,
@@ -26,6 +28,24 @@ impl GuardedCleanup {
 }
 
 impl GuardedChild {
+    pub(super) fn retirement_requested(&self) -> bool { self.child.retirement_requested() }
+    pub(super) fn operation_sha256(&self) -> [u8; 32] { self.child.operation_sha256() }
+    pub(super) fn cleanup_boottime_ns(&self) -> u64 { self.child.cleanup_boottime_ns() }
+
+    pub(super) fn retire(&mut self, cleanup: &GuardedCleanup, mut host: HostRetirement)
+        -> Result<(HostVethAbsence, CgroupRemoval, HostRetirement), String> {
+        // This token is private and created only after BOTH actual reaps/empty
+        // observations plus output EOF. No caller-provided cleanup verdict.
+        if cleanup.operation != self.child.operation_sha256() || !cleanup.child.leader_reaped() {
+            return Err("native retirement cleanup belongs to another child".to_owned());
+        }
+        let released = self.child.release_network_pins()?;
+        let absent = host.observe(&released);
+        // Independent directory retirement is still attempted if host absence
+        // fails, but never after its original signed bound or without v2 scope.
+        let removed = self.child.retire_containment();
+        Ok((absent?, removed?, host))
+    }
     pub(super) fn create(prepared: PreparedStart, parents: Arc<ExecutionParents>)
         -> Result<Self, String>
     {
@@ -72,6 +92,6 @@ impl GuardedChild {
         if !child.leader_reaped() {
             return Err("native guarded cleanup lacks its actual leader reap".to_owned());
         }
-        Ok(GuardedCleanup { child, guardian, output })
+        Ok(GuardedCleanup { operation: self.child.operation_sha256(), child, guardian, output })
     }
 }

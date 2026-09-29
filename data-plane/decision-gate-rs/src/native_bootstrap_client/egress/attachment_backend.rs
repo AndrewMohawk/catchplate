@@ -2,6 +2,10 @@
 //! A private journal claim precedes every mutation attempt; errors are sticky.
 //! No namespace switching, external descriptors, raw-message API or resends.
 
+#[path = "attachment_retirement.rs"]
+mod retirement;
+pub(in super::super) use retirement::{HostRetirement, HostVethAbsence};
+
 use super::{attachment::PreattachmentGuard,
     owners::{AttachmentOwner, Owner, OwnerIdentity, Phase},
     attachment_reservation::{AttachmentBackendLock, AttachmentReservation},

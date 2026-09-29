@@ -489,6 +489,40 @@ impl BlockedChild {
         let empty = empty?;
         Ok(ChildCleanup { code, status, empty })
     }
+
+    pub(super) fn retirement_requested(&self) -> bool {
+        self.containment.owner().constraints().containment.retirement_profile.as_deref()
+            == Some("remove-empty-owned-leaf-v1")
+    }
+
+    pub(super) fn operation_sha256(&self) -> [u8; 32] { self.containment.owner().operation_sha256() }
+    pub(super) fn cleanup_boottime_ns(&self) -> u64 { self.containment.owner().cleanup_boottime_ns() }
+
+    /// Requires exclusive access: no live PreparedNetwork/NetworkReady borrow
+    /// can coexist. Guardian completion is checked by the owning composition.
+    pub(super) fn release_network_pins(&mut self) -> Result<NetworkPinsReleased, String> {
+        require(self.retirement_requested() && self.cleanup_attempted.get() && self.leader.reaped.get()
+            && self.network.is_some() && self.namespaces.len() == 5,
+            "native child pin retirement lacks its exact one-use cleanup")?;
+        self.containment.check_retirement()?;
+        for namespace in &self.namespaces { namespace.check_descriptor()?; }
+        let namespace = self.network_namespace()?;
+        self.network_originals()?.check(namespace.fd.as_fd())?;
+        let result = NetworkPinsReleased { operation: self.operation_sha256(),
+            namespace: (namespace.identity.device, namespace.identity.inode), deadline: self.cleanup_boottime_ns() };
+        // All duplicate backend/socket pins must have dropped before this
+        // exclusive method is reachable. Close sockets before namespace FDs.
+        drop(self.network.take());
+        self.namespaces.clear();
+        self.containment.check_retirement()?;
+        Ok(result)
+    }
+
+    pub(super) fn retire_containment(&self) -> Result<super::containment::CgroupRemoval, String> {
+        require(self.network.is_none() && self.namespaces.is_empty() && self.leader.reaped.get(),
+            "native child retirement still holds network namespace pins")?;
+        self.containment.retire()
+    }
 }
 
 impl Drop for BlockedChild {
@@ -539,7 +573,20 @@ impl ChildCleanup {
 /// Non-Clone sealed reference to this exact executable child. It never accepts
 /// a supplied socket, namespace, PID, successful verdict or diagnostic owner.
 pub(in super::super) struct ChildNetworkBorrow<'child> { child: &'child BlockedChild }
+/// Sealed, one-use post-cleanup data. It is never accepted from capture JSON.
+pub(in super::super) struct NetworkPinsReleased {
+    operation: [u8; 32], namespace: (u64, u64), deadline: u64,
+}
+impl NetworkPinsReleased {
+    pub(in super::super) fn require(&self, operation: [u8; 32], namespace: (u64, u64), deadline: u64)
+        -> Result<(), String> {
+        require(self.operation == operation && self.namespace == namespace && self.deadline == deadline,
+            "cleanup observation belongs to a different released child")
+    }
+}
 impl ChildNetworkBorrow<'_> {
+    pub(in super::super) fn retirement_requested(&self) -> bool { self.child.retirement_requested() }
+    pub(in super::super) fn cleanup_boottime_ns(&self) -> u64 { self.child.cleanup_boottime_ns() }
     pub(in super::super) fn check(&self) -> Result<(), String> { self.child.check() }
     pub(in super::super) fn check_running(&self) -> Result<(), String> {
         self.child.check_continuation()?;

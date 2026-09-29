@@ -24,6 +24,36 @@ one NUL byte, then the exact canonical ASCII payload. This is not the framed
 Python historical-delivery signing recipe, nor a signature over a JSON verdict.
 The whole original must also equal its canonical encoding.
 
+The paired original-only
+[`native_workload_start_authorization.py`](../serverware/native_workload_start_authorization.py)
+producer and verifier take an existing work ledger, live window and absolute
+transport deadline, independently pinned public-key original, and (for signing)
+an explicitly supplied canonical Ed25519 PKCS8 private-key original. They do not
+read files, generate keys, provision services or authorize an effect.
+The default `requested_profile=START_PROFILE` accepts only v1.
+The caller must independently choose `RETIREMENT_PROFILE` for
+[v2](../schemas/native-workload-start-authorization.v2.schema.json);
+no incoming schema or diagnostic makes that decision.
+
+V2 keeps the exact 22-field payload and three-field envelope, changing both
+schema constants and therefore the signature domain. Its containment object
+adds exactly `retirementProfile: "remove-empty-owned-leaf-v1"`.
+V1 rejects that field even if null, and v2 requires its exact nonnull value.
+The original-only APIs check exact fields and scalar types, nonzero digest
+pins, distinct grant/manifest commitments, host and isolation constraints,
+resource bounds, separate journal/parent identity, and all four signed epoch
+relationships. Only the start boundary narrows their inherited work window;
+they never turn the later stop/cleanup epochs into new signing time or a
+Python-produced runtime clock projection.
+
+The separate native owner must still admit these exact signed bytes and join
+its actual held start/creation claims and created leaf. V2 permits one exact
+empty-owned-leaf removal only within the original signed cleanup deadline,
+after leader and guardian cleanup and fresh retained parent/leaf/control
+checks. It does not authorize removing a parent, recursive deletion, deleting
+an unrelated host link, host CA removal, retries or recovery. The corresponding
+explicit v7 client selects this profile; v5/v6 start semantics remain unchanged.
+
 `admit_constraints` takes raw authorization bytes, an independently pinned root
 PEM original/digest and the existing `OriginalClock`. Root bytes are bounded to
 16 KiB. It verifies the actual root and strict signature, rejects unknown fields,

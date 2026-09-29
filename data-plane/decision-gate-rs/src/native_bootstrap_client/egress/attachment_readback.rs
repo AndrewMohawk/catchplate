@@ -366,8 +366,35 @@ fn transcript_plan(transcript: &AttachmentTranscript, plan: &AttachmentPlan) -> 
 
 pub(super) struct VerifiedAttachment {
     owner: OwnerIdentity, plan_sha256: [u8; 32], transcript_sha256: [u8; 32], original: Vec<u8>,
+    retirement_links: RetirementLinks,
+}
+/// Data derived only alongside genuine full attachment verification. No
+/// external serialized link identity can construct the cleanup comparison.
+pub(super) struct RetirementLinks { bridge: Vec<u8>, host: Vec<u8> }
+impl RetirementLinks {
+    pub(super) fn copy_for_cleanup(&self) -> Self {
+        Self { bridge: self.bridge.clone(), host: self.host.clone() }
+    }
+    pub(super) fn observe(&self, payloads: &[&[u8]], authority: &Authorization, host_index: u32)
+        -> Result<bool, String> {
+        let parsed = links::parse(payloads, authority, Side::Host)?;
+        let bridge = parsed.get(&authority.bridge.ifindex).ok_or("cleanup bridge disappeared")?;
+        require(canonical_ascii_bytes(bridge)? == self.bridge)?;
+        let by_name = parsed.values().find(|link| link.name == authority.attachment.host_veth_name);
+        match (parsed.get(&host_index), by_name) {
+            (None, None) => Ok(true),
+            (Some(index), Some(name)) if index.index == name.index => {
+                require(canonical_ascii_bytes(index)? == self.host)?;
+                Ok(false)
+            }
+            _ => Err("cleanup host veth identity was replaced or renamed".to_owned()),
+        }
+    }
 }
 impl VerifiedAttachment {
+    pub(super) fn retirement_links(&self) -> RetirementLinks {
+        RetirementLinks { bridge: self.retirement_links.bridge.clone(), host: self.retirement_links.host.clone() }
+    }
     pub(super) fn original(&self) -> &[u8] { &self.original }
     pub(super) fn transcript_sha256(&self) -> [u8; 32] { self.transcript_sha256 }
     pub(super) fn require_owner(&self, owner: &EgressGuard, plan: &AttachmentPlan) -> Result<(), String> {
@@ -425,6 +452,10 @@ pub(super) fn verify_owner(guard: &AttachmentOwner<'_, '_>, plan: &AttachmentPla
     guard.check_phase(phase)?; plan.require_source(guard.egress(), phase)?;
     transcript.require_source(guard.egress(), plan, phase)?;
     snapshot.require_source(guard.egress(), plan, transcript, phase)?;
-    Ok(VerifiedAttachment { owner: plan.owner_identity(), plan_sha256: plan.sha256(),
+    let retirement_links = RetirementLinks {
+        bridge: canonical_ascii_bytes(value.host_links.get(&authority.bridge.ifindex)
+            .ok_or("verified bridge absent")?)?, host: canonical_ascii_bytes(host)?,
+    };
+    Ok(VerifiedAttachment { owner: plan.owner_identity(), plan_sha256: plan.sha256(), retirement_links,
         transcript_sha256: Sha256::digest(transcript.original()).into(), original })
 }

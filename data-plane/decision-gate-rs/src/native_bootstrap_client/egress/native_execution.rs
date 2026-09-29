@@ -180,9 +180,9 @@ impl<'child> PreparedNetwork<'child> {
             let verified = attachment_readback::verify_owner(&owner, &plan, &snapshot, &transcript, Phase::Admission)?;
             guard.verify_firewall(Phase::Admission)?;
             journal.complete(&plan, &verified)?;
-            Ok::<_, String>((verified.original().to_vec(), transcript.sha256()))
+            Ok::<_, String>((verified.original().to_vec(), transcript.sha256(), verified.retirement_links()))
         })();
-        let (semantic, evidence_sha256) = match outcome {
+        let (semantic, evidence_sha256, retirement_links) = match outcome {
             Ok(value) => value,
             Err(error) => {
                 if !observed { if let Ok(transcript) = backend.transcript() { let _ = journal.observe(&transcript); } }
@@ -191,7 +191,8 @@ impl<'child> PreparedNetwork<'child> {
         };
         guard.check()?;
         Ok(NetworkReady { prepared: self, guard, backend, journal, plan, semantic,
-            evidence_sha256, phase: Phase::Admission, stopped: false })
+            evidence_sha256, retirement_links, retirement_prepared: Cell::new(false),
+            phase: Phase::Admission, stopped: false })
     }
 }
 
@@ -246,10 +247,19 @@ pub(in super::super) struct NetworkReady<'network, 'child> {
     plan: AttachmentPlan,
     semantic: Vec<u8>,
     evidence_sha256: [u8; 32],
+    retirement_links: attachment_readback::RetirementLinks,
+    retirement_prepared: Cell<bool>,
     phase: Phase,
     stopped: bool,
 }
 impl NetworkReady<'_, '_> {
+    pub(in super::super) fn prepare_retirement(&mut self) -> Result<super::attachment_backend::HostRetirement, String> {
+        ensure(self.phase == Phase::Admission && !self.stopped && !self.retirement_prepared.replace(true),
+            "executable cleanup host owner already prepared or not admitted")?;
+        self.guard.check()?;
+        self.journal.check()?;
+        self.backend.prepare_retirement(&self.prepared.child, &self.plan, self.retirement_links.copy_for_cleanup())
+    }
     pub(in super::super) fn require_child(&self, child: &BlockedChild) -> Result<(), String> {
         ensure(!self.stopped && self.phase == Phase::Admission, "executable network release permission stopped")?;
         self.prepared.child.require_child(child)?;

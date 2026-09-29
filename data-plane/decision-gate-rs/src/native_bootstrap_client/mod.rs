@@ -228,8 +228,11 @@ pub(super) fn run() -> Result<(), String> {
     };
     // Explicit v5/v6 selects execution before any network contact. V1-v4 cannot
     // obtain it by presenting newer signed bytes or a successful diagnostic.
+    let retirement = config.retirement;
     let (execution, egress) = if let Some(inputs) = config.execution {
-        let start = if installation.is_some() {
+        let start = if retirement {
+            execution::PreparedStart::open_retiring(inputs, Arc::clone(&clock), installation.is_some())?
+        } else if installation.is_some() {
             execution::PreparedStart::open_with_trust(inputs, Arc::clone(&clock))?
         } else { execution::PreparedStart::open(inputs, Arc::clone(&clock))? };
         let network = attachment.take().ok_or("native execution requires its actual attachment original")?;
@@ -267,9 +270,11 @@ pub(super) fn run() -> Result<(), String> {
             &config.expected_target_request_sha256, sent.delegation_original(),
             sent.setup_original(), sent.target_request_original())?;
         let mut capture = json!({
-            "apiVersion":if combined { "serverware.nativeBootstrapClientCapture/v6" }
+            "apiVersion":if retirement { "serverware.nativeBootstrapClientCapture/v7" }
+                else if combined { "serverware.nativeBootstrapClientCapture/v6" }
                 else { "serverware.nativeBootstrapClientCapture/v5" },
-            "resultScope":if combined { "local-fixed-endpoint-bootstrap-ca-and-execution-observation" }
+            "resultScope":if retirement { "local-fixed-endpoint-bootstrap-execution-retirement-observation" }
+                else if combined { "local-fixed-endpoint-bootstrap-ca-and-execution-observation" }
                 else { "local-fixed-endpoint-bootstrap-and-execution-observation" },
             "okForAction":false,
             "configurationSha256":super::sha256_prefixed(&configuration_raw),
@@ -280,9 +285,9 @@ pub(super) fn run() -> Result<(), String> {
             "verification":json::parse(proof.diagnostic(), 4095)?,
             "execution":null,
         });
-        if combined { capture["installation"] = serde_json::Value::Null; }
+        if combined || retirement { capture["installation"] = serde_json::Value::Null; }
         let provisional = serde_json::to_vec(&capture).map_err(|_| "encode execution capture reservation")?;
-        let reserved = if combined { 24 * 1024 } else { 16 * 1024 };
+        let reserved = if retirement { 32 * 1024 } else if combined { 24 * 1024 } else { 16 * 1024 };
         ensure(!provisional.is_empty() && provisional.len() < MAX_CAPTURE_BYTES - reserved,
             "native execution capture cannot reserve its bounded terminal observation")?;
         recheck(&mut held, &mut private_original, &clock)?;
@@ -296,8 +301,11 @@ pub(super) fn run() -> Result<(), String> {
             format!("native CA installation completed; execution failed without rollback or retry: {error}")
         } else { error })?;
         let succeeded = observation.workload_succeeded();
-        let observed = serde_json::to_value(observation).map_err(|_| "encode native execution observation")?;
-        ensure(serde_json::to_vec(&observed).map_err(|_| "measure native execution observation")?.len() <= 16 * 1024,
+        // Retiring observations retain actual host originals, shared flock,
+        // removed leaf FD and original claims until bounded output finishes.
+        let observed = serde_json::to_value(&observation).map_err(|_| "encode native execution observation")?;
+        ensure(serde_json::to_vec(&observed).map_err(|_| "measure native execution observation")?.len()
+            <= if retirement { 24 * 1024 } else { 16 * 1024 },
             "native execution observation exceeds its reserved bound")?;
         capture["execution"] = observed;
         let mut encoded = serde_json::to_vec(&capture).map_err(|_| "encode native execution capture")?;

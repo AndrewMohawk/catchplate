@@ -14,6 +14,8 @@ use sha2::{Digest, Sha256};
 
 pub(in super::super) const MAX_BYTES: usize = 32 * 1024;
 const SCHEMA: &str = "serverware.nativeWorkloadStartAuthorization/v1";
+const RETIREMENT_SCHEMA: &str = "serverware.nativeWorkloadStartAuthorization/v2";
+const RETIREMENT_ENVELOPE: &str = "serverware.signedNativeWorkloadStartAuthorization/v2";
 const ENVELOPE: &str = "serverware.signedNativeWorkloadStartAuthorization/v1";
 const SECOND: u64 = 1_000_000_000;
 const MAX_EPOCH_MS: u64 = 9_223_372_036_854;
@@ -65,6 +67,7 @@ pub(in super::super) struct Containment {
     pub(in super::super) parent_inode: u64,
     pub(in super::super) child_name: String,
     pub(in super::super) guardian_profile: String,
+    pub(in super::super) retirement_profile: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -177,8 +180,9 @@ fn structure(raw: &[u8], clock: &OriginalClock) -> Result<(), String> {
     clock.check()
 }
 
-fn validate(value: &Constraints, opening_wall: u64) -> Result<(), String> {
-    require(value.schema == SCHEMA
+fn validate(value: &Constraints, opening_wall: u64, retirement: bool) -> Result<(), String> {
+    let schema = if retirement { RETIREMENT_SCHEMA } else { SCHEMA };
+    require(value.schema == schema
         && value.source_revision == crate::authority_source_revision_v1::SOURCE_REVISION
         && value.purpose == "native-workload-start" && value.trust_mode == "trusted-host-local"
         && value.creation_mode == "new-execution-child-v1")?;
@@ -214,6 +218,9 @@ fn validate(value: &Constraints, opening_wall: u64) -> Result<(), String> {
         && containment.profile == "cgroup-v2-new-leaf-kill-v1"
         && containment.guardian_profile == "independent-cgroup-guardian-v1"
         && containment.parent_device != 0 && containment.parent_inode != 0)?;
+    require(if retirement {
+        containment.retirement_profile.as_deref() == Some("remove-empty-owned-leaf-v1")
+    } else { containment.retirement_profile.is_none() })?;
     let capability = &value.capability;
     identifier(&capability.capability_id, 128)?;
     digest(&capability.capability_token_sha256)?;
@@ -240,6 +247,11 @@ fn validate(value: &Constraints, opening_wall: u64) -> Result<(), String> {
 
 pub(in super::super) fn admit_constraints(raw: &[u8], root_pem: &[u8], root_pem_sha: &str,
     clock: &OriginalClock) -> Result<Authorization, String> {
+    admit_constraints_profile(raw, root_pem, root_pem_sha, clock, false)
+}
+
+pub(in super::super) fn admit_constraints_profile(raw: &[u8], root_pem: &[u8], root_pem_sha: &str,
+    clock: &OriginalClock, retirement: bool) -> Result<Authorization, String> {
     clock.check()?;
     let (opening_wall, opening_boot) = sample()?;
     structure(raw, clock)?;
@@ -247,7 +259,11 @@ pub(in super::super) fn admit_constraints(raw: &[u8], root_pem: &[u8], root_pem_
     require(canonical_ascii_bytes(&value)? == raw)?;
     let envelope: Envelope = serde_json::from_value(value)
         .map_err(|_| "native workload start envelope is not closed")?;
-    require(envelope.schema == ENVELOPE && envelope.signature.len() == 94
+    require(envelope.schema == (if retirement { RETIREMENT_ENVELOPE } else { ENVELOPE }))?;
+    let containment = envelope.payload.get("containment").and_then(serde_json::Value::as_object)
+        .ok_or("native workload containment object absent")?;
+    require(containment.contains_key("retirementProfile") == retirement)?;
+    require(envelope.signature.len() == 94
         && envelope.signature.starts_with("ed25519:"))?;
     let signature = URL_SAFE_NO_PAD.decode(&envelope.signature[8..])
         .map_err(|_| "native workload start signature is invalid")?;
@@ -258,15 +274,16 @@ pub(in super::super) fn admit_constraints(raw: &[u8], root_pem: &[u8], root_pem_
     let (root, root_key_id) = native_verifier::installation_authorizer(root_pem, root_pem_sha)?;
     clock.check()?;
     let canonical = canonical_ascii_bytes(&envelope.payload)?;
-    let mut message = Vec::with_capacity(SCHEMA.len() + 1 + canonical.len());
-    message.extend_from_slice(SCHEMA.as_bytes()); message.push(0); message.extend_from_slice(&canonical);
+    let schema = if retirement { RETIREMENT_SCHEMA } else { SCHEMA };
+    let mut message = Vec::with_capacity(schema.len() + 1 + canonical.len());
+    message.extend_from_slice(schema.as_bytes()); message.push(0); message.extend_from_slice(&canonical);
     root.verify_strict(&message, &Signature::from_slice(&signature)
         .map_err(|_| "native workload start signature width is invalid")?)
         .map_err(|_| "native workload start signature refused")?;
     clock.check()?;
     let constraints: Constraints = serde_json::from_value(envelope.payload)
         .map_err(|_| "native workload start constraints are not closed")?;
-    validate(&constraints, opening_wall)?;
+    validate(&constraints, opening_wall, retirement)?;
     let stop_boottime_ns = opening_boot.checked_add(constraints.stop_at_epoch_ns - opening_wall)
         .ok_or("native workload stop deadline overflows")?;
     let cleanup_boottime_ns = opening_boot.checked_add(constraints.cleanup_before_epoch_ns - opening_wall)

@@ -28,6 +28,7 @@ mod workload;
 pub(super) use execution_parents::{bind_for_start, prepare_for_start, ExecutionParents, ExecutionPending};
 pub(super) use creation_reservation::ExecutionCreationPermit;
 pub(super) use native_execution::{NetworkReady, PreparedNetwork};
+pub(super) use attachment_backend::{HostRetirement, HostVethAbsence};
 // Reuse actual host observation, not the CA authorization or journal.
 #[path = "../install/host.rs"]
 mod host;

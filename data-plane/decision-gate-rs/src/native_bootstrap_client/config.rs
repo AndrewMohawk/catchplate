@@ -59,6 +59,7 @@ pub(super) struct Configuration {
     pub(super) egress: Option<super::egress::Inputs>,
     pub(super) attachment: Option<super::egress::attachment::Inputs>,
     pub(super) execution: Option<super::execution::Inputs>,
+    pub(super) retirement: bool,
 }
 
 pub(super) fn artifact(value: &ArtifactV1) -> Result<(), String> {
@@ -116,7 +117,10 @@ impl Configuration {
                     && !has_installation)
                 || (wire.api_version == "serverware.nativeBootstrapClient/v6"
                     && wire.egress.is_some() && wire.attachment.is_some() && wire.execution.is_some()
-                    && wire.installation.is_some()))
+                    && wire.installation.is_some())
+                || (wire.api_version == "serverware.nativeBootstrapClient/v7"
+                    && wire.egress.is_some() && wire.attachment.is_some() && wire.execution.is_some()
+                    && has_installation))
             && (100..=30_000).contains(&wire.timeout_milliseconds),
             "bootstrap client profile or timeout differs")?;
         if let Some(inputs) = &wire.installation { inputs.validate()?; }
@@ -157,6 +161,7 @@ impl Configuration {
             egress: wire.egress,
             attachment: wire.attachment,
             execution: wire.execution,
+            retirement: wire.api_version == "serverware.nativeBootstrapClient/v7",
         })
     }
 }

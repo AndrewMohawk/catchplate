@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-execution-retirement-observation.v1.schema.json",
+  "title": "Nonactionable owned native network and cgroup retirement observation",
+  "description": "Closed eight-field historical observation emitted only by the actual retained cleanup owners. Both host veth ifindex and name must be absent from complete bounded host RTNL observations while the signed bridge remains unchanged. Cgroup removal means one successful exact descriptor-relative empty-leaf removal, parent-relative ENOENT and retained original leaf identity, not recursive deletion or a claim of memory reclamation. All observations remain under the original signed cleanup deadline. This is neither current-state evidence nor permission to retry, restart, remove a CA, delete another resource or repair history.",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema", "resultScope", "operationSha256", "cleanupBeforeBoottimeNs", "hostVethAbsence", "cgroupRemoval", "actionAuthorization", "okForAction"],
+  "properties": {
+    "schema": {"const": "serverware.nativeExecutionRetirementObservation/v1"},
+    "resultScope": {"const": "local-owned-network-and-cgroup-retirement-observation"},
+    "operationSha256": {"$ref": "#/$defs/digest"},
+    "cleanupBeforeBoottimeNs": {"$ref": "#/$defs/positiveU64"},
+    "hostVethAbsence": {
+      "type": "object", "additionalProperties": false,
+      "required": ["namespaceDevice", "namespaceInode", "ifindex", "name", "bridgeIfindex", "observedBoottimeNs", "evidenceSha256"],
+      "properties": {
+        "namespaceDevice": {"$ref": "#/$defs/positiveU64"},
+        "namespaceInode": {"$ref": "#/$defs/positiveU64"},
+        "ifindex": {"$ref": "#/$defs/ifindex"},
+        "name": {"type": "string", "minLength": 1, "maxLength": 15, "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,14}(?![\\s\\S])"},
+        "bridgeIfindex": {"$ref": "#/$defs/ifindex"},
+        "observedBoottimeNs": {"$ref": "#/$defs/positiveU64"},
+        "evidenceSha256": {"$ref": "#/$defs/digest"}
+      },
+      "description": "Actual previously installed host-side veth identity, not the retired child namespace. Its ifindex differs from the separately pinned unchanged bridge ifindex. The digest commits the actual bounded readback transcript; the shape does not authenticate a kernel response or prove absence."
+    },
+    "cgroupRemoval": {
+      "type": "object", "additionalProperties": false,
+      "required": ["parentDevice", "parentInode", "device", "inode", "name", "observedBoottimeNs"],
+      "properties": {
+        "parentDevice": {"$ref": "#/$defs/positiveU64"},
+        "parentInode": {"$ref": "#/$defs/positiveU64"},
+        "device": {"$ref": "#/$defs/positiveU64"},
+        "inode": {"$ref": "#/$defs/positiveU64"},
+        "name": {"type": "string", "minLength": 1, "maxLength": 80, "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,79}(?![\\s\\S])"},
+        "observedBoottimeNs": {"$ref": "#/$defs/positiveU64"}
+      },
+      "description": "The retained real parent and created leaf identities. The original leaf must be empty, without descendants, and successfully removed once under its held parent; parent-relative ENOENT and rechecked retained parent/leaf identities are required before reporting. The observation does not require a zero link count on a retained kernfs inode or claim that its memory has been reclaimed."
+    },
+    "actionAuthorization": {"type": "null"},
+    "okForAction": {"const": false}
+  },
+  "$defs": {
+    "positiveU64": {"type": "integer", "minimum": 1, "maximum": 18446744073709551615},
+    "ifindex": {"type": "integer", "minimum": 1, "maximum": 2147483647},
+    "digest": {"type": "string", "minLength": 71, "maxLength": 71, "pattern": "^sha256:(?!0{64}(?![\\s\\S]))[0-9a-f]{64}(?![\\s\\S])"}
+  }
+}

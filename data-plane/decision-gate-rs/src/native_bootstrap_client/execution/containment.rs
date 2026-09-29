@@ -254,11 +254,19 @@ pub(super) struct ContainmentOwner {
     admission_stopped: Cell<bool>,
     child_attempted: Cell<bool>,
     cleanup_finished: Cell<bool>,
+    retirement_attempted: Cell<bool>,
 }
 
 /// Data-only evidence that this held leaf had no live tasks before its bound.
 /// Neither a leader reap nor a successful exec/exit/kill/guardian receipt.
 pub(super) struct LeafEmpty { observed_boottime_ns: u64, kill_acknowledged: bool }
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct CgroupRemoval {
+    parent_device: u64, parent_inode: u64, device: u64, inode: u64,
+    name: String, observed_boottime_ns: u64,
+}
 impl LeafEmpty {
     pub(super) fn observed_boottime_ns(&self) -> u64 { self.observed_boottime_ns }
     pub(super) fn kill_acknowledged(&self) -> bool { self.kill_acknowledged }
@@ -327,7 +335,7 @@ impl ContainmentOwner {
         }
         let result = Self { owner, permit, leaf, domain, subtree, stat, procs, limits, events,
             cleanup_deadline, admission_stopped: Cell::new(false), child_attempted: Cell::new(false),
-            cleanup_finished: Cell::new(false) };
+            cleanup_finished: Cell::new(false), retirement_attempted: Cell::new(false) };
         result.check_unpopulated_domain()?;
         for limit in &result.limits {
             result.owner.check_admission()?;
@@ -475,6 +483,51 @@ impl ContainmentOwner {
     }
 
     pub(super) fn attempt_emergency_kill(&self) -> Result<bool, String> { self.leaf.kill_once() }
+
+    pub(super) fn check_retirement(&self) -> Result<(), String> {
+        self.owner.check_cleanup_scope()?;
+        require(self.owner.constraints().containment.retirement_profile.as_deref()
+            == Some("remove-empty-owned-leaf-v1") && self.cleanup_finished.get()
+            && self.child_attempted.get() && !self.retirement_attempted.get(),
+            "native cgroup retirement lacks its signed one-use cleanup scope")?;
+        self.permit.check_cleanup_integrity()?;
+        require(boottime()? < self.cleanup_deadline, "native cgroup retirement deadline missed")?;
+        self.check_domain(true)?;
+        require(self.procs.read(self.leaf.directory.as_fd(), &self.leaf.identity)?.is_empty(),
+            "native cgroup retirement still has processes")?;
+        self.leaf.check()?;
+        self.permit.check_cleanup_integrity()?;
+        require(boottime()? < self.cleanup_deadline, "native cgroup closing retirement deadline missed")
+    }
+
+    /// Only the exact new leaf may be removed, once, after genuine cleanup.
+    /// No recursive deletion, adoption, retry, journal reset or Drop removal.
+    pub(super) fn retire(&self) -> Result<CgroupRemoval, String> {
+        self.check_retirement()?;
+        self.retirement_attempted.set(true);
+        let removed = unsafe { libc::unlinkat(self.leaf.parent.as_raw_fd(), self.leaf.name.as_ptr(), libc::AT_REMOVEDIR) };
+        require(removed == 0, "native owned cgroup removal failed or is uncertain; no retry")?;
+        // Removal is a namespace event, not synchronous memory reclamation.
+        // Keep the original directory FD while proving the exact name absent.
+        self.owner.check_cleanup_scope()?;
+        self.permit.check_cleanup_integrity()?;
+        require(directory(self.leaf.parent.as_fd())? == self.leaf.parent_identity
+            && directory(self.leaf.directory.as_fd())? == self.leaf.identity,
+            "native cgroup held parent or leaf changed during removal")?;
+        let mut named: libc::stat = unsafe { std::mem::zeroed() };
+        let result = unsafe { libc::fstatat(self.leaf.parent.as_raw_fd(), self.leaf.name.as_ptr(),
+            &mut named, libc::AT_SYMLINK_NOFOLLOW) };
+        let error = std::io::Error::last_os_error();
+        require(result == -1 && error.raw_os_error() == Some(libc::ENOENT),
+            "native removed cgroup name is not independently absent")?;
+        let observed = boottime()?;
+        require(observed < self.cleanup_deadline, "native cgroup removed but closing deadline missed")?;
+        Ok(CgroupRemoval { parent_device: self.leaf.parent_identity.device(),
+            parent_inode: self.leaf.parent_identity.inode(), device: self.leaf.identity.device(),
+            inode: self.leaf.identity.inode(),
+            name: self.leaf.name.to_str().map_err(|_| "native cgroup retained name invalid")?.to_owned(),
+            observed_boottime_ns: observed })
+    }
 
     pub(super) fn kill_and_wait_empty(&self) -> Result<LeafEmpty, String> {
         self.admission_stopped.set(true);

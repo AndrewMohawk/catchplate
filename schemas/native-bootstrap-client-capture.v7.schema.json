@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-bootstrap-client-capture.v7.schema.json",
+  "title": "Native completed execution and owned-resource retirement capture v7",
+  "description": "Closed eleven-field local capture, one JSON line plus one LF at most 1572864 bytes. Execution observation v2 is at most 24576 compact UTF-8 bytes. Installation is required and either null or the unchanged local CA receipt of at most 8191 bytes. Only definite terminal execution/cleanup produces this data; nonzero workload exit can produce a capture while the CLI still fails. It authenticates neither installation nor execution and grants no action, restart or recovery permission. Owned network absence and cgroup removal are historical local observations, not current-state, restart or CA-removal authority. Old captures cannot be relabeled as v7.",
+  "type": "object", "additionalProperties": false,
+  "required": ["apiVersion", "resultScope", "okForAction", "configurationSha256", "requestSha256", "endpoint", "challengeSource", "evidenceBase64url", "verification", "execution", "installation"],
+  "properties": {
+    "apiVersion": {"const": "serverware.nativeBootstrapClientCapture/v7"},
+    "resultScope": {"const": "local-fixed-endpoint-bootstrap-execution-retirement-observation"},
+    "okForAction": {"const": false},
+    "configurationSha256": {"$ref": "native-bootstrap-client-capture.v2.schema.json#/properties/configurationSha256"},
+    "requestSha256": {"$ref": "native-bootstrap-client-capture.v2.schema.json#/properties/requestSha256"},
+    "endpoint": {"$ref": "native-bootstrap-client-capture.v2.schema.json#/properties/endpoint"},
+    "challengeSource": {"const": "independently-pinned"},
+    "evidenceBase64url": {"$ref": "native-bootstrap-client-capture.v2.schema.json#/properties/evidenceBase64url"},
+    "verification": {"$ref": "native-bootstrap-client-capture.v2.schema.json#/properties/verification"},
+    "execution": {"$ref": "native-execution-observation.v2.schema.json"},
+    "installation": {"oneOf": [{"type": "null"}, {"$ref": "native-ca-installation-receipt.v1.schema.json"}]}
+  }
+}

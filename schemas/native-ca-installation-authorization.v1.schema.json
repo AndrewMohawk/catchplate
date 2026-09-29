@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-ca-installation-authorization.v1.schema.json",
+  "title": "Independent native local CA installation authorization v1",
+  "description": "Canonical sorted compact ensure_ascii JSON, no newline, at most 32768 bytes. Ed25519 signs payload schema ASCII, NUL and exact canonical payload. Schema validation alone is not signature admission, genuine native verification, host ownership, a durable reservation or installation.",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema", "payload", "signature"],
+  "properties": {
+    "schema": {"const": "serverware.signedNativeCaInstallationAuthorization/v1"},
+    "payload": {"$ref": "#/$defs/payload"},
+    "signature": {"type": "string", "minLength": 94, "maxLength": 94, "pattern": "^ed25519:[A-Za-z0-9_-]{85}[AQgw](?![\\s\\S])"}
+  },
+  "$defs": {
+    "digest": {"type": "string", "minLength": 71, "maxLength": 71, "pattern": "^sha256:(?!0{64}(?![\\s\\S]))[0-9a-f]{64}(?![\\s\\S])"},
+    "identifier": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}(?![\\s\\S])"},
+    "positive": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807},
+    "path": {"type": "string", "minLength": 2, "maxLength": 4096, "pattern": "^/[!-~]+(?![\\s\\S])", "description": "Absolute nonroot ASCII path; no backslash or empty/dot/dot-dot component. Journal paths additionally have at most 64 components, each at most 255 bytes. Runtime checks enforce these structural conditions."},
+    "caInstall": {
+      "type": "object", "additionalProperties": false,
+      "required": ["profile", "capabilityId", "capabilityTokenSha256", "expiresAtEpochMs", "destinationPath", "ownerUid", "ownerGid", "fileMode", "replaceExisting", "expectedExistingCertificateSha256"],
+      "properties": {
+        "profile": {"const": "native-ca-install-association-v1"},
+        "capabilityId": {"type": "string", "minLength": 24, "maxLength": 128, "pattern": "^[A-Za-z0-9_-]{24,128}(?![\\s\\S])"},
+        "capabilityTokenSha256": {"$ref": "#/$defs/digest"},
+        "expiresAtEpochMs": {"type": "integer", "minimum": 1, "maximum": 9223372036854},
+        "destinationPath": {"$ref": "#/$defs/path"},
+        "ownerUid": {"type": "integer", "minimum": 0, "maximum": 4294967294},
+        "ownerGid": {"type": "integer", "minimum": 0, "maximum": 4294967294},
+        "fileMode": {"const": 420}, "replaceExisting": {"type": "boolean"},
+        "expectedExistingCertificateSha256": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/digest"}]}
+      },
+      "allOf": [{"if": {"properties": {"replaceExisting": {"const": true}}}, "then": {"properties": {"expectedExistingCertificateSha256": {"$ref": "#/$defs/digest"}}}, "else": {"properties": {"expectedExistingCertificateSha256": {"type": "null"}}}}],
+      "description": "Exactly the existing ten-field signed setup association. Actual protected token and destination ownership/replacement admission remain mandatory in the installer."
+    },
+    "networkOwner": {
+      "type": "object", "additionalProperties": false,
+      "required": ["hostId", "bootId", "namespaceDevice", "namespaceInode", "ownerUid"],
+      "properties": {
+        "hostId": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9._:-]{1,128}(?![\\s\\S])"},
+        "bootId": {"type": "string", "minLength": 36, "maxLength": 36, "pattern": "^(?!00000000-0000-0000-0000-000000000000(?![\\s\\S]))[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?![\\s\\S])"},
+        "namespaceDevice": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615},
+        "namespaceInode": {"type": "integer", "minimum": 1, "maximum": 18446744073709551615},
+        "ownerUid": {"const": 0}
+      },
+      "description": "Signed expected launcher scope only. The actual owner must observe and retain this host, boot and network namespace under the original guard."
+    },
+    "journal": {
+      "type": "object", "additionalProperties": false,
+      "required": ["path", "device", "inode", "namespace"],
+      "properties": {"path": {"$ref": "#/$defs/path"}, "device": {"$ref": "#/$defs/positive"}, "inode": {"$ref": "#/$defs/positive"}, "namespace": {"$ref": "#/$defs/identifier"}},
+      "description": "Independent preprovisioned root:root0700 local journal identity. Its namespace plus exact capability ID selects the stable slot; operation digest changes do not select a fresh slot."
+    },
+    "payload": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "sourceRevision", "purpose", "trustMode", "authorizationId", "setupSha256", "delegationSha256", "targetRequestSha256", "runtimeCaCertificateSha256", "runtimeCaSpkiSha256", "caInstall", "networkOwner", "machineIdSha256", "journal", "issuedAtEpochNs", "expiresAtEpochNs"],
+      "properties": {
+        "schema": {"const": "serverware.nativeCaInstallationAuthorization/v1"},
+        "sourceRevision": {"type": "string", "description": "Must equal the shared current authority source revision; no rolling literal is embedded here."},
+        "purpose": {"const": "native-ca-installation"}, "trustMode": {"const": "trusted-host-local"},
+        "authorizationId": {"$ref": "#/$defs/identifier"},
+        "setupSha256": {"$ref": "#/$defs/digest"}, "delegationSha256": {"$ref": "#/$defs/digest"},
+        "targetRequestSha256": {"$ref": "#/$defs/digest"},
+        "runtimeCaCertificateSha256": {"$ref": "#/$defs/digest"}, "runtimeCaSpkiSha256": {"$ref": "#/$defs/digest"},
+        "caInstall": {"$ref": "#/$defs/caInstall"}, "networkOwner": {"$ref": "#/$defs/networkOwner"},
+        "machineIdSha256": {"$ref": "#/$defs/digest"}, "journal": {"$ref": "#/$defs/journal"},
+        "issuedAtEpochNs": {"$ref": "#/$defs/positive"}, "expiresAtEpochNs": {"$ref": "#/$defs/positive"}
+      },
+      "description": "Positive currently live interval, at most 300 seconds; expiry must not exceed caInstall expiry converted exactly to nanoseconds. Actual installer additionally contains the entire grant interval in the genuinely verified setup/session/CA scope. Native runtime CA certificate commitment is DER, not the target workload issuer or a PEM file digest."
+    }
+  }
+}

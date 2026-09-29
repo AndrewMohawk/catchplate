@@ -31,6 +31,7 @@ struct Wire {
     expected_target_principal: String,
     expected_target_nonce: String,
     expected_target_request_sha256: String,
+    installation: Option<super::install::Inputs>,
 }
 
 pub(super) struct Configuration {
@@ -51,9 +52,10 @@ pub(super) struct Configuration {
     pub(super) expected_target_principal: String,
     pub(super) expected_target_nonce: String,
     pub(super) expected_target_request_sha256: String,
+    pub(super) installation: Option<super::install::Inputs>,
 }
 
-fn artifact(value: &ArtifactV1) -> Result<(), String> {
+pub(super) fn artifact(value: &ArtifactV1) -> Result<(), String> {
     let bytes = value.path.as_os_str().as_bytes();
     ensure(!bytes.is_empty() && bytes.len() <= 4096 && !bytes.contains(&0)
         && value.path.is_absolute() && value.path.file_name().is_some()
@@ -88,11 +90,15 @@ fn endpoint(value: &str) -> Result<SocketAddr, String> {
 
 impl Configuration {
     pub(super) fn parse_original(raw: &[u8]) -> Result<Self, String> {
-        let wire: Wire = serde_json::from_value(json::parse(raw, MAX_CONFIGURATION_BYTES)?)
+        let original = json::parse(raw, MAX_CONFIGURATION_BYTES)?;
+        let has_installation = original.get("installation").is_some();
+        let wire: Wire = serde_json::from_value(original)
             .map_err(|_| "bootstrap client configuration violates its closed contract")?;
-        ensure(wire.api_version == "serverware.nativeBootstrapClient/v1"
+        ensure(((wire.api_version == "serverware.nativeBootstrapClient/v1" && !has_installation)
+                || (wire.api_version == "serverware.nativeBootstrapClient/v2" && wire.installation.is_some()))
             && (100..=30_000).contains(&wire.timeout_milliseconds),
             "bootstrap client profile or timeout differs")?;
+        if let Some(inputs) = &wire.installation { inputs.validate()?; }
         for value in [&wire.startup_evidence, &wire.startup_expectations, &wire.session_scope,
             &wire.trust_roots, &wire.client_certificate, &wire.client_private_key,
             &wire.caller_issuer, &wire.delegation_authorizer, &wire.setup_authorizer, &wire.request]
@@ -123,6 +129,7 @@ impl Configuration {
             expected_target_principal: wire.expected_target_principal,
             expected_target_nonce: wire.expected_target_nonce,
             expected_target_request_sha256: wire.expected_target_request_sha256,
+            installation: wire.installation,
         })
     }
 }

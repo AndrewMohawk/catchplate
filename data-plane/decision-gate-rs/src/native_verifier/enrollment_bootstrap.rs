@@ -99,6 +99,40 @@ struct Evidence {
     public_key: [u8; 32],
 }
 
+/// Same-call original owners for the fixed installation continuation. Neither
+/// deserialization nor a caller-supplied successful diagnostic constructs this.
+/// The separate host authorization, protected reservation and observed host
+/// owner remain mandatory; these originals alone are not installation permission.
+pub(crate) struct InstallationOriginals {
+    diagnostic: Vec<u8>,
+    setup: bootstrap_setup::VerifiedNativeEnrollmentBootstrapSetupV1,
+    target: request::VerifiedWorkloadBootstrapRequestV1,
+    session: ingress_session::VerifiedEnrollmentSession,
+    evidence_sha256: [u8; 32],
+    packet_sha256: [u8; 32],
+    valid_until: u64,
+}
+
+impl InstallationOriginals {
+    pub(crate) fn into_diagnostic(self) -> Vec<u8> { self.diagnostic }
+    pub(crate) fn diagnostic(&self) -> &[u8] { &self.diagnostic }
+    pub(crate) fn setup(&self) -> &bootstrap_setup::SetupPayload { self.setup.payload() }
+    pub(crate) fn setup_sha256(&self) -> [u8; 32] { self.setup.original_sha256() }
+    pub(crate) fn delegation_sha256(&self) -> [u8; 32] { self.setup.delegation().original_sha256() }
+    pub(crate) fn delegation_authorizer(&self) -> [u8; 32] {
+        self.setup.delegation().payload().authorizer_key_id
+    }
+    pub(crate) fn evidence_sha256(&self) -> [u8; 32] { self.evidence_sha256 }
+    pub(crate) fn packet_sha256(&self) -> [u8; 32] { self.packet_sha256 }
+    pub(crate) fn check(&mut self, deadline: u64) -> Result<(), String> {
+        self.setup.check(deadline)?;
+        self.target.check(deadline)?;
+        ensure(self.session.check(deadline)? < self.valid_until,
+            "native installation original quote or session expired")?;
+        target_scope(&self.setup, &self.target)
+    }
+}
+
 fn evidence(raw: &[u8], processing: &mut Processing) -> Result<Evidence, String> {
     processing.check(processing.deadline)?;
     ensure(raw.len() > 1 && raw.len() <= MAX_EVIDENCE_BYTES && raw.last() == Some(&b'\n'),
@@ -217,6 +251,18 @@ pub(super) fn verify_on_processing(raw: &[u8], delegation_pem: &[u8], delegation
     expected_caller: &str, expected_target: &str, expected_nonce: &str, expected_request_sha: &str,
     endpoint: SocketAddr, sent_originals: Option<(&[u8], &[u8], &[u8])>,
     processing: &mut Processing) -> Result<Vec<u8>, String> {
+    Ok(admit_on_processing(raw, delegation_pem, delegation_pem_sha, setup_pem, setup_pem_sha,
+        scope_raw, roots_raw, challenge, client, caller_issuer_der, caller_client_pem,
+        expected_caller, expected_target, expected_nonce, expected_request_sha, endpoint,
+        sent_originals, processing)?.into_diagnostic())
+}
+
+pub(super) fn admit_on_processing(raw: &[u8], delegation_pem: &[u8], delegation_pem_sha: &str,
+    setup_pem: &[u8], setup_pem_sha: &str, scope_raw: &[u8], roots_raw: &[u8], challenge: [u8; 32],
+    client: &ClientConnection, caller_issuer_der: &[u8], caller_client_pem: &[u8],
+    expected_caller: &str, expected_target: &str, expected_nonce: &str, expected_request_sha: &str,
+    endpoint: SocketAddr, sent_originals: Option<(&[u8], &[u8], &[u8])>,
+    processing: &mut Processing) -> Result<InstallationOriginals, String> {
     processing.check(processing.deadline)?;
     let mut total = 0usize;
     for (size, maximum) in [(raw.len(), MAX_EVIDENCE_BYTES), (delegation_pem.len(), 16 * 1024),
@@ -335,5 +381,7 @@ pub(super) fn verify_on_processing(raw: &[u8], delegation_pem: &[u8], delegation
     setup.check(processing.deadline)?;
     target.check(processing.deadline)?;
     processing.check(setup.deadline().min(target.deadline()))?;
-    Ok(bytes)
+    Ok(InstallationOriginals { diagnostic: bytes, valid_until: quote.valid_until_unix_seconds
+        .min(fresh_until).min(session.valid_until_unix_seconds).min(setup.payload().expires_at_unix_seconds),
+        setup, target, session, evidence_sha256: digest(raw), packet_sha256: packet_sha })
 }

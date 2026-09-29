@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-bootstrap-client.v2.schema.json",
+  "title": "Serverware fixed native bootstrap client with authorized local CA installation v2",
+  "description": "Closed independently pinned configuration, at most 16384 bytes: the 18 original v1 fields plus the required three-artifact installation object. Runtime requires an explicit root launcher and protected configuration/token originals, independent host-installation grant, actual same-connection native verification, observed host/namespace and one-use local journal before destination effects. Schema validation is not authority or installation evidence. V1 remains diagnostic-only and rejects installation even when null.",
+  "type": "object", "additionalProperties": false,
+  "required": [
+    "apiVersion", "endpoint", "timeoutMilliseconds", "startupEvidence", "startupExpectations",
+    "sessionScope", "trustRoots", "clientCertificate", "clientPrivateKey", "callerIssuer",
+    "delegationAuthorizer", "setupAuthorizer", "request", "clientChallengeBase64url",
+    "expectedCallerPrincipal", "expectedTargetPrincipal", "expectedTargetNonce", "expectedTargetRequestSha256",
+    "installation"
+  ],
+  "properties": {
+    "apiVersion": {"const": "serverware.nativeBootstrapClient/v2"},
+    "endpoint": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/endpoint"},
+    "timeoutMilliseconds": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/timeoutMilliseconds"},
+    "startupEvidence": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/startupEvidence"},
+    "startupExpectations": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/startupExpectations"},
+    "sessionScope": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/sessionScope"},
+    "trustRoots": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/trustRoots"},
+    "clientCertificate": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/clientCertificate"},
+    "clientPrivateKey": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/clientPrivateKey"},
+    "callerIssuer": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/callerIssuer"},
+    "delegationAuthorizer": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/delegationAuthorizer"},
+    "setupAuthorizer": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/setupAuthorizer"},
+    "request": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/request"},
+    "clientChallengeBase64url": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/clientChallengeBase64url"},
+    "expectedCallerPrincipal": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/expectedCallerPrincipal"},
+    "expectedTargetPrincipal": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/expectedTargetPrincipal"},
+    "expectedTargetNonce": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/expectedTargetNonce"},
+    "expectedTargetRequestSha256": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/expectedTargetRequestSha256"},
+    "installation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["authority", "authorityRoot", "capabilityToken"],
+      "properties": {
+        "authority": {"$ref": "native-bootstrap-client.v1.schema.json#/$defs/artifact", "description": "Exact independent signedNativeCaInstallationAuthorization/v1 original, at most 32768 bytes. Its full scope must join the genuine setup and same-connection native CA."},
+        "authorityRoot": {"$ref": "native-bootstrap-client.v1.schema.json#/$defs/artifact", "description": "Independently pinned canonical nonweak Ed25519 SPKI PEM, at most 16384 bytes; separate from actual setup/delegation/native CA keys. Its pin is not learned from evidence."},
+        "capabilityToken": {"$ref": "native-bootstrap-client.v1.schema.json#/$defs/artifact", "description": "Protected owner-only single-link regular-file original. Exact 32..256 ASCII URL-safe token bytes, no newline or header prefix; actual-byte hash must match the independent grant and genuine setup. Never embedded in output or journal."}
+      }
+    }
+  }
+}

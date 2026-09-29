@@ -209,12 +209,28 @@ impl Connection {
         setup_pem: &[u8], setup_pem_sha: &str, caller_issuer_der: &[u8], expected_caller: &str,
         expected_target: &str, expected_target_nonce: &str, expected_target_request_sha: &str,
         sent_delegation: &[u8], sent_setup: &[u8], sent_target_request: &[u8]) -> Result<Vec<u8>, String> {
+        Ok(self.admit_installation(evidence, delegation_pem, delegation_pem_sha, setup_pem,
+            setup_pem_sha, caller_issuer_der, expected_caller, expected_target,
+            expected_target_nonce, expected_target_request_sha, sent_delegation,
+            sent_setup, sent_target_request)?.into_diagnostic())
+    }
+
+    pub(super) fn admitted_ca_original(&self) -> Result<&[u8], String> {
+        self.check()?;
+        Ok(&self.bootstrap.ca)
+    }
+
+    pub(super) fn admit_installation(&mut self, evidence: &[u8], delegation_pem: &[u8], delegation_pem_sha: &str,
+        setup_pem: &[u8], setup_pem_sha: &str, caller_issuer_der: &[u8], expected_caller: &str,
+        expected_target: &str, expected_target_nonce: &str, expected_target_request_sha: &str,
+        sent_delegation: &[u8], sent_setup: &[u8], sent_target_request: &[u8])
+        -> Result<native_verifier::BootstrapInstallationOriginals, String> {
         self.check()?;
         require(self.authenticated_eof.get(), "native bootstrap verification requires authenticated response EOF")?;
         let result = (|| {
             let mut processing = self.processing.try_borrow_mut()
                 .map_err(|_| "native bootstrap verification guard is already borrowed")?;
-            native_verifier::verify_native_bootstrap_enrollment_originals(evidence,
+            native_verifier::admit_native_bootstrap_installation_originals(evidence,
                 delegation_pem, delegation_pem_sha, setup_pem, setup_pem_sha, &self.scope, &self.roots,
                 self.bootstrap.challenge, &self.tls.conn, caller_issuer_der, &self.actual_client_pem,
                 expected_caller, expected_target, expected_target_nonce, expected_target_request_sha,

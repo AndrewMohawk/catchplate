@@ -1229,6 +1229,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/workload_identity_issuance_authorization.py \
 	serverware/native_workload_identity_issuance_authorization.py \
 	serverware/native_workload_identity_originals.py \
+	serverware/native_ca_installation_authorization.py \
 	serverware/workload_identity_trust_authorization.py \
 	serverware/native_enrollment_assignment.py \
 	serverware/native_enrollment_bootstrap_delegation.py \
@@ -3491,6 +3492,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/workload_identity_issuance_authorization.py \
 				serverware/native_workload_identity_issuance_authorization.py \
 				serverware/native_workload_identity_originals.py \
+				serverware/native_ca_installation_authorization.py \
 				serverware/workload_identity_trust_authorization.py \
 				serverware/native_enrollment_assignment.py \
 				serverware/native_enrollment_bootstrap_delegation.py \
@@ -3669,6 +3671,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/Dockerfile \
 				data-plane/decision-gate-rs/Dockerfile.production \
 				data-plane/decision-gate-rs/Cargo.lock \
+				data-plane/decision-gate-rs/src/authority_source_revision_v1.rs \
 				data-plane/decision-gate-rs/src/workload_identity_trust.rs \
 				data-plane/decision-gate-rs/src/workload_identity_trust_crypto.rs \
 				data-plane/decision-gate-rs/src/native_enrollment_assignment_v1.rs \
@@ -3692,6 +3695,11 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/native_bootstrap_client/config.rs \
 				data-plane/decision-gate-rs/src/native_bootstrap_client/http.rs \
 				data-plane/decision-gate-rs/src/native_bootstrap_client/transport.rs \
+				data-plane/decision-gate-rs/src/native_bootstrap_client/install/mod.rs \
+				data-plane/decision-gate-rs/src/native_bootstrap_client/install/authority.rs \
+				data-plane/decision-gate-rs/src/native_bootstrap_client/install/host.rs \
+				data-plane/decision-gate-rs/src/native_bootstrap_client/install/reservation.rs \
+				data-plane/decision-gate-rs/src/native_bootstrap_client/install/destination.rs \
 				data-plane/decision-gate-rs/src/bin/serverware-native-bootstrap-client.rs \
 				data-plane/decision-gate-rs/coder-test-runner.sh \
 				ops/systemd/serverware-launch-authority-relay.service \
@@ -3705,7 +3713,11 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-enrollment-bootstrap-evidence.v1.schema.json \
 				schemas/native-enrollment-bootstrap-request.v1.schema.json \
 				schemas/native-bootstrap-client.v1.schema.json \
+				schemas/native-bootstrap-client.v2.schema.json \
 				schemas/native-bootstrap-client-capture.v1.schema.json \
+				schemas/native-bootstrap-client-capture.v2.schema.json \
+				schemas/native-ca-installation-authorization.v1.schema.json \
+				schemas/native-ca-installation-receipt.v1.schema.json \
 				schemas/native-enrollment-authorizer.v1.schema.json \
 				schemas/workload-identity-bootstrap-request.v1.schema.json \
 				schemas/native-enrollment-bootstrap-delegation.v1.schema.json \

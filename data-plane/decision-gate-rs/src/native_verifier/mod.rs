@@ -137,6 +137,30 @@ pub(crate) fn verify_native_bootstrap_enrollment_on_stream(raw: &[u8],
 }
 
 pub(crate) use enrollment_bootstrap::Processing as BootstrapProcessing;
+pub(crate) use enrollment_bootstrap::InstallationOriginals as BootstrapInstallationOriginals;
+
+pub(crate) fn installation_authorizer(original: &[u8], expected: &str)
+    -> Result<(ed25519_dalek::VerifyingKey, [u8; 32]), String> {
+    let (key, key_id) = assignment::authorizer(original, expected)?;
+    ensure(!key.is_weak(), "native installation root is weak")?;
+    Ok((key, key_id))
+}
+
+/// Fixed-client-only continuation retaining the genuine children. A serialized
+/// diagnostic cannot enter this API; the original TLS/configuration owner must
+/// still remain alive while a separate host authorization permits installation.
+pub(crate) fn admit_native_bootstrap_installation_originals(raw: &[u8],
+    delegation_pem: &[u8], delegation_pem_sha: &str, setup_pem: &[u8], setup_pem_sha: &str,
+    scope_raw: &[u8], roots_raw: &[u8], challenge: [u8; 32], client: &rustls::ClientConnection,
+    caller_issuer_der: &[u8], caller_client_pem: &[u8], expected_caller: &str,
+    expected_target: &str, expected_nonce: &str, expected_request_sha: &str,
+    endpoint: std::net::SocketAddr, sent_delegation: &[u8], sent_setup: &[u8], sent_request: &[u8],
+    processing: &mut BootstrapProcessing) -> Result<BootstrapInstallationOriginals, String> {
+    enrollment_bootstrap::admit_on_processing(raw, delegation_pem, delegation_pem_sha,
+        setup_pem, setup_pem_sha, scope_raw, roots_raw, challenge, client,
+        caller_issuer_der, caller_client_pem, expected_caller, expected_target, expected_nonce,
+        expected_request_sha, endpoint, Some((sent_delegation, sent_setup, sent_request)), processing)
+}
 
 /// Private fixed-client continuation over original inputs. The owning transport
 /// establishes reviewed ClientConfig and selected-certificate provenance; these

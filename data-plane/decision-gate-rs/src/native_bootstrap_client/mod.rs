@@ -3,6 +3,7 @@
 mod config;
 mod http;
 mod transport;
+mod install;
 #[path = "../native_ingress_client/identity.rs"]
 mod identity;
 #[path = "../native_startup_config/originals.rs"]
@@ -209,6 +210,10 @@ pub(super) fn run() -> Result<(), String> {
     // scope and Nitro roots. No result dictionary or arbitrary TLS config enters.
     let prepared = transport::prepare(&startup, &startup_expectations, &scope, &roots,
         config.challenge, Arc::clone(&clock))?;
+    let installation = match config.installation {
+        Some(inputs) => Some(install::prepare(inputs, &clock, &mut held)?),
+        None => None,
+    };
     let authority = if prepared.host().contains(':') {
         format!("[{}]:{}", prepared.host(), config.endpoint.port())
     } else { format!("{}:{}", prepared.host(), config.endpoint.port()) };
@@ -225,6 +230,30 @@ pub(super) fn run() -> Result<(), String> {
     connection.check()?;
     let evidence = http::post(&mut connection, &authority, config.challenge, &request_raw)?;
     connection.check()?;
+    if let Some(pending) = installation {
+        let proof = connection.admit_installation(&evidence, &delegation_root, &delegation_pin,
+            &setup_root, &setup_pin, &caller_issuer_der, &config.expected_caller_principal,
+            &config.expected_target_principal, &config.expected_target_nonce,
+            &config.expected_target_request_sha256, sent.delegation_original(),
+            sent.setup_original(), sent.target_request_original())?;
+        // This is output data only. The installation continuation retains the
+        // genuine proof and original connection; the diagnostic grants nothing.
+        let capture = json!({
+            "apiVersion":"serverware.nativeBootstrapClientCapture/v2",
+            "resultScope":"local-fixed-endpoint-bootstrap-and-host-installation",
+            "okForAction":false,
+            "configurationSha256":super::sha256_prefixed(&configuration_raw),
+            "requestSha256":super::sha256_prefixed(&request_raw),
+            "endpoint":config.endpoint.to_string(),
+            "challengeSource":"independently-pinned",
+            "evidenceBase64url":URL_SAFE_NO_PAD.encode(&evidence),
+            "verification":json::parse(proof.diagnostic(), 4095)?,
+            "installation":null,
+        });
+        recheck(&mut held, &mut private_original, &clock)?;
+        return install::execute(pending, proof, connection, clock, held, private_original,
+            &configuration_raw, capture);
+    }
     let verified = connection.verify_bootstrap(&evidence, &delegation_root, &delegation_pin,
         &setup_root, &setup_pin, &caller_issuer_der, &config.expected_caller_principal,
         &config.expected_target_principal, &config.expected_target_nonce,

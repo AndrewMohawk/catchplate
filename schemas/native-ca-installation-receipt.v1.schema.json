@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-ca-installation-receipt.v1.schema.json",
+  "title": "Local native CA installation receipt v1",
+  "description": "Closed local diagnostic with compact UTF-8 JSON representation at most 8191 bytes. Neither a signature nor independent evidence that an installation remains present. Capture extraction checks only this representation, never the authorization, token, journal, host, namespace, actual CA or destination. No private token or key is included. Preserve the producer exit status separately.",
+  "type": "object", "additionalProperties": false,
+  "required": ["apiVersion", "resultScope", "okForAction", "status", "authorizationSha256", "operationSha256", "reservationSha256", "setupSha256", "capabilityId", "runtimeCaCertificateSha256", "destinationPath"],
+  "properties": {
+    "apiVersion": {"const": "serverware.nativeCaInstallationReceipt/v1"},
+    "resultScope": {"const": "local-authorized-native-ca-installation-only"},
+    "okForAction": {"const": false},
+    "status": {"enum": ["installed", "already-complete"]},
+    "authorizationSha256": {"$ref": "#/$defs/digest"},
+    "operationSha256": {"$ref": "#/$defs/digest"},
+    "reservationSha256": {"$ref": "#/$defs/digest"},
+    "setupSha256": {"$ref": "#/$defs/digest"},
+    "capabilityId": {"type": "string", "minLength": 24, "maxLength": 128, "pattern": "^[A-Za-z0-9_-]{24,128}(?![\\s\\S])", "description": "Public capability association identifier, never the installation token or a live reservation."},
+    "runtimeCaCertificateSha256": {"$ref": "#/$defs/digest", "description": "Claimed SHA-256 of runtime CA certificate DER, not PEM. The extractor does not authenticate this claim."},
+    "destinationPath": {"type": "string", "minLength": 2, "maxLength": 4096, "pattern": "^/[!-~]+(?![\\s\\S])", "description": "Canonical absolute file-path spelling with no backslash or empty/dot/dotdot components. Runtime shape checks enforce these restrictions; no filesystem access or observed ownership follows from this string."}
+  },
+  "$defs": {
+    "digest": {"type": "string", "minLength": 71, "maxLength": 71, "pattern": "^sha256:[0-9a-f]{64}(?![\\s\\S])"}
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-bootstrap-client-capture.v2.schema.json",
+  "title": "Local native bootstrap client original capture with installation v2",
+  "description": "Public local capture, not an authenticated receipt or issuance/installation authority. The producing client emits one UTF-8 JSON line including exactly one final LF, at most 1572864 bytes. Exact bootstrap evidence is retained alongside the local installation diagnostic for later packet extraction without a second bootstrap attempt. Keep actual producer exit status separately; a valid shape cannot prove successful acquisition or installation. Explicit v2 only; v1 remains closed to the installation member.",
+  "type": "object", "additionalProperties": false,
+  "required": ["apiVersion", "resultScope", "okForAction", "configurationSha256", "requestSha256", "endpoint", "challengeSource", "evidenceBase64url", "verification", "installation"],
+  "properties": {
+    "apiVersion": {"const": "serverware.nativeBootstrapClientCapture/v2"},
+    "resultScope": {"const": "local-fixed-endpoint-bootstrap-and-host-installation"},
+    "okForAction": {"const": false},
+    "configurationSha256": {"$ref": "#/$defs/digest"},
+    "requestSha256": {"$ref": "#/$defs/digest", "description": "Digest of the exact four-field canonical bootstrap exchange including LF, not merely the embedded target CSR/PoP request."},
+    "endpoint": {"type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[!-~]+(?![\\s\\S])", "description": "Producer's fixed literal socket endpoint. An assertion in this local capture, not independently authenticated peer identity."},
+    "challengeSource": {"const": "independently-pinned"},
+    "evidenceBase64url": {
+      "type": "string", "minLength": 2, "maxLength": 1398102,
+      "pattern": "^(?:[A-Za-z0-9_-]{4})*(?:[A-Za-z0-9_-][AQgw]|[A-Za-z0-9_-]{2}[AEIMQUYcgkosw048])?(?![\\s\\S])",
+      "description": "Exact unpadded canonical base64url of at most 1048576 bytes of nativeEnrollmentBootstrapEvidence/v1. Its exact packet7 original remains unverified issuance input."
+    },
+    "verification": {"type": "object", "description": "Opaque local diagnostic with compact UTF-8 JSON representation at most 4095 bytes. No success, signature, quote, identity, policy or measurement claim grants issuance, installation or dispatch authority."},
+    "installation": {"$ref": "native-ca-installation-receipt.v1.schema.json", "description": "Closed eleven-field local receipt, bounded to 8191 compact UTF-8 bytes. The extractor ignores its claims as authority and does not verify current installation state."}
+  },
+  "$defs": {
+    "digest": {"type": "string", "minLength": 71, "maxLength": 71, "pattern": "^sha256:[0-9a-f]{64}(?![\\s\\S])"}
+  }
+}

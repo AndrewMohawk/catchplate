@@ -1,0 +1,21 @@
+# Native local installation reservation
+
+This source-only component is `native_bootstrap_client/install/reservation.rs`. It is unbuilt and unexecuted. It reserves a local installation operation; it is not the legacy web CA-install token store, a prior server reservation, or evidence of installation by itself.
+
+The parent installation owner first admits the independent host-installation authority and genuine same-connection native originals. It verifies the protected token's actual bytes against the setup and host-authority token hashes. Only the hash enters this journal. The parent supplies a signed journal path/device/inode, a stable reservation ID, and the exact public operation-association digest. The reservation ID is derived from a fixed domain, independently signed journal namespace and exact signed capability ID, not the changing operation digest. The association binds the admitted setup/host authority/runtime CA and exact target destination/host scope. Those authority checks are not replaced by constructing a `Spec`.
+
+## Retained owner and durable states
+
+`reserve(Spec, &InstallGuard)` returns a non-Clone, non-Debug `Reservation` retaining the same source-owned guard. Every filesystem phase rechecks that original guard and its nonrenewing lifetime. The journal must already exist, be root:root mode `0700`, and match its signed device/inode. Its canonical absolute path is limited to 4096 UTF-8 bytes and 64 components. Every ancestor is held without following symlinks, root-owned and not group/other writable; held identities and named links are rechecked. Nothing creates an authority directory or follows a replacement path.
+
+A nonblocking exclusive lock on the held journal directory remains owned through claim, installation and completion. The destination/recovery owner's nonblocking lock is acquired after this journal lock. This is cooperative local serialization, not protection against a hostile root or filesystem rollback.
+
+Each stable slot has at most three append-only root:root `0600` regular files, with one hard link each. Each exact 105-byte binary original contains the `SWNIRES1` framing, stage byte, reservation ID, operation digest and token hash. Filenames are lowercase 64-hex slot IDs plus `.reserve`, `.claim` or `.complete`. The closed journal allows 64 slots and 192 records; unknown entries, malformed records and missing predecessors refuse. Records are created with `O_EXCL`/`O_NOFOLLOW`, fully written, file/directory-fsynced and independently reopened for exact readback. No error path unlinks, repairs or overwrites a record.
+
+1. `reserve` publishes the exact reservation or matches an existing one. An exact reserved-but-unclaimed slot can later proceed under fresh genuine authority; no install effect was permitted yet.
+2. `claim(&mut self)` returns `Fresh` only after durable exclusive claim publication and readback. The parent may then perform its separately authorized destination operation. An existing claim without an exact completion is consumed/unknown and refuses: a lost result does not establish that installation never happened.
+3. After genuine destination readback, consuming `complete(self)` publishes and reads back the exact completion association. It does not install anything and accepts no effect callback or success receipt. A later exact completed slot produces `AlreadyComplete`; it must not install again. A changed association or token hash refuses the same slot.
+
+Malformed or partially written reservations and claims are retained and refused, not reset. The journal retains token hashes only: no token bytes, packet bodies, private keys, TLS credentials or signing material. Completion means the parent reached this local durable association after its destination check; it is not a proof of current remote state, off-host freshness, rollback resistance, enrollment completion or permission to reuse any issuance/install capability.
+
+Destination recovery, certificate selection, live host/namespace ownership and full installer lifecycle belong to their actual source-owned components. This component neither performs firewall changes nor grants canary or provider-request authority. Production and deployment evidence remain pending.

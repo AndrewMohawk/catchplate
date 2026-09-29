@@ -17,8 +17,9 @@ use serde_json::{json, Map, Value};
 use crate::{Snapshot, ProxyIngressAttestation, ProxyIngressTlsConfig};
 use crate::workload_identity_trust_crypto as crypto;
 
-pub(super) const SOURCE_REVISION: &str =
-    "serverware.policyCandidateAuthoritySource/2026-07-30.245";
+#[path = "authority_source_revision_v1.rs"]
+mod authority_source_revision_v1;
+pub(super) use authority_source_revision_v1::SOURCE_REVISION;
 const PROFILE: &str = "immutable-single-issuer-startup-v1";
 const SCHEMA: &str = "serverware.workloadIdentityTrustAuthorization/v1";
 const PREFIX: &str = "SERVERWARE_WORKLOAD_IDENTITY_TRUST_";

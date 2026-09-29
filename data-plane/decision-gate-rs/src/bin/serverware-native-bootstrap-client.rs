@@ -1,4 +1,8 @@
-//! One fixed native bootstrap evidence exchange, never an installer or proxy.
+//! Fixed native bootstrap acquisition; v2 adds separately authorized CA installation.
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[path = "../authority_source_revision_v1.rs"]
+mod authority_source_revision_v1;
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[path = "../native_bootstrap_client/mod.rs"]

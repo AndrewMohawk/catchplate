@@ -3,9 +3,12 @@
 `serverware-native-bootstrap-client` performs one fixed HTTPS POST to
 `/_serverware/native-enrollment/bootstrap`. It verifies the returned original
 bootstrap signatures, quotes and session against the same held TLS connection.
-Its public output is a local diagnostic capture with `okForAction: false`, not
+Its v1 public output is a local diagnostic capture with `okForAction: false`, not
 an enrollment, installation, issuer grant or production acceptance receipt.
-Existing native-ingress client v1/v2/v3 profiles are unchanged.
+The separate [v2 local-installation profile](native-ca-installation.md) adds an
+independent host-root grant, protected capability token and one-use local
+reservation before any destination effect. V1 rejects installation fields and
+is unchanged. Existing native-ingress client v1/v2/v3 profiles are unchanged.
 
 This is source-connected implementation, not a build, execution, deployment or
 pilot result. See the [fixed server exchange](native-enrollment-bootstrap-exchange.md)
@@ -45,6 +48,12 @@ is `serverware.nativeBootstrapClient/v1`, at most 16 KiB, with all 18 fields req
 | `expectedTargetPrincipal` | Independent exact target identity, nonempty UTF-8, at most 1024 bytes |
 | `expectedTargetNonce` | Independent target request nonce, 32–256 URL-safe characters |
 | `expectedTargetRequestSha256` | Independent SHA-256 of the exact target request original |
+
+The [v2 schema](../schemas/native-bootstrap-client.v2.schema.json) preserves
+these fields and requires a nineteenth `installation` object with exact
+`authority`, `authorityRoot` and `capabilityToken` artifact pins. It requires an
+explicit privileged local launcher and genuine same-connection verification;
+it is not enabled by adding a token to v1 or by trusting a capture diagnostic.
 
 Every artifact field is exactly `{ "path": "/absolute/original", "sha256":
 "sha256:<64-lowercase-hex>" }`. Paths and nonzero pins are independently supplied;
@@ -102,7 +111,7 @@ target selector, install capability or egress requirement has been completed.
 
 ## Output and failures
 
-Exit zero emits one public JSON line, at most 1.5 MiB:
+For v1, exit zero emits one public JSON line, at most 1.5 MiB:
 `serverware.nativeBootstrapClientCapture/v1`, scope
 `local-fixed-endpoint-bootstrap-originals-only`, `okForAction: false`,
 configuration/request hashes, fixed endpoint, `challengeSource:
@@ -129,5 +138,10 @@ nonzero exit is not successful acquisition.
 The invoker owns stdout and must prevent destructive redirection onto inputs,
 retain the exit status, and apply an external watchdog: deadline checks reject
 late results but cannot cancel already-blocked filesystem, stdout or kernel
-operations. No files are installed, trust stores changed, certificates issued,
-provider traffic dispatched or production gates closed by this client.
+operations. V1 installs no files or trust stores. V2's separately authorized
+local CA operation emits capture/v2 with the same exact evidence plus its
+bounded eleven-field installation result; the existing extractor can consume
+that evidence without a second bootstrap. See the [v2 guide](native-ca-installation.md)
+for preprovisioned resources, consumed unknown outcomes and scope. Neither
+profile issues certificates, dispatches provider traffic or closes production
+gates.

@@ -25,11 +25,16 @@ MAX_EVIDENCE_BYTES = 1024 * 1024
 _CAPTURE_FIELDS = frozenset({"apiVersion", "resultScope", "okForAction",
     "configurationSha256", "requestSha256", "endpoint", "challengeSource",
     "evidenceBase64url", "verification"})
+_CAPTURE_V2_FIELDS = _CAPTURE_FIELDS | {"installation"}
+_INSTALLATION_FIELDS = frozenset({"apiVersion", "resultScope", "okForAction", "status",
+    "authorizationSha256", "operationSha256", "reservationSha256", "setupSha256",
+    "capabilityId", "runtimeCaCertificateSha256", "destinationPath"})
 _EVIDENCE_FIELDS = frozenset({"apiVersion", "evidenceScope", "okForAction",
     "packetBase64url", "ingressSessionEvidenceBase64url", "enrollmentSignatureBase64url",
     "enrollmentPublicKeyBase64url", "enrollmentQuoteBase64url"})
 _DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _BASE64 = re.compile(r"[A-Za-z0-9_-]+\Z")
+_CAPABILITY = re.compile(r"[A-Za-z0-9_-]{24,128}\Z")
 
 
 def _fail():
@@ -56,6 +61,35 @@ def _base64_original(value, maximum, budget):
     return raw
 
 
+def _installation_data(value, budget):
+    """Check only a closed bounded representation, never installation state."""
+    budget.check()
+    value = _object(value, _INSTALLATION_FIELDS)
+    if (value["apiVersion"] != "serverware.nativeCaInstallationReceipt/v1"
+            or value["resultScope"] != "local-authorized-native-ca-installation-only"
+            or value["okForAction"] is not False
+            or value["status"] not in ("installed", "already-complete")):
+        _fail()
+    for name in ("authorizationSha256", "operationSha256", "reservationSha256",
+            "setupSha256", "runtimeCaCertificateSha256"):
+        if type(value[name]) is not str or _DIGEST.fullmatch(value[name]) is None:
+            _fail()
+    capability = value["capabilityId"]
+    if type(capability) is not str or _CAPABILITY.fullmatch(capability) is None:
+        _fail()
+    path = value["destinationPath"]
+    if (type(path) is not str or not 2 <= len(path) <= 4096 or not path.startswith("/")
+            or not path.isascii() or any(ord(char) < 33 or ord(char) > 126 for char in path)
+            or "\\" in path or any(part in ("", ".", "..") for part in path[1:].split("/"))):
+        _fail()
+    raw = json.dumps(value, sort_keys=True, separators=(",", ":"),
+        ensure_ascii=False, allow_nan=False).encode("utf-8")
+    if not 1 <= len(raw) <= 8191:
+        _fail()
+    packets._charge(budget, input_bytes=len(raw))
+    budget.check()
+
+
 def _packet_on_budget(capture_bytes, target_request_bytes, budget):
     """Return unverified data only; this function never returns a verdict."""
     budget.check()
@@ -71,10 +105,17 @@ def _packet_on_budget(capture_bytes, target_request_bytes, budget):
         + 16 * native_packet.MAX_BYTES + 16 * len(target_request_bytes) + 1024 * 1024)
     if reserve > native_packet.MAX_ORIGINAL_BYTES:
         _fail()
-    value = _object(packets._parse_packet(capture_bytes, budget), _CAPTURE_FIELDS)
-    if (value["apiVersion"] != "serverware.nativeBootstrapClientCapture/v1"
-            or value["resultScope"] != "local-fixed-endpoint-bootstrap-originals-only"
-            or value["okForAction"] is not False
+    value = packets._parse_packet(capture_bytes, budget)
+    if value.get("apiVersion") == "serverware.nativeBootstrapClientCapture/v1":
+        value = _object(value, _CAPTURE_FIELDS)
+        expected_scope = "local-fixed-endpoint-bootstrap-originals-only"
+    elif value.get("apiVersion") == "serverware.nativeBootstrapClientCapture/v2":
+        value = _object(value, _CAPTURE_V2_FIELDS)
+        expected_scope = "local-fixed-endpoint-bootstrap-and-host-installation"
+        _installation_data(value["installation"], budget)
+    else:
+        _fail()
+    if (value["resultScope"] != expected_scope or value["okForAction"] is not False
             or value["challengeSource"] != "independently-pinned"):
         _fail()
     for name in ("configurationSha256", "requestSha256"):

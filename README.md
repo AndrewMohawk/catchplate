@@ -26,14 +26,15 @@ Checkpoint: **2026-09-28 — pre-production, source-only.**
 
 ### Current work: native enrollment, workload trust and protected operations
 
-[`.249` source / b04ebda](https://github.com/example/private-deployment)
-connects [explicit native 1024-byte response/authorization profiles](docs/native-response-principal-profiles.md)
-and pinned Rust verifier v2. Signed policy preparation binds its hash before
-reservation; old profiles stay strict, with no downgrade or widening. Native
-credential leases remain open; incompatible credentialed principals refuse before
-effects. Prior preflight and protected CA installation remain source-connected.
-The [egress design](docs/native-egress-installation-design.md) is architecture only;
-provider/egress/canaries, Kubernetes, lifecycle and independent acceptance stay open.
+[`.250` source / f885504](https://github.com/example/private-deployment)
+connects [native credential leases](docs/native-credential-leases.md): producer,
+broker, quoted recipient and native authority/AAD/set, with independently pinned
+verifier v2 required even in development. Original deadlines, cache provenance and
+native parent hashes are joined; legacy profiles stay unchanged. Prior response,
+preflight and protected CA installation retain source credit. Separate signed
+egress authority and a real launcher-owned stopped-workload/claim/effect path are
+next; [egress remains design-only](docs/native-egress-installation-design.md).
+Provider/egress/canaries, Kubernetes, lifecycle and independent acceptance stay open.
 No build, test, runtime, NSM or AWS/spend acceptance is claimed.
 
 The four active checkpoints remain partial:
@@ -53,8 +54,8 @@ The four active checkpoints remain partial:
   installation with actual native CA/host-namespace admission and protected local
   reservation/token/destination ownership. Quote-bound target-principal preflight
   now retains actual source/header/token/mTLS admission on the CONNECT transport;
-  explicit native response/receipt/binding/lifecycle and signed preparation are
-  source-connected. Native credential leases, actual CONNECT/provider policy,
+  explicit native response/receipt/binding/lifecycle, signed preparation and
+  quoted native credential leases are source-connected. Actual CONNECT/provider policy,
   Kubernetes ownership, scoped proxy/egress/canaries,
   lifecycle/cross-session recovery, off-host rollback witnessing and independent
   service/exact-source verification remain open.
@@ -128,7 +129,7 @@ lists every remaining item and its evidence.
 | --- | --- | --- |
 | H05 | Historical authority across source/configuration/key changes | In progress |
 | N04 | Workload identity provisioning and authenticated channels | In progress |
-| N05 | Native enrollment, verified CA installation and proxy setup | In progress / partial; native issuance, host CA installation, principal preflight and native response/authorization source-connected; native leases, provider/egress/canaries and independent acceptance open |
+| N05 | Native enrollment, verified CA installation and proxy setup | In progress / partial; native issuance, host CA installation, principal preflight, response/authorization and credential leases source-connected; provider/egress/canaries and independent acceptance open |
 | N06 | Enclave TLS/proxy execution and credential custody | Todo |
 | O01 | OAuth ownership across deployments and applications | Todo |
 | O02 | Measured provider issuance and interrupted-exchange recovery | Todo |

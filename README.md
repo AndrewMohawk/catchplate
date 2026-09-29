@@ -24,20 +24,19 @@ Checkpoint: **2026-09-29 — pre-production, source-only.**
 
 [![Project checkpoints, one segment per task: 35 of 46 source-landed; 5 active and 6 todo. Evidence handoff 10/10; historical recovery 4/5; permissions and grants 10/10; finalization and sessions 8/8; workloads and native 3/6; providers and operations 0/7. F08 is source-landed in 170d0ac; H05, N04, N05, O04 and O05 are in progress. Production acceptance remains 0/6. Source only; unbuilt, unexecuted and unprovisioned.](docs/images/project-progress.svg)](docs/production-status.md#next-source-milestones)
 
-### Current work: protected policy-file publication
+### Current work: native application execution
 
-[`.261` source / b499aff](https://github.com/example/private-deployment)
-connects [exact signed policy originals and dedicated two-person hardware approval](docs/control-plane-policy-file-publication.md)
-to a durable one-shot claim, a separate least-privilege role holding the actual
-authority writer fence, one rename plus durability, then unlock and audit-only
-settlement. Recovery only finalizes an exact installed file or abandons an exact
-uninstalled attempt; unresolved history blocks the loader. O05 is partial, not complete.
+[`.262` source / 30947fd](https://github.com/example/private-deployment)
+connects the explicit v5 client to [same-child networking](docs/native-executable-network.md),
+one guarded exec release, observed exec acknowledgment, bounded running/output
+collection, and separate workload/guardian cleanup. The
+[execution capture](docs/native-execution-lifecycle.md) is data only, published
+after cleanup; it never grants retry or restart permission.
 
-Latest landed native source remains [`.260` / ce757ce](https://github.com/example/private-deployment):
-the private [blocked child](docs/native-executable-child.md) and
-[guardian](docs/native-execution-guardian.md), not exec release, same-child network
-transfer or public start. Prior approval/portal and H05/native credits remain.
-Source is unbuilt, unexecuted and unprovisioned; no runtime or pilot credit.
+Prior [controlled policy-file publication](docs/control-plane-policy-file-publication.md),
+approval/portal and H05/native source credit remains. Combined CA installation,
+actual provider journeys and runtime acceptance are still open. Source is unbuilt,
+unexecuted and unprovisioned; no tested-pilot credit.
 
 The five active checkpoints remain partial:
 
@@ -54,11 +53,10 @@ The five active checkpoints remain partial:
 - **N05 · Native enrollment:** acquisition/issuance, retained-key publication,
   protected host CA installation, principal preflight, response/lease authority
   and separately authorized dual-stack attachment retain source credit.
-  Client/capture v4 remains an observation before teardown. Immutable
-  filesystem/ELF admission, actual `StartOwner`, durable claims and containment
-  now join a private blocked child and guardian; old diagnostic owners remain distinct.
-  Exec release, same-child network transfer, public start, running supervision
-  and combined CA+egress remain open, alongside actual
+  Client/capture v4 remains diagnostic. Explicit v5 joins immutable filesystem/ELF,
+  actual `StartOwner`, durable claims, same-child networking, guarded execution,
+  bounded output and workload/guardian cleanup; old diagnostic owners remain distinct.
+  Combined CA+egress remains open, alongside actual
   CONNECT/provider/canary, Kubernetes, lifecycle/recovery/off-host rollback and
   independent service/exact-source acceptance.
 - **O04 · Protected operations:** [genuine approval verification](docs/control-plane-approval-verification.md)
@@ -135,7 +133,7 @@ lists every remaining item and its evidence.
 | --- | --- | --- |
 | H05 | Historical authority across source/configuration/key changes | In progress |
 | N04 | Workload identity provisioning and authenticated channels | In progress |
-| N05 | Native enrollment, verified CA installation and proxy setup | In progress / partial; native trust/leases, durable creation/guarded kernel and separately authorized dual-stack attachment observation, plus ordinary PolicyAware compatibility source-landed; start/persistent supervision, combined CA+egress, provider/canaries and independent acceptance open |
+| N05 | Native enrollment, verified CA installation and proxy setup | In progress / partial; explicit v5 same-child networking, guarded exec, bounded output and workload/guardian cleanup source-landed; combined CA+egress, provider/canaries, broader lifecycle/recovery and independent acceptance open |
 | N06 | Enclave TLS/proxy execution and credential custody | Todo |
 | O01 | OAuth ownership across deployments and applications | Todo |
 | O02 | Measured provider issuance and interrupted-exchange recovery | Todo |

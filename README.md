@@ -24,12 +24,11 @@ Checkpoint: **2026-09-29 — pre-production, source-only.**
 
 [![Project checkpoints, one segment per task: 36 of 46 source-landed; 10 active and 0 todo. Evidence handoff 10/10; historical recovery 4/5; permissions and grants 10/10; finalization and sessions 8/8; workloads and native 3/6; providers and operations 1/7. H05, N04, N05, N06 and O01 through O06 are in progress. Production acceptance remains 0/6. Source only; unbuilt, unexecuted and unprovisioned.](docs/images/project-progress.svg)](docs/production-status.md#next-source-milestones)
 
-Latest [`.282` source](https://github.com/example/private-deployment) connects
-[measured OAuth refresh and captured-outcome recovery](docs/native-oauth-measured-refresh.md).
-Provider token handling stays inside the enclave helper; encrypted response
-capture precedes replacement, and recovery never repeats the provider POST.
-This advances O02 to partial, not complete. Initial OAuth connection, guest
-startup, infrastructure and end-to-end verification remain open.
+Latest [`.283` source](https://github.com/example/private-deployment) adds the
+[confined guest inspector](docs/response-v2-guest-inspector.md) for kernel-backed
+gate process measurements across service identities. It exposes no public socket,
+arbitrary target or memory-reading API. Parent launch, router integration and
+complete guest startup remain unfinished; this is not a running pilot.
 
 The bar shows **committed source, not tested readiness or remaining effort**.
 Green means source-landed; amber means partial implementation. No current pilot

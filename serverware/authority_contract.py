@@ -10,7 +10,7 @@ from serverware import authority_complete_query
 from serverware.authority_query_read_work import _ValidationWork
 
 
-SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.288"
+SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.289"
 SCHEMA_VERSION = 9
 CONTRACT_SCHEMA = "serverware.policyAuthorityOperationContract/v3"
 BUSINESS_INTENT_SCHEMA = "serverware.policyAuthorityBusinessIntent/v2"
@@ -273,6 +273,8 @@ _AUDIT_COUNTER_REPLACEMENT_OPERATIONS = frozenset({
     "oauth.refresh.claim", "oauth.refresh.retain", "oauth.refresh.commit",
     "oauth.measured-refresh.inspect", "oauth.measured-refresh.claim", "oauth.measured-refresh.capture",
     "oauth.measured-refresh.commit", "oauth.measured-refresh.recover",
+    "oauth.measured-refresh-cleanup.inspect", "oauth.measured-refresh-cleanup.claim", "oauth.measured-refresh-cleanup.contact",
+    "oauth.measured-refresh-cleanup.finish", "oauth.measured-refresh-cleanup.recover",
     "credential.currentness.challenge", "credential.currentness.register", "credential.currentness.quiesce",
     "credential.currentness.ack", "credential.currentness.admit",
     "oauth.revocation.claim", "oauth.revocation.contact", "oauth.revocation.finish",
@@ -1461,6 +1463,7 @@ V9_ADDITIONAL_PROTECTED_TABLES = tuple(sorted({
     "credential_currentness_barriers",
     "oauth_refresh_reservations",
     "oauth_measured_refresh_custody",
+    "oauth_measured_refresh_cleanup_custody",
     "oauth_revocation_reservations",
     "oauth_revocation_attempts",
     "oauth_refresh_cleanup_reservations",
@@ -1890,6 +1893,23 @@ _OPERATIONS = {
             ("oauth.measured-refresh.commit", "serverware_policy_authority_oauth_measured_refresh_commit"),
             ("oauth.measured-refresh.recover", "serverware_policy_authority_oauth_measured_refresh_recover"),
         )
+    },
+    **{
+        operation: _spec(
+            "serverware_policy_authority_" + operation.replace(".", "_").replace("-", "_"),
+            reads=("credentials", "credential_generations", "oauth_refresh_reservations", "oauth_measured_refresh_custody",
+                "oauth_revocation_work", "oauth_refresh_cleanup_reservations", "oauth_refresh_cleanup_attempts",
+                "oauth_measured_refresh_cleanup_custody", "credential_currentness_roots", "credential_currentness_barriers",
+                "oauth_family_retirements") + _PHASE2_AGGREGATE,
+            writes=("metadata_audit_outbox",) + (() if operation in {"oauth.measured-refresh-cleanup.inspect", "oauth.measured-refresh-cleanup.recover"}
+                else ("credentials", "oauth_revocation_work", "oauth_refresh_cleanup_reservations", "oauth_refresh_cleanup_attempts",
+                    "oauth_measured_refresh_cleanup_custody", "credential_currentness_roots", "credential_currentness_barriers",
+                    "oauth_family_retirements")) + _PHASE2_AGGREGATE,
+            webauthn="not-required", proof_primitives=("primary-key-row", "bounded-limit-plus-one", "aggregate-high-water", "capacity-reservation"),
+            maximum_query_rows=128, maximum_mutations=16, maximum_work_units=4096,
+        ) for operation in (
+            "oauth.measured-refresh-cleanup.inspect", "oauth.measured-refresh-cleanup.claim", "oauth.measured-refresh-cleanup.contact",
+            "oauth.measured-refresh-cleanup.finish", "oauth.measured-refresh-cleanup.recover")
     },
     **{
         operation: _spec(

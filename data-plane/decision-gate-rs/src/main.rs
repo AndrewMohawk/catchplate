@@ -12,6 +12,7 @@ mod native_audit_owner;
 mod native_audit_transport;
 mod native_secret_broker;
 mod native_oauth_refresh;
+mod native_oauth_cleanup;
 mod native_oauth_exchange;
 mod native_oauth_browser_pages;
 mod native_gate_inputs;
@@ -2569,6 +2570,7 @@ struct GateState {
     native_serving_privileges: Option<Arc<serverware_decision_gate::native_serving_privileges::Owner>>,
     native_secret_broker: Option<Mutex<serverware_decision_gate::native_secret_broker_v1::Owner>>,
     measured_refresh: Option<Mutex<native_oauth_refresh::Owner>>,
+    measured_cleanup: Option<Mutex<native_oauth_cleanup::Owner>>,
     measured_issuance: Option<Mutex<native_oauth_exchange::Owner>>,
     native_oauth_serial: Mutex<()>,
     upstream_dispatch_authority: UpstreamDispatchAuthority,
@@ -51886,6 +51888,7 @@ fn main() -> Result<(), String> {
         prepared_secret_broker: None,
         secret_broker: None,
         measured_refresh: None,
+        measured_cleanup: None,
         measured_issuance: None,
         measured_audit: None,
         credential_currentness: None,
@@ -53228,6 +53231,7 @@ mod tests {
             native_serving_privileges: None,
             native_secret_broker: None,
             measured_refresh: None,
+            measured_cleanup: None,
             measured_issuance: None,
             native_oauth_serial: Mutex::new(()),
             upstream_dispatch_authority: UpstreamDispatchAuthority::new(),

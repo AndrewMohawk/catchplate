@@ -20,6 +20,9 @@ def maximum_rows(table):
 
 
 def tables_for(operation):
+    if operation in {"oauth.measured-refresh-cleanup.inspect", "oauth.measured-refresh-cleanup.claim", "oauth.measured-refresh-cleanup.contact",
+            "oauth.measured-refresh-cleanup.finish", "oauth.measured-refresh-cleanup.recover"}:
+        return ("credentials",)
     if operation in {"oauth.pending.activate", "oauth.pending.stage", "oauth.measured-exchange.stage"}:
         return TABLES
     if operation in {"oauth.exchange.prepare", "oauth.measured-exchange.prepare"}:

@@ -50,6 +50,7 @@ fn main() -> Result<(), String> {
         Some("--guest-inspector-v8") => { arguments.remove(0); "--native-startup-inspector-v8" },
         Some("--measured-issuance-v9") => { arguments.remove(0); "--native-measured-issuance-startup-v9" },
         Some("--guest-cohort-v10") => { arguments.remove(0); "--native-guest-cohort-startup-v10" },
+        Some("--measured-cleanup-v11") => { arguments.remove(0); "--native-measured-cleanup-startup-v11" },
         _ => "--native-encrypted-startup",
     };
     if arguments.is_empty() || arguments.len() > 9 {

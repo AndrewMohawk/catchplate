@@ -48,6 +48,7 @@ pub mod native_approver_policy_v1;
 pub mod native_lease_profile_v1;
 pub mod native_currentness_v1;
 pub mod native_oauth_refresh_v1;
+pub mod native_oauth_cleanup_v1;
 pub mod native_oauth_exchange_v1;
 pub mod native_oauth_browser_v1;
 pub mod native_audit_batch_v1;
@@ -1798,6 +1799,50 @@ impl CustodyRuntime {
         statement.validate(now()?).map_err(native_proof_error)?;
         owner.verify_live(deadline).map_err(native_proof_error)?;
         identity.verify_browser_ingress(prepared.ingress(), deadline).map_err(native_proof_error)?;
+        Ok(serde_json::json!({"statement":statement.0,"signature":format!("ed25519:{}",general_purpose::URL_SAFE_NO_PAD.encode(signature)),
+            "nativeKeyEvidence":{"apiVersion":"serverware.nativeResponseProofKeyEvidence/v1",
+                "responseProofPublicKey":general_purpose::URL_SAFE_NO_PAD.encode(fresh.public_key()),
+                "attestationDocumentB64":general_purpose::URL_SAFE_NO_PAD.encode(fresh.document())}}))
+    }
+
+    /// Dedicated cleanup command accepts only a sealed preparation returned by
+    /// this process's actual broker. No UDS/generic JSON signing branch exists.
+    pub fn sign_native_cleanup(&self, identity: &mut EnclaveRuntimeIdentityV1,
+        prepared: &native_oauth_cleanup_v1::Prepared, binary: &str, deadline: u64) -> Result<Value, ProtocolError> {
+        self.verify_native_process()?;
+        let CustodySigningBackend::Native { owner, quote, .. } = &self.signing_backend else {
+            return Err(invalid_statement("cleanup requires actual native custody"));
+        };
+        if !native_currentness_v1::digest(binary) { return Err(invalid_statement("cleanup measured binary absent")); }
+        let scope = identity.refresh_scope(deadline).map_err(native_proof_error)?;
+        let policy = scope["policyHash"].as_str().ok_or_else(|| invalid_statement("cleanup policy absent"))?;
+        let statement = prepared.statement(&self.boot_id, &self.key_id,
+            self.control_plane_response_signing_key_id.as_deref().ok_or_else(|| invalid_statement("cleanup CP key absent"))?,
+            policy, binary).map_err(native_proof_error)?;
+        let now = || SystemTime::now().duration_since(UNIX_EPOCH).map_err(|_|invalid_statement("cleanup epoch clock"))?
+            .as_nanos().try_into().map_err(|_|invalid_statement("cleanup clock overflow"));
+        statement.validate(now()?).map_err(native_proof_error)?;
+        let mut owner = owner.lock().map_err(|_|invalid_statement("cleanup key owner poisoned"))?;
+        let deadline = deadline.min(identity.deadline()).min(owner.deadline());
+        owner.verify_identity(identity, deadline).map_err(native_proof_error)?;
+        let mut expected = [0u8;32]; hex::decode_to_slice(&policy[7..], &mut expected).map_err(|_|invalid_statement("cleanup policy spelling"))?;
+        owner.verify_policy_commitment(expected, deadline).map_err(native_proof_error)?;
+        let key = owner.public_key_bytes().map_err(native_proof_error)?;
+        if quote.public_key() != key.as_slice() || sha256_prefixed(&ed25519_spki_der(&key)) != self.key_id {
+            return Err(invalid_statement("cleanup original key changed"));
+        }
+        let signature = owner.sign(&statement.preimage().map_err(native_proof_error)?, deadline).map_err(native_proof_error)?;
+        let mut hash = Sha256::new(); hash.update(native_oauth_cleanup_v1::ATTESTATION_DOMAIN);
+        hash.update(native_currentness_v1::bytes32(statement.0["challenge"].as_str().ok_or_else(||invalid_statement("cleanup nonce"))?).map_err(native_proof_error)?);
+        hash.update(Sha256::digest(statement.canonical().map_err(native_proof_error)?)); hash.update(signature);
+        let nonce: [u8;32] = hash.finalize().into();
+        let fresh = owner.quote_fresh(identity, nonce, deadline).map_err(native_proof_error)?;
+        if fresh.public_key() != key.as_slice() || fresh.user_data() != quote.user_data() || fresh.nonce() != &nonce
+            || fresh.document().is_empty() || fresh.document().len() > 12 * 1024 {
+            return Err(invalid_statement("cleanup evidence lost its retained scope"));
+        }
+        statement.validate(now()?).map_err(native_proof_error)?;
+        owner.verify_live(deadline).map_err(native_proof_error)?; identity.verify_live(deadline).map_err(native_proof_error)?;
         Ok(serde_json::json!({"statement":statement.0,"signature":format!("ed25519:{}",general_purpose::URL_SAFE_NO_PAD.encode(signature)),
             "nativeKeyEvidence":{"apiVersion":"serverware.nativeResponseProofKeyEvidence/v1",
                 "responseProofPublicKey":general_purpose::URL_SAFE_NO_PAD.encode(fresh.public_key()),

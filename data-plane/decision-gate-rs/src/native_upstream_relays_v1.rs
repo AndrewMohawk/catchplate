@@ -180,6 +180,16 @@ impl NativeUpstreamRelaysV1 {
             .map_err(|_|"fixed initial issuance TLS relay unavailable".to_owned())
     }
 
+    pub fn cleanup_stream(&self, provider: &str, deadline: u64)
+        -> Result<crate::enclave_vsock_v1::VsockStreamV1, String> {
+        let url = match provider { "google" => "https://oauth2.googleapis.com/revoke",
+            "x" => "https://api.twitter.com/2/oauth2/revoke", _ => return Err("cleanup provider is not fixed".to_owned()) };
+        let (_, endpoint, parent) = self.unique_service_origin(url)?;
+        if endpoint.port() != 443 { return Err("cleanup relay port differs".to_owned()); }
+        crate::enclave_vsock_v1::VsockStreamV1::connect_parent(parent, deadline.min(self.deadline))
+            .map_err(|_|"fixed cleanup TLS relay unavailable".to_owned())
+    }
+
     fn unique_service_origin(&self, raw_url: &str) -> Result<(String, SocketAddr, u32), String> {
         self.remaining()?;
         if raw_url.len() > 4096 {

@@ -1,0 +1,41 @@
+# Measured refresh family retirement
+
+This source path consumes only `measured-oauth-refresh-issued/v1` and `measured-oauth-refresh-superseded/v1` encrypted work. It is independently authorized family retirement, not routine refresh housekeeping. Existing exchange/ordinary cleanup grants, refresh permission, audit membership and browser enrollment do not select it. No runtime, provider contact, build or deployment acceptance is claimed by this source slice.
+
+## Authority and cold selection
+
+The explicit native startup v11 selector adds required `measuredCleanup` to the actual v10 owners. Earlier selectors reject the new field; neither HTTP input nor a returned statement selects a startup version. The retained configuration holds at most sixteen exact targets, each with an original signed `serverware.oauthMeasuredRefreshCleanupAuthorization/v1`, historical enrollment-root original, and an explicit `recovery` boolean. A recovery target cannot enter inspect/claim/contact/finish. Configuration is public ciphertext and pins; it is not permission by itself.
+
+The independently signed authority configuration v6 carries a separate `oauthMeasuredRefreshCleanupPolicy`. Its grant root is distinct from the runtime/verifier/other-purpose roots. Its native assignments bind the actual holder, boot, key, measured binary/PCR/EIF, instance, configuration, CA, encrypted application material, provider TLS roots and credential inventory. Both verifier and planner authenticate the original native signature and fresh NSM document under the dedicated cleanup statement/attestation domain. The helper independently authenticates the verifier's exact request/response and root-signed configuration originals before opening ciphertext or progressing.
+
+Each fresh family grant binds the original measured-refresh custody record and refresh history, exact work and ciphertext, affected current credential/generation, historical consumed barrier, verified provider subject/account, selected token purposes, encrypted application material and assigned helper. `externalFamilyRetirementAuthorized=true` is an independently signed scope decision, not proof inferred from a local table or token hash. The old enrollment signature authenticates history; it does not revive expired issuance permission. The grant's maximum five-minute interval is an outer ceiling. Each actual helper operation is capped at thirty seconds and the same original native lifetime, with no loop renewal.
+
+## Actual effect chain
+
+1. The measured helper prepares an inspection. The protected writer returns exact history/current-row originals. The CP coordinator checks that genuine opening and those exact rows, quiesces the current lineage, waits for every registered holder's real drained acknowledgement, and admits its barrier. An unreachable holder or deadline is not evidence of drain. Only the identical already-consumed historical current-version barrier can be reused as a fact.
+2. Inside the helper, the actual KEK opens the retained work, original and current credential, and encrypted application material. Exact associations and hashes are joined. An unchanged shared refresh token is never selected. X superseded work must contain original tokens different from current tokens; this comparison is not taken as provider-family isolation. Google selects exactly one issued refresh token, or one issued access token when no eligible refresh token exists.
+3. A protected claim atomically consumes the admitted current barrier, fences the family and credential, reserves the work and retains original native evidence. The transaction competes with refresh commit. Existing claim/contact records cannot be reused.
+4. A separate per-token contact claim commits the exact request commitment. Only its definite authenticated receipt lets the retained helper make its one fixed TLS POST. The gate relays encrypted TLS bytes to the source-fixed Google/X revocation origin; it never receives token/client plaintext or an arbitrary destination. The shared native OAuth serialization guard prevents private helper protocols interleaving while leaving the actual holder-drain worker independent.
+5. The actual complete TLS response is encrypted inside the helper under a purpose-derived response identity. A signed finish stores the encrypted original plus transport-derived HTTP observation and exact native evidence. HTTP 2xx is recorded as accepted, other complete responses as rejected. Missing/failed transport or an uncertain writer acknowledgement leaves the contact consumed and outcome unknown; there is no reconnect, second POST, implicit resend or plaintext replay.
+
+The configured helper runtime includes only the purpose-fixed cleanup material/receipt/owner modules alongside its existing measured broker dependencies. It does not import the authority planner, SQL client or control-plane service into the helper image.
+
+The shared helper admits at most one live issuance, refresh or cleanup protocol.
+While one is active, every received frame must keep that exact purpose and its
+original deadline; another OAuth purpose, credential opening or service-token
+opening cannot interleave. The authority client and verifier preserve distinct
+cleanup response signatures alongside the issuance and refresh response families.
+
+## Why family retirement
+
+[RFC 7009 section 2.1](https://www.rfc-editor.org/rfc/rfc7009.html#section-2.1) permits revocation to affect related tokens and their grant. Its success response can also cover a previously invalid token. [Google's revocation contract](https://developers.google.com/identity/protocols/oauth2/web-server#tokenrevoke) describes project-wide effects across registered clients and possible propagation delay. Therefore a changed token string, one local lineage, or a 2xx response cannot prove token-isolated retirement or global provider invalidity. The affected current local lineage stays fenced for accepted, rejected and unknown outcomes. A fresh authenticated reconnect/successor remains separately required; no currentness root is reopened.
+
+## Retention and inspection
+
+The actual `/api/data-plane/oauth-refresh-cleanup` route accepts bounded originals, never a caller outcome. It returns the dedicated verifier-signed receipt family. `oauth_measured_refresh_cleanup_custody` retains claim/contact/finish evidence; the existing protected cleanup journal and attempt tables retain their exact authorization association and encrypted transport observation. Old ordinary consumers refuse the distinct authorization family.
+
+An explicitly cold-selected recovery runs only `oauth.measured-refresh-cleanup.recover`. Its current signed assignment must include the exact original grant hash in `recoveryAuthorizationSha256s` (sorted, at most sixteen). This explicit read allowance permits a new actual holder after a restart and a new current configuration/source without relabeling the old grant or renewing its effect deadline. The original signature, historical enrollment, measured history, original credential/generation and retained claim/contact/finish associations remain exact. Recovery returns `no-local-claim`, `outcome-unknown`, or the recorded terminal observation. A missing/malformed association refuses instead of manufacturing completion. Even a proved absence supplies no execution permission. Recovery never decrypts a token for contact, changes a fence, retries a request, erases history or marks provider tokens valid.
+
+Bounds are enforced before opening/decoding: grant 64 KiB; cold configuration 1 MiB/16 targets; authority arguments 1 MiB; HTTP request 3 MiB/response 8 MiB; private helper frame 8 MiB; each form body 32 KiB; raw response body 96 KiB, headers 8 KiB and canonical raw-provider-response original 190 KiB. The encrypted transport original is separately capped at 384 KiB and its retained attempt at 512 KiB. Each contact has at most 512 TLS exchanges/512 KiB wire bytes; Google has one contact and X at most two separately claimed contacts. Every stage shares its original admission/transport deadline. No oversized input is truncated into a success.
+
+This does not close initial issuance, reconnect, cross-deployment family inventory, archival/capacity, general revocation UX, or O01/O03/O04 production acceptance. It grants no live-provider action by source installation alone.

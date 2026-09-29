@@ -192,7 +192,8 @@ def main() -> None:
     closure.add(backends[0], SITE / backends[0].name)
     for name in ("__init__.py", "native_kms_cms.py", "native_service_tokens.py", "native_secret_broker_helper.py",
                  "native_oauth_refresh.py", "native_oauth_refresh_receipts.py", "native_oauth_refresh_tls.py", "native_oauth_refresh_owner.py",
-                 "native_oauth_exchange.py", "native_oauth_exchange_receipts.py", "native_oauth_exchange_tls.py", "native_oauth_exchange_owner.py"):
+                 "native_oauth_exchange.py", "native_oauth_exchange_receipts.py", "native_oauth_exchange_tls.py", "native_oauth_exchange_owner.py",
+                 "native_oauth_cleanup.py", "native_oauth_cleanup_receipts.py", "native_oauth_cleanup_owner.py"):
         closure.add(SOURCE / "serverware" / name, SITE / "serverware" / name)
     closure.add(SOURCE / "serverware/native_secret_broker_helper.py", HELPER)
     closure.libraries()

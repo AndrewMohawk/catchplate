@@ -337,6 +337,28 @@ def admit_measured_refresh_barrier(opening, credential_row, generation_row):
     return _coordinate(owner, credential_row, generation_row, opening)
 
 
+def admit_measured_cleanup_barrier(opening, credential_row, generation_row, history):
+    from serverware.control_plane_oauth_measured_cleanup import Opening
+    from serverware import authority_oauth_measured_cleanup as cleanup
+    profile.require(type(opening) is Opening and opening.dispatched and opening.operation == cleanup.OP_INSPECT)
+    opening.check()
+    owner = _Owner(deadline=opening.deadline, expires=opening.expires)
+    profile.require(opening.custody is owner.custody and opening.binding is owner.binding)
+    grant = cleanup.grant_document(cleanup.unb64(opening.arguments["authorization_original"], cleanup.MAX_GRANT_BYTES))["payload"]
+    credential, generation, root = _rows(grant["credentialId"], grant["credentialVersion"])
+    profile.require(credential == credential_row and generation == generation_row
+        and cleanup.sha256(refresh.row_original(history)) == grant["refreshRowSha256"])
+    if root["status"] == "consumed":
+        barrier = _barrier(root)
+        profile.require(barrier is not None and barrier["status"] == "consumed"
+            and barrier["original_sha256"] == grant["historicalBarrierSha256"]
+            and barrier["consume_request_digest"] == history["claim_request_digest"]
+            and history["credential_id"] == credential["id"] and history["credential_version"] == credential["credential_version"])
+        opening.check(); owner.check()
+        return barrier["original_sha256"]
+    return _coordinate(owner, credential, generation, opening)
+
+
 def admit_cleanup_barrier(operation):
     from serverware.control_plane_oauth_refresh_cleanup import _Operation
     profile.require(type(operation) is _Operation)

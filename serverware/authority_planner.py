@@ -402,8 +402,11 @@ def reject_typed_authoritative_input(operation: str, value: Mapping[str, Any]) -
         evidence["nativeKeyEvidence"] = {name: item for name, item in evidence["nativeKeyEvidence"].items()
             if name != "attestationDocumentB64"}
         reject_authoritative_input({**value, "native_evidence": evidence})
-    elif operation.startswith("oauth.measured-refresh."):
-        from serverware import authority_oauth_measured_refresh as measured
+    elif operation.startswith("oauth.measured-refresh.") or operation.startswith("oauth.measured-refresh-cleanup."):
+        if operation.startswith("oauth.measured-refresh-cleanup."):
+            from serverware import authority_oauth_measured_cleanup as measured
+        else:
+            from serverware import authority_oauth_measured_refresh as measured
         measured.arguments(operation, value, typed=True)
         # This exact field is a bounded original COSE byte string, not an
         # attestation verdict. Both actual authority roles independently verify
@@ -4227,6 +4230,8 @@ class MeasuredPlanner:
                                 "oauth.refresh.claim", "oauth.refresh.retain", "oauth.refresh.commit",
                                 "oauth.measured-refresh.inspect", "oauth.measured-refresh.claim", "oauth.measured-refresh.capture",
                                 "oauth.measured-refresh.commit", "oauth.measured-refresh.recover",
+                                "oauth.measured-refresh-cleanup.inspect", "oauth.measured-refresh-cleanup.claim", "oauth.measured-refresh-cleanup.contact",
+                                "oauth.measured-refresh-cleanup.finish", "oauth.measured-refresh-cleanup.recover",
                                 "credential.currentness.challenge", "credential.currentness.register", "credential.currentness.quiesce", "credential.currentness.admit",
                                 "oauth.refresh-cleanup.claim", "oauth.refresh-cleanup.contact", "oauth.refresh-cleanup.finish"}:
                             authority_oauth_inventory.require_complete_populations(

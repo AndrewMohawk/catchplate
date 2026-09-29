@@ -4,7 +4,7 @@ use super::originals::ArtifactV1;
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-pub(super) enum Mode { Legacy, EnclaveV5, EncryptedV6, MeasuredRefreshV7, GuestInspectorV8, MeasuredIssuanceV9, GuestCohortV10 }
+pub(super) enum Mode { Legacy, EnclaveV5, EncryptedV6, MeasuredRefreshV7, GuestInspectorV8, MeasuredIssuanceV9, GuestCohortV10, MeasuredCleanupV11 }
 
 pub(super) fn arguments(mut arguments: impl Iterator<Item = OsString>)
     -> Result<Option<(ArtifactV1, ArtifactV1, bool, Mode)>, String>
@@ -17,6 +17,7 @@ pub(super) fn arguments(mut arguments: impl Iterator<Item = OsString>)
         else if argument == "--native-startup-inspector-v8" { Mode::GuestInspectorV8 }
         else if argument == "--native-measured-issuance-startup-v9" { Mode::MeasuredIssuanceV9 }
         else if argument == "--native-guest-cohort-startup-v10" { Mode::GuestCohortV10 }
+        else if argument == "--native-measured-cleanup-startup-v11" { Mode::MeasuredCleanupV11 }
         else { return Err("decision gate accepts no arguments or an explicit native startup mode".to_owned()); };
     let mut configuration = None;
     let mut configuration_pin = None;

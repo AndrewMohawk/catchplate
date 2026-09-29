@@ -78,6 +78,12 @@ pub(super) fn validate_native_gate_static_inputs(inputs: &GateStateInputs) -> Re
             return Err("native measured refresh requires the explicit encrypted v7 cold profile".to_owned());
         }
     }
+    if let Some(cleanup) = &inputs.measured_cleanup {
+        cleanup.validate()?;
+        if !pending_tokens || inputs.credential_currentness.is_none() || !measured {
+            return Err("native measured cleanup requires its explicit encrypted v11 cold profile".to_owned());
+        }
+    }
     if !inputs.is_production {
         return Err("native bootstrap requires production configuration".to_owned());
     }

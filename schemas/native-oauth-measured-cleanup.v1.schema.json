@@ -1,0 +1,834 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-oauth-measured-cleanup.v1.schema.json",
+  "title": "Independent measured OAuth family retirement and encrypted transport custody",
+  "$comment": "Data-only projections, not permissions. Exact canonical ASCII, independent native assignment and family grant signatures, current holder drain, original deadlines and protected claims are enforced by actual owners. Cold config <=1MiB, grant <=64KiB, arguments <=1MiB, response wrapper <=8MiB. Recovery is observation-only and cannot contact. A reported accepted response does not prove provider token invalidity or reactivate a credential.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/authorization"
+    },
+    {
+      "$ref": "#/$defs/policy"
+    },
+    {
+      "$ref": "#/$defs/configuration"
+    },
+    {
+      "$ref": "#/$defs/evidence"
+    },
+    {
+      "$ref": "#/$defs/httpRequest"
+    },
+    {
+      "$ref": "#/$defs/httpResponse"
+    },
+    {
+      "$ref": "#/$defs/transport"
+    }
+  ],
+  "$defs": {
+    "digest": {
+      "$ref": "oauth-refresh-cleanup-authority.v1.schema.json#/$defs/digest"
+    },
+    "uuid": {
+      "$ref": "oauth-refresh-cleanup-authority.v1.schema.json#/$defs/uuid"
+    },
+    "epoch": {
+      "$ref": "oauth-refresh-cleanup-authority.v1.schema.json#/$defs/epoch"
+    },
+    "encoded": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9_-]+$"
+    },
+    "bytes32": {
+      "$ref": "native-oauth-measured-refresh.v1.schema.json#/$defs/bytes32"
+    },
+    "assignment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "holderId",
+        "bootId",
+        "keyId",
+        "controlPlaneResponseSigningKeyId",
+        "releaseRecordSha256",
+        "policyHash",
+        "configurationSha256",
+        "caCertificateSha256",
+        "caPublicKeySpkiSha256",
+        "expectedBinaryDigest",
+        "expectedPcrs",
+        "expectedEif",
+        "expectedModuleId",
+        "maxAgeSeconds",
+        "futureSkewSeconds",
+        "instanceId",
+        "providerId",
+        "enrollmentSha256",
+        "applicationMaterialSha256",
+        "secretKekId",
+        "providerTlsRootSha256",
+        "credentialIds",
+        "recoveryAuthorizationSha256s"
+      ],
+      "properties": {
+        "holderId": {
+          "$ref": "native-oauth-measured-refresh.v1.schema.json#/$defs/assignment/properties/holderId"
+        },
+        "bootId": {
+          "$ref": "native-oauth-measured-refresh.v1.schema.json#/$defs/assignment/properties/bootId"
+        },
+        "keyId": {
+          "$ref": "native-oauth-measured-refresh.v1.schema.json#/$defs/assignment/properties/keyId"
+        },
+        "controlPlaneResponseSigningKeyId": {
+          "$ref": "native-oauth-measured-refresh.v1.schema.json#/$defs/assignment/properties/controlPlaneResponseSigningKeyId"
+        },
+        "releaseRecordSha256": {
+          "$ref": "native-oauth-measured-refresh.v1.schema.json#/$defs/assignment/properties/releaseRecordSha256"
+        },
+        "policyHash": {
+          "$ref": "native-oauth-measured-refresh.v1.schema.json#/$defs/assignment/properties/policyHash"
+        },
+        "configurationSha256": {
+          "$ref": "native-oauth-measured-refresh.v1.schema.json#/$defs/assignment/properties/configurationSha256"
+        },
+        "caCertificateSha256": {
+          "$ref": "native-oauth-measured-refresh.v1.schema.json#/$defs/assignment/properties/caCertificateSha256"
+        },
+        "caPublicKeySpkiSha256": {
+          "$ref": "native-oauth-measured-refresh.v1.schema.json#/$defs/assignment/properties/caPublicKeySpkiSha256"
+        },
+        "expectedBinaryDigest": {
+          "$ref": "native-oauth-measured-refresh.v1.schema.json#/$defs/assignment/properties/expectedBinaryDigest"
+        },
+        "expectedPcrs": {
+          "$ref": "native-oauth-measured-refresh.v1.schema.json#/$defs/assignment/properties/expectedPcrs"
+        },
+        "expectedEif": {
+          "$ref": "native-oauth-measured-refresh.v1.schema.json#/$defs/assignment/properties/expectedEif"
+        },
+        "expectedModuleId": {
+          "$ref": "native-oauth-measured-refresh.v1.schema.json#/$defs/assignment/properties/expectedModuleId"
+        },
+        "maxAgeSeconds": {
+          "$ref": "native-oauth-measured-refresh.v1.schema.json#/$defs/assignment/properties/maxAgeSeconds"
+        },
+        "futureSkewSeconds": {
+          "$ref": "native-oauth-measured-refresh.v1.schema.json#/$defs/assignment/properties/futureSkewSeconds"
+        },
+        "instanceId": {
+          "$ref": "native-oauth-measured-refresh.v1.schema.json#/$defs/assignment/properties/instanceId"
+        },
+        "providerId": {
+          "$ref": "native-oauth-measured-refresh.v1.schema.json#/$defs/assignment/properties/providerId"
+        },
+        "enrollmentSha256": {
+          "$ref": "native-oauth-measured-refresh.v1.schema.json#/$defs/assignment/properties/enrollmentSha256"
+        },
+        "applicationMaterialSha256": {
+          "$ref": "native-oauth-measured-refresh.v1.schema.json#/$defs/assignment/properties/applicationMaterialSha256"
+        },
+        "secretKekId": {
+          "$ref": "native-oauth-measured-refresh.v1.schema.json#/$defs/assignment/properties/secretKekId"
+        },
+        "providerTlsRootSha256": {
+          "$ref": "native-oauth-measured-refresh.v1.schema.json#/$defs/assignment/properties/providerTlsRootSha256"
+        },
+        "credentialIds": {
+          "$ref": "native-oauth-measured-refresh.v1.schema.json#/$defs/assignment/properties/credentialIds"
+        },
+        "recoveryAuthorizationSha256s": {
+          "type": "array",
+          "maxItems": 16,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/digest"
+          }
+        }
+      }
+    },
+    "application": {
+      "$ref": "native-oauth-measured-refresh.v1.schema.json#/$defs/application"
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "authorizationOriginal",
+        "historicalRootOriginal",
+        "recovery"
+      ],
+      "properties": {
+        "authorizationOriginal": {
+          "$ref": "#/$defs/encoded",
+          "maxLength": 87382
+        },
+        "historicalRootOriginal": {
+          "$ref": "#/$defs/encoded",
+          "maxLength": 5462
+        },
+        "recovery": {
+          "type": "boolean"
+        }
+      }
+    },
+    "authorizationPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "sourceRevision",
+        "purpose",
+        "authorizationId",
+        "configurationDigest",
+        "deploymentId",
+        "refreshId",
+        "refreshRowSha256",
+        "refreshVersion",
+        "workId",
+        "workSource",
+        "credentialId",
+        "credentialVersion",
+        "credentialRowSha256",
+        "generationRowSha256",
+        "historicalBarrierSha256",
+        "familyScope",
+        "workRowSha256",
+        "enrollmentSha256",
+        "historicalEnrollmentRootSpkiSha256",
+        "tokenEnvelopeSha256",
+        "tokenSecretSha256",
+        "providerId",
+        "clientId",
+        "clientMaterialSha256",
+        "providerConfiguration",
+        "tokenPurposes",
+        "issuedAtEpochNs",
+        "expiresAtEpochNs",
+        "custodyRowSha256",
+        "applicationMaterialSha256",
+        "providerTlsRootSha256",
+        "holderId"
+      ],
+      "properties": {
+        "schema": {
+          "const": "serverware.oauthMeasuredRefreshCleanupAuthorization/v1"
+        },
+        "sourceRevision": {
+          "$ref": "oauth-refresh-cleanup-authority.v1.schema.json#/$defs/authorizationPayload/properties/sourceRevision"
+        },
+        "purpose": {
+          "const": "measured-oauth-refresh-family-retirement"
+        },
+        "authorizationId": {
+          "$ref": "oauth-refresh-cleanup-authority.v1.schema.json#/$defs/authorizationPayload/properties/authorizationId"
+        },
+        "configurationDigest": {
+          "$ref": "oauth-refresh-cleanup-authority.v1.schema.json#/$defs/authorizationPayload/properties/configurationDigest"
+        },
+        "deploymentId": {
+          "$ref": "oauth-refresh-cleanup-authority.v1.schema.json#/$defs/authorizationPayload/properties/deploymentId"
+        },
+        "refreshId": {
+          "$ref": "oauth-refresh-cleanup-authority.v1.schema.json#/$defs/authorizationPayload/properties/refreshId"
+        },
+        "refreshRowSha256": {
+          "$ref": "oauth-refresh-cleanup-authority.v1.schema.json#/$defs/authorizationPayload/properties/refreshRowSha256"
+        },
+        "refreshVersion": {
+          "$ref": "oauth-refresh-cleanup-authority.v1.schema.json#/$defs/authorizationPayload/properties/refreshVersion"
+        },
+        "workId": {
+          "$ref": "oauth-refresh-cleanup-authority.v1.schema.json#/$defs/authorizationPayload/properties/workId"
+        },
+        "workSource": {
+          "enum": [
+            "measured-oauth-refresh-issued/v1",
+            "measured-oauth-refresh-superseded/v1"
+          ]
+        },
+        "credentialId": {
+          "$ref": "oauth-refresh-cleanup-authority.v1.schema.json#/$defs/authorizationPayload/properties/credentialId"
+        },
+        "credentialVersion": {
+          "$ref": "oauth-refresh-cleanup-authority.v1.schema.json#/$defs/authorizationPayload/properties/credentialVersion"
+        },
+        "credentialRowSha256": {
+          "$ref": "oauth-refresh-cleanup-authority.v1.schema.json#/$defs/authorizationPayload/properties/credentialRowSha256"
+        },
+        "generationRowSha256": {
+          "$ref": "oauth-refresh-cleanup-authority.v1.schema.json#/$defs/authorizationPayload/properties/generationRowSha256"
+        },
+        "historicalBarrierSha256": {
+          "$ref": "oauth-refresh-cleanup-authority.v1.schema.json#/$defs/authorizationPayload/properties/historicalBarrierSha256"
+        },
+        "familyScope": {
+          "$ref": "oauth-refresh-cleanup-authority.v1.schema.json#/$defs/authorizationPayload/properties/familyScope"
+        },
+        "workRowSha256": {
+          "$ref": "oauth-refresh-cleanup-authority.v1.schema.json#/$defs/authorizationPayload/properties/workRowSha256"
+        },
+        "enrollmentSha256": {
+          "$ref": "oauth-refresh-cleanup-authority.v1.schema.json#/$defs/authorizationPayload/properties/enrollmentSha256"
+        },
+        "historicalEnrollmentRootSpkiSha256": {
+          "$ref": "oauth-refresh-cleanup-authority.v1.schema.json#/$defs/authorizationPayload/properties/historicalEnrollmentRootSpkiSha256"
+        },
+        "tokenEnvelopeSha256": {
+          "$ref": "oauth-refresh-cleanup-authority.v1.schema.json#/$defs/authorizationPayload/properties/tokenEnvelopeSha256"
+        },
+        "tokenSecretSha256": {
+          "$ref": "oauth-refresh-cleanup-authority.v1.schema.json#/$defs/authorizationPayload/properties/tokenSecretSha256"
+        },
+        "providerId": {
+          "$ref": "oauth-refresh-cleanup-authority.v1.schema.json#/$defs/authorizationPayload/properties/providerId"
+        },
+        "clientId": {
+          "$ref": "oauth-refresh-cleanup-authority.v1.schema.json#/$defs/authorizationPayload/properties/clientId"
+        },
+        "clientMaterialSha256": {
+          "$ref": "oauth-refresh-cleanup-authority.v1.schema.json#/$defs/authorizationPayload/properties/clientMaterialSha256"
+        },
+        "providerConfiguration": {
+          "$ref": "oauth-refresh-cleanup-authority.v1.schema.json#/$defs/authorizationPayload/properties/providerConfiguration"
+        },
+        "tokenPurposes": {
+          "$ref": "oauth-refresh-cleanup-authority.v1.schema.json#/$defs/authorizationPayload/properties/tokenPurposes"
+        },
+        "issuedAtEpochNs": {
+          "$ref": "oauth-refresh-cleanup-authority.v1.schema.json#/$defs/authorizationPayload/properties/issuedAtEpochNs"
+        },
+        "expiresAtEpochNs": {
+          "$ref": "oauth-refresh-cleanup-authority.v1.schema.json#/$defs/authorizationPayload/properties/expiresAtEpochNs"
+        },
+        "custodyRowSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "applicationMaterialSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "providerTlsRootSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "holderId": {
+          "$ref": "#/$defs/digest"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "providerId": {
+                "const": "google"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "workSource": {
+                "const": "measured-oauth-refresh-issued/v1"
+              },
+              "tokenPurposes": {
+                "maxItems": 1
+              }
+            }
+          }
+        }
+      ]
+    },
+    "authorization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "payload",
+        "signatureBase64Url"
+      ],
+      "properties": {
+        "schema": {
+          "const": "serverware.signedOAuthMeasuredRefreshCleanupAuthorization/v1"
+        },
+        "payload": {
+          "$ref": "#/$defs/authorizationPayload"
+        },
+        "signatureBase64Url": {
+          "$ref": "#/$defs/encoded",
+          "minLength": 86,
+          "maxLength": 86
+        }
+      }
+    },
+    "policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "grantRootPublicKeyBase64Url",
+        "grantRootSpkiSha256",
+        "controlPlaneConfigurationDigest",
+        "deploymentId",
+        "trustRoots",
+        "assignments"
+      ],
+      "properties": {
+        "schema": {
+          "const": "serverware.oauthMeasuredRefreshCleanupAuthorityPolicy/v1"
+        },
+        "grantRootPublicKeyBase64Url": {
+          "$ref": "#/$defs/bytes32"
+        },
+        "grantRootSpkiSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "controlPlaneConfigurationDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "deploymentId": {
+          "$ref": "oauth-refresh-cleanup-authority.v1.schema.json#/$defs/policy/properties/deploymentId"
+        },
+        "trustRoots": {
+          "$ref": "credential-currentness-authority.v1.schema.json#/$defs/trustRoots"
+        },
+        "assignments": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "items": {
+            "$ref": "#/$defs/assignment"
+          }
+        }
+      }
+    },
+    "configuration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "sourceRevision",
+        "authorityRootPublicKey",
+        "authorityRootSpkiSha256",
+        "controlPlaneConfigurationDigest",
+        "deploymentId",
+        "instanceId",
+        "applications",
+        "targets"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeOAuthRefreshCleanupConfiguration/v1"
+        },
+        "sourceRevision": {
+          "$ref": "native-oauth-measured-refresh.v1.schema.json#/$defs/configuration/properties/sourceRevision"
+        },
+        "authorityRootPublicKey": {
+          "$ref": "#/$defs/bytes32"
+        },
+        "authorityRootSpkiSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "controlPlaneConfigurationDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "deploymentId": {
+          "$ref": "oauth-refresh-cleanup-authority.v1.schema.json#/$defs/policy/properties/deploymentId"
+        },
+        "instanceId": {
+          "$ref": "native-oauth-measured-refresh.v1.schema.json#/$defs/instance"
+        },
+        "applications": {
+          "type": "object",
+          "minProperties": 1,
+          "maxProperties": 2,
+          "additionalProperties": false,
+          "properties": {
+            "google": {
+              "$ref": "#/$defs/application"
+            },
+            "x": {
+              "$ref": "#/$defs/application"
+            }
+          }
+        },
+        "targets": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/target"
+          }
+        }
+      }
+    },
+    "statement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "phase",
+        "holderId",
+        "bootId",
+        "keyId",
+        "controlPlaneResponseSigningKeyId",
+        "deploymentId",
+        "instanceId",
+        "providerId",
+        "enrollmentSha256",
+        "credentialId",
+        "credentialVersion",
+        "inputSha256",
+        "challenge",
+        "policyHash",
+        "dataPlaneBinarySha256",
+        "issuedAtEpochNs",
+        "expiresAtEpochNs",
+        "workId",
+        "authorizationSha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeOAuthRefreshCleanupStatement/v1"
+        },
+        "phase": {
+          "enum": [
+            "inspect",
+            "claim",
+            "contact",
+            "finish",
+            "recover"
+          ]
+        },
+        "holderId": {
+          "$ref": "native-oauth-measured-refresh.v1.schema.json#/$defs/statement/properties/holderId"
+        },
+        "bootId": {
+          "$ref": "native-oauth-measured-refresh.v1.schema.json#/$defs/statement/properties/bootId"
+        },
+        "keyId": {
+          "$ref": "native-oauth-measured-refresh.v1.schema.json#/$defs/statement/properties/keyId"
+        },
+        "controlPlaneResponseSigningKeyId": {
+          "$ref": "native-oauth-measured-refresh.v1.schema.json#/$defs/statement/properties/controlPlaneResponseSigningKeyId"
+        },
+        "deploymentId": {
+          "$ref": "native-oauth-measured-refresh.v1.schema.json#/$defs/statement/properties/deploymentId"
+        },
+        "instanceId": {
+          "$ref": "native-oauth-measured-refresh.v1.schema.json#/$defs/statement/properties/instanceId"
+        },
+        "providerId": {
+          "$ref": "native-oauth-measured-refresh.v1.schema.json#/$defs/statement/properties/providerId"
+        },
+        "enrollmentSha256": {
+          "$ref": "native-oauth-measured-refresh.v1.schema.json#/$defs/statement/properties/enrollmentSha256"
+        },
+        "credentialId": {
+          "$ref": "native-oauth-measured-refresh.v1.schema.json#/$defs/statement/properties/credentialId"
+        },
+        "credentialVersion": {
+          "$ref": "native-oauth-measured-refresh.v1.schema.json#/$defs/version"
+        },
+        "inputSha256": {
+          "$ref": "native-oauth-measured-refresh.v1.schema.json#/$defs/statement/properties/inputSha256"
+        },
+        "challenge": {
+          "$ref": "native-oauth-measured-refresh.v1.schema.json#/$defs/statement/properties/challenge"
+        },
+        "policyHash": {
+          "$ref": "native-oauth-measured-refresh.v1.schema.json#/$defs/statement/properties/policyHash"
+        },
+        "dataPlaneBinarySha256": {
+          "$ref": "native-oauth-measured-refresh.v1.schema.json#/$defs/statement/properties/dataPlaneBinarySha256"
+        },
+        "issuedAtEpochNs": {
+          "$ref": "native-oauth-measured-refresh.v1.schema.json#/$defs/statement/properties/issuedAtEpochNs"
+        },
+        "expiresAtEpochNs": {
+          "$ref": "native-oauth-measured-refresh.v1.schema.json#/$defs/statement/properties/expiresAtEpochNs"
+        },
+        "workId": {
+          "$ref": "#/$defs/uuid"
+        },
+        "authorizationSha256": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "statement",
+        "signature",
+        "nativeKeyEvidence"
+      ],
+      "properties": {
+        "statement": {
+          "$ref": "#/$defs/statement"
+        },
+        "signature": {
+          "type": "string",
+          "pattern": "^ed25519:[A-Za-z0-9_-]{86}$"
+        },
+        "nativeKeyEvidence": {
+          "$ref": "credential-currentness-authority.v1.schema.json#/$defs/nativeKeyEvidence"
+        }
+      }
+    },
+    "readRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "issuedAtEpochNs",
+        "expiresAtEpochNs"
+      ],
+      "properties": {
+        "issuedAtEpochNs": {
+          "$ref": "#/$defs/epoch"
+        },
+        "expiresAtEpochNs": {
+          "$ref": "#/$defs/epoch"
+        }
+      }
+    },
+    "claimRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ownerNonceSha256",
+        "currentnessBarrierSha256"
+      ],
+      "properties": {
+        "ownerNonceSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "currentnessBarrierSha256": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "contactRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "journalRowSha256",
+        "ownerNonce",
+        "tokenPurpose",
+        "contactRequestSha256"
+      ],
+      "properties": {
+        "journalRowSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "ownerNonce": {
+          "$ref": "#/$defs/bytes32"
+        },
+        "tokenPurpose": {
+          "enum": [
+            "access_token",
+            "refresh_token"
+          ]
+        },
+        "contactRequestSha256": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "finishRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "journalRowSha256",
+        "ownerNonce",
+        "tokenPurpose",
+        "attemptRowSha256",
+        "transportOriginal"
+      ],
+      "properties": {
+        "journalRowSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "ownerNonce": {
+          "$ref": "#/$defs/bytes32"
+        },
+        "tokenPurpose": {
+          "enum": [
+            "access_token",
+            "refresh_token"
+          ]
+        },
+        "attemptRowSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "transportOriginal": {
+          "$ref": "#/$defs/encoded",
+          "maxLength": 524288
+        }
+      }
+    },
+    "arguments": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "work_id",
+        "authorization_original",
+        "enrollment_original",
+        "historical_root_original",
+        "control_plane_configuration_digest",
+        "assignment_original",
+        "request",
+        "evidence"
+      ],
+      "properties": {
+        "work_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "authorization_original": {
+          "$ref": "#/$defs/encoded",
+          "maxLength": 87382
+        },
+        "enrollment_original": {
+          "$ref": "native-oauth-measured-refresh.v1.schema.json#/$defs/enrollmentOriginal"
+        },
+        "historical_root_original": {
+          "$ref": "#/$defs/encoded",
+          "maxLength": 5462
+        },
+        "control_plane_configuration_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "assignment_original": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/assignment"
+            }
+          ]
+        },
+        "request": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/readRequest"
+            },
+            {
+              "$ref": "#/$defs/claimRequest"
+            },
+            {
+              "$ref": "#/$defs/contactRequest"
+            },
+            {
+              "$ref": "#/$defs/finishRequest"
+            }
+          ]
+        },
+        "evidence": {
+          "$ref": "#/$defs/evidence"
+        }
+      }
+    },
+    "httpRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "operation",
+        "arguments"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeOAuthRefreshCleanupRequest/v1"
+        },
+        "operation": {
+          "enum": [
+            "oauth.measured-refresh-cleanup.inspect",
+            "oauth.measured-refresh-cleanup.claim",
+            "oauth.measured-refresh-cleanup.contact",
+            "oauth.measured-refresh-cleanup.finish",
+            "oauth.measured-refresh-cleanup.recover"
+          ]
+        },
+        "arguments": {
+          "$ref": "#/$defs/arguments"
+        }
+      }
+    },
+    "httpResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "requestOriginal",
+        "responseOriginal",
+        "currentnessBarrierSha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeOAuthRefreshCleanupResponse/v1"
+        },
+        "requestOriginal": {
+          "$ref": "#/$defs/encoded",
+          "maxLength": 4194304
+        },
+        "responseOriginal": {
+          "$ref": "#/$defs/encoded",
+          "maxLength": 8388608
+        },
+        "currentnessBarrierSha256": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/digest"
+            }
+          ]
+        }
+      }
+    },
+    "transport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "requestSha256",
+        "status",
+        "receivedAtEpochNs",
+        "rawResponseSha256",
+        "rawResponseEnvelope"
+      ],
+      "properties": {
+        "schema": {
+          "const": "serverware.nativeOAuthRefreshCleanupTransport/v1"
+        },
+        "requestSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "status": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "integer",
+              "minimum": 200,
+              "maximum": 599
+            }
+          ]
+        },
+        "receivedAtEpochNs": {
+          "$ref": "#/$defs/epoch"
+        },
+        "rawResponseSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "rawResponseEnvelope": {
+          "$ref": "oauth-refresh-authority.v1.schema.json#/$defs/envelope"
+        }
+      }
+    }
+  }
+}

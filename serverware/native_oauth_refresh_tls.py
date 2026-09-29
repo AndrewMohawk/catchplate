@@ -14,11 +14,14 @@ EVENT = "serverware.nativeOAuthRefreshTls/v1"
 
 
 class Contact:
+    _endpoints = m.ENDPOINTS
+    _event = EVENT
+
     def __init__(self, *, channel, provider, roots, request, check, deadline):
         self.channel, self.provider, self.check = channel, provider, check
         self.deadline = deadline
         host, path, headers, body, _commitment = request
-        m.require((host, path) == m.ENDPOINTS[provider])
+        m.require((host, path) == self._endpoints[provider])
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
         context.minimum_version = ssl.TLSVersion.TLSv1_2
         context.check_hostname, context.verify_mode = True, ssl.CERT_REQUIRED
@@ -39,10 +42,10 @@ class Contact:
         output = self.outgoing.read()
         m.require(len(output) <= 64 * 1024 and self.sequence < 512 and not (read and self.eof))
         self.sequence += 1
-        self.channel.send({"apiVersion": EVENT, "providerId": self.provider, "sequence": self.sequence,
+        self.channel.send({"apiVersion": self._event, "providerId": self.provider, "sequence": self.sequence,
             "ciphertext": m.encoded(output) if output else None, "read": read}, self.deadline)
         value = self.channel.receive(self.deadline)
-        m.require(set(value) == {"apiVersion", "sequence", "ciphertext", "eof"} and value["apiVersion"] == EVENT
+        m.require(set(value) == {"apiVersion", "sequence", "ciphertext", "eof"} and value["apiVersion"] == self._event
             and value["sequence"] == self.sequence and type(value["eof"]) is bool)
         incoming = b"" if value["ciphertext"] is None else m.decoded(value["ciphertext"], 64 * 1024)
         m.require(read or not incoming and not value["eof"])

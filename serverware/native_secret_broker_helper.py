@@ -27,6 +27,7 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from serverware.native_kms_cms import unwrap_broker_kek
 from serverware import native_service_tokens
 from serverware import native_oauth_refresh_owner
+from serverware import native_oauth_cleanup_owner
 from serverware import native_oauth_exchange_owner
 
 _SCHEMA = "serverware.nativeSecretBrokerChannel/v1"
@@ -232,6 +233,7 @@ class _Broker:
         self.kek, self.operations = None, set()
         self.service_tokens_opened = False
         self.refresh_owner = None
+        self.cleanup_owner = None
         self.exchange_owner = None
 
     def provision(self, value):
@@ -360,9 +362,16 @@ def main():
         while True:
             refresh_operation = None if broker.refresh_owner is None else broker.refresh_owner.operation
             exchange_operation = None if broker.exchange_owner is None else broker.exchange_owner.operation
-            _require(refresh_operation is None or exchange_operation is None)
-            active_operation = refresh_operation if refresh_operation is not None else exchange_operation
+            cleanup_operation = None if broker.cleanup_owner is None else broker.cleanup_owner.operation
+            active = [(purpose, operation) for purpose, operation in (
+                (native_oauth_refresh_owner.CHANNEL, refresh_operation),
+                (native_oauth_exchange_owner.CHANNEL, exchange_operation),
+                (native_oauth_cleanup_owner.CHANNEL, cleanup_operation)) if operation is not None]
+            _require(len(active) <= 1)
+            active_operation = active[0][1] if active else None
             value = channel.receive(None if active_operation is None else active_operation.deadline)
+            if active:
+                _require(value.get("apiVersion") == active[0][0])
             if value.get("apiVersion") == _SERVICE_WORK:
                 broker.open_service_tokens(value)
             elif value.get("apiVersion") == native_oauth_refresh_owner.CHANNEL:
@@ -373,6 +382,14 @@ def main():
                 else:
                     _require(broker.refresh_owner is not None)
                     broker.refresh_owner.handle(value)
+            elif value.get("apiVersion") == native_oauth_cleanup_owner.CHANNEL:
+                _require(refresh_operation is None and exchange_operation is None)
+                if value.get("phase") == "configure":
+                    _require(broker.cleanup_owner is None)
+                    broker.cleanup_owner = native_oauth_cleanup_owner.Owner(broker, value)
+                else:
+                    _require(broker.cleanup_owner is not None and refresh_operation is None)
+                    broker.cleanup_owner.handle(value)
             elif value.get("apiVersion") == native_oauth_exchange_owner.CHANNEL:
                 _require(refresh_operation is None)
                 if value.get("phase") == "configure":

@@ -448,6 +448,16 @@ def metadata_base_schema_source() -> str:
                 CHECK (cancel_arguments_json IS NULL OR claim_arguments_json IS NULL)
             );
 
+            CREATE TABLE IF NOT EXISTS oauth_measured_refresh_cleanup_custody (
+                id TEXT PRIMARY KEY,
+                authorization_sha256 TEXT NOT NULL,
+                claim_original_json TEXT NOT NULL,
+                contact_originals_json TEXT NOT NULL,
+                finish_originals_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS oauth_measured_refresh_custody (
                 id TEXT PRIMARY KEY,
                 credential_id TEXT NOT NULL,

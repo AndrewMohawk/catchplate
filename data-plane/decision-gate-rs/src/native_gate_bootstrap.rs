@@ -149,6 +149,13 @@ pub(super) fn prepare_native_tls_gate_state(
         None => None,
     };
     let (_, attestation) = materialize_native_proxy_ingress(&ingress, deadline)?;
+    // Neither audit membership nor refresh configuration grants retirement.
+    let measured_cleanup = match inputs.measured_cleanup.take() {
+        Some(config) => Some(native_oauth_cleanup::prepare(config, &inputs,
+            secret_broker.as_mut().ok_or("native cleanup broker absent")?, &mut identity,
+            signer, &binary_digest, deadline)?),
+        None => None,
+    };
     let mut state = inputs.into_state(GateStateRuntime {
         snapshot: Arc::new(snapshot), audit_client, credential_lease_client: credential_client,
         upstream_resolver: Arc::new(NativeConfiguredResolver(Arc::clone(&relays))),
@@ -159,10 +166,12 @@ pub(super) fn prepare_native_tls_gate_state(
     state.native_upstream_relays = Some(held_relays);
     state.native_secret_broker = secret_broker.map(Mutex::new);
     state.measured_refresh = measured_refresh.map(Mutex::new);
+    state.measured_cleanup = measured_cleanup.map(Mutex::new);
     state.measured_issuance = measured_issuance.map(Mutex::new);
     state.measured_audit = measured_audit.map(Mutex::new);
     if state.measured_audit.is_some() { native_audit_owner::initialize(&state)?; }
     if state.measured_refresh.is_some() { native_oauth_refresh::initialize(&state)?; }
+    if state.measured_cleanup.is_some() { native_oauth_cleanup::initialize(&state)?; }
     if state.measured_issuance.is_some() { native_oauth_exchange::initialize(&state)?; }
     ingress.verify_live(deadline)?;
     native_service_remaining(&state)?;

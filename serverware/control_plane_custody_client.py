@@ -2015,6 +2015,31 @@ class ControlPlaneCustodyClient:
             raise CustodyClientError("measured refresh did not return exact request/response originals")
         return originals
 
+    def _request_measured_cleanup(self, *, operation, input_value, deadline_ns):
+        """Exact signed originals only for the fixed measured-cleanup family.
+
+        This is not generic signing/export, a retained-result verdict, or a
+        retry permit. The actual admitted runtime client verifies the result.
+        """
+        from serverware import authority_oauth_measured_cleanup as refresh
+        if operation not in refresh.OPERATIONS or type(deadline_ns) is not int:
+            raise CustodyClientError("measured cleanup original custody purpose differs")
+        binding = _snapshot(self)
+        runtime = binding.runtime_client
+        if type(runtime) is not service.AuthorityRuntimeClient:
+            raise CustodyClientError("measured cleanup lacks the actual cold runtime client")
+        _receipt_now(binding)
+        originals = service.AuthorityRuntimeClient.request_measured_cleanup(runtime,
+            operation=operation, input_value=input_value, deadline_ns=deadline_ns)
+        _process(binding); _receipt_now(binding)
+        if _snapshot(self) is not binding:
+            raise CustodyClientError("measured cleanup custody changed while receiving originals")
+        journal.CustodyJournal._require_ready(binding.journal)
+        transport._check_deadline(deadline_ns)
+        if type(originals) is not tuple or len(originals) != 2 or any(type(raw) is not bytes for raw in originals):
+            raise CustodyClientError("measured cleanup did not return exact request/response originals")
+        return originals
+
     def _request_measured_exchange(self, *, operation, input_value, deadline_ns):
         """Only exact verified originals of the initial-issuance purpose."""
         from serverware import authority_oauth_measured_exchange as exchange

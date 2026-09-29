@@ -26,13 +26,14 @@ Checkpoint: **2026-09-28 — pre-production, source-only.**
 
 ### Current work: native enrollment, workload trust and protected operations
 
-[`.242` source / a77ee44](https://github.com/example/private-deployment)
-connects [private bootstrap signing, durable completion and paired receiving](docs/native-enrollment-bootstrap-verification.md).
-The actual custody ledger claims the setup before key generation/signing/NSM and
-retains exact completed originals. Same-operation replay is read-only; incomplete
-claims cannot re-sign. The paired receiver remains **diagnostic-only**, and local
-filesystem durability is not independent rollback protection. HTTP/fixed acquisition,
-whole evidence assembly, issuance and protected installation remain open.
+[`.243` source / 514c842](https://github.com/example/private-deployment)
+connects the [fixed native bootstrap POST and complete evidence assembly](docs/native-enrollment-bootstrap-exchange.md)
+to a [separately pinned acquisition client](docs/native-bootstrap-client.md).
+Durably claimed role-5 output precedes the same-TLS role-3 quote and guarded close.
+The client retains actual TLS configuration, selected client certificate and peer,
+checks exact sent originals, and carries its original clock through verification
+output without retry. Results remain **diagnostic-only**; issuance, protected
+installation, lifecycle/recovery and independent runtime verification remain open.
 No build, test, runtime, NSM or AWS/spend acceptance is claimed.
 
 The four active checkpoints remain partial:
@@ -45,11 +46,12 @@ The four active checkpoints remain partial:
   is source-connected; historical release delivery, migration and older-source replay remain open.
 - **N05 · Native enrollment:** cold authority, caller policy/TLS admission,
   target CSR/possession, separate setup permission, current policy requirements
-  and packet originals now connect to private role-5 signing, durable completion
-  and diagnostic receiving. HTTP/fixed acquisition and whole evidence assembly,
-  independent issuer grants/target leaf/full selectors, protected installation
-  reservation/namespace ownership, egress/canaries, explicit cross-session recovery
-  and off-host rollback witnessing remain open.
+  and packet originals now connect to durable role-5 signing, fixed POST/full
+  evidence assembly and guarded client acquisition/diagnostic verification.
+  Independent issuer grants/target leaf/full selectors, protected installation
+  reservation/token/namespace ownership, scoped install/egress/canaries,
+  lifecycle/cross-session recovery, off-host rollback witnessing and independent
+  service/exact-source verification remain open.
 - **O04 · Protected operations:** [genuine approval verification](docs/control-plane-approval-verification.md)
   is source-connected; protected provider/filesystem effects and durable
   interruption outcomes remain open.
@@ -119,7 +121,7 @@ lists every remaining item and its evidence.
 | --- | --- | --- |
 | H05 | Historical authority across source/configuration/key changes | In progress |
 | N04 | Workload identity provisioning and authenticated channels | In progress |
-| N05 | Native enrollment, verified CA installation and proxy setup | In progress / partial; private signing, durable completion and diagnostic receiving source-connected |
+| N05 | Native enrollment, verified CA installation and proxy setup | In progress / partial; fixed POST, complete evidence assembly and guarded diagnostic acquisition source-connected |
 | N06 | Enclave TLS/proxy execution and credential custody | Todo |
 | O01 | OAuth ownership across deployments and applications | Todo |
 | O02 | Measured provider issuance and interrupted-exchange recovery | Todo |

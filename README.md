@@ -26,14 +26,13 @@ Checkpoint: **2026-09-28 — pre-production, source-only.**
 
 ### Current work: native enrollment, workload trust and protected operations
 
-[`.243` source / 514c842](https://github.com/example/private-deployment)
-connects the [fixed native bootstrap POST and complete evidence assembly](docs/native-enrollment-bootstrap-exchange.md)
-to a [separately pinned acquisition client](docs/native-bootstrap-client.md).
-Durably claimed role-5 output precedes the same-TLS role-3 quote and guarded close.
-The client retains actual TLS configuration, selected client certificate and peer,
-checks exact sent originals, and carries its original clock through verification
-output without retry. Results remain **diagnostic-only**; issuance, protected
-installation, lifecycle/recovery and independent runtime verification remain open.
+[`.244` source / 55acd31](https://github.com/example/private-deployment)
+connects [native original admission and a separate signed issuance grant](docs/native-workload-identity-issuance-authorization.md)
+through [cold bootstrap v2](docs/native-workload-identity-issuer-bootstrap.md) to the
+actual CA worker's irreversible claim, signing, exact readback and independent
+leaf verification. Role-3/role-5 diagnostics are not CA authority. Native caller
+delivery, retained-key SDK admission, protected installation, full runtime-policy
+verification and lifecycle/recovery remain open.
 No build, test, runtime, NSM or AWS/spend acceptance is claimed.
 
 The four active checkpoints remain partial:
@@ -47,9 +46,10 @@ The four active checkpoints remain partial:
 - **N05 · Native enrollment:** cold authority, caller policy/TLS admission,
   target CSR/possession, separate setup permission, current policy requirements
   and packet originals now connect to durable role-5 signing, fixed POST/full
-  evidence assembly and guarded client acquisition/diagnostic verification.
-  Independent issuer grants/target leaf/full selectors, protected installation
-  reservation/token/namespace ownership, scoped install/egress/canaries,
+  evidence assembly, guarded diagnostic acquisition and independently authorized
+  native CA-worker issuance/leaf compatibility. Native caller/grant delivery,
+  retained-key SDK leaf admission, full target runtime-policy verification,
+  protected installation reservation/token/namespace ownership, scoped install/egress/canaries,
   lifecycle/cross-session recovery, off-host rollback witnessing and independent
   service/exact-source verification remain open.
 - **O04 · Protected operations:** [genuine approval verification](docs/control-plane-approval-verification.md)
@@ -121,7 +121,7 @@ lists every remaining item and its evidence.
 | --- | --- | --- |
 | H05 | Historical authority across source/configuration/key changes | In progress |
 | N04 | Workload identity provisioning and authenticated channels | In progress |
-| N05 | Native enrollment, verified CA installation and proxy setup | In progress / partial; fixed POST, complete evidence assembly and guarded diagnostic acquisition source-connected |
+| N05 | Native enrollment, verified CA installation and proxy setup | In progress / partial; fixed acquisition and independently authorized native CA-worker issuance source-connected |
 | N06 | Enclave TLS/proxy execution and credential custody | Todo |
 | O01 | OAuth ownership across deployments and applications | Todo |
 | O02 | Measured provider issuance and interrupted-exchange recovery | Todo |

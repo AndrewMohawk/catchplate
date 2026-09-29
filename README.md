@@ -24,12 +24,12 @@ Checkpoint: **2026-09-29 — pre-production, source-only.**
 
 [![Project checkpoints, one segment per task: 36 of 46 source-landed; 9 active and 1 todo. Evidence handoff 10/10; historical recovery 4/5; permissions and grants 10/10; finalization and sessions 8/8; workloads and native 3/6; providers and operations 1/7. H05, N04, N05, N06, O01, O03, O04, O05 and O06 are in progress. Production acceptance remains 0/6. Source only; unbuilt, unexecuted and unprovisioned.](docs/images/project-progress.svg)](docs/production-status.md#next-source-milestones)
 
-Latest [`.278` source](https://github.com/example/private-deployment) connects
-[public passkey-revocation APIs](docs/public-webauthn-revocation.md) and
-[independent RBAC known-commit recovery](docs/rbac-known-commit-recovery.md).
-Revocation still needs its portal and lost-response lookup. Provider custody,
-guest service startup, lifecycle recovery, deployment and end-to-end verification
-remain open. O03 and O06 remain partial.
+Latest [`.279` source](https://github.com/example/private-deployment) connects the
+[revocation portal and lost-response lookup](docs/public-webauthn-revocation.md),
+[signed guest credential delivery](docs/response-v2-guest-credential-delivery.md)
+and its [offline signing producer](docs/response-v2-guest-delivery-producer.md).
+Measured provider custody, complete guest startup, lifecycle recovery, deployment
+and end-to-end verification remain open. N06 and O03 remain partial.
 
 The bar shows **committed source, not tested readiness or remaining effort**.
 Green means source-landed; amber means partial implementation. No current pilot

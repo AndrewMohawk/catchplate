@@ -78,11 +78,13 @@ repair.
 ## Remaining acceptance
 
 The `withdrawal_approval` setup inside `scripts/test_webauthn_attestation.py`
-currently injects WebAuthn metadata directly with optional MFA. That setup must
-be converted to a genuine signed assertion and verified receipt before the
-consolidated source freeze, preserving its credential-revocation and
-trust-withdrawal checks. The repaired transaction refuses its old shortcut; the fixture
-has not been run or presented as passing evidence for this source.
+now retains the actual rotated credential key, obtains approval-bound options,
+signs a genuine fresh assertion, authenticates the real request and invokes the
+actual approval handler. Mandatory MFA is scoped to this fixture and restored
+afterward; other registration callers and the post-withdrawal invalidation
+assertion are preserved. It no longer injects verified metadata or enables a
+development authenticator. This is a test-source correction only: the fixture
+has not been executed or presented as passing evidence for this source.
 
 After the complete source freeze, exercise all supported authentication modes,
 both configured MFA policies, fresh valid assertions, wrong-action and

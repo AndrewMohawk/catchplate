@@ -80,8 +80,9 @@ def cose_from_public_key(public_key: ec.EllipticCurvePublicKey) -> bytes:
     )
 
 
-def registration_response(webauthn, challenge: str, *, leaf_key=None, leaf_cert=None, intermediate_cert=None, aaguid: bytes = YUBIKEY_AAGUID, fmt: str = "packed") -> dict:
-    credential_key = ec.generate_private_key(ec.SECP256R1())
+def registration_response(webauthn, challenge: str, *, credential_key=None, leaf_key=None, leaf_cert=None, intermediate_cert=None, aaguid: bytes = YUBIKEY_AAGUID, fmt: str = "packed") -> dict:
+    if credential_key is None:
+        credential_key = ec.generate_private_key(ec.SECP256R1())
     credential_id = os.urandom(32)
     public_key_cose = cose_from_public_key(credential_key.public_key())
     auth_data = (
@@ -187,9 +188,11 @@ def main() -> None:
         os.environ["SERVERWARE_WEBAUTHN_TRUST_SIGNING_PUBLIC_KEY"] = str(tmp_path / "data" / "webauthn-trust-signing-ed25519.pub.pem")
         os.environ["SERVERWARE_PUBLIC_URL"] = "http://localhost:3000"
         os.environ["SERVERWARE_WEBAUTHN_ORIGIN"] = "http://localhost:3000"
+        os.environ["SERVERWARE_ADMIN_USER"] = "user:test"
 
+        from fastapi import Request
         from serverware import app as app_module
-        from serverware import db, webauthn, webauthn_trust
+        from serverware import auth, db, webauthn, webauthn_trust
         from serverware.auth import AdminIdentity
 
         db.init_db()
@@ -436,9 +439,11 @@ def main() -> None:
             root_id="trusted-root-v2",
         )
         opts = webauthn.registration_options("user:test", "rotated yubikey")
+        rotated_credential_key = ec.generate_private_key(ec.SECP256R1())
         rotated_response = registration_response(
             webauthn,
             opts["publicKey"]["challenge"],
+            credential_key=rotated_credential_key,
             leaf_key=rotated_leaf_key,
             leaf_cert=rotated_leaf_cert,
             intermediate_cert=rotated_intermediate_cert,
@@ -515,22 +520,85 @@ def main() -> None:
             request={"credential_id": withdrawal_resource},
             ttl_seconds=300,
         )
-        withdrawal_approval = db.approve_control_plane_approval(
-            withdrawal_approval["id"],
-            actor_id="user:test",
-            authn={
-                "method": "webauthn",
-                "user_id": "user:test",
-                "credential_record_id": rotated_record["id"],
-                "control_plane_action": "credential.update",
-                "resource_id": withdrawal_resource,
-                "payload_digest": "sha256:" + "7" * 64,
-                "control_plane_approval_id": withdrawal_approval["id"],
-                "approval_requester_id": withdrawal_approval["requester_id"],
-                "approval_expires_at": withdrawal_approval["expires_at"],
-                "decision": "approve",
-            },
+        withdrawal_path = (
+            f"/api/control-plane/approvals/{withdrawal_approval['id']}/approve"
         )
+        withdrawal_request = Request({
+            "type": "http",
+            "http_version": "1.1",
+            "method": "POST",
+            "scheme": "http",
+            "path": withdrawal_path,
+            "raw_path": withdrawal_path.encode("ascii"),
+            "root_path": "",
+            "query_string": b"",
+            "client": ("127.0.0.1", 49152),
+            "server": ("localhost", 3000),
+            "headers": [
+                (b"host", b"localhost:3000"),
+                (b"x-serverware-admin-token", auth.admin_token().encode("ascii")),
+            ],
+        })
+        withdrawal_identity = auth.require_admin(
+            withdrawal_request,
+            x_serverware_admin_token=withdrawal_request.headers.get("X-Serverware-Admin-Token"),
+        )
+        withdrawal_options_path = "/api/control-plane/mutations/webauthn/options"
+        withdrawal_options_request = Request({
+            **withdrawal_request.scope,
+            "path": withdrawal_options_path,
+            "raw_path": withdrawal_options_path.encode("ascii"),
+        })
+        previous_mutation_mfa = app_module.CONTROL_PLANE_MUTATION_WEBAUTHN_REQUIRED
+        try:
+            app_module.CONTROL_PLANE_MUTATION_WEBAUTHN_REQUIRED = True
+            withdrawal_options = app_module.control_plane_mutation_webauthn_options(
+                app_module.ControlPlaneMutationWebAuthnOptions(
+                    action=withdrawal_approval["action"],
+                    resource_id=withdrawal_approval["resource_id"],
+                    payload_digest=withdrawal_approval["payload_digest"],
+                    approval_id=withdrawal_approval["id"],
+                ),
+                request=withdrawal_options_request,
+                identity=auth.require_admin(
+                    withdrawal_options_request,
+                    x_serverware_admin_token=withdrawal_options_request.headers.get("X-Serverware-Admin-Token"),
+                ),
+            )
+            withdrawal_auth_data = (
+                webauthn._rp_hash()
+                + bytes([webauthn.UP_FLAG | webauthn.UV_FLAG])
+                + (int(rotated_record["sign_count"] or 0) + 1).to_bytes(4, "big")
+            )
+            withdrawal_client_data = json.dumps({
+                "type": "webauthn.get",
+                "challenge": withdrawal_options["publicKey"]["challenge"],
+                "origin": "http://localhost:3000",
+                "crossOrigin": False,
+            }, separators=(",", ":"), sort_keys=True).encode("utf-8")
+            withdrawal_signature = rotated_credential_key.sign(
+                withdrawal_auth_data + __import__("hashlib").sha256(withdrawal_client_data).digest(),
+                ec.ECDSA(hashes.SHA256()),
+            )
+            # Submit the original assertion once. The handler, not this fixture,
+            # verifies it and creates the private receipt consumed by the DB.
+            withdrawal_approval = app_module.control_plane_approval_approve(
+                withdrawal_approval["id"],
+                request=withdrawal_request,
+                payload=app_module.ControlPlaneApprovalDecision(mfa={"assertion": {
+                    "id": rotated_record["credential_id"],
+                    "rawId": rotated_record["credential_id"],
+                    "type": "public-key",
+                    "response": {
+                        "clientDataJSON": b64u(withdrawal_client_data),
+                        "authenticatorData": b64u(withdrawal_auth_data),
+                        "signature": b64u(withdrawal_signature),
+                    },
+                }}),
+                identity=withdrawal_identity,
+            )
+        finally:
+            app_module.CONTROL_PLANE_MUTATION_WEBAUTHN_REQUIRED = previous_mutation_mfa
         if not withdrawal_approval or withdrawal_approval["status"] != "approved":
             raise SystemExit(
                 f"trust-withdrawal approval fixture was not approved: {withdrawal_approval}"

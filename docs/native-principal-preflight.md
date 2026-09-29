@@ -86,10 +86,12 @@ preflight must not be presented as provider-proof compatibility. Separately
 pinned [response expectations v2](native-response-principal-profiles.md) select
 new native statement, receipt and binding profiles, with genuine control-plane
 preparation/reservation and native custody signing. They do not reinterpret
-legacy signed bytes or truncate, rename or remap identities. Credential leases
-still require their own explicit native producer/broker/recipient integration;
-incompatible credentialed requests remain refused before reservation/provider
-effects. Egress and canaries are also separate open work. Public captures remain
+legacy signed bytes or truncate, rename or remap identities. The separate
+[native credential-lease profiles](native-credential-leases.md) connect the actual
+recipient owner, broker and exact encrypted request scope without widening old
+contracts or treating preflight as credential-release authority. Their independent
+recipient expectations and real issuance checks remain mandatory. Egress and
+canaries are still separate open work. Public captures remain
 supporting local evidence with no new action authority.
 
 The separate [native egress installation design](native-egress-installation-design.md)

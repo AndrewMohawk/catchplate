@@ -45,6 +45,7 @@ pub mod native_principal_preflight_v1;
 pub mod response_principal_compatibility_v1;
 pub mod native_response_profile_v1;
 pub mod native_approver_policy_v1;
+pub mod native_lease_profile_v1;
 pub mod native_upstream_relays_v1;
 use enclave_runtime_identity_v1::{
     EnclaveRuntimeIdentityV1, QuotedResponseProofKeyV1, RuntimeKeyQuoteV1,

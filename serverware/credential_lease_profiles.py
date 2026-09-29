@@ -1,0 +1,74 @@
+"""Closed lease representations; profile selection grants no release authority."""
+
+from __future__ import annotations
+
+import hmac
+
+from serverware import release_authorization_profiles as release_profiles
+
+
+NATIVE_REQUEST_V1 = "serverware.nativeCredentialLeaseRequest/v1"
+NATIVE_REQUEST_V2 = "serverware.nativeCredentialLeaseRequest/v2"
+NATIVE_AUTHORITY_V1 = "serverware.nativeCredentialLeaseRequestAuthority/v1"
+
+
+def request_profile(api_version: str) -> tuple[bool, bool]:
+    profiles = {
+        "serverware.credentialLeaseRequest/v3": (False, False),
+        "serverware.credentialLeaseRequest/v4": (False, True),
+        NATIVE_REQUEST_V1: (True, False),
+        NATIVE_REQUEST_V2: (True, True),
+    }
+    try:
+        return profiles[api_version]
+    except (KeyError, TypeError) as exc:
+        raise ValueError("unsupported credential lease request profile") from exc
+
+
+def _version(family: str, *, native: bool, version: int) -> str:
+    if type(native) is not bool:
+        raise ValueError("credential lease profile must be explicit")
+    prefix = "nativeCredentialLease" if native else "credentialLease"
+    return f"serverware.{prefix}{family}/v{version}"
+
+
+def authority_version(*, native: bool) -> str:
+    return _version("RequestAuthority", native=native, version=1)
+
+
+def release_version(*, native: bool, durable: bool) -> str:
+    if type(durable) is not bool:
+        raise ValueError("credential release durability must be explicit")
+    return _version("ReleaseAuthorization", native=native, version=2 if durable else 1)
+
+
+def envelope_version(*, native: bool, bound: bool) -> str:
+    if type(bound) is not bool:
+        raise ValueError("credential request binding must be explicit")
+    return _version("Envelope", native=native, version=(1 if native else 2) + int(bound))
+
+
+def set_version(*, native: bool, bound: bool) -> str:
+    if type(bound) is not bool:
+        raise ValueError("credential request binding must be explicit")
+    return _version("Set", native=native, version=(1 if native else 3) + int(bound))
+
+
+def native_identity(value: str, *, principal: bool = False) -> str:
+    # Rust's retained nonprincipal predicate uses the same Unicode Cc rule,
+    # but only the separately versioned principal may exceed 256 UTF-8 bytes.
+    release_profiles.native_principal(value)
+    if not principal and len(value.encode("utf-8")) > 256:
+        raise ValueError("native credential lease identity exceeds 256 UTF-8 bytes")
+    return value
+
+
+def text_matches(actual: str, expected: str, *, native: bool) -> bool:
+    if not isinstance(actual, str) or not isinstance(expected, str):
+        return False
+    if native:
+        try:
+            return hmac.compare_digest(actual.encode("utf-8"), expected.encode("utf-8"))
+        except UnicodeError:
+            return False
+    return hmac.compare_digest(actual, expected)

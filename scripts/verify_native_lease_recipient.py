@@ -15,6 +15,13 @@ does not reserve a nonce; the existing app owns nonce reservation after success.
 The fixed native PKI profile requires an empty CRL inventory per AWS's native
 attestation contract; it supplies no vendor-CRL revocation proof. Independently
 current pins and app-level revocation remain mandatory.
+
+Independently pinned expectations v2 explicitly selects the native lease request
+profile. It requires the app's exact leaseRequestApiVersion marker in input and
+echoes it in output; expectations v1 retains its old input/output contract. The
+evidence never selects a request profile, and neither profile falls back to the
+other. Only the native principal bound is widened; other native IDs retain the
+existing producer's 256-byte predicate.
 """
 from __future__ import annotations
 
@@ -24,6 +31,7 @@ import hmac
 import re
 import sys
 import time
+import unicodedata
 from pathlib import Path
 from typing import Any
 
@@ -53,6 +61,10 @@ from verify_nitro_tee import (
 
 EVIDENCE_VERSION = "serverware.nativeCredentialRecipientEvidence/v1"
 EXPECTATIONS_VERSION = "serverware.nativeCredentialRecipientExpectations/v1"
+NATIVE_EXPECTATIONS_VERSION = "serverware.nativeCredentialRecipientExpectations/v2"
+NATIVE_REQUEST_PROFILE = "serverware.nativeCredentialLeaseRequest"
+NATIVE_REQUEST_V1 = NATIVE_REQUEST_PROFILE + "/v1"
+NATIVE_REQUEST_V2 = NATIVE_REQUEST_PROFILE + "/v2"
 TRUST_ROOTS_VERSION = "serverware.nativeCredentialRecipientTrustRoots/v1"
 BINDING_DOMAIN = b"serverware/enclave-runtime-key-binding/v1\0"
 MAX_INPUT_BYTES = 64 * 1024
@@ -128,6 +140,28 @@ def _expectations(document: Any, *, api_version: str = EXPECTATIONS_VERSION,
     return expected
 
 
+def _recipient_expectations(document: Any) -> dict[str, Any]:
+    # This document has already matched an independent CLI digest pin. Never
+    # choose the profile from stdin, evidence or a copied verification result.
+    if isinstance(document, dict) and document.get("apiVersion") == NATIVE_EXPECTATIONS_VERSION:
+        expected = _expectations(
+            document, api_version=NATIVE_EXPECTATIONS_VERSION,
+            extra_fields=frozenset({"leaseRequestProfile"}),
+        )
+        require(expected["leaseRequestProfile"] == NATIVE_REQUEST_PROFILE,
+                "native lease request profile mismatch")
+        return expected
+    return _expectations(document)
+
+
+def _native_identity(value: Any, label: str, maximum: int) -> str:
+    value = _text(value, label, maximum)
+    require(value == value.strip()
+            and not any(unicodedata.category(char) == "Cc" for char in value),
+            f"{label} is invalid")
+    return value
+
+
 def _trust_roots(document: Any, *, api_version: str = TRUST_ROOTS_VERSION) -> tuple[list[x509.Certificate], list[x509.CertificateRevocationList], dict[str, Any]]:
     trust = exact_keys(document, {
         "apiVersion", "awsNitroRootCertificatesPem", "awsNitroCrlsDerBase64url",
@@ -171,12 +205,23 @@ def _verify_request(raw: bytes, expected: dict[str, Any],
     require(1 <= len(raw) <= MAX_INPUT_BYTES, "native recipient verifier input exceeds its bound")
     request = parse_json(raw, "native recipient verifier input")
     require(isinstance(request, dict), "native recipient verifier input must be an object")
+    native = expected["apiVersion"] == NATIVE_EXPECTATIONS_VERSION
     fields = set(SCOPE_FIELDS) | {"recipientAttestation"}
+    if native:
+        fields.add("leaseRequestApiVersion")
     has_authority = "requestAuthoritySha256" in request
     if has_authority:
         fields.add("requestAuthoritySha256")
     request = exact_keys(request, fields, "native recipient verifier input")
     require(request["purpose"] in ("generationMetadata", "dispatchSecret"), "unknown credential purpose")
+    if native:
+        version = request["leaseRequestApiVersion"]
+        require(version in (NATIVE_REQUEST_V1, NATIVE_REQUEST_V2),
+                "native lease request version mismatch")
+        require((version == NATIVE_REQUEST_V1 and not has_authority)
+                or (version == NATIVE_REQUEST_V2 and has_authority
+                    and request["purpose"] == "dispatchSecret"),
+                "native lease request authority profile mismatch")
     if has_authority:
         require(request["purpose"] == "dispatchSecret", "generation metadata cannot carry request authority")
         _digest_bytes(request["requestAuthoritySha256"], "request authority digest")
@@ -184,7 +229,10 @@ def _verify_request(raw: bytes, expected: dict[str, Any],
     for field in ("recipientKeyId", "policyHash", "dataPlaneBinaryDigest"):
         _digest_bytes(request[field], field)
     for field in ("principalId", "routeId", "credentialId"):
-        _text(request[field], field, 1024)
+        if native:
+            _native_identity(request[field], field, 1024 if field == "principalId" else 256)
+        else:
+            _text(request[field], field, 1024)
     require(request["policyHash"] == expected["policyHash"], "request policy does not match independent expectations")
     require(request["dataPlaneBinaryDigest"] == expected["expectedBinaryDigest"], "request binary does not match independent expectations")
     nonce = b64url_decode_exact(request["recipientNonce"], "recipient nonce", exact_bytes=32)
@@ -222,6 +270,8 @@ def _verify_request(raw: bytes, expected: dict[str, Any],
             "verified native key identity mismatch")
     result = {"ok": True, "debug": False}
     result.update({field: request[field] for field in SCOPE_FIELDS})
+    if native:
+        result["leaseRequestApiVersion"] = request["leaseRequestApiVersion"]
     if has_authority:
         result["requestAuthoritySha256"] = request["requestAuthoritySha256"]
     return result
@@ -234,8 +284,10 @@ def main() -> None:
     parser.add_argument("--trust-roots", type=Path, required=True)
     parser.add_argument("--trust-roots-sha256", required=True)
     args = parser.parse_args()
-    expected = _expectations(_pinned_json(args.expectations, args.expectations_sha256,
-                                         "native recipient expectations", MAX_EXPECTATIONS_BYTES))
+    expected = _recipient_expectations(_pinned_json(
+        args.expectations, args.expectations_sha256,
+        "native recipient expectations", MAX_EXPECTATIONS_BYTES,
+    ))
     roots, crls, profile = _trust_roots(_pinned_json(args.trust_roots, args.trust_roots_sha256,
                                                   "native recipient trust roots", MAX_TRUST_ROOTS_BYTES))
     raw = sys.stdin.buffer.read(MAX_INPUT_BYTES + 1)

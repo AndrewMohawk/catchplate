@@ -78,10 +78,13 @@ can change the independently selected response profile.
 Only principal text changes to the native 1024-byte UTF-8 bound. All actual
 request/response, signature, control-plane receipt, TLS-exporter and original
 Nitro checks remain, as do the existing bounds on other identifiers. For wider
-principal arguments the separately pinned ingress v3 is also required. This does
-not complete credentialed wide-principal integration: credential leases still
-need explicit native producer/broker/recipient profiles; incompatible credentialed
-requests must be refused before reservation or provider effects in the interim.
+principal arguments the separately pinned ingress v3 is also required. The
+[explicit native credential-lease path](native-credential-leases.md) separately
+connects the actual quoted recipient, broker authority and encrypted material
+under matching native profiles. Preflight and response compatibility never grant
+credential access; the original policy, one-use issuance and retained lifecycle
+bounds still apply. Legacy lease contracts are unchanged. This source integration
+is not executed credentialed onboarding or production acceptance.
 
 ## Retained native proxy connection
 

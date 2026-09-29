@@ -24,8 +24,8 @@ pub fn valid_principal(value: &str) -> bool {
         && !value.chars().any(char::is_control)
 }
 
-/// Python-compatible sorted compact ensure_ascii JSON for NEW native binding
-/// and approver-policy commitments only. The historical recipe preserves a
+/// Python-compatible sorted compact ensure_ascii JSON for NEW native binding,
+/// approver-policy and lease commitments only. The historical recipe preserves a
 /// literal DEL; Python escapes it. Do not silently alter legacy signed bytes.
 pub fn canonical_ascii_bytes<T: serde::Serialize>(value: &T) -> Result<Vec<u8>, String> {
     let legacy = crate::canonical_json_ensure_ascii_bytes(value)

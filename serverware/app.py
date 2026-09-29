@@ -56,6 +56,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from serverware import __version__
 from serverware import release_authorization_profiles as release_profiles
+from serverware import credential_lease_profiles as lease_profiles
 from serverware.portal_workload_identity import (
     WORKLOAD_IDENTITY_FORM_HTML,
     WORKLOAD_IDENTITY_SCRIPT,
@@ -2107,6 +2108,8 @@ class CredentialLeaseReleaseAuthorization(BaseModel):
     api_version: Literal[
         "serverware.credentialLeaseReleaseAuthorization/v1",
         "serverware.credentialLeaseReleaseAuthorization/v2",
+        "serverware.nativeCredentialLeaseReleaseAuthorization/v1",
+        "serverware.nativeCredentialLeaseReleaseAuthorization/v2",
     ] = Field(alias="apiVersion")
     kind: Literal["jitGrant", "atomicReservation"]
     state: Literal["reserved"]
@@ -2119,7 +2122,7 @@ class CredentialLeaseReleaseAuthorization(BaseModel):
     binding_digest: str = Field(
         alias="bindingDigest", pattern=r"^sha256:[0-9a-f]{64}$"
     )
-    principal_id: str = Field(alias="principalId", min_length=1, max_length=256)
+    principal_id: str = Field(alias="principalId", min_length=1, max_length=1024)
     route_id: str = Field(alias="routeId", min_length=1, max_length=256)
     credential_id: str = Field(alias="credentialId", min_length=1, max_length=256)
     credential_version: int = Field(
@@ -2158,8 +2161,28 @@ class CredentialLeaseReleaseAuthorization(BaseModel):
 
     @model_validator(mode="after")
     def validate_kind(self) -> CredentialLeaseReleaseAuthorization:
+        native = self.api_version in {
+            "serverware.nativeCredentialLeaseReleaseAuthorization/v1",
+            "serverware.nativeCredentialLeaseReleaseAuthorization/v2",
+        }
+        if native:
+            lease_profiles.native_identity(self.principal_id, principal=True)
+            for value in (
+                self.route_id, self.credential_id, self.attempt_id,
+                self.grant_id, self.approval_request_id,
+            ):
+                if value is not None:
+                    lease_profiles.native_identity(value)
+            for claim in self.quota_claims:
+                lease_profiles.native_identity(claim.constraint_id)
+                if claim.operation is not None:
+                    lease_profiles.native_identity(claim.operation)
+            if self.durable_policy is not None:
+                lease_profiles.native_identity(self.durable_policy.actor_id)
+        elif len(self.principal_id) > 256:
+            raise ValueError("legacy credential release principal exceeds 256 characters")
         durable_present = "durable_policy" in self.model_fields_set
-        if self.api_version == "serverware.credentialLeaseReleaseAuthorization/v1":
+        if self.api_version == lease_profiles.release_version(native=native, durable=False):
             if durable_present:
                 raise ValueError(
                     "credential release v1 must omit durablePolicy"
@@ -2277,7 +2300,8 @@ class CredentialLeaseRequestAuthority(BaseModel):
     )
 
     api_version: Literal[
-        "serverware.credentialLeaseRequestAuthority/v1"
+        "serverware.credentialLeaseRequestAuthority/v1",
+        "serverware.nativeCredentialLeaseRequestAuthority/v1",
     ] = Field(alias="apiVersion")
     attempt_id: str = Field(
         alias="attemptId", pattern=r"^sha256:[0-9a-f]{64}$"
@@ -2327,9 +2351,11 @@ class CredentialLeaseRequest(BaseModel):
     api_version: Literal[
         "serverware.credentialLeaseRequest/v3",
         "serverware.credentialLeaseRequest/v4",
+        "serverware.nativeCredentialLeaseRequest/v1",
+        "serverware.nativeCredentialLeaseRequest/v2",
     ] = Field(alias="apiVersion")
     purpose: Literal["generationMetadata", "dispatchSecret"]
-    principal_id: str = Field(alias="principalId", min_length=1, max_length=256)
+    principal_id: str = Field(alias="principalId", min_length=1, max_length=1024)
     route_id: str = Field(alias="routeId", min_length=1, max_length=256)
     credential_id: str = Field(alias="credentialId", min_length=1, max_length=256)
     expected_credential_version: int | None = Field(
@@ -2372,13 +2398,40 @@ class CredentialLeaseRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_recipient_attestation_size(self) -> CredentialLeaseRequest:
+        native, bound = lease_profiles.request_profile(self.api_version)
+        if native:
+            lease_profiles.native_identity(self.principal_id, principal=True)
+            lease_profiles.native_identity(self.route_id)
+            lease_profiles.native_identity(self.credential_id)
+            required = {
+                "api_version", "purpose", "principal_id", "route_id", "credential_id",
+                "expected_credential_version", "expected_metadata_sha256",
+                "recipient_public_key", "recipient_key_id", "recipient_nonce",
+                "policy_hash", "data_plane_binary_digest", "max_ttl_seconds",
+                "recipient_attestation",
+            }
+            if bound:
+                required |= {"request_authority", "release_authorization"}
+            if self.model_fields_set != required or self.recipient_attestation is None:
+                raise ValueError("native credential request requires exact fields and recipient evidence")
+        elif len(self.principal_id) > 256:
+            raise ValueError("legacy credential request principal exceeds 256 characters")
+        if self.request_authority is not None and (
+            self.request_authority.api_version != lease_profiles.authority_version(native=native)
+        ):
+            raise ValueError("credential request authority profile mismatch")
+        if self.release_authorization is not None and self.release_authorization.api_version not in {
+            lease_profiles.release_version(native=native, durable=False),
+            lease_profiles.release_version(native=native, durable=True),
+        }:
+            raise ValueError("credential release authorization profile mismatch")
         request_authority_present = "request_authority" in self.model_fields_set
         release_authorization_present = (
             "release_authorization" in self.model_fields_set
         )
         if self.purpose == "generationMetadata":
             if (
-                self.api_version != "serverware.credentialLeaseRequest/v3"
+                bound
                 or self.expected_credential_version is not None
                 or self.expected_metadata_sha256 is not None
                 or request_authority_present
@@ -2394,7 +2447,7 @@ class CredentialLeaseRequest(BaseModel):
             raise ValueError(
                 "dispatchSecret requests require expected credential metadata bindings"
             )
-        elif self.api_version == "serverware.credentialLeaseRequest/v3":
+        elif not bound:
             if request_authority_present or release_authorization_present:
                 raise ValueError(
                     "credential lease v3 dispatch cannot carry request authority"
@@ -4404,7 +4457,15 @@ def _verify_credential_lease_recipient_attestation(
     principal_id: str,
     route_id: str,
     credential_id: str,
+    lease_request_api_version: str | None = None,
 ) -> None:
+    native = lease_request_api_version is not None
+    if native:
+        selected_native, bound = lease_profiles.request_profile(lease_request_api_version)
+        if not selected_native or bound != (request_authority_sha256 is not None):
+            raise HTTPException(status_code=403, detail="native recipient request profile mismatch")
+        if bound and purpose != "dispatchSecret":
+            raise HTTPException(status_code=403, detail="native recipient purpose mismatch")
     production_release = RELEASE_CHANNEL.strip().lower() not in {"dev", "development"}
     if production_release and (
         not DATA_PLANE_LEASE_RECIPIENT_ATTESTATION_REQUIRED
@@ -4415,7 +4476,7 @@ def _verify_credential_lease_recipient_attestation(
             detail="production recipient attestation is not configured fail-closed",
         )
     if evidence is None:
-        if DATA_PLANE_LEASE_RECIPIENT_ATTESTATION_REQUIRED:
+        if native or DATA_PLANE_LEASE_RECIPIENT_ATTESTATION_REQUIRED:
             raise HTTPException(
                 status_code=403, detail="recipient attestation is required"
             )
@@ -4449,6 +4510,8 @@ def _verify_credential_lease_recipient_attestation(
     }
     if request_authority_sha256 is not None:
         verifier_input["requestAuthoritySha256"] = request_authority_sha256
+    if native:
+        verifier_input["leaseRequestApiVersion"] = lease_request_api_version
     if not _recipient_attestation_verifier_slots.acquire(timeout=1.0):
         raise HTTPException(
             status_code=503, detail="recipient attestation verifier is at capacity"
@@ -4543,9 +4606,16 @@ def _verify_credential_lease_recipient_attestation(
         "routeId": route_id,
         "credentialId": credential_id,
     }
+    if native:
+        expected_bindings["leaseRequestApiVersion"] = lease_request_api_version
+        expected_fields = set(expected_bindings) | {"ok", "debug"}
+        if request_authority_sha256 is not None:
+            expected_fields.add("requestAuthoritySha256")
+        if set(verified) != expected_fields:
+            raise HTTPException(status_code=403, detail="native recipient verifier profile mismatch")
     if any(
         not isinstance(verified.get(field), str)
-        or not hmac.compare_digest(verified[field], expected)
+        or not lease_profiles.text_matches(verified[field], expected, native=native)
         for field, expected in expected_bindings.items()
     ):
         raise HTTPException(
@@ -4569,7 +4639,7 @@ def _verify_credential_lease_recipient_attestation(
             detail="recipient attestation request authority binding mismatch",
         )
     if (
-        RELEASE_CHANNEL.strip().lower() not in {"dev", "development"}
+        (native or RELEASE_CHANNEL.strip().lower() not in {"dev", "development"})
         and verified.get("debug") is not False
     ):
         raise HTTPException(
@@ -17380,8 +17450,9 @@ def _assert_credential_lease_route_binding(
             status_code=409,
             detail="principal is not assigned to the requested active route",
         )
-    if route.credential_ref is None or not hmac.compare_digest(
-        route.credential_ref, payload.credential_id
+    native, _ = lease_profiles.request_profile(payload.api_version)
+    if route.credential_ref is None or not lease_profiles.text_matches(
+        route.credential_ref, payload.credential_id, native=native
     ):
         raise HTTPException(
             status_code=409,
@@ -17600,6 +17671,7 @@ def _assert_credential_lease_release_authorization(
     *,
     route: Any,
 ) -> dict[str, Any]:
+    native, bound = lease_profiles.request_profile(payload.api_version)
     release = payload.release_authorization
     jit = route.jit if isinstance(route.jit, dict) else {}
     jit_required = jit.get("required") is True
@@ -17633,13 +17705,13 @@ def _assert_credential_lease_release_authorization(
     )
     if not route_controlled:
         if (
-            payload.api_version != "serverware.credentialLeaseRequest/v3"
+            bound
             or payload.request_authority is not None
             or release is not None
         ):
             raise HTTPException(
                 status_code=409,
-                detail="uncontrolled route requires legacy authority-free credential dispatch",
+                detail="uncontrolled route requires authority-free credential dispatch",
             )
         return {
             "controlled": False,
@@ -17649,12 +17721,12 @@ def _assert_credential_lease_release_authorization(
             "releaseAuthorization": None,
         }
     if (
-        payload.api_version != "serverware.credentialLeaseRequest/v4"
+        not bound
         or payload.request_authority is None
     ):
         raise HTTPException(
             status_code=409,
-            detail="controlled route requires operation-bound credential lease v4",
+            detail="controlled route requires an operation-bound credential lease profile",
         )
     if not ATOMIC_RELEASE_AUTHORIZATION_ENABLED:
         raise HTTPException(
@@ -17668,6 +17740,9 @@ def _assert_credential_lease_release_authorization(
     )
     authority_sha256 = _credential_lease_request_authority_sha256(authority)
     now_epoch_ms = time.time_ns() // 1_000_000
+    # Native request authority must recheck the same complete current JIT
+    # normalization used by preparation, reservation, and the issuance claim.
+    jit_authority = db.jit_approver_policy_arguments(jit) if native and jit_required else {}
     try:
         authority_snapshot = db.release_credential_request_authority_snapshot(
             attempt_id=authority.attempt_id,
@@ -17684,6 +17759,7 @@ def _assert_credential_lease_release_authorization(
             credential_id=payload.credential_id,
             credential_version=int(payload.expected_credential_version or 0),
             policy_hash=payload.policy_hash,
+            native_profile=native,
             now_epoch_ms=now_epoch_ms,
             required_approver_roles=({"approver"} if jit_required else set()),
             allowed_approver_ids=(
@@ -17692,10 +17768,14 @@ def _assert_credential_lease_release_authorization(
                 else None
             ),
             require_approver_webauthn=(
-                _webauthn_required(_approval_authn_policy(jit))
+                bool(jit_authority.get("require_approver_webauthn"))
+                if native
+                else _webauthn_required(_approval_authn_policy(jit))
                 if jit_required
                 else False
             ),
+            approval_threshold=int(jit_authority.get("approval_threshold", 1)),
+            approver_credential_policy=jit_authority.get("approver_credential_policy"),
         )
     except db.ReleaseAuthorizationConflictError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -17714,6 +17794,8 @@ def _assert_credential_lease_release_authorization(
             status_code=409,
             detail="credential lease request authority digest mismatch",
         )
+    if authority_snapshot["native_profile"] is not native:
+        raise HTTPException(status_code=409, detail="credential lease retained release profile mismatch")
 
     committed_operation = authority_snapshot["operation_context"].get(
         "operation"
@@ -17844,11 +17926,7 @@ def _assert_credential_lease_release_authorization(
                 detail="controlled operation requires exact release authorization",
             )
         expected_release = {
-            "apiVersion": (
-                "serverware.credentialLeaseReleaseAuthorization/v2"
-                if durable_required
-                else "serverware.credentialLeaseReleaseAuthorization/v1"
-            ),
+            "apiVersion": lease_profiles.release_version(native=native, durable=durable_required),
             "kind": expected_kind,
             "state": "reserved",
             "attemptId": authority.attempt_id,
@@ -17920,6 +17998,7 @@ def _claim_credential_lease_release_authorization(
     )
     try:
         return db.claim_release_credential_issuance(
+            native_profile=lease_profiles.request_profile(payload.api_version)[0],
             release_kind=str(dispatch_authority["issuanceKind"]),
             attempt_id=request_authority.attempt_id,
             reservation_id=request_authority.reservation_id,
@@ -17986,6 +18065,7 @@ def data_plane_credential_leases(
 ) -> Response:
     authenticated = True
     try:
+        native, bound_dispatch = lease_profiles.request_profile(payload.api_version)
         snapshot = get_policy_snapshot()
         if not snapshot:
             raise HTTPException(
@@ -18055,6 +18135,7 @@ def data_plane_credential_leases(
             principal_id=payload.principal_id,
             route_id=payload.route_id,
             credential_id=payload.credential_id,
+            lease_request_api_version=payload.api_version if native else None,
         )
         replay_result = db.reserve_credential_lease_nonce(
             payload.recipient_key_id,
@@ -18240,16 +18321,8 @@ def data_plane_credential_leases(
                 )
             credentials = [credential_entry]
 
-            v4_dispatch = (
-                payload.api_version
-                == "serverware.credentialLeaseRequest/v4"
-            )
             aad = {
-                "apiVersion": (
-                    "serverware.credentialLeaseEnvelope/v3"
-                    if v4_dispatch
-                    else "serverware.credentialLeaseEnvelope/v2"
-                ),
+                "apiVersion": lease_profiles.envelope_version(native=native, bound=bound_dispatch),
                 "algorithm": "X25519-HKDF-SHA256-AES-256-GCM",
                 "recipientKeyId": payload.recipient_key_id,
                 "recipientNonce": payload.recipient_nonce,
@@ -18261,7 +18334,7 @@ def data_plane_credential_leases(
                 "issuedAtEpochMs": issued_at_epoch_ms,
                 "expiresAtEpochMs": expires_at_epoch_ms,
             }
-            if v4_dispatch:
+            if bound_dispatch:
                 aad.update(
                     {
                         "purpose": payload.purpose,
@@ -18270,11 +18343,7 @@ def data_plane_credential_leases(
                     }
                 )
             plaintext = {
-                "apiVersion": (
-                    "serverware.credentialLeaseSet/v4"
-                    if v4_dispatch
-                    else "serverware.credentialLeaseSet/v3"
-                ),
+                "apiVersion": lease_profiles.set_version(native=native, bound=bound_dispatch),
                 "purpose": payload.purpose,
                 "requestBindingSha256": request_binding_sha256,
                 "releaseAuthorization": release_authorization,
@@ -18289,7 +18358,7 @@ def data_plane_credential_leases(
                 "expiresAtEpochMs": expires_at_epoch_ms,
                 "credentials": credentials,
             }
-            if v4_dispatch:
+            if bound_dispatch:
                 plaintext.update(
                     {
                         "requestAuthority": request_authority,
@@ -18299,7 +18368,7 @@ def data_plane_credential_leases(
             elif release_authorization is not None:
                 raise HTTPException(
                     status_code=409,
-                    detail="legacy credential lease cannot carry release authorization",
+                    detail="unbound credential lease cannot carry release authorization",
                 )
             if (
                 len(_canonical_json(plaintext).encode("utf-8"))

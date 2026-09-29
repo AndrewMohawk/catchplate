@@ -115,11 +115,14 @@ native transport and full response path. The [.247 principal-preflight owner](na
 continues to retain genuine proof on the same CONNECT transport; preflight alone
 does not authorize CONNECT or an upstream action.
 
-Credential lease request/broker/recipient contracts remain legacy 256-byte
-profiles. Incompatible credentialed principals must be refused before reservation
-or provider effects; no remapping or legacy widening is authorized. Explicit
-native lease integration remains open, so this slice does not establish a full
-credentialed wide-principal flow or complete onboarding.
+The [native credential-lease path](native-credential-leases.md) now has separate
+request, authority, envelope and plaintext profiles selected from the actual
+native recipient owner. A separately pinned recipient verifier joins the genuine
+role-2 quote and exact request digest; the broker checks retained native release
+authority before one-use controlled issuance. This replaces the interim refusal
+only on the fully native path. Legacy leases retain their limits, and no identity
+remapping or profile downgrade is authorized. Source integration still does not
+prove an executed credentialed flow, complete onboarding or production custody.
 
 This verifier does not establish full HTTP/exporter/receipt/witness semantics,
 install egress rules, authorize canaries, or prove runtime compatibility. Those

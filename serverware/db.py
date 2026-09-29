@@ -32,6 +32,7 @@ from cryptography.hazmat.primitives.asymmetric import ec
 
 from serverware import authority_contract, authority_primary_contract, grants
 from serverware import release_authorization_profiles as release_profiles
+from serverware import credential_lease_profiles as lease_profiles
 from serverware.audit_outbox_contract import MAX_PENDING
 from serverware.authority_store import (
     authority_dispatch as _authority_dispatch,
@@ -78684,7 +78685,17 @@ def _validate_credential_lease_request_authority(
     policy_hash: str,
     now_epoch_ms: int,
     for_update: bool = False,
+    native_profile: bool = False,
 ) -> tuple[Any, dict[str, Any]]:
+    if type(native_profile) is not bool:
+        raise ReleaseAuthorizationError("credential request profile must be explicit")
+    if native_profile:
+        try:
+            lease_profiles.native_identity(principal_id, principal=True)
+            lease_profiles.native_identity(route_id)
+            lease_profiles.native_identity(credential_id)
+        except ValueError as exc:
+            raise ReleaseAuthorizationError(str(exc)) from exc
     attempt_id = _release_digest(
         "credential request authority attempt ID", attempt_id
     ) or ""
@@ -78754,23 +78765,20 @@ def _validate_credential_lease_request_authority(
         raise ReleaseAuthorizationError(
             "credential request authority attempt was not found"
         )
+    _require_release_native_profile(row, native_profile)
     expected = {
         **expected_strings,
         "credential_version": credential_version,
         "reservation_expires_at_epoch_ms": reservation_expires_at_epoch_ms,
         "state": "reserved",
     }
-    native_principal_binding = (
-        _release_attempt_binding_version(row) in release_profiles.NATIVE_BINDING_VERSIONS
-    )
     for field, expected_value in expected.items():
         actual = row[field]
         if field in {"credential_version", "reservation_expires_at_epoch_ms"}:
             actual = int(actual)
         if isinstance(expected_value, str):
-            if not isinstance(actual, str) or not hmac.compare_digest(
-                actual.encode("utf-8") if field == "principal_id" and native_principal_binding else actual,
-                expected_value.encode("utf-8") if field == "principal_id" and native_principal_binding else expected_value,
+            if not lease_profiles.text_matches(
+                actual, expected_value, native=native_profile,
             ):
                 raise ReleaseAuthorizationConflictError(
                     "credential request authority does not match the reserved attempt"
@@ -78812,7 +78820,7 @@ def _validate_credential_lease_request_authority(
         )
     request_authority_json = dumps(
         {
-            "apiVersion": "serverware.credentialLeaseRequestAuthority/v1",
+            "apiVersion": lease_profiles.authority_version(native=native_profile),
             "attemptId": attempt_id,
             "reservationId": reservation_id,
             "bindingDigest": binding_digest,
@@ -78865,6 +78873,7 @@ def _validate_credential_lease_request_authority(
         "quota_claims": _release_credential_quota_claims(conn, attempt_id),
         "durable_policy": durable_policy,
         "release_protocol": _release_attempt_protocol(conn, row),
+        "native_profile": native_profile,
     }
 
 
@@ -78888,6 +78897,7 @@ def release_credential_request_authority_snapshot(
     require_approver_webauthn: bool = False,
     approval_threshold: int = 1,
     approver_credential_policy: Mapping[str, Any] | None = None,
+    native_profile: bool = False,
 ) -> dict[str, Any]:
     """Verify a v4 lease authority against the exact reserved request attempt."""
     require_atomic_release_writer()
@@ -78922,6 +78932,7 @@ def release_credential_request_authority_snapshot(
             credential_version=credential_version,
             policy_hash=policy_hash,
             now_epoch_ms=now_ms,
+            native_profile=native_profile,
         )
         _validate_release_consumption_state(conn, row)
         invalid_reason = _release_reservation_invalid_reason(
@@ -78982,6 +78993,7 @@ def claim_release_credential_issuance(
     require_approver_webauthn: bool = False,
     approval_threshold: int = 1,
     approver_credential_policy: Mapping[str, Any] | None = None,
+    native_profile: bool = False,
 ) -> dict[str, Any]:
     """Atomically claim the sole credential-bearing lease for a reserved attempt."""
     require_atomic_release_writer()
@@ -79133,6 +79145,7 @@ def claim_release_credential_issuance(
             raise ReleaseAuthorizationError(
                 "release authorization attempt was not found"
             )
+        _require_release_native_profile(preview, native_profile)
         if not hmac.compare_digest(str(preview["binding_digest"]), binding_digest):
             raise ReleaseAuthorizationConflictError(
                 "release authorization binding does not match the durable attempt"
@@ -79161,6 +79174,7 @@ def claim_release_credential_issuance(
             policy_hash=policy_hash,
             now_epoch_ms=now_ms,
             for_update=True,
+            native_profile=native_profile,
         )
         if not hmac.compare_digest(
             request_authority["request_authority_sha256"],
@@ -79240,17 +79254,13 @@ def claim_release_credential_issuance(
             "credential_version": credential_version,
             "reservation_expires_at_epoch_ms": reservation_expires_at_epoch_ms,
         }
-        native_principal_binding = (
-            _release_attempt_binding_version(row) in release_profiles.NATIVE_BINDING_VERSIONS
-        )
         for field, expected_value in expected.items():
             actual = row[field]
             if field in {"credential_version", "reservation_expires_at_epoch_ms"}:
                 actual = int(actual)
             if isinstance(expected_value, str):
-                if not isinstance(actual, str) or not hmac.compare_digest(
-                    actual.encode("utf-8") if field == "principal_id" and native_principal_binding else actual,
-                    expected_value.encode("utf-8") if field == "principal_id" and native_principal_binding else expected_value,
+                if not lease_profiles.text_matches(
+                    actual, expected_value, native=native_profile,
                 ):
                     raise ReleaseAuthorizationConflictError(
                         "credential issuance binding does not match the durable attempt"

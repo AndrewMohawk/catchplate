@@ -23,6 +23,10 @@ from serverware_agent_trust import workload_identity_originals as originals
 
 SCHEMA = "serverware.signedWorkloadIdentityIssuerBootstrap/v1"
 PAYLOAD_SCHEMA = "serverware.workloadIdentityIssuerBootstrap/v1"
+NATIVE_SCHEMA = "serverware.signedWorkloadIdentityIssuerBootstrap/v2"
+NATIVE_PAYLOAD_SCHEMA = "serverware.workloadIdentityIssuerBootstrap/v2"
+LEGACY_PROFILE = "legacy-v1"
+NATIVE_PROFILE = "native-request-first-v2"
 MAX_BYTES = 128 * 1024
 SERVICE_UID = SERVICE_GID = 65492
 PROCESS_MODE = "workload-identity-issuer"
@@ -38,6 +42,11 @@ _PAYLOAD_FIELDS = frozenset({
     "packetSigningKey", "authorizationKey", "policyHash", "runtimeManifestDigest",
     "caPrivateKey", "journal", "launch", "issuedAtEpochNs", "expiresAtEpochNs",
 })
+_NATIVE_PAYLOAD_FIELDS = (_PAYLOAD_FIELDS - {"packetSigningKey", "runtimeManifestDigest"}
+    | {"nativeEnrollment"})
+_NATIVE_ENROLLMENT_FIELDS = frozenset({"releaseRecordSha256", "configurationSha256",
+    "runtimeCaCertificateSha256", "runtimeCaSpkiSha256",
+    "delegationAuthorizerKey", "setupAuthorizerKey"})
 _LAUNCH_FIELDS = frozenset({
     "rootPublicKeyFd", "bootstrapFd", "listenerFd", "caPrivateKeyFd", "journalFd",
     "inheritedFileDescriptors", "listenerPath", "listenerDevice", "listenerInode",
@@ -226,19 +235,31 @@ def _wrapped(value, maximum, budget):
 
 
 @dataclass(frozen=True, slots=True, repr=False)
+class _NativeEnrollmentScope:
+    release_record_digest: str
+    runtime_configuration_digest: str
+    runtime_ca_certificate_digest: str
+    runtime_ca_spki_digest: str
+    delegation_public_key_bytes: bytes
+    delegation_pem_digest: str
+    setup_public_key_bytes: bytes
+    setup_pem_digest: str
+
+
+@dataclass(frozen=True, slots=True, repr=False)
 class _IssuerMaterial:
     bootstrap_bytes: bytes
     bootstrap_digest: str
     configuration_digest: str
     issuer_certificate_bytes: bytes
     issuer_certificate: object
-    packet_signing_key_bytes: bytes
+    packet_signing_key_bytes: bytes | None
     authorization_key_bytes: bytes
     authorization_public_key: object
     ca_private_key_byte_count: int
     ca_spki_digest: str
     policy_hash: str
-    runtime_manifest_digest: str
+    runtime_manifest_digest: str | None
     journal_namespace: str
     journal_device: int
     journal_inode: int
@@ -259,14 +280,78 @@ class _IssuerMaterial:
     window: tuple
     deadline_ns: int
     live: object
+    profile: str = LEGACY_PROFILE
+    native_scope: _NativeEnrollmentScope | None = None
 
 
 def _verify_on_work(*, bootstrap_bytes, root_public_key, live_window,
         transport_deadline_ns, work, _current=None):
+    """Strict legacy v1: never admits a native cold bootstrap."""
+    return _verify_profile_on_work(bootstrap_bytes=bootstrap_bytes,
+        root_public_key=root_public_key, live_window=live_window,
+        transport_deadline_ns=transport_deadline_ns, work=work,
+        _current=_current, native_profile=False)
+
+
+def _verify_native_on_work(*, bootstrap_bytes, root_public_key, live_window,
+        transport_deadline_ns, work, _current=None):
+    """Strict native v2: root permission, not a native verification receipt."""
+    return _verify_profile_on_work(bootstrap_bytes=bootstrap_bytes,
+        root_public_key=root_public_key, live_window=live_window,
+        transport_deadline_ns=transport_deadline_ns, work=work,
+        _current=_current, native_profile=True)
+
+
+def _verify_launch_on_work(*, bootstrap_bytes, root_public_key, live_window,
+        transport_deadline_ns, work, _current=None):
+    """Select a closed root-signed profile before private-resource acquisition.
+
+    The bounded decode selects only the verifier; the complete original still
+    receives genuine root signature and scope verification. No request flag or
+    successful caller-supplied material selects the launch profile.
+    """
     budget = _Budget(work, live_window, transport_deadline_ns, _current)
-    p = _signed(bootstrap_bytes, SCHEMA, PAYLOAD_SCHEMA, root_public_key, MAX_BYTES, budget)
-    _object(p, _PAYLOAD_FIELDS)
-    for name, expected in (("purpose", "workload-identity-issuance"),
+    envelope = _decode(bootstrap_bytes, MAX_BYTES, budget)
+    _object(envelope, {"schema", "payload", "signature"})
+    if envelope["schema"] == SCHEMA:
+        verifier = _verify_on_work
+    elif envelope["schema"] == NATIVE_SCHEMA:
+        verifier = _verify_native_on_work
+    else:
+        _fail()
+    return verifier(bootstrap_bytes=bootstrap_bytes, root_public_key=root_public_key,
+        live_window=budget.window, transport_deadline_ns=budget.bound, work=work,
+        _current=budget.current)
+
+
+def _enrollment_original_byte_count(material):
+    """Account actual admitted roots; never invent a legacy key for native v2."""
+    if type(material) is not _IssuerMaterial:
+        _fail()
+    if (material.profile == LEGACY_PROFILE and material.native_scope is None
+            and type(material.packet_signing_key_bytes) is bytes
+            and type(material.runtime_manifest_digest) is str):
+        return len(material.packet_signing_key_bytes)
+    if (material.profile == NATIVE_PROFILE
+            and type(material.native_scope) is _NativeEnrollmentScope
+            and material.packet_signing_key_bytes is None
+            and material.runtime_manifest_digest is None):
+        return (len(material.native_scope.delegation_public_key_bytes)
+            + len(material.native_scope.setup_public_key_bytes))
+    _fail()
+
+
+def _verify_profile_on_work(*, bootstrap_bytes, root_public_key, live_window,
+        transport_deadline_ns, work, _current, native_profile):
+    if type(native_profile) is not bool:
+        _fail()
+    budget = _Budget(work, live_window, transport_deadline_ns, _current)
+    p = _signed(bootstrap_bytes, NATIVE_SCHEMA if native_profile else SCHEMA,
+        NATIVE_PAYLOAD_SCHEMA if native_profile else PAYLOAD_SCHEMA,
+        root_public_key, MAX_BYTES, budget)
+    _object(p, _NATIVE_PAYLOAD_FIELDS if native_profile else _PAYLOAD_FIELDS)
+    purpose = "native-workload-identity-issuance" if native_profile else "workload-identity-issuance"
+    for name, expected in (("purpose", purpose),
             ("trustMode", "trusted-host-local"), ("serviceUid", SERVICE_UID),
             ("serviceGid", SERVICE_GID), ("processMode", PROCESS_MODE)):
         if type(p[name]) is not type(expected) or p[name] != expected:
@@ -274,15 +359,34 @@ def _verify_on_work(*, bootstrap_bytes, root_public_key, live_window,
     budget.interval(p["issuedAtEpochNs"], p["expiresAtEpochNs"])
     certificate_bytes = _wrapped(p["issuerCertificate"], originals.MAX_CERTIFICATE_BYTES, budget)
     issuer = originals._issuer(certificate_bytes, budget)
-    packet_key_bytes = _wrapped(p["packetSigningKey"], 1024, budget)
     authorization_key_bytes = _wrapped(p["authorizationKey"], 1024, budget)
-    packet_key = packets._public_key(packet_key_bytes, budget)
     authorization_key = packets._public_key(authorization_key_bytes, budget)
-    root_spki, packet_spki = _spki(root_public_key, budget), _spki(packet_key, budget)
+    root_spki = _spki(root_public_key, budget)
     authorizer_spki = _spki(authorization_key, budget)
-    if (authorizer_spki in (root_spki, packet_spki, issuer.spki_der)
-            or issuer.spki_der in (root_spki, packet_spki)):
-        _fail()
+    native_scope, packet_key_bytes, runtime_manifest = None, None, None
+    if native_profile:
+        scope = _object(p["nativeEnrollment"], _NATIVE_ENROLLMENT_FIELDS)
+        delegation_pem = _wrapped(scope["delegationAuthorizerKey"], 1024, budget)
+        setup_pem = _wrapped(scope["setupAuthorizerKey"], 1024, budget)
+        delegation_key = packets._public_key(delegation_pem, budget)
+        setup_key = packets._public_key(setup_pem, budget)
+        role_spkis = (root_spki, authorizer_spki, issuer.spki_der,
+            _spki(delegation_key, budget), _spki(setup_key, budget))
+        budget.charge(input_bytes=5 * sum(map(len, role_spkis)))
+        if len(set(role_spkis)) != len(role_spkis):
+            _fail()
+        native_scope = _NativeEnrollmentScope(_digest(scope["releaseRecordSha256"]),
+            _digest(scope["configurationSha256"]), _digest(scope["runtimeCaCertificateSha256"]),
+            _digest(scope["runtimeCaSpkiSha256"]), delegation_pem,
+            packets._digest(delegation_pem, budget), setup_pem, packets._digest(setup_pem, budget))
+    else:
+        packet_key_bytes = _wrapped(p["packetSigningKey"], 1024, budget)
+        packet_key = packets._public_key(packet_key_bytes, budget)
+        packet_spki = _spki(packet_key, budget)
+        if (authorizer_spki in (root_spki, packet_spki, issuer.spki_der)
+                or issuer.spki_der in (root_spki, packet_spki)):
+            _fail()
+        runtime_manifest = _digest(p["runtimeManifestDigest"])
     key = _object(p["caPrivateKey"], {"byteCount", "spkiSha256"})
     key_size = _integer(key["byteCount"], 64 * 1024, 1)
     ca_digest = _digest(key["spkiSha256"])
@@ -325,11 +429,12 @@ def _verify_on_work(*, bootstrap_bytes, root_public_key, live_window,
     result = _IssuerMaterial(bootstrap_bytes, packets._digest(bootstrap_bytes, budget),
         _digest(p["configurationDigest"]), certificate_bytes, issuer, packet_key_bytes,
         authorization_key_bytes, authorization_key, key_size, ca_digest,
-        _digest(p["policyHash"]), _digest(p["runtimeManifestDigest"]), _identifier(p["journalNamespace"]),
+        _digest(p["policyHash"]), runtime_manifest, _identifier(p["journalNamespace"]),
         journal["device"], journal["inode"], SERVICE_UID, SERVICE_GID, quota, records, (count, head),
         launch["listenerDevice"], launch["listenerInode"], launch["listenerPathDevice"],
         launch["listenerPathInode"], SERVICE_UID, PEER_GID, 0o660, timeout,
-        (p["issuedAtEpochNs"], p["expiresAtEpochNs"]), budget.window, budget.bound, budget.current)
+        (p["issuedAtEpochNs"], p["expiresAtEpochNs"]), budget.window, budget.bound, budget.current,
+        profile=NATIVE_PROFILE if native_profile else LEGACY_PROFILE, native_scope=native_scope)
     result.live()
     return result
 
@@ -340,5 +445,18 @@ def _produce_on_work(*, payload_bytes, root_private_key, root_public_key,
     raw = _produce(payload_bytes, SCHEMA, PAYLOAD_SCHEMA, root_private_key, root_public_key, MAX_BYTES, budget)
     admitted = _verify_on_work(bootstrap_bytes=raw, root_public_key=root_public_key,
         live_window=budget.window, transport_deadline_ns=budget.bound, work=work, _current=budget.current)
+    admitted.live()
+    return raw
+
+
+def _produce_native_on_work(*, payload_bytes, root_private_key, root_public_key,
+        live_window, transport_deadline_ns, work, _current=None):
+    """Explicit root operation; not a request-selected enrollment service."""
+    budget = _Budget(work, live_window, transport_deadline_ns, _current)
+    raw = _produce(payload_bytes, NATIVE_SCHEMA, NATIVE_PAYLOAD_SCHEMA,
+        root_private_key, root_public_key, MAX_BYTES, budget)
+    admitted = _verify_native_on_work(bootstrap_bytes=raw, root_public_key=root_public_key,
+        live_window=budget.window, transport_deadline_ns=budget.bound, work=work,
+        _current=budget.current)
     admitted.live()
     return raw

@@ -1,0 +1,108 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/workload-identity-issuer-bootstrap.v2.schema.json",
+  "title": "Root-signed native workload identity issuer cold bootstrap v2",
+  "description": "Closed canonical signed public original, at most 131072 bytes. Ed25519 signs the payload-schema ASCII bytes, NUL and canonical payload. Runtime signature, source revision, exact-byte digest, key separation, interval, descriptor and custody checks remain mandatory; schema validation is not launch or issuance authority. Native v2 is distinct from strict legacy v1.",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema", "payload", "signature"],
+  "properties": {
+    "schema": {"const": "serverware.signedWorkloadIdentityIssuerBootstrap/v2"},
+    "payload": {"$ref": "#/$defs/payload"},
+    "signature": {"type": "string", "minLength": 94, "maxLength": 94, "pattern": "^ed25519:[A-Za-z0-9_-]{85}[AQgw](?![\\s\\S])"}
+  },
+  "$defs": {
+    "digest": {"type": "string", "minLength": 71, "maxLength": 71, "pattern": "^sha256:[0-9a-f]{64}(?![\\s\\S])"},
+    "positive": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807},
+    "wrapped": {
+      "type": "object", "additionalProperties": false,
+      "required": ["base64Url", "byteCount", "bytesDigest"],
+      "properties": {
+        "base64Url": {"type": "string", "minLength": 2, "maxLength": 87382, "pattern": "^[A-Za-z0-9_-]+(?![\\s\\S])"},
+        "byteCount": {"type": "integer", "minimum": 1, "maximum": 65536},
+        "bytesDigest": {"$ref": "#/$defs/digest"}
+      },
+      "description": "Canonical unpadded base64url; byte count and digest must equal the actual decoded original. Semantic verification admits the exact PEM certificate or Ed25519 public key for its role."
+    },
+    "wrappedKey": {
+      "allOf": [{"$ref": "#/$defs/wrapped"}, {"properties": {
+        "base64Url": {"maxLength": 1366}, "byteCount": {"maximum": 1024}
+      }}]
+    },
+    "nativeEnrollment": {
+      "type": "object", "additionalProperties": false,
+      "required": ["releaseRecordSha256", "configurationSha256", "runtimeCaCertificateSha256", "runtimeCaSpkiSha256", "delegationAuthorizerKey", "setupAuthorizerKey"],
+      "properties": {
+        "releaseRecordSha256": {"$ref": "#/$defs/digest"},
+        "configurationSha256": {"$ref": "#/$defs/digest", "description": "Native runtime configuration, not the outer issuer-service configurationDigest."},
+        "runtimeCaCertificateSha256": {"$ref": "#/$defs/digest"},
+        "runtimeCaSpkiSha256": {"$ref": "#/$defs/digest"},
+        "delegationAuthorizerKey": {"$ref": "#/$defs/wrappedKey"},
+        "setupAuthorizerKey": {"$ref": "#/$defs/wrappedKey"}
+      },
+      "description": "Independent native scope. Root, issuance-authorizer, issuer CA, delegation-authorizer and setup-authorizer SPKIs must all be distinct. Runtime interception CA is not the workload issuer CA."
+    },
+    "caPrivateKey": {
+      "type": "object", "additionalProperties": false,
+      "required": ["byteCount", "spkiSha256"],
+      "properties": {
+        "byteCount": {"type": "integer", "minimum": 1, "maximum": 65536},
+        "spkiSha256": {"$ref": "#/$defs/digest"}
+      },
+      "description": "Public acquisition commitment only, never private key bytes. Must match the actual independently admitted issuer and inherited private-key original."
+    },
+    "checkpoint": {
+      "type": "object", "additionalProperties": false,
+      "required": ["recordCount", "headDigest"],
+      "properties": {
+        "recordCount": {"type": "integer", "minimum": 0, "maximum": 1024},
+        "headDigest": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/digest"}]}
+      },
+      "allOf": [{"if": {"properties": {"recordCount": {"const": 0}}}, "then": {"properties": {"headDigest": {"type": "null"}}}, "else": {"properties": {"headDigest": {"$ref": "#/$defs/digest"}}}}],
+      "description": "recordCount must not exceed the signed journal maximumRecords; local checkpoint continuity is not independent rollback witnessing."
+    },
+    "journal": {
+      "type": "object", "additionalProperties": false,
+      "required": ["device", "inode", "uid", "gid", "quotaBytes", "maximumRecords", "checkpoint"],
+      "properties": {
+        "device": {"$ref": "#/$defs/positive"}, "inode": {"$ref": "#/$defs/positive"},
+        "uid": {"const": 65492}, "gid": {"const": 65492},
+        "quotaBytes": {"type": "integer", "minimum": 4096, "maximum": 67108864},
+        "maximumRecords": {"type": "integer", "minimum": 2, "maximum": 1024, "multipleOf": 2},
+        "checkpoint": {"$ref": "#/$defs/checkpoint"}
+      }
+    },
+    "launch": {
+      "type": "object", "additionalProperties": false,
+      "required": ["rootPublicKeyFd", "bootstrapFd", "listenerFd", "caPrivateKeyFd", "journalFd", "inheritedFileDescriptors", "listenerPath", "listenerDevice", "listenerInode", "listenerPathDevice", "listenerPathInode", "listenerUid", "listenerGid", "listenerMode", "peerUid", "peerGid", "requestTimeoutNs"],
+      "properties": {
+        "rootPublicKeyFd": {"const": 198}, "bootstrapFd": {"const": 199},
+        "listenerFd": {"const": 200}, "caPrivateKeyFd": {"const": 201}, "journalFd": {"const": 202},
+        "inheritedFileDescriptors": {"const": [198, 199, 200, 201, 202]},
+        "listenerPath": {"const": "/run/serverware/workload-identity-issuer/issuer.sock"},
+        "listenerDevice": {"$ref": "#/$defs/positive"}, "listenerInode": {"$ref": "#/$defs/positive"},
+        "listenerPathDevice": {"$ref": "#/$defs/positive"}, "listenerPathInode": {"$ref": "#/$defs/positive"},
+        "listenerUid": {"const": 65492}, "listenerGid": {"const": 65532}, "listenerMode": {"const": 432},
+        "peerUid": {"const": 65532}, "peerGid": {"const": 65532},
+        "requestTimeoutNs": {"type": "integer", "minimum": 1, "maximum": 30000000000}
+      }
+    },
+    "payload": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "sourceRevision", "purpose", "trustMode", "serviceUid", "serviceGid", "processMode", "configurationDigest", "journalNamespace", "issuerCertificate", "authorizationKey", "policyHash", "caPrivateKey", "journal", "launch", "issuedAtEpochNs", "expiresAtEpochNs", "nativeEnrollment"],
+      "properties": {
+        "schema": {"const": "serverware.workloadIdentityIssuerBootstrap/v2"},
+        "sourceRevision": {"type": "string", "minLength": 1, "maxLength": 128, "description": "Must equal the running verifier's exact compiled authority source revision; not an operator-selected compatibility range."},
+        "purpose": {"const": "native-workload-identity-issuance"}, "trustMode": {"const": "trusted-host-local"},
+        "serviceUid": {"const": 65492}, "serviceGid": {"const": 65492},
+        "processMode": {"const": "workload-identity-issuer"},
+        "configurationDigest": {"$ref": "#/$defs/digest"},
+        "journalNamespace": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}(?![\\s\\S])"},
+        "issuerCertificate": {"$ref": "#/$defs/wrapped"}, "authorizationKey": {"$ref": "#/$defs/wrappedKey"},
+        "policyHash": {"$ref": "#/$defs/digest"}, "nativeEnrollment": {"$ref": "#/$defs/nativeEnrollment"},
+        "caPrivateKey": {"$ref": "#/$defs/caPrivateKey"}, "journal": {"$ref": "#/$defs/journal"}, "launch": {"$ref": "#/$defs/launch"},
+        "issuedAtEpochNs": {"$ref": "#/$defs/positive"},
+        "expiresAtEpochNs": {"$ref": "#/$defs/positive", "description": "Must be strictly later than issuedAtEpochNs and currently live; issuer-certificate validity and the original nonrenewing processing window also apply."}
+      }
+    }
+  }
+}

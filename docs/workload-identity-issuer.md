@@ -3,12 +3,14 @@
 This is an authored, source-only worker contract. It is unbuilt, unexecuted and
 unprovisioned; no issuance, mTLS handshake, production acceptance or N04 closure
 is claimed. The separate [control-plane caller and public action](control-plane-workload-identity-issuance.md)
-connect this worker in source; explicit CLI submission and portal orchestration
-remain open. Existing local preparation and certificate-admission CLI modes remain network-free. The
+and [explicit CLI submission and portal orchestration](workload-identity-submission.md)
+connect the legacy profile in source. The additive native request-first worker
+profile below does not silently convert those legacy callers. Existing local
+preparation and certificate-admission CLI modes remain network-free. The
 [remaining integration plan](workload-identity-issuer-plan.md) preserves those
 boundaries and the broader lifecycle/channel requirements.
 
-## Separate authority and exact originals
+## Legacy v1 authority and exact originals
 
 `workload_identity_issuer_bootstrap.py` admits a canonical Ed25519 root-signed
 `serverware.signedWorkloadIdentityIssuerBootstrap/v1` envelope whose payload
@@ -55,6 +57,57 @@ signing keys and bounded canonical `payload_bytes`, followed by genuine
 round-trip admission. These are operator/provisioner source APIs, not an
 automatic grant-signing service or issuance permission minted from a CSR.
 
+## Native request-first cold-profile dispatch
+
+The additive native cold bootstrap authenticates the exact profile
+`native-request-first-v2`; the existing profile is `legacy-v1`. The launcher
+selects between the strict signed cold schemas before reading the CA private
+key. Both produce the same source-owned `_IssuerMaterial` type, not an inbound
+profile selector or successful request DTO. The service selects its fixed
+verifier only from that retained cold material. A legacy owner requires no
+native scope and retains its actual packet-signing key and runtime-manifest
+digest. A native owner requires the exact admitted `_NativeEnrollmentScope`,
+with both legacy-only fields absent. There is no dummy v1 packet key or invented
+`runtimeManifestDigest`, and no fallback between profiles after refusal.
+
+`native_workload_identity_issuance_authorization.py` supplies the separate native
+grant and original certificate verifier. The wire still carries exactly grant,
+packet and request originals. For this profile the packet is the explicit native
+seven-field packet, bounded at 512 KiB, and the target request is the request-first
+CSR/possession original, bounded at 64 KiB. No prior target certificate or legacy
+enrollment packet is required. Independently signed setup/delegation associations
+and CSR possession do not themselves grant CA permission: the separately signed
+native issuance grant remains mandatory under the authenticated cold scope.
+Neither runtime-receiver diagnostics nor a caller-supplied verification result
+replace genuine original admission.
+
+The native input is packet material, not the eight-field evidence response; this
+worker does not replay role-3/role-5 Nitro quotes. Its original verifier checks the
+setup and delegation signatures under the independent cold roots, the target
+CSR/proof and issuer, and the exact committed policy-requirements projection.
+Before claiming, a configured target certificate pin refuses first issuance;
+configured subject/issuer SPKI pins must match the actual CSR/issuer, and each
+nonempty DNS/URI selector category must intersect the selected SANs. After
+readback, the verifier checks the real leaf against all retained mTLS selectors
+and the grant's exact serial/validity. This establishes certificate compatibility,
+not source-CIDR, header, token, provider or complete runtime authentication.
+
+The native grant distinguishes the actual issuer certificate DER digest from
+its exact PEM-original digest. The common CA builder and retained association
+continue to use the PEM digest, and the builder still checks the real private
+key's SPKI against the actual independently admitted issuer. The service uses
+the selected native verifier both before the irreversible claim and after exact
+completed-certificate readback; the latter independently repeats original
+admission and verifies the real leaf, rather than trusting the first result.
+No new signing callback, CA-loading path, worker UID, descriptor, socket or
+request/response frame is introduced.
+
+This is source-connected worker support, not proof that an actual native caller
+has delivered a grant, received and locally admitted its target leaf, or completed
+enrollment. Protected installation reservation/token/namespace ownership,
+scoped installation/egress/canaries, lifecycle and deployment acceptance remain
+separate obligations. The legacy public caller and old packet meanings stay strict.
+
 ## Fixed preprovisioned worker resources
 
 | Resource | Source-fixed contract |
@@ -97,6 +150,13 @@ also rejected. The namespace must remain stable across CA/grant renewal.
 
 Only the closed scalar association and public certificate are journaled. The
 packet body is deliberately absent because it can contain a CA-install token.
+The same seventeen-field journal frame now accommodates a native principal of
+up to 1024 UTF-8 bytes without an added printable-character restriction, matching
+the original request-first profile. Only that scalar's storage capacity changes;
+the legacy grant verifier retains its stricter 512-byte/control-character rule,
+and all other scalar, frame and total-size bounds remain unchanged. This storage
+acceptance is not grant authority. Principal text is length-framed into the slot
+hash, never used directly as a filename or log message.
 An exact complete result can be read back and genuinely re-admitted without
 signing again, while its original authority remains valid. A claim without a
 complete retained certificate is unknown: it permits no re-sign, deletion,

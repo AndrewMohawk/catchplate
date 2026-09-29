@@ -1,0 +1,111 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-enrollment-policy-requirements.v1.schema.json",
+  "title": "Native enrollment public policy requirements v1",
+  "description": "Exact Rust Snapshot projection: sorted compact ensure_ascii JSON without LF, at most 65536 original bytes, complete-or-refuse with at most128 entitled routes sorted by unique ID. Canonical strings, CIDRs, methods and path components originate in the actual compiled policy. Secret header/authentication values and arbitrary adapter/constraint/JIT values are absent, represented only by commitments and external-provisioning requirements. A signed setup commits the exact original, but parsing or signature admission alone proves neither current Snapshot provenance nor target authentication, provider permission, canary authorization or installation.",
+  "type": "object", "additionalProperties": false,
+  "required": ["apiVersion", "policy", "principal", "routes"],
+  "properties": {
+    "apiVersion": {"const": "serverware.nativeEnrollmentPolicyRequirements/v1"},
+    "policy": {"$ref": "#/$defs/policy"},
+    "principal": {"$ref": "#/$defs/principal"},
+    "routes": {"type": "array", "maxItems": 128, "items": {"$ref": "#/$defs/route"}}
+  },
+  "$defs": {
+    "text": {"type": "string", "maxLength": 65536, "description": "Aggregate canonical original remains bounded to65536 bytes; this is not a secret value or executable instruction allowance."},
+    "texts": {"type": "array", "maxItems": 65536, "items": {"$ref": "#/$defs/text"}},
+    "sha256": {"type": "string", "minLength": 71, "maxLength": 71, "pattern": "^sha256:[0-9a-f]{64}(?![\\s\\S])"},
+    "nullableSha256": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/sha256"}]},
+    "nullableText": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/text"}]},
+    "u64": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615},
+    "u128Decimal": {"type": "string", "minLength": 1, "maxLength": 39, "pattern": "^(?:0|[1-9][0-9]{0,38})(?![\\s\\S])", "description": "Canonical decimal text additionally bounded below2^128 by the consumer."},
+    "policy": {
+      "type": "object", "additionalProperties": false,
+      "required": ["hash", "id", "sequence", "rollbackEpoch", "trustGeneration", "compiledBehaviorSha256", "policySigningKeyId"],
+      "properties": {
+        "hash": {"$ref": "#/$defs/sha256"}, "id": {"$ref": "#/$defs/text"},
+        "sequence": {"$ref": "#/$defs/u64"}, "rollbackEpoch": {"$ref": "#/$defs/u64"},
+        "trustGeneration": {"$ref": "#/$defs/u64"},
+        "compiledBehaviorSha256": {"$ref": "#/$defs/sha256"},
+        "policySigningKeyId": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "principal": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "identityPolicySha256", "sourceCidrs", "mtls", "requiredHeaderNames", "requiredHeaderValues", "proxyAuthorization"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1, "maxLength": 1024, "description": "At most1024 UTF-8 bytes, exact target principal; not the bootstrap caller."},
+        "identityPolicySha256": {"$ref": "#/$defs/sha256"},
+        "sourceCidrs": {"$ref": "#/$defs/texts", "description": "Inbound principal identity constraints, not deployment proxy egress permissions."},
+        "mtls": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/mtls"}]},
+        "requiredHeaderNames": {"$ref": "#/$defs/texts"},
+        "requiredHeaderValues": {"const": "externally-provisioned"},
+        "proxyAuthorization": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/proxyAuthorization"}]}
+      }
+    },
+    "mtls": {
+      "type": "object", "additionalProperties": false,
+      "description": "All six original fields are retained. Empty SAN arrays impose no constraint; each nonempty category must intersect the observed category, and configured hashes must match. Certificate issuance rejects certificateSha256 before signing to avoid first-certificate circularity, and requires a genuine leaf/SPKI/SAN selector. Certificate compatibility never proves verified ingress or the remaining principal identity policy.",
+      "required": ["sanSpiffeIds", "sanDnsNames", "sanUris", "certificateSha256", "spkiSha256", "issuerSpkiSha256"],
+      "properties": {
+        "sanSpiffeIds": {"type": "array", "maxItems": 32, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 2048}},
+        "sanDnsNames": {"type": "array", "maxItems": 32, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 253}},
+        "sanUris": {"type": "array", "maxItems": 32, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 2048}},
+        "certificateSha256": {"$ref": "#/$defs/nullableSha256"},
+        "spkiSha256": {"$ref": "#/$defs/nullableSha256"},
+        "issuerSpkiSha256": {"$ref": "#/$defs/nullableSha256"}
+      }
+    },
+    "proxyAuthorization": {
+      "type": "object", "additionalProperties": false,
+      "required": ["type", "externallyProvisioned", "sourceCidrs", "expiresAtEpochMs"],
+      "properties": {
+        "type": {"enum": ["legacyExact", "bearerToken"]},
+        "externallyProvisioned": {"const": true}, "sourceCidrs": {"$ref": "#/$defs/texts"},
+        "expiresAtEpochMs": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/u128Decimal"}]}
+      },
+      "allOf": [{"if": {"properties": {"type": {"const": "legacyExact"}}}, "then": {"properties": {"sourceCidrs": {"maxItems": 0}, "expiresAtEpochMs": {"type": "null"}}}}]
+    },
+    "resolvedAddressPolicy": {
+      "oneOf": [
+        {"type": "object", "additionalProperties": false, "required": ["type"], "properties": {"type": {"const": "public-only"}}},
+        {"type": "object", "additionalProperties": false, "required": ["type", "cidrs"], "properties": {"type": {"const": "explicit-cidrs"}, "cidrs": {"$ref": "#/$defs/texts"}}}
+      ],
+      "description": "Upstream provider-address requirements, never workload proxy egress authorization."
+    },
+    "segment": {
+      "oneOf": [
+        {"type": "object", "additionalProperties": false, "required": ["literal"], "properties": {"literal": {"$ref": "#/$defs/text"}}},
+        {"type": "object", "additionalProperties": false, "required": ["variable"], "properties": {"variable": {"$ref": "#/$defs/text"}}},
+        {"type": "object", "additionalProperties": false, "required": ["wildcard"], "properties": {"wildcard": {"const": true}}},
+        {"type": "object", "additionalProperties": false, "required": ["glob"], "properties": {"glob": {"const": true}}}
+      ]
+    },
+    "responseObservation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["version", "lifecycleTimeoutNanos", "publicationTargetId", "publicationTargetPolicySha256"],
+      "properties": {
+        "version": {"enum": ["v1", "v2"]}, "lifecycleTimeoutNanos": {"$ref": "#/$defs/u128Decimal"},
+        "publicationTargetId": {"$ref": "#/$defs/nullableText"},
+        "publicationTargetPolicySha256": {"$ref": "#/$defs/nullableSha256"}
+      }
+    },
+    "route": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "scheme", "host", "port", "resolvedAddressPolicy", "methods", "paths", "credentialRef", "adapterType", "discardHeaders", "adapterConfigSha256", "requestPolicySha256", "responsePolicySha256", "requiredProviderHeaderNames", "constraintsSha256", "jitSha256", "jitRequired", "responseObservation"],
+      "properties": {
+        "id": {"$ref": "#/$defs/text"}, "scheme": {"$ref": "#/$defs/text"}, "host": {"$ref": "#/$defs/text"},
+        "port": {"type": "integer", "minimum": 1, "maximum": 65535},
+        "resolvedAddressPolicy": {"$ref": "#/$defs/resolvedAddressPolicy"},
+        "methods": {"$ref": "#/$defs/texts"},
+        "paths": {"type": "array", "maxItems": 65536, "items": {"type": "array", "maxItems": 65536, "items": {"$ref": "#/$defs/segment"}}},
+        "credentialRef": {"$ref": "#/$defs/nullableText"}, "adapterType": {"$ref": "#/$defs/text"},
+        "discardHeaders": {"$ref": "#/$defs/texts"}, "adapterConfigSha256": {"$ref": "#/$defs/sha256"},
+        "requestPolicySha256": {"$ref": "#/$defs/sha256"}, "responsePolicySha256": {"$ref": "#/$defs/nullableSha256"},
+        "requiredProviderHeaderNames": {"$ref": "#/$defs/texts"}, "constraintsSha256": {"$ref": "#/$defs/sha256"},
+        "jitSha256": {"$ref": "#/$defs/sha256"}, "jitRequired": {"type": "boolean"},
+        "responseObservation": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/responseObservation"}]}
+      }
+    }
+  }
+}

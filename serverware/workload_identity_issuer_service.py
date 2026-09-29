@@ -62,6 +62,30 @@ def _same_association(actual, expected, work):
         _fail("workload issuer original association differs")
 
 
+def _authorization_on_owner(owner):
+    """Select only from the authenticated cold owner, never request contents."""
+    from serverware import workload_identity_issuer_bootstrap as bootstrap
+
+    material = owner.material
+    if type(material) is not bootstrap._IssuerMaterial or type(material.profile) is not str:
+        _fail("workload issuer lost its exact cold admission profile")
+    if material.profile == "legacy-v1":
+        if (material.native_scope is not None
+                or type(material.packet_signing_key_bytes) is not bytes
+                or type(material.runtime_manifest_digest) is not str):
+            _fail("legacy workload issuer cold scope is not its original profile")
+        return authorization, authorization._IssuanceMaterial
+    if material.profile == "native-request-first-v2":
+        if (type(material.native_scope) is not bootstrap._NativeEnrollmentScope
+                or material.packet_signing_key_bytes is not None
+                or material.runtime_manifest_digest is not None):
+            _fail("native workload issuer cold scope is not its original profile")
+        from serverware import native_workload_identity_issuance_authorization as native_authorization
+
+        return native_authorization, native_authorization._NativeIssuanceMaterial
+    _fail("workload issuer cold admission profile is unsupported")
+
+
 def _certificate_builder(owner, admitted, *, work, current, deadline_ns):
     """Prepare the fixed leaf profile; this function performs no signature."""
     raw, private = owner.material.issuer_certificate_bytes, owner.ca_private_key
@@ -115,6 +139,7 @@ def _issue_on_owner(owner, originals, *, current):
     from serverware import workload_identity_issuer_startup as startup
 
     startup._require_owner(owner)
+    verifier, material_type = _authorization_on_owner(owner)
     raw = transport._originals(originals, response=False)
     work = owner.work
     if (type(owner.original_reservation_bytes) is not int
@@ -128,8 +153,8 @@ def _issue_on_owner(owner, originals, *, current):
         live_window=owner.window, transport_deadline_ns=owner.deadline_ns, work=work,
         _current=current, _additional_original_bytes=(owner.original_reservation_bytes
             + transport.FIXED_RESERVATION_BYTES))
-    admitted = authorization._verify_on_work(**kwargs)
-    if type(admitted) is not authorization._IssuanceMaterial:
+    admitted = verifier._verify_on_work(**kwargs)
+    if type(admitted) is not material_type:
         _fail("workload issuer requires actual original grant, packet and request admission")
     deadline = min(owner.deadline_ns, admitted.deadline_ns, admitted.window[4])
 
@@ -185,10 +210,10 @@ def _issue_on_owner(owner, originals, *, current):
     admitted_current()
     # Re-admit original authorization/packet/request and actual readback leaf;
     # the first result is not accepted as a substitute for those signatures.
-    verified = authorization._verify_certificate_on_work(certificate_bytes=certificate,
+    verified = verifier._verify_certificate_on_work(certificate_bytes=certificate,
         **{**kwargs, "live_window": admitted.window, "transport_deadline_ns": deadline,
             "_current": admitted_current})
-    if type(verified) is not authorization._IssuanceMaterial:
+    if type(verified) is not material_type:
         _fail("workload issuer retained certificate lacks independent original admission")
     _same_association(verified.association, admitted.association, work)
 

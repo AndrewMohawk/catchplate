@@ -74,10 +74,13 @@ def _association(value, work):
     fields = []
     for index, item in enumerate(value):
         if index < 13:
-            maximum = 512 if index in (1, 2) else 128
+            # Request-first native principals preserve the full original UTF-8
+            # profile. This storage bound grants no authority; legacy grants
+            # still enforce their own stricter principal rule before claiming.
+            maximum = 1024 if index == 1 else 512 if index == 2 else 128
             if type(item) is not str or not 1 <= len(item) <= maximum:
                 _fail("issuer journal association text exceeds its bound")
-            if any(ord(character) < 32 or ord(character) == 127 for character in item):
+            if index != 1 and any(ord(character) < 32 or ord(character) == 127 for character in item):
                 _fail("issuer journal association text contains controls")
             work.charge(input_bytes=4 * len(item))
             try:
@@ -123,7 +126,7 @@ def _decode_association(raw, work):
             _fail("issuer journal association length is truncated")
         size = int.from_bytes(raw[offset:offset + 4], "big")
         offset += 4
-        limit = 8192 if index == 16 else 512 if index in (1, 2) else 128
+        limit = 8192 if index == 16 else 1024 if index == 1 else 512 if index == 2 else 128
         if not 1 <= size <= limit or size > len(raw) - offset:
             _fail("issuer journal association field exceeds its bound")
         field = raw[offset:offset + size]

@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-workload-identity-issuance-authorization.v1.schema.json",
+  "title": "Separate native workload identity issuance authorization v1",
+  "description": "Canonical ensure_ascii sorted compact JSON, without LF, at most 32768 bytes. Dedicated Ed25519 authorization over the exact payload schema ASCII plus NUL plus canonical payload bytes. Runtime requires the exact current source revision, independently authenticated native cold bootstrap v2, genuine original setup/delegation/CSR/PoP and target certificate selectors. Neither native role-5 capture nor diagnostic verdict supplies issuer permission. Schema validation alone is not signature, cold-profile, interval, selector or issuance admission.",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema", "payload", "signature"],
+  "properties": {
+    "schema": {"const": "serverware.signedNativeWorkloadIdentityIssuanceAuthorization/v1"},
+    "signature": {"type": "string", "minLength": 94, "maxLength": 94, "pattern": "^ed25519:[A-Za-z0-9_-]{85}[AQgw](?![\\s\\S])"},
+    "payload": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "schema", "sourceRevision", "purpose", "trustMode", "bootstrapDigest", "configurationDigest",
+        "authorizationKeySpkiDigest", "issuerCertificateSha256", "issuerCertificateDerSha256",
+        "issuerSpkiSha256", "policyHash", "releaseRecordSha256", "runtimeConfigurationSha256",
+        "runtimeCaCertificateSha256", "runtimeCaSpkiSha256", "journalNamespace", "grantId",
+        "packetSha256", "delegationSha256", "setupSha256", "policyRequirementsSha256",
+        "identityPolicySha256", "certificateSelectorsSha256", "requestSha256", "csrSha256",
+        "subjectPublicKeyInfoSha256", "principalId", "nonce", "selectedSans", "serialNumber",
+        "notBeforeEpochSeconds", "notAfterEpochSeconds", "issuedAtEpochNs", "expiresAtEpochNs"
+      ],
+      "properties": {
+        "schema": {"const": "serverware.nativeWorkloadIdentityIssuanceAuthorization/v1"},
+        "sourceRevision": {"description": "Must equal the verifier's actual source-owned authority.SOURCE_REVISION, never a request-selected revision.", "type": "string", "maxLength": 128, "pattern": "^serverware\\.policyCandidateAuthoritySource/[0-9]{4}-[0-9]{2}-[0-9]{2}\\.[0-9]+(?![\\s\\S])"},
+        "purpose": {"const": "native-workload-identity-issuance"},
+        "trustMode": {"const": "trusted-host-local"},
+        "bootstrapDigest": {"description": "Exact independently root-signed native issuer bootstrap v2 original.", "$ref": "#/$defs/digest"},
+        "configurationDigest": {"description": "Issuer cold configuration commitment, distinct from the native runtime configuration below.", "$ref": "#/$defs/digest"},
+        "authorizationKeySpkiDigest": {"$ref": "#/$defs/digest"},
+        "issuerCertificateSha256": {"description": "SHA-256 of exact canonical issuer PEM original; remains the worker/journal issuer-original association.", "$ref": "#/$defs/digest"},
+        "issuerCertificateDerSha256": {"description": "SHA-256 of actual parsed issuer DER, separately joined to native packet and target request.", "$ref": "#/$defs/digest"},
+        "issuerSpkiSha256": {"$ref": "#/$defs/digest"},
+        "policyHash": {"$ref": "#/$defs/digest"},
+        "releaseRecordSha256": {"$ref": "#/$defs/digest"},
+        "runtimeConfigurationSha256": {"description": "Explicit native configuration commitment; not a legacy runtimeManifestDigest alias.", "$ref": "#/$defs/digest"},
+        "runtimeCaCertificateSha256": {"$ref": "#/$defs/digest"},
+        "runtimeCaSpkiSha256": {"$ref": "#/$defs/digest"},
+        "journalNamespace": {"$ref": "#/$defs/identifier"},
+        "grantId": {"$ref": "#/$defs/identifier"},
+        "packetSha256": {"description": "Exact nativeEnrollmentPacket/v2 original, at most 524288 bytes including its LF; no legacy packet signature is fabricated.", "$ref": "#/$defs/digest"},
+        "delegationSha256": {"$ref": "#/$defs/digest"},
+        "setupSha256": {"$ref": "#/$defs/digest"},
+        "policyRequirementsSha256": {"$ref": "#/$defs/digest"},
+        "identityPolicySha256": {"description": "Selected target's complete identity-policy commitment; hidden predicates are not claimed to have been evaluated by issuance.", "$ref": "#/$defs/digest"},
+        "certificateSelectorsSha256": {"description": "Canonical selected target certificate-selector commitment, independently checked against actual request and leaf originals.", "$ref": "#/$defs/digest"},
+        "requestSha256": {"$ref": "#/$defs/digest"},
+        "csrSha256": {"$ref": "#/$defs/digest"},
+        "subjectPublicKeyInfoSha256": {"$ref": "#/$defs/digest"},
+        "principalId": {"description": "Exact request-first target principal; nonempty Unicode with at most 1024 UTF-8 bytes. Runtime rejects invalid Unicode and enforces bytes, without legacy printable-text narrowing.", "type": "string", "minLength": 1, "maxLength": 1024},
+        "nonce": {"type": "string", "minLength": 32, "maxLength": 256, "pattern": "^[A-Za-z0-9_-]+(?![\\s\\S])"},
+        "selectedSans": {
+          "description": "Exact requested inventory, sorted and unique within each category; 1..8 names total, at most 8192 UTF-8 name bytes and 8192 canonical JSON bytes. Runtime enforces canonical DNS/URI shapes and all selected certificate-selector categories, not schema shape alone.",
+          "type": "object", "additionalProperties": false, "required": ["dnsNames", "uris"],
+          "properties": {
+            "dnsNames": {"type": "array", "maxItems": 8, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 2048}},
+            "uris": {"type": "array", "maxItems": 8, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 2048}}
+          },
+          "anyOf": [{"properties": {"dnsNames": {"minItems": 1}}}, {"properties": {"uris": {"minItems": 1}}}]
+        },
+        "serialNumber": {"description": "Canonical positive lower-case hexadecimal, value strictly below 2^159; runtime checks the integer bound.", "type": "string", "minLength": 1, "maxLength": 40, "pattern": "^[1-9a-f][0-9a-f]{0,39}(?![\\s\\S])"},
+        "notBeforeEpochSeconds": {"type": "integer", "minimum": 1, "maximum": 9223372036},
+        "notAfterEpochSeconds": {"description": "Strictly after notBefore and wholly within this grant and all genuine original authorization/request/issuer/cold intervals. Leaf serial and exact whole-second validity are rechecked after signing and durable readback.", "type": "integer", "minimum": 2, "maximum": 9223372036},
+        "issuedAtEpochNs": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807},
+        "expiresAtEpochNs": {"description": "Strictly after issuedAt, at most 300000000000 ns later; grant is currently live and entirely contained in genuine setup/delegation/request/issuer/cold intervals. Processing retains the original at-most-30-second window separately.", "type": "integer", "minimum": 2, "maximum": 9223372036854775807}
+      }
+    }
+  },
+  "$defs": {
+    "digest": {"type": "string", "minLength": 71, "maxLength": 71, "pattern": "^sha256:[0-9a-f]{64}(?![\\s\\S])"},
+    "identifier": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}(?![\\s\\S])"}
+  }
+}

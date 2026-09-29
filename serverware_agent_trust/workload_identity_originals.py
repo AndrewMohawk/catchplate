@@ -223,6 +223,18 @@ def _request_signature(encoded: object, payload: dict, public, domain: bytes, bu
 
 def _leaf(raw: bytes, issuer_certificate, selected: dict, public, binding: dict,
         selectors: dict, budget: Budget):
+    return _leaf_for_interval(raw, issuer_certificate, selected, public,
+        binding["issuedAtEpochMs"], binding["expiresAtEpochMs"], selectors, budget)
+
+
+def _leaf_for_interval(raw: bytes, issuer_certificate, selected: dict, public,
+        issued_at_epoch_ms: int, expires_at_epoch_ms: int, selectors: dict, budget: Budget):
+    """Direct-leaf cryptography under explicit already-admitted interval inputs.
+
+    This primitive accepts no packet, issuer grant or permission. Legacy callers
+    retain their original binding wrapper; other profiles must genuinely admit
+    their own originals before supplying the interval and complete selectors.
+    """
     packets._charge(budget, input_bytes=len(raw))
     _text, originals = tls._public_certificates(raw, budget, client=True)
     if len(originals) != 1:
@@ -246,8 +258,8 @@ def _leaf(raw: bytes, issuer_certificate, selected: dict, public, binding: dict,
         _fail("workload leaf identity or client-auth constraints differ")
     if (leaf.not_valid_before_utc < issuer.not_valid_before_utc
             or leaf.not_valid_after_utc > issuer.not_valid_after_utc
-            or leaf.not_valid_before_utc.timestamp() * 1000 < binding["issuedAtEpochMs"]
-            or leaf.not_valid_after_utc.timestamp() * 1000 > binding["expiresAtEpochMs"]):
+            or leaf.not_valid_before_utc.timestamp() * 1000 < issued_at_epoch_ms
+            or leaf.not_valid_after_utc.timestamp() * 1000 > expires_at_epoch_ms):
         _fail("workload leaf validity exceeds the original requested authority")
     algorithm = leaf.signature_hash_algorithm
     if not (isinstance(issuer.public_key(), ed25519.Ed25519PublicKey) and algorithm is None

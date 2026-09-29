@@ -1227,6 +1227,8 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/oidc_session_activation_release_grant_issuer_launcher.py \
 	serverware/oidc_session_activation_release_grant_issuer_runner.py \
 	serverware/workload_identity_issuance_authorization.py \
+	serverware/native_workload_identity_issuance_authorization.py \
+	serverware/native_workload_identity_originals.py \
 	serverware/workload_identity_trust_authorization.py \
 	serverware/native_enrollment_assignment.py \
 	serverware/native_enrollment_bootstrap_delegation.py \
@@ -3481,6 +3483,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/oidc_session_activation_release_grant_issuer_launcher.py \
 				serverware/oidc_session_activation_release_grant_issuer_runner.py \
 				serverware/workload_identity_issuance_authorization.py \
+				serverware/native_workload_identity_issuance_authorization.py \
+				serverware/native_workload_identity_originals.py \
 				serverware/workload_identity_trust_authorization.py \
 				serverware/native_enrollment_assignment.py \
 				serverware/native_enrollment_bootstrap_delegation.py \
@@ -3699,6 +3703,9 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/workload-identity-bootstrap-request.v1.schema.json \
 				schemas/native-enrollment-bootstrap-delegation.v1.schema.json \
 				schemas/native-enrollment-bootstrap-setup.v1.schema.json \
+				schemas/native-enrollment-policy-requirements.v1.schema.json \
+				schemas/native-workload-identity-issuance-authorization.v1.schema.json \
+				schemas/workload-identity-issuer-bootstrap.v2.schema.json \
 				schemas/native-enrollment-setup-authorizer.v1.schema.json \
 				schemas/native-enrollment-packet.v2.schema.json \
 				schemas/release-completion-verification.v1.schema.json \

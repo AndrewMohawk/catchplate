@@ -264,7 +264,7 @@ def main():
         root = serialization.load_pem_public_key(root_raw)
         if not isinstance(root, Ed25519PublicKey):
             raise RuntimeError("workload issuer root is not Ed25519")
-        material = bootstrap._verify_on_work(bootstrap_bytes=original, root_public_key=root,
+        material = bootstrap._verify_launch_on_work(bootstrap_bytes=original, root_public_key=root,
             live_window=window, transport_deadline_ns=bound, work=work, _current=construction_current)
         current_epoch = construction_current()
 
@@ -285,7 +285,7 @@ def main():
                 or bootstrap.LISTENER_PATH != LISTENER_PATH or _listener(3) != listener_pin):
             raise RuntimeError("workload issuer fixed launch differs from signed public originals")
         reserved = 8 * (len(root_raw) + len(original) + material.ca_private_key_byte_count
-            + len(material.issuer_certificate_bytes) + len(material.packet_signing_key_bytes)
+            + len(material.issuer_certificate_bytes) + bootstrap._enrollment_original_byte_count(material)
             + len(material.authorization_key_bytes)) + 128 * 1024
         if reserved >= MAX_ORIGINAL_BYTES:
             raise RuntimeError("workload issuer cold captures exhaust the original aggregate bound")

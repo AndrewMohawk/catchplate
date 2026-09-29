@@ -18,18 +18,18 @@ long-lived credential.
 
 Checkpoint: **2026-09-29 — pre-production, source-only.**
 
-**36/46 source checkpoints landed · 7 active · 3 todo.**
+**36/46 source checkpoints landed · 8 active · 2 todo.**
 
 **Production acceptance: 0/6 verified.** Current source is unbuilt, unexecuted and unprovisioned.
 
-[![Project checkpoints, one segment per task: 36 of 46 source-landed; 7 active and 3 todo. Evidence handoff 10/10; historical recovery 4/5; permissions and grants 10/10; finalization and sessions 8/8; workloads and native 3/6; providers and operations 1/7. O07 is source-landed in 7cd6710; H05, N04, N05, N06, O01, O04 and O05 are in progress. Production acceptance remains 0/6. Source only; unbuilt, unexecuted and unprovisioned.](docs/images/project-progress.svg)](docs/production-status.md#next-source-milestones)
+[![Project checkpoints, one segment per task: 36 of 46 source-landed; 8 active and 2 todo. Evidence handoff 10/10; historical recovery 4/5; permissions and grants 10/10; finalization and sessions 8/8; workloads and native 3/6; providers and operations 1/7. H05, N04, N05, N06, O01, O04, O05 and O06 are in progress. Production acceptance remains 0/6. Source only; unbuilt, unexecuted and unprovisioned.](docs/images/project-progress.svg)](docs/production-status.md#next-source-milestones)
 
-Latest [`.275` source](https://github.com/example/private-deployment) connects
-[signed, sequenced workload audit](docs/measured-data-plane-audit.md), the
-[enclave credential receiver](docs/native-secret-broker-custody.md) and its
-[immutable runtime packaging](docs/native-broker-runtime-image.md).
-Gate privilege separation, measured provider issuance/refresh, deployment and
-end-to-end verification remain open. Existing source credit is preserved.
+Latest [`.276` source](https://github.com/example/private-deployment) adds
+[permanent gate privilege separation](docs/native-serving-privilege-separation.md)
+and [independent RBAC currentness](docs/rbac-independent-currentness.md).
+Encrypted service-token startup is authored but not yet integrated. Provider
+issuance/refresh, guest service startup, recovery, deployment and end-to-end
+verification remain open. N06 and O06 remain partial.
 
 The bar shows **committed source, not tested readiness or remaining effort**.
 Green means source-landed; amber means partial implementation. No current pilot
@@ -49,7 +49,7 @@ release has passed end-to-end verification.
 | O03 | Public revocation and authenticated recovery | Todo |
 | O04 | Protected provider and filesystem side effects | In progress |
 | O05 | Interrupted policy-publication recovery | In progress |
-| O06 | Independent RBAC rollback witness | Todo |
+| O06 | Independent RBAC rollback witness | In progress |
 
 These are open parent checkpoints; each can contain landed implementation.
 The [detailed ledger](docs/production-status.md#remaining-work-breakdown) records

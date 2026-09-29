@@ -135,13 +135,15 @@ impl Drop for Workspace {
 
 // Closed source purposes share only immutable image custody, never a child,
 // key, serving phase or caller-selected executable/helper path.
-pub(crate) enum Purpose { Broker, RoleKeyProvisioner }
+pub(crate) enum Purpose { Broker, RoleKeyProvisioner, ShadowCustody }
 impl Purpose {
-    fn paths(&self) -> (&'static str, &'static str) {
+    fn paths(&self) -> (&'static str, &'static str, &'static str) {
         match self {
-            Self::Broker => (IMAGE_PATH, HELPER_PATH),
+            Self::Broker => (IMAGE_PATH, INTERPRETER_PATH, HELPER_PATH),
             Self::RoleKeyProvisioner => ("/opt/serverware/native-role-key-provisioner-runtime.squashfs",
-                "/opt/serverware/serverware/native_role_key_provisioner.py"),
+                INTERPRETER_PATH, "/opt/serverware/serverware/native_role_key_provisioner.py"),
+            Self::ShadowCustody => (super::shadow_image::IMAGE_PATH,
+                super::shadow_image::EXECUTABLE_PATH, super::shadow_image::SECCOMP_PATH),
         }
     }
 }
@@ -166,7 +168,7 @@ impl Image {
     }
     pub(crate) fn open_for(config: &ImageConfiguration, deadline: u64, purpose: Purpose) -> Result<Self, String> {
         live(deadline)?;
-        let (image_path, helper_path) = purpose.paths();
+        let (image_path, executable_path, helper_path) = purpose.paths();
         ensure(config.profile == "sealed-memfd-squashfs-v1" && config.image_path == image_path,
             "native broker image source profile differs")?;
         let original = path(image_path, false, false)?;
@@ -225,7 +227,7 @@ impl Image {
             1u32 | libc::O_CLOEXEC as u32) as RawFd })?; // nonrecursive OPEN_TREE_CLONE
         workspace.unmount()?;
         let root_info = stat(&root)?;
-        let interpreter = image_file(&root, INTERPRETER_PATH, true, &config.interpreter_sha256, deadline)?;
+        let interpreter = image_file(&root, executable_path, true, &config.interpreter_sha256, deadline)?;
         let helper = image_file(&root, helper_path, false, &config.helper_sha256, deadline)?;
         let owner = Self { root, interpreter, _helper: helper, block, image, _original: original,
             root_device: root_info.st_dev, root_inode: root_info.st_ino,
@@ -278,5 +280,10 @@ impl Image {
         Self::seals(&self.image, self.image_device, self.image_inode, self.image_length)?;
         Self::mapping(&self.block, self.image_device, self.image_inode, self.image_length, self.loop_number)?;
         live(deadline)
+    }
+
+    pub(crate) fn retain_artifact(&self, path: &str, pin: &str, deadline: u64) -> Result<File, String> {
+        self.check(deadline)?;
+        image_file(&self.root, path, false, pin, deadline)
     }
 }

@@ -1,0 +1,108 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-shadow-role-keys.v1.schema.json",
+  "$ref": "#/$defs/configuration",
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "positive": { "type": "integer", "minimum": 1, "maximum": 9223372036854775807 },
+    "signature": { "type": "string", "pattern": "^[A-Za-z0-9_-]{86}$" },
+    "bytes32": { "type": "string", "pattern": "^[A-Za-z0-9_-]{43}$" },
+    "challenge": {
+      "$ref": "#/$defs/bytes32",
+      "not": { "const": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" }
+    },
+    "localRole": {
+      "enum": [
+        "custody-ingress-admission", "custody-unavailable-ingress", "custody-dispatch-barrier",
+        "custody-terminal-append", "custody-ledger-append", "custody-spool-compaction",
+        "custody-active-effect-barrier", "custody-active-effect-commit",
+        "custody-publication-reconciliation", "custody-activation-publication",
+        "custody-result-envelope", "custody-store-response", "custody-signer-response",
+        "custody-retrieval-response", "custody-trusted-time-response", "custody-provider-response"
+      ]
+    },
+    "guest": { "$ref": "native-custody-closure.v1.schema.json#/$defs/guest" },
+    "assignmentPayload": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "apiVersion", "profile", "purpose", "assignmentId", "assignmentPayloadSha256", "assignmentRevision",
+        "executionClosureManifestSha256", "guest", "fullKeySetRootSha256", "localRoles", "challengeBase64url",
+        "trustCheckpointId", "revocationGeneration", "revocationRootSha256", "issuedAtUnixNanos", "expiresAtUnixNanos",
+        "signingKeyId", "signingKeySpkiSha256"
+      ],
+      "properties": {
+        "apiVersion": { "const": "serverware.nativeShadowRoleKeyAssignment/v1" },
+        "profile": { "const": "preassigned-final-role-originals-v1" },
+        "purpose": { "const": "shadow-role-key-possession" },
+        "assignmentId": { "$ref": "#/$defs/sha256" }, "assignmentPayloadSha256": { "$ref": "#/$defs/sha256" },
+        "assignmentRevision": { "$ref": "#/$defs/positive" }, "executionClosureManifestSha256": { "$ref": "#/$defs/sha256" },
+        "guest": { "$ref": "#/$defs/guest" }, "fullKeySetRootSha256": { "$ref": "#/$defs/sha256" },
+        "localRoles": {
+          "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true, "items": { "$ref": "#/$defs/localRole" },
+          "description": "Strictly increasing in the source AuthorityRole declaration order shown by localRole, not alphabetically. External verifier and supervisor keys are forbidden."
+        },
+        "challengeBase64url": { "$ref": "#/$defs/challenge" },
+        "trustCheckpointId": { "$ref": "#/$defs/sha256" }, "revocationGeneration": { "$ref": "#/$defs/positive" },
+        "revocationRootSha256": { "$ref": "#/$defs/sha256" }, "issuedAtUnixNanos": { "$ref": "#/$defs/positive" },
+        "expiresAtUnixNanos": { "$ref": "#/$defs/positive" }, "signingKeyId": { "$ref": "#/$defs/sha256" },
+        "signingKeySpkiSha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "authorization": {
+      "type": "object", "additionalProperties": false, "required": ["payload", "signature"],
+      "properties": { "payload": { "$ref": "#/$defs/assignmentPayload" }, "signature": { "$ref": "#/$defs/signature" } }
+    },
+    "configuration": {
+      "type": "object", "additionalProperties": false, "required": ["apiVersion", "authorization"],
+      "properties": {
+        "apiVersion": { "const": "serverware.nativeShadowRoleKeys/v1" }, "authorization": { "$ref": "#/$defs/authorization" }
+      }
+    },
+    "publicKey": {
+      "type": "object", "additionalProperties": false,
+      "required": ["role", "keyId", "keySpkiSha256", "keyMaterialSha256", "publicKeyBase64url"],
+      "properties": {
+        "role": { "$ref": "#/$defs/localRole" }, "keyId": { "$ref": "#/$defs/sha256" },
+        "keySpkiSha256": { "$ref": "#/$defs/sha256" }, "keyMaterialSha256": { "$ref": "#/$defs/sha256" },
+        "publicKeyBase64url": { "$ref": "#/$defs/bytes32" }
+      }
+    },
+    "statement": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "apiVersion", "purpose", "assignmentId", "assignmentPayloadSha256", "assignmentRevision", "keyAuthorizationSha256",
+        "guest", "productionConfigurationBindingSha256", "executionClosureManifestSha256", "structurallyVerifiedSeccompPolicySha256",
+        "workerExecutableSha256", "fullKeySetRootSha256", "localKeySetRootSha256", "localKeys", "challengeBase64url"
+      ],
+      "properties": {
+        "apiVersion": { "const": "serverware.nativeShadowRoleKeyStatement/v1" }, "purpose": { "const": "local-key-possession" },
+        "assignmentId": { "$ref": "#/$defs/sha256" }, "assignmentPayloadSha256": { "$ref": "#/$defs/sha256" },
+        "assignmentRevision": { "$ref": "#/$defs/positive" }, "keyAuthorizationSha256": { "$ref": "#/$defs/sha256" },
+        "guest": { "$ref": "#/$defs/guest" }, "productionConfigurationBindingSha256": { "$ref": "#/$defs/sha256" },
+        "executionClosureManifestSha256": { "$ref": "#/$defs/sha256" }, "structurallyVerifiedSeccompPolicySha256": { "$ref": "#/$defs/sha256" },
+        "workerExecutableSha256": { "$ref": "#/$defs/sha256" }, "fullKeySetRootSha256": { "$ref": "#/$defs/sha256" },
+        "localKeySetRootSha256": { "$ref": "#/$defs/sha256" },
+        "localKeys": { "type": "array", "minItems": 1, "maxItems": 16, "items": { "$ref": "#/$defs/publicKey" } },
+        "challengeBase64url": { "$ref": "#/$defs/challenge" }
+      }
+    },
+    "possession": {
+      "type": "object", "additionalProperties": false, "required": ["role", "keyId", "signature"],
+      "properties": {
+        "role": { "$ref": "#/$defs/localRole" }, "keyId": { "$ref": "#/$defs/sha256" }, "signature": { "$ref": "#/$defs/signature" }
+      }
+    },
+    "evidence": {
+      "type": "object", "additionalProperties": false,
+      "description": "Data-only original evidence, not a verified result or local owner constructor. Canonical base64url decoding, exact quoted framing and independently pinned Nitro verification remain mandatory.",
+      "required": ["apiVersion", "statement", "possession", "attestationDocumentBase64url", "userDataBase64url", "publicKeyBase64url", "nonceBase64url"],
+      "properties": {
+        "apiVersion": { "const": "serverware.nativeShadowRoleKeyEvidence/v1" }, "statement": { "$ref": "#/$defs/statement" },
+        "possession": { "type": "array", "minItems": 1, "maxItems": 16, "items": { "$ref": "#/$defs/possession" } },
+        "attestationDocumentBase64url": { "type": "string", "minLength": 2, "maxLength": 16384, "pattern": "^[A-Za-z0-9_-]+$" },
+        "userDataBase64url": { "type": "string", "minLength": 1, "maxLength": 1024, "pattern": "^[A-Za-z0-9_-]+$" },
+        "publicKeyBase64url": { "$ref": "#/$defs/bytes32" }, "nonceBase64url": { "$ref": "#/$defs/challenge" }
+      }
+    }
+  }
+}

@@ -2,6 +2,8 @@
 use super::*;
 use super::guest_original::{fail, Original, Parent, Process};
 use std::path::Path;
+#[path="native_keys.rs"]
+pub(crate) mod native_keys;
 
 const SIGNATURE_DOMAIN: &[u8] = b"serverware.policyCustodyGuestDelivery.signature/v1\0";
 const MAX_DELIVERY: usize = 64 * 1024;
@@ -68,6 +70,47 @@ fn exact<T:DeserializeOwned+Serialize>(bytes:&[u8])->Result<T,ServiceRunnerError
 /// Non-Clone same-process root admission; no caller-ready DTO constructor.
 pub(crate) struct PreparedGuestServiceDelivery {
     owner:Arc<Delivery>, activation:BTreeMap<String,OwnedFd>,
+}
+/// Public data projection is only a signed binding, never an owner constructor.
+#[derive(Debug,Clone,PartialEq,Eq,Serialize,Deserialize)]
+#[serde(rename_all="camelCase",deny_unknown_fields)]
+pub(crate) struct GuestClosureBinding {
+    pub(crate) configuration_sha256:Sha256Digest, pub(crate) delivery_sha256:Sha256Digest,
+    pub(crate) runtime_configuration_sha256:Sha256Digest, pub(crate) service_role:String,
+    pub(crate) uid:u32, pub(crate) gid:u32, pub(crate) boot_id_base64url:String,
+    pub(crate) time_namespace_device:u64, pub(crate) time_namespace_inode:u64,
+    pub(crate) issued_at_boottime_ns:String, pub(crate) startup_deadline_boottime_ns:String,
+    pub(crate) lifetime_deadline_boottime_ns:String, pub(crate) invocation_id:String,
+}
+/// Same original Arc, PIDFD/start/boot/parent and held delivery descriptors.
+/// No Deserialize, raw-FD constructor, numeric-PID rebinding or ready bit.
+pub(crate) struct GuestClosureAssociation { owner:Arc<Delivery> }
+impl GuestClosureAssociation {
+    pub(crate) fn same_origin(&self,other:&Self)->bool {Arc::ptr_eq(&self.owner,&other.owner)}
+    pub(crate) fn check_preparation(&self)->Result<(),ServiceRunnerError> {
+        self.owner.check_originals()?;
+        if unsafe {libc::getuid()}!=0 || unsafe {libc::geteuid()}!=0
+            || boottime_now_nanos().map_err(|e|fail(&e.to_string()))?>=self.owner.startup {
+            return Err(fail("native closure requires original root preparation window"));
+        }
+        Ok(())
+    }
+    pub(crate) fn check(&self)->Result<(),ServiceRunnerError> {self.owner.check()}
+    pub(crate) fn check_startup(&self)->Result<(),ServiceRunnerError> {self.owner.check_startup()}
+    pub(crate) fn startup(&self)->u64 {self.owner.startup}
+    pub(crate) fn lifetime(&self)->u64 {self.owner.lifetime}
+    pub(crate) fn binding(&self)->GuestClosureBinding {
+        let p=&self.owner.payload;
+        GuestClosureBinding { configuration_sha256:p.configuration_sha256.clone(),delivery_sha256:self.owner.delivery_sha256.clone(),
+            runtime_configuration_sha256:p.runtime_config.sha256.clone(),service_role:match p.service_role {
+                Role::DurableRecoveryStore=>"durable-recovery-store",Role::CleanupAuthorizationConsumer=>"cleanup-authorization-consumer",
+                Role::RecoveryTargetProvider=>"recovery-target-provider",Role::CurrentSignatureAuthority=>"current-signature-authority",
+                Role::BoundedCleanupHelper=>"bounded-cleanup-helper",Role::ProductionBridge=>"production-bridge",
+            }.into(),uid:p.uid,gid:p.gid,boot_id_base64url:p.boot_id_base64url.clone(),
+            time_namespace_device:p.time_namespace_device,time_namespace_inode:p.time_namespace_inode,
+            issued_at_boottime_ns:p.issued_at_boottime_ns.clone(),startup_deadline_boottime_ns:p.startup_deadline_boottime_ns.clone(),
+            lifetime_deadline_boottime_ns:p.lifetime_deadline_boottime_ns.clone(),invocation_id:p.invocation_id.clone() }
+    }
 }
 pub(super) struct Delivery {
     configuration:Original, envelope:Original, runtime:Original,
@@ -173,6 +216,14 @@ impl PreparedGuestServiceDelivery {
     pub(crate) fn role_uid(&self)->u32 { self.owner.payload.uid }
     pub(crate) fn role_gid(&self)->u32 { self.owner.payload.gid }
     pub(crate) fn startup_deadline_boottime_ns(&self)->u64 { self.owner.startup }
+    pub(crate) fn closure_association(&self)->Result<GuestClosureAssociation,ServiceRunnerError> {
+        let association=GuestClosureAssociation {owner:Arc::clone(&self.owner)};
+        association.check_preparation()?;
+        // Runtime configuration is nonsecret; keys remain unopened for content
+        // until the original delivery's actual final-role load.
+        self.owner.runtime.read(MAX_CONFIG_BYTES)?;
+        Ok(association)
+    }
     pub(crate) fn run_after_drop(self)->Result<(),ServiceRunnerError> {
         self.owner.check()?;
         self.owner.check_startup()?;

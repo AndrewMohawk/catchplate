@@ -2,6 +2,7 @@
 //! Configuration is an independently admitted input, not authority from a hash.
 mod process;
 pub(crate) mod image;
+pub mod shadow_image;
 pub mod service_tokens;
 mod refresh;
 mod cleanup;

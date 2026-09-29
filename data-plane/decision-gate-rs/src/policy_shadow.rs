@@ -39,6 +39,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 mod policy_custody;
 
 #[cfg(target_os = "linux")]
+#[path = "policy_custody/native_closure.rs"]
+pub(in crate::policy_shadow) mod native_custody_closure;
+
+#[cfg(target_os = "linux")]
 pub(crate) use policy_custody::{
     PreparedGuestServiceDelivery,
     install_policy_shadow_custody_generation_from_retained_file,
@@ -6986,6 +6990,31 @@ impl ProductionCustodyStableReaperIdentity {
 /// implementations. Construction is deliberately crate-private; the runtime
 /// will not accept a supervisor which cannot expose this binding.
 #[derive(Debug, Clone, PartialEq, Eq)]
+enum RetainedProductionCustodyClosure {
+    Legacy(ProductionCustodyExecutionClosureManifest),
+    #[cfg(target_os = "linux")]
+    Native(native_custody_closure::NativeCustodyClosureOwner),
+}
+impl RetainedProductionCustodyClosure {
+    fn validate(&self)->Result<(),ShadowError> {match self {
+        Self::Legacy(v)=>v.validate(),
+        #[cfg(target_os="linux")] Self::Native(v)=>v.check(),
+    }}
+    fn manifest_sha256(&self)->&Sha256Digest {match self {
+        Self::Legacy(v)=>v.manifest_sha256(),
+        #[cfg(target_os="linux")] Self::Native(v)=>v.manifest_sha256(),
+    }}
+    fn seccomp_policy_sha256(&self)->&Sha256Digest {match self {
+        Self::Legacy(v)=>v.seccomp_policy_sha256(),
+        #[cfg(target_os="linux")] Self::Native(v)=>v.seccomp_policy_sha256(),
+    }}
+    fn worker_executable_sha256(&self)->&Sha256Digest {match self {
+        Self::Legacy(v)=>v.worker_executable_sha256(),
+        #[cfg(target_os="linux")] Self::Native(v)=>v.worker_executable_sha256(),
+    }}
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ProductionCustodyConfiguration {
     retained_verified_assignment: VerifiedAssignment,
     assignment_id: Sha256Digest,
@@ -7001,7 +7030,7 @@ pub(crate) struct ProductionCustodyConfiguration {
     authority_bindings: BTreeMap<AuthorityRole, ProductionCustodyKeyBinding>,
     supervisor_instance_sha256: Sha256Digest,
     supervisor_boot_id_sha256: Sha256Digest,
-    execution_closure_manifest: ProductionCustodyExecutionClosureManifest,
+    execution_closure_manifest: RetainedProductionCustodyClosure,
     execution_closure_manifest_sha256: Sha256Digest,
     structurally_verified_seccomp_policy_sha256: Sha256Digest,
     worker_executable_sha256: Sha256Digest,
@@ -7073,6 +7102,44 @@ impl ProductionCustodyConfiguration {
         maximum_in_flight_calls: u16,
         maximum_async_durability_nanos: u64,
     ) -> Result<Self, ShadowError> {
+        Self::from_retained_closure_with_settlement_authority(assignment,key_trust,trusted_time,
+            supervisor_instance_sha256,supervisor_boot_id_sha256,
+            RetainedProductionCustodyClosure::Legacy(execution_closure_manifest),signer_backend_sha256,
+            persistence_backend_sha256,retrieval_backend_sha256,dispatcher_protocol_set_sha256,
+            kernel_retained_driver_identity,maximum_rpc_nanos,cleanup_reserve_nanos,maximum_in_flight_calls,
+            maximum_async_durability_nanos)
+    }
+
+    /// An actual native owner is necessary, but never sufficient, for admission.
+    /// The existing real settlement driver and independently verified TEE result
+    /// remain mandatory. There is no DTO/native-ready constructor.
+    #[cfg(target_os="linux")]
+    #[allow(clippy::too_many_arguments)]
+    pub(in crate::policy_shadow) fn from_native_closure_with_settlement_authority(
+        assignment:&VerifiedAssignment,key_trust:&dyn EnvelopeKeyTrust,trusted_time:&dyn TrustedTime,
+        supervisor_instance_sha256:Sha256Digest,supervisor_boot_id_sha256:Sha256Digest,
+        closure:native_custody_closure::NativeCustodyClosureOwner,
+        signer_backend_sha256:Sha256Digest,persistence_backend_sha256:Sha256Digest,retrieval_backend_sha256:Sha256Digest,
+        dispatcher_protocol_set_sha256:Sha256Digest,kernel_retained_driver_identity:ProductionCustodyKernelDriverIdentity,
+        maximum_rpc_nanos:u64,cleanup_reserve_nanos:u64,maximum_in_flight_calls:u16,maximum_async_durability_nanos:u64,
+    )->Result<Self,ShadowError> {
+        closure.require_assignment(assignment,key_trust,trusted_time,&supervisor_instance_sha256,&supervisor_boot_id_sha256)?;
+        Self::from_retained_closure_with_settlement_authority(assignment,key_trust,trusted_time,
+            supervisor_instance_sha256,supervisor_boot_id_sha256,RetainedProductionCustodyClosure::Native(closure),
+            signer_backend_sha256,persistence_backend_sha256,retrieval_backend_sha256,dispatcher_protocol_set_sha256,
+            kernel_retained_driver_identity,maximum_rpc_nanos,cleanup_reserve_nanos,maximum_in_flight_calls,
+            maximum_async_durability_nanos)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn from_retained_closure_with_settlement_authority(
+        assignment:&VerifiedAssignment,key_trust:&dyn EnvelopeKeyTrust,trusted_time:&dyn TrustedTime,
+        supervisor_instance_sha256:Sha256Digest,supervisor_boot_id_sha256:Sha256Digest,
+        execution_closure_manifest:RetainedProductionCustodyClosure,
+        signer_backend_sha256:Sha256Digest,persistence_backend_sha256:Sha256Digest,retrieval_backend_sha256:Sha256Digest,
+        dispatcher_protocol_set_sha256:Sha256Digest,kernel_retained_driver_identity:ProductionCustodyKernelDriverIdentity,
+        maximum_rpc_nanos:u64,cleanup_reserve_nanos:u64,maximum_in_flight_calls:u16,maximum_async_durability_nanos:u64,
+    )->Result<Self,ShadowError> {
         validate_positive(maximum_rpc_nanos, "custody.maximum_rpc_nanos")?;
         validate_positive(
             cleanup_reserve_nanos,
@@ -7489,8 +7556,24 @@ impl ProductionCustodyConfiguration {
 
     pub(in crate::policy_shadow) fn execution_closure_manifest(
         &self,
-    ) -> &ProductionCustodyExecutionClosureManifest {
-        &self.execution_closure_manifest
+    ) -> Result<&ProductionCustodyExecutionClosureManifest,ShadowError> {
+        // No production callers existed for this legacy-only accessor. Keep
+        // its meaning explicit: a native owner cannot yield an IMA manifest.
+        match &self.execution_closure_manifest {
+            RetainedProductionCustodyClosure::Legacy(value)=>Ok(value),
+            #[cfg(target_os="linux")]
+            RetainedProductionCustodyClosure::Native(_)=>Err(ShadowError::CustodyUnavailable),
+        }
+    }
+
+    #[cfg(target_os="linux")]
+    pub(in crate::policy_shadow) fn native_execution_closure(
+        &self,
+    )->Option<&native_custody_closure::NativeCustodyClosureOwner> {
+        match &self.execution_closure_manifest {
+            RetainedProductionCustodyClosure::Native(value)=>Some(value),
+            RetainedProductionCustodyClosure::Legacy(_)=>None,
+        }
     }
 
     pub(in crate::policy_shadow) fn execution_closure_manifest_sha256(
@@ -7633,6 +7716,10 @@ impl ProductionCustodyConfiguration {
         key_trust: &dyn EnvelopeKeyTrust,
     ) -> Result<(), ShadowError> {
         self.validate_retained_assignment_binding()?;
+        #[cfg(target_os="linux")]
+        if let Some(closure)=self.native_execution_closure() {
+            closure.verify_current(&self.retained_verified_assignment,checkpoint,key_trust)?;
+        }
         if !self
             .retained_verified_assignment
             .trust_checkpoint
@@ -7757,6 +7844,8 @@ impl ProductionCustodyConfiguration {
         &self,
         trusted_now_unix_nanos: i64,
     ) -> Result<(), ShadowError> {
+        #[cfg(target_os="linux")]
+        if let Some(closure)=self.native_execution_closure() {closure.freshness(trusted_now_unix_nanos)?;}
         validate_freshness(
             self.retained_verified_assignment
                 .payload()
@@ -7780,6 +7869,8 @@ impl ProductionCustodyConfiguration {
         mut self,
         attestation: VerifiedCustodyAttestation,
     ) -> Result<Self, ShadowError> {
+        #[cfg(target_os="linux")]
+        if let Some(closure)=self.native_execution_closure() {closure.check()?;}
         self.validate_attestation_binding_at_checkpoint(
             &attestation,
             &self.authority_trust_checkpoint,
@@ -7850,6 +7941,8 @@ impl ProductionCustodyConfiguration {
             key_trust,
         )?;
         let now = trusted_time.now_unix_nanos()?;
+        #[cfg(target_os="linux")]
+        if let Some(closure)=self.native_execution_closure() {closure.freshness(now)?;}
         validate_freshness(
             self.retained_verified_assignment
                 .payload()
@@ -7899,6 +7992,11 @@ fn verify_custody_attestation_verifier_result(
         configuration.maximum_authority_evidence_age_nanos,
     )?;
     let checkpoint = key_trust.current_checkpoint()?;
+    #[cfg(target_os="linux")]
+    if let Some(closure)=configuration.native_execution_closure() {
+        closure.verify_current(&configuration.retained_verified_assignment,&checkpoint,key_trust)?;
+        closure.freshness(now)?;
+    }
     if checkpoint.checkpoint_id != *trust_checkpoint_id
         || checkpoint.revocation_generation != trust_revocation_generation
         || checkpoint.revocation_root_sha256
@@ -7941,6 +8039,8 @@ fn verify_custody_attestation_verifier_result(
     if final_now < now {
         return Err(ShadowError::TrustedTimeUnavailable);
     }
+    #[cfg(target_os="linux")]
+    if let Some(closure)=configuration.native_execution_closure() {closure.freshness(final_now)?;}
     validate_freshness(
         verified_at_unix_nanos,
         expires_at_unix_nanos,

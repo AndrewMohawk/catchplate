@@ -195,9 +195,18 @@ impl DeviceOriginals {
     }
 
     fn verify(&self, deadline: u64) -> Result<(), String> {
+        self.verify_retained(deadline)?;
+        if !self.directory_node.same_directory(&named_node(libc::AT_FDCWD, DEVICE_DIRECTORY, deadline)?) {
+            return Err("NSM named device directory custody changed".into());
+        }
+        live(deadline)
+    }
+
+    // Root-switch consumers keep the genuine originals. They do not open a
+    // different /dev in the installed image or gain an FD-import constructor.
+    fn verify_retained(&self, deadline: u64) -> Result<(), String> {
         live(deadline)?;
         if !self.directory_node.same_directory(&held_node(self.directory.as_raw_fd(), deadline)?)
-            || !self.directory_node.same_directory(&named_node(libc::AT_FDCWD, DEVICE_DIRECTORY, deadline)?)
             || self.device_node != held_node(self.device.as_raw_fd(), deadline)?
             || self.device_node != named_node(self.directory.as_raw_fd(), DEVICE_NAME, deadline)?
             || self.directory_flags != descriptor_flags(self.directory.as_raw_fd(), libc::O_RDONLY, deadline)?
@@ -205,6 +214,84 @@ impl DeviceOriginals {
             return Err("NSM held or named device custody changed".into());
         }
         live(deadline)
+    }
+}
+
+/// Fixed shadow-key mechanism only. Its caller must retain actual independent
+/// guest delivery/closure authority; this object never establishes admission.
+pub struct PreparedShadowNsmV1 {
+    originals:DeviceOriginals, process:Process, startup:u64, lifetime:u64,
+}
+impl PreparedShadowNsmV1 {
+    pub fn open(startup:u64,lifetime:u64)->Result<Self,String> {
+        let process=Process::current();
+        if process.uid!=0 || process.euid!=0 || process.gid!=0 || process.egid!=0 || startup>lifetime {
+            return Err("shadow NSM requires original root preparation".into());
+        }
+        let originals=DeviceOriginals::open(startup)?;
+        if Process::current()!=process {return Err("shadow NSM preparation identity changed".into());}
+        Ok(Self {originals,process,startup,lifetime})
+    }
+    /// A NEW final-identity owner, never rebinding a live root Process snapshot.
+    /// The policy caller separately proves the exact same C9 preparation Arc.
+    pub fn consume(self)->Result<ShadowNsmV1,String> {
+        live(self.startup)?;let process=Process::current();
+        if process.pid!=self.process.pid || process.uid==0 || process.gid==0
+            || process.uid!=process.euid || process.gid!=process.egid {
+            return Err("shadow NSM final identity or original process differs".into());
+        }
+        self.originals.verify_retained(self.startup)?;
+        Ok(ShadowNsmV1 {originals:self.originals,process,deadline:self.lifetime,attempted:false})
+    }
+}
+
+/// Unverified NSM original and the exact fixed inputs sent to the driver.
+pub struct ShadowRoleKeyQuoteV1 {document:Vec<u8>,user_data:Vec<u8>,public_key:[u8;32],nonce:[u8;32]}
+impl ShadowRoleKeyQuoteV1 {
+    pub fn document(&self)->&[u8] {&self.document}
+    pub fn user_data(&self)->&[u8] {&self.user_data}
+    pub fn public_key(&self)->&[u8;32] {&self.public_key}
+    pub fn nonce(&self)->&[u8;32] {&self.nonce}
+}
+pub struct ShadowNsmV1 {originals:DeviceOriginals,process:Process,deadline:u64,attempted:bool}
+impl ShadowNsmV1 {
+    fn check(&self,deadline:u64)->Result<(),String> {
+        if Process::current()!=self.process || deadline>self.deadline {
+            return Err("shadow NSM original identity or deadline changed".into());
+        }
+        self.originals.verify_retained(deadline)
+    }
+    /// One fixed purpose, no arbitrary public-key/user-data operation, retry,
+    /// generic ioctl, raw FD or private-key export. The public_key field is an
+    /// explicit local key-set commitment, NOT a KMS/asymmetric recipient key.
+    pub fn quote_role_keys(&mut self,statement_sha256:[u8;32],full_key_set:[u8;32],local_key_set:[u8;32],
+        possession_sha256:[u8;32],nonce:[u8;32],deadline:u64)->Result<ShadowRoleKeyQuoteV1,String> {
+        if self.attempted {return Err("shadow NSM attempt cannot be replayed".into());}
+        self.attempted=true;self.check(deadline)?;
+        if [statement_sha256,full_key_set,local_key_set,possession_sha256,nonce].contains(&[0;32]) {
+            return Err("shadow NSM binding is absent".into());
+        }
+        let mut user_data=b"serverware/native-shadow-role-key-evidence/v1\0".to_vec();
+        for field in [statement_sha256,full_key_set,local_key_set,possession_sha256] {user_data.extend_from_slice(&field);}
+        let request=attestation_request(&local_key_set,&nonce,&user_data)?;
+        let mut response=[0u8;MAX_RESPONSE_BYTES];
+        let request_address=request.as_ptr() as usize as u64;let response_address=response.as_mut_ptr() as usize as u64;
+        let mut raw=NsmRaw {request:NsmIovec {addr:request_address,len:request.len() as u64},
+            response:NsmIovec {addr:response_address,len:MAX_RESPONSE_BYTES as u64}};
+        self.check(deadline)?;
+        // Same synchronous NSM limitation as the gate: after-deadline rejection
+        // is not ioctl cancellation. The real launcher watchdog is mandatory.
+        if unsafe {libc::ioctl(self.originals.device.as_raw_fd(),NSM_IOCTL_RAW as _,&mut raw)}!=0 {
+            return Err("shadow NSM ioctl failed; no retry".into());
+        }
+        self.check(deadline)?;
+        if raw.request.addr!=request_address || raw.request.len!=request.len() as u64 || raw.response.addr!=response_address
+            || raw.response.len==0 || raw.response.len>MAX_RESPONSE_BYTES as u64 {
+            return Err("shadow NSM buffer original changed".into());
+        }
+        let document=attestation_document(&response[..raw.response.len as usize])?;
+        self.check(deadline)?;
+        Ok(ShadowRoleKeyQuoteV1 {document,user_data,public_key:local_key_set,nonce})
     }
 }
 

@@ -1,0 +1,113 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-custody-closure.v1.schema.json",
+  "$ref": "#/$defs/configuration",
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "profile": { "const": "sealed-memfd-squashfs-static-amd64-v1" },
+    "u32": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+    "positive": { "type": "integer", "minimum": 1, "maximum": 9223372036854775807 },
+    "ns": { "$ref": "policy-custody-guest-delivery.v1.schema.json#/$defs/ns" },
+    "guest": {
+      "type": "object", "additionalProperties": false,
+      "required": ["configurationSha256", "deliverySha256", "runtimeConfigurationSha256", "serviceRole", "uid", "gid", "bootIdBase64url", "timeNamespaceDevice", "timeNamespaceInode", "issuedAtBoottimeNs", "startupDeadlineBoottimeNs", "lifetimeDeadlineBoottimeNs", "invocationId"],
+      "properties": {
+        "configurationSha256": { "$ref": "#/$defs/sha256" }, "deliverySha256": { "$ref": "#/$defs/sha256" },
+        "runtimeConfigurationSha256": { "$ref": "#/$defs/sha256" },
+        "serviceRole": { "$ref": "policy-custody-guest-delivery.v1.schema.json#/$defs/role" },
+        "uid": { "type": "integer", "minimum": 1, "maximum": 4294967294, "not": { "enum": [64988, 64989, 64990, 65534] } },
+        "gid": { "type": "integer", "minimum": 1, "maximum": 4294967294, "not": { "enum": [64988, 64989, 64990, 65534] } },
+        "bootIdBase64url": { "type": "string", "pattern": "^[A-Za-z0-9_-]{22}$" },
+        "timeNamespaceDevice": { "$ref": "#/$defs/positive" }, "timeNamespaceInode": { "$ref": "#/$defs/positive" },
+        "issuedAtBoottimeNs": { "$ref": "#/$defs/ns" }, "startupDeadlineBoottimeNs": { "$ref": "#/$defs/ns" },
+        "lifetimeDeadlineBoottimeNs": { "$ref": "#/$defs/ns" },
+        "invocationId": { "type": "string", "pattern": "^[0-9a-f]{32}$", "not": { "const": "00000000000000000000000000000000" } }
+      }
+    },
+    "instruction": {
+      "type": "object", "additionalProperties": false, "required": ["ordinal", "code", "jumpIfTrue", "jumpIfFalse", "operand"],
+      "properties": {
+        "ordinal": { "type": "integer", "minimum": 0, "maximum": 4095 },
+        "code": { "type": "integer", "minimum": 0, "maximum": 65535 },
+        "jumpIfTrue": { "type": "integer", "minimum": 0, "maximum": 255 },
+        "jumpIfFalse": { "type": "integer", "minimum": 0, "maximum": 255 }, "operand": { "$ref": "#/$defs/u32" }
+      }
+    },
+    "argumentRule": {
+      "type": "object", "additionalProperties": false,
+      "required": ["argumentIndex", "operator", "valueHigh", "valueLow", "maskHigh", "maskLow"],
+      "properties": {
+        "argumentIndex": { "type": "integer", "minimum": 0, "maximum": 5 },
+        "operator": { "enum": ["equal", "masked-equal", "less-than-or-equal"] },
+        "valueHigh": { "$ref": "#/$defs/u32" }, "valueLow": { "$ref": "#/$defs/u32" },
+        "maskHigh": { "$ref": "#/$defs/u32" }, "maskLow": { "$ref": "#/$defs/u32" }
+      }
+    },
+    "syscallRule": {
+      "type": "object", "additionalProperties": false, "required": ["syscallNumber", "action", "errno", "argumentRules"],
+      "properties": {
+        "syscallNumber": { "$ref": "#/$defs/u32" }, "action": { "enum": ["allow", "kill-process", "trap", "errno"] },
+        "errno": { "type": "integer", "minimum": 0, "maximum": 65535 },
+        "argumentRules": { "type": "array", "maxItems": 6, "items": { "$ref": "#/$defs/argumentRule" } }
+      }
+    },
+    "seccompPolicy": {
+      "type": "object", "additionalProperties": false,
+      "description": "Existing structural validator recomputes the complete canonical instruction stream, semantics and raw BPF commitments; requires architecture guard, kill default and unconditional execve/execveat kills. This schema is not installed-filter evidence.",
+      "required": ["architecture", "defaultAction", "noNewPrivilegesRequired", "installedBeforeUntrustedInput", "instructions", "syscallRules", "exactInstructionStreamSha256", "rawBpfSha256", "exactArgumentSemanticsSha256", "structurallyVerifiedPolicySha256"],
+      "properties": {
+        "architecture": { "const": "x86-64" }, "defaultAction": { "const": "kill-process" },
+        "noNewPrivilegesRequired": { "const": true }, "installedBeforeUntrustedInput": { "const": true },
+        "instructions": { "type": "array", "minItems": 1, "maxItems": 4096, "items": { "$ref": "#/$defs/instruction" } },
+        "syscallRules": { "type": "array", "minItems": 2, "maxItems": 1024, "items": { "$ref": "#/$defs/syscallRule" } },
+        "exactInstructionStreamSha256": { "$ref": "#/$defs/sha256" }, "rawBpfSha256": { "$ref": "#/$defs/sha256" },
+        "exactArgumentSemanticsSha256": { "$ref": "#/$defs/sha256" }, "structurallyVerifiedPolicySha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "buildProvenance": {
+      "type": "object", "additionalProperties": false,
+      "required": ["sourceTreeSha256", "dependencyLockSha256", "buildRecipeSha256", "toolchainClosureSha256", "provenanceStatementSha256", "transparencyLogEntrySha256", "reproducibleBuildRequired", "provenanceSha256"],
+      "properties": {
+        "sourceTreeSha256": { "$ref": "#/$defs/sha256" }, "dependencyLockSha256": { "$ref": "#/$defs/sha256" },
+        "buildRecipeSha256": { "$ref": "#/$defs/sha256" }, "toolchainClosureSha256": { "$ref": "#/$defs/sha256" },
+        "provenanceStatementSha256": { "$ref": "#/$defs/sha256" }, "transparencyLogEntrySha256": { "$ref": "#/$defs/sha256" },
+        "reproducibleBuildRequired": { "const": true }, "provenanceSha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "manifest": {
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "profile", "imageSha256", "workerExecutableSha256", "seccompPolicy", "runtimeConfigurationSha256", "buildProvenance", "manifestSha256"],
+      "properties": {
+        "apiVersion": { "const": "serverware.nativeCustodyExecutionClosure/v1" }, "profile": { "$ref": "#/$defs/profile" },
+        "imageSha256": { "$ref": "#/$defs/sha256" }, "workerExecutableSha256": { "$ref": "#/$defs/sha256" },
+        "seccompPolicy": { "$ref": "#/$defs/seccompPolicy" }, "runtimeConfigurationSha256": { "$ref": "#/$defs/sha256" },
+        "buildProvenance": { "$ref": "#/$defs/buildProvenance" }, "manifestSha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "assignmentPayload": {
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "purpose", "profile", "assignmentId", "assignmentPayloadSha256", "assignmentRevision", "manifestSha256", "guest", "trustCheckpointId", "revocationGeneration", "revocationRootSha256", "issuedAtUnixNanos", "expiresAtUnixNanos", "signingKeyId", "signingKeySpkiSha256"],
+      "properties": {
+        "apiVersion": { "const": "serverware.nativeCustodyClosureAssignment/v1" },
+        "purpose": { "const": "shadow-custody-execution-closure" }, "profile": { "$ref": "#/$defs/profile" },
+        "assignmentId": { "$ref": "#/$defs/sha256" }, "assignmentPayloadSha256": { "$ref": "#/$defs/sha256" },
+        "assignmentRevision": { "$ref": "#/$defs/positive" }, "manifestSha256": { "$ref": "#/$defs/sha256" },
+        "guest": { "$ref": "#/$defs/guest" }, "trustCheckpointId": { "$ref": "#/$defs/sha256" },
+        "revocationGeneration": { "$ref": "#/$defs/positive" }, "revocationRootSha256": { "$ref": "#/$defs/sha256" },
+        "issuedAtUnixNanos": { "$ref": "#/$defs/positive" }, "expiresAtUnixNanos": { "$ref": "#/$defs/positive" },
+        "signingKeyId": { "$ref": "#/$defs/sha256" }, "signingKeySpkiSha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "assignment": {
+      "type": "object", "additionalProperties": false, "required": ["payload", "signature"],
+      "properties": { "payload": { "$ref": "#/$defs/assignmentPayload" }, "signature": { "type": "string", "pattern": "^[A-Za-z0-9_-]{86}$" } }
+    },
+    "configuration": {
+      "type": "object", "additionalProperties": false, "required": ["apiVersion", "manifest", "authorization"],
+      "properties": {
+        "apiVersion": { "const": "serverware.nativeCustodyClosure/v1" },
+        "manifest": { "$ref": "#/$defs/manifest" }, "authorization": { "$ref": "#/$defs/assignment" }
+      }
+    }
+  }
+}

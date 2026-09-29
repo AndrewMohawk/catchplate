@@ -190,7 +190,7 @@ class OAuthExchangeKernel:
                 shared._query(operation=self.operation, name="new_credential", table="credentials", key={"id": item_id}, require_absence=True),
                 shared._query(operation=self.operation, name="new_generation", table="credential_generations", key={"credential_id": item_id}, require_absence=True)))
         queries.append(shared._audit_query(self.operation, request_digest))
-        return tuple(queries)
+        return family.order_populations(self.operation, tuple(queries))
 
     def transition(self, context):
         values = _values(self.operation, context.arguments)

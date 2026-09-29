@@ -52,6 +52,7 @@ fn main() -> Result<(), String> {
         Some("--guest-cohort-v10") => { arguments.remove(0); "--native-guest-cohort-startup-v10" },
         Some("--measured-cleanup-v11") => { arguments.remove(0); "--native-measured-cleanup-startup-v11" },
         Some("--guest-role-keys-v12") => { arguments.remove(0); "--native-guest-role-keys-startup-v12" },
+        Some("--measured-pending-retirement-v13") => { arguments.remove(0); "--native-measured-pending-retirement-startup-v13" },
         _ => "--native-encrypted-startup",
     };
     if arguments.is_empty() || arguments.len() > 9 {

@@ -719,6 +719,11 @@ def _validate_query_reads(operation: str, *, queries: tuple[Any, ...], query_rea
     if len(owned) != len(query_reads):
         raise QueryReadError("query read inventory omits or adds a declared query")
     records = tuple(_copy_read(record, work) for record in query_reads)
+    from serverware import authority_oauth_family_query_group as family_group
+    try:
+        family_group.validate_observations(operation, owned, records)
+    except _core().TransitionKernelError as exc:
+        raise QueryReadError("family inventory observations escaped the fixed admission group") from exc
     selections = _selection_map(operation, selected_rows, work)
     _associations(records, selections, work)
     checked = []

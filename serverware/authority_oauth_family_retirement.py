@@ -4,6 +4,7 @@ import uuid
 from serverware import authority_oauth_refresh_cleanup as profile
 from serverware import authority_transition_core as core
 from serverware import authority_transition_quota as shared
+from serverware import authority_oauth_family_query_group as group
 
 TABLE = "oauth_family_retirements"
 FIELDS = frozenset({"id", "provider_id", "provider_subject", "authorization_sha256", "work_id", "credential_id", "credential_version", "created_at"})
@@ -27,6 +28,19 @@ def population_query(operation):
         work_units=inventory.maximum_rows(TABLE) + 1)
 
 
+def population_queries(operation):
+    return group.queries(operation)
+
+
+def order_populations(operation, queries):
+    return group.ordered(operation, queries)
+
+
+def pending_query(operation, provider, subject):
+    return shared._query(operation=operation, name="oauth_pending_family_retirement", table=group.TABLES[1],
+        key={"id": family_id(provider, subject)})
+
+
 def require_open_from_population(context, provider, subject):
     """Caller must acquire this complete population in its same proved transaction."""
     key = family_id(provider, subject)
@@ -34,6 +48,11 @@ def require_open_from_population(context, provider, subject):
         row = shared._row(selected, "complete OAuth family retirement inventory")
         profile.require(set(row) == FIELDS and row["id"] == family_id(row["provider_id"], row["provider_subject"]))
         profile.require(row["id"] != key, "OAuth family retirement blocks activation, refresh and reuse")
+    from serverware import authority_oauth_measured_pending_retirement as pending
+    for selected in context.present_rows(pending.FAMILY_TABLE):
+        row = shared._row(selected, "complete pending family retirement inventory")
+        profile.require(set(row) == pending.FAMILY_FIELDS and row["id"] == family_id(row["provider_id"], row["provider_subject"]))
+        profile.require(row["id"] != key, "pending family retirement blocks activation, refresh and reuse")
 
 
 def require_single_lineage(context, grant, current):
@@ -50,6 +69,9 @@ def require_single_lineage(context, grant, current):
 
 
 def claim(context, grant, authorization_sha256):
+    require_open_from_population(context, grant["providerId"], grant["familyScope"]["providerSubject"])
+    profile.require(sum(len(context.present_rows(table)) for table in group.TABLES) < group.MAX_ROWS,
+        "combined family retirement capacity is full; no archival or overwrite permission")
     key = {"id": family_id(grant["providerId"], grant["familyScope"]["providerSubject"])}
     selected = context.exact(TABLE, key)
     profile.require(not selected["present"], "family retirement identity already consumed")
@@ -71,3 +93,5 @@ def require_open(context, provider, subject):
     """Actual effect callers must select query() in their same transaction."""
     profile.require(not context.exact(TABLE, {"id": family_id(provider, subject)})["present"],
         "OAuth family retirement blocks activation, refresh and reuse")
+    profile.require(not context.exact(group.TABLES[1], {"id": family_id(provider, subject)})["present"],
+        "pending family retirement blocks activation, refresh and reuse")

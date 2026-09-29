@@ -163,6 +163,7 @@ impl GateConfigV1 {
             secret_broker,
             measured_refresh,
             measured_cleanup: None,
+            measured_pending_retirement: None,
             measured_issuance: None,
             measured_audit,
             credential_currentness: None,

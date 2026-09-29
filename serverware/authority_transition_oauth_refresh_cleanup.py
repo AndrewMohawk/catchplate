@@ -112,11 +112,13 @@ class OAuthRefreshCleanupKernel:
                 shared._query(operation=self.operation, name="historical_barrier", table=roots.BARRIER_TABLE,
                     key={"id": core.SelectedRowFieldReference(roots.ROOT_TABLE, key, "barrier_id")})))
         queries.append(family.query(self.operation, grant["providerId"], grant["familyScope"]["providerSubject"]))
+        queries.extend(family.population_queries(self.operation))
+        queries.append(family.pending_query(self.operation, grant["providerId"], grant["familyScope"]["providerSubject"]))
         for purpose in grant["tokenPurposes"]:
             queries.append(shared._query(operation=self.operation, name="attempt_" + purpose, table=profile.ATTEMPT_TABLE,
                 key={"id": profile.attempt_id(grant["workId"], purpose)}, require_absence=self.operation == profile.OP_CLAIM))
         queries.append(shared._audit_query(self.operation, request_digest))
-        return tuple(queries)
+        return family.order_populations(self.operation, tuple(queries))
 
     def transition(self, context):
         values = _values(self.operation, context.arguments); grant = _grant(values); request = values["request"]

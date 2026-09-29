@@ -150,9 +150,9 @@ class OAuthRefreshKernel:
                 predicates=(), order_by=(core.QueryOrder("id"),), maximum_rows=inventory.maximum_rows(table) + 1,
                 proof_primitive="bounded-limit-plus-one", work_units=inventory.maximum_rows(table) + 1) for table in inventory.tables_for(self.operation))
         else:
-            queries.append(family_retirement.population_query(self.operation))
+            queries.extend(family_retirement.population_queries(self.operation))
         queries.append(shared._audit_query(self.operation, request_digest))
-        return tuple(queries)
+        return family_retirement.order_populations(self.operation, tuple(queries))
 
     def transition(self, context):
         values = _values(self.operation, context.arguments)

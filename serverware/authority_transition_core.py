@@ -3543,6 +3543,7 @@ def close_queries(
     operation: str,
     queries: tuple[Query, ...],
 ) -> tuple[Query, ...]:
+    from serverware import authority_oauth_family_query_group as family_group
     spec = authority_contract.operation_spec(operation)
     if (type(queries) is not tuple
             or len(queries) > spec["maximumQueryRows"]
@@ -3577,7 +3578,7 @@ def close_queries(
             for query in queries
         )
         or len({query.query_id for query in queries}) != len(queries)
-        or sum(query.maximum_rows for query in queries)
+        or family_group.declared_rows(operation, queries)
             > int(spec["maximumQueryRows"])
         or sum(query.work_units for query in queries)
             > int(spec["maximumWorkUnits"])

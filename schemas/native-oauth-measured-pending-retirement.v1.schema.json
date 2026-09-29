@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-oauth-measured-pending-retirement.v1.schema.json",
+  "title": "Explicit native staged-pending retirement configuration",
+  "$comment": "Public data only. The actual helper independently admits a distinct pending-retirement grant root, native pendingIds assignment and signed writer originals. Neither a configuration, a pending UUID nor a digest grants contact. Exact canonical byte bounds, sorted IDs, same current boot, helper lifetime and original deadlines are enforced by source owners. Older native startup profiles do not select this purpose.",
+  "$ref": "#/$defs/configuration",
+  "$defs": {
+    "pendingIds": {
+      "type": "array", "minItems": 1, "maxItems": 64, "uniqueItems": true,
+      "items": {"$ref": "oauth-refresh-authority.v1.schema.json#/$defs/uuid"}
+    },
+    "application": {
+      "type": "object", "additionalProperties": false,
+      "required": ["enrollmentOriginal", "material", "tlsRootsPem", "pendingIds"],
+      "properties": {
+        "enrollmentOriginal": {"$ref": "native-oauth-measured-refresh.v1.schema.json#/$defs/enrollmentOriginal"},
+        "material": {"$ref": "native-oauth-measured-refresh.v1.schema.json#/$defs/applicationMaterial"},
+        "tlsRootsPem": {"type": "string", "minLength": 1, "maxLength": 131072},
+        "pendingIds": {"$ref": "#/$defs/pendingIds"}
+      }
+    },
+    "target": {
+      "type": "object", "additionalProperties": false,
+      "required": ["authorizationOriginal", "historicalRootOriginal", "recovery"],
+      "properties": {
+        "authorizationOriginal": {"$ref": "native-oauth-measured-refresh.v1.schema.json#/$defs/encoded", "maxLength": 87382},
+        "historicalRootOriginal": {"$ref": "native-oauth-measured-refresh.v1.schema.json#/$defs/encoded", "maxLength": 5462},
+        "recovery": {"type": "boolean"}
+      }
+    },
+    "configuration": {
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "sourceRevision", "authorityRootPublicKey", "authorityRootSpkiSha256",
+        "controlPlaneConfigurationDigest", "deploymentId", "instanceId", "applications", "targets"],
+      "properties": {
+        "apiVersion": {"const": "serverware.nativeOAuthPendingRetirementConfiguration/v1"},
+        "sourceRevision": {"$ref": "oauth-application-enrollment.v1.schema.json#/$defs/revision"},
+        "authorityRootPublicKey": {"$ref": "native-oauth-measured-refresh.v1.schema.json#/$defs/bytes32"},
+        "authorityRootSpkiSha256": {"$ref": "native-oauth-measured-refresh.v1.schema.json#/$defs/digest"},
+        "controlPlaneConfigurationDigest": {"$ref": "native-oauth-measured-refresh.v1.schema.json#/$defs/digest"},
+        "deploymentId": {"$ref": "oauth-application-enrollment.v1.schema.json#/$defs/identifier"},
+        "instanceId": {"$ref": "native-oauth-measured-refresh.v1.schema.json#/$defs/instance"},
+        "applications": {
+          "type": "object", "minProperties": 1, "maxProperties": 2, "additionalProperties": false,
+          "properties": {"google": {"$ref": "#/$defs/application"}, "x": {"$ref": "#/$defs/application"}}
+        },
+        "targets": {"type": "array", "minItems": 1, "maxItems": 16, "items": {"$ref": "#/$defs/target"}}
+      }
+    }
+  }
+}

@@ -402,8 +402,10 @@ def reject_typed_authoritative_input(operation: str, value: Mapping[str, Any]) -
         evidence["nativeKeyEvidence"] = {name: item for name, item in evidence["nativeKeyEvidence"].items()
             if name != "attestationDocumentB64"}
         reject_authoritative_input({**value, "native_evidence": evidence})
-    elif operation.startswith("oauth.measured-refresh.") or operation.startswith("oauth.measured-refresh-cleanup."):
-        if operation.startswith("oauth.measured-refresh-cleanup."):
+    elif operation.startswith("oauth.measured-refresh.") or operation.startswith("oauth.measured-refresh-cleanup.") or operation.startswith("oauth.measured-pending-retirement."):
+        if operation.startswith("oauth.measured-pending-retirement."):
+            from serverware import authority_oauth_measured_pending_retirement as measured
+        elif operation.startswith("oauth.measured-refresh-cleanup."):
             from serverware import authority_oauth_measured_cleanup as measured
         else:
             from serverware import authority_oauth_measured_refresh as measured
@@ -2746,6 +2748,8 @@ def _read_bounded_transition_rows(
         raise AuthorityPlannerError("evidence admission requires its ordinary source trace")
     query_sources._require_query_work(query_work)
     queries = authority_query_reads._snapshot_queries(operation, queries, work=query_work)
+    from serverware import authority_oauth_family_query_group as family_group
+    family_acquisition = family_group.Acquisition(operation, queries)
     # Reject the whole inventory before even the first business/proof read.
     # A complete declaration must never fall through to ordinary SQL LIMIT+1.
     # The earlier database-clock read is not independent time authority.
@@ -2777,6 +2781,7 @@ def _read_bounded_transition_rows(
     query_reads: list[authority_query_reads.QueryRead] = []
 
     for query in queries:
+        family_acquisition.before(query)
         manifest_entry = manifest_by_table.get(query.table)
         if manifest_entry is None:
             raise AuthorityPlannerError(
@@ -2859,6 +2864,13 @@ def _read_bounded_transition_rows(
                 raise AuthorityPlannerError("typed transition query exceeded its manifest bound")
             if query.require_absence and rows:
                 raise AuthorityPlannerError("typed transition exact-absence query found a row")
+        # This is the actual metered SQL result, before source-reference or
+        # final primary proof construction, not a caller supplied population.
+        family_acquisition.record(query, len(rows))
+        if operation in {"oauth.measured-pending-retirement.inspect", "oauth.measured-pending-retirement.claim",
+                "oauth.measured-pending-retirement.contact", "oauth.measured-pending-retirement.finish", "oauth.measured-pending-retirement.recover"}:
+            from serverware import authority_transition_oauth_measured_pending_retirement as pending_retirement
+            pending_retirement.check_acquired_credentials(operation, request["arguments"], query, rows)
         query_rows = tuple(
             row["row_value"] for row in rows
         )
@@ -2928,6 +2940,7 @@ def _read_bounded_transition_rows(
             operation, query_reads=(*query_reads, query_read), work=query_work,
         )
         query_reads.append(query_read)
+    family_acquisition.finish()
     selected_rows = tuple(
         sorted(
             selected.values(),
@@ -4232,6 +4245,8 @@ class MeasuredPlanner:
                                 "oauth.measured-refresh.commit", "oauth.measured-refresh.recover",
                                 "oauth.measured-refresh-cleanup.inspect", "oauth.measured-refresh-cleanup.claim", "oauth.measured-refresh-cleanup.contact",
                                 "oauth.measured-refresh-cleanup.finish", "oauth.measured-refresh-cleanup.recover",
+                                "oauth.measured-pending-retirement.inspect", "oauth.measured-pending-retirement.claim", "oauth.measured-pending-retirement.contact",
+                                "oauth.measured-pending-retirement.finish", "oauth.measured-pending-retirement.recover",
                                 "credential.currentness.challenge", "credential.currentness.register", "credential.currentness.quiesce", "credential.currentness.admit",
                                 "oauth.refresh-cleanup.claim", "oauth.refresh-cleanup.contact", "oauth.refresh-cleanup.finish"}:
                             authority_oauth_inventory.require_complete_populations(

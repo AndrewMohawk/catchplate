@@ -16,6 +16,7 @@ from serverware import authority_transition_oauth_measured_exchange
 from serverware import authority_transition_oauth_refresh
 from serverware import authority_transition_oauth_measured_refresh
 from serverware import authority_transition_oauth_measured_cleanup
+from serverware import authority_transition_oauth_measured_pending_retirement
 from serverware import authority_transition_credential_currentness
 from serverware import authority_transition_oauth_revocation
 from serverware import authority_transition_oauth_refresh_cleanup
@@ -50,6 +51,7 @@ def _merge_kernels() -> dict[
         authority_transition_oauth_refresh.KERNELS,
         authority_transition_oauth_measured_refresh.KERNELS,
         authority_transition_oauth_measured_cleanup.KERNELS,
+        authority_transition_oauth_measured_pending_retirement.KERNELS,
         authority_transition_credential_currentness.KERNELS,
         authority_transition_oauth_revocation.KERNELS,
         authority_transition_oauth_refresh_cleanup.KERNELS,

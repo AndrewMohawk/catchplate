@@ -156,6 +156,14 @@ pub(super) fn prepare_native_tls_gate_state(
             signer, &binary_digest, deadline)?),
         None => None,
     };
+    // Staged pending retirement is a distinct purpose; neither refresh
+    // cleanup nor initial issuance supplies its permission.
+    let measured_pending_retirement = match inputs.measured_pending_retirement.take() {
+        Some(config) => Some(native_oauth_pending_retirement::prepare(config, &inputs,
+            secret_broker.as_mut().ok_or("native pending retirement broker absent")?, &mut identity,
+            signer, &binary_digest, deadline)?),
+        None => None,
+    };
     let mut state = inputs.into_state(GateStateRuntime {
         snapshot: Arc::new(snapshot), audit_client, credential_lease_client: credential_client,
         upstream_resolver: Arc::new(NativeConfiguredResolver(Arc::clone(&relays))),
@@ -167,11 +175,13 @@ pub(super) fn prepare_native_tls_gate_state(
     state.native_secret_broker = secret_broker.map(Mutex::new);
     state.measured_refresh = measured_refresh.map(Mutex::new);
     state.measured_cleanup = measured_cleanup.map(Mutex::new);
+    state.measured_pending_retirement = measured_pending_retirement.map(Mutex::new);
     state.measured_issuance = measured_issuance.map(Mutex::new);
     state.measured_audit = measured_audit.map(Mutex::new);
     if state.measured_audit.is_some() { native_audit_owner::initialize(&state)?; }
     if state.measured_refresh.is_some() { native_oauth_refresh::initialize(&state)?; }
     if state.measured_cleanup.is_some() { native_oauth_cleanup::initialize(&state)?; }
+    if state.measured_pending_retirement.is_some() { native_oauth_pending_retirement::initialize(&state)?; }
     if state.measured_issuance.is_some() { native_oauth_exchange::initialize(&state)?; }
     ingress.verify_live(deadline)?;
     native_service_remaining(&state)?;

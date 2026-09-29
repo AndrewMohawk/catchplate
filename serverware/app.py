@@ -529,6 +529,7 @@ async def bounded_control_plane_request_middleware(request: Request, call_next):
     from serverware import control_plane_oidc_session_activation_permission_http as activation_permission_contract
     from serverware import control_plane_oauth_measured_refresh as measured_refresh_contract
     from serverware import control_plane_oauth_measured_cleanup as measured_cleanup_contract
+    from serverware import control_plane_oauth_measured_pending_retirement as pending_retirement_contract
 
     request_path = request.scope.get("path")
     from serverware import control_plane_oauth_measured_exchange as native_issuance_contract
@@ -660,6 +661,7 @@ async def bounded_control_plane_request_middleware(request: Request, call_next):
         "/api/policy/file-publication/genesis-materialize": 24 * 1024 * 1024,
         "/api/data-plane/oauth-refresh": measured_refresh_contract.MAX_REQUEST,
         "/api/data-plane/oauth-refresh-cleanup": measured_cleanup_contract.MAX_REQUEST,
+        "/api/data-plane/oauth-pending-retirement": pending_retirement_contract.MAX_REQUEST,
         "/api/webauthn/register/prepare": _REGISTRATION_PREPARATION_MAX_BYTES,
         "/api/auth/session/webauthn/register/prepare": _REGISTRATION_PREPARATION_MAX_BYTES,
         "/api/webauthn/register/prepare-execution": _REGISTRATION_PREPARATION_MAX_BYTES,
@@ -18901,6 +18903,22 @@ async def data_plane_measured_oauth_cleanup(request: Request) -> Response:
         body = _canonical_json(result).encode("utf-8")
     except Exception as exc:
         raise HTTPException(status_code=503, detail="measured cleanup outcome uncertain; no retry is authorized") from exc
+    return Response(content=body, media_type="application/json", headers={"Cache-Control": "no-store"})
+
+
+@app.post("/api/data-plane/oauth-pending-retirement")
+async def data_plane_measured_pending_retirement(request: Request) -> Response:
+    from serverware import control_plane_oauth_measured_pending_retirement as pending
+    from starlette.concurrency import run_in_threadpool
+    _require_data_plane_token(request.headers.get("X-Serverware-Data-Plane-Token"), DATA_PLANE_CREDENTIAL_LEASE_TOKEN)
+    raw = await _native_oauth_original(request, pending.MAX_REQUEST)
+    try:
+        result = await run_in_threadpool(pending.on_request, request, raw)
+        body = _canonical_json(result).encode("utf-8")
+        if len(body) > pending.MAX_RESPONSE:
+            raise ValueError("bounded pending retirement response")
+    except Exception:
+        raise HTTPException(status_code=503, detail="pending retirement unavailable or uncertain; no retry authorized") from None
     return Response(content=body, media_type="application/json", headers={"Cache-Control": "no-store"})
 
 

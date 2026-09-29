@@ -174,7 +174,7 @@ class OAuthActivationKernel:
                 predicates=(), order_by=(core.QueryOrder("id"),), maximum_rows=inventory.maximum_rows(table) + 1,
                 proof_primitive="bounded-limit-plus-one", work_units=inventory.maximum_rows(table) + 1) for table in inventory.TABLES)
         queries.append(shared._audit_query(self.operation, request_digest))
-        return tuple(queries)
+        return family_retirement.order_populations(self.operation, tuple(queries))
 
     def transition(self, context):
         values = _values(self.operation, context.arguments)

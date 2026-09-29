@@ -1352,9 +1352,19 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_oauth_measured_cleanup.py \
 	serverware/authority_transition_oauth_measured_cleanup.py \
 	serverware/control_plane_oauth_measured_cleanup.py \
+	serverware/authority_oauth_family_query_group.py \
+	serverware/authority_oauth_measured_pending_originals.py \
+	serverware/authority_oauth_measured_pending_retirement.py \
+	serverware/authority_oauth_measured_pending_retirement_policy.py \
+	serverware/authority_transition_oauth_measured_pending_retirement.py \
+	serverware/control_plane_oauth_measured_pending_retirement.py \
+	scripts/authority/check_oauth_family_query_group.py \
 	serverware/native_oauth_cleanup_owner.py \
 	serverware/native_oauth_cleanup_receipts.py \
 	serverware/native_oauth_cleanup.py \
+	serverware/native_oauth_pending_retirement_owner.py \
+	serverware/native_oauth_pending_retirement_receipts.py \
+	serverware/native_oauth_pending_retirement.py \
 	serverware/control_plane_oauth_measured_exchange.py \
 	serverware/portal_oauth_measured_consent.py \
 	serverware/native_service_tokens.py \
@@ -3742,9 +3752,19 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_oauth_measured_cleanup.py \
 				serverware/authority_transition_oauth_measured_cleanup.py \
 				serverware/control_plane_oauth_measured_cleanup.py \
+				serverware/authority_oauth_family_query_group.py \
+				serverware/authority_oauth_measured_pending_originals.py \
+				serverware/authority_oauth_measured_pending_retirement.py \
+				serverware/authority_oauth_measured_pending_retirement_policy.py \
+				serverware/authority_transition_oauth_measured_pending_retirement.py \
+				serverware/control_plane_oauth_measured_pending_retirement.py \
+				scripts/authority/check_oauth_family_query_group.py \
 				serverware/native_oauth_cleanup_owner.py \
 				serverware/native_oauth_cleanup_receipts.py \
 				serverware/native_oauth_cleanup.py \
+				serverware/native_oauth_pending_retirement_owner.py \
+				serverware/native_oauth_pending_retirement_receipts.py \
+				serverware/native_oauth_pending_retirement.py \
 				serverware/control_plane_oauth_measured_exchange.py \
 				serverware/portal_oauth_measured_consent.py \
 				serverware/native_service_tokens.py \
@@ -3999,6 +4019,9 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/native_oauth_cleanup_v1.rs \
 				data-plane/decision-gate-rs/src/native_oauth_cleanup.rs \
 				data-plane/decision-gate-rs/src/native_secret_broker_v1/cleanup.rs \
+				data-plane/decision-gate-rs/src/native_oauth_pending_retirement_v1.rs \
+				data-plane/decision-gate-rs/src/native_oauth_pending_retirement.rs \
+				data-plane/decision-gate-rs/src/native_secret_broker_v1/pending_retirement.rs \
 				data-plane/decision-gate-rs/src/credential_currentness.rs \
 				data-plane/decision-gate-rs/src/native_currentness_v1.rs \
 				data-plane/decision-gate-rs/src/erofs_loop_v1.rs \
@@ -4230,8 +4253,11 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-startup-configuration.v10.schema.json \
 				schemas/native-startup-configuration.v11.schema.json \
 				schemas/native-startup-configuration.v12.schema.json \
+				schemas/native-startup-configuration.v13.schema.json \
 				schemas/native-guest-role-key-provisioner.v1.schema.json \
 				schemas/native-oauth-measured-cleanup.v1.schema.json \
+				schemas/native-oauth-measured-pending-retirement.v1.schema.json \
+				schemas/oauth-measured-pending-retirement-authority.v1.schema.json \
 				schemas/native-oauth-measured-exchange.v1.schema.json \
 				schemas/native-guest-cohort.v1.schema.json \
 				schemas/native-oauth-measured-refresh.v1.schema.json \

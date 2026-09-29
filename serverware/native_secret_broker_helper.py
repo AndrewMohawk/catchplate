@@ -28,6 +28,7 @@ from serverware.native_kms_cms import unwrap_broker_kek
 from serverware import native_service_tokens
 from serverware import native_oauth_refresh_owner
 from serverware import native_oauth_cleanup_owner
+from serverware import native_oauth_pending_retirement_owner
 from serverware import native_oauth_exchange_owner
 
 _SCHEMA = "serverware.nativeSecretBrokerChannel/v1"
@@ -234,6 +235,7 @@ class _Broker:
         self.service_tokens_opened = False
         self.refresh_owner = None
         self.cleanup_owner = None
+        self.pending_retirement_owner = None
         self.exchange_owner = None
 
     def provision(self, value):
@@ -363,10 +365,12 @@ def main():
             refresh_operation = None if broker.refresh_owner is None else broker.refresh_owner.operation
             exchange_operation = None if broker.exchange_owner is None else broker.exchange_owner.operation
             cleanup_operation = None if broker.cleanup_owner is None else broker.cleanup_owner.operation
+            pending_retirement_operation = None if broker.pending_retirement_owner is None else broker.pending_retirement_owner.operation
             active = [(purpose, operation) for purpose, operation in (
                 (native_oauth_refresh_owner.CHANNEL, refresh_operation),
                 (native_oauth_exchange_owner.CHANNEL, exchange_operation),
-                (native_oauth_cleanup_owner.CHANNEL, cleanup_operation)) if operation is not None]
+                (native_oauth_cleanup_owner.CHANNEL, cleanup_operation),
+                (native_oauth_pending_retirement_owner.CHANNEL, pending_retirement_operation)) if operation is not None]
             _require(len(active) <= 1)
             active_operation = active[0][1] if active else None
             value = channel.receive(None if active_operation is None else active_operation.deadline)
@@ -375,7 +379,7 @@ def main():
             if value.get("apiVersion") == _SERVICE_WORK:
                 broker.open_service_tokens(value)
             elif value.get("apiVersion") == native_oauth_refresh_owner.CHANNEL:
-                _require(exchange_operation is None)
+                _require(exchange_operation is None and cleanup_operation is None and pending_retirement_operation is None)
                 if value.get("phase") == "configure":
                     _require(broker.refresh_owner is None)
                     broker.refresh_owner = native_oauth_refresh_owner.Owner(broker, value)
@@ -383,15 +387,23 @@ def main():
                     _require(broker.refresh_owner is not None)
                     broker.refresh_owner.handle(value)
             elif value.get("apiVersion") == native_oauth_cleanup_owner.CHANNEL:
-                _require(refresh_operation is None and exchange_operation is None)
+                _require(refresh_operation is None and exchange_operation is None and pending_retirement_operation is None)
                 if value.get("phase") == "configure":
                     _require(broker.cleanup_owner is None)
                     broker.cleanup_owner = native_oauth_cleanup_owner.Owner(broker, value)
                 else:
                     _require(broker.cleanup_owner is not None and refresh_operation is None)
                     broker.cleanup_owner.handle(value)
+            elif value.get("apiVersion") == native_oauth_pending_retirement_owner.CHANNEL:
+                _require(refresh_operation is None and exchange_operation is None and cleanup_operation is None)
+                if value.get("phase") == "configure":
+                    _require(broker.pending_retirement_owner is None)
+                    broker.pending_retirement_owner = native_oauth_pending_retirement_owner.Owner(broker, value)
+                else:
+                    _require(broker.pending_retirement_owner is not None)
+                    broker.pending_retirement_owner.handle(value)
             elif value.get("apiVersion") == native_oauth_exchange_owner.CHANNEL:
-                _require(refresh_operation is None)
+                _require(refresh_operation is None and cleanup_operation is None and pending_retirement_operation is None)
                 if value.get("phase") == "configure":
                     _require(broker.exchange_owner is None)
                     broker.exchange_owner = native_oauth_exchange_owner.Owner(broker, value)

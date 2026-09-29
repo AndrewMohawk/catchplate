@@ -359,6 +359,32 @@ def admit_measured_cleanup_barrier(opening, credential_row, generation_row, hist
     return _coordinate(owner, credential, generation, opening)
 
 
+def admit_pending_retirement_barriers(opening, affected_originals):
+    from serverware.control_plane_oauth_measured_pending_retirement import Opening
+    from serverware import authority_oauth_measured_pending_retirement as pending
+    profile.require(type(opening) is Opening and opening.dispatched and opening.operation == pending.OP_INSPECT)
+    opening.check()
+    owner = _Owner(deadline=opening.deadline, expires=opening.expires)
+    profile.require(opening.custody is owner.custody and opening.binding is owner.binding)
+    grant = pending.grant_document(pending.unb64(opening.arguments["authorization_original"], pending.MAX_GRANT_BYTES))["payload"]
+    profile.require(type(affected_originals) is list and len(affected_originals) == len(grant["affectedLineages"]))
+    result = []
+    for original, pin in zip(affected_originals, grant["affectedLineages"]):
+        opening.check(); owner.check()
+        profile.require(type(original) is dict and set(original) == pending.AFFECTED_ORIGINAL_FIELDS)
+        credential = pending.document(original["credentialOriginal"].encode("ascii"), 512 * 1024)
+        generation = pending.document(original["generationOriginal"].encode("ascii"), 8192)
+        profile.require(pending.sha256(refresh.credential_original(credential)) == pin["credentialRowSha256"]
+            and pending.sha256(refresh.generation_original(generation)) == pin["generationRowSha256"])
+        actual, head, root = _rows(pin["credentialId"], pin["credentialVersion"])
+        profile.require(actual == credential and head == generation and root["status"] == "open"
+            and root["barrier_id"] is None)
+        digest = _coordinate(owner, credential, generation, opening)
+        result.append({"credentialId": pin["credentialId"], "credentialVersion": pin["credentialVersion"], "barrierSha256": digest})
+    opening.check(); owner.check()
+    return pending.barriers(result, grant["affectedLineages"])
+
+
 def admit_cleanup_barrier(operation):
     from serverware.control_plane_oauth_refresh_cleanup import _Operation
     profile.require(type(operation) is _Operation)

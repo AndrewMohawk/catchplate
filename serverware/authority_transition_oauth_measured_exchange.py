@@ -85,7 +85,7 @@ class MeasuredExchangeKernel:
             queries.extend((shared._query(operation=self.operation, name="credential", table="credentials", key={"id": item_id}, require_absence=True),
                 shared._query(operation=self.operation, name="generation", table="credential_generations", key={"credential_id": item_id}, require_absence=True)))
         queries.append(shared._audit_query(self.operation, request_digest))
-        return tuple(queries)
+        return family.order_populations(self.operation, tuple(queries))
 
     def transition(self, context):
         values = profile.arguments(self.operation, context.arguments, typed=True)

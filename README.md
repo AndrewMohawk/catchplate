@@ -24,16 +24,16 @@ Checkpoint: **2026-09-29 — pre-production, source-only.**
 
 [![Project checkpoints, one segment per task: 35 of 46 source-landed; 4 active and 7 todo. Evidence handoff 10/10; historical recovery 4/5; permissions and grants 10/10; finalization and sessions 8/8; workloads and native 3/6; providers and operations 0/7. F08 is source-landed in 170d0ac; H05, N04, N05 and O04 are in progress. Production acceptance remains 0/6. Source only; unbuilt, unexecuted and unprovisioned.](docs/images/project-progress.svg)](docs/production-status.md#next-source-milestones)
 
-### Current work: native enrollment, workload trust and protected operations
+### Current work: historical authority and protected operations
 
-[`.255` source / 53836b2](https://github.com/example/private-deployment)
-connects separately authorized [dual-stack network attachment](docs/native-network-attachment-client.md):
-fixed child policy, durable pre-effect claim and exact owner-bound kernel readback
-reach the public v4 client and strict data-only capture extraction.
-Output observes a never-executed child before teardown, not a persistent deployment.
-Prior native trust and separate ordinary PolicyAware source credit remains.
-Exec/start, persistent supervision, combined CA+egress,
-provider/egress/canaries, Kubernetes, lifecycle and independent acceptance stay open.
+[`.256` source / 43cea25](https://github.com/example/private-deployment)
+connects [current-authority LIVE delivery over retained RI originals](docs/control-plane-current-authority-retained-ri-delivery.md)
+and [durable generated-admin-token publication](docs/control-plane-approval-verification.md#protected-generated-admin-token-publication).
+Historical evidence custody stays distinct from fresh delivery authority;
+uncertain publication grants no retry. Prior [`.255` native attachment](https://github.com/example/private-deployment)
+and ordinary PolicyAware source credit remains. Recovery outcome-root history,
+migration/older-source adapters, provider effects, authorized journal recovery,
+multi-host coordination, native start/supervision and independent acceptance stay open.
 Source is unbuilt, unexecuted and unprovisioned; no build/test/runtime, tested pilot,
 NSM or AWS/spend acceptance is claimed.
 
@@ -44,8 +44,10 @@ The four active checkpoints remain partial:
   authorization/lease representation are source-connected.
   Production enrollment, native trust authorization, issuer lifecycle,
   authenticated service/sidecar journeys and runtime verification remain open.
-- **H05 · Historical recovery:** [retained intent/proof readmission](docs/control-plane-retained-intent-history.md)
-  is source-connected; historical release delivery, migration and older-source replay remain open.
+- **H05 · Historical recovery:** retained intent/proof readmission now joins
+  [fresh current-authority LIVE grants and delivery](docs/control-plane-current-authority-retained-ri-delivery.md),
+  without retired signing or expiry renewal. Retained-outcome-root recovery,
+  migration and older-source replay remain open.
 - **N05 · Native enrollment:** cold authority, caller policy/TLS admission,
   target CSR/possession, separate setup permission, current policy requirements
   and packet originals now connect to durable role-5 signing, fixed POST/full
@@ -67,9 +69,9 @@ The four active checkpoints remain partial:
   lifecycle/cross-session recovery, off-host rollback witnessing and independent
   service/exact-source verification remain open.
 - **O04 · Protected operations:** [genuine approval verification](docs/control-plane-approval-verification.md)
-  and its signed-assertion withdrawal fixture are source-corrected, unexecuted;
-  protected provider/filesystem effects and durable
-  interruption outcomes remain open.
+  now joins [durable admin-token publication](docs/control-plane-approval-verification.md#protected-generated-admin-token-publication),
+  exact file readback and read-only interruption inspection. Other provider/filesystem
+  effects, authorized journal recovery and multi-host coordination remain open.
 
 No new parent checkpoint or tested pilot is claimed. Source remains unbuilt,
 unexecuted and unprovisioned. The [detailed ledger](docs/production-status.md)

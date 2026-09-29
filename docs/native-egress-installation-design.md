@@ -1,10 +1,12 @@
 # Native egress installation design
 
-This is the agreed architecture for a future, separately authorized native host
-egress installer. It is not an implemented wire profile, installer, successful
-firewall transaction or completion credit. Existing native enrollment, CA
-installation and legacy firewall profiles remain unchanged. No commands in this
-document authorize deployment or a canary.
+This is the agreed architecture for a separately authorized native host egress
+installer. The `.251` [grant, stopped-workload and journal source foundation](native-egress-installation.md)
+now supplies purpose-specific components, not a completed installer or successful
+firewall transaction. There is no current public configuration/CLI/effect path;
+the kernel backend and full guarded orchestration remain open. Existing native
+enrollment, CA installation and legacy firewall profiles remain unchanged.
+No commands in this document authorize deployment or a canary.
 
 ## Existing inputs and their limits
 
@@ -33,20 +35,26 @@ here. Do not execute that script as the new installer or reinterpret its receipt
 
 ## Separate authority and retained ownership
 
-A new closed, versioned **egress-installation grant** must be independently signed
-under a dedicated, explicitly pinned public root. Its schema, byte bounds and
-canonical signature domain must be frozen with paired producer/verifier code;
-this design does not introduce a callable schema. The grant must bind:
+The `.251` closed, versioned **egress-installation grant** has a dedicated,
+explicitly pinned public root and purpose-specific original verification. This
+source foundation is not a public effect entrypoint. Its scope and future
+operation-side joins preserve these distinctions:
 
-- Exact setup, delegation and target-request original hashes, target principal
-  and key/nonce association, policy/configuration/runtime scope and the genuine
-  native proof used by the operation. Re-admit originals under independent
-  roots; a packet, capture, CA receipt or successful preflight JSON is not proof.
+- The precontact grant pins setup, delegation and target-request associations,
+  target principal/key/nonce, and expected policy/configuration/runtime scope.
+  It cannot contain hashes of fresh evidence or packet originals not yet
+  acquired. Those exact fresh originals must be admitted and bound into the
+  operation-side association. Re-admit originals under independent roots; a
+  packet, capture, CA receipt or successful preflight JSON is not proof.
 - Host label mapped to exact machine-id original hash, boot ID, network namespace
   device/inode/owner, and an independently authorized **controlled workload**
   association. The latter needs an actual retained launcher/process-lifecycle
   owner: the target workload must be stopped or not yet started, its namespace
   membership fixed, and unrelated workloads excluded throughout the effect.
+  Signed setup `networkOwner` refers to the launcher-host namespace. The grant
+  separately authorizes creation of one never-started `NEWNET` child before the
+  journal firewall claim; its new namespace identity is retained operation-side,
+  not predicted or substituted for the signed host namespace.
   Signed labels, PID text, environment variables and a one-time process list
   cannot substitute for that owner. Kubernetes requires its own actual cluster,
   namespace and workload ownership contract; this host profile does not supply it.
@@ -63,10 +71,22 @@ this design does not introduce a callable schema. The grant must bind:
   live; checks cannot manufacture a new allowance.
 
 The independent authority must explicitly permit the namespace-wide deny effect,
-not merely connectivity to an endpoint. The launcher must prevent workload start
-until verified completion and must remain able to keep it stopped on failure.
-This lifecycle contract is required implementation, not a property of today's
-`HostOwner` or `InstallGuard`.
+not merely connectivity to an endpoint. The `.251` stopped-child owner provides
+no target start API and tears down only its child through retained pidfd ownership
+on failure/parent death. Creation is separately grant-authorized; the later
+durable claim must precede firewall mutation. Full start/lifecycle permission
+still requires a future contract, not today's `HostOwner` or CA `InstallGuard`.
+
+The exact five-field [pre-exec launch manifest](../schemas/native-egress-launch-manifest.v1.schema.json)
+is `apiVersion: serverware.nativeEgressLaunchManifest/v1`,
+`profile: native-egress-create-new-workload-v1`, `executable: {path, sha256}`,
+`argv: [executable.path]`, and `environment: {}`. Its exact sorted compact
+`ensure_ascii` original has no newline and is bounded to 4 KiB; the native owner
+admits the actual executable original up to
+16 MiB. This pins a selected artifact, **not** full execution configuration or
+permission to execute it. Additional arguments, environment, working directory,
+UID/GID or capabilities need an explicit new profile; none may be inferred from
+the manifest or inherited silently as target authority.
 
 ## Exact rules, one transaction, actual readback
 
@@ -84,6 +104,20 @@ default policy `drop`, and exact address/family + TCP destination-port accept
 rules. There are no implicit established/related, loopback, DNS, UDP, ICMP or
 control-plane exceptions. If a deployment needs additional control traffic,
 stop for a separately reviewed profile; do not widen the set to make it work.
+
+Before any accept, the fixed backend must exclude every IPv4 packet with MF or
+a nonzero fragment offset (DF is permitted), and every IPv6 packet containing a
+Fragment header, including atomic fragments. Ordinary non-fragment IPv6
+extension-header resolution remains supported through `meta L4PROTO`; this is
+not permission for arbitrary encapsulated protocols. These are explicit rule
+constraints, not reliance on implicit payload-evaluator fragment handling. The
+source basis is Linux v6.12's [IPv4 packet initialization](https://github.com/torvalds/linux/blob/v6.12/include/net/netfilter/nf_tables_ipv4.h#L6-L15),
+[IPv6 extension walker](https://github.com/torvalds/linux/blob/v6.12/net/ipv6/exthdrs_core.c#L179-L267)
+and [payload evaluation paths](https://github.com/torvalds/linux/blob/v6.12/net/netfilter/nf_tables_core.c#L136-L165).
+This deliberately excludes otherwise legitimate pre-fragmented traffic. An
+output-hook check is not a guarantee against fragmentation after that hook;
+neither this design nor the source inspection is runtime evidence.
+
 Other hooks and networking configuration are outside this transaction, so this
 does not itself establish end-to-end connectivity or protection against host
 administrators changing routing, NAT or rules.
@@ -105,7 +139,8 @@ controlled workload owner through claim, effect, readback and completion.
    table, modify another owner's rules, or retry after submission uncertainty.
 4. Read actual kernel state from the same held namespace. Require the exact table,
    chain family/type/hook/priority/policy and full ordered rule expressions,
-   addresses, protocols, ports and verdicts; reject extra chains, sets or rules.
+   addresses, protocols, ports, fragment exclusions and verdicts; reject extra
+   chains, sets or rules.
    Names, comments, handles, an ACK or a matching supplied digest are insufficient.
    Kernel-generated identifiers must be separated from semantic comparison.
 5. Recheck all owners and original bounds, then durably publish completion and a
@@ -131,18 +166,20 @@ cross-session recovery require explicit lifecycle contracts.
 
 ## Implementation sequence and open acceptance
 
-Implement separate bounded components in this order: (1) original grant
-producer/verifier and independent-root provisioning; (2) actual controlled
-workload/launcher ownership beside the existing host owner; (3) purpose-specific
-protected claim owner; (4) fixed typed transaction and full kernel readback owner;
-(5) guarded orchestration and read-only completed recovery. Keep CA installation
-and old enrollment profiles strict; do not turn a shared data projection into an
-authority object.
+The `.251` foundation includes original grant scope, artifact-pinned never-started
+workload ownership and a distinct protected reserve/claim/complete journal.
+Independent provisioning and genuine acquisition of all operation originals,
+public configuration/CLI selection and full guard orchestration remain open.
+Next integrate the fixed typed kernel transaction, exact raw intended/observed
+original custody and full semantic readback, then guarded completion and read-only
+recovery. The journal's digests alone do not retain those raw originals or prove
+kernel success. Keep CA installation and old enrollment profiles strict; do not
+turn a shared data projection into an authority object.
 
-None of those new egress components is implemented by this document. Exact wire,
-backend dependency/capacity choices, privileged-writer exclusion and deployment
-compatibility still need source integration and independent review. Later
-authorized acceptance must separately establish deny/allow behavior, no direct
-bypass, real CONNECT/provider policy, canaries, interruption and recovery, and
-Kubernetes ownership where applicable. No test, build, runtime/network change,
-AWS/spend, production gate or N04/N05 completion is claimed here.
+No firewall backend/effect path is supplied by this foundation. Backend dependency
+and capacity choices, privileged-writer exclusion, lifecycle/recovery and deployment
+compatibility still need integration and independent review. Later authorized
+acceptance must separately establish deny/allow behavior, no direct bypass, real
+CONNECT/provider policy, canaries, interruption and recovery, and Kubernetes
+ownership where applicable. No test, build, runtime/network change, AWS/spend,
+production gate or N04/N05 completion is claimed here.

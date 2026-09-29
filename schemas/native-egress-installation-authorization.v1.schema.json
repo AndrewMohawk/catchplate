@@ -1,0 +1,128 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-egress-installation-authorization.v1.schema.json",
+  "title": "Independent create-new native egress installation authorization v1",
+  "description": "Original canonical sorted compact ensure_ascii JSON including escaped DEL, no LF, at most 32768 bytes and nesting depth 6. Ed25519 signs the payload schema ASCII, NUL, then exact canonical payload. Schema validity is not signature admission, genuine native proof, protected token possession, host/workload ownership, a durable claim or kernel effect. This distinct grant grants no CA-install permission, workload start, network attachment, recovery or persistent teardown.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "payload", "signature"],
+  "properties": {
+    "schema": {"const": "serverware.signedNativeEgressInstallationAuthorization/v1"},
+    "payload": {"$ref": "#/$defs/payload"},
+    "signature": {"type": "string", "minLength": 94, "maxLength": 94, "pattern": "^ed25519:[A-Za-z0-9_-]{85}[AQgw](?![\\s\\S])"}
+  },
+  "$defs": {
+    "digest": {"type": "string", "minLength": 71, "maxLength": 71, "pattern": "^sha256:(?!0{64}(?![\\s\\S]))[0-9a-f]{64}(?![\\s\\S])"},
+    "identifier": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}(?![\\s\\S])"},
+    "positive": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807},
+    "ascii": {"type": "string", "minLength": 1, "pattern": "^[!-~]+(?![\\s\\S])"},
+    "path": {
+      "type": "string", "minLength": 2, "maxLength": 4096, "pattern": "^/[!-~]+(?![\\s\\S])",
+      "description": "Canonical absolute nonroot ASCII journal path: no backslash or empty/dot/dot-dot component, at most 64 components, each at most 255 bytes. Runtime enforces these conditions and actual held-directory identity."
+    },
+    "proxy": {
+      "type": "object", "additionalProperties": false,
+      "required": ["origin", "endpoint", "egressCidrs", "hostAddresses"],
+      "properties": {
+        "origin": {"$ref": "#/$defs/ascii", "maxLength": 2048, "description": "Existing canonical HTTPS setup origin; no credentials, path, query or fragment, and default 443 omitted."},
+        "endpoint": {"$ref": "#/$defs/ascii", "maxLength": 64, "description": "Existing canonical unicast IP SocketAddr, port 1..65535, no DNS or IPv6 zone; canonical mapped IPv6 uses a dotted IPv4 tail."},
+        "egressCidrs": {"type": "array", "minItems": 1, "maxItems": 32, "uniqueItems": true, "items": {"$ref": "#/$defs/ascii", "maxLength": 80}},
+        "hostAddresses": {"type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true, "items": {"$ref": "#/$defs/ascii", "maxLength": 64}}
+      },
+      "description": "Exact original signed setup proxy shape. Lists are sorted ASCII originals. CIDRs are strict canonical non-universal networks. Every canonical unicast address lies within a signed same-family CIDR and the delegated endpoint address is present. Origin/endpoint ports agree; an IP origin requires the singleton exact endpoint address. Actual native owner must compare the entire object to genuine setup/delegation and its held peer; no DNS or CIDR expansion supplies rules."
+    },
+    "networkOwner": {
+      "type": "object", "additionalProperties": false,
+      "required": ["hostId", "bootId", "namespaceDevice", "namespaceInode", "ownerUid"],
+      "properties": {
+        "hostId": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9._:-]{1,128}(?![\\s\\S])"},
+        "bootId": {"type": "string", "minLength": 36, "maxLength": 36, "pattern": "^(?!00000000-0000-0000-0000-000000000000(?![\\s\\S]))[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?![\\s\\S])"},
+        "namespaceDevice": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615},
+        "namespaceInode": {"type": "integer", "minimum": 1, "maximum": 18446744073709551615},
+        "ownerUid": {"const": 0}
+      },
+      "description": "Exact launcher-host setup association, not the not-yet-created child namespace. Actual machine/boot/PID/TID/nsfs observations and ongoing ownership remain mandatory."
+    },
+    "workload": {
+      "type": "object", "additionalProperties": false,
+      "required": ["profile", "launchManifestSha256", "launcherBinarySha256", "namespaceMode", "beforeCompletion", "failureMode"],
+      "properties": {
+        "profile": {"const": "native-egress-create-new-workload-v1"},
+        "launchManifestSha256": {"$ref": "#/$defs/digest"},
+        "launcherBinarySha256": {"$ref": "#/$defs/digest"},
+        "namespaceMode": {"const": "create-new"},
+        "beforeCompletion": {"const": "never-executed"},
+        "failureMode": {"const": "terminate-before-start"}
+      },
+      "description": "Authority for bounded pre-exec creation under the exact typed launch-manifest and actual launcher executable originals, separate from claim-before-firewall-mutation. The retained launcher must control the fresh child's namespace and prevent execution; PID text, labels, env or one-time observations are insufficient. No workload-start or network-attachment authority is granted, even after completion."
+    },
+    "rule": {
+      "type": "object", "additionalProperties": false,
+      "required": ["family", "address", "tcpDestinationPort", "verdict"],
+      "properties": {
+        "family": {"enum": ["ipv4", "ipv6"]},
+        "address": {"$ref": "#/$defs/ascii", "maxLength": 64},
+        "tcpDestinationPort": {"type": "integer", "minimum": 1, "maximum": 65535},
+        "verdict": {"const": "accept"}
+      },
+      "description": "Effective canonical destination address and TCP only. Map IPv4-mapped IPv6 setup addresses to their effective IPv4 address; rule family must match. No implicit loopback, DNS, established/related or other control exception."
+    },
+    "ruleset": {
+      "type": "object", "additionalProperties": false,
+      "required": ["profile", "tableName", "family", "chainName", "chainType", "hook", "priority", "policy", "rules"],
+      "properties": {
+        "profile": {"const": "nft-inet-output-tcp-create-v1"},
+        "tableName": {"type": "string", "minLength": 39, "maxLength": 39, "pattern": "^swnegr_[0-9a-f]{32}(?![\\s\\S])"},
+        "family": {"const": "inet"}, "chainName": {"const": "output"},
+        "chainType": {"const": "filter"}, "hook": {"const": "output"},
+        "priority": {"const": -10}, "policy": {"const": "drop"},
+        "rules": {"type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true, "items": {"$ref": "#/$defs/rule"}}
+      },
+      "description": "The full ordered allow set must equal the proxy host-address set after effective-address normalization and deduplication, IPv4 before IPv6 and packed-byte ordering within each family, at the exact endpoint port. Runtime recomputes this equality. Permission is limited to an exclusive atomic create in the new controlled namespace: no replace/delete/flush, arbitrary nft text, extra objects or expanded CIDRs. Kernel ACKs or names alone are not exact semantic readback."
+    },
+    "capability": {
+      "type": "object", "additionalProperties": false,
+      "required": ["capabilityId", "capabilityTokenSha256", "expiresAtEpochMs"],
+      "properties": {
+        "capabilityId": {"type": "string", "minLength": 24, "maxLength": 128, "pattern": "^[A-Za-z0-9_-]{24,128}(?![\\s\\S])"},
+        "capabilityTokenSha256": {"$ref": "#/$defs/digest"},
+        "expiresAtEpochMs": {"type": "integer", "minimum": 1, "maximum": 9223372036854}
+      },
+      "description": "Dedicated egress capability and protected token, not the CA-install capability/token or a legacy server install session. Native orchestration must compare actual protected token bytes and reject CA association reuse. Only the hash may reach public diagnostics or journal records."
+    },
+    "journal": {
+      "type": "object", "additionalProperties": false,
+      "required": ["path", "device", "inode", "namespace"],
+      "properties": {
+        "path": {"$ref": "#/$defs/path"}, "device": {"$ref": "#/$defs/positive"},
+        "inode": {"$ref": "#/$defs/positive"}, "namespace": {"$ref": "#/$defs/identifier"}
+      },
+      "description": "Distinct preprovisioned root-owned0700 egress journal, actual identity retained under a nonblocking lock before the backend lock. Egress domain plus namespace/capability fixes the stable slot; changed operation/proof/intent conflicts under that slot rather than creating a retry. Local durability is not off-host rollback protection."
+    },
+    "payload": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "sourceRevision", "purpose", "trustMode", "authorizationId", "setupSha256", "delegationSha256", "targetRequestSha256", "policyRequirementsSha256", "releaseRecordSha256", "policyHash", "configurationSha256", "runtimeCaCertificateSha256", "runtimeCaSpkiSha256", "ingressLeafCertificateSha256", "clientTrustBundleSha256", "clientChallengeSha256", "targetPrincipalId", "targetNonce", "targetSpkiSha256", "proxy", "networkOwner", "machineIdSha256", "workload", "ruleset", "capability", "journal", "issuedAtEpochNs", "expiresAtEpochNs"],
+      "properties": {
+        "schema": {"const": "serverware.nativeEgressInstallationAuthorization/v1"},
+        "sourceRevision": {"type": "string", "minLength": 1, "maxLength": 128, "description": "Exact current shared authority source revision, supplied independently to the native reader; no rolling literal is embedded in this schema."},
+        "purpose": {"const": "native-egress-installation"}, "trustMode": {"const": "trusted-host-local"},
+        "authorizationId": {"$ref": "#/$defs/identifier"},
+        "setupSha256": {"$ref": "#/$defs/digest"}, "delegationSha256": {"$ref": "#/$defs/digest"},
+        "targetRequestSha256": {"$ref": "#/$defs/digest"}, "policyRequirementsSha256": {"$ref": "#/$defs/digest"},
+        "releaseRecordSha256": {"$ref": "#/$defs/digest"}, "policyHash": {"$ref": "#/$defs/digest"},
+        "configurationSha256": {"$ref": "#/$defs/digest"},
+        "runtimeCaCertificateSha256": {"$ref": "#/$defs/digest"}, "runtimeCaSpkiSha256": {"$ref": "#/$defs/digest"},
+        "ingressLeafCertificateSha256": {"$ref": "#/$defs/digest"}, "clientTrustBundleSha256": {"$ref": "#/$defs/digest"},
+        "clientChallengeSha256": {"$ref": "#/$defs/digest", "description": "SHA256 of the decoded exact nonzero32 client challenge original, not its base64url text spelling."},
+        "targetPrincipalId": {"type": "string", "minLength": 1, "maxLength": 1024, "description": "Exact request-first target principal, nonempty valid UTF-8 <=1024 bytes; no ASCII narrowing or Unicode normalization. Schema character count does not replace the runtime byte bound."},
+        "targetNonce": {"type": "string", "minLength": 32, "maxLength": 256, "pattern": "^[A-Za-z0-9_-]{32,256}(?![\\s\\S])"},
+        "targetSpkiSha256": {"$ref": "#/$defs/digest"}, "proxy": {"$ref": "#/$defs/proxy"},
+        "networkOwner": {"$ref": "#/$defs/networkOwner"}, "machineIdSha256": {"$ref": "#/$defs/digest"},
+        "workload": {"$ref": "#/$defs/workload"}, "ruleset": {"$ref": "#/$defs/ruleset"},
+        "capability": {"$ref": "#/$defs/capability"}, "journal": {"$ref": "#/$defs/journal"},
+        "issuedAtEpochNs": {"$ref": "#/$defs/positive"}, "expiresAtEpochNs": {"$ref": "#/$defs/positive"}
+      },
+      "description": "Exact29-field pre-contact permission. Positive current i64-nanosecond interval <=300 seconds, contained in capability expiry and, by the genuine native owner, all original parent/proof bounds. Exact setup/delegation/request hashes commit complete expected caller/target/runtime scope. Actual same-session evidence/packet and newly created child namespace identities enter the later irreversible operation association, never invented grant fields. Runtime certificate digests commit original DER, not PEM files. Separate key-role roots and genuine original verification remain mandatory; no signature or diagnostic receipt alone grants kernel permission."
+    }
+  }
+}

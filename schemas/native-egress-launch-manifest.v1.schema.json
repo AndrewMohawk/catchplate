@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-egress-launch-manifest.v1.schema.json",
+  "title": "Native egress pre-exec launch manifest v1",
+  "description": "Closed artifact-selection manifest only, not a complete execution configuration or launch permission. Runtime requires exact sorted compact canonical ASCII JSON using the native ensure_ascii codec, including DEL escaping, with no LF and at most 4096 original bytes. Values in this profile are ASCII. The actual retained executable original is at most 16 MiB, root-owned, regular and executable with protected non-group/world-writable root-owned ancestors; these are runtime observations, not schema proof. No public launcher or egress-effect entrypoint is conferred by this document.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "profile", "executable", "argv", "environment"],
+  "properties": {
+    "apiVersion": {"const": "serverware.nativeEgressLaunchManifest/v1"},
+    "profile": {"const": "native-egress-create-new-workload-v1"},
+    "executable": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": {"$ref": "#/$defs/absolutePath"},
+        "sha256": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "not": {"const": "sha256:0000000000000000000000000000000000000000000000000000000000000000"},
+          "description": "Independent digest of the actual executable original, not a substituted path or parsed success object."
+        }
+      }
+    },
+    "argv": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": {"$ref": "#/$defs/absolutePath"},
+      "description": "The one item must equal executable.path byte-for-byte, enforced by the native owner. No additional argument is supported by this profile."
+    },
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "maxProperties": 0,
+      "description": "Exactly empty; no inherited environment is granted as target execution authority."
+    }
+  },
+  "$defs": {
+    "absolutePath": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 4096,
+      "pattern": "^/[\\x21-\\x5B\\x5D-\\x7E]+$",
+      "description": "Visible ASCII 0x21..0x7e only, absolute and not '/', with no backslash. Runtime additionally rejects empty, '.' and '..' components, more than 64 components, or a component longer than 255 bytes. Total canonical manifest byte cap also applies."
+    }
+  }
+}

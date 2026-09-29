@@ -220,6 +220,17 @@ impl Connection {
         Ok(&self.bootstrap.ca)
     }
 
+    pub(super) fn check_egress_originals(&self,
+        proof: &mut native_verifier::BootstrapInstallationOriginals,
+        clock: &Arc<OriginalClock>) -> Result<(), String> {
+        self.check()?;
+        require(Arc::ptr_eq(&self.clock, clock) && self.authenticated_eof.get(),
+            "native egress requires the original clock and authenticated EOF")?;
+        proof.check_connection(&self.tls.conn, self.endpoint, self.bootstrap.challenge,
+            self.clock.boottime_deadline()?)?;
+        self.check()
+    }
+
     pub(super) fn admit_installation(&mut self, evidence: &[u8], delegation_pem: &[u8], delegation_pem_sha: &str,
         setup_pem: &[u8], setup_pem_sha: &str, caller_issuer_der: &[u8], expected_caller: &str,
         expected_target: &str, expected_target_nonce: &str, expected_target_request_sha: &str,

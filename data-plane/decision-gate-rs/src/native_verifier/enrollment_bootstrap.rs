@@ -122,6 +122,28 @@ impl InstallationOriginals {
     pub(crate) fn delegation_authorizer(&self) -> [u8; 32] {
         self.setup.delegation().payload().authorizer_key_id
     }
+    pub(crate) fn delegation(&self) -> &super::bootstrap_delegation::DelegationPayload {
+        self.setup.delegation().payload()
+    }
+    /// Rebind this retained proof to the actual still-owned TLS session. Public
+    /// capture fields or an equivalent-looking independent connection cannot
+    /// supply the original exporter-derived quote nonce.
+    pub(crate) fn check_connection(&mut self, client: &ClientConnection,
+        endpoint: SocketAddr, challenge: [u8; 32], deadline: u64) -> Result<(), String> {
+        self.check(deadline)?;
+        let exporter = client.export_keying_material([0u8; 32],
+            serverware_decision_gate::native_ingress_challenge_v1::EXPORTER_LABEL,
+            Some(&challenge)).map_err(|_| "native egress retained TLS exporter unavailable")?;
+        let nonce = serverware_decision_gate::native_ingress_challenge_v1::derive_nonce(challenge, exporter)?;
+        let peers = client.peer_certificates().ok_or("native egress retained peer chain absent")?;
+        ensure(peers.len() == 2 && digest(peers[0].as_ref()) == self.session.leaf_certificate_sha256
+            && digest(peers[1].as_ref()) == self.session.ca_certificate_sha256
+            && nonce == self.session.quote_nonce && challenge == self.session.challenge
+            && challenge == self.delegation().client_challenge
+            && endpoint == self.delegation().proxy_endpoint,
+            "native egress proof differs from its actual retained TLS session")?;
+        self.check(deadline)
+    }
     pub(crate) fn evidence_sha256(&self) -> [u8; 32] { self.evidence_sha256 }
     pub(crate) fn packet_sha256(&self) -> [u8; 32] { self.packet_sha256 }
     pub(crate) fn check(&mut self, deadline: u64) -> Result<(), String> {

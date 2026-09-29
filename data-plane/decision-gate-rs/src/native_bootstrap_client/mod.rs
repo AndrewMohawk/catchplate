@@ -4,6 +4,10 @@ mod config;
 mod http;
 mod transport;
 mod install;
+// Internal egress foundation only. No configuration/CLI profile invokes it
+// until the fixed kernel transaction/readback owner is integrated.
+#[allow(dead_code)]
+mod egress;
 #[path = "../native_ingress_client/identity.rs"]
 mod identity;
 #[path = "../native_startup_config/originals.rs"]

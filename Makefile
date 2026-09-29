@@ -1230,6 +1230,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/native_workload_identity_issuance_authorization.py \
 	serverware/native_workload_identity_originals.py \
 	serverware/native_ca_installation_authorization.py \
+	serverware/native_egress_installation_authorization.py \
 	serverware/workload_identity_trust_authorization.py \
 	serverware/native_enrollment_assignment.py \
 	serverware/native_enrollment_bootstrap_delegation.py \
@@ -3493,6 +3494,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/native_workload_identity_issuance_authorization.py \
 				serverware/native_workload_identity_originals.py \
 				serverware/native_ca_installation_authorization.py \
+				serverware/native_egress_installation_authorization.py \
 				serverware/workload_identity_trust_authorization.py \
 				serverware/native_enrollment_assignment.py \
 				serverware/native_enrollment_bootstrap_delegation.py \
@@ -3710,6 +3712,10 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/native_bootstrap_client/install/host.rs \
 				data-plane/decision-gate-rs/src/native_bootstrap_client/install/reservation.rs \
 				data-plane/decision-gate-rs/src/native_bootstrap_client/install/destination.rs \
+				data-plane/decision-gate-rs/src/native_bootstrap_client/egress/mod.rs \
+				data-plane/decision-gate-rs/src/native_bootstrap_client/egress/authority.rs \
+				data-plane/decision-gate-rs/src/native_bootstrap_client/egress/workload.rs \
+				data-plane/decision-gate-rs/src/native_bootstrap_client/egress/reservation.rs \
 				data-plane/decision-gate-rs/src/bin/serverware-native-bootstrap-client.rs \
 				data-plane/decision-gate-rs/coder-test-runner.sh \
 				ops/systemd/serverware-launch-authority-relay.service \
@@ -3746,6 +3752,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-bootstrap-client-capture.v1.schema.json \
 				schemas/native-bootstrap-client-capture.v2.schema.json \
 				schemas/native-ca-installation-authorization.v1.schema.json \
+				schemas/native-egress-installation-authorization.v1.schema.json \
+				schemas/native-egress-launch-manifest.v1.schema.json \
 				schemas/native-ca-installation-receipt.v1.schema.json \
 				schemas/native-enrollment-authorizer.v1.schema.json \
 				schemas/workload-identity-bootstrap-request.v1.schema.json \

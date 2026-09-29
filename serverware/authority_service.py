@@ -51,6 +51,8 @@ from serverware import authority_oauth_activation as oauth_activation
 from serverware import authority_oauth_activation_policy as oauth_activation_policy
 from serverware import authority_oauth_exchange as oauth_exchange
 from serverware import authority_oauth_exchange_policy as oauth_exchange_policy
+from serverware import authority_oauth_revocation as oauth_revocation
+from serverware import authority_oauth_revocation_policy as oauth_revocation_policy
 from serverware import authority_planner
 from serverware import authority_transition_registry
 from serverware import authority_transport
@@ -1154,7 +1156,7 @@ class MeasuredConfiguration:
                 "authority configuration root signature is invalid"
             ) from exc
         if (
-            set(payload) - {evidence_policy.FIELD, transition_policy.FIELD, enrollment_policy.FIELD, oauth_activation_policy.FIELD, oauth_exchange_policy.FIELD}
+            set(payload) - {evidence_policy.FIELD, transition_policy.FIELD, enrollment_policy.FIELD, oauth_activation_policy.FIELD, oauth_exchange_policy.FIELD, oauth_revocation_policy.FIELD}
                 != required_payload_fields
             or payload.get("schema") != CONFIG_SCHEMA
             or payload.get("sourceRevision") != SOURCE_REVISION
@@ -1245,6 +1247,10 @@ class MeasuredConfiguration:
             oauth_exchange_policy.validate_policy(payload.get(oauth_exchange_policy.FIELD), payload=payload, root_key=root_key)
         except (TypeError, ValueError) as exc:
             raise AuthorityServiceError("authority OAuth exchange policy is invalid") from exc
+        try:
+            oauth_revocation_policy.validate_policy(payload.get(oauth_revocation_policy.FIELD), payload=payload, root_key=root_key)
+        except (TypeError, ValueError) as exc:
+            raise AuthorityServiceError("authority OAuth cleanup policy is invalid") from exc
         configuration._verify_runtime_closure()
         configuration._verify_attestation(role=role)
         return configuration
@@ -8224,6 +8230,12 @@ class AuthorityProcess:
                 now_epoch_ns=time.time_ns())
             if oauth_exchange.request_digest(operation, original_values) != request_digest:
                 raise AuthorityServiceError("OAuth exchange original commitment differs from actual authority recipe")
+        if operation in oauth_revocation.OPERATIONS:
+            oauth_revocation_policy.verify_original(operation, arguments,
+                configuration_payload=self.configuration.payload, root_key=self.configuration.root_key,
+                now_epoch_ns=time.time_ns())
+            if oauth_revocation.request_digest(operation, arguments) != request_digest:
+                raise AuthorityServiceError("OAuth cleanup original commitment differs from actual authority recipe")
         operation_identifier = _domain_digest(
             "serverware.policyAuthorityOperation/v2",
             operation.encode("ascii"),
@@ -8717,6 +8729,10 @@ class AuthorityProcess:
                 root_key=self.configuration.root_key, now_epoch_ns=time.time_ns())
         if planner_request["operation"] in oauth_exchange.OPERATIONS:
             oauth_exchange_policy.verify_original(planner_request["operation"],
+                planner_request["typedRequest"]["arguments"], configuration_payload=self.configuration.payload,
+                root_key=self.configuration.root_key, now_epoch_ns=time.time_ns())
+        if planner_request["operation"] in oauth_revocation.OPERATIONS:
+            oauth_revocation_policy.verify_original(planner_request["operation"],
                 planner_request["typedRequest"]["arguments"], configuration_payload=self.configuration.payload,
                 root_key=self.configuration.root_key, now_epoch_ns=time.time_ns())
         verifier_config = self.configuration.role("verifier")

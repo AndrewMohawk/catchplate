@@ -106,8 +106,11 @@ protected history through a development helper. Failures after contact preserve
 the consumed state and any definitely retained originals; no inline revocation,
 legacy work deletion or retry is used. This does not guarantee token bytes
 survive process death, an expired owner or a retention failure. Raw evidence is
-bounded, private and not logged. Authorized revocation/recovery and protected
-history retirement remain separate transitions.
+bounded, private and not logged. The separate
+[controlled revocation worker](oauth-controlled-revocation.md) now connects
+current purpose grants and genuinely retained historical enrollment to one
+cleanup attempt per retained exchange/token. Unknown contact is not retryable.
+Other recovery sources and protected history retirement remain separate work.
 
 The consent and [activation portal](oauth-enrolled-activation-portal.md) now
 connect these options and exact request, fresh WebAuthn, explicit consent start,

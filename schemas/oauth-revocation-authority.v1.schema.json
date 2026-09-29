@@ -1,0 +1,150 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.dev/schemas/oauth-revocation-authority.v1.schema.json",
+  "title": "Current OAuth cleanup authority and retained local transport observations",
+  "description": "Data-only closed projections. Runtime verifies signatures, canonical ASCII byte originals, digest joins, root separation, inherited descriptors, original deadlines and genuine controlled-writer ownership. HTTP acceptance is not provider revocation or O02 proof.",
+  "oneOf": [
+    {"$ref": "#/$defs/authorization"},
+    {"$ref": "#/$defs/policy"},
+    {"$ref": "#/$defs/startup"},
+    {"$ref": "#/$defs/transport"}
+  ],
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$", "not": {"const": "sha256:0000000000000000000000000000000000000000000000000000000000000000"}},
+    "uuid": {"type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"},
+    "text": {"type": "string", "minLength": 1, "maxLength": 4096},
+    "epoch": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807},
+    "fd": {"type": "integer", "minimum": 32, "maximum": 1023},
+    "original": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9_-]+$"},
+    "purpose": {"enum": ["access_token", "refresh_token"]},
+    "provider": {
+      "type": "object", "additionalProperties": false,
+      "required": ["providerId", "authorizationUrl", "tokenUrl", "revocationUrl", "identityUrl", "tokenAuth", "defaultScopes", "authParams", "metadataProvider", "tokenResponseScopeOptional"],
+      "properties": {
+        "providerId": {"enum": ["google", "x"]},
+        "authorizationUrl": {"$ref": "#/$defs/text", "pattern": "^https://"},
+        "tokenUrl": {"$ref": "#/$defs/text", "pattern": "^https://"},
+        "revocationUrl": {"$ref": "#/$defs/text", "pattern": "^https://"},
+        "identityUrl": {"$ref": "#/$defs/text", "pattern": "^https://"},
+        "tokenAuth": {"enum": ["basic", "client_secret_post", "none"]},
+        "defaultScopes": {"type": "array", "minItems": 1, "maxItems": 30, "items": {"$ref": "#/$defs/text", "maxLength": 200}},
+        "authParams": {"type": "object", "maxProperties": 16, "propertyNames": {"minLength": 1, "maxLength": 128}, "additionalProperties": {"$ref": "#/$defs/text", "maxLength": 2048}},
+        "metadataProvider": {"$ref": "#/$defs/text", "maxLength": 256},
+        "tokenResponseScopeOptional": {"type": "boolean"}
+      }
+    },
+    "authorizationPayload": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "sourceRevision", "purpose", "authorizationId", "configurationDigest", "deploymentId", "exchangeId", "exchangeRowSha256", "workRowSha256", "enrollmentSha256", "historicalEnrollmentRootSpkiSha256", "tokenEnvelopeSha256", "tokenSecretSha256", "providerId", "clientId", "clientMaterialSha256", "providerConfiguration", "tokenPurposes", "issuedAtEpochNs", "expiresAtEpochNs"],
+      "properties": {
+        "schema": {"const": "serverware.oauthRevocationAuthorization/v1"},
+        "sourceRevision": {"$ref": "#/$defs/text", "maxLength": 128},
+        "purpose": {"const": "retained-oauth-revocation"},
+        "authorizationId": {"$ref": "#/$defs/uuid"},
+        "configurationDigest": {"$ref": "#/$defs/digest"},
+        "deploymentId": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"},
+        "exchangeId": {"$ref": "#/$defs/uuid"},
+        "exchangeRowSha256": {"$ref": "#/$defs/digest"},
+        "workRowSha256": {"$ref": "#/$defs/digest"},
+        "enrollmentSha256": {"$ref": "#/$defs/digest"},
+        "historicalEnrollmentRootSpkiSha256": {"$ref": "#/$defs/digest"},
+        "tokenEnvelopeSha256": {"$ref": "#/$defs/digest"},
+        "tokenSecretSha256": {"$ref": "#/$defs/digest"},
+        "providerId": {"enum": ["google", "x"]},
+        "clientId": {"$ref": "#/$defs/text", "maxLength": 2048},
+        "clientMaterialSha256": {"$ref": "#/$defs/digest"},
+        "providerConfiguration": {"$ref": "#/$defs/provider"},
+        "tokenPurposes": {"enum": [["access_token"], ["refresh_token"], ["access_token", "refresh_token"]]},
+        "issuedAtEpochNs": {"$ref": "#/$defs/epoch"},
+        "expiresAtEpochNs": {"$ref": "#/$defs/epoch"}
+      },
+      "allOf": [{"if": {"properties": {"providerId": {"const": "google"}}}, "then": {"properties": {"tokenPurposes": {"maxItems": 1}}}}]
+    },
+    "authorization": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "payload", "signatureBase64Url"],
+      "properties": {
+        "schema": {"const": "serverware.signedOAuthRevocationAuthorization/v1"},
+        "payload": {"$ref": "#/$defs/authorizationPayload"},
+        "signatureBase64Url": {"$ref": "#/$defs/original", "minLength": 86, "maxLength": 86}
+      }
+    },
+    "policy": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "grantRootPublicKeyBase64Url", "grantRootSpkiSha256", "controlPlaneConfigurationDigest", "deploymentId"],
+      "properties": {
+        "schema": {"const": "serverware.oauthRevocationAuthorityPolicy/v1"},
+        "grantRootPublicKeyBase64Url": {"$ref": "#/$defs/original", "minLength": 43, "maxLength": 43},
+        "grantRootSpkiSha256": {"$ref": "#/$defs/digest"},
+        "controlPlaneConfigurationDigest": {"$ref": "#/$defs/digest"},
+        "deploymentId": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"}
+      }
+    },
+    "startup": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "sourceRevision", "configurationDigest", "authorityRootFd", "authorityRootSha256", "authorizations"],
+      "properties": {
+        "schema": {"const": "serverware.oauthRevocationStartup/v1"},
+        "sourceRevision": {"$ref": "#/$defs/text", "maxLength": 128},
+        "configurationDigest": {"$ref": "#/$defs/digest"},
+        "authorityRootFd": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/fd"}]},
+        "authorityRootSha256": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/digest"}]},
+        "authorizations": {"type": "array", "maxItems": 16, "items": {
+          "type": "object", "additionalProperties": false,
+          "required": ["authorization", "clientMaterialFd", "historicalEnrollmentRootFd"],
+          "properties": {"authorization": {"$ref": "#/$defs/authorization"}, "clientMaterialFd": {"$ref": "#/$defs/fd"}, "historicalEnrollmentRootFd": {"$ref": "#/$defs/fd"}}
+        }}
+      },
+      "allOf": [{"if": {"properties": {"authorizations": {"maxItems": 0}}},
+        "then": {"properties": {"authorityRootFd": {"type": "null"}, "authorityRootSha256": {"type": "null"}}},
+        "else": {"properties": {"authorityRootFd": {"$ref": "#/$defs/fd"}, "authorityRootSha256": {"$ref": "#/$defs/digest"}}}}]
+    },
+    "transport": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "contactRequestSha256", "status", "rawHeaders", "bodyBase64url", "errorCode"],
+      "properties": {
+        "schema": {"const": "serverware.oauthRevocationTransport/v1"},
+        "contactRequestSha256": {"$ref": "#/$defs/digest"},
+        "status": {"type": ["integer", "null"], "minimum": 200, "maximum": 599},
+        "rawHeaders": {"type": ["array", "null"], "maxItems": 128, "items": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"type": "string"}}},
+        "bodyBase64url": {"type": ["string", "null"], "maxLength": 87382, "pattern": "^[A-Za-z0-9_-]*$"},
+        "errorCode": {"enum": [null, "transport-unknown"]}
+      },
+      "allOf": [{"if": {"properties": {"status": {"type": "null"}}},
+        "then": {"properties": {"rawHeaders": {"type": "null"}, "bodyBase64url": {"type": "null"}, "errorCode": {"const": "transport-unknown"}}},
+        "else": {"properties": {"rawHeaders": {"type": "array"}, "bodyBase64url": {"type": "string"}, "errorCode": {"type": "null"}}}}]
+    },
+    "claimRequest": {"type": "object", "additionalProperties": false, "required": ["ownerNonceSha256"], "properties": {"ownerNonceSha256": {"$ref": "#/$defs/digest"}}},
+    "contactRequest": {
+      "type": "object", "additionalProperties": false, "required": ["journalRowSha256", "ownerNonce", "tokenPurpose", "contactRequestSha256"],
+      "properties": {"journalRowSha256": {"$ref": "#/$defs/digest"}, "ownerNonce": {"$ref": "#/$defs/original", "minLength": 43, "maxLength": 43}, "tokenPurpose": {"$ref": "#/$defs/purpose"}, "contactRequestSha256": {"$ref": "#/$defs/digest"}}
+    },
+    "finishRequest": {
+      "type": "object", "additionalProperties": false, "required": ["journalRowSha256", "ownerNonce", "attemptRowSha256", "tokenPurpose", "transportOriginal"],
+      "properties": {"journalRowSha256": {"$ref": "#/$defs/digest"}, "ownerNonce": {"$ref": "#/$defs/original", "minLength": 43, "maxLength": 43}, "attemptRowSha256": {"$ref": "#/$defs/digest"}, "tokenPurpose": {"$ref": "#/$defs/purpose"}, "transportOriginal": {"$ref": "#/$defs/original", "maxLength": 174763}}
+    },
+    "arguments": {
+      "type": "object", "additionalProperties": false,
+      "required": ["work_id", "authorization_original", "enrollment_original", "historical_root_original", "request"],
+      "properties": {
+        "work_id": {"$ref": "#/$defs/uuid"},
+        "authorization_original": {"$ref": "#/$defs/original", "maxLength": 87382},
+        "enrollment_original": {"$ref": "#/$defs/original", "maxLength": 87382},
+        "historical_root_original": {"$ref": "#/$defs/original", "maxLength": 5462},
+        "request": {"oneOf": [{"$ref": "#/$defs/claimRequest"}, {"$ref": "#/$defs/contactRequest"}, {"$ref": "#/$defs/finishRequest"}]}
+      }
+    },
+    "journalObservation": {
+      "type": "object", "additionalProperties": false, "required": ["workId", "status", "rowSha256", "authorizationSha256", "expiresAt"],
+      "properties": {"workId": {"$ref": "#/$defs/uuid"}, "status": {"enum": ["claimed", "unknown", "observed-accepted", "observed-rejected"]}, "rowSha256": {"$ref": "#/$defs/digest"}, "authorizationSha256": {"$ref": "#/$defs/digest"}, "expiresAt": {"$ref": "#/$defs/text", "maxLength": 64}}
+    },
+    "attemptObservation": {
+      "type": "object", "additionalProperties": false, "required": ["id", "tokenPurpose", "status", "rowSha256", "transportSha256"],
+      "properties": {"id": {"$ref": "#/$defs/uuid"}, "tokenPurpose": {"$ref": "#/$defs/purpose"}, "status": {"enum": ["contact-claimed", "accepted", "rejected", "unknown"]}, "rowSha256": {"$ref": "#/$defs/digest"}, "transportSha256": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/digest"}]}}
+    },
+    "result": {
+      "type": "object", "additionalProperties": false, "required": ["ok", "journal", "attempt", "operation", "requestDigest", "auditEventDigest", "idempotentReplay"],
+      "properties": {"ok": {"const": true}, "journal": {"$ref": "#/$defs/journalObservation"}, "attempt": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/attemptObservation"}]}, "operation": {"enum": ["oauth.revocation.claim", "oauth.revocation.contact", "oauth.revocation.finish"]}, "requestDigest": {"$ref": "#/$defs/digest"}, "auditEventDigest": {"$ref": "#/$defs/digest"}, "idempotentReplay": {"const": false}}
+    }
+  }
+}

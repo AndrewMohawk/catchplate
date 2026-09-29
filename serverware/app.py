@@ -3196,11 +3196,13 @@ class KeyReleaseVerify(BaseModel):
 def startup() -> None:
     from serverware import control_plane_custody_startup
     from serverware import control_plane_enrollment_startup
+    from serverware import control_plane_oauth_revocation
 
     # The legacy PID startup marker cannot stand in for a live custody owner.
     # Direct ASGI startup must not admit descriptors after the event loop opens.
     control_plane_custody_startup.require_started()
     control_plane_enrollment_startup.require_started()
+    control_plane_oauth_revocation.selected()
     if RELEASE_CHANNEL.strip().lower() not in {
         "dev",
         "development",
@@ -3217,6 +3219,7 @@ def startup() -> None:
     # starting workers; never reload or renew trust during application startup.
     control_plane_custody_startup.require_started()
     control_plane_enrollment_startup.require_started()
+    control_plane_oauth_revocation.selected()
     runtime.start_runtime_workers()
     runtime.start_audit_anchor_worker()
     runtime.start_decision_gate_ca_publisher()
@@ -5034,6 +5037,14 @@ def _require_control_plane_two_person(
 def _reconcile_oauth_revocations(
     *, limit: int = _OAUTH_REVOCATION_RECONCILE_BATCH_SIZE
 ) -> dict[str, int]:
+    from serverware import control_plane_oauth_revocation
+    if control_plane_oauth_revocation.selected():
+        if type(limit) is not int or limit < 1:
+            raise ValueError("enrolled OAuth reconciliation requires a positive integer limit")
+        # Empty or unavailable production authority never falls through to the
+        # development claim/expiry/finish writers. Counts are local observations,
+        # not proof that a provider revoked its credentials.
+        return control_plane_oauth_revocation.reconcile(limit=min(limit, 16))
     worker_id = f"oauth-reconciler-{os.getpid()}-{secrets.token_hex(8)}"
     claimed = db.claim_oauth_revocations(worker_id=worker_id, limit=limit)
     revoked = 0

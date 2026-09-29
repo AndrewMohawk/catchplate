@@ -10,7 +10,7 @@ from serverware import authority_complete_query
 from serverware.authority_query_read_work import _ValidationWork
 
 
-SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.269"
+SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.270"
 SCHEMA_VERSION = 9
 CONTRACT_SCHEMA = "serverware.policyAuthorityOperationContract/v3"
 BUSINESS_INTENT_SCHEMA = "serverware.policyAuthorityBusinessIntent/v2"
@@ -261,6 +261,7 @@ _AUDIT_COUNTER_REPLACEMENT_OPERATIONS = frozenset({
     "publication-approval.consume", "publication-approval.settle",
     "oauth-activation-approval.request", "oauth-activation-approval.decide", "oauth.pending.activate",
     "oauth.exchange.prepare", "oauth.exchange.claim", "oauth.exchange.retain", "oauth.pending.stage",
+    "oauth.revocation.claim", "oauth.revocation.contact", "oauth.revocation.finish",
     "policy-file-approval.request", "policy-file-approval.decide",
     "policy-file-approval.consume", "policy-file-approval.settle",
     "jit.review-receipt.issue", "jit.decide", "jit.deny",
@@ -1436,6 +1437,8 @@ V9_ADDITIONAL_PROTECTED_TABLES = tuple(sorted({
     SUCCESSOR_EXECUTION_CUSTODY_TABLE,
     "credential_generations",
     "oauth_exchange_reservations",
+    "oauth_revocation_reservations",
+    "oauth_revocation_attempts",
     "oauth_revocation_work",
     "setup_sessions",
     "policy_authority_authorization_dependency_manifests",
@@ -1807,6 +1810,20 @@ _OPERATIONS = {
             ("oauth.exchange.claim", "serverware_policy_authority_oauth_exchange_claim"),
             ("oauth.exchange.retain", "serverware_policy_authority_oauth_exchange_retain"),
             ("oauth.pending.stage", "serverware_policy_authority_oauth_pending_stage"),
+        )
+    },
+    **{
+        operation: _spec(
+            handler,
+            reads=("oauth_exchange_reservations", "oauth_revocation_work", "oauth_revocation_reservations", "oauth_revocation_attempts") + _PHASE2_AGGREGATE,
+            writes=("oauth_revocation_work", "oauth_revocation_reservations", "oauth_revocation_attempts", "metadata_audit_outbox") + _PHASE2_AGGREGATE,
+            webauthn="not-required",
+            proof_primitives=("primary-key-row", "aggregate-high-water"),
+            maximum_query_rows=12, maximum_mutations=8, maximum_work_units=256,
+        ) for operation, handler in (
+            ("oauth.revocation.claim", "serverware_policy_authority_oauth_revocation_claim"),
+            ("oauth.revocation.contact", "serverware_policy_authority_oauth_revocation_contact"),
+            ("oauth.revocation.finish", "serverware_policy_authority_oauth_revocation_finish"),
         )
     },
     "control-approval.request": _spec(

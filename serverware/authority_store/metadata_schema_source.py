@@ -311,6 +311,35 @@ def metadata_base_schema_source() -> str:
                 CHECK (status IN ('prepared', 'claimed', 'retained', 'staged'))
             );
 
+            CREATE TABLE IF NOT EXISTS oauth_revocation_reservations (
+                id TEXT PRIMARY KEY,
+                authorization_original TEXT NOT NULL,
+                authorization_sha256 TEXT NOT NULL,
+                exchange_row_sha256 TEXT NOT NULL,
+                original_work_json TEXT NOT NULL,
+                owner_nonce_sha256 TEXT NOT NULL,
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                CHECK (status IN ('claimed', 'unknown', 'observed-accepted', 'observed-rejected'))
+            );
+
+            CREATE TABLE IF NOT EXISTS oauth_revocation_attempts (
+                id TEXT PRIMARY KEY,
+                work_id TEXT NOT NULL,
+                token_purpose TEXT NOT NULL,
+                contact_request_sha256 TEXT NOT NULL,
+                status TEXT NOT NULL,
+                transport_original TEXT,
+                transport_sha256 TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                CHECK (token_purpose IN ('access_token', 'refresh_token')),
+                CHECK (status IN ('contact-claimed', 'accepted', 'rejected', 'unknown')),
+                UNIQUE (work_id, token_purpose)
+            );
+
             CREATE TABLE IF NOT EXISTS oauth_revocation_work (
                 id TEXT PRIMARY KEY,
                 provider_id TEXT NOT NULL,

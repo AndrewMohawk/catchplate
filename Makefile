@@ -1269,6 +1269,10 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_transition_oauth_activation.py \
 	serverware/control_plane_oauth_activation.py \
 	serverware/authority_oauth_exchange.py \
+	serverware/authority_oauth_revocation.py \
+	serverware/authority_oauth_revocation_policy.py \
+	serverware/authority_transition_oauth_revocation.py \
+	serverware/control_plane_oauth_revocation.py \
 	serverware/authority_oauth_exchange_policy.py \
 	serverware/authority_transition_oauth_exchange.py \
 	serverware/control_plane_oauth_exchange.py \
@@ -3561,6 +3565,10 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_transition_oauth_activation.py \
 				serverware/control_plane_oauth_activation.py \
 				serverware/authority_oauth_exchange.py \
+				serverware/authority_oauth_revocation.py \
+				serverware/authority_oauth_revocation_policy.py \
+				serverware/authority_transition_oauth_revocation.py \
+				serverware/control_plane_oauth_revocation.py \
 				serverware/authority_oauth_exchange_policy.py \
 				serverware/authority_transition_oauth_exchange.py \
 				serverware/control_plane_oauth_exchange.py \
@@ -3907,6 +3915,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/oauth-application-enrollment.v1.schema.json \
 				schemas/oauth-activation-authority.v1.schema.json \
 				schemas/oauth-exchange-authority.v1.schema.json \
+				schemas/oauth-revocation-authority.v1.schema.json \
 				schemas/native-ca-installation-receipt.v1.schema.json \
 				schemas/native-enrollment-authorizer.v1.schema.json \
 				schemas/workload-identity-bootstrap-request.v1.schema.json \

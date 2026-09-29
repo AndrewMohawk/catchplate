@@ -18,17 +18,17 @@ long-lived credential.
 
 Checkpoint: **2026-09-29 — pre-production, source-only.**
 
-**35/46 source checkpoints landed · 6 active · 5 todo.**
+**35/46 source checkpoints landed · 7 active · 4 todo.**
 
 **Production acceptance: 0/6 verified.** Current source is unbuilt, unexecuted and unprovisioned.
 
-[![Project checkpoints, one segment per task: 35 of 46 source-landed; 6 active and 5 todo. Evidence handoff 10/10; historical recovery 4/5; permissions and grants 10/10; finalization and sessions 8/8; workloads and native 3/6; providers and operations 0/7. F08 is source-landed in 170d0ac; H05, N04, N05, O01, O04 and O05 are in progress. Production acceptance remains 0/6. Source only; unbuilt, unexecuted and unprovisioned.](docs/images/project-progress.svg)](docs/production-status.md#next-source-milestones)
+[![Project checkpoints, one segment per task: 35 of 46 source-landed; 7 active and 4 todo. Evidence handoff 10/10; historical recovery 4/5; permissions and grants 10/10; finalization and sessions 8/8; workloads and native 3/6; providers and operations 0/7. F08 is source-landed in 170d0ac; H05, N04, N05, N06, O01, O04 and O05 are in progress. Production acceptance remains 0/6. Source only; unbuilt, unexecuted and unprovisioned.](docs/images/project-progress.svg)](docs/production-status.md#next-source-milestones)
 
-Latest [`.273` source](https://github.com/example/private-deployment) connects
-[measured-holder drains and signed current leases](docs/credential-currentness-http.md)
-to controlled refresh and separately authorized OAuth family cleanup.
-The ordinary-app adapter and enrolled portal retain source credit. Holder recovery,
-migration, reconnect/setup, broader lifecycle and production verification remain open.
+Latest [`.274` source](https://github.com/example/private-deployment) adds the
+[ciphertext-only control-plane producer](docs/native-broker-credential-delivery.md),
+selected by root-signed startup and bound to current measured holders.
+The enclave receiver, measured provider refresh and immutable runtime packaging
+remain under construction. Existing ordinary-app, portal and cleanup source credit remains.
 
 The bar shows **committed source, not tested readiness or remaining effort**.
 Green means source-landed; amber means partial implementation. No current pilot
@@ -42,7 +42,7 @@ release has passed end-to-end verification.
 | H05 | Historical authority across source, configuration and key changes | In progress |
 | N04 | Workload identity provisioning and authenticated service channels | In progress |
 | N05 | Native enrollment, verified CA installation and proxy setup | In progress |
-| N06 | Enclave TLS/proxy execution and credential custody | Todo |
+| N06 | Enclave TLS/proxy execution and credential custody | In progress |
 | O01 | OAuth ownership across deployments and applications | In progress |
 | O02 | Measured provider issuance and interrupted-exchange recovery | Todo |
 | O03 | Public revocation and authenticated recovery | Todo |

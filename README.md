@@ -24,12 +24,12 @@ Checkpoint: **2026-09-29 — pre-production, source-only.**
 
 [![Project checkpoints, one segment per task: 36 of 46 source-landed; 10 active and 0 todo. Evidence handoff 10/10; historical recovery 4/5; permissions and grants 10/10; finalization and sessions 8/8; workloads and native 3/6; providers and operations 1/7. H05, N04, N05, N06 and O01 through O06 are in progress. Production acceptance remains 0/6. Source only; unbuilt, unexecuted and unprovisioned.](docs/images/project-progress.svg)](docs/production-status.md#next-source-milestones)
 
-Latest [`.294` source](https://github.com/example/private-deployment) connects
-[durable OAuth Setup](docs/native-oauth-measured-setup.md): real session creation,
-native browser consent and private issuance, protected pending staging,
-distinct-person credential activation and explicit audit settlement.
-Public request staging/authorization, later Setup steps, reconnect, broader
-lifecycle, provisioning and end-to-end verification remain open.
+Latest [`.295` source](https://github.com/example/private-deployment) connects
+[native request staging](docs/response-v2-native-public-staging.md): the actual
+gate session and process owner, independent policy authorization, credential-free
+ledger storage and protected state commits. Native Setup remains source-landed.
+Shadow custody/workers, later Setup steps, reconnect, broader lifecycle,
+provisioning and end-to-end verification remain open.
 
 The bar shows **committed source, not tested readiness or remaining effort**.
 Green means source-landed; amber means partial implementation. No current pilot

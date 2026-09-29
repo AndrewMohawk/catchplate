@@ -64,25 +64,28 @@ fn digest_text(raw: &[u8]) -> String { format!("sha256:{:x}", Sha256::digest(raw
 
 impl PreparedStart {
     pub(in super::super) fn open(inputs: Inputs, clock: Arc<OriginalClock>) -> Result<Self, String> {
-        Self::open_profile(inputs, clock, false, false, false)
+        Self::open_profile(inputs, clock, false, false, false, false)
     }
 
     pub(in super::super) fn open_with_trust(inputs: Inputs, clock: Arc<OriginalClock>) -> Result<Self, String> {
-        Self::open_profile(inputs, clock, true, false, false)
+        Self::open_profile(inputs, clock, true, false, false, false)
     }
 
     pub(in super::super) fn open_retiring(inputs: Inputs, clock: Arc<OriginalClock>, combined_trust: bool)
         -> Result<Self, String> {
-        Self::open_profile(inputs, clock, combined_trust, true, false)
+        Self::open_profile(inputs, clock, combined_trust, true, false, false)
     }
 
     pub(in super::super) fn open_outcome(inputs: Inputs, clock: Arc<OriginalClock>, combined_trust: bool)
         -> Result<Self, String> {
-        Self::open_profile(inputs, clock, combined_trust, true, true)
+        Self::open_profile(inputs, clock, combined_trust, true, true, false)
+    }
+    pub(in super::super) fn open_application(inputs: Inputs, clock: Arc<OriginalClock>) -> Result<Self, String> {
+        Self::open_profile(inputs, clock, true, true, true, true)
     }
 
     fn open_profile(inputs: Inputs, clock: Arc<OriginalClock>, combined_trust: bool, retirement: bool,
-        outcome: bool) -> Result<Self, String> {
+        outcome: bool, application: bool) -> Result<Self, String> {
         clock.check()?;
         inputs.validate()?;
         ensure(unsafe { libc::getuid() } == 0 && unsafe { libc::geteuid() } == 0
@@ -96,7 +99,9 @@ impl PreparedStart {
         let root = super::super::read(inputs.authority_root, 16 * 1024, &clock, &mut originals)?;
         let original = super::super::read(inputs.authority,
             start_authority::MAX_BYTES, &clock, &mut originals)?;
-        let authorization = if outcome {
+        let authorization = if application {
+            start_authority::admit_application_constraints(&original, &root, &root_pin, &clock)?
+        } else if outcome {
             start_authority::admit_outcome_constraints(&original, &root, &root_pin, &clock)?
         } else if retirement {
             start_authority::admit_constraints_profile(&original, &root, &root_pin, &clock, true)?
@@ -127,11 +132,15 @@ impl PreparedStart {
         }, &clock)?;
         // Signature, exact cold pin and actual host admission precede detached
         // immutable-root preparation. This creates no child or visible mount.
-        let filesystem = if combined_trust {
+        let filesystem = if application {
+            PreparedFilesystem::open_application(&inputs.execution_manifest, Arc::clone(&clock))?
+        } else if combined_trust {
             PreparedFilesystem::open_with_trust(&inputs.execution_manifest, Arc::clone(&clock))?
         } else { PreparedFilesystem::open(&inputs.execution_manifest, Arc::clone(&clock))? };
         clock.check()?;
         let held_manifest = filesystem.manifest_sha256();
+        ensure(filesystem.application().map(super::application_proxy::Settings::sha256).transpose()?
+            == constraints.application_proxy_sha256, "native start application bytes differ from signed permission")?;
         ensure(format!("sha256:{}", held_manifest.iter().map(|byte| format!("{byte:02x}"))
             .collect::<String>()) == manifest_pin,
             "native start retained manifest differs from independently signed original")?;
@@ -214,6 +223,7 @@ impl StartOwner {
             "combined execution requires actual completed CA installation before any start claim")?;
         if let Some(installation) = &prepared.installation { installation.require_parents(&parents)?; }
         parents.require_start(&prepared.authorization, &prepared.clock)?;
+        if let Some(settings)=prepared.filesystem.application() {parents.require_application_manifest(settings)?;}
         let parent = ParentOwner::open(&prepared.authorization.constraints.containment,
             &prepared.clock)?;
         let mut hash = Sha256::new();
@@ -232,6 +242,7 @@ impl StartOwner {
         self.prepared.check()?;
         self.check_cleanup_scope()?;
         self.parents.require_start(&self.prepared.authorization, &self.prepared.clock)?;
+        if let Some(settings)=self.prepared.filesystem.application() {self.parents.require_application_manifest(settings)?;}
         self.parent.check(&self.prepared.clock)?;
         self.prepared.check()?;
         self.stopped.set(false);
@@ -273,6 +284,7 @@ impl StartOwner {
     pub(super) fn filesystem(&self) -> &PreparedFilesystem { &self.prepared.filesystem }
     pub(super) fn operation_sha256(&self) -> [u8; 32] { self.operation }
     pub(super) fn clock(&self) -> &OriginalClock { &self.prepared.clock }
+    pub(super) fn clock_owner(&self) -> &Arc<OriginalClock> { &self.prepared.clock }
     pub(super) fn parents(&self) -> &Arc<ExecutionParents> { &self.parents }
 
     pub(super) fn begin_claim(&self) -> Result<(), String> {

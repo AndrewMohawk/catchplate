@@ -7,6 +7,7 @@ use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd};
 use std::os::unix::fs::MetadataExt;
 
 pub(super) const SOCKETS: &[u8; 8] = b"SWNENS01";
+pub(super) const LISTENER: &[u8;8] = b"SWNEAP01";
 const NS_GET_NSTYPE: libc::c_ulong = 0xb703;
 const SIOCGSKNS: libc::c_ulong = 0x894c;
 
@@ -109,7 +110,33 @@ impl Sockets {
     }
 }
 
-pub(super) enum Message { Originals(Sockets), Ready }
+pub(super) struct Listener { file:File, identity:Identity }
+impl Listener {
+    fn open(file:File)->Result<Self,String> {
+        Ok(Self{identity:identity(&file)?,file})
+    }
+    pub(super) fn check(&self, ns:BorrowedFd<'_>, port:u16)->Result<(),String> {
+        require(identity(&self.file)?==self.identity && self.identity.3==0 && self.identity.4==0
+            && option(&self.file,libc::SO_DOMAIN)?==libc::AF_INET
+            && option(&self.file,libc::SO_TYPE)?==libc::SOCK_STREAM
+            && option(&self.file,libc::SO_PROTOCOL)?==libc::IPPROTO_TCP
+            && option(&self.file,libc::SO_ACCEPTCONN)?==1)?;
+        let flags=unsafe{libc::fcntl(self.file.as_raw_fd(),libc::F_GETFL)};
+        require(flags>=0 && flags & libc::O_NONBLOCK !=0)?;
+        let mut address:libc::sockaddr_in=unsafe{zeroed()};let mut length=size_of::<libc::sockaddr_in>() as libc::socklen_t;
+        require(unsafe{libc::getsockname(self.file.as_raw_fd(),(&mut address as *mut libc::sockaddr_in).cast(),&mut length)}==0
+            && length as usize==size_of::<libc::sockaddr_in>() && address.sin_family==libc::AF_INET as u16
+            && address.sin_addr.s_addr.to_ne_bytes()==[127,0,0,1] && u16::from_be(address.sin_port)==port)?;
+        let raw=unsafe{libc::ioctl(self.file.as_raw_fd(),SIOCGSKNS)};require(raw>=0)?;
+        let held=unsafe{File::from_raw_fd(raw)};require(namespace(held.as_fd())?==namespace(ns)?)
+    }
+    pub(super) fn duplicate(&self,ns:BorrowedFd<'_>,port:u16)->Result<std::net::TcpListener,String> {
+        self.check(ns,port)?;let copy=duplicate(self.file.as_fd())?;
+        require(identity(&copy)?==self.identity)?;self.check(ns,port)?;
+        Ok(std::net::TcpListener::from(std::os::fd::OwnedFd::from(copy)))
+    }
+}
+pub(super) enum Message { Originals(Sockets), Listener(Listener), Ready }
 
 pub(super) fn receive(gate: BorrowedFd<'_>) -> Result<Message, String> {
     let mut bytes = [0u8; 9];
@@ -146,6 +173,10 @@ pub(super) fn receive(gate: BorrowedFd<'_>) -> Result<Message, String> {
     if &bytes[..8] == super::child_trampoline::READY {
         require(descriptors.is_empty() && header.msg_controllen == 0)?;
         return Ok(Message::Ready);
+    }
+    if &bytes[..8] == LISTENER {
+        require(descriptors.len()==1 && header.msg_controllen==unsafe{libc::CMSG_SPACE(4)} as usize)?;
+        return Ok(Message::Listener(Listener::open(descriptors.pop().ok_or("child listener absent")?)?));
     }
     require(&bytes[..8] == SOCKETS && descriptors.len() == 2
         && header.msg_controllen == unsafe { libc::CMSG_SPACE(8) } as usize)?;

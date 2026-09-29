@@ -21,6 +21,32 @@ pub(super) struct DeadlineTcp {
     write_limit: u64,
     read_bytes: u64,
     written_bytes: u64,
+    boot_deadline: Option<u64>,
+}
+
+fn bounded_remaining(owner_pid:u32,deadline:Instant,boot:Option<u64>)->io::Result<Duration> {
+    let remaining=remaining(owner_pid,deadline)?;
+    match boot {
+        None => Ok(remaining),
+        Some(bound) => Ok(remaining.min(boottime_remaining(bound)?)),
+    }
+}
+
+#[cfg(target_os="linux")]
+fn boottime_remaining(bound:u64)->io::Result<Duration> {
+        let mut now:libc::timespec=unsafe{std::mem::zeroed()};
+        if unsafe{libc::clock_gettime(libc::CLOCK_BOOTTIME,&mut now)}!=0 || now.tv_sec<0 || !(0..1_000_000_000).contains(&now.tv_nsec) {
+            return Err(io::Error::new(io::ErrorKind::PermissionDenied,"client original BOOTTIME unavailable"));
+        }
+        let nanos=(now.tv_sec as u64).checked_mul(1_000_000_000).and_then(|v|v.checked_add(now.tv_nsec as u64))
+            .ok_or_else(||io::Error::new(io::ErrorKind::InvalidData,"client BOOTTIME overflow"))?;
+        let left=bound.checked_sub(nanos).filter(|v|*v>0)
+            .ok_or_else(||io::Error::new(io::ErrorKind::TimedOut,"client original BOOTTIME expired"))?;
+        Ok(Duration::from_nanos(left))
+}
+#[cfg(not(target_os="linux"))]
+fn boottime_remaining(_bound:u64)->io::Result<Duration> {
+    Err(io::Error::new(io::ErrorKind::Unsupported,"client BOOTTIME bound requires Linux"))
 }
 
 fn remaining(owner_pid: u32, deadline: Instant) -> io::Result<Duration> {
@@ -35,20 +61,24 @@ fn remaining(owner_pid: u32, deadline: Instant) -> io::Result<Duration> {
 
 pub(super) fn connect(endpoint: SocketAddr, deadline: Instant,
     read_limit: u64, write_limit: u64) -> Result<DeadlineTcp, String> {
+    connect_bounded(endpoint,deadline,read_limit,write_limit,None)
+}
+pub(super) fn connect_bounded(endpoint:SocketAddr,deadline:Instant,read_limit:u64,write_limit:u64,
+    boot_deadline:Option<u64>)->Result<DeadlineTcp,String> {
     if !(1..=MAX_WIRE_BYTES).contains(&read_limit)
         || !(1..=MAX_WIRE_BYTES).contains(&write_limit)
     {
         return Err("client TCP aggregate byte limits must be in 1..=2GiB".to_owned());
     }
     let owner_pid = std::process::id();
-    let timeout = remaining(owner_pid, deadline)
+    let timeout = bounded_remaining(owner_pid, deadline,boot_deadline)
         .map_err(|error| error.to_string())?.min(CONNECT_LIMIT);
     // One literal-address attempt, never a resolver or alternate endpoint.
     let socket = TcpStream::connect_timeout(&endpoint, timeout)
         .map_err(|_| "client TCP connect failed".to_owned())?;
     let socket = DeadlineTcp {
         socket, owner_pid, deadline, read_limit, write_limit,
-        read_bytes: 0, written_bytes: 0,
+        read_bytes: 0, written_bytes: 0, boot_deadline,
     };
     socket.check().map_err(|error| error.to_string())?;
     if socket.socket.peer_addr().map_err(|_| "client TCP peer is unavailable")? != endpoint {
@@ -59,8 +89,16 @@ pub(super) fn connect(endpoint: SocketAddr, deadline: Instant,
 }
 
 impl DeadlineTcp {
+    /// Additive relay mode: the retained literal socket and original budgets
+    /// remain unchanged. WouldBlock is progress absence, never a new attempt.
+    #[allow(dead_code)]
+    pub(super) fn set_nonblocking(&self) -> io::Result<()> {
+        self.check()?;
+        self.socket.set_nonblocking(true)?;
+        self.check()
+    }
     pub(super) fn check(&self) -> io::Result<()> {
-        remaining(self.owner_pid, self.deadline).map(|_| ())
+        bounded_remaining(self.owner_pid, self.deadline,self.boot_deadline).map(|_| ())
     }
 
     /// Observe the actual retained socket, never its configured destination.
@@ -74,7 +112,7 @@ impl DeadlineTcp {
 
 impl Read for DeadlineTcp {
     fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
-        let timeout = remaining(self.owner_pid, self.deadline)?;
+        let timeout = bounded_remaining(self.owner_pid, self.deadline,self.boot_deadline)?;
         if output.is_empty() { return Ok(0); }
         let remaining_bytes = self.read_limit - self.read_bytes;
         let count = output.len().min(MAX_IO_BYTES)
@@ -95,7 +133,7 @@ impl Read for DeadlineTcp {
 
 impl Write for DeadlineTcp {
     fn write(&mut self, input: &[u8]) -> io::Result<usize> {
-        let timeout = remaining(self.owner_pid, self.deadline)?;
+        let timeout = bounded_remaining(self.owner_pid, self.deadline,self.boot_deadline)?;
         if input.is_empty() { return Ok(0); }
         let remaining_bytes = self.write_limit - self.written_bytes;
         let count = input.len().min(MAX_IO_BYTES)

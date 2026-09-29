@@ -234,8 +234,11 @@ pub(super) fn run() -> Result<(), String> {
     // obtain it by presenting newer signed bytes or a successful diagnostic.
     let retirement = config.retirement;
     let outcome = config.outcome;
+    let application = config.application_proxy;
     let (execution, egress) = if let Some(inputs) = config.execution {
-        let start = if outcome {
+        let start = if application.is_some() {
+            execution::PreparedStart::open_application(inputs, Arc::clone(&clock))?
+        } else if outcome {
             execution::PreparedStart::open_outcome(inputs, Arc::clone(&clock), installation.is_some())?
         } else if retirement {
             execution::PreparedStart::open_retiring(inputs, Arc::clone(&clock), installation.is_some())?
@@ -244,7 +247,8 @@ pub(super) fn run() -> Result<(), String> {
         } else { execution::PreparedStart::open(inputs, Arc::clone(&clock))? };
         let network = attachment.take().ok_or("native execution requires its actual attachment original")?;
         let egress = config.egress.ok_or("native execution requires its actual egress original")?;
-        let parents = egress::prepare_for_start(egress, network, &clock, &mut held)?;
+        let parents = if application.is_some() {egress::prepare_for_application(egress,network,&clock,&mut held)?}
+            else {egress::prepare_for_start(egress, network, &clock, &mut held)?};
         (Some((start, parents)), None)
     } else { (None, match config.egress {
         Some(inputs) => Some(match attachment.as_ref() {
@@ -277,11 +281,13 @@ pub(super) fn run() -> Result<(), String> {
             &config.expected_target_request_sha256, sent.delegation_original(),
             sent.setup_original(), sent.target_request_original())?;
         let mut capture = json!({
-            "apiVersion":if outcome { "serverware.nativeBootstrapClientCapture/v8" }
+            "apiVersion":if application.is_some() { "serverware.nativeBootstrapClientCapture/v9" }
+                else if outcome { "serverware.nativeBootstrapClientCapture/v8" }
                 else if retirement { "serverware.nativeBootstrapClientCapture/v7" }
                 else if combined { "serverware.nativeBootstrapClientCapture/v6" }
                 else { "serverware.nativeBootstrapClientCapture/v5" },
-            "resultScope":if outcome { "local-fixed-endpoint-bootstrap-execution-outcome-observation" }
+            "resultScope":if application.is_some() { "local-fixed-endpoint-bootstrap-application-proxy-observation" }
+                else if outcome { "local-fixed-endpoint-bootstrap-execution-outcome-observation" }
                 else if retirement { "local-fixed-endpoint-bootstrap-execution-retirement-observation" }
                 else if combined { "local-fixed-endpoint-bootstrap-ca-and-execution-observation" }
                 else { "local-fixed-endpoint-bootstrap-and-execution-observation" },
@@ -308,7 +314,7 @@ pub(super) fn run() -> Result<(), String> {
             let pending = install::bind_for_execution(pending, Arc::clone(&parents), &configuration_raw)?;
             capture["installation"] = start.install_ca(pending)?;
         }
-        let observation = execution::execute(start, parents).map_err(|error| if combined {
+        let observation = execution::execute(start, parents,application).map_err(|error| if combined {
             format!("native CA installation completed; execution failed without rollback or retry: {error}")
         } else { error })?;
         let succeeded = observation.workload_succeeded();

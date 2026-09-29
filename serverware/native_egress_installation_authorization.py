@@ -31,6 +31,9 @@ NETWORK_SCHEMA = "serverware.signedNativeEgressInstallationAuthorization/v3"
 NETWORK_PAYLOAD_SCHEMA = "serverware.nativeEgressInstallationAuthorization/v3"
 EXECUTION_SCHEMA = "serverware.signedNativeEgressInstallationAuthorization/v4"
 EXECUTION_PAYLOAD_SCHEMA = "serverware.nativeEgressInstallationAuthorization/v4"
+APPLICATION_SCHEMA = "serverware.signedNativeEgressInstallationAuthorization/v5"
+APPLICATION_PAYLOAD_SCHEMA = "serverware.nativeEgressInstallationAuthorization/v5"
+APPLICATION_WORKLOAD_PROFILE = "native-egress-application-proxy-v1"
 PURPOSE = "native-egress-installation"
 WORKLOAD_PROFILE = "native-egress-create-new-workload-v1"
 EXECUTION_WORKLOAD_PROFILE = "native-egress-new-execution-v1"
@@ -191,19 +194,21 @@ def _execution_profile(requested_profile):
     # This is an independently supplied caller selection, never a value read
     # from the signed payload, a journal record or a diagnostic response.
     if type(requested_profile) is not str or requested_profile not in (
-            WORKLOAD_PROFILE, EXECUTION_WORKLOAD_PROFILE):
+            WORKLOAD_PROFILE, EXECUTION_WORKLOAD_PROFILE, APPLICATION_WORKLOAD_PROFILE):
         _fail()
-    return requested_profile == EXECUTION_WORKLOAD_PROFILE
+    return requested_profile in (EXECUTION_WORKLOAD_PROFILE, APPLICATION_WORKLOAD_PROFILE)
 
 
 def _payload(value, budget, *, requested_profile=WORKLOAD_PROFILE):
     execution = _execution_profile(requested_profile)
+    application = requested_profile == APPLICATION_WORKLOAD_PROFILE
     if type(value) is not dict:
         _fail()
     network = execution or value.get("schema") == NETWORK_PAYLOAD_SCHEMA
     creation = network or value.get("schema") == CREATION_PAYLOAD_SCHEMA
-    shared._object(value, _NETWORK_FIELDS if network else (_CREATION_FIELDS if creation else _FIELDS))
-    allowed = (EXECUTION_PAYLOAD_SCHEMA,) if execution else (
+    shared._object(value, _NETWORK_FIELDS | {"applicationProxy"} if application else
+        (_NETWORK_FIELDS if network else (_CREATION_FIELDS if creation else _FIELDS)))
+    allowed = (APPLICATION_PAYLOAD_SCHEMA,) if application else (EXECUTION_PAYLOAD_SCHEMA,) if execution else (
         PAYLOAD_SCHEMA, CREATION_PAYLOAD_SCHEMA, NETWORK_PAYLOAD_SCHEMA)
     if (value["schema"] not in allowed
             or value["sourceRevision"] != shared.authority.SOURCE_REVISION
@@ -218,7 +223,8 @@ def _payload(value, budget, *, requested_profile=WORKLOAD_PROFILE):
         _fail()
     workload = shared._object(value["workload"], {"profile", "launchManifestSha256",
         "launcherBinarySha256", "namespaceMode", "beforeCompletion", "failureMode"})
-    if (workload["profile"] != requested_profile or workload["namespaceMode"] != "create-new"
+    workload_profile = EXECUTION_WORKLOAD_PROFILE if application else requested_profile
+    if (workload["profile"] != workload_profile or workload["namespaceMode"] != "create-new"
             or workload["beforeCompletion"] != "never-executed"
             or workload["failureMode"] != "terminate-before-start"):
         _fail()
@@ -256,7 +262,12 @@ def _payload(value, budget, *, requested_profile=WORKLOAD_PROFILE):
                 or (launch["device"], launch["inode"]) == (kernel["device"], kernel["inode"])
                 or launch["namespace"] == kernel["namespace"]):
             _fail()
-    if network and value["childNetworkPolicy"] != "manual-dual-stack-no-autoconfiguration-v1":
+    if application:
+        adapter = shared._object(value["applicationProxy"], {"settingsSha256", "listenerPort"})
+        assignment._digest(adapter["settingsSha256"])
+        shared._integer(adapter["listenerPort"], 65535, 1024)
+    child_policy = "manual-dual-stack-loopback-proxy-v1" if application else "manual-dual-stack-no-autoconfiguration-v1"
+    if network and value["childNetworkPolicy"] != child_policy:
         _fail()
     issued = shared._integer(value["issuedAtEpochNs"], minimum=1)
     expires = shared._integer(value["expiresAtEpochNs"], minimum=issued + 1)
@@ -270,7 +281,11 @@ def _admit(original, public, root_pin, budget, *, requested_profile=WORKLOAD_PRO
     _structure(original, budget)
     outer = shared._decode(original, MAX_BYTES, budget)
     shared._object(outer, {"schema", "payload", "signature"})
-    if execution:
+    if requested_profile == APPLICATION_WORKLOAD_PROFILE:
+        if outer["schema"] != APPLICATION_SCHEMA:
+            _fail()
+        schema, payload_schema = APPLICATION_SCHEMA, APPLICATION_PAYLOAD_SCHEMA
+    elif execution:
         if outer["schema"] != EXECUTION_SCHEMA:
             _fail()
         schema, payload_schema = EXECUTION_SCHEMA, EXECUTION_PAYLOAD_SCHEMA
@@ -334,7 +349,9 @@ def _produce_on_work(*, payload_bytes, root_private_key_bytes, root_public_key_b
                     serialization.NoEncryption()) != root_private_key_bytes
                 or shared._spki(private.public_key(), budget) != shared._spki(public, budget)):
             _fail()
-        if execution:
+        if requested_profile == APPLICATION_WORKLOAD_PROFILE:
+            schema, payload_schema = APPLICATION_SCHEMA, APPLICATION_PAYLOAD_SCHEMA
+        elif execution:
             schema, payload_schema = EXECUTION_SCHEMA, EXECUTION_PAYLOAD_SCHEMA
         else:
             schema, payload_schema = ((NETWORK_SCHEMA, NETWORK_PAYLOAD_SCHEMA)

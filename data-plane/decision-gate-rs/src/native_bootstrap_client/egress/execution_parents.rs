@@ -39,6 +39,14 @@ pub(in super::super) struct ExecutionParents {
 pub(in super::super) fn prepare_for_start(inputs: Inputs, attachment: attachment::Pending,
     clock: &OriginalClock, originals: &mut Vec<HeldOriginal>) -> Result<ExecutionPending, String>
 {
+    prepare_selected(inputs, attachment, clock, originals, false)
+}
+pub(in super::super) fn prepare_for_application(inputs: Inputs, attachment: attachment::Pending,
+    clock: &OriginalClock, originals: &mut Vec<HeldOriginal>) -> Result<ExecutionPending, String> {
+    prepare_selected(inputs, attachment, clock, originals, true)
+}
+fn prepare_selected(inputs: Inputs, attachment: attachment::Pending,
+    clock: &OriginalClock, originals: &mut Vec<HeldOriginal>, application: bool) -> Result<ExecutionPending, String> {
     inputs.validate()?;
     clock.check()?;
     ensure(unsafe { libc::getuid() == 0 && libc::geteuid() == 0
@@ -56,8 +64,9 @@ pub(in super::super) fn prepare_for_start(inputs: Inputs, attachment: attachment
     let authorization = authority::admit(&raw, &root, &root_pin,
         crate::authority_source_revision_v1::SOURCE_REVISION, clock)?;
     ensure(authorization.execution_profile && authorization.creation_journal.is_some()
+        && authorization.application_proxy_sha256.is_some() == application
         && authorization.child_network_policy == Some(authority::ChildNetworkPolicy::ManualDualStackV1),
-        "native execution parents require explicit egress authorization v4")?;
+        "native execution parents require the explicitly selected egress v4/v5 authorization")?;
     attachment.require_egress(&authorization, clock)?;
     let (mut token, secret) = HeldOriginal::read_private(inputs.capability_token, 256)?;
     clock.check()?;
@@ -116,6 +125,27 @@ pub(in super::super) fn bind_for_start(pending: ExecutionPending,
 }
 
 impl ExecutionParents {
+    pub(in super::super) fn require_application_manifest(&self,
+        settings:&super::super::execution::application_proxy::Settings)->Result<(),String> {
+        self.check()?;let a=&self.authorization;
+        ensure(a.application_proxy_sha256.as_deref()==Some(settings.sha256()?.as_str())
+            && a.ruleset.loopback_port==Some(settings.listener_port)
+            && a.target_principal_id==settings.target_principal_id && a.proxy.endpoint==settings.proxy_endpoint,
+            "application manifest differs from explicit parent effect permission")?;
+        self.check()
+    }
+    pub(in super::super) fn require_application(&self,
+        settings: &super::super::execution::application_proxy::Settings,
+        target_spki: [u8;32], actual_ca: &[u8]) -> Result<(),String> {
+        self.require_application_manifest(settings)?;
+        let a=&self.authorization;
+        ensure(a.application_proxy_sha256.as_deref()==Some(settings.sha256()?.as_str())
+            && a.ruleset.loopback_port==Some(settings.listener_port)
+            && a.target_principal_id==settings.target_principal_id && a.target_spki_sha256==target_spki
+            && a.runtime_ca_certificate_sha256==digest(actual_ca) && a.proxy.endpoint==settings.proxy_endpoint,
+            "application adapter differs from genuine target/CA/endpoint/egress originals")?;
+        self.check()
+    }
     pub(in super::super) fn check(&self) -> Result<(), String> {
         ensure(!self.stopped.replace(true), "native execution parents are permanently stopped")?;
         self.clock.check()?;
@@ -154,6 +184,8 @@ impl ExecutionParents {
         let constraints = &start.constraints;
         let egress = &self.authorization;
         let attachment = self.attachment.authorization();
+        ensure(constraints.application_proxy_sha256 == egress.application_proxy_sha256,
+            "native start and egress differ on explicit application adapter permission")?;
         {
             let launch = self.launch.try_borrow().map_err(|_| "execution launch already borrowed")?;
             ensure(constraints.egress_authorization_sha256 == digest_text(&egress.original_sha256)

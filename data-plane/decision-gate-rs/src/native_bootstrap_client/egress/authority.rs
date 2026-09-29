@@ -22,6 +22,8 @@ const NETWORK_SCHEMA: &str = "serverware.nativeEgressInstallationAuthorization/v
 const NETWORK_ENVELOPE: &str = "serverware.signedNativeEgressInstallationAuthorization/v3";
 const EXECUTION_SCHEMA: &str = "serverware.nativeEgressInstallationAuthorization/v4";
 const EXECUTION_ENVELOPE: &str = "serverware.signedNativeEgressInstallationAuthorization/v4";
+const APPLICATION_SCHEMA: &str = "serverware.nativeEgressInstallationAuthorization/v5";
+const APPLICATION_ENVELOPE: &str = "serverware.signedNativeEgressInstallationAuthorization/v5";
 const MAX_EPOCH_MS: u64 = 9_223_372_036_854;
 
 #[derive(Serialize)]
@@ -66,6 +68,8 @@ pub(super) struct Rule {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct Ruleset {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) loopback_port: Option<u16>,
     pub(super) profile: String,
     pub(super) table_name: String,
     pub(super) family: String,
@@ -100,6 +104,7 @@ pub(super) enum ChildNetworkPolicy { ManualDualStackV1 }
 // same-session originals, independent roles, token and actual retained owners.
 // The type is deliberately neither Clone nor Debug nor serializable authority.
 pub(super) struct Authorization {
+    pub(super) application_proxy_sha256: Option<String>,
     // Derived only from the authenticated closed schema, never a request hint.
     pub(super) execution_profile: bool,
     pub(super) root_key_id: [u8; 32],
@@ -351,7 +356,7 @@ fn ruleset(value: &Value, rules: Vec<Rule>) -> Result<Ruleset, String> {
             && integer(&rule["tcpDestinationPort"], 1, 65535)? == u64::from(expected.tcp_destination_port)
             && rule["verdict"] == "accept")?;
     }
-    Ok(Ruleset { profile: "nft-inet-output-tcp-create-v1".to_owned(), table_name: table.to_owned(),
+    Ok(Ruleset { loopback_port: None, profile: "nft-inet-output-tcp-create-v1".to_owned(), table_name: table.to_owned(),
         family: "inet".to_owned(), chain_name: "output".to_owned(), chain_type: "filter".to_owned(),
         hook: "output".to_owned(), priority: -10, policy: "drop".to_owned(), rules })
 }
@@ -379,6 +384,7 @@ pub(super) fn admit(raw: &[u8], root_pem: &[u8], root_pem_sha: &str,
         Some(CREATION_ENVELOPE) => CREATION_SCHEMA,
         Some(NETWORK_ENVELOPE) => NETWORK_SCHEMA,
         Some(EXECUTION_ENVELOPE) => EXECUTION_SCHEMA,
+        Some(APPLICATION_ENVELOPE) => APPLICATION_SCHEMA,
         _ => return Err("native egress authorization envelope profile refused".to_owned()),
     };
     let mut fields = vec!["schema", "sourceRevision", "purpose", "trustMode", "authorizationId",
@@ -389,7 +395,8 @@ pub(super) fn admit(raw: &[u8], root_pem: &[u8], root_pem_sha: &str,
         "networkOwner", "machineIdSha256", "workload", "ruleset", "capability", "journal",
         "issuedAtEpochNs", "expiresAtEpochNs"];
     if schema != SCHEMA { fields.push("creationJournal"); }
-    if matches!(schema, NETWORK_SCHEMA | EXECUTION_SCHEMA) { fields.push("childNetworkPolicy"); }
+    if matches!(schema, NETWORK_SCHEMA | EXECUTION_SCHEMA | APPLICATION_SCHEMA) { fields.push("childNetworkPolicy"); }
+    if schema == APPLICATION_SCHEMA { fields.push("applicationProxy"); }
     let p = object(&outer["payload"], &fields)?;
     require(p["schema"] == schema && p["purpose"] == "native-egress-installation"
         && p["trustMode"] == "trusted-host-local"
@@ -414,7 +421,13 @@ pub(super) fn admit(raw: &[u8], root_pem: &[u8], root_pem_sha: &str,
     let nonce = text(&p["targetNonce"], 256)?;
     require(nonce.len() >= 32 && nonce.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-')))?;
     let (proxy, rules) = proxy(&p["proxy"], clock)?;
-    let ruleset = ruleset(&p["ruleset"], rules)?;
+    let mut ruleset = ruleset(&p["ruleset"], rules)?;
+    let application_proxy_sha256 = if schema == APPLICATION_SCHEMA {
+        let application = object(&p["applicationProxy"], &["settingsSha256", "listenerPort"])?;
+        digest(&application["settingsSha256"])?;
+        ruleset.loopback_port = Some(integer(&application["listenerPort"], 1024, 65535)? as u16);
+        Some(text(&application["settingsSha256"], 71)?.to_owned())
+    } else { None };
     let capability = capability(&p["capability"])?;
     let kernel_journal = journal(&p["journal"])?;
     let creation_journal = if schema != SCHEMA {
@@ -424,7 +437,10 @@ pub(super) fn admit(raw: &[u8], root_pem: &[u8], root_pem_sha: &str,
             && creation.namespace != kernel_journal.namespace)?;
         Some(creation)
     } else { None };
-    let child_network_policy = if matches!(schema, NETWORK_SCHEMA | EXECUTION_SCHEMA) {
+    let child_network_policy = if schema == APPLICATION_SCHEMA {
+        require(p["childNetworkPolicy"] == "manual-dual-stack-loopback-proxy-v1")?;
+        Some(ChildNetworkPolicy::ManualDualStackV1)
+    } else if matches!(schema, NETWORK_SCHEMA | EXECUTION_SCHEMA) {
         require(p["childNetworkPolicy"] == "manual-dual-stack-no-autoconfiguration-v1")?;
         Some(ChildNetworkPolicy::ManualDualStackV1)
     } else { None };
@@ -432,7 +448,8 @@ pub(super) fn admit(raw: &[u8], root_pem: &[u8], root_pem_sha: &str,
     let expires = integer(&p["expiresAtEpochNs"], 1, i64::MAX as u64)?;
     require(issued <= opening_wall && opening_wall < expires && expires > issued
         && expires - issued <= 300_000_000_000 && expires <= capability.expires_at_epoch_ms * 1_000_000)?;
-    let result = Authorization { execution_profile: schema == EXECUTION_SCHEMA,
+    let result = Authorization { application_proxy_sha256,
+        execution_profile: matches!(schema, EXECUTION_SCHEMA | APPLICATION_SCHEMA),
         root_key_id, original_sha256: Sha256::digest(raw).into(),
         authorization_id: identifier(&p["authorizationId"])?, setup_sha256: digest(&p["setupSha256"])?,
         delegation_sha256: digest(&p["delegationSha256"])?, target_request_sha256: digest(&p["targetRequestSha256"])?,
@@ -446,7 +463,7 @@ pub(super) fn admit(raw: &[u8], root_pem: &[u8], root_pem_sha: &str,
         client_challenge_sha256: digest(&p["clientChallengeSha256"])?, target_spki_sha256: digest(&p["targetSpkiSha256"])?,
         machine_id_sha256: digest(&p["machineIdSha256"])?, target_principal_id: principal.to_owned(),
         target_nonce: nonce.to_owned(), proxy, network_owner: network_owner(&p["networkOwner"])?,
-        workload: workload(&p["workload"], schema == EXECUTION_SCHEMA)?, ruleset, capability, journal: kernel_journal,
+        workload: workload(&p["workload"], matches!(schema, EXECUTION_SCHEMA | APPLICATION_SCHEMA))?, ruleset, capability, journal: kernel_journal,
         creation_journal, child_network_policy,
         issued_at_epoch_ns: issued, expires_at_epoch_ns: expires };
     clock.restrict_until_epoch_ns(expires)?;

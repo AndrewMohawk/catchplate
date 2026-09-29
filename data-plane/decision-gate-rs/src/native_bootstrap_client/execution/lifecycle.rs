@@ -69,7 +69,7 @@ impl LifecycleObservation {
     }
 }
 
-pub(in super::super) fn execute(prepared: PreparedStart, parents: Arc<ExecutionParents>)
+pub(in super::super) fn execute(prepared: PreparedStart, parents: Arc<ExecutionParents>, application:Option<super::application_proxy::Inputs>)
     -> Result<LifecycleObservation, String>
 {
     let mut guarded = GuardedChild::create(prepared, parents)?;
@@ -81,7 +81,7 @@ pub(in super::super) fn execute(prepared: PreparedStart, parents: Arc<ExecutionP
         let prepared = guarded.prepare_network()?;
         let mut ready = prepared.install()?;
         let host = if retiring { Some(ready.prepare_retirement()?) } else { None };
-        Ok::<_, String>((guarded.run_and_finish(ready), host))
+        Ok::<_, String>((guarded.run_and_finish(ready,application), host))
     })();
     // Always attempt direct-child, whole-leaf, independent guardian and output
     // cleanup before reporting either the run error or the cleanup error.

@@ -328,7 +328,9 @@ impl<'guard, 'egress> AttachmentBackend<'guard, 'egress> {
         require(self.phase == Phase::Admission)?; self.guard.check()?;
         self.begin()?; require(self.plan_sha256.is_none() && !self.attempted)?;
         let originals = self.collect()?;
-        let preflight = attachment_readback::preflight(self.guard.authority(), &originals)?;
+        let preflight = if self.guard.egress().authority().application_proxy_sha256.is_some() {
+            attachment_readback::preflight_selected(self.guard.authority(), &originals,true)?
+        } else { attachment_readback::preflight(self.guard.authority(), &originals)? };
         let plan = wire::build_source(self.guard.egress(), self.guard.authority(), preflight.host_index(), preflight.child_index(),
             self.child.namespace.as_raw_fd(), self.host.port, self.child.port, self.next_sequence[0], self.next_sequence[1],
             self.host.namespace_identity, self.child.namespace_identity)?;

@@ -35,6 +35,7 @@ struct Wire {
     egress: Option<super::egress::Inputs>,
     attachment: Option<super::egress::attachment::Inputs>,
     execution: Option<super::execution::Inputs>,
+    application_proxy: Option<super::execution::application_proxy::Inputs>,
 }
 
 pub(super) struct Configuration {
@@ -61,6 +62,7 @@ pub(super) struct Configuration {
     pub(super) execution: Option<super::execution::Inputs>,
     pub(super) retirement: bool,
     pub(super) outcome: bool,
+    pub(super) application_proxy: Option<super::execution::application_proxy::Inputs>,
 }
 
 pub(super) fn artifact(value: &ArtifactV1) -> Result<(), String> {
@@ -103,6 +105,7 @@ impl Configuration {
         let has_egress = original.get("egress").is_some();
         let has_attachment = original.get("attachment").is_some();
         let has_execution = original.get("execution").is_some();
+        let has_application = original.get("applicationProxy").is_some();
         let wire: Wire = serde_json::from_value(original)
             .map_err(|_| "bootstrap client configuration violates its closed contract")?;
         ensure(((wire.api_version == "serverware.nativeBootstrapClient/v1"
@@ -122,13 +125,20 @@ impl Configuration {
                 || (matches!(wire.api_version.as_str(), "serverware.nativeBootstrapClient/v7"
                         | "serverware.nativeBootstrapClient/v8")
                     && wire.egress.is_some() && wire.attachment.is_some() && wire.execution.is_some()
-                    && has_installation))
+                    && has_installation)
+                || (wire.api_version == "serverware.nativeBootstrapClient/v9"
+                    && wire.egress.is_some() && wire.attachment.is_some() && wire.execution.is_some()
+                    && wire.installation.is_some() && wire.application_proxy.is_some()))
+            && has_application == (wire.api_version == "serverware.nativeBootstrapClient/v9")
             && (100..=30_000).contains(&wire.timeout_milliseconds),
             "bootstrap client profile or timeout differs")?;
         if let Some(inputs) = &wire.installation { inputs.validate()?; }
         if let Some(inputs) = &wire.egress { inputs.validate()?; }
         if let Some(inputs) = &wire.attachment { inputs.validate()?; }
         if let Some(inputs) = &wire.execution { inputs.validate()?; }
+        if let Some(inputs) = &wire.application_proxy {
+            inputs.require_separate(&wire.client_certificate,&wire.client_private_key)?;
+        }
         for value in [&wire.startup_evidence, &wire.startup_expectations, &wire.session_scope,
             &wire.trust_roots, &wire.client_certificate, &wire.client_private_key,
             &wire.caller_issuer, &wire.delegation_authorizer, &wire.setup_authorizer, &wire.request]
@@ -164,8 +174,9 @@ impl Configuration {
             attachment: wire.attachment,
             execution: wire.execution,
             retirement: matches!(wire.api_version.as_str(), "serverware.nativeBootstrapClient/v7"
-                | "serverware.nativeBootstrapClient/v8"),
-            outcome: wire.api_version == "serverware.nativeBootstrapClient/v8",
+                | "serverware.nativeBootstrapClient/v8" | "serverware.nativeBootstrapClient/v9"),
+            outcome: matches!(wire.api_version.as_str(),"serverware.nativeBootstrapClient/v8"|"serverware.nativeBootstrapClient/v9"),
+            application_proxy:wire.application_proxy,
         })
     }
 }

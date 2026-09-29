@@ -231,6 +231,16 @@ pub(super) fn expected_rule_expressions(ruleset: &Ruleset) -> Result<Vec<Vec<u8>
         && ruleset.hook == "output" && ruleset.priority == -10 && ruleset.policy == "drop"
         && !ruleset.rules.is_empty() && ruleset.rules.len() <= 16)?;
     let mut originals = vec![ipv4_fragment_drop()?, ipv6_fragment_drop()?];
+    if let Some(port) = ruleset.loopback_port {
+        require(port >= 1024)?;
+        // Two explicit directions, only 127.0.0.1 -> 127.0.0.1 TCP on the
+        // fixed listener port. No blanket lo accept or external return rule.
+        for offset in [0, 2] {
+            originals.push(join(&[meta(15)?, compare(0, &[2])?, meta(16)?, compare(0, &[6])?,
+                payload(1, 12, 8)?, compare(0, &[127,0,0,1,127,0,0,1])?,
+                payload(2, offset, 2)?, compare(0, &port.to_be_bytes())?, verdict(1)?])?);
+        }
+    }
     let mut previous: Option<Vec<u8>> = None;
     let mut port = None;
     for rule in &ruleset.rules {

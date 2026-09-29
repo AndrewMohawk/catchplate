@@ -18,12 +18,46 @@ pub(super) struct Spec {
     pub(super) gid: u32,
     pub(super) argv: *const *const libc::c_char,
     pub(super) envp: *const *const libc::c_char,
+    pub(super) application_port: u16,
 }
 
 pub(super) const READY: &[u8; 8] = b"SWNEBLK1";
 
 #[repr(C)]
 struct Rights { header: libc::cmsghdr, descriptors: [RawFd; 2] }
+
+unsafe fn application_listener(gate: RawFd, port: u16) -> bool {
+    if port < 1024 { return false; }
+    let control=libc::syscall(libc::SYS_socket,libc::AF_INET,libc::SOCK_DGRAM|libc::SOCK_CLOEXEC,0) as RawFd;
+    if control<0 { return false; }
+    let mut request:libc::ifreq=std::mem::zeroed();
+    request.ifr_name[0]=b'l' as libc::c_char; request.ifr_name[1]=b'o' as libc::c_char;
+    if libc::syscall(libc::SYS_ioctl,control,libc::SIOCGIFFLAGS,&mut request as *mut libc::ifreq)!=0
+        || request.ifr_ifru.ifru_flags & libc::IFF_UP as i16 !=0
+        || request.ifr_ifru.ifru_flags & libc::IFF_LOOPBACK as i16 ==0 { return false; }
+    request.ifr_ifru.ifru_flags |=libc::IFF_UP as i16;
+    if libc::syscall(libc::SYS_ioctl,control,libc::SIOCSIFFLAGS,&request as *const libc::ifreq)!=0
+        || libc::syscall(libc::SYS_ioctl,control,libc::SIOCGIFFLAGS,&mut request as *mut libc::ifreq)!=0
+        || request.ifr_ifru.ifru_flags & libc::IFF_UP as i16 ==0
+        || libc::syscall(libc::SYS_close,control)!=0 { return false; }
+    let listener=libc::syscall(libc::SYS_socket,libc::AF_INET,
+        libc::SOCK_STREAM|libc::SOCK_CLOEXEC|libc::SOCK_NONBLOCK,libc::IPPROTO_TCP) as RawFd;
+    if listener<0 { return false; }
+    let address=libc::sockaddr_in {sin_family:libc::AF_INET as u16,sin_port:port.to_be(),
+        sin_addr:libc::in_addr{s_addr:u32::from_ne_bytes([127,0,0,1])},sin_zero:[0;8]};
+    if libc::syscall(libc::SYS_bind,listener,&address as *const libc::sockaddr_in,std::mem::size_of::<libc::sockaddr_in>())!=0
+        || libc::syscall(libc::SYS_listen,listener,1)!=0 { return false; }
+    let mut control=[0usize;3];
+    let header=control.as_mut_ptr().cast::<libc::cmsghdr>();
+    (*header).cmsg_len=std::mem::size_of::<libc::cmsghdr>()+std::mem::size_of::<RawFd>();
+    (*header).cmsg_level=libc::SOL_SOCKET;(*header).cmsg_type=libc::SCM_RIGHTS;
+    *control.as_mut_ptr().cast::<u8>().add(std::mem::size_of::<libc::cmsghdr>()).cast::<RawFd>()=listener;
+    let mut iov=libc::iovec{iov_base:super::child_network::LISTENER.as_ptr().cast_mut().cast(),iov_len:8};
+    let mut message:libc::msghdr=std::mem::zeroed();message.msg_iov=&mut iov;message.msg_iovlen=1;
+    message.msg_control=control.as_mut_ptr().cast();message.msg_controllen=std::mem::size_of_val(&control);
+    let sent=libc::syscall(libc::SYS_sendmsg,gate,&message as *const libc::msghdr,libc::MSG_NOSIGNAL);
+    sent==8 && libc::syscall(libc::SYS_close,listener)==0
+}
 
 unsafe fn network_originals(gate: RawFd) -> bool {
     let filter = libc::syscall(libc::SYS_socket, libc::AF_NETLINK,
@@ -182,6 +216,7 @@ pub(super) unsafe fn run(spec: &Spec) -> ! {
         || libc::syscall(libc::SYS_dup3, spec.stderr, 2, 0) != 2
         || !close_except(spec.keep.as_ptr(), spec.keep.len()) { die(); }
     if !super::child_network_policy::apply() || !network_originals(spec.gate)
+        || (spec.application_port!=0 && !application_listener(spec.gate,spec.application_port))
         || libc::syscall(libc::SYS_sethostname, b"workload".as_ptr(), 8usize) != 0
         || libc::syscall(libc::SYS_setdomainname, b"\0".as_ptr(), 0usize) != 0 { die(); }
     // The detached tree is nonrecursive and already readonly/nosuid/nodev.

@@ -19,6 +19,8 @@ mod guardian;
 mod guardian_process;
 mod guarded;
 mod lifecycle;
+pub(super) mod application_proxy;
+mod application_proxy_transport;
 pub(super) use start::{Inputs, PreparedStart};
 pub(super) use lifecycle::execute;
 pub(super) use start_reservation::outcome::lookup;

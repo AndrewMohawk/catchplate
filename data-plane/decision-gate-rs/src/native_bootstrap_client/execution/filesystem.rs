@@ -369,14 +369,19 @@ pub(super) struct PreparedFilesystem {
 
 impl PreparedFilesystem {
     pub(super) fn open(pin: &ArtifactV1, clock: Arc<OriginalClock>) -> Result<Self, String> {
-        Self::open_profile(pin, clock, false)
+        Self::open_profile(pin, clock, false, false)
     }
 
     pub(super) fn open_with_trust(pin: &ArtifactV1, clock: Arc<OriginalClock>) -> Result<Self, String> {
-        Self::open_profile(pin, clock, true)
+        Self::open_profile(pin, clock, true, false)
     }
 
-    fn open_profile(pin: &ArtifactV1, clock: Arc<OriginalClock>, combined_trust: bool) -> Result<Self, String> {
+    pub(super) fn open_application(pin: &ArtifactV1, clock: Arc<OriginalClock>) -> Result<Self, String> {
+        Self::open_profile(pin, clock, true, true)
+    }
+    pub(super) fn application(&self) -> Option<&super::application_proxy::Settings> { self.manifest.application_proxy.as_ref() }
+
+    fn open_profile(pin: &ArtifactV1, clock: Arc<OriginalClock>, combined_trust: bool, application: bool) -> Result<Self, String> {
         let creator = source(&clock)?;
         let manifest_sha256 = manifest::digest(&pin.sha256)?;
         let named_path = pin.path.to_str().ok_or("native manifest path is not UTF-8")?;
@@ -385,7 +390,7 @@ impl PreparedFilesystem {
             path: pin.path.clone(), sha256: pin.sha256.clone(),
         }, MAX_MANIFEST)?;
         clock.check()?;
-        let manifest = manifest::decode(&manifest_raw, combined_trust)?;
+        let manifest = manifest::decode(&manifest_raw, combined_trust, application)?;
         require(bytes_sha256(&manifest_named.file, manifest_named.fingerprint.length, &clock)?
             == manifest_sha256)?;
         let root = NamedOriginal::open(&manifest.rootfs.mount_path, Kind::Root, &clock)?;

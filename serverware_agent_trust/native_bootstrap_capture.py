@@ -338,6 +338,12 @@ def _packet_on_budget(capture_bytes, target_request_bytes, budget):
         _outcome_data(value["outcome"], value["execution"], budget)
         if value["installation"] is not None:
             _installation_data(value["installation"], budget)
+    elif value.get("apiVersion") == "serverware.nativeBootstrapClientCapture/v9":
+        value = _object(value, _CAPTURE_V8_FIELDS)
+        expected_scope = "local-fixed-endpoint-bootstrap-application-proxy-observation"
+        _execution_data(value["execution"], budget, retirement=True)
+        _outcome_data(value["outcome"], value["execution"], budget)
+        _installation_data(value["installation"], budget)
     else:
         _fail()
     if (value["resultScope"] != expected_scope or value["okForAction"] is not False

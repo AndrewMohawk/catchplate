@@ -5,7 +5,7 @@ evidence plus a diagnostic. The issuance API instead consumes the exact native
 packet within that evidence. `native_bootstrap_capture.extract_packet` connects
 these representations without promoting the diagnostic to authority.
 
-The extractor explicitly accepts eight closed
+The extractor explicitly accepts nine closed
 `serverware.nativeBootstrapClientCapture` profiles. Each retains the same nine
 base fields and permits only the children shown here, never additional fields.
 Only v7/v8 explicitly permit a null installation child:
@@ -20,6 +20,13 @@ Only v7/v8 explicitly permit a null installation child:
 | v6 | `execution`, `installation` | 11 |
 | v7 | `execution` v2, `installation` (receipt or null) | 11 |
 | v8 | `execution` v2, `installation` (receipt or null), `outcome` | 12 |
+| v9 | `execution` v2, nonnull `installation`, `outcome` | 12 |
+
+V9 selects the [ordinary-application CONNECT adapter](native-application-proxy.md)
+and the distinct scope `local-fixed-endpoint-bootstrap-application-proxy-observation`.
+Its required nonnull installation, execution and durable outcome children retain
+their existing closed bounds. Extraction does not prove the app honored proxy
+or trust settings, authenticate a provider response, or grant another CONNECT.
 
 V8 adds the [durable terminal outcome](native-execution-outcomes.md) receipt.
 The decoder checks its exact nine fields, nonzero hashes, matching execution

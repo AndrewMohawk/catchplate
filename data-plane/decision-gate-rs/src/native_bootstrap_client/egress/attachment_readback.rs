@@ -217,9 +217,29 @@ fn state(authority: &Authorization, snapshot: &Snapshot) -> Result<State, String
         host_neighbors, child_neighbors, child_routes })
 }
 
-fn loopback(link: &links::Link) -> Result<(), String> {
-    require(link.name == "lo" && link.link_type == 772 && link.flags & 1 == 0
+fn loopback(link: &links::Link, application:bool) -> Result<(), String> {
+    require(link.name == "lo" && link.link_type == 772 && link.flags & 1 == u32::from(application)
         && link.flags & 8 != 0 && link.master.is_none() && link.kind.is_none())
+}
+fn loopback_addresses(index:u32)->Vec<Address> {
+    let mut v6=vec![0;16];v6[15]=1;
+    vec![Address{family:2,index,address:vec![127,0,0,1],prefix:8,scope:254,flags:0x80,
+        label:Some("lo".to_owned()),broadcast:None,priority:0,protocol:0,
+        preferred_lifetime:u32::MAX,valid_lifetime:u32::MAX},
+        Address{family:10,index,address:v6,prefix:128,scope:254,flags:0x80,label:None,
+        broadcast:None,priority:0,protocol:1,preferred_lifetime:u32::MAX,valid_lifetime:u32::MAX}]
+}
+fn loopback_routes(index:u32)->Vec<Route> {
+    let mut result=Vec::new();
+    for (destination,prefix,scope,kind) in [(vec![127,0,0,0],8,254,2),
+        (vec![127,0,0,1],32,254,2),(vec![127,255,255,255],32,253,3)] {
+        result.push(Route{family:2,destination,prefix,table:255,protocol:2,scope,kind,flags:0,index,
+            priority:0,gateway:None,preferred_source:Some(vec![127,0,0,1])});
+    }
+    let mut v6=vec![0;16];v6[15]=1;
+    result.push(Route{family:10,destination:v6,prefix:128,table:255,protocol:2,scope:0,kind:2,flags:0,
+        index,priority:0,gateway:None,preferred_source:None});
+    result.sort();result
 }
 fn bridge_and_gateways(authority: &Authorization, value: &State) -> Result<(), String> {
     let bridge = value.host_links.get(&authority.bridge.ifindex).ok_or("attachment bridge absent")?;
@@ -248,11 +268,16 @@ impl Preflight {
     pub(super) fn child_index(&self) -> u32 { self.child_index }
 }
 pub(super) fn preflight(authority: &Authorization, snapshot: &Snapshot) -> Result<Preflight, String> {
+    preflight_selected(authority,snapshot,false)
+}
+pub(super) fn preflight_selected(authority: &Authorization, snapshot: &Snapshot, application:bool) -> Result<Preflight, String> {
     let value = state(authority, snapshot)?;
     bridge_and_gateways(authority, &value)?;
-    require(value.child_links.len() == 1 && value.child_addresses.is_empty()
-        && value.child_neighbors.is_empty() && value.child_routes.is_empty())?;
-    loopback(value.child_links.values().next().ok_or("attachment loopback absent")?)?;
+    require(value.child_links.len() == 1 && value.child_neighbors.is_empty())?;
+    let lo=value.child_links.values().next().ok_or("attachment loopback absent")?;
+    loopback(lo,application)?;
+    require(if application {value.child_addresses==loopback_addresses(lo.index) && value.child_routes==loopback_routes(lo.index)}
+        else {value.child_addresses.is_empty() && value.child_routes.is_empty()})?;
     for link in value.host_links.values().chain(value.child_links.values()) {
         require(link.name != authority.attachment.host_veth_name && link.name != authority.attachment.child_veth_name)?;
     }
@@ -426,16 +451,22 @@ pub(super) fn verify_owner(guard: &AttachmentOwner<'_, '_>, plan: &AttachmentPla
     veth(child, &authority.attachment.child_veth_name, &authority.attachment.child_mac_address,
         authority.attachment.mtu, plan.host_index(), None)?;
     require(value.child_links.len() == 2)?;
-    for other in value.child_links.values().filter(|link| link.index != plan.child_index()) { loopback(other)?; }
+    let application=guard.egress().authority().application_proxy_sha256.is_some();
+    let lo=value.child_links.values().find(|link|link.index!=plan.child_index()).ok_or("attachment loopback absent")?;
+    loopback(lo,application)?;
     for index in [0usize, 3, 4, 5] {
         require(child.ipv6_conf.get(index) == Some(&0) && child.ipv4_conf.get(index) == Some(&0))?;
     }
     // Pinned v6.12 ipv6.h DEVCONF_RTR_SOLICITS and DEVCONF_USE_TEMPADDR.
     for index in [7usize, 10] { require(child.ipv6_conf.get(index) == Some(&0))?; }
+    let mut expected_addresses=expected_addresses(authority,plan.child_index())?;
+    let mut expected_routes=expected_routes(authority,plan.child_index())?;
+    if application {expected_addresses.extend(loopback_addresses(lo.index));expected_routes.extend(loopback_routes(lo.index));}
+    expected_addresses.sort();expected_routes.sort();
     require(!value.host_addresses.iter().any(|address| address.index == plan.host_index())
-        && value.child_addresses == expected_addresses(authority, plan.child_index())?
+        && value.child_addresses == expected_addresses
         && value.child_neighbors == expected_neighbors(authority, plan.child_index())?
-        && value.child_routes == expected_routes(authority, plan.child_index())?)?;
+        && value.child_routes == expected_routes)?;
     let gateways = value.host_addresses.iter().filter(|address| address.index == authority.bridge.ifindex)
         .collect::<Vec<_>>();
     let semantic = serde_json::json!({

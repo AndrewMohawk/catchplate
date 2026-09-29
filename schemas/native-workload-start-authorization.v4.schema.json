@@ -1,0 +1,39 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "$id":"https://serverware.invalid/schemas/native-workload-start-authorization.v4.schema.json",
+  "title":"Separate native application adapter start permission v4",
+  "description":"Closed canonical ASCII/no-LF <=32768 bytes. Ed25519 signs exact payload schema plus NUL plus canonical payload. Explicitly selected v4 retains v3 retirement/outcome requirements and adds actual immutable applicationProxy settings hash. This grants only the source-fixed one-child/one-CONNECT profile, never provider authorization, retry, restart or weaker legacy fallback.",
+  "type":"object","additionalProperties":false,"required":["schema","payload","signature"],
+  "properties":{
+    "schema":{"const":"serverware.signedNativeWorkloadStartAuthorization/v4"},
+    "signature":{"$ref":"native-workload-start-authorization.v3.schema.json#/properties/signature"},
+    "payload":{"$ref":"#/$defs/payload"}
+  },
+  "$defs":{"payload":{
+    "type":"object","additionalProperties":false,
+    "required":["schema","sourceRevision","purpose","trustMode","creationMode","authorizationId","egressAuthorizationSha256","attachmentAuthorizationSha256","launchManifestSha256","executionManifestSha256","launcherBinarySha256","machineIdSha256","networkOwner","isolation","resources","containment","capability","journal","issuedAtEpochNs","startBeforeEpochNs","stopAtEpochNs","cleanupBeforeEpochNs","applicationProxySha256"],
+    "properties":{
+      "schema":{"const":"serverware.nativeWorkloadStartAuthorization/v4"},
+      "sourceRevision":{"$ref":"native-workload-start-authorization.v3.schema.json#/$defs/payload/properties/sourceRevision"},
+      "purpose":{"const":"native-workload-start"},"trustMode":{"const":"trusted-host-local"},"creationMode":{"const":"new-execution-child-v1"},
+      "authorizationId":{"$ref":"native-workload-start-authorization.v2.schema.json#/$defs/identifier"},
+      "egressAuthorizationSha256":{"$ref":"native-workload-start-authorization.v2.schema.json#/$defs/digest"},
+      "attachmentAuthorizationSha256":{"$ref":"native-workload-start-authorization.v2.schema.json#/$defs/digest"},
+      "launchManifestSha256":{"$ref":"native-workload-start-authorization.v2.schema.json#/$defs/digest"},
+      "executionManifestSha256":{"$ref":"native-workload-start-authorization.v2.schema.json#/$defs/digest"},
+      "launcherBinarySha256":{"$ref":"native-workload-start-authorization.v2.schema.json#/$defs/digest"},
+      "machineIdSha256":{"$ref":"native-workload-start-authorization.v2.schema.json#/$defs/digest"},
+      "networkOwner":{"$ref":"native-workload-start-authorization.v2.schema.json#/$defs/host"},
+      "isolation":{"$ref":"native-workload-start-authorization.v2.schema.json#/$defs/isolation"},
+      "resources":{"$ref":"native-workload-start-authorization.v2.schema.json#/$defs/resources"},
+      "containment":{"$ref":"native-workload-start-authorization.v2.schema.json#/$defs/containment"},
+      "capability":{"$ref":"native-workload-start-authorization.v2.schema.json#/$defs/capability"},
+      "journal":{"$ref":"native-workload-start-authorization.v3.schema.json#/$defs/journal"},
+      "issuedAtEpochNs":{"$ref":"native-workload-start-authorization.v2.schema.json#/$defs/epochNs"},
+      "startBeforeEpochNs":{"$ref":"native-workload-start-authorization.v2.schema.json#/$defs/epochNs"},
+      "stopAtEpochNs":{"$ref":"native-workload-start-authorization.v2.schema.json#/$defs/epochNs"},
+      "cleanupBeforeEpochNs":{"$ref":"native-workload-start-authorization.v2.schema.json#/$defs/epochNs"},
+      "applicationProxySha256":{"$ref":"native-workload-start-authorization.v2.schema.json#/$defs/digest","description":"SHA256 of exact canonical ASCII applicationProxy object in actual admitted manifest/v3, also equal egress/v5 applicationProxy.settingsSha256. Never a caller-only inferred permission."}
+    }
+  }}
+}

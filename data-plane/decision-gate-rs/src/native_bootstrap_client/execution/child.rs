@@ -221,6 +221,8 @@ pub(in super::super) struct BlockedChild {
     gate: OwnedFd,
     namespaces: Vec<Namespace>,
     network: Option<child_network::Sockets>,
+    application_listener: Option<child_network::Listener>,
+    application_attempted: Cell<bool>,
     network_attempted: Cell<bool>,
     stdout: OwnedFd,
     stderr: OwnedFd,
@@ -276,7 +278,8 @@ impl BlockedChild {
         let spec = child_trampoline::Spec { root: copies[0].as_raw_fd(), cwd: copies[1].as_raw_fd(),
             entry: copies[2].as_raw_fd(), gate: copies[3].as_raw_fd(), parent: copies[4].as_raw_fd(),
             stdin: copies[5].as_raw_fd(), stdout: copies[6].as_raw_fd(), stderr: copies[7].as_raw_fd(),
-            keep, uid, gid, argv: filesystem.argv(), envp: filesystem.envp() };
+            keep, uid, gid, argv: filesystem.argv(), envp: filesystem.envp(),
+            application_port: owner.filesystem().application().map_or(0,|value|value.listener_port) };
         owner.check_admission()?;
         filesystem.check(owner.filesystem())?;
         let cgroup = containment.begin_child()?.as_raw_fd();
@@ -323,7 +326,8 @@ impl BlockedChild {
         drop(stderr_writer);
         drop(stdin);
         let mut result = Self { leader, containment, filesystem, launcher, launcher_identity, gate,
-            namespaces: Vec::with_capacity(5), network: None, network_attempted: Cell::new(false), stdout, stderr,
+            namespaces: Vec::with_capacity(5), network: None, application_listener:None,
+            application_attempted:Cell::new(false), network_attempted: Cell::new(false), stdout, stderr,
             output_remaining: Cell::new(output_remaining), output: RefCell::new(release::OutputState::new()),
             guardian_attempted: Cell::new(false),
             release_attempted: Cell::new(false), executed: Cell::new(false),
@@ -375,8 +379,15 @@ impl BlockedChild {
                 }
                 child_network::Message::Ready => {
                     require(self.network.is_some(), "native child readiness lacks its actual network sockets")?;
+                    require(self.application_listener.is_some()==self.containment.owner().filesystem().application().is_some(),
+                        "native child readiness listener differs from explicitly signed profile")?;
                     self.admission()?;
                     return Ok(());
+                }
+                child_network::Message::Listener(listener) => {
+                    require(self.application_listener.is_none() && self.containment.owner().filesystem().application().is_some(),
+                        "native child sent unexpected or repeated application listener")?;
+                    self.application_listener=Some(listener);
                 }
             }
         }
@@ -412,6 +423,10 @@ impl BlockedChild {
         require(self.namespaces.len() == 5, "native child namespace originals are incomplete")?;
         for namespace in &self.namespaces { namespace.check(&self.leader)?; }
         self.network_originals()?.check(self.network_namespace()?.fd.as_fd())?;
+        if let Some(settings)=self.containment.owner().filesystem().application() {
+            self.application_listener.as_ref().ok_or("actual application listener disappeared")?
+                .check(self.network_namespace()?.fd.as_fd(),settings.listener_port)?;
+        } else {require(self.application_listener.is_none(),"unexpected application listener")?;}
         self.admission()?;
         require(self.stop_event()? == Some((libc::CLD_TRAPPED,
             libc::SIGTRAP | (PTRACE_EVENT_STOP << 8))), "native child closing stop changed")?;
@@ -424,6 +439,23 @@ impl BlockedChild {
         self.containment.cleanup_borrow()?.check()?;
         Ok(GuardianBorrow { child: self })
     }
+    pub(super) fn application_context(&self)->Result<(&super::application_proxy::Settings,
+        &super::super::egress::ExecutionParents,&std::sync::Arc<super::super::OriginalClock>),String> {
+        self.check()?;
+        let owner=self.containment.owner();
+        let settings=owner.filesystem().application().ok_or("child lacks explicit application profile")?;
+        require(owner.constraints().application_proxy_sha256.as_deref()==Some(settings.sha256()?.as_str()),
+            "child application permission differs")?;
+        Ok((settings,owner.parents(),owner.clock_owner()))
+    }
+    pub(super) fn application_listener(&self)->Result<std::net::TcpListener,String> {
+        self.check()?;
+        require(!self.application_attempted.replace(true),"child application listener attempt consumed")?;
+        let (settings,_,_)=self.application_context()?;
+        self.application_listener.as_ref().ok_or("child actual listener unavailable")?
+            .duplicate(self.network_namespace()?.fd.as_fd(),settings.listener_port)
+    }
+    pub(super) fn application_requested(&self)->bool { self.containment.owner().filesystem().application().is_some() }
 
     fn network_namespace(&self) -> Result<&Namespace, String> {
         self.namespaces.iter().find(|value| value.kind == libc::CLONE_NEWNET)
@@ -530,13 +562,14 @@ impl BlockedChild {
         // All duplicate backend/socket pins must have dropped before this
         // exclusive method is reachable. Close sockets before namespace FDs.
         drop(self.network.take());
+        drop(self.application_listener.take());
         self.namespaces.clear();
         self.containment.check_retirement()?;
         Ok(result)
     }
 
     pub(super) fn retire_containment(&self) -> Result<super::containment::CgroupRemoval, String> {
-        require(self.network.is_none() && self.namespaces.is_empty() && self.leader.reaped.get(),
+        require(self.network.is_none() && self.application_listener.is_none() && self.namespaces.is_empty() && self.leader.reaped.get(),
             "native child retirement still holds network namespace pins")?;
         self.containment.retire()
     }

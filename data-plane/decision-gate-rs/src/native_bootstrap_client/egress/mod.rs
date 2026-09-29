@@ -25,7 +25,7 @@ mod readback;
 mod reservation;
 mod wire;
 mod workload;
-pub(super) use execution_parents::{bind_for_start, prepare_for_start, ExecutionParents, ExecutionPending};
+pub(super) use execution_parents::{bind_for_start, prepare_for_start, prepare_for_application, ExecutionParents, ExecutionPending};
 pub(super) use creation_reservation::ExecutionCreationPermit;
 pub(super) use native_execution::{NetworkReady, PreparedNetwork};
 pub(super) use attachment_backend::{HostRetirement, HostVethAbsence};

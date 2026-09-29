@@ -169,13 +169,15 @@ pub(in super::super) struct Execution<'child, 'ready, 'network, 'network_child> 
 
 impl<'child, 'ready, 'network, 'network_child> Execution<'child, 'ready, 'network, 'network_child> {
     pub(in super::super) fn begin(child: &'child BlockedChild, guardian: &'child Guardian,
-        network: &'ready mut NetworkReady<'network, 'network_child>) -> Result<Self, String>
+        network: &'ready mut NetworkReady<'network, 'network_child>, mut relay: Option<&mut super::super::application_proxy::Relay<'_>>) -> Result<Self, String>
     {
         let result = (|| {
             child.check()?;
             guardian.require_child(child)?;
             network.require_child(child)?;
             network.check()?;
+            require(child.application_requested()==relay.is_some(),"actual application relay is required before release")?;
+            if let Some(relay)=relay.as_mut() { relay.require_release(child)?; }
             guardian.require_child(child)?;
             child.check()?;
             // Burn before the sole send and first continue. Every uncertainty
@@ -252,11 +254,16 @@ impl<'child, 'ready, 'network, 'network_child> Execution<'child, 'ready, 'networ
         Ok(None)
     }
 
-    pub(in super::super) fn wait(mut self) -> Result<ExitObservation, String> {
+    pub(in super::super) fn wait(mut self, mut relay: Option<&mut super::super::application_proxy::Relay<'_>>) -> Result<ExitObservation, String> {
         loop {
             match self.poll_once() {
-                Ok(Some(observed)) => return Ok(observed),
-                Ok(None) => {},
+                Ok(Some(observed)) => {
+                    if let Some(relay)=relay.as_ref() {relay.finish()?;}
+                    return Ok(observed);
+                },
+                Ok(None) => { if let Some(relay)=relay.as_mut() {
+                    if let Err(error)=relay.step() {self.child.abort_execution(self.guardian);return Err(error);}
+                } },
                 Err(error) => { self.child.abort_execution(self.guardian); return Err(error); },
             }
         }

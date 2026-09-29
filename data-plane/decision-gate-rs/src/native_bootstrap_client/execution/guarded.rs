@@ -68,10 +68,16 @@ impl GuardedChild {
         PreparedNetwork::open(&self.child)
     }
 
-    pub(super) fn run_and_finish(&self, mut network: NetworkReady<'_, '_>)
+    pub(super) fn run_and_finish(&self, mut network: NetworkReady<'_, '_>, application:Option<super::application_proxy::Inputs>)
         -> (Result<ExitObservation, String>, Result<GuardedCleanup, String>)
     {
-        let run = (|| Execution::begin(&self.child, &self.guardian, &mut network)?.wait())();
+        let run = (|| {
+            if self.child.application_requested()!=application.is_some() {
+                return Err("executable application inputs differ from actual signed child profile".to_owned());
+            }
+            let mut relay=application.map(|inputs|super::application_proxy::Relay::open(&self.child,inputs)).transpose()?;
+            Execution::begin(&self.child, &self.guardian, &mut network,relay.as_mut())?.wait(relay.as_mut())
+        })();
         // NetworkReady and its bridge/journal/backend owners remain held until
         // BOTH cleanup paths and bounded output completion have finished.
         let cleanup = self.finish_borrowed();

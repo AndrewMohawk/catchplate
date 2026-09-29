@@ -1,0 +1,52 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "$id":"https://serverware.invalid/schemas/native-egress-installation-authorization.v5.schema.json",
+  "title":"Explicit executable application loopback and adapter egress permission v5",
+  "description":"Closed canonical ASCII/no-LF <=32768 bytes. Distinct v5 payload-schema plus NUL signing domain. New cold application profile only; old diagnostic/execution clients refuse it before effects. Existing irreversible creation claim precedes child-only loopback UP/listener creation. Existing kernel claim precedes fixed exact loopback TCP rules; no host firewall, NAT, default route or generic networking authority.",
+  "type":"object","additionalProperties":false,"required":["schema","payload","signature"],
+  "properties":{
+    "schema":{"const":"serverware.signedNativeEgressInstallationAuthorization/v5"},
+    "signature":{"$ref":"native-egress-installation-authorization.v4.schema.json#/properties/signature"},
+    "payload":{"$ref":"#/$defs/payload"}
+  },
+  "$defs":{"payload":{
+    "type":"object","additionalProperties":false,
+    "required":["schema","sourceRevision","purpose","trustMode","authorizationId","setupSha256","delegationSha256","targetRequestSha256","policyRequirementsSha256","releaseRecordSha256","policyHash","configurationSha256","runtimeCaCertificateSha256","runtimeCaSpkiSha256","ingressLeafCertificateSha256","clientTrustBundleSha256","clientChallengeSha256","targetPrincipalId","targetNonce","targetSpkiSha256","proxy","networkOwner","machineIdSha256","workload","ruleset","capability","journal","creationJournal","childNetworkPolicy","issuedAtEpochNs","expiresAtEpochNs","applicationProxy"],
+    "properties":{
+      "schema":{"const":"serverware.nativeEgressInstallationAuthorization/v5"},
+      "sourceRevision":{"$ref":"native-egress-installation-authorization.v4.schema.json#/$defs/payload/properties/sourceRevision"},
+      "purpose":{"const":"native-egress-installation"},"trustMode":{"const":"trusted-host-local"},
+      "authorizationId":{"$ref":"native-egress-installation-authorization.v4.schema.json#/$defs/identifier"},
+      "setupSha256":{"$ref":"native-egress-installation-authorization.v4.schema.json#/$defs/digest"},
+      "delegationSha256":{"$ref":"native-egress-installation-authorization.v4.schema.json#/$defs/digest"},
+      "targetRequestSha256":{"$ref":"native-egress-installation-authorization.v4.schema.json#/$defs/digest"},
+      "policyRequirementsSha256":{"$ref":"native-egress-installation-authorization.v4.schema.json#/$defs/digest"},
+      "releaseRecordSha256":{"$ref":"native-egress-installation-authorization.v4.schema.json#/$defs/digest"},
+      "policyHash":{"$ref":"native-egress-installation-authorization.v4.schema.json#/$defs/digest"},
+      "configurationSha256":{"$ref":"native-egress-installation-authorization.v4.schema.json#/$defs/digest"},
+      "runtimeCaCertificateSha256":{"$ref":"native-egress-installation-authorization.v4.schema.json#/$defs/digest"},
+      "runtimeCaSpkiSha256":{"$ref":"native-egress-installation-authorization.v4.schema.json#/$defs/digest"},
+      "ingressLeafCertificateSha256":{"$ref":"native-egress-installation-authorization.v4.schema.json#/$defs/digest"},
+      "clientTrustBundleSha256":{"$ref":"native-egress-installation-authorization.v4.schema.json#/$defs/digest"},
+      "clientChallengeSha256":{"$ref":"native-egress-installation-authorization.v4.schema.json#/$defs/digest"},
+      "targetPrincipalId":{"$ref":"native-egress-installation-authorization.v4.schema.json#/$defs/payload/properties/targetPrincipalId"},
+      "targetNonce":{"$ref":"native-egress-installation-authorization.v4.schema.json#/$defs/payload/properties/targetNonce"},
+      "targetSpkiSha256":{"$ref":"native-egress-installation-authorization.v4.schema.json#/$defs/digest"},
+      "proxy":{"$ref":"native-egress-installation-authorization.v4.schema.json#/$defs/payload/properties/proxy"},
+      "networkOwner":{"$ref":"native-egress-installation-authorization.v4.schema.json#/$defs/payload/properties/networkOwner"},
+      "machineIdSha256":{"$ref":"native-egress-installation-authorization.v4.schema.json#/$defs/digest"},
+      "workload":{"$ref":"native-egress-installation-authorization.v4.schema.json#/$defs/workload"},
+      "ruleset":{"$ref":"native-egress-installation-authorization.v4.schema.json#/$defs/payload/properties/ruleset"},
+      "capability":{"$ref":"native-egress-installation-authorization.v4.schema.json#/$defs/payload/properties/capability"},
+      "journal":{"$ref":"native-egress-installation-authorization.v4.schema.json#/$defs/journal"},
+      "creationJournal":{"$ref":"native-egress-installation-authorization.v4.schema.json#/$defs/journal"},
+      "childNetworkPolicy":{"const":"manual-dual-stack-loopback-proxy-v1"},
+      "issuedAtEpochNs":{"$ref":"native-egress-installation-authorization.v4.schema.json#/$defs/positive"},
+      "expiresAtEpochNs":{"$ref":"native-egress-installation-authorization.v4.schema.json#/$defs/positive"},
+      "applicationProxy":{"type":"object","additionalProperties":false,"required":["settingsSha256","listenerPort"],"properties":{
+        "settingsSha256":{"$ref":"native-egress-installation-authorization.v4.schema.json#/$defs/digest"},
+        "listenerPort":{"type":"integer","minimum":1024,"maximum":65535}
+      },"description":"Explicit permission for child-created 127.0.0.1 listener and loopback UP; two fixed output accepts require IPv4 TCP 127.0.0.1->127.0.0.1 with source or destination equal this port. Exact signed manifest/settings/start and actual same-child owner are mandatory. No blanket loopback accept."}
+    }
+  }}
+}

@@ -234,28 +234,14 @@ impl NativeIngressAdmission {
         self.finish(result)
     }
 
-    pub(super) fn protect_target(&self, target: &super::ResolvedOutputTarget)
-        -> Result<(), String> {
-        let result = (|| {
-            self.recheck()?;
-            {
-                let originals = self.originals.try_borrow()
-                    .map_err(|_| "native ingress original custody is already borrowed")?;
-                for original in originals.iter() {
-                    self.check()?;
-                    let (_, chain, metadata) = super::open_trusted_input_path(
-                        &original.path, "native ingress original", false, original.maximum)?;
-                    super::proof_client_native_session_v1::reject_alias(
-                        target, &original.path, &chain, &metadata)?;
-                    self.check()?;
-                }
-            }
-            // Rejoin every named original to its actual held descriptor after
-            // the existing anchored name/inode output-alias checks.
-            self.recheck()
-        })();
-        self.finish(result)
+    /// Data-only paths for the proof client's own output-alias checks. No
+    /// serialized admission or mutable original descriptor is exported.
+    pub(super) fn protected_inputs(&self) -> Result<Vec<(PathBuf, usize)>, String> {
+        self.recheck()?;
+        Ok(self.originals.try_borrow().map_err(|_| "native ingress originals already borrowed")?
+            .iter().map(|original| (original.path.clone(), original.maximum)).collect())
     }
+    pub(super) fn refuse(&self) { self.poisoned.set(true); }
 
     pub(super) fn attest(&self, transport: &mut NativeProxyTransportV1, authority: &str,
         identity_headers: &[(String, String)])

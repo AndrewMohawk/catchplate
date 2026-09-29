@@ -46,6 +46,23 @@ use proof_client_native_io_v1::CaptureIo;
 use proof_client_native_session_v1::NativeCaptureSessionV1;
 use proof_client_native_verifier_v1::NativeVerifierConfigV1;
 
+impl proof_client_native_ingress_v1::NativeIngressAdmission {
+    fn protect_target(&self, target: &ResolvedOutputTarget) -> Result<(), String> {
+        let result = (|| {
+            for (path, maximum) in self.protected_inputs()? {
+                self.recheck()?;
+                let (_, chain, metadata) = open_trusted_input_path(
+                    &path, "native ingress original", false, maximum)?;
+                proof_client_native_session_v1::reject_alias(target, &path, &chain, &metadata)?;
+                self.recheck()?;
+            }
+            self.recheck()
+        })();
+        if result.is_err() { self.refuse(); }
+        result
+    }
+}
+
 const EXPORTER_LABEL: &[u8] = b"EXPORTER-Serverware-Proxy-Response-v1";
 const STREAM_EXPORTER_LABEL: &[u8] = b"EXPORTER-Serverware-Proxy-Stream-v1";
 const OBSERVATION_EXPORTER_LABEL: &[u8] = b"EXPORTER-Serverware-Response-Observation-v1";

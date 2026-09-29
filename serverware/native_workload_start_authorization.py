@@ -28,6 +28,9 @@ RETIREMENT_PROFILE = "native-workload-start-retirement-v2"
 OUTCOME_PROFILE = "native-workload-start-outcome-v3"
 OUTCOME_SCHEMA = "serverware.signedNativeWorkloadStartAuthorization/v3"
 OUTCOME_PAYLOAD_SCHEMA = "serverware.nativeWorkloadStartAuthorization/v3"
+APPLICATION_PROFILE = "native-workload-start-application-proxy-v4"
+APPLICATION_SCHEMA = "serverware.signedNativeWorkloadStartAuthorization/v4"
+APPLICATION_PAYLOAD_SCHEMA = "serverware.nativeWorkloadStartAuthorization/v4"
 MAX_BYTES = 32 * 1024
 MAX_KEY_BYTES = 16 * 1024
 MAX_U64 = (1 << 64) - 1
@@ -84,6 +87,8 @@ def _profile(requested_profile):
         return RETIREMENT_SCHEMA, RETIREMENT_PAYLOAD_SCHEMA, True, False
     if requested_profile == OUTCOME_PROFILE:
         return OUTCOME_SCHEMA, OUTCOME_PAYLOAD_SCHEMA, True, True
+    if requested_profile == APPLICATION_PROFILE:
+        return APPLICATION_SCHEMA, APPLICATION_PAYLOAD_SCHEMA, True, True
     _fail()
 
 
@@ -159,7 +164,10 @@ def _containment(value, journal, retirement, outcome):
 
 def _payload(value, budget, requested_profile):
     _, payload_schema, retirement, outcome = _profile(requested_profile)
-    shared._object(value, _FIELDS)
+    application = requested_profile == APPLICATION_PROFILE
+    shared._object(value, _FIELDS | {"applicationProxySha256"} if application else _FIELDS)
+    if application:
+        assignment._digest(value["applicationProxySha256"])
     if (value["schema"] != payload_schema
             or value["sourceRevision"] != shared.authority.SOURCE_REVISION
             or value["purpose"] != "native-workload-start"

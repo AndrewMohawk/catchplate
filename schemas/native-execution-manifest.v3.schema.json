@@ -1,0 +1,37 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "$id":"https://serverware.invalid/schemas/native-execution-manifest.v3.schema.json",
+  "title":"Immutable ELF application with fixed native CONNECT adapter",
+  "description":"Closed canonical ASCII JSON, no LF, <=32768 bytes. Ten fields; applicationProxy canonical original hash is independently signed by start/v4 and egress/v5. Genuine owner joins required: no manifest-as-permission. Same static/dynamic ELF, immutable whole-image closure and actual in-image CA admission remain. Explicit SSL_CERT_FILE/HTTPS_PROXY are supported application conventions, not proof arbitrary code honors them.",
+  "type":"object","additionalProperties":false,
+  "required":["apiVersion","profile","rootfs","entry","argv","environment","cwd","loaderPolicy","applicationTrust","applicationProxy"],
+  "properties":{
+    "apiVersion":{"const":"serverware.nativeExecutionManifest/v3"},
+    "profile":{"const":"native-elf-erofs-v1"},
+    "rootfs":{"$ref":"native-execution-manifest.v2.schema.json#/properties/rootfs"},
+    "entry":{"$ref":"native-execution-manifest.v2.schema.json#/properties/entry"},
+    "argv":{"$ref":"native-execution-manifest.v2.schema.json#/properties/argv"},
+    "environment":{"$ref":"native-execution-manifest.v2.schema.json#/properties/environment","required":["HTTPS_PROXY"],"description":"HTTPS_PROXY must equal http://127.0.0.1:<listenerPort>. Other case-insensitive HTTP_PROXY/HTTPS_PROXY/ALL_PROXY/NO_PROXY keys, SSL_CERT_DIR/CURL_CA_BUNDLE/REQUESTS_CA_BUNDLE/NODE_EXTRA_CA_CERTS/PYTHONHTTPSVERIFY and alternate-case SSL_CERT_FILE are refused. SSL_CERT_FILE equals admitted applicationTrust.path. No inherited environment."},
+    "cwd":{"$ref":"native-execution-manifest.v2.schema.json#/properties/cwd"},
+    "loaderPolicy":{"const":"in-image-system-loader-v1"},
+    "applicationTrust":{"$ref":"native-execution-manifest.v2.schema.json#/properties/applicationTrust"},
+    "applicationProxy":{"$ref":"#/$defs/applicationProxy"}
+  },
+  "$defs":{
+    "applicationProxy":{
+      "type":"object","additionalProperties":false,
+      "required":["profile","listenerPort","destination","maximumTunnelBytes","proxyEndpoint","ingressConfigurationSha256","targetCertificateSha256","targetPrivateKeySha256","targetPrincipalId"],
+      "properties":{
+        "profile":{"const":"native-target-mtls-one-connect-v1"},
+        "listenerPort":{"type":"integer","minimum":1024,"maximum":65535},
+        "destination":{"type":"string","minLength":3,"maxLength":259,"description":"Canonical lowercase DNS name 1..253 bytes, each label 1..63 ASCII letters/digits/hyphen, no leading/trailing hyphen; colon and canonical nonzero u16 port. No URL, IP literal, credentials, path or wildcard."},
+        "maximumTunnelBytes":{"type":"integer","minimum":4096,"maximum":16777216,"description":"Independent aggregate cap for each opaque inner-TLS direction, not a request count or a fresh time allowance."},
+        "proxyEndpoint":{"type":"string","minLength":3,"maxLength":64,"description":"Canonical literal unicast nonloopback SocketAddr, exact actual egress endpoint. No DNS or alternate endpoint."},
+        "ingressConfigurationSha256":{"$ref":"native-execution-manifest.v1.schema.json#/$defs/digest"},
+        "targetCertificateSha256":{"$ref":"native-execution-manifest.v1.schema.json#/$defs/digest"},
+        "targetPrivateKeySha256":{"$ref":"native-execution-manifest.v1.schema.json#/$defs/digest"},
+        "targetPrincipalId":{"type":"string","minLength":1,"maxLength":1024,"description":"At most 1024 UTF8 bytes, trimmed and without controls; exact actual target principal, independently pinned ingress-v3 expected principal and authenticated same-connection selected mTLS principal."}
+      }
+    }
+  }
+}

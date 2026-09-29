@@ -124,6 +124,10 @@ fn check_lifetime(owner_pid: u32, deadline: Instant) -> io::Result<()> {
 
 pub(super) fn connect(endpoint: SocketAddr, name: ServerName<'static>,
     config: Arc<ClientConfig>, deadline: Instant) -> Result<NativeProxyTransportV1, String> {
+    connect_bounded(endpoint,name,config,deadline,None)
+}
+pub(super) fn connect_bounded(endpoint:SocketAddr,name:ServerName<'static>,config:Arc<ClientConfig>,
+    deadline:Instant,boot_deadline:Option<u64>)->Result<NativeProxyTransportV1,String> {
     let owner_pid = std::process::id();
     check_lifetime(owner_pid, deadline).map_err(|error| error.to_string())?;
     // The retained native session configuration disables both early data and
@@ -141,7 +145,10 @@ pub(super) fn connect(endpoint: SocketAddr, name: ServerName<'static>,
         .map_err(|_| "native proxy TLS initialization failed".to_owned())?;
     client.set_buffer_limit(Some(MAX_TLS_OUTPUT_BYTES));
     check_lifetime(owner_pid, deadline).map_err(|error| error.to_string())?;
-    let socket = deadline_tcp::connect(endpoint, deadline, MAX_WIRE_BYTES, MAX_WIRE_BYTES)?;
+    let socket = match boot_deadline {
+        Some(bound) => deadline_tcp::connect_bounded(endpoint, deadline, MAX_WIRE_BYTES, MAX_WIRE_BYTES,Some(bound))?,
+        None => deadline_tcp::connect(endpoint, deadline, MAX_WIRE_BYTES, MAX_WIRE_BYTES)?,
+    };
     let mut transport = NativeProxyTransportV1 {
         tls: StreamOwned::new(client, socket), owner_pid, deadline,
         client_identity: captured, client_certificate_pem: None,
@@ -172,6 +179,57 @@ pub(super) fn connect(endpoint: SocketAddr, name: ServerName<'static>,
 }
 
 impl NativeProxyTransportV1 {
+    #[allow(dead_code)] // Used by the separately path-loaded executable adapter.
+    pub(super) fn begin_relay(&mut self) -> io::Result<()> {
+        self.check()?;
+        if !self.principal_required.get() {
+            return Err(io::Error::new(io::ErrorKind::PermissionDenied, "relay requires actual principal proof"));
+        }
+        self.require_no_buffered_plaintext()?;
+        self.tls.sock.set_nonblocking()
+    }
+
+    /// One bounded wire read and write per turn. Never StreamOwned::read's
+    /// blocking drive loop: the caller must service its independent guardian.
+    #[allow(dead_code)] // Proof capture itself retains its existing blocking IO.
+    pub(super) fn relay_step(&mut self, outgoing: &[u8], incoming: &mut [u8])
+        -> io::Result<(usize, usize, bool)> {
+        self.check()?;
+        let accepted = if outgoing.is_empty() { 0 } else {
+            match self.tls.conn.writer().write(&outgoing[..outgoing.len().min(MAX_PLAINTEXT_IO_BYTES)]) {
+                Ok(count) => count,
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => 0,
+                Err(error) => return Err(error),
+            }
+        };
+        if self.tls.conn.wants_write() {
+            match self.tls.conn.write_tls(&mut self.tls.sock) {
+                Ok(_) => {}, Err(error) if error.kind() == io::ErrorKind::WouldBlock => {},
+                Err(error) => return Err(error),
+            }
+        }
+        let mut eof = false;
+        if self.tls.conn.wants_read() {
+            match self.tls.conn.read_tls(&mut self.tls.sock) {
+                Ok(0) => return Err(io::Error::new(io::ErrorKind::UnexpectedEof,
+                    "native relay TCP ended without a TLS close boundary")), Ok(_) => {
+                    self.tls.conn.process_new_packets().map_err(|_| io::Error::new(
+                        io::ErrorKind::InvalidData, "native relay TLS record refused"))?;
+                },
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {},
+                Err(error) => return Err(error),
+            }
+        }
+        let received = if incoming.is_empty() { 0 } else {
+            match self.tls.conn.reader().read(incoming) {
+                Ok(0) => { eof = true; 0 }, Ok(count) => count,
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => 0,
+                Err(error) => return Err(error),
+            }
+        };
+        self.check()?;
+        Ok((accepted, received, eof))
+    }
     pub(super) fn client(&self) -> &ClientConnection { &self.tls.conn }
 
     pub(super) fn retain_principal(&mut self, mut proof: PrincipalSession) -> Result<(), String> {

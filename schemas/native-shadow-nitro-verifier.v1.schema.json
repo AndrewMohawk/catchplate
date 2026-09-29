@@ -1,0 +1,120 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-shadow-nitro-verifier.v1.schema.json",
+  "$ref": "#/$defs/configuration",
+  "$defs": {
+    "sha256": { "$ref": "native-shadow-role-keys.v1.schema.json#/$defs/sha256" },
+    "positive": { "$ref": "native-shadow-role-keys.v1.schema.json#/$defs/positive" },
+    "bytes32": { "$ref": "native-shadow-role-keys.v1.schema.json#/$defs/bytes32" },
+    "signature": { "$ref": "native-shadow-role-keys.v1.schema.json#/$defs/signature" },
+    "uid": { "type": "integer", "minimum": 1, "maximum": 4294967294, "not": { "enum": [64988, 64989, 64990, 65534] } },
+    "ns": { "$ref": "policy-custody-guest-delivery.v1.schema.json#/$defs/ns" },
+    "authorityKey": {
+      "type": "object", "additionalProperties": false,
+      "required": ["role", "keyId", "keySpkiSha256", "keyMaterialSha256", "publicKeyBase64url"],
+      "properties": {
+        "role": { "anyOf": [{ "$ref": "native-shadow-role-keys.v1.schema.json#/$defs/localRole" }, { "enum": ["custody-attestation-verifier", "custody-supervisor-capability"] }] },
+        "keyId": { "$ref": "#/$defs/sha256" }, "keySpkiSha256": { "$ref": "#/$defs/sha256" },
+        "keyMaterialSha256": { "$ref": "#/$defs/sha256" }, "publicKeyBase64url": { "$ref": "#/$defs/bytes32" }
+      }
+    },
+    "operation": {
+      "type": "object", "additionalProperties": false,
+      "description": "Original independently provisioned external verifier host window, not the guest's separate BOOTTIME domain. Exact same boot/time namespace and <=30-second original interval required.",
+      "required": ["bootIdBase64url", "timeNamespaceDevice", "timeNamespaceInode", "issuedAtBoottimeNs", "deadlineBoottimeNs"],
+      "properties": {
+        "bootIdBase64url": { "type": "string", "pattern": "^[A-Za-z0-9_-]{22}$" },
+        "timeNamespaceDevice": { "$ref": "#/$defs/positive" }, "timeNamespaceInode": { "$ref": "#/$defs/positive" },
+        "issuedAtBoottimeNs": { "$ref": "#/$defs/ns" }, "deadlineBoottimeNs": { "$ref": "#/$defs/ns" }
+      }
+    },
+    "checkpoint": {
+      "type": "object", "additionalProperties": false,
+      "required": ["checkpointId", "asOfUnixNanos", "revocationGeneration", "revocationRootSha256"],
+      "properties": {
+        "checkpointId": { "$ref": "#/$defs/sha256" }, "asOfUnixNanos": { "$ref": "#/$defs/positive" },
+        "revocationGeneration": { "$ref": "#/$defs/positive" }, "revocationRootSha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "certificateProfile": {
+      "type": "object", "additionalProperties": false, "required": ["profileId", "allowedLeafExtendedKeyUsageOids"],
+      "properties": {
+        "profileId": { "const": "aws-nitro-attestation-pki-native-v1" },
+        "allowedLeafExtendedKeyUsageOids": { "type": "array", "maxItems": 32, "uniqueItems": true, "items": { "type": "string", "maxLength": 128, "pattern": "^[0-9]+(?:\\.[0-9]+)+$" } }
+      }
+    },
+    "nitro": {
+      "type": "object", "additionalProperties": false,
+      "required": ["expectedPcrs", "expectedEif", "expectedModuleId", "awsNitroRootCertificatesPem", "nitroCertificateProfile", "maxAgeSeconds", "futureSkewSeconds"],
+      "properties": {
+        "expectedPcrs": {
+          "type": "object", "minProperties": 3, "maxProperties": 32, "required": ["PCR0", "PCR1", "PCR2"],
+          "propertyNames": { "pattern": "^PCR(?:[0-9]|[12][0-9]|3[01])$" },
+          "additionalProperties": { "type": "string", "pattern": "^sha384:[0-9a-f]{96}$" }
+        },
+        "expectedEif": { "type": "string", "pattern": "^sha384:[0-9a-f]{96}$" },
+        "expectedModuleId": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "awsNitroRootCertificatesPem": { "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 65536 } },
+        "nitroCertificateProfile": { "$ref": "#/$defs/certificateProfile" },
+        "maxAgeSeconds": { "type": "integer", "minimum": 1, "maximum": 300 },
+        "futureSkewSeconds": { "type": "integer", "minimum": 0, "maximum": 30 }
+      }
+    },
+    "revocation": {
+      "type": "object", "additionalProperties": false,
+      "description": "Independently current application-level denied-certificate inventory, NOT an AWS CRL or proof that vendor revocation information exists.",
+      "required": ["apiVersion", "profile", "generation", "issuedAtUnixNanos", "expiresAtUnixNanos", "deniedCertificateSha256s"],
+      "properties": {
+        "apiVersion": { "const": "serverware.nativeShadowNitroApplicationRevocation/v1" },
+        "profile": { "const": "application-denial-inventory-no-vendor-crl-v1" }, "generation": { "$ref": "#/$defs/positive" },
+        "issuedAtUnixNanos": { "$ref": "#/$defs/positive" }, "expiresAtUnixNanos": { "$ref": "#/$defs/positive" },
+        "deniedCertificateSha256s": { "type": "array", "maxItems": 1024, "uniqueItems": true, "items": { "$ref": "#/$defs/sha256" } }
+      }
+    },
+    "expectedAttestation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["platform", "expectedMeasurementSha256", "endorsementRootSha256", "collateralPolicySha256", "revocationSourceSha256"],
+      "properties": {
+        "platform": { "const": "aws-nitro-enclave" }, "expectedMeasurementSha256": { "$ref": "#/$defs/sha256" },
+        "endorsementRootSha256": { "$ref": "#/$defs/sha256" }, "collateralPolicySha256": { "$ref": "#/$defs/sha256" },
+        "revocationSourceSha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "configuration": {
+      "type": "object", "additionalProperties": false,
+      "description": "Fixed root:root0400 named original, supplied on FD3. No request may select this configuration. It contains only public inputs, never a verifier seed.",
+      "required": ["apiVersion", "uid", "gid", "operation", "authorization", "expectedStatement", "authorityKeys", "trustCheckpoint", "nitro", "collateralRevocation", "expectedAttestation", "maximumResultAgeNanos"],
+      "properties": {
+        "apiVersion": { "const": "serverware.nativeShadowNitroVerifierConfiguration/v1" }, "uid": { "$ref": "#/$defs/uid" }, "gid": { "$ref": "#/$defs/uid" },
+        "operation": { "$ref": "#/$defs/operation" }, "authorization": { "$ref": "native-shadow-role-keys.v1.schema.json#/$defs/authorization" },
+        "expectedStatement": { "$ref": "native-shadow-role-keys.v1.schema.json#/$defs/statement" },
+        "authorityKeys": { "type": "array", "minItems": 18, "maxItems": 18, "items": { "$ref": "#/$defs/authorityKey" } },
+        "trustCheckpoint": { "$ref": "#/$defs/checkpoint" }, "nitro": { "$ref": "#/$defs/nitro" },
+        "collateralRevocation": { "$ref": "#/$defs/revocation" }, "expectedAttestation": { "$ref": "#/$defs/expectedAttestation" },
+        "maximumResultAgeNanos": { "type": "integer", "minimum": 1, "maximum": 30000000000 }
+      }
+    },
+    "request": { "$ref": "native-shadow-role-keys.v1.schema.json#/$defs/evidence" },
+    "result": {
+      "type": "object", "additionalProperties": false,
+      "required": ["platform", "quoteSha256", "endorsementEvidenceSha256", "endorsementRootSha256", "collateralPolicySha256", "revocationSourceSha256", "collateralRevocationGeneration", "collateralRevocationRootSha256", "measurementSha256", "productionConfigurationBindingSha256", "workerExecutableSha256", "executionClosureManifestSha256", "structurallyVerifiedSeccompPolicySha256", "quoteBoundCustodyKeySetRootSha256", "verifiedAtUnixNanos", "expiresAtUnixNanos", "trustCheckpointId", "trustRevocationGeneration", "trustRevocationRootSha256", "signingKeyId", "signingKeySpkiSha256", "signature"],
+      "properties": {
+        "platform": { "const": "aws-nitro-enclave" }, "quoteSha256": { "$ref": "#/$defs/sha256" },
+        "endorsementEvidenceSha256": { "$ref": "#/$defs/sha256" }, "endorsementRootSha256": { "$ref": "#/$defs/sha256" },
+        "collateralPolicySha256": { "$ref": "#/$defs/sha256" }, "revocationSourceSha256": { "$ref": "#/$defs/sha256" },
+        "collateralRevocationGeneration": { "$ref": "#/$defs/positive" }, "collateralRevocationRootSha256": { "$ref": "#/$defs/sha256" },
+        "measurementSha256": { "$ref": "#/$defs/sha256" }, "productionConfigurationBindingSha256": { "$ref": "#/$defs/sha256" },
+        "workerExecutableSha256": { "$ref": "#/$defs/sha256" }, "executionClosureManifestSha256": { "$ref": "#/$defs/sha256" },
+        "structurallyVerifiedSeccompPolicySha256": { "$ref": "#/$defs/sha256" }, "quoteBoundCustodyKeySetRootSha256": { "$ref": "#/$defs/sha256" },
+        "verifiedAtUnixNanos": { "$ref": "#/$defs/positive" }, "expiresAtUnixNanos": { "$ref": "#/$defs/positive" },
+        "trustCheckpointId": { "$ref": "#/$defs/sha256" }, "trustRevocationGeneration": { "$ref": "#/$defs/positive" },
+        "trustRevocationRootSha256": { "$ref": "#/$defs/sha256" }, "signingKeyId": { "$ref": "#/$defs/sha256" },
+        "signingKeySpkiSha256": { "$ref": "#/$defs/sha256" }, "signature": { "$ref": "#/$defs/signature" }
+      }
+    },
+    "response": {
+      "type": "object", "additionalProperties": false, "required": ["apiVersion", "result"],
+      "properties": { "apiVersion": { "const": "serverware.nativeShadowNitroVerifierResult/v1" }, "result": { "$ref": "#/$defs/result" } }
+    }
+  }
+}

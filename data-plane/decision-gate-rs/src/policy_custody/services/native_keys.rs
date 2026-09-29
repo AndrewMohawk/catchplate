@@ -6,6 +6,8 @@ use super::{GuestClosureAssociation,GuestClosureBinding,PreparedGuestServiceDeli
 use ed25519_dalek::{Signer,SigningKey};
 use serverware_decision_gate::enclave_runtime_identity_v1::{PreparedShadowNsmV1,ShadowNsmV1};
 use zeroize::Zeroizing;
+#[path="native_verifier_result.rs"]
+mod verifier_result;
 
 const PROFILE:&str="preassigned-final-role-originals-v1";
 const ASSIGNMENT_DOMAIN:&str="serverware.nativeShadowRoleKeyAssignment.signature/v1";

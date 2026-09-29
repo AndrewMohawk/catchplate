@@ -139,21 +139,19 @@ reported as timely cancellation.
    inputs are a finite ownership seam, not an encrypted delivery producer. Never
    bake seeds into EIF/configuration, send raw keys through a parent RPC, or alias
    response-v2 key provisioning or the gate's generic KEK handling.
-2. **Independent verifier adapter:** the existing genuine cryptographic primitive
-   is `scripts.verify_nitro_tee._verify_nitro_document_common`. With `claims=None`,
-   exact `expected_user_data_bytes`, original challenge, independently admitted
-   PCR/EIF/module/PKI/time expectations and `native_profile=True`, it returns the
-   verified payload, issued-at seconds, verified PCR map, leaf X.509 certificate
-   and trusted root certificate. A dedicated shadow adapter must verify this new
-   authorization, original framing, every actual local possession signature,
-   full18/local roots and native closure purpose; then invoke that primitive and
-   check `public_key`. It must produce the existing independently signed
-   `CustodyTeeAttestationVerifierResultWire` under the externally held
-   `CustodyAttestationVerifier` key with genuine collateral/measurement bindings.
-   The current result constructor/consumer does **not** implement that adapter.
-   Holder role-4 evidence, legacy closure digests and old result purposes must not
-   be relabelled. In particular, a quoted local root alone proves neither PCR
-   acceptance nor full-key possession nor the exact process executable.
+2. **Independent verifier deployment:** the separate
+   [native Nitro verifier adapter](native-shadow-nitro-verifier.md) now provides
+   source for actual original COSE/possession verification, independently pinned
+   PCR/EIF/PKI and application-denial checks, computed collateral/measurement
+   bindings and the existing externally signed result. Its closed result decoder
+   calls this actual retained key owner's admission method. It still requires an
+   independently provisioned verifier key, current protected policy originals,
+   a fixed isolated launcher, original-deadline watchdog and real public-result
+   transport. Source presence is not a deployed verifier service. Holder role-4
+   evidence and legacy closure digests cannot substitute; a quoted local root
+   alone proves neither PCR acceptance nor full-key possession nor the exact
+   process executable. The explicit application-denial profile is not AWS CRL
+   proof.
 3. **Real endpoint producers:** the ten `ProductionParentSignerEndpointConfigV4`
    receipt endpoints and four production proof endpoint families (trusted time,
    persistence, retrieval, generation-install envelope) still need genuine

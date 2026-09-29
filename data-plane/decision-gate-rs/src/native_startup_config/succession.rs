@@ -55,6 +55,7 @@ pub(super) fn configuration(value: Value) -> Result<ConfigurationParts, String> 
     original.measured_capture_retirement.validate()?;
     let (primary_broker, historical_broker) = original.secret_broker.into_parts()?;
     Ok(ConfigurationParts {
+        measured_canary_delivery: None,
         measured_reconnect: None,
         historical_broker: Some(historical_broker),
         measured_setup: None,

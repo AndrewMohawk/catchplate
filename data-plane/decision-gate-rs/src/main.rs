@@ -11,6 +11,7 @@ mod native_gate_bootstrap;
 mod native_audit_owner;
 mod native_audit_transport;
 mod native_canary_transport;
+mod native_canary_delivery;
 mod native_secret_broker;
 mod native_target_dispatch;
 mod native_staging;
@@ -2635,6 +2636,7 @@ struct GateState {
     native_enrollment_authorizer: Option<Arc<native_enrollment_authorizer::NativeEnrollmentAuthorizer>>,
     audit_client: Client,
     measured_audit: Option<Mutex<native_audit_owner::Owner>>,
+    measured_canary_delivery: Option<Mutex<native_canary_delivery::Owner>>,
     credential_lease_client: Client,
     audit_url: Option<String>,
     credential_lease_token: Option<String>,
@@ -51800,6 +51802,7 @@ fn main() -> Result<(), String> {
         measured_issuance: None, measured_setup: None, measured_reconnect: None, measured_succession: None,
         measured_audit: None,
         credential_currentness: None,
+        measured_canary_delivery: None,
         policy_shadow_generation_control,
         policy_path,
         policy_trust_root_source,
@@ -53196,6 +53199,7 @@ mod tests {
             audit_client: client.clone(),
             measured_audit: None,
             credential_lease_client: client,
+            measured_canary_delivery: None,
             audit_url: None,
             credential_lease_token: None,
             audit_token: None,

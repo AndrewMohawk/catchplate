@@ -11,7 +11,7 @@ from serverware import authority_oauth_retirement_succession_catalog as retireme
 from serverware.authority_query_read_work import _ValidationWork
 
 
-SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.312"
+SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.313"
 SCHEMA_VERSION = 9
 CONTRACT_SCHEMA = "serverware.policyAuthorityOperationContract/v3"
 BUSINESS_INTENT_SCHEMA = "serverware.policyAuthorityBusinessIntent/v2"
@@ -299,6 +299,7 @@ _AUDIT_COUNTER_REPLACEMENT_OPERATIONS = frozenset({
 })
 _AUDIT_COUNTER_REPLACEMENT_OPERATIONS = _AUDIT_COUNTER_REPLACEMENT_OPERATIONS | retirement_catalog.OPERATIONS
 _AUDIT_NEW_AGGREGATE_ROOT_OPERATIONS = frozenset({
+    "policy.canary.delivery.prepare", "policy.canary.delivery.claim", "policy.canary.delivery.recover",
     "webauthn.trust.stage", "webauthn.trust.complete", "webauthn.registration.create",
     "webauthn.registration.finalize", "webauthn.credential.revoke", "oidc.session.activate",
     "oidc.session.activation-delivery.consume",
@@ -1586,12 +1587,12 @@ _OPERATIONS = {
             "serverware_policy_authority_policy_canary_delivery_" + phase,
             reads=("policy_canary_delivery_slots", "policy_canary_delivery_heads", "policy_canary_delivery_parts", "policy_canary_intake_batches"),
             writes=(("policy_canary_delivery_slots", "policy_canary_delivery_heads", "policy_canary_delivery_parts") if phase == "prepare"
-                else ("policy_canary_delivery_slots", "policy_canary_delivery_heads") if phase == "claim" else ()) + _AUDIT,
+                else ("policy_canary_delivery_slots", "policy_canary_delivery_heads") if phase == "claim" else ()) + _AUDIT + ("policy_authority_bounded_aggregate_states",),
             mutation_kinds={**({"policy_canary_delivery_slots": ("INSERT",), "policy_canary_delivery_parts": ("INSERT",),
                 "policy_canary_delivery_heads": ("INSERT", "UPDATE")} if phase == "prepare" else
                 {"policy_canary_delivery_slots": ("UPDATE",), "policy_canary_delivery_heads": ("UPDATE",)} if phase == "claim" else {}),
-                **{table: ("INSERT",) for table in _AUDIT}},
-            proof_primitives=("primary-key-row",), maximum_query_rows=48, maximum_mutations=24, maximum_work_units=8192,
+                **{table: ("INSERT",) for table in _AUDIT}, "policy_authority_bounded_aggregate_states": ("UPDATE",)},
+            proof_primitives=("primary-key-row", "aggregate-high-water"), maximum_query_rows=48, maximum_mutations=24, maximum_work_units=8192,
         ) for phase in ("prepare", "claim", "recover")
     },
     "policy.canary.evidence-intake": _spec(

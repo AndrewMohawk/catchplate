@@ -168,6 +168,7 @@ impl GateConfigV1 {
             measured_capture_retirement: None,
             measured_issuance: None, measured_setup: None, measured_reconnect: None, measured_succession: None,
             measured_audit,
+            measured_canary_delivery: None,
             credential_currentness: None,
             policy_shadow_generation_control: None,
             policy_path: String::new(),

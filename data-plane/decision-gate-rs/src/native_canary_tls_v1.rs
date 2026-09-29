@@ -54,18 +54,21 @@ impl NativeCanaryTlsIdentity {
         let identity = self.identity.take().ok_or("canary TLS identity already installed")?;
         let client = builder.https_only(true).identity(identity)
             .min_tls_version(reqwest::tls::Version::TLS_1_3).max_tls_version(reqwest::tls::Version::TLS_1_3)
-            .redirect(reqwest::redirect::Policy::none()).pool_max_idle_per_host(0)
+            .redirect(reqwest::redirect::Policy::none()).retry(reqwest::retry::never()).http1_only().pool_max_idle_per_host(0)
             .build().map_err(|_| "build dedicated native canary TLS client")?;
         self.check(deadline)?;
-        Ok(NativeCanaryHttpClient { client, tls: self, intake: url.to_string(), inspect: inspect.to_string() })
+        let mut delivery=url.clone();delivery.set_path(crate::native_canary_delivery_v1::PATH);
+        Ok(NativeCanaryHttpClient { client, tls: self, intake: url.to_string(), inspect: inspect.to_string(), delivery:delivery.to_string(),
+            delivery_attempts:std::collections::BTreeSet::new(), intake_attempts:std::collections::BTreeSet::new() })
     }
 }
 
-/// Construction is real but contact deliberately awaits the durable
-/// precontact/uncertain-state owner. A cloned bare reqwest client cannot escape.
+/// No bare client escapes. Fixed delivery operations require actual native
+/// signed commands; intake additionally requires the exact completed claim.
 pub struct NativeCanaryHttpClient {
-    #[allow(dead_code)] client: reqwest::blocking::Client,
+    client: reqwest::blocking::Client,
     tls: NativeCanaryTlsIdentity, intake: String, inspect: String,
+    delivery:String, delivery_attempts:std::collections::BTreeSet<String>, intake_attempts:std::collections::BTreeSet<String>,
 }
 impl NativeCanaryHttpClient {
     pub fn tls(&self) -> &NativeCanaryTlsIdentity { &self.tls }
@@ -74,6 +77,42 @@ impl NativeCanaryHttpClient {
     }
     pub fn check(&self, identity: &mut EnclaveRuntimeIdentityV1, deadline: u64) -> Result<(), String> {
         identity.verify_canary_tls(&self.tls, deadline)
+    }
+    pub fn delivery_once(&mut self, command:&crate::native_canary_delivery_v1::Signed)->Result<Vec<u8>,String>{
+        command.check()?;self.tls.check(command.deadline())?;
+        let value=crate::native_canary_delivery_v1::document(command.original(),3*1024*1024)?;
+        self.require_tls_statement(&value["nativeEvidence"]["statement"])?;
+        let id=value["nativeEvidence"]["statement"]["requestId"].as_str().ok_or("delivery phase ID")?;
+        if self.delivery_attempts.len()>=256 || !self.delivery_attempts.insert(id.into()) {return Err("delivery phase already attempted or owner capacity exhausted".into());}
+        // Irreversible before request construction/send. Transport uncertainty
+        // cannot remove this identity or create another request with it.
+        let endpoint=self.delivery.clone();self.post_once(&endpoint,command.original(),command.deadline(),crate::native_canary_delivery_v1::MAX_RESPONSE)
+    }
+    pub fn intake_once(&mut self, completion:crate::native_canary_delivery_v1::Completion,
+        original:&wire::SignedEvidence)->Result<Vec<u8>,String>{
+        let body=completion.contact_original(original)?;
+        self.tls.check(original.deadline())?;
+        let value=crate::native_canary_delivery_v1::document(body.as_bytes(),wire::MAX_HTTP)?;
+        self.require_tls_statement(&value["nativeEvidence"]["statement"])?;
+        let selector=crate::native_canary_delivery_v1::Selector::from_http(body.as_bytes())?;
+        if self.intake_attempts.len()>=64 || !self.intake_attempts.insert(selector.slot_id) {return Err("intake original already attempted or owner capacity exhausted".into());}
+        let endpoint=self.intake.clone();self.post_once(&endpoint,body.as_bytes(),original.deadline(),crate::native_canary_delivery_v1::MAX_RESPONSE)
+    }
+    fn require_tls_statement(&self,value:&serde_json::Value)->Result<(),String>{
+        if value["clientCertificateSha256"]!=self.tls.certificate_sha256() || value["clientSpkiSha256"]!=self.tls.spki_sha256()
+            || value["workloadUri"]!=self.tls.workload_uri(){return Err("canary command belongs to another generated TLS owner".into());}Ok(())
+    }
+    fn post_once(&self,endpoint:&str,body:&[u8],deadline:u64,maximum:usize)->Result<Vec<u8>,String>{
+        use std::io::Read;
+        self.tls.check(deadline)?;
+        let remaining=deadline.checked_sub(wire::now_boot()?).filter(|v|*v>0).ok_or("canary contact original deadline")?;
+        let mut response=self.client.post(endpoint).header("Content-Type","application/json").body(body.to_vec())
+            .timeout(std::time::Duration::from_nanos(remaining)).send().map_err(|_|"canary contact outcome unknown; original cannot be resent")?;
+        if !response.status().is_success() {return Err("canary server refusal is not permission to resend".into());}
+        if response.content_length().is_some_and(|size|size>maximum as u64){return Err("canary response exceeds whole-frame bound".into());}
+        let mut raw=Vec::new();response.by_ref().take(maximum as u64+1).read_to_end(&mut raw).map_err(|_|"canary response lost; original cannot be resent")?;
+        if raw.is_empty()||raw.len()>maximum{return Err("canary complete response byte bound".into());}
+        self.tls.check(deadline)?;Ok(raw)
     }
 }
 

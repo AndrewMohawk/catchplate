@@ -61,6 +61,7 @@ pub mod native_oauth_succession_v1;
 pub mod native_oauth_browser_v1;
 pub mod native_audit_batch_v1;
 pub mod native_canary_evidence_v1;
+pub mod native_canary_delivery_v1;
 pub mod release_profile_v1;
 #[cfg(target_os = "linux")]
 pub mod erofs_loop_v1;
@@ -2270,6 +2271,52 @@ impl CustodyRuntime {
         identity.verify_canary_tls(tls, deadline).map_err(native_proof_error)?;
         owner.verify_live(deadline).map_err(native_proof_error)?;
         prepared.signed(&signature, fresh.public_key(), fresh.document(), tls).map_err(native_proof_error)
+    }
+
+    /// Closed prepare/recover/claim signing under the same actual canary TLS
+    /// and role-4 owner. Intake/audit domains cannot authorize these phases.
+    pub fn sign_native_canary_delivery(&self, identity: &mut EnclaveRuntimeIdentityV1,
+        tls: &enclave_runtime_identity_v1::NativeCanaryTlsIdentity,
+        prepared: &native_canary_delivery_v1::Prepared, measured_binary: &str, deadline: u64)
+        -> Result<native_canary_delivery_v1::Signed, ProtocolError> {
+        self.verify_native_process()?;
+        let CustodySigningBackend::Native { owner, quote, .. } = &self.signing_backend else {
+            return Err(invalid_statement("canary delivery requires actual native custody"));
+        };
+        let deadline=deadline.min(prepared.deadline()).min(identity.deadline()).min(tls.deadline());
+        prepared.check(tls,deadline).map_err(native_proof_error)?;
+        identity.verify_canary_tls(tls,deadline).map_err(native_proof_error)?;
+        let statement=prepared.statement();
+        if statement["bootId"]!=self.boot_id || statement["keyId"]!=self.key_id
+            || statement["holderId"]!=native_currentness_v1::holder_id(&self.boot_id,&self.key_id).map_err(native_proof_error)?
+            || statement["controlPlaneResponseSigningKeyId"].as_str()!=self.control_plane_response_signing_key_id.as_deref()
+            || !native_currentness_v1::digest(measured_binary) || statement["dataPlaneBinarySha256"]!=measured_binary {
+            return Err(invalid_statement("delivery actual native identity/source changed"));
+        }
+        let mut owner=owner.lock().map_err(|_|invalid_statement("delivery native key poisoned"))?;
+        let original_deadline=identity.deadline().min(owner.deadline());
+        owner.verify_identity(identity,original_deadline).map_err(native_proof_error)?;
+        let deadline=deadline.min(original_deadline);
+        let policy_text=statement["policyHash"].as_str().filter(|v|native_currentness_v1::digest(v))
+            .ok_or_else(||invalid_statement("delivery policy digest"))?;
+        let mut policy=[0u8;32];hex::decode_to_slice(&policy_text[7..],&mut policy).map_err(|_|invalid_statement("delivery policy bytes"))?;
+        owner.verify_policy_commitment(policy,deadline).map_err(native_proof_error)?;
+        identity.verify_policy_commitment(policy,deadline).map_err(native_proof_error)?;
+        let key=owner.public_key_bytes().map_err(native_proof_error)?;
+        if quote.public_key()!=key.as_slice() || sha256_prefixed(&ed25519_spki_der(&key))!=self.key_id {
+            return Err(invalid_statement("delivery retained native key changed"));
+        }
+        let signature=owner.sign(&prepared.preimage().map_err(native_proof_error)?,deadline).map_err(native_proof_error)?;
+        let nonce=prepared.attestation_nonce(&signature).map_err(native_proof_error)?;
+        let fresh=owner.quote_fresh(identity,nonce,deadline).map_err(native_proof_error)?;
+        if fresh.public_key()!=key.as_slice() || fresh.user_data()!=quote.user_data() || fresh.nonce()!=&nonce
+            || fresh.document().is_empty() || fresh.document().len()>12*1024 {
+            return Err(invalid_statement("delivery original role-4 quote scope changed"));
+        }
+        prepared.check(tls,deadline).map_err(native_proof_error)?;
+        identity.verify_canary_tls(tls,deadline).map_err(native_proof_error)?;
+        owner.verify_live(deadline).map_err(native_proof_error)?;
+        prepared.signed(&signature,fresh.public_key(),fresh.document(),tls).map_err(native_proof_error)
     }
 
     /// Exact recipient binding under the already registered native key. This

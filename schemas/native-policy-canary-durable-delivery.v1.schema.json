@@ -1,0 +1,53 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "$id":"https://serverware.invalid/schemas/native-policy-canary-durable-delivery.v1.schema.json",
+  "title":"Native canary durable sender cold configuration and existing exact wire",
+  "$ref":"#/$defs/configuration",
+  "$defs":{
+    "digest":{"$ref":"policy-canary-durable-delivery.v1.schema.json#/$defs/digest"},
+    "component":{"$ref":"policy-canary-durable-delivery.v1.schema.json#/$defs/component"},
+    "binding":{
+      "type":"object","additionalProperties":false,
+      "required":["canaryId","canaryAssignmentSha256","canaryBootId","intakePurposeAssignmentSha256","deliveryPurposeAssignmentSha256"],
+      "properties":{
+        "canaryId":{"type":"string","minLength":1,"maxLength":256},
+        "canaryAssignmentSha256":{"$ref":"#/$defs/digest"},"canaryBootId":{"$ref":"#/$defs/digest"},
+        "intakePurposeAssignmentSha256":{"$ref":"#/$defs/digest"},"deliveryPurposeAssignmentSha256":{"$ref":"#/$defs/digest"}
+      },
+      "description":"These selectors must match separately admitted current intake/delivery assignments in the full independently root-signed configuration. Native boot/key/binary/policy and generated TLS are obtained from actual retained owners, never these strings."
+    },
+    "recoveryTarget":{
+      "type":"object","additionalProperties":false,
+      "required":["canaryId","slotId","httpSha256","partCount","originalExpiresAtEpochNs"],
+      "properties":{
+        "canaryId":{"type":"string","minLength":1,"maxLength":256},
+        "slotId":{"$ref":"policy-canary-durable-delivery.v1.schema.json#/$defs/uuid"},
+        "httpSha256":{"$ref":"#/$defs/digest"},"partCount":{"type":"integer","minimum":1,"maximum":20},
+        "originalExpiresAtEpochNs":{"$ref":"policy-canary-durable-delivery.v1.schema.json#/$defs/epoch"}
+      },
+      "description":"Untrusted selectors, not prior ownership or permission. Cold startup performs only independently admitted completed recovery reads. Prepared/claimed/unknown history never creates a sender, expected-head continuation or contact permit."
+    },
+    "configuration":{
+      "type":"object","additionalProperties":false,
+      "required":["apiVersion","intakeUrl","deploymentId","instanceId","authorityRootPublicKeyBase64Url","authorityRootSpkiSha256",
+        "authorityConfigurationOriginalBase64Url","authorityConfigurationSha256","canaries","recoveryTargets"],
+      "properties":{
+        "apiVersion":{"const":"serverware.nativeCanaryDurableDelivery/v1"},
+        "intakeUrl":{"type":"string","pattern":"^https://[^/?#@]+/api/data-plane/policy-canary/controlled-evidence$"},
+        "deploymentId":{"$ref":"#/$defs/component"},"instanceId":{"$ref":"#/$defs/component"},
+        "authorityRootPublicKeyBase64Url":{"type":"string","pattern":"^[A-Za-z0-9_-]{43}$"},
+        "authorityRootSpkiSha256":{"$ref":"#/$defs/digest"},
+        "authorityConfigurationOriginalBase64Url":{"type":"string","minLength":1,"maxLength":4194304,"pattern":"^[A-Za-z0-9_-]+$"},
+        "authorityConfigurationSha256":{"$ref":"#/$defs/digest"},
+        "canaries":{"type":"array","minItems":1,"maxItems":16,"uniqueItems":true,"items":{"$ref":"#/$defs/binding"}},
+        "recoveryTargets":{"type":"array","maxItems":16,"uniqueItems":true,"items":{"$ref":"#/$defs/recoveryTarget"}}
+      },
+      "description":"Explicit cold profile only, no environment/HTTP/default selection. Public root and exact original pins are independently admitted with the native startup closure. Full signed authority bytes are retained (<=3 MiB), not policy bytes inferred from a custody digest. No secret TLS key is supplied. Original policy/custody lifetime remains fixed. Root owns additive outer v19 selection after v18; this schema never changes older closed profiles."
+    },
+    "deliveryRequest":{"$ref":"policy-canary-durable-delivery.v1.schema.json#/$defs/httpRequest"},
+    "deliveryStatement":{"$ref":"policy-canary-durable-delivery.v1.schema.json#/$defs/statement"},
+    "completionOriginal":{"$ref":"policy-canary-durable-delivery.v1.schema.json#/$defs/completionOriginal"},
+    "intakeOriginal":{"$ref":"policy-canary-durable-delivery.v1.schema.json#/$defs/httpOriginal"}
+  },
+  "$comment":"Schema data is not authority. Runtime owns immutable original bytes, role-4 signing, generated TLS, stable protected slot/head, complete signed planner/executor/witness originals, seven-root radix recomputation, and irreversible local claim/intake attempt state. No retry, split, re-signing, expiry renewal or unknown-head bypass. Whole response <=6 MiB, prepare/read completion <=768 KiB, combined claim originals <=1536 KiB, complete request <=3 MiB. Real twelve-kind exporters and runtime acceptance remain separate requirements."
+}

@@ -142,6 +142,10 @@ pub(super) fn prepare_native_tls_gate_state(
             inputs.audit_url.as_deref().ok_or("native measured audit URL absent")?, &mut identity, deadline)?),
         None => None,
     };
+    let measured_canary_delivery = match inputs.measured_canary_delivery.take() {
+        Some(config) => Some(native_canary_delivery::prepare(config,&inputs,control_plane_config,&relays,&mut identity,deadline)?),
+        None => None,
+    };
     if [inputs.measured_issuance.is_some(), inputs.measured_setup.is_some(), inputs.measured_reconnect.is_some(), inputs.measured_succession.is_some()]
         .into_iter().filter(|selected| *selected).count() > 1 {
         return Err("native browser/helper purpose must be selected once at cold startup".to_owned());
@@ -210,6 +214,8 @@ pub(super) fn prepare_native_tls_gate_state(
     state.measured_reconnect = measured_reconnect.map(Mutex::new);
     state.measured_succession = measured_succession.map(Mutex::new);
     state.measured_audit = measured_audit.map(Mutex::new);
+    state.measured_canary_delivery = measured_canary_delivery.map(Mutex::new);
+    if state.measured_canary_delivery.is_some() { native_canary_delivery::initialize(&state)?; }
     if state.measured_audit.is_some() { native_audit_owner::initialize(&state)?; }
     if state.measured_refresh.is_some() { native_oauth_refresh::initialize(&state)?; }
     if state.measured_cleanup.is_some() { native_oauth_cleanup::initialize(&state)?; }

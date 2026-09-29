@@ -1,5 +1,5 @@
-//! Native canary TLS/signature primitives only. No send, retry, startup opt-in,
-//! durable journal or claim that arbitrary records are genuine exporters.
+//! Retained native canary TLS/signature owner. Durable operations are fixed
+//! phases; only an actual completed claim can reach the single intake contact.
 use super::*;
 use serverware_decision_gate::{native_canary_evidence_v1 as wire,
     enclave_runtime_identity_v1::NativeCanaryHttpClient};
@@ -10,7 +10,7 @@ pub(super) struct Owner {
     relays: Arc<NativeUpstreamRelaysV1>, pid: u32,
 }
 
-/// For the future actual cold owner: construction uses admitted CP roots and
+/// For the actual cold owner: construction uses admitted CP roots and
 /// the retained native relay table. It never imports a client key/certificate
 /// or opens an ordinary direct-network fallback. No contact occurs here.
 pub(super) fn prepare(roots: &ControlPlaneClientConfig, relays: &Arc<NativeUpstreamRelaysV1>,
@@ -106,13 +106,69 @@ impl Owner {
         result.check()?; Ok(result)
     }
     pub(super) fn endpoint(&self, operation: wire::Operation) -> &str { self.client.endpoint(operation) }
+
+    pub(super) fn delivery(&mut self,state:&GateState,authority:&serverware_decision_gate::native_canary_delivery_v1::Authority,
+        operation:serverware_decision_gate::native_canary_delivery_v1::Operation,base:&serverware_decision_gate::native_canary_delivery_v1::Sender,
+        request:Value,assignment:&str,original_expires:u64,deadline:u64)
+        ->Result<serverware_decision_gate::native_canary_delivery_v1::Completion,String>{
+        use serverware_decision_gate::native_canary_delivery_v1 as delivery;
+        self.check(state)?;authority.check()?;
+        let snapshot=current_snapshot(state);
+        if !snapshot_is_active(state,&snapshot) || base.policy_hash!=snapshot.hash || base.data_plane_binary_sha256!=current_binary_digest()? {
+            return Err("delivery lost actual current policy/source owner".into());
+        }
+        let deadline=authority.operation_deadline(deadline,false)?.min(self.client.tls().deadline());
+        let issued=epoch_ns()?;let remaining=deadline.checked_sub(boottime_ns()?).ok_or("delivery original deadline")?;
+        let mut nonce=[0u8;32];SystemRandom::new().fill(&mut nonce).map_err(|_|"delivery nonce")?;
+        let mut uuid=[0u8;16];SystemRandom::new().fill(&mut uuid).map_err(|_|"delivery phase UUID")?;uuid[6]=(uuid[6]&15)|64;uuid[8]=(uuid[8]&63)|128;
+        let encoded=hex::encode(uuid);let request_id=format!("{}-{}-{}-{}-{}",&encoded[..8],&encoded[8..12],&encoded[12..16],&encoded[16..20],&encoded[20..]);
+        let mut expires=issued.checked_add(remaining).ok_or("delivery epoch overflow")?;
+        if operation!=delivery::Operation::Recover {expires=expires.min(original_expires);}
+        let prepared=delivery::Prepared::new(operation,base,request,request_id,URL_SAFE_NO_PAD.encode(nonce),assignment,issued,
+            expires,original_expires,self.client.tls(),deadline)?;
+        authority.require_sender(prepared.statement(),true)?;
+        let signed={
+            let ResponseProofSigner::Custody(signer)=&state.response_proof_signer else{return Err("delivery actual native signer absent".into());};
+            let mut guard=state.mitm_authority.as_ref().ok_or("delivery actual native identity absent")?.lock().map_err(|_|"delivery native identity poisoned")?;
+            let MitmAuthority::Native(identity)=&mut *guard else{return Err("delivery imported identity refused".into());};
+            self.client.check(identity,deadline)?;
+            let signed=signer.transport.canary_delivery(identity,self.client.tls(),&prepared,deadline)?;
+            self.client.check(identity,deadline)?;signed
+        };
+        self.check(state)?;authority.check()?;
+        let raw=self.client.delivery_once(&signed)?;
+        self.check(state)?;
+        if !snapshot_is_active(state,&snapshot){return Err("delivery policy changed during contact".into());}
+        delivery::Completion::verify(authority,&signed,&raw)
+    }
+    pub(super) fn intake_once(&mut self,state:&GateState,completion:serverware_decision_gate::native_canary_delivery_v1::Completion,
+        original:&wire::SignedEvidence)->Result<Vec<u8>,String>{
+        self.check(state)?;
+        let response=self.client.intake_once(completion,original)?;
+        self.check(state)?;Ok(response)
+    }
+    pub(super) fn recovery_sender(&self,state:&GateState,binding:&serverware_decision_gate::native_canary_delivery_v1::CanaryBinding,
+        deadline:u64)->Result<serverware_decision_gate::native_canary_delivery_v1::Sender,String>{
+        self.check(state)?;let snapshot=current_snapshot(state);
+        let ResponseProofSigner::Custody(signer)=&state.response_proof_signer else{return Err("recovery native signer absent".into());};
+        signer.transport.require_native()?;
+        if !snapshot_is_active(state,&snapshot) || current_binary_digest()?!=state.binary_digest{return Err("recovery native source/policy changed".into());}
+        let mut guard=state.mitm_authority.as_ref().ok_or("recovery native identity absent")?.lock().map_err(|_|"recovery native identity poisoned")?;
+        let MitmAuthority::Native(identity)=&mut *guard else{return Err("recovery imported identity refused".into());};
+        self.client.check(identity,deadline)?;let tls=self.client.tls();
+        Ok(serverware_decision_gate::native_canary_delivery_v1::Sender{deployment_id:self.deployment.clone(),instance_id:self.instance.clone(),
+            holder_id:serverware_decision_gate::native_currentness_v1::holder_id(&signer.boot_id,&signer.key_id)?,boot_id:signer.boot_id.clone(),key_id:signer.key_id.clone(),
+            control_plane_response_signing_key_id:signer.control_plane_response_signing_key_id.clone(),policy_hash:snapshot.hash.clone(),data_plane_binary_sha256:state.binary_digest.clone(),
+            canary_id:binding.canary_id.clone(),canary_assignment_sha256:binding.canary_assignment_sha256.clone(),canary_boot_id:binding.canary_boot_id.clone(),
+            workload_uri:tls.workload_uri().into(),client_certificate_sha256:tls.certificate_sha256().into(),client_spki_sha256:tls.spki_sha256().into()})
+    }
 }
 
 fn epoch_ns() -> Result<u64, String> {
     SystemTime::now().duration_since(UNIX_EPOCH).map_err(|_| "canary epoch clock")?.as_nanos()
         .try_into().map_err(|_| "canary epoch overflow".into())
 }
-fn boottime_ns() -> Result<u64, String> {
+pub(super) fn boottime_ns() -> Result<u64, String> {
     let mut value: libc::timespec = unsafe { std::mem::zeroed() };
     if unsafe { libc::clock_gettime(libc::CLOCK_BOOTTIME, &mut value) } != 0
         || value.tv_sec < 0 || !(0..1_000_000_000).contains(&value.tv_nsec) { return Err("canary BOOTTIME unavailable".into()); }

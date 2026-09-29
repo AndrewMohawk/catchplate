@@ -4168,6 +4168,15 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/native_audit_batch_v1.rs \
 				data-plane/decision-gate-rs/src/native_audit_owner.rs \
 				data-plane/decision-gate-rs/src/native_audit_transport.rs \
+				data-plane/decision-gate-rs/src/native_canary_evidence_v1.rs \
+				data-plane/decision-gate-rs/src/native_canary_tls_v1.rs \
+				data-plane/decision-gate-rs/src/native_canary_transport.rs \
+				data-plane/decision-gate-rs/src/native_canary_delivery.rs \
+				data-plane/decision-gate-rs/src/native_canary_delivery_v1.rs \
+				data-plane/decision-gate-rs/src/native_canary_delivery_v1/wire.rs \
+				data-plane/decision-gate-rs/src/native_canary_delivery_v1/configuration.rs \
+				data-plane/decision-gate-rs/src/native_canary_delivery_v1/radix.rs \
+				data-plane/decision-gate-rs/src/native_canary_delivery_v1/completion.rs \
 				data-plane/decision-gate-rs/src/native_secret_broker.rs \
 				data-plane/decision-gate-rs/src/native_secret_broker_v1.rs \
 				data-plane/decision-gate-rs/src/native_secret_broker_v1/history.rs \
@@ -4194,6 +4203,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/native_startup_config/capture_retirement.rs \
 				data-plane/decision-gate-rs/src/native_startup_config/reconnect.rs \
 				data-plane/decision-gate-rs/src/native_startup_config/succession.rs \
+				data-plane/decision-gate-rs/src/native_startup_config/canary_delivery.rs \
 				data-plane/decision-gate-rs/src/response_v2/client_transport.rs \
 				data-plane/decision-gate-rs/src/response_v2/custody/guest_listener.rs \
 				data-plane/decision-gate-rs/src/response_v2/custody/guest_public_artifacts.rs \
@@ -4548,6 +4558,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-startup-configuration.v16.schema.json \
 				schemas/native-startup-configuration.v17.schema.json \
 				schemas/native-startup-configuration.v18.schema.json \
+				schemas/native-startup-configuration.v19.schema.json \
 				schemas/native-oauth-succession-runtime.v1.schema.json \
 				schemas/native-oauth-capture-retirement.v1.schema.json \
 				schemas/oauth-measured-capture-retirement-authority.v1.schema.json \
@@ -4556,6 +4567,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/policy-canary-controlled-evidence.v1.schema.json \
 				schemas/policy-canary-durable-delivery.v1.schema.json \
 				schemas/native-policy-canary-sender.v1.schema.json \
+				schemas/native-policy-canary-durable-delivery.v1.schema.json \
 				schemas/native-oauth-measured-setup.v1.schema.json \
 				schemas/native-oauth-measured-reconnect.v1.schema.json \
 				schemas/native-oauth-retired-scope-succession.v1.schema.json \

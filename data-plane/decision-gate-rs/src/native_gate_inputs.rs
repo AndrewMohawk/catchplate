@@ -113,6 +113,13 @@ pub(super) fn validate_native_gate_static_inputs(inputs: &GateStateInputs) -> Re
             return Err("native measured cleanup requires its explicit encrypted v11 cold profile".to_owned());
         }
     }
+    if let Some(canary) = &inputs.measured_canary_delivery {
+        // Independently selected, never implied by refresh, audit or tokens.
+        canary.validate()?;
+        if !pending_tokens || !measured {
+            return Err("native canary delivery requires its explicit encrypted cold profile".into());
+        }
+    }
     if !inputs.is_production {
         return Err("native bootstrap requires production configuration".to_owned());
     }

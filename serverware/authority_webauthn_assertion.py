@@ -15,6 +15,7 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 from serverware import authority_contract
+from serverware import authority_publication_approval as publication_approval
 from serverware import authority_transition_core as core
 from serverware.authority_query_read_work import QueryReadValidationLimits, _ValidationWork
 
@@ -139,7 +140,7 @@ def _canonical(value: Any, *, work: _ReceiptWork | None) -> bytes:
 
 def _operation_digest(request_digest: str, *, work: _ReceiptWork | None,
                       operation: str = OPERATION) -> str:
-    if type(operation) is not str or operation not in (OPERATION, STAGE_OPERATION):
+    if type(operation) is not str or operation not in ({OPERATION, STAGE_OPERATION} | publication_approval.ASSERTION_OPERATIONS):
         raise AssertionEvidenceError("assertion operation has no fixed receipt consumer")
     if work is not None:
         work.shared.prepare_utf8(operation)
@@ -313,7 +314,7 @@ def _verify_operation_assertion_evidence(
     Representation/budget failures from the shared meter propagate unchanged.
     """
     _require_work(work)
-    if type(operation) is not str or operation not in (OPERATION, STAGE_OPERATION):
+    if type(operation) is not str or operation not in ({OPERATION, STAGE_OPERATION} | publication_approval.ASSERTION_OPERATIONS):
         raise AssertionEvidenceError("assertion operation has no fixed receipt consumer")
     if work is not None and (
         type(evidence) is not dict or len(evidence) != len(EVIDENCE_FIELDS)

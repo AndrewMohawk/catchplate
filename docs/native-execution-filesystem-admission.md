@@ -20,7 +20,9 @@ authority must authenticate the exact original, associate it with the genuine
 creation/egress/attachment and workload owners, and retain the same admission
 object. Neither the schema, a digest comparison, a serialized observation nor
 a returned successful-admission object grants start authority. This module
-exposes no raw descriptors, execution callback, shell command or exec method.
+exposes no generic descriptor constructor, execution callback, shell command or
+exec method. Its sealed child-filesystem borrow supplies only the actual retained
+originals to the consuming new-child path.
 
 `execution::filesystem::PreparedFilesystem::open(&ArtifactV1,
 Arc<OriginalClock>)` returns a non-Clone private-field owner. `check(&self)`
@@ -91,7 +93,7 @@ All entry/loader/cwd opens use `RESOLVE_IN_ROOT | RESOLVE_NO_MAGICLINKS |
 RESOLVE_NO_XDEV`. Ordinary relative or absolute image symlinks therefore work,
 without traversing ambient mounts or magic links. At an eventual exec, Linux
 opens the `PT_INTERP` pathname; retaining its FD alone cannot redirect that
-lookup. The future start owner must first install this exact closed root in
+lookup. The consuming child path must first install this exact closed root in
 the new child's private mount namespace and verify the path/FD association
 there. It must not manually invoke a different loader or fall back to host
 libraries. [openat2 resolution](https://man7.org/linux/man-pages/man2/openat2.2.html),
@@ -106,21 +108,24 @@ is at most 16 KiB. `loaderPolicy` is `in-image-system-loader-v1`, excluding
 inside the same image. No PATH lookup, shell expansion or ambient cwd is used
 by admission.
 
-## Required next caller, not current execution closure
+## Consuming child interface, not current execution closure
 
-A future actual `StartOwner` must admit a distinct signed start grant before
-using the manifest and retain this exact owner alongside the genuine original
-proof, clock, egress/attachment owners and separately admitted cgroup/guardian
-ownership. Its new child-creation branch must receive the filesystem owner
-before clone and consume independent durable creation and start permissions.
+The actual `StartOwner` admits a distinct signed start grant before using the
+manifest and retains this exact owner alongside the genuine original proof,
+clock and egress/attachment parents. Its new child-creation branch consumes the
+independent durable creation/start permissions and one leaf's child attempt.
+`prepare_child` creates a separate anonymous mount clone and retains actual
+entry/loader/cwd originals, with preallocated exact argv/environment storage.
+It does not alter the admitted original mount or attach anything to the host.
 The existing never-exec trampoline closes executable/stdio FDs, stops and exits
 on continuation; its profile is unchanged and cannot be relabelled as runnable.
 
-Before successful exec can be claimed, the new child branch still needs exact
-root installation, removal of old roots/submounts and escaping inherited FDs,
-explicit stdio/UID/GID/capability/signal policy, namespace/mount restrictions,
-a private consuming start gate and positive exec acknowledgement. Whole-tree
-supervision and confirmed termination need the separate cgroup/guardian owner.
+The [new executable-child branch](native-executable-child.md) owns its exact
+filesystem/isolation setup and stays blocked before exec; the
+[independent guardian](native-execution-guardian.md) has no release command.
+Successful exec still requires genuine same-child network ownership, consuming
+release and an actual positive exec event, followed by complete lifetime/output
+supervision. Those future paths cannot use error-pipe EOF as exec success.
 No extra mounts, writable library locations or host descriptor escapes are
 authorized here. Any broader writable-runtime filesystem profile requires its
 own explicit admission; longer execution requires separately signed absolute

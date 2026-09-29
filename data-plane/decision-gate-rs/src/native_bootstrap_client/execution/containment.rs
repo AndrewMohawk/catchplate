@@ -1,6 +1,8 @@
 //! Claim-before-mkdir ownership of one new native execution cgroup leaf.
 //!
-//! This owner never starts or migrates a task and exports no descriptor. Its
+//! This owner never migrates a task. Its one-use child admission exposes only
+//! the actual leaf to the source-owned clone path; cleanup borrows are sealed.
+//! Its
 //! cleanup capability is sealed to the actual created directory, independently
 //! of admission expiry. Empty-leaf observations are not leader-reap receipts.
 
@@ -92,19 +94,19 @@ fn file_identity(fd: BorrowedFd<'_>) -> Result<FileIdentity, String> {
 }
 
 #[derive(Clone, Copy)]
-enum Kind { Type, Subtree, Stat, Memory, Swap, Pids, Cpu, Kill }
+enum Kind { Type, Subtree, Stat, Procs, Memory, Swap, Pids, Cpu, Kill }
 impl Kind {
     fn name(self) -> &'static [u8] {
         match self {
             Self::Type => b"cgroup.type\0", Self::Subtree => b"cgroup.subtree_control\0",
-            Self::Stat => b"cgroup.stat\0", Self::Memory => b"memory.max\0",
+            Self::Stat => b"cgroup.stat\0", Self::Procs => b"cgroup.procs\0", Self::Memory => b"memory.max\0",
             Self::Swap => b"memory.swap.max\0", Self::Pids => b"pids.max\0",
             Self::Cpu => b"cpu.max\0", Self::Kill => b"cgroup.kill\0",
         }
     }
     fn access(self) -> libc::c_int {
         libc::O_NONBLOCK | match self {
-            Self::Type | Self::Subtree | Self::Stat => libc::O_RDONLY,
+            Self::Type | Self::Subtree | Self::Stat | Self::Procs => libc::O_RDONLY,
             Self::Kill => libc::O_WRONLY,
             _ => libc::O_RDWR,
         }
@@ -240,10 +242,12 @@ pub(super) struct ContainmentOwner {
     domain: Control,
     subtree: Control,
     stat: Control,
+    procs: Control,
     limits: Vec<Limit>,
     events: EventsV1,
     cleanup_deadline: u64,
     admission_stopped: Cell<bool>,
+    child_attempted: Cell<bool>,
     cleanup_finished: bool,
 }
 
@@ -310,13 +314,15 @@ impl ContainmentOwner {
         let domain = Control::open(leaf.directory.as_fd(), &leaf.identity, Kind::Type)?;
         let subtree = Control::open(leaf.directory.as_fd(), &leaf.identity, Kind::Subtree)?;
         let stat = Control::open(leaf.directory.as_fd(), &leaf.identity, Kind::Stat)?;
+        let procs = Control::open(leaf.directory.as_fd(), &leaf.identity, Kind::Procs)?;
         let events = EventsV1::open(leaf.directory.as_fd()).map_err(|error| error.to_string())?;
         let mut limits = Vec::with_capacity(4);
         for (kind, expected) in expected {
             limits.push(Limit { control: Control::open(leaf.directory.as_fd(), &leaf.identity, kind)?, expected });
         }
-        let result = Self { owner, permit, leaf, domain, subtree, stat, limits, events,
-            cleanup_deadline, admission_stopped: Cell::new(false), cleanup_finished: false };
+        let result = Self { owner, permit, leaf, domain, subtree, stat, procs, limits, events,
+            cleanup_deadline, admission_stopped: Cell::new(false), child_attempted: Cell::new(false),
+            cleanup_finished: false };
         result.check_unpopulated_domain()?;
         for limit in &result.limits {
             result.owner.check_admission()?;
@@ -336,7 +342,7 @@ impl ContainmentOwner {
         Ok(result)
     }
 
-    fn check_unpopulated_domain(&self) -> Result<(), String> {
+    fn check_domain(&self, require_empty: bool) -> Result<(), String> {
         self.leaf.check()?;
         require(self.domain.read(self.leaf.directory.as_fd(), &self.leaf.identity)? == b"domain\n",
             "native containment leaf is not a domain")?;
@@ -360,17 +366,27 @@ impl ContainmentOwner {
                 *target = Some(());
             }
         }
-        require(descendants.is_some() && dying.is_some() && !populated(&self.events)?,
-            "native containment new leaf is not empty")?;
+        require(descendants.is_some() && dying.is_some(),
+            "native containment leaf has child cgroups")?;
+        if require_empty {
+            require(!populated(&self.events)?, "native containment new leaf is not empty")?;
+        }
         self.leaf.check()
     }
 
+    fn check_unpopulated_domain(&self) -> Result<(), String> { self.check_domain(true) }
+
     pub(super) fn check_admission(&self) -> Result<(), String> {
+        require(!self.child_attempted.get(), "native containment child creation was already attempted")?;
+        self.check_retained_admission(true)
+    }
+
+    fn check_retained_admission(&self, require_empty: bool) -> Result<(), String> {
         require(!self.admission_stopped.replace(true) && !self.leaf.kill_attempted.get(),
             "native containment admission is permanently stopped")?;
         self.owner.check_admission()?;
         self.permit.require_owner(&self.owner)?;
-        self.check_unpopulated_domain()?;
+        self.check_domain(require_empty)?;
         for limit in &self.limits {
             require(limit.control.read(self.leaf.directory.as_fd(), &self.leaf.identity)? == limit.expected,
                 "native containment admitted resource limit changed")?;
@@ -382,6 +398,40 @@ impl ContainmentOwner {
         self.admission_stopped.set(false);
         Ok(())
     }
+
+    pub(super) fn owner(&self) -> &Arc<StartOwner> { &self.owner }
+
+    /// Only the consuming BlockedChild constructor uses this one-shot borrow.
+    /// The attempt is consumed before clone3, including syscall failure.
+    pub(super) fn begin_child(&self) -> Result<BorrowedFd<'_>, String> {
+        self.check_admission()?;
+        require(!self.child_attempted.replace(true), "native containment child attempt is consumed")?;
+        self.leaf.check()?;
+        Ok(self.leaf.directory.as_fd())
+    }
+
+    pub(super) fn check_child_admission(&self, leader: libc::pid_t) -> Result<(), String> {
+        require(self.child_attempted.get(), "native containment has no child attempt")?;
+        self.check_retained_admission(false)?;
+        require(leader > 0 && self.procs.read(self.leaf.directory.as_fd(), &self.leaf.identity)?
+            == format!("{leader}\n").as_bytes(),
+            "native blocked child is not the sole actual member of its retained leaf")?;
+        self.leaf.check()
+    }
+
+    pub(super) fn cleanup_borrow(&self) -> Result<ContainmentCleanupBorrow<'_>, String> {
+        let result = self.cleanup_view();
+        result.check()?;
+        Ok(result)
+    }
+
+    // Reborrowing an already sealed owner does not assert current validity.
+    // Guardian::arm must check this view before duplicating its fixed controls.
+    pub(super) fn cleanup_view(&self) -> ContainmentCleanupBorrow<'_> {
+        ContainmentCleanupBorrow { owner: self }
+    }
+
+    pub(super) fn attempt_emergency_kill(&self) -> Result<bool, String> { self.leaf.kill_once() }
 
     pub(super) fn kill_and_wait_empty(&mut self) -> Result<LeafEmpty, String> {
         self.admission_stopped.set(true);
@@ -422,4 +472,21 @@ impl ContainmentOwner {
             require(last >= now, "native containment cleanup boottime moved backwards")?;
         }
     }
+}
+
+/// Nonconstructible outside this module. A guardian may duplicate these exact
+/// originals before its fork; neither a digest nor an arbitrary FD creates it.
+/// Integrity is deliberately independent of current admission/deadline so an
+/// expired grant never disables emergency termination of the retained leaf.
+pub(super) struct ContainmentCleanupBorrow<'owner> { owner: &'owner ContainmentOwner }
+impl ContainmentCleanupBorrow<'_> {
+    pub(super) fn check(&self) -> Result<(), String> {
+        self.owner.leaf.check()?;
+        self.owner.events.check().map_err(|error| error.to_string())?;
+        self.owner.permit.check_cleanup_integrity()?;
+        self.owner.leaf.check()
+    }
+    pub(super) fn directory(&self) -> BorrowedFd<'_> { self.owner.leaf.directory.as_fd() }
+    pub(super) fn kill(&self) -> BorrowedFd<'_> { self.owner.leaf.kill.file.as_fd() }
+    pub(super) fn events(&self) -> BorrowedFd<'_> { self.owner.events.poll_fd() }
 }

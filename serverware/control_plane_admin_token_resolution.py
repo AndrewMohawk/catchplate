@@ -47,6 +47,7 @@ class _Resolution:
         self.pins = []
         self.history = None
         self.credential = None
+        self.authority = None
         self.attempt = payload.publication_id
         self.executing = self.claimed = self.authorized = False
 
@@ -74,6 +75,8 @@ class _Resolution:
             and publication._json(self.payload.mfa) == self.mfa_original
             and self._policy() == self.policy and self._identity() == self.identity)
         self.epoch, self.mono = epoch, mono
+        if self.authority is not None:
+            self.authority.check_current()
         if self.credential is not None:
             from serverware import app as application, webauthn
             current = db.get_webauthn_credential_by_record_id(self.credential[0])
@@ -126,6 +129,17 @@ class _Resolution:
     def _verify(self):
         from serverware import app as application, webauthn
         self.check()
+        from serverware import control_plane_custody_startup
+        if (control_plane_custody_startup.require_started() is not None
+                or type(self.payload.mfa) is dict and "publicationProfile" in self.payload.mfa):
+            from serverware.control_plane_publication_authorization import ResolutionAuthorization
+            self.authority = ResolutionAuthorization(self)
+            self.authority.negotiate()
+            self.mfa = {"method": "controlled-publication", "user_id": self.identity.user_id}
+            self.check()
+            return
+        # Explicitly unconfigured development compatibility only. Configured
+        # custody startup failures cannot fall through to runtime metadata DML.
         supplied = self.payload.mfa if type(self.payload.mfa) is dict else {}
         assertion = supplied.get("assertion")
         challenge = None
@@ -218,6 +232,72 @@ class _Resolution:
         audit = {**self.bound, "payloadDigest": self.payload_digest,
             "actorId": self.identity.user_id, "fileSha256": self.file_sha,
             "fileIdentity": self.file_identity, "control_plane_mfa": self.mfa}
+        if self.authority is not None:
+            # Burn the same append-only local slot BEFORE the one remote
+            # consume attempt. The claim does not certify a DB commit.
+            self.claimed = True
+            authority_request_digest = self.authority.consume_request_digest()
+            claim_sha = self._record("resolution-claimed", {
+                "schema": "serverware.adminTokenPublicationResolutionClaim/v2",
+                "attemptId": self.attempt, "intentSha256": self.payload.intent_sha256,
+                "outcome": self.payload.outcome, "actorId": self.identity.user_id,
+                "payloadDigest": self.payload_digest, "approvalId": self.authority.approval_id,
+                "reason": self.payload.reason, "fileSha256": self.file_sha,
+                "fileIdentity": self.file_identity, "priorCompletionSha256": self.prior_completion,
+                "authorityRequestDigest": authority_request_digest,
+                "auditId": self.authority.audit_id("consume", authority_request_digest)})
+            consumed = self.authority.consume()
+            audit["controlledPublicationConsumption"] = {"requestDigest": consumed["requestDigest"],
+                "auditEventDigest": consumed["auditEventDigest"]}
+        else:
+            claim_sha = self._authorize_development(audit)
+        # Only a definitely returned owned commit reaches terminal publication.
+        self.authorized = True
+        self.check()
+        publication._require(self.claimed and self.authorized)
+        # An installed rename may have been interrupted before its original
+        # directory flush. Flush the held originals and both held directories;
+        # do not repeat the rename or change any token bytes.
+        for _, _, descriptor, _, _ in self.pins:
+            os.fsync(descriptor)
+        os.fsync(self.parent)
+        os.fsync(self.directory)
+        self.check()
+        completion_sha = self._record("resolution-complete", {
+            "schema": "serverware.adminTokenPublicationResolutionComplete/v1",
+            "attemptId": self.attempt, "intentSha256": self.payload.intent_sha256,
+            "resolutionClaimSha256": claim_sha, "outcome": self.payload.outcome,
+            "fileSha256": self.file_sha, "fileIdentity": self.file_identity})
+        if self.authority is not None:
+            settlement = self.authority.settle()
+        else:
+            with publication._durable_connection() as connection:
+                db.append_audit_event(connection, event_type="control_plane.token_publication_resolved",
+                    actor_type="admin", actor_id=self.identity.user_id,
+                    event={**audit, "resolutionCompletionSha256": completion_sha},
+                    idempotency_key="admin-token-resolution-complete:" + self.attempt)
+                self.check()
+        settled = {
+            "schema": "serverware.adminTokenPublicationResolutionSettled/v1",
+            "attemptId": self.attempt, "resolutionCompletionSha256": completion_sha,
+            "auditId": "admin-token-resolution-complete:" + self.attempt}
+        if self.authority is not None:
+            settled.update(schema="serverware.adminTokenPublicationResolutionSettled/v2",
+                authorityRequestDigest=settlement["requestDigest"],
+                auditId=self.authority.audit_id("settle", settlement["requestDigest"]))
+        self._record("resolution-settled", settled)
+        attempts, incomplete, terminal = publication._history(self.directory, self.path)
+        publication._require(attempts == self.history and incomplete is None and terminal == completion_sha)
+        self.check()
+        return {"schema": "serverware.adminTokenPublicationResolution/v1", "ok": True,
+            "publicationId": self.attempt, "intentSha256": self.payload.intent_sha256,
+            "outcome": self.payload.outcome, "resolutionCompletionSha256": completion_sha,
+            "automaticRetryAllowed": False}
+
+    def _authorize_development(self, audit):
+        from serverware import app as application
+        from serverware import control_plane_custody_startup
+        publication._require(control_plane_custody_startup.require_started() is None)
         with publication._durable_connection() as connection:
             approval = application._require_control_plane_two_person(action=ACTION,
                 resource_id=publication._RESOURCE, payload_digest=self.payload_digest,
@@ -250,40 +330,7 @@ class _Resolution:
                 "reason": self.payload.reason, "fileSha256": self.file_sha,
                 "fileIdentity": self.file_identity, "priorCompletionSha256": self.prior_completion,
                 "auditId": "admin-token-resolution-intent:" + self.attempt})
-        # Only a definitely returned owned commit reaches terminal publication.
-        self.authorized = True
-        self.check()
-        publication._require(self.claimed and self.authorized)
-        # An installed rename may have been interrupted before its original
-        # directory flush. Flush the held originals and both held directories;
-        # do not repeat the rename or change any token bytes.
-        for _, _, descriptor, _, _ in self.pins:
-            os.fsync(descriptor)
-        os.fsync(self.parent)
-        os.fsync(self.directory)
-        self.check()
-        completion_sha = self._record("resolution-complete", {
-            "schema": "serverware.adminTokenPublicationResolutionComplete/v1",
-            "attemptId": self.attempt, "intentSha256": self.payload.intent_sha256,
-            "resolutionClaimSha256": claim_sha, "outcome": self.payload.outcome,
-            "fileSha256": self.file_sha, "fileIdentity": self.file_identity})
-        with publication._durable_connection() as connection:
-            db.append_audit_event(connection, event_type="control_plane.token_publication_resolved",
-                actor_type="admin", actor_id=self.identity.user_id,
-                event={**audit, "resolutionCompletionSha256": completion_sha},
-                idempotency_key="admin-token-resolution-complete:" + self.attempt)
-            self.check()
-        self._record("resolution-settled", {
-            "schema": "serverware.adminTokenPublicationResolutionSettled/v1",
-            "attemptId": self.attempt, "resolutionCompletionSha256": completion_sha,
-            "auditId": "admin-token-resolution-complete:" + self.attempt})
-        attempts, incomplete, terminal = publication._history(self.directory, self.path)
-        publication._require(attempts == self.history and incomplete is None and terminal == completion_sha)
-        self.check()
-        return {"schema": "serverware.adminTokenPublicationResolution/v1", "ok": True,
-            "publicationId": self.attempt, "intentSha256": self.payload.intent_sha256,
-            "outcome": self.payload.outcome, "resolutionCompletionSha256": completion_sha,
-            "automaticRetryAllowed": False}
+        return claim_sha
 
     def close(self):
         while self.pins:

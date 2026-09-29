@@ -1,8 +1,8 @@
 //! Retained admission of a closed native runtime image and ELF entry.
 //!
-//! This object grants no permission and has no descriptor-export/exec method.
-//! A future source-owned StartOwner must authenticate a separate start grant,
-//! select the exact original manifest, and retain/consume this same object.
+//! This object grants no permission. Only the genuine StartOwner's consuming
+//! child path obtains a sealed, separately detached child filesystem. The old
+//! admitted image remains held and unchanged; neither object can execute it.
 
 use super::{elf, manifest::{self, Manifest, MAX_EXECUTABLE, MAX_IMAGE, MAX_MANIFEST}};
 use super::super::{originals::{ArtifactV1, HeldOriginal}, OriginalClock};
@@ -13,7 +13,7 @@ use std::ffi::CString;
 use std::fs::{File, Metadata};
 use std::io;
 use std::mem::{size_of, zeroed};
-use std::os::fd::{AsFd, AsRawFd, FromRawFd, RawFd};
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, RawFd};
 use std::os::unix::fs::MetadataExt;
 use std::sync::Arc;
 use zeroize::Zeroizing;
@@ -292,7 +292,7 @@ fn source(clock: &OriginalClock) -> Result<(libc::pid_t, libc::pid_t), String> {
 }
 
 /// Non-Clone admission owner with sticky failure. No method grants execution,
-/// supplies raw descriptors, changes a process root, or renews its deadline.
+/// changes a process root, or renews its deadline.
 pub(super) struct PreparedFilesystem {
     clock: Arc<OriginalClock>,
     creator: (libc::pid_t, libc::pid_t),
@@ -373,6 +373,42 @@ impl PreparedFilesystem {
     /// selected original independently and retain this same live owner.
     pub(super) fn manifest_sha256(&self) -> [u8; 32] { self.manifest_sha256 }
 
+    /// A separate anonymous mount for exactly one consuming child attempt.
+    /// No host mountpoint, mount propagation or original owner's tree changes.
+    pub(super) fn prepare_child(&self) -> Result<ChildFilesystem, String> {
+        self.check()?;
+        let root = detached_root(&self.detached, &self.clock)?;
+        let fingerprint = inspect(&root, &self.clock)?.1;
+        require(fingerprint.identity.device == self.detached_fingerprint.identity.device
+            && fingerprint.identity.inode == self.detached_fingerprint.identity.inode
+            && fingerprint.identity.mount != self.detached_fingerprint.identity.mount)?;
+        let entry = ImageFile::open(&root, &fingerprint.identity, &self.entry.path,
+            self.entry.sha256, &self.clock)?;
+        let interpreter = self.interpreter.as_ref().map(|file|
+            ImageFile::open(&root, &fingerprint.identity, &file.path, file.sha256, &self.clock))
+            .transpose()?;
+        let cwd = in_root(&root, &self.manifest.cwd, true, &self.clock)?;
+        let cwd_fingerprint = inspect(&cwd, &self.clock)?.1;
+        require(cwd_fingerprint.identity.inode == self.cwd_fingerprint.identity.inode
+            && cwd_fingerprint.identity.device == fingerprint.identity.device
+            && cwd_fingerprint.identity.mount == fingerprint.identity.mount)?;
+        let arguments = self.manifest.argv.iter().map(|value| CString::new(value.as_bytes())
+            .map_err(|_| "native child argument contains NUL".to_owned())).collect::<Result<Vec<_>, _>>()?;
+        let environment = self.manifest.environment.iter().map(|(key, value)|
+            CString::new(format!("{key}={value}"))
+                .map_err(|_| "native child environment contains NUL".to_owned()))
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut argv = arguments.iter().map(|value| value.as_ptr()).collect::<Vec<_>>();
+        argv.push(std::ptr::null());
+        let mut envp = environment.iter().map(|value| value.as_ptr()).collect::<Vec<_>>();
+        envp.push(std::ptr::null());
+        let result = ChildFilesystem { root, fingerprint, entry, interpreter, cwd,
+            cwd_fingerprint, arguments, environment, argv, envp };
+        result.check(self)?;
+        self.check()?;
+        Ok(result)
+    }
+
     pub(super) fn check(&self) -> Result<(), String> {
         require(!self.stopped.replace(true))?;
         self.check_originals()?;
@@ -417,4 +453,48 @@ impl PreparedFilesystem {
         for named in [&self.manifest_named, &self.root, &self.block, &self.image] { named.check(&self.clock)?; }
         self.clock.check()
     }
+}
+
+/// Sealed retained originals and preallocated argv/env storage. Only a
+/// PreparedFilesystem constructs this; there is no generic-FD constructor.
+/// The child trampoline borrows it before clone, never allocates after clone,
+/// and closes every filesystem descriptor on exec (the kernel resolves the
+/// exact admitted PT_INTERP path inside this installed immutable root).
+pub(super) struct ChildFilesystem {
+    root: File,
+    fingerprint: Fingerprint,
+    entry: ImageFile,
+    interpreter: Option<ImageFile>,
+    cwd: File,
+    cwd_fingerprint: Fingerprint,
+    arguments: Vec<CString>,
+    environment: Vec<CString>,
+    argv: Vec<*const libc::c_char>,
+    envp: Vec<*const libc::c_char>,
+}
+
+impl ChildFilesystem {
+    pub(super) fn check(&self, original: &PreparedFilesystem) -> Result<(), String> {
+        original.clock.check()?;
+        require(inspect(&self.root, &original.clock)?.1 == self.fingerprint)?;
+        mount_flags(&self.root, &original.clock)?;
+        erofs_loop_v1::verify(self.root.as_fd(), original.block.file.as_fd(),
+            original.image.file.as_fd(), &original.expectation)
+            .map_err(|_| "native child image association changed")?;
+        self.entry.check(&self.root, &self.fingerprint.identity, &original.clock)?;
+        if let Some(loader) = &self.interpreter {
+            loader.check(&self.root, &self.fingerprint.identity, &original.clock)?;
+        }
+        let named_cwd = in_root(&self.root, &original.manifest.cwd, true, &original.clock)?;
+        require(inspect(&self.cwd, &original.clock)?.1 == self.cwd_fingerprint
+            && inspect(&named_cwd, &original.clock)?.1 == self.cwd_fingerprint
+            && self.arguments.len() == original.manifest.argv.len()
+            && self.environment.len() == original.manifest.environment.len())?;
+        original.clock.check()
+    }
+    pub(super) fn root(&self) -> BorrowedFd<'_> { self.root.as_fd() }
+    pub(super) fn cwd(&self) -> BorrowedFd<'_> { self.cwd.as_fd() }
+    pub(super) fn entry(&self) -> BorrowedFd<'_> { self.entry.file.as_fd() }
+    pub(super) fn argv(&self) -> *const *const libc::c_char { self.argv.as_ptr() }
+    pub(super) fn envp(&self) -> *const *const libc::c_char { self.envp.as_ptr() }
 }

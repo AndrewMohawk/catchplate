@@ -198,10 +198,17 @@ def _resolution_history(identifier, item):
         _require(complete is None and settled is None)
         return
     intent = item["intent"]
+    controlled = claim.get("schema") == "serverware.adminTokenPublicationResolutionClaim/v2"
+    audit_id = "admin-token-resolution-intent:" + identifier
+    if controlled:
+        from serverware.authority_transition_quota import _audit_identity
+        _require(type(claim.get("authorityRequestDigest")) is str and _DIGEST.fullmatch(claim["authorityRequestDigest"]))
+        audit_id = _audit_identity("publication-approval.consume", claim["authorityRequestDigest"])
     _require("settled" not in item and set(claim) == {"schema", "attemptId",
         "intentSha256", "outcome", "actorId", "payloadDigest", "approvalId",
-        "reason", "fileSha256", "fileIdentity", "priorCompletionSha256", "auditId"}
-        and claim["schema"] == "serverware.adminTokenPublicationResolutionClaim/v1"
+        "reason", "fileSha256", "fileIdentity", "priorCompletionSha256", "auditId"} | ({"authorityRequestDigest"} if controlled else set())
+        and claim["schema"] == ("serverware.adminTokenPublicationResolutionClaim/v2" if controlled else
+            "serverware.adminTokenPublicationResolutionClaim/v1")
         and claim["intentSha256"] == item["intentSha256"]
         and claim["outcome"] in {"finalize-installed", "abandon-uninstalled"}
         and type(claim["actorId"]) is str and 0 < len(claim["actorId"]) <= 4096
@@ -211,7 +218,7 @@ def _resolution_history(identifier, item):
         and type(claim["fileIdentity"]) is list and len(claim["fileIdentity"]) == 9
         and all(type(part) is int for part in claim["fileIdentity"])
         and claim["priorCompletionSha256"] == item.get("completeSha256")
-        and claim["auditId"] == "admin-token-resolution-intent:" + identifier)
+        and claim["auditId"] == audit_id)
     _require(claim["payloadDigest"] == _sha(_json({"token": "admin", "publicationId": identifier,
         "intentSha256": item["intentSha256"], "outcome": claim["outcome"], "reason": claim["reason"]})))
     if claim["outcome"] == "finalize-installed":
@@ -231,10 +238,18 @@ def _resolution_history(identifier, item):
             "outcome": claim["outcome"], "fileSha256": claim["fileSha256"],
             "fileIdentity": claim["fileIdentity"]})
     if settled is not None:
-        _require(complete is not None and settled == {
+        expected_settled = {
             "schema": "serverware.adminTokenPublicationResolutionSettled/v1",
             "attemptId": identifier, "resolutionCompletionSha256": item["resolution-completeSha256"],
-            "auditId": "admin-token-resolution-complete:" + identifier})
+            "auditId": "admin-token-resolution-complete:" + identifier}
+        if controlled:
+            # The original request digest is retained, not recomputed using a
+            # later cohort's operation manifest. It remains a data association.
+            _require(type(settled.get("authorityRequestDigest")) is str and _DIGEST.fullmatch(settled["authorityRequestDigest"]))
+            expected_settled.update(schema="serverware.adminTokenPublicationResolutionSettled/v2",
+                authorityRequestDigest=settled["authorityRequestDigest"],
+                auditId=_audit_identity("publication-approval.settle", settled["authorityRequestDigest"]))
+        _require(complete is not None and settled == expected_settled)
 
 
 def _terminal(item):

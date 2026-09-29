@@ -10,7 +10,7 @@ from serverware import authority_complete_query
 from serverware.authority_query_read_work import _ValidationWork
 
 
-SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.259"
+SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.260"
 SCHEMA_VERSION = 9
 CONTRACT_SCHEMA = "serverware.policyAuthorityOperationContract/v3"
 BUSINESS_INTENT_SCHEMA = "serverware.policyAuthorityBusinessIntent/v2"
@@ -257,6 +257,8 @@ _AUDIT_COUNTER_REPLACEMENT_OPERATIONS = frozenset({
     "policy.activation.prepare", "policy.activation.abort", "policy.genesis.prepare",
     "rbac.binding.mutate", "control-approval.request", "control-approval.decide",
     "control-approval.consume", "control-approval.deny", "jit.request",
+    "publication-approval.request", "publication-approval.decide",
+    "publication-approval.consume", "publication-approval.settle",
     "jit.review-receipt.issue", "jit.decide", "jit.deny",
 })
 _AUDIT_NEW_AGGREGATE_ROOT_OPERATIONS = frozenset({
@@ -1741,6 +1743,18 @@ _OPERATIONS = {
         maximum_mutations=5,
         maximum_work_units=96,
     ),
+    **{
+        "publication-approval." + phase: _spec(
+            "serverware_policy_authority_publication_approval_" + phase,
+            reads=("control_plane_approvals", "rbac_role_bindings") + (() if phase == "settle" else
+                ("webauthn_trust_publication_high_water", "webauthn_trust_publications")) + _PHASE2_AGGREGATE,
+            writes=("control_plane_approvals", "metadata_audit_outbox") + _PHASE2_AGGREGATE,
+            webauthn="not-required" if phase == "settle" else "bound-verified-assertion-receipt",
+            proof_primitives=("primary-key-row", "bounded-limit-plus-one", "aggregate-high-water", "capacity-reservation"),
+            maximum_query_rows=12, maximum_mutations=8, maximum_work_units=256,
+        )
+        for phase in ("request", "decide", "consume", "settle")
+    },
     "control-approval.request": _spec(
         "ensure_control_plane_approval",
         reads=_CONTROL_APPROVAL + _PHASE2_AGGREGATE,

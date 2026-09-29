@@ -2,7 +2,8 @@
 //!
 //! Retains actual originals and filesystem owners, not serialized successful
 //! checks. Separate executable-profile network parents and actual start/creation
-//! journals precede cgroup effects. There is no child/exec/guardian operation.
+//! journals precede cgroup effects. Executable children remain source-private
+//! and blocked; there is no public start or exec-release operation.
 
 use super::{filesystem::PreparedFilesystem, host, parent::ParentOwner, start_authority};
 use super::super::egress::ExecutionParents;
@@ -199,6 +200,8 @@ impl StartOwner {
         &self.prepared.authorization.constraints
     }
     pub(super) fn cleanup_boottime_ns(&self) -> u64 { self.prepared.authorization.cleanup_boottime_ns }
+    pub(super) fn stop_boottime_ns(&self) -> u64 { self.prepared.authorization.stop_boottime_ns }
+    pub(super) fn filesystem(&self) -> &PreparedFilesystem { &self.prepared.filesystem }
     pub(super) fn operation_sha256(&self) -> [u8; 32] { self.operation }
     pub(super) fn clock(&self) -> &OriginalClock { &self.prepared.clock }
     pub(super) fn parents(&self) -> &Arc<ExecutionParents> { &self.parents }
@@ -217,4 +220,12 @@ pub(super) fn prepare_containment(prepared: PreparedStart, parents: Arc<Executio
     let owner = StartOwner::bind(prepared, parents)?;
     let permit = super::start_reservation::claim(Arc::clone(&owner))?;
     super::containment::ContainmentOwner::create(owner, permit)
+}
+
+/// Both real irreversible claims and the new leaf precede the sole clone.
+/// This deliberately returns only a blocked child, never execution authority.
+pub(super) fn prepare_blocked_child(prepared: PreparedStart, parents: Arc<ExecutionParents>)
+    -> Result<super::child::BlockedChild, String>
+{
+    super::child::BlockedChild::create(prepare_containment(prepared, parents)?)
 }

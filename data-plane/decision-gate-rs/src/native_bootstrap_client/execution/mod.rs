@@ -1,8 +1,8 @@
-//! Retained executable-parent admission and claimed cgroup preparation.
+//! Retained executable-parent admission and guarded pre-exec child ownership.
 //!
-//! No public configuration, executable child or independent guardian yet.
-//! Actual owners and distinct durable claims precede cgroup creation; the old
-//! diagnostic workload cannot be promoted by these observations.
+//! No public start configuration or same-child network/release path yet.
+//! Actual owners and durable claims precede cgroup/child creation; the new child
+//! remains blocked. The old diagnostic workload cannot be promoted.
 
 mod elf;
 mod manifest;
@@ -12,6 +12,13 @@ mod start;
 mod parent;
 mod start_reservation;
 mod containment;
+mod child;
+mod child_trampoline;
+mod guardian;
+mod guardian_process;
+mod guarded;
+#[path = "../egress/child_network_policy.rs"]
+mod child_network_policy;
 // Reuse actual host observation, never CA-install permission or its journal.
 #[path = "../install/host.rs"]
 mod host;

@@ -2343,6 +2343,7 @@ def _require_external_measured_authority_writer_dispatch(
 def dispatch_policy_authority_operation(
     operation: str,
     input_value: Mapping[str, Any],
+    *, deadline_ns: int | None = None,
 ) -> dict[str, Any]:
     if operation not in authority_contract.OPERATIONS:
         raise MetadataStoreError(
@@ -2369,7 +2370,7 @@ def dispatch_policy_authority_operation(
         from serverware.control_plane_custody_client import ControlPlaneCustodyClient
 
         return ControlPlaneCustodyClient._request_authority(owner,
-            operation=operation, input_value=dict(input_value))
+            operation=operation, input_value=dict(input_value), deadline_ns=deadline_ns)
 
     # Preserve the unconfigured development path only. Production or explicit
     # custody configuration cannot fall back after failed/missing cold startup.
@@ -2378,6 +2379,7 @@ def dispatch_policy_authority_operation(
     return AuthorityRuntimeClient.from_environment().request(
         operation=operation,
         input_value=dict(input_value),
+        deadline_ns=deadline_ns,
     )
 
 
@@ -2413,6 +2415,7 @@ def issue_policy_authority_webauthn_challenge(
     input_value: Mapping[str, Any],
     user_id: str,
     credential_id: str,
+    deadline_ns: int | None = None,
 ) -> dict[str, Any]:
     _require_postgres_policy_authority(
         "policy-authority WebAuthn challenge issuance"
@@ -2428,6 +2431,7 @@ def issue_policy_authority_webauthn_challenge(
             "userId": user_id,
             "credentialId": credential_id,
         },
+        deadline_ns=deadline_ns,
     )
 
 

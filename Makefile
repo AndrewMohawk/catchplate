@@ -1253,6 +1253,10 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/control_plane_approval_verification.py \
 	serverware/control_plane_admin_token_publication.py \
 	serverware/control_plane_admin_token_resolution.py \
+	serverware/authority_publication_approval.py \
+	serverware/authority_transition_publication_approval.py \
+	serverware/control_plane_publication_authorization.py \
+	serverware/portal_admin_token_publication.py \
 	serverware/control_plane_workload_identity_routes.py \
 	serverware/portal_workload_issuance.py \
 	serverware_agent_trust/workload_identity_submission.py \
@@ -3521,6 +3525,10 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/control_plane_approval_verification.py \
 				serverware/control_plane_admin_token_publication.py \
 				serverware/control_plane_admin_token_resolution.py \
+				serverware/authority_publication_approval.py \
+				serverware/authority_transition_publication_approval.py \
+				serverware/control_plane_publication_authorization.py \
+				serverware/portal_admin_token_publication.py \
 				serverware/control_plane_workload_identity_routes.py \
 				serverware/portal_workload_issuance.py \
 				serverware_agent_trust/workload_identity_originals.py \
@@ -3728,6 +3736,11 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/native_bootstrap_client/execution/parent.rs \
 				data-plane/decision-gate-rs/src/native_bootstrap_client/execution/start_reservation.rs \
 				data-plane/decision-gate-rs/src/native_bootstrap_client/execution/containment.rs \
+				data-plane/decision-gate-rs/src/native_bootstrap_client/execution/child.rs \
+				data-plane/decision-gate-rs/src/native_bootstrap_client/execution/child_trampoline.rs \
+				data-plane/decision-gate-rs/src/native_bootstrap_client/execution/guardian.rs \
+				data-plane/decision-gate-rs/src/native_bootstrap_client/execution/guardian_process.rs \
+				data-plane/decision-gate-rs/src/native_bootstrap_client/execution/guarded.rs \
 				data-plane/decision-gate-rs/src/native_bootstrap_client/install/mod.rs \
 				data-plane/decision-gate-rs/src/native_bootstrap_client/install/authority.rs \
 				data-plane/decision-gate-rs/src/native_bootstrap_client/install/host.rs \
@@ -3822,6 +3835,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-egress-launch-manifest.v2.schema.json \
 				schemas/native-execution-manifest.v1.schema.json \
 				schemas/native-workload-start-authorization.v1.schema.json \
+				schemas/control-plane-publication-approval.v1.schema.json \
 				schemas/native-ca-installation-receipt.v1.schema.json \
 				schemas/native-enrollment-authorizer.v1.schema.json \
 				schemas/workload-identity-bootstrap-request.v1.schema.json \

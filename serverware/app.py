@@ -66,6 +66,10 @@ from serverware.portal_workload_enrollment import (
     WORKLOAD_ENROLLMENT_SCRIPT,
 )
 from serverware.portal_workload_issuance import WORKLOAD_ISSUANCE_HTML, WORKLOAD_ISSUANCE_SCRIPT
+from serverware.portal_admin_token_publication import (
+    ADMIN_TOKEN_PUBLICATION_HTML,
+    ADMIN_TOKEN_PUBLICATION_SCRIPT,
+)
 from serverware.portal_registration_handoff import (
     REGISTRATION_HANDOFF_CSS,
     REGISTRATION_HANDOFF_HTML,
@@ -1449,6 +1453,18 @@ class ControlPlaneMutationWebAuthnOptions(BaseModel):
     action: str = Field(min_length=1, max_length=128)
     resource_id: str | None = Field(default=None, alias="resourceId")
     payload_digest: str = Field(alias="payloadDigest", min_length=71, max_length=71)
+    approval_id: str | None = Field(default=None, alias="approvalId", max_length=64)
+    api_version: str | None = Field(default=None, alias="apiVersion")
+
+
+class PublicationApprovalWebAuthnOptions(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    api_version: Literal["serverware.publicationApprovalOptions/v1"] = Field(alias="apiVersion")
+    action: Literal["control_plane.token.publication.resolve"]
+    resource_id: Literal["admin-token"] = Field(alias="resourceId")
+    payload_digest: str = Field(alias="payloadDigest", pattern=r"^sha256:[0-9a-f]{64}$")
+    request_binding: dict[str, Any] = Field(alias="request")
     approval_id: str | None = Field(default=None, alias="approvalId", max_length=64)
 
 
@@ -7663,7 +7679,7 @@ def execute_control_plane_authority_operation(
 
 @app.post("/api/control-plane/mutations/webauthn/options")
 def control_plane_mutation_webauthn_options(
-    payload: ControlPlaneMutationWebAuthnOptions,
+    payload: PublicationApprovalWebAuthnOptions | ControlPlaneMutationWebAuthnOptions,
     request: Request,
     identity: AdminIdentity = Depends(
         require_role(
@@ -7676,6 +7692,18 @@ def control_plane_mutation_webauthn_options(
         )
     ),
 ) -> dict[str, Any]:
+    if type(payload) is PublicationApprovalWebAuthnOptions:
+        from serverware import control_plane_publication_authorization as publication_authority
+        try:
+            return publication_authority.options_on_request(request, payload)
+        except HTTPException:
+            raise
+        except Exception:
+            raise HTTPException(status_code=409, detail="publication authority options are unavailable; no automatic retry") from None
+    if payload.action == "control_plane.token.publication.resolve":
+        from serverware import control_plane_custody_startup
+        if payload.api_version is not None or control_plane_custody_startup.require_started() is not None:
+            raise HTTPException(status_code=409, detail="use the explicit publication approval options profile")
     _control_plane_approval_roles(payload.action)
     if payload.action == "workload.identity.issue":
         from serverware import control_plane_workload_identity_routes as workload_routes
@@ -8015,6 +8043,17 @@ def control_plane_approval_approve(
             status_code=409,
             detail=f"control-plane approval is already {approval['status']}",
         )
+    if approval["action"] == "control_plane.token.publication.resolve":
+        from serverware import control_plane_custody_startup
+        if (control_plane_custody_startup.require_started() is not None
+                or decision is not None and type(decision.mfa) is dict and "publicationProfile" in decision.mfa):
+            from serverware import control_plane_publication_authorization as publication_authority
+            try:
+                return publication_authority.decide_on_request(request, approval_id, decision)
+            except HTTPException:
+                raise
+            except Exception:
+                raise HTTPException(status_code=409, detail="publication approval decision uncertain; no automatic retry") from None
     workload_issuance = approval["action"] == "workload.identity.issue"
     mandatory_webauthn = _control_plane_mutation_webauthn_required(approval["action"])
     if workload_issuance:
@@ -21509,6 +21548,7 @@ UI_HTML = r"""
     <a href="#credential-workspace">Credentials</a>
     <a href="#policy-workspace">Policies</a>
     <a href="#approval-workspace">Approvals</a>
+    <a href="#admin-publication-workspace">Token publication</a>
     <a href="#registration-handoff-workspace">Registration actions</a>
     <a href="#session-activation-workspace">Session activation</a>
     <a href="#audit-workspace">Audit</a>
@@ -21543,6 +21583,7 @@ UI_HTML = r"""
     </section>
       __SERVERWARE_REGISTRATION_HANDOFF_HTML__
       __SERVERWARE_SESSION_ACTIVATION_HTML__
+      __SERVERWARE_ADMIN_TOKEN_PUBLICATION_HTML__
       <section id="setup-workspace" class="setup-section">
         <div class="toolbar">
           <h2 style="margin-right:auto">Setup and Verify</h2>
@@ -22166,6 +22207,7 @@ UI_HTML = r"""
     function markOIDCSessionStatusUnknown() {
       sessionActivationInvalidate('Browser session state became unknown. Fresh authorization is required.');
       workloadIssuanceInvalidate('Browser session state became unknown.');
+      adminPublicationInvalidate('Browser session state became unknown.');
       oidcSessionStatusUnknown = true;
       state.authStatus = null;
       renderAuthStatus();
@@ -22191,6 +22233,7 @@ UI_HTML = r"""
           !== JSON.stringify([status.userId, status.authMethod, status.sessionState, status.authenticated, status.roles])) {
         sessionActivationInvalidate('Browser authentication changed. Discarded activation authorization.');
         workloadIssuanceInvalidate('Browser authentication changed.');
+        adminPublicationInvalidate('Browser authentication changed.');
       }
       state.authStatus = status;
       oidcSessionStatusUnknown = false;
@@ -22236,6 +22279,7 @@ UI_HTML = r"""
       syncCustodyAuth();
       renderSessionActivation();
       renderWorkloadIssuance();
+      renderAdminPublication();
     }
 
     async function signInWithOIDC() {
@@ -22448,6 +22492,7 @@ UI_HTML = r"""
     async function signOutOperator() {
       sessionActivationInvalidate('Sign-out started. Discarded activation authorization.');
       workloadIssuanceInvalidate('Sign-out started.');
+      adminPublicationInvalidate('Sign-out started.');
       clearCustodyView('Signing out. Custody metadata cleared.');
       await sessionApi('/api/auth/logout');
       csrfToken = null;
@@ -23535,6 +23580,7 @@ UI_HTML = r"""
       renderWorkloadIdentityEditor();
       renderWorkloadEnrollmentRequirements();
       renderWorkloadIssuance();
+      renderAdminPublication();
       syncCredentialKindFields();
       renderOAuthDefaults(!hasRendered);
       renderPendingMutation();
@@ -23555,6 +23601,7 @@ UI_HTML = r"""
 
     function safeControlPlaneRequest(request, action = null) {
       if (action === workloadIssuanceAction) return workloadIssuanceReview(request);
+      if (action === adminPublicationAction) return adminPublicationReview(request);
       const allowed = [
         'credential_type', 'provider', 'provider_subject', 'provider_account', 'credential_name', 'scopes',
         'metadata_keys', 'expires_at_epoch_ms', 'x_app_id', 'name', 'kind',
@@ -23707,6 +23754,10 @@ UI_HTML = r"""
     async function decideControlPlaneApproval(id, decision) {
       const note = $(`control-plane-note-${id}`)?.value.trim() || null;
       const item = (state.controlPlaneApprovals || []).find(value => value.id === id);
+      if (decision === 'approve' && item?.action === adminPublicationAction) {
+        // Dedicated cold-authority ceremony; non-null notes are refused, not discarded.
+        return adminPublicationApprove(id, note);
+      }
       if (decision === 'approve' && item?.action === workloadIssuanceAction) {
         // Fresh cookie-only ceremony, never the generic 412 resend loop.
         return workloadIssuanceApprove(id, note);
@@ -25296,15 +25347,18 @@ UI_HTML = r"""
     __SERVERWARE_SESSION_ACTIVATION_CONFIRMATION_SCRIPT__
     __SERVERWARE_SESSION_ACTIVATION_SCRIPT__
     __SERVERWARE_WORKLOAD_ISSUANCE_SCRIPT__
+    __SERVERWARE_ADMIN_TOKEN_PUBLICATION_SCRIPT__
     initWorkloadIdentityEditor();
     initWorkloadEnrollmentRequirements();
     initRegistrationHandoff();
     initSessionActivation();
     initWorkloadIssuance();
+    initAdminPublication();
     $('admin-token').value = '';
     $('admin-token').addEventListener('input', () => {
       sessionActivationInvalidate('Operator authentication changed. Discarded activation authorization.');
       workloadIssuanceInvalidate('Entered operator credentials changed.');
+      adminPublicationInvalidate('Entered operator credentials changed.');
       clearCustodyView('Operator token changed. Refresh custody inventory explicitly.');
       syncCustodyAuth();
     });
@@ -25358,6 +25412,8 @@ for _portal_placeholder, _portal_fragment in (
     ("__SERVERWARE_WORKLOAD_ENROLLMENT_SCRIPT__", WORKLOAD_ENROLLMENT_SCRIPT),
     ("__SERVERWARE_WORKLOAD_ISSUANCE_HTML__", WORKLOAD_ISSUANCE_HTML),
     ("__SERVERWARE_WORKLOAD_ISSUANCE_SCRIPT__", WORKLOAD_ISSUANCE_SCRIPT),
+    ("__SERVERWARE_ADMIN_TOKEN_PUBLICATION_HTML__", ADMIN_TOKEN_PUBLICATION_HTML),
+    ("__SERVERWARE_ADMIN_TOKEN_PUBLICATION_SCRIPT__", ADMIN_TOKEN_PUBLICATION_SCRIPT),
     ("__SERVERWARE_REGISTRATION_HANDOFF_CSS__", REGISTRATION_HANDOFF_CSS),
     ("__SERVERWARE_REGISTRATION_HANDOFF_HTML__", REGISTRATION_HANDOFF_HTML),
     ("__SERVERWARE_REGISTRATION_HANDOFF_SCRIPT__", REGISTRATION_HANDOFF_SCRIPT),

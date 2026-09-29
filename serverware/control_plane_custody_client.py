@@ -1931,7 +1931,7 @@ class ControlPlaneCustodyClient:
         binding = _snapshot(self)
         return journal.CustodyJournal.load_observation(binding.journal, localdigest)
 
-    def _request_authority(self, *, operation, input_value):
+    def _request_authority(self, *, operation, input_value, deadline_ns=None):
         """Reuse cold admission for existing legacy dispatch, without retries.
 
         The actual runtime client retains its existing operation allowlist and
@@ -1944,10 +1944,12 @@ class ControlPlaneCustodyClient:
             raise CustodyClientError("cold admission did not retain the actual runtime client")
         _receipt_now(binding)
         result = service.AuthorityRuntimeClient.request(runtime,
-            operation=operation, input_value=input_value)
+            operation=operation, input_value=input_value, deadline_ns=deadline_ns)
         _process(binding)
         _receipt_now(binding)
         journal.CustodyJournal._require_ready(binding.journal)
+        if deadline_ns is not None:
+            transport._check_deadline(deadline_ns)
         return result
 
     def forward_once(self, localdigest, *, deadline_ns=None):

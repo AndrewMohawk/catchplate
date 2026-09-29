@@ -4,8 +4,8 @@ Status: source implementation only, unbuilt and unexecuted. The separate
 `nativeWorkloadStartAuthorization/v1` contract authenticates constraints for a
 new executable-child path. It is not a start permit, a running/healthy-workload
 observation or permission to convert the existing never-executed egress child
-into an application. No public start configuration or executable child is
-provided by this admission slice.
+into an application. The separate source-private child/guardian composition
+retains this admission; no public configuration or exec release is provided.
 
 ## Separate original and exact signature
 
@@ -59,7 +59,7 @@ or existence proof.
 | Signed deadline | Meaning |
 | --- | --- |
 | `startBeforeEpochNs` | Latest preparation/start admission boundary; it tightens the existing original clock. |
-| `stopAtEpochNs` | Separately signed absolute stop boundary for a future actual guardian; not a new request lifetime. |
+| `stopAtEpochNs` | Separately signed absolute stop boundary retained by the actual guardian; not a new request lifetime. |
 | `cleanupBeforeEpochNs` | Absolute deadline for the guardian's bounded cleanup after stop; not recovery or restart permission. |
 
 At a checked admission wall/boottime sample, issue time must be no later than
@@ -73,8 +73,8 @@ Stop and cleanup boottime values are checked projections from that one sample,
 not `now + TTL` calculations on later use. Admission narrows the same original
 clock to the start deadline and rechecks actual wall/boottime continuity before
 returning. The continuation deadlines do not renew bootstrap, CA, egress,
-attachment, approval or filesystem-proof lifetimes. Only a later actual owner
-may transfer those absolute bounds into an independently armed guardian.
+attachment, approval or filesystem-proof lifetimes. The actual blocked-child
+owner transfers those absolute bounds into its independently armed guardian.
 
 ## What still has to authorize execution
 
@@ -89,8 +89,11 @@ owner on failure. This is protected preparation, not transferable permission.
 The separate [retained start owner and claims](native-start-claim.md) now join
 actual v4 executable-profile parents and protected cgroup-parent admission;
 the real start/creation claims precede [new-leaf containment](native-execution-containment.md).
-These source-private connections still do not create an executable child or arm
-an independent guardian. Legacy v1-v3 diagnostic grants cannot enter them.
+The [new child owner](native-executable-child.md) now consumes those actual
+parents/claims and stays blocked before execution. The private
+[guarded composition](native-execution-guardian.md) arms its guardian and retains
+both owners through explicit cleanup. Legacy v1-v3 diagnostic grants cannot
+enter this new branch.
 
 Content closure for an ordinary dynamically linked application cannot follow from executable SHA-256
 or a read-only mount alone: its interpreter, libraries and other code lookup
@@ -103,7 +106,7 @@ workload. Constraints or a prepared filesystem cannot substitute for those joins
 PID migration, callback-based success assertion, reset/retry, automatic rollback
 or running/health claim is introduced here.
 
-Public configuration/orchestration, executable-child ownership, guardian
-handoff, supervision and runtime acceptance remain separate work. This profile
+Public configuration/orchestration, same-child network enforcement, consuming
+exec release, persistent supervision and runtime acceptance remain separate work. This profile
 does not claim a tested start/stop/cleanup cycle, persistent deployment,
 cloud provisioning or production acceptance.

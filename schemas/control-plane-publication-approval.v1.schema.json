@@ -1,0 +1,252 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.dev/schemas/control-plane-publication-approval.v1.schema.json",
+  "title": "Purpose-bound admin-token publication approval originals",
+  "description": "Closed purpose-specific HTTP producer bodies, controlled argument originals and resolution journal records. These data shapes are not signatures, current physical trust, cold custody, committed approval or filesystem permission. Operation selection, exact canonical ASCII digests, UTF-8 byte limits, actual rows/actors, hardware trust and nonrenewing deadlines are enforced by retained source owners. Generic v1/v2 mutation options are not this profile. No source cohort is pinned by this schema.",
+  "anyOf": [
+    {"$ref": "#/$defs/optionsRequest"},
+    {"$ref": "#/$defs/optionsResponse"},
+    {"$ref": "#/$defs/resolutionRequest"},
+    {"$ref": "#/$defs/approvalRequest"},
+    {"$ref": "#/$defs/resolutionResponse"},
+    {"$ref": "#/$defs/assertionArguments"},
+    {"$ref": "#/$defs/settlementArguments"},
+    {"$ref": "#/$defs/resolutionClaimV2"},
+    {"$ref": "#/$defs/resolutionCompleteV1"},
+    {"$ref": "#/$defs/resolutionSettledV2"}
+  ],
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "publicationId": {"type": "string", "pattern": "^[0-9a-f]{32}$"},
+    "approvalId": {"type": "string", "pattern": "^[0-9a-f-]{36}$"},
+    "reason": {"type": ["string", "null"], "maxLength": 500},
+    "outcome": {"enum": ["finalize-installed", "abandon-uninstalled"]},
+    "base64url": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9_-]+$", "description": "Canonical unpadded base64url; source checks decoded length and exact re-encoding."},
+    "actor": {
+      "type": "string", "minLength": 5, "maxLength": 512,
+      "pattern": "^oidc:[^\\u0000-\\u001f\\u007f]*$",
+      "description": "Exact current OIDC actor, trim-stable and UTF-8 <=512 bytes; maxLength alone does not enforce the byte bound. Roles and distinct-person identity require source verification."
+    },
+    "requestBinding": {
+      "type": "object", "additionalProperties": false,
+      "required": ["token", "publicationId", "intentSha256", "outcome", "reason"],
+      "properties": {
+        "token": {"const": "admin"},
+        "publicationId": {"$ref": "#/$defs/publicationId"},
+        "intentSha256": {"$ref": "#/$defs/digest"},
+        "outcome": {"$ref": "#/$defs/outcome"},
+        "reason": {"$ref": "#/$defs/reason"}
+      },
+      "description": "Existing binding, not a new token selector. Sorted compact ensure_ascii=True JSON, no LF, <=8192 bytes; payloadDigest must equal its SHA256."
+    },
+    "optionsRequest": {
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "action", "resourceId", "payloadDigest", "request"],
+      "properties": {
+        "apiVersion": {"const": "serverware.publicationApprovalOptions/v1"},
+        "action": {"const": "control_plane.token.publication.resolve"},
+        "resourceId": {"const": "admin-token"},
+        "payloadDigest": {"$ref": "#/$defs/digest"},
+        "request": {"$ref": "#/$defs/requestBinding"},
+        "approvalId": {"anyOf": [{"$ref": "#/$defs/approvalId"}, {"type": "null"}]}
+      },
+      "description": "POST existing mutation options route. Absent/null approvalId selects request. A present ID is joined to the actual actor and row to select decide or consume; no client phase selector."
+    },
+    "credentialDescriptor": {
+      "type": "object", "additionalProperties": false, "required": ["type", "id"],
+      "properties": {
+        "type": {"const": "public-key"},
+        "id": {"$ref": "#/$defs/base64url", "maxLength": 4096, "description": "Actual selected credential ID; panel decoded bound 3072 bytes."}
+      }
+    },
+    "optionsResponse": {
+      "type": "object", "additionalProperties": false, "required": ["publicKey", "serverware"],
+      "properties": {
+        "publicKey": {
+          "type": "object", "additionalProperties": false,
+          "required": ["challenge", "rpId", "allowCredentials", "timeout", "userVerification"],
+          "properties": {
+            "challenge": {"$ref": "#/$defs/base64url", "maxLength": 5462, "description": "Opaque actual authority challenge, not a hash derived from generic options metadata. Panel decoded bound 4096 bytes."},
+            "rpId": {"type": "string", "minLength": 1, "maxLength": 253, "description": "Configured RP ID, UTF-8 <=253 bytes; runtime enforces byte bound and actual RP/origin policy."},
+            "allowCredentials": {"type": "array", "minItems": 1, "maxItems": 1, "items": {"$ref": "#/$defs/credentialDescriptor"}},
+            "timeout": {"const": 120000},
+            "userVerification": {"const": "required"}
+          }
+        },
+        "serverware": {
+          "type": "object", "additionalProperties": false,
+          "required": ["schema", "operation", "operationId", "challengeId", "credentialRecordId", "payloadDigest", "expiresAt"],
+          "properties": {
+            "schema": {"const": "serverware.publicationApprovalOptions/v1"},
+            "operation": {"enum": ["publication-approval.request", "publication-approval.decide", "publication-approval.consume"]},
+            "operationId": {"$ref": "#/$defs/digest"},
+            "challengeId": {"$ref": "#/$defs/digest"},
+            "credentialRecordId": {"type": "string", "minLength": 1, "maxLength": 256, "description": "Opaque actual database record ID, not necessarily UUID; source enforces UTF-8 <=256 bytes."},
+            "payloadDigest": {"$ref": "#/$defs/digest"},
+            "expiresAt": {"type": "string", "minLength": 1, "maxLength": 128, "format": "date-time"}
+          }
+        }
+      }
+    },
+    "assertion": {
+      "type": "object", "additionalProperties": false, "required": ["id", "rawId", "type", "response"],
+      "properties": {
+        "id": {"$ref": "#/$defs/base64url", "maxLength": 4096},
+        "rawId": {"$ref": "#/$defs/base64url", "maxLength": 4096},
+        "type": {"const": "public-key"},
+        "response": {
+          "type": "object", "additionalProperties": false, "required": ["clientDataJSON", "authenticatorData", "signature"],
+          "properties": {
+            "clientDataJSON": {"$ref": "#/$defs/base64url", "maxLength": 10923},
+            "authenticatorData": {"$ref": "#/$defs/base64url", "maxLength": 10923},
+            "signature": {"$ref": "#/$defs/base64url", "maxLength": 10923},
+            "userHandle": {"anyOf": [{"$ref": "#/$defs/base64url", "maxLength": 1366}, {"type": "null"}]}
+          }
+        }
+      },
+      "description": "Closed browser-produced original. Source verifies actual id/rawId equality, challenge, RP/origin, flags, signature, current credential and physical trust. Complete purpose MFA is bounded to 16 KiB; individual maxima do not enlarge that bound."
+    },
+    "assertionMfa": {
+      "type": "object", "additionalProperties": false, "required": ["publicationProfile", "assertion"],
+      "properties": {
+        "publicationProfile": {"const": "serverware.publicationApprovalOptions/v1"},
+        "assertion": {"$ref": "#/$defs/assertion"}
+      },
+      "description": "Initial requester or different approver. No caller-supplied verification metadata or approvalId."
+    },
+    "consumptionMfa": {
+      "type": "object", "additionalProperties": false, "required": ["publicationProfile", "assertion", "approvalId"],
+      "properties": {
+        "publicationProfile": {"const": "serverware.publicationApprovalOptions/v1"},
+        "assertion": {"$ref": "#/$defs/assertion"},
+        "approvalId": {"$ref": "#/$defs/approvalId"}
+      },
+      "description": "Fresh continuing requester only; exact approved row and actual same requester are independently checked."
+    },
+    "resolutionRequest": {
+      "type": "object", "additionalProperties": false,
+      "required": ["publicationId", "intentSha256", "outcome", "reason", "mfa"],
+      "properties": {
+        "publicationId": {"$ref": "#/$defs/publicationId"},
+        "intentSha256": {"$ref": "#/$defs/digest"},
+        "outcome": {"$ref": "#/$defs/outcome"},
+        "reason": {"$ref": "#/$defs/reason"},
+        "mfa": {"oneOf": [{"$ref": "#/$defs/assertionMfa"}, {"$ref": "#/$defs/consumptionMfa"}]}
+      },
+      "description": "Existing resolver route with explicit new purpose MFA; this schema does not widen or relabel old callers."
+    },
+    "approvalRequest": {
+      "type": "object", "additionalProperties": false, "required": ["note", "mfa"],
+      "properties": {"note": {"type": "null"}, "mfa": {"$ref": "#/$defs/assertionMfa"}},
+      "description": "Purpose-specific producer body for the existing approve route. Actual requester must differ; note is mandatory null and never silently discarded by the panel."
+    },
+    "resolutionResponse": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "ok", "publicationId", "intentSha256", "outcome", "resolutionCompletionSha256", "automaticRetryAllowed"],
+      "properties": {
+        "schema": {"const": "serverware.adminTokenPublicationResolution/v1"},
+        "ok": {"const": true},
+        "publicationId": {"$ref": "#/$defs/publicationId"},
+        "intentSha256": {"$ref": "#/$defs/digest"},
+        "outcome": {"$ref": "#/$defs/outcome"},
+        "resolutionCompletionSha256": {"$ref": "#/$defs/digest"},
+        "automaticRetryAllowed": {"const": false}
+      },
+      "description": "Server-reported settlement only, not permission to rename, disclose or retry a token."
+    },
+    "credentialPolicy": {
+      "type": "object", "additionalProperties": false,
+      "required": ["rpId", "origins", "allowedAuthenticatorClasses", "hardwareRequired", "requireUserPresence", "requireUserVerification", "maxAssertionAgeSeconds"],
+      "properties": {
+        "rpId": {"type": "string", "minLength": 1, "maxLength": 253},
+        "origins": {"type": "array", "minItems": 1, "maxItems": 16, "items": {"type": "string", "minLength": 1, "maxLength": 2048}},
+        "allowedAuthenticatorClasses": {"type": "array", "minItems": 1, "maxItems": 2, "uniqueItems": true, "items": {"enum": ["hardware", "yubikey"]}},
+        "hardwareRequired": {"const": true},
+        "requireUserPresence": {"const": true},
+        "requireUserVerification": {"const": true},
+        "maxAssertionAgeSeconds": {"type": "integer", "minimum": 1, "maximum": 120}
+      },
+      "description": "Source also requires UTF-8 byte caps for RP/origins and sorted class array. Configured current policy and physical trust, not this data object, establish admission."
+    },
+    "assertionArguments": {
+      "type": "object", "additionalProperties": false,
+      "required": ["action", "resource_id", "payload_digest", "actor_id", "request", "approval_id", "credential_policy"],
+      "properties": {
+        "action": {"const": "control_plane.token.publication.resolve"},
+        "resource_id": {"const": "admin-token"},
+        "payload_digest": {"$ref": "#/$defs/digest"},
+        "actor_id": {"$ref": "#/$defs/actor"},
+        "request": {"$ref": "#/$defs/requestBinding"},
+        "approval_id": {"anyOf": [{"$ref": "#/$defs/approvalId"}, {"type": "null"}]},
+        "credential_policy": {"$ref": "#/$defs/credentialPolicy"}
+      },
+      "description": "Exact seven-field originals for independently selected request/decide/consume operations, <=32 KiB canonical ASCII. Raw evidence and typed businessIntent are separate internal fields, not fabricated here."
+    },
+    "requestArguments": {"allOf": [{"$ref": "#/$defs/assertionArguments"}, {"properties": {"approval_id": {"type": "null"}}}]},
+    "decideArguments": {"allOf": [{"$ref": "#/$defs/assertionArguments"}, {"properties": {"approval_id": {"$ref": "#/$defs/approvalId"}}}]},
+    "consumeArguments": {"$ref": "#/$defs/decideArguments", "description": "Same exact shape as decide, different independent operation, actual requester and approved-row guards."},
+    "settlementArguments": {
+      "type": "object", "additionalProperties": false,
+      "required": ["action", "resource_id", "payload_digest", "actor_id", "request", "approval_id", "consumption_request_digest", "completion_sha256"],
+      "properties": {
+        "action": {"const": "control_plane.token.publication.resolve"},
+        "resource_id": {"const": "admin-token"},
+        "payload_digest": {"$ref": "#/$defs/digest"},
+        "actor_id": {"$ref": "#/$defs/actor"},
+        "request": {"$ref": "#/$defs/requestBinding"},
+        "approval_id": {"$ref": "#/$defs/approvalId"},
+        "consumption_request_digest": {"$ref": "#/$defs/digest"},
+        "completion_sha256": {"$ref": "#/$defs/digest"}
+      },
+      "description": "Audit-only settlement, <=32 KiB canonical ASCII, available only to the actual resolver after definite owned consumption and exact completion. No fresh assertion or filesystem permission."
+    },
+    "fileIdentity": {"type": "array", "minItems": 9, "maxItems": 9, "items": {"type": "integer"}, "description": "Actual retained nine-part file identity. Equality to held originals is an owner check, never caller authority."},
+    "auditUuid": {"type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", "description": "Actual deterministic controlled audit identity; source joins operation and original request digest."},
+    "resolutionClaimV2": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "attemptId", "intentSha256", "outcome", "actorId", "payloadDigest", "approvalId", "reason", "fileSha256", "fileIdentity", "priorCompletionSha256", "auditId", "authorityRequestDigest"],
+      "properties": {
+        "schema": {"const": "serverware.adminTokenPublicationResolutionClaim/v2"},
+        "attemptId": {"$ref": "#/$defs/publicationId"},
+        "intentSha256": {"$ref": "#/$defs/digest"},
+        "outcome": {"$ref": "#/$defs/outcome"},
+        "actorId": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "payloadDigest": {"$ref": "#/$defs/digest"},
+        "approvalId": {"$ref": "#/$defs/approvalId"},
+        "reason": {"$ref": "#/$defs/reason"},
+        "fileSha256": {"$ref": "#/$defs/digest"},
+        "fileIdentity": {"$ref": "#/$defs/fileIdentity"},
+        "priorCompletionSha256": {"anyOf": [{"$ref": "#/$defs/digest"}, {"type": "null"}]},
+        "auditId": {"$ref": "#/$defs/auditUuid"},
+        "authorityRequestDigest": {"$ref": "#/$defs/digest"}
+      },
+      "description": "Durable local claim before one controlled consumption attempt; not proof that the remote transaction committed. Existing v1 records are not relabeled."
+    },
+    "resolutionCompleteV1": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "attemptId", "intentSha256", "resolutionClaimSha256", "outcome", "fileSha256", "fileIdentity"],
+      "properties": {
+        "schema": {"const": "serverware.adminTokenPublicationResolutionComplete/v1"},
+        "attemptId": {"$ref": "#/$defs/publicationId"},
+        "intentSha256": {"$ref": "#/$defs/digest"},
+        "resolutionClaimSha256": {"$ref": "#/$defs/digest"},
+        "outcome": {"$ref": "#/$defs/outcome"},
+        "fileSha256": {"$ref": "#/$defs/digest"},
+        "fileIdentity": {"$ref": "#/$defs/fileIdentity"}
+      },
+      "description": "Unchanged complete/v1 after definite owned consumption and exact held-original flush/readback. Not settlement or retry permission."
+    },
+    "resolutionSettledV2": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "attemptId", "resolutionCompletionSha256", "auditId", "authorityRequestDigest"],
+      "properties": {
+        "schema": {"const": "serverware.adminTokenPublicationResolutionSettled/v2"},
+        "attemptId": {"$ref": "#/$defs/publicationId"},
+        "resolutionCompletionSha256": {"$ref": "#/$defs/digest"},
+        "auditId": {"$ref": "#/$defs/auditUuid"},
+        "authorityRequestDigest": {"$ref": "#/$defs/digest"}
+      },
+      "description": "Exact definite controlled audit settlement. Keep original request digest; never recompute historical identity under a later operation manifest."
+    }
+  }
+}

@@ -2084,7 +2084,10 @@ def _socket_request(
     timeout_seconds: float,
     expected_peer_uid: int,
     expected_peer_gid: int,
+    deadline_ns: int | None = None,
 ) -> dict[str, Any]:
+    if deadline_ns is not None:
+        timeout_seconds = min(timeout_seconds, writer_transport._check_deadline(deadline_ns) / 1_000_000_000)
     connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     connection.settimeout(timeout_seconds)
     try:
@@ -2097,8 +2100,19 @@ def _socket_request(
             raise AuthorityServiceError(
                 "authority socket server identity is not exact"
             )
-        _send_message(connection, value)
-        return _recv_message(connection)
+        if deadline_ns is None:
+            _send_message(connection, value)
+            return _recv_message(connection)
+        _send_message_until(connection, value, deadline_ns=deadline_ns)
+        size = int.from_bytes(writer_transport._recv_exact_until(connection, 8, deadline_ns=deadline_ns), "big")
+        if not 2 <= size <= 128 * 1024:
+            raise AuthorityServiceError("publication authority response exceeds its fixed bound")
+        raw = writer_transport._recv_exact_until(connection, size, deadline_ns=deadline_ns)
+        response = json.loads(raw)
+        if type(response) is not dict or _canonical(response) != raw:
+            raise AuthorityServiceError("publication authority response is not canonical")
+        writer_transport._check_deadline(deadline_ns)
+        return response
     finally:
         connection.close()
 
@@ -2921,7 +2935,7 @@ class AuthorityRuntimeClient:
         )
 
     def request(
-        self, *, operation: str, input_value: Mapping[str, Any]
+        self, *, operation: str, input_value: Mapping[str, Any], deadline_ns: int | None = None
     ) -> Any:
         if (
             operation
@@ -2934,6 +2948,10 @@ class AuthorityRuntimeClient:
         deadline_monotonic_ns = (
             started_monotonic_ns + self.maximum_deadline_ns
         )
+        if deadline_ns is not None:
+            if type(deadline_ns) is not int or deadline_ns <= started_monotonic_ns:
+                raise AuthorityServiceError("inherited authority request deadline expired")
+            deadline_monotonic_ns = min(deadline_monotonic_ns, deadline_ns)
         request_id = _domain_digest(
             "serverware.policyAuthorityRuntimeRequestId/v1",
             operation.encode("ascii"),
@@ -2953,9 +2971,11 @@ class AuthorityRuntimeClient:
         response = _socket_request(
             self.socket_path,
             request,
-            timeout_seconds=self.timeout_seconds,
+            timeout_seconds=min(self.timeout_seconds,
+                (deadline_monotonic_ns - time.monotonic_ns()) / 1_000_000_000),
             expected_peer_uid=self.server_uid,
             expected_peer_gid=self.server_gid,
+            deadline_ns=deadline_monotonic_ns if deadline_ns is not None else None,
         )
         signature = _b64url_decode(response.get("signature"), size=64)
         unsigned = dict(response)
@@ -3029,6 +3049,15 @@ class AuthorityRuntimeClient:
             raise AuthorityServiceError(
                 "authority runtime response signature is invalid"
             ) from exc
+        if deadline_ns is not None:
+            # A signed scalar success is insufficient: require the exact result
+            # bytes and both nonempty definite-commit observations in this lane.
+            if response["resultDigest"] != _domain_digest(
+                    "serverware.policyAuthorityControlledWriterResult/v2", _canonical(response["result"])):
+                raise AuthorityServiceError("publication authority result original differs")
+            for field in ("commitReceiptDigest", "witnessCommitDigest"):
+                _require_digest(response[field], "publication authority committed result")
+            writer_transport._check_deadline(deadline_ns)
         return response["result"]
 
 
@@ -7952,6 +7981,24 @@ class AuthorityProcess:
             authorization=authorization_reference,
             operation_id=operation_id,
         )
+        from serverware import authority_publication_approval as publication_approval
+        if operation in publication_approval.ASSERTION_OPERATIONS:
+            # This is a new, independently admitted purpose. Legacy argument
+            # adapters and physical-evidence receipt families are not relabeled.
+            values = publication_approval.arguments(operation,
+                {name: value for name, value in arguments.items() if name != "authn_evidence"})
+            policy = values["credential_policy"]
+            classes = {credential.get("authenticatorClass")}
+            if "yubikey" in classes:
+                classes.add("hardware")
+            if (credential.get("userId") != values["actor_id"]
+                    or credential.get("attestationTrusted") is not True
+                    or not classes.intersection(set(policy["allowedAuthenticatorClasses"]))
+                    or not classes.intersection({"hardware", "yubikey"})
+                    or challenge.get("rpId") != policy["rpId"]
+                    or challenge.get("origin") not in policy["origins"]
+                    or time.time_ns() - challenge["issuedAtEpochNs"] > policy["maxAssertionAgeSeconds"] * 1_000_000_000):
+                raise AuthorityServiceError("publication assertion lacks current hardware policy")
         if authority_contract.operation_spec(operation)[
             "approverPolicyRequired"
         ]:
@@ -8136,6 +8183,12 @@ class AuthorityProcess:
             "serverware.policyAuthorityV9Request/v1",
             _canonical(authorization_material),
         )
+        from serverware import authority_publication_approval as publication_approval
+        if operation in publication_approval.OPERATIONS:
+            original_digest = publication_approval.request_digest(operation,
+                {name: value for name, value in arguments.items() if name != "authn_evidence"})
+            if original_digest != request_digest:
+                raise AuthorityServiceError("publication original commitment differs from the actual authority recipe")
         operation_identifier = _domain_digest(
             "serverware.policyAuthorityOperation/v2",
             operation.encode("ascii"),

@@ -5,8 +5,11 @@ production supervision claim. `execution/containment.rs` creates one new cgroup
 leaf only when called with the genuine retained `StartOwner` and its non-Clone
 `StartPermit`. The owning start path must supply the real producer and caller;
 neither a signed grant by itself nor successful observation JSON is permission.
-There is no public configuration, task creation, migration, execution, raw
-descriptor export, guardian process or leader-reap implementation in this file.
+There is no public configuration, task migration or exec operation in this file.
+The separate [blocked-child owner](native-executable-child.md) consumes its exact
+one-attempt child admission. A private-construction cleanup borrow exposes only
+the actual fixed directory/kill/events controls to the
+[independent guardian](native-execution-guardian.md), never caller-selected FDs.
 
 ## Admission and effects
 
@@ -32,13 +35,16 @@ Short writes, errors, changed identities and mismatched values consume the
 attempt; there is no retry, fallback, leaf reuse, automatic removal or repair.
 All admission work uses the original start owner's nonrenewing clock and
 retained originals. `check_admission()` additionally requires the leaf remain
-unpopulated; a future running lifecycle needs its own actual owner transition.
+unpopulated. The consuming child transition separately retains the same actual
+owner and resource-limit checks without falsely requiring its new leaf to remain
+unpopulated after clone.
 
-No process is placed in this leaf by this slice. A future new-child path must
-join the actual leaf to `CLONE_INTO_CGROUP`, close escaping control descriptors,
-and arm an independent guardian before allowing execution. A PID string or
-one-time membership scan cannot replace that construction. The existing
-never-executed egress child and static custody launcher are unchanged.
+The new child path joins the actual leaf to `CLONE_INTO_CGROUP` and closes
+escaping control descriptors. It stays blocked before exec; private orchestration
+arms its genuine guardian without releasing it. Same-child network ownership
+and a consuming execution release remain open. A PID string or one-time
+membership scan cannot replace the construction. The existing never-executed
+egress child and static custody launcher are unchanged.
 
 ## Emergency termination versus confirmed cleanup
 
@@ -59,14 +65,16 @@ error even if an empty leaf is observed late. The bound controls waiting and
 success reporting, not permission to abandon already-owned tasks. Reads are
 fixed-size, at most two `pread` calls with no EINTR/EAGAIN retry; polling uses
 the remaining absolute bound. These checks do not claim to preempt a blocked
-kernel syscall or replace the future independent guardian.
+kernel syscall or replace the separately scheduled independent guardian.
 
 The private-construction `LeafEmpty` result records only a timely actual
 populated-zero observation and whether the kill write was acknowledged. An
 uncertain kill write can coexist with genuinely observed emptiness. This is
 not a successful-exec, exit-status, leader-reap or complete supervision receipt.
-The actual guardian must separately retain and reap the leader pidfd before
-asserting its complete cleanup outcome. No cgroup is automatically removed.
+The launcher must separately reap its actual workload leader pidfd; the guardian
+is that child's sibling and cannot perform that reap. Private guarded cleanup
+requires both the launcher's leader/leaf result and the guardian's own empty
+observation and exact reap. No cgroup is automatically removed.
 
 The [Linux v6.12 cgroup-v2 documentation](https://docs.kernel.org/6.12/admin-guide/cgroup-v2.html#core-interface-files)
 specifies that `cgroup.kill` covers the descendant tree and concurrent forks;

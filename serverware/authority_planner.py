@@ -20,6 +20,7 @@ from serverware.authority_audit_trace import (
     audit_capacity_scan_key,
 )
 from serverware import authority_contract
+from serverware import authority_publication_approval as publication_approval
 from serverware import authority_complete_query
 from serverware import authority_complete_acquisition
 from serverware import authority_complete_query_batch
@@ -736,7 +737,7 @@ class TypedTransitionPlanningProgram:
             )
         _business_intent(request, operation=self.operation)
         try:
-            if self.operation == authority_webauthn_assertion.OPERATION:
+            if self.operation in ({authority_webauthn_assertion.OPERATION} | publication_approval.ASSERTION_OPERATIONS):
                 query_program = getattr(self.kernel, "queries_with_evidence", None)
                 if not callable(query_program) or verified_webauthn_evidence is None:
                     raise AuthorityPlannerError(
@@ -1296,7 +1297,7 @@ class TypedTransitionPlanningProgram:
             or self.kernel.program_id
                 != authority_contract.transition_program_id(operation)
             or state.database_now is None
-            or (operation == authority_webauthn_assertion.OPERATION)
+            or (operation in ({authority_webauthn_assertion.OPERATION} | publication_approval.ASSERTION_OPERATIONS))
                 != (state.verified_webauthn_evidence is not None)
         ):
             raise AuthorityPlannerError(
@@ -4004,7 +4005,7 @@ class MeasuredPlanner:
         self.connect_timeout_seconds = connect_timeout_seconds
         self.enabled_operations = frozenset(enabled_operations)
         self.programs = dict(programs)
-        if authority_webauthn_assertion.OPERATION in self.enabled_operations:
+        if ({authority_webauthn_assertion.OPERATION} | publication_approval.ASSERTION_OPERATIONS) & self.enabled_operations:
             if (
                 not isinstance(verifier_public_key, Ed25519PublicKey)
                 or not isinstance(verifier_identity, Mapping)
@@ -4028,6 +4029,17 @@ class MeasuredPlanner:
         self, request: Mapping[str, Any]
     ) -> Mapping[str, Any] | None:
         verified_webauthn_evidence = None
+        if request.get("operation") in publication_approval.ASSERTION_OPERATIONS:
+            # Independently pinned receipt verification precedes any proof SQL;
+            # current hardware/trust/actor and raw challenge joins are repeated
+            # by the purpose kernel over genuine selected originals.
+            return authority_webauthn_assertion._verify_operation_assertion_evidence(
+                request["webauthnEvidence"], operation=request["operation"],
+                operation_id=request["operationId"], request_digest=request["requestDigest"],
+                capability_id=request["capabilityId"], verifier_identity=self.verifier_identity,
+                verifier_public_key=self.verifier_public_key, now_epoch_ns=time.time_ns(),
+                deadline_epoch_ns=request["deadlineEpochNs"], maximum_age_ns=self.maximum_assertion_age_ns,
+                work=None)
         if request.get("operation") == authority_webauthn_assertion.OPERATION:
             # Independently authenticate the exact evidence before opening the
             # planner transaction or deriving any selectors or mutations.

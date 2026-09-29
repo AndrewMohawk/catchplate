@@ -2,7 +2,7 @@
 //! Linux v6.12 UAPI rtnetlink.h, if_link.h, if_addr.h, neighbour.h and
 //! drivers/net/veth.c define the encoded layouts and requested peer ifindex.
 
-use super::{attachment_authority::Authorization, EgressGuard};
+use super::{attachment_authority::Authorization, owners::{Owner, OwnerIdentity, Phase}, EgressGuard};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::IpAddr;
@@ -138,7 +138,7 @@ pub(super) struct Operation { pub(super) side: Side, pub(super) original: Vec<u8
 /// Only the actual backend builds this after complete original preflight.
 /// Exact requested ifindices remove any post-claim mutation-template input.
 pub(super) struct AttachmentPlan {
-    owner: usize,
+    owner: OwnerIdentity,
     original: Vec<u8>,
     operations: Vec<Operation>,
     host_index: u32,
@@ -152,15 +152,26 @@ impl AttachmentPlan {
     pub(super) fn sha256(&self) -> [u8; 32] { Sha256::digest(&self.original).into() }
     pub(super) fn host_index(&self) -> u32 { self.host_index }
     pub(super) fn child_index(&self) -> u32 { self.child_index }
-    pub(super) fn owner_identity(&self) -> usize { self.owner }
+    pub(super) fn owner_identity(&self) -> OwnerIdentity { self.owner }
     pub(super) fn operations(&self) -> &[Operation] { &self.operations }
     pub(super) fn last_sequence(&self, side: Side) -> u32 { match side { Side::Host => self.last_host, Side::Child => self.last_child } }
     pub(super) fn require_owner(&self, owner: &EgressGuard) -> Result<(), String> {
-        owner.check()?; require(self.owner == owner as *const EgressGuard as usize)
+        self.require_source(Owner::Diagnostic(owner), Phase::Admission)
+    }
+    pub(super) fn require_source(&self, owner: Owner<'_>, phase: Phase) -> Result<(), String> {
+        owner.check_phase(phase)?; require(self.owner == owner.identity())
     }
 }
 
 pub(super) fn build(owner: &EgressGuard, authority: &Authorization, host_index: u32,
+    child_index: u32, namespace_fd: i32, host_port: u32, child_port: u32,
+    host_sequence: u32, child_sequence: u32, host_namespace: (u64, u64), child_namespace: (u64, u64))
+    -> Result<AttachmentPlan, String>
+{
+    build_source(Owner::Diagnostic(owner), authority, host_index, child_index, namespace_fd,
+        host_port, child_port, host_sequence, child_sequence, host_namespace, child_namespace)
+}
+pub(super) fn build_source(owner: Owner<'_>, authority: &Authorization, host_index: u32,
     child_index: u32, namespace_fd: i32, host_port: u32, child_port: u32,
     host_sequence: u32, child_sequence: u32, host_namespace: (u64, u64), child_namespace: (u64, u64))
     -> Result<AttachmentPlan, String>
@@ -253,6 +264,6 @@ pub(super) fn build(owner: &EgressGuard, authority: &Authorization, host_index: 
     }
     require(original.len() <= MAX_DATAGRAM)?;
     owner.check()?;
-    Ok(AttachmentPlan { owner: owner as *const EgressGuard as usize, original, operations,
+    Ok(AttachmentPlan { owner: owner.identity(), original, operations,
         host_index, child_index, last_host: sequences[0] - 1, last_child: sequences[1] - 1 })
 }

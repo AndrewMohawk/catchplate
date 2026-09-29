@@ -22,6 +22,37 @@ pub(super) struct Spec {
 
 pub(super) const READY: &[u8; 8] = b"SWNEBLK1";
 
+#[repr(C)]
+struct Rights { header: libc::cmsghdr, descriptors: [RawFd; 2] }
+
+unsafe fn network_originals(gate: RawFd) -> bool {
+    let filter = libc::syscall(libc::SYS_socket, libc::AF_NETLINK,
+        libc::SOCK_RAW | libc::SOCK_CLOEXEC | libc::SOCK_NONBLOCK, libc::NETLINK_NETFILTER) as RawFd;
+    let route = libc::syscall(libc::SYS_socket, libc::AF_NETLINK,
+        libc::SOCK_RAW | libc::SOCK_CLOEXEC | libc::SOCK_NONBLOCK, libc::NETLINK_ROUTE) as RawFd;
+    if filter < 0 || route < 0 { return false; }
+    let mut address: libc::sockaddr_nl = std::mem::zeroed();
+    address.nl_family = libc::AF_NETLINK as u16;
+    if libc::syscall(libc::SYS_bind, filter, &address as *const libc::sockaddr_nl,
+        std::mem::size_of::<libc::sockaddr_nl>()) != 0
+        || libc::syscall(libc::SYS_bind, route, &address as *const libc::sockaddr_nl,
+            std::mem::size_of::<libc::sockaddr_nl>()) != 0 { return false; }
+    let mut rights = Rights { header: libc::cmsghdr {
+        cmsg_len: std::mem::size_of::<Rights>(), cmsg_level: libc::SOL_SOCKET, cmsg_type: libc::SCM_RIGHTS,
+    }, descriptors: [filter, route] };
+    let mut iov = libc::iovec { iov_base: super::child_network::SOCKETS.as_ptr().cast_mut().cast(), iov_len: 8 };
+    let mut message: libc::msghdr = std::mem::zeroed();
+    message.msg_iov = &mut iov;
+    message.msg_iovlen = 1;
+    message.msg_control = (&mut rights as *mut Rights).cast();
+    message.msg_controllen = std::mem::size_of::<Rights>();
+    let sent = libc::syscall(libc::SYS_sendmsg, gate, &message as *const libc::msghdr, libc::MSG_NOSIGNAL);
+    let closed_filter = libc::syscall(libc::SYS_close, filter);
+    let closed_route = libc::syscall(libc::SYS_close, route);
+    // These privileged sockets never reach the unprivileged gate or ELF.
+    sent == 8 && closed_filter == 0 && closed_route == 0
+}
+
 unsafe fn die() -> ! {
     loop {
         libc::syscall(libc::SYS_exit_group, 127);
@@ -150,7 +181,7 @@ pub(super) unsafe fn run(spec: &Spec) -> ! {
         || libc::syscall(libc::SYS_dup3, spec.stdout, 1, 0) != 1
         || libc::syscall(libc::SYS_dup3, spec.stderr, 2, 0) != 2
         || !close_except(spec.keep.as_ptr(), spec.keep.len()) { die(); }
-    if !super::child_network_policy::apply()
+    if !super::child_network_policy::apply() || !network_originals(spec.gate)
         || libc::syscall(libc::SYS_sethostname, b"workload".as_ptr(), 8usize) != 0
         || libc::syscall(libc::SYS_setdomainname, b"\0".as_ptr(), 0usize) != 0 { die(); }
     // The detached tree is nonrecursive and already readonly/nosuid/nodev.

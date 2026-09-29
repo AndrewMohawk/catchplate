@@ -125,9 +125,10 @@ filesystem/isolation setup and stays blocked before exec; the
 [independent guardian](native-execution-guardian.md) has no release command.
 Successful exec still requires genuine same-child network ownership, consuming
 release and an actual positive exec event, followed by complete lifetime/output
-supervision. Those future paths cannot use error-pipe EOF as exec success.
+supervision. The [v5 lifecycle](native-execution-lifecycle.md) connects those
+owners in source; error-pipe EOF never establishes exec success.
 No extra mounts, writable library locations or host descriptor escapes are
 authorized here. Any broader writable-runtime filesystem profile requires its
 own explicit admission; longer execution requires separately signed absolute
-continuation authority. There is no public execution configuration, workload
-start, connectivity, runtime compatibility or pilot result from this module.
+continuation authority. This module alone grants no workload start, connectivity,
+runtime compatibility or pilot result; v5's actual owners and claims are mandatory.

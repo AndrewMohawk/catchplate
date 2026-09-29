@@ -108,7 +108,8 @@ pub(super) struct Guardian {
     pid: u32,
     thread: libc::pid_t,
     cancelled: Cell<bool>,
-    reaped: bool,
+    reaped: Cell<bool>,
+    finish_attempted: Cell<bool>,
 }
 
 /// Data-only local observation. Workload leader reaping remains owned by the
@@ -196,7 +197,8 @@ impl Guardian {
         let guardian_pid = libc::pid_t::try_from(pid).map_err(|_| "native guardian PID overflow")?;
         let result = Self { channel, guardian_pidfd, guardian_identity, guardian_pid,
             leader_pidfd: leader, leader_identity, operation, cleanup, stop,
-            pid: std::process::id(), thread, cancelled: Cell::new(false), reaped: false };
+            pid: std::process::id(), thread, cancelled: Cell::new(false), reaped: Cell::new(false),
+            finish_attempted: Cell::new(false) };
         mask.restore()?;
         let (flags, observed) = result.receive(1, admission)?;
         require(flags == 0 && observed < admission && observed <= now()?,
@@ -222,7 +224,7 @@ impl Guardian {
     pub(super) fn require_child(&self, child: &BlockedChild) -> Result<(), String> {
         let result = (|| {
             self.check_process()?;
-            require(!self.cancelled.get() && !self.reaped && now()? < self.stop,
+            require(!self.cancelled.get() && !self.reaped.get() && now()? < self.stop,
                 "native guardian is stopped or expired")?;
             let original = child.guardian_borrow()?;
             original.check()?;
@@ -236,6 +238,24 @@ impl Guardian {
             require(count == -1 && std::io::Error::last_os_error().raw_os_error() == Some(libc::EAGAIN),
                 "native guardian unexpectedly reported or closed before release")?;
             original.check()
+        })();
+        if result.is_err() { self.cancel(); }
+        result
+    }
+
+    /// The execution owner retains this exact guardian after require_child;
+    /// this is liveness observation only, never a substitute child admission.
+    pub(super) fn check_live(&self) -> Result<(), String> {
+        let result = (|| {
+            self.check_process()?;
+            require(!self.cancelled.get() && !self.reaped.get() && now()? < self.stop
+                && process::live(self.guardian_pidfd.as_raw_fd()),
+                "native execution guardian is stopped, exited or expired")?;
+            let mut byte = 0u8;
+            let count = unsafe { libc::recv(self.channel.as_raw_fd(), (&mut byte as *mut u8).cast(),
+                1, libc::MSG_PEEK | libc::MSG_DONTWAIT) };
+            require(count == -1 && std::io::Error::last_os_error().raw_os_error() == Some(libc::EAGAIN),
+                "native execution guardian reported termination or lost its channel")
         })();
         if result.is_err() { self.cancel(); }
         result
@@ -282,24 +302,25 @@ impl Guardian {
         }
     }
 
-    fn reap(&mut self) -> Result<bool, String> {
+    fn reap(&self) -> Result<bool, String> {
         self.check_process()?;
-        require(!self.reaped, "native guardian process was already reaped")?;
+        require(!self.reaped.get(), "native guardian process was already reaped")?;
         let mut info: libc::siginfo_t = unsafe { zeroed() };
         require(unsafe { libc::waitid(libc::P_PIDFD, self.guardian_pidfd.as_raw_fd() as libc::id_t,
             &mut info, libc::WEXITED | libc::WNOHANG) } == 0,
             "native guardian exact pidfd reap failed")?;
         if unsafe { info.si_pid() } == 0 { return Ok(false); }
-        self.reaped = true;
+        self.reaped.set(true);
         require(unsafe { info.si_pid() } == self.guardian_pid && info.si_code == libc::CLD_EXITED
             && unsafe { info.si_status() } == 0, "native guardian terminated without successful observation")?;
         Ok(true)
     }
 
-    pub(super) fn finish(mut self) -> Result<GuardianObservation, String> {
+    pub(super) fn finish(&self) -> Result<GuardianObservation, String> {
         // Stop request precedes optional integrity/clock diagnostics. Expired
         // authority never causes us to leave the independent guardian idle.
         self.cancel();
+        require(!self.finish_attempted.replace(true), "native guardian finish was already consumed")?;
         self.check_process()?;
         let (flags, observed) = self.receive(2, self.cleanup)?;
         require(flags & 2 != 0 && observed < self.cleanup,
@@ -323,6 +344,6 @@ impl Drop for Guardian {
         self.cancel();
         // No blocking destructor, no kill of the guardian, and no success
         // claim. Explicit finish must retain the owner until exact reap.
-        if self.pid == std::process::id() && !self.reaped { let _ = self.reap(); }
+        if self.pid == std::process::id() && !self.reaped.get() { let _ = self.reap(); }
     }
 }

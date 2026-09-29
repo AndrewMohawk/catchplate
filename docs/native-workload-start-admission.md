@@ -4,8 +4,9 @@ Status: source implementation only, unbuilt and unexecuted. The separate
 `nativeWorkloadStartAuthorization/v1` contract authenticates constraints for a
 new executable-child path. It is not a start permit, a running/healthy-workload
 observation or permission to convert the existing never-executed egress child
-into an application. The separate source-private child/guardian composition
-retains this admission; no public configuration or exec release is provided.
+into an application. The separate [v5 lifecycle](native-execution-lifecycle.md)
+retains this admission through actual child/guardian/network ownership and
+consuming release. None of those source paths has been executed.
 
 ## Separate original and exact signature
 
@@ -106,7 +107,7 @@ workload. Constraints or a prepared filesystem cannot substitute for those joins
 PID migration, callback-based success assertion, reset/retry, automatic rollback
 or running/health claim is introduced here.
 
-Public configuration/orchestration, same-child network enforcement, consuming
-exec release, persistent supervision and runtime acceptance remain separate work. This profile
+Explicit v5 configuration/orchestration now joins same-child networking and
+consuming release. Persistent deployment and runtime acceptance remain open. This profile
 does not claim a tested start/stop/cleanup cycle, persistent deployment,
 cloud provisioning or production acceptance.

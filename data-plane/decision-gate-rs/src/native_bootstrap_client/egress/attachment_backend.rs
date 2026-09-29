@@ -3,6 +3,7 @@
 //! No namespace switching, external descriptors, raw-message API or resends.
 
 use super::{attachment::PreattachmentGuard,
+    owners::{AttachmentOwner, Owner, OwnerIdentity, Phase},
     attachment_reservation::{AttachmentBackendLock, AttachmentReservation},
     attachment_wire::{self as wire, AttachmentPlan, DumpKind, Side}, attachment_readback, EgressGuard};
 use sha2::{Digest, Sha256};
@@ -42,7 +43,7 @@ impl ReplyOriginals {
 }
 
 pub(super) struct Snapshot {
-    owner: usize,
+    owner: OwnerIdentity,
     plan_sha256: Option<[u8; 32]>,
     transcript_sha256: [u8; 32],
     originals: BTreeMap<(Side, DumpKind), ReplyOriginals>,
@@ -51,8 +52,12 @@ pub(super) struct Snapshot {
 impl Snapshot {
     pub(super) fn require_owner(&self, owner: &EgressGuard, plan: &AttachmentPlan,
         transcript: &AttachmentTranscript) -> Result<(), String> {
-        transcript.require_owner(owner, plan)?;
-        require(self.owner == owner as *const EgressGuard as usize
+        self.require_source(Owner::Diagnostic(owner), plan, transcript, Phase::Admission)
+    }
+    pub(super) fn require_source(&self, owner: Owner<'_>, plan: &AttachmentPlan,
+        transcript: &AttachmentTranscript, phase: Phase) -> Result<(), String> {
+        transcript.require_source(owner, plan, phase)?;
+        require(self.owner == owner.identity()
             && self.plan_sha256 == Some(plan.sha256())
             && self.transcript_sha256 == transcript.sha256())
     }
@@ -64,15 +69,18 @@ impl Snapshot {
     }
 }
 
-pub(super) struct AttachmentTranscript { owner: usize, plan_sha256: [u8; 32], original: Vec<u8> }
+pub(super) struct AttachmentTranscript { owner: OwnerIdentity, plan_sha256: [u8; 32], original: Vec<u8> }
 impl AttachmentTranscript {
     pub(super) fn original(&self) -> &[u8] { &self.original }
     pub(super) fn sha256(&self) -> [u8; 32] { Sha256::digest(&self.original).into() }
     pub(super) fn require_owner(&self, owner: &EgressGuard, plan: &AttachmentPlan) -> Result<(), String> {
-        plan.require_owner(owner)?;
-        require(self.owner == owner as *const EgressGuard as usize && self.plan_sha256 == plan.sha256())
+        self.require_source(Owner::Diagnostic(owner), plan, Phase::Admission)
     }
-    pub(super) fn owner_identity(&self) -> usize { self.owner }
+    pub(super) fn require_source(&self, owner: Owner<'_>, plan: &AttachmentPlan, phase: Phase) -> Result<(), String> {
+        plan.require_source(owner, phase)?;
+        require(self.owner == owner.identity() && self.plan_sha256 == plan.sha256())
+    }
+    pub(super) fn owner_identity(&self) -> OwnerIdentity { self.owner }
     pub(super) fn plan_sha256(&self) -> [u8; 32] { self.plan_sha256 }
 }
 
@@ -81,7 +89,8 @@ struct Socket {
 }
 
 pub(super) struct AttachmentBackend<'guard, 'egress> {
-    guard: &'guard PreattachmentGuard<'egress>,
+    guard: AttachmentOwner<'guard, 'egress>,
+    phase: Phase,
     lock: AttachmentBackendLock<'guard, 'egress>,
     host: Socket, child: Socket,
     next_sequence: [u32; 2],
@@ -92,9 +101,13 @@ pub(super) struct AttachmentBackend<'guard, 'egress> {
 impl<'guard, 'egress> AttachmentBackend<'guard, 'egress> {
     pub(super) fn open(guard: &'guard PreattachmentGuard<'egress>,
         reservation: &AttachmentReservation<'guard, 'egress>) -> Result<Self, String> {
+        Self::open_owner(AttachmentOwner::Diagnostic(guard), reservation)
+    }
+    pub(super) fn open_owner(guard: AttachmentOwner<'guard, 'egress>,
+        reservation: &AttachmentReservation<'guard, 'egress>) -> Result<Self, String> {
         guard.check()?;
         let lock = reservation.backend_lock()?;
-        lock.require_guard(guard)?;
+        lock.require_owner(&guard)?;
         let descriptors = guard.egress().duplicate_attachment()?;
         guard.check()?; lock.check()?;
         let host_file = file(unsafe { libc::socket(libc::AF_NETLINK,
@@ -115,7 +128,7 @@ impl<'guard, 'egress> AttachmentBackend<'guard, 'egress> {
         require(child_identity.0 == descriptors.route_socket_device && child_identity.1 == descriptors.route_socket_inode)?;
         let mut transcript = Vec::with_capacity(MAX_TRANSCRIPT);
         transcript.extend_from_slice(b"SWNATBE1"); transcript.extend_from_slice(&0u32.to_be_bytes());
-        let owner = Self { guard, lock,
+        let owner = Self { guard, lock, phase: Phase::Admission,
             host: Socket { file: host_file, identity: host_identity, namespace: descriptors.host_namespace,
                 namespace_identity: (descriptors.host_namespace_device, descriptors.host_namespace_inode), port: host_port },
             child: Socket { file: descriptors.child_route, identity: child_identity, namespace: descriptors.child_namespace,
@@ -139,7 +152,13 @@ impl<'guard, 'egress> AttachmentBackend<'guard, 'egress> {
     }
 
     fn socket(&self, side: Side) -> &Socket { if side == Side::Host { &self.host } else { &self.child } }
-    fn source(&self) -> Result<(), String> { self.guard.check()?; self.lock.check() }
+    fn source(&self) -> Result<(), String> { self.guard.check_phase(self.phase)?; self.lock.check_phase(self.phase) }
+    pub(super) fn enter_continuation(&mut self) -> Result<(), String> {
+        require(self.submitted && !self.stopped.get())?;
+        self.guard.check_phase(Phase::Continuation)?;
+        self.phase = Phase::Continuation;
+        self.current()
+    }
     fn io<T>(&self, operation: impl FnOnce() -> io::Result<T>) -> Result<T, String> {
         self.source()?; let result = operation(); self.source()?;
         result.map_err(|_| "native attachment IO failed or outcome uncertain".to_owned())
@@ -241,7 +260,7 @@ impl<'guard, 'egress> AttachmentBackend<'guard, 'egress> {
             if let Some(error) = error {
                 self.source()?;
                 if error.kind() != io::ErrorKind::WouldBlock { return Err("native attachment receive lost data".to_owned()); }
-                let timeout = self.guard.deadline()?.checked_duration_since(Instant::now())
+                let timeout = self.guard.deadline(self.phase)?.checked_duration_since(Instant::now())
                     .ok_or("native attachment original deadline expired")?.as_millis().min(25) as i32;
                 let events = self.io(|| {
                     let mut poll = libc::pollfd { fd: self.socket(side).file.as_raw_fd(), events: libc::POLLIN, revents: 0 };
@@ -297,15 +316,16 @@ impl<'guard, 'egress> AttachmentBackend<'guard, 'egress> {
             }
         }
         let closing = [self.query(Side::Host, DumpKind::Links)?, self.query(Side::Child, DumpKind::Links)?];
-        Ok(Snapshot { owner: self.guard.egress() as *const EgressGuard as usize,
+        Ok(Snapshot { owner: self.guard.egress().identity(),
             plan_sha256: self.plan_sha256, transcript_sha256: Sha256::digest(&self.transcript).into(),
             originals, closing })
     }
     pub(super) fn plan(&mut self) -> Result<AttachmentPlan, String> {
+        require(self.phase == Phase::Admission)?; self.guard.check()?;
         self.begin()?; require(self.plan_sha256.is_none() && !self.attempted)?;
         let originals = self.collect()?;
         let preflight = attachment_readback::preflight(self.guard.authority(), &originals)?;
-        let plan = wire::build(self.guard.egress(), self.guard.authority(), preflight.host_index(), preflight.child_index(),
+        let plan = wire::build_source(self.guard.egress(), self.guard.authority(), preflight.host_index(), preflight.child_index(),
             self.child.namespace.as_raw_fd(), self.host.port, self.child.port, self.next_sequence[0], self.next_sequence[1],
             self.host.namespace_identity, self.child.namespace_identity)?;
         self.next_sequence = [plan.last_sequence(Side::Host).checked_add(1).ok_or("native host sequence exhausted")?,
@@ -314,11 +334,12 @@ impl<'guard, 'egress> AttachmentBackend<'guard, 'egress> {
     }
     pub(super) fn submit_once(&mut self, plan: &AttachmentPlan,
         reservation: &AttachmentReservation<'guard, 'egress>) -> Result<(), String> {
-        self.begin()?; plan.require_owner(self.guard.egress())?;
+        require(self.phase == Phase::Admission)?; self.guard.check()?;
+        self.begin()?; plan.require_source(self.guard.egress(), Phase::Admission)?;
         require(!self.attempted && self.plan_sha256 == Some(plan.sha256()))?;
-        reservation.require_claim(self.guard.egress(), plan)?; self.attempted = true;
+        reservation.require_source_claim(self.guard.egress(), plan)?; self.attempted = true;
         for operation in plan.operations() {
-            reservation.require_claim(self.guard.egress(), plan)?;
+            reservation.require_source_claim(self.guard.egress(), plan)?;
             self.send(operation.side, 2, &operation.original)?;
             let raw = self.receive(operation.side)?; let frames = wire::frames(&raw)?;
             self.account(frames.len())?; require(frames.len() == 1)?;
@@ -339,7 +360,7 @@ impl<'guard, 'egress> AttachmentBackend<'guard, 'egress> {
     /// Raw originals remain available on failure; copying them cannot revive IO.
     pub(super) fn transcript(&self) -> Result<AttachmentTranscript, String> {
         require(self.transcript.len() <= MAX_TRANSCRIPT && self.events <= MAX_EVENTS)?;
-        Ok(AttachmentTranscript { owner: self.guard.egress() as *const EgressGuard as usize,
+        Ok(AttachmentTranscript { owner: self.guard.egress().identity(),
             plan_sha256: self.plan_sha256.ok_or("native attachment intent not prepared")?, original: self.transcript.clone() })
     }
 }

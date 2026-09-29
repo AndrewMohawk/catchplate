@@ -5,7 +5,7 @@
 //! not a serializable permission to start a workload or enter another session.
 
 use super::{backend::{Backend, ReplyOriginals}, kernel_reservation::{self, KernelClaimState},
-    readback, reservation::Spec, wire::DumpKind, EgressGuard};
+    owners::{Owner, Phase}, readback, reservation::Spec, wire::DumpKind, EgressGuard};
 use std::path::PathBuf;
 
 struct Snapshot {
@@ -33,7 +33,7 @@ impl Snapshot {
 /// historical local data; check() performs a fresh bounded read-only comparison
 /// under the SAME original allowance. Nothing grants workload start authority.
 pub(in super::super) struct Installed<'a> {
-    guard: &'a EgressGuard,
+    guard: Owner<'a>,
     backend: Backend<'a>,
     semantic_sha256: [u8; 32],
     evidence_sha256: [u8; 32],
@@ -45,20 +45,33 @@ impl Installed<'_> {
     /// Query-free ownership admission for the separately authorized network
     /// attachment path. It does not replace boundary semantic readbacks.
     pub(super) fn require_owner(&self, guard: &EgressGuard) -> Result<(), String> {
-        super::ensure(!self.stopped && std::ptr::eq(self.guard, guard),
+        self.require_source(Owner::Diagnostic(guard), Phase::Admission)
+    }
+    pub(super) fn require_source(&self, guard: Owner<'_>, phase: Phase) -> Result<(), String> {
+        super::ensure(!self.stopped && self.guard.same(guard),
             "native installed egress owner differs or is stopped")?;
+        self.guard.check_phase(phase)?;
         self.backend.current()
+    }
+    pub(super) fn enter_continuation(&mut self) -> Result<(), String> {
+        super::ensure(!self.stopped, "native installed egress owner stopped")?;
+        self.guard.check_phase(Phase::Continuation)?;
+        self.backend.enter_continuation()
     }
 
     pub(in super::super) fn check(&mut self) -> Result<(), String> {
+        self.check_phase(Phase::Admission)
+    }
+    pub(super) fn check_phase(&mut self, phase: Phase) -> Result<(), String> {
         super::ensure(!std::mem::replace(&mut self.stopped, true), "native installed egress owner stopped")?;
-        self.guard.check()?;
-        let snapshot = Snapshot::acquire(&mut self.backend, &self.guard.precreation.authorization.ruleset.table_name)?;
-        let current = readback::verify(&self.guard.precreation.authorization.ruleset,
+        self.guard.check_phase(phase)?;
+        if phase == Phase::Continuation { self.backend.enter_continuation()?; }
+        let snapshot = Snapshot::acquire(&mut self.backend, &self.guard.authority().ruleset.table_name)?;
+        let current = readback::verify(&self.guard.authority().ruleset,
             &snapshot.before, snapshot.references(), &snapshot.after)?;
         super::ensure(current.semantic_sha256() == self.semantic_sha256,
             "native installed egress semantic state changed")?;
-        self.guard.check()?;
+        self.guard.check_phase(phase)?;
         self.stopped = false;
         Ok(())
     }
@@ -69,19 +82,26 @@ impl Installed<'_> {
 }
 
 pub(super) fn install(guard: &EgressGuard) -> Result<Installed<'_>, String> {
+    install_owner(Owner::Diagnostic(guard))
+}
+
+pub(super) fn install_owner(guard: Owner<'_>) -> Result<Installed<'_>, String> {
     guard.check()?;
-    let grant = &guard.precreation.authorization;
+    let grant = guard.authority();
+    let (reservation_id, association_sha256, token_sha256) = guard.association();
     // The journal lock precedes the independent protected backend lock. Intent
     // is initially absent, not a caller-supplied success or transaction digest.
-    let mut journal = kernel_reservation::open_kernel(Spec {
+    let mut journal = kernel_reservation::open_kernel_owner(Spec {
         journal_path: PathBuf::from(&grant.journal.path), journal_device: grant.journal.device,
-        journal_inode: grant.journal.inode, reservation_id: guard.reservation_id,
-        association_sha256: guard.association_sha256, token_sha256: guard.token_sha256,
+        journal_inode: grant.journal.inode, reservation_id,
+        association_sha256, token_sha256,
         intended_transaction_sha256: [0; 32],
     }, guard)?;
-    let mut backend = Backend::open(guard, &journal)?;
+    let mut backend = Backend::open_owner(guard, &journal)?;
 
     if let Some(retained) = journal.retained_transaction().map(|raw| raw.to_vec()) {
+        super::ensure(matches!(guard, Owner::Diagnostic(_)),
+            "executable child cannot reuse a completed egress effect")?;
         // A completed read-only check must not encode a new transaction using a
         // changed generation or sequence, and must never publish another claim.
         journal.reserve_transaction(&retained)?;

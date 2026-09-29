@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-bootstrap-client-capture.v5.schema.json",
+  "title": "Native bootstrap and completed single-attempt execution capture v5",
+  "description": "Closed ten-field local capture, one JSON line plus one LF at most 1572864 bytes. Written only after exact workload/guardian reaps, separate empty-leaf observations and complete bounded output accounting. Original proof bytes are retained, not renewed. No capture follows an uncertain execution/cleanup; a nonzero workload exit can produce a terminal capture but the CLI still fails. Output is data, never action or restart permission. V1-v4 profiles cannot be relabeled as v5.",
+  "type": "object", "additionalProperties": false,
+  "required": ["apiVersion", "resultScope", "okForAction", "configurationSha256", "requestSha256", "endpoint", "challengeSource", "evidenceBase64url", "verification", "execution"],
+  "properties": {
+    "apiVersion": {"const": "serverware.nativeBootstrapClientCapture/v5"},
+    "resultScope": {"const": "local-fixed-endpoint-bootstrap-and-execution-observation"},
+    "okForAction": {"const": false},
+    "configurationSha256": {"$ref": "native-bootstrap-client-capture.v2.schema.json#/properties/configurationSha256"},
+    "requestSha256": {"$ref": "native-bootstrap-client-capture.v2.schema.json#/properties/requestSha256"},
+    "endpoint": {"$ref": "native-bootstrap-client-capture.v2.schema.json#/properties/endpoint"},
+    "challengeSource": {"const": "independently-pinned"},
+    "evidenceBase64url": {"$ref": "native-bootstrap-client-capture.v2.schema.json#/properties/evidenceBase64url"},
+    "verification": {"$ref": "native-bootstrap-client-capture.v2.schema.json#/properties/verification"},
+    "execution": {"$ref": "native-execution-observation.v1.schema.json"}
+  }
+}

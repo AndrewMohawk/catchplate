@@ -1,7 +1,9 @@
 # Native blocked executable child
 
-This is source-only implementation, not a runnable start interface or pilot
-result. `start::prepare_blocked_child` consumes the actual executable-parent
+This is source-only implementation, not a tested start interface or pilot
+result. The explicit [v5 lifecycle](native-execution-lifecycle.md) now consumes
+this owner after genuine same-child networking and guardian admission.
+`start::prepare_blocked_child` consumes the actual executable-parent
 admission, durable start and creation claims, and newly limited cgroup owner.
 The older diagnostic child is unchanged and cannot be converted into this one.
 
@@ -36,8 +38,8 @@ umask, empties supplementary groups and all capability sets, locks securebits,
 sets the signed non-root UID/GID and no-new-privileges, disables dump/core dumps,
 and verifies those changes. Stdin is the actual null device; stdout/stderr are
 bounded pipes. The combined signed output limit is retained by the owner;
-there is not yet a running-program output/publication loop. Successful exec
-would retain only descriptors 0, 1 and 2.
+the lifecycle accounts for both streams through bounded final EOF. Successful
+exec retains only descriptors 0, 1 and 2.
 
 Before clone the parent retains a creator-**thread** pidfd. The child installs
 PDEATHSIG and polls that pidfd to close the parent-death race, then repeats this
@@ -55,16 +57,18 @@ the guardian. The guardian READY bound is the original admission deadline; the
 signed stop/cleanup bounds do not renew it. Guardian preparation cannot itself
 resume the workload.
 
-## No exec release yet
+## Consuming exec release
 
-There is **no gate-release sender, PTRACE_CONT, public start configuration or
-conversion to a running owner**. A genuine same-child network installation and
-attachment permission is still required before such a transition can be added.
-The source contains the real syscall-only `execveat` continuation and a private
-positive EXEC observer, but neither is reachable through a release API in this
-slice. An EXEC acknowledgement requires the exact retained leader's
+The [v5 lifecycle](native-execution-lifecycle.md) now moves a genuine same-child
+network-ready owner into the guarded execution/cleanup scope. Its one-shot
+release latch precedes the sole gate send and PTRACE_CONT; no serialized result
+or old diagnostic owner can authorize either. An EXEC acknowledgement requires
+the exact retained leader's
 `PTRACE_EVENT_EXEC` stop and original event-message identity. Gate EOF,
 pre-exec death, exit status 127 or a vanished executable FD are not success.
+Final original-clock checks precede detach at that positive first EXEC stop;
+normal signals are then handled by the application while the independent
+guardian enforces the signed lifetime. This source path has not been executed.
 
 `BlockedChild::terminate` attempts emergency whole-leaf kill and exact leader
 pidfd kill even if admission has expired. It separately performs the exact

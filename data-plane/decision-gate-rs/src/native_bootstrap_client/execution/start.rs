@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct Inputs {
+pub(in super::super) struct Inputs {
     authority: ArtifactV1,
     authority_root: ArtifactV1,
     capability_token: ArtifactV1,
@@ -24,7 +24,7 @@ pub(super) struct Inputs {
 }
 
 impl Inputs {
-    fn validate(&self) -> Result<(), String> {
+    pub(in super::super) fn validate(&self) -> Result<(), String> {
         let originals = [&self.authority, &self.authority_root,
             &self.capability_token, &self.execution_manifest];
         for original in originals { config::artifact(original)?; }
@@ -39,7 +39,7 @@ impl Inputs {
 
 /// Preparation is not a transferable execution permission. StartOwner consumes
 /// this exact owner only after genuine executable-parent admission joins.
-pub(super) struct PreparedStart {
+pub(in super::super) struct PreparedStart {
     clock: Arc<OriginalClock>,
     originals: RefCell<Vec<HeldOriginal>>,
     token: RefCell<HeldOriginal>,
@@ -60,7 +60,7 @@ fn thread_id() -> Result<libc::pid_t, String> {
 fn digest_text(raw: &[u8]) -> String { format!("sha256:{:x}", Sha256::digest(raw)) }
 
 impl PreparedStart {
-    pub(super) fn open(inputs: Inputs, clock: Arc<OriginalClock>) -> Result<Self, String> {
+    pub(in super::super) fn open(inputs: Inputs, clock: Arc<OriginalClock>) -> Result<Self, String> {
         clock.check()?;
         inputs.validate()?;
         ensure(unsafe { libc::getuid() } == 0 && unsafe { libc::geteuid() } == 0

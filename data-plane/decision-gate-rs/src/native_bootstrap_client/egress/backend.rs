@@ -6,7 +6,7 @@
 //! error poisons this owner; raw IO events remain data for uncertainty custody.
 
 use super::{authority::Ruleset, kernel_reservation::{BackendLock, KernelReservation},
-    wire::{self, DumpKind, Transaction}, EgressGuard};
+    owners::{Owner, Phase}, wire::{self, DumpKind, Transaction}, EgressGuard};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::fs::File;
@@ -68,7 +68,8 @@ struct Prepared { sha256: [u8; 32], first_sequence: u32, last_sequence: u32 }
 type Identity = (u64, u64, u32, u32, u32);
 
 pub(super) struct Backend<'a> {
-    guard: &'a EgressGuard,
+    guard: Owner<'a>,
+    phase: Phase,
     lock: BackendLock<'a>,
     socket: File,
     socket_identity: Identity,
@@ -92,26 +93,26 @@ impl<'a> Backend<'a> {
     pub(super) fn open(guard: &'a EgressGuard, reservation: &KernelReservation<'a>)
         -> Result<Self, String>
     {
+        Self::open_owner(Owner::Diagnostic(guard), reservation)
+    }
+    pub(super) fn open_owner(guard: Owner<'a>, reservation: &KernelReservation<'a>)
+        -> Result<Self, String>
+    {
         guard.check()?;
         let lock = reservation.backend_lock()?;
-        lock.require_guard(guard)?;
+        lock.require_owner(guard)?;
         let socket = guard.duplicate_backend()?;
         lock.check()?;
         let meta = socket.metadata();
         guard.check()?;
         lock.check()?;
         let meta = meta.map_err(|_| "native backend socket metadata failed")?;
-        let (namespace_device, namespace_inode, port_id, device, inode) = {
-            let workload = guard.workload.try_borrow().map_err(|_| "native workload already borrowed")?;
-            let actual = workload.identity();
-            (actual.namespace_device, actual.namespace_inode, actual.backend_port_id,
-                actual.backend_socket_device, actual.backend_socket_inode)
-        };
+        let (namespace_device, namespace_inode, port_id, device, inode) = guard.backend_identity()?;
         require(meta.dev() == device && meta.ino() == inode && port_id != 0)?;
         let mut transcript = Vec::with_capacity(MAX_TRANSCRIPT);
         transcript.extend_from_slice(TRANSCRIPT_MAGIC);
         transcript.extend_from_slice(&0u32.to_be_bytes());
-        let mut owner = Self { guard, lock, socket,
+        let mut owner = Self { guard, phase: Phase::Admission, lock, socket,
             socket_identity: (meta.dev(), meta.ino(), meta.mode(), meta.uid(), meta.gid()),
             namespace_device, namespace_inode, port_id, next_sequence: 1,
             prepared: None, attempted_mutation: false, stopped: true, messages: 0,
@@ -135,8 +136,15 @@ impl<'a> Backend<'a> {
     }
 
     fn source(&self) -> Result<(), String> {
-        self.guard.check()?;
-        self.lock.check()
+        self.guard.check_phase(self.phase)?;
+        self.lock.check_phase(self.phase)
+    }
+
+    pub(super) fn enter_continuation(&mut self) -> Result<(), String> {
+        require(!self.stopped && self.attempted_mutation)?;
+        self.guard.check_phase(Phase::Continuation)?;
+        self.phase = Phase::Continuation;
+        self.current()
     }
 
     // Private internal bracketing only; no callback crosses an API boundary.
@@ -280,7 +288,7 @@ impl<'a> Backend<'a> {
                 if error.kind() != io::ErrorKind::WouldBlock {
                     return Err("native netlink receive failed or lost data".to_owned());
                 }
-                let timeout = self.guard.deadline()?.checked_duration_since(Instant::now())
+                let timeout = self.guard.deadline(self.phase)?.checked_duration_since(Instant::now())
                     .ok_or("native backend original deadline expired")?.as_millis().min(25) as i32;
                 let events = self.io(|| {
                     let mut poll = libc::pollfd { fd: self.socket.as_raw_fd(), events: libc::POLLIN, revents: 0 };
@@ -361,7 +369,7 @@ impl<'a> Backend<'a> {
 
     pub(super) fn dump(&mut self, kind: DumpKind, table: &str) -> Result<ReplyOriginals, String> {
         self.begin()?;
-        require(table == self.guard.precreation.authorization.ruleset.table_name)?;
+        require(table == self.guard.authority().ruleset.table_name)?;
         let sequence = self.sequence()?;
         let request = wire::dump_request(kind, table, self.port_id, sequence)?;
         let originals = self.query(sequence, request, Some(kind))?;
@@ -370,9 +378,11 @@ impl<'a> Backend<'a> {
     }
 
     pub(super) fn transaction(&mut self, ruleset: &Ruleset, generation: u32) -> Result<Transaction, String> {
+        require(self.phase == Phase::Admission)?;
+        self.guard.check()?;
         self.begin()?;
         require(self.prepared.is_none() && !self.attempted_mutation
-            && std::ptr::eq(ruleset, &self.guard.precreation.authorization.ruleset))?;
+            && std::ptr::eq(ruleset, &self.guard.authority().ruleset))?;
         let first_sequence = self.next_sequence;
         let transaction = Transaction::build(ruleset, generation, self.port_id, first_sequence)?;
         let last_sequence = transaction.last_sequence();
@@ -395,7 +405,9 @@ impl<'a> Backend<'a> {
         require(intended == prepared.sha256 && transaction.last_sequence() == prepared.last_sequence
             && transaction.expected_acks().iter().all(|ack|
                 (prepared.first_sequence..=prepared.last_sequence).contains(&ack.sequence)))?;
-        reservation.require_backend_claim(self.guard, intended)?;
+        require(self.phase == Phase::Admission)?;
+        self.guard.check()?;
+        reservation.require_owner_claim(self.guard, intended)?;
         self.attempted_mutation = true;
         self.send_once(MUTATION_ATTEMPT, transaction.bytes())?;
         let mut seen = BTreeSet::new();

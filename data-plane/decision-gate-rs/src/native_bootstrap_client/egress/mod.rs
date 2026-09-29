@@ -1,7 +1,8 @@
-//! Separate grant, genuine proof, host and never-executed workload ownership.
+//! Separate grants and genuine proof/host/child ownership for fixed networking.
 //!
 //! Creation is preceded by a distinct irreversible cross-invocation claim.
-//! This remains a never-executed child owner, not workload start authority.
+//! Diagnostic creation and executable-child borrowing remain separate owners;
+//! neither can substitute for the independent workload start/release authority.
 //! Network attachment requires its separate admitted grant and durable claim;
 //! no generic effect API is exposed.
 
@@ -17,6 +18,8 @@ mod child_network_policy;
 mod creation_reservation;
 mod effect;
 mod execution_parents;
+mod native_execution;
+mod owners;
 mod kernel_reservation;
 mod readback;
 mod reservation;
@@ -24,6 +27,7 @@ mod wire;
 mod workload;
 pub(super) use execution_parents::{bind_for_start, prepare_for_start, ExecutionParents, ExecutionPending};
 pub(super) use creation_reservation::ExecutionCreationPermit;
+pub(super) use native_execution::{NetworkReady, PreparedNetwork};
 // Reuse actual host observation, not the CA authorization or journal.
 #[path = "../install/host.rs"]
 mod host;

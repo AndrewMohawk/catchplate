@@ -8,8 +8,8 @@ mod install;
 // separately authorized network attachment. Neither profile starts a workload.
 #[allow(dead_code)]
 mod egress;
-// Private start admission and claimed cgroup preparation only; no public
-// execution configuration, executable child or independent guardian yet.
+// V5 alone selects actual executable parents, claimed containment, same-child
+// networking, guardian, consuming exec release and terminal cleanup.
 #[allow(dead_code)]
 mod execution;
 #[path = "../native_ingress_client/identity.rs"]
@@ -222,17 +222,25 @@ pub(super) fn run() -> Result<(), String> {
         Some(inputs) => Some(install::prepare(inputs, &clock, &mut held)?),
         None => None,
     };
-    let attachment = match config.attachment {
+    let mut attachment = match config.attachment {
         Some(inputs) => Some(egress::attachment::prepare(inputs, &clock, &mut held)?),
         None => None,
     };
-    let egress = match config.egress {
+    // Explicit v5 selects execution before any network contact. V1-v4 cannot
+    // obtain it by presenting newer signed bytes or a successful diagnostic.
+    let (execution, egress) = if let Some(inputs) = config.execution {
+        let start = execution::PreparedStart::open(inputs, Arc::clone(&clock))?;
+        let network = attachment.take().ok_or("native execution requires its actual attachment original")?;
+        let egress = config.egress.ok_or("native execution requires its actual egress original")?;
+        let parents = egress::prepare_for_start(egress, network, &clock, &mut held)?;
+        (Some((start, parents)), None)
+    } else { (None, match config.egress {
         Some(inputs) => Some(match attachment.as_ref() {
             Some(network) => egress::prepare_for_attachment(inputs, network, &clock, &mut held)?,
             None => egress::prepare(inputs, &clock, &mut held)?,
         }),
         None => None,
-    };
+    }) };
     let authority = if prepared.host().contains(':') {
         format!("[{}]:{}", prepared.host(), config.endpoint.port())
     } else { format!("{}:{}", prepared.host(), config.endpoint.port()) };
@@ -249,6 +257,51 @@ pub(super) fn run() -> Result<(), String> {
     connection.check()?;
     let evidence = http::post(&mut connection, &authority, config.challenge, &request_raw)?;
     connection.check()?;
+    if let Some((start, pending)) = execution {
+        let proof = connection.admit_installation(&evidence, &delegation_root, &delegation_pin,
+            &setup_root, &setup_pin, &caller_issuer_der, &config.expected_caller_principal,
+            &config.expected_target_principal, &config.expected_target_nonce,
+            &config.expected_target_request_sha256, sent.delegation_original(),
+            sent.setup_original(), sent.target_request_original())?;
+        let mut capture = json!({
+            "apiVersion":"serverware.nativeBootstrapClientCapture/v5",
+            "resultScope":"local-fixed-endpoint-bootstrap-and-execution-observation",
+            "okForAction":false,
+            "configurationSha256":super::sha256_prefixed(&configuration_raw),
+            "requestSha256":super::sha256_prefixed(&request_raw),
+            "endpoint":config.endpoint.to_string(),
+            "challengeSource":"independently-pinned",
+            "evidenceBase64url":URL_SAFE_NO_PAD.encode(&evidence),
+            "verification":json::parse(proof.diagnostic(), 4095)?,
+            "execution":null,
+        });
+        let provisional = serde_json::to_vec(&capture).map_err(|_| "encode execution capture reservation")?;
+        ensure(!provisional.is_empty() && provisional.len() < MAX_CAPTURE_BYTES - 16 * 1024,
+            "native execution capture cannot reserve its bounded terminal observation")?;
+        recheck(&mut held, &mut private_original, &clock)?;
+        let parents = egress::bind_for_start(pending, proof, connection, clock, held,
+            private_original, &configuration_raw)?;
+        let observation = execution::execute(start, parents)?;
+        let succeeded = observation.workload_succeeded();
+        let observed = serde_json::to_value(observation).map_err(|_| "encode native execution observation")?;
+        ensure(serde_json::to_vec(&observed).map_err(|_| "measure native execution observation")?.len() <= 16 * 1024,
+            "native execution observation exceeds its reserved bound")?;
+        capture["execution"] = observed;
+        let mut encoded = serde_json::to_vec(&capture).map_err(|_| "encode native execution capture")?;
+        ensure(!encoded.is_empty() && encoded.len() < MAX_CAPTURE_BYTES
+            && !encoded.contains(&b'\n') && !encoded.contains(&b'\r'),
+            "native execution capture exceeds its single-line bound")?;
+        encoded.push(b'\n');
+        // All workload/guardian reaps and empty-leaf observations precede
+        // this data-only output. Do not renew the expired admission clock to
+        // print a receipt, nor keep a running child behind a blocked writer.
+        let stdout = std::io::stdout();
+        let mut output = stdout.lock();
+        output.write_all(&encoded).map_err(|_| "write completed native execution capture")?;
+        output.flush().map_err(|_| "flush completed native execution capture")?;
+        ensure(succeeded, "native workload exited unsuccessfully; exact terminal capture was written")?;
+        return Ok(());
+    }
     if let Some(pending) = egress {
         let proof = connection.admit_installation(&evidence, &delegation_root, &delegation_pin,
             &setup_root, &setup_pin, &caller_issuer_der, &config.expected_caller_principal,

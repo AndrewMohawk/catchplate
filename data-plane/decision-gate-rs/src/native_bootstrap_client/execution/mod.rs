@@ -1,8 +1,7 @@
-//! Retained executable-parent admission and guarded pre-exec child ownership.
+//! Retained native execution admission, same-child networking and lifecycle.
 //!
-//! No public start configuration or same-child network/release path yet.
-//! Actual owners and durable claims precede cgroup/child creation; the new child
-//! remains blocked. The old diagnostic workload cannot be promoted.
+//! Explicit cold v5 reaches only genuine executable parents and durable claims.
+//! The old diagnostic workload cannot be promoted or used to mint a permit.
 
 mod elf;
 mod manifest;
@@ -12,11 +11,16 @@ mod start;
 mod parent;
 mod start_reservation;
 mod containment;
-mod child;
+pub(super) mod child;
+pub(super) mod child_network;
+pub(super) mod network;
 mod child_trampoline;
 mod guardian;
 mod guardian_process;
 mod guarded;
+mod lifecycle;
+pub(super) use start::{Inputs, PreparedStart};
+pub(super) use lifecycle::execute;
 #[path = "../egress/child_network_policy.rs"]
 mod child_network_policy;
 // Reuse actual host observation, never CA-install permission or its journal.

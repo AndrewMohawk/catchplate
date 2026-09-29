@@ -151,7 +151,12 @@ impl Control {
 // At most two reads, no EINTR/EAGAIN retries. A partial or changing seq-file
 // record is refused rather than borrowing a fresh deadline to finish it.
 fn read_bounded(fd: BorrowedFd<'_>) -> Result<Vec<u8>, String> {
-    let mut raw = [0u8; MAX_CONTROL_BYTES];
+    read_with_bound(fd, MAX_CONTROL_BYTES)
+}
+
+fn read_with_bound(fd: BorrowedFd<'_>, maximum: usize) -> Result<Vec<u8>, String> {
+    require(matches!(maximum, MAX_CONTROL_BYTES | 65_536), "native containment read bound is not source-fixed")?;
+    let mut raw = vec![0u8; maximum];
     let count = unsafe { libc::pread(fd.as_raw_fd(), raw.as_mut_ptr().cast(), raw.len(), 0) };
     require(count >= 0 && (count as usize) < raw.len(),
         "native containment control read failed or exceeds its bound")?;
@@ -248,7 +253,7 @@ pub(super) struct ContainmentOwner {
     cleanup_deadline: u64,
     admission_stopped: Cell<bool>,
     child_attempted: Cell<bool>,
-    cleanup_finished: bool,
+    cleanup_finished: Cell<bool>,
 }
 
 /// Data-only evidence that this held leaf had no live tasks before its bound.
@@ -322,7 +327,7 @@ impl ContainmentOwner {
         }
         let result = Self { owner, permit, leaf, domain, subtree, stat, procs, limits, events,
             cleanup_deadline, admission_stopped: Cell::new(false), child_attempted: Cell::new(false),
-            cleanup_finished: false };
+            cleanup_finished: Cell::new(false) };
         result.check_unpopulated_domain()?;
         for limit in &result.limits {
             result.owner.check_admission()?;
@@ -419,6 +424,44 @@ impl ContainmentOwner {
         self.leaf.check()
     }
 
+    /// Observation only after the child owner's positively observed execution.
+    /// It cannot claim, clone, alter a limit, or renew any admission allowance.
+    pub(super) fn check_continuation(&self, leader: libc::pid_t) -> Result<(), String> {
+        require(self.child_attempted.get() && !self.cleanup_finished.get()
+            && !self.leaf.kill_attempted.get(), "native containment continuation is stopped")?;
+        self.owner.check_cleanup_scope()?;
+        self.permit.check_cleanup_integrity()?;
+        require(boottime()? < self.owner.stop_boottime_ns(),
+            "native containment signed stop boundary ended")?;
+        self.check_domain(false)?;
+        for limit in &self.limits {
+            require(limit.control.read(self.leaf.directory.as_fd(), &self.leaf.identity)? == limit.expected,
+                "native running resource limit differs from its signed original")?;
+        }
+        // Up to 4096 admitted tasks can exceed the scalar-control bound.
+        self.procs.check(self.leaf.directory.as_fd(), &self.leaf.identity)?;
+        let members = read_with_bound(self.procs.file.as_fd(), 65_536)?;
+        self.procs.check(self.leaf.directory.as_fd(), &self.leaf.identity)?;
+        require(leader > 0 && members.last() == Some(&b'\n'),
+            "native running leaf member observation is incomplete")?;
+        let text = std::str::from_utf8(&members).map_err(|_| "native running leaf member is not ASCII")?;
+        let mut found = false;
+        let mut count = 0u32;
+        for line in text.lines() {
+            let pid = line.parse::<libc::pid_t>().map_err(|_| "native running leaf member is invalid")?;
+            require(pid > 0 && line == pid.to_string(), "native running leaf member is noncanonical")?;
+            count = count.checked_add(1).ok_or("native running member count overflow")?;
+            require(count <= self.owner.constraints().resources.pids_max,
+                "native running leaf exceeds its signed task bound")?;
+            found |= pid == leader;
+        }
+        require(found, "native running leader left its retained leaf")?;
+        self.leaf.check()?;
+        self.permit.check_cleanup_integrity()?;
+        require(boottime()? < self.owner.stop_boottime_ns(),
+            "native running observation missed its signed stop boundary")
+    }
+
     pub(super) fn cleanup_borrow(&self) -> Result<ContainmentCleanupBorrow<'_>, String> {
         let result = self.cleanup_view();
         result.check()?;
@@ -433,13 +476,12 @@ impl ContainmentOwner {
 
     pub(super) fn attempt_emergency_kill(&self) -> Result<bool, String> { self.leaf.kill_once() }
 
-    pub(super) fn kill_and_wait_empty(&mut self) -> Result<LeafEmpty, String> {
+    pub(super) fn kill_and_wait_empty(&self) -> Result<LeafEmpty, String> {
         self.admission_stopped.set(true);
         // Admission revocation/expiry, journal damage and a passed cleanup bound
         // cannot prevent this first exact-descriptor emergency kill attempt.
         let acknowledged = self.leaf.kill_once()?;
-        require(!self.cleanup_finished, "native containment cleanup observation was already consumed")?;
-        self.cleanup_finished = true;
+        require(!self.cleanup_finished.replace(true), "native containment cleanup observation was already consumed")?;
         let integrity = self.permit.check_cleanup_integrity();
         let mut last = boottime()?;
         loop {

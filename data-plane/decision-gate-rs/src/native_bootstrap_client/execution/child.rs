@@ -1,9 +1,14 @@
 //! One genuinely claimed executable child, retained in a ptrace stop before
-//! exec. No public/configured start and, deliberately, no exec-release sender.
+//! exec. Only the consuming, same-child network and guardian composition may
+//! release it. There is no raw PID, descriptor, or serialized-permit constructor.
 
-use super::{child_trampoline, containment::{ContainmentCleanupBorrow, ContainmentOwner, LeafEmpty},
+#[path = "child_release.rs"]
+mod release;
+pub(super) use release::{Execution, ExitObservation, OutputObservation};
+
+use super::{child_network, child_trampoline, containment::{ContainmentCleanupBorrow, ContainmentOwner, LeafEmpty},
     filesystem::ChildFilesystem};
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::mem::{size_of, zeroed};
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
 
@@ -204,8 +209,8 @@ fn null_input() -> Result<OwnedFd, String> {
     Ok(result)
 }
 
-/// Non-Clone, no raw constructor and no method sending the exec command.
-pub(super) struct BlockedChild {
+/// Non-Clone, no raw constructor. Release requires the actual network/guardian owners.
+pub(in super::super) struct BlockedChild {
     // Drop must request whole-leaf termination while all real claims remain
     // held, then preserve exact leader pidfd cleanup before owner destruction.
     leader: Leader,
@@ -215,12 +220,18 @@ pub(super) struct BlockedChild {
     launcher_identity: Identity,
     gate: OwnedFd,
     namespaces: Vec<Namespace>,
+    network: Option<child_network::Sockets>,
+    network_attempted: Cell<bool>,
     stdout: OwnedFd,
     stderr: OwnedFd,
     output_remaining: Cell<u64>,
+    output: RefCell<release::OutputState>,
     guardian_attempted: Cell<bool>,
+    release_attempted: Cell<bool>,
+    executed: Cell<bool>,
+    continuation_stopped: Cell<bool>,
     stopped: Cell<bool>,
-    cleanup_attempted: bool,
+    cleanup_attempted: Cell<bool>,
 }
 
 impl BlockedChild {
@@ -312,9 +323,12 @@ impl BlockedChild {
         drop(stderr_writer);
         drop(stdin);
         let mut result = Self { leader, containment, filesystem, launcher, launcher_identity, gate,
-            namespaces: Vec::with_capacity(5), stdout, stderr,
-            output_remaining: Cell::new(output_remaining), guardian_attempted: Cell::new(false),
-            stopped: Cell::new(false), cleanup_attempted: false };
+            namespaces: Vec::with_capacity(5), network: None, network_attempted: Cell::new(false), stdout, stderr,
+            output_remaining: Cell::new(output_remaining), output: RefCell::new(release::OutputState::new()),
+            guardian_attempted: Cell::new(false),
+            release_attempted: Cell::new(false), executed: Cell::new(false),
+            continuation_stopped: Cell::new(false),
+            stopped: Cell::new(false), cleanup_attempted: Cell::new(false) };
         require(restored, "native launcher signal mask restore failed; child remains unreleased")?;
         result.await_ready()?;
         result.leader.check()?;
@@ -346,7 +360,7 @@ impl BlockedChild {
         self.containment.owner().clock().boottime_deadline()
     }
 
-    fn await_ready(&self) -> Result<(), String> {
+    fn await_ready(&mut self) -> Result<(), String> {
         loop {
             let deadline = self.admission()?;
             let events = poll(self.gate.as_fd(), libc::POLLIN, deadline)?;
@@ -354,14 +368,17 @@ impl BlockedChild {
             require(events & (libc::POLLERR | libc::POLLHUP) == 0,
                 "native executable child died before blocked readiness")?;
             if events & libc::POLLIN == 0 { continue; }
-            let mut bytes = [0u8; 9];
-            let count = unsafe { libc::recv(self.gate.as_raw_fd(), bytes.as_mut_ptr().cast(),
-                bytes.len(), libc::MSG_DONTWAIT | libc::MSG_TRUNC) };
-            require(count == child_trampoline::READY.len() as isize
-                && &bytes[..8] == child_trampoline::READY,
-                "native child readiness message is incomplete or not source-produced")?;
-            self.admission()?;
-            return Ok(());
+            match child_network::receive(self.gate.as_fd())? {
+                child_network::Message::Originals(originals) => {
+                    require(self.network.is_none(), "native child sent duplicate network originals")?;
+                    self.network = Some(originals);
+                }
+                child_network::Message::Ready => {
+                    require(self.network.is_some(), "native child readiness lacks its actual network sockets")?;
+                    self.admission()?;
+                    return Ok(());
+                }
+            }
         }
     }
 
@@ -385,7 +402,7 @@ impl BlockedChild {
     }
 
     pub(super) fn check(&self) -> Result<(), String> {
-        require(!self.stopped.replace(true) && !self.cleanup_attempted,
+        require(!self.stopped.replace(true) && !self.cleanup_attempted.get() && !self.release_attempted.get(),
             "native blocked child admission is stopped")?;
         self.admission()?;
         require(self.stop_event()? == Some((libc::CLD_TRAPPED,
@@ -394,6 +411,7 @@ impl BlockedChild {
         self.filesystem.check(self.containment.owner().filesystem())?;
         require(self.namespaces.len() == 5, "native child namespace originals are incomplete")?;
         for namespace in &self.namespaces { namespace.check(&self.leader)?; }
+        self.network_originals()?.check(self.network_namespace()?.fd.as_fd())?;
         self.admission()?;
         require(self.stop_event()? == Some((libc::CLD_TRAPPED,
             libc::SIGTRAP | (PTRACE_EVENT_STOP << 8))), "native child closing stop changed")?;
@@ -407,8 +425,19 @@ impl BlockedChild {
         Ok(GuardianBorrow { child: self })
     }
 
-    // Actual positive EXEC observer, deliberately private and unused until a
-    // genuine same-child network permission can authorize release. EOF,
+    fn network_namespace(&self) -> Result<&Namespace, String> {
+        self.namespaces.iter().find(|value| value.kind == libc::CLONE_NEWNET)
+            .ok_or_else(|| "native child network namespace original absent".to_owned())
+    }
+    fn network_originals(&self) -> Result<&child_network::Sockets, String> {
+        self.network.as_ref().ok_or_else(|| "native child network socket originals absent".to_owned())
+    }
+    pub(in super::super) fn network_borrow(&self) -> Result<ChildNetworkBorrow<'_>, String> {
+        self.check()?;
+        Ok(ChildNetworkBorrow { child: self })
+    }
+
+    // Actual positive EXEC observer after genuine same-child network release. EOF,
     // CLD_EXITED/127 and every other stop are NOT successful exec evidence.
     fn observe_exec(&self) -> Result<ExecAcknowledgement, String> {
         loop {
@@ -437,26 +466,14 @@ impl BlockedChild {
         }
     }
 
-    fn drain_output(&self) -> Result<(), String> {
-        let mut bytes = [0u8; 4096];
-        for fd in [&self.stdout, &self.stderr] {
-            let count = unsafe { libc::read(fd.as_raw_fd(), bytes.as_mut_ptr().cast(), bytes.len()) };
-            if count < 0 {
-                require(std::io::Error::last_os_error().raw_os_error() == Some(libc::EAGAIN),
-                    "native child bounded output read failed")?;
-            } else {
-                let left = self.output_remaining.get().checked_sub(count as u64)
-                    .ok_or("native child exceeded signed combined output limit")?;
-                self.output_remaining.set(left);
-            }
-        }
-        Ok(())
+    fn drain_output(&self) -> Result<bool, String> {
+        self.output.try_borrow_mut().map_err(|_| "native child output owner already borrowed")?
+            .drain([self.stdout.as_fd(), self.stderr.as_fd()], &self.output_remaining)
     }
 
-    pub(super) fn terminate(&mut self) -> Result<ChildCleanup, String> {
+    pub(super) fn terminate(&self) -> Result<ChildCleanup, String> {
         self.stopped.set(true);
-        let first = !self.cleanup_attempted;
-        self.cleanup_attempted = true;
+        let first = !self.cleanup_attempted.replace(true);
         // None of these emergency attempts depend on renewed admission, the
         // guardian being alive or a timely wall/boot clock. Each actor has its
         // own one-shot latch; there is no global exactly-once-kill assertion.
@@ -508,8 +525,7 @@ impl GuardianBorrow<'_> {
     }
 }
 
-/// Private, data-only positive observation. No consumer presently releases or
-/// converts the blocked owner, and no serializable object grants start rights.
+/// Private, data-only positive observation. No serializable object grants start rights.
 struct ExecAcknowledgement { operation: [u8; 32], observed_boottime_ns: u64 }
 
 pub(super) struct ChildCleanup { code: i32, status: i32, empty: LeafEmpty }
@@ -518,4 +534,70 @@ impl ChildCleanup {
     pub(super) fn leader_status(&self) -> i32 { self.status }
     pub(super) fn leader_code(&self) -> i32 { self.code }
     pub(super) fn leaf_empty(&self) -> &LeafEmpty { &self.empty }
+}
+
+/// Non-Clone sealed reference to this exact executable child. It never accepts
+/// a supplied socket, namespace, PID, successful verdict or diagnostic owner.
+pub(in super::super) struct ChildNetworkBorrow<'child> { child: &'child BlockedChild }
+impl ChildNetworkBorrow<'_> {
+    pub(in super::super) fn check(&self) -> Result<(), String> { self.child.check() }
+    pub(in super::super) fn check_running(&self) -> Result<(), String> {
+        self.child.check_continuation()?;
+        self.child.network_originals()?.check(self.child.network_namespace()?.fd.as_fd())?;
+        self.host_namespace()?;
+        self.child.check_continuation()
+    }
+    pub(in super::super) fn require_child(&self, child: &BlockedChild) -> Result<(), String> {
+        require(std::ptr::eq(self.child, child), "network permission belongs to another executable child")?;
+        self.check()
+    }
+    pub(in super::super) fn begin_network(&self) -> Result<(), String> {
+        self.check()?;
+        require(!self.child.network_attempted.replace(true), "native child network attempt already consumed")
+    }
+    pub(in super::super) fn kernel_identity(&self) -> [u64; 3] {
+        [self.child.leader.identity.device, self.child.leader.identity.inode, self.child.leader.pid as u64]
+    }
+    pub(in super::super) fn operation_sha256(&self) -> [u8; 32] {
+        self.child.containment.owner().operation_sha256()
+    }
+    pub(in super::super) fn parents(&self) -> &std::sync::Arc<super::super::egress::ExecutionParents> {
+        self.child.containment.owner().parents()
+    }
+    pub(in super::super) fn deadline(&self) -> Result<std::time::Instant, String> {
+        self.check()?;
+        self.child.containment.owner().clock().instant_deadline()
+    }
+    pub(in super::super) fn stop_boottime_ns(&self) -> u64 { self.child.stop_boottime_ns() }
+    pub(in super::super) fn filter(&self) -> Result<std::fs::File, String> {
+        self.check()?;
+        let result = self.child.network_originals()?.filter(self.child.network_namespace()?.fd.as_fd())?;
+        self.check()?;
+        Ok(result)
+    }
+    pub(in super::super) fn route(&self) -> Result<std::fs::File, String> {
+        self.check()?;
+        let result = self.child.network_originals()?.route(self.child.network_namespace()?.fd.as_fd())?;
+        self.check()?;
+        Ok(result)
+    }
+    pub(in super::super) fn child_namespace(&self) -> Result<std::fs::File, String> {
+        child_network::duplicate(self.child.network_namespace()?.fd.as_fd())
+    }
+    pub(in super::super) fn host_namespace(&self) -> Result<std::fs::File, String> {
+        let namespace = Namespace::from_pidfd(self.child.launcher.as_fd(), 0xff04, libc::CLONE_NEWNET)?;
+        let signed = &self.child.containment.owner().constraints().network_owner;
+        require((namespace.identity.device, namespace.identity.inode)
+            == (signed.namespace_device, signed.namespace_inode),
+            "native executable launcher network namespace changed")?;
+        child_network::duplicate(namespace.fd.as_fd())
+    }
+    pub(in super::super) fn filter_identity(&self) -> Result<(u64, u64, u32, u64, u64), String> {
+        let namespace = self.child.network_namespace()?;
+        let (device, inode, port) = self.child.network_originals()?.filter_identity();
+        Ok((namespace.identity.device, namespace.identity.inode, port, device, inode))
+    }
+    pub(in super::super) fn route_identity(&self) -> Result<(u64, u64, u32), String> {
+        Ok(self.child.network_originals()?.route_identity())
+    }
 }

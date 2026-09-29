@@ -38,6 +38,7 @@ pub(in super::super) struct Pending {
 impl Pending {
     /// Exact retained signed constraints, not an attachment or effect verdict.
     pub(super) fn authorization(&self) -> &attachment_authority::Authorization { &self.authorization }
+    pub(super) fn token_sha256(&self) -> [u8; 32] { self.token_sha256 }
 
     pub(super) fn require_egress(&self, egress: &authority::Authorization,
         clock: &OriginalClock) -> Result<(), String> {
@@ -258,7 +259,7 @@ impl<'egress> PreattachmentGuard<'egress> {
         Ok(())
     }
 
-    pub(super) fn egress(&self) -> &EgressGuard { self.egress }
+    pub(super) fn egress(&self) -> &'egress EgressGuard { self.egress }
     pub(super) fn authority(&self) -> &attachment_authority::Authorization { &self.pending.authorization }
     pub(super) fn deadline(&self) -> Result<Instant, String> {
         self.check()?;

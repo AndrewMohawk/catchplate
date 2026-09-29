@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-execution-observation.v1.schema.json",
+  "title": "Nonactionable native single-attempt execution and cleanup observation",
+  "description": "At most 16384 compact UTF-8 bytes. Positive first EXEC, exact leader exit/reap, independent guardian reap/empty observation, launcher leaf-empty observation and complete bounded output accounting are separate facts. Raw stdout/stderr are not returned. This local record neither authorizes action/retry nor proves application health, provider semantics, credential protection or production acceptance. Runtime compares exit/reap values and enforces original absolute clocks; the schema alone cannot prove them.",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema", "resultScope", "execution", "output", "cleanup", "workloadSucceeded", "actionAuthorization", "okForAction"],
+  "properties": {
+    "schema": {"const": "serverware.nativeExecutionObservation/v1"},
+    "resultScope": {"const": "local-single-attempt-execution-and-cleanup-observation"},
+    "execution": {
+      "type": "object", "additionalProperties": false,
+      "required": ["operationSha256", "execObservedBoottimeNs", "exitObservedBoottimeNs", "code", "status", "firewallSemanticSha256", "firewallEvidenceSha256", "attachmentSemanticSha256", "attachmentEvidenceSha256"],
+      "properties": {
+        "operationSha256": {"$ref": "#/$defs/digest"},
+        "execObservedBoottimeNs": {"$ref": "#/$defs/boottime"},
+        "exitObservedBoottimeNs": {"$ref": "#/$defs/boottime"},
+        "code": {"type": "integer", "enum": [1, 2, 3]},
+        "status": {"type": "integer", "minimum": 0, "maximum": 255},
+        "firewallSemanticSha256": {"$ref": "#/$defs/digest"},
+        "firewallEvidenceSha256": {"$ref": "#/$defs/digest"},
+        "attachmentSemanticSha256": {"$ref": "#/$defs/digest"},
+        "attachmentEvidenceSha256": {"$ref": "#/$defs/digest"}
+      },
+      "allOf": [{"if": {"properties": {"code": {"enum": [2, 3]}}}, "then": {"properties": {"status": {"minimum": 1, "maximum": 64}}}}]
+    },
+    "output": {
+      "type": "object", "additionalProperties": false,
+      "required": ["stdoutBytes", "stdoutSha256", "stderrBytes", "stderrSha256", "complete"],
+      "properties": {
+        "stdoutBytes": {"type": "integer", "minimum": 0, "maximum": 67108864},
+        "stdoutSha256": {"$ref": "#/$defs/digest"},
+        "stderrBytes": {"type": "integer", "minimum": 0, "maximum": 67108864},
+        "stderrSha256": {"$ref": "#/$defs/digest"},
+        "complete": {"const": true}
+      }
+    },
+    "cleanup": {
+      "type": "object", "additionalProperties": false,
+      "required": ["leaderReaped", "leafEmptyBoottimeNs", "leafKillAcknowledged", "guardianEmptyBoottimeNs", "guardianKillAcknowledged"],
+      "properties": {
+        "leaderReaped": {"const": true},
+        "leafEmptyBoottimeNs": {"$ref": "#/$defs/boottime"},
+        "leafKillAcknowledged": {"type": "boolean"},
+        "guardianEmptyBoottimeNs": {"$ref": "#/$defs/boottime"},
+        "guardianKillAcknowledged": {"type": "boolean"}
+      }
+    },
+    "workloadSucceeded": {"type": "boolean"},
+    "actionAuthorization": {"type": "null"},
+    "okForAction": {"const": false}
+  },
+  "allOf": [{
+    "if": {"properties": {"execution": {"properties": {"code": {"const": 1}, "status": {"const": 0}}}}},
+    "then": {"properties": {"workloadSucceeded": {"const": true}}},
+    "else": {"properties": {"workloadSucceeded": {"const": false}}}
+  }],
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
+    "boottime": {"type": "integer", "minimum": 1, "maximum": 18446744073709551615}
+  }
+}

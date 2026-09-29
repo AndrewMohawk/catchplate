@@ -214,6 +214,14 @@ impl ExecutionParents {
 
     pub(in super::super) fn operation_sha256(&self) -> [u8; 32] { self.operation_sha256 }
 
+    // Read-only selected originals. These getters never replace check(), a
+    // durable purpose-specific claim, the actual child or a live namespace.
+    pub(in super::super) fn egress_authorization(&self) -> &authority::Authorization {
+        &self.authorization
+    }
+    pub(in super::super) fn attachment_pending(&self) -> &attachment::Pending { &self.attachment }
+    pub(in super::super) fn original_clock(&self) -> &OriginalClock { &self.clock }
+
     pub(in super::super) fn claim_creation(self: &Arc<Self>)
         -> Result<creation_reservation::ExecutionCreationPermit, String>
     {

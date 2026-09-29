@@ -3747,10 +3747,14 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/native_bootstrap_client/execution/start_reservation.rs \
 				data-plane/decision-gate-rs/src/native_bootstrap_client/execution/containment.rs \
 				data-plane/decision-gate-rs/src/native_bootstrap_client/execution/child.rs \
+				data-plane/decision-gate-rs/src/native_bootstrap_client/execution/child_network.rs \
+				data-plane/decision-gate-rs/src/native_bootstrap_client/execution/child_release.rs \
 				data-plane/decision-gate-rs/src/native_bootstrap_client/execution/child_trampoline.rs \
 				data-plane/decision-gate-rs/src/native_bootstrap_client/execution/guardian.rs \
 				data-plane/decision-gate-rs/src/native_bootstrap_client/execution/guardian_process.rs \
 				data-plane/decision-gate-rs/src/native_bootstrap_client/execution/guarded.rs \
+				data-plane/decision-gate-rs/src/native_bootstrap_client/execution/lifecycle.rs \
+				data-plane/decision-gate-rs/src/native_bootstrap_client/execution/network.rs \
 				data-plane/decision-gate-rs/src/native_bootstrap_client/install/mod.rs \
 				data-plane/decision-gate-rs/src/native_bootstrap_client/install/authority.rs \
 				data-plane/decision-gate-rs/src/native_bootstrap_client/install/host.rs \
@@ -3758,6 +3762,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/native_bootstrap_client/install/destination.rs \
 				data-plane/decision-gate-rs/src/native_bootstrap_client/egress/mod.rs \
 				data-plane/decision-gate-rs/src/native_bootstrap_client/egress/execution_parents.rs \
+				data-plane/decision-gate-rs/src/native_bootstrap_client/egress/native_execution.rs \
+				data-plane/decision-gate-rs/src/native_bootstrap_client/egress/owners.rs \
 				data-plane/decision-gate-rs/src/native_bootstrap_client/egress/authority.rs \
 				data-plane/decision-gate-rs/src/native_bootstrap_client/egress/attachment.rs \
 				data-plane/decision-gate-rs/src/native_bootstrap_client/egress/attachment_authority.rs \
@@ -3827,10 +3833,13 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-bootstrap-client.v2.schema.json \
 				schemas/native-bootstrap-client.v3.schema.json \
 				schemas/native-bootstrap-client.v4.schema.json \
+				schemas/native-bootstrap-client.v5.schema.json \
 				schemas/native-bootstrap-client-capture.v1.schema.json \
 				schemas/native-bootstrap-client-capture.v2.schema.json \
 				schemas/native-bootstrap-client-capture.v3.schema.json \
 				schemas/native-bootstrap-client-capture.v4.schema.json \
+				schemas/native-bootstrap-client-capture.v5.schema.json \
+				schemas/native-execution-observation.v1.schema.json \
 				schemas/native-ca-installation-authorization.v1.schema.json \
 				schemas/native-egress-installation-authorization.v1.schema.json \
 				schemas/native-egress-installation-authorization.v2.schema.json \

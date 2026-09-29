@@ -3,7 +3,8 @@
 
 use super::{attachment::PreattachmentGuard, attachment_backend::AttachmentTranscript,
     attachment_readback::VerifiedAttachment, attachment_wire::AttachmentPlan, EgressGuard,
-    reservation::{Directory, DirectoryStream, FileIdentity, check_directories, directory,
+    owners::{AttachmentOwner, Owner, Phase},
+    reservation::{Directory, DirectoryStream, FileIdentity, check_directories_owner as check_directories, check_directories_phase, directory,
         duplicate_directories, file_identity, hex, open_directory, stat_at}};
 use sha2::{Digest, Sha256};
 use std::cell::{Cell, RefCell};
@@ -59,7 +60,7 @@ struct Slot { mask: u8, association: [u8; 96], observed: Option<[u8; 32]>, compl
 
 pub(super) struct AttachmentReservation<'guard, 'egress> {
     spec: Spec,
-    guard: &'guard PreattachmentGuard<'egress>,
+    guard: AttachmentOwner<'guard, 'egress>,
     directories: Vec<Directory>,
     bridge: RefCell<Option<AttachmentBackendLock<'guard, 'egress>>>,
     records: RefCell<BTreeMap<Stage, HeldRecord>>,
@@ -76,7 +77,7 @@ pub(super) struct AttachmentReservation<'guard, 'egress> {
 /// This FD and the journal's duplicate share the actual acquired flock. Neither
 /// a copied pathname nor a caller success flag can manufacture this owner.
 pub(super) struct AttachmentBackendLock<'guard, 'egress> {
-    guard: &'guard PreattachmentGuard<'egress>,
+    guard: AttachmentOwner<'guard, 'egress>,
     directories: Vec<Directory>,
     name: CString,
     file: File,
@@ -102,7 +103,7 @@ fn components(path: &PathBuf) -> Result<Vec<&str>, String> {
     Ok(parts)
 }
 
-fn directories(parts: &[&str], final_private: bool, guard: &PreattachmentGuard<'_>)
+fn directories(parts: &[&str], final_private: bool, guard: &AttachmentOwner<'_, '_>)
     -> Result<Vec<Directory>, String>
 {
     guard.check()?;
@@ -132,26 +133,32 @@ fn named_file(parent: RawFd, name: &CStr, identity: &FileIdentity) -> Result<(),
 
 impl<'guard, 'egress> AttachmentBackendLock<'guard, 'egress> {
     pub(super) fn check(&self) -> Result<(), String> {
+        self.check_phase(Phase::Admission)
+    }
+    pub(super) fn check_phase(&self, phase: Phase) -> Result<(), String> {
         ensure(!self.stopped.replace(true), "attachment bridge lock owner stopped")?;
-        self.guard.check()?;
-        check_directories(&self.directories, self.guard.egress(), self.pid)?;
+        self.guard.check_phase(phase)?;
+        check_directories_phase(&self.directories, self.guard.egress(), self.pid, phase)?;
         ensure(file_identity(&self.file, self.identity.device, 0)? == self.identity,
             "attachment bridge lock original changed")?;
         named_file(self.directories.last().ok_or("attachment lock parent absent")?.file.as_raw_fd(),
             &self.name, &self.identity)?;
-        self.guard.check()?;
+        self.guard.check_phase(phase)?;
         self.stopped.set(false);
         Ok(())
     }
     pub(super) fn require_guard(&self, guard: &PreattachmentGuard<'_>) -> Result<(), String> {
-        ensure(std::ptr::eq(self.guard, guard), "attachment bridge lock owner differs")?;
+        self.require_owner(&AttachmentOwner::Diagnostic(guard))
+    }
+    pub(super) fn require_owner(&self, guard: &AttachmentOwner<'_, '_>) -> Result<(), String> {
+        ensure(self.guard.same(guard), "attachment bridge lock owner differs")?;
         self.check()
     }
     fn duplicate(&self) -> Result<Self, String> {
         self.check()?;
         let file = self.file.try_clone().map_err(|_| "attachment bridge lock duplication failed")?;
         let identity = file_identity(&file, self.identity.device, 0)?;
-        let result = Self { guard: self.guard, directories: duplicate_directories(&self.directories)?,
+        let result = Self { guard: self.guard.clone(), directories: duplicate_directories(&self.directories)?,
             name: self.name.clone(), file, identity, pid: self.pid, stopped: Cell::new(false) };
         result.check()?; self.check()?;
         Ok(result)
@@ -390,7 +397,7 @@ impl<'guard, 'egress> AttachmentReservation<'guard, 'egress> {
         let parts = components(&self.spec.bridge_lock_path)?;
         let name = CString::new(*parts.last().ok_or("attachment bridge lock name absent")?)
             .map_err(|_| "attachment bridge lock name invalid")?;
-        let held = directories(&parts[..parts.len() - 1], false, self.guard)?;
+        let held = directories(&parts[..parts.len() - 1], false, &self.guard)?;
         let parent = held.last().ok_or("attachment bridge lock parent absent")?.file.as_raw_fd();
         self.guard.check()?;
         let fd = unsafe { libc::openat(parent, name.as_ptr(),
@@ -402,7 +409,7 @@ impl<'guard, 'egress> AttachmentReservation<'guard, 'egress> {
         named_file(parent, &name, &identity)?;
         ensure(unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0,
             "attachment bridge lock busy or unavailable")?;
-        let owner = AttachmentBackendLock { guard: self.guard, directories: held, name, file, identity,
+        let owner = AttachmentBackendLock { guard: self.guard.clone(), directories: held, name, file, identity,
             pid: self.pid, stopped: Cell::new(false) };
         owner.check()?;
         let retained = owner.duplicate()?;
@@ -411,7 +418,7 @@ impl<'guard, 'egress> AttachmentReservation<'guard, 'egress> {
         Ok(owner)
     }
     pub(super) fn reserve(&mut self, plan: &AttachmentPlan) -> Result<(), String> {
-        self.check()?; plan.require_owner(self.guard.egress())?;
+        self.check()?; plan.require_source(self.guard.egress(), Phase::Admission)?;
         ensure(self.state == State::Opened && self.bridge.borrow().is_some()
             && !plan.original().is_empty() && plan.original().len() <= MAX_PLAN
             && digest(plan.original()) == plan.sha256() && nonzero(&plan.sha256()),
@@ -452,8 +459,11 @@ impl<'guard, 'egress> AttachmentReservation<'guard, 'egress> {
         Ok(ClaimState::Fresh)
     }
     pub(super) fn require_claim(&self, guard: &EgressGuard, plan: &AttachmentPlan) -> Result<(), String> {
-        self.check()?; plan.require_owner(guard)?;
-        ensure(std::ptr::eq(self.guard.egress(), guard) && !self.replay && self.state == State::Claimed
+        self.require_source_claim(Owner::Diagnostic(guard), plan)
+    }
+    pub(super) fn require_source_claim(&self, guard: Owner<'_>, plan: &AttachmentPlan) -> Result<(), String> {
+        self.check()?; plan.require_source(guard, Phase::Admission)?;
+        ensure(self.guard.egress().same(guard) && !self.replay && self.state == State::Claimed
             && self.intent.as_deref() == Some(plan.original()), "attachment requires its own fresh exact claim")?;
         self.check()
     }
@@ -461,7 +471,7 @@ impl<'guard, 'egress> AttachmentReservation<'guard, 'egress> {
         self.check()?;
         ensure(!self.replay && self.state == State::Claimed && !original.original().is_empty()
             && original.original().len() <= MAX_TRANSCRIPT
-            && original.owner_identity() == self.guard.egress() as *const EgressGuard as usize
+            && original.owner_identity() == self.guard.egress().identity()
             && original.plan_sha256() == digest(self.intent.as_ref().ok_or("attachment intent absent")?),
             "attachment observation requires fresh own-plan typed originals")?;
         self.stopped.set(true); self.state = State::Unknown;
@@ -469,8 +479,8 @@ impl<'guard, 'egress> AttachmentReservation<'guard, 'egress> {
         self.state = State::Observed; self.stopped.set(false); self.check()
     }
     pub(super) fn complete(&mut self, plan: &AttachmentPlan, verified: &VerifiedAttachment) -> Result<(), String> {
-        self.check()?; plan.require_owner(self.guard.egress())?;
-        verified.require_owner(self.guard.egress(), plan)?;
+        self.check()?; plan.require_source(self.guard.egress(), Phase::Admission)?;
+        verified.require_source(self.guard.egress(), plan, Phase::Admission)?;
         ensure(!self.replay && self.state == State::Observed && self.intent.as_deref() == Some(plan.original())
             && !verified.original().is_empty() && verified.original().len() <= MAX_SEMANTIC
             && digest(self.transcript.as_ref().ok_or("attachment observed original absent")?) == verified.transcript_sha256(),
@@ -490,13 +500,18 @@ impl<'guard, 'egress> AttachmentReservation<'guard, 'egress> {
 pub(super) fn open<'guard, 'egress>(spec: Spec, guard: &'guard PreattachmentGuard<'egress>)
     -> Result<AttachmentReservation<'guard, 'egress>, String>
 {
+    open_owner(spec, AttachmentOwner::Diagnostic(guard))
+}
+pub(super) fn open_owner<'guard, 'egress>(spec: Spec, guard: AttachmentOwner<'guard, 'egress>)
+    -> Result<AttachmentReservation<'guard, 'egress>, String>
+{
     guard.check()?;
     ensure(spec.journal_device != 0 && spec.journal_inode != 0 && spec.bridge_lock_device != 0
         && spec.bridge_lock_inode != 0 && nonzero(&spec.reservation_id)
         && nonzero(&spec.association_sha256) && nonzero(&spec.token_sha256)
         && !spec.bridge_lock_path.starts_with(&spec.journal_path), "attachment journal opening scope invalid")?;
     components(&spec.bridge_lock_path)?;
-    let held = directories(&components(&spec.journal_path)?, true, guard)?;
+    let held = directories(&components(&spec.journal_path)?, true, &guard)?;
     let last = held.last().ok_or("attachment journal absent")?;
     ensure(last.device == spec.journal_device && last.inode == spec.journal_inode,
         "attachment journal differs from signed identity")?;

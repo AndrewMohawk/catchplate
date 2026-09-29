@@ -2,8 +2,9 @@
 //! This local journal records attempts, not kernel success or rollback proof.
 //! No record is deleted, replaced or repaired, including on partial publication.
 
-use super::{EgressGuard, reservation::{Spec, Directory, FileIdentity, DirectoryStream,
-    directory, open_directory, stat_at, hex, file_identity, check_directories,
+use super::{EgressGuard, owners::{Owner, Phase}, reservation::{Spec, Directory, FileIdentity, DirectoryStream,
+    directory, open_directory, stat_at, hex, file_identity, check_directories_owner as check_directories,
+    check_directories_phase,
     duplicate_directories}};
 use sha2::{Digest, Sha256};
 use std::cell::{Cell, RefCell};
@@ -67,7 +68,7 @@ struct Slot {
 
 pub(super) struct KernelReservation<'guard> {
     spec: Spec,
-    guard: &'guard EgressGuard,
+    guard: Owner<'guard>,
     directories: Vec<Directory>,
     records: RefCell<BTreeMap<Stage, HeldRecord>>,
     slot: String,
@@ -84,7 +85,7 @@ pub(super) struct KernelReservation<'guard> {
 /// Independent borrow/FD ownership keeps both locks alive after consuming the
 /// reservation. It contains no callback, arbitrary path or copied success flag.
 pub(super) struct BackendLock<'guard> {
-    guard: &'guard EgressGuard,
+    guard: Owner<'guard>,
     directories: Vec<Directory>,
     file: File,
     identity: FileIdentity,
@@ -103,19 +104,25 @@ fn named_file(parent: RawFd, name: &CStr, identity: &FileIdentity) -> Result<(),
 
 impl BackendLock<'_> {
     pub(super) fn check(&self) -> Result<(), String> {
+        self.check_phase(Phase::Admission)
+    }
+    pub(super) fn check_phase(&self, phase: Phase) -> Result<(), String> {
         ensure(!self.stopped.replace(true), "egress backend lock owner is stopped")?;
-        check_directories(&self.directories, self.guard, self.pid)?;
+        check_directories_phase(&self.directories, self.guard, self.pid, phase)?;
         ensure(file_identity(&self.file, self.identity.device, 0)? == self.identity,
             "egress backend lock original changed")?;
         let parent = self.directories.last().ok_or("egress backend directory absent")?.file.as_raw_fd();
         named_file(parent, &backend_name(), &self.identity)?;
-        self.guard.check()?;
+        self.guard.check_phase(phase)?;
         self.stopped.set(false);
         Ok(())
     }
 
     pub(super) fn require_guard(&self, guard: &EgressGuard) -> Result<(), String> {
-        ensure(std::ptr::eq(self.guard, guard), "egress backend lock belongs to a different guard")?;
+        self.require_owner(Owner::Diagnostic(guard))
+    }
+    pub(super) fn require_owner(&self, guard: Owner<'_>) -> Result<(), String> {
+        ensure(self.guard.same(guard), "egress backend lock belongs to a different guard")?;
         self.check()
     }
 }
@@ -498,8 +505,12 @@ impl<'guard> KernelReservation<'guard> {
 
     pub(super) fn require_backend_claim(&self, guard: &EgressGuard,
         intended_sha256: [u8; 32]) -> Result<(), String> {
+        self.require_owner_claim(Owner::Diagnostic(guard), intended_sha256)
+    }
+    pub(super) fn require_owner_claim(&self, guard: Owner<'_>,
+        intended_sha256: [u8; 32]) -> Result<(), String> {
         self.check()?;
-        ensure(std::ptr::eq(self.guard, guard) && self.fresh && self.state == State::Claimed
+        ensure(self.guard.same(guard) && self.fresh && self.state == State::Claimed
             && intended_sha256 == self.spec.intended_transaction_sha256,
             "egress backend requires its own fresh exact transaction claim")?;
         self.check()
@@ -532,6 +543,10 @@ impl<'guard> KernelReservation<'guard> {
 }
 
 pub(super) fn open_kernel(spec: Spec, guard: &EgressGuard) -> Result<KernelReservation<'_>, String> {
+    open_kernel_owner(spec, Owner::Diagnostic(guard))
+}
+
+pub(super) fn open_kernel_owner(spec: Spec, guard: Owner<'_>) -> Result<KernelReservation<'_>, String> {
     guard.check()?;
     ensure(unsafe { libc::geteuid() } == 0 && unsafe { libc::getegid() } == 0
         && spec.journal_device != 0 && spec.journal_inode != 0 && nonzero(&spec.reservation_id)

@@ -1,9 +1,10 @@
 # Native executable-child guardian
 
-This is a source-private, trusted-host-local mechanism. It is not a public start
-profile, a running application, a production attestation or tested cleanup proof.
-The child remains blocked before exec; actual same-child network enforcement and
-the release/lifetime orchestration remain separate requirements.
+This is a source-private, trusted-host-local mechanism connected to the explicit
+[v5 execution lifecycle](native-execution-lifecycle.md). It is not a verified
+running application, production attestation or tested cleanup proof. Guardian
+admission alone leaves the child blocked; actual same-child network enforcement
+must also precede the separately consumed release.
 
 ## Actual ownership
 
@@ -12,7 +13,7 @@ the release/lifetime orchestration remain separate requirements.
 pidfd and its claimed containment's fixed directory/kill/events descriptors.
 No caller-selected PID, path, generic FD list or serialized successful check can
 construct a guardian owner. The exact operation and pidfd identity are rejoined
-to the blocked child before the guardian can be used by a future release path.
+to the blocked child before the guardian can be used by the consuming release path.
 The genuine blocked child burns a one-attempt guardian latch before preparation;
 failure cannot produce a second guardian attempt from the same child.
 
@@ -62,7 +63,10 @@ network parents, claims containment, creates the blocked child and arms its
 guardian. Its explicit termination evaluates both child cleanup and guardian
 completion even if one fails, requiring exact workload and guardian reaps plus
 their empty-leaf observations before producing a local data-only result. It has
-no release/continue operation and therefore does not yet run an application.
+an explicit `run_and_finish` operation retaining the real network owners through
+execution and cleanup. One-use interior state permits observing cleanup through
+that genuine borrow without dropping bridge/journal ownership first; it cannot
+repeat a cleanup ceremony or a start. Runtime behavior remains unverified.
 
 ## Kernel basis and remaining acceptance
 

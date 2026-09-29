@@ -4,6 +4,7 @@
 //! rt6_fill_node define the accepted dump forms. No parser result is permission.
 
 use super::{attachment::PreattachmentGuard, attachment_authority::Authorization,
+    owners::{AttachmentOwner, Owner, OwnerIdentity, Phase},
     attachment_backend::{AttachmentTranscript, ReplyOriginals, Snapshot},
     attachment_wire::{self as wire, AttachmentPlan, DumpKind, Side}, EgressGuard};
 use serde::Serialize;
@@ -364,25 +365,32 @@ fn transcript_plan(transcript: &AttachmentTranscript, plan: &AttachmentPlan) -> 
 }
 
 pub(super) struct VerifiedAttachment {
-    owner: usize, plan_sha256: [u8; 32], transcript_sha256: [u8; 32], original: Vec<u8>,
+    owner: OwnerIdentity, plan_sha256: [u8; 32], transcript_sha256: [u8; 32], original: Vec<u8>,
 }
 impl VerifiedAttachment {
     pub(super) fn original(&self) -> &[u8] { &self.original }
     pub(super) fn transcript_sha256(&self) -> [u8; 32] { self.transcript_sha256 }
     pub(super) fn require_owner(&self, owner: &EgressGuard, plan: &AttachmentPlan) -> Result<(), String> {
-        owner.check()?; plan.require_owner(owner)?;
-        require(self.owner == owner as *const EgressGuard as usize && self.plan_sha256 == plan.sha256())
+        self.require_source(Owner::Diagnostic(owner), plan, Phase::Admission)
+    }
+    pub(super) fn require_source(&self, owner: Owner<'_>, plan: &AttachmentPlan, phase: Phase) -> Result<(), String> {
+        owner.check_phase(phase)?; plan.require_source(owner, phase)?;
+        require(self.owner == owner.identity() && self.plan_sha256 == plan.sha256())
     }
 }
 
 pub(super) fn verify(guard: &PreattachmentGuard<'_>, plan: &AttachmentPlan,
     snapshot: &Snapshot, transcript: &AttachmentTranscript) -> Result<VerifiedAttachment, String> {
-    guard.check()?; plan.require_owner(guard.egress())?;
-    transcript.require_owner(guard.egress(), plan)?;
-    snapshot.require_owner(guard.egress(), plan, transcript)?;
-    transcript_plan(transcript, plan)?; guard.check()?;
+    verify_owner(&AttachmentOwner::Diagnostic(guard), plan, snapshot, transcript, Phase::Admission)
+}
+pub(super) fn verify_owner(guard: &AttachmentOwner<'_, '_>, plan: &AttachmentPlan,
+    snapshot: &Snapshot, transcript: &AttachmentTranscript, phase: Phase) -> Result<VerifiedAttachment, String> {
+    guard.check_phase(phase)?; plan.require_source(guard.egress(), phase)?;
+    transcript.require_source(guard.egress(), plan, phase)?;
+    snapshot.require_source(guard.egress(), plan, transcript, phase)?;
+    transcript_plan(transcript, plan)?; guard.check_phase(phase)?;
     let authority = guard.authority();
-    let value = state(authority, snapshot)?; guard.check()?;
+    let value = state(authority, snapshot)?; guard.check_phase(phase)?;
     bridge_and_gateways(authority, &value)?;
     let host = value.host_links.get(&plan.host_index()).ok_or("attachment host veth absent")?;
     let child = value.child_links.get(&plan.child_index()).ok_or("attachment child veth absent")?;
@@ -414,9 +422,9 @@ pub(super) fn verify(guard: &PreattachmentGuard<'_>, plan: &AttachmentPlan,
     });
     let original = canonical_ascii_bytes(&semantic)?;
     require(!original.is_empty() && original.len() <= MAX_SEMANTIC)?;
-    guard.check()?; plan.require_owner(guard.egress())?;
-    transcript.require_owner(guard.egress(), plan)?;
-    snapshot.require_owner(guard.egress(), plan, transcript)?;
+    guard.check_phase(phase)?; plan.require_source(guard.egress(), phase)?;
+    transcript.require_source(guard.egress(), plan, phase)?;
+    snapshot.require_source(guard.egress(), plan, transcript, phase)?;
     Ok(VerifiedAttachment { owner: plan.owner_identity(), plan_sha256: plan.sha256(),
         transcript_sha256: Sha256::digest(transcript.original()).into(), original })
 }

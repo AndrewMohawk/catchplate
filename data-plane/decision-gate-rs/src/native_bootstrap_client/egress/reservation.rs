@@ -144,12 +144,22 @@ impl Drop for DirectoryStream {
 /// machines remain separate; a copied directory handle grants no new action.
 pub(super) fn check_directories(directories: &[Directory], guard: &EgressGuard,
     pid: u32) -> Result<(), String> {
-    guard.check()?;
+    check_directories_owner(directories, super::owners::Owner::Diagnostic(guard), pid)
+}
+
+pub(super) fn check_directories_owner(directories: &[Directory], guard: super::owners::Owner<'_>,
+    pid: u32) -> Result<(), String> {
+    check_directories_phase(directories, guard, pid, super::owners::Phase::Admission)
+}
+
+pub(super) fn check_directories_phase(directories: &[Directory], guard: super::owners::Owner<'_>,
+    pid: u32, phase: super::owners::Phase) -> Result<(), String> {
+    guard.check_phase(phase)?;
     ensure(!directories.is_empty() && std::process::id() == pid
         && unsafe { libc::geteuid() } == 0 && unsafe { libc::getegid() } == 0,
         "egress reservation crossed a process or privilege boundary")?;
     for (index, held) in directories.iter().enumerate() {
-        guard.check()?;
+        guard.check_phase(phase)?;
         let m = held.file.metadata().map_err(|_| "egress held directory metadata failed")?;
         ensure(m.is_dir() && m.dev() == held.device && m.ino() == held.inode
             && m.uid() == 0 && m.gid() == held.gid && m.mode() == held.mode,
@@ -164,7 +174,7 @@ pub(super) fn check_directories(directories: &[Directory], guard: &EgressGuard,
             && named.st_uid == 0 && named.st_gid == held.gid && named.st_mode == held.mode,
             "egress journal pathname no longer names its held directory")?;
     }
-    guard.check()
+    guard.check_phase(phase)
 }
 
 pub(super) fn duplicate_directories(directories: &[Directory]) -> Result<Vec<Directory>, String> {

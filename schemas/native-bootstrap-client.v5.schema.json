@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-bootstrap-client.v5.schema.json",
+  "title": "Explicit native executable-workload bootstrap client v5",
+  "description": "Closed independently pinned configuration, at most 16384 bytes. Requires actual egress v4, launch manifest v2, separate attachment authority and independent workload start authority/immutable execution manifest. A successful older diagnostic never selects this profile. Installation is forbidden, including null; this does not implicitly install a CA. All actual signature, original, journal, namespace, network and guardian checks remain mandatory. Source presence is not a verified runtime.",
+  "type": "object", "additionalProperties": false,
+  "required": ["apiVersion", "endpoint", "timeoutMilliseconds", "startupEvidence", "startupExpectations", "sessionScope", "trustRoots", "clientCertificate", "clientPrivateKey", "callerIssuer", "delegationAuthorizer", "setupAuthorizer", "request", "clientChallengeBase64url", "expectedCallerPrincipal", "expectedTargetPrincipal", "expectedTargetNonce", "expectedTargetRequestSha256", "egress", "attachment", "execution"],
+  "properties": {
+    "apiVersion": {"const": "serverware.nativeBootstrapClient/v5"},
+    "endpoint": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/endpoint"},
+    "timeoutMilliseconds": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/timeoutMilliseconds"},
+    "startupEvidence": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/startupEvidence"},
+    "startupExpectations": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/startupExpectations"},
+    "sessionScope": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/sessionScope"},
+    "trustRoots": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/trustRoots"},
+    "clientCertificate": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/clientCertificate"},
+    "clientPrivateKey": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/clientPrivateKey"},
+    "callerIssuer": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/callerIssuer"},
+    "delegationAuthorizer": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/delegationAuthorizer"},
+    "setupAuthorizer": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/setupAuthorizer"},
+    "request": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/request"},
+    "clientChallengeBase64url": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/clientChallengeBase64url"},
+    "expectedCallerPrincipal": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/expectedCallerPrincipal"},
+    "expectedTargetPrincipal": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/expectedTargetPrincipal"},
+    "expectedTargetNonce": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/expectedTargetNonce"},
+    "expectedTargetRequestSha256": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/expectedTargetRequestSha256"},
+    "egress": {
+      "type": "object", "additionalProperties": false,
+      "required": ["authority", "authorityRoot", "capabilityToken", "launchManifest"],
+      "properties": {
+        "authority": {"$ref": "native-bootstrap-client.v1.schema.json#/$defs/artifact", "description": "Explicit signed native egress authorization v4; older diagnostic versions are refused."},
+        "authorityRoot": {"$ref": "native-bootstrap-client.v1.schema.json#/$defs/artifact"},
+        "capabilityToken": {"$ref": "native-bootstrap-client.v1.schema.json#/$defs/artifact"},
+        "launchManifest": {"$ref": "native-bootstrap-client.v1.schema.json#/$defs/artifact", "description": "Actual execution-parent launch manifest v2, binding the separately pinned execution manifest."}
+      }
+    },
+    "attachment": {"$ref": "native-bootstrap-client.v4.schema.json#/properties/attachment"},
+    "execution": {
+      "type": "object", "additionalProperties": false,
+      "required": ["authority", "authorityRoot", "capabilityToken", "executionManifest"],
+      "properties": {
+        "authority": {"$ref": "native-bootstrap-client.v1.schema.json#/$defs/artifact", "description": "Signed nativeWorkloadStartAuthorization/v1 with distinct start, stop and cleanup bounds, resource/isolation limits and journal."},
+        "authorityRoot": {"$ref": "native-bootstrap-client.v1.schema.json#/$defs/artifact", "description": "Independently selected start authorizer, distinct from retained parent/key roles."},
+        "capabilityToken": {"$ref": "native-bootstrap-client.v1.schema.json#/$defs/artifact", "description": "Exact protected private start token, never output."},
+        "executionManifest": {"$ref": "native-bootstrap-client.v1.schema.json#/$defs/artifact", "description": "Protected immutable EROFS/fs-verity image and static/dynamic ELF manifest original, independently bound by start and launch authorities."}
+      }
+    }
+  }
+}

@@ -41,8 +41,9 @@ unpopulated after clone.
 
 The new child path joins the actual leaf to `CLONE_INTO_CGROUP` and closes
 escaping control descriptors. It stays blocked before exec; private orchestration
-arms its genuine guardian without releasing it. Same-child network ownership
-and a consuming execution release remain open. A PID string or one-time
+arms its genuine guardian without releasing it. The separate
+[v5 lifecycle](native-execution-lifecycle.md) subsequently requires same-child
+network ownership before consuming execution release. A PID string or one-time
 membership scan cannot replace the construction. The existing never-executed
 egress child and static custody launcher are unchanged.
 

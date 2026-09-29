@@ -29,7 +29,7 @@ _scopes = set()
 _MATERIAL_FIELDS = ("original_bytes", "configuration_digest", "enabled", "issuer_root_bytes",
     "issuer_root_public_key", "issuer_bootstrap_bytes", "issuer_material", "endpoint",
     "peer_uid", "peer_gid", "request_timeout_ns", "maximum_original_bytes",
-    "valid_from_epoch_ns", "valid_until_epoch_ns")
+    "valid_from_epoch_ns", "valid_until_epoch_ns", "profile")
 _OWNER_FIELDS = ("_material", "_custody", "_binding", "_descriptor", "_descriptor_pin",
     "_identity", "_material_pin")
 _SCOPE_FIELDS = ("owner", "material", "work", "original_reservation_bytes",
@@ -191,7 +191,7 @@ def initialize_from_environment():
             if os.pread(descriptor, 1, pin[6]) or _descriptor_identity(descriptor) != pin:
                 _fail("workload caller sealed configuration changed during read")
             original = bytes(body)
-            material = bootstrap._admit_on_work(bootstrap_bytes=original,
+            material = bootstrap._admit_launch_on_work(bootstrap_bytes=original,
                 runtime_root_public_key=binding.runtime_root_public_key,
                 expected_configuration_digest=binding.configuration_digest,
                 expected_uid=binding.caller_uid, expected_gid=binding.caller_gid,
@@ -265,7 +265,7 @@ class _CallerScope:
         issuer._integer(additional, MAX_ORIGINAL_BYTES)
         original_bytes = (len(material.original_bytes) + len(material.issuer_root_bytes)
             + len(material.issuer_bootstrap_bytes) + len(material.issuer_material.issuer_certificate_bytes)
-            + len(material.issuer_material.packet_signing_key_bytes)
+            + issuer._enrollment_original_byte_count(material.issuer_material)
             + len(material.issuer_material.authorization_key_bytes))
         reservation = 8 * original_bytes + 128 * 1024 + additional
         if reservation >= MAX_ORIGINAL_BYTES:

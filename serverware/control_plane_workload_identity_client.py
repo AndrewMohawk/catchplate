@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 
 from serverware import workload_identity_issuance_authorization as authorization
+from serverware import native_workload_identity_issuance_authorization as native_authorization
 from serverware import workload_identity_issuer_transport as transport
 
 
@@ -25,6 +26,10 @@ _ADMISSION_FIELDS = ("authorization_digest", "bootstrap_digest", "configuration_
     "authorization_key_digest", "grant_id", "journal_namespace", "principal_id",
     "nonce", "selected_sans", "serial_number", "not_before_epoch_seconds",
     "not_after_epoch_seconds", "window", "deadline_ns")
+_NATIVE_ADMISSION_FIELDS = tuple(name for name in _ADMISSION_FIELDS
+    if name != "packet_signing_key_digest") + ("delegation_digest", "setup_digest",
+    "policy_requirements_digest", "identity_policy_digest", "certificate_selectors_digest",
+    "issuer_certificate_der_digest")
 
 
 class WorkloadIdentityClientError(ValueError):
@@ -47,7 +52,22 @@ def _cold_pin(context):
     return (context.owner, context.material, context.work,
         context.issuer_root_public_key, context.issuer_bootstrap_bytes,
         context.endpoint, context.peer_uid, context.peer_gid,
-        context.original_reservation_bytes)
+        context.original_reservation_bytes, context.material.profile)
+
+
+def _authorization_profile(context):
+    """Only the source-owned cold material selects a verifier, never HTTP bytes."""
+    cold = context.material.issuer_material
+    if (type(cold) is not authorization.bootstrap._IssuerMaterial
+            or cold.bootstrap_bytes is not context.issuer_bootstrap_bytes
+            or cold.profile != context.material.profile):
+        _fail("workload issuer caller lost its exact cold verifier profile")
+    authorization.bootstrap._enrollment_original_byte_count(cold)
+    if context.material.profile == authorization.bootstrap.LEGACY_PROFILE:
+        return authorization, authorization._IssuanceMaterial, _ADMISSION_FIELDS
+    if context.material.profile == authorization.bootstrap.NATIVE_PROFILE:
+        return native_authorization, native_authorization._NativeIssuanceMaterial, _NATIVE_ADMISSION_FIELDS
+    _fail("workload issuer caller has an unsupported cold verifier profile")
 
 
 def _check_cold(context, pin):
@@ -59,11 +79,15 @@ def _check_cold(context, pin):
     if (any(observed[index] is not pin[index] for index in range(5))
             or observed[5:] != pin[5:]):
         _fail("workload issuer caller changed its independent cold originals")
+    _authorization_profile(context)
     return now
 
 
 def _capacity(context, raw):
     held = transport._originals(raw, response=False)
+    verifier, _, _ = _authorization_profile(context)
+    if len(held[1]) > verifier.MAX_PACKET_BYTES:
+        _fail("workload issuer packet exceeds its cold-selected profile")
     base = context.original_reservation_bytes
     if (type(base) is not int or not 0 < base < transport.MAX_ORIGINAL_BYTES
             or base < 8 * len(context.issuer_bootstrap_bytes)
@@ -74,16 +98,20 @@ def _capacity(context, raw):
 
 
 def _retain_admission(context, admitted):
-    if type(admitted) is not authorization._IssuanceMaterial:
+    verifier, material_type, field_names = _authorization_profile(context)
+    if type(admitted) is not material_type:
         _fail("workload issuer caller lacks genuine original admission")
     pin, work = _cold_pin(context), context.work
-    fields = tuple(getattr(admitted, name) for name in _ADMISSION_FIELDS)
+    fields = tuple(getattr(admitted, name) for name in field_names)
     original_live, public_key, association = admitted.live, admitted.public_key, admitted.association
 
     def live():
         _check_cold(context, pin)
-        work.prepare_comparison(tuple(getattr(admitted, name) for name in _ADMISSION_FIELDS), fields)
-        if (tuple(getattr(admitted, name) for name in _ADMISSION_FIELDS) != fields
+        selected, selected_type, selected_fields = _authorization_profile(context)
+        work.prepare_comparison(tuple(getattr(admitted, name) for name in field_names), fields)
+        if (selected is not verifier or selected_type is not material_type or selected_fields is not field_names
+                or type(admitted) is not material_type
+                or tuple(getattr(admitted, name) for name in field_names) != fields
                 or admitted.live is not original_live or admitted.public_key is not public_key
                 or admitted.association is not association):
             _fail("workload issuer caller admission changed its signed association")
@@ -116,10 +144,11 @@ def _verify(context, raw, *, certificate_bytes=None):
         work=context.work, _current=base_current,
         _additional_original_bytes=context.original_reservation_bytes + EXCHANGE_RESERVATION_BYTES)
     context.current()
+    verifier, _, _ = _authorization_profile(context)
     if certificate_bytes is None:
-        admitted = authorization._verify_on_work(**kwargs)
+        admitted = verifier._verify_on_work(**kwargs)
     else:
-        admitted = authorization._verify_certificate_on_work(certificate_bytes=certificate_bytes, **kwargs)
+        admitted = verifier._verify_certificate_on_work(certificate_bytes=certificate_bytes, **kwargs)
     context.current()
     return _retain_admission(context, admitted)
 
@@ -134,12 +163,14 @@ def _digest(raw, work):
     return "sha256:" + hashlib.sha256(raw).hexdigest()
 
 
-def _same_association(actual, expected, work):
+def _same_association(actual, expected, work, *, profile):
     # The fixed tuple contains a canonical SAN bytes original, so it must not
     # pass through JSON-only comparison accounting or be converted to text.
     if type(actual) is not tuple or type(expected) is not tuple or len(actual) != 17 or len(expected) != 17:
         _fail("workload issuer response lacks its closed association")
-    for left, right in zip(actual, expected):
+    if profile not in (authorization.bootstrap.LEGACY_PROFILE, authorization.bootstrap.NATIVE_PROFILE):
+        _fail("workload issuer association has no cold-selected profile")
+    for index, (left, right) in enumerate(zip(actual, expected)):
         if type(left) is not type(right):
             _fail("workload issuer association scalar type changed")
         if type(left) is bytes:
@@ -147,7 +178,11 @@ def _same_association(actual, expected, work):
                 _fail("workload issuer association original exceeds its bound")
             work.charge(input_bytes=len(left) + len(right))
         elif type(left) is str:
-            if max(len(left), len(right)) > 512:
+            if profile == authorization.bootstrap.NATIVE_PROFILE and index == 1:
+                if not (1 <= len(left.encode("utf-8")) <= 1024
+                        and 1 <= len(right.encode("utf-8")) <= 1024):
+                    _fail("native workload issuer principal exceeds its original UTF-8 bound")
+            elif max(len(left), len(right)) > 512:
                 _fail("workload issuer association text exceeds its bound")
             work.charge(input_bytes=4 * (len(left) + len(right)))
         elif type(left) is int:
@@ -243,7 +278,8 @@ def _issue_on_context(context, *, authorization_bytes, packet_bytes, request_byt
     live()
     response = transport._originals(response, response=True)
     verified = _verify(context, raw, certificate_bytes=response[1])
-    _same_association(verified.association, original_association, work)
+    _same_association(verified.association, original_association, work,
+        profile=context.material.profile)
     expected = _response_association(verified, response[1], work)
     work.charge(input_bytes=len(expected) + len(response[0]))
     if expected != response[0]:

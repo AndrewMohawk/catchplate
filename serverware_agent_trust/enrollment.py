@@ -700,6 +700,124 @@ def _workload_issuance_mode(parser: argparse.ArgumentParser, args: argparse.Name
     return True
 
 
+def _extract_native_bootstrap_mode(parser: argparse.ArgumentParser, args: argparse.Namespace) -> bool:
+    """Data-only bounded capture extraction, never verification or network use."""
+    if not args.extract_native_bootstrap_packet:
+        return False
+    allowed = {"--extract-native-bootstrap-packet", "--workload-capture", "--workload-capture-sha256",
+        "--workload-request", "--workload-request-sha256", "--workload-output-directory",
+        "--workload-timeout-ms"}
+    supplied = {item.split("=", 1)[0] for item in sys.argv[1:] if item.startswith("--")}
+    if supplied - allowed:
+        parser.error("native capture extraction accepts only explicit capture/request pins and local output")
+    required = ("capture", "capture_sha256", "request", "request_sha256", "output_directory")
+    missing = ["--workload-" + name.replace("_", "-") for name in required
+        if getattr(args, "workload_" + name) in (None, "")]
+    if missing:
+        parser.error("native capture extraction requires " + ", ".join(missing))
+    from .native_bootstrap_capture import extract_packet
+    from ._workload_tls import PinnedFile
+
+    pin = extract_packet(capture=PinnedFile(args.workload_capture, args.workload_capture_sha256),
+        target_request=PinnedFile(args.workload_request, args.workload_request_sha256),
+        output_directory=args.workload_output_directory, timeout_ms=args.workload_timeout_ms)
+    print(json.dumps({"schema": "serverware.nativeBootstrapPacketExtractionResult/v1",
+        "status": "unverified-packet-extracted", "packet": {"path": os.fspath(pin.path), "sha256": pin.sha256},
+        "okForAction": False, "issuanceAuthorized": False,
+        "proxyAuthenticated": False, "enrollmentComplete": False}, indent=2, sort_keys=True))
+    return True
+
+
+def _native_workload_issuance_mode(parser: argparse.ArgumentParser, args: argparse.Namespace) -> bool:
+    """Explicit native operator modes; no legacy packet-key or manifest alias."""
+    if not (args.request_native_workload_issuance_options or args.submit_native_workload_issuance):
+        return False
+    common_pins = ("packet", "issuer", "authorization", "request", "tls-ca", "cookie", "csrf")
+    issue_pins = ("private-key", "options", "assertion")
+    pin_names = (*common_pins, *issue_pins, "approval")
+    allowed = {"--request-native-workload-issuance-options", "--submit-native-workload-issuance",
+        "--expected-principal", "--expected-nonce", "--workload-output-directory", "--workload-timeout-ms",
+        "--workload-origin", "--workload-endpoint-address", "--workload-endpoint-port",
+        "--workload-server-name", "--workload-server-spki-sha256", "--workload-san-dns", "--workload-san-uri",
+        *("--workload-" + name + suffix for name in pin_names for suffix in ("", "-sha256"))}
+    supplied = {item.split("=", 1)[0] for item in sys.argv[1:] if item.startswith("--")}
+    if supplied - allowed:
+        parser.error("native workload issuance accepts only explicit native originals and pinned operator inputs")
+
+    def argument(name: str):
+        return getattr(args, "workload_" + name.replace("-", "_"))
+
+    required = [("--expected-principal", args.expected_principal), ("--expected-nonce", args.expected_nonce),
+        *(("--workload-" + name, argument(name)) for name in ("output-directory", "origin",
+            "endpoint-address", "endpoint-port", "server-name", "server-spki-sha256"))]
+    required_pins = common_pins
+    if args.submit_native_workload_issuance:
+        required_pins += issue_pins
+        if argument("approval") is not None or argument("approval-sha256") is not None:
+            required_pins += ("approval",)
+    elif any(argument(name + suffix) is not None
+            for name in (*issue_pins, "approval") for suffix in ("", "-sha256")):
+        parser.error("native options-only mode cannot accept private key, assertion or continuation inputs")
+    required.extend(("--workload-" + name + suffix, argument(name + suffix))
+        for name in required_pins for suffix in ("", "-sha256"))
+    missing = [flag for flag, value in required if value is None or value == ""]
+    if missing:
+        parser.error("native workload issuance requires " + ", ".join(missing))
+    if (not args.workload_san_dns and not args.workload_san_uri
+            or len(set(args.workload_san_dns)) != len(args.workload_san_dns)
+            or len(set(args.workload_san_uri)) != len(args.workload_san_uri)):
+        parser.error("native workload issuance requires explicit unique target DNS/URI SANs")
+    from . import native_workload_identity_submission as submission
+    from ._workload_operator_http import OperatorEndpoint
+    from ._workload_stream import WorkloadClientError
+    from ._workload_tls import PinnedFile
+
+    def pin(name: str) -> PinnedFile:
+        return PinnedFile(argument(name), argument(name + "-sha256"))
+
+    def description(value: PinnedFile) -> dict[str, str]:
+        return {"path": os.fspath(value.path), "sha256": value.sha256}
+
+    connection = OperatorEndpoint(origin=args.workload_origin,
+        endpoint=(args.workload_endpoint_address, args.workload_endpoint_port),
+        server_name=args.workload_server_name, trust=pin("tls-ca"),
+        server_spki_sha256=args.workload_server_spki_sha256, cookie=pin("cookie"), csrf=pin("csrf"))
+    common = {"connection": connection, "packet": pin("packet"), "issuer": pin("issuer"),
+        "authorization": pin("authorization"), "request": pin("request"),
+        "expected_principal": args.expected_principal, "expected_nonce": args.expected_nonce,
+        "requested_sans": {"dnsNames": sorted(args.workload_san_dns), "uris": sorted(args.workload_san_uri)},
+        "output_directory": args.workload_output_directory, "timeout_ms": args.workload_timeout_ms}
+    try:
+        exit_code = 0
+        if args.request_native_workload_issuance_options:
+            options = submission.request_issuance_options(**common)
+            result = {"status": "options-received", "response": description(options.response),
+                "action": options.action, "resourceId": options.resource_id, "payloadDigest": options.payload_digest}
+        else:
+            submitted = submission.submit_issuance(**common, private_key=pin("private-key"),
+                options=pin("options"), assertion=pin("assertion"),
+                approval=pin("approval") if args.workload_approval is not None else None)
+            statuses = {"certificate-issued": 0, "approval-required": 3,
+                "issuance-outcome-unknown": 4, "refused": 5}
+            if type(submitted.status) is not str or submitted.status not in statuses:
+                raise WorkloadClientError("native workload submission status is invalid")
+            exit_code = statuses[submitted.status]
+            result = {"status": submitted.status, "response": description(submitted.response)}
+            if submitted.identity is not None:
+                result["clientCertificate"] = description(submitted.identity.client_certificate)
+                result["clientPrivateKey"] = description(submitted.identity.client_private_key)
+        print(json.dumps({"schema": "serverware.nativeWorkloadIdentitySubmissionResult/v1", **result,
+            "proxyAuthenticated": False, "enrollmentComplete": False, "automaticRetryAllowed": False},
+            indent=2, sort_keys=True))
+        if exit_code:
+            raise SystemExit(exit_code)
+    except (OSError, ValueError):
+        raise WorkloadClientError(
+            "native workload request did not complete; retain all artifacts and do not automatically retry"
+        ) from None
+    return True
+
+
 def _workload_bootstrap_mode(parser: argparse.ArgumentParser, args: argparse.Namespace) -> bool:
     """Explicit local request-first mode; no packet, admin or network authority."""
     if not args.prepare_workload_bootstrap:
@@ -868,8 +986,14 @@ def main() -> None:
         help="make one pinned operator HTTPS options request; never submit issuance")
     workload_modes.add_argument("--submit-workload-issuance", action="store_true",
         help="explicitly submit once with pinned options and fresh assertion; never automatically retry")
+    workload_modes.add_argument("--extract-native-bootstrap-packet", action="store_true",
+        help="extract exact native packet bytes from a pinned capture; no signature or quote authority")
+    workload_modes.add_argument("--request-native-workload-issuance-options", action="store_true",
+        help="request fresh native issuance options from the pinned operator endpoint; no CA contact")
+    workload_modes.add_argument("--submit-native-workload-issuance", action="store_true",
+        help="submit native originals once and admit the returned leaf against the retained request key")
     for name in ("packet", "packet-signing-key", "issuer", "request", "private-key", "certificate",
-            "authorization", "tls-ca", "cookie", "csrf", "options", "assertion", "approval"):
+            "authorization", "tls-ca", "cookie", "csrf", "options", "assertion", "approval", "capture"):
         parser.add_argument("--workload-" + name, type=Path)
         parser.add_argument("--workload-" + name + "-sha256")
     parser.add_argument("--workload-origin", help="exact HTTPS origin only, without path or trailing slash")
@@ -929,7 +1053,8 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    if (_workload_bootstrap_mode(parser, args) or _workload_issuance_mode(parser, args)
+    if (_extract_native_bootstrap_mode(parser, args) or _native_workload_issuance_mode(parser, args)
+            or _workload_bootstrap_mode(parser, args) or _workload_issuance_mode(parser, args)
             or _workload_identity_mode(parser, args)):
         return
 

@@ -1250,6 +1250,9 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/control_plane_workload_identity_routes.py \
 	serverware/portal_workload_issuance.py \
 	serverware_agent_trust/workload_identity_submission.py \
+	serverware_agent_trust/native_workload_identity_submission.py \
+	serverware_agent_trust/native_workload_identity_provisioning.py \
+	serverware_agent_trust/native_bootstrap_capture.py \
 	serverware_agent_trust/_workload_operator_http.py \
 	serverware_agent_trust/workload_identity_originals.py \
 	serverware_agent_trust/workload_identity_bootstrap_originals.py \
@@ -3123,6 +3126,9 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware_agent_trust/requirements.lock \
 				serverware_agent_trust/workload_identity_provisioning.py \
 				serverware_agent_trust/workload_identity_submission.py \
+				serverware_agent_trust/native_workload_identity_submission.py \
+				serverware_agent_trust/native_workload_identity_provisioning.py \
+				serverware_agent_trust/native_bootstrap_capture.py \
 				serverware_agent_trust/_workload_operator_http.py \
 				serverware/authority_counted_root_transition.py \
 				serverware/authority_store/counted_installation.py \
@@ -3699,6 +3705,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-enrollment-bootstrap-evidence.v1.schema.json \
 				schemas/native-enrollment-bootstrap-request.v1.schema.json \
 				schemas/native-bootstrap-client.v1.schema.json \
+				schemas/native-bootstrap-client-capture.v1.schema.json \
 				schemas/native-enrollment-authorizer.v1.schema.json \
 				schemas/workload-identity-bootstrap-request.v1.schema.json \
 				schemas/native-enrollment-bootstrap-delegation.v1.schema.json \
@@ -3706,6 +3713,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-enrollment-policy-requirements.v1.schema.json \
 				schemas/native-workload-identity-issuance-authorization.v1.schema.json \
 				schemas/workload-identity-issuer-bootstrap.v2.schema.json \
+				schemas/control-plane-workload-identity-bootstrap.v2.schema.json \
 				schemas/native-enrollment-setup-authorizer.v1.schema.json \
 				schemas/native-enrollment-packet.v2.schema.json \
 				schemas/release-completion-verification.v1.schema.json \

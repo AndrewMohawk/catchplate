@@ -116,7 +116,8 @@ class _Directory:
         self.check(budget)
         if name not in {"preparation.claim", "private-key.pem", "request.pem",
                 "request.json", "client-certificate.pem", "options-response.json",
-                "submission.claim", "submission-response.json", "issued-certificate.pem"}:
+                "submission.claim", "submission-response.json", "issued-certificate.pem",
+                "native-packet.json"}:
             _fail("identity publication name is not source-fixed")
         temporary = ".identity-" + secrets.token_hex(16)
         descriptor = os.open(temporary, os.O_RDWR | os.O_CREAT | os.O_EXCL

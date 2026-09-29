@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/control-plane-workload-identity-bootstrap.v2.schema.json",
+  "title": "Root-signed native workload identity public caller bootstrap v2",
+  "description": "Closed canonical sorted compact ASCII JSON without a trailing newline, at most 262144 bytes. Ed25519 signs the payload-schema ASCII bytes, NUL and canonical payload. Actual signature, current source revision, custody/configuration, original clocks, nested worker and socket checks remain mandatory; schema validation is not authority. The outer runtime root is independently supplied by the existing cold custody owner, never selected by this record.",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema", "payload", "signature"],
+  "properties": {
+    "schema": {"const": "serverware.signedControlPlaneWorkloadIdentityBootstrap/v2"},
+    "payload": {"$ref": "#/$defs/payload"},
+    "signature": {"type": "string", "minLength": 94, "maxLength": 94, "pattern": "^ed25519:[A-Za-z0-9_-]{85}[AQgw](?![\\s\\S])"}
+  },
+  "$defs": {
+    "digest": {"type": "string", "minLength": 71, "maxLength": 71, "pattern": "^sha256:[0-9a-f]{64}(?![\\s\\S])"},
+    "positive": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807},
+    "wrapped": {
+      "type": "object", "additionalProperties": false,
+      "required": ["base64Url", "byteCount", "bytesDigest"],
+      "properties": {
+        "base64Url": {"type": "string", "minLength": 2, "maxLength": 174763, "pattern": "^[A-Za-z0-9_-]+(?![\\s\\S])"},
+        "byteCount": {"type": "integer", "minimum": 1, "maximum": 131072},
+        "bytesDigest": {"$ref": "#/$defs/digest"}
+      },
+      "description": "Canonical unpadded base64url and exact original-byte count/SHA-256. Padding bits, byte count, digest and nested signature are checked from originals."
+    },
+    "root": {
+      "allOf": [{"$ref": "#/$defs/wrapped"}, {"properties": {
+        "base64Url": {"maxLength": 1366}, "byteCount": {"maximum": 1024}
+      }}],
+      "description": "Canonical Ed25519 SPKI PEM for the nested worker root, authorized by the independent outer runtime-root signature."
+    },
+    "endpoint": {
+      "type": "object", "additionalProperties": false,
+      "required": ["path", "device", "inode", "uid", "gid", "mode", "serverUid", "serverGid"],
+      "properties": {
+        "path": {"const": "/run/serverware/workload-identity-issuer/issuer.sock"},
+        "device": {"$ref": "#/$defs/positive"}, "inode": {"$ref": "#/$defs/positive"},
+        "uid": {"const": 65492}, "gid": {"const": 65532}, "mode": {"const": 432},
+        "serverUid": {"const": 0}, "serverGid": {"const": 0}
+      },
+      "description": "Device/inode match the authenticated worker's named socket path. Named-path owner/mode and connected server peer credentials are separate pins: this profile uses a root-created listener."
+    },
+    "issuer": {
+      "type": "object", "additionalProperties": false,
+      "required": ["root", "bootstrap", "endpoint", "requestTimeoutNs", "maximumOriginalBytes"],
+      "properties": {
+        "root": {"$ref": "#/$defs/root"},
+        "bootstrap": {"$ref": "#/$defs/wrapped", "description": "Exact signedWorkloadIdentityIssuerBootstrap/v2 original; strict native-request-first-v2 worker admission is mandatory, with no legacy fallback."},
+        "endpoint": {"$ref": "#/$defs/endpoint"},
+        "requestTimeoutNs": {"type": "integer", "minimum": 1, "maximum": 30000000000},
+        "maximumOriginalBytes": {"const": 67108864}
+      },
+      "description": "Timeout also must not exceed the genuine worker's signed limit. The original 64 MiB work/capture ceiling is shared, not renewed by nested verification."
+    },
+    "payload": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "sourceRevision", "purpose", "trustMode", "processMode", "callerUid", "callerGid", "configurationDigest", "issuedAtEpochNs", "expiresAtEpochNs", "issuer"],
+      "properties": {
+        "schema": {"const": "serverware.controlPlaneWorkloadIdentityBootstrap/v2"},
+        "sourceRevision": {"type": "string", "description": "Must exactly equal the current shared authority source revision; no independent version literal in this schema."},
+        "purpose": {"const": "native-workload-identity-caller"},
+        "trustMode": {"const": "trusted-host-local"},
+        "processMode": {"const": "serverware-control-plane"},
+        "callerUid": {"type": "integer", "minimum": 0, "maximum": 4294967294},
+        "callerGid": {"type": "integer", "minimum": 0, "maximum": 4294967294},
+        "configurationDigest": {"$ref": "#/$defs/digest"},
+        "issuedAtEpochNs": {"$ref": "#/$defs/positive"},
+        "expiresAtEpochNs": {"$ref": "#/$defs/positive"},
+        "issuer": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/issuer"}]}
+      },
+      "allOf": [{"if": {"properties": {"issuer": {"type": "object"}}}, "then": {"properties": {"callerUid": {"const": 65532}, "callerGid": {"const": 65532}}}}],
+      "description": "UID/GID and configuration must match genuine cold custody. Null issuer is an explicit signed disabled profile, not permission to fall back. Current positive caller validity is intersected with the worker and actual issuer CA interval; expiry must exceed issue time."
+    }
+  }
+}

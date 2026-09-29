@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-bootstrap-client-capture.v1.schema.json",
+  "title": "Local native bootstrap client original capture v1",
+  "description": "Public local diagnostic, not an authenticated receipt or issuance authority. The producing client emits one UTF-8 JSON line including exactly one final LF, at most 1572864 bytes. Keep the actual producer exit status separately; a valid shape cannot prove successful acquisition. Packet extraction checks exact target request association and publishes data only, never an accepted verification result.",
+  "type": "object", "additionalProperties": false,
+  "required": ["apiVersion", "resultScope", "okForAction", "configurationSha256", "requestSha256", "endpoint", "challengeSource", "evidenceBase64url", "verification"],
+  "properties": {
+    "apiVersion": {"const": "serverware.nativeBootstrapClientCapture/v1"},
+    "resultScope": {"const": "local-fixed-endpoint-bootstrap-originals-only"},
+    "okForAction": {"const": false},
+    "configurationSha256": {"$ref": "#/$defs/digest"},
+    "requestSha256": {"$ref": "#/$defs/digest", "description": "Digest of the exact four-field canonical bootstrap exchange including LF, not merely the embedded target CSR/PoP request."},
+    "endpoint": {"type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[!-~]+(?![\\s\\S])", "description": "Producer's fixed literal socket endpoint. An assertion in this local capture, not an independently authenticated peer identity."},
+    "challengeSource": {"const": "independently-pinned"},
+    "evidenceBase64url": {
+      "type": "string", "minLength": 2, "maxLength": 1398102,
+      "pattern": "^(?:[A-Za-z0-9_-]{4})*(?:[A-Za-z0-9_-][AQgw]|[A-Za-z0-9_-]{2}[AEIMQUYcgkosw048])?(?![\\s\\S])",
+      "description": "Exact unpadded canonical base64url of at most 1048576 bytes of nativeEnrollmentBootstrapEvidence/v1. Its exact packet7 original remains unverified issuance input."
+    },
+    "verification": {"type": "object", "description": "Opaque local diagnostic with compact UTF-8 JSON representation at most 4095 bytes. No success, signature, quote, identity, policy or measurement claim inside it grants issuance, installation or dispatch authority."}
+  },
+  "$defs": {
+    "digest": {"type": "string", "minLength": 71, "maxLength": 71, "pattern": "^sha256:[0-9a-f]{64}(?![\\s\\S])"}
+  }
+}

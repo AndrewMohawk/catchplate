@@ -1,0 +1,29 @@
+# Native workload identity public caller
+
+This is a source-only integration of the native request-first issuer profile into the existing public control-plane caller. It is unbuilt, unexecuted and unprovisioned; it does not close N04 or a production gate.
+
+## Cold selection, not an HTTP switch
+
+`control_plane_workload_identity_bootstrap.py` admits a distinct closed `serverware.signedControlPlaneWorkloadIdentityBootstrap/v2` envelope. Its payload schema is `serverware.controlPlaneWorkloadIdentityBootstrap/v2`, with purpose `native-workload-identity-caller`. The [v2 schema](../schemas/control-plane-workload-identity-bootstrap.v2.schema.json) records the public shape. The actual verifier still checks canonical originals, the independently supplied runtime-root signature, current source revision, genuine custody configuration/UID/GID, original validity and all nested worker pins.
+
+The payload keeps the existing caller fields and either an explicit `issuer: null` disabled profile or the exact nested root/bootstrap/endpoint/timeout/capacity fields. Enabled v2 requires the genuine [native worker bootstrap](native-workload-identity-issuer-bootstrap.md), with `profile = native-request-first-v2`. It does not manufacture a legacy packet signing key or `runtimeManifestDigest`. Strict v1 admission and production's signed enabled-or-disabled cold-start requirement remain in place; unknown or mismatched versions refuse without fallback.
+
+`control_plane_workload_identity_startup.py` dispatches only during cold admission of the existing sealed descriptor, under the actual retained custody snapshot/root/receipt and inherited inventory. Its material seal includes the selected profile. Per-request capture reservations count the actual native delegation/setup public roots instead of an absent legacy packet key. A new HTTP request receives its own original scope before body intake; nested verification never renews that request's work allowance or deadline. The expired cold-processing callback is not reused as long-lived request authority.
+
+The fixed Unix endpoint remains `/run/serverware/workload-identity-issuer/issuer.sock`. Its signed named-path device/inode and `65492:65532` / `0660` pins are distinct from the connected server peer `0:0` pins for the root-created listener. This public caller acquires no CA key, journal or signer authority.
+
+## Existing route and genuine original exchange
+
+The public route remains `POST /api/agents/workload-identity/issue`, with options at the same path plus `/options`, action `workload.identity.issue`, and the existing request/response v1 envelopes. There is no posted native-profile flag. Cookie-only current requester authentication, fresh WebAuthn and a different approver remain mandatory under the [existing route contract](control-plane-workload-identity-issuance.md).
+
+The action binding remains the exact canonical object containing `action`, `authorizationDigest`, `packetDigest`, `requestDigest`, `principalId`, `nonce`, `bootstrapDigest`, `configurationDigest`, `issuerCertificateDigest` and `grantId`. The resource hashes the canonical principal/nonce object; the payload digest hashes that full binding. `issuerCertificateDigest` is the exact pinned issuer **PEM** digest, not the native certificate **DER** digest. Native target principals retain their existing UTF-8 limit of 1024 bytes; the legacy principal profile is unchanged.
+
+`control_plane_workload_identity_client.py` selects the actual native grant and leaf verifier solely from source-owned cold material. Options genuinely re-admit the independent grant, exact seven-field native packet, signed setup/delegation and target CSR/PoP originals without contacting the worker. Issuance repeats original admission after the public approval gates, spends its one-exchange context before contact, sends the same raw grant/packet/request triple, and receives the exact association/certificate pair. A prior options result, native role-5 capture or CLI diagnostic is never an authority input.
+
+Before returning a certificate, the caller independently re-admits its original bytes through the native grant verifier, including the genuine issuer, CSR key, requested SANs, all certificate selectors, signed serial and exact validity. It compares the closed journal association to the original admission and requires the exact canonical worker response association: schema `serverware.workloadIdentityIssuerResponse/v1`, `authorizationDigest`, `requestDigest`, `issuerCertificateDigest`, `certificateSha256` and lowercase hexadecimal `serialNumber`. The native material seal also retains the delegation/setup/requirements/identity-policy/certificate-selector and issuer-DER commitments. Original guards remain live through the existing HTTP response owner.
+
+The native packet cap is 512 KiB. Raw transport limits and the original 64 MiB work ceiling are unchanged; nested native representation forecasts may refuse inputs before signing when the remaining allowance is insufficient. No all-maximum-input acceptance is claimed. A lost or rejected response does not establish nonissuance, and the caller never automatically retries or opens a replacement context.
+
+## Remaining boundary
+
+The worker's separate signed native issuance grant is direct issuer authorization. Native setup/delegation/CSR verification and certificate-selector compatibility do not establish every hidden source/header/token policy condition, provider-request authorization or canary success. This is the existing trusted-host-local software CA boundary, not enclave CA custody or a conversion of native diagnostic evidence into issuer permission. Deployment, full enrollment/install completion, rotation/revocation, trust lifecycle, channels/sidecar and production evidence remain separate unfinished work.

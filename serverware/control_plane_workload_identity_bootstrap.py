@@ -14,6 +14,8 @@ from serverware_agent_trust import _workload_signed_packet as packets
 
 SCHEMA = "serverware.signedControlPlaneWorkloadIdentityBootstrap/v1"
 PAYLOAD_SCHEMA = "serverware.controlPlaneWorkloadIdentityBootstrap/v1"
+NATIVE_SCHEMA = "serverware.signedControlPlaneWorkloadIdentityBootstrap/v2"
+NATIVE_PAYLOAD_SCHEMA = "serverware.controlPlaneWorkloadIdentityBootstrap/v2"
 MAX_BYTES = 256 * 1024
 MAX_ORIGINAL_BYTES = 64 * 1024 * 1024
 _FIELDS = frozenset({"schema", "sourceRevision", "purpose", "trustMode", "processMode",
@@ -38,19 +40,68 @@ class _CallerMaterial:
     maximum_original_bytes: int
     valid_from_epoch_ns: int
     valid_until_epoch_ns: int
+    profile: str = issuer.LEGACY_PROFILE
 
 
 def _admit_on_work(*, bootstrap_bytes, runtime_root_public_key,
         expected_configuration_digest, expected_uid, expected_gid,
         live_window, transport_deadline_ns, work, _current=None):
+    """Strict legacy caller admission; native originals cannot fall back here."""
+    return _admit_profile_on_work(bootstrap_bytes=bootstrap_bytes,
+        runtime_root_public_key=runtime_root_public_key,
+        expected_configuration_digest=expected_configuration_digest,
+        expected_uid=expected_uid, expected_gid=expected_gid, live_window=live_window,
+        transport_deadline_ns=transport_deadline_ns, work=work, _current=_current,
+        native_profile=False)
+
+
+def _admit_native_on_work(*, bootstrap_bytes, runtime_root_public_key,
+        expected_configuration_digest, expected_uid, expected_gid,
+        live_window, transport_deadline_ns, work, _current=None):
+    """Strict native caller admission under the actual runtime root original."""
+    return _admit_profile_on_work(bootstrap_bytes=bootstrap_bytes,
+        runtime_root_public_key=runtime_root_public_key,
+        expected_configuration_digest=expected_configuration_digest,
+        expected_uid=expected_uid, expected_gid=expected_gid, live_window=live_window,
+        transport_deadline_ns=transport_deadline_ns, work=work, _current=_current,
+        native_profile=True)
+
+
+def _admit_launch_on_work(*, bootstrap_bytes, runtime_root_public_key,
+        expected_configuration_digest, expected_uid, expected_gid,
+        live_window, transport_deadline_ns, work, _current=None):
+    """Cold-only version selection; the selected verifier still checks all originals."""
     budget = issuer._Budget(work, live_window, transport_deadline_ns, _current)
-    p = issuer._signed(bootstrap_bytes, SCHEMA, PAYLOAD_SCHEMA,
+    envelope = issuer._decode(bootstrap_bytes, MAX_BYTES, budget)
+    issuer._object(envelope, {"schema", "payload", "signature"})
+    if envelope["schema"] == SCHEMA:
+        verifier = _admit_on_work
+    elif envelope["schema"] == NATIVE_SCHEMA:
+        verifier = _admit_native_on_work
+    else:
+        issuer._fail()
+    return verifier(bootstrap_bytes=bootstrap_bytes, runtime_root_public_key=runtime_root_public_key,
+        expected_configuration_digest=expected_configuration_digest,
+        expected_uid=expected_uid, expected_gid=expected_gid, live_window=budget.window,
+        transport_deadline_ns=budget.bound, work=work, _current=budget.current)
+
+
+def _admit_profile_on_work(*, bootstrap_bytes, runtime_root_public_key,
+        expected_configuration_digest, expected_uid, expected_gid,
+        live_window, transport_deadline_ns, work, _current, native_profile):
+    if type(native_profile) is not bool:
+        issuer._fail()
+    budget = issuer._Budget(work, live_window, transport_deadline_ns, _current)
+    p = issuer._signed(bootstrap_bytes, NATIVE_SCHEMA if native_profile else SCHEMA,
+        NATIVE_PAYLOAD_SCHEMA if native_profile else PAYLOAD_SCHEMA,
         runtime_root_public_key, MAX_BYTES, budget)
     issuer._object(p, _FIELDS)
     issuer._digest(expected_configuration_digest)
     issuer._integer(expected_uid, (1 << 32) - 2)
     issuer._integer(expected_gid, (1 << 32) - 2)
-    fixed = {"purpose": "workload-identity-caller", "trustMode": "trusted-host-local",
+    selected_profile = issuer.NATIVE_PROFILE if native_profile else issuer.LEGACY_PROFILE
+    fixed = {"purpose": "native-workload-identity-caller" if native_profile else "workload-identity-caller",
+        "trustMode": "trusted-host-local",
         "processMode": "serverware-control-plane", "callerUid": expected_uid,
         "callerGid": expected_gid, "configurationDigest": expected_configuration_digest}
     if any(type(p[name]) is not type(value) or p[name] != value for name, value in fixed.items()):
@@ -61,16 +112,20 @@ def _admit_on_work(*, bootstrap_bytes, runtime_root_public_key,
         budget.check()
         return _CallerMaterial(bootstrap_bytes, expected_configuration_digest, False,
             None, None, None, None, None, None, None, issuer._MAX_TIMEOUT_NS,
-            MAX_ORIGINAL_BYTES, start, end)
+            MAX_ORIGINAL_BYTES, start, end, selected_profile)
     profile = issuer._object(p["issuer"], _ISSUER_FIELDS)
     if (expected_uid, expected_gid) != (issuer.PEER_UID, issuer.PEER_GID):
         issuer._fail()
     root_bytes = issuer._wrapped(profile["root"], 1024, budget)
     root = packets._public_key(root_bytes, budget)
     worker_bytes = issuer._wrapped(profile["bootstrap"], issuer.MAX_BYTES, budget)
-    worker = issuer._verify_on_work(bootstrap_bytes=worker_bytes, root_public_key=root,
+    verifier = issuer._verify_native_on_work if native_profile else issuer._verify_on_work
+    worker = verifier(bootstrap_bytes=worker_bytes, root_public_key=root,
         live_window=budget.window, transport_deadline_ns=budget.bound, work=work,
         _current=budget.current)
+    if type(worker) is not issuer._IssuerMaterial or worker.profile != selected_profile:
+        issuer._fail()
+    issuer._enrollment_original_byte_count(worker)
     endpoint = issuer._object(profile["endpoint"], _ENDPOINT_FIELDS)
     expected = {"path": issuer.LISTENER_PATH,
         "device": worker.listener_path_device, "inode": worker.listener_path_inode,
@@ -93,16 +148,42 @@ def _admit_on_work(*, bootstrap_bytes, runtime_root_public_key,
     budget.check()
     return _CallerMaterial(bootstrap_bytes, expected_configuration_digest, True,
         root_bytes, root, worker_bytes, worker, issuer.LISTENER_PATH, 0, 0,
-        timeout, maximum, start, end)
+        timeout, maximum, start, end, selected_profile)
 
 
 def _produce_on_work(*, payload_bytes, runtime_root_private_key, runtime_root_public_key,
         expected_configuration_digest, expected_uid, expected_gid, live_window,
         transport_deadline_ns, work, _current=None):
+    return _produce_profile_on_work(payload_bytes=payload_bytes,
+        runtime_root_private_key=runtime_root_private_key, runtime_root_public_key=runtime_root_public_key,
+        expected_configuration_digest=expected_configuration_digest,
+        expected_uid=expected_uid, expected_gid=expected_gid, live_window=live_window,
+        transport_deadline_ns=transport_deadline_ns, work=work, _current=_current,
+        native_profile=False)
+
+
+def _produce_native_on_work(*, payload_bytes, runtime_root_private_key, runtime_root_public_key,
+        expected_configuration_digest, expected_uid, expected_gid, live_window,
+        transport_deadline_ns, work, _current=None):
+    return _produce_profile_on_work(payload_bytes=payload_bytes,
+        runtime_root_private_key=runtime_root_private_key, runtime_root_public_key=runtime_root_public_key,
+        expected_configuration_digest=expected_configuration_digest,
+        expected_uid=expected_uid, expected_gid=expected_gid, live_window=live_window,
+        transport_deadline_ns=transport_deadline_ns, work=work, _current=_current,
+        native_profile=True)
+
+
+def _produce_profile_on_work(*, payload_bytes, runtime_root_private_key, runtime_root_public_key,
+        expected_configuration_digest, expected_uid, expected_gid, live_window,
+        transport_deadline_ns, work, _current, native_profile):
+    if type(native_profile) is not bool:
+        issuer._fail()
     budget = issuer._Budget(work, live_window, transport_deadline_ns, _current)
-    raw = issuer._produce(payload_bytes, SCHEMA, PAYLOAD_SCHEMA, runtime_root_private_key,
+    raw = issuer._produce(payload_bytes, NATIVE_SCHEMA if native_profile else SCHEMA,
+        NATIVE_PAYLOAD_SCHEMA if native_profile else PAYLOAD_SCHEMA, runtime_root_private_key,
         runtime_root_public_key, MAX_BYTES, budget)
-    _admit_on_work(bootstrap_bytes=raw, runtime_root_public_key=runtime_root_public_key,
+    verifier = _admit_native_on_work if native_profile else _admit_on_work
+    verifier(bootstrap_bytes=raw, runtime_root_public_key=runtime_root_public_key,
         expected_configuration_digest=expected_configuration_digest,
         expected_uid=expected_uid, expected_gid=expected_gid,
         live_window=budget.window, transport_deadline_ns=budget.bound,

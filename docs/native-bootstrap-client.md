@@ -111,6 +111,14 @@ bounded local receiver `verification` diagnostic. The capture can contain
 public identity and policy information; it contains no private-key bytes or
 install token. It is not independently authenticated as a receipt.
 
+The [capture schema](../schemas/native-bootstrap-client-capture.v1.schema.json)
+documents this exact public shape. The separate [packet extraction helper](native-bootstrap-capture.md)
+can publish the exact packet original for the [native issuance workflow](native-workload-identity-submission.md),
+bound to a separately pinned target request. It ignores the diagnostic's success
+claims and does not replace independent issuance authorization or retained-key
+certificate verification. Extracting a parseable capture cannot establish that
+the producing process exited successfully.
+
 Any error exits nonzero with fixed safe text. A server may already have durably
 claimed/completed signing before an HTTP, verification or publication failure;
 the outcome can therefore be unknown. Do not automatically resubmit or replace

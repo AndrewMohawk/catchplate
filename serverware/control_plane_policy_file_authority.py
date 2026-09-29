@@ -17,20 +17,34 @@ DSN_SHA = "SERVERWARE_POLICY_FILE_MATERIALIZER_DSN_SHA256"
 
 
 class CurrentPolicyAuthority:
+    SQL, DSN_PATH, DSN_SHA = sql, DSN_PATH, DSN_SHA
+
     def __init__(self):
         raise TypeError("use the actual policy publication owner")
 
     @classmethod
     def open(cls, publication):
-        from serverware.control_plane_policy_file_publication import PolicyFilePublication, _require, _sha
+        from serverware.control_plane_policy_file_publication import PolicyFilePublication, _require
+        from serverware.control_plane_policy_file_genesis import GenesisPolicyAuthority
+        _require(cls in {CurrentPolicyAuthority, GenesisPolicyAuthority})
         _require(type(publication) is PolicyFilePublication and publication.consumed is not None
             and publication.authority is None)
+        _require((publication.material_binding["kind"] == "genesis-materialize") == (cls is GenesisPolicyAuthority))
+        return cls._connect(publication)
+
+    @classmethod
+    def _connect(cls, publication):
+        from serverware.control_plane_policy_file_publication import PolicyFilePublication, _require, _sha
+        from serverware.control_plane_policy_file_genesis import GenesisPolicyAuthority
+        from serverware.control_plane_policy_genesis_maintenance import MaintenanceOwner, GenesisAdmissionRead
+        _require((type(publication) is PolicyFilePublication and cls in {CurrentPolicyAuthority, GenesisPolicyAuthority}
+            and publication.consumed is not None) or (type(publication) is MaintenanceOwner and cls is GenesisAdmissionRead))
         publication.check()
         owner = object.__new__(cls)
         owner.publication = publication
         owner.connection = owner.parent = owner.descriptor = None
         owner.original = None
-        owner.configuration = (os.environ.get(DSN_PATH), os.environ.get(DSN_SHA))
+        owner.configuration = (os.environ.get(cls.DSN_PATH), os.environ.get(cls.DSN_SHA))
         try:
             path, digest = owner.configuration
             _require(type(path) is str and Path(path).is_absolute() and type(digest) is str)
@@ -48,7 +62,7 @@ class CurrentPolicyAuthority:
             remaining = publication.deadline - time.monotonic_ns()
             _require(remaining > 1_000_000_000)
             owner.connection = db._pinned_auxiliary_pg_connect(dsn=dsn, schema="serverware_metadata",
-                connect_timeout=min(2, max(1, remaining // 1_000_000_000)), runtime_role=sql.ROLE,
+                connect_timeout=min(2, max(1, remaining // 1_000_000_000)), runtime_role=cls.SQL.ROLE,
                 label="policy file materializer", error_type=ValueError)
             owner._configure()
             owner.check()
@@ -59,6 +73,7 @@ class CurrentPolicyAuthority:
 
     def _contract(self):
         from serverware.control_plane_policy_file_publication import _require
+        sql = self.SQL
         with self.connection.cursor() as cursor:
             _require(cursor.execute(*sql.privilege_check(namespace="serverware_metadata")).fetchone() is None)
             function = cursor.execute("SELECT p.prosrc, owner.rolname AS owner FROM pg_catalog.pg_proc p "
@@ -78,17 +93,21 @@ class CurrentPolicyAuthority:
                 "pg_catalog.set_config('idle_in_transaction_session_timeout', %s, true)",
                 (str(min(500, remaining)) + "ms", str(remaining) + "ms", str(remaining) + "ms"))
 
-    def check(self):
-        from serverware.control_plane_policy_file_publication import _require, _signed, _sha
-        from serverware.authority_policy_file_approval import canonical
+    def _check_held_connection(self):
+        from serverware.control_plane_policy_file_publication import _require
         self.publication.check()
-        _require(self.configuration == (os.environ.get(DSN_PATH), os.environ.get(DSN_SHA)))
+        _require(self.configuration == (os.environ.get(self.DSN_PATH), os.environ.get(self.DSN_SHA)))
         bundles._recheck_secure_parent_directory(self.path, label="policy materializer private DSN", expected=self.parent_identity)
         raw, value = files._read(self.parent, self.basename, 16 * 1024)
         _require(raw == self.raw and files._file_identity(value) == self.identity
             == files._file_identity(os.fstat(self.descriptor)))
         self._configure()
         self._contract()
+
+    def check(self):
+        from serverware.control_plane_policy_file_publication import _require, _signed, _sha
+        from serverware.authority_policy_file_approval import canonical
+        self._check_held_connection()
         bound = self.publication.material_binding
         with self.connection.cursor() as cursor:
             row = cursor.execute("SELECT serverware_metadata.serverware_policy_file_current_lock(%s,%s) AS original",

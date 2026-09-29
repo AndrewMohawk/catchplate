@@ -16,6 +16,8 @@ def main() -> None:
 
     try:
         custody_startup.initialize_from_environment()
+        if custody_startup.genesis_maintenance_configuration() is not None:
+            raise RuntimeError("genesis maintenance requires its distinct cold runner; normal startup is forbidden")
         # Reuse that admitted root and original FD inventory; the custody
         # journal has now opened a private handle, so never repeat admission.
         from serverware import control_plane_enrollment_startup as enrollment_startup

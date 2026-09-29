@@ -133,7 +133,7 @@ def _history(directory):
             "approvalId", "previousTerminalSha256", "oldIdentity", "stageIdentity"}
             and intent["schema"] == "serverware.policyFilePublicationIntent/v1")
         bound = profile.request_binding(intent["binding"])
-        _require(bound["kind"] == "materialize" and bound["publicationId"] == identifier
+        _require(bound["kind"] in {"materialize", "genesis-materialize"} and bound["publicationId"] == identifier
             and item.get("newSha256") == bound["policyOriginalSha256"]
             and item.get("oldSha256") == bound["expectedFileSha256"])
         _identity(intent["oldIdentity"], absent=True)
@@ -144,6 +144,8 @@ def _history(directory):
         if "stageSha256" in item:
             _require(item["stageSha256"] == item["newSha256"] and item["stageIdentity"] == intent["stageIdentity"])
         previous = intent["previousTerminalSha256"]
+        _require(bound["kind"] != "genesis-materialize" or (previous is None
+            and intent["oldIdentity"] is None and bound["expectedFileSha256"] is None))
         _require(previous not in by_previous and (previous is None or SHA.fullmatch(previous) is not None))
         by_previous[previous] = identifier
         claim = item.get("claimed")
@@ -216,18 +218,21 @@ def _history(directory):
 
 
 class PolicyFilePublication:
-    def __init__(self, request, payload, *, resolving=False):
+    def __init__(self, request, payload, *, resolving=False, genesis=False):
         self.pid, self.thread = os.getpid(), threading.get_ident()
         self.mono, self.epoch = time.monotonic_ns(), time.time_ns()
         self.deadline, self.expires = self.mono + 30_000_000_000, self.epoch + 30_000_000_000
         self.request, self.pin, self.payload = request, _request_pin(request), payload
-        _require(type(request) is Request and request.url.path == PATH + ("/resolve" if resolving else "/materialize"))
-        self.resolving = resolving
+        _require(type(genesis) is bool and not (resolving and genesis)
+            and type(request) is Request and request.url.path == PATH + (
+                "/resolve" if resolving else "/genesis-materialize" if genesis else "/materialize"))
+        self.resolving, self.genesis = resolving, genesis
         self.parent = self.directory = self.authority = None
         self.pins = []
         self.history = None
         self.attempt = payload.publication_id
         self.approval = ceremonies._Ceremony(request, purpose="policy-file", deadline_ns=self.deadline, expires_epoch_ns=self.expires)
+        self.deadline, self.expires = min(self.deadline, self.approval.deadline), min(self.expires, self.approval.expires)
         self.assertion = self.approval.capture_assertion(payload.mfa)
         self.mfa_original = profile.canonical(payload.mfa)
         self.raw = None if resolving else _original(payload.policy_original)
@@ -236,9 +241,12 @@ class PolicyFilePublication:
                 "outcome": payload.outcome, "reason": payload.reason}
         else:
             self.snapshot, self.trust, original = _signed(self.raw)
-            self.bound = {"kind": "materialize", "publicationId": self.attempt, **original,
-                "artifactEnvelopeSha256": payload.artifact_sha256, "expectedFileSha256": payload.expected_file_sha256,
+            self.bound = {"kind": "genesis-materialize" if genesis else "materialize",
+                "publicationId": self.attempt, **original, "expectedFileSha256": payload.expected_file_sha256,
                 "reason": payload.reason}
+            self.bound.update({"genesisPreparationDigest": payload.genesis_preparation_digest,
+                "genesisFinalizationDigest": payload.genesis_finalization_digest} if genesis else
+                {"artifactEnvelopeSha256": payload.artifact_sha256})
         self.bound = profile.request_binding(self.bound)
         self.bound_original = profile.canonical(self.bound)
         self.payload_digest = _sha(self.bound_original)
@@ -248,6 +256,8 @@ class PolicyFilePublication:
         self.target_installed = False
 
     def check(self):
+        from serverware import control_plane_policy_genesis_maintenance as genesis_maintenance
+        genesis_maintenance.require_binding(self.bound, publication=self)
         mono, epoch = time.monotonic_ns(), time.time_ns()
         _require((os.getpid(), threading.get_ident()) == (self.pid, self.thread)
             and self.mono <= mono < self.deadline and self.epoch <= epoch < self.expires
@@ -278,7 +288,7 @@ class PolicyFilePublication:
 
     def _arguments(self, phase):
         return ceremonies._arguments(phase, self.approval.identity, self.bound, self.approval.policy,
-            getattr(self, "approval_id", None), purpose="policy-file")
+            getattr(self, "approval_id", None), purpose="policy-file", publication=self)
 
     def negotiate(self):
         from serverware import app
@@ -366,6 +376,9 @@ class PolicyFilePublication:
         else:
             _require(incomplete is None and self.attempt not in items and len(items) < MAX_SLOTS
                 and self.file_sha == self.bound["expectedFileSha256"])
+            # Local absence is necessary, never positive genesis authority.
+            _require(not self.genesis or (not items and previous is None and terminal is None
+                and old is None and identity is None))
             if terminal is not None:
                 _require(self.file_sha == terminal["fileSha256"] and identity == terminal["fileIdentity"])
             # Originals and the single staged inode precede the irreversible
@@ -418,9 +431,11 @@ class PolicyFilePublication:
         self._open()
         self._consume()
         from serverware.control_plane_policy_file_authority import CurrentPolicyAuthority
+        from serverware.control_plane_policy_file_genesis import GenesisPolicyAuthority
         # This connection is separate from definite approval/audit commits.
         # Never call the controlled writer while its conflicting fence is held.
-        self.authority = CurrentPolicyAuthority.open(self)
+        authority = GenesisPolicyAuthority if self.material_binding["kind"] == "genesis-materialize" else CurrentPolicyAuthority
+        self.authority = authority.open(self)
         try:
             self.authority.check()
             if not self.resolving:
@@ -491,10 +506,10 @@ class PolicyFilePublication:
                     os.close(descriptor)
 
 
-def execute(request, payload, *, resolving=False):
+def execute(request, payload, *, resolving=False, genesis=False):
     owner = None
     try:
-        owner = PolicyFilePublication(request, payload, resolving=resolving)
+        owner = PolicyFilePublication(request, payload, resolving=resolving, genesis=genesis)
         return owner.execute()
     except HTTPException:
         raise

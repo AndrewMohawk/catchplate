@@ -53,6 +53,7 @@ from serverware.authority_store import completion_read_sql as _authority_complet
 from serverware.authority_store import successor_execution_sql as _successor_execution_sql
 from serverware.authority_store import successor_execution_privileges as _successor_execution_privileges
 from serverware.authority_store import policy_file_read_sql as _policy_file_read_sql
+from serverware.authority_store import policy_file_genesis_sql as _policy_file_genesis_sql
 from serverware.authority_store.authority_dispatch import (
     _POLICY_AUTHORITY_CONTROLLED_WRITER_HANDLERS,
     _authority_marshal_value,
@@ -3582,13 +3583,13 @@ def _seal_postgres_schema_acl(
         _POLICY_CANDIDATE_AUTHORITY_SCHEMA_NAME,
         "serverware_candidate_authority_expected_v9",
     }
-    if completion_enabled and _policy_file_read_sql.ROLE in {
+    if completion_enabled and {_policy_file_read_sql.ROLE, _policy_file_genesis_sql.ROLE} & {
         runtime_role, authority_executor_role, authority_verifier_role, authority_owner_role,
         authority_capability_issuer_role, authority_planner_writer_role,
         _METADATA_STORE_AUTHORITY_COMPLETION_READER_ROLE, authority_contract.SUCCESSOR_ISSUER_ROLE,
         authority_contract.SUCCESSOR_EXECUTOR_ROLE, authority_contract.SUCCESSOR_RECOVERY_ROLE,
     }:
-        raise error_type("policy file materializer requires a separate fixed role")
+        raise error_type("policy file materializers require separate fixed roles")
     if completion_enabled and _METADATA_STORE_AUTHORITY_COMPLETION_READER_ROLE in {
         runtime_role, authority_executor_role, authority_verifier_role,
         authority_owner_role, authority_capability_issuer_role, authority_planner_writer_role,
@@ -3953,11 +3954,12 @@ def _seal_postgres_schema_acl(
                 for kind in ("TABLES", "SEQUENCES", "FUNCTIONS"):
                     cur.execute("REVOKE ALL ON ALL " + kind + " IN SCHEMA " + schema_name
                         + " FROM " + successor_role_name)
-            materializer = _policy_candidate_authority_identifier(_policy_file_read_sql.ROLE)
-            cur.execute("REVOKE CREATE, TEMPORARY ON DATABASE " + database_name + " FROM " + materializer)
-            cur.execute("REVOKE ALL ON SCHEMA " + schema_name + " FROM " + materializer)
-            for kind in ("TABLES", "SEQUENCES", "FUNCTIONS"):
-                cur.execute("REVOKE ALL ON ALL " + kind + " IN SCHEMA " + schema_name + " FROM " + materializer)
+            for materializer_sql in (_policy_file_read_sql, _policy_file_genesis_sql):
+                materializer = _policy_candidate_authority_identifier(materializer_sql.ROLE)
+                cur.execute("REVOKE CREATE, TEMPORARY ON DATABASE " + database_name + " FROM " + materializer)
+                cur.execute("REVOKE ALL ON SCHEMA " + schema_name + " FROM " + materializer)
+                for kind in ("TABLES", "SEQUENCES", "FUNCTIONS"):
+                    cur.execute("REVOKE ALL ON ALL " + kind + " IN SCHEMA " + schema_name + " FROM " + materializer)
             cur.execute(
                 "REVOKE CREATE, TEMPORARY ON DATABASE " + database_name + " FROM " + completion_role_name
             )
@@ -4164,11 +4166,12 @@ def _seal_postgres_schema_acl(
                 cur.execute("GRANT USAGE ON SCHEMA " + schema_name + " TO " + successor_role_name)
                 cur.execute("GRANT EXECUTE ON FUNCTION " + schema_name + "." + function_name
                     + "(text, text) TO " + successor_role_name)
-            materializer = _policy_candidate_authority_identifier(_policy_file_read_sql.ROLE)
-            materializer_function = _policy_candidate_authority_identifier(_policy_file_read_sql.FUNCTION)
-            cur.execute("GRANT USAGE ON SCHEMA " + schema_name + " TO " + materializer)
-            cur.execute("GRANT EXECUTE ON FUNCTION " + schema_name + "." + materializer_function
-                + "(text, text) TO " + materializer)
+            for materializer_sql in (_policy_file_read_sql, _policy_file_genesis_sql):
+                materializer = _policy_candidate_authority_identifier(materializer_sql.ROLE)
+                materializer_function = _policy_candidate_authority_identifier(materializer_sql.FUNCTION)
+                cur.execute("GRANT USAGE ON SCHEMA " + schema_name + " TO " + materializer)
+                cur.execute("GRANT EXECUTE ON FUNCTION " + schema_name + "." + materializer_function
+                    + "(text, text) TO " + materializer)
             cur.execute("GRANT USAGE ON SCHEMA " + schema_name + " TO " + completion_role_name)
             for table in sorted(_POLICY_AUTHORITY_COMPLETION_READ_TABLES):
                 table_name = _policy_candidate_authority_identifier(table)
@@ -4395,6 +4398,9 @@ def _seal_postgres_schema_acl(
             " OR (grantee.rolname = %s AND function_record.proname = %s "
             "AND pg_catalog.oidvectortypes(function_record.proargtypes) = 'text, text' "
             "AND grant_entry.privilege_type = 'EXECUTE' AND NOT grant_entry.is_grantable)"
+            " OR (grantee.rolname = %s AND function_record.proname = %s "
+            "AND pg_catalog.oidvectortypes(function_record.proargtypes) = 'text, text' "
+            "AND grant_entry.privilege_type = 'EXECUTE' AND NOT grant_entry.is_grantable)"
             "), FALSE) LIMIT 1",
             (
                 schema,
@@ -4412,6 +4418,8 @@ def _seal_postgres_schema_acl(
                 authority_contract.SUCCESSOR_READ_FUNCTION if completion_enabled else "",
                 _policy_file_read_sql.ROLE if completion_enabled else "",
                 _policy_file_read_sql.FUNCTION if completion_enabled else "",
+                _policy_file_genesis_sql.ROLE if completion_enabled else "",
+                _policy_file_genesis_sql.FUNCTION if completion_enabled else "",
             ),
         ).fetchone()
         wrong_owner = cur.execute(
@@ -5161,8 +5169,9 @@ def _seal_postgres_schema_acl(
             if verifier_privilege_violation is not None:
                 raise error_type("PostgreSQL verifier effective privileges are not source exact")
         if completion_enabled:
-            if cur.execute(*_policy_file_read_sql.privilege_check(namespace=schema)).fetchone() is not None:
-                raise error_type("PostgreSQL policy file materializer privileges are not source exact")
+            for materializer_sql in (_policy_file_read_sql, _policy_file_genesis_sql):
+                if cur.execute(*materializer_sql.privilege_check(namespace=schema)).fetchone() is not None:
+                    raise error_type("PostgreSQL policy file materializer privileges are not source exact")
             for successor_role in successor_functions:
                 successor_violation = cur.execute(
                     *_successor_execution_privileges.successor_execution_privilege_check(
@@ -19234,6 +19243,8 @@ def _install_policy_candidate_authority_guards(conn: Any) -> None:
             issuer_pins=successor_issuer_pins, executor_pins=successor_executor_pins,
             recovery_pins=successor_recovery_pins))
         conn.execute(_policy_file_read_sql.functions_sql(guard_namespace,
+            owner_role=_METADATA_STORE_AUTHORITY_OWNER_ROLE))
+        conn.execute(_policy_file_genesis_sql.functions_sql(guard_namespace,
             owner_role=_METADATA_STORE_AUTHORITY_OWNER_ROLE))
         return
 

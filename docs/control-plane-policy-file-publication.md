@@ -95,8 +95,12 @@ audit inclusion and its exact activation-attempt candidate artifact. Supplied
 digests are equality expectations, never table/path/historical-row selectors.
 The retained same-connection owner compares backend/transaction identity and all
 originals through closing readback; lock, statement and idle waits narrow its
-original allowance. The current profile supports committed activation artifacts,
-not genesis or old-source/migration adapters.
+original allowance. This profile supports committed activation artifacts, not
+old-source/migration adapters. The separate additive
+[finalized-genesis path](control-plane-policy-file-genesis.md) uses a positive
+signed/audit-included finalized-genesis chain, its own read-lock role and fresh
+`policy.file.genesis.materialize` approval. It does not widen the activation role
+or function or infer genesis from missing files.
 
 ## Protected one-shot transition
 

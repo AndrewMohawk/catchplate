@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.dev/schemas/control-plane-custody-startup.v3.schema.json",
+  "title": "Root-authorized finalized-genesis maintenance startup",
+  "description": "Original canonical ASCII JSON <=16KiB in the existing root-owned sealed custody configuration FD. A distinct signature domain covers all fields except signature. Only the actual admitted runtime-root key/configuration may verify it. This allows the restricted maintenance entrypoint, never publication, activation, effect retry or normal runtime. The original maintenance validity is <=15 minutes, further narrowed by the original custody receipt; actual effects retain fresh independent <=30-second owners and purpose-bound approval.",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema", "sourceRevision", "configurationDigest", "directoryFd", "device", "inode", "uid", "gid", "quotaBytes", "maximumRecords", "policyFileGenesisMaintenance", "signature"],
+  "properties": {
+    "schema": {"const": "serverware.controlPlaneCustodyStartup/v3"},
+    "sourceRevision": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]{0,255}$"},
+    "configurationDigest": {"$ref": "#/$defs/digest"},
+    "directoryFd": {"type": "integer", "minimum": 32, "maximum": 1023},
+    "device": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615},
+    "inode": {"type": "integer", "minimum": 1, "maximum": 18446744073709551615},
+    "uid": {"type": "integer", "minimum": 0, "maximum": 4294967294},
+    "gid": {"type": "integer", "minimum": 0, "maximum": 4294967294},
+    "quotaBytes": {"type": "integer", "minimum": 1, "maximum": 8589934592},
+    "maximumRecords": {"type": "integer", "minimum": 1, "maximum": 4096},
+    "signature": {"type": "string", "pattern": "^ed25519:[A-Za-z0-9_-]{86}$"},
+    "policyFileGenesisMaintenance": {
+      "type": "object", "additionalProperties": false,
+      "required": ["profile", "genesisPreparationDigest", "genesisFinalizationDigest", "policyId", "sequence", "rollbackEpoch", "policyHash", "genesisDsnSha256", "issuedAtEpochNs", "expiresAtEpochNs"],
+      "properties": {
+        "profile": {"const": "finalized-genesis-file-maintenance-v1"},
+        "genesisPreparationDigest": {"$ref": "#/$defs/digest"},
+        "genesisFinalizationDigest": {"$ref": "#/$defs/digest"},
+        "policyId": {"type": "string", "minLength": 1, "maxLength": 256, "description": "Source enforces UTF-8 <=256 bytes."},
+        "sequence": {"$ref": "#/$defs/positiveI64"},
+        "rollbackEpoch": {"$ref": "#/$defs/positiveI64"},
+        "policyHash": {"$ref": "#/$defs/digest"},
+        "genesisDsnSha256": {"$ref": "#/$defs/digest"},
+        "issuedAtEpochNs": {"$ref": "#/$defs/positiveI64"},
+        "expiresAtEpochNs": {"$ref": "#/$defs/positiveI64"}
+      },
+      "description": "Source requires 0 < expiry-issued <=900000000000ns and a current original admitted custody receipt. The named protected DSN original must match genesisDsnSha256. Cold observation of the positive finalized/current chain must succeed before listening; each publication checks that chain again under the retained writer fence."
+    }
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "positiveI64": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807}
+  }
+}

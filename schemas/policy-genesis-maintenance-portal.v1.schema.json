@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.dev/schemas/policy-genesis-maintenance-portal.v1.schema.json",
+  "title": "Cold genesis maintenance portal review observations",
+  "description": "Source-fixed POST /api/policy/genesis-maintenance/context and /review, available only behind the actual cold maintenance owner. Data is never approval, reservation, filesystem permission or a renewed deadline. Existing publication effect/inspection contracts are unchanged. No key, trust root, DSN or target path is a browser input.",
+  "oneOf": [
+    {"$ref": "#/$defs/contextRequest"}, {"$ref": "#/$defs/context"},
+    {"$ref": "#/$defs/bundleReview"}, {"$ref": "#/$defs/approvalReview"},
+    {"$ref": "#/$defs/resolutionReview"}, {"$ref": "#/$defs/review"}
+  ],
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "publicationId": {"type": "string", "pattern": "^[0-9a-f]{32}$"},
+    "approvalId": {"type": "string", "pattern": "^[0-9a-f-]{36}$"},
+    "epoch": {"type": "string", "pattern": "^[1-9][0-9]{0,18}$", "description": "Original admitted positive i64 epoch nanoseconds encoded as decimal text, not a browser floating-point number."},
+    "reason": {"type": ["string", "null"], "maxLength": 500},
+    "original": {"type": "string", "minLength": 1, "maxLength": 22369622, "pattern": "^[A-Za-z0-9_-]+$", "description": "Canonical unpadded base64url of the exact 1..16777216 original signed policy bytes; actual signature/schema/compiled identity are verified with existing admitted signing trust. Whole review HTTP request <=24MiB."},
+    "canonical": {"type": "string", "minLength": 2, "maxLength": 8192, "pattern": "^[\\x00-\\x7f]*$", "description": "Exact sorted compact ensure_ascii canonical JSON without LF. Returned as a string so approved i64 sequence/epoch scalars are not rounded by JavaScript. The runtime closes and validates the decoded binding separately."},
+    "actor": {
+      "type": "object", "additionalProperties": false, "required": ["userId", "authMethod", "roles"],
+      "properties": {"userId": {"type": "string", "pattern": "^oidc:", "maxLength": 512},
+        "authMethod": {"const": "oidc-session"},
+        "roles": {"type": "array", "maxItems": 32, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 128}}}
+    },
+    "queueItem": {
+      "type": "object", "additionalProperties": false,
+      "required": ["approvalId", "requesterId", "status", "action", "payloadDigest", "expiresAt"],
+      "properties": {"approvalId": {"$ref": "#/$defs/approvalId"}, "requesterId": {"type": "string", "pattern": "^oidc:", "maxLength": 512},
+        "status": {"type": "string", "minLength": 1, "maxLength": 64},
+        "action": {"enum": ["policy.file.genesis.materialize", "policy.file.resolve"]},
+        "payloadDigest": {"$ref": "#/$defs/digest"}, "expiresAt": {"type": "string", "minLength": 1, "maxLength": 128}}
+    },
+    "approval": {
+      "type": "object", "additionalProperties": false,
+      "required": ["approvalId", "requesterId", "status", "expiresAt", "approvedBy", "action", "payloadDigest"],
+      "properties": {"approvalId": {"$ref": "#/$defs/approvalId"}, "requesterId": {"type": "string", "pattern": "^oidc:", "maxLength": 512},
+        "status": {"type": "string", "minLength": 1, "maxLength": 64}, "expiresAt": {"type": "string", "minLength": 1, "maxLength": 128},
+        "approvedBy": {"type": ["string", "null"], "maxLength": 512},
+        "action": {"enum": ["policy.file.genesis.materialize", "policy.file.resolve"]}, "payloadDigest": {"$ref": "#/$defs/digest"}}
+    },
+    "contextRequest": {
+      "type": "object", "additionalProperties": false, "required": ["schema"],
+      "properties": {"schema": {"const": "serverware.policyGenesisMaintenancePortalContextRequest/v1"}},
+      "description": "Cookie-authenticated current policy_publisher plus CSRF before body acquisition. Body <=1KiB. Context is the original admitted cold target, not a new current-writer reservation."
+    },
+    "context": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "actor", "targetOriginal", "maintenanceExpiresAtEpochNs", "approvals", "maxPolicyOriginalBytes", "hardwareRequired", "distinctApproverRequired", "automaticRetryAllowed", "restartRequired"],
+      "properties": {"schema": {"const": "serverware.policyGenesisMaintenancePortalContext/v1"}, "actor": {"$ref": "#/$defs/actor"},
+        "targetOriginal": {"$ref": "#/$defs/canonical"}, "maintenanceExpiresAtEpochNs": {"$ref": "#/$defs/epoch"},
+        "approvals": {"type": "array", "maxItems": 64, "items": {"$ref": "#/$defs/queueItem"}},
+        "maxPolicyOriginalBytes": {"const": 16777216}, "hardwareRequired": {"const": true}, "distinctApproverRequired": {"const": true},
+        "automaticRetryAllowed": {"const": false}, "restartRequired": {"const": true}},
+      "description": "targetOriginal is the exact six-field genesis tuple from the held signed maintenance owner. Queue is scoped navigation among the latest64 approvals, never complete absence evidence."
+    },
+    "bundleReview": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "kind", "publicationId", "reason", "policyOriginalBase64url"],
+      "properties": {"schema": {"const": "serverware.policyGenesisMaintenancePortalReviewRequest/v1"}, "kind": {"const": "bundle"},
+        "publicationId": {"$ref": "#/$defs/publicationId"}, "reason": {"$ref": "#/$defs/reason"}, "policyOriginalBase64url": {"$ref": "#/$defs/original"}}
+    },
+    "approvalReview": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "kind", "approvalId", "policyOriginalBase64url"],
+      "properties": {"schema": {"const": "serverware.policyGenesisMaintenancePortalReviewRequest/v1"}, "kind": {"const": "approval"},
+        "approvalId": {"$ref": "#/$defs/approvalId"}, "policyOriginalBase64url": {"$ref": "#/$defs/original"}},
+      "description": "Looks up the actual purpose-specific approval original; requester/approver roles are independently read. Supplied bundle must match the exact retained material, including for resolution."
+    },
+    "resolutionReview": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "kind", "publicationId", "intentSha256", "outcome", "reason", "policyOriginalBase64url"],
+      "properties": {"schema": {"const": "serverware.policyGenesisMaintenancePortalReviewRequest/v1"}, "kind": {"const": "resolution"},
+        "publicationId": {"$ref": "#/$defs/publicationId"}, "intentSha256": {"$ref": "#/$defs/digest"},
+        "outcome": {"enum": ["finalize-installed", "abandon-uninstalled"]}, "reason": {"$ref": "#/$defs/reason"},
+        "policyOriginalBase64url": {"$ref": "#/$defs/original"}},
+      "description": "Requires exact retained protected intent and signed genesis material. This is not a resolution attempt or proof of install/noninstall."
+    },
+    "review": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "actor", "requestOriginal", "materialOriginal", "payloadDigest", "approval", "policyOriginalBytes", "maintenanceExpiresAtEpochNs", "automaticRetryAllowed"],
+      "properties": {"schema": {"const": "serverware.policyGenesisMaintenancePortalReview/v1"}, "actor": {"$ref": "#/$defs/actor"},
+        "requestOriginal": {"$ref": "#/$defs/canonical"}, "materialOriginal": {"$ref": "#/$defs/canonical"},
+        "payloadDigest": {"$ref": "#/$defs/digest"}, "approval": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/approval"}]},
+        "policyOriginalBytes": {"type": "integer", "minimum": 1, "maximum": 16777216},
+        "maintenanceExpiresAtEpochNs": {"$ref": "#/$defs/epoch"}, "automaticRetryAllowed": {"const": false}},
+      "description": "Response<=128KiB. materialOriginal is the exact12-field genesis binding; requestOriginal is that binding or exact5-field resolution binding. payloadDigest hashes exact requestOriginal ASCII bytes. No permission carrier is returned."
+    }
+  }
+}

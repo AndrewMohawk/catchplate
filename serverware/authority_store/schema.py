@@ -14,6 +14,7 @@ from serverware.authority_store import counted_installation
 from serverware.authority_store.completion_read_sql import COMPLETION_READ_PRIVILEGE_SQL_DIGEST
 from serverware.authority_store.successor_execution_privileges import SUCCESSOR_EXECUTION_PRIVILEGE_SQL_DIGEST
 from serverware.authority_store import policy_file_read_sql
+from serverware.authority_store import policy_file_genesis_sql
 from serverware.authority_store import metadata_schema_source
 from serverware.authority_store import postgres_column_manifest
 from serverware.authority_store import postgres_trigger_manifest
@@ -238,6 +239,9 @@ def _policy_candidate_authority_source_contract_digest() -> str:
             "policyFileMaterializerRole": policy_file_read_sql.ROLE,
             "policyFileCurrentLockContract": policy_file_read_sql.CONTRACT,
             "policyFileCurrentLockSqlDigest": policy_file_read_sql.SQL_DIGEST,
+            "policyFileGenesisMaterializerRole": policy_file_genesis_sql.ROLE,
+            "policyFileGenesisLockContract": policy_file_genesis_sql.CONTRACT,
+            "policyFileGenesisLockSqlDigest": policy_file_genesis_sql.SQL_DIGEST,
             "policyFilePrivilegeSqlDigest": SUCCESSOR_EXECUTION_PRIVILEGE_SQL_DIGEST,
             "metadataSchemaProgramDigest":
                 _policy_candidate_authority_framed_digest(

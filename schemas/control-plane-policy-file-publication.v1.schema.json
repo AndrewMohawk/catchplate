@@ -46,7 +46,7 @@
       }
     },
     "binding": {
-      "oneOf": [{"$ref": "#/$defs/materializeBinding"}, {"$ref": "#/$defs/resolveBinding"}],
+      "oneOf": [{"$ref": "#/$defs/materializeBinding"}, {"$ref": "#/$defs/resolveBinding"}, {"$ref": "control-plane-policy-file-genesis.v1.schema.json#/$defs/binding"}],
       "description": "Canonical sorted compact ensure_ascii=True JSON without LF, <=8192 bytes. payloadDigest is its exact SHA256."
     },
     "materializeRequest": {
@@ -70,7 +70,7 @@
       "type": "object", "additionalProperties": false, "required": ["apiVersion", "action", "resourceId", "payloadDigest", "request"],
       "properties": {
         "apiVersion": {"const": "serverware.policyFileApprovalOptions/v1"},
-        "action": {"enum": ["policy.file.materialize", "policy.file.resolve"]},
+        "action": {"enum": ["policy.file.materialize", "policy.file.genesis.materialize", "policy.file.resolve"]},
         "resourceId": {"const": "active-policy-file"}, "payloadDigest": {"$ref": "#/$defs/digest"},
         "request": {"$ref": "#/$defs/binding"},
         "approvalId": {"anyOf": [{"$ref": "#/$defs/approvalId"}, {"type": "null"}]}
@@ -119,7 +119,7 @@
             "required": ["publicationId", "intentSha256", "binding", "resolutionClaimed"],
             "properties": {
               "publicationId": {"$ref": "#/$defs/id"}, "intentSha256": {"$ref": "#/$defs/digest"},
-              "binding": {"$ref": "#/$defs/materializeBinding"}, "resolutionClaimed": {"type": "boolean"}
+              "binding": {"oneOf": [{"$ref": "#/$defs/materializeBinding"}, {"$ref": "control-plane-policy-file-genesis.v1.schema.json#/$defs/binding"}]}, "resolutionClaimed": {"type": "boolean"}
             }
           }
         }

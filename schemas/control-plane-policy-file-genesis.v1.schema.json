@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.dev/schemas/control-plane-policy-file-genesis.v1.schema.json",
+  "title": "Explicit finalized-genesis policy file publication",
+  "description": "Data only. Actual retained owners independently verify positive finalized signed genesis, audit inclusion, current committed tuple, exact signed policy bytes and fresh hardware two-person approval. Null expected file and an empty local journal never prove genesis. No activation, authority initialization, retry or repair permission.",
+  "oneOf": [{"$ref": "#/$defs/request"}, {"$ref": "#/$defs/binding"}],
+  "$defs": {
+    "binding": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "publicationId", "reason", "policyOriginalSha256", "policyId", "sequence", "rollbackEpoch", "policyHash", "policyBundleSha256", "genesisPreparationDigest", "genesisFinalizationDigest", "expectedFileSha256"],
+      "properties": {
+        "kind": {"const": "genesis-materialize"},
+        "publicationId": {"$ref": "control-plane-policy-file-publication.v1.schema.json#/$defs/id"},
+        "reason": {"$ref": "control-plane-policy-file-publication.v1.schema.json#/$defs/reason"},
+        "policyOriginalSha256": {"$ref": "control-plane-policy-file-publication.v1.schema.json#/$defs/digest"},
+        "policyId": {"type": "string", "minLength": 1, "maxLength": 256, "description": "Source enforces UTF-8 <=256 bytes."},
+        "sequence": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807},
+        "rollbackEpoch": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807},
+        "policyHash": {"$ref": "control-plane-policy-file-publication.v1.schema.json#/$defs/digest"},
+        "policyBundleSha256": {"$ref": "control-plane-policy-file-publication.v1.schema.json#/$defs/digest"},
+        "genesisPreparationDigest": {"$ref": "control-plane-policy-file-publication.v1.schema.json#/$defs/digest"},
+        "genesisFinalizationDigest": {"$ref": "control-plane-policy-file-publication.v1.schema.json#/$defs/digest"},
+        "expectedFileSha256": {"type": "null"}
+      },
+      "description": "Canonical sorted compact ASCII JSON, no LF, <=8192 bytes. Fresh policy.file.genesis.materialize options/request/decision/consume bind these exact bytes; an activation-materialize approval cannot substitute."
+    },
+    "request": {
+      "type": "object", "additionalProperties": false,
+      "required": ["publicationId", "policyOriginalBase64url", "genesisPreparationDigest", "genesisFinalizationDigest", "expectedFileSha256", "reason", "mfa"],
+      "properties": {
+        "publicationId": {"$ref": "control-plane-policy-file-publication.v1.schema.json#/$defs/id"},
+        "policyOriginalBase64url": {"type": "string", "minLength": 1, "maxLength": 22369622, "pattern": "^[A-Za-z0-9_-]+$", "description": "Canonical unpadded base64url, decoded <=16MiB exact signed JSON PolicyBundle."},
+        "genesisPreparationDigest": {"$ref": "control-plane-policy-file-publication.v1.schema.json#/$defs/digest"},
+        "genesisFinalizationDigest": {"$ref": "control-plane-policy-file-publication.v1.schema.json#/$defs/digest"},
+        "expectedFileSha256": {"type": "null"},
+        "reason": {"$ref": "control-plane-policy-file-publication.v1.schema.json#/$defs/reason"},
+        "mfa": {"$ref": "control-plane-policy-file-publication.v1.schema.json#/$defs/mfa"}
+      },
+      "description": "POST /api/policy/file-publication/genesis-materialize, whole HTTP body <=24MiB. Protected DSN, keys, target path and authority originals never come from this request. Existing six-field result and seven-field inspection apply."
+    }
+  }
+}

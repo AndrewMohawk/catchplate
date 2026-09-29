@@ -20,22 +20,27 @@ canonical, require, digest, policy = shared.canonical, shared.require, shared.di
 
 
 def action(value):
-    return {"materialize": "policy.file.materialize", "resolve": "policy.file.resolve"}[value["kind"]]
+    return {"materialize": "policy.file.materialize", "resolve": "policy.file.resolve",
+        "genesis-materialize": "policy.file.genesis.materialize"}[value["kind"]]
 
 
 def request_binding(value):
-    require(type(value) is dict and value.get("kind") in {"materialize", "resolve"})
+    require(type(value) is dict and value.get("kind") in {"materialize", "genesis-materialize", "resolve"})
     common = {"kind", "publicationId", "reason"}
+    genesis = value["kind"] == "genesis-materialize"
     fields = (common | {"policyOriginalSha256", "policyId", "sequence", "rollbackEpoch", "policyHash",
-        "policyBundleSha256", "artifactEnvelopeSha256", "expectedFileSha256"}
-        if value["kind"] == "materialize" else common | {"intentSha256", "outcome"})
+        "policyBundleSha256", "expectedFileSha256"} | ({"genesisPreparationDigest", "genesisFinalizationDigest"}
+            if genesis else {"artifactEnvelopeSha256"})
+        if value["kind"] != "resolve" else common | {"intentSha256", "outcome"})
     require(set(value) == fields and type(value["publicationId"]) is str
         and re.fullmatch(r"[0-9a-f]{32}", value["publicationId"]) is not None
         and (value["reason"] is None or type(value["reason"]) is str and len(value["reason"]) <= 500))
-    if value["kind"] == "materialize":
-        for key in ("policyOriginalSha256", "policyHash", "policyBundleSha256", "artifactEnvelopeSha256"):
+    if value["kind"] != "resolve":
+        for key in ("policyOriginalSha256", "policyHash", "policyBundleSha256") + (
+                ("genesisPreparationDigest", "genesisFinalizationDigest") if genesis else ("artifactEnvelopeSha256",)):
             digest(value[key])
         require(value["expectedFileSha256"] is None or digest(value["expectedFileSha256"]))
+        require(not genesis or value["expectedFileSha256"] is None)
         require(type(value["policyId"]) is str and 1 <= len(value["policyId"].encode("utf-8")) <= 256)
         require(all(type(value[key]) is int and 1 <= value[key] <= 2**63 - 1 for key in ("sequence", "rollbackEpoch")))
     else:

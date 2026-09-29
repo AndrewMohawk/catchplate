@@ -2057,17 +2057,27 @@ def _control_plane_custody_configuration(descriptor: int) -> dict:
         fields = {"schema", "sourceRevision", "configurationDigest", "directoryFd",
             "device", "inode", "uid", "gid", "quotaBytes", "maximumRecords"}
         broker = type(value) is dict and value.get("schema") == "serverware.controlPlaneCustodyStartup/v2"
+        genesis = type(value) is dict and value.get("schema") == "serverware.controlPlaneCustodyStartup/v3"
         if broker:
             fields |= {"credentialBrokerProfile", "signature"}
+        if genesis:
+            fields |= {"policyFileGenesisMaintenance", "signature"}
         if type(value) is not dict or set(value) != fields:
             raise RuntimeError("control-plane custody startup configuration is not closed")
-        if not broker and value["schema"] != CONTROL_PLANE_CUSTODY_CONFIG_SCHEMA:
+        if not broker and not genesis and value["schema"] != CONTROL_PLANE_CUSTODY_CONFIG_SCHEMA:
             raise RuntimeError("control-plane custody startup schema is not supported")
         if broker and (value["credentialBrokerProfile"] != "enclave-ciphertext-rows-v1"
                 or type(value["signature"]) is not str or len(value["signature"]) != 94
                 or not value["signature"].startswith("ed25519:")
                 or any(char not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_" for char in value["signature"][8:])):
             raise RuntimeError("control-plane broker startup authorization is not exact")
+        if genesis:
+            from serverware import control_plane_policy_genesis_bootstrap as genesis_profile
+            genesis_profile._unsigned(value)
+            if (type(value["signature"]) is not str or len(value["signature"]) != 94
+                    or not value["signature"].startswith("ed25519:")
+                    or any(char not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_" for char in value["signature"][8:])):
+                raise RuntimeError("genesis maintenance cold signature is not exact")
         # The genuine cold runtime owner verifies this purpose-specific signature
         # against its actually admitted root after permanent privilege drop.
         revision = value["sourceRevision"]
@@ -2619,9 +2629,11 @@ def _control_plane_health() -> int:
     return 1
 
 
-def _normal_main(role: str, *, public_revocation: bool = False) -> int:
+def _normal_main(role: str, *, public_revocation: bool = False, genesis_maintenance: bool = False) -> int:
     if type(public_revocation) is not bool or public_revocation and role not in {"verifier", "issuer", "executor"}:
         raise RuntimeError("public revocation cold selection requires its fixed measured roles")
+    if type(genesis_maintenance) is not bool or genesis_maintenance and (role != "control-plane" or public_revocation):
+        raise RuntimeError("genesis maintenance cold selection requires the fixed control-plane role")
     trusted_host_local = (
         os.environ.get("SERVERWARE_AUTHORITY_TRUST_MODE")
         == "trusted-host-local"
@@ -2805,6 +2817,9 @@ def _normal_main(role: str, *, public_revocation: bool = False) -> int:
             descriptors.extend(_open_measured_audit_material(measured_audit_descriptor, occupied_descriptors=set(descriptors)))
             if custody_configuration_descriptor is None:
                 raise RuntimeError("control-plane custody startup configuration is unavailable")
+            custody_shape = _control_plane_custody_configuration(custody_configuration_descriptor)
+            if (custody_shape["schema"] == "serverware.controlPlaneCustodyStartup/v3") != genesis_maintenance:
+                raise RuntimeError("maintenance command and original custody profile must be explicitly paired")
             custody_configuration, custody_directory = _open_control_plane_custody(
                 custody_configuration_descriptor, occupied_descriptors=set(descriptors))
             descriptors.extend((custody_configuration, custody_directory))
@@ -2850,7 +2865,7 @@ def _normal_main(role: str, *, public_revocation: bool = False) -> int:
                     "-P",
                     "-s",
                     "-m",
-                    "serverware.control_plane_runner",
+                    "serverware.control_plane_policy_genesis_runner" if genesis_maintenance else "serverware.control_plane_runner",
                 ],
                 environment,
             )
@@ -2893,6 +2908,8 @@ def _normal_main(role: str, *, public_revocation: bool = False) -> int:
 
 
 def main() -> int:
+    if len(sys.argv) == 3 and sys.argv[1:] == ["control-plane", "--policy-file-genesis-maintenance"]:
+        return _normal_main("control-plane", genesis_maintenance=True)
     if (len(sys.argv) == 3 and sys.argv[2] == "--public-webauthn-revocation"
             and sys.argv[1] in {"verifier", "issuer", "executor"}):
         return _normal_main(sys.argv[1], public_revocation=True)

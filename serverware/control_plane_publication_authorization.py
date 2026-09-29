@@ -65,9 +65,12 @@ def _approval(approval_id, purpose="admin-token"):
     return original
 
 
-def _arguments(phase, identity, bound, policy, approval_id=None, *, purpose="admin-token"):
+def _arguments(phase, identity, bound, policy, approval_id=None, *, purpose="admin-token", publication=None):
     selected = _purpose(purpose)
     original = selected.request_binding(bound)
+    if purpose == "policy-file":
+        from serverware import control_plane_policy_genesis_maintenance as genesis_maintenance
+        genesis_maintenance.require_binding(original, publication=publication)
     value = {"action": selected.action(original), "resource_id": selected.RESOURCE,
         "payload_digest": "sha256:" + hashlib.sha256(profile.canonical(original)).hexdigest(),
         "actor_id": identity.user_id, "request": original, "approval_id": approval_id,
@@ -86,6 +89,9 @@ class _Ceremony:
         self.mono, self.epoch = time.monotonic_ns(), time.time_ns()
         self.deadline = min(self.mono + 30_000_000_000, deadline_ns or self.mono + 30_000_000_000)
         self.expires = min(self.epoch + 30_000_000_000, expires_epoch_ns or self.epoch + 30_000_000_000)
+        if purpose == "policy-file":
+            from serverware import control_plane_policy_genesis_maintenance as genesis_maintenance
+            self.deadline, self.expires = genesis_maintenance.clip_window(self.deadline, self.expires)
         self.custody = startup.require_started()
         profile.require(self.custody is not None, "publication approval requires genuine cold custody startup")
         self.credential = None

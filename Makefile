@@ -1260,6 +1260,12 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_policy_file_approval.py \
 	serverware/authority_transition_policy_file_approval.py \
 	serverware/control_plane_policy_file_publication.py \
+	serverware/authority_store/policy_file_genesis_sql.py \
+	serverware/control_plane_policy_file_genesis.py \
+	serverware/control_plane_policy_genesis_bootstrap.py \
+	serverware/control_plane_policy_genesis_maintenance.py \
+	serverware/control_plane_policy_genesis_runner.py \
+	serverware/portal_policy_genesis.py \
 	serverware/control_plane_policy_file_authority.py \
 	serverware/authority_store/policy_file_read_sql.py \
 	serverware/oauth_application_owner.py \
@@ -3615,6 +3621,12 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_policy_file_approval.py \
 				serverware/authority_transition_policy_file_approval.py \
 				serverware/control_plane_policy_file_publication.py \
+				serverware/authority_store/policy_file_genesis_sql.py \
+				serverware/control_plane_policy_file_genesis.py \
+				serverware/control_plane_policy_genesis_bootstrap.py \
+				serverware/control_plane_policy_genesis_maintenance.py \
+				serverware/control_plane_policy_genesis_runner.py \
+				serverware/portal_policy_genesis.py \
 				serverware/control_plane_policy_file_authority.py \
 				serverware/authority_store/policy_file_read_sql.py \
 				serverware/oauth_application_owner.py \
@@ -4069,6 +4081,9 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-workload-start-authorization.v4.schema.json \
 				schemas/control-plane-publication-approval.v1.schema.json \
 				schemas/control-plane-policy-file-publication.v1.schema.json \
+				schemas/control-plane-custody-startup.v3.schema.json \
+				schemas/control-plane-policy-file-genesis.v1.schema.json \
+				schemas/policy-genesis-maintenance-portal.v1.schema.json \
 				schemas/oauth-application-enrollment.v1.schema.json \
 				schemas/oauth-activation-authority.v1.schema.json \
 				schemas/oauth-exchange-authority.v1.schema.json \

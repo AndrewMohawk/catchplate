@@ -651,6 +651,7 @@ async def bounded_control_plane_request_middleware(request: Request, call_next):
         "/api/authority/control-plane/execute":
             _POLICY_AUTHORITY_TRANSACTION_REQUEST_MAX_BYTES,
         "/api/authority/control-plane/custody/reconcile": 256,
+        "/api/policy/file-publication/genesis-materialize": 24 * 1024 * 1024,
         "/api/webauthn/register/prepare": _REGISTRATION_PREPARATION_MAX_BYTES,
         "/api/auth/session/webauthn/register/prepare": _REGISTRATION_PREPARATION_MAX_BYTES,
         "/api/webauthn/register/prepare-execution": _REGISTRATION_PREPARATION_MAX_BYTES,
@@ -1521,7 +1522,7 @@ class PolicyFileApprovalWebAuthnOptions(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     api_version: Literal["serverware.policyFileApprovalOptions/v1"] = Field(alias="apiVersion")
-    action: Literal["policy.file.materialize", "policy.file.resolve"]
+    action: Literal["policy.file.materialize", "policy.file.genesis.materialize", "policy.file.resolve"]
     resource_id: Literal["active-policy-file"] = Field(alias="resourceId")
     payload_digest: str = Field(alias="payloadDigest", pattern=r"^sha256:[0-9a-f]{64}$")
     request_binding: dict[str, Any] = Field(alias="request")
@@ -1921,6 +1922,19 @@ class PolicyFileMaterializeRequest(BaseModel):
         pattern=r"^[A-Za-z0-9_-]+$")
     artifact_sha256: str = Field(alias="artifactEnvelopeSha256", pattern=r"^sha256:[0-9a-f]{64}$")
     expected_file_sha256: str | None = Field(alias="expectedFileSha256", pattern=r"^sha256:[0-9a-f]{64}$")
+    reason: str | None = Field(max_length=500)
+    mfa: dict[str, Any]
+
+
+class PolicyFileGenesisMaterializeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    publication_id: str = Field(alias="publicationId", pattern=r"^[0-9a-f]{32}$")
+    policy_original: str = Field(alias="policyOriginalBase64url", min_length=1, max_length=22369622,
+        pattern=r"^[A-Za-z0-9_-]+$")
+    genesis_preparation_digest: str = Field(alias="genesisPreparationDigest", pattern=r"^sha256:[0-9a-f]{64}$")
+    genesis_finalization_digest: str = Field(alias="genesisFinalizationDigest", pattern=r"^sha256:[0-9a-f]{64}$")
+    expected_file_sha256: None = Field(alias="expectedFileSha256")
     reason: str | None = Field(max_length=500)
     mfa: dict[str, Any]
 
@@ -3324,6 +3338,8 @@ def startup() -> None:
     # The legacy PID startup marker cannot stand in for a live custody owner.
     # Direct ASGI startup must not admit descriptors after the event loop opens.
     control_plane_custody_startup.require_started()
+    if control_plane_custody_startup.genesis_maintenance_configuration() is not None:
+        raise RuntimeError("maintenance may not enter the ordinary app lifespan or start workers")
     control_plane_enrollment_startup.require_started()
     control_plane_oauth_revocation.selected()
     control_plane_oauth_refresh_cleanup.selected()
@@ -4973,7 +4989,7 @@ def _control_plane_mutation_authn_policy() -> dict[str, Any]:
 
 def _control_plane_mutation_webauthn_required(action: str) -> bool:
     # A separate recovery purpose; this does not alter ordinary mutation policy.
-    return action in {"control_plane.token.publication.resolve", "policy.file.materialize", "policy.file.resolve"} or CONTROL_PLANE_MUTATION_WEBAUTHN_REQUIRED
+    return action in {"control_plane.token.publication.resolve", "policy.file.materialize", "policy.file.genesis.materialize", "policy.file.resolve"} or CONTROL_PLANE_MUTATION_WEBAUTHN_REQUIRED
 
 
 def _require_control_plane_mutation_mfa(
@@ -5043,7 +5059,7 @@ def _require_control_plane_mutation_mfa(
 
 
 def _control_plane_two_person_required(action: str) -> bool:
-    if action in {"workload.identity.issue", "control_plane.token.publication.resolve", "policy.file.materialize", "policy.file.resolve"}:
+    if action in {"workload.identity.issue", "control_plane.token.publication.resolve", "policy.file.materialize", "policy.file.genesis.materialize", "policy.file.resolve"}:
         return True
     if not CONTROL_PLANE_TWO_PERSON_REQUIRED:
         return False
@@ -7964,7 +7980,7 @@ def control_plane_mutation_webauthn_options(
                 raise HTTPException(status_code=409, detail="OAuth activation options unavailable; no automatic retry") from None
         if payload.api_version is not None or oauth_activation.selected():
             raise HTTPException(status_code=409, detail="use the explicit OAuth activation approval options profile")
-    if payload.action in {"policy.file.materialize", "policy.file.resolve"}:
+    if payload.action in {"policy.file.materialize", "policy.file.genesis.materialize", "policy.file.resolve"}:
         raise HTTPException(status_code=409, detail="use the explicit policy-file approval options endpoint")
     if type(payload) is PublicationApprovalWebAuthnOptions:
         from serverware import control_plane_publication_authorization as publication_authority
@@ -8309,6 +8325,18 @@ def policy_file_publication_resolve(
     return execute(request, payload, resolving=True)
 
 
+@app.post("/api/policy/file-publication/genesis-materialize")
+def policy_file_publication_genesis_materialize(
+    request: Request, response: Response, payload: PolicyFileGenesisMaterializeRequest,
+    identity: AdminIdentity = Depends(require_role("policy_publisher")),
+) -> dict[str, Any]:
+    from serverware.control_plane_policy_file_publication import execute
+
+    del identity
+    response.headers["Cache-Control"] = "no-store"
+    return execute(request, payload, genesis=True)
+
+
 @app.get("/api/control-plane/approvals")
 def control_plane_approvals(
     status: str | None = None,
@@ -8326,6 +8354,9 @@ def control_plane_approvals(
 ) -> list[dict[str, Any]]:
     results: list[dict[str, Any]] = []
     for item in db.list_control_plane_approvals(status=status, limit=limit):
+        from serverware import control_plane_policy_genesis_maintenance as genesis_maintenance
+        if not genesis_maintenance.visible_approval(item):
+            continue
         required_roles = _control_plane_approval_roles(str(item["action"]))
         pending = item.get("status") == "pending"
         has_role = identity.has_any_role(required_roles)
@@ -8397,7 +8428,7 @@ def control_plane_approval_approve(
                 raise
             except Exception:
                 raise HTTPException(status_code=409, detail="OAuth activation decision uncertain or blocked; no automatic retry") from None
-    if approval["action"] in {"policy.file.materialize", "policy.file.resolve"}:
+    if approval["action"] in {"policy.file.materialize", "policy.file.genesis.materialize", "policy.file.resolve"}:
         from serverware import control_plane_publication_authorization as publication_authority
         try:
             return publication_authority.decide_on_request(request, approval_id, decision, purpose="policy-file")

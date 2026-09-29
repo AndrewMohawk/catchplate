@@ -122,8 +122,8 @@ def _retained_interval(inputs):
         if interval is not None:
             _fail("current release authority cannot borrow a retained interval")
         return None
-    if inputs._purpose != "release-intent-proof":
-        _fail("retired release authority permits preparation readmission only")
+    if inputs._purpose not in ("release-intent-proof", "release"):
+        _fail("retired release authority is evidence only for preparation or independently granted LIVE delivery")
     if type(interval) is not tuple or len(interval) != 2:
         _fail("retained release authority lacks its independently selected interval")
     for value in interval:

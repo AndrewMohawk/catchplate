@@ -1,0 +1,241 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.dev/schemas/oidc-session-activation-retained-ri-delivery.v1.schema.json",
+  "title": "Current-authority delivery over retained RI originals",
+  "description": "Four explicit closed signed profiles. This data schema verifies neither signatures nor custody, current authority, source revision, original-byte digests, elapsed time, possession or execution. Canonical no-LF originals, exact sourceRevision, aggregate byte/node/depth/work limits, cross-field equality and nonrenewing lifetime checks are enforced by the paired Python owners. Old profiles are not admitted by this bundle.",
+  "oneOf": [
+    {"$ref": "#/$defs/releaseCustodyEnvelopeV2"},
+    {"$ref": "#/$defs/retainedGrantBridgeEnvelopeV1"},
+    {"$ref": "#/$defs/grantIssuerPolicyEnvelopeV2"},
+    {"$ref": "#/$defs/liveReleaseEnvelopeV2"}
+  ],
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "sourceRevision": {"type": "string", "minLength": 1, "description": "Must equal the actual paired source revision at runtime; no revision is inferred from a record."},
+    "token": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"},
+    "positiveEpochNs": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807},
+    "device": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615},
+    "inode": {"type": "integer", "minimum": 1, "maximum": 18446744073709551615},
+    "timeout": {"type": "integer", "minimum": 1, "maximum": 30},
+    "signature": {"type": "string", "minLength": 86, "maxLength": 86, "pattern": "^[A-Za-z0-9_-]{85}[AQgw]$", "description": "Canonical unpadded base64url Ed25519 signature. The existing framed canonical-payload signature verifier remains mandatory."},
+    "identity": {
+      "type": "object", "additionalProperties": false,
+      "required": ["sessionIdentityDigest", "measurementDigest", "attestationReceiptDigest"],
+      "properties": {
+        "sessionIdentityDigest": {"$ref": "#/$defs/digest"},
+        "measurementDigest": {"$ref": "#/$defs/digest"},
+        "attestationReceiptDigest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "original": {
+      "type": "object", "additionalProperties": false,
+      "required": ["base64Url", "byteCount", "bytesDigest"],
+      "properties": {
+        "base64Url": {"type": "string", "minLength": 3, "maxLength": 44739243, "pattern": "^[A-Za-z0-9_-]+$"},
+        "byteCount": {"type": "integer", "minimum": 2, "maximum": 33554432},
+        "bytesDigest": {"$ref": "#/$defs/digest"}
+      },
+      "description": "Exact retained original, not a decoded authority DTO. Runtime checks canonical unpadded encoding, decoded byteCount, raw SHA-256, purpose and original signature before use. Field-specific limits and aggregate reservation still apply."
+    },
+    "original16KiB": {"allOf": [{"$ref": "#/$defs/original"}, {"properties": {"byteCount": {"maximum": 16384}, "base64Url": {"maxLength": 21846}}}]},
+    "original64KiB": {"allOf": [{"$ref": "#/$defs/original"}, {"properties": {"byteCount": {"maximum": 65536}, "base64Url": {"maxLength": 87382}}}]},
+    "original256KiB": {"allOf": [{"$ref": "#/$defs/original"}, {"properties": {"byteCount": {"maximum": 262144}, "base64Url": {"maxLength": 349526}}}]},
+    "original4MiB": {"allOf": [{"$ref": "#/$defs/original"}, {"properties": {"byteCount": {"maximum": 4194304}, "base64Url": {"maxLength": 5592406}}}]},
+    "original8MiB": {"allOf": [{"$ref": "#/$defs/original"}, {"properties": {"byteCount": {"maximum": 8388608}, "base64Url": {"maxLength": 11184811}}}]},
+    "original32MiB": {"$ref": "#/$defs/original"},
+    "deliveryScope": {
+      "type": "object", "additionalProperties": false,
+      "required": ["deliveryId", "userId", "sessionId", "credentialId", "credentialRecordId", "challengeId", "assertionDigest", "oldTokenDigest", "newTokenDigest", "createdAt", "expiresAt"],
+      "properties": {
+        "deliveryId": {"type": "string", "minLength": 1, "maxLength": 128},
+        "userId": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "sessionId": {"type": "string", "minLength": 1, "maxLength": 128},
+        "credentialId": {"type": "string", "minLength": 2, "maxLength": 1366, "pattern": "^[A-Za-z0-9_-]+$"},
+        "credentialRecordId": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "challengeId": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "assertionDigest": {"$ref": "#/$defs/digest"},
+        "oldTokenDigest": {"$ref": "#/$defs/digest"},
+        "newTokenDigest": {"$ref": "#/$defs/digest"},
+        "createdAt": {"type": "string", "minLength": 1, "maxLength": 64, "format": "date-time"},
+        "expiresAt": {"type": "string", "minLength": 1, "maxLength": 64, "format": "date-time"}
+      },
+      "description": "Paired scalar grammar remains authoritative: each text is NUL-free and its UTF-8 byte length also cannot exceed the listed character ceiling. Credential ID is canonical base64url for 1..1024 bytes. Times must equal canonical UTC isoformat originals; lifetime is positive and at most 60 seconds. Tokens must differ. No grant renews this original expiry."
+    },
+    "consumeBinding": {
+      "type": "object", "additionalProperties": false,
+      "required": ["packetDigest", "pendingDecisionDigest", "completionRequestDigest", "effectsDigest", "afterVectorDigest"],
+      "properties": {
+        "packetDigest": {"$ref": "#/$defs/digest"}, "pendingDecisionDigest": {"$ref": "#/$defs/digest"},
+        "completionRequestDigest": {"$ref": "#/$defs/digest"}, "effectsDigest": {"$ref": "#/$defs/digest"},
+        "afterVectorDigest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "expectedRelease": {
+      "type": "object", "additionalProperties": false,
+      "required": ["activationRequestDigest", "activationOperationId", "consumeRequestDigest", "deliveryEnvelopeDigest", "deliveryScope", "consumeBinding"],
+      "properties": {
+        "activationRequestDigest": {"$ref": "#/$defs/digest"}, "activationOperationId": {"$ref": "#/$defs/digest"},
+        "consumeRequestDigest": {"$ref": "#/$defs/digest"}, "deliveryEnvelopeDigest": {"$ref": "#/$defs/digest"},
+        "deliveryScope": {"$ref": "#/$defs/deliveryScope"}, "consumeBinding": {"$ref": "#/$defs/consumeBinding"}
+      }
+    },
+    "proofScope": {
+      "type": "object", "additionalProperties": false,
+      "required": ["configurationDigest", "databaseId", "generationDigest", "runtimeClosureDigest", "producerId", "producerIdentity", "receiverIdentity"],
+      "properties": {
+        "configurationDigest": {"$ref": "#/$defs/digest"}, "databaseId": {"$ref": "#/$defs/token"},
+        "generationDigest": {"$ref": "#/$defs/digest"}, "runtimeClosureDigest": {"$ref": "#/$defs/digest"},
+        "producerId": {"$ref": "#/$defs/token"}, "producerIdentity": {"$ref": "#/$defs/identity"},
+        "receiverIdentity": {"$ref": "#/$defs/identity"}
+      }
+    },
+    "intentAuthorityRoot": {
+      "type": "object", "additionalProperties": false, "required": ["publicKeyPem", "spkiDigest"],
+      "properties": {
+        "publicKeyPem": {"type": "string", "minLength": 1, "maxLength": 4096, "pattern": "^[\\u0001-\\u007f]+$"},
+        "spkiDigest": {"$ref": "#/$defs/digest"}
+      },
+      "description": "Independently authorized RI root. Runtime parses the exact ASCII, NUL-free PEM and verifies its SPKI digest. It is never selected from the retained evidence itself."
+    },
+    "archiveInterval": {
+      "type": "object", "additionalProperties": false, "required": ["issuedAtEpochNs", "expiresAtEpochNs"],
+      "properties": {"issuedAtEpochNs": {"$ref": "#/$defs/positiveEpochNs"}, "expiresAtEpochNs": {"$ref": "#/$defs/positiveEpochNs"}},
+      "description": "Nonempty independently selected historical authentication interval; not a new live processing allowance. Original custody, intent and proof must fit inside it."
+    },
+    "releaseCustodyV2": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "sourceRevision", "consumerRole", "processMode", "serviceUid", "serviceGid", "receiverIdentity", "configurationDigest", "generationDigest", "runtimeClosureDigest", "deliveryKeyDigest", "plannerBootstrap", "activationRequestDigest", "activationOperationId", "deliveryEnvelopeDigest", "deliveryScope", "releaseIntentDigest", "consumeRequestDigest", "consumeOperation", "issuedAtEpochNs", "expiresAtEpochNs", "trustMode", "hardwareBacked", "nativeStageZero", "hsmBackedKeys", "teeVerified", "externalWitnessVerified", "intentAuthorityRoot", "intentAuthorityInterval", "intentEnrollment", "proofEnrollment", "proofScope", "historicalReleaseCustody", "currentActivationPlanner"],
+      "properties": {
+        "schema": {"const": "serverware.oidcSessionActivationReleaseCustody/v2"}, "sourceRevision": {"$ref": "#/$defs/sourceRevision"},
+        "consumerRole": {"const": "token-release"}, "processMode": {"const": "oidc-session-activation-token-release"},
+        "serviceUid": {"const": 65502}, "serviceGid": {"const": 65502}, "receiverIdentity": {"$ref": "#/$defs/identity"},
+        "configurationDigest": {"$ref": "#/$defs/digest"}, "generationDigest": {"$ref": "#/$defs/digest"},
+        "runtimeClosureDigest": {"$ref": "#/$defs/digest"}, "deliveryKeyDigest": {"$ref": "#/$defs/digest"},
+        "plannerBootstrap": {"$ref": "#/$defs/original4MiB"}, "activationRequestDigest": {"$ref": "#/$defs/digest"},
+        "activationOperationId": {"$ref": "#/$defs/digest"}, "deliveryEnvelopeDigest": {"$ref": "#/$defs/digest"},
+        "deliveryScope": {"$ref": "#/$defs/deliveryScope"}, "releaseIntentDigest": {"$ref": "#/$defs/digest"},
+        "consumeRequestDigest": {"$ref": "#/$defs/digest"}, "consumeOperation": {"const": "oidc.session.activation-delivery.consume"},
+        "issuedAtEpochNs": {"$ref": "#/$defs/positiveEpochNs"}, "expiresAtEpochNs": {"$ref": "#/$defs/positiveEpochNs"},
+        "trustMode": {"const": "trusted-host-local"}, "hardwareBacked": {"const": false}, "nativeStageZero": {"const": false},
+        "hsmBackedKeys": {"const": false}, "teeVerified": {"const": false}, "externalWitnessVerified": {"const": false},
+        "intentAuthorityRoot": {"$ref": "#/$defs/intentAuthorityRoot"}, "intentAuthorityInterval": {"$ref": "#/$defs/archiveInterval"},
+        "intentEnrollment": {"$ref": "#/$defs/original16KiB"}, "proofEnrollment": {"$ref": "#/$defs/original16KiB"},
+        "proofScope": {"$ref": "#/$defs/proofScope"}, "historicalReleaseCustody": {"$ref": "#/$defs/original8MiB"},
+        "currentActivationPlanner": {"$ref": "#/$defs/original4MiB"}
+      },
+      "description": "Fresh current-root custody, at most 8 MiB encoded. Historical custody is strict v1. Every base field except schema/issuedAtEpochNs/expiresAtEpochNs must equal that original historical custody. Fresh interval is at most 300 seconds and clipped to original delivery expiry; current planner must preserve complete state and delivery-key association."
+    },
+    "retainedGrantBridgeV1": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "sourceRevision", "purpose", "role", "trustMode", "completionBootstrap", "proofEnrollment", "releaseCustody", "intent", "intentEnrollment", "completionRequest", "stateReceipt", "currentActivationPlanner", "proofScope", "expectedRelease", "callerId", "issuedAtEpochNs", "expiresAtEpochNs", "requestTimeoutSeconds"],
+      "properties": {
+        "schema": {"const": "serverware.oidcSessionActivationRetainedReleaseGrantBridge/v1"}, "sourceRevision": {"$ref": "#/$defs/sourceRevision"},
+        "purpose": {"const": "authorize-current-release-grants-over-retained-intent"}, "role": {"const": "oidc-session-activation-release-proof"},
+        "trustMode": {"const": "trusted-host-local"}, "completionBootstrap": {"$ref": "#/$defs/original32MiB"},
+        "proofEnrollment": {"$ref": "#/$defs/original16KiB"}, "releaseCustody": {"$ref": "#/$defs/original8MiB"},
+        "intent": {"$ref": "#/$defs/original64KiB"}, "intentEnrollment": {"$ref": "#/$defs/original16KiB"},
+        "completionRequest": {"$ref": "#/$defs/original256KiB"}, "stateReceipt": {"$ref": "#/$defs/original16KiB"},
+        "currentActivationPlanner": {"$ref": "#/$defs/original4MiB"}, "proofScope": {"$ref": "#/$defs/proofScope"},
+        "expectedRelease": {"$ref": "#/$defs/expectedRelease"}, "callerId": {"$ref": "#/$defs/token"},
+        "issuedAtEpochNs": {"$ref": "#/$defs/positiveEpochNs"}, "expiresAtEpochNs": {"$ref": "#/$defs/positiveEpochNs"},
+        "requestTimeoutSeconds": {"$ref": "#/$defs/timeout"}
+      },
+      "description": "Grant-only bridge, at most 48 MiB encoded with unchanged aggregate work/original limits. It contains no launch object and cannot authorize a proof worker, replacement proof or retired signing. The fixed issuer independently verifies genuine retained originals and historical COMPLETE/ACK without executing COMPLETE."
+    },
+    "endpoint": {
+      "type": "object", "additionalProperties": false, "required": ["path", "timeoutSeconds", "peerUid", "peerGid"],
+      "properties": {
+        "path": {"const": "/run/serverware/oidc-session-activation-token-release/release.sock"},
+        "timeoutSeconds": {"$ref": "#/$defs/timeout"}, "peerUid": {"const": 0}, "peerGid": {"const": 0}
+      }
+    },
+    "releaseLaunch": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "processMode", "serviceUid", "serviceGid", "rootPublicKeyFd", "bootstrapFd", "deliveryKeyFd", "outcomeDirectoryFd", "listenerFd", "inheritedFileDescriptors", "outcomeDirectoryDevice", "outcomeDirectoryInode", "outcomeDirectoryUid", "outcomeDirectoryGid", "outcomeDirectoryMode", "listenerPath", "peerUid", "peerGid", "listenerSocketDevice", "listenerSocketInode", "listenerPathDevice", "listenerPathInode", "requestTimeoutSeconds"],
+      "properties": {
+        "schema": {"const": "serverware.oidcSessionActivationReleaseLaunch/v1"}, "processMode": {"const": "oidc-session-activation-token-release"},
+        "serviceUid": {"const": 65502}, "serviceGid": {"const": 65502}, "rootPublicKeyFd": {"const": 198},
+        "bootstrapFd": {"const": 199}, "deliveryKeyFd": {"const": 200}, "outcomeDirectoryFd": {"const": 201}, "listenerFd": {"const": 202},
+        "inheritedFileDescriptors": {"const": [198, 199, 200, 201, 202]},
+        "outcomeDirectoryDevice": {"$ref": "#/$defs/device"}, "outcomeDirectoryInode": {"$ref": "#/$defs/inode"},
+        "outcomeDirectoryUid": {"const": 65502}, "outcomeDirectoryGid": {"const": 65502}, "outcomeDirectoryMode": {"const": 448},
+        "listenerPath": {"const": "/run/serverware/oidc-session-activation-token-release/release.sock"},
+        "peerUid": {"const": 65532}, "peerGid": {"const": 65532},
+        "listenerSocketDevice": {"$ref": "#/$defs/device"}, "listenerSocketInode": {"$ref": "#/$defs/inode"},
+        "listenerPathDevice": {"$ref": "#/$defs/device"}, "listenerPathInode": {"$ref": "#/$defs/inode"},
+        "requestTimeoutSeconds": {"$ref": "#/$defs/timeout"}
+      },
+      "description": "Existing fixed launch shape, not proof that descriptors or processes exist. Actual cold owners verify all descriptor/path identities, privilege transitions and original deadlines."
+    },
+    "grantIssuerPolicyV2": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "sourceRevision", "purpose", "trustMode", "proofBootstrapDigest", "clientId", "clientIdentity", "endpoint", "releaseLaunch", "issuedAtEpochNs", "expiresAtEpochNs"],
+      "properties": {
+        "schema": {"const": "serverware.oidcSessionActivationReleaseGrantIssuerPolicy/v2"}, "sourceRevision": {"$ref": "#/$defs/sourceRevision"},
+        "purpose": {"const": "issue-oidc-session-activation-release-grants"}, "trustMode": {"const": "trusted-host-local"},
+        "proofBootstrapDigest": {"$ref": "#/$defs/digest"}, "clientId": {"$ref": "#/$defs/token"},
+        "clientIdentity": {"$ref": "#/$defs/identity"}, "endpoint": {"$ref": "#/$defs/endpoint"},
+        "releaseLaunch": {"$ref": "#/$defs/releaseLaunch"}, "issuedAtEpochNs": {"$ref": "#/$defs/positiveEpochNs"},
+        "expiresAtEpochNs": {"$ref": "#/$defs/positiveEpochNs"}
+      },
+      "description": "At most 16 KiB encoded. V2 selects the grant-only retained bridge verifier, never profile inference from proof bytes. Endpoint timeout cannot exceed the fixed release launch timeout. The current root and original interval remain independently verified."
+    },
+    "liveStorageScope": {
+      "type": "object", "additionalProperties": false,
+      "required": ["configurationDigest", "databaseId", "generationDigest", "runtimeClosureDigest", "receiverIdentity", "deliveryId", "releaseCustodyDigest", "directory", "checkpoint"],
+      "properties": {
+        "configurationDigest": {"$ref": "#/$defs/digest"}, "databaseId": {"$ref": "#/$defs/token"},
+        "generationDigest": {"$ref": "#/$defs/digest"}, "runtimeClosureDigest": {"$ref": "#/$defs/digest"},
+        "receiverIdentity": {"$ref": "#/$defs/identity"}, "deliveryId": {"type": "string", "minLength": 1, "maxLength": 128},
+        "releaseCustodyDigest": {"$ref": "#/$defs/digest", "description": "Historical evidence-custody framed digest, not the fresh delivery-custody digest."},
+        "directory": {
+          "type": "object", "additionalProperties": false, "required": ["device", "inode", "uid", "gid"],
+          "properties": {"device": {"$ref": "#/$defs/device"}, "inode": {"$ref": "#/$defs/inode"}, "uid": {"const": 65502}, "gid": {"const": 65502}}
+        },
+        "checkpoint": {
+          "type": "object", "additionalProperties": false, "required": ["recordCount", "outcomeDigest"],
+          "properties": {"recordCount": {"const": 0}, "outcomeDigest": {"type": "null"}}
+        }
+      }
+    },
+    "liveReleaseV2": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "sourceRevision", "purpose", "role", "profile", "configurationDigest", "databaseId", "generationDigest", "runtimeClosureDigest", "receiverIdentity", "callerId", "producerId", "producerIdentity", "stateReceiptDigest", "expectedRelease", "releaseCustodyDigest", "evidenceCustodyDigest", "deliveryKeyDigest", "storageScope", "recoveryScope", "releaseCustody", "storageAuthorization", "recoveryAuthorization", "issuedAtEpochNs", "expiresAtEpochNs", "trustMode", "launch", "hardwareBacked", "nativeStageZero", "hsmBackedKeys", "teeVerified", "externalWitnessVerified"],
+      "properties": {
+        "schema": {"const": "serverware.oidcSessionActivationReleaseBootstrap/v2"}, "sourceRevision": {"$ref": "#/$defs/sourceRevision"},
+        "purpose": {"const": "launch-oidc-session-activation-token-release"}, "role": {"const": "oidc-session-activation-token-release"},
+        "profile": {"const": "live-release"}, "configurationDigest": {"$ref": "#/$defs/digest"},
+        "databaseId": {"$ref": "#/$defs/token"}, "generationDigest": {"$ref": "#/$defs/digest"}, "runtimeClosureDigest": {"$ref": "#/$defs/digest"},
+        "receiverIdentity": {"$ref": "#/$defs/identity"}, "callerId": {"$ref": "#/$defs/token"},
+        "producerId": {"$ref": "#/$defs/token"}, "producerIdentity": {"$ref": "#/$defs/identity"},
+        "stateReceiptDigest": {"$ref": "#/$defs/digest"}, "expectedRelease": {"$ref": "#/$defs/expectedRelease"},
+        "releaseCustodyDigest": {"$ref": "#/$defs/digest", "description": "Fresh current delivery-custody framed digest."},
+        "evidenceCustodyDigest": {"$ref": "#/$defs/digest", "description": "Historical RI custody framed digest used by the retained proof and outcome association."},
+        "deliveryKeyDigest": {"$ref": "#/$defs/digest"}, "storageScope": {"$ref": "#/$defs/liveStorageScope"},
+        "recoveryScope": {"type": "null"}, "releaseCustody": {"$ref": "#/$defs/original8MiB"},
+        "storageAuthorization": {"$ref": "#/$defs/original16KiB"}, "recoveryAuthorization": {"type": "null"},
+        "issuedAtEpochNs": {"$ref": "#/$defs/positiveEpochNs"}, "expiresAtEpochNs": {"$ref": "#/$defs/positiveEpochNs"},
+        "trustMode": {"const": "trusted-host-local"}, "launch": {"$ref": "#/$defs/releaseLaunch"},
+        "hardwareBacked": {"const": false}, "nativeStageZero": {"const": false}, "hsmBackedKeys": {"const": false},
+        "teeVerified": {"const": false}, "externalWitnessVerified": {"const": false}
+      },
+      "description": "At most 16 MiB encoded. LIVE only; recovery fields must be present and null. Fresh current custody is verified separately from historical evidence custody. Storage retains the original evidence identity; original delivery expiry, actual old-token possession and one original processing window remain mandatory."
+    },
+    "releaseCustodyEnvelopeV2": {
+      "type": "object", "additionalProperties": false, "required": ["schema", "payload", "signatureBase64Url"],
+      "properties": {"schema": {"const": "serverware.signedOidcSessionActivationReleaseCustody/v2"}, "payload": {"$ref": "#/$defs/releaseCustodyV2"}, "signatureBase64Url": {"$ref": "#/$defs/signature"}}
+    },
+    "retainedGrantBridgeEnvelopeV1": {
+      "type": "object", "additionalProperties": false, "required": ["schema", "payload", "signatureBase64Url"],
+      "properties": {"schema": {"const": "serverware.signedOidcSessionActivationRetainedReleaseGrantBridge/v1"}, "payload": {"$ref": "#/$defs/retainedGrantBridgeV1"}, "signatureBase64Url": {"$ref": "#/$defs/signature"}}
+    },
+    "grantIssuerPolicyEnvelopeV2": {
+      "type": "object", "additionalProperties": false, "required": ["schema", "payload", "signatureBase64Url"],
+      "properties": {"schema": {"const": "serverware.signedOidcSessionActivationReleaseGrantIssuerPolicy/v2"}, "payload": {"$ref": "#/$defs/grantIssuerPolicyV2"}, "signatureBase64Url": {"$ref": "#/$defs/signature"}}
+    },
+    "liveReleaseEnvelopeV2": {
+      "type": "object", "additionalProperties": false, "required": ["schema", "payload", "signatureBase64Url"],
+      "properties": {"schema": {"const": "serverware.signedOidcSessionActivationReleaseBootstrap/v2"}, "payload": {"$ref": "#/$defs/liveReleaseV2"}, "signatureBase64Url": {"$ref": "#/$defs/signature"}}
+    }
+  }
+}

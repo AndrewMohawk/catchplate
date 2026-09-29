@@ -55,6 +55,89 @@ raw assertions and request authentication material are not stored in approval
 metadata or audit records. Existing allowlisted authentication summaries remain
 the recorded evidence.
 
+## Protected generated-admin-token publication
+
+The active `POST /api/control-plane/tokens/admin/rotate` handler now delegates
+to the fixed-purpose owner in
+`serverware/control_plane_admin_token_publication.py`. It is not a generic
+provider/effect callback and does not implement policy-file recovery (O05).
+Externally supplied administrator tokens remain non-rotatable.
+
+The owner freshly authenticates the retained HTTP request using the existing
+header/bearer/OIDC/cookie precedence and CSRF checks. It samples one maximum
+30-second processing interval before its fresh authentication, verification and
+publication reads (not before the framework's prior body/dependency processing), checks
+the actual administrator role, and retains the original request and policy.
+Required MFA invokes the genuine action/resource/payload-bound WebAuthn verifier.
+The shared mutation helper's authority-style raw-assertion shortcut cannot select
+this effect: hints must agree with an actual verifier result. Raw assertions are
+not journaled or audited. When the configured policy makes MFA or two-person
+approval optional, that branch remains optional; workload issuance's separate
+mandatory policy is unchanged.
+
+The effect sequence is fixed:
+
+1. Hold the protected service-owned token parent, a nonblocking journal lock,
+   and the actual predecessor file descriptor/original. Secure path, service
+   UID, mode, link count and identity checks use the
+   existing policy-publication filesystem primitives, not native root-only
+   assumptions.
+2. Invoke the existing two-person gate against its real approval row in an
+   owned metadata transaction. Stage a new random token, persist the exact
+   old/new originals and immutable intent, then append the intent audit event in
+   that same transaction as approval consumption. SQLite requires WAL and
+   `synchronous=FULL`; PostgreSQL requires `fsync=on`, `full_page_writes=on` and
+   transaction-local `synchronous_commit=on`. These are local durability
+   conditions, as described by [SQLite](https://www.sqlite.org/pragma.html#pragma_synchronous)
+   and [PostgreSQL](https://www.postgresql.org/docs/current/runtime-config-wal.html).
+3. Only a definite successful transaction exit permits the authorized journal
+   record. Clip the remaining original interval to the actual approval expiry.
+   Recheck the current actor/authenticator and exact predecessor/staged files,
+   durably record the irreversible claim, then attempt exactly one atomic rename.
+4. Flush both affected directories and verify the actual installed inode and
+   exact bytes against the retained staged descriptor. Persist the complete
+   local outcome, commit the completion audit/outbox event, and then persist a
+   separate settled record before returning the new token once.
+
+The journal is `.serverware-admin-token-publications` beside the generated token:
+service-owned mode `0700`, with no-follow, single-link, mode `0600` originals.
+It is bounded to 64 attempts, seven fixed file kinds per attempt, 16 KiB per
+record and 256 bytes per token original. Records are create-exclusive and form
+one predecessor chain. No runtime pruning, repair, rollback, replay of token
+plaintext, or retry after an uncertain commit/publication exists. Partial or
+inconsistent files fail closed. A complete record without the final settled
+record distinguishes an observed durable file outcome from an uncertain audit
+acknowledgment and still blocks another rotation.
+
+Generated-token authentication now reads the current protected file rather than
+retaining an old per-process cached credential. Initial generation remains
+create-exclusive; a missing token with an existing publication journal cannot
+silently regenerate. The old ungated in-process rotation helper refuses use.
+Successful HTTP responses preserve the token fields, add `publicationId`, and
+are marked no-store. An absent response does not authorize resubmission.
+
+### Inspecting an interrupted attempt
+
+`GET /api/control-plane/tokens/admin/publication` requires an existing
+administrator identity and returns bounded, read-only journal phases and whether
+the current file matches an old/new original. It never returns either token,
+changes the journal, resolves uncertainty, or grants a retry. Independently
+configured OIDC administrator authentication remains available if the old token
+has ceased working; an unavailable generated-token file fails that credential
+closed without disabling the OIDC branch.
+
+If no independently usable administrator identity exists, an authorized host
+operator can inspect the protected journal directly under the existing service
+UID/ownership boundary and correlate `admin-token-intent:<publicationId>` and
+`admin-token-complete:<publicationId>` with metadata/audit records. The `.old`
+and `.new` files contain secrets: do not print, upload, replay, delete, or rename
+them as a recovery procedure. Read-only observation is not a repair procedure;
+recovery authority, journal archival/pruning, multi-host coordination and an
+independent rollback witness remain open. Local filesystem/DB flushes are not
+off-host rollback protection or proof against a hostile service UID/kernel.
+Blocking calls still require an external watchdog; the original interval does
+not preempt them or renew after interruption.
+
 ## Preserve the actual authentication policy
 
 The required-MFA receipt path reauthenticates the actual request using the

@@ -77,40 +77,39 @@ class AdminIdentity:
         return bool(self.roles.intersection(required)) or "admin" in self.roles
 
 
-@lru_cache(maxsize=1)
 def admin_token() -> str:
     if ADMIN_TOKEN:
         return ADMIN_TOKEN
-    ensure_data_dirs()
-    if ADMIN_TOKEN_PATH.exists():
-        return ADMIN_TOKEN_PATH.read_text().strip()
-    token = secrets.token_urlsafe(32)
-    ADMIN_TOKEN_PATH.write_text(token + "\n")
-    os.chmod(ADMIN_TOKEN_PATH, 0o600)
-    return token
+    from serverware.control_plane_admin_token_publication import _read_generated_token
+
+    # A different worker may have completed an authorized atomic rotation.
+    # A process-local token cache must not preserve the previous credential.
+    return _read_generated_token()
+
+
+def _clear_admin_token_cache() -> None:
+    """Compatibility hook: generated administrator tokens are no longer cached."""
+
+
+admin_token.cache_clear = _clear_admin_token_cache
 
 
 def check_admin_token(candidate: str | None) -> bool:
     if not candidate:
         return False
-    return hmac.compare_digest(candidate, admin_token())
+    from serverware.control_plane_admin_token_publication import PublicationError
+    from serverware.policy_bundle import PolicyBundleError
+
+    try:
+        return hmac.compare_digest(candidate, admin_token())
+    except (PublicationError, PolicyBundleError, OSError):
+        # Fail this credential closed without blocking independently configured
+        # OIDC authentication (including read-only interrupted-outcome inspection).
+        return False
 
 
 def rotate_generated_admin_token() -> dict[str, str]:
-    if ADMIN_TOKEN:
-        raise RuntimeError("externally provided admin token cannot be rotated at runtime")
-    old_token = admin_token()
-    token = secrets.token_urlsafe(32)
-    ensure_data_dirs()
-    ADMIN_TOKEN_PATH.write_text(token + "\n")
-    os.chmod(ADMIN_TOKEN_PATH, 0o600)
-    admin_token.cache_clear()
-    return {
-        "token": token,
-        "token_sha256": "sha256:" + hashlib.sha256(token.encode("utf-8")).hexdigest(),
-        "previous_token_sha256": "sha256:" + hashlib.sha256(old_token.encode("utf-8")).hexdigest(),
-        "token_path": str(ADMIN_TOKEN_PATH),
-    }
+    raise RuntimeError("admin token rotation requires the retained HTTP publication owner")
 
 
 def _b64url_decode(value: str) -> bytes:

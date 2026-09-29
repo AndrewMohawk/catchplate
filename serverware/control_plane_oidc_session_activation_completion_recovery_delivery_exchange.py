@@ -10,6 +10,7 @@ from serverware import control_plane_oidc_session_activation_release_handoff as 
 from serverware import control_plane_oidc_session_activation_completion_recovery_intent_inputs as inputs_source
 from serverware import control_plane_oidc_session_activation_completion_recovery_intent as intent_source
 from serverware import control_plane_oidc_session_activation_completion_recovery_proof as proof_source
+from serverware import oidc_session_activation_release_retained_authority as history
 
 
 clients, receiving, transport = shared.clients, shared.receiving, shared.transport
@@ -56,7 +57,7 @@ def _exchange_on_active(active, *, _delivery=None):
     consume_selection = actor._consume_recovery_selection
     if (inputs._purpose != "release" or actor._purpose != "release"
             or inputs.actor is not actor or inputs.controls is not controls or inputs.work is not work
-            or inputs.response_originals is not response or inputs.root_public_key is not root
+            or inputs.response_originals is not response
             or selected_intent.inputs is not inputs or selected_proof.intent is not selected_intent
             or actor._owner is not owner or owner._material is not parent
             or owner._binding is not binding or owner._custody is not custody
@@ -73,8 +74,10 @@ def _exchange_on_active(active, *, _delivery=None):
     if sum(map(len, grants)) > MAX_GRANT_RESPONSE_BYTES:
         _fail("completion release grants exceed the original bounded acquisition lane")
     policy, proof_policy, intent_policy = parent.release_handoff, inputs.proof_policy, inputs.intent_policy
+    historical, intent_root = inputs.retained_only, inputs.root_public_key
     if (type(policy) is not configured._ReleaseHandoffMaterial
-            or parent.release_proof is not proof_policy or parent.release_intent is not intent_policy):
+            or (not historical and (intent_root is not root
+                or parent.release_proof is not proof_policy or parent.release_intent is not intent_policy))):
         _fail("completion release requires independent parent handoff pins")
     proof_raw, intent_raw, old = selected_proof._originals, selected_intent.intent_bytes, inputs.old_token_bytes
     if (type(proof_raw) is not tuple or len(proof_raw) != 4 or proof_raw[0] != b"proved"
@@ -159,11 +162,11 @@ def _exchange_on_active(active, *, _delivery=None):
     current()
     _same(proof_raw[3], proof_enrollment, work, "independent proof enrollment")
     enrolled_intent = intents.enrollments._admit_on_work(enrollment_bytes=intent_enrollment,
-        root_public_key=root, expected_scope=intent_scope,
+        root_public_key=intent_root, expected_scope=intent_scope,
         forbidden_public_keys=intent_policy.forbidden_public_keys, work=work)
     current()
     enrolled_proof = proofs.enrollments._admit_on_work(enrollment_bytes=proof_enrollment,
-        root_public_key=root, expected_scope=proof_scope,
+        root_public_key=intent_root, expected_scope=proof_scope,
         forbidden_public_keys=proof_policy.forbidden_public_keys, work=work)
     current()
     plan._same(enrolled_intent.enrollment_digest, intent_policy.enrollment_digest, work,
@@ -173,31 +176,37 @@ def _exchange_on_active(active, *, _delivery=None):
     age = min(enrolled_intent.payload["maximumAgeNs"], enrolled_proof.payload["maximumAgeNs"])
     skew = min(enrolled_intent.payload["maximumClockSkewNs"], enrolled_proof.payload["maximumClockSkewNs"])
     lifetime.narrow(lifetime.window[3], age, skew)
-    admitted_intent = intents._verify_on_work(intent_bytes=intent_raw,
-        enrollment_bytes=intent_enrollment, root_public_key=root,
+    verify_intent = intents._verify_historical_on_work if historical else intents._verify_on_work
+    admitted_intent = verify_intent(intent_bytes=intent_raw,
+        enrollment_bytes=intent_enrollment, root_public_key=intent_root,
         forbidden_public_keys=intent_policy.forbidden_public_keys,
         expected_scope=intent_scope, expected_release=release, old_token_bytes=old,
         live_window=lifetime.window, transport_deadline_ns=lifetime.bound,
         work=work, _continuity=lifetime.continuity)
-    if type(admitted_intent) is not intents._AdmittedIntent:
+    if type(admitted_intent) is not (intents._HistoricalIntentEvidence if historical else intents._AdmittedIntent):
         _fail("completion release requires genuine current intent admission")
     lifetime.attach(admitted_intent.live)
     interval = admitted_intent.payload["issuedAtEpochNs"], admitted_intent.payload["expiresAtEpochNs"]
-    lifetime.narrow(interval[1], age, skew)
+    intent_source._contain_original_interval(inputs, admitted_intent.payload)
+    if not historical:
+        lifetime.narrow(interval[1], age, skew)
     evidence = {"releaseCustodyDigest": plan._frame(proofs.contract.CUSTODY_IDENTITY_DOMAIN,
             (proof_raw[1],), work), "releaseIntentDigest": admitted_intent.intent_digest,
         "stateReceiptDigest": plan._frame(state.RECEIPT_IDENTITY_DOMAIN, (response[3],), work)}
     current()
-    admitted_proof = proofs._verify_on_work(proof_bytes=proof_raw[2], enrollment_bytes=proof_enrollment,
-        root_public_key=root, forbidden_public_keys=proof_policy.forbidden_public_keys,
+    verify_proof = proofs._verify_historical_on_work if historical else proofs._verify_on_work
+    admitted_proof = verify_proof(proof_bytes=proof_raw[2], enrollment_bytes=proof_enrollment,
+        root_public_key=intent_root, forbidden_public_keys=proof_policy.forbidden_public_keys,
         expected_scope=proof_scope, expected_release=release, expected_evidence=evidence,
         expected_intent_interval=interval, live_window=lifetime.window,
         transport_deadline_ns=lifetime.bound, work=work, _continuity=lifetime.continuity)
-    if type(admitted_proof) is not proofs._AdmittedProof:
+    if type(admitted_proof) is not (proofs._HistoricalProofEvidence if historical else proofs._AdmittedProof):
         _fail("completion release requires genuine current proof admission")
     lifetime.attach(admitted_proof.live)
-    lifetime.narrow(min(admitted_proof.payload["expiresAtEpochNs"],
-        admitted_proof.payload["issuedAtEpochNs"] + age), age, skew)
+    intent_source._contain_original_interval(inputs, admitted_proof.payload)
+    if not historical:
+        lifetime.narrow(min(admitted_proof.payload["expiresAtEpochNs"],
+            admitted_proof.payload["issuedAtEpochNs"] + age), age, skew)
     packet, effects, envelope, created, expires = hints._decode_on_work(response[4:], work=work)
     for actual, expected, label in (
             (packet, release["consumeBinding"]["packetDigest"], "packet"),
@@ -240,15 +249,26 @@ def _exchange_on_active(active, *, _delivery=None):
     if (material.profile != clients.LIVE_PROFILE or material.recovery_scope is not None
             or material.storage_scope["checkpoint"] != {"recordCount": 0, "outcomeDigest": None}):
         _fail("completion release requires independently root-authorized LIVE checkpoint zero")
-    _same(material.custody_bytes, proof_raw[1], work, "root server exact retained proof custody")
     root_custody = material.custody_material
+    if historical != (root_custody.intent_root_public_key is not None):
+        _fail("completion release grant differs from independently selected RI profile")
+    _same(history.custody_for(root_custody), proof_raw[1], work, "root server exact retained proof custody")
+    history.require_originals(root_custody, intent_enrollment, proof_enrollment, work)
+    plan._same(clients.server.keys._spki_on_work(history.root_for(root_custody, root), work),
+        clients.server.keys._spki_on_work(intent_root, work), work, "independently selected RI root")
+    if historical:
+        plan._same(root_custody.intent_authority_interval, inputs.retained_authority_interval,
+            work, "independently selected RI authority interval")
     _same(root_custody.planner.bootstrap_bytes, inputs.planner_original, work, "original activation planner")
+    current_planner = history.planner_for(root_custody)
+    _same(current_planner.bootstrap_bytes, parent.activation_planning.planner_bootstrap_bytes,
+        work, "independently selected current activation planner")
     # R1 authenticates only the retained consume evidence. The independently
     # current R2 server must preserve its complete state contract, not merely
     # a database ID or generation. Both signatures are checked on this work;
     # no retired authority becomes a grant or a token-release signer.
     current_state = state._admit_enrollment_on_work(
-        enrollment_bytes=root_custody.planner.state_enrollment_bytes,
+        enrollment_bytes=current_planner.state_enrollment_bytes,
         root_public_key=root, work=work)
     current()
     original_state = state._admit_enrollment_on_work(enrollment_bytes=consume_state,
@@ -277,8 +297,8 @@ def _exchange_on_active(active, *, _delivery=None):
         plan._same(actual, expected, work, "completion release independent custody " + label)
     lifetime.attach(proofs.bootstrap.planner_bootstrap._launch_guard(root_custody.attestation_interval,
         root_custody.opening_sample, lifetime.base, work))
-    lifetime.narrow(root_custody.attestation_interval[1], root_custody.planner.maximum_plan_age_ns,
-        root_custody.planner.maximum_clock_skew_ns)
+    lifetime.narrow(root_custody.attestation_interval[1], current_planner.maximum_plan_age_ns,
+        current_planner.maximum_clock_skew_ns)
     current()
     # Canonical outcome reconstruction binds this request, not store absence.
     # The directly metered same-global claim is terminal before any socket.

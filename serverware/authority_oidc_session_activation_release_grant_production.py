@@ -19,6 +19,7 @@ from serverware import oidc_session_activation_release_grant_issuer_policy as is
 from serverware import oidc_session_activation_release_grant_issuer_bootstrap as cold
 from serverware import oidc_session_activation_release_outcome as outcomes
 from serverware import oidc_session_activation_release_transport as transport
+from serverware import oidc_session_activation_release_retained_authority as retained
 
 
 clients, server = issuer.client, issuer.server
@@ -223,10 +224,14 @@ def _produce_on_work(*, request_originals, issuer_policy_bytes, proof_bootstrap_
     root_custody = server.custody._verify_on_work(custody_bytes=material.release_custody_bytes,
         root_public_key=root, live_window=lifetime.window, transport_deadline_ns=lifetime.bound, work=work)
     current()
+    historical = root_custody.intent_root_public_key is not None
+    intent_root = retained.root_for(root_custody, root)
+    retained.require_originals(root_custody, request[4], request[2], work)
+    custody_planner = retained.planner_for(root_custody)
     lifetime.attach(server.custody.planner_bootstrap._launch_guard(root_custody.attestation_interval,
         root_custody.opening_sample, lifetime.base, work))
-    lifetime.narrow(root_custody.attestation_interval[1], root_custody.planner.maximum_plan_age_ns,
-        root_custody.planner.maximum_clock_skew_ns)
+    lifetime.narrow(root_custody.attestation_interval[1], custody_planner.maximum_plan_age_ns,
+        custody_planner.maximum_clock_skew_ns)
     if current_planner is None:
         if material.current_activation_planner_bytes is not None:
             _fail("legacy release proof has an unexpected current template")
@@ -235,7 +240,7 @@ def _produce_on_work(*, request_originals, issuer_policy_bytes, proof_bootstrap_
         _same_bytes(root_custody.planner.state_enrollment_bytes, cm.current_root_enrollment_bytes,
             work, "release issuer exact activation state enrollment")
     else:
-        _same_bytes(root_custody.planner.bootstrap_bytes, material.current_activation_planner_bytes,
+        _same_bytes(custody_planner.bootstrap_bytes, material.current_activation_planner_bytes,
             work, "release issuer exact current custody planner")
         _same_bytes(current_planner.bootstrap_bytes, material.current_activation_planner_bytes,
             work, "release issuer genuine current planner original")
@@ -243,11 +248,11 @@ def _produce_on_work(*, request_originals, issuer_policy_bytes, proof_bootstrap_
         root_public_key=evidence_root, work=work)
     current()
     current_state = authorization._admit_enrollment_on_work(
-        enrollment_bytes=root_custody.planner.state_enrollment_bytes, root_public_key=root, work=work)
+        enrollment_bytes=custody_planner.state_enrollment_bytes, root_public_key=root, work=work)
     current()
     for actual, expected in ((enrolled_state.payload, current_state.payload),
             (enrolled_state.enrollment_digest, cm.enrollment_digest),
-            (current_state.enrollment_digest, root_custody.planner.state_enrollment_digest),
+            (current_state.enrollment_digest, custody_planner.state_enrollment_digest),
             (current_state.payload["databaseId"], scope["databaseId"]),
             (cm.database_id, scope["databaseId"]),
             (current_state.payload["generationDigest"], scope["generationDigest"]),
@@ -256,12 +261,13 @@ def _produce_on_work(*, request_originals, issuer_policy_bytes, proof_bootstrap_
         plan._same(actual, expected, work, "release issuer complete original/current state and delivery key")
     current()
     unique = issuer.proof_bootstrap._unique_keys
-    base_keys = unique((root_custody.planner.planner_public_key, current_state.computation_public_key,
+    base_keys = unique((root_custody.planner.planner_public_key, custody_planner.planner_public_key,
+        current_state.computation_public_key,
         current_state.completion_public_key, current_state.state_public_key,
         enrolled_state.computation_public_key, enrolled_state.completion_public_key,
-        enrolled_state.state_public_key, evidence_root), work)
+        enrolled_state.state_public_key, evidence_root, root), work)
     intent_enrollment = intents.enrollments._admit_on_work(enrollment_bytes=request[4],
-        root_public_key=root, expected_scope=intent_scope, forbidden_public_keys=base_keys, work=work)
+        root_public_key=intent_root, expected_scope=intent_scope, forbidden_public_keys=base_keys, work=work)
     current()
     completion = issuer.proof_bootstrap.completion
     caller_enrollment = completion.caller._admit_enrollment_on_work(
@@ -280,9 +286,15 @@ def _produce_on_work(*, request_originals, issuer_policy_bytes, proof_bootstrap_
 
     # The expected receipt identity comes from independently root-bound exact
     # COMPLETE/ACK originals, never from decoding the incoming proof payload.
-    complete_material, complete, complete_digest = state._verify_request_on_work(
-        request_bytes=material.completion_request_bytes, enrollment_bytes=cm.current_root_enrollment_bytes,
-        root_public_key=evidence_root, now_epoch_ns=current(), work=work)
+    complete_arguments = dict(request_bytes=material.completion_request_bytes,
+        enrollment_bytes=cm.current_root_enrollment_bytes, root_public_key=evidence_root, work=work)
+    if historical:
+        complete_material, complete, complete_digest = state._verify_historical_request_on_work(**complete_arguments)
+        if complete["issuedAtEpochNs"] > current():
+            _fail("retained COMPLETE evidence is future-issued")
+    else:
+        complete_material, complete, complete_digest = state._verify_request_on_work(
+            **complete_arguments, now_epoch_ns=current())
     current()
     acknowledged = acknowledgments._verify_ack_on_work(request_bytes=material.completion_request_bytes,
         receipt_bytes=material.state_receipt_bytes, enrollment_bytes=cm.current_root_enrollment_bytes,
@@ -307,38 +319,48 @@ def _produce_on_work(*, request_originals, issuer_policy_bytes, proof_bootstrap_
         state._fresh(complete, complete_material, now)
         return now
 
-    lifetime.attach(complete_live)
-    lifetime.narrow(min(complete["expiresAtEpochNs"], complete["issuedAtEpochNs"] + complete_age),
-        complete_age, complete_material.payload["maxClockSkewNs"])
-    admitted_intent = intents._verify_on_work(intent_bytes=request[3], enrollment_bytes=request[4],
-        root_public_key=root, forbidden_public_keys=base_keys, expected_scope=intent_scope,
+    if not historical:
+        lifetime.attach(complete_live)
+        lifetime.narrow(min(complete["expiresAtEpochNs"], complete["issuedAtEpochNs"] + complete_age),
+            complete_age, complete_material.payload["maxClockSkewNs"])
+    intent_verifier = intents._verify_historical_on_work if historical else intents._verify_on_work
+    admitted_intent = intent_verifier(intent_bytes=request[3], enrollment_bytes=request[4],
+        root_public_key=intent_root, forbidden_public_keys=base_keys, expected_scope=intent_scope,
         expected_release=release, old_token_bytes=request[5], live_window=lifetime.window,
         transport_deadline_ns=lifetime.bound, work=work, _continuity=lifetime.continuity)
-    if type(admitted_intent) is not intents._AdmittedIntent:
+    if type(admitted_intent) is not (intents._HistoricalIntentEvidence if historical else intents._AdmittedIntent):
         _fail("release issuer requires actual live intent and old-token possession")
     lifetime.attach(admitted_intent.live)
     intent_interval = admitted_intent.payload["issuedAtEpochNs"], admitted_intent.payload["expiresAtEpochNs"]
-    lifetime.narrow(min(intent_interval[1], intent_interval[0] + intent_enrollment.payload["maximumAgeNs"]),
-        intent_enrollment.payload["maximumAgeNs"], intent_enrollment.payload["maximumClockSkewNs"])
+    retained.contain(root_custody, admitted_intent.payload)
+    if not historical:
+        lifetime.narrow(min(intent_interval[1], intent_interval[0] + intent_enrollment.payload["maximumAgeNs"]),
+            intent_enrollment.payload["maximumAgeNs"], intent_enrollment.payload["maximumClockSkewNs"])
     plan._same(root_custody.release_intent_digest, admitted_intent.intent_digest, work,
         "release issuer original custody intent")
-    custody_digest = plan._frame(proofs.contract.CUSTODY_IDENTITY_DOMAIN, (material.release_custody_bytes,), work)
+    custody_digest = plan._frame(proofs.contract.CUSTODY_IDENTITY_DOMAIN,
+        (retained.custody_for(root_custody),), work)
+    current_custody_digest = plan._frame(proofs.contract.CUSTODY_IDENTITY_DOMAIN,
+        (material.release_custody_bytes,), work)
     evidence = {"releaseCustodyDigest": custody_digest, "releaseIntentDigest": admitted_intent.intent_digest,
         "stateReceiptDigest": acknowledged.receipt_digest}
     current()
-    admitted_proof = proofs._verify_on_work(proof_bytes=request[1], enrollment_bytes=request[2],
-        root_public_key=root, forbidden_public_keys=proof_keys, expected_scope=scope, expected_release=release,
+    proof_verifier = proofs._verify_historical_on_work if historical else proofs._verify_on_work
+    admitted_proof = proof_verifier(proof_bytes=request[1], enrollment_bytes=request[2],
+        root_public_key=intent_root, forbidden_public_keys=proof_keys, expected_scope=scope, expected_release=release,
         expected_evidence=evidence, expected_intent_interval=intent_interval, live_window=lifetime.window,
         transport_deadline_ns=lifetime.bound, work=work, _continuity=lifetime.continuity)
-    if type(admitted_proof) is not proofs._AdmittedProof:
+    if type(admitted_proof) is not (proofs._HistoricalProofEvidence if historical else proofs._AdmittedProof):
         _fail("release issuer requires genuine original committed-release proof admission")
     lifetime.attach(admitted_proof.live)
-    proof_enrollment = proofs.enrollments._admit_on_work(enrollment_bytes=request[2], root_public_key=root,
+    retained.contain(root_custody, admitted_proof.payload)
+    proof_enrollment = proofs.enrollments._admit_on_work(enrollment_bytes=request[2], root_public_key=intent_root,
         expected_scope=scope, forbidden_public_keys=proof_keys, work=work)
     current()
     age, skew = proof_enrollment.payload["maximumAgeNs"], proof_enrollment.payload["maximumClockSkewNs"]
-    lifetime.narrow(min(admitted_proof.payload["expiresAtEpochNs"],
-        admitted_proof.payload["issuedAtEpochNs"] + age), age, skew)
+    if not historical:
+        lifetime.narrow(min(admitted_proof.payload["expiresAtEpochNs"],
+            admitted_proof.payload["issuedAtEpochNs"] + age), age, skew)
     delivery._envelope(request[6], work)
     plan._same(_bytes_digest(request[6], work, current), release["deliveryEnvelopeDigest"], work,
         "release issuer original encrypted envelope")
@@ -379,16 +401,19 @@ def _produce_on_work(*, request_originals, issuer_policy_bytes, proof_bootstrap_
     admitted_storage = storage._verify_on_work(authorization_bytes=storage_raw, root_public_key=root,
         expected_scope=storage_scope, live_window=lifetime.window, transport_deadline_ns=lifetime.bound, work=work)
     lifetime.attach(admitted_storage.live)
-    server_payload = {**common, "schema": server.PAYLOAD_SCHEMA, "purpose": server.PURPOSE,
+    server_payload = {**common, "schema": server.V2_PAYLOAD_SCHEMA if historical else server.PAYLOAD_SCHEMA,
+        "purpose": server.PURPOSE,
         "role": server.ROLE, "profile": server.LIVE_PROFILE,
         **{name: scope[name] for name in ("configurationDigest", "databaseId", "generationDigest",
             "runtimeClosureDigest", "receiverIdentity", "producerId", "producerIdentity")},
         "callerId": material.caller_id, "stateReceiptDigest": acknowledged.receipt_digest,
-        "expectedRelease": release, "releaseCustodyDigest": custody_digest,
+        "expectedRelease": release, "releaseCustodyDigest": current_custody_digest,
         "deliveryKeyDigest": root_custody.delivery_key_digest, "storageScope": storage_scope,
         "recoveryScope": None, "releaseCustody": _wrapped(material.release_custody_bytes, work, current),
         "storageAuthorization": _wrapped(storage_raw, work, current), "recoveryAuthorization": None,
         "launch": launch, **{name: False for name in server._FALSE_FIELDS}}
+    if historical:
+        server_payload["evidenceCustodyDigest"] = custody_digest
     current()
     server_raw = server._produce_on_work(payload=server_payload, root_private_key=private,
         root_public_key=root, live_window=lifetime.window, transport_deadline_ns=lifetime.bound, work=work)

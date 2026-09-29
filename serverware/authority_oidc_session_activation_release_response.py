@@ -7,6 +7,8 @@ No socket, store, successful material input or durable-delivery claim exists.
 """
 from __future__ import annotations
 
+from serverware import oidc_session_activation_release_retained_authority as history
+
 from dataclasses import dataclass
 import hashlib
 import time
@@ -69,9 +71,10 @@ def _reservation_bytes(request_lengths, *, client_bytes, bootstrap_bytes,
     planner = server.custody.planner_bootstrap
     custody_bytes = min(server.custody.MAX_BYTES, bootstrap_bytes)
     planner_bytes = min(planner.MAX_BYTES, custody_bytes)
-    nested_bytes = (custody_bytes + planner_bytes
+    nested_bytes = (2 * custody_bytes + 2 * planner_bytes
         + min(planner.vector.MAX_BYTES, planner_bytes)
-        + min(authorization.MAX_ENROLLMENT_BYTES, planner_bytes)
+        + 2 * min(authorization.MAX_ENROLLMENT_BYTES, planner_bytes)
+        + 2 * min(intent_keys.MAX_BYTES, custody_bytes)
         + min(server.storage.MAX_BYTES, bootstrap_bytes)
         + min(server.recovery.MAX_BYTES, bootstrap_bytes))
     frame_bytes = 8 + 8 * len(request_lengths) + transport.RESPONSE_HEADER_BYTES
@@ -243,7 +246,7 @@ def _state_keys(held, material, current, work):
     # not repeat the original planner/history, intent or proof admission.
     state = authorization._admit_enrollment_on_work(
         enrollment_bytes=original.state_enrollment_bytes,
-        root_public_key=held.root_public_key, work=work)
+        root_public_key=history.root_for(material.custody_material, held.root_public_key), work=work)
     current()
     for observed, expected in ((state.enrollment_digest, original.state_enrollment_digest),
             (state.payload["databaseId"], held.scope["databaseId"]),
@@ -288,7 +291,10 @@ def _verify_on_work(*, response_originals, request_originals,
         _fail("release response lacks its genuinely admitted server originals")
     scope, request = held.scope, held.request
     profile = scope["profile"]
-    historical = profile == server.RECOVERY_PROFILE
+    historical = (profile == server.RECOVERY_PROFILE
+        or material.custody_material.intent_root_public_key is not None)
+    intent_root = history.root_for(material.custody_material, held.root_public_key)
+    history.require_originals(material.custody_material, request[4], request[2], work)
     plan._same(material.profile, profile, work, "release response independently selected profile")
     identity = transport._request_identity_on_work(request, profile=profile,
         deadline_ns=bound, work=work, current=current)
@@ -302,7 +308,7 @@ def _verify_on_work(*, response_originals, request_originals,
     intent_scope = {name: scope[name] for name in intent_keys.SCOPE_FIELDS}
     proof_scope = {name: scope[name] for name in proof_keys.SCOPE_FIELDS}
     custody_digest = plan._frame(proofs.contract.CUSTODY_IDENTITY_DOMAIN,
-        (material.custody_bytes,), work)
+        (history.custody_for(material.custody_material),), work)
     plan._same(custody_digest, material.storage_scope["releaseCustodyDigest"], work,
         "release response exact original custody")
     envelope = delivery._envelope(request[6], work)
@@ -317,7 +323,7 @@ def _verify_on_work(*, response_originals, request_originals,
     verify_intent = intents._verify_historical_on_work if historical else intents._verify_on_work
     current()
     intent = verify_intent(intent_bytes=request[3], enrollment_bytes=request[4],
-        root_public_key=held.root_public_key, forbidden_public_keys=forbidden,
+        root_public_key=intent_root, forbidden_public_keys=forbidden,
         expected_scope=intent_scope, expected_release=expected_release,
         old_token_bytes=request[5], live_window=window, transport_deadline_ns=bound, work=work,
         _continuity=child_continuity)
@@ -325,11 +331,12 @@ def _verify_on_work(*, response_originals, request_originals,
     if type(intent) is not expected_intent_type:
         _fail("release response requires genuine original intent and possession admission")
     attach(intent.live)
+    history.contain(material.custody_material, intent.payload)
     plan._same(intent.intent_digest, material.custody_material.release_intent_digest, work,
         "release response root-pinned original intent")
     current()
     enrolled_intent = intent_keys._admit_on_work(enrollment_bytes=request[4],
-        root_public_key=held.root_public_key, expected_scope=intent_scope,
+        root_public_key=intent_root, expected_scope=intent_scope,
         forbidden_public_keys=forbidden, work=work)
     current()
     plan._same(enrolled_intent.enrollment_digest, intent.payload["enrollmentDigest"], work,
@@ -346,7 +353,7 @@ def _verify_on_work(*, response_originals, request_originals,
     verify_proof = proofs._verify_historical_on_work if historical else proofs._verify_on_work
     current()
     proof = verify_proof(proof_bytes=request[1], enrollment_bytes=request[2],
-        root_public_key=held.root_public_key,
+        root_public_key=intent_root,
         forbidden_public_keys=(*forbidden, enrolled_intent.caller_public_key),
         expected_scope=proof_scope, expected_release=expected_release, expected_evidence=evidence,
         expected_intent_interval=(intent.payload["issuedAtEpochNs"], intent.payload["expiresAtEpochNs"]),
@@ -355,6 +362,7 @@ def _verify_on_work(*, response_originals, request_originals,
     if type(proof) is not expected_proof_type:
         _fail("release response requires genuine original proof admission")
     attach(proof.live)
+    history.contain(material.custody_material, proof.payload)
     if not historical:
         candidate = processing._narrow(window, deadline_epoch_ns=proof.payload["expiresAtEpochNs"],
             maximum_lifetime_ns=window[5], maximum_clock_skew_ns=window[6])
@@ -373,7 +381,7 @@ def _verify_on_work(*, response_originals, request_originals,
     current()
     plan._same(outcome_digest, scope["expectedOutcomeDigest"], work,
         "release response independently pinned original-derived outcome")
-    if historical:
+    if profile == server.RECOVERY_PROFILE:
         if material.recovery_scope is None:
             _fail("release response recovery lacks its separate fresh root purpose")
         plan._same(outcome_digest, material.recovery_scope["outcomeDigest"], work,

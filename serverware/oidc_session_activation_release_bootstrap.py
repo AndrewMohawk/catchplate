@@ -14,6 +14,7 @@ from cryptography.exceptions import InvalidSignature
 
 from serverware import authority_successor_execution_window as processing
 from serverware import oidc_session_activation_release_custody_bootstrap as custody
+from serverware import oidc_session_activation_release_retained_authority as retained
 from serverware import oidc_session_activation_release_outcome_authorization as storage
 from serverware import oidc_session_activation_release_proof as proof
 from serverware import oidc_session_activation_release_recovery_authorization as recovery
@@ -34,6 +35,8 @@ LIVE_PROFILE, RECOVERY_PROFILE = "live-release", "recovery"
 PURPOSE = "launch-oidc-session-activation-token-release"
 SCHEMA = "serverware.signedOidcSessionActivationReleaseBootstrap/v1"
 PAYLOAD_SCHEMA = "serverware.oidcSessionActivationReleaseBootstrap/v1"
+V2_SCHEMA = "serverware.signedOidcSessionActivationReleaseBootstrap/v2"
+V2_PAYLOAD_SCHEMA = "serverware.oidcSessionActivationReleaseBootstrap/v2"
 LAUNCH_SCHEMA = "serverware.oidcSessionActivationReleaseLaunch/v1"
 MAX_BYTES = MAX_BOOTSTRAP_BYTES = 16 * 1024 * 1024
 MAX_ORIGINAL_BYTES = authority.MAX_RESULT_BYTES
@@ -190,12 +193,18 @@ def _release_shape(value, work):
 
 
 def _payload_shape(payload, work):
-    shape._object(payload, _PAYLOAD_FIELDS, "release bootstrap payload")
-    for name, expected in (("schema", PAYLOAD_SCHEMA), ("sourceRevision", authority.SOURCE_REVISION),
+    historical = type(payload) is dict and payload.get("schema") == V2_PAYLOAD_SCHEMA
+    shape._object(payload, _PAYLOAD_FIELDS | {"evidenceCustodyDigest"} if historical else _PAYLOAD_FIELDS,
+        "release bootstrap payload")
+    for name, expected in (("schema", V2_PAYLOAD_SCHEMA if historical else PAYLOAD_SCHEMA), ("sourceRevision", authority.SOURCE_REVISION),
             ("purpose", PURPOSE), ("role", ROLE), ("trustMode", "trusted-host-local")):
         shape._literal(payload[name], expected)
     if type(payload["profile"]) is not str or payload["profile"] not in (LIVE_PROFILE, RECOVERY_PROFILE):
         _fail("release launch profile is not one of the two fixed root purposes")
+    if historical:
+        shape._digest(payload["evidenceCustodyDigest"])
+        if payload["profile"] != LIVE_PROFILE:
+            _fail("retained-intent delivery does not authorize retained-outcome recovery")
     for name in ("configurationDigest", "generationDigest", "runtimeClosureDigest",
             "stateReceiptDigest", "releaseCustodyDigest", "deliveryKeyDigest"):
         shape._digest(payload[name])
@@ -267,9 +276,18 @@ def _material(payload, original, root, window, bound, opening, current, work, _c
         live_window=window, transport_deadline_ns=bound, work=work,
         _current=current if _continuity is not None else None)
     current()
+    historical = payload["schema"] == V2_PAYLOAD_SCHEMA
+    if historical != (admitted.intent_root_public_key is not None):
+        _fail("release bootstrap and current custody historical profiles differ")
+    evidence_root = retained.root_for(admitted, root)
+    current_planner = retained.planner_for(admitted)
     if total + len(admitted.planner.bootstrap_bytes) > MAX_ORIGINAL_BYTES:
         _fail("release cold nested original inventory exceeds its aggregate bound")
     custody_digest = plan._frame(proof.CUSTODY_IDENTITY_DOMAIN, (custody_bytes,), work)
+    evidence_digest = plan._frame(proof.CUSTODY_IDENTITY_DOMAIN, (retained.custody_for(admitted),), work)
+    if historical:
+        plan._same(evidence_digest, payload["evidenceCustodyDigest"], work,
+            "release bootstrap exact retired evidence custody")
     for actual, expected in ((custody_digest, payload["releaseCustodyDigest"]),
             (admitted.receiver_identity, payload["receiverIdentity"]),
             (admitted.delivery_key_digest, payload["deliveryKeyDigest"]),
@@ -283,7 +301,7 @@ def _material(payload, original, root, window, bound, opening, current, work, _c
             (admitted.delivery_scope, payload["expectedRelease"]["deliveryScope"])):
         plan._same(actual, expected, work, "release launch genuine custody and independent target")
     state = authorization._admit_enrollment_on_work(enrollment_bytes=admitted.planner.state_enrollment_bytes,
-        root_public_key=root, work=work)
+        root_public_key=evidence_root, work=work)
     current()
     for actual, expected in ((state.enrollment_digest, admitted.planner.state_enrollment_digest),
             (state.payload["databaseId"], payload["databaseId"]),
@@ -291,7 +309,8 @@ def _material(payload, original, root, window, bound, opening, current, work, _c
         plan._same(actual, expected, work, "release launch original state enrollment")
     slot = payload["storageScope"]
     for name in storage.SCOPE_FIELDS - {"directory", "checkpoint", "deliveryId"}:
-        plan._same(slot[name], payload[name], work, "release launch independent storage " + name)
+        expected = evidence_digest if name == "releaseCustodyDigest" else payload[name]
+        plan._same(slot[name], expected, work, "release launch independent storage " + name)
     plan._same(slot["deliveryId"], admitted.delivery_scope["deliveryId"], work, "release launch exact slot")
     directory = {name: payload["launch"]["outcomeDirectory" + name[0].upper() + name[1:]]
         for name in storage.DIRECTORY_FIELDS}
@@ -318,9 +337,9 @@ def _material(payload, original, root, window, bound, opening, current, work, _c
         _contains(interval, (recovered.payload["issuedAtEpochNs"], recovered.payload["expiresAtEpochNs"]))
     _created, delivery_expiry = custody._scope(admitted.delivery_scope, work)
     narrowed = processing._narrow(window, deadline_epoch_ns=min(interval[1], delivery_expiry),
-        maximum_lifetime_ns=min(admitted.planner.maximum_plan_age_ns,
+        maximum_lifetime_ns=min(current_planner.maximum_plan_age_ns,
             payload["launch"]["requestTimeoutSeconds"] * 1_000_000_000),
-        maximum_clock_skew_ns=admitted.planner.maximum_clock_skew_ns)
+        maximum_clock_skew_ns=current_planner.maximum_clock_skew_ns)
     deadline = min(bound, narrowed[4])
     checked, _bind = storage._processing(narrowed, deadline, work, _continuity)
     last_epoch = current()
@@ -362,14 +381,17 @@ def _verify_on_work(*, bootstrap_bytes, root_public_key, live_window, transport_
     current()
     envelope = _decode(original, work)
     shape._object(envelope, _ENVELOPE_FIELDS, "signed release cold bootstrap")
-    shape._literal(envelope["schema"], SCHEMA)
+    if envelope["schema"] not in (SCHEMA, V2_SCHEMA):
+        _fail("unsupported release cold schema")
     shape._base64url(envelope["signatureBase64Url"], signature=True)
     _payload_shape(envelope["payload"], work)
+    shape._literal(envelope["payload"]["schema"],
+        V2_PAYLOAD_SCHEMA if envelope["schema"] == V2_SCHEMA else PAYLOAD_SCHEMA)
     _canonical(original, envelope, work)
     unsigned = _wire(envelope["payload"], work)
     current()
     try:
-        capability._signature(root, envelope["signatureBase64Url"], SCHEMA,
+        capability._signature(root, envelope["signatureBase64Url"], envelope["schema"],
             unsigned, capture._SharedLedger(work))
     except InvalidSignature as exc:
         raise OidcSessionActivationReleaseBootstrapError("release cold root signature is invalid") from exc
@@ -406,14 +428,15 @@ def _produce_on_work(*, payload, root_private_key, root_public_key,
     admitted = _material(owned, unsigned, root, window, bound, opening, live, work, _continuity)
     keys._pair_on_work(private, root, work)
     admitted.live()
-    envelope = {"schema": SCHEMA, "payload": owned, "signatureBase64Url": "A" * 86}
+    schema = V2_SCHEMA if owned["schema"] == V2_PAYLOAD_SCHEMA else SCHEMA
+    envelope = {"schema": schema, "payload": owned, "signatureBase64Url": "A" * 86}
     size, nodes = work.measure(envelope)
     payload_size, payload_nodes = work.measure(owned)
     if size > MAX_BYTES or nodes > MAX_NODES:
         _fail("release cold signed output exceeds its fixed bound")
     work.charge(input_bytes=size + 2 * payload_size + production._SIGNATURE_TRANSPORT_BYTES,
         json_nodes=nodes + payload_nodes)
-    message = plan._ascii(plan._frame(SCHEMA, (unsigned,), work), work)
+    message = plan._ascii(plan._frame(schema, (unsigned,), work), work)
     admitted.live()
     signature = production._sign_and_verify(private, root, message, work)
     admitted.live()

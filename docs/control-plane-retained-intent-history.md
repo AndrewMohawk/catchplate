@@ -54,8 +54,11 @@ Current private-key/descriptor checks exist only in the fresh signing branch.
 
 Missing retained intent or proof cannot create a claim, sign a replacement,
 request proof setup, contact a proof service or retry a spent operation. The
-retired mode cannot enter LIVE or retained-outcome token delivery. Those need a
-separate explicit current-authority grant/custody bridge and remain unfinished.
+read-only preparation result cannot itself enter token delivery. The separate
+[current-authority retained-RI delivery bridge](control-plane-current-authority-retained-ri-delivery.md)
+now connects a fresh release actor, fixed current issuer policy, current custody
+and LIVE delivery; it does not grant retired signing or proof-service contact.
+Retained-outcome delivery across a retired release root remains unfinished.
 
 ## Bounds and remaining work
 
@@ -67,6 +70,6 @@ loader shapes, existing global attempt slots and original deadlines stay
 unchanged. Large individually valid inventories may still be refused.
 
 The fresh-current preparation and current-R2 LIVE paths keep their separate
-authority requirements. Older source-cohort adapters, migration and retired-RI
-release delivery remain H05 work. This is source integration only: no build,
+authority requirements. Older source-cohort adapters, migration and retained
+release-outcome root history remain H05 work. This is source integration only: no build,
 execution, pilot, AWS deployment or production acceptance is claimed.

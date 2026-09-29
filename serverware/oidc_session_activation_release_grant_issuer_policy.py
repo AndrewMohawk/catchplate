@@ -25,6 +25,8 @@ processing, authority, capability, keys = client.processing, client.authority, c
 PURPOSE = "issue-oidc-session-activation-release-grants"
 SCHEMA = "serverware.signedOidcSessionActivationReleaseGrantIssuerPolicy/v1"
 PAYLOAD_SCHEMA = "serverware.oidcSessionActivationReleaseGrantIssuerPolicy/v1"
+V2_SCHEMA = "serverware.signedOidcSessionActivationReleaseGrantIssuerPolicy/v2"
+V2_PAYLOAD_SCHEMA = "serverware.oidcSessionActivationReleaseGrantIssuerPolicy/v2"
 SIGNATURE_DOMAIN = SCHEMA
 IDENTITY_DOMAIN = "serverware.oidcSessionActivationReleaseGrantIssuerPolicyIdentity/v1"
 PROOF_BOOTSTRAP_IDENTITY_DOMAIN = "serverware.oidcSessionActivationReleaseGrantIssuerProofBootstrapIdentity/v1"
@@ -90,7 +92,9 @@ def _canonical(original, value, work):
 
 def _payload_shape(payload, work):
     shape._object(payload, PAYLOAD_FIELDS, "release grant issuer policy")
-    for name, expected in (("schema", PAYLOAD_SCHEMA), ("sourceRevision", authority.SOURCE_REVISION),
+    if payload["schema"] not in (PAYLOAD_SCHEMA, V2_PAYLOAD_SCHEMA):
+        _fail("release grant issuer policy payload profile is unsupported")
+    for name, expected in (("sourceRevision", authority.SOURCE_REVISION),
             ("purpose", PURPOSE), ("trustMode", "trusted-host-local")):
         shape._literal(payload[name], expected)
     shape._digest(payload["proofBootstrapDigest"])
@@ -113,9 +117,11 @@ def _read(original, work):
         maximum_nodes=MAX_NODES, maximum_depth=MAX_DEPTH)
     owned = _capture(decoded, work)
     shape._object(owned, _ENVELOPE_FIELDS, "signed release grant issuer policy")
-    shape._literal(owned["schema"], SCHEMA)
+    if owned["schema"] not in (SCHEMA, V2_SCHEMA):
+        _fail("release grant issuer signed policy profile is unsupported")
     shape._base64url(owned["signatureBase64Url"], signature=True)
     _payload_shape(owned["payload"], work)
+    shape._literal(owned["schema"], V2_SCHEMA if owned["payload"]["schema"] == V2_PAYLOAD_SCHEMA else SCHEMA)
     _canonical(raw, owned, work)
     return owned
 
@@ -141,7 +147,7 @@ def _inventory(policy_size, proof_original, work):
 def _signature(envelope, root, work):
     unsigned = _wire(envelope["payload"], work)
     try:
-        capability._signature(root, envelope["signatureBase64Url"], SIGNATURE_DOMAIN,
+        capability._signature(root, envelope["signatureBase64Url"], envelope["schema"],
             unsigned, capture._SharedLedger(work))
     except InvalidSignature as exc:
         raise OidcSessionActivationReleaseGrantIssuerPolicyError(
@@ -192,7 +198,8 @@ def _join_proof(payload, proof_original, root, window, bound, current, bind_inte
         maximum_lifetime_ns=window[5],
         maximum_clock_skew_ns=window[6])
     selected_bound = min(bound, selected[4])
-    material = proof_bootstrap._verify_on_work(bootstrap_bytes=proof_original, root_public_key=root,
+    verify = proof_bootstrap._verify_grant_on_work if payload["schema"] == V2_PAYLOAD_SCHEMA else proof_bootstrap._verify_on_work
+    material = verify(bootstrap_bytes=proof_original, root_public_key=root,
         live_window=selected, transport_deadline_ns=selected_bound, work=work,
         _current=current if _continuity is not None else None)
     if type(material) is not proof_bootstrap._ProofMaterial:
@@ -296,14 +303,15 @@ def _produce_on_work(*, payload, proof_bootstrap_bytes, root_private_key, root_p
     live()
     keys._pair_on_work(private, root, work)
     live()
-    envelope = {"schema": SCHEMA, "payload": owned, "signatureBase64Url": "A" * 86}
+    schema = V2_SCHEMA if owned["schema"] == V2_PAYLOAD_SCHEMA else SCHEMA
+    envelope = {"schema": schema, "payload": owned, "signatureBase64Url": "A" * 86}
     unsigned_size, unsigned_nodes = work.measure(owned)
     envelope_size, envelope_nodes = work.measure(envelope)
     if max(unsigned_size, envelope_size) > MAX_BYTES or max(unsigned_nodes, envelope_nodes) > MAX_NODES:
         _fail("release grant issuer policy signature exceeds its output bounds")
     work.charge(input_bytes=4 * unsigned_size + envelope_size + production._SIGNATURE_TRANSPORT_BYTES,
         json_nodes=2 * unsigned_nodes + envelope_nodes)
-    frame_bytes = 2 * len(SIGNATURE_DOMAIN) + 9 + unsigned_size + 2 * 71
+    frame_bytes = 2 * len(schema) + 9 + unsigned_size + 2 * 71
     if (work.limits.max_hashes - work.hash_work < 1
             or work.limits.max_input_bytes - work.input_bytes < frame_bytes + unsigned_size
             or work.limits.max_json_nodes - work.json_nodes < 4 + unsigned_nodes):
@@ -311,7 +319,7 @@ def _produce_on_work(*, payload, proof_bootstrap_bytes, root_private_key, root_p
     unsigned = plan.core.canonical_bytes(owned)
     if len(unsigned) != unsigned_size:
         _fail("release grant issuer policy changed after measurement")
-    message = plan._ascii(plan._frame(SIGNATURE_DOMAIN, (unsigned,), work), work)
+    message = plan._ascii(plan._frame(schema, (unsigned,), work), work)
     live()
     signature = production._sign_and_verify(private, root, message, work)
     live()
@@ -319,7 +327,7 @@ def _produce_on_work(*, payload, proof_bootstrap_bytes, root_private_key, root_p
         _fail("release grant issuer policy changed during signing")
     encoded = base64.urlsafe_b64encode(signature).decode("ascii").rstrip("=")
     shape._base64url(encoded, signature=True)
-    original = plan.core.canonical_bytes({"schema": SCHEMA, "payload": owned, "signatureBase64Url": encoded})
+    original = plan.core.canonical_bytes({"schema": schema, "payload": owned, "signatureBase64Url": encoded})
     if len(original) != envelope_size:
         _fail("release grant issuer policy output differs from its reservation")
     live()

@@ -17,6 +17,7 @@ import os
 import threading
 
 from serverware import oidc_session_activation_release_custody_bootstrap as bootstrap
+from serverware import oidc_session_activation_release_retained_authority as retained
 from serverware import oidc_session_activation_delivery as delivery
 from serverware import oidc_session_activation_release_intent as release_intent
 from serverware import oidc_session_activation_release_intent_enrollment as intent_enrollment
@@ -128,8 +129,8 @@ class OidcSessionActivationReleaseCustody:
         _key_binding(material, key, work)
         current()
         configured = _Configuration(bootstrap.authority.SOURCE_REVISION, original, root, key,
-            receiver, _binding(material, work), material.planner.maximum_plan_age_ns,
-            material.planner.maximum_clock_skew_ns, material.attestation_interval, material.opening_sample)
+            receiver, _binding(material, work), retained.planner_for(material).maximum_plan_age_ns,
+            retained.planner_for(material).maximum_clock_skew_ns, material.attestation_interval, material.opening_sample)
         object.__setattr__(self, "_configured", configured)
         object.__setattr__(self, "_seal", configured)
         object.__setattr__(self, "_pid", os.getpid())
@@ -190,7 +191,8 @@ class OidcSessionActivationReleaseCustody:
             work, "original independently pinned release receiver")
         registration._same(_binding(material, work), configured.scope_bytes, work,
             "original activation release identity and delivery scope")
-        registration._same((material.planner.maximum_plan_age_ns, material.planner.maximum_clock_skew_ns),
+        planner = retained.planner_for(material)
+        registration._same((planner.maximum_plan_age_ns, planner.maximum_clock_skew_ns),
             (configured.maximum_age_ns, configured.maximum_clock_skew_ns), work, "original release processing policy")
         _key_binding(material, configured.delivery_key, work)
         current()
@@ -255,11 +257,16 @@ class OidcSessionActivationReleaseCustody:
         current()
         registration._same(digest, material.release_intent_digest, work,
             "root-pinned original release intent identity")
+        historical = material.intent_root_public_key is not None
+        root = retained.root_for(material, configured.root_public_key)
+        if historical:
+            retained._same_bytes(enrollment_original, material.intent_enrollment_bytes, work,
+                "current custody independently pinned intent enrollment")
         # Use only the original planner's actually admitted current-root
         # enrollment, not keys or a database identity selected by intent.
         state = bootstrap.authorization._admit_enrollment_on_work(
             enrollment_bytes=material.planner.state_enrollment_bytes,
-            root_public_key=configured.root_public_key, work=work)
+            root_public_key=root, work=work)
         current()
         registration._same(state.enrollment_digest,
             material.planner.state_enrollment_digest, work,
@@ -283,15 +290,17 @@ class OidcSessionActivationReleaseCustody:
             "deliveryScope": material.delivery_scope,
             "consumeBinding": consume_binding,
         }
-        admitted = intent_admission._verify_on_work(intent_bytes=original,
-            enrollment_bytes=enrollment_original, root_public_key=configured.root_public_key,
+        verifier = intent_admission._verify_historical_on_work if historical else intent_admission._verify_on_work
+        admitted = verifier(intent_bytes=original,
+            enrollment_bytes=enrollment_original, root_public_key=root,
             forbidden_public_keys=(material.planner.planner_public_key,
                 state.computation_public_key, state.completion_public_key, state.state_public_key),
             expected_scope=expected_scope, expected_release=expected_release,
             old_token_bytes=old_token, live_window=window,
             transport_deadline_ns=bound, work=work)
-        if type(admitted) is not intent_admission._AdmittedIntent:
+        if type(admitted) is not (intent_admission._HistoricalIntentEvidence if historical else intent_admission._AdmittedIntent):
             _fail("release intent did not return the genuine original admission")
+        retained.contain(material, admitted.payload)
         registration._same(admitted.intent_digest, digest, work,
             "original release intent identity after admission")
         intent_now = admitted.live()
@@ -459,6 +468,9 @@ class OidcSessionActivationReleaseCustody:
         outcome_started = False
         try:
             material, current = self._reauthenticate_locked(configured, window, bound, work)
+            historical = material.intent_root_public_key is not None
+            root = retained.root_for(material, configured.root_public_key)
+            retained.require_originals(material, intent_enrolled, proof_enrolled, work)
             intent, intent_scope, release, forbidden = self._intent_locked(
                 configured=configured, material=material, current=current, original=intent_raw,
                 enrollment_original=intent_enrolled, caller=caller,
@@ -467,7 +479,7 @@ class OidcSessionActivationReleaseCustody:
             # Authenticate the actual intent key, not a PEM chosen by the
             # proof, before checking separation from the new proof signer.
             intent_key = intent_enrollment._admit_on_work(enrollment_bytes=intent_enrolled,
-                root_public_key=configured.root_public_key, expected_scope=intent_scope,
+                root_public_key=root, expected_scope=intent_scope,
                 forbidden_public_keys=forbidden, work=work)
             registration._same(intent_key.enrollment_digest, intent.payload["enrollmentDigest"],
                 work, "release proof actual intent enrollment")
@@ -476,11 +488,15 @@ class OidcSessionActivationReleaseCustody:
                 "configurationDigest", "databaseId", "generationDigest",
                 "runtimeClosureDigest", "receiverIdentity")}
             expected_scope.update(producerId=producer, producerIdentity=held["producerIdentity"])
+            if historical:
+                registration._same(expected_scope, material.proof_scope, work,
+                    "current custody independently pinned proof scope")
             custody_digest = evidence.plan._frame(release_proof.CUSTODY_IDENTITY_DOMAIN,
-                (configured.custody_bytes,), work)
+                (retained.custody_for(material),), work)
             current()
-            admitted = proof_admission._verify_on_work(proof_bytes=proof_raw,
-                enrollment_bytes=proof_enrolled, root_public_key=configured.root_public_key,
+            verifier = proof_admission._verify_historical_on_work if historical else proof_admission._verify_on_work
+            admitted = verifier(proof_bytes=proof_raw,
+                enrollment_bytes=proof_enrolled, root_public_key=root,
                 forbidden_public_keys=(*forbidden, intent_key.caller_public_key),
                 expected_scope=expected_scope, expected_release=release,
                 expected_evidence={"releaseCustodyDigest": custody_digest,
@@ -489,13 +505,15 @@ class OidcSessionActivationReleaseCustody:
                 expected_intent_interval=(intent.payload["issuedAtEpochNs"],
                     intent.payload["expiresAtEpochNs"]),
                 live_window=window, transport_deadline_ns=bound, work=work)
-            if type(admitted) is not proof_admission._AdmittedProof:
+            if type(admitted) is not (proof_admission._HistoricalProofEvidence if historical else proof_admission._AdmittedProof):
                 _fail("release committed proof lacks genuine original admission")
-            # Later owner samples also obey both signed expiries. Retain the
-            # original guard and persistent owner clocks, not a new allowance.
+            retained.contain(material, admitted.payload)
+            # Current-only release obeys both evidence expiries. Explicit v2
+            # historical evidence instead retains the current custody deadline;
+            # neither branch opens a new processing allowance.
             final_window = processing_window._narrow(window,
-                deadline_epoch_ns=min(intent.payload["expiresAtEpochNs"],
-                    admitted.payload["expiresAtEpochNs"]),
+                deadline_epoch_ns=(material.attestation_interval[1] if historical else
+                    min(intent.payload["expiresAtEpochNs"], admitted.payload["expiresAtEpochNs"])),
                 maximum_lifetime_ns=configured.maximum_age_ns,
                 maximum_clock_skew_ns=configured.maximum_clock_skew_ns)
             final_current = self._guard(configured, final_window,

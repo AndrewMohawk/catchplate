@@ -18,6 +18,7 @@ from serverware import oidc_session_activation_release_intent as intent
 from serverware import oidc_session_activation_release_intent_enrollment as intent_enrollments
 from serverware import oidc_session_activation_release_proof as proof_contract
 from serverware import oidc_session_activation_release_proof_enrollment as proof_enrollments
+from serverware import oidc_session_activation_release_retained_authority as retained_authority
 
 
 authorization, shape, plan = completion.authorization, completion.shape, completion.plan
@@ -36,6 +37,9 @@ SCHEMA = "serverware.signedOidcSessionActivationReleaseProofBootstrap/v1"
 PAYLOAD_SCHEMA = "serverware.oidcSessionActivationReleaseProofBootstrap/v1"
 V2_SCHEMA = "serverware.signedOidcSessionActivationReleaseProofBootstrap/v2"
 V2_PAYLOAD_SCHEMA = "serverware.oidcSessionActivationReleaseProofBootstrap/v2"
+GRANT_SCHEMA = "serverware.signedOidcSessionActivationRetainedReleaseGrantBridge/v1"
+GRANT_PAYLOAD_SCHEMA = "serverware.oidcSessionActivationRetainedReleaseGrantBridge/v1"
+GRANT_PURPOSE = "authorize-current-release-grants-over-retained-intent"
 LAUNCH_SCHEMA = "serverware.oidcSessionActivationReleaseProofLaunch/v1"
 PURPOSE = "launch-oidc-session-activation-release-proof"
 MAX_BYTES = MAX_BOOTSTRAP_BYTES = 48 * 1024 * 1024
@@ -62,6 +66,7 @@ _PAYLOAD_FIELDS = frozenset({"schema", "sourceRevision", "purpose", "role", "tru
     *(name for name, _ in _ORIGINAL_LIMITS), "proofScope", "expectedRelease", "callerId",
     "issuedAtEpochNs", "expiresAtEpochNs", "launch"})
 _V2_PAYLOAD_FIELDS = _PAYLOAD_FIELDS | {"currentActivationPlanner"}
+_GRANT_PAYLOAD_FIELDS = (_V2_PAYLOAD_FIELDS - {"launch"}) | {"requestTimeoutSeconds"}
 _ENVELOPE_FIELDS = frozenset({"schema", "payload", "signatureBase64Url"})
 
 
@@ -149,10 +154,12 @@ def _launch_shape(value, work):
 
 
 def _payload_shape(payload, work):
-    bridged = type(payload) is dict and payload.get("schema") == V2_PAYLOAD_SCHEMA
-    shape._object(payload, _V2_PAYLOAD_FIELDS if bridged else _PAYLOAD_FIELDS, "release proof bootstrap")
-    for name, expected in (("schema", V2_PAYLOAD_SCHEMA if bridged else PAYLOAD_SCHEMA), ("sourceRevision", authority.SOURCE_REVISION),
-            ("purpose", PURPOSE), ("role", ROLE), ("trustMode", "trusted-host-local")):
+    retained = type(payload) is dict and payload.get("schema") == GRANT_PAYLOAD_SCHEMA
+    bridged = retained or (type(payload) is dict and payload.get("schema") == V2_PAYLOAD_SCHEMA)
+    shape._object(payload, _GRANT_PAYLOAD_FIELDS if retained else (_V2_PAYLOAD_FIELDS if bridged else _PAYLOAD_FIELDS), "release proof bootstrap")
+    selected_schema = GRANT_PAYLOAD_SCHEMA if retained else (V2_PAYLOAD_SCHEMA if bridged else PAYLOAD_SCHEMA)
+    for name, expected in (("schema", selected_schema), ("sourceRevision", authority.SOURCE_REVISION),
+            ("purpose", GRANT_PURPOSE if retained else PURPOSE), ("role", ROLE), ("trustMode", "trusted-host-local")):
         shape._literal(payload[name], expected)
     for name, maximum in (_V2_ORIGINAL_LIMITS if bridged else _ORIGINAL_LIMITS):
         record = payload[name]
@@ -171,7 +178,10 @@ def _payload_shape(payload, work):
     for value in expected["consumeBinding"].values():
         shape._digest(value)
     authorization._interval(payload, completion.MAX_RECEIPT_AGE_NS)
-    _launch_shape(payload["launch"], work)
+    if retained:
+        shape._integer(payload["requestTimeoutSeconds"], 30, minimum=1)
+    else:
+        _launch_shape(payload["launch"], work)
     return bridged
 
 
@@ -237,7 +247,8 @@ def _current_activation_on_work(original, *, completion_material, root_public_ke
 
 def _material(payload, original, root, window, bound, work, inherited, *, _current=None):
     # Bound the complete nested byte inventory before any base64 allocation.
-    bridged = payload["schema"] == V2_PAYLOAD_SCHEMA
+    retained = payload["schema"] == GRANT_PAYLOAD_SCHEMA
+    bridged = retained or payload["schema"] == V2_PAYLOAD_SCHEMA
     limits = _V2_ORIGINAL_LIMITS if bridged else _ORIGINAL_LIMITS
     original_count = sum(payload[name]["byteCount"] for name, _ in limits)
     reserved = len(original) + original_count
@@ -299,6 +310,11 @@ def _material(payload, original, root, window, bound, work, inherited, *, _curre
     guards.append(release_bootstrap.planner_bootstrap._launch_guard(rm.attestation_interval,
         rm.opening_sample, inherited, work))
     live()
+    if retained != (rm.intent_root_public_key is not None):
+        _fail("retained RI custody requires its explicit grant-only bridge")
+    intent_root = retained_authority.root_for(rm, root)
+    if retained:
+        retained_authority.require_originals(rm, raw[4], raw[1], work)
     nested = (cm.custody_bytes, cm.planner_bootstrap_bytes, cm.planner_history_custody_bytes,
         cm.receiving_history_custody_bytes, cm.authorization_bytes, cm.current_root_enrollment_bytes,
         cm.grant_enrollment_bytes, cm.authorization_enrollment_bytes, rm.planner.bootstrap_bytes)
@@ -311,17 +327,19 @@ def _material(payload, original, root, window, bound, work, inherited, *, _curre
         if not actual[0] <= interval[0] < interval[1] <= actual[1]:
             _fail("proof launch escapes genuinely admitted current authority")
     scope, expected = payload["proofScope"], payload["expectedRelease"]
-    configured = current_planner if bridged else None
+    configured = rm.planner if retained else (current_planner if bridged else None)
     configuration_digest = configured.configuration_digest if bridged else cm.configuration_digest
     generation_digest = configured.generation["digest"] if bridged else cm.generation_digest
     runtime_digest = configured.runtime_closure_digest if bridged else cm.runtime_closure_digest
     if bridged:
-        completion.receiving._same_bytes(rm.planner.bootstrap_bytes, raw[7], work,
+        completion.receiving._same_bytes(retained_authority.planner_for(rm).bootstrap_bytes, raw[7], work,
             "proof release custody differs from exact current activation planner")
+    if retained:
+        plan._same(payload["proofScope"], rm.proof_scope, work, "current custody exact independently selected RI proof scope")
     for actual, wanted in ((scope["configurationDigest"], configuration_digest),
             (scope["databaseId"], cm.database_id), (scope["generationDigest"], cm.generation_digest),
             (scope["runtimeClosureDigest"], runtime_digest),
-            (scope["producerIdentity"], cm.receiver_identity), (scope["receiverIdentity"], rm.receiver_identity),
+            (scope["producerIdentity"], rm.proof_scope["producerIdentity"] if retained else cm.receiver_identity), (scope["receiverIdentity"], rm.receiver_identity),
             (rm.planner.configuration_digest, configuration_digest),
             (rm.planner.generation["digest"], generation_digest),
             (rm.planner.runtime_closure_digest, runtime_digest),
@@ -361,7 +379,7 @@ def _material(payload, original, root, window, bound, work, inherited, *, _curre
     intent_scope = {name: scope[name] for name in ("configurationDigest", "databaseId",
         "generationDigest", "runtimeClosureDigest", "receiverIdentity")}
     intent_scope["callerId"] = payload["callerId"]
-    enrolled_intent = intent_enrollments._admit_on_work(enrollment_bytes=raw[4], root_public_key=root,
+    enrolled_intent = intent_enrollments._admit_on_work(enrollment_bytes=raw[4], root_public_key=intent_root,
         expected_scope=intent_scope, forbidden_public_keys=base, work=work)
     live()
     envelope = intent._read(raw[3], work)
@@ -373,7 +391,11 @@ def _material(payload, original, root, window, bound, work, inherited, *, _curre
         plan._same(envelope["payload"][name], wanted, work, "proof original intent target")
     plan._same(intent._digest(raw[3], work), rm.release_intent_digest, work, "proof root-pinned intent")
     intent_interval = envelope["payload"]["issuedAtEpochNs"], envelope["payload"]["expiresAtEpochNs"]
-    if not intent_interval[0] <= interval[0] < interval[1] <= intent_interval[1]:
+    if retained:
+        retained_authority.contain(rm, envelope["payload"])
+        if intent_interval[0] > live() + window[6]:
+            _fail("retained RI intent is future-issued")
+    elif not intent_interval[0] <= interval[0] < interval[1] <= intent_interval[1]:
         _fail("proof launch escapes its exact original intent")
     if not bridged:
         caller = completion.caller._admit_enrollment_on_work(
@@ -388,7 +410,7 @@ def _material(payload, original, root, window, bound, work, inherited, *, _curre
     forbidden = _unique_keys((*base, enrolled_intent.caller_public_key, cm.planner_public_key,
         cm.operation_public_key, caller.caller_public_key, grant.authorizer_public_key,
         cm.custody_material.history.planner.planner_public_key), work)
-    enrolled = proof_enrollments._admit_on_work(enrollment_bytes=raw[1], root_public_key=root,
+    enrolled = proof_enrollments._admit_on_work(enrollment_bytes=raw[1], root_public_key=intent_root,
         expected_scope=scope, forbidden_public_keys=forbidden, work=work)
     live()
     proof_pin = enrolled.payload["proofKey"]["spkiDigest"]
@@ -405,11 +427,12 @@ def _material(payload, original, root, window, bound, work, inherited, *, _curre
             enrolled_intent.payload["maximumAgeNs"]),
         min(policy["maximumClockSkewNs"], current_planner.maximum_clock_skew_ns if bridged else policy["maximumClockSkewNs"], enrolled.payload["maximumClockSkewNs"],
             enrolled_intent.payload["maximumClockSkewNs"]))
-    if payload["launch"]["requestTimeoutSeconds"] * 1_000_000_000 > window[5]:
+    launch = {"requestTimeoutSeconds": payload["requestTimeoutSeconds"]} if retained else payload["launch"]
+    if launch["requestTimeoutSeconds"] * 1_000_000_000 > window[5]:
         _fail("proof socket timeout exceeds its original processing lifetime")
     result = _ProofMaterial(original, raw[0], cm, raw[1], enrolled.proof_public_key, proof_pin,
         scope, raw[2], raw[3], raw[4], raw[5], raw[6], expected, expected["consumeBinding"],
-        payload["callerId"], payload["launch"], interval, opening, window, bound, live,
+        payload["callerId"], launch, interval, opening, window, bound, live,
         raw[7] if bridged else None, current_planner)
     live()
     return result
@@ -417,6 +440,21 @@ def _material(payload, original, root, window, bound, work, inherited, *, _curre
 
 def _verify_on_work(*, bootstrap_bytes, root_public_key, live_window, transport_deadline_ns, work,
         _current=None):
+    return _verify_original(bootstrap_bytes=bootstrap_bytes, root_public_key=root_public_key,
+        live_window=live_window, transport_deadline_ns=transport_deadline_ns, work=work,
+        _current=_current, for_grants=False)
+
+
+def _verify_grant_on_work(*, bootstrap_bytes, root_public_key, live_window, transport_deadline_ns, work,
+        _current=None):
+    """Grant-only cold admission; never accepted by a proof-signing worker."""
+    return _verify_original(bootstrap_bytes=bootstrap_bytes, root_public_key=root_public_key,
+        live_window=live_window, transport_deadline_ns=transport_deadline_ns, work=work,
+        _current=_current, for_grants=True)
+
+
+def _verify_original(*, bootstrap_bytes, root_public_key, live_window, transport_deadline_ns, work,
+        _current, for_grants):
     root = root_public_key
     authorization._public(root)
     original = authorization._original(bootstrap_bytes, MAX_BYTES, "release proof bootstrap")
@@ -430,7 +468,7 @@ def _verify_on_work(*, bootstrap_bytes, root_public_key, live_window, transport_
         envelope = _decode(original, work)
         shape._object(envelope, _ENVELOPE_FIELDS, "signed release proof bootstrap")
         schema = envelope["schema"]
-        if schema not in (SCHEMA, V2_SCHEMA):
+        if schema not in ((GRANT_SCHEMA,) if for_grants else (SCHEMA, V2_SCHEMA)):
             _fail("release proof bootstrap has an unsupported signed schema")
         shape._base64url(envelope["signatureBase64Url"], signature=True)
         _canonical(original, envelope, work)
@@ -438,7 +476,8 @@ def _verify_on_work(*, bootstrap_bytes, root_public_key, live_window, transport_
             _wire(envelope["payload"], work), capture._SharedLedger(work))
         inherited()
         bridged = _payload_shape(envelope["payload"], work)
-        shape._literal(schema, V2_SCHEMA if bridged else SCHEMA)
+        shape._literal(schema, GRANT_SCHEMA if envelope["payload"]["schema"] == GRANT_PAYLOAD_SCHEMA
+            else (V2_SCHEMA if bridged else SCHEMA))
         material = _material(envelope["payload"], original, root, window, bound, work, inherited,
             _current=_current)
         _canonical(original, envelope, work)
@@ -452,6 +491,20 @@ def _verify_on_work(*, bootstrap_bytes, root_public_key, live_window, transport_
 
 def _produce_on_work(*, payload, root_private_key, root_public_key, live_window, transport_deadline_ns, work,
         _current=None):
+    return _produce_original(payload=payload, root_private_key=root_private_key, root_public_key=root_public_key,
+        live_window=live_window, transport_deadline_ns=transport_deadline_ns, work=work,
+        _current=_current, for_grants=False)
+
+
+def _produce_grant_on_work(*, payload, root_private_key, root_public_key, live_window, transport_deadline_ns, work,
+        _current=None):
+    return _produce_original(payload=payload, root_private_key=root_private_key, root_public_key=root_public_key,
+        live_window=live_window, transport_deadline_ns=transport_deadline_ns, work=work,
+        _current=_current, for_grants=True)
+
+
+def _produce_original(*, payload, root_private_key, root_public_key, live_window, transport_deadline_ns, work,
+        _current, for_grants):
     private, root = root_private_key, root_public_key
     authorization._private(private)
     authorization._public(root)
@@ -463,7 +516,10 @@ def _produce_on_work(*, payload, root_private_key, root_public_key, live_window,
     inherited = delivery._join_current(inherited, _current, work)
     inherited()
     bridged = _payload_shape(owned, work)
-    schema = V2_SCHEMA if bridged else SCHEMA
+    retained = owned["schema"] == GRANT_PAYLOAD_SCHEMA
+    if retained != for_grants:
+        _fail("retained grant bridge and proof signing profiles cannot be substituted")
+    schema = GRANT_SCHEMA if retained else (V2_SCHEMA if bridged else SCHEMA)
     unsigned = _wire(owned, work)
     envelope = {"schema": schema, "payload": owned, "signatureBase64Url": "A" * 86}
     # Reserve the full fixed-signature envelope, including its wrapper, in the

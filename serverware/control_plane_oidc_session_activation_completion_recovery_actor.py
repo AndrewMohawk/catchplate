@@ -30,6 +30,7 @@ RELEASE_INTENT_SCHEMA = "serverware.oidcSessionActivationCompletionRecoveryRelea
 RELEASE_OPTIONS_SCHEMA = "serverware.oidcSessionActivationCompletionRecoveryReleaseOptions/v1"
 RELEASE_PATH = "/api/auth/session/activation/consume/completion/recovery/release-proof"
 DELIVERY_SCHEMA = "serverware.oidcSessionActivationCompletionRecoveryDeliveryIntent/v1"
+HISTORICAL_DELIVERY_SCHEMA = "serverware.oidcSessionActivationCompletionRecoveryDeliveryIntent/v2"
 DELIVERY_OPTIONS_SCHEMA = "serverware.oidcSessionActivationCompletionRecoveryDeliveryOptions/v1"
 DELIVERY_PATH = "/api/auth/session/activation/consume/completion/recovery/release"
 RETAINED_DELIVERY_SCHEMA = "serverware.oidcSessionActivationCompletionRecoveryRetainedDeliveryIntent/v1"
@@ -221,12 +222,12 @@ class _CompletionActorScope(actor._ActorScope):
         elif selected_consume is not None:
             actor._deny("consume history selection cannot authorize another effect purpose", 503)
         self._consume_recovery_selection = self._consume_recovery_selection_pin = selected_consume
-        if purpose == "release-intent-proof":
+        if purpose in ("release-intent-proof", "release"):
             intent_selection._require_selection(selected_intent, owner=owner, target=target, work=work)
             if selected_intent.consume_selection is not selected_consume:
                 actor._deny("retained intent selection changed its original consume prefix", 503)
         elif selected_intent is not None:
-            actor._deny("retained intent evidence cannot authorize a delivery purpose", 503)
+            actor._deny("retained intent evidence is not selected for this purpose", 503)
         self._retained_intent_selection = self._retained_intent_selection_pin = selected_intent
         self._consume_configuration = self._consume_planner_original = self._consume_configuration_pin = None
         if purpose == "consume":
@@ -258,6 +259,10 @@ class _CompletionActorScope(actor._ActorScope):
             # completion nor intent/proof preparation can authorize this use.
             self._binding["schema"] = DELIVERY_SCHEMA
             self._binding["recoveryPurpose"] = purpose
+            if selected_intent.retained_only:
+                self._binding["schema"] = HISTORICAL_DELIVERY_SCHEMA
+                self._binding["retainedIntentOnly"] = True
+                self._binding["retainedIntentRecordDigest"] = selected_intent.prefix_pins[2]
         elif purpose == "retained-release":
             # Retained-outcome authority is a separate fresh action, never a
             # fallback selected by a LIVE failure or preparation permission.
@@ -480,6 +485,8 @@ def _prepare_on_owner(owner, *, profile, request, recovery_bytes, options,
         if not selected_intent.retained_only:
             _require_proof_effect_authority(owner, parent, target, selected_consume, work)
     elif _purpose == "release":
+        selected_intent = intent_selection._select_on_owner(owner, target=target,
+            consume_selection=selected_consume, work=work, current=base_current)
         _require_live_release_authority(owner, parent, target, selected_consume, work)
     elif _purpose not in ("completion", "consume"):
         _require_current_effect_authority(owner, parent, target)

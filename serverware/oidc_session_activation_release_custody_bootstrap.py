@@ -25,6 +25,8 @@ registration = delivery.registration
 production = planner_bootstrap.configuration.production
 SCHEMA = "serverware.signedOidcSessionActivationReleaseCustody/v1"
 PAYLOAD_SCHEMA = "serverware.oidcSessionActivationReleaseCustody/v1"
+V2_SCHEMA = "serverware.signedOidcSessionActivationReleaseCustody/v2"
+V2_PAYLOAD_SCHEMA = "serverware.oidcSessionActivationReleaseCustody/v2"
 CONSUMER_ROLE = "token-release"
 ROLE = PROCESS_MODE = "oidc-session-activation-token-release"
 SERVICE_UID = SERVICE_GID = 65502
@@ -68,6 +70,13 @@ class _ReleaseCustodyMaterial:
     consume_operation: str
     attestation_interval: tuple
     opening_sample: tuple
+    intent_root_public_key: object = None
+    intent_authority_interval: tuple | None = None
+    intent_enrollment_bytes: bytes | None = None
+    proof_enrollment_bytes: bytes | None = None
+    proof_scope: dict | None = None
+    historical_custody_bytes: bytes | None = None
+    current_activation_planner: object = None
 
 
 def _fail(message):
@@ -125,6 +134,9 @@ def _scope(value, work):
 
 
 def _payload_shape(payload, work):
+    if type(payload) is dict and payload.get("schema") == V2_PAYLOAD_SCHEMA:
+        from serverware import oidc_session_activation_release_retained_authority as retained
+        return retained._shape(payload, work)
     shape._object(payload, _PAYLOAD_FIELDS, "activation release custody payload")
     for field, expected in (("schema", PAYLOAD_SCHEMA), ("sourceRevision", authority.SOURCE_REVISION),
             ("consumerRole", CONSUMER_ROLE), ("processMode", PROCESS_MODE),
@@ -174,6 +186,10 @@ def _continuity(current, work):
 
 
 def _material(payload, original, root, window, deadline, opening, work, current, *, _current=None):
+    if payload["schema"] == V2_PAYLOAD_SCHEMA:
+        from serverware import oidc_session_activation_release_retained_authority as retained
+        return retained._material(payload, original, root, window, deadline, opening,
+            work, current, _current=_current)
     record = payload["plannerBootstrap"]
     current()
     planner_original = authorization.transport._decode(record["base64Url"], record["byteCount"],
@@ -235,7 +251,9 @@ def _verify_on_work(*, custody_bytes, root_public_key, live_window, transport_de
         inherited()
         envelope = _decode(original, work)
         shape._object(envelope, _ENVELOPE_FIELDS, "signed activation release custody")
-        shape._literal(envelope["schema"], SCHEMA)
+        schema = envelope["schema"]
+        if schema not in (SCHEMA, V2_SCHEMA):
+            _fail("activation release custody signed schema is unsupported")
         shape._base64url(envelope["signatureBase64Url"], signature=True)
         if type(envelope["payload"]) is not dict:
             _fail("activation release custody payload is not an exact object")
@@ -243,10 +261,11 @@ def _verify_on_work(*, custody_bytes, root_public_key, live_window, transport_de
         payload = envelope["payload"]
         unsigned = _wire(payload, work)
         inherited()
-        capability._signature(root, envelope["signatureBase64Url"], SCHEMA, unsigned, capture._SharedLedger(work))
+        capability._signature(root, envelope["signatureBase64Url"], schema, unsigned, capture._SharedLedger(work))
         inherited()
         _canonical(original, envelope, work)
         _payload_shape(payload, work)
+        shape._literal(schema, V2_SCHEMA if payload["schema"] == V2_PAYLOAD_SCHEMA else SCHEMA)
         interval = payload["issuedAtEpochNs"], payload["expiresAtEpochNs"]
         opening = (window[1], window[0], window[2])
         _fresh(interval, work, opening=opening)
@@ -297,6 +316,9 @@ def _verify_historical_on_work(*, custody_bytes, root_public_key, live_window,
         current()
         _canonical(original, envelope, work)
         _payload_shape(payload, work)
+        # Retiring the authority of a v2 delivery outcome is a separate bridge,
+        # not this original v1 historical-custody profile.
+        shape._literal(payload["schema"], PAYLOAD_SCHEMA)
         # Match historical planner admission: actual present time, no future
         # issue and no freshness call or backdated clock for the old interval.
         if payload["issuedAtEpochNs"] > current():
@@ -332,6 +354,7 @@ def _produce_on_work(*, payload, root_private_key, root_public_key, live_window,
         inherited = delivery._join_current(inherited, _current, work)
         inherited()
         _payload_shape(owned, work)
+        schema = V2_SCHEMA if owned["schema"] == V2_PAYLOAD_SCHEMA else SCHEMA
         interval = owned["issuedAtEpochNs"], owned["expiresAtEpochNs"]
         opening = (window[1], window[0], window[2])
         _fresh(interval, work, opening=opening)
@@ -340,14 +363,14 @@ def _produce_on_work(*, payload, root_private_key, root_public_key, live_window,
         _material(owned, unsigned, root, window, deadline, opening, work, current, _current=_current)
         planner_bootstrap.keys._pair_on_work(private, root, work)
         current()
-        envelope = {"schema": SCHEMA, "payload": owned, "signatureBase64Url": "A" * 86}
+        envelope = {"schema": schema, "payload": owned, "signatureBase64Url": "A" * 86}
         envelope_size, envelope_nodes = work.measure(envelope)
         payload_size, payload_nodes = work.measure(owned)
         if envelope_size > MAX_BYTES or envelope_nodes > MAX_NODES:
             _fail("activation release custody signed output exceeds its fixed bound")
         work.charge(input_bytes=envelope_size + 2 * payload_size + production._SIGNATURE_TRANSPORT_BYTES,
             json_nodes=envelope_nodes + payload_nodes)
-        message = plan._ascii(plan._frame(SCHEMA, (unsigned,), work), work)
+        message = plan._ascii(plan._frame(schema, (unsigned,), work), work)
         current()
         signature = production._sign_and_verify(private, root, message, work)
         current()

@@ -170,7 +170,6 @@ from serverware.auth import (
     oidc_session_token_digest,
     require_admin,
     require_role,
-    rotate_generated_admin_token,
     validate_csrf_request,
 )
 from serverware.crypto import decrypt_secret, encrypt_credential_lease_envelope, encrypt_secret
@@ -7884,54 +7883,41 @@ def rbac_deprovision_subject(
 
 @app.post("/api/control-plane/tokens/admin/rotate")
 def control_plane_admin_token_rotate(
+    request: Request,
+    response: Response,
     payload: AdminTokenRotateRequest | None = Body(default=None),
     identity: AdminIdentity = Depends(require_role("admin")),
 ) -> dict[str, Any]:
+    from serverware.control_plane_admin_token_publication import rotate_on_request
+
+    del identity  # The owner freshly authenticates this exact retained request.
     request_payload = (
         payload
         if isinstance(payload, AdminTokenRotateRequest)
         else AdminTokenRotateRequest()
     )
-    payload_digest = _admin_token_rotation_payload_digest(request_payload)
-    mfa = _require_control_plane_mutation_mfa(
-        action="control_plane.token.rotate",
-        resource_id="admin-token",
-        payload_digest=payload_digest,
-        mfa=request_payload.mfa,
-        identity=identity,
-    )
-    two_person = _require_control_plane_two_person(
-        action="control_plane.token.rotate",
-        resource_id="admin-token",
-        payload_digest=payload_digest,
-        mfa=request_payload.mfa,
-        identity=identity,
-        request={"token": "admin", "reason": request_payload.reason},
-    )
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Pragma"] = "no-cache"
+    return rotate_on_request(request, request_payload)
+
+
+@app.get("/api/control-plane/tokens/admin/publication")
+def control_plane_admin_token_publication(
+    response: Response,
+    identity: AdminIdentity = Depends(require_role("admin")),
+) -> dict[str, Any]:
+    from serverware.control_plane_admin_token_publication import inspect_publication
+
+    del identity
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Pragma"] = "no-cache"
     try:
-        rotated = rotate_generated_admin_token()
-    except RuntimeError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    db.record_audit_event(
-        "control_plane.token_rotated",
-        {
-            "token": "admin",
-            "token_path": rotated["token_path"],
-            "previous_token_sha256": rotated["previous_token_sha256"],
-            "new_token_sha256": rotated["token_sha256"],
-            "reason": request_payload.reason,
-            "control_plane_mfa": mfa,
-            "control_plane_approval": two_person,
-            "payload_digest": payload_digest,
-        },
-        actor_id=identity.user_id,
-    )
-    return {
-        "ok": True,
-        "token": rotated["token"],
-        "tokenSha256": rotated["token_sha256"],
-        "tokenPath": rotated["token_path"],
-    }
+        return inspect_publication()
+    except (RuntimeError, ValueError, OSError, KeyError, TypeError) as exc:
+        raise HTTPException(status_code=409, detail={
+            "error": "admin_token_publication_not_inspectable",
+            "automaticRetryAllowed": False,
+        }) from exc
 
 
 @app.get("/api/control-plane/approvals")

@@ -264,11 +264,11 @@ def _acquire_grants(active):
     selected, work = active.inputs, active._work
     wire = grants_transport
     raw = active.proof._originals
-    # Only current R2 proof/intent originals enter the LIVE issuer. The R0/R1
-    # controls were genuinely admitted separately, never substituted for these
-    # current parent grants or used to select an archived transport endpoint.
+    # The independently selected RI originals are evidence, including when RI
+    # is retired. Only the current, fixed issuer endpoint may issue LIVE grants;
+    # no archive endpoint, retired signing key or proof retry is selected here.
     inputs.bookkeeping._same_bytes(raw[3], selected.proof_policy.enrollment_bytes,
-        work, "completion delivery current independently enrolled proof")
+        work, "completion delivery independently selected proof enrollment")
     lengths = (len(wire.PURPOSE), len(wire.release.LIVE_PURPOSE), len(raw[2]), len(raw[3]),
         len(active.intent.intent_bytes), len(selected.intent_policy.enrollment_bytes),
         len(selected.old_token_bytes), live.clients.delivery.ENVELOPE_BYTES)

@@ -1096,6 +1096,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_oidc_session_activation_completion_transport.py \
 	serverware/authority_oidc_session_activation_completion_response.py \
 	serverware/oidc_session_activation_release_custody_bootstrap.py \
+	serverware/oidc_session_activation_release_retained_authority.py \
 	serverware/oidc_session_activation_release_intent.py \
 	serverware/oidc_session_activation_release_intent_enrollment.py \
 	serverware/authority_oidc_session_activation_release_intent.py \
@@ -1250,6 +1251,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/control_plane_workload_identity_client.py \
 	serverware/control_plane_workload_identity_approval.py \
 	serverware/control_plane_approval_verification.py \
+	serverware/control_plane_admin_token_publication.py \
 	serverware/control_plane_workload_identity_routes.py \
 	serverware/portal_workload_issuance.py \
 	serverware_agent_trust/workload_identity_submission.py \
@@ -3361,6 +3363,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_oidc_session_activation_completion_transport.py \
 				serverware/authority_oidc_session_activation_completion_response.py \
 				serverware/oidc_session_activation_release_custody_bootstrap.py \
+				serverware/oidc_session_activation_release_retained_authority.py \
 				serverware/oidc_session_activation_release_intent.py \
 				serverware/oidc_session_activation_release_intent_enrollment.py \
 				serverware/authority_oidc_session_activation_release_intent.py \
@@ -3515,6 +3518,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/control_plane_workload_identity_client.py \
 				serverware/control_plane_workload_identity_approval.py \
 				serverware/control_plane_approval_verification.py \
+				serverware/control_plane_admin_token_publication.py \
 				serverware/control_plane_workload_identity_routes.py \
 				serverware/portal_workload_issuance.py \
 				serverware_agent_trust/workload_identity_originals.py \
@@ -3796,6 +3800,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-egress-installation-authorization.v3.schema.json \
 				schemas/native-network-attachment-authorization.v1.schema.json \
 				schemas/native-network-attachment-observation.v1.schema.json \
+				schemas/oidc-session-activation-retained-ri-delivery.v1.schema.json \
 				schemas/native-egress-observation.v1.schema.json \
 				schemas/native-egress-launch-manifest.v1.schema.json \
 				schemas/native-ca-installation-receipt.v1.schema.json \

@@ -655,7 +655,7 @@ def _initialize(*, work, live_window, transport_deadline_ns, delivery_current, r
             proof = material.policy_material.proof_material
             enrolled = producer.state._admit_enrollment_on_work(
                 enrollment_bytes=proof.completion_material.current_root_enrollment_bytes,
-                root_public_key=root, work=work)
+                root_public_key=proof.completion_material.evidence_root_public_key, work=work)
             current()
             age, skew = enrolled.payload["maxControlAgeNs"], enrolled.payload["maxClockSkewNs"]
             window = bootstrap.processing._narrow(window, deadline_epoch_ns=window[3],

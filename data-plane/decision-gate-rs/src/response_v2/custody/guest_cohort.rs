@@ -95,6 +95,7 @@ pub struct StartedGuestCohort {
     children: Vec<RoleProcess>,
     inspector: Arc<InitializedGuestInspector>,
     public_artifacts: super::guest_public_artifacts::Owner,
+    role_keys: Option<super::guest_role_provisioning::Owner>,
     deadline: u64,
 }
 
@@ -104,6 +105,18 @@ impl StartedGuestCohort {
     pub fn launch(configuration: GuestCohortConfiguration, prepared: &Prepared,
         inspector: Arc<InitializedGuestInspector>)
         -> Result<Arc<Self>, String> {
+        Self::launch_inner(configuration,None,prepared,inspector)
+    }
+    /// Explicit additive boot path. No missing-file detection or fallback
+    /// silently promotes the old preprovisioned launch profile.
+    pub fn launch_with_role_keys(configuration: GuestCohortConfiguration,
+        provisioner: super::guest_role_provisioning::GuestRoleKeyProvisionerConfiguration,
+        prepared:&Prepared,inspector:Arc<InitializedGuestInspector>) -> Result<Arc<Self>,String> {
+        Self::launch_inner(configuration,Some(provisioner),prepared,inspector)
+    }
+    fn launch_inner(configuration:GuestCohortConfiguration,
+        provisioner:Option<super::guest_role_provisioning::GuestRoleKeyProvisionerConfiguration>,
+        prepared:&Prepared,inspector:Arc<InitializedGuestInspector>)->Result<Arc<Self>,String>{
         configuration.validate()?;
         prepared.check()?;
         inspector.require_preparation(prepared)?;
@@ -150,6 +163,10 @@ impl StartedGuestCohort {
         // Only public signed generation metadata is shared. Private state and
         // credential directories keep their existing exact 0700 boundaries.
         let originals: Vec<_> = pending.iter().map(|entry| &entry.original).collect();
+        let role_keys=match provisioner {
+            Some(configuration)=>Some(super::guest_role_provisioning::Owner::provision(configuration,prepared,&originals)?),
+            None=>None,
+        };
         let public_artifacts = super::guest_public_artifacts::Owner::prepare(prepared, &originals)
             .map_err(|e| e.to_string())?;
         drop(originals);
@@ -188,7 +205,7 @@ impl StartedGuestCohort {
         }
         prepared.check()?;
         if kernel::now()? >= startup_deadline { return Err("guest cohort completion exceeded original startup admission".into()); }
-        let result = Arc::new(Self { association, image, roles, inspector, public_artifacts, deadline: prepared.deadline(),
+        let result = Arc::new(Self { association, image, roles, inspector, public_artifacts, role_keys, deadline: prepared.deadline(),
             children: std::mem::take(&mut children.processes) });
         result.check()?;
         Ok(result)
@@ -196,11 +213,13 @@ impl StartedGuestCohort {
     pub fn deadline_boottime_ns(&self) -> u64 { self.deadline }
     pub fn require_serving(&self, owner: &Owner) -> Result<(), String> {
         self.association.require(owner)?;
+        if let Some(keys)=&self.role_keys {keys.require_serving(owner)?;}
         self.inspector.require_serving(owner)?;
         self.check()
     }
     pub fn check(&self) -> Result<(), String> {
         if kernel::now()? >= self.deadline { return Err("guest cohort original serving lifetime expired".into()); }
+        if let Some(keys)=&self.role_keys {keys.check()?;}
         self.inspector.check()?;
         self.image.check()?;
         self.public_artifacts.check().map_err(|e| e.to_string())?;

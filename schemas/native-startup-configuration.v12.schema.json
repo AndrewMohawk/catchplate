@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-startup-configuration.v12.schema.json",
+  "title": "Explicit native guest role-key provisioning startup",
+  "$comment": "Exact v11 retained owners plus required guestRoleKeyProvisioner. This data-only selection does not provide independent keys, KMS policy, generation authority or runtime acceptance. Actual retained seven-role delivery admission and the same original privileged preparation precede purpose-fixed provisioning and cohort launch. Earlier profiles do not infer this selection from missing files.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion",
+    "gate",
+    "native",
+    "shadow",
+    "responseObservationV2",
+    "policy",
+    "enrollmentAuthorizer",
+    "enrollmentSetupAuthorizer",
+    "enrollmentProxyEndpoint",
+    "credentialCurrentness",
+    "secretBroker",
+    "measuredAudit",
+    "encryptedServiceTokens",
+    "measuredRefresh",
+    "guestInspector",
+    "measuredIssuance",
+    "guestCohort",
+    "measuredCleanup",
+    "guestRoleKeyProvisioner"
+  ],
+  "properties": {
+    "apiVersion": {
+      "const": "serverware.nativeStartupConfiguration/v12"
+    },
+    "gate": {
+      "$ref": "native-startup-configuration.v11.schema.json#/properties/gate"
+    },
+    "native": {
+      "$ref": "native-startup-configuration.v11.schema.json#/properties/native"
+    },
+    "shadow": {
+      "$ref": "native-startup-configuration.v11.schema.json#/properties/shadow"
+    },
+    "responseObservationV2": {
+      "$ref": "native-startup-configuration.v11.schema.json#/properties/responseObservationV2"
+    },
+    "policy": {
+      "$ref": "native-startup-configuration.v11.schema.json#/properties/policy"
+    },
+    "enrollmentAuthorizer": {
+      "$ref": "native-startup-configuration.v11.schema.json#/properties/enrollmentAuthorizer"
+    },
+    "enrollmentSetupAuthorizer": {
+      "$ref": "native-startup-configuration.v11.schema.json#/properties/enrollmentSetupAuthorizer"
+    },
+    "enrollmentProxyEndpoint": {
+      "$ref": "native-startup-configuration.v11.schema.json#/properties/enrollmentProxyEndpoint"
+    },
+    "credentialCurrentness": {
+      "$ref": "native-startup-configuration.v11.schema.json#/properties/credentialCurrentness"
+    },
+    "secretBroker": {
+      "$ref": "native-startup-configuration.v11.schema.json#/properties/secretBroker"
+    },
+    "measuredAudit": {
+      "$ref": "native-startup-configuration.v11.schema.json#/properties/measuredAudit"
+    },
+    "encryptedServiceTokens": {
+      "$ref": "native-startup-configuration.v11.schema.json#/properties/encryptedServiceTokens"
+    },
+    "measuredRefresh": {
+      "$ref": "native-startup-configuration.v11.schema.json#/properties/measuredRefresh"
+    },
+    "guestInspector": {
+      "$ref": "native-startup-configuration.v11.schema.json#/properties/guestInspector"
+    },
+    "measuredIssuance": {
+      "$ref": "native-startup-configuration.v11.schema.json#/properties/measuredIssuance"
+    },
+    "guestCohort": {
+      "$ref": "native-startup-configuration.v11.schema.json#/properties/guestCohort"
+    },
+    "measuredCleanup": {
+      "$ref": "native-startup-configuration.v11.schema.json#/properties/measuredCleanup"
+    },
+    "guestRoleKeyProvisioner": {
+      "$ref": "native-guest-role-key-provisioner.v1.schema.json#/$defs/configuration"
+    }
+  }
+}

@@ -1,7 +1,7 @@
 //! Purpose-fixed measured helper custody. No private RSA/KEK/DEK is returned.
 //! Configuration is an independently admitted input, not authority from a hash.
 mod process;
-mod image;
+pub(crate) mod image;
 pub mod service_tokens;
 mod refresh;
 mod cleanup;
@@ -35,8 +35,8 @@ const IMAGE_PATH: &str = "/opt/serverware/native-broker-runtime.squashfs";
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ImageConfiguration {
-    profile: String, image_path: String, image_sha256: String,
-    interpreter_sha256: String, helper_sha256: String,
+    pub(crate) profile: String, pub(crate) image_path: String, pub(crate) image_sha256: String,
+    pub(crate) interpreter_sha256: String, pub(crate) helper_sha256: String,
 }
 
 #[derive(Deserialize, Serialize)]

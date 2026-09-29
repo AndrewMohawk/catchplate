@@ -62,7 +62,9 @@ def sha(data: bytes) -> str:
 
 
 class Closure:
-    def __init__(self, epoch: int) -> None:
+    def __init__(self, epoch: int, *, purpose: str = "broker") -> None:
+        require(purpose in {"broker", "role-keys"}, "unknown fixed runtime closure purpose")
+        self.root = ROOT if purpose == "broker" else Path("/role-key-runtime")
         self.epoch = epoch
         self.files: dict[str, dict[str, object]] = {}
         self.elf_sources: list[Path] = []
@@ -79,7 +81,7 @@ class Closure:
             return
         self.total += len(data)
         require(self.total <= MAX_TOTAL and len(self.files) < MAX_FILES, "runtime closure exceeds its bound")
-        destination = ROOT / name[1:]
+        destination = self.root / name[1:]
         destination.parent.mkdir(parents=True, exist_ok=True)
         with destination.open("xb") as stream:
             stream.write(data)
@@ -147,16 +149,16 @@ class Closure:
     def finish(self) -> list[dict[str, object]]:
         # Build a cache for this root only: /usr/local/lib is not a default
         # glibc search directory. -X prevents ldconfig-created symlink aliases.
-        configuration = ROOT / "etc/ld.so.conf"
+        configuration = self.root / "etc/ld.so.conf"
         configuration.parent.mkdir()
         configuration.write_text("/usr/local/lib\n/lib/x86_64-linux-gnu\n/usr/lib/x86_64-linux-gnu\n", encoding="ascii")
-        subprocess.run(["/sbin/ldconfig", "-i", "-X", "-r", str(ROOT)], env=ENV, check=True, timeout=30)
-        for path in (configuration, ROOT / "etc/ld.so.cache"):
+        subprocess.run(["/sbin/ldconfig", "-i", "-X", "-r", str(self.root)], env=ENV, check=True, timeout=30)
+        for path in (configuration, self.root / "etc/ld.so.cache"):
             path.chmod(0o444)
             os.utime(path, (self.epoch, self.epoch))
-            self.files["/" + str(path.relative_to(ROOT))] = {
+            self.files["/" + str(path.relative_to(self.root))] = {
                 "sha256": sha(original(path)), "size": path.stat().st_size, "mode": "0444"}
-        for directory, subdirs, names in os.walk(ROOT, followlinks=False):
+        for directory, subdirs, names in os.walk(self.root, followlinks=False):
             path = Path(directory)
             require(not path.is_symlink(), "runtime root contains a symlink")
             path.chmod(0o555)
@@ -164,7 +166,7 @@ class Closure:
             for name in subdirs + names:
                 require(not (path / name).is_symlink(), "runtime root contains a symlink")
             for name in names:
-                require("/" + str((path / name).relative_to(ROOT)) in self.files,
+                require("/" + str((path / name).relative_to(self.root)) in self.files,
                         "runtime tool introduced an unrecorded file")
         return [{"path": path, **entry} for path, entry in sorted(self.files.items())]
 

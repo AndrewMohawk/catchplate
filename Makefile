@@ -1295,6 +1295,11 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/control_plane_broker_startup.py \
 	scripts/authority/sign_control_plane_broker_startup.py \
 	scripts/package_native_broker_runtime.py \
+	serverware/native_role_key_contract.py \
+	serverware/native_role_key_provisioner.py \
+	scripts/native_role_key_kms_parent.py \
+	scripts/package_native_role_key_runtime.py \
+	scripts/prepare_native_role_keys.py \
 	scripts/seal_native_service_tokens.py \
 	scripts/sign_native_guest_credential_delivery.py \
 	serverware/data_plane_audit_authority.py \
@@ -3680,6 +3685,11 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/control_plane_broker_startup.py \
 				scripts/authority/sign_control_plane_broker_startup.py \
 				scripts/package_native_broker_runtime.py \
+				serverware/native_role_key_contract.py \
+				serverware/native_role_key_provisioner.py \
+				scripts/native_role_key_kms_parent.py \
+				scripts/package_native_role_key_runtime.py \
+				scripts/prepare_native_role_keys.py \
 				scripts/seal_native_service_tokens.py \
 				scripts/sign_native_guest_credential_delivery.py \
 				serverware/data_plane_audit_authority.py \
@@ -3956,6 +3966,9 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/response_v2/custody/guest_role/privileges.rs \
 				data-plane/decision-gate-rs/src/response_v2/custody/guest_cohort.rs \
 				data-plane/decision-gate-rs/src/response_v2/custody/guest_cohort_process.rs \
+				data-plane/decision-gate-rs/src/response_v2/custody/guest_role_provisioning.rs \
+				data-plane/decision-gate-rs/src/response_v2/custody/guest_role_provisioning_files.rs \
+				data-plane/decision-gate-rs/src/response_v2/custody/guest_role_provisioning_process.rs \
 				data-plane/decision-gate-rs/src/response_v2/integration.rs \
 				data-plane/decision-gate-rs/src/response_v2/mod.rs \
 				data-plane/decision-gate-rs/src/response_v2/native_config.rs \
@@ -4200,6 +4213,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-startup-configuration.v9.schema.json \
 				schemas/native-startup-configuration.v10.schema.json \
 				schemas/native-startup-configuration.v11.schema.json \
+				schemas/native-startup-configuration.v12.schema.json \
+				schemas/native-guest-role-key-provisioner.v1.schema.json \
 				schemas/native-oauth-measured-cleanup.v1.schema.json \
 				schemas/native-oauth-measured-exchange.v1.schema.json \
 				schemas/native-guest-cohort.v1.schema.json \

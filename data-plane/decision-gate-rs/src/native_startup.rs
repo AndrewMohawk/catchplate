@@ -139,13 +139,14 @@ pub(super) fn run(
     v2_config: ResponseObservationV2ClientConfig,
     guest_inspector: Option<serverware_decision_gate::GuestInspectorConfiguration>,
     guest_cohort: Option<serverware_decision_gate::GuestCohortConfiguration>,
+    guest_role_key_provisioner: Option<serverware_decision_gate::GuestRoleKeyProvisionerConfiguration>,
     public_identity_stdout: bool,
 ) -> Result<(), String> {
     // Retain the original unshared lifetime through every cold error as well
     // as serving. Attachments finish before any Arc clone is given to runtime.
     let mut startup = NativeRuntimeLifetimeV1::new(parameters.deadline_boottime_ns)?;
     let result = run_owned(&mut startup, inputs, parameters, shadow_config, v2_config,
-        guest_inspector, guest_cohort, public_identity_stdout);
+        guest_inspector, guest_cohort, guest_role_key_provisioner, public_identity_stdout);
     startup.stop();
     let cleanup = startup.finish_guest_inspector();
     result?;
@@ -160,6 +161,7 @@ fn run_owned(
     v2_config: ResponseObservationV2ClientConfig,
     guest_inspector: Option<serverware_decision_gate::GuestInspectorConfiguration>,
     guest_cohort: Option<serverware_decision_gate::GuestCohortConfiguration>,
+    guest_role_key_provisioner: Option<serverware_decision_gate::GuestRoleKeyProvisionerConfiguration>,
     public_identity_stdout: bool,
 ) -> Result<(), String> {
     // This guard starts no tasks and grants no new interval. Runtime serving
@@ -207,6 +209,9 @@ fn run_owned(
     if guest_cohort.is_some() && guest_inspector.is_none() {
         return Err("native guest cohort requires the actual cold inspector owner".into());
     }
+    if guest_role_key_provisioner.is_some() && guest_cohort.is_none() {
+        return Err("native role-key provisioning requires the actual cold guest cohort".into());
+    }
     let prepared_device = if let Some(config) = inputs.secret_broker.take() {
         use serverware_decision_gate::{native_serving_privileges,
             native_secret_broker_v1::PreparedBroker,
@@ -217,8 +222,12 @@ fn run_owned(
             NativeRuntimeLifetimeV1::bind_guest_inspector(startup, Arc::clone(&inspector))?;
             inspector.require_response_client(&v2_config.generation_id, v2_config.expected_uid)?;
             if let Some(configuration) = guest_cohort {
-                let cohort = serverware_decision_gate::StartedGuestCohort::launch(configuration,
-                    &privileged, inspector)?;
+                let cohort = match guest_role_key_provisioner {
+                    Some(provisioner) => serverware_decision_gate::StartedGuestCohort::launch_with_role_keys(
+                        configuration, provisioner, &privileged, inspector)?,
+                    None => serverware_decision_gate::StartedGuestCohort::launch(
+                        configuration, &privileged, inspector)?,
+                };
                 NativeRuntimeLifetimeV1::bind_guest_cohort(startup, cohort)?;
             }
         }

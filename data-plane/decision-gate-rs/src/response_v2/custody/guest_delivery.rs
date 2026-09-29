@@ -474,6 +474,19 @@ pub(crate) struct PreparedRoleDelivery {
     payload: Payload, scoped: ScopedCustodyServiceConfig, pid: libc::pid_t,
     configuration_sha256: String, delivery_sha256: String,
 }
+// Public commitments only. This value cannot construct or replace an admitted
+// delivery; the provisioner also retains/rechecks the actual owners.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ProvisioningSeed {
+    pub(crate) service_role: CustodyServiceRole,
+    pub(crate) logical_role: String,
+    pub(crate) uid: u32,
+    pub(crate) gid: u32,
+    pub(crate) path: PathBuf,
+    pub(crate) seed_sha256: String,
+    pub(crate) public_key_sha256: String,
+}
 #[cfg(target_os="linux")]
 impl PreparedRoleDelivery {
     pub(crate) fn open(configuration_path: &Path, configuration_sha256: &str,
@@ -519,6 +532,30 @@ impl PreparedRoleDelivery {
             .validate(&self.config)
     }
     pub(crate) fn delivery_sha256(&self) -> &str { &self.delivery_sha256 }
+    pub(crate) fn provisioning_seeds(&self) -> Result<Vec<ProvisioningSeed>, V2RuntimeError> {
+        self.check()?;
+        if self.config.custody_topology.processes.iter().any(|role|
+            role.uid == 64989 || role.gid == 64989)
+            || self.payload.credentials.role_keys.len() != self.scoped.process.role_keys.len()
+        { return Err(fail("provisioner identity or complete signed role-key inventory differs")); }
+        let mut names = std::collections::BTreeSet::new();
+        let mut result = Vec::new();
+        for key in &self.payload.credentials.role_keys {
+            let descriptor = self.scoped.process.role_keys.iter().find(|item| item.logical_role == key.logical_role)
+                .ok_or_else(|| fail("unassigned provisioning logical role"))?;
+            if !names.insert(&key.logical_role) || key.public_key.path != descriptor.public_key_path
+                || key.secret_key.path != descriptor.secret_key_path || key.public_key.sha256 != descriptor.public_key_sha256
+                || !super::is_sha256_digest(&key.secret_key.sha256)
+            { return Err(fail("provisioning key paths or independent public commitments differ")); }
+            super::guest_public_artifacts::require_private_path(&key.secret_key.path)?;
+            result.push(ProvisioningSeed {service_role:self.scoped.role, logical_role:key.logical_role.clone(),
+                uid:self.scoped.process.uid, gid:self.scoped.process.gid, path:key.secret_key.path.clone(),
+                seed_sha256:key.secret_key.sha256.clone(), public_key_sha256:key.public_key.sha256.clone()});
+        }
+        result.sort_by(|a,b| a.logical_role.cmp(&b.logical_role));
+        self.check()?;
+        Ok(result)
+    }
     pub(crate) fn boot_id(&self) -> &str { &self.payload.boot_id }
     pub(crate) fn startup_deadline_boottime_ns(&self) -> Result<u64,V2RuntimeError> {
         ns(&self.payload.deadline_boottime_ns)

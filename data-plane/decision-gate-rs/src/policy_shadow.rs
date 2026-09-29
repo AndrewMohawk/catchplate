@@ -40,6 +40,7 @@ mod policy_custody;
 
 #[cfg(target_os = "linux")]
 pub(crate) use policy_custody::{
+    PreparedGuestServiceDelivery,
     install_policy_shadow_custody_generation_from_retained_file,
     run_bounded_cleanup_helper_from_env,
     run_cleanup_authorization_consumer_from_env,

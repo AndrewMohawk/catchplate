@@ -262,7 +262,7 @@ pub(super) struct ProductionProofEndpointConfigV4 {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct ProductionRpcRuntimeConfigV4 {
+pub(super) struct ProductionRpcRuntimeConfigV4 {
     api_version: String,
     startup_timeout_millis: u64,
     listener_socket_path: PathBuf,
@@ -1824,6 +1824,18 @@ pub(super) fn run_production_rpc_service<A>(
 where
     A: ExistingFiveServiceProductionAuthoritiesV4 + 'static,
 {
+    run_production_rpc_service_scoped(sessions, bridge, super::Bootstrap::Host)
+}
+
+fn run_production_rpc_service_scoped<A>(
+    sessions: Vec<AuthenticatedInheritedSeqpacket>,
+    bridge: ProductionRpcServiceBridgeV4<A>,
+    bootstrap: super::Bootstrap,
+) -> Result<(), ServiceRunnerError>
+where
+    A: ExistingFiveServiceProductionAuthoritiesV4 + 'static,
+{
+    bootstrap.check()?;
     if sessions.len() != PRODUCTION_RPC_SESSION_COUNT
         || !bridge.recovery_ready()
     {
@@ -1839,10 +1851,11 @@ where
     for ordinal in 0..PRODUCTION_RPC_WORKER_COUNT {
         let bridge = Arc::clone(&bridge);
         let receiver = Arc::clone(&receiver);
+        let bootstrap = bootstrap.clone();
         workers.push(
             thread::Builder::new()
                 .name(format!("policy-custody-production-worker-{ordinal}"))
-                .spawn(move || production_worker(bridge, receiver))
+                .spawn(move || production_worker(bridge, receiver, bootstrap))
                 .map_err(|_| {
                     ServiceRunnerError::invalid(
                         "production RPC worker could not be created",
@@ -1853,10 +1866,11 @@ where
     let mut session_threads = Vec::with_capacity(sessions.len());
     for (ordinal, session) in sessions.into_iter().enumerate() {
         let sender = sender.clone();
+        let bootstrap = bootstrap.clone();
         session_threads.push(
             thread::Builder::new()
                 .name(format!("policy-custody-production-session-{ordinal}"))
-                .spawn(move || serve_session(session, sender))
+                .spawn(move || serve_session(session, sender, bootstrap))
                 .map_err(|_| {
                     ServiceRunnerError::invalid(
                         "production RPC session could not be created",
@@ -1885,6 +1899,7 @@ where
 fn production_worker<A>(
     bridge: Arc<Mutex<ProductionRpcServiceBridgeV4<A>>>,
     receiver: Arc<Mutex<Receiver<ProductionRpcJob>>>,
+    bootstrap: super::Bootstrap,
 ) -> Result<(), ServiceRunnerError>
 where
     A: ExistingFiveServiceProductionAuthoritiesV4,
@@ -1899,6 +1914,9 @@ where
             }
         };
         let Ok(job) = job else { return Ok(()) };
+        bootstrap.check()?;
+        let request: ProductionRpcRequestV4 = decode_canonical_frame(&job.exact_request)?;
+        bootstrap.require_deadline(request.deadline_boottime_nanos)?;
         let result = match bridge.lock() {
             Ok(mut bridge) => bridge.handle_exact_request(&job.exact_request),
             Err(_) => Err(ServiceRunnerError::invalid(
@@ -1912,22 +1930,25 @@ where
 fn serve_session(
     session: AuthenticatedInheritedSeqpacket,
     sender: SyncSender<ProductionRpcJob>,
+    bootstrap: super::Bootstrap,
 ) -> Result<(), ServiceRunnerError> {
     loop {
         let packet = loop {
+            bootstrap.check()?;
             if let Some(packet) = session.try_receive(0)? {
                 break packet;
             }
             wait_for_session_fd(
                 session.progress_fd().as_raw_fd(),
                 libc::POLLIN,
-                None,
+                bootstrap.receive_deadline(),
             )?;
         };
         session.revalidate_peer()?;
         let request: ProductionRpcRequestV4 =
             decode_canonical_frame(&packet.frame)?;
         request.validate().map_err(ServiceRunnerError::invalid)?;
+        bootstrap.require_deadline(request.deadline_boottime_nanos)?;
         require_live_deadline(request.deadline_boottime_nanos)?;
         let (completion, completed) = sync_channel(1);
         match sender.try_send(ProductionRpcJob {
@@ -1947,6 +1968,7 @@ fn serve_session(
             }
         }
         let exact_response = loop {
+            bootstrap.check()?;
             match completed.try_recv() {
                 Ok(result) => break result?,
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
@@ -1964,6 +1986,7 @@ fn serve_session(
             }
         };
         loop {
+            bootstrap.check()?;
             if session.try_send(&exact_response, &[], 0)? {
                 break;
             }
@@ -2059,10 +2082,19 @@ pub(in crate::policy_shadow::policy_custody) fn run_production_rpc_service_from_
     super::close_unlisted_ambient_descriptors()?;
     let loaded: super::LoadedConfig<ProductionRpcRuntimeConfigV4> =
         super::load_config(PRODUCTION_RPC_CONFIG_CREDENTIAL)?;
+    let activation = super::take_activation_fds()?;
+    run_production_rpc_service_loaded(loaded, super::Bootstrap::Host, activation)
+}
+
+pub(super) fn run_production_rpc_service_loaded(
+    loaded: super::LoadedConfig<ProductionRpcRuntimeConfigV4>,
+    bootstrap: super::Bootstrap,
+    mut activation: BTreeMap<String, OwnedFd>,
+) -> Result<(), ServiceRunnerError> {
+    bootstrap.check()?;
     loaded.value.validate()?;
     let startup_deadline =
-        super::startup_deadline(loaded.value.startup_timeout_millis)?;
-    let mut activation = super::take_activation_fds()?;
+        bootstrap.deadline(loaded.value.startup_timeout_millis)?;
     let mut required_names = vec![
         PRODUCTION_RPC_LISTENER_FD_NAME,
         PRODUCTION_RPC_JOURNAL_FD_NAME,
@@ -2271,10 +2303,10 @@ pub(in crate::policy_shadow::policy_custody) fn run_production_rpc_service_from_
         )?);
     }
     drop(listener);
-    super::notify_systemd_ready_status(
+    bootstrap.ready_status(
         "policy-custody production RPC recovered, authenticated, and ready",
     )?;
-    run_production_rpc_service(facade_sessions, bridge)
+    run_production_rpc_service_scoped(facade_sessions, bridge, bootstrap)
 }
 
 fn load_pinned_endpoint(

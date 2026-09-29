@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/policy-custody-guest-delivery.v1.schema.json",
+  "$ref": "#/$defs/delivery",
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "ns": { "type": "string", "pattern": "^[1-9][0-9]{0,19}$" },
+    "path": { "type": "string", "pattern": "^/[^\\u0000]+$", "maxLength": 4096 },
+    "publicKey": { "type": "string", "pattern": "^[A-Za-z0-9_-]{43}$" },
+    "role": { "enum": ["durable-recovery-store", "cleanup-authorization-consumer", "recovery-target-provider", "current-signature-authority", "bounded-cleanup-helper", "production-bridge"] },
+    "authority": {
+      "type": "object", "additionalProperties": false,
+      "required": ["publicKeyBase64url", "keyId"],
+      "properties": { "publicKeyBase64url": { "$ref": "#/$defs/publicKey" }, "keyId": { "$ref": "#/$defs/sha256" } }
+    },
+    "configuration": {
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "authority", "serviceRole", "uid", "gid"],
+      "properties": {
+        "apiVersion": { "const": "serverware.policyCustodyGuestConfiguration/v1" },
+        "authority": { "$ref": "#/$defs/authority" }, "serviceRole": { "$ref": "#/$defs/role" },
+        "uid": { "type": "integer", "minimum": 1, "maximum": 4294967294, "not": { "enum": [64988, 64989, 64990, 65534] } },
+        "gid": { "type": "integer", "minimum": 1, "maximum": 4294967294, "not": { "enum": [64988, 64989, 64990, 65534] } }
+      }
+    },
+    "pin": {
+      "type": "object", "additionalProperties": false, "required": ["path", "sha256"],
+      "properties": { "path": { "$ref": "#/$defs/path" }, "sha256": { "$ref": "#/$defs/sha256" } }
+    },
+    "credential": {
+      "type": "object", "additionalProperties": false,
+      "required": ["name", "original", "length", "signing"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "maxLength": 255 },
+        "original": { "$ref": "#/$defs/pin" }, "length": { "type": "integer", "minimum": 1, "maximum": 4194304 },
+        "signing": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/authority" }] }
+      }
+    },
+    "activation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["name", "fd", "device", "inode", "mode", "uid", "gid"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "maxLength": 255 },
+        "fd": { "type": "integer", "minimum": 6, "maximum": 69 },
+        "device": { "type": "integer", "minimum": 0 }, "inode": { "type": "integer", "minimum": 1 },
+        "mode": { "type": "integer", "minimum": 1 }, "uid": { "type": "integer", "minimum": 0 }, "gid": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "payload": {
+      "type": "object", "additionalProperties": false,
+      "required": ["configurationSha256", "authorityKeyId", "serviceRole", "uid", "gid", "bootIdBase64url", "timeNamespaceDevice", "timeNamespaceInode", "issuedAtBoottimeNs", "startupDeadlineBoottimeNs", "lifetimeDeadlineBoottimeNs", "invocationId", "runtimeConfig", "credentials", "activation"],
+      "properties": {
+        "configurationSha256": { "$ref": "#/$defs/sha256" }, "authorityKeyId": { "$ref": "#/$defs/sha256" },
+        "serviceRole": { "$ref": "#/$defs/role" }, "uid": { "type": "integer", "minimum": 1 }, "gid": { "type": "integer", "minimum": 1 },
+        "bootIdBase64url": { "type": "string", "pattern": "^[A-Za-z0-9_-]{22}$" },
+        "timeNamespaceDevice": { "type": "integer", "minimum": 1 }, "timeNamespaceInode": { "type": "integer", "minimum": 1 },
+        "issuedAtBoottimeNs": { "$ref": "#/$defs/ns" }, "startupDeadlineBoottimeNs": { "$ref": "#/$defs/ns" }, "lifetimeDeadlineBoottimeNs": { "$ref": "#/$defs/ns" },
+        "invocationId": { "type": "string", "pattern": "^[0-9a-f]{32}$", "not": { "const": "00000000000000000000000000000000" } },
+        "runtimeConfig": { "$ref": "#/$defs/pin" },
+        "credentials": { "type": "array", "minItems": 1, "maxItems": 64, "items": { "$ref": "#/$defs/credential" } },
+        "activation": { "type": "array", "minItems": 1, "maxItems": 64, "items": { "$ref": "#/$defs/activation" } }
+      }
+    },
+    "delivery": {
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "payload", "signatureBase64url"],
+      "properties": {
+        "apiVersion": { "const": "serverware.policyCustodyGuestDelivery/v1" },
+        "payload": { "$ref": "#/$defs/payload" }, "signatureBase64url": { "type": "string", "pattern": "^[A-Za-z0-9_-]{86}$" }
+      }
+    },
+    "notice": {
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "deliverySha256", "serviceRole", "invocationId", "phase"],
+      "properties": {
+        "apiVersion": { "const": "serverware.policyCustodyGuestStartup/v1" }, "deliverySha256": { "$ref": "#/$defs/sha256" },
+        "serviceRole": { "$ref": "#/$defs/role" }, "invocationId": { "type": "string", "pattern": "^[0-9a-f]{32}$" }, "phase": { "const": "constructed" }
+      }
+    }
+  }
+}

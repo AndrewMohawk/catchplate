@@ -1,9 +1,11 @@
 //! TrustedHostNoTee policy-custody service bootstrap and serving loops.
 //!
-//! These runners intentionally accept only systemd-owned inputs: one named,
+//! Host runners accept only systemd-owned inputs: one named,
 //! inherited AF_UNIX SOCK_SEQPACKET listener, named retained capability FDs,
 //! and read-only credentials beneath CREDENTIALS_DIRECTORY. They never bind or
 //! connect a socket path and never accept an ambient secret-path override.
+//! The separate guest delivery owner supplies held signed originals to the same
+//! real constructors; it does not relabel their trust reports as measured.
 
 pub(super) mod bounded_cleanup_helper;
 pub(super) mod cleanup_authorization_consumer;
@@ -13,6 +15,9 @@ pub(super) mod durable_recovery_store;
 pub(super) mod production;
 pub(super) mod recovery_target_provider;
 pub(super) mod wire;
+pub(super) mod guest;
+mod guest_original;
+use guest::Bootstrap;
 
 use self::bounded_cleanup_helper::{
     CleanupHelperServerProgress, CleanupHelperSigningAuthorityV3,
@@ -331,7 +336,6 @@ impl RuntimeConfigHeaderV3 {
         validate_credential_name(
             &self.authority_history_manifest_credential,
         )?;
-        self.observed_service_invocation_id_sha256()?;
         for (name, identity) in
             &self.activation_directory_identities
         {
@@ -812,8 +816,9 @@ impl HandshakeCurrentHeadPin {
     }
 }
 
-struct CredentialDirectory {
-    descriptor: OwnedFd,
+enum CredentialDirectory {
+    Host { descriptor: OwnedFd },
+    Guest(Arc<guest::Delivery>),
 }
 
 impl CredentialDirectory {
@@ -851,7 +856,7 @@ impl CredentialDirectory {
         }
         let descriptor = unsafe { OwnedFd::from_raw_fd(raw) };
         validate_credential_directory(descriptor.as_fd())?;
-        Ok(Self { descriptor })
+        Ok(Self::Host { descriptor })
     }
 
     fn read(
@@ -860,6 +865,10 @@ impl CredentialDirectory {
         maximum_bytes: usize,
     ) -> Result<Vec<u8>, ServiceRunnerError> {
         validate_credential_name(name)?;
+        let descriptor = match self {
+            Self::Guest(owner) => return owner.read(name, maximum_bytes),
+            Self::Host { descriptor } => descriptor,
+        };
         if maximum_bytes == 0 {
             return Err(ServiceRunnerError::invalid(
                 "credential byte bound must be nonzero",
@@ -872,7 +881,7 @@ impl CredentialDirectory {
         })?;
         let raw = unsafe {
             libc::openat(
-                self.descriptor.as_raw_fd(),
+                descriptor.as_raw_fd(),
                 name.as_ptr(),
                 libc::O_RDONLY
                     | libc::O_CLOEXEC
@@ -959,6 +968,7 @@ impl CredentialDirectory {
     fn read_signing_key(
         &self,
         name: &str,
+        expected_key_id: &Sha256Digest,
     ) -> Result<(SigningKey, Sha256Digest), ServiceRunnerError> {
         let mut bytes = self.read(name, 32)?;
         if bytes.len() != 32 {
@@ -973,6 +983,9 @@ impl CredentialDirectory {
         bytes.fill(0);
         let key = SigningKey::from_bytes(&secret);
         secret.fill(0);
+        if let Self::Guest(owner) = self {
+            owner.signing(name, &key, expected_key_id)?;
+        }
         Ok((key, credential_sha256))
     }
 
@@ -1029,17 +1042,26 @@ pub(crate) fn run_durable_recovery_store_from_env(
     close_unlisted_ambient_descriptors()?;
     let loaded: LoadedConfig<DurableRecoveryStoreRuntimeConfigV3> =
         load_config(DURABLE_RECOVERY_STORE_CONFIG_CREDENTIAL)?;
+    loaded.value.runtime.observed_service_invocation_id_sha256()?;
+    let activation = take_activation_fds()?;
+    run_durable_recovery_store_loaded(loaded, Bootstrap::Host, activation)
+}
+
+fn run_durable_recovery_store_loaded(
+    loaded: LoadedConfig<DurableRecoveryStoreRuntimeConfigV3>,
+    bootstrap: Bootstrap, mut activation: BTreeMap<String, OwnedFd>,
+) -> Result<(), ServiceRunnerError> {
+    bootstrap.check()?;
     loaded.value.runtime.validate()?;
     let _authority_history =
         loaded.value.runtime.load_authority_history(
             &loaded.credentials,
             TrustedHostServiceRoleV3::DurableRecoveryStore,
         )?;
-    let startup_deadline = startup_deadline(
+    let startup_deadline = bootstrap.deadline(
         loaded.value.runtime.startup_timeout_millis,
     )?;
     let expected_peer = loaded.value.runtime.expected_peer.checked()?;
-    let mut activation = take_activation_fds()?;
     require_exact_activation_names(
         &activation,
         &[LISTENER_FD_NAME, JOURNAL_FD_NAME],
@@ -1071,7 +1093,7 @@ pub(crate) fn run_durable_recovery_store_from_env(
 
     let (signing_key, signing_credential_sha256) = loaded
         .credentials
-        .read_signing_key(&loaded.value.signing_key_credential)?;
+        .read_signing_key(&loaded.value.signing_key_credential, &loaded.value.signing_key_id)?;
     let current_head_authority = loaded
         .credentials
         .read_verifying_key(
@@ -1120,10 +1142,7 @@ pub(crate) fn run_durable_recovery_store_from_env(
         TrustedHostServiceRoleV3::DurableRecoveryStore,
         loaded.value.runtime.operation_generation,
         loaded.value.runtime.service_restart_epoch,
-        loaded
-            .value
-            .runtime
-            .observed_service_invocation_id_sha256()?,
+        bootstrap.invocation(&loaded.value.runtime)?,
         loaded.value.runtime.readiness_epoch,
         loaded.value.runtime.durability_worker_queue_depth,
         loaded
@@ -1193,6 +1212,7 @@ pub(crate) fn run_durable_recovery_store_from_env(
     serve_exact_frame_authority(
         connection.as_fd(),
         &authenticated,
+        bootstrap,
         TrustedHostServiceRoleV3::DurableRecoveryStore,
         loaded
             .value
@@ -1210,6 +1230,16 @@ pub(crate) fn run_cleanup_authorization_consumer_from_env(
     let loaded: LoadedConfig<
         CleanupAuthorizationConsumerRuntimeConfigV3,
     > = load_config(CLEANUP_AUTHORIZATION_CONSUMER_CONFIG_CREDENTIAL)?;
+    loaded.value.runtime.observed_service_invocation_id_sha256()?;
+    let activation = take_activation_fds()?;
+    run_cleanup_authorization_consumer_loaded(loaded, Bootstrap::Host, activation)
+}
+
+fn run_cleanup_authorization_consumer_loaded(
+    loaded: LoadedConfig<CleanupAuthorizationConsumerRuntimeConfigV3>,
+    bootstrap: Bootstrap, mut activation: BTreeMap<String, OwnedFd>,
+) -> Result<(), ServiceRunnerError> {
+    bootstrap.check()?;
     loaded.value.runtime.validate()?;
     let _authority_history =
         loaded.value.runtime.load_authority_history(
@@ -1217,11 +1247,10 @@ pub(crate) fn run_cleanup_authorization_consumer_from_env(
             TrustedHostServiceRoleV3::
                 CleanupAuthorizationConsumer,
         )?;
-    let startup_deadline = startup_deadline(
+    let startup_deadline = bootstrap.deadline(
         loaded.value.runtime.startup_timeout_millis,
     )?;
     let expected_peer = loaded.value.runtime.expected_peer.checked()?;
-    let mut activation = take_activation_fds()?;
     require_exact_activation_names(
         &activation,
         &[LISTENER_FD_NAME, STATE_FD_NAME, JOURNAL_FD_NAME],
@@ -1262,7 +1291,7 @@ pub(crate) fn run_cleanup_authorization_consumer_from_env(
 
     let (signing_key, signing_credential_sha256) = loaded
         .credentials
-        .read_signing_key(&loaded.value.signing_key_credential)?;
+        .read_signing_key(&loaded.value.signing_key_credential, &loaded.value.signing_key_id)?;
     let signing_spki_sha256 =
         verifying_key_spki_sha256(&signing_key.verifying_key())?;
     let current_head_authority = loaded
@@ -1357,10 +1386,7 @@ pub(crate) fn run_cleanup_authorization_consumer_from_env(
             loaded.value.genesis_predecessor_receipt_sha256,
             loaded.value.runtime.operation_generation,
             loaded.value.runtime.service_restart_epoch,
-            loaded
-                .value
-                .runtime
-                .observed_service_invocation_id_sha256()?,
+            bootstrap.invocation(&loaded.value.runtime)?,
             loaded.value.runtime.readiness_epoch,
             loaded.value.runtime.durability_worker_queue_depth,
             loaded
@@ -1419,6 +1445,7 @@ pub(crate) fn run_cleanup_authorization_consumer_from_env(
     serve_exact_frame_authority(
         connection.as_fd(),
         &authenticated,
+        bootstrap,
         TrustedHostServiceRoleV3::CleanupAuthorizationConsumer,
         loaded
             .value
@@ -1435,17 +1462,26 @@ pub(crate) fn run_recovery_target_provider_from_env(
     close_unlisted_ambient_descriptors()?;
     let loaded: LoadedConfig<RecoveryTargetProviderRuntimeConfigV3> =
         load_config(RECOVERY_TARGET_PROVIDER_CONFIG_CREDENTIAL)?;
+    loaded.value.runtime.observed_service_invocation_id_sha256()?;
+    let activation = take_activation_fds()?;
+    run_recovery_target_provider_loaded(loaded, Bootstrap::Host, activation)
+}
+
+fn run_recovery_target_provider_loaded(
+    loaded: LoadedConfig<RecoveryTargetProviderRuntimeConfigV3>,
+    bootstrap: Bootstrap, mut activation: BTreeMap<String, OwnedFd>,
+) -> Result<(), ServiceRunnerError> {
+    bootstrap.check()?;
     loaded.value.runtime.validate()?;
     let _authority_history =
         loaded.value.runtime.load_authority_history(
             &loaded.credentials,
             TrustedHostServiceRoleV3::RecoveryTargetProvider,
         )?;
-    let startup_deadline = startup_deadline(
+    let startup_deadline = bootstrap.deadline(
         loaded.value.runtime.startup_timeout_millis,
     )?;
     let expected_peer = loaded.value.runtime.expected_peer.checked()?;
-    let mut activation = take_activation_fds()?;
     require_exact_activation_names(
         &activation,
         &[LISTENER_FD_NAME, JOURNAL_FD_NAME],
@@ -1483,7 +1519,7 @@ pub(crate) fn run_recovery_target_provider_from_env(
         HandshakeCurrentHeadPin::from_endpoint_pin(&signing_pin);
     let (signing_key, signing_credential_sha256) = loaded
         .credentials
-        .read_signing_key(&loaded.value.signing_key_credential)?;
+        .read_signing_key(&loaded.value.signing_key_credential, &signing_pin.current_key_authorization.signing_key_id)?;
     let lineage_authority_verifying_key = loaded
         .credentials
         .read_verifying_key(
@@ -1497,10 +1533,7 @@ pub(crate) fn run_recovery_target_provider_from_env(
             journal,
             loaded.value.runtime.operation_generation,
             loaded.value.runtime.service_restart_epoch,
-            loaded
-                .value
-                .runtime
-                .observed_service_invocation_id_sha256()?,
+            bootstrap.invocation(&loaded.value.runtime)?,
             loaded.value.runtime.readiness_epoch,
             loaded.value.runtime.durability_worker_queue_depth,
             loaded
@@ -1600,17 +1633,19 @@ pub(crate) fn run_recovery_target_provider_from_env(
             Ok(prepared)
         },
     )?;
-    notify_systemd_ready(
+    bootstrap.ready(
         TrustedHostServiceRoleV3::RecoveryTargetProvider,
     )?;
     loop {
-        let packet = receive_packet(connection.as_raw_fd(), None)?;
+        bootstrap.check()?;
+        let packet = receive_packet(connection.as_raw_fd(), bootstrap.receive_deadline())?;
         let request: ServiceRequestFrameV3 =
             decode_canonical_frame(&packet.frame)?;
         let deadline = request
             .binding
             .deadline
             .absolute_boottime_nanos();
+        bootstrap.require_deadline(deadline)?;
         let prepared = worker.execute(
             ReceivedSeqpacket {
                 frame: packet.frame,
@@ -1644,6 +1679,16 @@ pub(crate) fn run_current_signature_authority_from_env(
     let loaded: LoadedConfig<
         CurrentSignatureAuthorityRuntimeConfigV3,
     > = load_config(CURRENT_SIGNATURE_AUTHORITY_CONFIG_CREDENTIAL)?;
+    loaded.value.runtime.observed_service_invocation_id_sha256()?;
+    let activation = take_activation_fds()?;
+    run_current_signature_authority_loaded(loaded, Bootstrap::Host, activation)
+}
+
+fn run_current_signature_authority_loaded(
+    loaded: LoadedConfig<CurrentSignatureAuthorityRuntimeConfigV3>,
+    bootstrap: Bootstrap, mut activation: BTreeMap<String, OwnedFd>,
+) -> Result<(), ServiceRunnerError> {
+    bootstrap.check()?;
     loaded.value.runtime.validate()?;
     let _authority_history =
         loaded.value.runtime.load_authority_history(
@@ -1658,11 +1703,10 @@ pub(crate) fn run_current_signature_authority_from_env(
             "current-signature subject count is outside its fixed bound",
         ));
     }
-    let startup_deadline = startup_deadline(
+    let startup_deadline = bootstrap.deadline(
         loaded.value.runtime.startup_timeout_millis,
     )?;
     let expected_peer = loaded.value.runtime.expected_peer.checked()?;
-    let mut activation = take_activation_fds()?;
     require_exact_activation_names(
         &activation,
         &[LISTENER_FD_NAME],
@@ -1694,6 +1738,7 @@ pub(crate) fn run_current_signature_authority_from_env(
         .credentials
         .read_signing_key(
             &loaded.value.service_signing_key_credential,
+            &service_signing_pin.current_key_authorization.signing_key_id,
         )?;
     let mut current_subjects =
         Vec::with_capacity(loaded.value.current_subjects.len());
@@ -1710,10 +1755,7 @@ pub(crate) fn run_current_signature_authority_from_env(
             service_signing_credential_sha256,
             loaded.value.runtime.operation_generation,
             loaded.value.runtime.service_restart_epoch,
-            loaded
-                .value
-                .runtime
-                .observed_service_invocation_id_sha256()?,
+            bootstrap.invocation(&loaded.value.runtime)?,
             loaded.value.runtime.readiness_epoch,
             loaded.value.runtime.durability_worker_queue_depth,
             loaded
@@ -1769,17 +1811,20 @@ pub(crate) fn run_current_signature_authority_from_env(
         0,
         startup_deadline,
     )?;
-    notify_systemd_ready(
+    bootstrap.ready(
         TrustedHostServiceRoleV3::CurrentSignatureAuthority,
     )?;
     loop {
+        bootstrap.check()?;
         authenticated.revalidate_peer()?;
-        let packet = receive_packet(connection.as_raw_fd(), None)?;
+        let packet = receive_packet(connection.as_raw_fd(), bootstrap.receive_deadline())?;
         if !packet.rights.is_empty() {
             return Err(ServiceRunnerError::invalid(
                 "current-signature request carried SCM_RIGHTS",
             ));
         }
+        let request: ServiceRequestFrameV3 = decode_canonical_frame(&packet.frame)?;
+        bootstrap.require_deadline(request.binding.deadline.absolute_boottime_nanos())?;
         let prepared = server.handle_authenticated_packet(
             &authenticated,
             ReceivedSeqpacket {
@@ -1808,17 +1853,26 @@ pub(crate) fn run_bounded_cleanup_helper_from_env(
     close_unlisted_ambient_descriptors()?;
     let loaded: LoadedConfig<BoundedCleanupHelperRuntimeConfigV3> =
         load_config(BOUNDED_CLEANUP_HELPER_CONFIG_CREDENTIAL)?;
+    loaded.value.runtime.observed_service_invocation_id_sha256()?;
+    let activation = take_activation_fds()?;
+    run_bounded_cleanup_helper_loaded(loaded, Bootstrap::Host, activation)
+}
+
+fn run_bounded_cleanup_helper_loaded(
+    loaded: LoadedConfig<BoundedCleanupHelperRuntimeConfigV3>,
+    bootstrap: Bootstrap, mut activation: BTreeMap<String, OwnedFd>,
+) -> Result<(), ServiceRunnerError> {
+    bootstrap.check()?;
     loaded.value.runtime.validate()?;
     let _authority_history =
         loaded.value.runtime.load_authority_history(
             &loaded.credentials,
             TrustedHostServiceRoleV3::BoundedCleanupHelper,
         )?;
-    let startup_deadline = startup_deadline(
+    let startup_deadline = bootstrap.deadline(
         loaded.value.runtime.startup_timeout_millis,
     )?;
     let expected_peer = loaded.value.runtime.expected_peer.checked()?;
-    let mut activation = take_activation_fds()?;
     require_exact_activation_names(
         &activation,
         &[LISTENER_FD_NAME, JOURNAL_FD_NAME],
@@ -1854,7 +1908,7 @@ pub(crate) fn run_bounded_cleanup_helper_from_env(
 
     let (signing_key, signing_credential_sha256) = loaded
         .credentials
-        .read_signing_key(&loaded.value.signing_key_credential)?;
+        .read_signing_key(&loaded.value.signing_key_credential, &loaded.value.signing_key_id)?;
     let current_head_authority = loaded
         .credentials
         .read_verifying_key(
@@ -1881,10 +1935,7 @@ pub(crate) fn run_bounded_cleanup_helper_from_env(
         TrustedHostServiceRoleV3::BoundedCleanupHelper,
         loaded.value.runtime.operation_generation,
         loaded.value.runtime.service_restart_epoch,
-        loaded
-            .value
-            .runtime
-            .observed_service_invocation_id_sha256()?,
+        bootstrap.invocation(&loaded.value.runtime)?,
         loaded.value.runtime.readiness_epoch,
         loaded.value.runtime.durability_worker_queue_depth,
         loaded
@@ -1976,30 +2027,31 @@ pub(crate) fn run_bounded_cleanup_helper_from_env(
         startup_deadline,
     )?;
     drop(handshake_transport);
-    notify_systemd_ready(
+    bootstrap.ready(
         TrustedHostServiceRoleV3::BoundedCleanupHelper,
     )?;
 
     loop {
-        match server.try_serve_one_bounded_blocking()? {
+        bootstrap.check()?;
+        match server.try_serve_one_bounded_blocking_scoped(&bootstrap)? {
             CleanupHelperServerProgress::ReplySent => {}
             CleanupHelperServerProgress::Idle => {
                 wait_for_fd(
                     server.progress_fd().as_raw_fd(),
                     libc::POLLIN,
-                    server.next_deadline_boottime_nanos()?,
+                    server.next_deadline_boottime_nanos()?.or(bootstrap.receive_deadline()),
                 )?;
             }
             CleanupHelperServerProgress::ReplyPending => {
                 wait_for_fd(
                     server.progress_fd().as_raw_fd(),
                     libc::POLLOUT,
-                    server.next_deadline_boottime_nanos()?,
+                    server.next_deadline_boottime_nanos()?.or(bootstrap.receive_deadline()),
                 )?;
             }
             CleanupHelperServerProgress::EffectPending => {
                 let deadline =
-                    server.next_deadline_boottime_nanos()?;
+                    server.next_deadline_boottime_nanos()?.or(bootstrap.receive_deadline());
                 if let Some(progress) = server.effect_progress_fd() {
                     wait_for_fd(
                         progress.as_raw_fd(),
@@ -2385,6 +2437,7 @@ where
 fn serve_exact_frame_authority<F>(
     connection: BorrowedFd<'_>,
     authenticated: &AuthenticatedInheritedSeqpacket,
+    bootstrap: Bootstrap,
     service_role: TrustedHostServiceRoleV3,
     maximum_work_nanos: u64,
     mut handle: F,
@@ -2404,10 +2457,11 @@ where
             Ok(response)
         },
     )?;
-    notify_systemd_ready(service_role)?;
+    bootstrap.ready(service_role)?;
     loop {
+        bootstrap.check()?;
         authenticated.revalidate_peer()?;
-        let packet = receive_packet(connection.as_raw_fd(), None)?;
+        let packet = receive_packet(connection.as_raw_fd(), bootstrap.receive_deadline())?;
         if !packet.rights.is_empty() {
             return Err(ServiceRunnerError::invalid(
                 "descriptor-free authority request carried SCM_RIGHTS",
@@ -2417,6 +2471,7 @@ where
             decode_canonical_frame(&packet.frame)?;
         let request_deadline =
             request.binding.deadline.absolute_boottime_nanos();
+        bootstrap.require_deadline(request_deadline)?;
         let response = worker.execute(
             packet.frame,
             request_deadline,

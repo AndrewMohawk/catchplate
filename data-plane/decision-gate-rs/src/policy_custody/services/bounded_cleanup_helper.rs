@@ -2770,6 +2770,21 @@ impl TrustedHostNoTeeBoundedCleanupHelperServer {
     pub(super) fn try_serve_one_bounded_blocking(
         &mut self,
     ) -> Result<CleanupHelperServerProgress, ServiceError> {
+        self.try_serve_one_bounded_blocking_scoped(&super::Bootstrap::Host)
+    }
+
+    pub(super) fn try_serve_one_bounded_blocking_scoped(
+        &mut self,
+        bootstrap: &super::Bootstrap,
+    ) -> Result<CleanupHelperServerProgress, ServiceError> {
+        bootstrap.check().map_err(|_| ServiceError::Invalid(
+            "cleanup helper guest originals or lifetime unavailable",
+        ))?;
+        if let Some(deadline) = self.next_deadline_boottime_nanos()? {
+            bootstrap.require_deadline(deadline).map_err(|_| ServiceError::Invalid(
+                "cleanup progression exceeds original guest lifetime",
+            ))?;
+        }
         self.peer_authentication.revalidate_peer()?;
         if let Some(reply) = self.pending_reply.take() {
             if try_send_seqpacket(self.socket.as_raw_fd(), &reply)? {
@@ -2789,7 +2804,7 @@ impl TrustedHostNoTeeBoundedCleanupHelperServer {
                 }
                 EffectProgress::Complete(reply) => {
                     self.pending_reply = Some(reply);
-                    return self.try_serve_one_bounded_blocking();
+                    return self.try_serve_one_bounded_blocking_scoped(bootstrap);
                 }
             }
         }
@@ -2801,9 +2816,9 @@ impl TrustedHostNoTeeBoundedCleanupHelperServer {
         else {
             return Ok(CleanupHelperServerProgress::Idle);
         };
-        if let Some(reply) = self.handle_packet(packet)? {
+        if let Some(reply) = self.handle_packet(packet, bootstrap)? {
             self.pending_reply = Some(reply);
-            return self.try_serve_one_bounded_blocking();
+            return self.try_serve_one_bounded_blocking_scoped(bootstrap);
         }
         Ok(CleanupHelperServerProgress::EffectPending)
     }
@@ -2811,9 +2826,14 @@ impl TrustedHostNoTeeBoundedCleanupHelperServer {
     fn handle_packet(
         &mut self,
         packet: ServerPacket,
+        bootstrap: &super::Bootstrap,
     ) -> Result<Option<Vec<u8>>, ServiceError> {
         let request: ServiceRequestFrameV3 =
             decode_canonical_frame(&packet.frame)?;
+        bootstrap.require_deadline(request.binding.deadline.absolute_boottime_nanos())
+            .map_err(|_| ServiceError::Invalid(
+                "cleanup request exceeds original guest lifetime",
+            ))?;
         let payload: PolicyCustodyServiceRequestV3 =
             request.decode_payload()?;
         payload.validate()?;

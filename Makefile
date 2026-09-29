@@ -4041,6 +4041,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/native_shadow_workers/wire.rs \
 				data-plane/decision-gate-rs/src/native_shadow_workers/worker.rs \
 				data-plane/decision-gate-rs/src/policy_shadow_generation_native.rs \
+				data-plane/decision-gate-rs/src/policy_custody/services/guest.rs \
+				data-plane/decision-gate-rs/src/policy_custody/services/guest_original.rs \
 				data-plane/decision-gate-rs/src/native_staging.rs \
 				data-plane/decision-gate-rs/src/native_staging_v1.rs \
 				data-plane/decision-gate-rs/src/native_staging_v1/config.rs \
@@ -4318,6 +4320,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-oauth-measured-setup.v1.schema.json \
 				schemas/native-gate-cgroup.v1.schema.json \
 				schemas/native-shadow-workers.v1.schema.json \
+				schemas/policy-custody-guest-delivery.v1.schema.json \
 				schemas/native-guest-role-key-provisioner.v1.schema.json \
 				schemas/native-oauth-measured-cleanup.v1.schema.json \
 				schemas/native-oauth-measured-pending-retirement.v1.schema.json \

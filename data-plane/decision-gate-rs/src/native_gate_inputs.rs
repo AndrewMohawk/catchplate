@@ -56,6 +56,11 @@ pub(super) fn validate_native_gate_inputs(inputs: &GateStateInputs,
 /// Pure preflight for cold configuration, usable before opening NSM, generating
 /// keys or contacting startup services. Actual-owner checks remain separate.
 pub(super) fn validate_native_gate_static_inputs(inputs: &GateStateInputs) -> Result<(), String> {
+    let measured = inputs.measured_audit.is_some();
+    if measured != inputs.secret_broker.is_some() {
+        return Err("native measured audit and secret broker must share the explicit v5 cold profile".to_owned());
+    }
+    if let Some(config) = &inputs.secret_broker { config.validate()?; }
     if !inputs.is_production {
         return Err("native bootstrap requires production configuration".to_owned());
     }
@@ -110,9 +115,9 @@ pub(super) fn validate_native_gate_static_inputs(inputs: &GateStateInputs) -> Re
     validate_configured_internal_service_tokens(true, &configured_tokens)?;
     let mut required_tokens = vec![
         ("credential lease token", &inputs.credential_lease_token),
-        ("audit token", &inputs.audit_token),
         ("management token", &inputs.management_token),
     ];
+    if !measured { required_tokens.push(("audit token", &inputs.audit_token)); }
     if inputs.atomic_release_authorization_enabled {
         required_tokens.push(("release authorization token", &inputs.release_authorization_token));
         if inputs.release_authorization_base_url.is_none() {
@@ -128,7 +133,10 @@ pub(super) fn validate_native_gate_static_inputs(inputs: &GateStateInputs) -> Re
         }
     }
     validate_internal_service_tokens(true, &required_tokens)?;
-    if inputs.audit_url.is_some() != inputs.audit_token.is_some() {
+    if measured && (inputs.audit_url.is_none() || inputs.audit_token.is_some()) {
+        return Err("native v5 measured audit requires its URL and forbids a bearer token".to_owned());
+    }
+    if !measured && inputs.audit_url.is_some() != inputs.audit_token.is_some() {
         return Err("native audit URL and token must be supplied together".to_owned());
     }
     if inputs.credential_lease_url.is_none() {

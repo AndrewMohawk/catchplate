@@ -8,6 +8,9 @@ mod response_v2;
 mod gate_state_init;
 mod control_plane_client_config;
 mod native_gate_bootstrap;
+mod native_audit_owner;
+mod native_audit_transport;
+mod native_secret_broker;
 mod native_gate_inputs;
 mod native_proof_signer;
 mod native_response_attestation;
@@ -2559,6 +2562,7 @@ impl MitmAuthority {
 }
 
 struct GateState {
+    native_secret_broker: Option<Mutex<serverware_decision_gate::native_secret_broker_v1::Owner>>,
     upstream_dispatch_authority: UpstreamDispatchAuthority,
     credential_currentness: credential_currentness::LocalHolder,
     #[cfg(test)]
@@ -2605,6 +2609,7 @@ struct GateState {
     native_runtime_lifetime: Option<Arc<NativeRuntimeLifetimeV1>>,
     native_enrollment_authorizer: Option<Arc<native_enrollment_authorizer::NativeEnrollmentAuthorizer>>,
     audit_client: Client,
+    measured_audit: Option<Mutex<native_audit_owner::Owner>>,
     credential_lease_client: Client,
     audit_url: Option<String>,
     credential_lease_token: Option<String>,
@@ -5334,6 +5339,18 @@ struct CredentialLeaseSet {
 enum CredentialLeaseEntry {
     GenerationMetadata(CredentialLeaseGenerationEntry),
     DispatchSecret(CredentialLeaseSecretEntry),
+    BrokerCiphertext(CredentialLeaseBrokerEntry),
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CredentialLeaseBrokerEntry {
+    credential_id: String,
+    credential_version: u64,
+    metadata_sha256: String,
+    metadata: BTreeMap<String, Value>,
+    encrypted_credential: serverware_decision_gate::native_secret_broker_v1::EncryptedCredential,
+    storage_metadata: String,
 }
 
 #[derive(Deserialize)]
@@ -19957,6 +19974,12 @@ fn exactly_one_matching_credential_profile(
                 &entry.metadata,
             )
         }
+        CredentialLeaseEntry::BrokerCiphertext(entry) => {
+            if purpose != CredentialLeasePurpose::DispatchSecret || profile != ReleaseProfile::Native {
+                return Err("broker ciphertext requires the selected Native dispatch profile".to_owned());
+            }
+            (entry.credential_id.as_str(), entry.metadata_sha256.as_str(), &entry.metadata)
+        }
     };
     if entries.next().is_some()
         || credential_id != scope.credential_id
@@ -20036,6 +20059,7 @@ fn decrypt_credential_lease_envelope(
         recipient_nonce_bytes,
         body,
         requested_ttl_seconds,
+        None,
     )
 }
 
@@ -20053,8 +20077,12 @@ fn decrypt_credential_lease_envelope_with_owner(
     recipient_nonce_bytes: &[u8; 32],
     body: &[u8],
     requested_ttl_seconds: u64,
+    broker: Option<(&GateState, Option<Instant>)>,
 ) -> Result<CredentialLeaseMaterial, String> {
     let profile = recipient_private_key.profile();
+    if broker.is_some() && profile != ReleaseProfile::Native {
+        return Err("broker ciphertext cannot use an ordinary recipient".to_owned());
+    }
     if let Some(authority) = request_authority {
         validate_credential_lease_request_authority_profile(authority, profile)?;
     }
@@ -20068,7 +20096,8 @@ fn decrypt_credential_lease_envelope_with_owner(
     let request_authority_sha256 =
         request_authority.map(credential_lease_request_authority_sha256);
     let request_bound = request_authority.is_some();
-    let expected_envelope_version = native_lease_profile::envelope_version(request_bound, profile);
+    let expected_envelope_version = if broker.is_some() { native_secret_broker::envelope_version(request_bound) }
+        else { native_lease_profile::envelope_version(request_bound, profile) };
     let envelope_fields_v2 = [
         "apiVersion",
         "algorithm",
@@ -20291,7 +20320,8 @@ fn decrypt_credential_lease_envelope_with_owner(
     }
     let payload: CredentialLeaseSet = serde_json::from_value(payload_value.into_value())
         .map_err(|_| "parse_decrypted_credential_lease_set_contract".to_string())?;
-    let expected_set_version = native_lease_profile::set_version(request_bound, profile);
+    let expected_set_version = if broker.is_some() { native_secret_broker::set_version(request_bound) }
+        else { native_lease_profile::set_version(request_bound, profile) };
     if payload.api_version != expected_set_version
         || payload.purpose != purpose
         || payload.request_binding_sha256 != request_binding_sha256
@@ -20341,7 +20371,7 @@ fn decrypt_credential_lease_envelope_with_owner(
             ))
         }
         CredentialLeaseEntry::DispatchSecret(entry) => {
-            if entry.credential_version == 0 || entry.secret.is_empty() {
+            if broker.is_some() || entry.credential_version == 0 || entry.secret.is_empty() {
                 return Err(
                     "credential lease entry has invalid version or empty secret".to_string()
                 );
@@ -20361,6 +20391,21 @@ fn decrypt_credential_lease_envelope_with_owner(
                     expires_at_monotonic,
                 },
             )))
+        }
+        CredentialLeaseEntry::BrokerCiphertext(entry) => {
+            let (state, deadline) = broker.ok_or("old lease profile rejects encrypted broker entries")?;
+            if entry.credential_version == 0 || entry.credential_version > i64::MAX as u64 {
+                return Err("native broker credential version invalid".to_owned());
+            }
+            let secret = native_secret_broker::open(state, snapshot, scope, &entry, request_binding_sha256,
+                request_authority, release_authorization, payload.issued_at_epoch_ms, payload.expires_at_epoch_ms,
+                deadline.map(|original| original.min(expires_at_monotonic)))?;
+            Ok(CredentialLeaseMaterial::DispatchSecret(Box::new(SecretLease {
+                profile, scope: scope.clone(), version: entry.credential_version, secret,
+                metadata: entry.metadata, metadata_sha256: entry.metadata_sha256, policy_hash: snapshot.hash.clone(),
+                request_authority: request_authority.cloned(), release_authorization: release_authorization.cloned(),
+                expires_at_epoch_ms: expires_at_ms, expires_at_monotonic,
+            })))
         }
     }
 }
@@ -20574,15 +20619,16 @@ fn credential_lease_request_binding_sha256_profile(
 fn credential_lease_request_wire_value(
     request: &CredentialLeaseRequest,
 ) -> Result<Value, String> {
-    credential_lease_request_wire_value_profile(request, ReleaseProfile::Legacy)
+    credential_lease_request_wire_value_profile(request, ReleaseProfile::Legacy, false)
 }
 
 fn credential_lease_request_wire_value_profile(
-    request: &CredentialLeaseRequest, profile: ReleaseProfile,
+    request: &CredentialLeaseRequest, profile: ReleaseProfile, broker: bool,
 ) -> Result<Value, String> {
     let request_bound = request.request_authority.is_some();
-    let uncontrolled = native_lease_profile::request_version(false, profile);
-    let controlled = native_lease_profile::request_version(true, profile);
+    if broker && profile != ReleaseProfile::Native { return Err("broker request requires native owner".to_owned()); }
+    let uncontrolled = if broker { native_secret_broker::request_version(false) } else { native_lease_profile::request_version(false, profile) };
+    let controlled = if broker { native_secret_broker::request_version(true) } else { native_lease_profile::request_version(true, profile) };
     if profile.has_approver_policy() && (request.recipient_attestation.as_ref().and_then(|value| value.get("apiVersion"))
         .and_then(Value::as_str) != Some("serverware.nativeCredentialRecipientEvidence/v1")
         || !credential_lease_principal_valid(&request.principal_id, profile)
@@ -20977,6 +21023,7 @@ fn check_credential_operation_deadline(deadline: Option<Instant>) -> Result<(), 
 
 fn verify_native_credential_lease_scope(state: &GateState, policy_hash: &str) -> Result<(), String> {
     native_runtime_live(state)?;
+    native_secret_broker::check(state)?;
     if let Some(authority) = state.mitm_authority.as_ref() {
         let mut authority = authority.lock()
             .map_err(|_| "credential recipient runtime authority is poisoned".to_owned())?;
@@ -21060,6 +21107,8 @@ fn fetch_scoped_credential_lease_on_deadline(
     let opening = Instant::now();
     check_credential_operation_deadline(original_deadline)?;
     let profile = credential_lease_profile(state, &snapshot.hash)?;
+    let broker = state.native_secret_broker.is_some();
+    if broker && profile != ReleaseProfile::Native { return Err("broker lease lost its native owner".to_owned()); }
     if profile.has_approver_policy() && (!credential_lease_principal_valid(&scope.principal_id, profile)
         || !valid_release_authorization_identity(Some(&scope.route_id))
         || !valid_release_authorization_identity(Some(&scope.credential_id))) {
@@ -21165,7 +21214,8 @@ fn fetch_scoped_credential_lease_on_deadline(
     let recipient_nonce = general_purpose::URL_SAFE_NO_PAD.encode(&recipient_nonce_bytes);
     let requested_ttl_seconds = 5u64;
     let mut request_body = CredentialLeaseRequest {
-        api_version: native_lease_profile::request_version(request_bound, profile).to_string(),
+        api_version: if broker { native_secret_broker::request_version(request_bound) }
+            else { native_lease_profile::request_version(request_bound, profile) }.to_string(),
         purpose,
         principal_id: scope.principal_id.clone(),
         route_id: scope.route_id.clone(),
@@ -21266,7 +21316,7 @@ fn fetch_scoped_credential_lease_on_deadline(
             else { LeaseRecipientOwner::Standalone(owner) }
         }
     };
-    let request_wire = credential_lease_request_wire_value_profile(&request_body, profile)?;
+    let request_wire = credential_lease_request_wire_value_profile(&request_body, profile, broker)?;
     let (request_wire, currentness_pin) = credential_currentness::wrap_request(
         state, snapshot, scope, purpose, expected_generation.map(|generation| generation.version),
         request_wire, deadline)?;
@@ -21297,7 +21347,7 @@ fn fetch_scoped_credential_lease_on_deadline(
     let status = response.status();
     let body = Zeroizing::new(read_bounded_control_plane_response_body(
         &mut response,
-        MAX_CREDENTIAL_LEASE_RESPONSE_BYTES,
+        if broker { 4 * 1024 * 1024 } else { MAX_CREDENTIAL_LEASE_RESPONSE_BYTES },
         "credential lease response",
     )?);
     verify_credential_lease_response(
@@ -21331,6 +21381,7 @@ fn fetch_scoped_credential_lease_on_deadline(
         &recipient_nonce_bytes,
         &inner_body,
         requested_ttl_seconds,
+        if broker { Some((state, deadline)) } else { None },
     )?;
     match &lease {
         CredentialLeaseMaterial::GenerationMetadata(generation) => {
@@ -22715,6 +22766,7 @@ fn acquire_upstream_send_authority<'a>(
     snapshot: &Arc<Snapshot>,
     binding: Option<&CredentialLeaseReleaseBinding>,
 ) -> Result<UpstreamSendAuthority<'a>, &'static str> {
+    native_secret_broker::check(state).map_err(|_| "native_broker_owner_unavailable_before_upstream_send")?;
     let profile = credential_lease_profile(state, &snapshot.hash)
         .map_err(|_| "credential_runtime_owner_changed_before_upstream_send")?;
     if binding.is_some_and(|binding| binding.profile != profile) {
@@ -23899,7 +23951,7 @@ fn control_plane_client_builder(timeout: Duration) -> Result<reqwest::blocking::
 }
 
 fn audit_enabled(state: &GateState) -> bool {
-    state.audit_url.is_some() && state.audit_token.is_some() && state.audit_queue_max > 0
+    state.audit_url.is_some() && (state.measured_audit.is_some() || (!state.is_production && state.audit_token.is_some())) && state.audit_queue_max > 0
 }
 
 fn audit_event_serialized_len(event: &AuditEvent) -> Option<usize> {
@@ -23937,7 +23989,7 @@ fn enqueue_audit(state: &GateState, event_type: &str, event: Value) {
 }
 
 fn post_required_audit_event(state: &GateState, event_type: &str, event: Value) -> bool {
-    if state.audit_url.is_none() || state.audit_token.is_none() {
+    if !audit_enabled(state) {
         state.audit_required_failed.fetch_add(1, Ordering::Relaxed);
         return false;
     }
@@ -23951,7 +24003,7 @@ fn post_required_audit_event(state: &GateState, event_type: &str, event: Value) 
     };
     match post_audit_batch(state, &[audit_event]) {
         Ok(()) => {
-            state.audit_sent.fetch_add(1, Ordering::Relaxed);
+            if state.measured_audit.is_none() { state.audit_sent.fetch_add(1, Ordering::Relaxed); }
             true
         }
         Err(_) => {
@@ -23970,7 +24022,7 @@ fn record_required_credential_release_start(
     url: &Url,
     binding: &CredentialLeaseReleaseBinding,
 ) -> bool {
-    if state.audit_url.is_none() || state.audit_token.is_none() {
+    if !audit_enabled(state) {
         state.audit_required_failed.fetch_add(1, Ordering::Relaxed);
         return false;
     }
@@ -23999,7 +24051,7 @@ fn record_required_credential_release_start(
     let batch = [audit_event];
     match post_audit_batch(state, &batch) {
         Ok(()) => {
-            state.audit_sent.fetch_add(1, Ordering::Relaxed);
+            if state.measured_audit.is_none() { state.audit_sent.fetch_add(1, Ordering::Relaxed); }
             true
         }
         Err(_) => {
@@ -24076,6 +24128,7 @@ fn pop_audit_batch(state: &GateState) -> Vec<AuditEvent> {
         .lock()
         .expect("audit queue mutex poisoned");
     let count = state.audit_batch_max.max(1).min(queue.len());
+    let count = if state.measured_audit.is_some() {count.min(200)} else {count};
     let mut batch = Vec::with_capacity(count);
     let mut serialized_len = br#"{"events":[]}"#.len();
     while batch.len() < count {
@@ -24091,7 +24144,9 @@ fn pop_audit_batch(state: &GateState) -> Vec<AuditEvent> {
         let next_len = serialized_len
             .saturating_add(separator_len)
             .saturating_add(event_len);
-        if next_len > MAX_CONTROL_PLANE_AUDIT_BATCH_BODY_BYTES {
+        let maximum=if state.measured_audit.is_some() {serverware_decision_gate::native_audit_batch_v1::MAX_EVENTS}
+            else {MAX_CONTROL_PLANE_AUDIT_BATCH_BODY_BYTES};
+        if next_len > maximum {
             if !batch.is_empty() {
                 break;
             }
@@ -24148,6 +24203,12 @@ fn release_audit_batch_reservations(state: &GateState, batch: &[AuditEvent]) {
 }
 
 fn post_audit_batch(state: &GateState, batch: &[AuditEvent]) -> Result<(), AuditPostError> {
+    if state.measured_audit.is_some() {
+        return native_audit_owner::deliver(state,batch,false).map_err(AuditPostError::other);
+    }
+    if state.is_production {
+        return Err(AuditPostError::other("production audit requires measured mTLS authorship"));
+    }
     let mut body = Zeroizing::new(
         serde_json::to_vec(&json!({"events": batch}))
             .map_err(|_| AuditPostError::other("serialize audit batch"))?,
@@ -24255,6 +24316,9 @@ fn post_audit_batch(state: &GateState, batch: &[AuditEvent]) -> Result<(), Audit
 }
 
 fn flush_audit_batch(state: &GateState, batch: Vec<AuditEvent>) -> Result<(), AuditPostError> {
+    if state.measured_audit.is_some() {
+        return native_audit_owner::flush(state,batch).map_err(AuditPostError::other);
+    }
     let mut pending = VecDeque::from([batch]);
     while let Some(mut batch) = pending.pop_front() {
         let count = batch.len() as u64;
@@ -24290,6 +24354,9 @@ fn flush_audit_batch(state: &GateState, batch: Vec<AuditEvent>) -> Result<(), Au
 
 fn audit_worker(state: Arc<GateState>, interval: Duration) {
     loop {
+        if state.measured_audit.is_some() && native_audit_owner::retry(&state).is_err() {
+            thread::sleep(interval); continue;
+        }
         let batch = pop_audit_batch(&state);
         if batch.is_empty() {
             thread::sleep(interval);
@@ -51797,6 +51864,8 @@ fn main() -> Result<(), String> {
     let credential_lease_client = build_control_plane_client(Duration::from_secs(3))?;
     let mitm_authority = build_mitm_authority()?;
     let state = Arc::new(GateStateInputs {
+        secret_broker: None,
+        measured_audit: None,
         credential_currentness: None,
         policy_shadow_generation_control,
         policy_path,
@@ -53134,6 +53203,7 @@ mod tests {
             key_id: response_proof_signing_key_id,
         } = local_response_proof_signing_material().expect("test response proof key");
         GateState {
+            native_secret_broker: None,
             upstream_dispatch_authority: UpstreamDispatchAuthority::new(),
             credential_currentness: credential_currentness::LocalHolder::new(None),
             upstream_send_credential_lock_contentions: AtomicU64::new(0),
@@ -53183,6 +53253,7 @@ mod tests {
             native_runtime_lifetime: None,
             native_enrollment_authorizer: None,
             audit_client: client.clone(),
+            measured_audit: None,
             credential_lease_client: client,
             audit_url: None,
             credential_lease_token: None,

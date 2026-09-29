@@ -103,11 +103,25 @@ impl CustodySignerTransport {
         Ok(evidence)
     }
 
+    pub(super) fn audit_evidence(&self, identity:&mut EnclaveRuntimeIdentityV1,
+        prepared:&native_audit_owner::Prepared, deadline:u64)->Result<Value,String> {
+        let Self::Native(owner)=self else{return Err("audit refuses unmeasured UDS custody".into());};
+        self.verify_live()?;
+        owner.active.fetch_update(Ordering::AcqRel,Ordering::Acquire,
+            |active|(active<CUSTODY_MAX_CONCURRENT_CONNECTIONS).then_some(active+1))
+            .map_err(|_|"native audit custody concurrency bound")?;
+        let _permit=NativeOperationPermit(&owner.active);
+        let value=owner.runtime.sign_native_audit(identity,prepared.statement(),deadline).map_err(|e|e.to_string())?;
+        self.verify_live()?; Ok(value)
+    }
+
     pub(super) fn currentness_lease(&self, prepared: &credential_currentness::PreparedLease<'_>) -> Result<String, String> {
         let Self::Native(owner) = self else { return Err("currentness refuses unmeasured UDS custody".to_owned()); };
         self.verify_live()?;
         let (holder, epoch, registration, request) = prepared.parts();
-        let signature = owner.runtime.sign_native_currentness_lease(holder, epoch, registration, request)
+        let signature = if prepared.broker() {
+            owner.runtime.sign_native_broker_currentness_lease(holder, epoch, registration, request)
+        } else { owner.runtime.sign_native_currentness_lease(holder, epoch, registration, request) }
             .map_err(|error| error.to_string())?;
         self.verify_live()?;
         Ok(signature)

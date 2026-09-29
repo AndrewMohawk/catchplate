@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-startup-configuration.v5.schema.json",
+  "title": "Cold native full proxy with measured secret-broker and audit owners",
+  "$comment": "Explicit additive v5, original <=16MiB integer-only duplicate-free JSON. This configuration is not independent release admission. Runtime retains actual generated native identity, private broker helper and measured audit owner before publication; old versions do not select these owners. Full image/runtime provisioning and original-deadline validation are mandatory source checks beyond JSON Schema.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "gate", "native", "shadow", "responseObservationV2", "policy", "enrollmentAuthorizer", "enrollmentSetupAuthorizer", "enrollmentProxyEndpoint", "credentialCurrentness", "secretBroker", "measuredAudit"],
+  "properties": {
+    "apiVersion": {"const": "serverware.nativeStartupConfiguration/v5"},
+    "gate": {
+      "allOf": [
+        {"$ref": "native-startup-configuration.v4.schema.json#/$defs/gate"},
+        {"required": ["auditUrl"], "properties": {"auditUrl": {"type": "string", "minLength": 1, "maxLength": 4096}, "auditToken": {"type": "null"}}}
+      ]
+    },
+    "native": {"$ref": "native-startup-configuration.v4.schema.json#/$defs/native"},
+    "shadow": {"$ref": "native-startup-configuration.v4.schema.json#/$defs/shadow"},
+    "responseObservationV2": {"$ref": "native-startup-configuration.v4.schema.json#/$defs/responseObservation"},
+    "policy": {"$ref": "native-startup-configuration.v4.schema.json#/$defs/artifact"},
+    "enrollmentAuthorizer": {"$ref": "native-enrollment-authorizer.v1.schema.json"},
+    "enrollmentSetupAuthorizer": {"$ref": "native-enrollment-setup-authorizer.v1.schema.json"},
+    "enrollmentProxyEndpoint": {"type": "string", "minLength": 1, "maxLength": 4096},
+    "credentialCurrentness": {"$ref": "native-startup-configuration.v4.schema.json#/properties/credentialCurrentness"},
+    "secretBroker": {"$ref": "native-secret-broker.v1.schema.json#/$defs/configuration"},
+    "measuredAudit": {"$ref": "measured-data-plane-audit.v1.schema.json#/$defs/nativeConfiguration"}
+  }
+}

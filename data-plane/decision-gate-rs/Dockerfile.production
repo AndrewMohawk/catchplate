@@ -2,6 +2,9 @@ FROM scratch AS rust-production-dependency-cache
 COPY production-dependencies/cache/cargo-vendor.tar.gz /dependency-cache/cache/cargo-vendor.tar.gz
 COPY production-dependencies/cache/musl-1.2.5-r12.apk /dependency-cache/cache/musl-1.2.5-r12.apk
 COPY production-dependencies/cache/musl-dev-1.2.5-r12.apk /dependency-cache/cache/musl-dev-1.2.5-r12.apk
+COPY production-dependencies/cache/python-wheelhouse-linux-amd64.tar.gz /dependency-cache/cache/python-wheelhouse-linux-amd64.tar.gz
+COPY production-dependencies/cache/squashfs-tools_4.5.1-1_amd64.deb /dependency-cache/cache/squashfs-tools_4.5.1-1_amd64.deb
+COPY production-dependencies/cache/liblzo2-2_2.10-2_amd64.deb /dependency-cache/cache/liblzo2-2_2.10-2_amd64.deb
 
 FROM rust:1.88-slim-bookworm@sha256:38bc5a86d998772d4aec2348656ed21438d20fcdce2795b56ca434cf21430d89 AS build
 
@@ -173,7 +176,38 @@ COPY --from=launcher-build /src/target/release/serverware-native-parent-relay /s
 FROM scratch AS native-parent-ingress-artifact
 COPY --from=launcher-build /src/target/release/serverware-native-parent-ingress /serverware-native-parent-ingress
 
-FROM gcr.io/distroless/cc-debian12:nonroot@sha256:ce0d66bc0f64aae46e6a03add867b07f42cc7b8799c949c2e898057b7f75a151
+FROM python:3.11-slim-bookworm@sha256:0030323c9ce4d6dfab5f0812577cb0abd13c806f86b3a1f5b5d8f200ebb1421c AS native-broker-runtime
+ARG SOURCE_DATE_EPOCH="0"
+ENV SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_INDEX=1
+COPY --from=build /source /source
+COPY --from=build /source-contract /source-contract
+COPY --from=rust-production-dependency-cache /dependency-cache /dependency-cache
+RUN --network=none set -eu; \
+    cp /source/requirements.lock /dependency-cache/requirements.lock; \
+    cp /source/production-dependencies/python-linux-amd64.sha256 /dependency-cache/python-linux-amd64.sha256; \
+    cp /source/production-dependencies/native-broker-linux-amd64.sha256 /dependency-cache/native-broker-linux-amd64.sha256; \
+    cd /dependency-cache; \
+    test "$(grep -Ec '^[0-9a-f]{64}  ' python-linux-amd64.sha256)" -eq 2; \
+    test "$(grep -Ec '^[0-9a-f]{64}  ' native-broker-linux-amd64.sha256)" -eq 2; \
+    grep -E '^[0-9a-f]{64}  ' python-linux-amd64.sha256 | sha256sum -c -; \
+    grep -E '^[0-9a-f]{64}  ' native-broker-linux-amd64.sha256 | sha256sum -c -; \
+    dpkg-deb --extract cache/squashfs-tools_4.5.1-1_amd64.deb /; \
+    dpkg-deb --extract cache/liblzo2-2_2.10-2_amd64.deb /; \
+    tar -xzf cache/python-wheelhouse-linux-amd64.tar.gz; \
+    python -m pip install --no-cache-dir --no-compile --no-index --only-binary=:all: \
+        --find-links=/dependency-cache/wheelhouse --require-hashes --target=/deps \
+        -r /dependency-cache/requirements.lock; \
+    python -I -B /source/scripts/package_native_broker_runtime.py
+
+FROM scratch AS native-broker-runtime-artifact
+COPY --from=native-broker-runtime /broker-output /broker-output
+
+# The old host-side target remains explicit for migration work. The default,
+# last target below is the native-only enclave image.
+FROM gcr.io/distroless/cc-debian12:nonroot@sha256:ce0d66bc0f64aae46e6a03add867b07f42cc7b8799c949c2e898057b7f75a151 AS production-decision-gate
 
 ARG SERVERWARE_IMAGE_SOURCE="https://github.com/example/private-deployment"
 ARG SERVERWARE_IMAGE_TITLE="invalid source identity"
@@ -223,3 +257,13 @@ COPY --from=build --chown=65532:65532 --chmod=0755 /runtime-layout/serverware-cu
 USER nonroot:nonroot
 EXPOSE 9090
 ENTRYPOINT ["/usr/local/bin/serverware-decision-gate"]
+
+FROM production-decision-gate AS native-enclave
+COPY --from=native-broker-runtime --chown=0:0 --chmod=0444 /broker-output/native-broker-runtime.squashfs /opt/serverware/native-broker-runtime.squashfs
+COPY --from=native-broker-runtime --chown=0:0 --chmod=0444 /broker-output/native-broker-runtime.json /usr/share/serverware/native-broker-runtime.json
+COPY --from=build --chown=0:0 --chmod=0555 /src/target/release/serverware-native-enclave-entrypoint /usr/local/libexec/serverware-native-enclave-entrypoint
+# Native startup constructs the private broker mount and drops the helper's
+# privileges. No root key, credential, provider token or host socket is baked in.
+USER 0:0
+ENTRYPOINT ["/usr/local/libexec/serverware-native-enclave-entrypoint"]
+CMD []

@@ -110,6 +110,27 @@ impl TlsAuthorityV1 {
 
     pub fn certificate_der(&self) -> &[u8] { &self.ca_cert_der }
 
+    /// Dedicated outbound audit identity. The private key is generated here,
+    /// moves only into the in-process TLS client, and is never returned as PEM.
+    pub fn audit_client_identity(&self, uri:&str, not_before:OffsetDateTime, not_after:OffsetDateTime)
+        ->Result<(reqwest::Identity,Vec<u8>),String> {
+        if self.generated_validity!=Some((not_before,not_after)) || !uri.starts_with("spiffe://serverware.audit/") {
+            return Err("audit TLS identity requires the original generated CA interval".into());
+        }
+        let key=KeyPair::generate().map_err(|_|"generate native audit client key")?;
+        let mut params=CertificateParams::new(Vec::<String>::new()).map_err(|_|"audit certificate parameters")?;
+        params.distinguished_name=rcgen::DistinguishedName::new();
+        params.not_before=not_before; params.not_after=not_after; params.is_ca=IsCa::ExplicitNoCa;
+        params.key_usages=vec![KeyUsagePurpose::DigitalSignature];
+        params.extended_key_usages=vec![ExtendedKeyUsagePurpose::ClientAuth];
+        params.subject_alt_names=vec![SanType::URI(Ia5String::try_from(uri).map_err(|_|"audit workload URI")?)];
+        let certificate=params.signed_by(&key,&self.ca_cert,&self.ca_key).map_err(|_|"sign native audit client certificate")?;
+        let mut pem=zeroize::Zeroizing::new(key.serialize_pem());
+        pem.push_str(&certificate.pem()); pem.push_str(&self.ca_cert.pem());
+        let identity=reqwest::Identity::from_pem(pem.as_bytes()).map_err(|_|"install native audit client identity")?;
+        Ok((identity,certificate.der().to_vec()))
+    }
+
     /// Public SubjectPublicKeyInfo of this owner's actual signing key. The
     /// development loader's preserved supplied certificate can still mismatch.
     pub fn public_key_spki_der(&self) -> Vec<u8> { self.ca_key.public_key_der() }

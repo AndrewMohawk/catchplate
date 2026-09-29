@@ -43,6 +43,7 @@ const LEASE_RECIPIENT: u8 = 2;
 const MUTUAL_TLS_INGRESS: u8 = 3;
 const RESPONSE_PROOF: u8 = 4;
 const ENROLLMENT: u8 = 5;
+const BROKER_KMS_RECIPIENT: u8 = 6;
 const INGRESS_BINDING_DOMAIN: &[u8] = b"serverware/native-tls13-mandatory-client-auth/v1\0";
 const MAX_INGRESS_CERTIFICATE_BYTES: usize = 16 * 1024;
 const MAX_INGRESS_SPKI_BYTES: usize = 1024;
@@ -262,6 +263,14 @@ impl EnclaveRuntimeIdentityV1 {
         self.finish(deadline)
     }
 
+    pub fn audit_client_identity(&mut self, uri:&str, deadline:u64)
+        ->Result<(reqwest::Identity,Vec<u8>),String> {
+        let deadline=self.begin(deadline)?;
+        self.require_tls_time(OffsetDateTime::now_utc())?;
+        let value=self.authority.audit_client_identity(uri,self.ca_not_before,self.ca_not_after)?;
+        self.finish(deadline)?; Ok(value)
+    }
+
     /// Join the actual generated leaf-plus-CA chain to this held owner. This
     /// does not verify the NSM quote, PCRs, enrollment or peer authorization.
     pub fn verify_quoted_ingress(&mut self, ingress: &QuotedMutualTlsIngressV1,
@@ -360,6 +369,20 @@ impl EnclaveRuntimeIdentityV1 {
     pub fn prepare_lease_recipient(&mut self, deadline: u64)
         -> Result<PendingCredentialRecipientV1, String> {
         self.prepare_lease_recipient_profile(deadline, ReleaseProfile::Native)
+    }
+
+    /// Only the actual private child owner can supply this purpose's RSA key.
+    /// The NSM original is not independent KMS release or image admission.
+    pub(crate) fn quote_broker_recipient(&mut self,
+        pending: &mut crate::native_secret_broker_v1::PendingBroker, deadline: u64)
+        -> Result<RuntimeKeyQuoteV1, String> {
+        let deadline = self.begin(deadline)?;
+        let ca = Sha256::digest(self.authority.certificate_der()).into();
+        let (public_key, nonce, request_binding) = pending.quote_parts(ca, deadline)?;
+        let user_data = self.binding(BROKER_KMS_RECIPIENT, &public_key, request_binding);
+        let document = self.nsm.attest(&public_key, &nonce, &user_data, deadline)?;
+        self.finish(deadline)?;
+        Ok(RuntimeKeyQuoteV1 { document, user_data, public_key, nonce })
     }
 
     /// Native key custody cannot stand in for independently selected ordinary

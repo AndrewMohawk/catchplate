@@ -1284,6 +1284,13 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/credential_ciphertext.py \
 	serverware/control_plane_broker_startup.py \
 	scripts/authority/sign_control_plane_broker_startup.py \
+	scripts/package_native_broker_runtime.py \
+	serverware/data_plane_audit_authority.py \
+	serverware/data_plane_audit_store.py \
+	serverware/control_plane_data_plane_audit.py \
+	serverware/native_kms_cms.py \
+	serverware/native_secret_broker_helper.py \
+	scripts/native_broker_kms_parent.py \
 	serverware/authority_oauth_family_retirement.py \
 	serverware/authority_oauth_refresh_cleanup.py \
 	serverware/authority_oauth_refresh_cleanup_policy.py \
@@ -3598,6 +3605,13 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/credential_ciphertext.py \
 				serverware/control_plane_broker_startup.py \
 				scripts/authority/sign_control_plane_broker_startup.py \
+				scripts/package_native_broker_runtime.py \
+				serverware/data_plane_audit_authority.py \
+				serverware/data_plane_audit_store.py \
+				serverware/control_plane_data_plane_audit.py \
+				serverware/native_kms_cms.py \
+				serverware/native_secret_broker_helper.py \
+				scripts/native_broker_kms_parent.py \
 				serverware/authority_oauth_family_retirement.py \
 				serverware/authority_oauth_refresh_cleanup.py \
 				serverware/authority_oauth_refresh_cleanup_policy.py \
@@ -3774,6 +3788,13 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/Dockerfile.production \
 				data-plane/decision-gate-rs/Cargo.lock \
 				data-plane/decision-gate-rs/src/authority_source_revision_v1.rs \
+				data-plane/decision-gate-rs/src/native_audit_batch_v1.rs \
+				data-plane/decision-gate-rs/src/native_audit_owner.rs \
+				data-plane/decision-gate-rs/src/native_audit_transport.rs \
+				data-plane/decision-gate-rs/src/native_secret_broker.rs \
+				data-plane/decision-gate-rs/src/native_secret_broker_v1.rs \
+				data-plane/decision-gate-rs/src/native_secret_broker_v1/image.rs \
+				data-plane/decision-gate-rs/src/native_secret_broker_v1/process.rs \
 				data-plane/decision-gate-rs/src/credential_currentness.rs \
 				data-plane/decision-gate-rs/src/native_currentness_v1.rs \
 				data-plane/decision-gate-rs/src/erofs_loop_v1.rs \
@@ -3864,6 +3885,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/native_bootstrap_client/egress/workload.rs \
 				data-plane/decision-gate-rs/src/native_bootstrap_client/egress/reservation.rs \
 				data-plane/decision-gate-rs/src/bin/serverware-native-bootstrap-client.rs \
+				data-plane/decision-gate-rs/src/bin/serverware-native-enclave-entrypoint.rs \
 				data-plane/decision-gate-rs/coder-test-runner.sh \
 				ops/systemd/serverware-launch-authority-relay.service \
 				ops/systemd/serverware-launch-authority-relay.socket \
@@ -3977,6 +3999,9 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-broker-credential-recipient-expectations.v1.schema.json \
 				schemas/native-current-credential-lease-request.v2.schema.json \
 				schemas/native-current-credential-lease-envelope.v2.schema.json \
+				schemas/measured-data-plane-audit.v1.schema.json \
+				schemas/native-secret-broker.v1.schema.json \
+				schemas/native-startup-configuration.v5.schema.json \
 				schemas/native-startup-configuration.v4.schema.json \
 				schemas/oauth-refresh-cleanup-authority.v1.schema.json \
 				schemas/native-ca-installation-receipt.v1.schema.json \
@@ -3994,6 +4019,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/release-completion-result-signing-request.v1.schema.json \
 				schemas/release-completion-result-signing-response.v1.schema.json \
 				production-dependencies/prefetch.py \
+				production-dependencies/native-broker-linux-amd64.sha256 \
 				scripts/discard_headers_parity.v1.json \
 				scripts/oci_lane_entrypoint.py \
 				scripts/verify_agent_trust_same_journey.py \

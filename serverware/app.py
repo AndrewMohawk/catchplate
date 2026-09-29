@@ -19079,15 +19079,7 @@ def data_plane_credential_leases(
     )
 
 
-def _ingest_data_plane_audit(
-    batch: DataPlaneAuditBatch,
-    x_serverware_data_plane_token: str | None = Header(
-        default=None, alias="X-Serverware-Data-Plane-Token"
-    ),
-) -> dict[str, Any]:
-    _require_data_plane_token(
-        x_serverware_data_plane_token, DATA_PLANE_AUDIT_INGEST_TOKEN
-    )
+def _validate_data_plane_audit_batch(batch: DataPlaneAuditBatch) -> None:
     production_release = RELEASE_CHANNEL.strip().lower() not in {
         "dev",
         "development",
@@ -19131,6 +19123,17 @@ def _ingest_data_plane_audit(
                 status_code=413,
                 detail="canonical data-plane audit event exceeds 2 MiB",
             ) from exc
+
+
+def _ingest_data_plane_audit(
+    batch: DataPlaneAuditBatch,
+    x_serverware_data_plane_token: str | None = Header(default=None, alias="X-Serverware-Data-Plane-Token"),
+) -> dict[str, Any]:
+    from serverware import control_plane_data_plane_audit as measured
+    if measured.selected():
+        raise HTTPException(status_code=403, detail="measured audit never accepts bearer-only authorship")
+    _require_data_plane_token(x_serverware_data_plane_token, DATA_PLANE_AUDIT_INGEST_TOKEN)
+    _validate_data_plane_audit_batch(batch)
     try:
         recorded = db.record_audit_event_batch(
             [(item.event_type, item.event) for item in batch.events],
@@ -19155,12 +19158,21 @@ def _ingest_data_plane_audit(
 @app.post("/api/data-plane/audit")
 async def data_plane_audit(
     request: Request,
-    batch: DataPlaneAuditBatch,
     x_serverware_data_plane_token: str | None = Header(
         default=None, alias="X-Serverware-Data-Plane-Token"
     ),
 ) -> dict[str, Any]:
+    from serverware import control_plane_data_plane_audit as measured
+    try:
+        if measured.selected():
+            return await measured.intake(request)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="measured audit original or durable continuity refused") from exc
     request_body = await request.body()
+    try:
+        batch = DataPlaneAuditBatch.model_validate_json(request_body)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail="invalid data-plane audit batch") from exc
     result = _ingest_data_plane_audit(batch, x_serverware_data_plane_token)
     return {
         "apiVersion": "serverware.dataPlaneAuditAck/v1",

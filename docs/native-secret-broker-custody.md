@@ -1,0 +1,41 @@
+# Native secret-broker custody
+
+This source connects the complete existing Rust TLS proxy to a non-exporting broker helper inside the native runtime. It does not establish a provisioned enclave, working KMS grant, successful AWS exchange, measured OAuth producer, tested pilot or N06 closure. Builds and runtime/negative verification remain deferred.
+
+## Explicit cold selection
+
+`serverware.nativeStartupConfiguration/v5` requires both `secretBroker` and `measuredAudit`, plus the existing v4 currentness and native startup originals. The enclave packaging entrypoint uses `--native-enclave-startup`; the actual gate parser requires exactly v5 before startup. The older `--native-startup` contracts remain separate. There is no environment or incoming-request promotion.
+
+The broker configuration pins the exact KMS key, encrypted KEK blob, encryption context, full plaintext KEK SHA256, `secretKekId`, parent port and immutable helper image. These values need independent release/configuration authorization; self-consistent hashes alone supply none. The full KEK pin is necessary: encrypting a parent-chosen value to a public RSA key would not authenticate that value.
+
+The actual admitted CP broker profile selects [ciphertext lease delivery](native-broker-credential-delivery.md). A retained Rust broker owner selects currentness outer v2 and native-broker inner request/envelope/set v1 or v2. V1 preserves metadata and uncontrolled dispatch; v2 is controlled dispatch. Both dispatch forms still require a registered current holder, actual recipient quote and policy/version binding. Old lease and currentness bytes are not reinterpreted.
+
+## Immutable helper and actual owner
+
+The source-owned gate copies `/opt/serverware/native-broker-runtime.squashfs` (at most 512MiB) into its own memfd, verifies the complete independently pinned image hash, and applies and reads back `F_SEAL_WRITE`, `F_SEAL_GROW`, `F_SEAL_SHRINK` and `F_SEAL_SEAL`. It creates one read-only/autoclear loop association at offset zero and full image length, mounts SquashFS read-only, and retains a nonrecursive detached root. Rechecks join actual sealed-file device/inode/length, loop backing and root device/filesystem/flags. This is not a readonly-mount-only or file-hash-only closure claim.
+
+The fixed ELF `/usr/local/bin/python3.11` and helper `/opt/serverware/serverware/native_secret_broker_helper.py` are separately hashed under that root. The complete image must contain the interpreter, loader, recursive DSOs, standard library and pinned cryptography/package closure; `-I -B` and an empty environment exclude caller-controlled Python paths. Runtime source never substitutes a host Python process. AWS's default native kernel includes loop and SquashFS but not the host fs-verity/EROFS combination; the existing host `erofs_loop_v1` contract is unchanged. [AWS kernel configuration](https://raw.githubusercontent.com/aws/aws-nitro-enclaves-sdk-bootstrap/main/kernel/microvm-kernel-config-x86_64)
+
+The gate launches and retains the actual child, pidfd, anonymous inherited socketpair and image descriptors. The helper chroots into that retained root, drops supplementary groups and its capability bounding set, runs as UID/GID65534, uses no-new-privileges and bounded resources, and inherits only its private FD3 protocol channel. The gate executes the held ELF descriptor, not a reopened pathname. The helper checks the actual parent PID/peer identity. Parent death, malformed frames, process exit, clock expiry or uncertain exchange poison the owner. Owned teardown kills and reaps the child; this is not a hard-realtime scheduling guarantee.
+
+The runtime needs source-owned mount/device/credential-drop privileges for this construction. It creates and removes only its own random workspace below protected `/run/serverware-native-broker`; `/dev/loop-control` is supplied by the native entrypoint. No parent-accessible helper socket, key file or plaintext-returning RPC is provided.
+
+## KMS and private material
+
+The helper generates RSA2048 internally. The actual native identity obtains a separate role6 NSM original binding this exact public key, request commitment and nonce. The fixed CID3 adapter sends that original to the existing KMS `Decrypt` recipient operation and transports only `CiphertextForRecipient`. Parent routing/response labels are not verification results. KMS policy, actual Nitro measurements and independently admitted release/configuration remain required.
+
+The locked Rust crypto primitives do not supply RSA key generation/OAEP decryption. The helper therefore uses the already pinned `cryptography==50.0.0` implementation, enlarging the measured TCB to CPython and its crypto closure. Its private structural decoder accepts only the bounded single-recipient AWS CMS profile: RSA-OAEP-SHA256/MGF1-SHA256 with empty label, AES256-CBC/PKCS7, exact algorithms and a 32-byte recovered KEK. All private cryptographic operations use the pinned implementation, not handwritten RSA/AES. The high-level `pkcs7_decrypt_der` API only supports PKCS1v1.5 and cannot replace this OAEP-specific boundary. [cryptography 50 API](https://cryptography.io/en/50.0.0/hazmat/primitives/asymmetric/serialization/#cryptography.hazmat.primitives.serialization.pkcs7.pkcs7_decrypt_der), [AWS CMS implementation](https://github.com/aws/aws-nitro-enclaves-sdk-c/blob/main/source/cms.c)
+
+BER structure, depth, node counts, lengths, recipients and content chunks are bounded; unknown, duplicate, trailing or disallowed encodings fail. A failed CMS operation destroys that unique RSA/helper owner without a recoverable decryption response. The recovered KEK must match its full cold commitment before custody continues. RSA/KEK/DEK bytes are never serialized to the parent or gate. Python/OpenSSL allocations are not claimed to provide complete secret erasure. Real AWS compatibility and adverse-input testing have not been run.
+
+## Actual lease, cache and injection
+
+The existing authenticated CP body proof and X25519 lease recipient remain intact. The gate checks the full request/policy/principal/route/version/currentness/expiry/AAD bindings before a broker dispatch entry can reach its private helper. The entry holds exact `encryptedCredential` seven fields and `storageMetadata`, the untouched original private metadata JSON string; metadata-only responses retain their old public projection. Broker response size is bounded at 4MiB; the old response ceiling remains unchanged.
+
+Stored credential envelopes keep their original padded URL-safe base64 and `serverware:dek:<id>:v<version>` / `serverware:secret:<id>:v<version>` AAD. The helper opens only this purpose-fixed credential work. For enrolled OAuth it joins decrypted Bearer token, application association, unique scopes and exact access/refresh expiry to the actual transported storage metadata, rejects expired material, and selects only the access token. It neither contacts providers nor returns refresh-token material.
+
+The helper encrypts its output to a fresh actual gate recipient, binding the complete work original and nonce. Only that gate owner opens it into the existing zeroizing secret lease, cache and injection path. Original operation, lease and runtime deadlines are narrowed, never renewed. Cached sends retain the strict holder barrier and recheck the live broker owner; already-dispatched effects are not undone. No SQL lookup is added to the ordinary upstream hot path.
+
+The independently admitted measured-audit owner is generated from the same native identity and reconciles its signed epoch/head before state publication. Production audit refuses bearer fallback; compatibility with old configuration bytes is not production permission. The v5 schema references the separately closed measured-audit configuration; a receipt remains observation, not permission.
+
+Measured OAuth issuance/refresh/cleanup custody, migration and all independent release/provisioning/operational acceptance remain separate unfinished work. A parent decrypting a KEK or a CP plaintext refresh path is not an allowed fallback for this profile.

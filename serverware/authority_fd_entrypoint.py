@@ -20,6 +20,8 @@ OAUTH_APPLICATION_CONFIG_NAME = "SERVERWARE_OAUTH_APPLICATION_CONFIG_FD"
 OAUTH_APPLICATION_CONFIG_MAX_BYTES = 64 * 1024
 OAUTH_REVOCATION_CONFIG_NAME = "SERVERWARE_OAUTH_REVOCATION_CONFIG_FD"
 OAUTH_REVOCATION_CONFIG_MAX_BYTES = 2 * 1024 * 1024
+MEASURED_AUDIT_CONFIG_NAME = "SERVERWARE_MEASURED_AUDIT_CONFIG_FD"
+MEASURED_AUDIT_CONFIG_MAX_BYTES = 3 * 1024 * 1024
 OAUTH_REFRESH_CLEANUP_CONFIG_NAME = "SERVERWARE_OAUTH_REFRESH_CLEANUP_CONFIG_FD"
 OAUTH_REFRESH_CLEANUP_CONFIG_MAX_BYTES = 2 * 1024 * 1024
 CONTROL_PLANE_ENROLLMENT_BOOTSTRAP_NAME = "SERVERWARE_CONTROL_PLANE_ENROLLMENT_BOOTSTRAP_FD"
@@ -214,6 +216,7 @@ ROLE_SOURCES = {
             "/run/serverware/authority-trust/oauth-revocations.json",
         ),
         (OAUTH_REFRESH_CLEANUP_CONFIG_NAME, "/run/serverware/authority-trust/oauth-refresh-cleanups.json"),
+        (MEASURED_AUDIT_CONFIG_NAME, "/run/serverware/authority-trust/measured-audit.json"),
     ),
     "runtime": (
         (
@@ -553,6 +556,26 @@ def _open_oauth_application_material(config_fd, *, occupied_descriptors):
         for descriptor in opened:
             os.close(descriptor)
         raise
+
+
+def _open_measured_audit_material(config_fd, *, occupied_descriptors):
+    from serverware import data_plane_audit_authority as profile
+    value = profile.document(os.pread(config_fd, MEASURED_AUDIT_CONFIG_MAX_BYTES + 1, 0), MEASURED_AUDIT_CONFIG_MAX_BYTES)
+    profile.require(set(value) == {"schema", "sourceRevision", "configurationDigest", "authorityRootFd", "authorityRootSha256", "authorization"}
+        and value["schema"] == profile.STARTUP_SCHEMA)
+    target = value["authorityRootFd"]
+    profile.require(type(target) is int and 32 <= target <= 1023 and target not in occupied_descriptors)
+    try:
+        os.fstat(target)
+    except OSError as exc:
+        if exc.errno != errno.EBADF: raise
+    else: raise RuntimeError("measured audit root descriptor is occupied")
+    descriptor = _open_source("/run/serverware/authority-trust/measured-audit-root-public-key", expected_owner_uid=0, maximum_bytes=4096)
+    try:
+        os.dup2(descriptor, target, inheritable=True)
+    finally:
+        if descriptor != target: os.close(descriptor)
+    return (target,)
 
 
 def _open_oauth_revocation_material(config_fd, *, occupied_descriptors):
@@ -2527,7 +2550,7 @@ def _normal_main(role: str) -> int:
             )
     for name in tuple(environment):
         if name.startswith(("SERVERWARE_CONTROL_PLANE_CUSTODY_",
-                "SERVERWARE_CONTROL_PLANE_ENROLLMENT_", "SERVERWARE_OAUTH_APPLICATION_", "SERVERWARE_OAUTH_REVOCATION_", "SERVERWARE_OAUTH_REFRESH_CLEANUP_")):
+                "SERVERWARE_CONTROL_PLANE_ENROLLMENT_", "SERVERWARE_OAUTH_APPLICATION_", "SERVERWARE_OAUTH_REVOCATION_", "SERVERWARE_OAUTH_REFRESH_CLEANUP_", "SERVERWARE_MEASURED_AUDIT_")):
             environment.pop(name, None)
     environment.pop("SERVERWARE_AUTHORITY_BOOTSTRAP_FD", None)
     environment.pop("SERVERWARE_PROCESS_MODE", None)
@@ -2544,12 +2567,14 @@ def _normal_main(role: str) -> int:
     oauth_application_descriptor: int | None = None
     oauth_revocation_descriptor: int | None = None
     oauth_refresh_cleanup_descriptor: int | None = None
+    measured_audit_descriptor: int | None = None
     control_plane_source_limits = {
         CONTROL_PLANE_CUSTODY_CONFIG_NAME: CONTROL_PLANE_CUSTODY_CONFIG_MAX_BYTES,
         CONTROL_PLANE_ENROLLMENT_BOOTSTRAP_NAME: CONTROL_PLANE_ENROLLMENT_BOOTSTRAP_MAX_BYTES,
         OAUTH_APPLICATION_CONFIG_NAME: OAUTH_APPLICATION_CONFIG_MAX_BYTES,
         OAUTH_REVOCATION_CONFIG_NAME: OAUTH_REVOCATION_CONFIG_MAX_BYTES,
         OAUTH_REFRESH_CLEANUP_CONFIG_NAME: OAUTH_REFRESH_CLEANUP_CONFIG_MAX_BYTES,
+        MEASURED_AUDIT_CONFIG_NAME: MEASURED_AUDIT_CONFIG_MAX_BYTES,
     }
     try:
         for environment_name, path in ROLE_SOURCES[role]:
@@ -2574,6 +2599,8 @@ def _normal_main(role: str) -> int:
                     oauth_revocation_descriptor = descriptor
                 elif environment_name == OAUTH_REFRESH_CLEANUP_CONFIG_NAME:
                     oauth_refresh_cleanup_descriptor = descriptor
+                elif environment_name == MEASURED_AUDIT_CONFIG_NAME:
+                    measured_audit_descriptor = descriptor
             else:
                 descriptor_assignments.append(
                     (environment_name, descriptor)
@@ -2606,6 +2633,9 @@ def _normal_main(role: str) -> int:
                 raise RuntimeError("OAuth family retirement cold configuration is unavailable")
             descriptors.extend(_open_oauth_refresh_cleanup_material(
                 oauth_refresh_cleanup_descriptor, occupied_descriptors=set(descriptors)))
+            if measured_audit_descriptor is None:
+                raise RuntimeError("measured audit cold configuration is unavailable")
+            descriptors.extend(_open_measured_audit_material(measured_audit_descriptor, occupied_descriptors=set(descriptors)))
             if custody_configuration_descriptor is None:
                 raise RuntimeError("control-plane custody startup configuration is unavailable")
             custody_configuration, custody_directory = _open_control_plane_custody(

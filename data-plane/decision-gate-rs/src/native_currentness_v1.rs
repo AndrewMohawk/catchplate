@@ -129,11 +129,25 @@ impl Statement {
 /// It commits the complete actual inner request, including its recipient quote.
 pub fn lease_preimage(holder: &str, epoch: u64, registration: &str, request: &Value)
     -> Result<Vec<u8>, String> {
+    lease_preimage_profile(holder, epoch, registration, request, false)
+}
+
+/// Additive broker-only family. The existing preimage function still refuses
+/// these labels; actual cold broker ownership selects this entrypoint.
+pub fn broker_lease_preimage(holder: &str, epoch: u64, registration: &str, request: &Value)
+    -> Result<Vec<u8>, String> {
+    lease_preimage_profile(holder, epoch, registration, request, true)
+}
+
+fn lease_preimage_profile(holder: &str, epoch: u64, registration: &str, request: &Value, broker: bool)
+    -> Result<Vec<u8>, String> {
+    let version = request.get("apiVersion").and_then(Value::as_str);
+    let selected = if broker { matches!(version, Some("serverware.nativeBrokerCredentialLeaseRequest/v1" | "serverware.nativeBrokerCredentialLeaseRequest/v2")) }
+        else { matches!(version, Some("serverware.nativeCredentialLeaseRequest/v1" | "serverware.nativeCredentialLeaseRequest/v2")) };
     if !digest(holder) || !digest(registration) || epoch == 0 || epoch > i64::MAX as u64
         || request.get("purpose").and_then(Value::as_str) != Some("dispatchSecret")
         || request.get("expectedCredentialVersion").and_then(Value::as_u64) != Some(epoch)
-        || !matches!(request.get("apiVersion").and_then(Value::as_str),
-            Some("serverware.nativeCredentialLeaseRequest/v1" | "serverware.nativeCredentialLeaseRequest/v2")) {
+        || !selected {
         return Err("currentness lease binding is not an exact native secret request".to_owned());
     }
     let mut bytes = LEASE_DOMAIN.to_vec();

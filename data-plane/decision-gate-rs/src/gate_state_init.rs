@@ -18,6 +18,8 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant, SystemTime};
 
 pub(super) struct GateStateInputs {
+    pub(super) secret_broker: Option<serverware_decision_gate::native_secret_broker_v1::Configuration>,
+    pub(super) measured_audit: Option<super::native_audit_transport::Configuration>,
     pub(super) credential_currentness: Option<serverware_decision_gate::native_currentness_v1::Configuration>,
     pub(super) policy_shadow_generation_control: Option<Arc<PolicyShadowGenerationControl>>,
     pub(super) policy_path: String,
@@ -75,6 +77,7 @@ pub(super) struct GateStateRuntime {
 impl GateStateInputs {
     pub(super) fn into_state(self, runtime: GateStateRuntime) -> GateState {
         GateState {
+            native_secret_broker: None,
             upstream_dispatch_authority: UpstreamDispatchAuthority::new(),
             credential_currentness: super::credential_currentness::LocalHolder::new(self.credential_currentness),
             #[cfg(test)]
@@ -124,6 +127,7 @@ impl GateStateInputs {
             native_runtime_lifetime: None,
             native_enrollment_authorizer: None,
             audit_client: runtime.audit_client,
+            measured_audit: None,
             credential_lease_client: runtime.credential_lease_client,
             audit_url: self.audit_url,
             credential_lease_token: self.credential_lease_token,

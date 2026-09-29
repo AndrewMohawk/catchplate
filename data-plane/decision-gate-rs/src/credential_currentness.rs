@@ -27,12 +27,14 @@ impl PreparedEvidence {
     pub(super) fn statement(&self) -> &wire::Statement { &self.statement }
 }
 pub(super) struct PreparedLease<'a> {
+    broker: bool,
     holder: String,
     epoch: u64,
     registration: String,
     request: &'a Value,
 }
 impl PreparedLease<'_> {
+    pub(super) fn broker(&self) -> bool { self.broker }
     pub(super) fn parts(&self) -> (&str, u64, &str, &Value) {
         (&self.holder, self.epoch, &self.registration, self.request)
     }
@@ -292,13 +294,15 @@ pub(super) fn wrap_request(state: &GateState, snapshot: &Arc<Snapshot>, scope: &
         let entries = state.credential_currentness.entries.lock().map_err(|_| "currentness registry poisoned")?;
         let entry = entries.get(&(scope.credential_id.clone(), version)).ok_or("currentness holder absent")?;
         require(!entry.blocked)?;
-        let prepared = PreparedLease { holder: holder_id(state)?, epoch: version,
+        let prepared = PreparedLease { broker: state.native_secret_broker.is_some(), holder: holder_id(state)?, epoch: version,
             registration: entry.registration.clone().ok_or("currentness registration absent")?, request: &inner };
         let signature = signer(state)?.transport.currentness_lease(&prepared)?;
         custody_deadline_remaining(deadline, "currentness recipient binding")?;
         json!({"holderId":prepared.holder,"epoch":version,"registrationSha256":prepared.registration,"signature":signature})
     };
-    Ok((json!({"apiVersion":"serverware.nativeCurrentCredentialLeaseRequest/v1",
+    let api_version = if state.native_secret_broker.is_some() { "serverware.nativeCurrentCredentialLeaseRequest/v2" }
+        else { "serverware.nativeCurrentCredentialLeaseRequest/v1" };
+    Ok((json!({"apiVersion":api_version,
         "currentness":currentness,"leaseRequest":inner}), Some(currentness)))
 }
 
@@ -307,8 +311,10 @@ pub(super) fn unwrap_response(state: &GateState, purpose: CredentialLeasePurpose
     if !state.credential_currentness.enabled() { require(expected.is_none())?; return Ok((body.to_vec(), None)); }
     let value = response_value(body)?;
     let object = value.as_object().ok_or("currentness envelope is not an object")?;
+    let api_version = if state.native_secret_broker.is_some() { "serverware.nativeCurrentCredentialLeaseEnvelope/v2" }
+        else { "serverware.nativeCurrentCredentialLeaseEnvelope/v1" };
     require(object.len() == 3 && object.get("apiVersion").and_then(Value::as_str)
-        == Some("serverware.nativeCurrentCredentialLeaseEnvelope/v1") && object.contains_key("envelope"))?;
+        == Some(api_version) && object.contains_key("envelope"))?;
     let currentness = object.get("currentness").ok_or("currentness envelope pin absent")?;
     let version = if purpose == CredentialLeasePurpose::GenerationMetadata {
         require(expected.as_ref() == Some(&Value::Null))?;

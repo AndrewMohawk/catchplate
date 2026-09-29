@@ -5,11 +5,12 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 
 pub(super) fn arguments(mut arguments: impl Iterator<Item = OsString>)
-    -> Result<Option<(ArtifactV1, ArtifactV1, bool)>, String>
+    -> Result<Option<(ArtifactV1, ArtifactV1, bool, bool)>, String>
 {
     let Some(mode) = arguments.next() else { return Ok(None); };
-    if mode != "--native-startup" {
-        return Err("decision gate accepts no arguments or the explicit --native-startup mode".to_owned());
+    let require_v5 = mode == "--native-enclave-startup";
+    if mode != "--native-startup" && !require_v5 {
+        return Err("decision gate accepts no arguments or an explicit native startup mode".to_owned());
     }
     let mut configuration = None;
     let mut configuration_pin = None;
@@ -44,5 +45,5 @@ pub(super) fn arguments(mut arguments: impl Iterator<Item = OsString>)
     }, ArtifactV1 {
         path: launch.ok_or("native startup requires --launch")?,
         sha256: launch_pin.ok_or("native startup requires --launch-sha256")?,
-    }, public_identity_stdout)))
+    }, public_identity_stdout, require_v5)))
 }

@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.dev/schemas/measured-data-plane-audit.v1.schema.json",
+  "title": "Original measured audit authority, sequenced commands and durable acknowledgements",
+  "oneOf": [{"$ref":"#/$defs/envelope"},{"$ref":"#/$defs/ack"},{"$ref":"#/$defs/signedPolicy"},{"$ref":"#/$defs/startup"},{"$ref":"#/$defs/nativeConfiguration"}],
+  "$defs": {
+    "digest": {"$ref":"credential-currentness-authority.v1.schema.json#/$defs/digest"},
+    "nullableDigest": {"oneOf":[{"type":"null"},{"$ref":"#/$defs/digest"}]},
+    "integer": {"type":"integer","minimum":1,"maximum":9223372036854775807},
+    "sequence": {"type":"integer","minimum":1,"maximum":9223372036854775806},
+    "uuid": {"$ref":"credential-currentness-authority.v1.schema.json#/$defs/uuid"},
+    "bytes32": {"$ref":"credential-currentness-authority.v1.schema.json#/$defs/bytes32"},
+    "component": {"type":"string","pattern":"^[A-Za-z0-9._-]{1,128}$"},
+    "statement": {
+      "type":"object","additionalProperties":false,
+      "required":["apiVersion","action","deploymentId","instanceId","epochId","assignmentSha256","bootId","keyId","controlPlaneResponseSigningKeyId","policyHash","dataPlaneBinarySha256","clientCertificateSha256","clientSpkiSha256","workloadUri","sequence","previousBatchSha256","batchSha256","eventsBase64url","issuedAtEpochNs","expiresAtEpochNs","challenge"],
+      "properties": {
+        "apiVersion":{"const":"serverware.nativeAuditStatement/v1"},"action":{"enum":["hello","prepare","commit"]},
+        "deploymentId":{"$ref":"#/$defs/component"},"instanceId":{"$ref":"#/$defs/component"},"epochId":{"$ref":"#/$defs/uuid"},
+        "assignmentSha256":{"$ref":"#/$defs/digest"},"bootId":{"$ref":"#/$defs/bytes32"},"keyId":{"$ref":"#/$defs/digest"},
+        "controlPlaneResponseSigningKeyId":{"$ref":"#/$defs/digest"},"policyHash":{"$ref":"#/$defs/digest"},"dataPlaneBinarySha256":{"$ref":"#/$defs/digest"},
+        "clientCertificateSha256":{"$ref":"#/$defs/digest"},"clientSpkiSha256":{"$ref":"#/$defs/digest"},
+        "workloadUri":{"type":"string","pattern":"^spiffe://serverware\\.audit/[A-Za-z0-9._-]{1,128}/[A-Za-z0-9._-]{1,128}$"},
+        "sequence":{"$ref":"#/$defs/sequence"},"previousBatchSha256":{"$ref":"#/$defs/nullableDigest"},"batchSha256":{"$ref":"#/$defs/nullableDigest"},
+        "eventsBase64url":{"oneOf":[{"type":"null"},{"type":"string","minLength":1,"maxLength":1398102,"pattern":"^[A-Za-z0-9_-]+$"}]},
+        "issuedAtEpochNs":{"$ref":"#/$defs/integer"},"expiresAtEpochNs":{"$ref":"#/$defs/integer"},"challenge":{"$ref":"#/$defs/bytes32"}
+      },
+      "allOf":[
+        {"if":{"properties":{"action":{"const":"prepare"}}},"then":{"properties":{"eventsBase64url":{"type":"string"},"batchSha256":{"type":"null"}}}},
+        {"if":{"properties":{"action":{"const":"hello"}}},"then":{"properties":{"eventsBase64url":{"type":"null"},"batchSha256":{"type":"null"}}}},
+        {"if":{"properties":{"action":{"const":"commit"}}},"then":{"properties":{"eventsBase64url":{"type":"null"},"batchSha256":{"$ref":"#/$defs/digest"}}}}
+      ]
+    },
+    "nativeEvidence": {
+      "type":"object","additionalProperties":false,"required":["apiVersion","attestationDocumentB64","responseProofPublicKey"],
+      "properties":{"apiVersion":{"const":"serverware.nativeResponseProofKeyEvidence/v1"},"attestationDocumentB64":{"type":"string","minLength":1,"maxLength":16384,"pattern":"^[A-Za-z0-9_-]+$"},"responseProofPublicKey":{"$ref":"#/$defs/bytes32"}}
+    },
+    "envelope": {
+      "type":"object","additionalProperties":false,"required":["statement","signature","nativeKeyEvidence"],
+      "properties":{"statement":{"$ref":"#/$defs/statement"},"signature":{"type":"string","pattern":"^ed25519:[A-Za-z0-9_-]{86}$"},"nativeKeyEvidence":{"$ref":"#/$defs/nativeEvidence"}}
+    },
+    "ack": {
+      "type":"object","additionalProperties":false,
+      "required":["apiVersion","ok","epochId","assignmentSha256","requestSha256","status","sequence","previousBatchSha256","batchSha256","pendingOriginal","accepted","auditHeadSha256"],
+      "properties":{"apiVersion":{"const":"serverware.measuredAuditAck/v1"},"ok":{"const":true},"epochId":{"$ref":"#/$defs/uuid"},"assignmentSha256":{"$ref":"#/$defs/digest"},"requestSha256":{"$ref":"#/$defs/digest"},
+        "status":{"enum":["admitted","prepared","committed"]},"sequence":{"$ref":"#/$defs/sequence"},"previousBatchSha256":{"$ref":"#/$defs/nullableDigest"},"batchSha256":{"$ref":"#/$defs/nullableDigest"},
+        "pendingOriginal":{"oneOf":[{"type":"null"},{"type":"string","minLength":1,"maxLength":1572864}]},"accepted":{"type":"integer","minimum":0,"maximum":200},"auditHeadSha256":{"$ref":"#/$defs/nullableDigest"}}
+    },
+    "assignment": {
+      "type":"object","additionalProperties":false,"required":["epochId","instanceId","native","workloadCaCertificatePem","initialSequence","previousBatchSha256","previousAssignmentSha256","pendingBatchSha256"],
+      "properties":{"epochId":{"$ref":"#/$defs/uuid"},"instanceId":{"$ref":"#/$defs/component"},"native":{"$ref":"credential-currentness-authority.v1.schema.json#/$defs/assignment"},
+        "workloadCaCertificatePem":{"type":"string","minLength":1,"maxLength":65536},"initialSequence":{"$ref":"#/$defs/sequence"},"previousBatchSha256":{"$ref":"#/$defs/nullableDigest"},"previousAssignmentSha256":{"$ref":"#/$defs/nullableDigest"},"pendingBatchSha256":{"$ref":"#/$defs/nullableDigest"}}
+    },
+    "trustRoots": {
+      "type":"object","additionalProperties":false,"required":["apiVersion","awsNitroRootCertificatesPem","awsNitroCrlsDerBase64url","nitroCertificateProfile"],
+      "properties":{"apiVersion":{"const":"serverware.measuredAuditNativeTrustRoots/v1"},"awsNitroRootCertificatesPem":{"type":"array","minItems":1,"maxItems":32,"uniqueItems":true,"items":{"type":"string","minLength":1,"maxLength":65536}},"awsNitroCrlsDerBase64url":{"const":[]},"nitroCertificateProfile":{"$ref":"credential-currentness-authority.v1.schema.json#/$defs/certificateProfile"}}
+    },
+    "policy": {
+      "type":"object","additionalProperties":false,"required":["schema","sourceRevision","configurationDigest","deploymentId","issuedAtEpochNs","expiresAtEpochNs","trustRoots","assignments"],
+      "properties":{"schema":{"const":"serverware.measuredAuditAuthorityPolicy/v1"},"sourceRevision":{"type":"string","minLength":1,"maxLength":256},"configurationDigest":{"$ref":"#/$defs/digest"},"deploymentId":{"$ref":"#/$defs/component"},"issuedAtEpochNs":{"$ref":"#/$defs/integer"},"expiresAtEpochNs":{"$ref":"#/$defs/integer"},"trustRoots":{"$ref":"#/$defs/trustRoots"},"assignments":{"type":"array","minItems":1,"maxItems":32,"items":{"$ref":"#/$defs/assignment"}}}
+    },
+    "signedPolicy": {
+      "type":"object","additionalProperties":false,"required":["schema","payload","signatureBase64Url"],
+      "properties":{"schema":{"const":"serverware.signedMeasuredAuditAuthorityPolicy/v1"},"payload":{"$ref":"#/$defs/policy"},"signatureBase64Url":{"type":"string","pattern":"^[A-Za-z0-9_-]{86}$"}}
+    },
+    "startup": {
+      "type":"object","additionalProperties":false,"required":["schema","sourceRevision","configurationDigest","authorityRootFd","authorityRootSha256","authorization"],
+      "properties":{"schema":{"const":"serverware.measuredAuditStartup/v1"},"sourceRevision":{"type":"string","minLength":1,"maxLength":256},"configurationDigest":{"$ref":"#/$defs/digest"},"authorityRootFd":{"type":"integer","minimum":32,"maximum":1023},"authorityRootSha256":{"$ref":"#/$defs/digest"},"authorization":{"$ref":"#/$defs/signedPolicy"}}
+    },
+    "nativeConfiguration": {
+      "type":"object","additionalProperties":false,"required":["apiVersion","deploymentId","instanceId","epochId","assignmentSha256","initialSequence","previousBatchSha256"],
+      "properties":{"apiVersion":{"const":"serverware.nativeMeasuredAuditConfiguration/v1"},"deploymentId":{"$ref":"#/$defs/component"},"instanceId":{"$ref":"#/$defs/component"},"epochId":{"$ref":"#/$defs/uuid"},"assignmentSha256":{"$ref":"#/$defs/digest"},"initialSequence":{"$ref":"#/$defs/sequence"},"previousBatchSha256":{"$ref":"#/$defs/nullableDigest"}}
+    }
+  }
+}

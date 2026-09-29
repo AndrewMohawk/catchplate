@@ -24900,7 +24900,9 @@ def init_audit_store(
                     "IS NOT NULL AS events_present, "
                     "pg_catalog.to_regclass("
                     "'serverware_audit.serverware_store_migrations') "
-                    "IS NOT NULL AS migrations_present"
+                    "IS NOT NULL AS migrations_present, "
+                    "(pg_catalog.to_regclass('serverware_audit.serverware_measured_audit_records') IS NOT NULL AND "
+                    "pg_catalog.to_regclass('serverware_audit.serverware_measured_audit_epochs') IS NOT NULL) AS measured_audit_present"
                 ).fetchone()
                 if (
                     readiness is None
@@ -24910,6 +24912,9 @@ def init_audit_store(
                     raise AuditStoreError(
                         "PostgreSQL audit store is not bootstrapped"
                     )
+                from serverware import control_plane_data_plane_audit as measured_audit
+                if measured_audit.selected() and not bool(readiness["measured_audit_present"]):
+                    raise AuditStoreError("measured audit append-only store is not bootstrapped")
         return
     # Schema bootstrap must commit before key release can emit its own audit event.
     with _audit_pg_bootstrap_connect(
@@ -25032,6 +25037,8 @@ def init_audit_store(
                             serverware_audit.serverware_audit_storage_epoch_guard();
                     """
                 )
+                from serverware.data_plane_audit_store import DDL as measured_audit_ddl
+                cur.execute(measured_audit_ddl)
                 _seal_postgres_schema_acl(
                     conn,
                     schema=_AUDIT_POSTGRES_SCHEMA,

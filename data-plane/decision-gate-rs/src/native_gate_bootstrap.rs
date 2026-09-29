@@ -115,6 +115,18 @@ pub(super) fn prepare_native_tls_gate_state(
     // and permanently narrow key use to this cohort's original deadline. A
     // hello label or public-key equality alone cannot establish that ownership.
     signer.transport.verify_native_identity(&mut identity, deadline)?;
+    // Both values originate only from the closed v5 cold configuration. Keep
+    // actual generated-key owners; no caller-provided readiness result enters
+    // the state, and neither operation renews the cohort's original deadline.
+    let secret_broker = match inputs.secret_broker.take() {
+        Some(config) => Some(serverware_decision_gate::native_secret_broker_v1::prepare(config, &mut identity, deadline)?),
+        None => None,
+    };
+    let measured_audit = match inputs.measured_audit.take() {
+        Some(config) => Some(native_audit_transport::prepare(config, control_plane_config, &relays,
+            inputs.audit_url.as_deref().ok_or("native measured audit URL absent")?, &mut identity, deadline)?),
+        None => None,
+    };
     let (_, attestation) = materialize_native_proxy_ingress(&ingress, deadline)?;
     let mut state = inputs.into_state(GateStateRuntime {
         snapshot: Arc::new(snapshot), audit_client, credential_lease_client: credential_client,
@@ -124,6 +136,9 @@ pub(super) fn prepare_native_tls_gate_state(
     });
     state.native_policy_bytes = Some(Arc::from(policy_bytes));
     state.native_upstream_relays = Some(held_relays);
+    state.native_secret_broker = secret_broker.map(Mutex::new);
+    state.measured_audit = measured_audit.map(Mutex::new);
+    if state.measured_audit.is_some() { native_audit_owner::initialize(&state)?; }
     ingress.verify_live(deadline)?;
     native_service_remaining(&state)?;
     Ok(NativeTlsGateV1 { state: Arc::new(state), ingress, deadline })

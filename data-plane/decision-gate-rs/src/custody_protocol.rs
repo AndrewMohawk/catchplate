@@ -47,9 +47,11 @@ pub mod native_response_profile_v1;
 pub mod native_approver_policy_v1;
 pub mod native_lease_profile_v1;
 pub mod native_currentness_v1;
+pub mod native_audit_batch_v1;
 pub mod release_profile_v1;
 #[cfg(target_os = "linux")]
 pub mod erofs_loop_v1;
+pub mod native_secret_broker_v1;
 #[cfg(target_os = "linux")]
 pub mod cgroup_control_v1;
 use release_profile_v1::{ReleaseOperation, ReleaseProfile, StatementKind};
@@ -1697,10 +1699,59 @@ impl CustodyRuntime {
                 "responseProofPublicKey":general_purpose::URL_SAFE_NO_PAD.encode(fresh.public_key())}}))
     }
 
+    /// Dedicated audit command, invoked only by the measured gate's retained
+    /// audit owner. It cannot use the development/UDS signing backend.
+    pub fn sign_native_audit(&self, identity: &mut EnclaveRuntimeIdentityV1,
+        statement: &native_audit_batch_v1::Statement, deadline:u64)->Result<Value,ProtocolError> {
+        self.verify_native_process()?;
+        let CustodySigningBackend::Native{owner,quote,..}=&self.signing_backend else {
+            return Err(invalid_statement("audit requires actual native custody"));
+        };
+        let now=|| SystemTime::now().duration_since(UNIX_EPOCH)
+            .map_err(|_|invalid_statement("audit clock before epoch"))?.as_nanos().try_into()
+            .map_err(|_|invalid_statement("audit clock overflow"));
+        statement.validate(now()?).map_err(native_proof_error)?;
+        if statement.boot_id!=self.boot_id || statement.key_id!=self.key_id
+            || Some(statement.control_plane_response_signing_key_id.as_str())!=self.control_plane_response_signing_key_id.as_deref() {
+            return Err(invalid_statement("audit differs from actual native key owner"));
+        }
+        let mut owner=owner.lock().map_err(|_|invalid_statement("audit key owner poisoned"))?;
+        let deadline=deadline.min(identity.deadline()).min(owner.deadline());
+        owner.verify_identity(identity,deadline).map_err(native_proof_error)?;
+        let mut policy=[0u8;32]; hex::decode_to_slice(&statement.policy_hash[7..],&mut policy)
+            .map_err(|_|invalid_statement("audit policy malformed"))?;
+        owner.verify_policy_commitment(policy,deadline).map_err(native_proof_error)?;
+        let key=owner.public_key_bytes().map_err(native_proof_error)?;
+        if quote.public_key()!=key.as_slice() { return Err(invalid_statement("audit quoted key changed")); }
+        let signature=owner.sign(&statement.preimage().map_err(native_proof_error)?,deadline).map_err(native_proof_error)?;
+        let mut hash=Sha256::new(); hash.update(native_audit_batch_v1::ATTESTATION_DOMAIN);
+        hash.update(general_purpose::URL_SAFE_NO_PAD.decode(&statement.challenge).map_err(|_|invalid_statement("audit challenge"))?);
+        hash.update(Sha256::digest(statement.canonical().map_err(native_proof_error)?)); hash.update(signature);
+        let challenge:[u8;32]=hash.finalize().into();
+        let fresh=owner.quote_fresh(identity,challenge,deadline).map_err(native_proof_error)?;
+        if fresh.public_key()!=key.as_slice() || fresh.user_data()!=quote.user_data() || fresh.nonce()!=&challenge
+            || fresh.document().is_empty() || fresh.document().len()>12*1024 { return Err(invalid_statement("audit fresh quote scope changed")); }
+        statement.validate(now()?).map_err(native_proof_error)?;
+        owner.verify_live(deadline).map_err(native_proof_error)?; identity.verify_live(deadline).map_err(native_proof_error)?;
+        Ok(serde_json::json!({"statement":statement,"signature":format!("ed25519:{}",general_purpose::URL_SAFE_NO_PAD.encode(signature)),
+            "nativeKeyEvidence":{"apiVersion":"serverware.nativeResponseProofKeyEvidence/v1",
+            "attestationDocumentB64":general_purpose::URL_SAFE_NO_PAD.encode(fresh.document()),"responseProofPublicKey":general_purpose::URL_SAFE_NO_PAD.encode(fresh.public_key())}}))
+    }
+
     /// Exact recipient binding under the already registered native key. This
     /// does not register a holder, acknowledge a drain, or authorize any send.
     pub fn sign_native_currentness_lease(&self, holder: &str, epoch: u64,
         registration: &str, request: &Value) -> Result<String, ProtocolError> {
+        self.sign_native_currentness_lease_profile(holder, epoch, registration, request, false)
+    }
+
+    pub fn sign_native_broker_currentness_lease(&self, holder: &str, epoch: u64,
+        registration: &str, request: &Value) -> Result<String, ProtocolError> {
+        self.sign_native_currentness_lease_profile(holder, epoch, registration, request, true)
+    }
+
+    fn sign_native_currentness_lease_profile(&self, holder: &str, epoch: u64,
+        registration: &str, request: &Value, broker: bool) -> Result<String, ProtocolError> {
         self.verify_native_live()?;
         if !self.is_native() || holder != native_currentness_v1::holder_id(&self.boot_id, &self.key_id)
             .map_err(native_proof_error)? {
@@ -1709,8 +1760,8 @@ impl CustodyRuntime {
         let policy = request.get("policyHash").and_then(Value::as_str)
             .ok_or_else(|| invalid_statement("currentness lease lacks its policy"))?;
         self.validate_native_policy_commitment(policy)?;
-        let bytes = native_currentness_v1::lease_preimage(holder, epoch, registration, request)
-            .map_err(native_proof_error)?;
+        let bytes = if broker { native_currentness_v1::broker_lease_preimage(holder, epoch, registration, request) }
+            else { native_currentness_v1::lease_preimage(holder, epoch, registration, request) }.map_err(native_proof_error)?;
         let CustodySigningBackend::Native { owner, .. } = &self.signing_backend else { unreachable!() };
         let mut owner = owner.lock().map_err(|_| native_proof_error("currentness key owner poisoned".to_owned()))?;
         let deadline = owner.deadline();

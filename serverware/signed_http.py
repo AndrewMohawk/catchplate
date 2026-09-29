@@ -120,6 +120,9 @@ class SignedOnlyHttpToolsProtocol(HttpToolsProtocol):
         self.scope["path"] = self.root_path + path
         self.scope["raw_path"] = self.root_path.encode("ascii") + raw_path
         self.scope["query_string"] = parsed_url.query or b""
+        if self.scope["path"] == "/api/data-plane/audit":
+            from serverware import control_plane_data_plane_audit as measured_audit
+            self.scope["serverware.measured_audit_peer"] = measured_audit.peer_from_transport(self.transport)
 
         existing_cycle = self.cycle
         self.cycle = _SignedHttpToolsRequestResponseCycle(

@@ -39,7 +39,7 @@ SOURCE_INPUTS = (
     "data-plane/decision-gate-rs/Cargo.toml",
     "data-plane/decision-gate-rs/Cargo.lock",
 )
-MANIFEST_NAMES = ("python-linux-amd64.sha256", "rust-linux-amd64.sha256")
+MANIFEST_NAMES = ("python-linux-amd64.sha256", "rust-linux-amd64.sha256", "native-broker-linux-amd64.sha256")
 
 
 def canonical_json(value: Any) -> bytes:
@@ -291,6 +291,7 @@ def prefetch_module(root: Path, dependency_directory: Path) -> Any:
     module.CACHE_DIR = dependency_directory / "cache"
     module.PYTHON_MANIFEST = dependency_directory / MANIFEST_NAMES[0]
     module.RUST_MANIFEST = dependency_directory / MANIFEST_NAMES[1]
+    module.BROKER_MANIFEST = dependency_directory / MANIFEST_NAMES[2]
     return module
 
 
@@ -432,12 +433,13 @@ def prepare(*, expected_commit: str, existing_cache: Path, snapshot_id: str, out
         cache = snapshot / "cache"
         cache.mkdir(parents=True)
         carried = {}
-        for relative, digest in originals[1]["entries"].items():
-            if relative not in verifier.CACHE_INPUTS:
-                continue
-            path = cache / Path(relative).name
-            carried[relative] = copy_verified(existing_cache / path.name, path, expected=digest)
-            verifier._verify_regular_input(path, relative, digest)
+        for original in originals[1:]:
+            for relative, digest in original["entries"].items():
+                if relative not in verifier.CACHE_INPUTS:
+                    continue
+                path = cache / Path(relative).name
+                carried[relative] = copy_verified(existing_cache / path.name, path, expected=digest)
+                verifier._verify_regular_input(path, relative, digest)
         download = run_container("download", output)
         if download.get("deterministic_packaging") is not True:
             raise ValueError("download phase did not prove deterministic packaging")

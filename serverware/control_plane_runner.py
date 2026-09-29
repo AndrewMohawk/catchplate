@@ -11,6 +11,7 @@ def main() -> None:
     oauth_application_startup = None
     oauth_revocation_startup = None
     oauth_refresh_cleanup_startup = None
+    measured_audit_startup = None
 
     try:
         custody_startup.initialize_from_environment()
@@ -26,6 +27,8 @@ def main() -> None:
         oauth_revocation_startup.initialize_from_environment()
         from serverware import control_plane_oauth_refresh_cleanup as oauth_refresh_cleanup_startup
         oauth_refresh_cleanup_startup.initialize_from_environment()
+        from serverware import control_plane_data_plane_audit as measured_audit_startup
+        measured_audit_startup.initialize_from_environment()
 
         import uvicorn
         from serverware.config import WEB_HOST, WEB_PORT, WEB_TLS_CERT_FILE, WEB_TLS_KEY_FILE
@@ -34,7 +37,7 @@ def main() -> None:
 
         validate_control_plane_startup()
         validate_signed_http_protocol()
-        uvicorn.run(
+        configuration = uvicorn.Config(
             "serverware.app:app",
             host=WEB_HOST,
             port=WEB_PORT,
@@ -46,9 +49,12 @@ def main() -> None:
             ssl_certfile=WEB_TLS_CERT_FILE or None,
             ssl_keyfile=WEB_TLS_KEY_FILE or None,
         )
+        configuration.load()
+        measured_audit_startup.configure_tls(configuration.ssl)
+        uvicorn.Server(configuration).run()
     except BaseException:
         # Preserve the original launch/runtime error if cleanup also fails.
-        for owner in (oauth_refresh_cleanup_startup, oauth_revocation_startup, oauth_application_startup, workload_identity_startup, enrollment_startup, custody_startup):
+        for owner in (measured_audit_startup, oauth_refresh_cleanup_startup, oauth_revocation_startup, oauth_application_startup, workload_identity_startup, enrollment_startup, custody_startup):
             try:
                 if owner is not None:
                     owner.close()
@@ -56,6 +62,7 @@ def main() -> None:
                 pass
         raise
     else:
+        measured_audit_startup.close()
         try:
             oauth_refresh_cleanup_startup.close()
         finally:

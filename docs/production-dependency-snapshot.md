@@ -4,14 +4,16 @@
 
 `production-dependencies/prepare_snapshot.py` creates a real candidate wheelhouse
 from the exact committed `requirements.lock`, checks offline installation, and
-carries forward only the unchanged, digest-verified Rust artifacts. It never
+carries forward only the unchanged, digest-verified Rust and broker-tool artifacts. It never
 publishes a snapshot, changes the checkout's reviewed manifests, or grants release
 authority. Its result is local engineering evidence awaiting dependency-owner
 review.
 
-The current lock pins `cryptography==50.0.0`; the reviewed v1 Python manifest still
-refers to the old lock and archive. Updating that manifest without producing and
-reviewing new wheel bytes does not resolve the handoff requirement.
+The current lock pins `cryptography==50.0.0`; the Python manifest still refers
+to the old lock and archive. The v2 snapshot identity now reserves the additional
+broker packaging inputs; it is not evidence that a v2 snapshot exists. Updating
+the identity or manifest without producing and reviewing new wheel bytes does
+not resolve the handoff requirement.
 
 ## Preconditions
 
@@ -39,13 +41,20 @@ The existing cache can supply the three reviewed Rust inputs:
 The directory's location and filenames do not prove integrity. The producer
 checks copied bytes against the current committed Rust manifest before starting
 network work, verifies the Cargo archive structure, and rejects changed Cargo
-inputs. It never reads or reuses that directory's Python wheelhouse.
+inputs. It never reads or reuses that directory's Python wheelhouse. That input
+directory must also supply the exact `squashfs-tools_4.5.1-1_amd64.deb` and
+`liblzo2-2_2.10-2_amd64.deb` bytes named by the new broker manifest. The
+dependency owner acquires those from Debian before candidate preparation;
+the producer only copies and verifies them, never installs them on the host.
+Their primary hash records are the Debian
+[SquashFS download page](https://packages.debian.org/bookworm/amd64/squashfs-tools/download)
+and [LZO download page](https://packages.debian.org/bookworm/amd64/liblzo2-2/download).
 
 ## Preparation
 
 These are preparation commands, to run after source review and outside an active
 expensive build phase. Replace the example commit with the new frozen commit
-containing this tool. Snapshot IDs must be new; the suggested v2 ID is valid only
+containing this tool. Snapshot IDs must be new; the suggested v3 ID is valid only
 if the dependency owner has not already assigned it.
 
 ```bash
@@ -62,7 +71,7 @@ snapshot_workdir="$(mktemp -d /srv/catchplate-fast/tmp/serverware-dependency-can
 python3 -B production-dependencies/prepare_snapshot.py \
   --expected-commit '<full-frozen-commit-id>' \
   --existing-cache /home/catchplate/codex-offload/serverware/current/production-dependencies/cache \
-  --snapshot-id serverware-production-dependencies-linux-amd64-v2 \
+  --snapshot-id serverware-production-dependencies-linux-amd64-v3 \
   --output "$snapshot_workdir/candidate"
 ```
 
@@ -100,19 +109,22 @@ candidate/
   snapshot/
     python-linux-amd64.sha256
     rust-linux-amd64.sha256
+    native-broker-linux-amd64.sha256
     cache/
       python-wheelhouse-linux-amd64.tar.gz
       cargo-vendor.tar.gz
       musl-1.2.5-r12.apk
       musl-dev-1.2.5-r12.apk
+      squashfs-tools_4.5.1-1_amd64.deb
+      liblzo2-2_2.10-2_amd64.deb
 ```
 
-Both proposed manifests identify the same new snapshot. Rust hashes remain the
+All three proposed manifests identify the same new snapshot. Rust and broker-tool hashes remain the
 reviewed values; the Python descriptor binds the captured lock and newly created
 archive. Before reporting success, the normal dependency verifier checks the
 complete staged snapshot. The report records builder image identity, source
 commit/tree, captured input hashes, wheel inventory, offline validation, carried
-artifact hashes, and both proposed manifest hashes. `published`,
+artifact hashes, and all proposed manifest hashes. `published`,
 `reviewed_pins_installed`, and `production_release_authority` remain `false` even
 on success.
 

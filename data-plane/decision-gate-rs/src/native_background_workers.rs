@@ -65,6 +65,10 @@ pub(super) fn start<'scope, 'env: 'scope>(
         let audit_lifetime = Arc::clone(&lifetime);
         spawn_task(scope, &lifetime, "native-audit-flush".to_owned(), move || {
             while keep_running(&audit_lifetime)? {
+                if audit_state.measured_audit.is_some() && super::native_audit_owner::retry(&audit_state).is_err() {
+                    if !audit_lifetime.wait(Duration::from_secs(1))? { return Ok(()); }
+                    continue;
+                }
                 let batch = pop_audit_batch(&audit_state);
                 if batch.is_empty() {
                     if !audit_lifetime.wait(audit_interval)? { return Ok(()); }

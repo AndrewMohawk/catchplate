@@ -34,9 +34,13 @@ PYTHON_ARCHIVE = "cache/python-wheelhouse-linux-amd64.tar.gz"
 CARGO_ARCHIVE = "cache/cargo-vendor.tar.gz"
 MUSL_APK = "cache/musl-1.2.5-r12.apk"
 MUSL_DEV_APK = "cache/musl-dev-1.2.5-r12.apk"
+SQUASHFS_DEB = "cache/squashfs-tools_4.5.1-1_amd64.deb"
+LZO_DEB = "cache/liblzo2-2_2.10-2_amd64.deb"
 
 PYTHON_MANIFEST = DEPENDENCY_DIR / "python-linux-amd64.sha256"
 RUST_MANIFEST = DEPENDENCY_DIR / "rust-linux-amd64.sha256"
+BROKER_MANIFEST = DEPENDENCY_DIR / "native-broker-linux-amd64.sha256"
+BROKER_INPUTS = (SQUASHFS_DEB, LZO_DEB)
 PYTHON_INPUTS = ("requirements.lock", PYTHON_ARCHIVE)
 RUST_INPUTS = (
     "data-plane/decision-gate-rs/Cargo.toml",
@@ -45,7 +49,7 @@ RUST_INPUTS = (
     MUSL_APK,
     MUSL_DEV_APK,
 )
-CACHE_INPUTS = {PYTHON_ARCHIVE, CARGO_ARCHIVE, MUSL_APK, MUSL_DEV_APK}
+CACHE_INPUTS = {PYTHON_ARCHIVE, CARGO_ARCHIVE, MUSL_APK, MUSL_DEV_APK, *BROKER_INPUTS}
 ARCHIVE_ROOTS = {
     PYTHON_ARCHIVE: "wheelhouse",
     CARGO_ARCHIVE: "vendor",
@@ -190,6 +194,8 @@ def expected_artifact_descriptor(relative: str, entries: dict[str, str]) -> dict
     return {
         MUSL_APK: {"kind": "alpine-apk", "name": "musl", "version": "1.2.5-r12"},
         MUSL_DEV_APK: {"kind": "alpine-apk", "name": "musl-dev", "version": "1.2.5-r12"},
+        SQUASHFS_DEB: {"kind": "debian-deb", "name": "squashfs-tools", "version": "1:4.5.1-1"},
+        LZO_DEB: {"kind": "debian-deb", "name": "liblzo2-2", "version": "2.10-2"},
     }[relative]
 
 
@@ -265,6 +271,7 @@ def manifests() -> list[dict[str, Any]]:
     parsed = [
         parse_manifest(PYTHON_MANIFEST, PYTHON_INPUTS),
         parse_manifest(RUST_MANIFEST, RUST_INPUTS),
+        parse_manifest(BROKER_MANIFEST, BROKER_INPUTS),
     ]
     snapshot_ids = {item["metadata"]["snapshotId"] for item in parsed}
     if len(snapshot_ids) != 1:

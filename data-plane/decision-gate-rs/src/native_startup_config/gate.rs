@@ -89,7 +89,9 @@ struct PolicyTrustConfigV1 {
 }
 
 impl GateConfigV1 {
-    pub(super) fn into_inputs(self)
+    pub(super) fn into_inputs(self,
+        secret_broker: Option<serverware_decision_gate::native_secret_broker_v1::Configuration>,
+        measured_audit: Option<super::super::native_audit_transport::Configuration>)
         -> Result<(GateStateInputs, ControlPlaneClientConfig), String>
     {
         if !is_sha256_digest(&self.expected_binary_sha256)
@@ -140,6 +142,8 @@ impl GateConfigV1 {
             Some((_, certificates)) => certificates,
         };
         let inputs = GateStateInputs {
+            secret_broker,
+            measured_audit,
             credential_currentness: None,
             policy_shadow_generation_control: None,
             policy_path: String::new(),

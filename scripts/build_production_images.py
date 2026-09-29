@@ -46,11 +46,17 @@ PRIVATE_CONTEXT_FILES = (
     "production-dependencies/cache/cargo-vendor.tar.gz",
     "production-dependencies/cache/musl-1.2.5-r12.apk",
     "production-dependencies/cache/musl-dev-1.2.5-r12.apk",
+    "production-dependencies/cache/squashfs-tools_4.5.1-1_amd64.deb",
+    "production-dependencies/cache/liblzo2-2_2.10-2_amd64.deb",
 )
 PRODUCTION_ARTIFACT_TARGETS = {
     (
         "data-plane/decision-gate-rs/Dockerfile.production",
         "production-launcher-artifact",
+    ),
+    (
+        "data-plane/decision-gate-rs/Dockerfile.production",
+        "native-broker-runtime-artifact",
     ),
 }
 

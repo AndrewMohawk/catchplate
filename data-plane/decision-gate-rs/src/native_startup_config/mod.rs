@@ -126,9 +126,28 @@ struct ConfigurationV4 {
     credential_currentness: serverware_decision_gate::native_currentness_v1::Configuration,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ConfigurationV5 {
+    api_version: String,
+    gate: gate::GateConfigV1,
+    native: parameters::NativeSettingsV1,
+    shadow: shadow::ShadowConfigV1,
+    response_observation_v2: NativeResponseObservationV2ConfigV1,
+    policy: ArtifactV1,
+    enrollment_authorizer: EnrollmentAuthorizerV1,
+    enrollment_setup_authorizer: EnrollmentAuthorizerV1,
+    enrollment_proxy_endpoint: String,
+    credential_currentness: serverware_decision_gate::native_currentness_v1::Configuration,
+    secret_broker: serverware_decision_gate::native_secret_broker_v1::Configuration,
+    measured_audit: super::native_audit_transport::Configuration,
+}
+
 // This is only a source-local decomposition after exact version-specific
 // decoding. It is never accepted as configuration or verification authority.
 struct ConfigurationParts {
+    secret_broker: Option<serverware_decision_gate::native_secret_broker_v1::Configuration>,
+    measured_audit: Option<super::native_audit_transport::Configuration>,
     credential_currentness: Option<serverware_decision_gate::native_currentness_v1::Configuration>,
     gate: gate::GateConfigV1,
     native: parameters::NativeSettingsV1,
@@ -138,15 +157,17 @@ struct ConfigurationParts {
     enrollment: Option<EnrollmentParts>,
 }
 
-fn configuration(raw: &[u8]) -> Result<ConfigurationParts, String> {
+fn configuration(raw: &[u8], require_v5: bool) -> Result<ConfigurationParts, String> {
     let value = json::parse(raw, MAX_CONFIGURATION_BYTES)?;
+    ensure(!require_v5 || value.get("apiVersion").and_then(Value::as_str) == Some("serverware.nativeStartupConfiguration/v5"),
+        "native enclave entrypoint requires the exact v5 broker/audit configuration")?;
     match value.get("apiVersion").and_then(Value::as_str) {
         Some("serverware.nativeStartupConfiguration/v1") => {
             let original: ConfigurationV1 = serde_json::from_value(value)
                 .map_err(|_| "native v1 configuration violates its closed contract")?;
             ensure(original.api_version == "serverware.nativeStartupConfiguration/v1",
                 "native startup v1 configuration version differs")?;
-            Ok(ConfigurationParts { credential_currentness: None, gate: original.gate, native: original.native,
+            Ok(ConfigurationParts { secret_broker: None, measured_audit: None, credential_currentness: None, gate: original.gate, native: original.native,
                 shadow: original.shadow, response_observation_v2: original.response_observation_v2,
                 policy: original.policy, enrollment: None })
         },
@@ -156,7 +177,7 @@ fn configuration(raw: &[u8]) -> Result<ConfigurationParts, String> {
             ensure(original.api_version == "serverware.nativeStartupConfiguration/v2"
                 && original.enrollment_authorizer.api_version == "serverware.nativeEnrollmentAuthorizer/v1",
                 "native startup v2 authorizer version differs")?;
-            Ok(ConfigurationParts { credential_currentness: None, gate: original.gate, native: original.native,
+            Ok(ConfigurationParts { secret_broker: None, measured_audit: None, credential_currentness: None, gate: original.gate, native: original.native,
                 shadow: original.shadow, response_observation_v2: original.response_observation_v2,
                 policy: original.policy,
                 enrollment: Some(EnrollmentParts { authorizer: original.enrollment_authorizer,
@@ -169,7 +190,7 @@ fn configuration(raw: &[u8]) -> Result<ConfigurationParts, String> {
                 && original.enrollment_authorizer.api_version == "serverware.nativeEnrollmentAuthorizer/v1"
                 && original.enrollment_setup_authorizer.api_version == "serverware.nativeEnrollmentSetupAuthorizer/v1",
                 "native startup v3 authorizer version differs")?;
-            Ok(ConfigurationParts { credential_currentness: None, gate: original.gate, native: original.native,
+            Ok(ConfigurationParts { secret_broker: None, measured_audit: None, credential_currentness: None, gate: original.gate, native: original.native,
                 shadow: original.shadow, response_observation_v2: original.response_observation_v2,
                 policy: original.policy,
                 enrollment: Some(EnrollmentParts { authorizer: original.enrollment_authorizer,
@@ -184,7 +205,24 @@ fn configuration(raw: &[u8]) -> Result<ConfigurationParts, String> {
                 && original.enrollment_setup_authorizer.api_version == "serverware.nativeEnrollmentSetupAuthorizer/v1",
                 "native startup v4 authorizer version differs")?;
             original.credential_currentness.validate()?;
-            Ok(ConfigurationParts { credential_currentness: Some(original.credential_currentness),
+            Ok(ConfigurationParts { secret_broker: None, measured_audit: None, credential_currentness: Some(original.credential_currentness),
+                gate: original.gate, native: original.native, shadow: original.shadow,
+                response_observation_v2: original.response_observation_v2, policy: original.policy,
+                enrollment: Some(EnrollmentParts { authorizer: original.enrollment_authorizer,
+                    endpoint: original.enrollment_proxy_endpoint,
+                    setup_authorizer: Some(original.enrollment_setup_authorizer) }) })
+        },
+        Some("serverware.nativeStartupConfiguration/v5") => {
+            let original: ConfigurationV5 = serde_json::from_value(value)
+                .map_err(|_| "native v5 configuration violates its closed contract")?;
+            ensure(original.api_version == "serverware.nativeStartupConfiguration/v5"
+                && original.enrollment_authorizer.api_version == "serverware.nativeEnrollmentAuthorizer/v1"
+                && original.enrollment_setup_authorizer.api_version == "serverware.nativeEnrollmentSetupAuthorizer/v1",
+                "native startup v5 authorizer version differs")?;
+            original.credential_currentness.validate()?;
+            original.secret_broker.validate()?;
+            Ok(ConfigurationParts { secret_broker: Some(original.secret_broker), measured_audit: Some(original.measured_audit),
+                credential_currentness: Some(original.credential_currentness),
                 gate: original.gate, native: original.native, shadow: original.shadow,
                 response_observation_v2: original.response_observation_v2, policy: original.policy,
                 enrollment: Some(EnrollmentParts { authorizer: original.enrollment_authorizer,
@@ -203,18 +241,18 @@ fn decode<T: DeserializeOwned>(raw: &[u8], maximum: usize) -> Result<T, String> 
         .map_err(|_| "native configuration does not match its closed JSON contract".to_owned())
 }
 
-fn run(configuration: ArtifactV1, launch: ArtifactV1, public_identity_stdout: bool) -> Result<(), String> {
+fn run(configuration: ArtifactV1, launch: ArtifactV1, public_identity_stdout: bool, require_v5: bool) -> Result<(), String> {
     let configuration_pin = configuration.sha256.clone();
     let (mut configuration_original, raw_configuration) =
         HeldOriginal::read(configuration, MAX_CONFIGURATION_BYTES)?;
     let raw_configuration = zeroize::Zeroizing::new(raw_configuration);
     configuration_original.require_private()?;
-    let configuration = self::configuration(&raw_configuration)?;
+    let configuration = self::configuration(&raw_configuration, require_v5)?;
     let (mut launch_original, raw_launch) = HeldOriginal::read(launch, MAX_LAUNCH_BYTES)?;
     let launch: parameters::LaunchV1 = decode(&raw_launch, MAX_LAUNCH_BYTES)?;
     launch.validate(&configuration_pin)?;
     let lifetime = NativeRuntimeLifetimeV1::new(launch.deadline_boottime_ns)?;
-    let (mut inputs, control_plane_tls) = configuration.gate.into_inputs()?;
+    let (mut inputs, control_plane_tls) = configuration.gate.into_inputs(configuration.secret_broker, configuration.measured_audit)?;
     inputs.credential_currentness = configuration.credential_currentness;
     let v2 = configuration.response_observation_v2.into_config()?;
     let shadow = configuration.shadow.into_config()?;
@@ -239,7 +277,7 @@ fn run(configuration: ArtifactV1, launch: ArtifactV1, public_identity_stdout: bo
 pub(super) fn run_from_process_arguments() -> Result<Option<()>, String> {
     match cli::arguments(std::env::args_os().skip(1))? {
         None => Ok(None),
-        Some((configuration, launch, public_identity_stdout)) =>
-            run(configuration, launch, public_identity_stdout).map(Some),
+        Some((configuration, launch, public_identity_stdout, require_v5)) =>
+            run(configuration, launch, public_identity_stdout, require_v5).map(Some),
     }
 }

@@ -3,11 +3,13 @@
 This source profile connects an independently enrolled OAuth application to a
 purpose-controlled approval and atomic activation path. It supports a new
 credential only: the pending row must have no reconnect target and no setup
-session association. It is not a completed consent-to-credential flow or a tested
+session association. It is not an executed consent-to-credential flow or a tested
 pilot. The separate [enrolled exchange client](oauth-controlled-exchange-client.md)
 now connects new-credential consent, one-shot exchange, retained material and
-pending staging in source. Reconnect, refresh, setup and portal ceremonies remain
-unfinished; unconfigured development behavior remains explicitly separate.
+pending staging in source. The [dedicated portal](oauth-enrolled-activation-portal.md)
+connects exact-account review, distinct-person approval and fresh requester
+activation. Reconnect, refresh and setup remain unfinished; unconfigured
+development behavior remains explicitly separate.
 
 ## Independently admitted originals
 
@@ -88,7 +90,9 @@ projection. Unknown, late, conflicting or uncertain outcomes are blocked with
 no automatic retry and no fallback to generic runtime writes. This profile does
 not add approval, ciphertext or token data to logs.
 
-The existing portal has not been connected to this new ceremony by this slice.
+The dedicated portal now consumes this exact ceremony without generic retry or
+development fallback. Its [read projections](oauth-enrolled-read-projections.md)
+do not perform legacy expiration or revocation DML while listing accounts.
 Deployment still requires independently provisioned enrollment authority,
 matching signed authority configuration and current physical authenticator
 trust. Shared fenced subject coordination across deployments, external

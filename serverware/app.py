@@ -70,6 +70,8 @@ from serverware.portal_admin_token_publication import (
     ADMIN_TOKEN_PUBLICATION_HTML,
     ADMIN_TOKEN_PUBLICATION_SCRIPT,
 )
+from serverware.portal_oauth_consent import OAUTH_CONSENT_HTML, OAUTH_CONSENT_SCRIPT, enrolled_oauth_profile
+from serverware.portal_oauth_activation import OAUTH_ACTIVATION_HTML, OAUTH_ACTIVATION_SCRIPT
 from serverware.portal_registration_handoff import (
     REGISTRATION_HANDOFF_CSS,
     REGISTRATION_HANDOFF_HTML,
@@ -3224,14 +3226,21 @@ def startup() -> None:
 @app.get("/", response_class=HTMLResponse)
 @app.get("/approvals", response_class=HTMLResponse)
 def index() -> str:
-    return UI_HTML
+    return _portal_document()
+
+
+def _portal_document() -> str:
+    marker = "__SERVERWARE_ENROLLED_OAUTH_PROFILE__"
+    if UI_HTML.count(marker) != 1:
+        raise RuntimeError("portal OAuth profile placeholder is missing or duplicated")
+    return UI_HTML.replace(marker, json.dumps(enrolled_oauth_profile()))
 
 
 @app.get("/approvals/{approval_id}", response_class=HTMLResponse)
 def approval_index(approval_id: str) -> str:
     if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,255}", approval_id) is None:
         raise HTTPException(status_code=404, detail="approval not found")
-    return UI_HTML
+    return _portal_document()
 
 
 @app.get("/healthz")
@@ -7251,24 +7260,20 @@ def bootstrap(identity: AdminIdentity = Depends(require_admin)) -> dict[str, Any
     can_view_approvals = identity.has_any_role({"approver", "auditor"})
     can_view_logs = identity.has_any_role({"auditor"})
     credentials = db.list_credentials() if can_view_credentials else []
-    pending_oauth_credentials = (
-        db.list_pending_oauth_credentials(
-            requester_id=(
-                None
-                if identity.has_any_role({"admin"})
-                else identity.user_id
-            )
-        )
-        if can_view_credentials
-        else []
-    )
-    oauth_issuance_uncertainties = (
-        db.list_oauth_issuance_uncertainties(
-            actor_id=None if identity.has_any_role({"admin"}) else identity.user_id
-        )
-        if can_view_credentials
-        else []
-    )
+    pending_oauth_credentials, oauth_issuance_uncertainties = [], []
+    if can_view_credentials:
+        from serverware import oauth_read_projections
+        actor_filter = None if identity.has_any_role({"admin"}) else identity.user_id
+        try:
+            oauth_owner = oauth_read_projections.source_owner()
+            if oauth_owner is not None:
+                pending_oauth_credentials = oauth_read_projections.pending(oauth_owner, requester_id=actor_filter)
+                oauth_issuance_uncertainties = oauth_read_projections.uncertainties(oauth_owner, actor_id=actor_filter)
+        except Exception:
+            raise HTTPException(status_code=503, detail="OAuth observations unavailable; no expiry, cleanup or retry is authorized") from None
+        if oauth_owner is None:
+            pending_oauth_credentials = db.list_pending_oauth_credentials(requester_id=actor_filter)
+            oauth_issuance_uncertainties = db.list_oauth_issuance_uncertainties(actor_id=actor_filter)
     routes = db.list_routes() if can_view_routes else []
     approvals = db.list_approvals(limit=100) if can_view_approvals else []
     logs = db.list_logs(limit=150) if can_view_logs else []
@@ -15316,6 +15321,14 @@ def oauth_pending_credentials(
         require_role("admin", "policy_author", "credential_owner")
     ),
 ) -> dict[str, Any]:
+    from serverware import oauth_read_projections
+    try:
+        oauth_owner = oauth_read_projections.source_owner()
+        if oauth_owner is not None:
+            return {"pendingCredentials": oauth_read_projections.pending(oauth_owner,
+                requester_id=None if identity.has_any_role({"admin"}) else identity.user_id)}
+    except Exception:
+        raise HTTPException(status_code=503, detail="OAuth observations unavailable; no expiry, cleanup or retry is authorized") from None
     return {
         "pendingCredentials": db.list_pending_oauth_credentials(
             requester_id=(
@@ -21940,6 +21953,7 @@ UI_HTML = r"""
             <p class="hint" id="oauth-status" role="status" aria-live="polite"></p>
             <button id="oauth-submit" type="submit">Connect with OAuth</button>
           </form>
+          __SERVERWARE_OAUTH_CONSENT_HTML__
           <div id="oauth-connected-section" class="pending-oauth-list connected-oauth-list" hidden>
             <h3>Connected provider accounts</h3>
             <div id="oauth-connected-accounts"></div>
@@ -21948,6 +21962,7 @@ UI_HTML = r"""
             <h3>Verified accounts awaiting activation</h3>
             <div id="pending-oauth-credentials"></div>
           </div>
+          __SERVERWARE_OAUTH_ACTIVATION_HTML__
           <div id="oauth-uncertain-section" class="pending-oauth-list" hidden>
             <h3>Provider issuance requires review</h3>
             <p class="hint">The provider may have issued a grant, but Serverware could not durably confirm the result. Revoke the app in the provider account before clearing this record.</p>
@@ -22412,6 +22427,7 @@ UI_HTML = r"""
     };
 
     const policyTemplates = __SERVERWARE_CANONICAL_POLICY_TEMPLATES__;
+    const enrolledOAuthProfile = __SERVERWARE_ENROLLED_OAUTH_PROFILE__;
 
     function adminToken() {
       return $('admin-token').value.trim();
@@ -22446,6 +22462,7 @@ UI_HTML = r"""
       sessionActivationInvalidate('Browser session state became unknown. Fresh authorization is required.');
       workloadIssuanceInvalidate('Browser session state became unknown.');
       adminPublicationInvalidate('Browser session state became unknown.');
+      oauthActivationInvalidate('Browser session state became unknown.');
       oidcSessionStatusUnknown = true;
       state.authStatus = null;
       renderAuthStatus();
@@ -22472,6 +22489,7 @@ UI_HTML = r"""
         sessionActivationInvalidate('Browser authentication changed. Discarded activation authorization.');
         workloadIssuanceInvalidate('Browser authentication changed.');
         adminPublicationInvalidate('Browser authentication changed.');
+        oauthActivationInvalidate('Browser authentication changed.');
       }
       state.authStatus = status;
       oidcSessionStatusUnknown = false;
@@ -22518,11 +22536,13 @@ UI_HTML = r"""
       renderSessionActivation();
       renderWorkloadIssuance();
       renderAdminPublication();
+      renderOAuthActivation();
     }
 
     async function signInWithOIDC() {
       sessionActivationInvalidate('Sign-in started. Discarded activation authorization.');
       workloadIssuanceInvalidate('Sign-in started.');
+      oauthActivationInvalidate('Sign-in started.');
       clearCustodyView('Sign-in is changing. Custody metadata cleared.');
       const returnTo = `${window.location.pathname}${window.location.search}`;
       const query = new URLSearchParams({return_to: returnTo});
@@ -22731,6 +22751,7 @@ UI_HTML = r"""
       sessionActivationInvalidate('Sign-out started. Discarded activation authorization.');
       workloadIssuanceInvalidate('Sign-out started.');
       adminPublicationInvalidate('Sign-out started.');
+      oauthActivationInvalidate('Sign-out started.');
       clearCustodyView('Signing out. Custody metadata cleared.');
       await sessionApi('/api/auth/logout');
       csrfToken = null;
@@ -22761,7 +22782,7 @@ UI_HTML = r"""
     async function runUiAction(label, action) {
       try {
         const result = await action();
-        if (!result || (!result.pending && !result.blocked && !result.cancelled)) setStatus(`${label} complete.`, 'success');
+        if (!result || (!result.uiHandled && !result.pending && !result.blocked && !result.cancelled)) setStatus(`${label} complete.`, 'success');
         return result;
       } catch (error) {
         setStatus(`${label} failed: ${error.message}`, 'error');
@@ -22782,6 +22803,7 @@ UI_HTML = r"""
         if (control.id === 'admin-token' || control.id === 'webauthn-bootstrap-token'
             || control.id.startsWith('registration-handoff-')
             || control.id.startsWith('workload-issuance-')
+            || control.id.startsWith('oauth-activation-')
             || control.id.startsWith('session-activation-') || control.readOnly) return;
         const key = controlStateKey(control);
         if (!key) return;
@@ -23363,7 +23385,12 @@ UI_HTML = r"""
         const status = item.status || 'pending';
         const scopes = Array.isArray(review.scopes) ? review.scopes.join(', ') : '';
         let action = '';
-        if (status === 'pending' && mine) {
+        if (enrolledOAuthProfile !== 'development') {
+          action = enrolledOAuthProfile === 'enrolled-new-credential-v1' && status === 'pending' && mine && oauthActivationId(item.id)
+            ? `<button type="button" onclick="activatePendingOAuthCredential('${item.id}')">Review enrolled account</button>`
+            : '<span class="pill warn">Enrolled account: explicit authorized action required</span>';
+          action += '<span class="hint">No legacy cancellation or revocation retry is available for enrolled accounts.</span>';
+        } else if (status === 'pending' && mine) {
           action = `<div class="toolbar"><button type="button" onclick="runUiAction('Activate verified OAuth account', () => activatePendingOAuthCredential('${item.id}'))">Request approval and activate</button><button class="danger" type="button" onclick="runUiAction('Cancel OAuth connection', () => cancelPendingOAuthCredential('${item.id}'))">Cancel</button></div>`;
         } else if (status === 'pending') {
           action = '<span class="pill warn">requester action required</span>';
@@ -23384,6 +23411,20 @@ UI_HTML = r"""
 
     function renderOAuthIssuanceUncertainties() {
       const items = state.oauthIssuanceUncertainties || [];
+      if (enrolledOAuthProfile !== 'development') {
+        $('oauth-uncertain-section').hidden = false;
+        const hint = $('oauth-uncertain-section').querySelector('p.hint');
+        if (hint) hint.textContent = 'Stored enrolled work observations only. Missing rows or an accepted HTTP response do not prove clean state or provider revocation. No confirm, clear, cleanup or retry control is available here.';
+        $('oauth-issuance-uncertainties').innerHTML = enrolledOAuthProfile === 'unavailable'
+          ? '<p class="hint">Cold ownership is unavailable; no current OAuth work observation or fallback is available.</p>'
+          : items.map(item => `<div class="pending-oauth-item oauth-uncertain-item stack">
+            <div class="toolbar"><span class="pill warn">stored: ${esc(item.status)}</span><strong>${esc(item.provider_id)}</strong></div>
+            <code>${esc(item.id)}</code><span class="muted">${esc(item.source)} / observed stored update ${esc(item.updated_at)}</span>
+            <span class="muted">Requester ${esc(item.actor_id)}</span>
+            <span>Incomplete or terminal local evidence only; this view cannot authorize contact, cleanup or retry and does not prove provider revocation.</span>
+          </div>`).join('') || '<p class="hint">No matching retained work was returned for this reader. This is not a clean-state, no-issuance or revocation proof.</p>';
+        return;
+      }
       $('oauth-uncertain-section').hidden = !items.length;
       $('oauth-issuance-uncertainties').innerHTML = items.map((item) => {
         const confirmId = `oauth-uncertain-confirm-${item.id}`;
@@ -23819,6 +23860,7 @@ UI_HTML = r"""
       renderWorkloadEnrollmentRequirements();
       renderWorkloadIssuance();
       renderAdminPublication();
+      renderOAuthActivation();
       syncCredentialKindFields();
       renderOAuthDefaults(!hasRendered);
       renderPendingMutation();
@@ -23830,16 +23872,19 @@ UI_HTML = r"""
       if (!provider) {
         $('oauth-status').textContent = 'No OAuth providers configured.';
         $('oauth-submit').disabled = true;
+        renderOAuthConsent();
         return;
       }
       if (applyDefaults && !$('oauth-scopes').value.trim()) $('oauth-scopes').value = (provider.defaultScopes || []).join('\n');
       $('oauth-submit').disabled = !provider.configured;
       $('oauth-status').textContent = provider.configured ? `Redirect URI: ${provider.redirectUri}` : `Set OAuth client env vars for ${provider.displayName}.`;
+      renderOAuthConsent();
     }
 
     function safeControlPlaneRequest(request, action = null) {
       if (action === workloadIssuanceAction) return workloadIssuanceReview(request);
       if (action === adminPublicationAction) return adminPublicationReview(request);
+      if (action === oauthActivationAction && enrolledOAuthProfile !== 'development') return oauthActivationReviewBinding(request);
       const allowed = [
         'credential_type', 'provider', 'provider_subject', 'provider_account', 'credential_name', 'scopes',
         'metadata_keys', 'expires_at_epoch_ms', 'x_app_id', 'name', 'kind',
@@ -23864,8 +23909,10 @@ UI_HTML = r"""
         const resource = item.resource_id ? `<br><code>${esc(item.resource_id)}</code>` : '';
         const summary = safeControlPlaneRequest(item.request, item.action);
         const requiredRoles = (item.required_approver_roles || []).join(' or ');
-        const approveBlocked = item.can_approve !== true;
-        const denyBlocked = item.can_deny !== true;
+        const enrolledActivation = item.action === oauthActivationAction && enrolledOAuthProfile !== 'development';
+        const approveBlocked = item.can_approve !== true || enrolledActivation
+          && (enrolledOAuthProfile !== 'enrolled-new-credential-v1' || !(state.authStatus?.roles || []).includes('credential_owner'));
+        const denyBlocked = item.can_deny !== true || enrolledActivation;
         const approveBlockId = `control-plane-approve-block-${item.id}`;
         const denyBlockId = `control-plane-deny-block-${item.id}`;
         const approveAttributes = approveBlocked ? `disabled aria-disabled="true" aria-describedby="${approveBlockId}"` : '';
@@ -23877,7 +23924,7 @@ UI_HTML = r"""
             <button type="button" onclick="runUiAction('Approve control-plane mutation', () => decideControlPlaneApproval('${item.id}', 'approve'))" ${approveAttributes}>Approve</button>
             <button class="danger" type="button" onclick="runUiAction('Deny control-plane mutation', () => decideControlPlaneApproval('${item.id}', 'deny'))" ${denyAttributes}>Deny</button>
             ${approveBlocked ? `<span id="${approveBlockId}" class="approval-block-reason">${esc(item.approve_block_reason || 'Approval is unavailable.')}</span>` : ''}
-            ${denyBlocked ? `<span id="${denyBlockId}" class="approval-block-reason">${esc(item.deny_block_reason || 'Denial is unavailable.')}</span>` : ''}
+            ${denyBlocked ? `<span id="${denyBlockId}" class="approval-block-reason">${esc(enrolledActivation ? 'Enrolled denial requires a separate controlled action; no legacy fallback.' : item.deny_block_reason || 'Denial is unavailable.')}</span>` : ''}
           </div>
           <span class="muted">Required role: ${esc(requiredRoles || 'unavailable')}</span>` : `<span class="muted">${esc(item.decision_note || 'Decided')}</span>`;
         return `<tr id="${esc(rowId)}" tabindex="-1">
@@ -23992,6 +24039,13 @@ UI_HTML = r"""
     async function decideControlPlaneApproval(id, decision) {
       const note = $(`control-plane-note-${id}`)?.value.trim() || null;
       const item = (state.controlPlaneApprovals || []).find(value => value.id === id);
+      if (item?.action === oauthActivationAction && enrolledOAuthProfile !== 'development') {
+        if (enrolledOAuthProfile !== 'enrolled-new-credential-v1' || decision !== 'approve') {
+          throw new Error('This enrolled OAuth decision is unavailable; no generic approval or denial fallback.');
+        }
+        const originalNote = $(`control-plane-note-${id}`)?.value ?? '';
+        return oauthActivationApprove(id, originalNote === '' ? null : originalNote);
+      }
       if (decision === 'approve' && item?.action === adminPublicationAction) {
         // Dedicated cold-authority ceremony; non-null notes are refused, not discarded.
         return adminPublicationApprove(id, note);
@@ -24748,6 +24802,11 @@ UI_HTML = r"""
     $('oauth-form').addEventListener('change', saveOAuthDraft);
     $('oauth-form').addEventListener('submit', (event) => {
       event.preventDefault();
+      if (enrolledOAuthProfile !== 'development') {
+        if (enrolledOAuthProfile === 'enrolled-new-credential-v1') void oauthConsentPrepare();
+        else { oauthConsentMessage('Cold ownership is unavailable. No fallback request was sent.', true); renderOAuthConsent(); }
+        return;
+      }
       runUiAction('Start OAuth login', async () => {
         const form = new FormData(event.target);
         const provider = (state.oauthProviders || []).find((item) => item.id === form.get('provider'));
@@ -25218,6 +25277,7 @@ UI_HTML = r"""
       return completed;
     }
     async function reconnectOAuthCredential(id) {
+      if (enrolledOAuthProfile !== 'development') throw new Error('Controlled enrolled reconnect is not implemented. No request or new-credential fallback was sent.');
       const item = state.credentials.find((candidate) => candidate.id === id);
       if (!item || item.kind !== 'oauth2' || item.metadata?.oauth !== true) throw new Error('Managed OAuth credential is unavailable');
       if ((item.lifecycle_status || 'active') !== 'active') throw new Error('Complete provider revocation before reconnecting this credential');
@@ -25234,6 +25294,8 @@ UI_HTML = r"""
       return completed;
     }
     async function activatePendingOAuthCredential(id) {
+      if (enrolledOAuthProfile === 'enrolled-new-credential-v1') return oauthActivationInspect(id);
+      if (enrolledOAuthProfile !== 'development') throw new Error('Enrolled OAuth activation profile is unavailable.');
       const item = (state.pendingOAuthCredentials || []).find((candidate) => candidate.id === id);
       if (!item) throw new Error('Pending OAuth credential is no longer available');
       if (item.requester_id !== state.currentUserId) throw new Error('Only the OAuth requester can activate this account');
@@ -25253,6 +25315,7 @@ UI_HTML = r"""
       return completed;
     }
     async function cancelPendingOAuthCredential(id) {
+      if (enrolledOAuthProfile !== 'development') throw new Error('Enrolled cancellation requires a controlled lifecycle action; no legacy fallback.');
       if (!window.confirm('Cancel this OAuth connection attempt and revoke its provider grant?')) return cancelledAction('OAuth connection cancellation');
       const result = await api(`/api/oauth/pending/${id}`, {method: 'DELETE'});
       await refresh();
@@ -25260,6 +25323,7 @@ UI_HTML = r"""
       return result;
     }
     async function revokePendingOAuthCredential(id) {
+      if (enrolledOAuthProfile !== 'development') throw new Error('Enrolled revocation requires its own authority; no legacy retry.');
       try {
         return await api(`/api/oauth/pending/${id}/revoke`, {method: 'POST'});
       } finally {
@@ -25267,6 +25331,7 @@ UI_HTML = r"""
       }
     }
     async function resolveOAuthIssuanceUncertainty(id) {
+      if (enrolledOAuthProfile !== 'development') throw new Error('Enrolled OAuth observations cannot enter the generic confirm/clear mutation. A separately controlled successor is required; no request was sent.');
       const item = (state.oauthIssuanceUncertainties || []).find((candidate) => candidate.id === id);
       if (!item) throw new Error('OAuth issuance uncertainty is no longer available');
       const confirmed = $(`oauth-uncertain-confirm-${id}`)?.checked === true;
@@ -25586,17 +25651,22 @@ UI_HTML = r"""
     __SERVERWARE_SESSION_ACTIVATION_SCRIPT__
     __SERVERWARE_WORKLOAD_ISSUANCE_SCRIPT__
     __SERVERWARE_ADMIN_TOKEN_PUBLICATION_SCRIPT__
+    __SERVERWARE_OAUTH_CONSENT_SCRIPT__
+    __SERVERWARE_OAUTH_ACTIVATION_SCRIPT__
     initWorkloadIdentityEditor();
     initWorkloadEnrollmentRequirements();
     initRegistrationHandoff();
     initSessionActivation();
     initWorkloadIssuance();
     initAdminPublication();
+    initOAuthConsent();
+    initOAuthActivation();
     $('admin-token').value = '';
     $('admin-token').addEventListener('input', () => {
       sessionActivationInvalidate('Operator authentication changed. Discarded activation authorization.');
       workloadIssuanceInvalidate('Entered operator credentials changed.');
       adminPublicationInvalidate('Entered operator credentials changed.');
+      oauthActivationInvalidate('Entered operator credentials changed.');
       clearCustodyView('Operator token changed. Refresh custody inventory explicitly.');
       syncCustodyAuth();
     });
@@ -25652,6 +25722,10 @@ for _portal_placeholder, _portal_fragment in (
     ("__SERVERWARE_WORKLOAD_ISSUANCE_SCRIPT__", WORKLOAD_ISSUANCE_SCRIPT),
     ("__SERVERWARE_ADMIN_TOKEN_PUBLICATION_HTML__", ADMIN_TOKEN_PUBLICATION_HTML),
     ("__SERVERWARE_ADMIN_TOKEN_PUBLICATION_SCRIPT__", ADMIN_TOKEN_PUBLICATION_SCRIPT),
+    ("__SERVERWARE_OAUTH_CONSENT_HTML__", OAUTH_CONSENT_HTML),
+    ("__SERVERWARE_OAUTH_CONSENT_SCRIPT__", OAUTH_CONSENT_SCRIPT),
+    ("__SERVERWARE_OAUTH_ACTIVATION_HTML__", OAUTH_ACTIVATION_HTML),
+    ("__SERVERWARE_OAUTH_ACTIVATION_SCRIPT__", OAUTH_ACTIVATION_SCRIPT),
     ("__SERVERWARE_REGISTRATION_HANDOFF_CSS__", REGISTRATION_HANDOFF_CSS),
     ("__SERVERWARE_REGISTRATION_HANDOFF_HTML__", REGISTRATION_HANDOFF_HTML),
     ("__SERVERWARE_REGISTRATION_HANDOFF_SCRIPT__", REGISTRATION_HANDOFF_SCRIPT),

@@ -5,8 +5,9 @@ fixed `oauth.exchange.prepare`, `oauth.exchange.claim`, `oauth.exchange.retain`
 and `oauth.pending.stage` writers. It supports a new credential without a setup
 session or reconnect target. The old unconfigured development path is unchanged;
 enrolled refresh, reconnect and revocation do not fall back to its runtime DML.
-The existing portal is not yet wired to these new ceremonies. This is source
-integration, not an executed provider flow or a testable pilot claim.
+The [dedicated consent portal](oauth-enrolled-consent-portal.md) now consumes these
+ceremonies, preserving the original request's nanosecond number lexemes. This is
+source integration, not an executed provider flow or a testable pilot claim.
 
 ## Consent is an explicit cookie-authenticated ceremony
 
@@ -108,9 +109,9 @@ survive process death, an expired owner or a retention failure. Raw evidence is
 bounded, private and not logged. Authorized revocation/recovery and protected
 history retirement remain separate transitions.
 
-The portal still needs to consume these options, preserve the exact request,
-perform fresh WebAuthn, explicitly start consent, then drive the distinct-person
-activation request/decision/fresh-requester ceremony. Reconnect, refresh, setup
+The consent and [activation portal](oauth-enrolled-activation-portal.md) now
+connect these options and exact request, fresh WebAuthn, explicit consent start,
+distinct-person approval and fresh-requester activation in source. Reconnect, refresh, setup
 sessions, cross-deployment subject fencing, external application coordination
 and measured provider issuance (O02) are not closed by this API. Independent
 enrollment/configuration roots and current physical authenticator trust still

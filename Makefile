@@ -1273,6 +1273,9 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_transition_oauth_exchange.py \
 	serverware/control_plane_oauth_exchange.py \
 	serverware/oauth_exchange_material.py \
+	serverware/portal_oauth_consent.py \
+	serverware/portal_oauth_activation.py \
+	serverware/oauth_read_projections.py \
 	serverware/portal_admin_token_publication.py \
 	serverware/control_plane_workload_identity_routes.py \
 	serverware/portal_workload_issuance.py \
@@ -3562,6 +3565,9 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_transition_oauth_exchange.py \
 				serverware/control_plane_oauth_exchange.py \
 				serverware/oauth_exchange_material.py \
+				serverware/portal_oauth_consent.py \
+				serverware/portal_oauth_activation.py \
+				serverware/oauth_read_projections.py \
 				serverware/portal_admin_token_publication.py \
 				serverware/control_plane_workload_identity_routes.py \
 				serverware/portal_workload_issuance.py \

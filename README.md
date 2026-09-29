@@ -18,26 +18,28 @@ long-lived credential.
 
 Checkpoint: **2026-09-29 — pre-production, source-only.**
 
-**35/46 source checkpoints landed · 4 active · 7 todo.**
+**35/46 source checkpoints landed · 5 active · 6 todo.**
 
 **Production acceptance: 0/6 verified.** Current source is unbuilt, unexecuted and unprovisioned.
 
-[![Project checkpoints, one segment per task: 35 of 46 source-landed; 4 active and 7 todo. Evidence handoff 10/10; historical recovery 4/5; permissions and grants 10/10; finalization and sessions 8/8; workloads and native 3/6; providers and operations 0/7. F08 is source-landed in 170d0ac; H05, N04, N05 and O04 are in progress. Production acceptance remains 0/6. Source only; unbuilt, unexecuted and unprovisioned.](docs/images/project-progress.svg)](docs/production-status.md#next-source-milestones)
+[![Project checkpoints, one segment per task: 35 of 46 source-landed; 5 active and 6 todo. Evidence handoff 10/10; historical recovery 4/5; permissions and grants 10/10; finalization and sessions 8/8; workloads and native 3/6; providers and operations 0/7. F08 is source-landed in 170d0ac; H05, N04, N05, O04 and O05 are in progress. Production acceptance remains 0/6. Source only; unbuilt, unexecuted and unprovisioned.](docs/images/project-progress.svg)](docs/production-status.md#next-source-milestones)
 
-### Current work: controlled approvals and a blocked native child
+### Current work: protected policy-file publication
 
-[`.260` source / ce757ce](https://github.com/example/private-deployment)
-connects the [purpose-bound publication approval writer](docs/control-plane-publication-approval-authority.md)
-and [operator portal](docs/portal-admin-token-publication.md), plus an actual
-private [blocked executable child](docs/native-executable-child.md) and
-[guardian with separate reap/leaf-empty cleanup](docs/native-execution-guardian.md).
-The approval path uses genuine assertion verification, planner and cold clients,
-not generic runtime metadata writes; independent custody and physical trust
-remain unprovisioned. Native exec release, same-child network transfer and public
-start remain open. Prior H05 recovery and native admission retain source credit.
-Source remains unbuilt, unexecuted and unprovisioned; no runtime or pilot credit.
+[`.261` source / b499aff](https://github.com/example/private-deployment)
+connects [exact signed policy originals and dedicated two-person hardware approval](docs/control-plane-policy-file-publication.md)
+to a durable one-shot claim, a separate least-privilege role holding the actual
+authority writer fence, one rename plus durability, then unlock and audit-only
+settlement. Recovery only finalizes an exact installed file or abandons an exact
+uninstalled attempt; unresolved history blocks the loader. O05 is partial, not complete.
 
-The four active checkpoints remain partial:
+Latest landed native source remains [`.260` / ce757ce](https://github.com/example/private-deployment):
+the private [blocked child](docs/native-executable-child.md) and
+[guardian](docs/native-execution-guardian.md), not exec release, same-child network
+transfer or public start. Prior approval/portal and H05/native credits remain.
+Source is unbuilt, unexecuted and unprovisioned; no runtime or pilot credit.
+
+The five active checkpoints remain partial:
 
 - **N04 · Workload identity:** issuance, CLI/portal submission, standard trust
   publication, native session/issuer verification and opt-in ordinary PolicyAware
@@ -64,6 +66,9 @@ The four active checkpoints remain partial:
   The purpose-bound approval writer and portal are source-connected, not provisioned or tested.
   Other provider/filesystem effects, ambiguous or malformed-history recovery,
   journal archival, multi-host coordination and independent rollback witnessing remain open.
+- **O05 · Policy-file recovery:** committed-policy materialization and explicit
+  exact-state resolution are source-connected. Genesis, superseded-history and
+  migration support, ambiguous/malformed repair, provisioning and runtime acceptance remain open.
 
 No new parent checkpoint or tested pilot is claimed. Source remains unbuilt,
 unexecuted and unprovisioned. The [detailed ledger](docs/production-status.md)
@@ -81,12 +86,12 @@ current-cookie check. Activation uses two distinct fresh ceremonies; historical
 acknowledgments and delivery reports do not establish a current session.
 No automatic retry, profile fallback or original-expiry renewal is authorized.
 Source is unbuilt, unexecuted and unprovisioned. **H05 historical authority,
-N04 workload identity, N05 native enrollment and O04 protected side effects are in progress; production acceptance remains open.**
+N04 workload identity, N05 native enrollment, O04 protected side effects and O05 policy-file recovery are in progress; production acceptance remains open.**
 Previous source: [`.217` public consume completion and recovery closure](https://github.com/example/private-deployment).
 Full [criteria and commit history](docs/production-status.md#activation-recovery-detail)
 live in the tracker.
 
-[![Session activation: all 26 source steps landed; 0 active and 0 todo. Portal steps 24–26 and F08 are source-landed in 170d0ac: explicit target-bound actions, fresh cookie-only WebAuthn and approval continuation, and separate exact-target current-cookie confirmation. Activation uses two distinct fresh ceremonies; generic failures never authorize automatic retry. Step 23 recovery remains credited to dde38d8. Public actions 3/3 and F08 direct children 6/6 are source-landed; project 35/46 has 4 active and 7 todo, with H05, N04, N05 and O04 in progress. Production acceptance remains 0/6. Source only; unbuilt, unexecuted and unprovisioned.](docs/images/activation-progress.svg)](docs/production-status.md#active-workflow-granular-source-steps)
+[![Session activation: all 26 source steps landed; 0 active and 0 todo. Portal steps 24–26 and F08 are source-landed in 170d0ac: explicit target-bound actions, fresh cookie-only WebAuthn and approval continuation, and separate exact-target current-cookie confirmation. Activation uses two distinct fresh ceremonies; generic failures never authorize automatic retry. Step 23 recovery remains credited to dde38d8. Public actions 3/3 and F08 direct children 6/6 are source-landed; project 35/46 has 5 active and 6 todo, with H05, N04, N05, O04 and O05 in progress. Production acceptance remains 0/6. Source only; unbuilt, unexecuted and unprovisioned.](docs/images/activation-progress.svg)](docs/production-status.md#active-workflow-granular-source-steps)
 
 **Green = committed source · amber = in progress · blue/gray = open.**
 Each connection has a [completion criterion and commit evidence](docs/production-status.md#activation-recovery-detail).
@@ -96,7 +101,7 @@ Nested counts are not additive and are not effort estimates.
 <details>
 <summary>Completed step 23 recovery and step 22 dispatch details</summary>
 
-[![Step 23 recovery is source-landed in dde38d8. TARGET and ACTOR are source-landed in 9f03664; AUTHORITY in 097ce54; EXCHANGE in 272a40e; HTTP in dbd99f6; COMPLETE in dde38d8. Public data-only consume completion connects through the same retained originals to separately fresh proof, LIVE/RECOVERY release, current-auth and signed cookie continuations. The consume receipt itself releases no token or cookie and keeps session state unknown. Portal steps 24–26 subsequently landed in 170d0ac, completing activation 26/26 and F08 direct 6/6. Project 35/46 has 4 active and 7 todo; H05, N04, N05 and O04 are in progress. These six recovery facets are not new milestones or effort percentages. No automatic retry or original-expiry renewal is authorized. Production acceptance remains 0/6. Source only; unbuilt, unexecuted and unprovisioned.](docs/images/activation-recovery-progress.svg)](docs/production-status.md#activation-recovery-detail)
+[![Step 23 recovery is source-landed in dde38d8. TARGET and ACTOR are source-landed in 9f03664; AUTHORITY in 097ce54; EXCHANGE in 272a40e; HTTP in dbd99f6; COMPLETE in dde38d8. Public data-only consume completion connects through the same retained originals to separately fresh proof, LIVE/RECOVERY release, current-auth and signed cookie continuations. The consume receipt itself releases no token or cookie and keeps session state unknown. Portal steps 24–26 subsequently landed in 170d0ac, completing activation 26/26 and F08 direct 6/6. Project 35/46 has 5 active and 6 todo; H05, N04, N05, O04 and O05 are in progress. These six recovery facets are not new milestones or effort percentages. No automatic retry or original-expiry renewal is authorized. Production acceptance remains 0/6. Source only; unbuilt, unexecuted and unprovisioned.](docs/images/activation-recovery-progress.svg)](docs/production-status.md#activation-recovery-detail)
 
 The completed dispatch graphic below preserves the **historical .201 checkpoint**,
 including its then-current 0 active / 4 todo rollup; step 23 is now source-landed.
@@ -136,7 +141,7 @@ lists every remaining item and its evidence.
 | O02 | Measured provider issuance and interrupted-exchange recovery | Todo |
 | O03 | Public revocation and authenticated recovery | Todo |
 | O04 | Protected provider and filesystem side effects | In progress (partial) |
-| O05 | Interrupted policy-publication recovery | Todo |
+| O05 | Interrupted policy-publication recovery | In progress (partial) |
 | O06 | Independent RBAC rollback witness | Todo |
 | O07 | Authenticated, signed and sequenced telemetry | Todo |
 

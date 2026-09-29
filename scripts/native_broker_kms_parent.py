@@ -66,7 +66,7 @@ def decoded(value, maximum):
     return raw
 
 
-def configuration(path):
+def protected_original(path, maximum):
     require(type(path) is str and path.startswith("/") and len(path) <= 4096
         and all(part and part not in {".", ".."} for part in path[1:].split("/")))
     parent = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
@@ -79,16 +79,20 @@ def configuration(path):
             parent = next_fd
             info = os.fstat(parent)
             require(info.st_uid == info.st_gid == 0 and info.st_mode & 0o022 == 0)
-        require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and 1 <= info.st_size <= 32768)
-        raw = os.read(parent, 32769)
+        require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and 1 <= info.st_size <= maximum)
+        raw = os.read(parent, maximum + 1)
         closing = os.fstat(parent)
         require(len(raw) == info.st_size and (closing.st_dev, closing.st_ino, closing.st_size,
             closing.st_mtime_ns, closing.st_ctime_ns, closing.st_mode, closing.st_uid, closing.st_gid)
             == (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns,
                 info.st_mode, info.st_uid, info.st_gid))
-        config = document(raw, 32768)
     finally:
         os.close(parent)
+    return raw
+
+
+def configuration(path):
+    config = document(protected_original(path, 32768), 32768)
     require(set(config) == {"apiVersion", "enclaveCid", "port", "kmsKeyId", "ciphertextBlob",
         "encryptionContext", "region"} and config["apiVersion"] == "serverware.nativeBrokerKmsParent/v1")
     require(type(config["enclaveCid"]) is int and 3 < config["enclaveCid"] < 2**32 - 1

@@ -54,6 +54,7 @@ pub(super) fn configuration(value: Value) -> Result<ConfigurationParts, String> 
     original.gate_cgroup.validate()?;
     original.measured_capture_retirement.validate()?;
     Ok(ConfigurationParts {
+        measured_succession: None, historical_broker: None,
         measured_setup: None,
         measured_capture_retirement: Some(original.measured_capture_retirement),
         measured_reconnect: Some(original.measured_reconnect),

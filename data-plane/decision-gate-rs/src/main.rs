@@ -21,6 +21,7 @@ mod native_oauth_capture_retirement;
 mod native_oauth_exchange;
 mod native_oauth_setup;
 mod native_oauth_reconnect;
+mod native_oauth_succession;
 mod native_oauth_browser_pages;
 mod native_gate_inputs;
 mod native_service_tokens;
@@ -2585,6 +2586,7 @@ struct GateState {
     measured_issuance: Option<Mutex<native_oauth_exchange::Owner>>,
     measured_setup: Option<Mutex<native_oauth_setup::Owner>>,
     measured_reconnect: Option<Mutex<native_oauth_reconnect::Owner>>,
+    measured_succession: Option<Mutex<native_oauth_succession::Owner>>,
     native_oauth_serial: Mutex<()>,
     upstream_dispatch_authority: UpstreamDispatchAuthority,
     credential_currentness: credential_currentness::LocalHolder,
@@ -51790,11 +51792,12 @@ fn main() -> Result<(), String> {
         native_serving_privileges: None,
         prepared_secret_broker: None,
         secret_broker: None,
+        historical_broker: None,
         measured_refresh: None,
         measured_cleanup: None,
         measured_pending_retirement: None,
         measured_capture_retirement: None,
-        measured_issuance: None, measured_setup: None, measured_reconnect: None,
+        measured_issuance: None, measured_setup: None, measured_reconnect: None, measured_succession: None,
         measured_audit: None,
         credential_currentness: None,
         policy_shadow_generation_control,
@@ -53139,7 +53142,7 @@ mod tests {
             measured_cleanup: None,
             measured_pending_retirement: None,
             measured_capture_retirement: None,
-            measured_issuance: None, measured_setup: None, measured_reconnect: None,
+            measured_issuance: None, measured_setup: None, measured_reconnect: None, measured_succession: None,
             native_oauth_serial: Mutex::new(()),
             upstream_dispatch_authority: UpstreamDispatchAuthority::new(),
             credential_currentness: credential_currentness::LocalHolder::new(None),

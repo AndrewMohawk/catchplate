@@ -79,7 +79,7 @@ impl PreparedNativeCustodyKeys {
         let helper=PreparedShadowKeyHelper::open(p.transport.clone(),guest.uid,guest.gid,association.startup()).map_err(fail)?;
         association.check_preparation().map_err(fail)?;
         Ok(Self{configuration,assignment:assignment.clone(),association,nsm,checkpoint,
-            encrypted:Some(Prepared{configuration:encrypted,helper})})
+            encrypted:Some(Prepared{configuration:encrypted,helper}),verifier_transport:None})
     }
 }
 #[derive(Serialize,Deserialize)]

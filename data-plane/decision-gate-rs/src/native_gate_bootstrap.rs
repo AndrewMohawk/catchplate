@@ -142,10 +142,16 @@ pub(super) fn prepare_native_tls_gate_state(
             inputs.audit_url.as_deref().ok_or("native measured audit URL absent")?, &mut identity, deadline)?),
         None => None,
     };
-    if [inputs.measured_issuance.is_some(), inputs.measured_setup.is_some(), inputs.measured_reconnect.is_some()]
+    if [inputs.measured_issuance.is_some(), inputs.measured_setup.is_some(), inputs.measured_reconnect.is_some(), inputs.measured_succession.is_some()]
         .into_iter().filter(|selected| *selected).count() > 1 {
         return Err("native browser/helper purpose must be selected once at cold startup".to_owned());
     }
+    let measured_succession = match inputs.measured_succession.take() {
+        Some(config) => Some(native_oauth_succession::prepare(config, &inputs,
+            secret_broker.as_mut().ok_or("native succession broker absent")?, &mut identity,
+            signer, &binary_digest, deadline)?),
+        None => None,
+    };
     let measured_reconnect = match inputs.measured_reconnect.take() {
         Some(config) => Some(native_oauth_reconnect::prepare(config, &inputs,
             secret_broker.as_mut().ok_or("native reconnect broker absent")?, &mut identity,
@@ -202,6 +208,7 @@ pub(super) fn prepare_native_tls_gate_state(
     state.measured_issuance = measured_issuance.map(Mutex::new);
     state.measured_setup = measured_setup.map(Mutex::new);
     state.measured_reconnect = measured_reconnect.map(Mutex::new);
+    state.measured_succession = measured_succession.map(Mutex::new);
     state.measured_audit = measured_audit.map(Mutex::new);
     if state.measured_audit.is_some() { native_audit_owner::initialize(&state)?; }
     if state.measured_refresh.is_some() { native_oauth_refresh::initialize(&state)?; }
@@ -211,6 +218,7 @@ pub(super) fn prepare_native_tls_gate_state(
     if state.measured_issuance.is_some() { native_oauth_exchange::initialize(&state)?; }
     if state.measured_setup.is_some() { native_oauth_setup::initialize(&state)?; }
     if state.measured_reconnect.is_some() { native_oauth_reconnect::initialize(&state)?; }
+    if state.measured_succession.is_some() { native_oauth_succession::initialize(&state)?; }
     ingress.verify_live(deadline)?;
     native_service_remaining(&state)?;
     Ok(NativeTlsGateV1 { state: Arc::new(state), ingress, deadline })

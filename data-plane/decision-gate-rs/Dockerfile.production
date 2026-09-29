@@ -137,6 +137,7 @@ RUN --network=none cargo build --release --frozen \
         --bin serverware-response-v2-guest-role \
         --bin serverware-native-shadow-worker \
         --bin serverware-native-shadow-verifier \
+        --bin serverware-native-shadow-verifier-transport \
         --bin serverware-native-parent-relay --bin serverware-native-parent-ingress \
     && test "$(readelf -l /src/target/release/serverware-production-launcher | grep -c INTERP)" -eq 0 \
     && test "$(readelf -d /src/target/release/serverware-production-launcher | grep -c NEEDED)" -eq 0 \
@@ -169,7 +170,10 @@ RUN --network=none cargo build --release --frozen \
     && test "$(stat -c %s /src/target/release/serverware-native-shadow-worker)" -le 67108864 \
     && test "$(readelf -l /src/target/release/serverware-native-shadow-verifier | grep -c INTERP)" -eq 0 \
     && test "$(readelf -d /src/target/release/serverware-native-shadow-verifier | grep -c NEEDED)" -eq 0 \
-    && test "$(stat -c %s /src/target/release/serverware-native-shadow-verifier)" -le 67108864
+    && test "$(stat -c %s /src/target/release/serverware-native-shadow-verifier)" -le 67108864 \
+    && test "$(readelf -l /src/target/release/serverware-native-shadow-verifier-transport | grep -c INTERP)" -eq 0 \
+    && test "$(readelf -d /src/target/release/serverware-native-shadow-verifier-transport | grep -c NEEDED)" -eq 0 \
+    && test "$(stat -c %s /src/target/release/serverware-native-shadow-verifier-transport)" -le 67108864
 
 FROM scratch AS production-launcher-artifact
 COPY --from=launcher-build /src/target/release/serverware-production-launcher /serverware-production-launcher
@@ -203,6 +207,9 @@ COPY --from=launcher-build /src/target/release/serverware-native-shadow-worker /
 
 FROM scratch AS native-shadow-verifier-supervisor-artifact
 COPY --from=launcher-build /src/target/release/serverware-native-shadow-verifier /serverware-native-shadow-verifier
+
+FROM scratch AS native-shadow-verifier-transport-artifact
+COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-native-shadow-verifier-transport /serverware-native-shadow-verifier-transport
 
 FROM python:3.11-slim-bookworm@sha256:0030323c9ce4d6dfab5f0812577cb0abd13c806f86b3a1f5b5d8f200ebb1421c AS native-python-runtime-build
 ARG SOURCE_DATE_EPOCH="0"

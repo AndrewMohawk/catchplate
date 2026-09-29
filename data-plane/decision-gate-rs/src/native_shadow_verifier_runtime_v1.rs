@@ -1,5 +1,5 @@
 //! External verifier runtime/root custody only: no claimant NSM, keys or exec.
-mod originals;
+pub(crate) mod originals;
 mod mounts;
 #[path = "native_verifier/json.rs"]
 mod json;
@@ -122,6 +122,14 @@ impl RuntimeAdmission {
     pub(crate) fn gid(&self) -> u32 { self.policy.gid }
     pub(crate) fn issued_boottime_ns(&self) -> u64 { self.policy.issued }
     pub(crate) fn deadline_boottime_ns(&self) -> u64 { self.policy.deadline }
+    /// Public consistency pins from the SAME retained originals, not a new
+    /// policy/deadline admission or a caller-selected transport authority.
+    pub(crate) fn public_transport_pins(&self) -> Result<(String, String), String> {
+        self.check()?;
+        let pins = (hash(&self.launch.bytes), hash(&self.configuration.bytes));
+        self.check()?;
+        Ok(pins)
+    }
     pub(crate) fn prepare(self) -> Result<PreparedRuntime, String> {
         self.check()?;
         let Self { launch, configuration, origin, policy, image_config } = self;

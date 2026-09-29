@@ -33,6 +33,8 @@ from serverware import native_oauth_capture_retirement_owner
 from serverware import native_oauth_exchange_owner
 from serverware import native_oauth_setup_owner
 from serverware import native_oauth_reconnect_owner
+from serverware import native_oauth_succession_owner
+from serverware import native_secret_broker_history
 
 _SCHEMA = "serverware.nativeSecretBrokerChannel/v1"
 _WORK = "serverware.nativeBrokerOpenCredential/v1"
@@ -217,8 +219,12 @@ class _Channel:
 
 class _Broker:
     def __init__(self, channel, value):
+        historical = value.get("apiVersion") == "serverware.nativeSecretBrokerChannel/v2"
         _require(set(value) == {"apiVersion", "phase", "deadlineBoottimeNs", "kekSha256", "secretKekId"}
-            and value["apiVersion"] == _SCHEMA and value["phase"] == "initialize")
+            | ({"historicalConfigurationSha256"} if historical else set())
+            and (historical or value["apiVersion"] == _SCHEMA) and value["phase"] == "initialize")
+        self.schema = value["apiVersion"]
+        self.historical_configuration_pin = _digest(value["historicalConfigurationSha256"]) if historical else None
         deadline = _integer(value["deadlineBoottimeNs"], maximum=2**64 - 1)
         now = time.clock_gettime_ns(time.CLOCK_BOOTTIME)
         _require(now < deadline <= now + 86_400_000_000_000)
@@ -232,7 +238,7 @@ class _Broker:
         public = self.rsa.public_key().public_bytes(
             serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
         self.public_digest = _sha(public)
-        channel.send({"apiVersion": _SCHEMA, "phase": "recipient",
+        channel.send({"apiVersion": self.schema, "phase": "recipient",
             "recipientPublicKey": _encoded(public), "recipientPublicKeySha256": self.public_digest})
         self.kek, self.operations = None, set()
         self.service_tokens_opened = False
@@ -243,12 +249,14 @@ class _Broker:
         self.exchange_owner = None
         self.setup_owner = None
         self.reconnect_owner = None
+        self.succession_owner = None
+        self.historical_keys = None
 
     def provision(self, value):
         _require(self.kek is None and self.rsa is not None
             and set(value) == {"apiVersion", "phase", "requestSha256", "recipientPublicKeySha256",
                 "ciphertextForRecipient", "ciphertextSha256"}
-            and value["apiVersion"] == _SCHEMA and value["phase"] == "provision"
+            and value["apiVersion"] == self.schema and value["phase"] == "provision"
             and value["recipientPublicKeySha256"] == self.public_digest)
         request_digest = _digest(value["requestSha256"])
         original = _decoded(value["ciphertextForRecipient"], 65536)
@@ -259,10 +267,11 @@ class _Broker:
         _require(hmac.compare_digest(_sha(key), self.commitment))
         self.kek = AESGCM(key)
         self.channel.check()
-        self.channel.send({"apiVersion": _SCHEMA, "phase": "provisioned", "requestSha256": request_digest})
+        self.channel.send({"apiVersion": self.schema, "phase": "provisioned", "requestSha256": request_digest})
 
     def open_service_tokens(self, value):
         _require(self.kek is not None and self.rsa is None and not self.service_tokens_opened
+            and (self.historical_configuration_pin is None or self.historical_keys is not None and self.historical_keys.finished)
             and not self.operations and set(value) == {"apiVersion", "operationId",
                 "gateRecipientPublicKey", "gateRecipientNonce", "deadlineBoottimeNs",
                 "expectedBinding", "envelope"} and value["apiVersion"] == _SERVICE_WORK)
@@ -372,6 +381,7 @@ def main():
             exchange_operation = None if broker.exchange_owner is None else broker.exchange_owner.operation
             setup_operation = None if broker.setup_owner is None else broker.setup_owner.operation
             reconnect_operation = None if broker.reconnect_owner is None else broker.reconnect_owner.operation
+            succession_operation = None if broker.succession_owner is None else broker.succession_owner.operation
             cleanup_operation = None if broker.cleanup_owner is None else broker.cleanup_owner.operation
             pending_retirement_operation = None if broker.pending_retirement_owner is None else broker.pending_retirement_owner.operation
             capture_retirement_operation = None if broker.capture_retirement_owner is None else broker.capture_retirement_owner.operation
@@ -380,6 +390,7 @@ def main():
                 (native_oauth_exchange_owner.CHANNEL, exchange_operation),
                 (native_oauth_setup_owner.CHANNEL, setup_operation),
                 (native_oauth_reconnect_owner.CHANNEL, reconnect_operation),
+                (native_oauth_succession_owner.CHANNEL, succession_operation),
                 (native_oauth_cleanup_owner.CHANNEL, cleanup_operation),
                 (native_oauth_pending_retirement_owner.CHANNEL, pending_retirement_operation),
                 (native_oauth_capture_retirement_owner.CHANNEL, capture_retirement_operation)) if operation is not None]
@@ -388,7 +399,15 @@ def main():
             value = channel.receive(None if active_operation is None else active_operation.deadline)
             if active:
                 _require(value.get("apiVersion") == active[0][0])
-            if value.get("apiVersion") == _SERVICE_WORK:
+            if value.get("apiVersion") == native_secret_broker_history.CHANNEL:
+                _require(not active and broker.historical_configuration_pin is not None)
+                if value.get("phase") == "initialize":
+                    _require(broker.historical_keys is None)
+                    broker.historical_keys = native_secret_broker_history.HistoricalKeys(broker, value)
+                else:
+                    _require(broker.historical_keys is not None)
+                    broker.historical_keys.handle(value)
+            elif value.get("apiVersion") == _SERVICE_WORK:
                 broker.open_service_tokens(value)
             elif value.get("apiVersion") == native_oauth_refresh_owner.CHANNEL:
                 _require(exchange_operation is None and setup_operation is None and cleanup_operation is None and pending_retirement_operation is None)
@@ -426,7 +445,7 @@ def main():
             elif value.get("apiVersion") == native_oauth_exchange_owner.CHANNEL:
                 _require(refresh_operation is None and setup_operation is None and cleanup_operation is None and pending_retirement_operation is None)
                 if value.get("phase") == "configure":
-                    _require(broker.exchange_owner is None and broker.setup_owner is None and broker.reconnect_owner is None)
+                    _require(broker.exchange_owner is None and broker.setup_owner is None and broker.reconnect_owner is None and broker.succession_owner is None)
                     broker.exchange_owner = native_oauth_exchange_owner.Owner(broker, value)
                 else:
                     _require(broker.exchange_owner is not None)
@@ -434,7 +453,7 @@ def main():
             elif value.get("apiVersion") == native_oauth_setup_owner.CHANNEL:
                 _require(refresh_operation is None and exchange_operation is None and cleanup_operation is None and pending_retirement_operation is None)
                 if value.get("phase") == "configure":
-                    _require(broker.setup_owner is None and broker.exchange_owner is None and broker.reconnect_owner is None)
+                    _require(broker.setup_owner is None and broker.exchange_owner is None and broker.reconnect_owner is None and broker.succession_owner is None)
                     broker.setup_owner = native_oauth_setup_owner.Owner(broker, value)
                 else:
                     _require(broker.setup_owner is not None)
@@ -443,11 +462,19 @@ def main():
                 _require(refresh_operation is None and exchange_operation is None and setup_operation is None
                     and cleanup_operation is None and pending_retirement_operation is None and capture_retirement_operation is None)
                 if value.get("phase") == "configure":
-                    _require(broker.reconnect_owner is None and broker.exchange_owner is None and broker.setup_owner is None)
+                    _require(broker.reconnect_owner is None and broker.exchange_owner is None and broker.setup_owner is None and broker.succession_owner is None)
                     broker.reconnect_owner = native_oauth_reconnect_owner.Owner(broker, value)
                 else:
                     _require(broker.reconnect_owner is not None)
                     broker.reconnect_owner.handle(value)
+            elif value.get("apiVersion") == native_oauth_succession_owner.CHANNEL:
+                if value.get("phase") == "configure":
+                    _require(not active and broker.succession_owner is None and broker.reconnect_owner is None
+                        and broker.exchange_owner is None and broker.setup_owner is None)
+                    broker.succession_owner = native_oauth_succession_owner.Owner(broker, value)
+                else:
+                    _require(broker.succession_owner is not None)
+                    broker.succession_owner.handle(value)
             else:
                 _require(active_operation is None)
                 broker.open_credential(value)

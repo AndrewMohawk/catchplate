@@ -72,9 +72,21 @@ pub(super) fn validate_native_gate_static_inputs(inputs: &GateStateInputs) -> Re
     }
     if let Some(config) = &inputs.secret_broker { config.validate()?; }
     let pending_tokens = super::native_service_tokens::pending(inputs)?;
-    if [inputs.measured_issuance.is_some(), inputs.measured_setup.is_some(), inputs.measured_reconnect.is_some()]
+    if [inputs.measured_issuance.is_some(), inputs.measured_setup.is_some(), inputs.measured_reconnect.is_some(), inputs.measured_succession.is_some()]
         .into_iter().filter(|selected| *selected).count() > 1 {
         return Err("native cold configuration requires one browser/helper purpose".to_owned());
+    }
+    if inputs.historical_broker.is_some() && (!configured || inputs.measured_succession.is_none()) {
+        return Err("historical broker requires the explicit succession cold profile".to_owned());
+    }
+    if let Some(succession) = &inputs.measured_succession {
+        succession.validate()?;
+        if !pending_tokens || inputs.credential_currentness.is_none() || !measured
+            || (configured && inputs.historical_broker.is_none()) {
+            return Err("native succession requires its distinct historical encrypted cold profile".to_owned());
+        }
+        // After pre-drop preparation the opaque inventory lives in the real
+        // PreparedBroker, then the helper owner; it is never reconstructed.
     }
     if let Some(reconnect) = &inputs.measured_reconnect {
         reconnect.validate()?;

@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-shadow-verifier-transport.v1.schema.json",
+  "$ref": "#/$defs/guestConfiguration",
+  "$defs": {
+    "sha256": {
+      "type": "string", "pattern": "^sha256:[0-9a-f]{64}$",
+      "not": { "const": "sha256:0000000000000000000000000000000000000000000000000000000000000000" }
+    },
+    "positive": { "type": "integer", "minimum": 1, "maximum": 9223372036854775807 },
+    "assignment": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "apiVersion", "purpose", "assignmentId", "assignmentPayloadSha256", "assignmentRevision",
+        "keyAuthorizationSha256", "guest", "fullKeySetRootSha256", "challengeBase64url", "verifierKeyId",
+        "verifierKeySpkiSha256", "verifierKeyMaterialSha256", "parentPort", "trustCheckpointId",
+        "revocationGeneration", "revocationRootSha256", "issuedAtUnixNanos", "expiresAtUnixNanos",
+        "signingKeyId", "signingKeySpkiSha256"
+      ],
+      "properties": {
+        "apiVersion": { "const": "serverware.nativeShadowVerifierTransportAssignment/v1" },
+        "purpose": { "const": "public-shadow-nitro-verification" },
+        "assignmentId": { "$ref": "#/$defs/sha256" },
+        "assignmentPayloadSha256": { "$ref": "#/$defs/sha256" },
+        "assignmentRevision": { "$ref": "#/$defs/positive" },
+        "keyAuthorizationSha256": { "$ref": "#/$defs/sha256" },
+        "guest": { "$ref": "native-shadow-role-keys.v1.schema.json#/$defs/guest" },
+        "fullKeySetRootSha256": { "$ref": "#/$defs/sha256" },
+        "challengeBase64url": { "$ref": "native-shadow-role-keys.v1.schema.json#/$defs/challenge" },
+        "verifierKeyId": { "$ref": "#/$defs/sha256" },
+        "verifierKeySpkiSha256": { "$ref": "#/$defs/sha256" },
+        "verifierKeyMaterialSha256": { "$ref": "#/$defs/sha256" },
+        "parentPort": { "type": "integer", "minimum": 1024, "maximum": 4294967294 },
+        "trustCheckpointId": { "$ref": "#/$defs/sha256" },
+        "revocationGeneration": { "$ref": "#/$defs/positive" },
+        "revocationRootSha256": { "$ref": "#/$defs/sha256" },
+        "issuedAtUnixNanos": { "$ref": "#/$defs/positive" },
+        "expiresAtUnixNanos": { "$ref": "#/$defs/positive" },
+        "signingKeyId": { "$ref": "#/$defs/sha256" },
+        "signingKeySpkiSha256": { "$ref": "#/$defs/sha256" }
+      },
+      "description": "Public assignment under the independently assigned current supervisor-capability key, using the distinct serverware.nativeShadowVerifierTransport.signature/v1 domain and existing signedEnvelope/ascii-integer preimage. It binds the actual C9 guest originals and the separate independent verifier role key. It grants no claimant signing permission."
+    },
+    "guestConfiguration": {
+      "type": "object", "additionalProperties": false, "required": ["apiVersion", "authorization"],
+      "properties": {
+        "apiVersion": { "const": "serverware.nativeShadowVerifierTransport/v1" },
+        "authorization": {
+          "type": "object", "additionalProperties": false, "required": ["payload", "signature"],
+          "properties": {
+            "payload": { "$ref": "#/$defs/assignment" },
+            "signature": { "$ref": "native-shadow-role-keys.v1.schema.json#/$defs/signature" }
+          }
+        }
+      },
+      "description": "Exact canonical ASCII separately protected root:root0400 original, at most 32768 bytes, at fixed /etc/serverware/native-shadow-public-exchange.json. Admitted by the actual PreparedNativeCustodyKeys owner using an independent post-C9 pin, outside C9/runtime/closure transitive digests to avoid a digest cycle. Held across final-role drop; no late path reopen, environment/request configuration or automatic old-profile selection."
+    },
+    "guestPin": {
+      "type": "object", "additionalProperties": false, "required": ["path", "sha256"],
+      "properties": {
+        "path": { "const": "/etc/serverware/native-shadow-public-exchange.json" },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      },
+      "description": "Independent post-C9 launch selector only, not authority. Must not be embedded in the signed C9 delivery/runtime/closure transitive digests. The actual root preparation owner verifies both this pin and the complete independently signed transport authorization."
+    },
+    "externalConfiguration": {
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "verifierLaunchSha256", "verifierConfigurationSha256", "localAddress", "peerIp"],
+      "properties": {
+        "apiVersion": { "const": "serverware.nativeShadowVerifierPublicExchange/v1" },
+        "verifierLaunchSha256": { "$ref": "#/$defs/sha256" },
+        "verifierConfigurationSha256": { "$ref": "#/$defs/sha256" },
+        "localAddress": { "type": "string", "minLength": 7, "maxLength": 64 },
+        "peerIp": { "type": "string", "minLength": 2, "maxLength": 45 }
+      },
+      "description": "Independently protected fixed /etc/serverware/native-shadow-verifier-transport.json, root:root0400 regular singly-linked original <=16384bytes. Requires exact held launch/policy SHA pins and canonical literal socket addresses. Actual local port >1023; non-unspecified/non-multicast addresses; FD6 full peer/local tuple, socket cookie and metadata retained. Peer IP is routing consistency, not cryptographic identity. Original external boot/time/deadline comes only from the same RuntimeAdmission, never from this profile or the request."
+    },
+    "requestOriginal": { "$ref": "native-shadow-role-keys.v1.schema.json#/$defs/evidence" },
+    "resultOriginal": { "$ref": "native-shadow-nitro-verifier.v1.schema.json#/$defs/response" }
+  }
+}

@@ -224,7 +224,10 @@ def main() -> None:
                  "oauth_retirement_values.py", "native_oauth_capture_retirement.py", "native_oauth_capture_retirement_receipts.py", "native_oauth_capture_retirement_owner.py",
                  "oauth_retirement_policy_values.py", "oauth_pending_retirement_values.py",
                  "oauth_capture_retirement_policy.py", "oauth_pending_retirement_policy.py",
-                 "native_oauth_reconnect.py", "native_oauth_reconnect_rows.py", "native_oauth_reconnect_receipts.py", "native_oauth_reconnect_tls.py", "native_oauth_reconnect_owner.py"):
+                 "native_oauth_reconnect.py", "native_oauth_reconnect_rows.py", "native_oauth_reconnect_receipts.py", "native_oauth_reconnect_tls.py", "native_oauth_reconnect_owner.py",
+                 "native_secret_broker_history.py", "native_oauth_succession.py", "native_oauth_succession_rows.py",
+                 "native_oauth_succession_materials.py", "native_oauth_succession_receipts.py", "native_oauth_succession_tls.py", "native_oauth_succession_owner.py",
+                 "authority_oauth_retirement_succession_catalog.py"):
         closure.add(SOURCE / "serverware" / name, SITE / "serverware" / name)
     closure.add(SOURCE / "serverware/native_secret_broker_helper.py", HELPER)
     closure.libraries()

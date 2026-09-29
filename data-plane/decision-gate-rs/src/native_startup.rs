@@ -253,7 +253,10 @@ fn run_owned(
             }
         }
         let device = PreparedNativeDeviceV1::open(&privileged)?;
-        let mut broker = PreparedBroker::open(config, &privileged)?;
+        let mut broker = match inputs.historical_broker.take() {
+            Some(historical) => PreparedBroker::open_historical(config, historical, &privileged)?,
+            None => PreparedBroker::open(config, &privileged)?,
+        };
         // The final privileged child has now been created. Only the actual
         // gate joins the fresh leaf; the original deadline is never renewed.
         let gate_cgroup = gate_cgroup.map(|owner| owner.attach_gate(&privileged)).transpose()?;

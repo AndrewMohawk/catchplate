@@ -208,6 +208,18 @@ impl CustodySignerTransport {
         self.verify_live()?; Ok(result)
     }
 
+    pub(super) fn succession_evidence(&self, identity: &mut EnclaveRuntimeIdentityV1,
+        prepared: &serverware_decision_gate::native_oauth_succession_v1::Prepared,
+        binary: &str, deadline: u64) -> Result<Value,String> {
+        let Self::Native(owner) = self else { return Err("succession refuses unmeasured custody".to_owned()); };
+        self.verify_live()?;
+        owner.active.fetch_update(Ordering::AcqRel, Ordering::Acquire,
+            |active| (active < CUSTODY_MAX_CONCURRENT_CONNECTIONS).then_some(active + 1)).map_err(|_|"succession custody concurrency")?;
+        let _permit = NativeOperationPermit(&owner.active);
+        let result = owner.runtime.sign_native_succession(identity, prepared, binary, deadline).map_err(|error|error.to_string())?;
+        self.verify_live()?; Ok(result)
+    }
+
     pub(super) fn cleanup_evidence(&self, identity: &mut EnclaveRuntimeIdentityV1,
         prepared: &serverware_decision_gate::native_oauth_cleanup_v1::Prepared,
         binary: &str, deadline: u64) -> Result<Value, String> {

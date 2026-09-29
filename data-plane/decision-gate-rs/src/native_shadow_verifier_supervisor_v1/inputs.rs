@@ -43,6 +43,18 @@ impl Sealed {
     }
 }
 pub(super) struct Inputs { seed: Sealed, evidence: Sealed, binding: Option<(u32,u32)> }
+/// Only the separate transport entry may retain the genuine seed before policy
+/// admission. No seed bytes, caller path or arbitrary descriptor are accepted.
+pub(super) struct PendingSeed { seed: Sealed }
+impl PendingSeed {
+    pub(super) fn take() -> Result<Self, String> {
+        ensure(unsafe { libc::fcntl(4, libc::F_GETFD) } >= 0,
+            "verifier transport requires inherited FD4 seed")?;
+        let seed = Sealed::admit(unsafe { OwnedFd::from_raw_fd(4) }, 32)?;
+        ensure(seed.identity.size == 32, "verifier transport seed size differs")?;
+        Ok(Self { seed })
+    }
+}
 impl Inputs {
     pub(super) fn take() -> Result<Self, String> {
         // Reserve BOTH real slots before opening any owned object. Missing
@@ -58,6 +70,16 @@ impl Inputs {
             && (seed.identity.device,seed.identity.inode) != (evidence.identity.device,evidence.identity.inode),
             "verifier seed/evidence are not exact distinct originals")?;
         Ok(Self { seed, evidence, binding: None })
+    }
+    pub(super) fn from_transport(seed: PendingSeed, evidence: OwnedFd) -> Result<Self, String> {
+        // Receive owns the actual newly sealed file. Numeric FD5 may now hold
+        // an admission original and is never overwritten or reinterpreted.
+        seed.seed.check()?;
+        let evidence = Sealed::admit(evidence, 128 * 1024)?;
+        ensure((seed.seed.identity.device,seed.seed.identity.inode)
+            != (evidence.identity.device,evidence.identity.inode),
+            "verifier transport seed/evidence originals are not distinct")?;
+        Ok(Self { seed: seed.seed, evidence, binding: None })
     }
     pub(super) fn bind(&mut self, admission: &RuntimeAdmission) -> Result<(), String> {
         admission.check()?;

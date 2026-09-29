@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-oauth-succession-runtime.v1.schema.json",
+  "title": "Native succession private replies and public navigation observations",
+  "$comment": "Data grammar only. Actual sealed helper, native proof, full signed writer originals, independent assignment, retained browser TLS and one-use effect owners are mandatory. The COMPLETE canonical private message including encoded originals is <=8MiB. No reply is authority to repeat a provider contact.",
+  "oneOf": [{"$ref": "#/$defs/prepared"}, {"$ref": "#/$defs/redirect"}, {"$ref": "#/$defs/terminal"}, {"$ref": "#/$defs/tlsEvent"}, {"$ref": "#/$defs/tlsReply"}],
+  "$defs": {
+    "uuid": {"$ref": "oauth-retired-scope-succession.v1.schema.json#/$defs/uuid"},
+    "epoch": {"$ref": "oauth-retired-scope-succession.v1.schema.json#/$defs/epoch"},
+    "ciphertext": {"anyOf": [{"type": "null"}, {"type": "string", "minLength": 1, "maxLength": 87382, "pattern": "^[A-Za-z0-9_-]+$"}]},
+    "prepared": {
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "phase", "operation", "arguments", "issuedAtEpochNs", "expiresAtEpochNs"],
+      "properties": {
+        "apiVersion": {"const": "serverware.nativeOAuthSuccessionChannel/v1"}, "phase": {"const": "prepared"},
+        "operation": {"enum": ["oauth.measured-succession.inspect", "oauth.measured-succession.material-claim", "oauth.measured-succession.contact", "oauth.measured-succession.finish", "oauth.measured-succession.prepare", "oauth.measured-succession.claim", "oauth.measured-succession.capture", "oauth.measured-succession.stage", "oauth.measured-succession.cancel", "oauth.measured-succession.recover"]},
+        "arguments": {"$ref": "#/$defs/preparedArguments"},
+        "issuedAtEpochNs": {"$ref": "#/$defs/epoch"}, "expiresAtEpochNs": {"$ref": "#/$defs/epoch"}
+      },
+      "$comment": "Helper preparation precedes native proof insertion. Actual Rust verifies literal phase, complete request digest, unchanged grant, selected historical enrollment and original operation window; it signs only its source-owned Prepared value. No prepare-to-draft alias."
+    },
+    "preparedArguments": {
+      "type": "object", "additionalProperties": false,
+      "required": ["action", "resource_id", "payload_digest", "actor_id", "request", "approval_id", "credential_policy", "enrollment_original", "authorization_original", "control_plane_configuration_digest", "assignment_original"],
+      "properties": {
+        "action": {"const": "credential.oauth.measured-succession"},
+        "resource_id": {"$ref": "#/$defs/uuid"},
+        "payload_digest": {"$ref": "oauth-retired-scope-succession.v1.schema.json#/$defs/digest"},
+        "actor_id": {"$ref": "oauth-retired-scope-succession.v1.schema.json#/$defs/actor"},
+        "request": {"$ref": "oauth-retired-scope-succession.v1.schema.json#/$defs/arguments/properties/request"},
+        "approval_id": {"type": "null"},
+        "credential_policy": {"$ref": "oauth-retired-scope-succession.v1.schema.json#/$defs/credentialPolicy"},
+        "enrollment_original": {"$ref": "oauth-retired-scope-succession.v1.schema.json#/$defs/enrollmentOriginal"},
+        "authorization_original": {"$ref": "oauth-retired-scope-succession.v1.schema.json#/$defs/authorizationOriginal"},
+        "control_plane_configuration_digest": {"$ref": "oauth-retired-scope-succession.v1.schema.json#/$defs/digest"},
+        "assignment_original": {"$ref": "oauth-retired-scope-succession.v1.schema.json#/$defs/assignment"}
+      }
+    },
+    "redirect": {
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "exchangeId", "location"],
+      "properties": {
+        "apiVersion": {"const": "serverware.nativeOAuthSuccessionAuthorizationRedirect/v1"},
+        "exchangeId": {"$ref": "#/$defs/uuid"}, "location": {"type": "string", "minLength": 1, "maxLength": 16384}
+      },
+      "$comment": "Public exact3 after accepted historical closure and one definite fresh PREPARE. Fixed HTTPS provider authorization paths only. Private reply also retains cookieName/cookieValue/expiresAtEpochNs under the actual browser TLS owner; the public JSON never contains private cookie values."
+    },
+    "terminal": {
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "exchangeId", "status"],
+      "properties": {
+        "apiVersion": {"const": "serverware.nativeOAuthSuccessionTerminalObservation/v1"},
+        "exchangeId": {"$ref": "#/$defs/uuid"}, "status": {"enum": ["retirement-rejected", "retirement-unknown"]}
+      },
+      "$comment": "A definite signed FINISH observation before PKCE. It does not claim retirement completion, reopen a scope, activate a credential or permit a retry. Lost responses use separate observation-only recovery."
+    },
+    "tlsEvent": {
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "providerId", "purpose", "sequence", "ciphertext", "read"],
+      "properties": {
+        "apiVersion": {"const": "serverware.nativeOAuthSuccessionTls/v1"},
+        "providerId": {"enum": ["google", "x"]}, "purpose": {"enum": ["retirement", "token", "identity"]},
+        "sequence": {"type": "integer", "minimum": 1, "maximum": 512},
+        "ciphertext": {"$ref": "#/$defs/ciphertext"}, "read": {"type": "boolean"}
+      },
+      "$comment": "Only encrypted TLS records cross the parent. Actual phase selects one fixed relay socket; <=512KiB bidirectional aggregate per contact. EOF/error cannot open another socket or renew the original deadline."
+    },
+    "tlsReply": {
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "sequence", "ciphertext", "eof"],
+      "properties": {
+        "apiVersion": {"const": "serverware.nativeOAuthSuccessionTls/v1"},
+        "sequence": {"type": "integer", "minimum": 1, "maximum": 512},
+        "ciphertext": {"$ref": "#/$defs/ciphertext"}, "eof": {"type": "boolean"}
+      }
+    }
+  }
+}

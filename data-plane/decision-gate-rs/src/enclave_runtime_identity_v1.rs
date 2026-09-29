@@ -49,6 +49,7 @@ const MUTUAL_TLS_INGRESS: u8 = 3;
 const RESPONSE_PROOF: u8 = 4;
 const ENROLLMENT: u8 = 5;
 const BROKER_KMS_RECIPIENT: u8 = 6;
+const HISTORICAL_BROKER_KMS_RECIPIENT: u8 = 7;
 const INGRESS_BINDING_DOMAIN: &[u8] = b"serverware/native-tls13-mandatory-client-auth/v1\0";
 const MAX_INGRESS_CERTIFICATE_BYTES: usize = 16 * 1024;
 const MAX_INGRESS_SPKI_BYTES: usize = 1024;
@@ -454,6 +455,20 @@ impl EnclaveRuntimeIdentityV1 {
         let ca = Sha256::digest(self.authority.certificate_der()).into();
         let (public_key, nonce, request_binding) = pending.quote_parts(ca, deadline)?;
         let user_data = self.binding(BROKER_KMS_RECIPIENT, &public_key, request_binding);
+        let document = self.nsm.attest(&public_key, &nonce, &user_data, deadline)?;
+        self.finish(deadline)?;
+        Ok(RuntimeKeyQuoteV1 { document, user_data, public_key, nonce })
+    }
+
+    /// Only the actual v2 helper key-inventory owner supplies this recipient.
+    /// This separate role and exact full request binding grant no token effect.
+    pub(crate) fn quote_historical_broker_recipient(&mut self,
+        pending: &mut crate::native_secret_broker_v1::history::PendingHistoricalKey<'_>, deadline: u64)
+        -> Result<RuntimeKeyQuoteV1, String> {
+        let deadline = self.begin(deadline)?;
+        let ca = Sha256::digest(self.authority.certificate_der()).into();
+        let (public_key, nonce, request_binding) = pending.quote_parts(ca, deadline)?;
+        let user_data = self.binding(HISTORICAL_BROKER_KMS_RECIPIENT, &public_key, request_binding);
         let document = self.nsm.attest(&public_key, &nonce, &user_data, deadline)?;
         self.finish(deadline)?;
         Ok(RuntimeKeyQuoteV1 { document, user_data, public_key, nonce })

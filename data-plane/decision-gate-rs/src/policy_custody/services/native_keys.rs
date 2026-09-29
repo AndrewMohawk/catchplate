@@ -8,6 +8,9 @@ use serverware_decision_gate::enclave_runtime_identity_v1::{PreparedShadowNsmV1,
 use zeroize::Zeroizing;
 #[path="native_verifier_result.rs"]
 mod verifier_result;
+#[path="native_verifier_transport.rs"]
+mod verifier_transport;
+pub(crate) use verifier_transport::NativeVerifierTransportPin;
 #[path="native_key_delivery.rs"]
 mod encrypted;
 pub(crate) use encrypted::NativeShadowEncryptedKeysConfiguration;
@@ -103,6 +106,7 @@ pub(crate) struct PreparedNativeCustodyKeys {
     configuration:NativeCustodyKeyConfiguration,assignment:VerifiedAssignment,
     association:GuestClosureAssociation,nsm:PreparedShadowNsmV1,checkpoint:AtomicTrustCheckpoint,
     encrypted:Option<encrypted::Prepared>,
+    verifier_transport:Option<verifier_transport::PreparedTransport>,
 }
 impl PreparedNativeCustodyKeys {
     pub(crate) fn open(configuration:NativeCustodyKeyConfiguration,assignment:&VerifiedAssignment,
@@ -122,7 +126,7 @@ impl PreparedNativeCustodyKeys {
         }
         let nsm=PreparedShadowNsmV1::open(association.startup(),association.lifetime()).map_err(fail)?;
         association.check_preparation().map_err(fail)?;
-        Ok(Self {configuration,assignment:assignment.clone(),association,nsm,checkpoint,encrypted:None})
+        Ok(Self {configuration,assignment:assignment.clone(),association,nsm,checkpoint,encrypted:None,verifier_transport:None})
     }
     pub(crate) fn bind(mut self,closure:&NativeCustodyClosureOwner,configuration:&ProductionCustodyConfiguration,
         trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime)->Result<NativeCustodyKeys,ShadowError> {
@@ -131,6 +135,9 @@ impl PreparedNativeCustodyKeys {
             && configuration.asserted_custody_key_set_root_sha256()==&self.configuration.authorization.payload.full_key_set_root_sha256)?;
         let checkpoint=trust.current_checkpoint()?;require(self.checkpoint.permits_successor(&checkpoint))?;
         verify(&self.configuration,&self.assignment,&self.association,&checkpoint,trust,time)?;
+        if let Some(source)=&self.verifier_transport {
+            source.check(&self.configuration,&self.assignment,&self.association,trust,time)?;
+        }
         configuration.validate_retained_assignment_binding()?;
         let mut nsm=self.nsm.consume().map_err(fail)?;
         let (keys,encrypted_authorization)=if let Some(source)=self.encrypted.take() {
@@ -157,7 +164,8 @@ impl PreparedNativeCustodyKeys {
         };
         let owner=NativeCustodyKeys {configuration:self.configuration,assignment:self.assignment,association:self.association,
             closure:closure.clone(),production:configuration.clone(),keys,nsm,checkpoint:self.checkpoint,
-            evidence:None,attempted:false,admitted:false,poisoned:AtomicBool::new(false),encrypted_authorization};
+            evidence:None,attempted:false,admitted:false,poisoned:AtomicBool::new(false),encrypted_authorization,
+            verifier_transport:self.verifier_transport};
         owner.check(trust,time)?;owner.association.check_startup().map_err(fail)?;Ok(owner)
     }
 }
@@ -189,6 +197,7 @@ pub(crate) struct NativeCustodyKeys {
     closure:NativeCustodyClosureOwner,production:ProductionCustodyConfiguration,keys:BTreeMap<AuthorityRole,LocalKey>,nsm:ShadowNsmV1,
     checkpoint:AtomicTrustCheckpoint,evidence:Option<NativeKeyEvidence>,attempted:bool,admitted:bool,poisoned:AtomicBool,
     encrypted_authorization:Option<NativeShadowEncryptedKeysConfiguration>,
+    verifier_transport:Option<verifier_transport::PreparedTransport>,
 }
 impl NativeCustodyKeys {
     fn check(&self,trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime)->Result<(),ShadowError> {

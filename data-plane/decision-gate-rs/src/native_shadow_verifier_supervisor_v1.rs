@@ -1,6 +1,9 @@
-//! Fixed external verifier process. No key generation, network or generic exec.
+//! Fixed external verifier process. No key generation or generic exec;
+//! the separate public transport is selected only by its fixed entrypoint.
 mod child;
+mod exchange;
 mod inputs;
+mod transport;
 mod watchdog;
 #[path = "native_verifier/json.rs"]
 mod json;
@@ -175,14 +178,8 @@ fn publish(output: &inputs::Output, input: &inputs::Inputs, bytes: &[u8], watch:
     }
     output.check()?; input.check()?; watch.check()
 }
-fn attempt() -> Result<(), String> {
-    ensure(std::env::args_os().count() == 1, "verifier supervisor accepts no arguments")?;
-    parent_security()?;
-    let mut inputs = inputs::Inputs::take()?;
-    let output = inputs::Output::take()?;
-    let admission = RuntimeAdmission::open()?;
-    let watch = Watchdog::arm(&admission)?;
-    inputs.bind(&admission)?;
+fn execute(admission: RuntimeAdmission, inputs: &inputs::Inputs, watch: &Watchdog)
+    -> Result<Vec<u8>, String> {
     // The same protected admission survives across watchdog arming. No copied
     // deadline/configuration can create a fresh image/root operation.
     let mut runtime = admission.prepare()?;
@@ -197,38 +194,49 @@ fn attempt() -> Result<(), String> {
     };
     // Every failure after inheritance ends this one-shot supervisor process.
     // No caller-supplied no-child cancellation authorizes mount reuse.
-    let (pidfd,pid) = spawn(&child,&watch)?;
+    let (pidfd,pid) = spawn(&child,watch)?;
     drop(child); drop(result_write); drop(gate_read);
     let owner = match runtime.bind_child(pidfd,pid) {
         Ok(owner) => owner,
         Err(failure) => {
-            let _ = stop_and_retire(failure.into_cleanup(),&watch);
+            let _ = stop_and_retire(failure.into_cleanup(),watch);
             return Err("verifier child admission failed".into());
         }
     };
     let collected = (|| {
         owner.check()?; watch.check()?; inputs.check()?;
-        release_gate(gate_write.as_raw_fd(),&watch)?;
+        release_gate(gate_write.as_raw_fd(),watch)?;
         drop(gate_write);
-        let raw = collect(&owner,&inputs,result_read.as_raw_fd(),&watch)?;
+        let raw = collect(&owner,inputs,result_read.as_raw_fd(),watch)?;
         result_shape(&raw)?;
         owner.check_after_exit()?; inputs.check()?; watch.check()?;
         Ok::<_,String>(raw)
     })();
     let raw = match collected {
         Ok(raw) => raw,
-        Err(error) => { let _ = stop_and_retire(owner,&watch); return Err(error); }
+        Err(error) => { let _ = stop_and_retire(owner,watch); return Err(error); }
     };
     let retired = match owner.retire() {
         Ok(retired) => retired,
         Err(failure) => {
-            let _ = stop_and_retire(failure.into_cleanup(),&watch);
+            let _ = stop_and_retire(failure.into_cleanup(),watch);
             return Err("verifier original root/child retirement failed".into());
         }
     };
     ensure(retired.code() == libc::CLD_EXITED && retired.status() == 0,
         "verifier child did not exit successfully")?;
     watch.check()?; inputs.check()?;
+    Ok(raw)
+}
+fn attempt() -> Result<(), String> {
+    ensure(std::env::args_os().count() == 1, "verifier supervisor accepts no arguments")?;
+    parent_security()?;
+    let mut inputs = inputs::Inputs::take()?;
+    let output = inputs::Output::take()?;
+    let admission = RuntimeAdmission::open()?;
+    let watch = Watchdog::arm(&admission)?;
+    inputs.bind(&admission)?;
+    let raw = execute(admission,&inputs,&watch)?;
     publish(&output,&inputs,&raw,&watch)
 }
 /// Only fixed one-shot process entry, never an embeddable launch/retry API.
@@ -238,3 +246,5 @@ pub fn run() -> ! {
     // namespace/descriptor; it does not claim explicit successful cleanup.
     unsafe { libc::_exit(status) }
 }
+/// Separate fixed binary selection, never inferred from an inherited socket.
+pub fn run_transport() -> ! { transport::run() }

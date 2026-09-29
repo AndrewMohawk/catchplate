@@ -1368,6 +1368,13 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/native_oauth_reconnect_receipts.py \
 	serverware/native_oauth_reconnect_rows.py \
 	serverware/native_oauth_reconnect_tls.py \
+	serverware/native_secret_broker_history.py \
+	serverware/native_oauth_succession.py \
+	serverware/native_oauth_succession_rows.py \
+	serverware/native_oauth_succession_materials.py \
+	serverware/native_oauth_succession_receipts.py \
+	serverware/native_oauth_succession_tls.py \
+	serverware/native_oauth_succession_owner.py \
 	serverware/authority_oauth_provider_retirement.py \
 	serverware/authority_oauth_measured_capture_retirement.py \
 	serverware/authority_oauth_measured_capture_retirement_policy.py \
@@ -1465,6 +1472,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/native_service_tokens.py \
 	serverware/response_v2_guest_delivery.py \
 	scripts/native_broker_kms_parent.py \
+	scripts/native_broker_history_kms_parent.py \
 	serverware/authority_oauth_family_retirement.py \
 	serverware/authority_oauth_refresh_cleanup.py \
 	serverware/authority_oauth_refresh_cleanup_policy.py \
@@ -3868,6 +3876,13 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/native_oauth_reconnect_receipts.py \
 				serverware/native_oauth_reconnect_rows.py \
 				serverware/native_oauth_reconnect_tls.py \
+				serverware/native_secret_broker_history.py \
+				serverware/native_oauth_succession.py \
+				serverware/native_oauth_succession_rows.py \
+				serverware/native_oauth_succession_materials.py \
+				serverware/native_oauth_succession_receipts.py \
+				serverware/native_oauth_succession_tls.py \
+				serverware/native_oauth_succession_owner.py \
 				serverware/authority_oauth_provider_retirement.py \
 				serverware/authority_oauth_measured_capture_retirement.py \
 				serverware/authority_oauth_measured_capture_retirement_policy.py \
@@ -3965,6 +3980,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/native_service_tokens.py \
 				serverware/response_v2_guest_delivery.py \
 				scripts/native_broker_kms_parent.py \
+				scripts/native_broker_history_kms_parent.py \
 				serverware/authority_oauth_family_retirement.py \
 				serverware/authority_oauth_refresh_cleanup.py \
 				serverware/authority_oauth_refresh_cleanup_policy.py \
@@ -4154,6 +4170,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/native_audit_transport.rs \
 				data-plane/decision-gate-rs/src/native_secret_broker.rs \
 				data-plane/decision-gate-rs/src/native_secret_broker_v1.rs \
+				data-plane/decision-gate-rs/src/native_secret_broker_v1/history.rs \
 				data-plane/decision-gate-rs/src/native_serving_privileges.rs \
 				data-plane/decision-gate-rs/src/native_gate_cgroup.rs \
 				data-plane/decision-gate-rs/src/native_gate_cgroup/filesystem.rs \
@@ -4176,6 +4193,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/native_startup_config/mod.rs \
 				data-plane/decision-gate-rs/src/native_startup_config/capture_retirement.rs \
 				data-plane/decision-gate-rs/src/native_startup_config/reconnect.rs \
+				data-plane/decision-gate-rs/src/native_startup_config/succession.rs \
 				data-plane/decision-gate-rs/src/response_v2/client_transport.rs \
 				data-plane/decision-gate-rs/src/response_v2/custody/guest_listener.rs \
 				data-plane/decision-gate-rs/src/response_v2/custody/guest_public_artifacts.rs \
@@ -4216,12 +4234,15 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/native_target_dispatch.rs \
 				data-plane/decision-gate-rs/src/bin/serverware-native-shadow-worker.rs \
 				data-plane/decision-gate-rs/src/bin/serverware-native-shadow-verifier.rs \
+				data-plane/decision-gate-rs/src/bin/serverware-native-shadow-verifier-transport.rs \
 				data-plane/decision-gate-rs/src/native_shadow_verifier_runtime_v1.rs \
 				data-plane/decision-gate-rs/src/native_shadow_verifier_runtime_v1/mounts.rs \
 				data-plane/decision-gate-rs/src/native_shadow_verifier_runtime_v1/originals.rs \
 				data-plane/decision-gate-rs/src/native_shadow_verifier_supervisor_v1.rs \
 				data-plane/decision-gate-rs/src/native_shadow_verifier_supervisor_v1/child.rs \
 				data-plane/decision-gate-rs/src/native_shadow_verifier_supervisor_v1/inputs.rs \
+				data-plane/decision-gate-rs/src/native_shadow_verifier_supervisor_v1/exchange.rs \
+				data-plane/decision-gate-rs/src/native_shadow_verifier_supervisor_v1/transport.rs \
 				data-plane/decision-gate-rs/src/native_shadow_verifier_supervisor_v1/watchdog.rs \
 				data-plane/decision-gate-rs/src/native_shadow_workers/elf.rs \
 				data-plane/decision-gate-rs/src/native_shadow_workers/identity.rs \
@@ -4238,6 +4259,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/policy_custody/services/native_keys.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_verifier_result.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_key_delivery.rs \
+				data-plane/decision-gate-rs/src/policy_custody/services/native_verifier_transport.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/guest_original.rs \
 				data-plane/decision-gate-rs/src/native_staging.rs \
 				data-plane/decision-gate-rs/src/native_staging_v1.rs \
@@ -4271,6 +4293,9 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/native_oauth_reconnect_v1.rs \
 				data-plane/decision-gate-rs/src/native_oauth_reconnect.rs \
 				data-plane/decision-gate-rs/src/native_secret_broker_v1/reconnect.rs \
+				data-plane/decision-gate-rs/src/native_oauth_succession_v1.rs \
+				data-plane/decision-gate-rs/src/native_oauth_succession.rs \
+				data-plane/decision-gate-rs/src/native_secret_broker_v1/succession.rs \
 				data-plane/decision-gate-rs/src/native_oauth_capture_retirement.rs \
 				data-plane/decision-gate-rs/src/native_oauth_capture_retirement_v1.rs \
 				data-plane/decision-gate-rs/src/native_secret_broker_v1/capture_retirement.rs \
@@ -4508,6 +4533,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/response-v2-native-staging.v1.schema.json \
 				schemas/rbac-witness-recovery.v1.schema.json \
 				schemas/native-secret-broker.v1.schema.json \
+				schemas/native-secret-broker.v2.schema.json \
 				schemas/native-startup-configuration.v5.schema.json \
 				schemas/native-startup-configuration.v6.schema.json \
 				schemas/native-startup-configuration.v7.schema.json \
@@ -4521,6 +4547,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-startup-configuration.v15.schema.json \
 				schemas/native-startup-configuration.v16.schema.json \
 				schemas/native-startup-configuration.v17.schema.json \
+				schemas/native-startup-configuration.v18.schema.json \
+				schemas/native-oauth-succession-runtime.v1.schema.json \
 				schemas/native-oauth-capture-retirement.v1.schema.json \
 				schemas/oauth-measured-capture-retirement-authority.v1.schema.json \
 				schemas/oauth-measured-reconnect-authority.v1.schema.json \
@@ -4539,6 +4567,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-shadow-role-keys.v1.schema.json \
 				schemas/native-shadow-nitro-verifier.v1.schema.json \
 				schemas/native-shadow-verifier-launch.v1.schema.json \
+				schemas/native-shadow-verifier-transport.v1.schema.json \
 				schemas/native-shadow-encrypted-keys.v1.schema.json \
 				schemas/native-guest-role-key-provisioner.v1.schema.json \
 				schemas/native-oauth-measured-cleanup.v1.schema.json \

@@ -50,13 +50,14 @@ pub(super) fn read(fd: RawFd, maximum: usize) -> Result<Vec<u8>, String> {
 }
 
 struct Ancestor { file: File, identity: Identity, name: CString }
-pub(super) struct Original {
+pub(crate) struct Original {
     root: File, root_identity: Identity, ancestors: Vec<Ancestor>, leaf: CString,
-    pub(super) file: File, identity: Identity, pub(super) bytes: Vec<u8>,
+    pub(super) file: File, identity: Identity, pub(crate) bytes: Vec<u8>,
 }
 impl Original {
-    pub(super) fn open(name: &'static str, maximum: usize) -> Result<Self, String> {
-        ensure(matches!(name, "native-shadow-verifier-launch.json" | "native-shadow-nitro-verifier.json"),
+    pub(crate) fn open(name: &'static str, maximum: usize) -> Result<Self, String> {
+        ensure(matches!(name, "native-shadow-verifier-launch.json" | "native-shadow-nitro-verifier.json"
+            | "native-shadow-verifier-transport.json"),
             "verifier original name is not a fixed purpose")?;
         let root = owned(unsafe { libc::open(b"/\0".as_ptr().cast(), libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC) })?;
         protected_directory(root.as_raw_fd())?;
@@ -85,7 +86,7 @@ impl Original {
         owner.check()?;
         Ok(owner)
     }
-    pub(super) fn check(&self) -> Result<(), String> {
+    pub(crate) fn check(&self) -> Result<(), String> {
         ensure(identity(self.root.as_raw_fd())? == self.root_identity, "verifier original root changed")?;
         let mut parent = self.root.as_raw_fd();
         for ancestor in &self.ancestors {
@@ -155,13 +156,13 @@ fn boot() -> Result<String, String> {
     ensure(bytes.len() == 16 && bytes.iter().any(|byte| *byte != 0), "verifier boot is empty")?;
     Ok(URL_SAFE_NO_PAD.encode(bytes))
 }
-pub(super) struct Origin {
+pub(crate) struct Origin {
     pub(super) pid: libc::pid_t, start: u64, pidfd: File, pidfd_identity: Identity,
     time: File, time_identity: Identity, pid_namespace: File, pid_identity: Identity,
     pub(super) boot: String,
 }
 impl Origin {
-    pub(super) fn capture() -> Result<Self, String> {
+    pub(crate) fn capture() -> Result<Self, String> {
         root_identity()?;
         let pid = unsafe { libc::getpid() };
         let tasks = std::fs::read_dir("/proc/self/task").map_err(|_| "verifier task inventory unavailable")?
@@ -178,7 +179,7 @@ impl Origin {
     pub(super) fn time_identity(&self) -> Result<(u64,u64), String> {
         let info = stat(self.time.as_raw_fd())?; Ok((info.st_dev, info.st_ino))
     }
-    pub(super) fn check(&self) -> Result<(), String> {
+    pub(crate) fn check(&self) -> Result<(), String> {
         root_identity()?;
         ensure(unsafe { libc::getpid() } == self.pid && process(self.pid)?.1 == self.start && boot()? == self.boot,
             "verifier preparation crossed process/boot/root identity")?;

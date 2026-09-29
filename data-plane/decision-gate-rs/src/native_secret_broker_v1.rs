@@ -5,6 +5,7 @@ pub(crate) mod image;
 pub mod shadow_image;
 pub mod shadow_key_delivery;
 pub mod service_tokens;
+pub mod history;
 mod refresh;
 mod cleanup;
 mod pending_retirement;
@@ -12,6 +13,7 @@ mod capture_retirement;
 mod exchange;
 mod setup;
 mod reconnect;
+mod succession;
 #[path = "native_verifier/json.rs"]
 mod json;
 
@@ -121,29 +123,39 @@ impl Configuration {
 
 pub(crate) struct PendingBroker {
     process: process::Process, config: Configuration, public_key: Vec<u8>, nonce: [u8; 32],
-    request: Value, deadline: u64, owner_ca: Option<[u8; 32]>, quoted: bool,
+    request: Value, deadline: u64, owner_ca: Option<[u8; 32]>, quoted: bool, channel: &'static str,
 }
 
 impl PendingBroker {
     fn spawn(config: Configuration, deadline: u64) -> Result<Self, String> {
+        Self::spawn_profile(config, deadline, None)
+    }
+
+    fn spawn_profile(config: Configuration, deadline: u64, historical_configuration: Option<&str>) -> Result<Self, String> {
         config.validate()?;
         let current = now()?;
         ensure(deadline > current && deadline - current <= 86_400_000_000_000,
             "native broker lifetime must fit original 24-hour ceiling")?;
         let mut process = process::Process::spawn(&config, deadline)?;
-        let initialize = canonical_ascii_bytes(&json!({"apiVersion":CHANNEL,"phase":"initialize",
-            "deadlineBoottimeNs":deadline,"kekSha256":config.kek_sha256,"secretKekId":config.secret_kek_id}))?;
+        let channel = if historical_configuration.is_some() { "serverware.nativeSecretBrokerChannel/v2" } else { CHANNEL };
+        let mut initialize = json!({"apiVersion":channel,"phase":"initialize",
+            "deadlineBoottimeNs":deadline,"kekSha256":config.kek_sha256,"secretKekId":config.secret_kek_id});
+        if let Some(original) = historical_configuration {
+            digest(original)?;
+            initialize["historicalConfigurationSha256"] = json!(original);
+        }
+        let initialize = canonical_ascii_bytes(&initialize)?;
         let hello = document(&process.exchange(&initialize, deadline)?, 8192)?;
         fields(&hello, &["apiVersion","phase","recipientPublicKey","recipientPublicKeySha256"])?;
         let public_key = decoded(&hello["recipientPublicKey"], 1024, None)?;
-        ensure(hello["apiVersion"] == CHANNEL && hello["phase"] == "recipient"
+        ensure(hello["apiVersion"] == channel && hello["phase"] == "recipient"
             && hello["recipientPublicKeySha256"] == sha(&public_key), "native broker actual recipient hello differs")?;
         let mut nonce = [0u8; 32]; SystemRandom::new().fill(&mut nonce).map_err(|_| "native broker nonce entropy unavailable")?;
         let request = json!({"apiVersion":KMS_REQUEST,"material":"broker-kek",
             "configurationSha256":sha(&canonical_ascii_bytes(&config)?),"kmsKeyId":config.kms_key_id,
             "ciphertextBlobSha256":config.ciphertext_blob_sha256,"encryptionContext":config.encryption_context,
             "recipientPublicKeySha256":sha(&public_key),"nonce":encoded(&nonce),"deadlineBoottimeNs":deadline});
-        Ok(Self { process, config, public_key, nonce, request, deadline, owner_ca: None, quoted: false })
+        Ok(Self { process, config, public_key, nonce, request, deadline, owner_ca: None, quoted: false, channel })
     }
 
     pub(crate) fn quote_parts(&mut self, owner_ca: [u8; 32], deadline: u64)
@@ -177,19 +189,20 @@ impl PendingBroker {
         let cms = decoded(&response["ciphertextForRecipient"], 65536, None)?;
         ensure(response["apiVersion"] == KMS_RESPONSE && response["requestSha256"] == request_sha
             && response["ciphertextSha256"] == sha(&cms), "native broker KMS ciphertext correlation differs")?;
-        let provision = canonical_ascii_bytes(&json!({"apiVersion":CHANNEL,"phase":"provision",
+        let provision = canonical_ascii_bytes(&json!({"apiVersion":self.channel,"phase":"provision",
             "requestSha256":request_sha,"recipientPublicKeySha256":sha(&self.public_key),
             "ciphertextForRecipient":encoded(&cms),"ciphertextSha256":sha(&cms)}))?;
         let done = document(&self.process.exchange(&provision, self.deadline)?, 4096)?;
         fields(&done, &["apiVersion","phase","requestSha256"])?;
-        ensure(done["apiVersion"] == CHANNEL && done["phase"] == "provisioned" && done["requestSha256"] == request_sha,
+        ensure(done["apiVersion"] == self.channel && done["phase"] == "provisioned" && done["requestSha256"] == request_sha,
             "native broker private provisioning response differs")?;
         self.process.check(self.deadline)?;
         Ok(Owner { process: self.process, deadline: self.deadline,
             owner_ca: self.owner_ca.ok_or("native broker CA association absent")?,
             secret_kek_id: self.config.secret_kek_id, service_phase_closed: false,
-            poisoned: false, _quote: quote, serving: None, refresh_configuration: None, exchange_configuration: None, setup_configuration: None, reconnect_configuration: None,
-            cleanup_configuration: None, pending_retirement_configuration: None, capture_retirement_configuration: None })
+            poisoned: false, _quote: quote, serving: None, refresh_configuration: None, exchange_configuration: None, setup_configuration: None, reconnect_configuration: None, succession_configuration: None,
+            cleanup_configuration: None, pending_retirement_configuration: None, capture_retirement_configuration: None,
+            historical_configuration_sha256: None, historical_original: None, _historical_quotes: Vec::new() })
     }
 }
 
@@ -203,9 +216,13 @@ pub struct Owner {
     cleanup_configuration: Option<crate::native_oauth_cleanup_v1::Configuration>,
     pending_retirement_configuration: Option<crate::native_oauth_pending_retirement_v1::Configuration>,
     capture_retirement_configuration: Option<crate::native_oauth_capture_retirement_v1::Configuration>,
+    historical_configuration_sha256: Option<String>,
+    historical_original: Option<Vec<u8>>,
+    _historical_quotes: Vec<RuntimeKeyQuoteV1>,
     exchange_configuration: Option<(crate::native_oauth_exchange_v1::Configuration, Arc<crate::native_oauth_exchange_v1::BrowserTls>)>,
     setup_configuration: Option<(crate::native_oauth_setup_v1::Configuration, Arc<crate::native_oauth_exchange_v1::BrowserTls>)>,
     reconnect_configuration: Option<(crate::native_oauth_reconnect_v1::Configuration, Arc<crate::native_oauth_exchange_v1::BrowserTls>)>,
+    succession_configuration: Option<(crate::native_oauth_succession_v1::Configuration, Arc<crate::native_oauth_exchange_v1::BrowserTls>)>,
 }
 
 /// Privileged image/child setup only. The helper is already unprivileged; no
@@ -213,13 +230,23 @@ pub struct Owner {
 pub struct PreparedBroker {
     pending: PendingBroker,
     association: native_serving_privileges::Association,
+    historical: Option<history::HistoricalConfiguration>,
 }
 impl PreparedBroker {
     pub fn open(config: Configuration, privileges: &native_serving_privileges::Prepared) -> Result<Self, String> {
         let association = native_serving_privileges::Association::capture(privileges)?;
         let pending = PendingBroker::spawn(config, privileges.deadline())?;
         privileges.check()?;
-        Ok(Self { pending, association })
+        Ok(Self { pending, association, historical: None })
+    }
+    pub fn open_historical(config: Configuration, historical: history::HistoricalConfiguration,
+        privileges: &native_serving_privileges::Prepared) -> Result<Self, String> {
+        historical.require_primary(&config)?;
+        let association = native_serving_privileges::Association::capture(privileges)?;
+        let mut pending = PendingBroker::spawn_profile(config, privileges.deadline(), Some(&historical.commitment()))?;
+        historical.bind_pending(&mut pending)?;
+        privileges.check()?;
+        Ok(Self { pending, association, historical: Some(historical) })
     }
     pub fn check(&mut self, privileges: &native_serving_privileges::Owner) -> Result<(), String> {
         self.association.require(privileges)?;
@@ -234,6 +261,9 @@ impl PreparedBroker {
         let quote = identity.quote_broker_recipient(&mut self.pending, deadline)?;
         let mut owner = self.pending.provision(quote)?;
         owner.serving = Some(Arc::clone(privileges));
+        if let Some(historical) = self.historical {
+            historical.provision(&mut owner, identity)?;
+        }
         owner.check(deadline)?;
         Ok(owner)
     }

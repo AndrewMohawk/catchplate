@@ -111,9 +111,25 @@ struct EnrollmentParts {
     setup_authorizer: Option<EnrollmentAuthorizerV1>,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ConfigurationV4 {
+    api_version: String,
+    gate: gate::GateConfigV1,
+    native: parameters::NativeSettingsV1,
+    shadow: shadow::ShadowConfigV1,
+    response_observation_v2: NativeResponseObservationV2ConfigV1,
+    policy: ArtifactV1,
+    enrollment_authorizer: EnrollmentAuthorizerV1,
+    enrollment_setup_authorizer: EnrollmentAuthorizerV1,
+    enrollment_proxy_endpoint: String,
+    credential_currentness: serverware_decision_gate::native_currentness_v1::Configuration,
+}
+
 // This is only a source-local decomposition after exact version-specific
 // decoding. It is never accepted as configuration or verification authority.
 struct ConfigurationParts {
+    credential_currentness: Option<serverware_decision_gate::native_currentness_v1::Configuration>,
     gate: gate::GateConfigV1,
     native: parameters::NativeSettingsV1,
     shadow: shadow::ShadowConfigV1,
@@ -130,7 +146,7 @@ fn configuration(raw: &[u8]) -> Result<ConfigurationParts, String> {
                 .map_err(|_| "native v1 configuration violates its closed contract")?;
             ensure(original.api_version == "serverware.nativeStartupConfiguration/v1",
                 "native startup v1 configuration version differs")?;
-            Ok(ConfigurationParts { gate: original.gate, native: original.native,
+            Ok(ConfigurationParts { credential_currentness: None, gate: original.gate, native: original.native,
                 shadow: original.shadow, response_observation_v2: original.response_observation_v2,
                 policy: original.policy, enrollment: None })
         },
@@ -140,7 +156,7 @@ fn configuration(raw: &[u8]) -> Result<ConfigurationParts, String> {
             ensure(original.api_version == "serverware.nativeStartupConfiguration/v2"
                 && original.enrollment_authorizer.api_version == "serverware.nativeEnrollmentAuthorizer/v1",
                 "native startup v2 authorizer version differs")?;
-            Ok(ConfigurationParts { gate: original.gate, native: original.native,
+            Ok(ConfigurationParts { credential_currentness: None, gate: original.gate, native: original.native,
                 shadow: original.shadow, response_observation_v2: original.response_observation_v2,
                 policy: original.policy,
                 enrollment: Some(EnrollmentParts { authorizer: original.enrollment_authorizer,
@@ -153,9 +169,24 @@ fn configuration(raw: &[u8]) -> Result<ConfigurationParts, String> {
                 && original.enrollment_authorizer.api_version == "serverware.nativeEnrollmentAuthorizer/v1"
                 && original.enrollment_setup_authorizer.api_version == "serverware.nativeEnrollmentSetupAuthorizer/v1",
                 "native startup v3 authorizer version differs")?;
-            Ok(ConfigurationParts { gate: original.gate, native: original.native,
+            Ok(ConfigurationParts { credential_currentness: None, gate: original.gate, native: original.native,
                 shadow: original.shadow, response_observation_v2: original.response_observation_v2,
                 policy: original.policy,
+                enrollment: Some(EnrollmentParts { authorizer: original.enrollment_authorizer,
+                    endpoint: original.enrollment_proxy_endpoint,
+                    setup_authorizer: Some(original.enrollment_setup_authorizer) }) })
+        },
+        Some("serverware.nativeStartupConfiguration/v4") => {
+            let original: ConfigurationV4 = serde_json::from_value(value)
+                .map_err(|_| "native v4 configuration violates its closed contract")?;
+            ensure(original.api_version == "serverware.nativeStartupConfiguration/v4"
+                && original.enrollment_authorizer.api_version == "serverware.nativeEnrollmentAuthorizer/v1"
+                && original.enrollment_setup_authorizer.api_version == "serverware.nativeEnrollmentSetupAuthorizer/v1",
+                "native startup v4 authorizer version differs")?;
+            original.credential_currentness.validate()?;
+            Ok(ConfigurationParts { credential_currentness: Some(original.credential_currentness),
+                gate: original.gate, native: original.native, shadow: original.shadow,
+                response_observation_v2: original.response_observation_v2, policy: original.policy,
                 enrollment: Some(EnrollmentParts { authorizer: original.enrollment_authorizer,
                     endpoint: original.enrollment_proxy_endpoint,
                     setup_authorizer: Some(original.enrollment_setup_authorizer) }) })
@@ -183,7 +214,8 @@ fn run(configuration: ArtifactV1, launch: ArtifactV1, public_identity_stdout: bo
     let launch: parameters::LaunchV1 = decode(&raw_launch, MAX_LAUNCH_BYTES)?;
     launch.validate(&configuration_pin)?;
     let lifetime = NativeRuntimeLifetimeV1::new(launch.deadline_boottime_ns)?;
-    let (inputs, control_plane_tls) = configuration.gate.into_inputs()?;
+    let (mut inputs, control_plane_tls) = configuration.gate.into_inputs()?;
+    inputs.credential_currentness = configuration.credential_currentness;
     let v2 = configuration.response_observation_v2.into_config()?;
     let shadow = configuration.shadow.into_config()?;
     lifetime.check()?;

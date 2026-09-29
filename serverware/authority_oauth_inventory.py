@@ -10,7 +10,13 @@ from serverware import authority_radix_proof as radix
 from serverware import authority_oauth_activation as profile
 
 MAX_ROWS = 64
-TABLES = ("credentials", "pending_oauth_credentials", "setup_sessions")
+TABLES = ("credentials", "pending_oauth_credentials", "setup_sessions", "oauth_family_retirements")
+
+
+def maximum_rows(table):
+    # Four complete populations plus exact assertion/current rows must fit the
+    # unchanged global 256-proof ceiling. No larger population is truncated.
+    return 32 if table == "oauth_family_retirements" else MAX_ROWS
 
 
 def tables_for(operation):
@@ -19,7 +25,15 @@ def tables_for(operation):
     if operation == "oauth.exchange.prepare":
         return ("oauth_exchange_reservations", "oauth_revocation_work", "pending_oauth_credentials")
     if operation == "oauth.refresh.claim":
-        return ("oauth_refresh_reservations", "oauth_revocation_work")
+        return ("oauth_refresh_reservations", "oauth_revocation_work", "oauth_family_retirements")
+    if operation in {"oauth.refresh.retain", "oauth.refresh.commit"}:
+        return ("oauth_family_retirements",)
+    if operation == "credential.currentness.challenge":
+        return ("credential_currentness_challenges",)
+    if operation in {"credential.currentness.register", "credential.currentness.quiesce", "credential.currentness.admit"}:
+        return ("credential_currentness_holders",)
+    if operation in {"oauth.refresh-cleanup.claim", "oauth.refresh-cleanup.contact", "oauth.refresh-cleanup.finish"}:
+        return ("credentials",)
     raise ValueError("operation has no complete OAuth population contract")
 
 
@@ -34,7 +48,7 @@ def require_complete_populations(*, selected_rows, before_roots, work, deadline_
         check()
         work.prepare_scan(selected_rows)
         rows = [entry for entry in selected_rows if entry["table"] == table and entry["present"]]
-        profile.require(table in roots and len(rows) <= MAX_ROWS, "OAuth complete inventory exceeds its 64-row table bound")
+        profile.require(table in roots and len(rows) <= maximum_rows(table), "OAuth complete inventory exceeds its source-fixed table bound")
         nodes = {}
         # Each cold empty_digest(depth) separately computes its suffix ladder.
         # Reserve the complete triangular work, regardless of cache state.

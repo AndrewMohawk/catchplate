@@ -89,6 +89,30 @@ impl CustodySignerTransport {
         Ok(evidence)
     }
 
+    pub(super) fn currentness_evidence(&self, identity: &mut EnclaveRuntimeIdentityV1,
+        prepared: &credential_currentness::PreparedEvidence, deadline: u64) -> Result<Value, String> {
+        let Self::Native(owner) = self else { return Err("currentness refuses unmeasured UDS custody".to_owned()); };
+        self.verify_live()?;
+        owner.active.fetch_update(Ordering::AcqRel, Ordering::Acquire,
+            |active| (active < CUSTODY_MAX_CONCURRENT_CONNECTIONS).then_some(active + 1))
+            .map_err(|_| "native custody concurrency limit reached".to_owned())?;
+        let _permit = NativeOperationPermit(&owner.active);
+        let evidence = owner.runtime.sign_native_currentness(identity, prepared.statement(), deadline)
+            .map_err(|error| error.to_string())?;
+        self.verify_live()?;
+        Ok(evidence)
+    }
+
+    pub(super) fn currentness_lease(&self, prepared: &credential_currentness::PreparedLease<'_>) -> Result<String, String> {
+        let Self::Native(owner) = self else { return Err("currentness refuses unmeasured UDS custody".to_owned()); };
+        self.verify_live()?;
+        let (holder, epoch, registration, request) = prepared.parts();
+        let signature = owner.runtime.sign_native_currentness_lease(holder, epoch, registration, request)
+            .map_err(|error| error.to_string())?;
+        self.verify_live()?;
+        Ok(signature)
+    }
+
     /// Native bootstrap only, over the same actual runtime/ledger owner. The
     /// caller retains real policy/configuration guards; the library repeats
     /// original verification and claims durably before generating a key.

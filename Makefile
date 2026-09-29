@@ -1277,6 +1277,16 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_oauth_refresh_policy.py \
 	serverware/authority_transition_oauth_refresh.py \
 	serverware/control_plane_oauth_refresh.py \
+	serverware/authority_credential_currentness.py \
+	serverware/authority_credential_currentness_policy.py \
+	serverware/authority_transition_credential_currentness.py \
+	serverware/control_plane_credential_currentness.py \
+	serverware/authority_oauth_family_retirement.py \
+	serverware/authority_oauth_refresh_cleanup.py \
+	serverware/authority_oauth_refresh_cleanup_policy.py \
+	serverware/authority_transition_oauth_refresh_cleanup.py \
+	serverware/control_plane_oauth_refresh_cleanup.py \
+	scripts/verify_nitro_tee.py \
 	serverware/oauth_refresh_material.py \
 	serverware/authority_oauth_exchange_policy.py \
 	serverware/authority_transition_oauth_exchange.py \
@@ -3578,6 +3588,16 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_oauth_refresh_policy.py \
 				serverware/authority_transition_oauth_refresh.py \
 				serverware/control_plane_oauth_refresh.py \
+				serverware/authority_credential_currentness.py \
+				serverware/authority_credential_currentness_policy.py \
+				serverware/authority_transition_credential_currentness.py \
+				serverware/control_plane_credential_currentness.py \
+				serverware/authority_oauth_family_retirement.py \
+				serverware/authority_oauth_refresh_cleanup.py \
+				serverware/authority_oauth_refresh_cleanup_policy.py \
+				serverware/authority_transition_oauth_refresh_cleanup.py \
+				serverware/control_plane_oauth_refresh_cleanup.py \
+				scripts/verify_nitro_tee.py \
 				serverware/oauth_refresh_material.py \
 				serverware/authority_oauth_exchange_policy.py \
 				serverware/authority_transition_oauth_exchange.py \
@@ -3748,6 +3768,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/Dockerfile.production \
 				data-plane/decision-gate-rs/Cargo.lock \
 				data-plane/decision-gate-rs/src/authority_source_revision_v1.rs \
+				data-plane/decision-gate-rs/src/credential_currentness.rs \
+				data-plane/decision-gate-rs/src/native_currentness_v1.rs \
 				data-plane/decision-gate-rs/src/erofs_loop_v1.rs \
 				data-plane/decision-gate-rs/src/cgroup_control_v1.rs \
 				data-plane/decision-gate-rs/src/workload_identity_trust.rs \
@@ -3934,6 +3956,12 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/oauth-exchange-authority.v1.schema.json \
 				schemas/oauth-revocation-authority.v1.schema.json \
 				schemas/oauth-refresh-authority.v1.schema.json \
+				schemas/credential-currentness-authority.v1.schema.json \
+				schemas/credential-currentness-request.v1.schema.json \
+				schemas/native-current-credential-lease-request.v1.schema.json \
+				schemas/native-current-credential-lease-envelope.v1.schema.json \
+				schemas/native-startup-configuration.v4.schema.json \
+				schemas/oauth-refresh-cleanup-authority.v1.schema.json \
 				schemas/native-ca-installation-receipt.v1.schema.json \
 				schemas/native-enrollment-authorizer.v1.schema.json \
 				schemas/workload-identity-bootstrap-request.v1.schema.json \

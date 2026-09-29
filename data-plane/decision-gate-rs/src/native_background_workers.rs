@@ -32,6 +32,18 @@ pub(super) fn start<'scope, 'env: 'scope>(
     let observation = state.response_observation_v2_client.clone()
         .ok_or("native background work requires response-observation v2 custody")?;
 
+    if state.credential_currentness.enabled() {
+        let holder_state = Arc::clone(&state);
+        let holder_lifetime = Arc::clone(&lifetime);
+        spawn_task(scope, &lifetime, "native-credential-currentness".to_owned(), move || {
+            while keep_running(&holder_lifetime)? {
+                super::credential_currentness::poll_once(&holder_state)?;
+                if !holder_lifetime.wait(Duration::from_millis(100))? { return Ok(()); }
+            }
+            Ok(())
+        })?;
+    }
+
     let policy_state = Arc::clone(&state);
     let policy_lifetime = Arc::clone(&lifetime);
     spawn_task(scope, &lifetime, "native-policy-refresh".to_owned(), move || {

@@ -53,8 +53,12 @@ from serverware import authority_oauth_exchange as oauth_exchange
 from serverware import authority_oauth_exchange_policy as oauth_exchange_policy
 from serverware import authority_oauth_refresh as oauth_refresh
 from serverware import authority_oauth_refresh_policy as oauth_refresh_policy
+from serverware import authority_credential_currentness as credential_currentness
+from serverware import authority_credential_currentness_policy as credential_currentness_policy
 from serverware import authority_oauth_revocation as oauth_revocation
 from serverware import authority_oauth_revocation_policy as oauth_revocation_policy
+from serverware import authority_oauth_refresh_cleanup as oauth_refresh_cleanup
+from serverware import authority_oauth_refresh_cleanup_policy as oauth_refresh_cleanup_policy
 from serverware import authority_planner
 from serverware import authority_transition_registry
 from serverware import authority_transport
@@ -1158,7 +1162,7 @@ class MeasuredConfiguration:
                 "authority configuration root signature is invalid"
             ) from exc
         if (
-            set(payload) - {evidence_policy.FIELD, transition_policy.FIELD, enrollment_policy.FIELD, oauth_activation_policy.FIELD, oauth_exchange_policy.FIELD, oauth_revocation_policy.FIELD, oauth_refresh_policy.FIELD}
+            set(payload) - {evidence_policy.FIELD, transition_policy.FIELD, enrollment_policy.FIELD, oauth_activation_policy.FIELD, oauth_exchange_policy.FIELD, oauth_revocation_policy.FIELD, oauth_refresh_policy.FIELD, credential_currentness_policy.FIELD, oauth_refresh_cleanup_policy.FIELD}
                 != required_payload_fields
             or payload.get("schema") != CONFIG_SCHEMA
             or payload.get("sourceRevision") != SOURCE_REVISION
@@ -1254,10 +1258,18 @@ class MeasuredConfiguration:
         except (TypeError, ValueError) as exc:
             raise AuthorityServiceError("authority OAuth due-refresh policy is invalid") from exc
         try:
+            credential_currentness_policy.validate_policy(payload.get(credential_currentness_policy.FIELD), payload=payload, root_key=root_key)
+        except (TypeError, ValueError) as exc:
+            raise AuthorityServiceError("authority measured credential-currentness policy is invalid") from exc
+        try:
             oauth_revocation_policy.validate_policy(payload.get(oauth_revocation_policy.FIELD), payload=payload, root_key=root_key)
         except (TypeError, ValueError) as exc:
             raise AuthorityServiceError("authority OAuth cleanup policy is invalid") from exc
         configuration._verify_runtime_closure()
+        try:
+            oauth_refresh_cleanup_policy.validate_policy(payload.get(oauth_refresh_cleanup_policy.FIELD), payload=payload, root_key=root_key)
+        except (TypeError, ValueError) as exc:
+            raise AuthorityServiceError("authority OAuth family retirement policy is invalid") from exc
         configuration._verify_attestation(role=role)
         return configuration
 
@@ -8242,12 +8254,23 @@ class AuthorityProcess:
                 now_epoch_ns=time.time_ns())
             if oauth_refresh.request_digest(operation, arguments) != request_digest:
                 raise AuthorityServiceError("OAuth refresh original commitment differs from actual authority recipe")
+        if operation in credential_currentness.OPERATIONS:
+            credential_currentness_policy.verify_original(operation, arguments,
+                configuration_payload=self.configuration.payload, root_key=self.configuration.root_key,
+                now_epoch_ns=time.time_ns())
+            if credential_currentness.request_digest(operation, arguments) != request_digest:
+                raise AuthorityServiceError("credential-currentness original commitment differs from actual authority recipe")
         if operation in oauth_revocation.OPERATIONS:
             oauth_revocation_policy.verify_original(operation, arguments,
                 configuration_payload=self.configuration.payload, root_key=self.configuration.root_key,
                 now_epoch_ns=time.time_ns())
             if oauth_revocation.request_digest(operation, arguments) != request_digest:
                 raise AuthorityServiceError("OAuth cleanup original commitment differs from actual authority recipe")
+        if operation in oauth_refresh_cleanup.OPERATIONS:
+            oauth_refresh_cleanup_policy.verify_original(operation, arguments,
+                configuration_payload=self.configuration.payload, root_key=self.configuration.root_key, now_epoch_ns=time.time_ns())
+            if oauth_refresh_cleanup.request_digest(operation, arguments) != request_digest:
+                raise AuthorityServiceError("OAuth family retirement commitment differs from actual authority recipe")
         operation_identifier = _domain_digest(
             "serverware.policyAuthorityOperation/v2",
             operation.encode("ascii"),
@@ -8747,10 +8770,17 @@ class AuthorityProcess:
             oauth_refresh_policy.verify_original(planner_request["operation"],
                 planner_request["typedRequest"]["arguments"], configuration_payload=self.configuration.payload,
                 root_key=self.configuration.root_key, now_epoch_ns=time.time_ns())
+        if planner_request["operation"] in credential_currentness.OPERATIONS:
+            credential_currentness_policy.verify_original(planner_request["operation"],
+                planner_request["typedRequest"]["arguments"], configuration_payload=self.configuration.payload,
+                root_key=self.configuration.root_key, now_epoch_ns=time.time_ns())
         if planner_request["operation"] in oauth_revocation.OPERATIONS:
             oauth_revocation_policy.verify_original(planner_request["operation"],
                 planner_request["typedRequest"]["arguments"], configuration_payload=self.configuration.payload,
                 root_key=self.configuration.root_key, now_epoch_ns=time.time_ns())
+        if planner_request["operation"] in oauth_refresh_cleanup.OPERATIONS:
+            oauth_refresh_cleanup_policy.verify_original(planner_request["operation"], planner_request["typedRequest"]["arguments"],
+                configuration_payload=self.configuration.payload, root_key=self.configuration.root_key, now_epoch_ns=time.time_ns())
         verifier_config = self.configuration.role("verifier")
         planner = authority_planner.MeasuredPlanner(
             read_dsn=_read_dsn_descriptor(

@@ -311,6 +311,83 @@ def metadata_base_schema_source() -> str:
                 CHECK (status IN ('prepared', 'claimed', 'retained', 'staged'))
             );
 
+            CREATE TABLE IF NOT EXISTS credential_currentness_roots (
+                id TEXT PRIMARY KEY,
+                credential_id TEXT NOT NULL,
+                credential_version BIGINT NOT NULL,
+                epoch BIGINT NOT NULL,
+                profile TEXT NOT NULL,
+                status TEXT NOT NULL,
+                origin_request_digest TEXT NOT NULL,
+                predecessor_barrier_sha256 TEXT,
+                barrier_id TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE (credential_id, credential_version),
+                CHECK (status IN ('open', 'quiescing', 'admitted', 'consumed'))
+            );
+
+            CREATE TABLE IF NOT EXISTS credential_currentness_holders (
+                id TEXT PRIMARY KEY,
+                root_id TEXT NOT NULL,
+                credential_id TEXT NOT NULL,
+                credential_version BIGINT NOT NULL,
+                epoch BIGINT NOT NULL,
+                holder_id TEXT NOT NULL,
+                boot_id TEXT NOT NULL,
+                key_id TEXT NOT NULL,
+                control_plane_response_signing_key_id TEXT NOT NULL,
+                control_plane_configuration_digest TEXT NOT NULL,
+                registration_sha256 TEXT NOT NULL,
+                registration_original_json TEXT NOT NULL,
+                acknowledgement_sha256 TEXT,
+                acknowledgement_original_json TEXT,
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE (root_id, holder_id),
+                CHECK (status IN ('registered', 'acked'))
+            );
+
+            CREATE TABLE IF NOT EXISTS credential_currentness_challenges (
+                id TEXT PRIMARY KEY,
+                root_id TEXT NOT NULL,
+                credential_id TEXT NOT NULL,
+                credential_version BIGINT NOT NULL,
+                epoch BIGINT NOT NULL,
+                holder_id TEXT NOT NULL,
+                phase TEXT NOT NULL,
+                challenge TEXT NOT NULL,
+                barrier_id TEXT,
+                barrier_sha256 TEXT,
+                issued_at_epoch_ns BIGINT NOT NULL,
+                expires_at_epoch_ns BIGINT NOT NULL,
+                status TEXT NOT NULL,
+                request_digest TEXT NOT NULL,
+                consumed_request_digest TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                CHECK (phase IN ('register', 'ack')),
+                CHECK (status IN ('open', 'consumed'))
+            );
+
+            CREATE TABLE IF NOT EXISTS credential_currentness_barriers (
+                id TEXT PRIMARY KEY,
+                root_id TEXT NOT NULL UNIQUE,
+                credential_id TEXT NOT NULL,
+                credential_version BIGINT NOT NULL,
+                epoch BIGINT NOT NULL,
+                original_json TEXT NOT NULL,
+                original_sha256 TEXT NOT NULL,
+                status TEXT NOT NULL,
+                quiesce_request_digest TEXT NOT NULL,
+                admit_request_digest TEXT,
+                consume_request_digest TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                CHECK (status IN ('quiescing', 'admitted', 'consumed'))
+            );
+
             CREATE TABLE IF NOT EXISTS oauth_refresh_reservations (
                 id TEXT PRIMARY KEY,
                 credential_id TEXT NOT NULL,
@@ -370,6 +447,51 @@ def metadata_base_schema_source() -> str:
                 CHECK (token_purpose IN ('access_token', 'refresh_token')),
                 CHECK (status IN ('contact-claimed', 'accepted', 'rejected', 'unknown')),
                 UNIQUE (work_id, token_purpose)
+            );
+
+            CREATE TABLE IF NOT EXISTS oauth_refresh_cleanup_reservations (
+                id TEXT PRIMARY KEY,
+                authorization_original TEXT NOT NULL,
+                authorization_sha256 TEXT NOT NULL,
+                refresh_row_sha256 TEXT NOT NULL,
+                original_work_json TEXT NOT NULL,
+                original_credential_json TEXT NOT NULL,
+                original_generation_json TEXT NOT NULL,
+                currentness_barrier_sha256 TEXT NOT NULL,
+                claim_request_digest TEXT NOT NULL,
+                owner_nonce_sha256 TEXT NOT NULL,
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                CHECK (status IN ('claimed', 'unknown', 'observed-accepted', 'observed-rejected'))
+            );
+
+            CREATE TABLE IF NOT EXISTS oauth_refresh_cleanup_attempts (
+                id TEXT PRIMARY KEY,
+                work_id TEXT NOT NULL,
+                token_purpose TEXT NOT NULL,
+                contact_request_sha256 TEXT NOT NULL,
+                status TEXT NOT NULL,
+                transport_original TEXT,
+                transport_sha256 TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                CHECK (token_purpose IN ('access_token', 'refresh_token')),
+                CHECK (status IN ('contact-claimed', 'accepted', 'rejected', 'unknown')),
+                UNIQUE (work_id, token_purpose)
+            );
+
+            CREATE TABLE IF NOT EXISTS oauth_family_retirements (
+                id TEXT PRIMARY KEY,
+                provider_id TEXT NOT NULL,
+                provider_subject TEXT NOT NULL,
+                authorization_sha256 TEXT NOT NULL,
+                work_id TEXT NOT NULL,
+                credential_id TEXT NOT NULL,
+                credential_version BIGINT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE (provider_id, provider_subject)
             );
 
             CREATE TABLE IF NOT EXISTS oauth_revocation_work (

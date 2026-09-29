@@ -10,6 +10,7 @@ def main() -> None:
     workload_identity_startup = None
     oauth_application_startup = None
     oauth_revocation_startup = None
+    oauth_refresh_cleanup_startup = None
 
     try:
         custody_startup.initialize_from_environment()
@@ -23,6 +24,8 @@ def main() -> None:
         oauth_application_startup.initialize_from_environment()
         from serverware import control_plane_oauth_revocation as oauth_revocation_startup
         oauth_revocation_startup.initialize_from_environment()
+        from serverware import control_plane_oauth_refresh_cleanup as oauth_refresh_cleanup_startup
+        oauth_refresh_cleanup_startup.initialize_from_environment()
 
         import uvicorn
         from serverware.config import WEB_HOST, WEB_PORT, WEB_TLS_CERT_FILE, WEB_TLS_KEY_FILE
@@ -45,7 +48,7 @@ def main() -> None:
         )
     except BaseException:
         # Preserve the original launch/runtime error if cleanup also fails.
-        for owner in (oauth_revocation_startup, oauth_application_startup, workload_identity_startup, enrollment_startup, custody_startup):
+        for owner in (oauth_refresh_cleanup_startup, oauth_revocation_startup, oauth_application_startup, workload_identity_startup, enrollment_startup, custody_startup):
             try:
                 if owner is not None:
                     owner.close()
@@ -54,18 +57,21 @@ def main() -> None:
         raise
     else:
         try:
-            oauth_revocation_startup.close()
+            oauth_refresh_cleanup_startup.close()
         finally:
             try:
-                oauth_application_startup.close()
+                oauth_revocation_startup.close()
             finally:
                 try:
-                    workload_identity_startup.close()
+                    oauth_application_startup.close()
                 finally:
                     try:
-                        enrollment_startup.close()
+                        workload_identity_startup.close()
                     finally:
-                        custody_startup.close()
+                        try:
+                            enrollment_startup.close()
+                        finally:
+                            custody_startup.close()
 
 
 if __name__ == "__main__":

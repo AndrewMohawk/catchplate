@@ -11,6 +11,7 @@ mod native_gate_bootstrap;
 mod native_gate_inputs;
 mod native_proof_signer;
 mod native_response_attestation;
+mod credential_currentness;
 mod native_runtime_lifetime;
 mod native_background_workers;
 mod native_lease_renewal;
@@ -2343,6 +2344,7 @@ struct UpstreamDispatchAuthorityState {
     send_cohort_remaining: u64,
     next_mutation_ticket: u64,
     serving_mutation_ticket: u64,
+    cancelled_mutation_tickets: HashSet<u64>,
 }
 
 struct UpstreamDispatchPermit<'a> {
@@ -2384,6 +2386,11 @@ impl Drop for UpstreamDispatchMutation<'_> {
             .serving_mutation_ticket
             .checked_add(1)
             .expect("upstream mutation ticket exhausted");
+        loop {
+            let ticket = state.serving_mutation_ticket;
+            if !state.cancelled_mutation_tickets.remove(&ticket) { break; }
+            state.serving_mutation_ticket = ticket.checked_add(1).expect("upstream mutation ticket exhausted");
+        }
         if state.waiting_sends != 0 {
             state.send_admit_through = state
                 .next_send_ticket
@@ -2411,6 +2418,7 @@ impl UpstreamDispatchAuthority {
                 send_cohort_remaining: 0,
                 next_mutation_ticket: 1,
                 serving_mutation_ticket: 1,
+                cancelled_mutation_tickets: HashSet::new(),
             }),
             changed: Condvar::new(),
         }
@@ -2458,6 +2466,14 @@ impl UpstreamDispatchAuthority {
     }
 
     fn begin_mutation(&self) -> UpstreamDispatchMutation<'_> {
+        self.begin_mutation_until(None).expect("unbounded upstream mutation cannot expire")
+    }
+
+    fn begin_mutation_on_deadline(&self, deadline: Instant) -> Result<UpstreamDispatchMutation<'_>, String> {
+        self.begin_mutation_until(Some(deadline))
+    }
+
+    fn begin_mutation_until(&self, deadline: Option<Instant>) -> Result<UpstreamDispatchMutation<'_>, String> {
         let mut state = self
             .state
             .lock()
@@ -2476,10 +2492,24 @@ impl UpstreamDispatchAuthority {
             || state.send_cohort_remaining != 0
             || ticket != state.serving_mutation_ticket
         {
-            state = self
-                .changed
-                .wait(state)
-                .expect("upstream dispatch authority lock poisoned");
+            if let Some(deadline) = deadline {
+                let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+                    state.waiting_mutations -= 1;
+                    state.cancelled_mutation_tickets.insert(ticket);
+                    loop {
+                        let next = state.serving_mutation_ticket;
+                        if !state.cancelled_mutation_tickets.remove(&next) { break; }
+                        state.serving_mutation_ticket = next.checked_add(1).expect("upstream mutation ticket exhausted");
+                    }
+                    drop(state);
+                    self.changed.notify_all();
+                    return Err("currentness drain exceeded its original deadline; no acknowledgement".to_owned());
+                };
+                state = self.changed.wait_timeout(state, remaining)
+                    .expect("upstream dispatch authority lock poisoned").0;
+            } else {
+                state = self.changed.wait(state).expect("upstream dispatch authority lock poisoned");
+            }
         }
         state.waiting_mutations = state
             .waiting_mutations
@@ -2487,7 +2517,7 @@ impl UpstreamDispatchAuthority {
             .expect("upstream waiting mutation count underflow");
         state.mutation_active = true;
         drop(state);
-        UpstreamDispatchMutation { authority: self }
+        Ok(UpstreamDispatchMutation { authority: self })
     }
 }
 
@@ -2530,6 +2560,7 @@ impl MitmAuthority {
 
 struct GateState {
     upstream_dispatch_authority: UpstreamDispatchAuthority,
+    credential_currentness: credential_currentness::LocalHolder,
     #[cfg(test)]
     upstream_send_credential_lock_contentions: AtomicU64,
     policy_shadow: ShadowRuntime,
@@ -21236,6 +21267,9 @@ fn fetch_scoped_credential_lease_on_deadline(
         }
     };
     let request_wire = credential_lease_request_wire_value_profile(&request_body, profile)?;
+    let (request_wire, currentness_pin) = credential_currentness::wrap_request(
+        state, snapshot, scope, purpose, expected_generation.map(|generation| generation.version),
+        request_wire, deadline)?;
     verify_native_credential_lease_scope(state, &snapshot.hash)?;
     if credential_lease_profile(state, &snapshot.hash)? != profile {
         return Err("credential recipient runtime profile changed before send".to_owned());
@@ -21281,6 +21315,8 @@ fn fetch_scoped_credential_lease_on_deadline(
         ));
     }
     verify_native_credential_lease_scope(state, &snapshot.hash)?;
+    let (inner_body, currentness_version) = credential_currentness::unwrap_response(
+        state, purpose, &currentness_pin, body.as_ref())?;
     let mut lease = decrypt_credential_lease_envelope_with_owner(
         snapshot,
         &state.binary_digest,
@@ -21293,9 +21329,19 @@ fn fetch_scoped_credential_lease_on_deadline(
         &recipient_key_id,
         &recipient_nonce,
         &recipient_nonce_bytes,
-        body.as_ref(),
+        &inner_body,
         requested_ttl_seconds,
     )?;
+    match &lease {
+        CredentialLeaseMaterial::GenerationMetadata(generation) => {
+            if currentness_version.is_some_and(|version| version != generation.version) {
+                return Err("currentness metadata and decrypted generation differ".to_owned());
+            }
+        },
+        CredentialLeaseMaterial::DispatchSecret(secret) => {
+            state.credential_currentness.require_send(&scope.credential_id, secret.version)?;
+        },
+    }
     check_credential_operation_deadline(deadline)?;
     if let Some(deadline) = deadline {
         match &mut lease {
@@ -21913,6 +21959,7 @@ fn cache_scoped_credential_lease(
         return Err("credential lease metadata or expiry is invalid".to_string());
     }
     let _dispatch_authority = state.upstream_dispatch_authority.begin_mutation();
+    state.credential_currentness.require_send(&scope.credential_id, lease.version)?;
     let active = state
         .snapshot
         .read()
@@ -22705,6 +22752,8 @@ fn acquire_upstream_send_authority<'a>(
             lease_deadline: None,
         });
     };
+    state.credential_currentness.require_send(&binding.scope.credential_id, binding.version)
+        .map_err(|_| "credential_currentness_blocked_before_upstream_send")?;
     #[cfg(test)]
     match state.credential_leases.try_lock() {
         Ok(leases) => drop(leases),
@@ -51748,6 +51797,7 @@ fn main() -> Result<(), String> {
     let credential_lease_client = build_control_plane_client(Duration::from_secs(3))?;
     let mitm_authority = build_mitm_authority()?;
     let state = Arc::new(GateStateInputs {
+        credential_currentness: None,
         policy_shadow_generation_control,
         policy_path,
         policy_trust_root_source,
@@ -53085,6 +53135,7 @@ mod tests {
         } = local_response_proof_signing_material().expect("test response proof key");
         GateState {
             upstream_dispatch_authority: UpstreamDispatchAuthority::new(),
+            credential_currentness: credential_currentness::LocalHolder::new(None),
             upstream_send_credential_lock_contentions: AtomicU64::new(0),
             policy_shadow: ShadowRuntime::new_inactive_for_forwarding_tests(),
             policy_shadow_generation_control: None,

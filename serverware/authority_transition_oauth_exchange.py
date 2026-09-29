@@ -15,6 +15,7 @@ from serverware import authority_oauth_activation as activation
 from serverware import authority_oauth_activation_policy as enrollment
 from serverware import authority_oauth_exchange as profile
 from serverware import authority_oauth_inventory as inventory
+from serverware import authority_oauth_family_retirement as family
 from serverware import authority_transition_core as core
 from serverware import authority_transition_oauth_activation as activation_kernel
 from serverware import authority_transition_quota as shared
@@ -182,8 +183,8 @@ class OAuthExchangeKernel:
             queries.extend(assertion._trust_queries(self.operation, work=None))
         if self.operation in {profile.OP_PREPARE, profile.OP_STAGE}:
             queries.extend(core.BoundedQuery(query_id=core.query_program_id(self.operation, "complete_population", table), table=table,
-                predicates=(), order_by=(core.QueryOrder("id"),), maximum_rows=inventory.MAX_ROWS + 1,
-                proof_primitive="bounded-limit-plus-one", work_units=inventory.MAX_ROWS + 1) for table in inventory.tables_for(self.operation))
+                predicates=(), order_by=(core.QueryOrder("id"),), maximum_rows=inventory.maximum_rows(table) + 1,
+                proof_primitive="bounded-limit-plus-one", work_units=inventory.maximum_rows(table) + 1) for table in inventory.tables_for(self.operation))
         if self.operation == profile.OP_STAGE:
             queries.extend((shared._query(operation=self.operation, name="new_pending", table="pending_oauth_credentials", key={"id": item_id}, require_absence=True),
                 shared._query(operation=self.operation, name="new_credential", table="credentials", key={"id": item_id}, require_absence=True),
@@ -286,6 +287,7 @@ class OAuthExchangeKernel:
                     raise core.TransitionKernelError("OAuth staging lacks exact retained material or original lifetime")
                 profile.digest(row["raw_response_sha256"])
                 metadata = _review(request, consent, payload, association)
+                family.require_open_from_population(context, metadata["provider_id"], metadata["provider_subject"])
                 for table, key in (("pending_oauth_credentials", {"id": row["id"]}), ("credentials", {"id": row["id"]}), ("credential_generations", {"credential_id": row["id"]})):
                     if context.exact(table, key)["present"]:
                         raise core.TransitionKernelError("OAuth pending identity or credential generation already exists")

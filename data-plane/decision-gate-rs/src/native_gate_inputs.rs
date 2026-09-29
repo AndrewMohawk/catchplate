@@ -35,6 +35,7 @@ pub(super) fn validate_native_gate_inputs(inputs: &GateStateInputs,
     // host UDS peer or UID-isolated process. Legacy UDS startup still enforces
     // its separate UID. Neither construction supplies independent admission.
     signer.transport.require_native()?;
+    if let Some(currentness) = &inputs.credential_currentness { currentness.validate()?; }
     if signer.public_key_pem != proof.public_key_pem || signer.key_id != proof.key_id {
         return Err("native custody signer metadata does not match the supplied proof configuration".to_owned());
     }

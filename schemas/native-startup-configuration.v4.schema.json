@@ -1,0 +1,132 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-startup-configuration.v4.schema.json",
+  "title": "Cold native startup with measured credential currentness",
+  "$comment": "Source validates original bytes <=16MiB, duplicate-free integer-only JSON, protected original custody, exact URL/token/pin relationships, certificates, role assignments and original deadlines. Schema acceptance is not admission. Older startup versions are unchanged.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "gate", "native", "shadow", "responseObservationV2", "policy", "enrollmentAuthorizer", "enrollmentSetupAuthorizer", "enrollmentProxyEndpoint", "credentialCurrentness"],
+  "properties": {
+    "apiVersion": {"const": "serverware.nativeStartupConfiguration/v4"},
+    "gate": {"$ref": "#/$defs/gate"},
+    "native": {"$ref": "#/$defs/native"},
+    "shadow": {"$ref": "#/$defs/shadow"},
+    "responseObservationV2": {"$ref": "#/$defs/responseObservation"},
+    "policy": {"$ref": "#/$defs/artifact"},
+    "enrollmentAuthorizer": {"$ref": "native-enrollment-authorizer.v1.schema.json"},
+    "enrollmentSetupAuthorizer": {"$ref": "native-enrollment-setup-authorizer.v1.schema.json"},
+    "enrollmentProxyEndpoint": {"type": "string", "minLength": 1, "maxLength": 4096},
+    "credentialCurrentness": {
+      "type": "object", "additionalProperties": false, "required": ["profile", "deploymentId"],
+      "properties": {
+        "profile": {"const": "measured-holder-barrier-v1"},
+        "deploymentId": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"}
+      }
+    }
+  },
+  "$defs": {
+    "sha": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "uint": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615},
+    "positive": {"type": "integer", "minimum": 1, "maximum": 18446744073709551615},
+    "path": {"type": "string", "minLength": 2, "maxLength": 4096, "pattern": "^/[^\u0000]+$"},
+    "text": {"type": "string", "maxLength": 4096},
+    "url": {"type": "string", "minLength": 1, "maxLength": 4096},
+    "nullableUrl": {"anyOf": [{"$ref": "#/$defs/url"}, {"type": "null"}]},
+    "token": {"type": "string", "minLength": 1, "maxLength": 4096},
+    "nullableToken": {"anyOf": [{"$ref": "#/$defs/token"}, {"type": "null"}]},
+    "artifact": {
+      "type": "object", "additionalProperties": false, "required": ["path", "sha256"],
+      "properties": {"path": {"$ref": "#/$defs/path"}, "sha256": {"$ref": "#/$defs/sha"}}
+    },
+    "verifier": {
+      "type": "object", "additionalProperties": false, "required": ["executable", "arguments", "sha256"],
+      "properties": {"executable": {"$ref": "#/$defs/path"}, "arguments": {"type": "array", "maxItems": 0}, "sha256": {"$ref": "#/$defs/sha"}}
+    },
+    "roots": {"anyOf": [{"type": "null"}, {"type": "array", "minItems": 1, "maxItems": 32, "items": {"type": "string", "minLength": 1, "maxLength": 65536}}]},
+    "cache": {"type": "integer", "minimum": 1, "maximum": 1000000},
+    "gate": {
+      "type": "object", "additionalProperties": false,
+      "required": ["policyHighWater", "policyTrust", "expectedBinarySha256", "instanceId", "grantCacheMax", "gmailProofCacheMax", "credentialLeaseUrl", "credentialLeaseToken", "credentialLeaseRenewalIntervalMs", "credentialLeaseRenewalWorkers", "credentialLeaseRenewalQueueCapacity", "credentialLeaseCacheMax", "atomicReleaseAuthorizationEnabled", "managementToken", "auditQueueMax", "auditBatchMax", "requestHeadDeadlineMs", "requestBodyDeadlineMs", "responseWriteDeadlineMs"],
+      "properties": {
+        "policyHighWater": {
+          "type": "object", "additionalProperties": false, "required": ["apiVersion", "policyId", "sequence", "rollbackEpoch", "policyHash"],
+          "properties": {"apiVersion": {"const": "serverware.policyHighWater/v1"}, "policyId": {"type": "string", "minLength": 1, "maxLength": 256}, "sequence": {"$ref": "#/$defs/positive"}, "rollbackEpoch": {"$ref": "#/$defs/positive"}, "policyHash": {"$ref": "#/$defs/sha"}}
+        },
+        "policyTrust": {
+          "type": "object", "additionalProperties": false, "required": ["url", "verifier"],
+          "properties": {"url": {"$ref": "#/$defs/url"}, "verifier": {"$ref": "#/$defs/verifier"}, "expectedQuoteKeyId": {"anyOf": [{"$ref": "#/$defs/sha"}, {"type": "null"}]}}
+        },
+        "expectedBinarySha256": {"$ref": "#/$defs/sha"}, "instanceId": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "grantCacheMax": {"$ref": "#/$defs/cache"}, "gmailProofCacheMax": {"$ref": "#/$defs/cache"},
+        "credentialLeaseUrl": {"$ref": "#/$defs/url"}, "credentialLeaseToken": {"$ref": "#/$defs/token"},
+        "credentialLeaseRenewalIntervalMs": {"type": "integer", "minimum": 50, "maximum": 1000},
+        "credentialLeaseRenewalWorkers": {"type": "integer", "minimum": 1, "maximum": 32},
+        "credentialLeaseRenewalQueueCapacity": {"type": "integer", "minimum": 1, "maximum": 65536},
+        "credentialLeaseCacheMax": {"$ref": "#/$defs/cache"},
+        "controlPlaneTlsRootsPem": {"$ref": "#/$defs/roots"}, "upstreamTlsRootsPem": {"$ref": "#/$defs/roots"},
+        "auditUrl": {"$ref": "#/$defs/nullableUrl"}, "auditToken": {"$ref": "#/$defs/nullableToken"},
+        "grantConsumeUrl": {"$ref": "#/$defs/nullableUrl"}, "grantConsumeToken": {"$ref": "#/$defs/nullableToken"},
+        "rateLimitConsumeUrl": {"$ref": "#/$defs/nullableUrl"}, "rateLimitConsumeToken": {"$ref": "#/$defs/nullableToken"},
+        "atomicReleaseAuthorizationEnabled": {"type": "boolean"},
+        "releaseAuthorizationBaseUrl": {"$ref": "#/$defs/nullableUrl"}, "releaseAuthorizationToken": {"$ref": "#/$defs/nullableToken"},
+        "managementToken": {"$ref": "#/$defs/token"}, "auditQueueMax": {"$ref": "#/$defs/cache"},
+        "auditBatchMax": {"type": "integer", "minimum": 1, "maximum": 200},
+        "requestHeadDeadlineMs": {"type": "integer", "minimum": 100, "maximum": 30000},
+        "requestBodyDeadlineMs": {"type": "integer", "minimum": 1000, "maximum": 600000},
+        "responseWriteDeadlineMs": {"type": "integer", "minimum": 1000, "maximum": 600000}
+      }
+    },
+    "native": {
+      "type": "object", "additionalProperties": false,
+      "required": ["ingressHost", "ingressClientRootsDerBase64url", "controlPlaneResponsePublicKeyPem", "controlPlaneResponseKeyId", "attemptLedgerDirectory", "relayAssignments", "listenerPort", "expectedPolicySigningKeyId", "runtime"],
+      "properties": {
+        "ingressHost": {"type": "string", "minLength": 1, "maxLength": 253},
+        "ingressClientRootsDerBase64url": {"type": "array", "minItems": 1, "maxItems": 32, "items": {"type": "string", "minLength": 1, "maxLength": 87382, "pattern": "^[A-Za-z0-9_-]+$"}},
+        "controlPlaneResponsePublicKeyPem": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "controlPlaneResponseKeyId": {"$ref": "#/$defs/sha"}, "attemptLedgerDirectory": {"$ref": "#/$defs/path"},
+        "relayAssignments": {"type": "array", "minItems": 1, "maxItems": 32, "items": {
+          "type": "object", "additionalProperties": false, "required": ["host", "endpoint", "parentPort"],
+          "properties": {"host": {"type": "string", "minLength": 1, "maxLength": 253}, "endpoint": {"type": "string", "minLength": 1}, "parentPort": {"type": "integer", "minimum": 0, "maximum": 4294967295}}
+        }},
+        "listenerPort": {"type": "integer", "minimum": 0, "maximum": 4294967295}, "expectedPolicySigningKeyId": {"$ref": "#/$defs/sha"},
+        "runtime": {
+          "type": "object", "additionalProperties": false, "required": ["proxyWorkers", "proxyQueueCapacity", "policyIntervalMs", "auditIntervalMs"],
+          "properties": {"proxyWorkers": {"type": "integer", "minimum": 1, "maximum": 24}, "proxyQueueCapacity": {"type": "integer", "minimum": 1, "maximum": 4096}, "policyIntervalMs": {"type": "integer", "minimum": 50, "maximum": 60000}, "auditIntervalMs": {"type": "integer", "minimum": 10, "maximum": 60000}}
+        }
+      }
+    },
+    "shadow": {
+      "type": "object", "additionalProperties": false, "required": ["trustManifest", "runtimeVerifier", "webauthnVerifier", "publicationHandoff", "custodyConfig", "startupActiveAuthorization"],
+      "properties": {"trustManifest": {"$ref": "#/$defs/artifact"}, "runtimeVerifier": {"$ref": "#/$defs/verifier"}, "webauthnVerifier": {"$ref": "#/$defs/verifier"}, "publicationHandoff": {"$ref": "#/$defs/verifier"}, "custodyConfig": {"$ref": "#/$defs/artifact"}, "startupActiveAuthorization": {"$ref": "#/$defs/artifact"}}
+    },
+    "responseObservation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "socketPath", "expectedUid", "startupTimeoutMs", "signerKeySha256", "roleIdentityRootSha256", "proofPinsRootSha256", "teeVerifier", "transparencyTrustPin", "roleKeys", "generationId", "expectedSourceCommitSha256", "expectedSourceTreeSha256", "minimumRevocationEpoch"],
+      "properties": {
+        "apiVersion": {"const": "serverware.nativeResponseObservationV2Config/v1"}, "socketPath": {"$ref": "#/$defs/path"},
+        "expectedUid": {"type": "integer", "minimum": 0, "maximum": 4294967295}, "startupTimeoutMs": {"type": "integer", "minimum": 1, "maximum": 30000},
+        "signerKeySha256": {"$ref": "#/$defs/sha"}, "roleIdentityRootSha256": {"$ref": "#/$defs/sha"}, "proofPinsRootSha256": {"$ref": "#/$defs/sha"},
+        "teeVerifier": {"$ref": "#/$defs/teeVerifier"}, "transparencyTrustPin": {"$ref": "#/$defs/transparency"},
+        "roleKeys": {"type": "array", "minItems": 1, "maxItems": 256, "items": {"$ref": "#/$defs/roleKey"}},
+        "generationId": {"$ref": "#/$defs/text"}, "expectedSourceCommitSha256": {"$ref": "#/$defs/sha"}, "expectedSourceTreeSha256": {"$ref": "#/$defs/sha"},
+        "expectedProviderGeneration": {"anyOf": [{"$ref": "#/$defs/uint"}, {"type": "null"}]},
+        "expectedTrustRootSha256": {"anyOf": [{"$ref": "#/$defs/sha"}, {"type": "null"}]}, "expectedTrustCheckpointSha256": {"anyOf": [{"$ref": "#/$defs/sha"}, {"type": "null"}]},
+        "minimumRevocationEpoch": {"$ref": "#/$defs/uint"}
+      }
+    },
+    "teeVerifier": {
+      "type": "object", "additionalProperties": false, "required": ["apiVersion", "executable", "executableSha256", "expectations", "trustRoots"],
+      "properties": {"apiVersion": {"const": "serverware.responseObservationV2PinnedTeeVerifier/v1"}, "executable": {"$ref": "#/$defs/path"}, "arguments": {"type": "array", "maxItems": 0}, "executableSha256": {"$ref": "#/$defs/sha"}, "verifierModule": {"anyOf": [{"$ref": "#/$defs/artifact"}, {"type": "null"}]}, "expectations": {"$ref": "#/$defs/artifact"}, "trustRoots": {"$ref": "#/$defs/artifact"}}
+    },
+    "roleKey": {
+      "type": "object", "additionalProperties": false,
+      "required": ["role", "generationId", "providerId", "providerGeneration", "keyId", "keyMaterialSha256", "keyMaterialPath", "executableMeasurementSha256", "executablePath", "providerConfigSha256", "providerConfigPath", "teeMeasurementSha256", "publicKeyBase64", "publicKeySha256", "allowedOperations"],
+      "properties": {"role": {"type": "string", "maxLength": 256}, "generationId": {"type": "string", "maxLength": 256}, "providerId": {"type": "string", "maxLength": 256}, "providerGeneration": {"$ref": "#/$defs/uint"}, "keyId": {"$ref": "#/$defs/text"}, "keyMaterialSha256": {"$ref": "#/$defs/sha"}, "keyMaterialPath": {"$ref": "#/$defs/text"}, "executableMeasurementSha256": {"$ref": "#/$defs/sha"}, "executablePath": {"$ref": "#/$defs/text"}, "providerConfigSha256": {"$ref": "#/$defs/sha"}, "providerConfigPath": {"$ref": "#/$defs/text"}, "teeMeasurementSha256": {"$ref": "#/$defs/sha"}, "publicKeyBase64": {"$ref": "#/$defs/text"}, "publicKeySha256": {"$ref": "#/$defs/sha"}, "allowedOperations": {"type": "array", "maxItems": 256, "items": {"type": "string", "maxLength": 256}}}
+    },
+    "transparency": {
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "kind", "schemaVersion", "generationId", "providerGeneration", "proofPinsRootSha256", "logId", "logKeyId", "logKeySpkiBase64", "logKeySpkiSha256", "anchorTreeSize", "anchorRootSha256", "trustCheckpointSha256", "revocationEpoch", "validFromEpochMs", "validUntilEpochMs", "maximumCheckpointAgeMs"],
+      "properties": {"apiVersion": {"const": "serverware.responseV2.releaseTransparencyTrustPin/v2"}, "kind": {"const": "ServerwareResponseV2ReleaseTransparencyTrustPin"}, "schemaVersion": {"$ref": "#/$defs/text"}, "generationId": {"$ref": "#/$defs/text"}, "providerGeneration": {"$ref": "#/$defs/uint"}, "proofPinsRootSha256": {"$ref": "#/$defs/sha"}, "logId": {"$ref": "#/$defs/text"}, "logKeyId": {"$ref": "#/$defs/text"}, "logKeySpkiBase64": {"$ref": "#/$defs/text"}, "logKeySpkiSha256": {"$ref": "#/$defs/sha"}, "anchorTreeSize": {"$ref": "#/$defs/uint"}, "anchorRootSha256": {"$ref": "#/$defs/sha"}, "trustCheckpointSha256": {"$ref": "#/$defs/sha"}, "revocationEpoch": {"$ref": "#/$defs/uint"}, "validFromEpochMs": {"$ref": "#/$defs/uint"}, "validUntilEpochMs": {"$ref": "#/$defs/uint"}, "revokedAtEpochMs": {"anyOf": [{"$ref": "#/$defs/uint"}, {"type": "null"}]}, "maximumCheckpointAgeMs": {"type": "integer", "minimum": 1, "maximum": 86400000}}
+    }
+  }
+}

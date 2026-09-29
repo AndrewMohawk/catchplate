@@ -18,6 +18,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant, SystemTime};
 
 pub(super) struct GateStateInputs {
+    pub(super) credential_currentness: Option<serverware_decision_gate::native_currentness_v1::Configuration>,
     pub(super) policy_shadow_generation_control: Option<Arc<PolicyShadowGenerationControl>>,
     pub(super) policy_path: String,
     pub(super) policy_trust_root_source: PolicyTrustRootSource,
@@ -75,6 +76,7 @@ impl GateStateInputs {
     pub(super) fn into_state(self, runtime: GateStateRuntime) -> GateState {
         GateState {
             upstream_dispatch_authority: UpstreamDispatchAuthority::new(),
+            credential_currentness: super::credential_currentness::LocalHolder::new(self.credential_currentness),
             #[cfg(test)]
             upstream_send_credential_lock_contentions: AtomicU64::new(0),
             policy_shadow: ShadowRuntime::new(),

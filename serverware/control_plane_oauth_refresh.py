@@ -265,6 +265,13 @@ class _Refresh:
         issued = time.time_ns()
         retention = min(self.opening.expires, issued + self.bounds["operationMaxSeconds"] * 1_000_000_000)
         contact = min(retention, issued + 20_000_000_000)
+        from serverware.control_plane_credential_currentness import admit_refresh_barrier
+        # Drain the genuine registered holders before the irreversible claim.
+        # Waiting spends these original bounds; it does not start a fresh
+        # contact or retention allowance when the final holder acknowledges.
+        barrier_sha256 = admit_refresh_barrier(self.opening, self.row, self.head)
+        self.check()
+        profile.require(time.time_ns() < contact)
         common = {"expectedVersion": self.version, "limits": self.bounds}
         def reserved(purpose):
             return _encrypted(profile.artifact_id(self.refresh_id, purpose), profile.canonical({
@@ -272,6 +279,7 @@ class _Refresh:
         row, _ = self.dispatch(profile.OP_CLAIM, {**common,
             "credentialRowSha256": profile.sha256(profile.credential_original(self.row)),
             "generationRowSha256": profile.sha256(profile.generation_original(self.head)),
+            "currentnessBarrierSha256": barrier_sha256,
             "ownerNonceSha256": profile.sha256(base64.urlsafe_b64decode(self.nonce + "=")),
             "issuedAtEpochNs": issued, "contactExpiresAtEpochNs": contact, "retentionExpiresAtEpochNs": retention,
             "contactRequestSha256": contact_digest, "reservedIssuedEnvelope": reserved("issued"),

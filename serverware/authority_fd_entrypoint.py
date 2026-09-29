@@ -20,6 +20,8 @@ OAUTH_APPLICATION_CONFIG_NAME = "SERVERWARE_OAUTH_APPLICATION_CONFIG_FD"
 OAUTH_APPLICATION_CONFIG_MAX_BYTES = 64 * 1024
 OAUTH_REVOCATION_CONFIG_NAME = "SERVERWARE_OAUTH_REVOCATION_CONFIG_FD"
 OAUTH_REVOCATION_CONFIG_MAX_BYTES = 2 * 1024 * 1024
+OAUTH_REFRESH_CLEANUP_CONFIG_NAME = "SERVERWARE_OAUTH_REFRESH_CLEANUP_CONFIG_FD"
+OAUTH_REFRESH_CLEANUP_CONFIG_MAX_BYTES = 2 * 1024 * 1024
 CONTROL_PLANE_ENROLLMENT_BOOTSTRAP_NAME = "SERVERWARE_CONTROL_PLANE_ENROLLMENT_BOOTSTRAP_FD"
 CONTROL_PLANE_ENROLLMENT_BOOTSTRAP_SCHEMA = "serverware.signedControlPlaneEnrollmentBootstrap/v2"
 CONTROL_PLANE_ENROLLMENT_PAYLOAD_SCHEMA = "serverware.controlPlaneEnrollmentBootstrap/v2"
@@ -211,6 +213,7 @@ ROLE_SOURCES = {
             OAUTH_REVOCATION_CONFIG_NAME,
             "/run/serverware/authority-trust/oauth-revocations.json",
         ),
+        (OAUTH_REFRESH_CLEANUP_CONFIG_NAME, "/run/serverware/authority-trust/oauth-refresh-cleanups.json"),
     ),
     "runtime": (
         (
@@ -572,6 +575,57 @@ def _open_oauth_revocation_material(config_fd, *, occupied_descriptors):
         work_ids.add(grant["exchangeId"])
         selected.extend(((entry["clientMaterialFd"],
             "/run/secrets/serverware-oauth-revocation-" + grant["authorizationId"] + "-client", 32 * 1024, True),
+            (entry["historicalEnrollmentRootFd"], "/run/serverware/authority-trust/oauth-enrollment-history/"
+                + grant["historicalEnrollmentRootSpkiSha256"][7:] + "-public-key", 4096, False)))
+    targets = [item[0] for item in selected]
+    profile.require(all(type(target) is int and 32 <= target <= 1023 for target in targets)
+        and len(set(targets)) == len(targets) and not set(targets) & set(occupied_descriptors))
+    for target in targets:
+        try:
+            os.fstat(target)
+        except OSError as exc:
+            if exc.errno != errno.EBADF:
+                raise
+        else:
+            raise RuntimeError("OAuth cleanup inherited descriptor slot is occupied")
+    opened = []
+    try:
+        for target, path, maximum, private in selected:
+            descriptor = _open_source(path, expected_owner_uid=0, maximum_bytes=maximum,
+                required_mode=0o400 if private else None)
+            try:
+                os.dup2(descriptor, target, inheritable=True)
+                opened.append(target)
+            finally:
+                if descriptor != target:
+                    os.close(descriptor)
+        return tuple(opened)
+    except BaseException:
+        for descriptor in opened:
+            os.close(descriptor)
+        raise
+
+
+def _open_oauth_refresh_cleanup_material(config_fd, *, occupied_descriptors):
+    """Deliver fixed cleanup originals; no arbitrary pathname or signing key."""
+    from serverware import authority_oauth_refresh_cleanup as profile
+    raw = os.pread(config_fd, OAUTH_REFRESH_CLEANUP_CONFIG_MAX_BYTES + 1, 0)
+    config = profile.document(raw, OAUTH_REFRESH_CLEANUP_CONFIG_MAX_BYTES)
+    profile.require(set(config) == {"schema", "sourceRevision", "configurationDigest", "authorityRootFd", "authorityRootSha256", "authorizations"}
+        and config["schema"] == "serverware.oauthRefreshCleanupStartup/v1"
+        and type(config["authorizations"]) is list and len(config["authorizations"]) <= 16)
+    if not config["authorizations"]:
+        profile.require(config["authorityRootFd"] is None and config["authorityRootSha256"] is None)
+        return ()
+    selected = [(config["authorityRootFd"], "/run/serverware/authority-trust/oauth-refresh-cleanup-root-public-key", 4096, False)]
+    work_ids = set()
+    for entry in config["authorizations"]:
+        profile.require(type(entry) is dict and set(entry) == {"authorization", "clientMaterialFd", "historicalEnrollmentRootFd"})
+        grant = profile.grant_document(profile.canonical(entry["authorization"]))["payload"]
+        profile.require(grant["workId"] not in work_ids)
+        work_ids.add(grant["workId"])
+        selected.extend(((entry["clientMaterialFd"],
+            "/run/secrets/serverware-oauth-refresh-cleanup-" + grant["authorizationId"] + "-client", 32 * 1024, True),
             (entry["historicalEnrollmentRootFd"], "/run/serverware/authority-trust/oauth-enrollment-history/"
                 + grant["historicalEnrollmentRootSpkiSha256"][7:] + "-public-key", 4096, False)))
     targets = [item[0] for item in selected]
@@ -2463,7 +2517,7 @@ def _normal_main(role: str) -> int:
             )
     for name in tuple(environment):
         if name.startswith(("SERVERWARE_CONTROL_PLANE_CUSTODY_",
-                "SERVERWARE_CONTROL_PLANE_ENROLLMENT_", "SERVERWARE_OAUTH_APPLICATION_", "SERVERWARE_OAUTH_REVOCATION_")):
+                "SERVERWARE_CONTROL_PLANE_ENROLLMENT_", "SERVERWARE_OAUTH_APPLICATION_", "SERVERWARE_OAUTH_REVOCATION_", "SERVERWARE_OAUTH_REFRESH_CLEANUP_")):
             environment.pop(name, None)
     environment.pop("SERVERWARE_AUTHORITY_BOOTSTRAP_FD", None)
     environment.pop("SERVERWARE_PROCESS_MODE", None)
@@ -2479,11 +2533,13 @@ def _normal_main(role: str) -> int:
     enrollment_bootstrap_descriptor: int | None = None
     oauth_application_descriptor: int | None = None
     oauth_revocation_descriptor: int | None = None
+    oauth_refresh_cleanup_descriptor: int | None = None
     control_plane_source_limits = {
         CONTROL_PLANE_CUSTODY_CONFIG_NAME: CONTROL_PLANE_CUSTODY_CONFIG_MAX_BYTES,
         CONTROL_PLANE_ENROLLMENT_BOOTSTRAP_NAME: CONTROL_PLANE_ENROLLMENT_BOOTSTRAP_MAX_BYTES,
         OAUTH_APPLICATION_CONFIG_NAME: OAUTH_APPLICATION_CONFIG_MAX_BYTES,
         OAUTH_REVOCATION_CONFIG_NAME: OAUTH_REVOCATION_CONFIG_MAX_BYTES,
+        OAUTH_REFRESH_CLEANUP_CONFIG_NAME: OAUTH_REFRESH_CLEANUP_CONFIG_MAX_BYTES,
     }
     try:
         for environment_name, path in ROLE_SOURCES[role]:
@@ -2506,6 +2562,8 @@ def _normal_main(role: str) -> int:
                     oauth_application_descriptor = descriptor
                 elif environment_name == OAUTH_REVOCATION_CONFIG_NAME:
                     oauth_revocation_descriptor = descriptor
+                elif environment_name == OAUTH_REFRESH_CLEANUP_CONFIG_NAME:
+                    oauth_refresh_cleanup_descriptor = descriptor
             else:
                 descriptor_assignments.append(
                     (environment_name, descriptor)
@@ -2534,6 +2592,10 @@ def _normal_main(role: str) -> int:
                 raise RuntimeError("OAuth cleanup cold configuration is unavailable")
             descriptors.extend(_open_oauth_revocation_material(
                 oauth_revocation_descriptor, occupied_descriptors=set(descriptors)))
+            if oauth_refresh_cleanup_descriptor is None:
+                raise RuntimeError("OAuth family retirement cold configuration is unavailable")
+            descriptors.extend(_open_oauth_refresh_cleanup_material(
+                oauth_refresh_cleanup_descriptor, occupied_descriptors=set(descriptors)))
             if custody_configuration_descriptor is None:
                 raise RuntimeError("control-plane custody startup configuration is unavailable")
             custody_configuration, custody_directory = _open_control_plane_custody(

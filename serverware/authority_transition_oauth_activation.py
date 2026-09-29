@@ -17,6 +17,9 @@ from serverware import authority_oauth_inventory as inventory
 from serverware import authority_transition_core as core
 from serverware import authority_transition_quota as shared
 from serverware import authority_transition_webauthn as assertion
+from serverware import authority_credential_currentness as currentness
+from serverware import authority_transition_credential_currentness as currentness_kernel
+from serverware import authority_oauth_family_retirement as family_retirement
 
 _PROVENANCE = frozenset({"schema", "requestDigest", "requestEvidenceDigest", "credentialPolicy", "decisionDigest", "decisionEvidenceDigest", "consumptionDigest", "consumptionEvidenceDigest"})
 _CREDENTIAL_COPY = ("id", "name", "kind", "encrypted_secret", "encrypted_dek", "secret_nonce", "secret_ciphertext", "secret_kek_id", "credential_version", "secret_updated_at", "metadata")
@@ -161,14 +164,15 @@ class OAuthActivationKernel:
             queries.append(shared._query(operation=self.operation, name=name, table=table, key={"id": evidence[field]}))
         queries.extend(assertion._trust_queries(self.operation, work=None))
         if self.operation == profile.OP_ACTIVATE:
+            queries.append(currentness_kernel.root_query(self.operation, values["resource_id"], 1, absent=True))
             queries.extend((shared._query(operation=self.operation, name="new_credential", table="credentials", key={"id": values["resource_id"]}, require_absence=True),
                 shared._query(operation=self.operation, name="new_generation", table="credential_generations", key={"credential_id": values["resource_id"]}, require_absence=True),
                 shared._query(operation=self.operation, name="approver_credential", table="webauthn_credentials", key={"id": core.SelectedRowFieldReference("control_plane_approvals", {"id": item_id}, "approver_webauthn_credential_id")})))
             # Completeness is NOT inferred from these observations. The actual
-            # planner must reconstruct all three entire roots before this kernel.
+            # planner must reconstruct all four entire roots before this kernel.
             queries.extend(core.BoundedQuery(query_id=core.query_program_id(self.operation, "complete_population", table), table=table,
-                predicates=(), order_by=(core.QueryOrder("id"),), maximum_rows=inventory.MAX_ROWS + 1,
-                proof_primitive="bounded-limit-plus-one", work_units=inventory.MAX_ROWS + 1) for table in inventory.TABLES)
+                predicates=(), order_by=(core.QueryOrder("id"),), maximum_rows=inventory.maximum_rows(table) + 1,
+                proof_primitive="bounded-limit-plus-one", work_units=inventory.maximum_rows(table) + 1) for table in inventory.TABLES)
         queries.append(shared._audit_query(self.operation, request_digest))
         return tuple(queries)
 
@@ -246,17 +250,21 @@ class OAuthActivationKernel:
                         or type(withdrawn) is not list or approver["id"] in withdrawn or approver["credential_id"] in withdrawn):
                     raise core.TransitionKernelError("OAuth approver current physical trust differs")
                 _google_collisions(context, pending, metadata)
+                family_retirement.require_open_from_population(context, metadata["provider_id"], metadata["provider_subject"])
                 if any(shared._row(item, "setup session").get("oauth_pending_credential_id") == pending["id"]
                         for item in context.present_rows("setup_sessions")):
                     raise core.TransitionKernelError("OAuth pending credential requires a separate atomic setup transition")
                 new_selected = context.exact("credentials", {"id": pending["id"]})
                 generation = context.exact("credential_generations", {"credential_id": pending["id"]})
-                if new_selected["present"] or generation["present"]:
+                currentness_selected = context.exact(currentness.ROOT_TABLE, {"id": currentness.root_id(pending["id"], 1)})
+                if new_selected["present"] or generation["present"] or currentness_selected["present"]:
                     raise core.TransitionKernelError("OAuth new credential identity or generation already exists")
                 new_row = {name: pending[name] for name in _CREDENTIAL_COPY}
                 new_row.update(lifecycle_status="active", revocation_error=None, revocation_requested_at=None, created_at=now_s, updated_at=now_s)
                 mutations.extend((core.mutation(operation=self.operation, selected=new_selected, row=new_row),
                     core.mutation(operation=self.operation, selected=generation, row={"credential_id": pending["id"], "last_version": 1, "updated_at": now_s}),
+                    core.mutation(operation=self.operation, selected=currentness_selected,
+                        row=currentness.new_root(pending["id"], 1, context.request_digest, now_s)),
                     core.delete_mutation(operation=self.operation, selected=pending_selected)))
                 provenance = {**provenance, "consumptionDigest": context.request_digest, "consumptionEvidenceDigest": evidence["verifiedAssertionReceiptDigest"]}
                 row = {**row, "status": "consumed", "consumed_by": actor, "consumed_at": now_s}

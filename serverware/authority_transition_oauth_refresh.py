@@ -11,6 +11,9 @@ from serverware import authority_oauth_inventory as inventory
 from serverware import authority_oauth_refresh as profile
 from serverware import authority_transition_core as core
 from serverware import authority_transition_quota as shared
+from serverware import authority_credential_currentness as currentness
+from serverware import authority_transition_credential_currentness as currentness_kernel
+from serverware import authority_oauth_family_retirement as family_retirement
 
 _HANDLERS = {name: "serverware_policy_authority_" + name.replace(".", "_") for name in profile.OPERATIONS}
 _MUTABLE_METADATA = frozenset({"refreshable", "token_type", "scopes", "expires_at_epoch_ms", "refresh_token_expires_at_epoch_ms"})
@@ -137,13 +140,17 @@ class OAuthRefreshKernel:
         queries = [shared._query(operation=self.operation, name="credential", table="credentials", key={"id": values["credential_id"]}),
             shared._query(operation=self.operation, name="generation", table="credential_generations", key={"credential_id": values["credential_id"]}),
             shared._query(operation=self.operation, name="refresh", table=profile.TABLE, key={"id": item_id}, require_absence=self.operation == profile.OP_CLAIM)]
+        queries.extend(currentness_kernel.effect_queries(self.operation, values["credential_id"], values["request"]["expectedVersion"],
+            next_root=self.operation == profile.OP_COMMIT))
         for purpose in ("issued", "superseded") if payload["providerId"] == "x" else ("issued",):
             queries.append(shared._query(operation=self.operation, name=purpose, table="oauth_revocation_work",
                 key={"id": profile.artifact_id(item_id, purpose)}, require_absence=self.operation == profile.OP_CLAIM))
         if self.operation == profile.OP_CLAIM:
             queries.extend(core.BoundedQuery(query_id=core.query_program_id(self.operation, "complete_population", table), table=table,
-                predicates=(), order_by=(core.QueryOrder("id"),), maximum_rows=inventory.MAX_ROWS + 1,
-                proof_primitive="bounded-limit-plus-one", work_units=inventory.MAX_ROWS + 1) for table in inventory.tables_for(self.operation))
+                predicates=(), order_by=(core.QueryOrder("id"),), maximum_rows=inventory.maximum_rows(table) + 1,
+                proof_primitive="bounded-limit-plus-one", work_units=inventory.maximum_rows(table) + 1) for table in inventory.tables_for(self.operation))
+        else:
+            queries.append(family_retirement.population_query(self.operation))
         queries.append(shared._audit_query(self.operation, request_digest))
         return tuple(queries)
 
@@ -152,12 +159,14 @@ class OAuthRefreshKernel:
         request = values["request"]
         now_s, now_ns = context.database_now.isoformat(), shared._database_epoch_ns(context.database_now)
         credential_selected, credential, generation_selected, generation, metadata, payload = _heads(context, values)
+        family_retirement.require_open_from_population(context, metadata["provider_id"], metadata["provider_subject"])
         item_id = profile.refresh_id(credential["id"], request["expectedVersion"])
         selected = context.exact(profile.TABLE, {"id": item_id})
         issued_id = profile.artifact_id(item_id, "issued")
         superseded_id = profile.artifact_id(item_id, "superseded") if payload["providerId"] == "x" else None
         mutations = []
         if self.operation == profile.OP_CLAIM:
+            mutations.extend(currentness_kernel.consume_barrier(context, credential["id"], request["expectedVersion"], request["currentnessBarrierSha256"]))
             population = context.present_rows(profile.TABLE)
             if (selected["present"] or len(population) >= inventory.MAX_ROWS
                     or any(shared._row(item, "refresh population")["credential_id"] == credential["id"]
@@ -190,6 +199,10 @@ class OAuthRefreshKernel:
         else:
             row = shared._row(selected, "refresh original")
             profile.row_original(row)
+            _, original_root = currentness_kernel.require_root(context, credential["id"], request["expectedVersion"])
+            _, original_barrier, _ = currentness_kernel._barrier(context, original_root, original_root["barrier_id"])
+            currentness_kernel.require_consumed_refresh_barrier(context, credential["id"], request["expectedVersion"],
+                original_barrier["original_sha256"], claim_request_digest=row["claim_request_digest"])
             if (profile.row_digest(row) != request["refreshRowSha256"] or row["credential_id"] != credential["id"]
                     or row["credential_version"] != request["expectedVersion"] or row["provider_id"] != payload["providerId"]
                     or row["enrollment_original"] != values["enrollment_original"] or row["limits_json"] != profile.canonical(request["limits"]).decode("ascii")
@@ -219,9 +232,14 @@ class OAuthRefreshKernel:
                 _replacement_metadata(metadata, request["replacementMetadata"], row["received_at_epoch_ns"], now_ns)
                 next_row = {**credential, **request["replacementEnvelope"], "metadata": profile.canonical(request["replacementMetadata"]).decode("ascii"), "updated_at": now_s}
                 profile.credential_original(next_row)
+                next_root_selected = context.exact(currentness.ROOT_TABLE, {"id": currentness.root_id(credential["id"], request["expectedVersion"] + 1)})
+                profile.require(next_root_selected["present"] is False)
                 mutations.extend((core.mutation(operation=self.operation, selected=credential_selected, row=next_row),
                     core.mutation(operation=self.operation, selected=generation_selected,
                         row={**generation, "last_version": request["expectedVersion"] + 1, "updated_at": now_s}),
+                    core.mutation(operation=self.operation, selected=next_root_selected,
+                        row=currentness.new_root(credential["id"], request["expectedVersion"] + 1, context.request_digest,
+                            now_s, original_barrier["original_sha256"])),
                     core.delete_mutation(operation=self.operation, selected=issued_selected)))
                 if superseded_id is not None:
                     superseded_selected, superseded = _work(context, superseded_id, profile.SUPERSEDED_SOURCE, payload["providerId"], row["created_at"])

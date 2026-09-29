@@ -45,6 +45,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    RootModel,
     ValidationError,
     field_validator,
     model_validator,
@@ -315,6 +316,9 @@ _credential_lease_audit_lock = threading.Lock()
 _credential_lease_audit_last: dict[tuple[str, ...], float] = {}
 _CREDENTIAL_LEASE_AUDIT_INTERVAL_SECONDS = 60.0
 _CREDENTIAL_LEASE_REQUEST_MAX_BYTES = 96 * 1024
+_CREDENTIAL_CURRENTNESS_REQUEST_MAX_BYTES = 64 * 1024
+_CREDENTIAL_LEASE_ORIGINAL_SCOPE_KEY = "serverware.credential-lease-original"
+_CREDENTIAL_CURRENTNESS_ORIGINAL_SCOPE_KEY = "serverware.credential-currentness-original"
 _RELEASE_AUTHORIZATION_REQUEST_MAX_BYTES = 512 * 1024
 _CREDENTIAL_LEASE_PLAINTEXT_MAX_BYTES = 4 * 1024 * 1024
 _CREDENTIAL_LEASE_RESPONSE_MAX_BYTES = 8 * 1024 * 1024
@@ -2576,6 +2580,57 @@ class CredentialLeaseRequest(BaseModel):
         return self
 
 
+class CredentialCurrentnessDispatchPin(BaseModel):
+    model_config = ConfigDict(extra="forbid", validate_by_alias=True, validate_by_name=False)
+
+    holder_id: str = Field(alias="holderId", pattern=r"^sha256:[0-9a-f]{64}$")
+    epoch: int = Field(strict=True, ge=1, le=9_223_372_036_854_775_807)
+    registration_sha256: str = Field(alias="registrationSha256", pattern=r"^sha256:[0-9a-f]{64}$")
+    signature: str = Field(pattern=r"^ed25519:[A-Za-z0-9_-]{86}$")
+
+
+class NativeCurrentCredentialLeaseRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", validate_by_alias=True, validate_by_name=False)
+
+    api_version: Literal["serverware.nativeCurrentCredentialLeaseRequest/v1"] = Field(alias="apiVersion")
+    currentness: CredentialCurrentnessDispatchPin | None
+    lease_request: CredentialLeaseRequest = Field(alias="leaseRequest")
+
+    @model_validator(mode="after")
+    def validate_native_currentness(self) -> NativeCurrentCredentialLeaseRequest:
+        inner = self.lease_request
+        if inner.api_version not in {
+            "serverware.nativeCredentialLeaseRequest/v1", "serverware.nativeCredentialLeaseRequest/v2"
+        }:
+            raise ValueError("currentness requires the explicit native lease profile")
+        if inner.purpose == "generationMetadata":
+            if self.currentness is not None:
+                raise ValueError("currentness metadata cannot carry dispatch authority")
+        elif self.currentness is None or self.currentness.epoch != inner.expected_credential_version:
+            raise ValueError("currentness dispatch requires the exact expected credential epoch")
+        return self
+
+
+class CredentialLeaseWireRequest(RootModel[CredentialLeaseRequest | NativeCurrentCredentialLeaseRequest]):
+    pass
+
+
+class CredentialCurrentnessPhase(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    phase: Literal["challenge", "register", "ack", "poll"]
+    arguments: dict[str, Any]
+
+
+class CredentialCurrentnessRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", validate_by_alias=True, validate_by_name=False)
+
+    api_version: Literal["serverware.credentialCurrentnessRequest/v1"] = Field(alias="apiVersion")
+    credential_id: str = Field(alias="credentialId", pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+    credential_version: int = Field(alias="credentialVersion", strict=True, ge=1, le=9_223_372_036_854_775_807)
+    request: CredentialCurrentnessPhase
+
+
 class DataPlaneGrantConsume(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
@@ -3197,12 +3252,14 @@ def startup() -> None:
     from serverware import control_plane_custody_startup
     from serverware import control_plane_enrollment_startup
     from serverware import control_plane_oauth_revocation
+    from serverware import control_plane_oauth_refresh_cleanup
 
     # The legacy PID startup marker cannot stand in for a live custody owner.
     # Direct ASGI startup must not admit descriptors after the event loop opens.
     control_plane_custody_startup.require_started()
     control_plane_enrollment_startup.require_started()
     control_plane_oauth_revocation.selected()
+    control_plane_oauth_refresh_cleanup.selected()
     if RELEASE_CHANNEL.strip().lower() not in {
         "dev",
         "development",
@@ -3220,6 +3277,7 @@ def startup() -> None:
     control_plane_custody_startup.require_started()
     control_plane_enrollment_startup.require_started()
     control_plane_oauth_revocation.selected()
+    control_plane_oauth_refresh_cleanup.selected()
     runtime.start_runtime_workers()
     runtime.start_audit_anchor_worker()
     runtime.start_decision_gate_ca_publisher()
@@ -4450,6 +4508,7 @@ async def _bounded_exact_data_plane_model(
     expected_token: str,
     maximum_bytes: int,
     label: str,
+    capture_original_key: str | None = None,
 ) -> BaseModel:
     _require_data_plane_token(
         request.headers.get("X-Serverware-Data-Plane-Token"),
@@ -4494,7 +4553,14 @@ async def _bounded_exact_data_plane_model(
             object_pairs_hook=reject_duplicate_keys,
             parse_constant=reject_non_finite_number,
         )
-        return model_type.model_validate(parsed)
+        validated = model_type.model_validate(parsed)
+        if capture_original_key is not None:
+            if capture_original_key in request.scope:
+                raise ValueError("request original was already captured")
+            # Keep the parsed original, not a model projection: a holder's
+            # signature binds the complete recipient request and its evidence.
+            request.scope[capture_original_key] = (validated, parsed)
+        return validated
     except ValidationError as exc:
         detail = [
             {key: error[key] for key in ("type", "loc", "msg") if key in error}
@@ -4514,14 +4580,45 @@ async def _bounded_exact_data_plane_model(
         ) from exc
 
 
-async def _bounded_credential_lease_request(request: Request) -> CredentialLeaseRequest:
-    return await _bounded_exact_data_plane_model(
+async def _bounded_credential_lease_request(
+    request: Request,
+) -> CredentialLeaseRequest | NativeCurrentCredentialLeaseRequest:
+    wire = await _bounded_exact_data_plane_model(
         request,
-        model_type=CredentialLeaseRequest,
+        model_type=CredentialLeaseWireRequest,
         expected_token=DATA_PLANE_CREDENTIAL_LEASE_TOKEN,
         maximum_bytes=_CREDENTIAL_LEASE_REQUEST_MAX_BYTES,
         label="credential lease request",
+        capture_original_key=_CREDENTIAL_LEASE_ORIGINAL_SCOPE_KEY,
     )
+    return wire.root
+
+
+async def _bounded_credential_currentness_request(request: Request) -> CredentialCurrentnessRequest:
+    return await _bounded_exact_data_plane_model(
+        request,
+        model_type=CredentialCurrentnessRequest,
+        expected_token=DATA_PLANE_CREDENTIAL_LEASE_TOKEN,
+        maximum_bytes=_CREDENTIAL_CURRENTNESS_REQUEST_MAX_BYTES,
+        label="credential currentness request",
+        capture_original_key=_CREDENTIAL_CURRENTNESS_ORIGINAL_SCOPE_KEY,
+    )
+
+
+def _original_data_plane_request(request: Request, scope_key: str, payload: BaseModel) -> dict[str, Any]:
+    captured = request.scope.get(scope_key)
+    if type(captured) is not tuple or len(captured) != 2 or type(captured[1]) is not dict:
+        raise HTTPException(status_code=503, detail="original data-plane request is unavailable")
+    admitted = captured[0].root if isinstance(captured[0], RootModel) else captured[0]
+    if admitted is not payload:
+        raise HTTPException(status_code=503, detail="original data-plane request identity changed")
+    return captured[1]
+
+
+def _require_currentness_response_context(request: Request, expected_path: str) -> None:
+    method, path, query, nonce, _https, invalid_nonce = _request_signature_inputs(request.scope)
+    if method != "POST" or path != expected_path or query or nonce is None or invalid_nonce:
+        raise HTTPException(status_code=400, detail="currentness requires an exact nonce-bound POST")
 
 
 async def _bounded_release_authorization_prepare_request(
@@ -5038,13 +5135,25 @@ def _reconcile_oauth_revocations(
     *, limit: int = _OAUTH_REVOCATION_RECONCILE_BATCH_SIZE
 ) -> dict[str, int]:
     from serverware import control_plane_oauth_revocation
-    if control_plane_oauth_revocation.selected():
+    from serverware import control_plane_oauth_refresh_cleanup
+    controlled = (
+        (control_plane_oauth_refresh_cleanup, control_plane_oauth_refresh_cleanup.selected()),
+        (control_plane_oauth_revocation, control_plane_oauth_revocation.selected()),
+    )
+    if any(selected for _worker, selected in controlled):
         if type(limit) is not int or limit < 1:
             raise ValueError("enrolled OAuth reconciliation requires a positive integer limit")
         # Empty or unavailable production authority never falls through to the
         # development claim/expiry/finish writers. Counts are local observations,
-        # not proof that a provider revoked its credentials.
-        return control_plane_oauth_revocation.reconcile(limit=min(limit, 16))
+        # not proof that a provider revoked its credentials. Each independent
+        # cold worker keeps its own bounded inventory and per-lane limit.
+        counts = {"claimed": 0, "accepted": 0, "rejected": 0, "unknown": 0, "notContacted": 0, "blocked": 0}
+        for worker, selected in controlled:
+            if selected:
+                observed = worker.reconcile(limit=min(limit, 16))
+                for name in counts:
+                    counts[name] += observed[name]
+        return counts
     worker_id = f"oauth-reconciler-{os.getpid()}-{secrets.token_hex(8)}"
     claimed = db.claim_oauth_revocations(worker_id=worker_id, limit=limit)
     revoked = 0
@@ -17222,7 +17331,9 @@ def _should_record_credential_lease_issuance(
     return key
 
 
-def _credential_for_lease(credential_id: str) -> dict[str, Any] | None:
+def _credential_for_lease(
+    credential_id: str, *, allow_legacy_oauth: bool = True
+) -> dict[str, Any] | None:
     from serverware import oauth_application_owner
     if oauth_application_owner.require_started() is not None:
         raise HTTPException(status_code=503, detail="enrolled credentials require the current fenced lease opening")
@@ -17237,6 +17348,8 @@ def _credential_for_lease(credential_id: str) -> dict[str, Any] | None:
             metadata = credential.get("metadata")
             if not isinstance(metadata, dict) or metadata.get("oauth") is not True:
                 return credential
+            if not allow_legacy_oauth:
+                raise HTTPException(status_code=503, detail="current OAuth credentials require the controlled refresh opening")
             require_application_metadata(metadata)
             expires_at_epoch_ms = metadata.get("expires_at_epoch_ms")
             if not isinstance(expires_at_epoch_ms, int) or isinstance(
@@ -18434,14 +18547,52 @@ def _claim_credential_lease_release_authorization(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
+@app.post("/api/data-plane/credential-currentness")
+def data_plane_credential_currentness(
+    request: Request,
+    payload: CredentialCurrentnessRequest = Depends(_bounded_credential_currentness_request),
+) -> Response:
+    from serverware import control_plane_credential_currentness as currentness
+
+    try:
+        if not currentness.selected():
+            raise HTTPException(status_code=503, detail="measured credential currentness is not configured")
+        _require_currentness_response_context(request, "/api/data-plane/credential-currentness")
+        original = _original_data_plane_request(request, _CREDENTIAL_CURRENTNESS_ORIGINAL_SCOPE_KEY, payload)
+        result = currentness.on_request(request, original)
+        body = _canonical_json(result).encode("utf-8")
+        if len(body) > _SIGNED_RESPONSE_MAX_BYTES:
+            raise HTTPException(status_code=503, detail="credential currentness response exceeds its bound")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="credential currentness is unavailable") from exc
+    # The existing ASGI response signer binds the actual nonce, request and
+    # final body. An observation never substitutes for a dispatch capability.
+    return Response(content=body, media_type="application/json", headers={"Cache-Control": "no-store"})
+
+
 @app.post("/api/data-plane/credential-leases")
 def data_plane_credential_leases(
     request: Request,
-    payload: CredentialLeaseRequest = Depends(_bounded_credential_lease_request),
+    payload: CredentialLeaseRequest | NativeCurrentCredentialLeaseRequest = Depends(_bounded_credential_lease_request),
 ) -> Response:
     authenticated = True
     refresh_opening = None
+    currentness_opening = None
+    wire_payload = payload
+    wrapped = isinstance(payload, NativeCurrentCredentialLeaseRequest)
+    if wrapped:
+        payload = payload.lease_request
     try:
+        from serverware import control_plane_credential_currentness as currentness
+        strict_currentness = currentness.selected()
+        if strict_currentness or wrapped:
+            if not strict_currentness or not wrapped:
+                raise HTTPException(status_code=503, detail="credential lease requires the configured currentness profile")
+            _require_currentness_response_context(request, "/api/data-plane/credential-leases")
+            original = _original_data_plane_request(request, _CREDENTIAL_LEASE_ORIGINAL_SCOPE_KEY, wire_payload)
+            currentness_opening = currentness.LeaseOpening(request, original["leaseRequest"], original["currentness"])
         from serverware import oauth_application_owner
         if oauth_application_owner.require_started() is not None:
             from serverware.control_plane_oauth_refresh import LeaseOpening
@@ -18521,6 +18672,8 @@ def data_plane_credential_leases(
             credential_id=payload.credential_id,
             lease_request_api_version=payload.api_version if native or policy_aware else None,
         )
+        if currentness_opening is not None and payload.purpose == "dispatchSecret":
+            currentness_opening.require_dispatch(payload.expected_credential_version)
         replay_result = db.reserve_credential_lease_nonce(
             payload.recipient_key_id,
             recipient_nonce_sha256,
@@ -18555,10 +18708,12 @@ def data_plane_credential_leases(
             # this response pins the version. It cannot renew a dispatch pin.
             refresh_opening.generation_metadata()
         if payload.purpose == "dispatchSecret":
+            if currentness_opening is not None:
+                currentness_opening.check()
             prepared_credential = (
                 refresh_opening.dispatch_credential()
                 if refresh_opening is not None
-                else _credential_for_lease(payload.credential_id)
+                else _credential_for_lease(payload.credential_id, allow_legacy_oauth=currentness_opening is None)
             )
             if not prepared_credential:
                 raise HTTPException(
@@ -18693,6 +18848,13 @@ def data_plane_credential_leases(
             metadata = _credential_lease_public_metadata(current_credential)
             metadata_sha256 = _credential_lease_metadata_sha256(metadata)
             credential_version = int(current_credential["credential_version"])
+            currentness_context = None
+            if currentness_opening is not None:
+                if payload.purpose == "generationMetadata":
+                    currentness_context = currentness_opening.metadata(credential_version)
+                else:
+                    currentness_opening.require_dispatch(credential_version)
+                    currentness_context = currentness_opening.currentness
             if payload.purpose == "dispatchSecret" and (
                 credential_version != payload.expected_credential_version
                 or not hmac.compare_digest(
@@ -18783,7 +18945,15 @@ def data_plane_credential_leases(
                     status_code=400,
                     detail="recipientPublicKey is not a valid X25519 public key",
                 ) from exc
-            response_body = _canonical_json({**aad, **encrypted}).encode("utf-8")
+            envelope = {**aad, **encrypted}
+            if currentness_opening is not None:
+                currentness_opening.check()
+                envelope = {
+                    "apiVersion": "serverware.nativeCurrentCredentialLeaseEnvelope/v1",
+                    "currentness": currentness_context,
+                    "envelope": envelope,
+                }
+            response_body = _canonical_json(envelope).encode("utf-8")
             if len(response_body) > _CREDENTIAL_LEASE_RESPONSE_MAX_BYTES:
                 raise HTTPException(
                     status_code=503, detail="credential lease response exceeds 8 MiB"
@@ -18863,6 +19033,11 @@ def data_plane_credential_leases(
             refresh_opening.require_current()
         except Exception as exc:
             raise HTTPException(status_code=503, detail="credential generation or refresh fence changed before lease output") from exc
+    if currentness_opening is not None:
+        try:
+            currentness_opening.check()
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="credential currentness changed before lease output") from exc
     return Response(
         content=response_body,
         media_type="application/json",

@@ -48,12 +48,13 @@
     "nullableDigest": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/digest"}]},
     "claimRequest": {
       "type": "object", "additionalProperties": false,
-      "required": ["expectedVersion", "limits", "credentialRowSha256", "generationRowSha256", "ownerNonceSha256", "issuedAtEpochNs", "contactExpiresAtEpochNs", "retentionExpiresAtEpochNs", "contactRequestSha256", "reservedIssuedEnvelope", "reservedSupersededEnvelope"],
+      "required": ["expectedVersion", "limits", "credentialRowSha256", "generationRowSha256", "ownerNonceSha256", "issuedAtEpochNs", "contactExpiresAtEpochNs", "retentionExpiresAtEpochNs", "contactRequestSha256", "reservedIssuedEnvelope", "reservedSupersededEnvelope", "currentnessBarrierSha256"],
       "properties": {
         "expectedVersion": {"$ref": "#/$defs/expectedVersion"}, "limits": {"$ref": "#/$defs/limits"},
         "credentialRowSha256": {"$ref": "#/$defs/digest"}, "generationRowSha256": {"$ref": "#/$defs/digest"},
         "ownerNonceSha256": {"$ref": "#/$defs/digest"}, "issuedAtEpochNs": {"$ref": "#/$defs/epoch"},
         "contactExpiresAtEpochNs": {"$ref": "#/$defs/epoch"}, "retentionExpiresAtEpochNs": {"$ref": "#/$defs/epoch"},
+        "currentnessBarrierSha256": {"$ref": "#/$defs/digest"},
         "contactRequestSha256": {"$ref": "#/$defs/digest"}, "reservedIssuedEnvelope": {"$ref": "#/$defs/artifactEnvelope"},
         "reservedSupersededEnvelope": {"$ref": "#/$defs/nullableArtifactEnvelope"}
       }

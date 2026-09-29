@@ -10,7 +10,7 @@ from serverware import authority_complete_query
 from serverware.authority_query_read_work import _ValidationWork
 
 
-SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.272"
+SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.273"
 SCHEMA_VERSION = 9
 CONTRACT_SCHEMA = "serverware.policyAuthorityOperationContract/v3"
 BUSINESS_INTENT_SCHEMA = "serverware.policyAuthorityBusinessIntent/v2"
@@ -262,7 +262,10 @@ _AUDIT_COUNTER_REPLACEMENT_OPERATIONS = frozenset({
     "oauth-activation-approval.request", "oauth-activation-approval.decide", "oauth.pending.activate",
     "oauth.exchange.prepare", "oauth.exchange.claim", "oauth.exchange.retain", "oauth.pending.stage",
     "oauth.refresh.claim", "oauth.refresh.retain", "oauth.refresh.commit",
+    "credential.currentness.challenge", "credential.currentness.register", "credential.currentness.quiesce",
+    "credential.currentness.ack", "credential.currentness.admit",
     "oauth.revocation.claim", "oauth.revocation.contact", "oauth.revocation.finish",
+    "oauth.refresh-cleanup.claim", "oauth.refresh-cleanup.contact", "oauth.refresh-cleanup.finish",
     "policy-file-approval.request", "policy-file-approval.decide",
     "policy-file-approval.consume", "policy-file-approval.settle",
     "jit.review-receipt.issue", "jit.decide", "jit.deny",
@@ -1438,9 +1441,16 @@ V9_ADDITIONAL_PROTECTED_TABLES = tuple(sorted({
     SUCCESSOR_EXECUTION_CUSTODY_TABLE,
     "credential_generations",
     "oauth_exchange_reservations",
+    "credential_currentness_roots",
+    "credential_currentness_holders",
+    "credential_currentness_challenges",
+    "credential_currentness_barriers",
     "oauth_refresh_reservations",
     "oauth_revocation_reservations",
     "oauth_revocation_attempts",
+    "oauth_refresh_cleanup_reservations",
+    "oauth_refresh_cleanup_attempts",
+    "oauth_family_retirements",
     "oauth_revocation_work",
     "setup_sessions",
     "policy_authority_authorization_dependency_manifests",
@@ -1783,12 +1793,13 @@ _OPERATIONS = {
         operation: _spec(
             handler,
             reads=("control_plane_approvals", "rbac_role_bindings", "pending_oauth_credentials") +
-                (("credentials", "credential_generations", "setup_sessions") if operation == "oauth.pending.activate" else ()) + _PHASE2_AGGREGATE,
+                (("credentials", "credential_generations", "setup_sessions", "credential_currentness_roots", "oauth_family_retirements") if operation == "oauth.pending.activate" else ()) + _PHASE2_AGGREGATE,
             writes=("control_plane_approvals", "metadata_audit_outbox") +
-                (("credentials", "credential_generations", "pending_oauth_credentials") if operation == "oauth.pending.activate" else ()) + _PHASE2_AGGREGATE,
+                (("credentials", "credential_generations", "pending_oauth_credentials", "credential_currentness_roots") if operation == "oauth.pending.activate" else ()) + _PHASE2_AGGREGATE,
             webauthn="bound-verified-assertion-receipt",
             proof_primitives=("primary-key-row", "bounded-limit-plus-one", "aggregate-high-water", "capacity-reservation"),
-            maximum_query_rows=224, maximum_mutations=12, maximum_work_units=1024,
+            maximum_query_rows=256 if operation == "oauth.pending.activate" else 224,
+            maximum_mutations=16 if operation == "oauth.pending.activate" else 12, maximum_work_units=1024,
         )
         for operation, handler in (
             ("oauth-activation-approval.request", "serverware_policy_authority_oauth_activation_approval_request"),
@@ -1801,12 +1812,12 @@ _OPERATIONS = {
             handler,
             reads=("oauth_exchange_reservations", "oauth_revocation_work", "rbac_role_bindings") +
                 (("pending_oauth_credentials",) if operation == "oauth.exchange.prepare" else ()) +
-                (("credentials", "credential_generations", "pending_oauth_credentials", "setup_sessions") if operation == "oauth.pending.stage" else ()) + _PHASE2_AGGREGATE,
+                (("credentials", "credential_generations", "pending_oauth_credentials", "setup_sessions", "oauth_family_retirements") if operation == "oauth.pending.stage" else ()) + _PHASE2_AGGREGATE,
             writes=("oauth_exchange_reservations", "oauth_revocation_work", "metadata_audit_outbox") +
                 (("pending_oauth_credentials",) if operation == "oauth.pending.stage" else ()) + _PHASE2_AGGREGATE,
             webauthn="bound-verified-assertion-receipt" if operation == "oauth.exchange.prepare" else "not-required",
             proof_primitives=("primary-key-row", "bounded-limit-plus-one", "aggregate-high-water", "capacity-reservation"),
-            maximum_query_rows=224, maximum_mutations=72, maximum_work_units=2048,
+            maximum_query_rows=256 if operation == "oauth.pending.stage" else 224, maximum_mutations=72, maximum_work_units=2048,
         ) for operation, handler in (
             ("oauth.exchange.prepare", "serverware_policy_authority_oauth_exchange_prepare"),
             ("oauth.exchange.claim", "serverware_policy_authority_oauth_exchange_claim"),
@@ -1817,12 +1828,13 @@ _OPERATIONS = {
     **{
         operation: _spec(
             handler,
-            reads=("credentials", "credential_generations", "oauth_refresh_reservations", "oauth_revocation_work") + _PHASE2_AGGREGATE,
+            reads=("credentials", "credential_generations", "oauth_refresh_reservations", "oauth_revocation_work", "credential_currentness_roots", "credential_currentness_barriers", "oauth_family_retirements") + _PHASE2_AGGREGATE,
             writes=("oauth_refresh_reservations", "oauth_revocation_work", "metadata_audit_outbox") +
-                (("credentials", "credential_generations") if operation == "oauth.refresh.commit" else ()) + _PHASE2_AGGREGATE,
+                (("credentials", "credential_generations", "credential_currentness_roots") if operation == "oauth.refresh.commit" else ()) +
+                (("credential_currentness_roots", "credential_currentness_barriers") if operation == "oauth.refresh.claim" else ()) + _PHASE2_AGGREGATE,
             webauthn="not-required",
             proof_primitives=("primary-key-row", "bounded-limit-plus-one", "aggregate-high-water", "capacity-reservation"),
-            maximum_query_rows=144, maximum_mutations=12, maximum_work_units=2048,
+            maximum_query_rows=224, maximum_mutations=12, maximum_work_units=2048,
         ) for operation, handler in (
             ("oauth.refresh.claim", "serverware_policy_authority_oauth_refresh_claim"),
             ("oauth.refresh.retain", "serverware_policy_authority_oauth_refresh_retain"),
@@ -1841,6 +1853,34 @@ _OPERATIONS = {
             ("oauth.revocation.claim", "serverware_policy_authority_oauth_revocation_claim"),
             ("oauth.revocation.contact", "serverware_policy_authority_oauth_revocation_contact"),
             ("oauth.revocation.finish", "serverware_policy_authority_oauth_revocation_finish"),
+        )
+    },
+    **{
+        "credential.currentness." + phase: _spec(
+            "serverware_policy_authority_credential_currentness_" + phase,
+            reads=("credentials", "credential_generations", "credential_currentness_roots", "credential_currentness_holders",
+                "credential_currentness_challenges", "credential_currentness_barriers") + _PHASE2_AGGREGATE,
+            writes=("credential_currentness_roots", "credential_currentness_holders", "credential_currentness_challenges",
+                "credential_currentness_barriers", "metadata_audit_outbox") + _PHASE2_AGGREGATE,
+            webauthn="not-required",
+            proof_primitives=("primary-key-row", "bounded-limit-plus-one", "aggregate-high-water", "capacity-reservation"),
+            maximum_query_rows=80, maximum_mutations=8, maximum_work_units=2048,
+        ) for phase in ("challenge", "register", "quiesce", "ack", "admit")
+    },
+    **{
+        operation: _spec(
+            handler,
+            reads=("credentials", "credential_generations", "oauth_refresh_reservations", "oauth_revocation_work",
+                "oauth_refresh_cleanup_reservations", "oauth_refresh_cleanup_attempts", "oauth_family_retirements",
+                "credential_currentness_roots", "credential_currentness_barriers") + _PHASE2_AGGREGATE,
+            writes=("credentials", "oauth_revocation_work", "oauth_refresh_cleanup_reservations", "oauth_refresh_cleanup_attempts",
+                "oauth_family_retirements", "credential_currentness_roots", "credential_currentness_barriers", "metadata_audit_outbox") + _PHASE2_AGGREGATE,
+            webauthn="not-required", proof_primitives=("primary-key-row", "bounded-limit-plus-one", "aggregate-high-water"),
+            maximum_query_rows=96, maximum_mutations=16, maximum_work_units=2048,
+        ) for operation, handler in (
+            ("oauth.refresh-cleanup.claim", "serverware_policy_authority_oauth_refresh_cleanup_claim"),
+            ("oauth.refresh-cleanup.contact", "serverware_policy_authority_oauth_refresh_cleanup_contact"),
+            ("oauth.refresh-cleanup.finish", "serverware_policy_authority_oauth_refresh_cleanup_finish"),
         )
     },
     "control-approval.request": _spec(

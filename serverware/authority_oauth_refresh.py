@@ -33,7 +33,7 @@ _ROW_NULLABLE = frozenset({"superseded_work_id", "received_at_epoch_ns", "raw_re
     "issued_material_sha256", "issued_material_envelope_json", "replacement_secret_sha256", "replacement_credential_sha256", "superseded_material_sha256"})
 _COMMON = frozenset({"expectedVersion", "limits"})
 REQUEST_FIELDS = {
-    OP_CLAIM: _COMMON | {"credentialRowSha256", "generationRowSha256", "ownerNonceSha256", "issuedAtEpochNs", "contactExpiresAtEpochNs", "retentionExpiresAtEpochNs", "contactRequestSha256", "reservedIssuedEnvelope", "reservedSupersededEnvelope"},
+    OP_CLAIM: _COMMON | {"credentialRowSha256", "generationRowSha256", "ownerNonceSha256", "issuedAtEpochNs", "contactExpiresAtEpochNs", "retentionExpiresAtEpochNs", "contactRequestSha256", "reservedIssuedEnvelope", "reservedSupersededEnvelope", "currentnessBarrierSha256"},
     OP_RETAIN: _COMMON | {"refreshRowSha256", "ownerNonce", "receivedAtEpochNs", "rawResponseSha256", "rawResponseEnvelope", "issuedMaterialSha256", "issuedMaterialEnvelope"},
     OP_COMMIT: _COMMON | {"refreshRowSha256", "ownerNonce", "replacementSecretSha256", "replacementEnvelope", "replacementMetadata", "supersededMaterialSha256", "supersededEnvelope"},
 }
@@ -151,7 +151,7 @@ def request_binding(operation, request):
     require(version < 2**63 - 1)
     bounds = limits(request["limits"])
     if operation == OP_CLAIM:
-        for name in ("credentialRowSha256", "generationRowSha256", "ownerNonceSha256", "contactRequestSha256"):
+        for name in ("credentialRowSha256", "generationRowSha256", "ownerNonceSha256", "contactRequestSha256", "currentnessBarrierSha256"):
             digest(request[name])
         for name in ("issuedAtEpochNs", "contactExpiresAtEpochNs", "retentionExpiresAtEpochNs"):
             require(type(request[name]) is int and 1 <= request[name] <= 2**63 - 1)

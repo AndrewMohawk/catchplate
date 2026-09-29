@@ -36,7 +36,9 @@ expected-version release authorization. Those are separate required workflows.
 The shared module is `authority_oauth_refresh.py`. Raw authority inputs are
 exactly `credential_id`, `enrollment_original`, and `request`; no actor ID,
 caller trust root, provider-success flag or caller-selected table is accepted.
-Claim/retain/commit requests have eleven/nine/nine fields respectively. Results
+Claim/retain/commit requests have twelve/nine/nine fields respectively. Claim's
+mandatory `currentnessBarrierSha256` binds the separately admitted all-holder
+barrier; there is no old eleven-field fallback. Results
 have six fields, with only commit adding the exact public credential projection.
 The paired [schema](../schemas/oauth-refresh-authority.v1.schema.json) is a
 closed data projection, never signature, custody or effect authority.
@@ -116,13 +118,15 @@ transparently renew an already pinned expected version. Control-plane cached
 material is checked against current rows/heads and the refresh fence before
 new lease publication.
 
-These checks do not retract an earlier lease already held by the data plane.
-An independent currentness mechanism at actual cached upstream-send admission
-is still required; this source does not invent a SQL-only global fence,
-retroactive undo, fake currentness proof or a database query in the Rust hot
-path. The CP fence limits new observed issuance, not previously dispatched
-effects. Any race-free distributed send boundary must be joined and validated
-separately before claiming that stronger property.
+SQL checks alone do not retract an earlier lease already held by a data plane.
+The paired [measured-holder barrier](credential-currentness-authority.md) now
+requires the exact registered holders to drain their actual sends, purge cached
+scopes and permanently block that version before refresh claim consumes its
+admitted barrier. New activation creates the strict never-issued root, and
+commit creates a distinct N+1 root; older credentials need explicit migration.
+This is not retroactive undo or a database query in the Rust hot path. The
+paired gate/lease/coordinator source and its actual provisioning still require
+separately authorized validation before claiming a live distributed boundary.
 
 Unknown claim/contact/retention/commit outcomes leave the original slot consumed.
 There is no resume-from-JSON permit, lease renewal, automatic retry, deletion,
@@ -144,5 +148,5 @@ No source-connected statement is production or pilot validation. Actual signed
 policy/configuration, enrollment, roots/ACLs, cold custody, provider application
 material and the independent authority services must be provisioned, and the
 full selected flow must undergo separately authorized validation. Refresh
-cleanup, cached-send currentness, reconnect, setup and cross-deployment ownership
+cleanup, live cached-send barrier validation, reconnect, setup and cross-deployment ownership
 remain explicit obligations rather than a permanently narrowed product.

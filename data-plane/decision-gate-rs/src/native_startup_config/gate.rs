@@ -140,6 +140,7 @@ impl GateConfigV1 {
             Some((_, certificates)) => certificates,
         };
         let inputs = GateStateInputs {
+            credential_currentness: None,
             policy_shadow_generation_control: None,
             policy_path: String::new(),
             policy_trust_root_source: PolicyTrustRootSource::AttestedControlPlane {

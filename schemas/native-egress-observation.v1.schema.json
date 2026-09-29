@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-egress-observation.v1.schema.json",
+  "title": "Local native egress observation before owner teardown v1",
+  "description": "Closed ten-field nonactionable local projection, at most 8191 compact UTF-8 bytes. The producing client retains actual proof/host/creation/workload/kernel owners through bounded stdout and final checks. Workload scalars are observations, not portable authority or proof of continuing process/namespace ownership. Owner drop tears down the never-executed child. The SDK checks shape only and never consults a journal, socket, kernel or namespace. Preserve producer exit status; parsing cannot prove final producer success.",
+  "type": "object", "additionalProperties": false,
+  "required": ["apiVersion", "resultScope", "okForAction", "status", "authorizationSha256", "creationSlotSha256", "creationRecordSha256", "kernelSemanticSha256", "kernelEvidenceSha256", "workload"],
+  "properties": {
+    "apiVersion": {"const": "serverware.nativeEgressObservation/v1"},
+    "resultScope": {"const": "local-authorized-egress-observed-before-owner-teardown"},
+    "okForAction": {"const": false},
+    "status": {"enum": ["observed-created", "observed-complete"], "description": "Selected only from the actual retained Installed.created value. No new mutation is authorized by either spelling."},
+    "authorizationSha256": {"$ref": "#/$defs/digest"},
+    "creationSlotSha256": {"$ref": "#/$defs/digest"},
+    "creationRecordSha256": {"$ref": "#/$defs/digest"},
+    "kernelSemanticSha256": {"$ref": "#/$defs/digest"},
+    "kernelEvidenceSha256": {"$ref": "#/$defs/digest"},
+    "workload": {
+      "type": "object", "additionalProperties": false,
+      "required": ["launcherProcessId", "launcherThreadId", "childProcessId", "pidfdDevice", "pidfdInode", "namespaceDevice", "namespaceInode", "backendSocketDevice", "backendSocketInode", "backendPortId"],
+      "properties": {
+        "launcherProcessId": {"$ref": "#/$defs/u32"},
+        "launcherThreadId": {"$ref": "#/$defs/u32"},
+        "childProcessId": {"$ref": "#/$defs/u32"},
+        "pidfdDevice": {"$ref": "#/$defs/u64"},
+        "pidfdInode": {"$ref": "#/$defs/u64"},
+        "namespaceDevice": {"$ref": "#/$defs/u64"},
+        "namespaceInode": {"$ref": "#/$defs/u64"},
+        "backendSocketDevice": {"$ref": "#/$defs/u64"},
+        "backendSocketInode": {"$ref": "#/$defs/u64"},
+        "backendPortId": {"$ref": "#/$defs/u32"}
+      },
+      "description": "Exact JSON integer representations, not bools, strings or floating-point coercions. Runtime observes the actual retained pidfd/nsfs/socket and child; these public numbers alone prove none of that ownership."
+    }
+  },
+  "$defs": {
+    "digest": {"type": "string", "minLength": 71, "maxLength": 71, "pattern": "^sha256:[0-9a-f]{64}(?![\\s\\S])"},
+    "u32": {"type": "integer", "minimum": 0, "maximum": 4294967295},
+    "u64": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615}
+  }
+}

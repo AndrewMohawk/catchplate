@@ -1,11 +1,11 @@
-//! Fixed original-only bootstrap acquisition, not enrollment or installation.
+//! Fixed bootstrap acquisition and explicitly selected local continuations.
 
 mod config;
 mod http;
 mod transport;
 mod install;
-// Internal egress ownership only. No configuration/CLI profile invokes it
-// before cold cross-invocation admission and separate workload lifecycle scope.
+// V3 uses independent cold creation authority and retains the never-executed
+// workload through observation output. No workload start/attachment API exists.
 #[allow(dead_code)]
 mod egress;
 #[path = "../native_ingress_client/identity.rs"]
@@ -218,6 +218,10 @@ pub(super) fn run() -> Result<(), String> {
         Some(inputs) => Some(install::prepare(inputs, &clock, &mut held)?),
         None => None,
     };
+    let egress = match config.egress {
+        Some(inputs) => Some(egress::prepare(inputs, &clock, &mut held)?),
+        None => None,
+    };
     let authority = if prepared.host().contains(':') {
         format!("[{}]:{}", prepared.host(), config.endpoint.port())
     } else { format!("{}:{}", prepared.host(), config.endpoint.port()) };
@@ -234,6 +238,77 @@ pub(super) fn run() -> Result<(), String> {
     connection.check()?;
     let evidence = http::post(&mut connection, &authority, config.challenge, &request_raw)?;
     connection.check()?;
+    if let Some(pending) = egress {
+        let proof = connection.admit_installation(&evidence, &delegation_root, &delegation_pin,
+            &setup_root, &setup_pin, &caller_issuer_der, &config.expected_caller_principal,
+            &config.expected_target_principal, &config.expected_target_nonce,
+            &config.expected_target_request_sha256, sent.delegation_original(),
+            sent.setup_original(), sent.target_request_original())?;
+        // Reserve output capacity before the separate durable creation claim.
+        // Neither this diagnostic nor the later observation authorizes effects.
+        let mut capture = json!({
+            "apiVersion":"serverware.nativeBootstrapClientCapture/v3",
+            "resultScope":"local-fixed-endpoint-bootstrap-and-egress-observation",
+            "okForAction":false,
+            "configurationSha256":super::sha256_prefixed(&configuration_raw),
+            "requestSha256":super::sha256_prefixed(&request_raw),
+            "endpoint":config.endpoint.to_string(),
+            "challengeSource":"independently-pinned",
+            "evidenceBase64url":URL_SAFE_NO_PAD.encode(&evidence),
+            "verification":json::parse(proof.diagnostic(), 4095)?,
+            "egress":null,
+        });
+        let provisional = serde_json::to_vec(&capture).map_err(|_| "encode egress capture reservation")?;
+        ensure(!provisional.is_empty() && provisional.len() < MAX_CAPTURE_BYTES - 8192,
+            "egress capture cannot reserve its bounded observation")?;
+        recheck(&mut held, &mut private_original, &clock)?;
+        let guard = egress::bind(pending, proof, connection, clock, held, private_original,
+            &configuration_raw)?;
+        let mut installed = guard.install()?;
+        let mut observation = serde_json::to_value(guard.observation()?)
+            .map_err(|_| "encode native egress creation observation")?;
+        let fields = observation.as_object_mut().ok_or("native egress observation shape differs")?;
+        ensure(fields.len() == 4, "native egress creation observation field count differs")?;
+        fields.insert("apiVersion".to_owned(), json!("serverware.nativeEgressObservation/v1"));
+        fields.insert("resultScope".to_owned(), json!("local-authorized-egress-observed-before-owner-teardown"));
+        fields.insert("okForAction".to_owned(), json!(false));
+        fields.insert("status".to_owned(), json!(if installed.created() {
+            "observed-created"
+        } else { "observed-complete" }));
+        for (name, digest) in [("kernelSemanticSha256", installed.semantic_sha256()),
+            ("kernelEvidenceSha256", installed.evidence_sha256())]
+        {
+            let hex: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+            fields.insert(name.to_owned(), json!(format!("sha256:{hex}")));
+        }
+        let observation_raw = serde_json::to_vec(&observation)
+            .map_err(|_| "encode native egress observation")?;
+        ensure(!observation_raw.is_empty() && observation_raw.len() <= 8191,
+            "native egress observation exceeds its bound")?;
+        capture["egress"] = observation;
+        let mut encoded = serde_json::to_vec(&capture).map_err(|_| "encode native egress capture")?;
+        ensure(!encoded.is_empty() && encoded.len() < MAX_CAPTURE_BYTES
+            && !encoded.contains(&b'\n') && !encoded.contains(&b'\r'),
+            "native egress capture exceeds its single-line bound")?;
+        encoded.push(b'\n');
+        installed.check()?;
+        guard.check()?;
+        let stdout = std::io::stdout();
+        let mut output = stdout.lock();
+        for chunk in encoded.chunks(16 * 1024) {
+            guard.check()?;
+            output.write_all(chunk).map_err(|_| "write native egress capture")?;
+            guard.check()?;
+        }
+        output.flush().map_err(|_| "flush native egress capture")?;
+        guard.check()?;
+        // The exact semantic snapshot above is an observation, not a promise
+        // that kernel state cannot change during output. Do not mint a query
+        // allowance or repeatedly dump through the same bounded transcript.
+        // Both owners remain alive through flush/final checks. Dropping them
+        // tears down this never-executed child; the capture grants no lifecycle.
+        return Ok(());
+    }
     if let Some(pending) = installation {
         let proof = connection.admit_installation(&evidence, &delegation_root, &delegation_pin,
             &setup_root, &setup_pin, &caller_issuer_der, &config.expected_caller_principal,

@@ -1,11 +1,12 @@
 //! Separate grant, genuine proof, host and never-executed workload ownership.
 //!
-//! This is an internal owner, not a public launch profile. Cold cross-invocation
-//! admission and the separate start/lifecycle permission remain required. It
-//! exposes no workload start or generic effect API.
+//! Creation is preceded by a distinct irreversible cross-invocation claim.
+//! This remains a never-executed child owner, not workload start authority or
+//! permission to attach a network. No generic effect API is exposed.
 
 mod authority;
 mod backend;
+mod creation_reservation;
 mod effect;
 mod kernel_reservation;
 mod readback;
@@ -18,11 +19,12 @@ mod host;
 
 use super::{config, ensure, native_verifier, originals::{ArtifactV1, HeldOriginal},
     transport::Connection, OriginalClock};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serverware_decision_gate::native_response_profile_v1::canonical_ascii_bytes;
 use sha2::{Digest, Sha256};
 use std::cell::{Cell, RefCell};
 use std::fs::File;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -51,50 +53,44 @@ pub(super) struct Pending {
     token_sha256: [u8; 32],
 }
 
-/// The journal accepts this concrete owner, never a validity callback, parsed
-/// success DTO, supplied pidfd or caller-owned namespace. Failure is sticky.
-pub(super) struct EgressGuard {
+/// Retains genuine precreation admission and originals. It never owns a child
+/// or permit, so journal checks cannot recurse through a lifecycle owner.
+pub(super) struct PrecreationOwner {
     clock: Arc<OriginalClock>,
     connection: Connection,
     proof: RefCell<native_verifier::BootstrapInstallationOriginals>,
     host: RefCell<host::HostOwner>,
-    workload: RefCell<workload::WorkloadOwner>,
+    launch: RefCell<workload::LaunchSpec>,
     originals: RefCell<Vec<HeldOriginal>>,
     client_private: RefCell<HeldOriginal>,
     token: RefCell<HeldOriginal>,
     authorization: authority::Authorization,
-    reservation_id: [u8; 32],
-    association_sha256: [u8; 32],
+    creation_scope_sha256: [u8; 32],
     token_sha256: [u8; 32],
     stopped: Cell<bool>,
 }
 
-impl EgressGuard {
-    pub(super) fn install(&self) -> Result<effect::Installed<'_>, String> {
-        effect::install(self)
-    }
-
-    pub(super) fn deadline(&self) -> Result<Instant, String> {
+impl PrecreationOwner {
+    pub(super) fn creation_spec(&self) -> Result<creation_reservation::Spec, String> {
         self.check()?;
-        self.clock.instant_deadline()
-    }
-
-    pub(super) fn duplicate_backend(&self) -> Result<File, String> {
-        self.check()?;
-        let duplicate = self.workload.try_borrow_mut()
-            .map_err(|_| "native egress workload already borrowed")?.duplicate_backend(&self.clock)?;
-        self.check()?;
-        Ok(duplicate)
+        let journal = self.authorization.creation_journal.as_ref()
+            .ok_or("native egress durable creation authority is absent")?;
+        Ok(creation_reservation::Spec {
+            journal_path: PathBuf::from(&journal.path), journal_device: journal.device,
+            journal_inode: journal.inode, journal_namespace: journal.namespace.clone(),
+            capability_id: self.authorization.capability.capability_id.clone(),
+            scope_sha256: self.creation_scope_sha256,
+        })
     }
 
     pub(super) fn check(&self) -> Result<(), String> {
-        ensure(!self.stopped.replace(true), "native egress owner is stopped")?;
+        ensure(!self.stopped.replace(true), "native egress precreation owner is stopped")?;
         self.clock.check()?;
         self.connection.check_egress_originals(&mut self.proof.try_borrow_mut()
             .map_err(|_| "native egress proof already borrowed")?, &self.clock)?;
         self.host.try_borrow_mut().map_err(|_| "native egress host already borrowed")?
             .check(&self.clock)?;
-        self.workload.try_borrow_mut().map_err(|_| "native egress workload already borrowed")?
+        self.launch.try_borrow_mut().map_err(|_| "native egress launch original already borrowed")?
             .check(&self.clock)?;
         for original in self.originals.try_borrow_mut()
             .map_err(|_| "native egress originals already borrowed")?.iter_mut() {
@@ -110,12 +106,78 @@ impl EgressGuard {
         }
         self.host.try_borrow_mut().map_err(|_| "native egress host already borrowed")?
             .check(&self.clock)?;
-        self.workload.try_borrow_mut().map_err(|_| "native egress workload already borrowed")?
+        self.launch.try_borrow_mut().map_err(|_| "native egress launch original already borrowed")?
             .check(&self.clock)?;
         self.connection.check()?;
         self.clock.check()?;
         self.stopped.set(false);
         Ok(())
+    }
+}
+
+/// The kernel journal accepts this concrete owner, never a validity callback,
+/// parsed success DTO, supplied pidfd or caller-owned namespace.
+pub(super) struct EgressGuard {
+    // The child (and its cleanup) drops before the shared precreation owner.
+    workload: RefCell<workload::WorkloadOwner>,
+    precreation: Arc<PrecreationOwner>,
+    reservation_id: [u8; 32],
+    association_sha256: [u8; 32],
+    token_sha256: [u8; 32],
+    stopped: Cell<bool>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct CreationObservation {
+    creation_slot_sha256: String,
+    creation_record_sha256: String,
+    authorization_sha256: String,
+    workload: workload::WorkloadIdentity,
+}
+
+impl EgressGuard {
+    pub(super) fn install(&self) -> Result<effect::Installed<'_>, String> { effect::install(self) }
+
+    pub(super) fn deadline(&self) -> Result<Instant, String> {
+        self.check()?;
+        self.precreation.clock.instant_deadline()
+    }
+
+    pub(super) fn duplicate_backend(&self) -> Result<File, String> {
+        self.check()?;
+        let duplicate = self.workload.try_borrow_mut()
+            .map_err(|_| "native egress workload already borrowed")?
+            .duplicate_backend(&self.precreation.clock)?;
+        self.check()?;
+        Ok(duplicate)
+    }
+
+    pub(super) fn check(&self) -> Result<(), String> {
+        ensure(!self.stopped.replace(true), "native egress owner is stopped")?;
+        self.precreation.check()?;
+        self.workload.try_borrow_mut().map_err(|_| "native egress workload already borrowed")?
+            .check(&self.precreation.clock)?;
+        self.precreation.check()?;
+        self.stopped.set(false);
+        Ok(())
+    }
+
+    /// Data observed under this live owner, not an execution or persistence
+    /// receipt. The child is terminated when the actual owner is torn down.
+    pub(super) fn observation(&self) -> Result<CreationObservation, String> {
+        self.check()?;
+        let result = {
+            let child = self.workload.try_borrow().map_err(|_| "native egress workload already borrowed")?;
+            CreationObservation {
+                creation_slot_sha256: digest_text(&child.creation_slot_sha256()),
+                creation_record_sha256: digest_text(&child.creation_record_sha256()),
+                authorization_sha256: digest_text(&self.precreation.authorization.original_sha256),
+                workload: child.identity().clone(),
+            }
+        };
+        self.check()?;
+        Ok(result)
     }
 }
 
@@ -139,6 +201,8 @@ pub(super) fn prepare(inputs: Inputs, clock: &OriginalClock,
     let raw = super::read(inputs.authority, 32 * 1024, clock, originals)?;
     let authorization = authority::admit(&raw, &root, &root_pin,
         crate::authority_source_revision_v1::SOURCE_REVISION, clock)?;
+    ensure(authorization.creation_journal.is_some(),
+        "native egress requires v2 durable precreation authority")?;
     let (mut token, secret) = HeldOriginal::read_private(inputs.capability_token, 256)?;
     clock.check()?;
     ensure((32..=256).contains(&secret.len()) && secret.iter().all(|byte|
@@ -156,8 +220,8 @@ pub(super) fn prepare(inputs: Inputs, clock: &OriginalClock,
 }
 
 /// The genuine same-TLS proof and original inputs are consumed into this owner.
-/// Namespace creation is separately authorized by this new profile BEFORE any
-/// journal claim; only a later durable claim may precede a firewall mutation.
+/// Namespace creation requires its own durable claim before clone3. A later,
+/// distinct kernel claim still precedes the sole firewall mutation.
 pub(super) fn bind(pending: Pending, mut proof: native_verifier::BootstrapInstallationOriginals,
     connection: Connection, clock: Arc<OriginalClock>, mut originals: Vec<HeldOriginal>,
     mut client_private: HeldOriginal, configuration_raw: &[u8]) -> Result<EgressGuard, String> {
@@ -166,6 +230,7 @@ pub(super) fn bind(pending: Pending, mut proof: native_verifier::BootstrapInstal
     ensure(!configuration_raw.is_empty() && configuration_raw.len() <= config::MAX_CONFIGURATION_BYTES,
         "native egress original configuration exceeds bound")?;
     let grant = pending.authorization;
+    ensure(grant.creation_journal.is_some(), "native egress durable creation authority is absent")?;
     let setup = proof.setup();
     let delegation = proof.delegation();
     ensure(proof.setup_sha256() == grant.setup_sha256
@@ -216,10 +281,24 @@ pub(super) fn bind(pending: Pending, mut proof: native_verifier::BootstrapInstal
     token.require_private()?;
     connection.check_egress_originals(&mut proof, &clock)?;
     observed.check(&clock)?;
-    // No application is executed; the newly created child is permanently parked
-    // behind its fixed trampoline. Only its explicit never-started cleanup applies.
-    let mut child = workload::WorkloadOwner::create(pending.launch, &clock)?;
-    child.check(&clock)?;
+    let commitments = [grant.original_sha256, proof.setup_sha256(), proof.delegation_sha256(),
+        proof.evidence_sha256(), proof.packet_sha256(), digest(configuration_raw), ca_sha256];
+    let mut creation_scope = Sha256::new();
+    creation_scope.update(b"serverware/native-egress-creation-operation/v1\0");
+    for commitment in commitments { creation_scope.update(commitment); }
+    let precreation = Arc::new(PrecreationOwner { clock, connection,
+        proof: RefCell::new(proof), host: RefCell::new(observed), launch: RefCell::new(pending.launch),
+        originals: RefCell::new(originals), client_private: RefCell::new(client_private),
+        token: RefCell::new(token), authorization: grant,
+        creation_scope_sha256: creation_scope.finalize().into(), token_sha256: pending.token_sha256,
+        stopped: Cell::new(false) });
+    precreation.check()?;
+    let permit = creation_reservation::claim(Arc::clone(&precreation))?;
+    // An existing or uncertain creation record never yields a permit. No
+    // application is executed; cleanup covers only this task-created child.
+    let mut child = workload::WorkloadOwner::create(Arc::clone(&precreation), permit, &precreation.clock)?;
+    child.check(&precreation.clock)?;
+    let grant = &precreation.authorization;
     ensure((child.identity().namespace_device, child.identity().namespace_inode)
         != (grant.network_owner.namespace_device, grant.network_owner.namespace_inode),
         "native egress child namespace is not newly separate from the launcher")?;
@@ -232,16 +311,14 @@ pub(super) fn bind(pending: Pending, mut proof: native_verifier::BootstrapInstal
     let reservation_id = slot.finalize().into();
     let mut association = Sha256::new();
     association.update(b"serverware/native-egress-installation-operation/v1\0");
-    for commitment in [grant.original_sha256, proof.setup_sha256(), proof.delegation_sha256(),
-        proof.evidence_sha256(), proof.packet_sha256(), digest(configuration_raw), ca_sha256,
-        digest(&child_original)] { association.update(commitment); }
+    for commitment in commitments { association.update(commitment); }
+    association.update(digest(&child_original));
     let association_sha256 = association.finalize().into();
-    let result = EgressGuard { clock, connection, proof: RefCell::new(proof), host: RefCell::new(observed),
-        workload: RefCell::new(child), originals: RefCell::new(originals),
-        client_private: RefCell::new(client_private), token: RefCell::new(token), authorization: grant,
-        reservation_id, association_sha256, token_sha256: pending.token_sha256, stopped: Cell::new(false) };
+    let token_sha256 = precreation.token_sha256;
+    let result = EgressGuard { workload: RefCell::new(child), precreation,
+        reservation_id, association_sha256, token_sha256, stopped: Cell::new(false) };
     result.check()?;
-    // No claim or completion is manufactured here. The backend must first
-    // retain its exact intended wire transaction and later actual readback.
+    // The creation claim is retained by the child. No kernel claim or completion
+    // is manufactured here: actual wire intent/readback still belong downstream.
     Ok(result)
 }

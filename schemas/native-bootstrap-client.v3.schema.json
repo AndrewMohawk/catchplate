@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-bootstrap-client.v3.schema.json",
+  "title": "Serverware fixed native bootstrap client with scoped egress observation v3",
+  "description": "Closed independently pinned configuration, at most 16384 bytes: the 18 v1 fields plus required nonnull egress. Installation is forbidden, including null; v1/v2 reject egress, including null. Runtime verifies startup before admitting protected cold egress inputs and before client private-key access/network. A separate signed egress authorization v2 and durable creation claim are required before one never-executed child is created; a separate kernel claim precedes the fixed firewall transaction. Output is observation while owners are held, not workload start, attachment, persistent deployment or CA installation. Schema validation is not permission.",
+  "type": "object", "additionalProperties": false,
+  "required": [
+    "apiVersion", "endpoint", "timeoutMilliseconds", "startupEvidence", "startupExpectations",
+    "sessionScope", "trustRoots", "clientCertificate", "clientPrivateKey", "callerIssuer",
+    "delegationAuthorizer", "setupAuthorizer", "request", "clientChallengeBase64url",
+    "expectedCallerPrincipal", "expectedTargetPrincipal", "expectedTargetNonce", "expectedTargetRequestSha256",
+    "egress"
+  ],
+  "properties": {
+    "apiVersion": {"const": "serverware.nativeBootstrapClient/v3"},
+    "endpoint": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/endpoint"},
+    "timeoutMilliseconds": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/timeoutMilliseconds"},
+    "startupEvidence": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/startupEvidence"},
+    "startupExpectations": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/startupExpectations"},
+    "sessionScope": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/sessionScope"},
+    "trustRoots": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/trustRoots"},
+    "clientCertificate": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/clientCertificate"},
+    "clientPrivateKey": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/clientPrivateKey"},
+    "callerIssuer": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/callerIssuer"},
+    "delegationAuthorizer": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/delegationAuthorizer"},
+    "setupAuthorizer": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/setupAuthorizer"},
+    "request": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/request"},
+    "clientChallengeBase64url": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/clientChallengeBase64url"},
+    "expectedCallerPrincipal": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/expectedCallerPrincipal"},
+    "expectedTargetPrincipal": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/expectedTargetPrincipal"},
+    "expectedTargetNonce": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/expectedTargetNonce"},
+    "expectedTargetRequestSha256": {"$ref": "native-bootstrap-client.v1.schema.json#/properties/expectedTargetRequestSha256"},
+    "egress": {
+      "type": "object", "additionalProperties": false,
+      "required": ["authority", "authorityRoot", "capabilityToken", "launchManifest"],
+      "properties": {
+        "authority": {"$ref": "native-bootstrap-client.v1.schema.json#/$defs/artifact", "description": "Exact independently signed native egress authorization v2 original, at most 32768 bytes, including the separate creation journal. V1 is refused by this public path."},
+        "authorityRoot": {"$ref": "native-bootstrap-client.v1.schema.json#/$defs/artifact", "description": "Independently pinned canonical nonweak Ed25519 SPKI PEM original, at most 16384 bytes; actual separate-role exclusions are checked by the native owner."},
+        "capabilityToken": {"$ref": "native-bootstrap-client.v1.schema.json#/$defs/artifact", "description": "Protected owner-only single-link regular original containing exact 32..256 URL-safe ASCII token bytes, no LF. Actual hash must equal the dedicated egress capability hash; no token bytes are output or journaled."},
+        "launchManifest": {"$ref": "native-bootstrap-client.v1.schema.json#/$defs/artifact", "description": "Protected canonical nativeEgressLaunchManifest/v1 original, at most 4096 bytes without LF. Runtime retains the selected protected executable original, at most 16 MiB. This profile never executes it, supplies arguments/environment, or attaches a network."}
+      }
+    }
+  }
+}

@@ -16,6 +16,8 @@ const MAX_BYTES: usize = 32 * 1024;
 const MAX_KEY_BYTES: usize = 16 * 1024;
 const SCHEMA: &str = "serverware.nativeEgressInstallationAuthorization/v1";
 const ENVELOPE: &str = "serverware.signedNativeEgressInstallationAuthorization/v1";
+const CREATION_SCHEMA: &str = "serverware.nativeEgressInstallationAuthorization/v2";
+const CREATION_ENVELOPE: &str = "serverware.signedNativeEgressInstallationAuthorization/v2";
 const MAX_EPOCH_MS: u64 = 9_223_372_036_854;
 
 #[derive(Serialize)]
@@ -116,6 +118,7 @@ pub(super) struct Authorization {
     pub(super) ruleset: Ruleset,
     pub(super) capability: Capability,
     pub(super) journal: Journal,
+    pub(super) creation_journal: Option<Journal>,
     pub(super) issued_at_epoch_ns: u64,
     pub(super) expires_at_epoch_ns: u64,
 }
@@ -359,15 +362,21 @@ pub(super) fn admit(raw: &[u8], root_pem: &[u8], root_pem_sha: &str,
     let value = json::parse(raw, MAX_BYTES)?;
     require(canonical_ascii_bytes(&value)? == raw)?;
     let outer = object(&value, &["schema", "payload", "signature"])?;
-    require(outer["schema"] == ENVELOPE)?;
-    let p = object(&outer["payload"], &["schema", "sourceRevision", "purpose", "trustMode", "authorizationId",
+    let schema = match outer["schema"].as_str() {
+        Some(ENVELOPE) => SCHEMA,
+        Some(CREATION_ENVELOPE) => CREATION_SCHEMA,
+        _ => return Err("native egress authorization envelope profile refused".to_owned()),
+    };
+    let mut fields = vec!["schema", "sourceRevision", "purpose", "trustMode", "authorizationId",
         "setupSha256", "delegationSha256", "targetRequestSha256", "policyRequirementsSha256",
         "releaseRecordSha256", "policyHash", "configurationSha256", "runtimeCaCertificateSha256",
         "runtimeCaSpkiSha256", "ingressLeafCertificateSha256", "clientTrustBundleSha256",
         "clientChallengeSha256", "targetPrincipalId", "targetNonce", "targetSpkiSha256", "proxy",
         "networkOwner", "machineIdSha256", "workload", "ruleset", "capability", "journal",
-        "issuedAtEpochNs", "expiresAtEpochNs"])?;
-    require(p["schema"] == SCHEMA && p["purpose"] == "native-egress-installation"
+        "issuedAtEpochNs", "expiresAtEpochNs"];
+    if schema == CREATION_SCHEMA { fields.push("creationJournal"); }
+    let p = object(&outer["payload"], &fields)?;
+    require(p["schema"] == schema && p["purpose"] == "native-egress-installation"
         && p["trustMode"] == "trusted-host-local"
         && text(&p["sourceRevision"], 128)? == expected_source_revision)?;
     let encoded = text(&outer["signature"], 94)?;
@@ -379,8 +388,8 @@ pub(super) fn admit(raw: &[u8], root_pem: &[u8], root_pem_sha: &str,
     let (root_key, root_key_id) = native_verifier::installation_authorizer(root_pem, root_pem_sha)?;
     clock.check()?;
     let canonical = canonical_ascii_bytes(&outer["payload"])?;
-    let mut signed = Vec::with_capacity(SCHEMA.len() + 1 + canonical.len());
-    signed.extend_from_slice(SCHEMA.as_bytes()); signed.push(0); signed.extend_from_slice(&canonical);
+    let mut signed = Vec::with_capacity(schema.len() + 1 + canonical.len());
+    signed.extend_from_slice(schema.as_bytes()); signed.push(0); signed.extend_from_slice(&canonical);
     root_key.verify_strict(&signed, &Signature::from_slice(&signature)
         .map_err(|_| "native egress signature width invalid")?)
         .map_err(|_| "native egress signature refused")?;
@@ -392,6 +401,14 @@ pub(super) fn admit(raw: &[u8], root_pem: &[u8], root_pem_sha: &str,
     let (proxy, rules) = proxy(&p["proxy"], clock)?;
     let ruleset = ruleset(&p["ruleset"], rules)?;
     let capability = capability(&p["capability"])?;
+    let kernel_journal = journal(&p["journal"])?;
+    let creation_journal = if schema == CREATION_SCHEMA {
+        let creation = journal(&p["creationJournal"])?;
+        require(creation.path != kernel_journal.path
+            && (creation.device, creation.inode) != (kernel_journal.device, kernel_journal.inode)
+            && creation.namespace != kernel_journal.namespace)?;
+        Some(creation)
+    } else { None };
     let issued = integer(&p["issuedAtEpochNs"], 1, i64::MAX as u64)?;
     let expires = integer(&p["expiresAtEpochNs"], 1, i64::MAX as u64)?;
     require(issued <= opening_wall && opening_wall < expires && expires > issued
@@ -409,7 +426,8 @@ pub(super) fn admit(raw: &[u8], root_pem: &[u8], root_pem_sha: &str,
         client_challenge_sha256: digest(&p["clientChallengeSha256"])?, target_spki_sha256: digest(&p["targetSpkiSha256"])?,
         machine_id_sha256: digest(&p["machineIdSha256"])?, target_principal_id: principal.to_owned(),
         target_nonce: nonce.to_owned(), proxy, network_owner: network_owner(&p["networkOwner"])?,
-        workload: workload(&p["workload"])?, ruleset, capability, journal: journal(&p["journal"])?,
+        workload: workload(&p["workload"])?, ruleset, capability, journal: kernel_journal,
+        creation_journal,
         issued_at_epoch_ns: issued, expires_at_epoch_ns: expires };
     clock.restrict_until_epoch_ns(expires)?;
     let (closing_wall, _) = sample()?;

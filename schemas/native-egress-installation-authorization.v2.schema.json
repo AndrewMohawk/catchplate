@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-egress-installation-authorization.v2.schema.json",
+  "title": "Native egress authorization with separate durable creation admission v2",
+  "description": "Exact canonical sorted compact ensure_ascii JSON, including escaped DEL, with no LF, at most 32768 bytes and depth 6. Ed25519 signs the v2 payload schema ASCII, NUL, and exact canonical payload. Version 1 is not upgraded by adding a field. This separately authorizes a protected precreation journal; no schema or signed grant alone is a durable claim, current proof, workload start or network attachment.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "payload", "signature"],
+  "properties": {
+    "schema": {"const": "serverware.signedNativeEgressInstallationAuthorization/v2"},
+    "payload": {"$ref": "#/$defs/payload"},
+    "signature": {"$ref": "native-egress-installation-authorization.v1.schema.json#/properties/signature"}
+  },
+  "$defs": {
+    "digest": {"$ref": "native-egress-installation-authorization.v1.schema.json#/$defs/digest"},
+    "identifier": {"$ref": "native-egress-installation-authorization.v1.schema.json#/$defs/identifier"},
+    "positive": {"$ref": "native-egress-installation-authorization.v1.schema.json#/$defs/positive"},
+    "journal": {
+      "$ref": "native-egress-installation-authorization.v1.schema.json#/$defs/journal",
+      "description": "Exact signed preprovisioned directory identity. creationJournal must differ from the kernel journal in path, device/inode pair and namespace; runtime enforces all three comparisons and actual protected directory ownership. Its separate SWNEGCR1 inventory admits at most 64 irreversible creation claims. Existing, partial, uncertain or historical claims never authorize another child. Local durability is not an off-host rollback witness."
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "sourceRevision", "purpose", "trustMode", "authorizationId", "setupSha256", "delegationSha256", "targetRequestSha256", "policyRequirementsSha256", "releaseRecordSha256", "policyHash", "configurationSha256", "runtimeCaCertificateSha256", "runtimeCaSpkiSha256", "ingressLeafCertificateSha256", "clientTrustBundleSha256", "clientChallengeSha256", "targetPrincipalId", "targetNonce", "targetSpkiSha256", "proxy", "networkOwner", "machineIdSha256", "workload", "ruleset", "capability", "journal", "creationJournal", "issuedAtEpochNs", "expiresAtEpochNs"],
+      "properties": {
+        "schema": {"const": "serverware.nativeEgressInstallationAuthorization/v2"},
+        "sourceRevision": {"$ref": "native-egress-installation-authorization.v1.schema.json#/$defs/payload/properties/sourceRevision"},
+        "purpose": {"const": "native-egress-installation"},
+        "trustMode": {"const": "trusted-host-local"},
+        "authorizationId": {"$ref": "#/$defs/identifier"},
+        "setupSha256": {"$ref": "#/$defs/digest"},
+        "delegationSha256": {"$ref": "#/$defs/digest"},
+        "targetRequestSha256": {"$ref": "#/$defs/digest"},
+        "policyRequirementsSha256": {"$ref": "#/$defs/digest"},
+        "releaseRecordSha256": {"$ref": "#/$defs/digest"},
+        "policyHash": {"$ref": "#/$defs/digest"},
+        "configurationSha256": {"$ref": "#/$defs/digest"},
+        "runtimeCaCertificateSha256": {"$ref": "#/$defs/digest"},
+        "runtimeCaSpkiSha256": {"$ref": "#/$defs/digest"},
+        "ingressLeafCertificateSha256": {"$ref": "#/$defs/digest"},
+        "clientTrustBundleSha256": {"$ref": "#/$defs/digest"},
+        "clientChallengeSha256": {"$ref": "#/$defs/digest"},
+        "targetPrincipalId": {"$ref": "native-egress-installation-authorization.v1.schema.json#/$defs/payload/properties/targetPrincipalId"},
+        "targetNonce": {"$ref": "native-egress-installation-authorization.v1.schema.json#/$defs/payload/properties/targetNonce"},
+        "targetSpkiSha256": {"$ref": "#/$defs/digest"},
+        "proxy": {"$ref": "native-egress-installation-authorization.v1.schema.json#/$defs/proxy"},
+        "networkOwner": {"$ref": "native-egress-installation-authorization.v1.schema.json#/$defs/networkOwner"},
+        "machineIdSha256": {"$ref": "#/$defs/digest"},
+        "workload": {"$ref": "native-egress-installation-authorization.v1.schema.json#/$defs/workload"},
+        "ruleset": {"$ref": "native-egress-installation-authorization.v1.schema.json#/$defs/ruleset"},
+        "capability": {"$ref": "native-egress-installation-authorization.v1.schema.json#/$defs/capability"},
+        "journal": {"$ref": "#/$defs/journal"},
+        "creationJournal": {"$ref": "#/$defs/journal"},
+        "issuedAtEpochNs": {"$ref": "#/$defs/positive"},
+        "expiresAtEpochNs": {"$ref": "#/$defs/positive"}
+      },
+      "description": "Exact 30-field pre-contact grant. All v1 semantic bounds and genuine setup/delegation/token/host joins remain mandatory, including the positive current i64-nanosecond interval of at most 300 seconds. Creation uses a stable purpose-separated slot from creationJournal.namespace and capability.capabilityId; the full grant and actual admitted proof/packet/configuration/CA bind its operation scope. Fresh evidence, process IDs or child identities cannot allocate a retry. A new child is possible only after an actual durable fresh claim; the separate kernel claim still precedes firewall mutation. No v2 grant authorizes exec/start, network attachment, recovery or repair."
+    }
+  }
+}

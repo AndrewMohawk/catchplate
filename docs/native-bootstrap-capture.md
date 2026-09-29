@@ -6,12 +6,12 @@ packet within that evidence. `native_bootstrap_capture.extract_packet` connects
 these representations without promoting the diagnostic to authority.
 
 The extractor explicitly accepts the closed nine-field
-`serverware.nativeBootstrapClientCapture/v1` and ten-field
-`serverware.nativeBootstrapClientCapture/v2` profiles. V2 retains the same exact
-bootstrap evidence and adds an `installation` child; v1 still rejects that field.
-The installing client can therefore preserve its original evidence for later
-native identity submission without making a second bootstrap attempt. No new
-extraction CLI mode or automatic acquisition is needed.
+`serverware.nativeBootstrapClientCapture/v1` and separate ten-field v2 and v3
+profiles. V2 retains the same exact bootstrap evidence and adds `installation`;
+v3 instead adds `egress`. V1 rejects both children, v2 rejects `egress`, and v3
+rejects `installation`, including null. These clients can preserve their original
+evidence for later native identity submission without another bootstrap attempt.
+No new extraction CLI mode or automatic acquisition is needed.
 
 Supply independently selected `PinnedFile` descriptions for the capture and the
 target request, plus an existing current-user-owned mode-0700 output directory.
@@ -32,6 +32,21 @@ or infer current host/namespace/CA installation state. Its public capability ID
 is not a token or live permission. The whole
 [v2 capture](../schemas/native-bootstrap-client-capture.v2.schema.json) remains
 bounded at 1.5 MiB; the v1 limits and behavior are unchanged.
+
+The [v3 capture](../schemas/native-bootstrap-client-capture.v3.schema.json)
+contains the exact ten-field
+[egress observation](../schemas/native-egress-observation.v1.schema.json), also
+at most 8191 compact UTF-8 bytes. Its scope is observation before owner teardown,
+not a persistent deployed workload: both levels retain `okForAction: false`.
+`observed-created` and `observed-complete` are data-only status spellings. The
+extractor checks the five digest spellings and closed ten-scalar workload shape,
+with exact unsigned 32-/64-bit JSON integers and no bool/float coercion. It does
+not authenticate the grant, read a creation/kernel journal, check a pidfd/nsfs or
+socket, inspect rules, infer current namespace membership, or authorize a retry.
+The [v3 client](native-egress-client.md) retains genuine owners through output
+and then tears down its never-executed child. No execution, network attachment,
+CA installation or continuing kernel state follows from this public capture.
+Combined CA installation plus egress is not a supported client profile.
 
 The packet's embedded target request must equal the supplied request original.
 Reconstructing the exact delegation/setup/target exchange must also reproduce
@@ -55,6 +70,9 @@ Keep the bootstrap producer exit status separately. A parseable capture from a
 failed producer is not proof of successful acquisition, and extraction cannot
 recover that missing fact. An installation receipt in a parseable v2 capture also
 cannot prove final producer success or that the installed file remains present.
+Likewise a v3 observation cannot prove producer success or live workload/kernel
+state after capture. Old extractors that support only v1/v2 refuse v3; there is
+no relabeling or automatic downgrade.
 Extraction starts no network request, reads no private
 key, renews no signed lifetime, installs no CA and supplies no automatic retry.
 An external watchdog is still needed for blocked filesystem calls. This is

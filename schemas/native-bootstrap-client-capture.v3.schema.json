@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-bootstrap-client-capture.v3.schema.json",
+  "title": "Local native bootstrap client capture with pre-teardown egress observation v3",
+  "description": "Closed ten-field public local capture, not an authenticated receipt or authority. One UTF-8 JSON line including exactly one final LF, at most 1572864 bytes. The exact original bootstrap evidence is retained for later packet extraction without another bootstrap attempt. Egress is observed while owners are held, then the never-executed child is torn down on owner drop. No CA installation, workload execution, network attachment, persistent deployment, automatic retry or recovery permission is conveyed. V1/v2 remain strict and reject this profile rather than treating it as their own.",
+  "type": "object", "additionalProperties": false,
+  "required": ["apiVersion", "resultScope", "okForAction", "configurationSha256", "requestSha256", "endpoint", "challengeSource", "evidenceBase64url", "verification", "egress"],
+  "properties": {
+    "apiVersion": {"const": "serverware.nativeBootstrapClientCapture/v3"},
+    "resultScope": {"const": "local-fixed-endpoint-bootstrap-and-egress-observation"},
+    "okForAction": {"const": false},
+    "configurationSha256": {"$ref": "native-bootstrap-client-capture.v2.schema.json#/properties/configurationSha256"},
+    "requestSha256": {"$ref": "native-bootstrap-client-capture.v2.schema.json#/properties/requestSha256"},
+    "endpoint": {"$ref": "native-bootstrap-client-capture.v2.schema.json#/properties/endpoint"},
+    "challengeSource": {"const": "independently-pinned"},
+    "evidenceBase64url": {"$ref": "native-bootstrap-client-capture.v2.schema.json#/properties/evidenceBase64url"},
+    "verification": {"$ref": "native-bootstrap-client-capture.v2.schema.json#/properties/verification"},
+    "egress": {"$ref": "native-egress-observation.v1.schema.json", "description": "Closed nonactionable observation, at most 8191 compact UTF-8 bytes. Its claims are never used as permission by the data-only SDK extractor."}
+  }
+}

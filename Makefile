@@ -3716,6 +3716,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/native_bootstrap_client/install/destination.rs \
 				data-plane/decision-gate-rs/src/native_bootstrap_client/egress/mod.rs \
 				data-plane/decision-gate-rs/src/native_bootstrap_client/egress/authority.rs \
+				data-plane/decision-gate-rs/src/native_bootstrap_client/egress/creation_reservation.rs \
 				data-plane/decision-gate-rs/src/native_bootstrap_client/egress/backend.rs \
 				data-plane/decision-gate-rs/src/native_bootstrap_client/egress/effect.rs \
 				data-plane/decision-gate-rs/src/native_bootstrap_client/egress/kernel_reservation.rs \
@@ -3773,10 +3774,14 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-enrollment-bootstrap-request.v1.schema.json \
 				schemas/native-bootstrap-client.v1.schema.json \
 				schemas/native-bootstrap-client.v2.schema.json \
+				schemas/native-bootstrap-client.v3.schema.json \
 				schemas/native-bootstrap-client-capture.v1.schema.json \
 				schemas/native-bootstrap-client-capture.v2.schema.json \
+				schemas/native-bootstrap-client-capture.v3.schema.json \
 				schemas/native-ca-installation-authorization.v1.schema.json \
 				schemas/native-egress-installation-authorization.v1.schema.json \
+				schemas/native-egress-installation-authorization.v2.schema.json \
+				schemas/native-egress-observation.v1.schema.json \
 				schemas/native-egress-launch-manifest.v1.schema.json \
 				schemas/native-ca-installation-receipt.v1.schema.json \
 				schemas/native-enrollment-authorizer.v1.schema.json \

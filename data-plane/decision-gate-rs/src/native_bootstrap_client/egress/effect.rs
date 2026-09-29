@@ -45,8 +45,8 @@ impl Installed<'_> {
     pub(in super::super) fn check(&mut self) -> Result<(), String> {
         super::ensure(!std::mem::replace(&mut self.stopped, true), "native installed egress owner stopped")?;
         self.guard.check()?;
-        let snapshot = Snapshot::acquire(&mut self.backend, &self.guard.authorization.ruleset.table_name)?;
-        let current = readback::verify(&self.guard.authorization.ruleset,
+        let snapshot = Snapshot::acquire(&mut self.backend, &self.guard.precreation.authorization.ruleset.table_name)?;
+        let current = readback::verify(&self.guard.precreation.authorization.ruleset,
             &snapshot.before, snapshot.references(), &snapshot.after)?;
         super::ensure(current.semantic_sha256() == self.semantic_sha256,
             "native installed egress semantic state changed")?;
@@ -62,7 +62,7 @@ impl Installed<'_> {
 
 pub(super) fn install(guard: &EgressGuard) -> Result<Installed<'_>, String> {
     guard.check()?;
-    let grant = &guard.authorization;
+    let grant = &guard.precreation.authorization;
     // The journal lock precedes the independent protected backend lock. Intent
     // is initially absent, not a caller-supplied success or transaction digest.
     let mut journal = kernel_reservation::open_kernel(Spec {

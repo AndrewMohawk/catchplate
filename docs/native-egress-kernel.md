@@ -1,7 +1,9 @@
 # Native egress kernel transaction and semantic readback
 
-This `.252` slice connects an internal source-only kernel pipeline. It does not provide a public egress
-configuration, CLI, installer invocation or workload-start permission. The
+This `.252` slice connects the source-only kernel pipeline. The later
+[public v3 client](native-egress-client.md) invokes it only after a separate
+[durable precreation claim](native-egress-creation.md); neither supplies workload
+start or network-attachment permission. The
 [independent egress grant and retained owners](native-egress-installation.md)
 remain required. Kernel submission, an ACK, a parser result or a digest alone
 cannot supply missing launch admission, installation authority or runtime proof.
@@ -107,10 +109,12 @@ submission, changed generation/state, exhausted limits or lost replies remain
 consumed uncertainty, without retry, rollback or automatic start. No claim
 completion may substitute a supplied digest for the actual readback owner.
 
-Cross-invocation launch admission, public cold configuration/CLI, network
-attachment and independently authorized exec/start/lifecycle remain separate
-gates from the private pipeline.
-One child per retained owner is not a durable global creation claim. Cooperative
+The public v3 path now requires local durable precreation admission in a separate
+signed journal before the child exists, then this kernel pipeline. Its capture
+observes only the retained never-started child before owner teardown; it is not a
+persistent deployment. Network attachment and independently authorized
+exec/start/lifecycle remain open. The creation journal is not a global or
+rollback-resistant authority. Cooperative
 locks do not defeat a hostile privileged writer, and local durability is not an
 off-host rollback witness. Connectivity, provider/canary behavior, Kubernetes
 ownership and production acceptance remain unverified. No build, test, socket

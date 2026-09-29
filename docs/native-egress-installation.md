@@ -1,9 +1,11 @@
 # Native egress authority and protected journals
 
-The `.251` authority/workload/journal foundation now has a `.252`
-[private kernel transaction and readback pipeline](native-egress-kernel.md).
-This is source integration, not an executed firewall transaction, public
-installer, workload launch or production gate. The original hash-only
+The `.251` authority/workload/journal foundation and `.252`
+[kernel transaction and readback pipeline](native-egress-kernel.md) now have a
+separate [durable precreation claim](native-egress-creation.md) and explicit
+[public v3 client profile](native-egress-client.md). These are source integration,
+not an executed firewall transaction, a started workload or a production gate.
+The original hash-only
 `native_bootstrap_client/egress/reservation.rs` and the new raw-custody
 `kernel_reservation.rs` have distinct formats. Neither reuses the CA installation
 journal, token, slot domain, records or receipt as egress authority.
@@ -18,8 +20,19 @@ Exact packet/evidence hashes and the actual transaction are bound into the
 operation-side association when genuine originals are admitted. Neither capture
 JSON, a CA installation receipt nor a supplied digest substitutes for those owners.
 
-The grant separately permits creation of one **never-started** `NEWNET` child
-before journal admission. There is no target start API in this foundation. The
+The additive signed authorization v2 contains all 29 v1 fields plus a required
+`creationJournal` with exact path, device, inode and namespace. Envelope and
+payload both use v2; the signing domain is the exact v2 payload schema followed
+by NUL and canonical payload bytes. Paired Python/Rust admission preserves v1
+bytes, refuses unknown fields and forbids mixing versions. Public launch
+preparation requires v2 before workload admission or effects; v1 parsing grants
+no fallback creation route.
+
+The creation journal must differ from the kernel journal in path, device/inode
+pair **and** namespace. Both are separately preprovisioned protected directories,
+not directories the launcher creates or repairs. The durable `SWNEGCR1` claim
+must precede the one **never-started** `NEWNET` child creation attempt. There is
+no target start API in this foundation. The
 actual launcher retains the child through a pidfd and holds its newly created
 namespace; failure or parent death tears down only that child. This creation is
 not authorized retroactively by the later journal claim. Signed setup
@@ -27,11 +40,13 @@ not authorized retroactively by the later journal claim. Signed setup
 namespace inode that does not exist when the grant is signed. Actual child
 identity must be retained and bound operation-side, never invented from a label.
 
-Creation is limited to one child per retained owner. This internal primitive does
-not itself supply cross-invocation launch admission or a durable once-only child
-creation record. The later firewall claim is not retroactive permission or proof
-of such admission. Public orchestration must define that lifecycle explicitly;
-there is currently no configuration or CLI path that invokes this foundation.
+Creation is limited to one attempt under the retained original owner and stable
+signed creation slot. An existing, partial, uncertain or historical record blocks
+new creation; a different process, fresh proof or new child identity cannot
+allocate another slot. The exact owner and claim remain held through the child's
+life. The later firewall claim is not retroactive creation permission. This is
+local protected-file admission, not hostile-root exclusion or off-host rollback
+protection, and cannot resume or attach to a historical PID.
 
 The irreversible journal claim must be durable **before firewall mutation**.
 The root-owned concrete `EgressGuard::check(&self)` supplies the same original
@@ -41,8 +56,10 @@ success callback or generic effect command. A `Spec` by itself grants no authori
 Acquire the journal lock before the protected backend lock; both
 must be nonblocking and remain held through effect, exact readback and completion.
 The private `.252` pipeline connects those owners and retains both locks after
-completion. No public configuration/CLI or installation invocation is exposed;
-a parsed digest remains no substitute for the retained originals and guard.
+completion. Public v3 orchestration retains these owners through its bounded
+diagnostic output, then tears down the never-started child; output is not a
+persistent workload handle. A parsed digest remains no substitute for the
+retained originals and guard.
 
 ## Historical hash-only records: SWNEGRS1
 
@@ -118,8 +135,10 @@ consumed; a missing observed record never grants a fresh attempt.
 
 The fixed create-only transaction, backend ownership, full ordered kernel
 expression readback and original-byte custody are privately source-connected,
-not executed or publicly invocable. Cross-invocation launch admission, public
-cold configuration/CLI, network attachment and exec/start remain open.
+not executed. Public cold v3 configuration and local durable precreation
+admission are source-connected; network attachment, exec/start, persistent
+supervision, combined CA-plus-egress orchestration and independent runtime
+acceptance remain open.
 Only the signed setup's explicit host addresses at the delegated TCP port may
 populate the intended rules; CIDRs remain membership limits, not broad allowlists.
 No implicit traffic exception, canary or provider authority follows from this

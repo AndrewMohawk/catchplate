@@ -2,9 +2,11 @@
 
 This is the agreed architecture for a separately authorized native host egress
 installer. The `.251` [grant, stopped-workload and journal foundation](native-egress-installation.md)
-now joins the `.252` [private kernel transaction/readback pipeline](native-egress-kernel.md).
-There is no current public configuration/CLI/installer invocation, cross-invocation
-launch admission, exec/start or network-attachment path. Source integration is not
+now joins the `.252` [kernel transaction/readback pipeline](native-egress-kernel.md)
+and `.254` [durable precreation admission](native-egress-creation.md) through the
+[public v3 client](native-egress-client.md). Exec/start, network attachment,
+persistent supervision and combined CA-plus-egress orchestration remain open.
+Source integration is not
 a successful firewall transaction or runtime evidence. Existing native
 enrollment, CA installation and legacy firewall profiles remain unchanged.
 No commands in this document authorize deployment or a canary.
@@ -38,7 +40,8 @@ here. Do not execute that script as the new installer or reinterpret its receipt
 
 The `.251` closed, versioned **egress-installation grant** has a dedicated,
 explicitly pinned public root and purpose-specific original verification. This
-source foundation is not a public effect entrypoint. Its scope and future
+source foundation alone is not a public effect entrypoint; the v3 client requires
+the additive v2 grant and separate precreation claim. Its scope and actual
 operation-side joins preserve these distinctions:
 
 - The precontact grant pins setup, delegation and target-request associations,
@@ -180,10 +183,13 @@ cross-session recovery require explicit lifecycle contracts.
 
 The `.252` source connects the original grant/workload/guard foundation to typed
 exclusive kernel submission, exact raw custody, full semantic readback, guarded
-completion and read-only completed replay. It remains private: independent
-provisioning, cross-invocation launch admission, public configuration/CLI and
-separately authorized exec/start/network attachment are not supplied. One child
-per retained owner is not a durable global creation claim. Keep CA installation
+completion and read-only completed replay. The `.254` public v3 client now joins
+a separately signed creation-journal identity, irreversible durable claim before
+the one clone attempt, retained genuine owners and an explicit no-action capture
+with an SDK receiver. Historical or uncertain claims never permit recreation or
+PID reattachment. Independent provisioning, separately authorized exec/start,
+network attachment and persistent supervision are not supplied. Local creation
+admission is not a global rollback-resistant claim. Keep CA installation
 and old enrollment profiles strict; no data projection becomes authority.
 
 The kernel pipeline has not been built or executed. Privileged-writer exclusion,

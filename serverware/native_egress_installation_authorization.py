@@ -25,6 +25,8 @@ from serverware_agent_trust import workload_identity_bootstrap_originals as boot
 
 SCHEMA = "serverware.signedNativeEgressInstallationAuthorization/v1"
 PAYLOAD_SCHEMA = "serverware.nativeEgressInstallationAuthorization/v1"
+CREATION_SCHEMA = "serverware.signedNativeEgressInstallationAuthorization/v2"
+CREATION_PAYLOAD_SCHEMA = "serverware.nativeEgressInstallationAuthorization/v2"
 PURPOSE = "native-egress-installation"
 WORKLOAD_PROFILE = "native-egress-create-new-workload-v1"
 RULESET_PROFILE = "nft-inet-output-tcp-create-v1"
@@ -42,6 +44,7 @@ _FIELDS = frozenset({
     "targetSpkiSha256", "proxy", "networkOwner", "machineIdSha256", "workload",
     "ruleset", "capability", "journal", "issuedAtEpochNs", "expiresAtEpochNs",
 })
+_CREATION_FIELDS = _FIELDS | {"creationJournal"}
 _DIGEST_FIELDS = (
     "setupSha256", "delegationSha256", "targetRequestSha256", "policyRequirementsSha256",
     "releaseRecordSha256", "policyHash", "configurationSha256",
@@ -179,8 +182,12 @@ def _proxy_rules(value, budget):
 
 
 def _payload(value, budget):
-    shared._object(value, _FIELDS)
-    if (value["schema"] != PAYLOAD_SCHEMA or value["sourceRevision"] != shared.authority.SOURCE_REVISION
+    if type(value) is not dict:
+        _fail()
+    creation = value.get("schema") == CREATION_PAYLOAD_SCHEMA
+    shared._object(value, _CREATION_FIELDS if creation else _FIELDS)
+    if (value["schema"] not in (PAYLOAD_SCHEMA, CREATION_PAYLOAD_SCHEMA)
+            or value["sourceRevision"] != shared.authority.SOURCE_REVISION
             or value["purpose"] != PURPOSE or value["trustMode"] != "trusted-host-local"):
         _fail()
     shared._identifier(value["authorizationId"])
@@ -222,6 +229,14 @@ def _payload(value, budget):
     assignment._digest(capability["capabilityTokenSha256"])
     expiry_ms = shared._integer(capability["expiresAtEpochMs"], bootstrap.MAX_EPOCH_MS, 1)
     _journal(value["journal"])
+    if creation:
+        _journal(value["creationJournal"])
+        kernel = value["journal"]
+        launch = value["creationJournal"]
+        if (launch["path"] == kernel["path"]
+                or (launch["device"], launch["inode"]) == (kernel["device"], kernel["inode"])
+                or launch["namespace"] == kernel["namespace"]):
+            _fail()
     issued = shared._integer(value["issuedAtEpochNs"], minimum=1)
     expires = shared._integer(value["expiresAtEpochNs"], minimum=issued + 1)
     if expires - issued > MAX_LIFETIME_NS or expires > expiry_ms * 1_000_000:
@@ -231,7 +246,15 @@ def _payload(value, budget):
 
 def _admit(original, public, root_pin, budget):
     _structure(original, budget)
-    payload = shared._signed(original, SCHEMA, PAYLOAD_SCHEMA, public, MAX_BYTES, budget)
+    outer = shared._decode(original, MAX_BYTES, budget)
+    shared._object(outer, {"schema", "payload", "signature"})
+    if outer["schema"] == SCHEMA:
+        schema, payload_schema = SCHEMA, PAYLOAD_SCHEMA
+    elif outer["schema"] == CREATION_SCHEMA:
+        schema, payload_schema = CREATION_SCHEMA, CREATION_PAYLOAD_SCHEMA
+    else:
+        _fail()
+    payload = shared._signed(original, schema, payload_schema, public, MAX_BYTES, budget)
     _payload(payload, budget)
     result = _EgressAuthorizationMaterial(
         authorization_bytes=original, authorization_digest=packets._digest(original, budget),
@@ -279,7 +302,9 @@ def _produce_on_work(*, payload_bytes, root_private_key_bytes, root_public_key_b
                     serialization.NoEncryption()) != root_private_key_bytes
                 or shared._spki(private.public_key(), budget) != shared._spki(public, budget)):
             _fail()
-        original = shared._produce(payload_bytes, SCHEMA, PAYLOAD_SCHEMA,
+        schema, payload_schema = ((CREATION_SCHEMA, CREATION_PAYLOAD_SCHEMA)
+            if payload["schema"] == CREATION_PAYLOAD_SCHEMA else (SCHEMA, PAYLOAD_SCHEMA))
+        original = shared._produce(payload_bytes, schema, payload_schema,
             private, public, MAX_BYTES, budget)
         admitted = _admit(original, public, expected_root_pem_sha256, budget)
         admitted.live()

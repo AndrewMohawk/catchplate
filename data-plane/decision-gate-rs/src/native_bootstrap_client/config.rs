@@ -32,6 +32,7 @@ struct Wire {
     expected_target_nonce: String,
     expected_target_request_sha256: String,
     installation: Option<super::install::Inputs>,
+    egress: Option<super::egress::Inputs>,
 }
 
 pub(super) struct Configuration {
@@ -53,6 +54,7 @@ pub(super) struct Configuration {
     pub(super) expected_target_nonce: String,
     pub(super) expected_target_request_sha256: String,
     pub(super) installation: Option<super::install::Inputs>,
+    pub(super) egress: Option<super::egress::Inputs>,
 }
 
 pub(super) fn artifact(value: &ArtifactV1) -> Result<(), String> {
@@ -92,13 +94,19 @@ impl Configuration {
     pub(super) fn parse_original(raw: &[u8]) -> Result<Self, String> {
         let original = json::parse(raw, MAX_CONFIGURATION_BYTES)?;
         let has_installation = original.get("installation").is_some();
+        let has_egress = original.get("egress").is_some();
         let wire: Wire = serde_json::from_value(original)
             .map_err(|_| "bootstrap client configuration violates its closed contract")?;
-        ensure(((wire.api_version == "serverware.nativeBootstrapClient/v1" && !has_installation)
-                || (wire.api_version == "serverware.nativeBootstrapClient/v2" && wire.installation.is_some()))
+        ensure(((wire.api_version == "serverware.nativeBootstrapClient/v1"
+                    && !has_installation && !has_egress)
+                || (wire.api_version == "serverware.nativeBootstrapClient/v2"
+                    && wire.installation.is_some() && !has_egress)
+                || (wire.api_version == "serverware.nativeBootstrapClient/v3"
+                    && wire.egress.is_some() && !has_installation))
             && (100..=30_000).contains(&wire.timeout_milliseconds),
             "bootstrap client profile or timeout differs")?;
         if let Some(inputs) = &wire.installation { inputs.validate()?; }
+        if let Some(inputs) = &wire.egress { inputs.validate()?; }
         for value in [&wire.startup_evidence, &wire.startup_expectations, &wire.session_scope,
             &wire.trust_roots, &wire.client_certificate, &wire.client_private_key,
             &wire.caller_issuer, &wire.delegation_authorizer, &wire.setup_authorizer, &wire.request]
@@ -130,6 +138,7 @@ impl Configuration {
             expected_target_nonce: wire.expected_target_nonce,
             expected_target_request_sha256: wire.expected_target_request_sha256,
             installation: wire.installation,
+            egress: wire.egress,
         })
     }
 }

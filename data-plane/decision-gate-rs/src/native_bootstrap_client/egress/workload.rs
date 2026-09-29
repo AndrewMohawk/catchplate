@@ -6,7 +6,7 @@
 //! Linux ABI references: linux/{sched,nsfs,sockios,wait}.h and man-pages
 //! clone(2), wait(2), PR_SET_PDEATHSIG(2const). Missing kernel support refuses.
 
-use super::authority::Authorization;
+use super::{authority::Authorization, creation_reservation::CreationPermit, PrecreationOwner};
 use super::super::{json, originals::{ArtifactV1, HeldOriginal}, OriginalClock};
 use serverware_decision_gate::native_response_profile_v1::canonical_ascii_bytes;
 use serde::{Deserialize, Serialize};
@@ -18,6 +18,7 @@ use std::io::{self, Read, Seek, SeekFrom};
 use std::os::fd::{AsRawFd, FromRawFd, RawFd};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 const PROFILE: &str = "native-egress-create-new-workload-v1";
@@ -312,7 +313,7 @@ pub(super) fn admit(authorization: &Authorization, manifest_pin: &ArtifactV1,
 }
 
 impl LaunchSpec {
-    fn check(&mut self, clock: &OriginalClock) -> Result<(), String> {
+    pub(super) fn check(&mut self, clock: &OriginalClock) -> Result<(), String> {
         require(self.clock == clock as *const OriginalClock as usize
             && source_process(clock)? == (self.pid, self.tid))?;
         self.proc.check(self.pid, self.tid, clock)?;
@@ -539,7 +540,7 @@ fn receive(gate: &File, clock: &OriginalClock) -> Result<(File, File), String> {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct WorkloadIdentity {
     pub(super) launcher_process_id: u32,
@@ -555,8 +556,10 @@ pub(super) struct WorkloadIdentity {
 }
 
 pub(super) struct WorkloadOwner {
-    spec: LaunchSpec,
+    // Cleanup runs before the durable permit and its original owner are dropped.
     child: Child,
+    permit: CreationPermit,
+    precreation: Arc<PrecreationOwner>,
     gate: File,
     gate_identity: Identity,
     namespace: File,
@@ -570,8 +573,15 @@ pub(super) struct WorkloadOwner {
 }
 
 impl WorkloadOwner {
-    pub(super) fn create(mut spec: LaunchSpec, clock: &OriginalClock) -> Result<Self, String> {
-        spec.check(clock)?;
+    pub(super) fn create(precreation: Arc<PrecreationOwner>, permit: CreationPermit,
+        clock: &OriginalClock) -> Result<Self, String> {
+        require(std::ptr::eq(Arc::as_ptr(&precreation.clock), clock))?;
+        permit.require_owner(&precreation)?;
+        permit.check()?;
+        let (parent_pid, parent_tid, host_identity) = {
+            let spec = precreation.launch.try_borrow().map_err(|_| "native launch original already borrowed")?;
+            (spec.pid, spec.tid, spec.host_identity)
+        };
         // This ABI profile is deliberately Linux 64-bit, with no emulation or
         // fallback to a numeric-PID/open-existing-namespace construction.
         require(cfg!(all(target_os = "linux", target_pointer_width = "64"))
@@ -586,10 +596,15 @@ impl WorkloadOwner {
         let args = CloneArgs { flags: (libc::CLONE_NEWNET | libc::CLONE_PIDFD) as u64,
             pidfd: (&mut pidfd as *mut i32) as u64, child_tid: 0, parent_tid: 0,
             exit_signal: libc::SIGCHLD as u64, stack: 0, stack_size: 0, tls: 0 };
+        // The exact non-forgeable, durably read-back permit is consumed by this
+        // owner and checked immediately before the sole child-creation syscall.
+        permit.require_owner(&precreation)?;
+        permit.check()?;
         let mut mask = SignalMask::block()?;
+        clock.check()?;
         let child_pid = unsafe { libc::syscall(libc::SYS_clone3, &args as *const CloneArgs,
             std::mem::size_of::<CloneArgs>()) };
-        if child_pid == 0 { unsafe { child_trampoline(child_gate.as_raw_fd(), spec.pid, spec.tid) } }
+        if child_pid == 0 { unsafe { child_trampoline(child_gate.as_raw_fd(), parent_pid, parent_tid) } }
         // Install pidfd-only cleanup before any fallible post-clone operation.
         if child_pid < 0 { mask.restore()?; return Err("native workload clone3 unavailable or refused".to_owned()); }
         let child = Child { pidfd: descriptor(pidfd).map_err(|_| "native workload clone3 pidfd absent; cleanup uncertain")?,
@@ -605,15 +620,15 @@ impl WorkloadOwner {
             require(unsafe { libc::poll(std::ptr::null_mut(), 0, remaining) } >= 0)?;
         }
         let ns_identity = namespace(&namespace_file, clock)?;
-        require((ns_identity.0, ns_identity.1) != (spec.host_identity.0, spec.host_identity.1))?;
+        require((ns_identity.0, ns_identity.1) != (host_identity.0, host_identity.1))?;
         let port = backend(&socket, ns_identity, clock)?;
         let socket_identity = identity(&metadata(&socket, clock)?);
         let pidfd_identity = identity(&metadata(&child.pidfd, clock)?);
-        let observed = WorkloadIdentity { launcher_process_id: spec.pid, launcher_thread_id: spec.tid as u32,
+        let observed = WorkloadIdentity { launcher_process_id: parent_pid, launcher_thread_id: parent_tid as u32,
             child_process_id: child.pid as u32, pidfd_device: pidfd_identity.0, pidfd_inode: pidfd_identity.1,
             namespace_device: ns_identity.0, namespace_inode: ns_identity.1,
             backend_socket_device: socket_identity.0, backend_socket_inode: socket_identity.1, backend_port_id: port };
-        let mut owner = Self { spec, child, gate, gate_identity, namespace: namespace_file,
+        let mut owner = Self { child, permit, precreation, gate, gate_identity, namespace: namespace_file,
             namespace_identity: ns_identity, socket, socket_identity, pidfd_identity, identity: observed,
             backend_duplicated: false, stopped: false };
         owner.check(clock)?;
@@ -622,7 +637,9 @@ impl WorkloadOwner {
 
     pub(super) fn check(&mut self, clock: &OriginalClock) -> Result<(), String> {
         require(!std::mem::replace(&mut self.stopped, true))?;
-        self.spec.check(clock)?;
+        require(std::ptr::eq(Arc::as_ptr(&self.precreation.clock), clock))?;
+        self.permit.require_owner(&self.precreation)?;
+        self.permit.check()?;
         require(self.child.stopped(clock)?
             && identity(&metadata(&self.child.pidfd, clock)?) == self.pidfd_identity
             && namespace(&self.namespace, clock)? == self.namespace_identity
@@ -636,6 +653,7 @@ impl WorkloadOwner {
             libc::MSG_PEEK | libc::MSG_DONTWAIT) };
         require(result < 0 && io::Error::last_os_error().kind() == io::ErrorKind::WouldBlock)?;
         require(self.child.stopped(clock)?)?;
+        self.permit.check()?;
         clock.check()?;
         self.stopped = false;
         Ok(())
@@ -643,6 +661,9 @@ impl WorkloadOwner {
 
     /// Observed association only; callers must retain and recheck this owner.
     pub(super) fn identity(&self) -> &WorkloadIdentity { &self.identity }
+
+    pub(super) fn creation_slot_sha256(&self) -> [u8; 32] { self.permit.slot_sha256() }
+    pub(super) fn creation_record_sha256(&self) -> [u8; 32] { self.permit.record_sha256() }
 
     /// Exactly one private backend obtains a checked CLOEXEC alias of the
     /// actual child-created socket. The original remains under this owner.

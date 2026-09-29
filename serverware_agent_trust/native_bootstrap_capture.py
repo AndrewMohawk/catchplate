@@ -26,9 +26,17 @@ _CAPTURE_FIELDS = frozenset({"apiVersion", "resultScope", "okForAction",
     "configurationSha256", "requestSha256", "endpoint", "challengeSource",
     "evidenceBase64url", "verification"})
 _CAPTURE_V2_FIELDS = _CAPTURE_FIELDS | {"installation"}
+_CAPTURE_V3_FIELDS = _CAPTURE_FIELDS | {"egress"}
 _INSTALLATION_FIELDS = frozenset({"apiVersion", "resultScope", "okForAction", "status",
     "authorizationSha256", "operationSha256", "reservationSha256", "setupSha256",
     "capabilityId", "runtimeCaCertificateSha256", "destinationPath"})
+_EGRESS_FIELDS = frozenset({"apiVersion", "resultScope", "okForAction", "status",
+    "authorizationSha256", "creationSlotSha256", "creationRecordSha256",
+    "kernelSemanticSha256", "kernelEvidenceSha256", "workload"})
+_WORKLOAD_U32_FIELDS = frozenset({"launcherProcessId", "launcherThreadId",
+    "childProcessId", "backendPortId"})
+_WORKLOAD_U64_FIELDS = frozenset({"pidfdDevice", "pidfdInode", "namespaceDevice",
+    "namespaceInode", "backendSocketDevice", "backendSocketInode"})
 _EVIDENCE_FIELDS = frozenset({"apiVersion", "evidenceScope", "okForAction",
     "packetBase64url", "ingressSessionEvidenceBase64url", "enrollmentSignatureBase64url",
     "enrollmentPublicKeyBase64url", "enrollmentQuoteBase64url"})
@@ -90,6 +98,35 @@ def _installation_data(value, budget):
     budget.check()
 
 
+def _egress_data(value, budget):
+    """Check data shape only; never infer kernel, workload or journal ownership."""
+    budget.check()
+    value = _object(value, _EGRESS_FIELDS)
+    if (value["apiVersion"] != "serverware.nativeEgressObservation/v1"
+            or value["resultScope"] != "local-authorized-egress-observed-before-owner-teardown"
+            or value["okForAction"] is not False
+            or value["status"] not in ("observed-created", "observed-complete")):
+        _fail()
+    for name in ("authorizationSha256", "creationSlotSha256", "creationRecordSha256",
+            "kernelSemanticSha256", "kernelEvidenceSha256"):
+        if type(value[name]) is not str or _DIGEST.fullmatch(value[name]) is None:
+            _fail()
+    workload = _object(value["workload"], _WORKLOAD_U32_FIELDS | _WORKLOAD_U64_FIELDS)
+    for names, maximum in ((_WORKLOAD_U32_FIELDS, (1 << 32) - 1),
+            (_WORKLOAD_U64_FIELDS, (1 << 64) - 1)):
+        for name in names:
+            # In particular, bool is not an integer and large inode values are
+            # never converted through floating point or truncated to JS width.
+            if type(workload[name]) is not int or not 0 <= workload[name] <= maximum:
+                _fail()
+    raw = json.dumps(value, sort_keys=True, separators=(",", ":"),
+        ensure_ascii=False, allow_nan=False).encode("utf-8")
+    if not 1 <= len(raw) <= 8191:
+        _fail()
+    packets._charge(budget, input_bytes=len(raw))
+    budget.check()
+
+
 def _packet_on_budget(capture_bytes, target_request_bytes, budget):
     """Return unverified data only; this function never returns a verdict."""
     budget.check()
@@ -113,6 +150,10 @@ def _packet_on_budget(capture_bytes, target_request_bytes, budget):
         value = _object(value, _CAPTURE_V2_FIELDS)
         expected_scope = "local-fixed-endpoint-bootstrap-and-host-installation"
         _installation_data(value["installation"], budget)
+    elif value.get("apiVersion") == "serverware.nativeBootstrapClientCapture/v3":
+        value = _object(value, _CAPTURE_V3_FIELDS)
+        expected_scope = "local-fixed-endpoint-bootstrap-and-egress-observation"
+        _egress_data(value["egress"], budget)
     else:
         _fail()
     if (value["resultScope"] != expected_scope or value["okForAction"] is not False

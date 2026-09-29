@@ -361,7 +361,7 @@ impl<'a> Backend<'a> {
 
     pub(super) fn dump(&mut self, kind: DumpKind, table: &str) -> Result<ReplyOriginals, String> {
         self.begin()?;
-        require(table == self.guard.authorization.ruleset.table_name)?;
+        require(table == self.guard.precreation.authorization.ruleset.table_name)?;
         let sequence = self.sequence()?;
         let request = wire::dump_request(kind, table, self.port_id, sequence)?;
         let originals = self.query(sequence, request, Some(kind))?;
@@ -372,7 +372,7 @@ impl<'a> Backend<'a> {
     pub(super) fn transaction(&mut self, ruleset: &Ruleset, generation: u32) -> Result<Transaction, String> {
         self.begin()?;
         require(self.prepared.is_none() && !self.attempted_mutation
-            && std::ptr::eq(ruleset, &self.guard.authorization.ruleset))?;
+            && std::ptr::eq(ruleset, &self.guard.precreation.authorization.ruleset))?;
         let first_sequence = self.next_sequence;
         let transaction = Transaction::build(ruleset, generation, self.port_id, first_sequence)?;
         let last_sequence = transaction.last_sequence();

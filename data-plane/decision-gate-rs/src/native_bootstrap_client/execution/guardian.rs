@@ -117,10 +117,12 @@ pub(super) struct Guardian {
 pub(super) struct GuardianObservation {
     observed: u64,
     kill_acknowledged: bool,
+    original: [u8; process::FRAME_BYTES],
 }
 impl GuardianObservation {
     pub(super) fn observed_boottime_ns(&self) -> u64 { self.observed }
     pub(super) fn kill_acknowledged(&self) -> bool { self.kill_acknowledged }
+    pub(super) fn original(&self) -> &[u8] { &self.original }
 }
 
 impl Guardian {
@@ -273,6 +275,11 @@ impl Guardian {
     }
 
     fn receive(&self, kind: u8, deadline: u64) -> Result<(u8, u64), String> {
+        self.receive_original(kind, deadline).map(|(flags, observed, _)| (flags, observed))
+    }
+
+    fn receive_original(&self, kind: u8, deadline: u64)
+        -> Result<(u8, u64, [u8; process::FRAME_BYTES]), String> {
         let mut previous = now()?;
         loop {
             require(previous < deadline, "native guardian response missed its absolute deadline")?;
@@ -286,7 +293,7 @@ impl Guardian {
                 let observed = now()?;
                 require(observed >= previous && observed < deadline && value.1 <= observed,
                     "native guardian response clock changed or deadline ended")?;
-                return Ok(value);
+                return Ok((value.0, value.1, raw));
             }
             require(std::io::Error::last_os_error().raw_os_error() == Some(libc::EAGAIN),
                 "native guardian channel receive failed")?;
@@ -322,7 +329,7 @@ impl Guardian {
         self.cancel();
         require(!self.finish_attempted.replace(true), "native guardian finish was already consumed")?;
         self.check_process()?;
-        let (flags, observed) = self.receive(2, self.cleanup)?;
+        let (flags, observed, original) = self.receive_original(2, self.cleanup)?;
         require(flags & 2 != 0 && observed < self.cleanup,
             "native guardian did not observe its leaf empty within the original bound")?;
         while !self.reap()? {
@@ -335,7 +342,7 @@ impl Guardian {
                 "native guardian exact reap poll failed")?;
         }
         require(now()? < self.cleanup, "native guardian closing observation missed cleanup bound")?;
-        Ok(GuardianObservation { observed, kill_acknowledged: flags & 1 != 0 })
+        Ok(GuardianObservation { observed, kill_acknowledged: flags & 1 != 0, original })
     }
 }
 

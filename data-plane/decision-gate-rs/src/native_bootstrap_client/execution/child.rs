@@ -487,7 +487,15 @@ impl BlockedChild {
         leaf_kill?;
         let (code, status) = leader?;
         let empty = empty?;
-        Ok(ChildCleanup { code, status, empty })
+        // Serialize selected initialized waitid results and actual retained
+        // pidfd identity, never padding from a raw siginfo_t or caller status.
+        let original = serverware_decision_gate::native_response_profile_v1::canonical_ascii_bytes(
+            &serde_json::json!({"apiVersion":"serverware.nativeLeaderReapOriginal/v1",
+                "operationSha256":format!("sha256:{}", self.operation_sha256().iter()
+                    .map(|byte| format!("{byte:02x}")).collect::<String>()),
+                "leaderPid":self.leader.pid, "pidfdDevice":self.leader.identity.device,
+                "pidfdInode":self.leader.identity.inode, "code":code, "status":status}))?;
+        Ok(ChildCleanup { code, status, empty, original })
     }
 
     pub(super) fn retirement_requested(&self) -> bool {
@@ -497,6 +505,15 @@ impl BlockedChild {
 
     pub(super) fn operation_sha256(&self) -> [u8; 32] { self.containment.owner().operation_sha256() }
     pub(super) fn cleanup_boottime_ns(&self) -> u64 { self.containment.owner().cleanup_boottime_ns() }
+    pub(super) fn outcome_requested(&self) -> bool {
+        self.containment.owner().constraints().journal.outcome_profile.as_deref()
+            == Some(super::start_authority::OUTCOME_PROFILE)
+    }
+    pub(super) fn outcome_permit(&self) -> Result<&super::start_reservation::StartPermit, String> {
+        require(self.leader.reaped.get() && self.network.is_none() && self.namespaces.is_empty(),
+            "native outcome retains a live child or child network pins")?;
+        self.containment.outcome_permit()
+    }
 
     /// Requires exclusive access: no live PreparedNetwork/NetworkReady borrow
     /// can coexist. Guardian completion is checked by the owning composition.
@@ -562,12 +579,13 @@ impl GuardianBorrow<'_> {
 /// Private, data-only positive observation. No serializable object grants start rights.
 struct ExecAcknowledgement { operation: [u8; 32], observed_boottime_ns: u64 }
 
-pub(super) struct ChildCleanup { code: i32, status: i32, empty: LeafEmpty }
+pub(super) struct ChildCleanup { code: i32, status: i32, empty: LeafEmpty, original: Vec<u8> }
 impl ChildCleanup {
     pub(super) fn leader_reaped(&self) -> bool { true }
     pub(super) fn leader_status(&self) -> i32 { self.status }
     pub(super) fn leader_code(&self) -> i32 { self.code }
     pub(super) fn leaf_empty(&self) -> &LeafEmpty { &self.empty }
+    pub(super) fn original(&self) -> &[u8] { &self.original }
 }
 
 /// Non-Clone sealed reference to this exact executable child. It never accepts

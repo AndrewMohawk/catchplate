@@ -44,7 +44,7 @@ pub(in super::super::super) struct HostRetirement {
     links: RetirementLinks, operation: [u8; 32], child_namespace: (u64, u64),
     plan_sha256: [u8; 32], host_index: u32, next_sequence: u32,
     deadline: u64, pid: u32, thread: libc::c_long,
-    transcript: Vec<u8>, messages: usize, queries: u32, attempted: bool,
+    transcript: Vec<u8>, messages: usize, queries: u32, attempted: bool, completed: bool,
 }
 
 impl AttachmentBackend<'_, '_> {
@@ -73,7 +73,7 @@ impl AttachmentBackend<'_, '_> {
             host_index: plan.host_index(), next_sequence: first_sequence,
             deadline: child.cleanup_boottime_ns(), pid: std::process::id(),
             thread: unsafe { libc::syscall(libc::SYS_gettid) },
-            transcript, messages: 0, queries: 0, attempted: false };
+            transcript, messages: 0, queries: 0, attempted: false, completed: false };
         owner.check()?;
         self.current()?; child.check()?;
         Ok(owner)
@@ -81,6 +81,12 @@ impl AttachmentBackend<'_, '_> {
 }
 
 impl HostRetirement {
+    pub(in super::super::super) fn completed_original(&self, operation: [u8; 32]) -> Result<&[u8], String> {
+        require(self.completed && self.operation == operation,
+            "native outcome lacks its actual completed host retirement")?;
+        // Historical original only: no new dump, renewed deadline or permission.
+        Ok(&self.transcript)
+    }
     fn check(&self) -> Result<(), String> {
         require(self.pid == std::process::id() && self.thread > 0
             && self.thread == unsafe { libc::syscall(libc::SYS_gettid) }
@@ -220,6 +226,7 @@ impl HostRetirement {
                 let authority = self.parents.attachment_pending().authorization();
                 let observed = now()?;
                 require(observed < self.deadline, "cleanup host absence deadline missed")?;
+                self.completed = true;
                 return Ok(HostVethAbsence { namespace_device: self.host.namespace_identity.0,
                     namespace_inode: self.host.namespace_identity.1, ifindex: self.host_index,
                     name: authority.attachment.host_veth_name.clone(), bridge_ifindex: authority.bridge.ifindex,

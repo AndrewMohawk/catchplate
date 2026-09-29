@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-execution-outcome-lookup-result.v1.schema.json",
+  "title": "Read-only protected native outcome observation",
+  "description": "Closed ten-field JSON line including LF at most 32768 bytes. no-claim requires all three exact names absent; an existing valid claim is consumed even without an outcome. Malformed/foreign/oversized/inconsistent records are refused, never no-claim. committed-outcome-observed means exact protected originals and a matching completion marker were read now: not historical fsync acknowledgement, current kernel state, application/provider success or any new action permission. Noncommitted outcomes are null and never permit retry.",
+  "type": "object", "additionalProperties": false,
+  "required": ["apiVersion", "resultScope", "configurationSha256", "slotSha256", "expectedOperationSha256", "status", "outcomeSha256", "outcome", "actionAuthorization", "okForAction"],
+  "properties": {
+    "apiVersion": {"const": "serverware.nativeExecutionOutcomeLookupResult/v1"},
+    "resultScope": {"const": "local-protected-native-outcome-observation"},
+    "configurationSha256": {"$ref": "native-workload-start-authorization.v2.schema.json#/$defs/digest"},
+    "slotSha256": {"$ref": "native-workload-start-authorization.v2.schema.json#/$defs/digest"},
+    "expectedOperationSha256": {"$ref": "native-workload-start-authorization.v2.schema.json#/$defs/digest"},
+    "status": {"enum": ["no-claim", "consumed-outcome-unknown", "committed-outcome-observed"]},
+    "outcomeSha256": {"oneOf": [{"type": "null"}, {"$ref": "native-workload-start-authorization.v2.schema.json#/$defs/digest"}]},
+    "outcome": {"oneOf": [{"type": "null"}, {"$ref": "native-execution-observation.v2.schema.json"}]},
+    "actionAuthorization": {"type": "null"}, "okForAction": {"const": false}
+  },
+  "allOf": [{
+    "if": {"properties": {"status": {"const": "committed-outcome-observed"}}},
+    "then": {"properties": {"outcomeSha256": {"type": "string"}, "outcome": {"type": "object"}}},
+    "else": {"properties": {"outcomeSha256": {"type": "null"}, "outcome": {"type": "null"}}}
+  }]
+}

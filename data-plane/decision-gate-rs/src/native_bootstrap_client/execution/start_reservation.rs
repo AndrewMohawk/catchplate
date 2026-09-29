@@ -1,6 +1,11 @@
 //! Irreversible start claim retained with the separate genuine creation claim.
 //! No resume, repair, deletion, completion replay or second-attempt interface.
 
+#[path = "outcome.rs"]
+pub(super) mod outcome;
+#[path = "outcome_record.rs"]
+mod outcome_record;
+
 use super::{parent::DirectoryChain, start::StartOwner};
 use super::super::{egress::ExecutionCreationPermit, ensure};
 use sha2::{Digest, Sha256};
@@ -81,6 +86,9 @@ impl Journal {
     }
 
     fn inventory(&self) -> Result<(), String> {
+        if self.owner.constraints().journal.outcome_profile.as_deref() == Some(super::start_authority::OUTCOME_PROFILE) {
+            return outcome::inventory(self);
+        }
         self.check_admission()?;
         let raw = unsafe { libc::openat(self.directory.fd().as_raw_fd(), b".\0".as_ptr().cast(),
             libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK) };
@@ -162,6 +170,8 @@ pub(super) struct StartPermit {
     identity: FileIdentity,
     journal: Journal,
     stopped: Cell<bool>,
+    outcome_attempted: Cell<bool>,
+    outcome_boottime: Cell<u64>,
 }
 
 impl StartPermit {
@@ -215,7 +225,8 @@ pub(super) fn claim(owner: Arc<StartOwner>) -> Result<StartPermit, String> {
     // burned. Neither failure permits a cgroup or child creation attempt.
     let creation = journal.owner.parents().claim_creation()?;
     journal.check_admission()?;
-    let permit = StartPermit { creation, record, identity, journal, stopped: Cell::new(false) };
+    let permit = StartPermit { creation, record, identity, journal, stopped: Cell::new(false),
+        outcome_attempted: Cell::new(false), outcome_boottime: Cell::new(0) };
     permit.require_owner(&permit.journal.owner)?;
     Ok(permit)
 }

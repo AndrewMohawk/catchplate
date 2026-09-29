@@ -143,8 +143,10 @@ impl OriginalClock {
     }
 }
 
-fn arguments() -> Result<ArtifactV1, String> {
-    let mut arguments = std::env::args_os().skip(1);
+fn arguments() -> Result<(ArtifactV1, bool), String> {
+    let mut arguments = std::env::args_os().skip(1).peekable();
+    let lookup = arguments.peek().is_some_and(|flag| flag.to_str() == Some("--inspect-native-outcome"));
+    if lookup { arguments.next(); }
     let mut path = None;
     let mut pin = None;
     for _ in 0..2 {
@@ -166,8 +168,8 @@ fn arguments() -> Result<ArtifactV1, String> {
         }
     }
     ensure(arguments.next().is_none(), "bootstrap client has extra arguments")?;
-    Ok(ArtifactV1 { path: path.ok_or("bootstrap client configuration path is absent")?,
-        sha256: pin.ok_or("bootstrap client configuration pin is absent")? })
+    Ok((ArtifactV1 { path: path.ok_or("bootstrap client configuration path is absent")?,
+        sha256: pin.ok_or("bootstrap client configuration pin is absent")? }, lookup))
 }
 
 fn read(artifact: ArtifactV1, maximum: usize, clock: &OriginalClock,
@@ -195,8 +197,10 @@ fn recheck(held: &mut [HeldOriginal], private: &mut HeldOriginal,
 
 pub(super) fn run() -> Result<(), String> {
     let clock = OriginalClock::start()?;
+    let (artifact, lookup) = arguments()?;
+    if lookup { return execution::lookup(artifact, &clock); }
     let mut held = Vec::new();
-    let configuration_raw = read(arguments()?, MAX_CONFIGURATION_BYTES, &clock, &mut held)?;
+    let configuration_raw = read(artifact, MAX_CONFIGURATION_BYTES, &clock, &mut held)?;
     let config = Configuration::parse_original(&configuration_raw)?;
     clock.limit(config.timeout)?;
     let startup = read(config.startup_evidence, 64 * 1024, &clock, &mut held)?;
@@ -229,8 +233,11 @@ pub(super) fn run() -> Result<(), String> {
     // Explicit v5/v6 selects execution before any network contact. V1-v4 cannot
     // obtain it by presenting newer signed bytes or a successful diagnostic.
     let retirement = config.retirement;
+    let outcome = config.outcome;
     let (execution, egress) = if let Some(inputs) = config.execution {
-        let start = if retirement {
+        let start = if outcome {
+            execution::PreparedStart::open_outcome(inputs, Arc::clone(&clock), installation.is_some())?
+        } else if retirement {
             execution::PreparedStart::open_retiring(inputs, Arc::clone(&clock), installation.is_some())?
         } else if installation.is_some() {
             execution::PreparedStart::open_with_trust(inputs, Arc::clone(&clock))?
@@ -270,10 +277,12 @@ pub(super) fn run() -> Result<(), String> {
             &config.expected_target_request_sha256, sent.delegation_original(),
             sent.setup_original(), sent.target_request_original())?;
         let mut capture = json!({
-            "apiVersion":if retirement { "serverware.nativeBootstrapClientCapture/v7" }
+            "apiVersion":if outcome { "serverware.nativeBootstrapClientCapture/v8" }
+                else if retirement { "serverware.nativeBootstrapClientCapture/v7" }
                 else if combined { "serverware.nativeBootstrapClientCapture/v6" }
                 else { "serverware.nativeBootstrapClientCapture/v5" },
-            "resultScope":if retirement { "local-fixed-endpoint-bootstrap-execution-retirement-observation" }
+            "resultScope":if outcome { "local-fixed-endpoint-bootstrap-execution-outcome-observation" }
+                else if retirement { "local-fixed-endpoint-bootstrap-execution-retirement-observation" }
                 else if combined { "local-fixed-endpoint-bootstrap-ca-and-execution-observation" }
                 else { "local-fixed-endpoint-bootstrap-and-execution-observation" },
             "okForAction":false,
@@ -286,8 +295,10 @@ pub(super) fn run() -> Result<(), String> {
             "execution":null,
         });
         if combined || retirement { capture["installation"] = serde_json::Value::Null; }
+        if outcome { capture["outcome"] = serde_json::Value::Null; }
         let provisional = serde_json::to_vec(&capture).map_err(|_| "encode execution capture reservation")?;
-        let reserved = if retirement { 32 * 1024 } else if combined { 24 * 1024 } else { 16 * 1024 };
+        let reserved = if outcome { 36 * 1024 } else if retirement { 32 * 1024 }
+            else if combined { 24 * 1024 } else { 16 * 1024 };
         ensure(!provisional.is_empty() && provisional.len() < MAX_CAPTURE_BYTES - reserved,
             "native execution capture cannot reserve its bounded terminal observation")?;
         recheck(&mut held, &mut private_original, &clock)?;
@@ -308,6 +319,13 @@ pub(super) fn run() -> Result<(), String> {
             <= if retirement { 24 * 1024 } else { 16 * 1024 },
             "native execution observation exceeds its reserved bound")?;
         capture["execution"] = observed;
+        if outcome {
+            let receipt = observation.outcome_receipt().ok_or("native durable outcome receipt absent")?;
+            let receipt = serde_json::to_value(receipt).map_err(|_| "encode native outcome receipt")?;
+            ensure(serde_json::to_vec(&receipt).map_err(|_| "measure native outcome receipt")?.len() <= 4096,
+                "native outcome receipt exceeds its reserved bound")?;
+            capture["outcome"] = receipt;
+        }
         let mut encoded = serde_json::to_vec(&capture).map_err(|_| "encode native execution capture")?;
         ensure(!encoded.is_empty() && encoded.len() < MAX_CAPTURE_BYTES
             && !encoded.contains(&b'\n') && !encoded.contains(&b'\r'),

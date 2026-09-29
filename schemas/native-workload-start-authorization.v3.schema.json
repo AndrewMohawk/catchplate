@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-workload-start-authorization.v3.schema.json",
+  "title": "Independent native start, retirement and durable terminal publication constraints v3",
+  "description": "Closed canonical sorted compact ASCII JSON without LF, at most 32768 original bytes, depth at most 6. Ed25519 signs payload schema ASCII plus NUL plus canonical payload. The cold caller explicitly selects v3; v1/v2 cannot obtain outcome permission by including fields or relabeling. Publication uses the same original signed cleanupBefore deadline, actual retained start/creation claims and terminal owners; neither source schema nor receipt supplies permission. No restart, archival, overwrite, repair or retry is authorized.",
+  "type": "object", "additionalProperties": false, "required": ["schema", "payload", "signature"],
+  "properties": {
+    "schema": {"const": "serverware.signedNativeWorkloadStartAuthorization/v3"},
+    "signature": {"$ref": "native-workload-start-authorization.v2.schema.json#/properties/signature"},
+    "payload": {"$ref": "#/$defs/payload"}
+  },
+  "$defs": {
+    "journal": {
+      "type": "object", "additionalProperties": false,
+      "required": ["path", "device", "inode", "namespace", "outcomeProfile"],
+      "properties": {
+        "path": {"$ref": "native-workload-start-authorization.v2.schema.json#/$defs/path"},
+        "device": {"$ref": "native-workload-start-authorization.v2.schema.json#/$defs/positiveU64"},
+        "inode": {"$ref": "native-workload-start-authorization.v2.schema.json#/$defs/positiveU64"},
+        "namespace": {"$ref": "native-workload-start-authorization.v2.schema.json#/$defs/identifier"},
+        "outcomeProfile": {"const": "durable-terminal-retirement-v1"}
+      },
+      "description": "Same protected root:root0700 directory and stable namespace/capability slot. V3 permits only source-fixed claim/outcome/complete names, at most 64 slots/192 records. Existing claims remain consumed; old claim bytes/domain are unchanged, not upgraded to permission. Journal identity/path separation from actual containment/network/CA journals remains mandatory."
+    },
+    "payload": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "sourceRevision", "purpose", "trustMode", "creationMode", "authorizationId", "egressAuthorizationSha256", "attachmentAuthorizationSha256", "launchManifestSha256", "executionManifestSha256", "launcherBinarySha256", "machineIdSha256", "networkOwner", "isolation", "resources", "containment", "capability", "journal", "issuedAtEpochNs", "startBeforeEpochNs", "stopAtEpochNs", "cleanupBeforeEpochNs"],
+      "properties": {
+        "schema": {"const": "serverware.nativeWorkloadStartAuthorization/v3"},
+        "sourceRevision": {"$ref": "native-workload-start-authorization.v2.schema.json#/$defs/payload/properties/sourceRevision"},
+        "purpose": {"const": "native-workload-start"}, "trustMode": {"const": "trusted-host-local"},
+        "creationMode": {"const": "new-execution-child-v1"},
+        "authorizationId": {"$ref": "native-workload-start-authorization.v2.schema.json#/$defs/identifier"},
+        "egressAuthorizationSha256": {"$ref": "native-workload-start-authorization.v2.schema.json#/$defs/digest"},
+        "attachmentAuthorizationSha256": {"$ref": "native-workload-start-authorization.v2.schema.json#/$defs/digest"},
+        "launchManifestSha256": {"$ref": "native-workload-start-authorization.v2.schema.json#/$defs/digest"},
+        "executionManifestSha256": {"$ref": "native-workload-start-authorization.v2.schema.json#/$defs/digest"},
+        "launcherBinarySha256": {"$ref": "native-workload-start-authorization.v2.schema.json#/$defs/digest"},
+        "machineIdSha256": {"$ref": "native-workload-start-authorization.v2.schema.json#/$defs/digest"},
+        "networkOwner": {"$ref": "native-workload-start-authorization.v2.schema.json#/$defs/host"},
+        "isolation": {"$ref": "native-workload-start-authorization.v2.schema.json#/$defs/isolation"},
+        "resources": {"$ref": "native-workload-start-authorization.v2.schema.json#/$defs/resources"},
+        "containment": {"$ref": "native-workload-start-authorization.v2.schema.json#/$defs/containment"},
+        "capability": {"$ref": "native-workload-start-authorization.v2.schema.json#/$defs/capability"},
+        "journal": {"$ref": "#/$defs/journal"},
+        "issuedAtEpochNs": {"$ref": "native-workload-start-authorization.v2.schema.json#/$defs/epochNs"},
+        "startBeforeEpochNs": {"$ref": "native-workload-start-authorization.v2.schema.json#/$defs/epochNs"},
+        "stopAtEpochNs": {"$ref": "native-workload-start-authorization.v2.schema.json#/$defs/epochNs"},
+        "cleanupBeforeEpochNs": {"$ref": "native-workload-start-authorization.v2.schema.json#/$defs/epochNs"}
+      },
+      "description": "All v2 cross-field, identity and original-clock joins remain mandatory: issued <= opening wall < startBefore; startBefore-issued <=300s; startBefore <= capability expiry; startBefore < stopAt <= startBefore+86400s; 100ms <= cleanupBefore-stopAt <=30s. Completion publication does not renew any bound."
+    }
+  }
+}

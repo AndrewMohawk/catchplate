@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-bootstrap-client.v8.schema.json",
+  "title": "Explicit native execution, retirement and durable outcome bootstrap client v8",
+  "description": "Closed independently pinned 22-field configuration, at most 16384 bytes. Explicit v8 requires independently signed start authorization v3 with journal.outcomeProfile durable-terminal-retirement-v1, separate genuine egress/start/optional CA owners, actual terminal cleanup and retirement, and write-once outcome publication before stdout. Installation must be present: null selects execution-only; an object selects the existing immutable in-image CA trust path. Old profiles are not widened. Schema acceptance grants no action or retry authority.",
+  "type": "object", "additionalProperties": false,
+  "required": ["apiVersion", "endpoint", "timeoutMilliseconds", "startupEvidence", "startupExpectations", "sessionScope", "trustRoots", "clientCertificate", "clientPrivateKey", "callerIssuer", "delegationAuthorizer", "setupAuthorizer", "request", "clientChallengeBase64url", "expectedCallerPrincipal", "expectedTargetPrincipal", "expectedTargetNonce", "expectedTargetRequestSha256", "installation", "egress", "attachment", "execution"],
+  "properties": {
+    "apiVersion": {"const": "serverware.nativeBootstrapClient/v8"},
+    "endpoint": {"$ref": "native-bootstrap-client.v7.schema.json#/properties/endpoint"},
+    "timeoutMilliseconds": {"$ref": "native-bootstrap-client.v7.schema.json#/properties/timeoutMilliseconds"},
+    "startupEvidence": {"$ref": "native-bootstrap-client.v7.schema.json#/properties/startupEvidence"},
+    "startupExpectations": {"$ref": "native-bootstrap-client.v7.schema.json#/properties/startupExpectations"},
+    "sessionScope": {"$ref": "native-bootstrap-client.v7.schema.json#/properties/sessionScope"},
+    "trustRoots": {"$ref": "native-bootstrap-client.v7.schema.json#/properties/trustRoots"},
+    "clientCertificate": {"$ref": "native-bootstrap-client.v7.schema.json#/properties/clientCertificate"},
+    "clientPrivateKey": {"$ref": "native-bootstrap-client.v7.schema.json#/properties/clientPrivateKey"},
+    "callerIssuer": {"$ref": "native-bootstrap-client.v7.schema.json#/properties/callerIssuer"},
+    "delegationAuthorizer": {"$ref": "native-bootstrap-client.v7.schema.json#/properties/delegationAuthorizer"},
+    "setupAuthorizer": {"$ref": "native-bootstrap-client.v7.schema.json#/properties/setupAuthorizer"},
+    "request": {"$ref": "native-bootstrap-client.v7.schema.json#/properties/request"},
+    "clientChallengeBase64url": {"$ref": "native-bootstrap-client.v7.schema.json#/properties/clientChallengeBase64url"},
+    "expectedCallerPrincipal": {"$ref": "native-bootstrap-client.v7.schema.json#/properties/expectedCallerPrincipal"},
+    "expectedTargetPrincipal": {"$ref": "native-bootstrap-client.v7.schema.json#/properties/expectedTargetPrincipal"},
+    "expectedTargetNonce": {"$ref": "native-bootstrap-client.v7.schema.json#/properties/expectedTargetNonce"},
+    "expectedTargetRequestSha256": {"$ref": "native-bootstrap-client.v7.schema.json#/properties/expectedTargetRequestSha256"},
+    "installation": {"$ref": "native-bootstrap-client.v7.schema.json#/properties/installation"},
+    "egress": {"$ref": "native-bootstrap-client.v7.schema.json#/properties/egress"},
+    "attachment": {"$ref": "native-bootstrap-client.v7.schema.json#/properties/attachment"},
+    "execution": {"$ref": "native-bootstrap-client.v5.schema.json#/properties/execution", "description": "Same four independently pinned original roles, but the cold v8 caller admits only nativeWorkloadStartAuthorization/v3. It never selects permission from a result or an incoming version. Manifest v1/v2 selection follows installation null/object exactly as v7."}
+  }
+}

@@ -16,6 +16,9 @@ pub(in super::super) const MAX_BYTES: usize = 32 * 1024;
 const SCHEMA: &str = "serverware.nativeWorkloadStartAuthorization/v1";
 const RETIREMENT_SCHEMA: &str = "serverware.nativeWorkloadStartAuthorization/v2";
 const RETIREMENT_ENVELOPE: &str = "serverware.signedNativeWorkloadStartAuthorization/v2";
+const OUTCOME_SCHEMA: &str = "serverware.nativeWorkloadStartAuthorization/v3";
+const OUTCOME_ENVELOPE: &str = "serverware.signedNativeWorkloadStartAuthorization/v3";
+pub(super) const OUTCOME_PROFILE: &str = "durable-terminal-retirement-v1";
 const ENVELOPE: &str = "serverware.signedNativeWorkloadStartAuthorization/v1";
 const SECOND: u64 = 1_000_000_000;
 const MAX_EPOCH_MS: u64 = 9_223_372_036_854;
@@ -85,6 +88,8 @@ pub(in super::super) struct Journal {
     pub(in super::super) device: u64,
     pub(in super::super) inode: u64,
     pub(in super::super) namespace: String,
+    #[serde(rename = "outcomeProfile")]
+    pub(in super::super) outcome_profile: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -180,8 +185,8 @@ fn structure(raw: &[u8], clock: &OriginalClock) -> Result<(), String> {
     clock.check()
 }
 
-fn validate(value: &Constraints, opening_wall: u64, retirement: bool) -> Result<(), String> {
-    let schema = if retirement { RETIREMENT_SCHEMA } else { SCHEMA };
+fn validate(value: &Constraints, opening_wall: u64, retirement: bool, outcome: bool) -> Result<(), String> {
+    let schema = if outcome { OUTCOME_SCHEMA } else if retirement { RETIREMENT_SCHEMA } else { SCHEMA };
     require(value.schema == schema
         && value.source_revision == crate::authority_source_revision_v1::SOURCE_REVISION
         && value.purpose == "native-workload-start" && value.trust_mode == "trusted-host-local"
@@ -227,6 +232,8 @@ fn validate(value: &Constraints, opening_wall: u64, retirement: bool) -> Result<
     require((1..=MAX_EPOCH_MS).contains(&capability.expires_at_epoch_ms))?;
     path(&value.journal.path)?;
     identifier(&value.journal.namespace, 128)?;
+    require(if outcome { retirement && value.journal.outcome_profile.as_deref() == Some(OUTCOME_PROFILE) }
+        else { value.journal.outcome_profile.is_none() })?;
     require(value.journal.device != 0 && value.journal.inode != 0
         && value.journal.path != containment.parent_path
         && (value.journal.device, value.journal.inode)
@@ -252,6 +259,16 @@ pub(in super::super) fn admit_constraints(raw: &[u8], root_pem: &[u8], root_pem_
 
 pub(in super::super) fn admit_constraints_profile(raw: &[u8], root_pem: &[u8], root_pem_sha: &str,
     clock: &OriginalClock, retirement: bool) -> Result<Authorization, String> {
+    admit_selected(raw, root_pem, root_pem_sha, clock, retirement, false)
+}
+
+pub(in super::super) fn admit_outcome_constraints(raw: &[u8], root_pem: &[u8], root_pem_sha: &str,
+    clock: &OriginalClock) -> Result<Authorization, String> {
+    admit_selected(raw, root_pem, root_pem_sha, clock, true, true)
+}
+
+fn admit_selected(raw: &[u8], root_pem: &[u8], root_pem_sha: &str,
+    clock: &OriginalClock, retirement: bool, outcome: bool) -> Result<Authorization, String> {
     clock.check()?;
     let (opening_wall, opening_boot) = sample()?;
     structure(raw, clock)?;
@@ -259,10 +276,14 @@ pub(in super::super) fn admit_constraints_profile(raw: &[u8], root_pem: &[u8], r
     require(canonical_ascii_bytes(&value)? == raw)?;
     let envelope: Envelope = serde_json::from_value(value)
         .map_err(|_| "native workload start envelope is not closed")?;
-    require(envelope.schema == (if retirement { RETIREMENT_ENVELOPE } else { ENVELOPE }))?;
+    require(envelope.schema == (if outcome { OUTCOME_ENVELOPE }
+        else if retirement { RETIREMENT_ENVELOPE } else { ENVELOPE }))?;
     let containment = envelope.payload.get("containment").and_then(serde_json::Value::as_object)
         .ok_or("native workload containment object absent")?;
     require(containment.contains_key("retirementProfile") == retirement)?;
+    let journal = envelope.payload.get("journal").and_then(Value::as_object)
+        .ok_or("native workload journal object absent")?;
+    require(journal.contains_key("outcomeProfile") == outcome)?;
     require(envelope.signature.len() == 94
         && envelope.signature.starts_with("ed25519:"))?;
     let signature = URL_SAFE_NO_PAD.decode(&envelope.signature[8..])
@@ -274,7 +295,7 @@ pub(in super::super) fn admit_constraints_profile(raw: &[u8], root_pem: &[u8], r
     let (root, root_key_id) = native_verifier::installation_authorizer(root_pem, root_pem_sha)?;
     clock.check()?;
     let canonical = canonical_ascii_bytes(&envelope.payload)?;
-    let schema = if retirement { RETIREMENT_SCHEMA } else { SCHEMA };
+    let schema = if outcome { OUTCOME_SCHEMA } else if retirement { RETIREMENT_SCHEMA } else { SCHEMA };
     let mut message = Vec::with_capacity(schema.len() + 1 + canonical.len());
     message.extend_from_slice(schema.as_bytes()); message.push(0); message.extend_from_slice(&canonical);
     root.verify_strict(&message, &Signature::from_slice(&signature)
@@ -283,7 +304,7 @@ pub(in super::super) fn admit_constraints_profile(raw: &[u8], root_pem: &[u8], r
     clock.check()?;
     let constraints: Constraints = serde_json::from_value(envelope.payload)
         .map_err(|_| "native workload start constraints are not closed")?;
-    validate(&constraints, opening_wall, retirement)?;
+    validate(&constraints, opening_wall, retirement, outcome)?;
     let stop_boottime_ns = opening_boot.checked_add(constraints.stop_at_epoch_ns - opening_wall)
         .ok_or("native workload stop deadline overflows")?;
     let cleanup_boottime_ns = opening_boot.checked_add(constraints.cleanup_before_epoch_ns - opening_wall)

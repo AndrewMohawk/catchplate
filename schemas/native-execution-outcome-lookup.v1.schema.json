@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-execution-outcome-lookup.v1.schema.json",
+  "title": "Independently pinned read-only native outcome lookup configuration",
+  "description": "Closed canonical sorted compact ASCII JSON without LF, at most 8192 bytes. Requires explicit --inspect-native-outcome CLI selection and independently pinned root-owned owner-only single-link original. Actual protected journal chain and root:root0700 directory identity are retained under a shared nonblocking flock. A separate at-most-five-second read-only allowance never renews a writer, contacts a provider, starts a child, issues cleanup or repairs history.",
+  "type": "object", "additionalProperties": false,
+  "required": ["apiVersion", "journal", "capabilityId", "expectedOperationSha256"],
+  "properties": {
+    "apiVersion": {"const": "serverware.nativeExecutionOutcomeLookup/v1"},
+    "journal": {"$ref": "native-workload-start-authorization.v2.schema.json#/$defs/journal"},
+    "capabilityId": {"$ref": "native-workload-start-authorization.v2.schema.json#/$defs/identifier"},
+    "expectedOperationSha256": {"$ref": "native-workload-start-authorization.v2.schema.json#/$defs/digest"}
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-bootstrap-client-capture.v8.schema.json",
+  "title": "Nonactionable native execution and durable terminal outcome capture v8",
+  "description": "Closed twelve-field local capture, one JSON line and LF at most 1572864 bytes. Execution v2 is at most 24576 bytes, nullable installation receipt at most 8191, and outcome receipt at most 4096. Actual producer publishes both bounded protected outcome originals and a completion marker with file/directory durability and exact named readbacks before stdout. Nonzero application exit still has a terminal record. A capture is not proof of those local effects, current state, permission or historical fsync; interrupted stdout is inspected with the separate read-only lookup, never a replay.",
+  "type": "object", "additionalProperties": false,
+  "required": ["apiVersion", "resultScope", "okForAction", "configurationSha256", "requestSha256", "endpoint", "challengeSource", "evidenceBase64url", "verification", "execution", "installation", "outcome"],
+  "properties": {
+    "apiVersion": {"const": "serverware.nativeBootstrapClientCapture/v8"},
+    "resultScope": {"const": "local-fixed-endpoint-bootstrap-execution-outcome-observation"},
+    "okForAction": {"const": false},
+    "configurationSha256": {"$ref": "native-bootstrap-client-capture.v7.schema.json#/properties/configurationSha256"},
+    "requestSha256": {"$ref": "native-bootstrap-client-capture.v7.schema.json#/properties/requestSha256"},
+    "endpoint": {"$ref": "native-bootstrap-client-capture.v7.schema.json#/properties/endpoint"},
+    "challengeSource": {"const": "independently-pinned"},
+    "evidenceBase64url": {"$ref": "native-bootstrap-client-capture.v7.schema.json#/properties/evidenceBase64url"},
+    "verification": {"$ref": "native-bootstrap-client-capture.v7.schema.json#/properties/verification"},
+    "execution": {"$ref": "native-execution-observation.v2.schema.json"},
+    "installation": {"$ref": "native-bootstrap-client-capture.v7.schema.json#/properties/installation"},
+    "outcome": {"$ref": "native-execution-outcome-receipt.v1.schema.json"}
+  }
+}

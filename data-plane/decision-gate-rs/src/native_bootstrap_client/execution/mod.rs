@@ -21,6 +21,7 @@ mod guarded;
 mod lifecycle;
 pub(super) use start::{Inputs, PreparedStart};
 pub(super) use lifecycle::execute;
+pub(super) use start_reservation::outcome::lookup;
 #[path = "../egress/child_network_policy.rs"]
 mod child_network_policy;
 // Reuse actual host observation, never CA-install permission or its journal.

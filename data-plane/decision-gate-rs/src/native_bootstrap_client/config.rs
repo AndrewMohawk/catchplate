@@ -60,6 +60,7 @@ pub(super) struct Configuration {
     pub(super) attachment: Option<super::egress::attachment::Inputs>,
     pub(super) execution: Option<super::execution::Inputs>,
     pub(super) retirement: bool,
+    pub(super) outcome: bool,
 }
 
 pub(super) fn artifact(value: &ArtifactV1) -> Result<(), String> {
@@ -118,7 +119,8 @@ impl Configuration {
                 || (wire.api_version == "serverware.nativeBootstrapClient/v6"
                     && wire.egress.is_some() && wire.attachment.is_some() && wire.execution.is_some()
                     && wire.installation.is_some())
-                || (wire.api_version == "serverware.nativeBootstrapClient/v7"
+                || (matches!(wire.api_version.as_str(), "serverware.nativeBootstrapClient/v7"
+                        | "serverware.nativeBootstrapClient/v8")
                     && wire.egress.is_some() && wire.attachment.is_some() && wire.execution.is_some()
                     && has_installation))
             && (100..=30_000).contains(&wire.timeout_milliseconds),
@@ -161,7 +163,9 @@ impl Configuration {
             egress: wire.egress,
             attachment: wire.attachment,
             execution: wire.execution,
-            retirement: wire.api_version == "serverware.nativeBootstrapClient/v7",
+            retirement: matches!(wire.api_version.as_str(), "serverware.nativeBootstrapClient/v7"
+                | "serverware.nativeBootstrapClient/v8"),
+            outcome: wire.api_version == "serverware.nativeBootstrapClient/v8",
         })
     }
 }

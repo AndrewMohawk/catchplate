@@ -3775,6 +3775,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/native_bootstrap_client/execution/start.rs \
 				data-plane/decision-gate-rs/src/native_bootstrap_client/execution/parent.rs \
 				data-plane/decision-gate-rs/src/native_bootstrap_client/execution/start_reservation.rs \
+				data-plane/decision-gate-rs/src/native_bootstrap_client/execution/outcome.rs \
+				data-plane/decision-gate-rs/src/native_bootstrap_client/execution/outcome_record.rs \
 				data-plane/decision-gate-rs/src/native_bootstrap_client/execution/containment.rs \
 				data-plane/decision-gate-rs/src/native_bootstrap_client/execution/child.rs \
 				data-plane/decision-gate-rs/src/native_bootstrap_client/execution/child_network.rs \
@@ -3868,6 +3870,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-bootstrap-client.v5.schema.json \
 				schemas/native-bootstrap-client.v6.schema.json \
 				schemas/native-bootstrap-client.v7.schema.json \
+				schemas/native-bootstrap-client.v8.schema.json \
 				schemas/native-bootstrap-client-capture.v1.schema.json \
 				schemas/native-bootstrap-client-capture.v2.schema.json \
 				schemas/native-bootstrap-client-capture.v3.schema.json \
@@ -3875,9 +3878,13 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-bootstrap-client-capture.v5.schema.json \
 				schemas/native-bootstrap-client-capture.v6.schema.json \
 				schemas/native-bootstrap-client-capture.v7.schema.json \
+				schemas/native-bootstrap-client-capture.v8.schema.json \
 				schemas/native-execution-observation.v1.schema.json \
 				schemas/native-execution-observation.v2.schema.json \
 				schemas/native-execution-retirement-observation.v1.schema.json \
+				schemas/native-execution-outcome-receipt.v1.schema.json \
+				schemas/native-execution-outcome-lookup.v1.schema.json \
+				schemas/native-execution-outcome-lookup-result.v1.schema.json \
 				schemas/native-ca-installation-authorization.v1.schema.json \
 				schemas/native-egress-installation-authorization.v1.schema.json \
 				schemas/native-egress-installation-authorization.v2.schema.json \
@@ -3894,6 +3901,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-execution-manifest.v2.schema.json \
 				schemas/native-workload-start-authorization.v1.schema.json \
 				schemas/native-workload-start-authorization.v2.schema.json \
+				schemas/native-workload-start-authorization.v3.schema.json \
 				schemas/control-plane-publication-approval.v1.schema.json \
 				schemas/control-plane-policy-file-publication.v1.schema.json \
 				schemas/oauth-application-enrollment.v1.schema.json \

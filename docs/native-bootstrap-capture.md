@@ -5,10 +5,10 @@ evidence plus a diagnostic. The issuance API instead consumes the exact native
 packet within that evidence. `native_bootstrap_capture.extract_packet` connects
 these representations without promoting the diagnostic to authority.
 
-The extractor explicitly accepts seven closed
+The extractor explicitly accepts eight closed
 `serverware.nativeBootstrapClientCapture` profiles. Each retains the same nine
 base fields and permits only the children shown here, never additional fields.
-Only v7 explicitly permits a null installation child:
+Only v7/v8 explicitly permit a null installation child:
 
 | Version | Required children | Total fields |
 | --- | --- | --- |
@@ -19,6 +19,14 @@ Only v7 explicitly permits a null installation child:
 | v5 | `execution` | 10 |
 | v6 | `execution`, `installation` | 11 |
 | v7 | `execution` v2, `installation` (receipt or null) | 11 |
+| v8 | `execution` v2, `installation` (receipt or null), `outcome` | 12 |
+
+V8 adds the [durable terminal outcome](native-execution-outcomes.md) receipt.
+The decoder checks its exact nine fields, nonzero hashes, matching execution
+operation and recorded BOOTTIME within the original retirement/cleanup interval.
+It does not consult the journal, verify historical fsync or grant permission.
+The actual producer publishes before stdout; the separate protected read-only
+lookup handles lost output without replaying execution or retirement.
 
 These clients can preserve their original
 evidence for later native identity submission without another bootstrap attempt.

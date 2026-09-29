@@ -64,19 +64,25 @@ fn digest_text(raw: &[u8]) -> String { format!("sha256:{:x}", Sha256::digest(raw
 
 impl PreparedStart {
     pub(in super::super) fn open(inputs: Inputs, clock: Arc<OriginalClock>) -> Result<Self, String> {
-        Self::open_profile(inputs, clock, false, false)
+        Self::open_profile(inputs, clock, false, false, false)
     }
 
     pub(in super::super) fn open_with_trust(inputs: Inputs, clock: Arc<OriginalClock>) -> Result<Self, String> {
-        Self::open_profile(inputs, clock, true, false)
+        Self::open_profile(inputs, clock, true, false, false)
     }
 
     pub(in super::super) fn open_retiring(inputs: Inputs, clock: Arc<OriginalClock>, combined_trust: bool)
         -> Result<Self, String> {
-        Self::open_profile(inputs, clock, combined_trust, true)
+        Self::open_profile(inputs, clock, combined_trust, true, false)
     }
 
-    fn open_profile(inputs: Inputs, clock: Arc<OriginalClock>, combined_trust: bool, retirement: bool) -> Result<Self, String> {
+    pub(in super::super) fn open_outcome(inputs: Inputs, clock: Arc<OriginalClock>, combined_trust: bool)
+        -> Result<Self, String> {
+        Self::open_profile(inputs, clock, combined_trust, true, true)
+    }
+
+    fn open_profile(inputs: Inputs, clock: Arc<OriginalClock>, combined_trust: bool, retirement: bool,
+        outcome: bool) -> Result<Self, String> {
         clock.check()?;
         inputs.validate()?;
         ensure(unsafe { libc::getuid() } == 0 && unsafe { libc::geteuid() } == 0
@@ -90,7 +96,9 @@ impl PreparedStart {
         let root = super::super::read(inputs.authority_root, 16 * 1024, &clock, &mut originals)?;
         let original = super::super::read(inputs.authority,
             start_authority::MAX_BYTES, &clock, &mut originals)?;
-        let authorization = if retirement {
+        let authorization = if outcome {
+            start_authority::admit_outcome_constraints(&original, &root, &root_pin, &clock)?
+        } else if retirement {
             start_authority::admit_constraints_profile(&original, &root, &root_pin, &clock, true)?
         } else { start_authority::admit_constraints(&original, &root, &root_pin, &clock)? };
         let constraints = &authorization.constraints;
@@ -238,6 +246,22 @@ impl StartOwner {
             && unsafe { libc::getuid() } == 0 && unsafe { libc::geteuid() } == 0
             && unsafe { libc::getgid() } == 0 && unsafe { libc::getegid() } == 0,
             "native start retained claim crossed process/thread/privilege boundary")
+    }
+
+    /// Recheck the exact already admitted start authority/root/token originals
+    /// for its distinct terminal-publication purpose. This does not resurrect
+    /// preparation, proof, CA installation or executable-resource authority.
+    pub(super) fn check_outcome_originals(&self) -> Result<(), String> {
+        self.check_cleanup_scope()?;
+        ensure(self.constraints().journal.outcome_profile.as_deref() == Some(start_authority::OUTCOME_PROFILE),
+            "native start lacks terminal-publication purpose")?;
+        for original in self.prepared.originals.try_borrow_mut()
+            .map_err(|_| "native outcome start originals already borrowed")?.iter_mut() {
+            original.recheck()?;
+        }
+        let mut token = self.prepared.token.try_borrow_mut().map_err(|_| "native outcome token already borrowed")?;
+        token.require_private()?; token.recheck()?; token.require_private()?;
+        self.check_cleanup_scope()
     }
 
     pub(super) fn containment_parent(&self) -> BorrowedFd<'_> { self.parent.fd() }

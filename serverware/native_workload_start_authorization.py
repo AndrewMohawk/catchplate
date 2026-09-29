@@ -25,6 +25,9 @@ RETIREMENT_SCHEMA = "serverware.signedNativeWorkloadStartAuthorization/v2"
 RETIREMENT_PAYLOAD_SCHEMA = "serverware.nativeWorkloadStartAuthorization/v2"
 START_PROFILE = "native-workload-start-v1"
 RETIREMENT_PROFILE = "native-workload-start-retirement-v2"
+OUTCOME_PROFILE = "native-workload-start-outcome-v3"
+OUTCOME_SCHEMA = "serverware.signedNativeWorkloadStartAuthorization/v3"
+OUTCOME_PAYLOAD_SCHEMA = "serverware.nativeWorkloadStartAuthorization/v3"
 MAX_BYTES = 32 * 1024
 MAX_KEY_BYTES = 16 * 1024
 MAX_U64 = (1 << 64) - 1
@@ -76,9 +79,11 @@ def _profile(requested_profile):
     if type(requested_profile) is not str:
         _fail()
     if requested_profile == START_PROFILE:
-        return SCHEMA, PAYLOAD_SCHEMA, False
+        return SCHEMA, PAYLOAD_SCHEMA, False, False
     if requested_profile == RETIREMENT_PROFILE:
-        return RETIREMENT_SCHEMA, RETIREMENT_PAYLOAD_SCHEMA, True
+        return RETIREMENT_SCHEMA, RETIREMENT_PAYLOAD_SCHEMA, True, False
+    if requested_profile == OUTCOME_PROFILE:
+        return OUTCOME_SCHEMA, OUTCOME_PAYLOAD_SCHEMA, True, True
     _fail()
 
 
@@ -127,7 +132,7 @@ def _resources(value):
         shared._integer(value[field], maximum, minimum)
 
 
-def _containment(value, journal, retirement):
+def _containment(value, journal, retirement, outcome):
     shared._object(value, _CONTAINMENT_FIELDS | {"retirementProfile"}
         if retirement else _CONTAINMENT_FIELDS)
     if (value["profile"] != "cgroup-v2-new-leaf-kill-v1"
@@ -139,7 +144,10 @@ def _containment(value, journal, retirement):
         shared._integer(value[field], MAX_U64, 1)
     if type(value["childName"]) is not str or _CHILD_NAME.fullmatch(value["childName"]) is None:
         _fail()
-    shared._object(journal, {"path", "device", "inode", "namespace"})
+    shared._object(journal, {"path", "device", "inode", "namespace", "outcomeProfile"}
+        if outcome else {"path", "device", "inode", "namespace"})
+    if outcome and journal["outcomeProfile"] != "durable-terminal-retirement-v1":
+        _fail()
     _path(journal["path"])
     shared._identifier(journal["namespace"])
     for field in ("device", "inode"):
@@ -150,7 +158,7 @@ def _containment(value, journal, retirement):
 
 
 def _payload(value, budget, requested_profile):
-    _, payload_schema, retirement = _profile(requested_profile)
+    _, payload_schema, retirement, outcome = _profile(requested_profile)
     shared._object(value, _FIELDS)
     if (value["schema"] != payload_schema
             or value["sourceRevision"] != shared.authority.SOURCE_REVISION
@@ -167,7 +175,7 @@ def _payload(value, budget, requested_profile):
     _host(value["networkOwner"])
     _isolation(value["isolation"])
     _resources(value["resources"])
-    _containment(value["containment"], value["journal"], retirement)
+    _containment(value["containment"], value["journal"], retirement, outcome)
     capability = shared._object(value["capability"],
         {"capabilityId", "capabilityTokenSha256", "expiresAtEpochMs"})
     shared._identifier(capability["capabilityId"])
@@ -186,7 +194,7 @@ def _payload(value, budget, requested_profile):
 
 
 def _admit(original, public, root_pin, budget, requested_profile):
-    schema, payload_schema, _ = _profile(requested_profile)
+    schema, payload_schema, _, _ = _profile(requested_profile)
     egress._structure(original, budget)
     payload = shared._signed(original, schema, payload_schema, public, MAX_BYTES, budget)
     _payload(payload, budget, requested_profile)
@@ -224,7 +232,7 @@ def _produce_on_work(*, payload_bytes, root_private_key_bytes, root_public_key_b
         requested_profile=START_PROFILE, _current=None, _additional_original_bytes=0):
     """Sign supplied canonical PKCS8 originals; no key generation, file or effect."""
     try:
-        schema, payload_schema, _ = _profile(requested_profile)
+        schema, payload_schema, _, _ = _profile(requested_profile)
         egress._preflight(((payload_bytes, MAX_BYTES), (root_private_key_bytes, MAX_KEY_BYTES),
             (root_public_key_bytes, MAX_KEY_BYTES)), work, _additional_original_bytes, producing=True)
         budget = shared._Budget(work, live_window, transport_deadline_ns, _current)

@@ -30,6 +30,9 @@ _CAPTURE_V3_FIELDS = _CAPTURE_FIELDS | {"egress"}
 _CAPTURE_V4_FIELDS = _CAPTURE_FIELDS | {"egress", "attachment"}
 _CAPTURE_V5_FIELDS = _CAPTURE_FIELDS | {"execution"}
 _CAPTURE_V6_FIELDS = _CAPTURE_V5_FIELDS | {"installation"}
+_CAPTURE_V8_FIELDS = _CAPTURE_V6_FIELDS | {"outcome"}
+_OUTCOME_FIELDS = frozenset({"apiVersion", "resultScope", "slotSha256", "operationSha256",
+    "outcomeSha256", "rawEvidenceSha256", "recordedBoottimeNs", "actionAuthorization", "okForAction"})
 _INSTALLATION_FIELDS = frozenset({"apiVersion", "resultScope", "okForAction", "status",
     "authorizationSha256", "operationSha256", "reservationSha256", "setupSha256",
     "capabilityId", "runtimeCaCertificateSha256", "destinationPath"})
@@ -253,6 +256,34 @@ def _execution_data(value, budget, *, retirement=False):
     budget.check()
 
 
+def _outcome_data(value, execution, budget):
+    """Reported durable record association only, not observed fsync or authority."""
+    budget.check()
+    value = _object(value, _OUTCOME_FIELDS)
+    if (value["apiVersion"] != "serverware.nativeExecutionOutcomeReceipt/v1"
+            or value["resultScope"] != "local-durable-native-terminal-outcome"
+            or value["actionAuthorization"] is not None or value["okForAction"] is not False
+            or value["operationSha256"] != execution["execution"]["operationSha256"]):
+        _fail()
+    for field in ("slotSha256", "operationSha256", "outcomeSha256", "rawEvidenceSha256"):
+        if (type(value[field]) is not str or _DIGEST.fullmatch(value[field]) is None
+                or value[field] == "sha256:" + "0" * 64):
+            _fail()
+    retirement = execution["retirement"]
+    recorded = value["recordedBoottimeNs"]
+    if (type(recorded) is not int or not 1 <= recorded <= (1 << 64) - 1
+            or not max(retirement["hostVethAbsence"]["observedBoottimeNs"],
+                retirement["cgroupRemoval"]["observedBoottimeNs"])
+                <= recorded < retirement["cleanupBeforeBoottimeNs"]):
+        _fail()
+    raw = json.dumps(value, sort_keys=True, separators=(",", ":"),
+        ensure_ascii=False, allow_nan=False).encode("utf-8")
+    if not 1 <= len(raw) <= 4096:
+        _fail()
+    packets._charge(budget, input_bytes=len(raw))
+    budget.check()
+
+
 def _packet_on_budget(capture_bytes, target_request_bytes, budget):
     """Return unverified data only; this function never returns a verdict."""
     budget.check()
@@ -298,6 +329,13 @@ def _packet_on_budget(capture_bytes, target_request_bytes, budget):
         value = _object(value, _CAPTURE_V6_FIELDS)
         expected_scope = "local-fixed-endpoint-bootstrap-execution-retirement-observation"
         _execution_data(value["execution"], budget, retirement=True)
+        if value["installation"] is not None:
+            _installation_data(value["installation"], budget)
+    elif value.get("apiVersion") == "serverware.nativeBootstrapClientCapture/v8":
+        value = _object(value, _CAPTURE_V8_FIELDS)
+        expected_scope = "local-fixed-endpoint-bootstrap-execution-outcome-observation"
+        _execution_data(value["execution"], budget, retirement=True)
+        _outcome_data(value["outcome"], value["execution"], budget)
         if value["installation"] is not None:
             _installation_data(value["installation"], budget)
     else:

@@ -169,6 +169,10 @@ fn read_with_bound(fd: BorrowedFd<'_>, maximum: usize) -> Result<Vec<u8>, String
 }
 
 fn populated(events: &EventsV1) -> Result<bool, String> {
+    populated_original(events).map(|(live, _)| live)
+}
+
+fn populated_original(events: &EventsV1) -> Result<(bool, Vec<u8>), String> {
     events.check().map_err(|error| error.to_string())?;
     let raw = read_bounded(events.poll_fd())?;
     require(raw.last() == Some(&b'\n'), "native containment events record is incomplete")?;
@@ -186,7 +190,7 @@ fn populated(events: &EventsV1) -> Result<bool, String> {
         }
     }
     events.check().map_err(|error| error.to_string())?;
-    result.ok_or_else(|| "native containment events lack populated".to_owned())
+    Ok((result.ok_or_else(|| "native containment events lack populated".to_owned())?, raw))
 }
 
 struct Leaf {
@@ -259,7 +263,7 @@ pub(super) struct ContainmentOwner {
 
 /// Data-only evidence that this held leaf had no live tasks before its bound.
 /// Neither a leader reap nor a successful exec/exit/kill/guardian receipt.
-pub(super) struct LeafEmpty { observed_boottime_ns: u64, kill_acknowledged: bool }
+pub(super) struct LeafEmpty { observed_boottime_ns: u64, kill_acknowledged: bool, original: Vec<u8> }
 
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -270,6 +274,7 @@ pub(super) struct CgroupRemoval {
 impl LeafEmpty {
     pub(super) fn observed_boottime_ns(&self) -> u64 { self.observed_boottime_ns }
     pub(super) fn kill_acknowledged(&self) -> bool { self.kill_acknowledged }
+    pub(super) fn original(&self) -> &[u8] { &self.original }
 }
 
 impl ContainmentOwner {
@@ -413,6 +418,12 @@ impl ContainmentOwner {
     }
 
     pub(super) fn owner(&self) -> &Arc<StartOwner> { &self.owner }
+    pub(super) fn outcome_permit(&self) -> Result<&StartPermit, String> {
+        require(self.cleanup_finished.get() && self.retirement_attempted.get(),
+            "native outcome lacks consumed cleanup and retirement")?;
+        self.permit.check_cleanup_integrity()?;
+        Ok(&self.permit)
+    }
 
     /// Only the consuming BlockedChild constructor uses this one-shot borrow.
     /// The attempt is consumed before clone3, including syscall failure.
@@ -541,7 +552,7 @@ impl ContainmentOwner {
             require(last < self.cleanup_deadline,
                 "native containment cleanup deadline missed; kill attempted, outcome not confirmed")?;
             self.leaf.check()?;
-            let live = populated(&self.events)?;
+            let (live, original) = populated_original(&self.events)?;
             self.leaf.check()?;
             let now = boottime()?;
             require(now >= last && now < self.cleanup_deadline,
@@ -553,7 +564,7 @@ impl ContainmentOwner {
                 let closed = boottime()?;
                 require(closed >= now && closed < self.cleanup_deadline,
                     "native containment closing empty observation missed its deadline")?;
-                return Ok(LeafEmpty { observed_boottime_ns: closed, kill_acknowledged: acknowledged });
+                return Ok(LeafEmpty { observed_boottime_ns: closed, kill_acknowledged: acknowledged, original });
             }
             let remaining = self.cleanup_deadline - now;
             let timeout = ((remaining.min(100_000_000) + 999_999) / 1_000_000) as libc::c_int;

@@ -31,6 +31,10 @@ impl GuardedChild {
     pub(super) fn retirement_requested(&self) -> bool { self.child.retirement_requested() }
     pub(super) fn operation_sha256(&self) -> [u8; 32] { self.child.operation_sha256() }
     pub(super) fn cleanup_boottime_ns(&self) -> u64 { self.child.cleanup_boottime_ns() }
+    pub(super) fn outcome_requested(&self) -> bool { self.child.outcome_requested() }
+    pub(super) fn outcome_permit(&self) -> Result<&super::start_reservation::StartPermit, String> {
+        self.child.outcome_permit()
+    }
 
     pub(super) fn retire(&mut self, cleanup: &GuardedCleanup, mut host: HostRetirement)
         -> Result<(HostVethAbsence, CgroupRemoval, HostRetirement), String> {

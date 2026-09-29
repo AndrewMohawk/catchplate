@@ -134,6 +134,9 @@ def _continuity(owner):
     if (owner._intent_key_fd is not None and _descriptor_identity(
             owner._intent_key_fd, private=True) != owner._intent_key_identity):
         raise EnrollmentStartupError("release intent caller key custody changed")
+    if (owner._revocation_key_fd is not None and _descriptor_identity(
+            owner._revocation_key_fd, private=True) != owner._revocation_key_identity):
+        raise EnrollmentStartupError("public revocation caller key custody changed")
     return observed_epoch
 
 
@@ -192,7 +195,8 @@ class _EnrollmentOwner:
         "_release_spent", "_activation_key", "_activation_key_fd",
         "_activation_key_identity", "_activation_permission",
         "_consume_key", "_consume_key_fd", "_consume_key_identity",
-        "_intent_key", "_intent_key_fd", "_intent_key_identity")
+        "_intent_key", "_intent_key_fd", "_intent_key_identity",
+        "_revocation_key", "_revocation_key_fd", "_revocation_key_identity")
 
     def __init__(self):
         raise EnrollmentStartupError("enrollment owner requires fixed cold startup")
@@ -211,6 +215,12 @@ class _EnrollmentOwner:
     def finalization_enabled(self):
         _live(self)
         return self._finalization_key is not None
+
+    @property
+    def public_revocation_enabled(self):
+        """Cold selection only; present requester admission remains separate."""
+        _live(self)
+        return self._revocation_key is not None and self._material.public_revocation is not None
 
     @property
     def activation_execution_enabled(self):
@@ -1151,6 +1161,7 @@ def initialize_from_environment():
             activation_key, activation_fd, activation_identity = None, None, None
             consume_key, consume_fd, consume_identity = None, None, None
             intent_key, intent_fd, intent_identity = None, None, None
+            revocation_key, revocation_fd, revocation_identity = None, None, None
             if (material.release_client is not None or material.release_handoff is not None) and identity != (65532, 65532):
                 raise EnrollmentStartupError("release caller requires the fixed control-plane identity")
             if (material.finalization_slot_reserved and material.finalization is None
@@ -1198,6 +1209,19 @@ def initialize_from_environment():
                         raise
                 else:
                     raise EnrollmentStartupError("disabled v9 intent has an undeclared open key slot")
+            if material.public_revocation_slot_reserved:
+                if key_fd == 208 or descriptor == 208:
+                    raise EnrollmentStartupError("v23 reserves public revocation FD208")
+                if material.public_revocation is None:
+                    if 208 in inventory:
+                        raise EnrollmentStartupError("disabled public revocation has an inherited key slot")
+                    try:
+                        fcntl.fcntl(208, fcntl.F_GETFD)
+                    except OSError as exc:
+                        if exc.errno != errno.EBADF:
+                            raise
+                    else:
+                        raise EnrollmentStartupError("disabled public revocation has an undeclared key slot")
             if policy is None:
                 if key_fd is not None or public_key is not None:
                     raise EnrollmentStartupError("disabled enrollment bootstrap contains issuer key material")
@@ -1369,6 +1393,49 @@ def initialize_from_environment():
                         None if finalization_key is None else finalization_pin):
                     raise EnrollmentStartupError("release intent key reuses another actual retained purpose")
                 client._receipt_now(binding)
+            if material.public_revocation is not None:
+                from cryptography.hazmat.primitives import serialization
+                from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+                from serverware import response_identity
+
+                revocation = material.public_revocation
+                revocation_fd = revocation.caller_private_key_fd
+                if (identity != (65532, 65532) or not material.public_revocation_slot_reserved
+                        or revocation_fd != 208 or revocation_fd not in inventory
+                        or revocation_fd in (descriptor, key_fd, execution_fd, finalization_fd,
+                            activation_fd, consume_fd, intent_fd)):
+                    raise EnrollmentStartupError("public revocation key requires its dedicated admitted slot")
+                client._receipt_now(binding)
+                revocation_identity = issuer.evidence.production._callback(work,
+                    lambda: _descriptor_identity(revocation_fd, private=True))
+                work.charge(input_bytes=2 * revocation_identity[6])
+                revocation_raw, observed_identity = issuer.evidence.production._callback(work,
+                    lambda: _read_original(revocation_fd, private=True))
+                if (observed_identity != revocation_identity or len(revocation_raw) != revocation_identity[6]
+                        or not revocation_raw.startswith(b"-----BEGIN PRIVATE KEY-----\n")
+                        or not revocation_raw.endswith(b"-----END PRIVATE KEY-----\n")):
+                    raise EnrollmentStartupError("public revocation key must be its original unencrypted PKCS8 PEM")
+                revocation_key = issuer.evidence.production._callback(work,
+                    lambda: serialization.load_pem_private_key(revocation_raw, password=None))
+                del revocation_raw
+                if not isinstance(revocation_key, Ed25519PrivateKey):
+                    raise EnrollmentStartupError("public revocation caller key must be Ed25519")
+                issuer.evidence.keys._pair_on_work(revocation_key, revocation.caller_public_key, work)
+                revocation_pin = issuer.evidence.keys._spki_on_work(revocation.caller_public_key, work)
+                if response_pin is None:
+                    response_path = response_identity.RESPONSE_SIGNING_KEY_PATH
+                    response_pin = _response_spki(response_path, identity[0], work)
+                prior_pins = [response_pin]
+                for prior_key in (key, execution_key, finalization_key, activation_key, consume_key, intent_key):
+                    if prior_key is not None:
+                        prior_public = issuer.evidence.production._callback(work, prior_key.public_key)
+                        prior_pins.append(issuer.evidence.keys._spki_on_work(prior_public, work))
+                work.prepare_scan(prior_pins)
+                for pin in prior_pins:
+                    work.prepare_comparison(revocation_pin, pin)
+                    if revocation_pin == pin:
+                        raise EnrollmentStartupError("public revocation key reuses another retained purpose")
+                client._receipt_now(binding)
             if (material.configuration_digest != digest or _environment() != namespace
                     or (os.geteuid(), os.getegid()) != identity
                     or _descriptor_identity(descriptor, private=False) != original_identity
@@ -1383,6 +1450,8 @@ def initialize_from_environment():
                         consume_fd, private=True) != consume_identity
                     or intent_fd is not None and _descriptor_identity(
                         intent_fd, private=True) != intent_identity
+                    or revocation_fd is not None and _descriptor_identity(
+                        revocation_fd, private=True) != revocation_identity
                     or custody.require_started() is not custody_owner
                     or client._snapshot(custody_owner) is not binding):
                 raise EnrollmentStartupError("enrollment startup inputs changed during admission")
@@ -1402,6 +1471,8 @@ def initialize_from_environment():
             owner._consume_key_identity = consume_identity
             owner._intent_key, owner._intent_key_fd = intent_key, intent_fd
             owner._intent_key_identity = intent_identity
+            owner._revocation_key, owner._revocation_key_fd = revocation_key, revocation_fd
+            owner._revocation_key_identity = revocation_identity
             owner._release_spent = False
             owner._response_path, owner._response_pin = response_path, response_pin
             _owner, _state = owner, "started"
@@ -1452,3 +1523,4 @@ def close():
             owner._activation_key, owner._activation_permission = None, None
             owner._consume_key = None
             owner._intent_key = None
+            owner._revocation_key = None

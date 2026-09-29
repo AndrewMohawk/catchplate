@@ -59,6 +59,7 @@ from serverware import control_plane_oidc_session_activation_records as activati
 from serverware import control_plane_oidc_session_activation_consume_records as consume_records
 from serverware import control_plane_oidc_session_activation_recovery_records as recovery_records
 from serverware import control_plane_oidc_session_activation_completion_recovery_records as completion_recovery
+from serverware import control_plane_public_revocation_records as public_revocation
 from serverware.authority_witness_journal import WitnessJournalIO
 
 
@@ -73,7 +74,8 @@ _MAX_RECORD_BYTES = max(records.MAX_RECORD_BYTES, execution_records.MAX_RECORD_B
     signer_records.MAX_RECORD_BYTES, finalization_records.MAX_RECORD_BYTES, outcome_records.MAX_RECORD_BYTES,
     finalization_reservations.MAX_RECORD_BYTES, finalization_outcomes.MAX_RECORD_BYTES,
     activation_attempts.MAX_RECORD_BYTES, activation_records.MAX_RECORD_BYTES,
-    consume_records.MAX_RECORD_BYTES, recovery_records.MAX_RECORD_BYTES, completion_recovery.MAX_RECORD_BYTES)
+    consume_records.MAX_RECORD_BYTES, recovery_records.MAX_RECORD_BYTES, completion_recovery.MAX_RECORD_BYTES,
+    public_revocation.MAX_RECORD_BYTES)
 _FINALIZATION_OUTCOME_FILES = {
     "finalization-" + kind: kind for kind in finalization_outcomes.KINDS}
 _ACTIVATION_RECORD_FILES = {
@@ -83,7 +85,7 @@ _CONSUME_RECORD_FILES = {
 _RECOVERY_RECORD_FILES = dict(zip(recovery_records.FILE_KINDS, recovery_records.KINDS))
 _COMPLETION_RECOVERY_FILES = dict(zip(completion_recovery.FILE_KINDS, completion_recovery.KINDS))
 _RETENTION_ONLY_FAMILIES = frozenset({execution_records.FAMILY, signer_records.FAMILY,
-    finalization_records.FAMILY})
+    finalization_records.FAMILY, public_revocation.RETENTION_FAMILY})
 _COMPLETION_HISTORY_MAX_BYTES = 64 * 1024**2
 _COMPLETION_HISTORY_FIXED_BYTES = 16 * 1024
 REGISTRATION_PREPARATION_MAX_BYTES = _COMPLETION_HISTORY_MAX_BYTES
@@ -244,6 +246,8 @@ def _decode_prepared(encoded):
         return signer_records.decode_prepared(encoded)
     if encoded[:8] == finalization_records.PREPARED_RECORD_MAGIC:
         return finalization_records.decode_prepared(encoded)
+    if encoded[:8] == public_revocation.PREPARED_RECORD_MAGIC:
+        return public_revocation.decode_prepared(encoded)
     raise CustodyJournalError("prepared record version is unsupported")
 
 
@@ -328,6 +332,8 @@ class CustodyJournal:
         self._release_attempts = {}
         self._activation_dispatch_attempts = {}
         self._activation_records = {}
+        self._public_revocation_records = {}
+        self._public_revocation_live_claims = set()
         # Only successful claims made by this owner may continue publication.
         # Recovery intentionally never populates this in-memory set.
         self._activation_live_claims = set()
@@ -446,6 +452,7 @@ class CustodyJournal:
     def _recover(self):
         before = self._stamp()
         prepared = {}
+        public_records = {}
         attempted = set()
         observed = set()
         associated = {}
@@ -548,6 +555,13 @@ class CustodyJournal:
                         raise CustodyJournalError("prepared filename differs from its original content")
                     prepared[digest] = JournalEntry(digest, record.family, record.selector,
                         record.source_revision, len(encoded), False)
+                    if record.family in (public_revocation.REQUEST_FAMILY, public_revocation.RETENTION_FAMILY):
+                        parent = record.originals[0].decode("ascii")
+                        if record.selector != "options":
+                            key = (parent, record.selector)
+                            if key in public_records:
+                                raise CustodyJournalError("public revocation stage has two retained originals")
+                            public_records[key] = digest
                     if len(prepared) + len(release_claims) + len(activation_claims) + len(consume_claims) > self._maximum_records:
                         raise CustodyJournalError("journal prepared record limit exceeded")
                 elif kind == release_attempts.KIND:
@@ -687,6 +701,17 @@ class CustodyJournal:
             raise CustodyJournalError("journal has insufficient reserved marker capacity")
         self._entries = {digest: replace(entry, attempted=digest in attempted, observed=digest in observed)
             for digest, entry in prepared.items()}
+        for (parent, kind), digest in public_records.items():
+            predecessor = self._entries.get(parent)
+            expected_kind = "options" if kind == "request" else "request"
+            expected_family = (public_revocation.RETENTION_FAMILY if kind == "request"
+                else public_revocation.REQUEST_FAMILY)
+            if (predecessor is None or predecessor.selector != expected_kind
+                    or predecessor.family != expected_family
+                    or predecessor.source_revision != self._entries[digest].source_revision
+                    or kind != "request" and not predecessor.attempted):
+                raise CustodyJournalError("public revocation stage lacks its exact retained predecessor")
+        self._public_revocation_records = public_records
         self._release_attempts = release_claims
         self._activation_dispatch_attempts = activation_claims
         for digest, by_kind in activation_stages.items():
@@ -956,6 +981,76 @@ class CustodyJournal:
         with self._io.ready():
             self._require_ready()
             return self._append(*records.encode_transition(operation, originals))
+
+    def append_public_revocation(self, kind, parent, originals):
+        """Retain a fixed stage, never infer permission or success from it.
+
+        Only this owner's successful request claim permits live continuations.
+        A restarted owner can retain an explicitly acquired completion original
+        for inspection; it cannot replan, reacquire a grant, reserve or execute.
+        """
+        digest, encoded = public_revocation.encode(kind, parent, originals)
+        self._require_process()
+        with self._io.ready():
+            self._require_ready()
+            key = (parent, kind)
+            if kind != "options":
+                preceding = self._entries.get(parent)
+                expected = ((public_revocation.RETENTION_FAMILY, "options") if kind == "request"
+                    else (public_revocation.REQUEST_FAMILY, "request"))
+                if (preceding is None or (preceding.family, preceding.selector) != expected
+                        or preceding.source_revision != records.authority.SOURCE_REVISION):
+                    raise CustodyJournalError("public revocation predecessor is missing or has another source")
+                self._load(parent)
+                if kind != "request" and (not preceding.attempted or kind != "completion"
+                        and parent not in self._public_revocation_live_claims):
+                    raise CustodyJournalError("historical revocation attempts are not continuation authority")
+                previous = self._public_revocation_records.get(key)
+                if previous is not None:
+                    if previous != digest:
+                        raise CustodyJournalError("public revocation cannot replace its original stage")
+                    self._load(previous)
+                    self._require_ready()
+                    return previous
+            result = self._append(digest, encoded)
+            if kind != "options":
+                self._public_revocation_records[key] = result
+            self._require_ready()
+            return result
+
+    def claim_public_revocation(self, request_digest):
+        """Irreversibly burn this retained request before its first exchange."""
+        digest = _digest(request_digest)
+        self._require_process()
+        with self._io.ready():
+            self._require_ready()
+            entry = self._entries.get(digest)
+            if entry is None or (entry.family, entry.selector) != (public_revocation.REQUEST_FAMILY, "request"):
+                raise CustodyJournalError("public revocation claim requires its exact request record")
+            self.claim_attempt(digest)
+            self._public_revocation_live_claims.add(digest)
+            self._require_ready()
+
+    def load_public_revocation(self, request_digest):
+        """Read exact local originals; no absence, retry or completion inference."""
+        digest = _digest(request_digest)
+        self._require_process()
+        with self._io.ready():
+            self._require_ready()
+            request, _entry = self._load(digest)
+            if (request.family, request.selector) != (public_revocation.REQUEST_FAMILY, "request"):
+                raise CustodyJournalError("public revocation lookup requires its exact request record")
+            result = [("request", request)]
+            for kind in public_revocation.KINDS[2:]:
+                stage = self._public_revocation_records.get((digest, kind))
+                if stage is not None:
+                    original, _entry = self._load(stage)
+                    if original.originals[0] != digest.encode("ascii"):
+                        raise CustodyJournalError("public revocation original association changed")
+                    result.append((kind, original))
+            attempted = self._entries[digest].attempted
+            self._require_ready()
+            return attempted, tuple(result)
 
     def append_registration_execution_grant(self, originals):
         """Durably retain original raw10, without forwarding or execution authority."""

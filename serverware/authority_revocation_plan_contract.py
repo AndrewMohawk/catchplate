@@ -1,4 +1,4 @@
-"""Hash-free shapes for the inactive, revoke-only measured-plan v4 transport.
+"""Hash-free shapes for disjoint revoke-only measured-plan v4/v5 transports.
 
 Callers must first own the entire lossless JSON graph through bounded capture:
 64 MiB, one million nodes and depth 128. These checks neither measure that
@@ -18,6 +18,10 @@ PLANNER_RESPONSE_SCHEMA = "serverware.policyAuthorityPlannerResponse/v4"
 MEASURED_PLAN_SCHEMA = "serverware.policyAuthorityMeasuredPlan/v4"
 SIGNED_MEASURED_PLAN_SCHEMA = "serverware.signedPolicyAuthorityMeasuredPlan/v4"
 SNAPSHOT_DOMAIN = "serverware.policyAuthoritySnapshot/v4"
+PUBLIC_PLANNER_RESPONSE_SCHEMA = "serverware.policyAuthorityPlannerResponse/v5"
+PUBLIC_MEASURED_PLAN_SCHEMA = "serverware.policyAuthorityMeasuredPlan/v5"
+PUBLIC_SIGNED_MEASURED_PLAN_SCHEMA = "serverware.signedPolicyAuthorityMeasuredPlan/v5"
+PUBLIC_SNAPSHOT_DOMAIN = "serverware.policyAuthoritySnapshot/v5"
 TYPED_REQUEST_SCHEMA = "serverware.policyAuthorityV9Request/v1"
 PLANNER_TRACE_SCHEMA = "serverware.policyAuthorityPlannerTrace/v1"
 MAX_PAYLOAD_BYTES = 64 * 1024 * 1024
@@ -161,9 +165,17 @@ def validate_identity_shape(value) -> None:
         _digest(item)
 
 
-def validate_measured_plan_shape(value) -> None:
+def profile(public):
+    if type(public) is not bool:
+        raise RevocationPlanContractError("revocation profile is not explicit")
+    return ((PUBLIC_PLANNER_RESPONSE_SCHEMA, PUBLIC_MEASURED_PLAN_SCHEMA,
+        PUBLIC_SIGNED_MEASURED_PLAN_SCHEMA, PUBLIC_SNAPSHOT_DOMAIN) if public else
+        (PLANNER_RESPONSE_SCHEMA, MEASURED_PLAN_SCHEMA, SIGNED_MEASURED_PLAN_SCHEMA, SNAPSHOT_DOMAIN))
+
+
+def validate_measured_plan_shape(value, *, public=False) -> None:
     _object(value, MEASURED_PLAN_FIELDS, "measured plan")
-    _literal(value["schema"], MEASURED_PLAN_SCHEMA)
+    _literal(value["schema"], profile(public)[1])
     _literal(value["operation"], OPERATION)
     _literal(value["sourceRevision"], authority_contract.SOURCE_REVISION)
     _integer(value["authoritySchemaVersion"], authority_contract.SCHEMA_VERSION,
@@ -185,8 +197,17 @@ def _request(value):
     _bounded_object(value["arguments"], retained.complete.MAX_ARGUMENT_FIELDS, "arguments")
 
 
-def _projection(value):
-    _object(value, AUTHORIZATION_PROJECTION_FIELDS, "authorization projection")
+def authorization_digest_profile(public):
+    if type(public) is not bool:
+        raise RevocationPlanContractError("authorization digest profile is not source fixed")
+    return (("requestAuthorizationDigest", "serverware.publicWebAuthnRevocationAuthorizationIdentity/v1")
+        if public else ("assertionEvidenceDigest", "serverware.policyAuthorityWebAuthnAssertionEvidence/v1"))
+
+
+def _projection(value, *, public=False):
+    fields = ((AUTHORIZATION_PROJECTION_FIELDS - {"assertionEvidenceDigest"}) | {"requestAuthorizationDigest"}
+        if public else AUTHORIZATION_PROJECTION_FIELDS)
+    _object(value, fields, "authorization projection")
     _literal(value["operation"], OPERATION)
     _array(value["authorizationReads"], MAX_AUTHORIZATION_SOURCES, "authorization tables")
     _array(value["sourceRows"], MAX_AUTHORIZATION_SOURCES, "authorization sources")
@@ -199,7 +220,7 @@ def _projection(value):
         retained._boolean(row["present"])
         retained._row(row["row"])
         _digest(row["rowDigest"])
-    for name in AUTHORIZATION_PROJECTION_FIELDS - {
+    for name in fields - {
         "operation", "authorizationReads", "sourceRows", "approverPolicyDigest",
         "createdAtEpochNs", "expiresAtEpochNs",
     }:
@@ -210,7 +231,11 @@ def _projection(value):
         _integer(value[name], minimum=1)
 
 
-def _evidence(value):
+def _evidence(value, *, public=False):
+    if public:
+        from serverware import authority_public_webauthn_revocation as authorization
+        authorization.shape(value)
+        return
     _object(value, EVIDENCE_FIELDS, "assertion evidence")
     _literal(value["operation"], OPERATION)
     for name in EVIDENCE_DIGEST_FIELDS:
@@ -244,10 +269,11 @@ def _trace(value):
 
 
 def validate_payload_shape(value) -> None:
-    """Check an owned v4 payload's shape, not its bindings or authority."""
+    """Check an owned v4/v5 payload's shape, not its bindings or authority."""
     _object(value, PAYLOAD_FIELDS, "payload")
-    _literal(value["schema"], PLANNER_RESPONSE_SCHEMA)
-    validate_measured_plan_shape(value["measuredPlan"])
+    public = value["schema"] == PUBLIC_PLANNER_RESPONSE_SCHEMA
+    _literal(value["schema"], profile(public)[0])
+    validate_measured_plan_shape(value["measuredPlan"], public=public)
     # Admit all outer collection bounds before traversing retained proof data.
     _array(value["selectedBusinessRows"], MAX_SELECTED_ROWS, "selected rows")
     _array(value["mutationPlan"], MAX_MUTATIONS, "mutations")
@@ -262,6 +288,9 @@ def validate_payload_shape(value) -> None:
     try:
         retained.validate_bundle_shape(value["revocationProofBundle"])
         retained.validate_transition_shape(value["rootTransition"])
+        if (retained.public_binding(value["revocationProofBundle"]["inputs"]["assertionBinding"]) != public
+                or retained.public_binding(value["rootTransition"]["assertionBinding"]) != public):
+            raise RevocationPlanContractError("revocation plan and proof profiles differ")
         for selected in value["selectedBusinessRows"]:
             retained._object(selected, retained._SELECTED_FIELDS, "selected row")
             retained._text(selected["table"])
@@ -284,8 +313,8 @@ def validate_payload_shape(value) -> None:
             retained._row(mutation["row"])
         for proof in value["queryMultiproofs"]:
             retained._proof(proof)
-        _projection(value["authorizationProjection"])
-        _evidence(value["webauthnEvidence"])
+        _projection(value["authorizationProjection"], public=public)
+        _evidence(value["webauthnEvidence"], public=public)
     except retained.RevocationBundleContractError as exc:
         raise RevocationPlanContractError("revocation plan retained evidence shape is invalid") from exc
     _trace(value["plannerTrace"])
@@ -294,6 +323,8 @@ def validate_payload_shape(value) -> None:
 def validate_signed_envelope_shape(value) -> None:
     """Close an owned envelope without decoding or verifying its signature."""
     _object(value, SIGNED_ENVELOPE_FIELDS, "signed envelope")
-    _literal(value["schema"], SIGNED_MEASURED_PLAN_SCHEMA)
+    _object(value["payload"], PAYLOAD_FIELDS, "payload")
+    public = value["payload"]["schema"] == PUBLIC_PLANNER_RESPONSE_SCHEMA
+    _literal(value["schema"], profile(public)[2])
     _base64url(value["signatureBase64Url"], signature=True)
     validate_payload_shape(value["payload"])

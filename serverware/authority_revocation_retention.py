@@ -23,6 +23,8 @@ from serverware.authority_query_read_work import QueryReadValidationMetrics, _Va
 CONTEXT_SCHEMA = "serverware.policyAuthorityRevocationEvaluationContext/v1"
 RECORD_SCHEMA = "serverware.policyAuthorityRevocationRetainedPlan/v1"
 PLAN_PROTOCOL = "revocation-v4"
+PUBLIC_RECORD_SCHEMA = "serverware.policyAuthorityRevocationRetainedPlan/v2"
+PUBLIC_PLAN_PROTOCOL = "revocation-v5"
 MAX_CONTEXT_BYTES = 512 * 1024
 MAX_CONTEXT_NODES = 4096
 MAX_CONTEXT_DEPTH = 8
@@ -181,9 +183,11 @@ def _verify_record_on_work(*, envelope_bytes: bytes, evaluation_context_bytes: b
         context_digest = _bytes_digest(evaluation_context_bytes, work)
         payload_digest = _bytes_digest(verification.payload_bytes, work)
         measured = envelope["payload"]["measuredPlan"]
+        public = envelope["payload"]["schema"] == plan.contract.PUBLIC_PLANNER_RESPONSE_SCHEMA
+        record_schema = PUBLIC_RECORD_SCHEMA if public else RECORD_SCHEMA
         header = {
-            "schema": RECORD_SCHEMA, "sourceRevision": authority_contract.SOURCE_REVISION,
-            "planProtocol": PLAN_PROTOCOL,
+            "schema": record_schema, "sourceRevision": authority_contract.SOURCE_REVISION,
+            "planProtocol": PUBLIC_PLAN_PROTOCOL if public else PLAN_PROTOCOL,
             "plannerTransactionId": measured["plannerTransactionId"],
             "operationId": measured["operationId"], "requestDigest": measured["requestDigest"],
             "capabilityId": measured["capabilityId"],
@@ -191,7 +195,7 @@ def _verify_record_on_work(*, envelope_bytes: bytes, evaluation_context_bytes: b
             "envelopeDigest": envelope_digest, "envelopeByteCount": len(envelope_bytes),
             "contextDigest": context_digest, "contextByteCount": len(evaluation_context_bytes),
         }
-        record_digest = plan._json_digest(RECORD_SCHEMA, header, ledger)
+        record_digest = plan._json_digest(record_schema, header, ledger)
         return _RetainedRevocationRecord(envelope_bytes, evaluation_context_bytes,
             verification.payload_bytes, envelope["payload"], context, planner_key_digest,
             verifier_key_digest, envelope_digest, context_digest, payload_digest, header,

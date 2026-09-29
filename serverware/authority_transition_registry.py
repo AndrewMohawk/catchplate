@@ -17,6 +17,7 @@ from serverware import authority_transition_credential_currentness
 from serverware import authority_transition_oauth_revocation
 from serverware import authority_transition_oauth_refresh_cleanup
 from serverware import authority_transition_policy_file_approval
+from serverware import authority_transition_public_revocation_approval
 
 
 WEBAUTHN_CHALLENGE_OPERATIONS: Final[frozenset[str]] = frozenset(
@@ -47,6 +48,7 @@ def _merge_kernels() -> dict[
         authority_transition_oauth_revocation.KERNELS,
         authority_transition_oauth_refresh_cleanup.KERNELS,
         authority_transition_policy_file_approval.KERNELS,
+        authority_transition_public_revocation_approval.KERNELS,
     ):
         overlap = set(merged) & set(registry)
         if overlap:

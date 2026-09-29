@@ -77,6 +77,8 @@ V21_SCHEMA = "serverware.signedControlPlaneEnrollmentBootstrap/v21"
 V21_PAYLOAD_SCHEMA = "serverware.controlPlaneEnrollmentBootstrap/v21"
 V22_SCHEMA = "serverware.signedControlPlaneEnrollmentBootstrap/v22"
 V22_PAYLOAD_SCHEMA = "serverware.controlPlaneEnrollmentBootstrap/v22"
+V23_SCHEMA = "serverware.signedControlPlaneEnrollmentBootstrap/v23"
+V23_PAYLOAD_SCHEMA = "serverware.controlPlaneEnrollmentBootstrap/v23"
 MAX_BYTES = authority.MAX_REQUEST_BYTES
 MAX_NODES = capture.MAX_TOTAL_JSON_NODES
 MAX_DEPTH = capture.MAX_JSON_DEPTH
@@ -105,6 +107,7 @@ _V19_PAYLOAD_FIELDS = _V18_PAYLOAD_FIELDS | frozenset({"activationHistory"})
 _V20_PAYLOAD_FIELDS = _V19_PAYLOAD_FIELDS
 _V21_PAYLOAD_FIELDS = _V20_PAYLOAD_FIELDS | frozenset({"historicalConsumeInputAcquisition"})
 _V22_PAYLOAD_FIELDS = _V21_PAYLOAD_FIELDS
+_V23_PAYLOAD_FIELDS = _V22_PAYLOAD_FIELDS | frozenset({"publicWebAuthnRevocation"})
 _ENDPOINT_FIELDS = frozenset({"socketPath", "requestTimeoutSeconds", "listenerUid", "listenerGid"})
 _GENERATION_FIELDS = frozenset(configuration._GENERATION_FIELDS)
 _NUMBER_BYTES = frozenset(b"0123456789.eE+-")
@@ -148,6 +151,8 @@ class _EnrollmentMaterial:
     finalization_history: object | None = None
     activation_history: object | None = None
     historical_consume_input_acquisition: object | None = None
+    public_revocation: object | None = None
+    public_revocation_slot_reserved: bool = False
 
 
 def _preflight(raw, work):
@@ -732,6 +737,26 @@ def _v22_shape(value):
     _v22_payload_shape(value["payload"])
 
 
+def _v23_payload_shape(value):
+    from serverware import control_plane_public_revocation_bootstrap as revocation
+
+    capability.shape._object(value, _V23_PAYLOAD_FIELDS, "v23 enrollment bootstrap payload")
+    capability.shape._literal(value["schema"], V23_PAYLOAD_SCHEMA)
+    prior = {name: value[name] for name in _V22_PAYLOAD_FIELDS}
+    prior["schema"] = V22_PAYLOAD_SCHEMA
+    _v22_payload_shape(prior)
+    if value["issuerPrivateKeyFd"] == revocation.CALLER_KEY_FD:
+        raise EnrollmentBootstrapError("v23 reserves the public revocation caller descriptor")
+    revocation._shape(value["publicWebAuthnRevocation"])
+
+
+def _v23_shape(value):
+    capability.shape._object(value, _ENVELOPE_FIELDS, "v23 enrollment bootstrap envelope")
+    capability.shape._literal(value["schema"], V23_SCHEMA)
+    capability.shape._base64url(value["signatureBase64Url"], signature=True)
+    _v23_payload_shape(value["payload"])
+
+
 def _canonical(raw, value, work):
     encoded = configuration._configuration_wire(value, capture._SharedLedger(work))
     work.charge(input_bytes=len(raw) + len(encoded))
@@ -1142,6 +1167,16 @@ def _v21_material(payload, expected_digest, root_public_key, work, *,
     return replace(material, historical_consume_input_acquisition=held)
 
 
+def _public_revocation_material(payload, material, root, work):
+    from serverware import control_plane_public_revocation_bootstrap as revocation
+
+    held = revocation._admit_on_work(public_revocation=payload["publicWebAuthnRevocation"],
+        configuration_payload=material.configuration_payload,
+        configuration_digest=material.configuration_digest, generation=material.generation,
+        runtime_role_identities=material.runtime_role_identities, runtime_root_public_key=root, work=work)
+    return replace(material, public_revocation=held, public_revocation_slot_reserved=True)
+
+
 def _admit_on_work(*, bootstrap_bytes, runtime_root_public_key,
         expected_configuration_digest, work, _history_current_interval=None,
         _history_now_epoch_ns=None, _history_live_window=None,
@@ -1176,7 +1211,10 @@ def _admit_on_work(*, bootstrap_bytes, runtime_root_public_key,
         is_v20 = type(envelope) is dict and envelope.get("schema") == V20_SCHEMA
         is_v21 = type(envelope) is dict and envelope.get("schema") == V21_SCHEMA
         is_v22 = type(envelope) is dict and envelope.get("schema") == V22_SCHEMA
-        if is_v22:
+        is_v23 = type(envelope) is dict and envelope.get("schema") == V23_SCHEMA
+        if is_v23:
+            _v23_shape(envelope)
+        elif is_v22:
             _v22_shape(envelope)
         elif is_v21:
             _v21_shape(envelope)
@@ -1222,12 +1260,12 @@ def _admit_on_work(*, bootstrap_bytes, runtime_root_public_key,
         payload = envelope["payload"]
         payload_bytes = configuration._configuration_wire(payload, capture._SharedLedger(work))
         capability._signature(key, envelope["signatureBase64Url"],
-            V22_SCHEMA if is_v22 else V21_SCHEMA if is_v21 else V20_SCHEMA if is_v20 else V19_SCHEMA if is_v19 else V18_SCHEMA if is_v18 else V17_SCHEMA if is_v17 else V16_SCHEMA if is_v16 else V15_SCHEMA if is_v15 else V14_SCHEMA if is_v14 else V13_SCHEMA if is_v13 else V12_SCHEMA if is_v12 else V11_SCHEMA if is_v11 else V10_SCHEMA if is_v10 else V9_SCHEMA if is_v9 else V8_SCHEMA if is_v8 else V7_SCHEMA if is_v7 else V6_SCHEMA if is_v6 else V5_SCHEMA if is_v5 else V4_SCHEMA if is_v4 else V3_SCHEMA if is_v3 else SCHEMA,
+            V23_SCHEMA if is_v23 else V22_SCHEMA if is_v22 else V21_SCHEMA if is_v21 else V20_SCHEMA if is_v20 else V19_SCHEMA if is_v19 else V18_SCHEMA if is_v18 else V17_SCHEMA if is_v17 else V16_SCHEMA if is_v16 else V15_SCHEMA if is_v15 else V14_SCHEMA if is_v14 else V13_SCHEMA if is_v13 else V12_SCHEMA if is_v12 else V11_SCHEMA if is_v11 else V10_SCHEMA if is_v10 else V9_SCHEMA if is_v9 else V8_SCHEMA if is_v8 else V7_SCHEMA if is_v7 else V6_SCHEMA if is_v6 else V5_SCHEMA if is_v5 else V4_SCHEMA if is_v4 else V3_SCHEMA if is_v3 else SCHEMA,
             payload_bytes, capture._SharedLedger(work))
         _canonical(original, envelope, work)
         material = (_v21_material(payload, expected, key, work,
             current_interval=_history_current_interval, now_epoch_ns=_history_now_epoch_ns,
-            live_window=_history_live_window, transport_deadline_ns=_history_transport_deadline_ns) if (is_v21 or is_v22)
+            live_window=_history_live_window, transport_deadline_ns=_history_transport_deadline_ns) if (is_v21 or is_v22 or is_v23)
             else _v19_material(payload, expected, key, work,
             current_interval=_history_current_interval, now_epoch_ns=_history_now_epoch_ns,
             live_window=_history_live_window, transport_deadline_ns=_history_transport_deadline_ns) if (is_v19 or is_v20)
@@ -1250,6 +1288,8 @@ def _admit_on_work(*, bootstrap_bytes, runtime_root_public_key,
             else _v4_material(payload, expected, key, work) if is_v4
             else _v3_material(payload, expected, key, work) if is_v3
             else _material(payload, expected, work))
+        if is_v23:
+            material = _public_revocation_material(payload, material, key, work)
         _canonical(original, envelope, work)
         return material
     except (KeyError, TypeError, ValueError, OverflowError, RecursionError, InvalidSignature) as exc:
@@ -2598,7 +2638,27 @@ def _produce_v21_on_work(*, payload, history_current_interval, history_now_epoch
 def _produce_v22_on_work(*, payload, history_current_interval, history_now_epoch_ns,
         history_live_window, history_transport_deadline_ns,
         runtime_root_private_key, runtime_root_public_key, work):
-    """Sign v22 only after genuine archived intent/proof admission.
+    return _produce_history_profile_on_work(payload=payload, history_current_interval=history_current_interval,
+        history_now_epoch_ns=history_now_epoch_ns, history_live_window=history_live_window,
+        history_transport_deadline_ns=history_transport_deadline_ns,
+        runtime_root_private_key=runtime_root_private_key, runtime_root_public_key=runtime_root_public_key,
+        work=work, public_revocation=False)
+
+
+def _produce_v23_on_work(*, payload, history_current_interval, history_now_epoch_ns,
+        history_live_window, history_transport_deadline_ns,
+        runtime_root_private_key, runtime_root_public_key, work):
+    return _produce_history_profile_on_work(payload=payload, history_current_interval=history_current_interval,
+        history_now_epoch_ns=history_now_epoch_ns, history_live_window=history_live_window,
+        history_transport_deadline_ns=history_transport_deadline_ns,
+        runtime_root_private_key=runtime_root_private_key, runtime_root_public_key=runtime_root_public_key,
+        work=work, public_revocation=True)
+
+
+def _produce_history_profile_on_work(*, payload, history_current_interval, history_now_epoch_ns,
+        history_live_window, history_transport_deadline_ns,
+        runtime_root_private_key, runtime_root_public_key, work, public_revocation):
+    """Sign explicit v22/v23 only after genuine archived intent/proof admission.
 
     The closed payload retains every existing purpose slot. Archive v3 adds
     public original enrollment data, never a retired private-key requirement or
@@ -2606,19 +2666,24 @@ def _produce_v22_on_work(*, payload, history_current_interval, history_now_epoch
     """
     from serverware import control_plane_oidc_session_activation_history_bootstrap as history
 
+    if type(public_revocation) is not bool:
+        raise EnrollmentBootstrapError("enrollment production profile must be explicitly selected")
+    schema = V23_SCHEMA if public_revocation else V22_SCHEMA
     ledger = capture._SharedLedger(work)
     private, public = runtime_root_private_key, runtime_root_public_key
     if not isinstance(private, Ed25519PrivateKey) or not isinstance(public, Ed25519PublicKey):
         raise EnrollmentBootstrapError("v22 bootstrap requires an independently admitted root pair")
     owned = configuration._ConfigurationCapture(ledger, maximum_bytes=MAX_BYTES).visit(payload)
-    _v22_payload_shape(owned)
+    (_v23_payload_shape if public_revocation else _v22_payload_shape)(owned)
     current = history.planning.planner._processing(history_live_window, history_transport_deadline_ns, work)
     current()
     # The shared constructor admits the exact nested originals; only the
-    # source-selected v22 shape and signing domain authorize the new inventory.
+    # source-selected shape and signing domain authorize the new inventory.
     material = _v21_material(owned, owned["configurationDigest"], public, work,
         current_interval=history_current_interval, now_epoch_ns=history_now_epoch_ns,
         live_window=history_live_window, transport_deadline_ns=history_transport_deadline_ns)
+    if public_revocation:
+        material = _public_revocation_material(owned, material, public, work)
 
     def live():
         now = current()
@@ -2635,12 +2700,12 @@ def _produce_v22_on_work(*, payload, history_current_interval, history_now_epoch
     live()
     keys._pair_on_work(private, public, work)
     live()
-    envelope = {"schema": V22_SCHEMA, "payload": owned, "signatureBase64Url": "A" * 86}
+    envelope = {"schema": schema, "payload": owned, "signatureBase64Url": "A" * 86}
     payload_size, payload_nodes = _measure(owned, work)
     envelope_size, envelope_nodes = _measure(envelope, work)
     work.charge(input_bytes=3 * payload_size + envelope_size + production._SIGNATURE_TRANSPORT_BYTES,
         json_nodes=payload_nodes + envelope_nodes)
-    frame_bytes = 2 * len(V22_SCHEMA) + 9 + payload_size + 2 * 71
+    frame_bytes = 2 * len(schema) + 9 + payload_size + 2 * 71
     if (work.limits.max_hashes - work.hash_work < 1
             or work.limits.max_input_bytes - work.input_bytes < frame_bytes + payload_size
             or work.limits.max_json_nodes - work.json_nodes < 4 + payload_nodes):
@@ -2648,7 +2713,7 @@ def _produce_v22_on_work(*, payload, history_current_interval, history_now_epoch
     original = configuration._configuration_wire(owned, capture._SharedLedger(work))
     if len(original) != payload_size:
         raise EnrollmentBootstrapError("v22 payload changed after measurement")
-    message = plan._ascii(plan._frame(V22_SCHEMA, (original,), work), work)
+    message = plan._ascii(plan._frame(schema, (original,), work), work)
     live()
     signature = production._sign_and_verify(private, public, message, work)
     live()

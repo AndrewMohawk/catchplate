@@ -21,6 +21,7 @@ from serverware.authority_audit_trace import (
 )
 from serverware import authority_contract
 from serverware import authority_publication_approval as publication_approval
+from serverware import authority_public_revocation_approval as public_revocation_approval
 from serverware import authority_oauth_activation as oauth_activation
 from serverware import authority_oauth_exchange as oauth_exchange
 from serverware import authority_oauth_inventory
@@ -741,7 +742,7 @@ class TypedTransitionPlanningProgram:
             )
         _business_intent(request, operation=self.operation)
         try:
-            if self.operation in ({authority_webauthn_assertion.OPERATION} | publication_approval.assertion_operations() | oauth_activation.ASSERTION_OPERATIONS | oauth_exchange.ASSERTION_OPERATIONS):
+            if self.operation in ({authority_webauthn_assertion.OPERATION} | publication_approval.assertion_operations() | oauth_activation.ASSERTION_OPERATIONS | oauth_exchange.ASSERTION_OPERATIONS | public_revocation_approval.ASSERTION_OPERATIONS):
                 query_program = getattr(self.kernel, "queries_with_evidence", None)
                 if not callable(query_program) or verified_webauthn_evidence is None:
                     raise AuthorityPlannerError(
@@ -890,7 +891,9 @@ class TypedTransitionPlanningProgram:
                 if (type(request) is not dict or type(manifest) is not tuple
                         or type(verified_webauthn_evidence) not in (dict, MappingProxyType)):
                     raise AuthorityPlannerError("private revocation read inputs are not exact owned-value types")
-                fields = authority_webauthn_assertion.EVIDENCE_FIELDS
+                from serverware import authority_public_webauthn_revocation as public_revocation
+                fields = (public_revocation.FIELDS if public_revocation.is_public(verified_webauthn_evidence)
+                    else authority_webauthn_assertion.EVIDENCE_FIELDS)
                 if (len(verified_webauthn_evidence) != len(fields)
                         or any(type(name) is not str or len(name) > 128
                                for name in verified_webauthn_evidence)
@@ -1031,12 +1034,12 @@ class TypedTransitionPlanningProgram:
             claimed_operation = _require_digest(actual_request["operationId"], "producer operation id")
             if _request_different(actual_operation_id, claimed_operation, work=query_work):
                 raise AuthorityPlannerError("private revocation producer operation id changed")
-            verified = authority_webauthn_assertion._verify_revoke_assertion_evidence(
+            verified, _signature_attempts = authority_revocation_semantics._verify_evidence(
                 owned["evidence"], operation_id=actual_operation_id, request_digest=request_digest,
                 capability_id=owned["capabilityId"], verifier_identity=owned["verifierIdentity"],
                 verifier_public_key=verifier_public_key, now_epoch_ns=owned["nowEpochNs"],
                 deadline_epoch_ns=owned["deadlineEpochNs"], maximum_age_ns=owned["maximumAgeNs"],
-                work=authority_webauthn_assertion._ReceiptWork(query_work),
+                work=query_work,
             )
             # These are actual root-table reads on this transaction and trace,
             # including the separately charged global audit-capacity root.
@@ -1240,8 +1243,7 @@ class TypedTransitionPlanningProgram:
                 work=query_work, operation=authority_transition_webauthn.OPERATION,
                 arguments=acquired.request["arguments"], cutoff_us=raw.cutoff_us,
                 request_digest=acquired.request["requestDigest"],
-                assertion_binding={name: verified_evidence[name]
-                                   for name in ("credentialRecordId", "challengeId")},
+                assertion_binding=authority_revocation_semantics._evidence_binding(verified_evidence),
                 query_reads=state.query_reads, queries=queries,
                 business_before_roots=raw.business_before_roots,
                 authorization_before_roots=raw.authorization_before_roots,
@@ -1301,7 +1303,7 @@ class TypedTransitionPlanningProgram:
             or self.kernel.program_id
                 != authority_contract.transition_program_id(operation)
             or state.database_now is None
-            or (operation in ({authority_webauthn_assertion.OPERATION} | publication_approval.assertion_operations() | oauth_activation.ASSERTION_OPERATIONS | oauth_exchange.ASSERTION_OPERATIONS))
+            or (operation in ({authority_webauthn_assertion.OPERATION} | publication_approval.assertion_operations() | oauth_activation.ASSERTION_OPERATIONS | oauth_exchange.ASSERTION_OPERATIONS | public_revocation_approval.ASSERTION_OPERATIONS))
                 != (state.verified_webauthn_evidence is not None)
         ):
             raise AuthorityPlannerError(
@@ -4018,7 +4020,7 @@ class MeasuredPlanner:
         self.connect_timeout_seconds = connect_timeout_seconds
         self.enabled_operations = frozenset(enabled_operations)
         self.programs = dict(programs)
-        if ({authority_webauthn_assertion.OPERATION} | publication_approval.assertion_operations() | oauth_activation.ASSERTION_OPERATIONS | oauth_exchange.ASSERTION_OPERATIONS) & self.enabled_operations:
+        if ({authority_webauthn_assertion.OPERATION} | publication_approval.assertion_operations() | oauth_activation.ASSERTION_OPERATIONS | oauth_exchange.ASSERTION_OPERATIONS | public_revocation_approval.ASSERTION_OPERATIONS) & self.enabled_operations:
             if (
                 not isinstance(verifier_public_key, Ed25519PublicKey)
                 or not isinstance(verifier_identity, Mapping)
@@ -4042,7 +4044,7 @@ class MeasuredPlanner:
         self, request: Mapping[str, Any]
     ) -> Mapping[str, Any] | None:
         verified_webauthn_evidence = None
-        if request.get("operation") in (publication_approval.assertion_operations() | oauth_activation.ASSERTION_OPERATIONS | oauth_exchange.ASSERTION_OPERATIONS):
+        if request.get("operation") in (publication_approval.assertion_operations() | oauth_activation.ASSERTION_OPERATIONS | oauth_exchange.ASSERTION_OPERATIONS | public_revocation_approval.ASSERTION_OPERATIONS):
             # Independently pinned receipt verification precedes any proof SQL;
             # current hardware/trust/actor and raw challenge joins are repeated
             # by the purpose kernel over genuine selected originals.

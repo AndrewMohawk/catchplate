@@ -18,6 +18,10 @@ BUNDLE_SCHEMA = "serverware.policyAuthorityRevocationProofBundle/v1"
 BUNDLE_PROFILE = "serverware.policyAuthorityRevocationProofBundleProfile/v1"
 TRANSITION_SCHEMA = "serverware.policyAuthorityRevocationReadWriteTransition/v1"
 TRANSITION_PROFILE = "serverware.policyAuthorityRevocationReadWriteTransitionProfile/v1"
+PUBLIC_BUNDLE_SCHEMA = "serverware.policyAuthorityRevocationProofBundle/v2"
+PUBLIC_BUNDLE_PROFILE = "serverware.policyAuthorityRevocationProofBundleProfile/v2"
+PUBLIC_TRANSITION_SCHEMA = "serverware.policyAuthorityRevocationReadWriteTransition/v2"
+PUBLIC_TRANSITION_PROFILE = "serverware.policyAuthorityRevocationReadWriteTransitionProfile/v2"
 MAX_COMPACT_BYTES = 65536
 MAX_COMPACT_NODES = 1024
 
@@ -48,7 +52,7 @@ _ADDRESS_FIELDS = frozenset({"table", "keyJson", "keyDigest", "present"})
 _ASSERTION_FIELDS = frozenset({"credentialRecordId", "challengeId"})
 _MAX_HEADS = 11
 _QUERY_COUNT = 6
-_MAX_READS = 45
+_MAX_READS = 50
 _MAX_OUTSIDE_PREFIXES = 4800
 _SPEC = authority_contract.operation_spec(complete.OPERATION)
 _MAX_SELECTED = _SPEC["maximumQueryRows"]
@@ -106,9 +110,25 @@ def _literal(value, expected):
 
 
 def _assertion(value):
+    if public_binding(value):
+        from serverware import authority_public_webauthn_revocation as public
+        public.binding_shape(value)
+        return
     _object(value, _ASSERTION_FIELDS, "assertion binding")
     for identity in value.values():
         _text(identity, 1024)
+
+
+def public_binding(value):
+    from serverware import authority_public_webauthn_revocation as public
+    return type(value) is dict and value.get("schema") == public.BINDING_SCHEMA
+
+
+def profile(binding, *, transition=False):
+    if public_binding(binding):
+        return ((PUBLIC_TRANSITION_SCHEMA, PUBLIC_TRANSITION_PROFILE) if transition else
+            (PUBLIC_BUNDLE_SCHEMA, PUBLIC_BUNDLE_PROFILE))
+    return (TRANSITION_SCHEMA, TRANSITION_PROFILE) if transition else (BUNDLE_SCHEMA, BUNDLE_PROFILE)
 
 
 def _key(value):
@@ -283,8 +303,10 @@ def validate_inputs_shape(inputs) -> None:
 def validate_bundle_shape(value) -> None:
     """Validate only the closed envelope and bounded captured input shapes."""
     _object(value, BUNDLE_FIELDS, "proof bundle")
-    _literal(value["schema"], BUNDLE_SCHEMA)
-    _literal(value["profile"], BUNDLE_PROFILE)
+    _object(value["inputs"], INPUT_FIELDS, "inputs")
+    schema, selected_profile = profile(value["inputs"]["assertionBinding"])
+    _literal(value["schema"], schema)
+    _literal(value["profile"], selected_profile)
     _literal(value["sourceRevision"], authority_contract.SOURCE_REVISION)
     validate_inputs_shape(value["inputs"])
 
@@ -313,8 +335,9 @@ def validate_transition_shape(value) -> None:
     encoder. This helper deliberately performs no serialization to find sizes.
     """
     _object(value, TRANSITION_FIELDS, "transition")
-    _literal(value["schema"], TRANSITION_SCHEMA)
-    _literal(value["profile"], TRANSITION_PROFILE)
+    schema, selected_profile = profile(value["assertionBinding"], transition=True)
+    _literal(value["schema"], schema)
+    _literal(value["profile"], selected_profile)
     _literal(value["sourceRevision"], authority_contract.SOURCE_REVISION)
     _literal(value["operation"], complete.OPERATION)
     _digest(value["requestDigest"])

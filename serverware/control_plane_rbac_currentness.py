@@ -33,7 +33,7 @@ def _development(value):
 class _Owner:
     def check(self):
         profile.require(os.getpid() == self.pid == _PID and not self.closed and _environment() == self.environment
-            and time.monotonic_ns() < self.deadline and self.opening_epoch <= time.time_ns() < self.policy["expiresAtEpochNs"])
+            and time.monotonic_ns() < self.deadline and self.opening_epoch <= time.time_ns() < self.expires_epoch)
         for original in self.originals: original.check()
         if self.process is None:
             from serverware import control_plane_custody_client as client
@@ -48,7 +48,7 @@ class _Owner:
 
     def require_writer(self):
         self.check()
-        profile.require(self.writer and self.process is not None and self.process.role_name == "verifier",
+        profile.require(self.recovery is None and self.writer and self.process is not None and self.process.role_name == "verifier",
             "only the genuinely admitted RBAC verifier owns witness write permission")
 
     def connection_parameters(self):
@@ -125,9 +125,11 @@ def _initialize(process=None):
             profile.require(descriptor in inherited)
             config_original = _Original(descriptor, 96 * 1024)
             config = profile.document(config_original.raw, 96 * 1024)
-            profile.require(type(config) is dict and set(config) == {"schema", "sourceRevision", "configurationDigest",
-                "root", "enrollment", "tlsRoot", "clientCertificate", "clientKey"}
-                and config["schema"] == profile.STARTUP_SCHEMA and config["sourceRevision"] == authority_contract.SOURCE_REVISION
+            profile.require(type(config) is dict and config.get("schema") in {profile.STARTUP_SCHEMA, profile.STARTUP_V2_SCHEMA})
+            second = config["schema"] == profile.STARTUP_V2_SCHEMA
+            profile.require(set(config) == {"schema", "sourceRevision", "configurationDigest",
+                "root", "enrollment", "tlsRoot", "clientCertificate", "clientKey"} | ({"recoveryAuthorization"} if second else set())
+                and config["sourceRevision"] == authority_contract.SOURCE_REVISION
                 and config["configurationDigest"] == current_digest)
             originals, used = [config_original], {descriptor}
             materials = {}
@@ -152,9 +154,26 @@ def _initialize(process=None):
             value.enrollment_original = profile.canonical(config["enrollment"])
             value.policy = profile.enrollment(value.enrollment_original, root)
             value.enrollment_sha256 = profile.sha256(value.enrollment_original)
-            profile.require(value.policy["sourceRevision"] == authority_contract.SOURCE_REVISION
-                and current_digest in value.policy["configurationDigests"]
-                and value.policy["issuedAtEpochNs"] <= current_epoch < value.policy["expiresAtEpochNs"])
+            profile.require(value.policy["schema"] == (profile.ENROLLMENT_V2_SCHEMA if second else profile.ENROLLMENT_SCHEMA))
+            value.recovery, value.recovery_original = None, None
+            if second:
+                from serverware import authority_rbac_recovery as recovery
+                recovery_key = Ed25519PublicKey.from_public_bytes(recovery.decode(value.policy["recoveryPublicKeyBase64Url"], 32))
+                profile.require(recovery_key.public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
+                    != independent_root.public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo))
+                if config["recoveryAuthorization"] is not None:
+                    profile.require(process is not None and process.role_name == "verifier" and value.writer,
+                        "recovery-only startup requires the actual fresh verifier role")
+                    value.recovery_original = profile.canonical(config["recoveryAuthorization"])
+                    value.recovery = recovery.authorization(value.recovery_original, value.policy)
+                    profile.require(value.recovery["sourceRevision"] == authority_contract.SOURCE_REVISION
+                        and value.recovery["configurationDigest"] == current_digest
+                        and value.recovery["enrollmentSha256"] == value.enrollment_sha256
+                        and value.recovery["issuedAtEpochNs"] <= current_epoch < value.recovery["expiresAtEpochNs"])
+            if value.recovery is None:
+                profile.require(value.policy["sourceRevision"] == authority_contract.SOURCE_REVISION
+                    and current_digest in value.policy["configurationDigests"]
+                    and value.policy["issuedAtEpochNs"] <= current_epoch < value.policy["expiresAtEpochNs"])
             identity = value.policy["writer" if value.writer else "reader"]
             value.tls_root, value.certificate, value.key = materials["tlsRoot"], materials["clientCertificate"], materials["clientKey"]
             profile.require(profile.sha256(value.tls_root.raw) == value.policy["tlsRootSha256"]
@@ -165,7 +184,8 @@ def _initialize(process=None):
                 == key.public_key().public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo))
             value.originals, value.configuration_digest = tuple(originals), current_digest
             value.opening_epoch, value.opening_mono = current_epoch, opening_mono
-            value.expires_epoch = min(maximum_expiry, value.policy["expiresAtEpochNs"])
+            value.expires_epoch = min(maximum_expiry,
+                value.policy["expiresAtEpochNs"] if value.recovery is None else value.recovery["expiresAtEpochNs"])
             value.deadline = opening_mono + value.expires_epoch - current_epoch
             _owner, _state = value, "started"
             value.check()
@@ -190,6 +210,7 @@ def require_started():
         if _state == "disabled":
             profile.require(_development(namespace)); return None
         profile.require(_state == "started" and _owner is not None)
+        profile.require(_owner.recovery is None, "recovery-only admission cannot serve current authorization or execution")
         _owner.check(); return _owner
 
 

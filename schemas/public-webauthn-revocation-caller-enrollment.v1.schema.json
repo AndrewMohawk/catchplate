@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.dev/schemas/public-webauthn-revocation-caller-enrollment.v1.schema.json",
+  "title": "Independent public revocation caller enrollment original",
+  "description": "Root-signed canonical ASCII original <=16384 bytes. Source joins exact current-root/grant enrollment originals, measured planner/verifier, separate actual caller key and current mutation policy. Neither this document nor a JSON-schema result authenticates an HTTP actor. Four approval operations are explicitly enrolled; current policy chooses identity-only or asserted request/decision. No generic effect or nullable-v4 evidence authority.",
+  "type": "object", "additionalProperties": false, "required": ["schema", "payload", "signatureBase64Url"],
+  "properties": {
+    "schema": {"const": "serverware.signedPolicyAuthorityPublicRevocationCallerAuthorizationEnrollment/v1"},
+    "signatureBase64Url": {"type": "string", "pattern": "^[A-Za-z0-9_-]{86}$"},
+    "payload": {"type": "object", "additionalProperties": false,
+      "required": ["schema", "sourceRevision", "purpose", "operation", "configurationDigest", "databaseId", "generationDigest", "currentRootEnrollmentDigest", "grantEnrollmentDigest", "callerId", "audienceSpkiDigest", "callerKey", "maximumAgeNs", "maximumClockSkewNs", "mutationPolicy", "approvalOperations"],
+      "properties": {
+        "schema": {"const": "serverware.policyAuthorityPublicRevocationCallerAuthorizationEnrollment/v1"},
+        "sourceRevision": {"type": "string", "minLength": 1, "maxLength": 128},
+        "purpose": {"const": "authorize-public-webauthn-revocation"}, "operation": {"const": "webauthn.credential.revoke"},
+        "configurationDigest": {"$ref": "#/$defs/digest"}, "databaseId": {"$ref": "#/$defs/token"},
+        "generationDigest": {"$ref": "#/$defs/digest"}, "currentRootEnrollmentDigest": {"$ref": "#/$defs/digest"},
+        "grantEnrollmentDigest": {"$ref": "#/$defs/digest"}, "callerId": {"$ref": "#/$defs/token"}, "audienceSpkiDigest": {"$ref": "#/$defs/digest"},
+        "callerKey": {"type": "object", "additionalProperties": false, "required": ["publicKeyPem", "spkiDigest", "measurementDigest"], "properties": {
+          "publicKeyPem": {"type": "string", "minLength": 1, "maxLength": 4096}, "spkiDigest": {"$ref": "#/$defs/digest"}, "measurementDigest": {"$ref": "#/$defs/digest"}}},
+        "maximumAgeNs": {"type": "integer", "minimum": 1, "maximum": 30000000000},
+        "maximumClockSkewNs": {"type": "integer", "minimum": 0, "maximum": 5000000000},
+        "mutationPolicy": {"$ref": "public-webauthn-revocation-authorization.v1.schema.json#/$defs/policy"},
+        "approvalOperations": {"const": ["public-revocation-approval.decide-asserted", "public-revocation-approval.decide-identity", "public-revocation-approval.request-asserted", "public-revocation-approval.request-identity"]}
+      }}
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "token": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"}
+  }
+}

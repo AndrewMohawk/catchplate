@@ -139,6 +139,36 @@ class ControlPlaneCustodyClient:
     def __init__(self):
         raise CustodyClientError("use the fixed from_environment custody caller factory")
 
+    def append_public_revocation(self, kind, parent, originals):
+        binding = _snapshot(self)
+        result = journal.CustodyJournal.append_public_revocation(binding.journal, kind, parent, originals)
+        if _snapshot(self) is not binding:
+            raise CustodyClientError("public revocation custody changed during durable append")
+        return result
+
+    def load_public_revocation_options(self, local_digest):
+        from serverware import control_plane_public_revocation_records as public
+        binding = _snapshot(self)
+        result = journal.CustodyJournal.load(binding.journal, local_digest)
+        if (result.family != public.RETENTION_FAMILY or result.selector != "options"
+                or result.source_revision != authority.SOURCE_REVISION
+                or _snapshot(self) is not binding):
+            raise CustodyClientError("public revocation options have another actual retained profile")
+        return result
+
+    def claim_public_revocation(self, request_digest):
+        binding = _snapshot(self)
+        journal.CustodyJournal.claim_public_revocation(binding.journal, request_digest)
+        if _snapshot(self) is not binding:
+            raise CustodyClientError("public revocation custody changed after its irreversible local claim")
+
+    def load_public_revocation(self, request_digest):
+        binding = _snapshot(self)
+        result = journal.CustodyJournal.load_public_revocation(binding.journal, request_digest)
+        if _snapshot(self) is not binding:
+            raise CustodyClientError("public revocation custody changed while reading originals")
+        return result
+
     @classmethod
     def from_environment(cls, *, directory_fd, expected_device, expected_inode,
             expected_uid, expected_gid, quota_bytes, maximum_records):

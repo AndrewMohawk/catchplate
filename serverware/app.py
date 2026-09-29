@@ -1475,6 +1475,25 @@ class ControlPlaneMutationWebAuthnOptions(BaseModel):
     api_version: str | None = Field(default=None, alias="apiVersion")
 
 
+class PublicRevocationApprovalWebAuthnOptions(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    api_version: Literal["serverware.publicWebAuthnRevocationApprovalOptionsRequest/v1"] = Field(alias="apiVersion")
+    action: Literal["webauthn.credential.revoke"]
+    resource_id: str = Field(alias="resourceId", min_length=1, max_length=1024)
+    reason: str = Field(min_length=1, max_length=500)
+    approval_id: str | None = Field(alias="approvalId", max_length=256)
+    credential_record_id: str | None = Field(alias="credentialRecordId", max_length=1024)
+
+
+class PublicRevocationApprovalSubmit(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    api_version: Literal["serverware.publicWebAuthnRevocationApprovalSubmitRequest/v1"] = Field(alias="apiVersion")
+    local_digest: str = Field(alias="localDigest", pattern=r"^sha256:[0-9a-f]{64}$")
+    mfa: dict[str, Any] | None
+
+
 class PublicationApprovalWebAuthnOptions(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
@@ -2007,6 +2026,31 @@ class WebAuthnCredentialRevoke(BaseModel):
 
     reason: str = Field(min_length=1, max_length=500)
     mfa: dict[str, Any] | None = None
+
+
+class PublicWebAuthnRevocationOptions(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    api_version: Literal["serverware.publicWebAuthnRevocationOptionsRequest/v1"] = Field(alias="apiVersion")
+    reason: str = Field(min_length=1, max_length=500)
+    approval_id: str | None = Field(alias="approvalId", max_length=256)
+    credential_record_id: str | None = Field(alias="credentialRecordId", max_length=1024)
+
+
+class PublicWebAuthnRevocationExecute(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    api_version: Literal["serverware.publicWebAuthnRevocationExecuteRequest/v1"] = Field(alias="apiVersion")
+    local_digest: str = Field(alias="localDigest", pattern=r"^sha256:[0-9a-f]{64}$")
+    reason: str = Field(min_length=1, max_length=500)
+    mfa: dict[str, Any] | None
+
+
+class PublicWebAuthnRevocationRecovery(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    api_version: Literal["serverware.publicWebAuthnRevocationRecoveryRequest/v1"] = Field(alias="apiVersion")
+    local_digest: str = Field(alias="localDigest", pattern=r"^sha256:[0-9a-f]{64}$")
 
 
 class WebAuthnTrustPublish(BaseModel):
@@ -7868,7 +7912,7 @@ def execute_control_plane_authority_operation(
 
 @app.post("/api/control-plane/mutations/webauthn/options")
 def control_plane_mutation_webauthn_options(
-    payload: OAuthActivationWebAuthnOptions | PublicationApprovalWebAuthnOptions | ControlPlaneMutationWebAuthnOptions,
+    payload: PublicRevocationApprovalWebAuthnOptions | OAuthActivationWebAuthnOptions | PublicationApprovalWebAuthnOptions | ControlPlaneMutationWebAuthnOptions,
     request: Request,
     identity: AdminIdentity = Depends(
         require_role(
@@ -7881,6 +7925,19 @@ def control_plane_mutation_webauthn_options(
         )
     ),
 ) -> dict[str, Any]:
+    if payload.action == "webauthn.credential.revoke":
+        from serverware import control_plane_public_revocation as public_revocation
+        if type(payload) is PublicRevocationApprovalWebAuthnOptions:
+            from serverware import control_plane_public_revocation_approval
+            try:
+                return control_plane_public_revocation_approval.options_on_request(
+                    request, public_revocation.body_original(request))
+            except HTTPException:
+                raise
+            except Exception:
+                raise HTTPException(status_code=409, detail="public revocation approval options unavailable; no automatic retry") from None
+        if public_revocation.selected() or payload.api_version is not None:
+            raise HTTPException(status_code=409, detail="use the explicit public revocation approval options profile")
     if payload.action == "credential.oauth.activate":
         from serverware import control_plane_oauth_activation as oauth_activation
         if type(payload) is OAuthActivationWebAuthnOptions:
@@ -8290,7 +8347,7 @@ def control_plane_approvals(
 def control_plane_approval_approve(
     approval_id: str,
     request: Request,
-    payload: ControlPlaneApprovalDecision | None = Body(default=None),
+    payload: PublicRevocationApprovalSubmit | ControlPlaneApprovalDecision | None = Body(default=None),
     identity: AdminIdentity = Depends(require_admin),
 ) -> dict[str, Any]:
     decision = payload if isinstance(payload, ControlPlaneApprovalDecision) else None
@@ -8302,6 +8359,19 @@ def control_plane_approval_approve(
             status_code=409,
             detail=f"control-plane approval is already {approval['status']}",
         )
+    if approval["action"] == "webauthn.credential.revoke":
+        from serverware import control_plane_public_revocation as public_revocation
+        if type(payload) is PublicRevocationApprovalSubmit:
+            from serverware import control_plane_public_revocation_approval
+            try:
+                return control_plane_public_revocation_approval.submit_on_request(request,
+                    approval["resource_id"], public_revocation.body_original(request), approval_id=approval_id)
+            except HTTPException:
+                raise
+            except Exception:
+                raise HTTPException(status_code=409, detail="public revocation approval outcome unresolved; no automatic retry") from None
+        if public_revocation.selected():
+            raise HTTPException(status_code=409, detail="use the explicit public revocation approval submission")
     if approval["action"] == "credential.oauth.activate":
         from serverware import control_plane_oauth_activation as oauth_activation
         if (oauth_activation.selected() or decision is not None and isinstance(decision.mfa, dict)
@@ -16741,12 +16811,71 @@ def webauthn_credentials(
     ]
 
 
+@app.post("/api/webauthn/credentials/{record_id}/revocation/options")
+def public_webauthn_revocation_options(
+    record_id: str, request: Request, payload: PublicWebAuthnRevocationOptions,
+    identity: AdminIdentity = Depends(require_role("admin", "approver")),
+) -> dict[str, Any]:
+    from serverware import control_plane_public_revocation as public_revocation
+    try:
+        return public_revocation.options_on_request(request, record_id, public_revocation.body_original(request))
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=409, detail="public revocation options unavailable; no automatic retry") from None
+
+
+@app.post("/api/webauthn/credentials/{record_id}/revocation/approval/request")
+def public_webauthn_revocation_approval_request(
+    record_id: str, request: Request, payload: PublicRevocationApprovalSubmit,
+    identity: AdminIdentity = Depends(require_role("admin", "approver")),
+) -> dict[str, Any]:
+    from serverware import control_plane_public_revocation as public_revocation
+    from serverware import control_plane_public_revocation_approval
+    try:
+        return control_plane_public_revocation_approval.submit_on_request(
+            request, record_id, public_revocation.body_original(request))
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=409, detail="public revocation approval request unresolved; no automatic retry") from None
+
+
+@app.post("/api/webauthn/credentials/{record_id}/revocation/recover")
+def public_webauthn_revocation_recover(
+    record_id: str, request: Request, payload: PublicWebAuthnRevocationRecovery,
+    identity: AdminIdentity = Depends(require_role("admin", "approver")),
+) -> dict[str, Any]:
+    from serverware import control_plane_public_revocation as public_revocation
+    from serverware import control_plane_public_revocation_execution
+    try:
+        return control_plane_public_revocation_execution.recover_on_request(
+            request, record_id, public_revocation.body_original(request))
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=409, detail="public revocation recovery unresolved; no automatic retry") from None
+
+
 @app.post("/api/webauthn/credentials/{record_id}/revoke")
 def webauthn_credential_revoke(
     record_id: str,
-    payload: WebAuthnCredentialRevoke,
+    payload: PublicWebAuthnRevocationExecute | WebAuthnCredentialRevoke,
+    request: Request,
     identity: AdminIdentity = Depends(require_role("admin", "approver")),
 ) -> dict[str, Any]:
+    from serverware import control_plane_public_revocation as public_revocation
+    if type(payload) is PublicWebAuthnRevocationExecute:
+        from serverware import control_plane_public_revocation_execution
+        try:
+            return control_plane_public_revocation_execution.execute_on_request(
+                request, record_id, public_revocation.body_original(request))
+        except HTTPException:
+            raise
+        except Exception:
+            raise HTTPException(status_code=409, detail="public revocation unavailable; no automatic retry") from None
+    if public_revocation.selected():
+        raise HTTPException(status_code=409, detail="use the explicit durable public revocation options and execution profiles")
     credential = db.get_webauthn_credential_by_record_id(
         record_id, include_revoked=True
     )

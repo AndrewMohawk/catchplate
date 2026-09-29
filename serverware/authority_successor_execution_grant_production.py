@@ -112,6 +112,11 @@ def _hold_on_work(*, operation, originals, expectations, planner_public_key,
         shape._integer(inherited, minimum=1)
     elif held_custody is not None:
         raise SuccessorExecutionGrantProductionError("activation custody cannot authorize another grant family")
+    elif live_window is not None:
+        # Additive callers may retain their pre-intake opening. It is never
+        # widened, replaced by plan issue time or interpreted as authorization.
+        held_window = clock._validate(live_window)
+        shape._integer(inherited, minimum=1)
     # The actual family capture owns all caller graphs (and preserves the
     # exact revocation UTC instant) before any enrollment/key/clock callback.
     owned_expectations = replay._expectations(held_operation, expectations,
@@ -187,6 +192,12 @@ def _produce_held_on_work(held, held_authorization, *, work, request_binding=Non
             plan._same(held_authorization, request_binding.authorization_digest, work,
                 "grant authorization differs from the genuine original authorization")
         maximum_age, skew = window[5:]
+    elif request_binding is None and held.live_window is not None:
+        from serverware import authority_successor_execution_window as execution_window
+        window = execution_window._narrow(held.live_window, deadline_epoch_ns=held_deadline,
+            maximum_lifetime_ns=maximum_age, maximum_clock_skew_ns=skew)
+        bound = min(window[4], inherited)
+        last_epoch, last_monotonic = window[0], window[2]
     elif request_binding is None:
         window = clock._open_on_work(deadline_epoch_ns=held_deadline,
             maximum_lifetime_ns=maximum_age, maximum_clock_skew_ns=skew, work=work)

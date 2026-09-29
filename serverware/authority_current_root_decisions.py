@@ -31,6 +31,7 @@ import time
 from serverware import authority_current_root_authorization as authorization
 from serverware import authority_current_root_head as head_wire
 from serverware import authority_current_root_delivery_head as delivery_head_wire
+from serverware import authority_current_root_revocation_head as revocation_head_wire
 from serverware import authority_current_root_journal as storage
 from serverware import authority_current_root_lookup as lookup_wire
 from serverware import authority_current_root_vector as vector
@@ -462,10 +463,15 @@ class CurrentRootDecisionOwner:
         return CurrentRootDecisionOwner._observe_head(self, query_bytes,
             transport_deadline_ns=transport_deadline_ns, delivery=True)
 
-    def _observe_head(self, query_bytes, *, transport_deadline_ns, delivery):
-        if type(delivery) is not bool:
+    def observe_revocation_head(self, query_bytes, *, transport_deadline_ns=None):
+        """Explicit public-revocation head; never an activation/consume alias."""
+        return CurrentRootDecisionOwner._observe_head(self, query_bytes,
+            transport_deadline_ns=transport_deadline_ns, delivery=False, revocation=True)
+
+    def _observe_head(self, query_bytes, *, transport_deadline_ns, delivery, revocation=False):
+        if type(delivery) is not bool or type(revocation) is not bool or delivery and revocation:
             raise CurrentRootDecisionError("current-root head purpose is not source fixed")
-        protocol = delivery_head_wire if delivery else head_wire
+        protocol = revocation_head_wire if revocation else delivery_head_wire if delivery else head_wire
         if type(self) is not CurrentRootDecisionOwner:
             raise CurrentRootDecisionError("head observation requires the actual decision owner")
         if type(query_bytes) is not bytes or not 2 <= len(query_bytes) <= protocol.MAX_QUERY_BYTES:

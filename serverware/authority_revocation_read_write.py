@@ -32,7 +32,7 @@ from serverware.authority_query_read_work import (
 
 # Target + six complete roles + at most 32 approval audits + credential audit
 # + optional signer/challenge + two trust reads + the genuine framework counter.
-MAX_QUERY_READS = 1 + query_batch.QUERY_COUNT + complete.CASCADE_MAX + 1 + 2 + 2 + 1
+MAX_QUERY_READS = 1 + query_batch.QUERY_COUNT + complete.CASCADE_MAX + 1 + 2 + 2 + 1 + 5
 _ASSERTION_FIELDS = frozenset({"credentialRecordId", "challengeId"})
 
 
@@ -131,7 +131,10 @@ def _preflight(*, ledger, operation, request_digest, assertion_binding,
         raise RevocationReadWriteError("revocation operation is not source admitted")
     if type(request_digest) is not str or len(request_digest) != 71:
         raise RevocationReadWriteError("revocation request digest has an invalid exact shape")
-    if (type(assertion_binding) is not dict or len(assertion_binding) != 2
+    from serverware import authority_revocation_bundle_contract as binding_contract
+    if binding_contract.public_binding(assertion_binding):
+        binding_contract._assertion(assertion_binding)
+    elif (type(assertion_binding) is not dict or len(assertion_binding) != 2
             or any(type(key) is not str for key in assertion_binding)
             or set(assertion_binding) != _ASSERTION_FIELDS
             or any(type(value) is not str or not 1 <= len(value) <= 1024

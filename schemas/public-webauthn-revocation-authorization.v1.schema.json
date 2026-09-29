@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.dev/schemas/public-webauthn-revocation-authorization.v1.schema.json",
+  "title": "Measured public WebAuthn revocation authorization aggregate",
+  "description": "At most 262144 canonical ensure_ascii JSON bytes. Produced only by the measured verifier from the independently enrolled caller original. Signature, exact original request and configuration, current roles, complete authenticated cascade, clocks and one-use protected execution remain runtime requirements. Null assertion is valid only when the independently enrolled current policy does not require MFA. This does not widen assertion-only v4.",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema", "operation", "operationId", "requestDigest", "capabilityId", "actor", "policy", "payloadDigest", "approval", "assertion", "verifierIdentity", "verifiedAtEpochNs", "expiresAtEpochNs", "signatureBase64Url"],
+  "properties": {
+    "schema": {"const": "serverware.publicWebAuthnRevocationAuthorization/v1"},
+    "operation": {"const": "webauthn.credential.revoke"},
+    "operationId": {"$ref": "#/$defs/digest"}, "requestDigest": {"$ref": "#/$defs/digest"},
+    "capabilityId": {"$ref": "#/$defs/digest"}, "payloadDigest": {"$ref": "#/$defs/digest"},
+    "actor": {"$ref": "#/$defs/actor"}, "policy": {"$ref": "#/$defs/policy"},
+    "approval": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/approval"}]},
+    "assertion": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/assertion"}]},
+    "verifierIdentity": {"$ref": "#/$defs/identity"},
+    "verifiedAtEpochNs": {"$ref": "#/$defs/epoch"}, "expiresAtEpochNs": {"$ref": "#/$defs/epoch"},
+    "signatureBase64Url": {"$ref": "#/$defs/signature"}
+  },
+  "allOf": [
+    {"if": {"properties": {"policy": {"properties": {"mfaRequired": {"const": false}}}}}, "then": {"properties": {"assertion": {"type": "null"}}}, "else": {"properties": {"assertion": {"$ref": "#/$defs/assertion"}}}},
+    {"if": {"properties": {"policy": {"properties": {"twoPersonRequired": {"const": false}}}}}, "then": {"properties": {"approval": {"type": "null"}}}, "else": {"properties": {"approval": {"$ref": "#/$defs/approval"}}}}
+  ],
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "epoch": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807},
+    "integer": {"type": "integer", "minimum": 0, "maximum": 9223372036854775807},
+    "text": {"type": "string", "minLength": 1, "maxLength": 1024, "pattern": "^[^\\u0000]+$", "description": "Source additionally bounds UTF-8 bytes."},
+    "signature": {"type": "string", "pattern": "^[A-Za-z0-9_-]{86}$"},
+    "bytes": {"type": "string", "minLength": 1, "maxLength": 4194304, "pattern": "^[A-Za-z0-9_-]+$"},
+    "actor": {"type": "object", "additionalProperties": false,
+      "required": ["userId", "roles", "authMethod", "requestSha256"], "properties": {
+        "userId": {"$ref": "#/$defs/text"}, "authMethod": {"type": "string", "minLength": 1, "maxLength": 128},
+        "requestSha256": {"$ref": "#/$defs/digest"}, "roles": {"type": "array", "minItems": 1, "maxItems": 32, "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1, "maxLength": 128}, "contains": {"enum": ["admin", "approver"]}}}},
+    "policy": {"type": "object", "additionalProperties": false,
+      "required": ["mfaRequired", "twoPersonRequired", "credentialPolicy"], "properties": {
+        "mfaRequired": {"type": "boolean"}, "twoPersonRequired": {"type": "boolean"},
+        "credentialPolicy": {"type": "object", "additionalProperties": false, "required": ["userVerification"], "properties": {
+          "userVerification": {"const": "required"}, "requireHardwareAttestation": {"type": "boolean"},
+          "allowedAuthenticatorClasses": {"type": "array", "minItems": 1, "maxItems": 32, "uniqueItems": true,
+            "items": {"type": "string", "minLength": 1, "maxLength": 128}}}}}},
+    "approval": {"type": "object", "additionalProperties": false,
+      "required": ["id", "approvedBy", "credentialRecordId", "originalSha256"], "properties": {
+        "id": {"$ref": "#/$defs/text"}, "approvedBy": {"$ref": "#/$defs/text"},
+        "credentialRecordId": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/text"}]}, "originalSha256": {"$ref": "#/$defs/digest"}}},
+    "identity": {"type": "object", "additionalProperties": false,
+      "required": ["sessionIdentityDigest", "measurementDigest", "attestationReceiptDigest"], "properties": {
+        "sessionIdentityDigest": {"$ref": "#/$defs/digest"}, "measurementDigest": {"$ref": "#/$defs/digest"}, "attestationReceiptDigest": {"$ref": "#/$defs/digest"}}},
+    "assertion": {"type": "object", "additionalProperties": false,
+      "required": ["operationId", "requestDigest", "capabilityId", "challengeDigest", "clientChallengeDigest", "credentialPolicyDigest", "authenticatorDataDigest", "clientDataJSONDigest", "signatureDigest", "rpIdHashDigest", "trustHighWaterDigest", "verifierSessionIdentityDigest", "verifierMeasurementDigest", "verifierAttestationReceiptDigest", "verifiedAssertionReceiptDigest", "verifierSignatureDigest", "operation", "challengeId", "credentialRecordId", "credentialId", "rpId", "origin", "authenticatorDataBase64url", "clientDataJSONBase64url", "signatureBase64url", "verifierSignatureBase64url", "flags", "priorCounter", "counter", "metadataPublicationSequence", "verifiedAtEpochNs", "expiresAtEpochNs", "userPresent", "userVerified"],
+      "properties": {
+        "operationId": {"$ref": "#/$defs/digest"}, "requestDigest": {"$ref": "#/$defs/digest"}, "capabilityId": {"$ref": "#/$defs/digest"},
+        "challengeDigest": {"$ref": "#/$defs/digest"}, "clientChallengeDigest": {"$ref": "#/$defs/digest"}, "credentialPolicyDigest": {"$ref": "#/$defs/digest"},
+        "authenticatorDataDigest": {"$ref": "#/$defs/digest"}, "clientDataJSONDigest": {"$ref": "#/$defs/digest"}, "signatureDigest": {"$ref": "#/$defs/digest"},
+        "rpIdHashDigest": {"$ref": "#/$defs/digest"}, "trustHighWaterDigest": {"$ref": "#/$defs/digest"},
+        "verifierSessionIdentityDigest": {"$ref": "#/$defs/digest"}, "verifierMeasurementDigest": {"$ref": "#/$defs/digest"}, "verifierAttestationReceiptDigest": {"$ref": "#/$defs/digest"},
+        "verifiedAssertionReceiptDigest": {"$ref": "#/$defs/digest"}, "verifierSignatureDigest": {"$ref": "#/$defs/digest"},
+        "operation": {"const": "webauthn.credential.revoke"}, "challengeId": {"$ref": "#/$defs/text"}, "credentialRecordId": {"$ref": "#/$defs/text"},
+        "credentialId": {"$ref": "#/$defs/bytes"}, "rpId": {"$ref": "#/$defs/text"}, "origin": {"$ref": "#/$defs/text"},
+        "authenticatorDataBase64url": {"$ref": "#/$defs/bytes"}, "clientDataJSONBase64url": {"$ref": "#/$defs/bytes"},
+        "signatureBase64url": {"$ref": "#/$defs/bytes"}, "verifierSignatureBase64url": {"$ref": "#/$defs/signature"},
+        "flags": {"type": "integer", "minimum": 0, "maximum": 255}, "priorCounter": {"$ref": "#/$defs/integer"}, "counter": {"$ref": "#/$defs/integer"},
+        "metadataPublicationSequence": {"$ref": "#/$defs/integer"}, "verifiedAtEpochNs": {"$ref": "#/$defs/epoch"}, "expiresAtEpochNs": {"$ref": "#/$defs/epoch"},
+        "userPresent": {"const": true}, "userVerified": {"const": true}
+      }}
+  }
+}

@@ -1789,7 +1789,12 @@ def _enter(
     runtime_evidence_descriptor: int | None,
     handoff_descriptor: int | None,
     trusted_host_local: bool,
+    public_revocation: bool = False,
 ) -> int:
+    if type(public_revocation) is not bool or public_revocation and role not in {"verifier", "issuer", "executor"}:
+        raise LaunchError("public revocation launch selection is not a fixed terminal role")
+    expected_credentials = ROLE_CREDENTIAL_DESCRIPTOR_NAMES[role] | (
+        {"SERVERWARE_PUBLIC_WEBAUTHN_REVOCATION_BOOTSTRAP_FD"} if public_revocation else set())
     flags = sys.flags
     required_isolation_flags = ("-I", "-P", "-s", "-S", "-E")
     original_arguments = list(sys.orig_argv)
@@ -1881,7 +1886,7 @@ def _enter(
             binding["environmentName"]
             for binding in credential_descriptors
         }
-            != ROLE_CREDENTIAL_DESCRIPTOR_NAMES[role]
+            != expected_credentials
         or len(
             {
                 binding["descriptor"]
@@ -2368,10 +2373,15 @@ def main(argv: list[str] | None = None) -> int:
         default=[],
     )
     parser.add_argument("role", choices=sorted(PROCESS_MODES))
+    parser.add_argument("--public-webauthn-revocation", action="store_true")
     args = parser.parse_args(argv)
+    if args.public_webauthn_revocation and args.role not in {"verifier", "issuer", "executor"}:
+        raise LaunchError("public revocation launch selection has another role")
     required_assignments = (
         ROLE_CREDENTIAL_DESCRIPTOR_NAMES[args.role] | {BOOTSTRAP_CONTROL_NAME}
     )
+    if args.public_webauthn_revocation:
+        required_assignments |= {"SERVERWARE_PUBLIC_WEBAUTHN_REVOCATION_BOOTSTRAP_FD"}
     if args.role in RUNTIME_EVIDENCE_ROLES:
         required_assignments |= {RUNTIME_EVIDENCE_NAME}
     assignments: dict[str, int] = {}
@@ -2435,6 +2445,7 @@ def main(argv: list[str] | None = None) -> int:
         runtime_evidence_descriptor=assignments.get(RUNTIME_EVIDENCE_NAME),
         handoff_descriptor=args.stage_zero_handoff_fd,
         trusted_host_local=args.trusted_host_local,
+        public_revocation=args.public_webauthn_revocation,
     )
 
 

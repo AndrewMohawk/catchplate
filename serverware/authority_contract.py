@@ -10,7 +10,7 @@ from serverware import authority_complete_query
 from serverware.authority_query_read_work import _ValidationWork
 
 
-SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.277"
+SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.278"
 SCHEMA_VERSION = 9
 CONTRACT_SCHEMA = "serverware.policyAuthorityOperationContract/v3"
 BUSINESS_INTENT_SCHEMA = "serverware.policyAuthorityBusinessIntent/v2"
@@ -252,6 +252,13 @@ VERIFIER_READ_TABLES = frozenset({
     "webauthn_credentials",
     "webauthn_trust_publication_high_water",
     "webauthn_trust_publications",
+    # Exact committed v9 originals for the recovery-only startup consumer.
+    # The actual reader still has no metadata mutation/procedure privilege.
+    "policy_authority_writer_capabilities",
+    "policy_authority_planner_transactions",
+    "policy_authority_execution_envelopes",
+    "policy_authority_writer_receipts",
+    "policy_authority_consumed_envelopes",
 })
 _AUDIT_COUNTER_REPLACEMENT_OPERATIONS = frozenset({
     "policy.activation.prepare", "policy.activation.abort", "policy.genesis.prepare",
@@ -268,6 +275,8 @@ _AUDIT_COUNTER_REPLACEMENT_OPERATIONS = frozenset({
     "oauth.refresh-cleanup.claim", "oauth.refresh-cleanup.contact", "oauth.refresh-cleanup.finish",
     "policy-file-approval.request", "policy-file-approval.decide",
     "policy-file-approval.consume", "policy-file-approval.settle",
+    "public-revocation-approval.request-identity", "public-revocation-approval.request-asserted",
+    "public-revocation-approval.decide-identity", "public-revocation-approval.decide-asserted",
     "jit.review-receipt.issue", "jit.decide", "jit.deny",
 })
 _AUDIT_NEW_AGGREGATE_ROOT_OPERATIONS = frozenset({
@@ -1883,6 +1892,17 @@ _OPERATIONS = {
             ("oauth.refresh-cleanup.finish", "serverware_policy_authority_oauth_refresh_cleanup_finish"),
         )
     },
+    **{
+        "public-revocation-approval." + phase + "-" + mode: _spec(
+            "serverware_policy_authority_public_revocation_approval_" + phase + "_" + mode,
+            reads=("control_plane_approvals", "rbac_role_bindings", "webauthn_credentials",
+                "webauthn_challenges", "webauthn_trust_publication_high_water", "webauthn_trust_publications") + _PHASE2_AGGREGATE,
+            writes=("control_plane_approvals", "webauthn_credentials", "webauthn_challenges", "metadata_audit_outbox") + _PHASE2_AGGREGATE,
+            webauthn="bound-verified-assertion-receipt" if mode == "asserted" else "not-required",
+            proof_primitives=("primary-key-row", "bounded-limit-plus-one", "aggregate-high-water", "capacity-reservation"),
+            maximum_query_rows=16, maximum_mutations=10, maximum_work_units=256,
+        ) for phase in ("request", "decide") for mode in ("identity", "asserted")
+    },
     "control-approval.request": _spec(
         "ensure_control_plane_approval",
         reads=_CONTROL_APPROVAL + _PHASE2_AGGREGATE,
@@ -2833,6 +2853,7 @@ _OPERATIONS = {
             "approval_grants",
             "control_plane_approvals",
             "oidc_browser_sessions",
+            "rbac_role_bindings",
         ),
         writes=(
             "approval_grants",

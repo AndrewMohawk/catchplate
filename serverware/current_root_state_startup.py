@@ -343,7 +343,10 @@ def initialize_from_environment():
             decision = decisions.CurrentRootDecisionOwner(journal=journal, enrollment_bytes=enrollment,
                 root_public_key=root_key, state_private_key=private_key,
                 expected_sequence=sequence, expected_head_digest=head)
-            if launch["schema"] == bootstrap.LAUNCH_SCHEMA_V9:
+            if launch["schema"] == bootstrap.LAUNCH_SCHEMA_V10:
+                serving = service.CurrentRootDecisionService._with_public_revocation(
+                    owner=decision, timeout_seconds=timeout)
+            elif launch["schema"] == bootstrap.LAUNCH_SCHEMA_V9:
                 # V9 adds only consume completion and purpose-filtered known
                 # lookup; the actual owner authenticates signed operation and
                 # action before returning history or publishing a decision.

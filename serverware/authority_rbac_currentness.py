@@ -12,6 +12,9 @@ MAX_BYTES = 1024 * 1024
 ENROLLMENT_SCHEMA = "serverware.rbacWitnessEnrollment/v1"
 SIGNED_ENROLLMENT_SCHEMA = "serverware.signedRbacWitnessEnrollment/v1"
 STARTUP_SCHEMA = "serverware.rbacWitnessStartup/v1"
+ENROLLMENT_V2_SCHEMA = "serverware.rbacWitnessEnrollment/v2"
+SIGNED_ENROLLMENT_V2_SCHEMA = "serverware.signedRbacWitnessEnrollment/v2"
+STARTUP_V2_SCHEMA = "serverware.rbacWitnessStartup/v2"
 INTENT_SCHEMA = "serverware.rbacWitnessIntent/v1"
 COMPLETION_SCHEMA = "serverware.rbacWitnessCompletion/v1"
 TABLES = ("rbac_authority_state", "rbac_role_bindings")
@@ -95,12 +98,23 @@ def enrollment(raw, root):
     require(isinstance(root, Ed25519PublicKey))
     value = document(raw, 65536)
     require(type(value) is dict and set(value) == {"schema", "payload", "signatureBase64Url"}
-        and value["schema"] == SIGNED_ENROLLMENT_SCHEMA)
+        and value["schema"] in {SIGNED_ENROLLMENT_SCHEMA, SIGNED_ENROLLMENT_V2_SCHEMA})
     payload = value["payload"]
     fields = {"schema", "sourceRevision", "enrollmentId", "databaseId", "deploymentId", "configurationDigests",
         "metadataClusterId", "witnessClusterId", "metadataFaultDomain", "witnessFaultDomain", "reader", "writer",
         "initialState", "issuedAtEpochNs", "expiresAtEpochNs", "maximumRecords", "endpoint", "tlsRootSha256", "metadataDatabase"}
-    require(type(payload) is dict and set(payload) == fields and payload["schema"] == ENROLLMENT_SCHEMA)
+    second = value["schema"] == SIGNED_ENROLLMENT_V2_SCHEMA
+    require(type(payload) is dict and set(payload) == fields | ({"recoveryPublicKeyBase64Url"} if second else set())
+        and payload["schema"] == (ENROLLMENT_V2_SCHEMA if second else ENROLLMENT_SCHEMA))
+    if second:
+        raw_key = payload["recoveryPublicKeyBase64Url"]
+        require(type(raw_key) is str and re.fullmatch(r"[A-Za-z0-9_-]{43}", raw_key) is not None)
+        key_bytes = base64.urlsafe_b64decode(raw_key + "=")
+        require(base64.urlsafe_b64encode(key_bytes).rstrip(b"=").decode("ascii") == raw_key)
+        from cryptography.hazmat.primitives import serialization
+        require(key_bytes != root.public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw),
+            "RBAC recovery permission requires a separate independently enrolled signing key")
+        Ed25519PublicKey.from_public_bytes(key_bytes)
     for name in ("sourceRevision", "enrollmentId", "databaseId", "deploymentId", "metadataFaultDomain", "witnessFaultDomain"):
         require(type(payload[name]) is str and 0 < len(payload[name]) <= 256 and payload[name].isascii()
             and not any(ord(char) <= 32 or ord(char) >= 127 for char in payload[name]))
@@ -139,7 +153,7 @@ def enrollment(raw, root):
     require(type(signature_text) is str and re.fullmatch(r"[A-Za-z0-9_-]{86}", signature_text) is not None)
     signature = base64.urlsafe_b64decode(signature_text + "==")
     require(base64.urlsafe_b64encode(signature).rstrip(b"=").decode("ascii") == signature_text)
-    root.verify(signature, ENROLLMENT_SCHEMA.encode("ascii") + b"\0" + canonical(payload))
+    root.verify(signature, payload["schema"].encode("ascii") + b"\0" + canonical(payload))
     return payload
 
 
@@ -147,8 +161,9 @@ def sign_enrollment(payload, key):
     """Independent offline operator only; no runtime owns this signing key."""
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
     require(isinstance(key, Ed25519PrivateKey))
-    signature = key.sign(ENROLLMENT_SCHEMA.encode("ascii") + b"\0" + canonical(payload))
-    original = canonical({"schema": SIGNED_ENROLLMENT_SCHEMA, "payload": payload,
+    require(type(payload) is dict and payload.get("schema") in {ENROLLMENT_SCHEMA, ENROLLMENT_V2_SCHEMA})
+    signature = key.sign(payload["schema"].encode("ascii") + b"\0" + canonical(payload))
+    original = canonical({"schema": SIGNED_ENROLLMENT_V2_SCHEMA if payload["schema"] == ENROLLMENT_V2_SCHEMA else SIGNED_ENROLLMENT_SCHEMA, "payload": payload,
         "signatureBase64Url": base64.urlsafe_b64encode(signature).rstrip(b"=").decode("ascii")})
     enrollment(original, key.public_key())
     return original

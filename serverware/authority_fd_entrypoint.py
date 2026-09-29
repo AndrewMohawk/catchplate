@@ -69,6 +69,10 @@ CONTROL_PLANE_ENROLLMENT_V21_BOOTSTRAP_SCHEMA = "serverware.signedControlPlaneEn
 CONTROL_PLANE_ENROLLMENT_V21_PAYLOAD_SCHEMA = "serverware.controlPlaneEnrollmentBootstrap/v21"
 CONTROL_PLANE_ENROLLMENT_V22_BOOTSTRAP_SCHEMA = "serverware.signedControlPlaneEnrollmentBootstrap/v22"
 CONTROL_PLANE_ENROLLMENT_V22_PAYLOAD_SCHEMA = "serverware.controlPlaneEnrollmentBootstrap/v22"
+CONTROL_PLANE_ENROLLMENT_V23_BOOTSTRAP_SCHEMA = "serverware.signedControlPlaneEnrollmentBootstrap/v23"
+CONTROL_PLANE_ENROLLMENT_V23_PAYLOAD_SCHEMA = "serverware.controlPlaneEnrollmentBootstrap/v23"
+CONTROL_PLANE_REVOCATION_KEY_FD = 208
+CONTROL_PLANE_REVOCATION_KEY_NAME = "serverware-public-webauthn-revocation-caller-key"
 CONTROL_PLANE_COMPLETION_RECOVERY_SCHEMA = "serverware.controlPlaneOidcSessionActivationCompletionRecovery/v1"
 CONTROL_PLANE_ACTIVATION_COMPLETION_RECOVERY_SCHEMA = "serverware.controlPlaneOidcSessionActivationCompletionRecoveryScope/v1"
 CONTROL_PLANE_CONSUME_COMPLETION_RECOVERY_SCHEMA = "serverware.controlPlaneOidcSessionActivationConsumeCompletionRecoveryScope/v1"
@@ -696,8 +700,11 @@ def _open_rbac_witness_material(config_fd, *, occupied_descriptors):
     """CP delivery only; authority roles use their signed descriptor inventory."""
     from serverware import authority_rbac_currentness as profile
     config = profile.document(os.pread(config_fd, RBAC_WITNESS_CONFIG_MAX_BYTES + 1, 0), RBAC_WITNESS_CONFIG_MAX_BYTES)
-    profile.require(type(config) is dict and set(config) == {"schema", "sourceRevision", "configurationDigest",
-        "root", "enrollment", "tlsRoot", "clientCertificate", "clientKey"} and config["schema"] == profile.STARTUP_SCHEMA)
+    profile.require(type(config) is dict and config.get("schema") in {profile.STARTUP_SCHEMA, profile.STARTUP_V2_SCHEMA})
+    second = config["schema"] == profile.STARTUP_V2_SCHEMA
+    profile.require(set(config) == {"schema", "sourceRevision", "configurationDigest",
+        "root", "enrollment", "tlsRoot", "clientCertificate", "clientKey"} | ({"recoveryAuthorization"} if second else set())
+        and (not second or config["recoveryAuthorization"] is None), "HTTP runtime cannot acquire recovery-only permission")
     selected = (("root", "/run/serverware/authority-trust/rbac-witness-root-public-key", 4096, False),
         ("tlsRoot", "/run/serverware/authority-trust/rbac-witness-tls-root", 65536, False),
         ("clientCertificate", "/run/serverware/authority-trust/rbac-witness-reader-certificate", 65536, False),
@@ -1560,8 +1567,61 @@ def _control_plane_history_public_shape(payload, *, registration, finalization, 
         raise RuntimeError("activation history requires both shared historical inventories")
 
 
+def _control_plane_public_revocation_key_slot(value, *, issuer_descriptor, bootstrap_descriptor):
+    """Bound delivery shape only; actual signed admission stays in the child."""
+    if CONTROL_PLANE_REVOCATION_KEY_FD in (issuer_descriptor, bootstrap_descriptor):
+        raise RuntimeError("v23 reserves public revocation FD208 even when disabled")
+    if value is None:
+        return None
+    if (type(value) is not dict or set(value) != {"schema", "callerPrivateKeyFd",
+            "currentRootEnrollment", "grantEnrollment", "authorizationEnrollment", "stateEndpoint",
+            "mutationPolicy"}
+            or value["schema"] != "serverware.controlPlanePublicWebAuthnRevocation/v1"
+            or type(value["callerPrivateKeyFd"]) is not int or value["callerPrivateKeyFd"] != 208):
+        raise RuntimeError("public revocation delivery scope is not closed")
+    alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+    for name, maximum in (("currentRootEnrollment", 128 * 1024),
+            ("grantEnrollment", 16 * 1024), ("authorizationEnrollment", 16 * 1024)):
+        raw = value[name]
+        if type(raw) is not dict or set(raw) != {"base64Url", "byteCount"}:
+            raise RuntimeError("public revocation enrollment original is not closed")
+        encoded, size = raw["base64Url"], raw["byteCount"]
+        if (type(size) is not int or not 2 <= size <= maximum or type(encoded) is not str
+                or len(encoded) != (4 * size + 2) // 3 or any(c not in alphabet for c in encoded)):
+            raise RuntimeError("public revocation enrollment exceeds its fixed bound")
+        unused = 4 if size % 3 == 1 else 2 if size % 3 == 2 else 0
+        if unused and alphabet.index(encoded[-1]) & ((1 << unused) - 1):
+            raise RuntimeError("public revocation enrollment encoding is not canonical")
+    endpoint = value["stateEndpoint"]
+    if (type(endpoint) is not dict or set(endpoint) != {"socketPath", "requestTimeoutSeconds",
+            "serviceUid", "serviceGid", "listenerUid", "listenerGid"}
+            or endpoint["socketPath"] != "/run/serverware/current-root/state.sock"
+            or type(endpoint["requestTimeoutSeconds"]) is not int
+            or not 1 <= endpoint["requestTimeoutSeconds"] <= 30
+            or any(type(endpoint[name]) is not int or endpoint[name] != expected
+                for name, expected in (("serviceUid", 65516), ("serviceGid", 65516),
+                    ("listenerUid", 0), ("listenerGid", 0)))):
+        raise RuntimeError("public revocation state endpoint is not fixed")
+    policy = value["mutationPolicy"]
+    if (type(policy) is not dict or set(policy) != {"mfaRequired", "twoPersonRequired", "credentialPolicy"}
+            or any(type(policy[name]) is not bool for name in ("mfaRequired", "twoPersonRequired"))):
+        raise RuntimeError("public revocation mutation policy is not closed")
+    credential = policy["credentialPolicy"]
+    if (type(credential) is not dict or credential.get("userVerification") != "required"
+            or not set(credential) <= {"userVerification", "allowedAuthenticatorClasses", "requireHardwareAttestation"}
+            or "requireHardwareAttestation" in credential and type(credential["requireHardwareAttestation"]) is not bool):
+        raise RuntimeError("public revocation credential policy differs")
+    if "allowedAuthenticatorClasses" in credential:
+        classes = credential["allowedAuthenticatorClasses"]
+        if (type(classes) is not list or not 1 <= len(classes) <= 32
+                or any(type(item) is not str or not 1 <= len(item) <= 128 for item in classes)
+                or len(set(classes)) != len(classes)):
+            raise RuntimeError("public revocation authenticator classes are invalid")
+    return CONTROL_PLANE_REVOCATION_KEY_FD
+
+
 def _control_plane_enrollment_slot_projection(descriptor: int) -> tuple:
-    """Project closed v2-v22 slots; child admission alone supplies authority."""
+    """Project closed v2-v23 slots; child admission alone supplies authority."""
     if type(descriptor) is not int or not 3 <= descriptor <= 1023:
         raise RuntimeError("control-plane enrollment bootstrap descriptor is outside its range")
     metadata = os.fstat(descriptor)
@@ -1598,7 +1658,8 @@ def _control_plane_enrollment_slot_projection(descriptor: int) -> tuple:
                     CONTROL_PLANE_ENROLLMENT_V19_BOOTSTRAP_SCHEMA,
                     CONTROL_PLANE_ENROLLMENT_V20_BOOTSTRAP_SCHEMA,
                     CONTROL_PLANE_ENROLLMENT_V21_BOOTSTRAP_SCHEMA,
-                    CONTROL_PLANE_ENROLLMENT_V22_BOOTSTRAP_SCHEMA)):
+                    CONTROL_PLANE_ENROLLMENT_V22_BOOTSTRAP_SCHEMA,
+                    CONTROL_PLANE_ENROLLMENT_V23_BOOTSTRAP_SCHEMA)):
             raise RuntimeError("control-plane enrollment bootstrap envelope is not closed")
         is_v3 = value["schema"] == CONTROL_PLANE_ENROLLMENT_V3_BOOTSTRAP_SCHEMA
         is_v4 = value["schema"] == CONTROL_PLANE_ENROLLMENT_V4_BOOTSTRAP_SCHEMA
@@ -1610,7 +1671,8 @@ def _control_plane_enrollment_slot_projection(descriptor: int) -> tuple:
         is_v10 = value["schema"] == CONTROL_PLANE_ENROLLMENT_V10_BOOTSTRAP_SCHEMA
         is_v11 = value["schema"] == CONTROL_PLANE_ENROLLMENT_V11_BOOTSTRAP_SCHEMA
         is_v12 = value["schema"] == CONTROL_PLANE_ENROLLMENT_V12_BOOTSTRAP_SCHEMA
-        is_v22 = value["schema"] == CONTROL_PLANE_ENROLLMENT_V22_BOOTSTRAP_SCHEMA
+        is_v23 = value["schema"] == CONTROL_PLANE_ENROLLMENT_V23_BOOTSTRAP_SCHEMA
+        is_v22 = value["schema"] == CONTROL_PLANE_ENROLLMENT_V22_BOOTSTRAP_SCHEMA or is_v23
         is_v21 = value["schema"] == CONTROL_PLANE_ENROLLMENT_V21_BOOTSTRAP_SCHEMA or is_v22
         is_v20 = value["schema"] == CONTROL_PLANE_ENROLLMENT_V20_BOOTSTRAP_SCHEMA or is_v21
         is_v19 = value["schema"] == CONTROL_PLANE_ENROLLMENT_V19_BOOTSTRAP_SCHEMA or is_v20
@@ -1660,9 +1722,12 @@ def _control_plane_enrollment_slot_projection(descriptor: int) -> tuple:
             payload_fields.add("activationHistory")
         if is_v21:
             payload_fields.add("historicalConsumeInputAcquisition")
+        if is_v23:
+            payload_fields.add("publicWebAuthnRevocation")
         payload = value["payload"]
         if (type(payload) is not dict or set(payload) != payload_fields
-                or payload["schema"] != (CONTROL_PLANE_ENROLLMENT_V22_PAYLOAD_SCHEMA if is_v22
+                or payload["schema"] != (CONTROL_PLANE_ENROLLMENT_V23_PAYLOAD_SCHEMA if is_v23
+                    else CONTROL_PLANE_ENROLLMENT_V22_PAYLOAD_SCHEMA if is_v22
                     else CONTROL_PLANE_ENROLLMENT_V21_PAYLOAD_SCHEMA if is_v21
                     else CONTROL_PLANE_ENROLLMENT_V20_PAYLOAD_SCHEMA if is_v20
                     else CONTROL_PLANE_ENROLLMENT_V19_PAYLOAD_SCHEMA if is_v19
@@ -1765,6 +1830,8 @@ def _control_plane_enrollment_slot_projection(descriptor: int) -> tuple:
                 consume_value=payload["oidcSessionActivationConsumeExecution"])
         _control_plane_history_public_shape(payload, registration=is_v17,
             finalization=is_v18, activation=is_v19, v20=is_v20, v22=is_v22)
+        revocation_target = (_control_plane_public_revocation_key_slot(payload["publicWebAuthnRevocation"],
+            issuer_descriptor=target, bootstrap_descriptor=descriptor) if is_v23 else None)
         canonical = json.dumps(value, ensure_ascii=True, allow_nan=False,
             separators=(",", ":"), sort_keys=True).encode("ascii")
         if canonical != original:
@@ -1773,7 +1840,7 @@ def _control_plane_enrollment_slot_projection(descriptor: int) -> tuple:
         raise RuntimeError("control-plane enrollment bootstrap is invalid") from exc
     return (target, execution_target, finalization_target, is_v4 or is_v5 or is_v6 or is_v7 or is_v8 or is_v9 or is_v10 or is_v11 or is_v12 or is_v13,
         activation_target, is_v6 or is_v7 or is_v8 or is_v9 or is_v10 or is_v11 or is_v12 or is_v13, consume_target, is_v8 or is_v9 or is_v10 or is_v11 or is_v12 or is_v13,
-        intent_target, is_v9 or is_v10 or is_v11 or is_v12 or is_v13)
+        intent_target, is_v9 or is_v10 or is_v11 or is_v12 or is_v13, revocation_target, is_v23)
 
 
 def _control_plane_enrollment_purpose_slots(descriptor: int) -> tuple:
@@ -1836,7 +1903,7 @@ def _open_control_plane_purpose_key(bootstrap_descriptor: int, *, target,
         source_name: str, occupied_descriptors: set[int]) -> int | None:
     if source_name not in (CONTROL_PLANE_ENROLLMENT_KEY_NAME, CONTROL_PLANE_EXECUTION_KEY_NAME,
             CONTROL_PLANE_FINALIZATION_KEY_NAME, CONTROL_PLANE_ACTIVATION_KEY_NAME,
-            CONTROL_PLANE_CONSUME_KEY_NAME, CONTROL_PLANE_INTENT_KEY_NAME):
+            CONTROL_PLANE_CONSUME_KEY_NAME, CONTROL_PLANE_INTENT_KEY_NAME, CONTROL_PLANE_REVOCATION_KEY_NAME):
         raise RuntimeError("control-plane private-key source is not a fixed purpose")
     if target is None:
         return None
@@ -1845,7 +1912,8 @@ def _open_control_plane_purpose_key(bootstrap_descriptor: int, *, target,
             or source_name == CONTROL_PLANE_FINALIZATION_KEY_NAME and target != CONTROL_PLANE_FINALIZATION_KEY_FD
             or source_name == CONTROL_PLANE_ACTIVATION_KEY_NAME and target != CONTROL_PLANE_ACTIVATION_KEY_FD
             or source_name == CONTROL_PLANE_CONSUME_KEY_NAME and target != CONTROL_PLANE_CONSUME_KEY_FD
-            or source_name == CONTROL_PLANE_INTENT_KEY_NAME and target != CONTROL_PLANE_INTENT_KEY_FD):
+            or source_name == CONTROL_PLANE_INTENT_KEY_NAME and target != CONTROL_PLANE_INTENT_KEY_FD
+            or source_name == CONTROL_PLANE_REVOCATION_KEY_NAME and target != CONTROL_PLANE_REVOCATION_KEY_FD):
         raise RuntimeError("control-plane private-key target differs from its fixed purpose")
     if target in occupied_descriptors:
         raise RuntimeError("control-plane enrollment key descriptor is already assigned")
@@ -1953,6 +2021,24 @@ def _open_control_plane_oidc_session_activation_release_intent_key(bootstrap_des
             raise RuntimeError("disabled v9 intent has an undeclared open key slot")
     return _open_control_plane_purpose_key(bootstrap_descriptor, target=target,
         source_name=CONTROL_PLANE_INTENT_KEY_NAME, occupied_descriptors=occupied_descriptors)
+
+
+def _open_control_plane_public_revocation_key(bootstrap_descriptor: int, *,
+        occupied_descriptors: set[int]) -> int | None:
+    slots = _control_plane_enrollment_slot_projection(bootstrap_descriptor)
+    target, reserved = slots[10:12]
+    if reserved and target is None:
+        if CONTROL_PLANE_REVOCATION_KEY_FD in occupied_descriptors:
+            raise RuntimeError("disabled public revocation has an occupied reserved key slot")
+        try:
+            fcntl.fcntl(CONTROL_PLANE_REVOCATION_KEY_FD, fcntl.F_GETFD)
+        except OSError as exc:
+            if exc.errno != errno.EBADF:
+                raise
+        else:
+            raise RuntimeError("disabled public revocation has an undeclared key slot")
+    return _open_control_plane_purpose_key(bootstrap_descriptor, target=target,
+        source_name=CONTROL_PLANE_REVOCATION_KEY_NAME, occupied_descriptors=occupied_descriptors)
 
 
 def _control_plane_custody_configuration(descriptor: int) -> dict:
@@ -2533,7 +2619,9 @@ def _control_plane_health() -> int:
     return 1
 
 
-def _normal_main(role: str) -> int:
+def _normal_main(role: str, *, public_revocation: bool = False) -> int:
+    if type(public_revocation) is not bool or public_revocation and role not in {"verifier", "issuer", "executor"}:
+        raise RuntimeError("public revocation cold selection requires its fixed measured roles")
     trusted_host_local = (
         os.environ.get("SERVERWARE_AUTHORITY_TRUST_MODE")
         == "trusted-host-local"
@@ -2547,6 +2635,8 @@ def _normal_main(role: str) -> int:
     if os.geteuid() != 0 or os.getegid() != 0:
         raise RuntimeError("authority descriptor bootstrap must start as root")
     environment = dict(os.environ)
+    environment.pop("SERVERWARE_PUBLIC_WEBAUTHN_REVOCATION_BOOTSTRAP_FD", None)
+    environment.pop("SERVERWARE_PUBLIC_WEBAUTHN_REVOCATION_BOOTSTRAP_PATH", None)
     if any(
         environment.get(name)
         for name in OBSOLETE_STATIC_RELEASE_CONSUMER_NAMES
@@ -2662,6 +2752,27 @@ def _normal_main(role: str) -> int:
                     "SERVERWARE_POLICY_AUTHORITY_LAUNCH_MANIFEST_FD"
                 ):
                     launch_manifest_descriptor = descriptor
+        if public_revocation:
+            target = 212
+            if target in descriptors:
+                raise RuntimeError("public revocation terminal descriptor overlaps another original")
+            try:
+                os.fstat(target)
+            except OSError as exc:
+                if exc.errno != 9:
+                    raise
+            else:
+                raise RuntimeError("public revocation terminal descriptor is already occupied")
+            original = _open_systemd_credential("serverware-authority-" + role + "-public-revocation")
+            if original != target:
+                try:
+                    os.dup2(original, target, inheritable=True)
+                finally:
+                    os.close(original)
+            else:
+                os.set_inheritable(target, True)
+            descriptors.append(target)
+            descriptor_assignments.append(("SERVERWARE_PUBLIC_WEBAUTHN_REVOCATION_BOOTSTRAP_FD", target))
         if role == "witness":
             if launch_manifest_descriptor is None:
                 raise RuntimeError(
@@ -2726,6 +2837,10 @@ def _normal_main(role: str) -> int:
                 enrollment_bootstrap_descriptor, occupied_descriptors=set(descriptors))
             if intent_key is not None:
                 descriptors.append(intent_key)
+            revocation_key = _open_control_plane_public_revocation_key(
+                enrollment_bootstrap_descriptor, occupied_descriptors=set(descriptors))
+            if revocation_key is not None:
+                descriptors.append(revocation_key)
             environment["SERVERWARE_PROCESS_MODE"] = PROCESS_MODES[role]
             _drop_identity(role)
             os.execve(
@@ -2763,6 +2878,8 @@ def _normal_main(role: str) -> int:
                     f"{environment_name}={descriptor}",
                 ]
             )
+        if public_revocation:
+            launcher_arguments.append("--public-webauthn-revocation")
         launcher_arguments.append(role)
         os.execve(
             "/runtime/python/bin/python3",
@@ -2776,6 +2893,9 @@ def _normal_main(role: str) -> int:
 
 
 def main() -> int:
+    if (len(sys.argv) == 3 and sys.argv[2] == "--public-webauthn-revocation"
+            and sys.argv[1] in {"verifier", "issuer", "executor"}):
+        return _normal_main(sys.argv[1], public_revocation=True)
     if len(sys.argv) == 2 and sys.argv[1] == "witness-init":
         raise RuntimeError(
             "legacy witness ledger initialization is forbidden; "

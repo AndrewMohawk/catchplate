@@ -37,6 +37,8 @@ HEAD_QUERY_REQUEST_MAGIC = b"SWCHQR01"
 HEAD_OBSERVATION_RESPONSE_MAGIC = b"SWCHST01"
 DELIVERY_HEAD_QUERY_REQUEST_MAGIC = b"SWDHQR01"
 DELIVERY_HEAD_OBSERVATION_RESPONSE_MAGIC = b"SWDHST01"
+REVOCATION_HEAD_QUERY_REQUEST_MAGIC = b"SWRHQR01"
+REVOCATION_HEAD_OBSERVATION_RESPONSE_MAGIC = b"SWRHST01"
 REQUEST_MAGICS = (RESERVE_REQUEST_MAGIC, COMPLETE_REQUEST_MAGIC)
 MAX_REQUEST_BYTES = 256 * 1024
 MAX_RECEIPT_BYTES = 16 * 1024
@@ -139,6 +141,11 @@ def _recv_delivery_head_query(connection, *, prefix, deadline_ns):
         deadline_ns=deadline_ns)
 
 
+def _recv_revocation_head_query(connection, *, prefix, deadline_ns):
+    return _recv_head_body(connection, prefix=prefix, expected_magic=REVOCATION_HEAD_QUERY_REQUEST_MAGIC,
+        deadline_ns=deadline_ns)
+
+
 def _recv_head_body(connection, *, prefix, expected_magic, deadline_ns):
     if type(prefix) is not bytes or prefix != expected_magic:
         raise AuthorityTransportError("current-root head query magic is invalid")
@@ -160,6 +167,11 @@ def _send_delivery_head_observation(connection, observation_bytes, *, deadline_n
         response_magic=DELIVERY_HEAD_OBSERVATION_RESPONSE_MAGIC, deadline_ns=deadline_ns)
 
 
+def _send_revocation_head_observation(connection, observation_bytes, *, deadline_ns):
+    return _send_head_body(connection, observation_bytes,
+        response_magic=REVOCATION_HEAD_OBSERVATION_RESPONSE_MAGIC, deadline_ns=deadline_ns)
+
+
 def _send_head_body(connection, observation_bytes, *, response_magic, deadline_ns):
     observation = _original(observation_bytes, MAX_HEAD_OBSERVATION_BYTES, "head observation")
     header = response_magic + len(observation).to_bytes(8, "big")
@@ -179,6 +191,9 @@ def _socket_exchange(config, *, purpose, original_bytes, deadline_ns):
     elif type(purpose) is str and purpose == "delivery-head":
         magic, maximum = DELIVERY_HEAD_QUERY_REQUEST_MAGIC, MAX_HEAD_QUERY_BYTES
         response_magic, response_maximum = DELIVERY_HEAD_OBSERVATION_RESPONSE_MAGIC, MAX_HEAD_OBSERVATION_BYTES
+    elif type(purpose) is str and purpose == "revocation-head":
+        magic, maximum = REVOCATION_HEAD_QUERY_REQUEST_MAGIC, MAX_HEAD_QUERY_BYTES
+        response_magic, response_maximum = REVOCATION_HEAD_OBSERVATION_RESPONSE_MAGIC, MAX_HEAD_OBSERVATION_BYTES
     else:
         magic, maximum = _action(purpose), MAX_REQUEST_BYTES
         response_magic, response_maximum = RESPONSE_MAGIC, MAX_RECEIPT_BYTES
@@ -249,6 +264,16 @@ def _delivery_head_on_configuration(config, *, query_bytes, deadline_ns):
 
 
 def _delivery_head_on_work(config, *, query_bytes, deadline_ns, work, current):
+    return _guarded_head_on_work(config, query_bytes=query_bytes, deadline_ns=deadline_ns,
+        work=work, current=current, revocation=False)
+
+
+def _revocation_head_on_work(config, *, query_bytes, deadline_ns, work, current):
+    return _guarded_head_on_work(config, query_bytes=query_bytes, deadline_ns=deadline_ns,
+        work=work, current=current, revocation=True)
+
+
+def _guarded_head_on_work(config, *, query_bytes, deadline_ns, work, current, revocation):
     """One fixed delivery-head query retaining the actual original guard.
 
     This direct metered path is not invoked inside a stable-metrics callback.
@@ -257,6 +282,11 @@ def _delivery_head_on_work(config, *, query_bytes, deadline_ns, work, current):
     """
     from serverware import oidc_session_activation_release_transport as chunks
 
+    if type(revocation) is not bool:
+        raise AuthorityTransportError("current-root head transport requires a source-fixed purpose")
+    request_magic, response_magic = ((REVOCATION_HEAD_QUERY_REQUEST_MAGIC,
+        REVOCATION_HEAD_OBSERVATION_RESPONSE_MAGIC) if revocation else
+        (DELIVERY_HEAD_QUERY_REQUEST_MAGIC, DELIVERY_HEAD_OBSERVATION_RESPONSE_MAGIC))
     configured = _validate_configuration(config)
     request = _original(query_bytes, MAX_HEAD_QUERY_BYTES, "delivery head query")
     chunks._guard(work, current, deadline_ns)
@@ -313,11 +343,11 @@ def _delivery_head_on_work(config, *, query_bytes, deadline_ns, work, current):
         peer_identity = chunks._native(lambda: authority_transport._peer_identity(connection), **kwargs)
         if peer_identity[:2] != configured[2:]:
             raise AuthorityTransportError("delivery head peer changed after connection")
-        header = DELIVERY_HEAD_QUERY_REQUEST_MAGIC + len(request).to_bytes(8, "big")
+        header = request_magic + len(request).to_bytes(8, "big")
         chunks._send_precharged(connection, header, **kwargs)
         chunks._send_precharged(connection, request, **kwargs)
         chunks._native(lambda: connection.shutdown(socket.SHUT_WR), **kwargs)
-        if chunks._recv_exact(connection, 8, **kwargs) != DELIVERY_HEAD_OBSERVATION_RESPONSE_MAGIC:
+        if chunks._recv_exact(connection, 8, **kwargs) != response_magic:
             raise AuthorityTransportError("delivery head response magic differs")
         raw_length = chunks._recv_exact(connection, 8, **kwargs)
         work.charge(input_bytes=8)

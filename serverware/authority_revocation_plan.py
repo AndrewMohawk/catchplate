@@ -298,6 +298,8 @@ def _expectations(owned, ledger):
 
 def _bindings(payload, owned, actual, ledger):
     work, plan = ledger.work, payload["measuredPlan"]
+    public = payload["schema"] == contract.PUBLIC_PLANNER_RESPONSE_SCHEMA
+    authorization_field, authorization_domain = contract.authorization_digest_profile(public)
     inputs, authorization = payload["revocationProofBundle"]["inputs"], payload["authorizationProjection"]
     expected_fields = {
         "operationContractDigest": authority_contract.OPERATION_MANIFEST_DIGEST,
@@ -325,8 +327,7 @@ def _bindings(payload, owned, actual, ledger):
         "sourceHighWaterDigest": _json_digest("serverware.policyAuthorityAuthorizationRootSet/v1",
             owned["expectedBefore"]["authorizationBeforeRoots"], ledger),
         "approverPolicyDigest": owned["expectedApproverPolicyDigest"],
-        "assertionEvidenceDigest": _json_digest("serverware.policyAuthorityWebAuthnAssertionEvidence/v1",
-            payload["webauthnEvidence"], ledger),
+        authorization_field: _json_digest(authorization_domain, payload["webauthnEvidence"], ledger),
         "verifierSessionIdentityDigest": owned["expectedVerifierIdentity"]["sessionIdentityDigest"],
         "verifierMeasurementDigest": owned["expectedVerifierIdentity"]["measurementDigest"],
         "verifierAttestationReceiptDigest": owned["expectedVerifierIdentity"]["attestationReceiptDigest"],
@@ -343,7 +344,7 @@ def _bindings(payload, owned, actual, ledger):
         (payload["expectedResultDigest"], "serverware.policyAuthorityControlledWriterResult/v2", actual.kernel.result),
     ):
         _same(value, _json_digest(domain, graph, ledger), work, "revocation derived commitment changed")
-    snapshot = _frame(contract.SNAPSHOT_DOMAIN,
+    snapshot = _frame(contract.profile(public)[3],
         tuple(_ascii(plan[name], work) for name in contract.SNAPSHOT_FRAME_FIELDS), work)
     _same(plan["authoritySnapshotDigest"], snapshot, work, "revocation v4 snapshot commitment changed")
     _trace(payload, ledger, actual.proof.primary.business_after_roots)
@@ -408,7 +409,8 @@ def _verify_on_ledger(
         signature = base64.b64decode(signature_text, altchars=b"-_", validate=True)
         if len(signature) != 64:
             raise RevocationPlanError("revocation planner signature has invalid length")
-        message = _ascii(_frame(contract.SIGNED_MEASURED_PLAN_SCHEMA, (payload_wire,), work), work)
+        public = payload["schema"] == contract.PUBLIC_PLANNER_RESPONSE_SCHEMA
+        message = _ascii(_frame(contract.profile(public)[2], (payload_wire,), work), work)
         signature_limits, signature_metrics = work.limits, work.metrics
         signature_limit_values = (signature_limits.max_hashes,
             signature_limits.max_input_bytes, signature_limits.max_json_nodes)

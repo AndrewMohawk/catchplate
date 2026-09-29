@@ -1289,6 +1289,30 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/data_plane_audit_authority.py \
 	serverware/data_plane_audit_store.py \
 	serverware/authority_rbac_currentness.py \
+	serverware/authority_current_root_revocation_head.py \
+	serverware/authority_public_revocation_approval.py \
+	serverware/authority_public_revocation_approval_owner.py \
+	serverware/authority_public_revocation_caller_authorization.py \
+	serverware/authority_public_revocation_caller_signing.py \
+	serverware/authority_public_revocation_execution.py \
+	serverware/authority_public_revocation_preparation.py \
+	serverware/authority_public_revocation_recovery_authorization.py \
+	serverware/authority_public_revocation_request.py \
+	serverware/authority_public_revocation_service.py \
+	serverware/authority_public_revocation_terminal.py \
+	serverware/authority_public_revocation_terminal_bootstrap.py \
+	serverware/authority_public_revocation_transport.py \
+	serverware/authority_public_webauthn_revocation.py \
+	serverware/authority_public_webauthn_revocation_kernel.py \
+	serverware/authority_rbac_recovery.py \
+	serverware/authority_store/rbac_recovery_sql.py \
+	serverware/authority_transition_public_revocation_approval.py \
+	serverware/control_plane_public_revocation.py \
+	serverware/control_plane_public_revocation_approval.py \
+	serverware/control_plane_public_revocation_bootstrap.py \
+	serverware/control_plane_public_revocation_execution.py \
+	serverware/control_plane_public_revocation_records.py \
+	serverware/control_plane_rbac_recovery.py \
 	serverware/authority_rbac_witness.py \
 	serverware/control_plane_rbac_currentness.py \
 	serverware/authority_store/rbac_witness_sql.py \
@@ -3616,6 +3640,30 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/data_plane_audit_authority.py \
 				serverware/data_plane_audit_store.py \
 				serverware/authority_rbac_currentness.py \
+				serverware/authority_current_root_revocation_head.py \
+				serverware/authority_public_revocation_approval.py \
+				serverware/authority_public_revocation_approval_owner.py \
+				serverware/authority_public_revocation_caller_authorization.py \
+				serverware/authority_public_revocation_caller_signing.py \
+				serverware/authority_public_revocation_execution.py \
+				serverware/authority_public_revocation_preparation.py \
+				serverware/authority_public_revocation_recovery_authorization.py \
+				serverware/authority_public_revocation_request.py \
+				serverware/authority_public_revocation_service.py \
+				serverware/authority_public_revocation_terminal.py \
+				serverware/authority_public_revocation_terminal_bootstrap.py \
+				serverware/authority_public_revocation_transport.py \
+				serverware/authority_public_webauthn_revocation.py \
+				serverware/authority_public_webauthn_revocation_kernel.py \
+				serverware/authority_rbac_recovery.py \
+				serverware/authority_store/rbac_recovery_sql.py \
+				serverware/authority_transition_public_revocation_approval.py \
+				serverware/control_plane_public_revocation.py \
+				serverware/control_plane_public_revocation_approval.py \
+				serverware/control_plane_public_revocation_bootstrap.py \
+				serverware/control_plane_public_revocation_execution.py \
+				serverware/control_plane_public_revocation_records.py \
+				serverware/control_plane_rbac_recovery.py \
 				serverware/authority_rbac_witness.py \
 				serverware/control_plane_rbac_currentness.py \
 				serverware/authority_store/rbac_witness_sql.py \
@@ -4016,6 +4064,11 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-current-credential-lease-envelope.v2.schema.json \
 				schemas/measured-data-plane-audit.v1.schema.json \
 				schemas/rbac-witness.v1.schema.json \
+				schemas/public-webauthn-revocation-authorization.v1.schema.json \
+				schemas/public-webauthn-revocation-caller-enrollment.v1.schema.json \
+				schemas/public-webauthn-revocation-cold.v1.schema.json \
+				schemas/public-webauthn-revocation-http.v1.schema.json \
+				schemas/rbac-witness-recovery.v1.schema.json \
 				schemas/native-secret-broker.v1.schema.json \
 				schemas/native-startup-configuration.v5.schema.json \
 				schemas/native-startup-configuration.v6.schema.json \

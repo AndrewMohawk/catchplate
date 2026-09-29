@@ -66,6 +66,9 @@ class Connection:
                 "WHERE n.nspname='serverware_rbac_witness' ORDER BY p.proname").fetchall()
             expected_functions = {("identity", ""): True, ("read_head", "text"): True, ("read_record", "text, text"): True,
                 ("reserve", "text, text"): self.owner.writer, ("complete", "text, text, text, text"): self.owner.writer}
+            if self.owner.policy["schema"] == wire.ENROLLMENT_V2_SCHEMA:
+                expected_functions.update({("recovery_head", "text"): self.owner.writer,
+                    ("recover_complete", "text, text, text, text, text"): self.owner.writer})
             wire.require(len(functions) == len(expected_functions))
             for function in functions:
                 key = function["proname"], function["arguments"]
@@ -180,6 +183,9 @@ def provision(connection, enrollment_original, root_original):
         wire.require(connection.execute("SELECT 1 FROM pg_catalog.pg_namespace WHERE nspname='serverware_rbac_witness'").fetchone() is None,
             "RBAC witness provisioning refuses an existing or uncertain namespace")
         connection.execute(sql.DDL)
+        if policy["schema"] == wire.ENROLLMENT_V2_SCHEMA:
+            from serverware.authority_store import rbac_recovery_sql
+            connection.execute(rbac_recovery_sql.DDL)
         connection.execute("INSERT INTO serverware_rbac_witness.enrollments(enrollment_sha256,database_id,enrollment_original,head_original,head_sha256,maximum_records) "
             "VALUES(%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING", (enrollment_sha256, policy["databaseId"], enrollment_original.decode("ascii"),
                 initial.decode("ascii"), wire.sha256(initial), policy["maximumRecords"]))

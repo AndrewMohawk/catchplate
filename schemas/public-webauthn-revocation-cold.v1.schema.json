@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.dev/schemas/public-webauthn-revocation-cold.v1.schema.json",
+  "title": "Public WebAuthn revocation independent cold inputs",
+  "description": "A v23 control-plane scope or separately root-signed verifier/issuer/executor terminal bootstrap. Source verifies canonical ASCII originals, independent root signatures, all original enrollments, actual measured role keys, generation, process identity, sealed descriptors, protected files and journal checkpoints. Shape alone grants no effect. Terminal original <=524288 bytes and validity <=300 seconds; request effects remain within their original <=30 seconds.",
+  "oneOf": [{"$ref": "#/$defs/scope"}, {"$ref": "#/$defs/terminal"}],
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "epoch": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807},
+    "original": {"type": "object", "additionalProperties": false, "required": ["base64Url", "byteCount"], "properties": {
+      "base64Url": {"type": "string", "minLength": 3, "maxLength": 174763, "pattern": "^[A-Za-z0-9_-]+$"},
+      "byteCount": {"type": "integer", "minimum": 2, "maximum": 131072}}},
+    "scope": {"type": "object", "additionalProperties": false,
+      "required": ["schema", "callerPrivateKeyFd", "currentRootEnrollment", "grantEnrollment", "authorizationEnrollment", "stateEndpoint", "mutationPolicy"],
+      "properties": {
+        "schema": {"const": "serverware.controlPlanePublicWebAuthnRevocation/v1"}, "callerPrivateKeyFd": {"const": 208},
+        "currentRootEnrollment": {"$ref": "#/$defs/original"},
+        "grantEnrollment": {"allOf": [{"$ref": "#/$defs/original"}, {"properties": {"byteCount": {"maximum": 16384}, "base64Url": {"maxLength": 21846}}}]},
+        "authorizationEnrollment": {"allOf": [{"$ref": "#/$defs/original"}, {"properties": {"byteCount": {"maximum": 16384}, "base64Url": {"maxLength": 21846}}}]},
+        "mutationPolicy": {"$ref": "public-webauthn-revocation-authorization.v1.schema.json#/$defs/policy"},
+        "stateEndpoint": {"type": "object", "additionalProperties": false,
+          "required": ["socketPath", "requestTimeoutSeconds", "serviceUid", "serviceGid", "listenerUid", "listenerGid"], "properties": {
+            "socketPath": {"const": "/run/serverware/current-root/state.sock"}, "requestTimeoutSeconds": {"type": "integer", "minimum": 1, "maximum": 30},
+            "serviceUid": {"const": 65516}, "serviceGid": {"const": 65516}, "listenerUid": {"const": 0}, "listenerGid": {"const": 0}}}
+      }},
+    "sqlIdentity": {"type": "object", "additionalProperties": false,
+      "required": ["connectTimeoutSeconds", "clientDn", "clientSerial", "issuerDn"], "properties": {
+        "connectTimeoutSeconds": {"type": "integer", "minimum": 2, "maximum": 300},
+        "clientDn": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "clientSerial": {"type": "string", "minLength": 1, "maxLength": 4096}, "issuerDn": {"type": "string", "minLength": 1, "maxLength": 4096}}},
+    "tlsPin": {"type": "object", "additionalProperties": false, "required": ["bytesDigest", "byteCount"], "properties": {
+      "bytesDigest": {"$ref": "#/$defs/digest"}, "byteCount": {"type": "integer", "minimum": 2, "maximum": 65536}}},
+    "keyPin": {"allOf": [{"$ref": "#/$defs/tlsPin"}, {"properties": {"byteCount": {"maximum": 16384}}}]},
+    "journal": {"type": "object", "additionalProperties": false,
+      "required": ["path", "device", "inode", "maximumRecords", "sequence", "headDigest"], "properties": {
+        "path": {"type": "string", "enum": ["/var/lib/serverware/authority-public-revocation/attempts", "/var/lib/serverware/authority-public-revocation/completion"]},
+        "device": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615},
+        "inode": {"type": "integer", "minimum": 1, "maximum": 18446744073709551615},
+        "maximumRecords": {"type": "integer", "minimum": 2, "maximum": 4096},
+        "sequence": {"type": "integer", "minimum": 0, "maximum": 4096}, "headDigest": {"$ref": "#/$defs/digest"}}},
+    "database": {"type": "object", "additionalProperties": false,
+      "required": ["host", "hostaddr", "port", "databaseName"], "properties": {
+        "host": {"type": "string", "minLength": 1, "maxLength": 253},
+        "hostaddr": {"type": "string", "minLength": 1, "maxLength": 45},
+        "port": {"type": "integer", "minimum": 1, "maximum": 65535},
+        "databaseName": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,62}$"}}},
+    "payload": {"type": "object", "additionalProperties": false,
+      "required": ["schema", "sourceRevision", "role", "configurationDigest", "generationDigest", "measurementDigest", "scope", "databaseEndpoint", "sqlRoles", "tlsFiles", "queryManifestDigest", "structureManifestDigest", "attemptJournal", "completionJournal", "issuedAtEpochNs", "expiresAtEpochNs"],
+      "properties": {
+        "schema": {"const": "serverware.publicWebAuthnRevocationTerminalBootstrap/v1"}, "sourceRevision": {"type": "string", "minLength": 1, "maxLength": 128},
+        "role": {"enum": ["verifier", "issuer", "executor"]}, "configurationDigest": {"$ref": "#/$defs/digest"},
+        "generationDigest": {"$ref": "#/$defs/digest"}, "measurementDigest": {"$ref": "#/$defs/digest"}, "scope": {"$ref": "#/$defs/scope"},
+        "databaseEndpoint": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/database"}]},
+        "sqlRoles": {"type": "object"}, "tlsFiles": {"type": "object"},
+        "queryManifestDigest": {"$ref": "#/$defs/digest"}, "structureManifestDigest": {"$ref": "#/$defs/digest"},
+        "attemptJournal": {"oneOf": [{"type": "null"}, {"allOf": [{"$ref": "#/$defs/journal"}, {"properties": {"path": {"const": "/var/lib/serverware/authority-public-revocation/attempts"}}}]}]},
+        "completionJournal": {"oneOf": [{"type": "null"}, {"allOf": [{"$ref": "#/$defs/journal"}, {"properties": {"path": {"const": "/var/lib/serverware/authority-public-revocation/completion"}}}]}]},
+        "issuedAtEpochNs": {"$ref": "#/$defs/epoch"}, "expiresAtEpochNs": {"$ref": "#/$defs/epoch"}
+      },
+      "allOf": [
+        {"if": {"properties": {"role": {"const": "verifier"}}}, "then": {"properties": {
+          "databaseEndpoint": {"type": "null"}, "sqlRoles": {"maxProperties": 0}, "tlsFiles": {"maxProperties": 0},
+          "attemptJournal": {"type": "null"}, "completionJournal": {"type": "null"}}}},
+        {"if": {"properties": {"role": {"const": "issuer"}}}, "then": {"properties": {
+          "databaseEndpoint": {"$ref": "#/$defs/database"},
+          "sqlRoles": {"type": "object", "additionalProperties": false, "required": ["issue"], "properties": {"issue": {"$ref": "#/$defs/sqlIdentity"}}},
+          "tlsFiles": {"type": "object", "additionalProperties": false, "required": ["ca", "issueCertificate", "issueKey"], "properties": {
+            "ca": {"$ref": "#/$defs/tlsPin"}, "issueCertificate": {"$ref": "#/$defs/tlsPin"}, "issueKey": {"$ref": "#/$defs/keyPin"}}},
+          "attemptJournal": {"type": "null"}, "completionJournal": {"type": "null"}}}},
+        {"if": {"properties": {"role": {"const": "executor"}}}, "then": {"properties": {
+          "databaseEndpoint": {"$ref": "#/$defs/database"}, "attemptJournal": {"$ref": "#/$defs/journal"}, "completionJournal": {"$ref": "#/$defs/journal"},
+          "sqlRoles": {"type": "object", "additionalProperties": false, "required": ["execute", "recover", "commit"], "properties": {
+            "execute": {"$ref": "#/$defs/sqlIdentity"}, "recover": {"$ref": "#/$defs/sqlIdentity"}, "commit": {"$ref": "#/$defs/sqlIdentity"}}},
+          "tlsFiles": {"type": "object", "additionalProperties": false, "required": ["ca", "executeCertificate", "executeKey", "recoverCertificate", "recoverKey", "commitCertificate", "commitKey"], "properties": {
+            "ca": {"$ref": "#/$defs/tlsPin"}, "executeCertificate": {"$ref": "#/$defs/tlsPin"}, "executeKey": {"$ref": "#/$defs/keyPin"},
+            "recoverCertificate": {"$ref": "#/$defs/tlsPin"}, "recoverKey": {"$ref": "#/$defs/keyPin"}, "commitCertificate": {"$ref": "#/$defs/tlsPin"}, "commitKey": {"$ref": "#/$defs/keyPin"}}}}}
+      ]},
+    "terminal": {"type": "object", "additionalProperties": false, "required": ["schema", "payload", "signatureBase64Url"], "properties": {
+      "schema": {"const": "serverware.signedPublicWebAuthnRevocationTerminalBootstrap/v1"}, "payload": {"$ref": "#/$defs/payload"},
+      "signatureBase64Url": {"type": "string", "pattern": "^[A-Za-z0-9_-]{86}$"}}}
+  }
+}

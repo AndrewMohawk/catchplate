@@ -541,6 +541,7 @@ def plan_credential_cascade(
 
 def _plan_credential_cascade(
     context: core.KernelContext, values: Mapping[str, Any], *, work: _ValidationWork | None,
+    consumed_approval_id: str | None = None,
 ) -> core.KernelTransition:
     """The actual cascade body; callers own inputs and all admission duties."""
     _kernel_work(context, work)
@@ -569,6 +570,14 @@ def _plan_credential_cascade(
         and r.get("used_at") is None
         and _utc(r.get("expires_at"), "registration expiry", work=work) > now
     ), work=work)
+    if consumed_approval_id is not None:
+        # Validate completeness against the untouched prestate first. Only
+        # the authenticated public aggregate consumes this row atomically;
+        # legacy consume-before-cascade behavior remains the final result.
+        if work is None:
+            raise core.TransitionKernelError("public approval consumption requires retained proof work")
+        work.prepare_copy(approvals)
+        approvals = tuple(item for item in approvals if item["key"]["id"] != consumed_approval_id)
     if work is not None:
         work.prepare_copy(row)
     updated = {**row, "revoked_at": now_s, "revoked_by": values["actor_id"],
@@ -819,6 +828,11 @@ class WebAuthnCredentialRevokeKernel:
         self, *, arguments: Mapping[str, Any], cutoff_us: int,
         request_digest: str, evidence: Mapping[str, Any], work: _ValidationWork | None,
     ) -> tuple[core.Query, ...]:
+        from serverware import authority_public_webauthn_revocation as public
+        if public.is_public(evidence) or evidence.get("schema") == public.BINDING_SCHEMA:
+            from serverware import authority_public_webauthn_revocation_kernel as aggregate
+            return aggregate.queries(arguments=arguments, cutoff_us=cutoff_us,
+                request_digest=request_digest, evidence=evidence, work=work)
         values = _arguments(arguments) if work is None else _arguments(arguments, work=work)
         queries = list(
             cascade_queries_at_cutoff(
@@ -867,6 +881,10 @@ class WebAuthnCredentialRevokeKernel:
         if work is not None and context.operation != self.operation:
             raise core.TransitionKernelError("revocation kernel context operation changed")
         values = _arguments(context.arguments) if work is None else _arguments(context.arguments, work=work)
+        from serverware import authority_public_webauthn_revocation as public
+        if public.is_public(context.verified_webauthn_evidence):
+            from serverware import authority_public_webauthn_revocation_kernel as aggregate
+            return aggregate.transition(context, values, work=work)
         target = _row(_exact(context, "webauthn_credentials", {"id": values["record_id"]}, work=work), work=work)
         if _different(target.get("user_id"), values["actor_id"], work=work):
             raise core.TransitionKernelError("standalone revocation cannot revoke another user's credential")

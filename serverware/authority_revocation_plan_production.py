@@ -98,8 +98,12 @@ def _build_and_sign(
     limit_values = (entering_limits.max_hashes, entering_limits.max_input_bytes,
                     entering_limits.max_json_nodes)
     ledger = batch._SharedLedger(work)
+    from serverware import authority_public_webauthn_revocation as public_authorization
+    public = public_authorization.is_public(evidence)
+    response_schema, measured_schema, signed_schema, snapshot_domain = contract.profile(public)
+    authorization_field, authorization_domain = contract.authorization_digest_profile(public)
     contract._request(request)
-    contract._evidence(evidence)
+    contract._evidence(evidence, public=public)
     contract.retained.validate_bundle_shape(bundle)
     contract.retained.validate_transition_shape(transition)
     contract._digest(transition_digest)
@@ -121,7 +125,7 @@ def _build_and_sign(
     plan._same(transaction, context["expectedPlannerTransactionId"], work,
                "revocation production differs from the independent reservation")
     measured = {
-        "schema": contract.MEASURED_PLAN_SCHEMA, "plannerTransactionId": transaction,
+        "schema": measured_schema, "plannerTransactionId": transaction,
         "operation": contract.OPERATION, "operationId": request["operationId"],
         "requestDigest": request["requestDigest"], "capabilityId": context["expectedCapabilityId"],
         "sourceRevision": authority_contract.SOURCE_REVISION,
@@ -141,15 +145,14 @@ def _build_and_sign(
         "sourceHighWaterDigest": plan._json_digest("serverware.policyAuthorityAuthorizationRootSet/v1",
             expected_before["authorizationBeforeRoots"], ledger),
         "approverPolicyDigest": context["expectedApproverPolicyDigest"],
-        "assertionEvidenceDigest": plan._json_digest("serverware.policyAuthorityWebAuthnAssertionEvidence/v1",
-            evidence, ledger),
+        authorization_field: plan._json_digest(authorization_domain, evidence, ledger),
         "verifierSessionIdentityDigest": context["expectedVerifierIdentity"]["sessionIdentityDigest"],
         "verifierMeasurementDigest": context["expectedVerifierIdentity"]["measurementDigest"],
         "verifierAttestationReceiptDigest": context["expectedVerifierIdentity"]["attestationReceiptDigest"],
         "createdAtEpochNs": context["reservedAtEpochNs"], "expiresAtEpochNs": context["deadlineEpochNs"],
     }
     payload = {
-        "schema": contract.PLANNER_RESPONSE_SCHEMA, "measuredPlan": measured, "typedRequest": request,
+        "schema": response_schema, "measuredPlan": measured, "typedRequest": request,
         "selectedBusinessRows": _list(selected_rows, contract.MAX_SELECTED_ROWS, work),
         "mutationPlan": _list(mutations, contract.MAX_MUTATIONS, work),
         "queryMultiproofs": _list(before_proofs, contract.MAX_SELECTED_ROWS, work),
@@ -169,14 +172,14 @@ def _build_and_sign(
         (payload, "expectedResultDigest", "serverware.policyAuthorityControlledWriterResult/v2", result),
     ):
         destination[field] = plan._json_digest(domain, graph, ledger)
-    measured["authoritySnapshotDigest"] = plan._frame(contract.SNAPSHOT_DOMAIN,
+    measured["authoritySnapshotDigest"] = plan._frame(snapshot_domain,
         tuple(plan._ascii(measured[name], work) for name in contract.SNAPSHOT_FRAME_FIELDS), work)
     contract.validate_payload_shape(payload)
 
     # Measure both complete buffers before either encoder or the signer. The
     # literal placeholder has exactly the real signature's ASCII JSON size;
     # it is never signed, returned, or used as a claimed verification result.
-    envelope = {"schema": contract.SIGNED_MEASURED_PLAN_SCHEMA, "payload": payload,
+    envelope = {"schema": signed_schema, "payload": payload,
                 "signatureBase64Url": _SIGNATURE_PLACEHOLDER}
     payload_size, payload_nodes = work.measure(payload)
     envelope_size, envelope_nodes = work.measure(envelope)
@@ -191,7 +194,7 @@ def _build_and_sign(
     # Existing _frame/_ascii below perform their real debits. Check their exact
     # pending units before allocating either final wire buffer, not a fresh
     # allowance or a refund of the already spent measurement/encoding reserve.
-    frame_bytes = 2 * len(contract.SIGNED_MEASURED_PLAN_SCHEMA) + 9 + payload_size + 2 * 71
+    frame_bytes = 2 * len(signed_schema) + 9 + payload_size + 2 * 71
     if (work.limits.max_hashes - work.hash_work < 1
             or work.limits.max_input_bytes - work.input_bytes < frame_bytes + payload_size
             or work.limits.max_json_nodes - work.json_nodes < 4 + payload_nodes):
@@ -199,7 +202,7 @@ def _build_and_sign(
     payload_wire = core.canonical_bytes(payload)
     if len(payload_wire) != payload_size:
         raise plan.RevocationPlanError("revocation production payload changed after measurement")
-    message = plan._ascii(plan._frame(contract.SIGNED_MEASURED_PLAN_SCHEMA, (payload_wire,), work), work)
+    message = plan._ascii(plan._frame(signed_schema, (payload_wire,), work), work)
     signing_metrics = work.metrics
     if (work.limits is not entering_limits
             or (work.limits.max_hashes, work.limits.max_input_bytes, work.limits.max_json_nodes) != limit_values):

@@ -45,7 +45,7 @@ class CurrentRootServiceError(RuntimeError):
 
 
 def _validate_configuration(config):
-    if type(config) is not tuple or len(config) not in (6, 7, 8, 9, 10, 11, 12, 13, 14):
+    if type(config) is not tuple or len(config) not in (6, 7, 8, 9, 10, 11, 12, 13, 14, 17):
         raise CurrentRootServiceError("current-root service configuration is not a fixed profile")
     owner, reserve_uid, reserve_gid, complete_uid, complete_gid, timeout = config[:6]
     if type(owner) is not decisions.CurrentRootDecisionOwner:
@@ -79,9 +79,14 @@ def _validate_configuration(config):
     if len(config) >= 13 and (type(config[12]) is not tuple or len(config[12]) != 2
             or any(type(value) is not int for value in config[12]) or config[12] != (65499, 65499)):
         raise CurrentRootServiceError("current-root delivery reserve peer differs from fixed source")
-    if len(config) == 14 and (type(config[13]) is not tuple or len(config[13]) != 2
+    if len(config) >= 14 and (type(config[13]) is not tuple or len(config[13]) != 2
             or any(type(value) is not int for value in config[13]) or config[13] != (65497, 65497)):
         raise CurrentRootServiceError("current-root delivery completion peer differs from fixed source")
+    if len(config) == 17:
+        for peer, expected in zip(config[14:], ((65520, 65520), (65521, 65521), (65522, 65522))):
+            if (type(peer) is not tuple or len(peer) != 2
+                    or any(type(value) is not int for value in peer) or peer != expected):
+                raise CurrentRootServiceError("current-root public revocation peer differs from fixed source")
     return config
 
 
@@ -224,6 +229,20 @@ class CurrentRootDecisionService:
         object.__setattr__(result, "_pid", os.getpid())
         return result
 
+    @classmethod
+    def _with_public_revocation(cls, *, owner, timeout_seconds):
+        """Cold v10 only: fixed measured verifier/issuer/executor purposes."""
+        if cls is not CurrentRootDecisionService:
+            raise CurrentRootServiceError("public revocation requires the exact current-root service")
+        configured = _validate_configuration((owner, 65514, 65514, 65515, 65515,
+            timeout_seconds, (65510, 65510), (65508, 65508), (65507, 65507),
+            (65505, 65505), (65503, 65503), (65501, 65501), (65499, 65499), (65497, 65497),
+            (65520, 65520), (65521, 65521), (65522, 65522)))
+        result = object.__new__(CurrentRootDecisionService)
+        object.__setattr__(result, "_configuration", configured)
+        object.__setattr__(result, "_pid", os.getpid())
+        return result
+
     def serve_connection(self, connection, *, transport_deadline_ns=None):
         """Own one accepted socket, serve at most one request, then close it."""
         if type(connection) is not socket.socket:
@@ -239,7 +258,9 @@ class CurrentRootDecisionService:
             activation_complete_peer = configured[10] if len(configured) >= 11 else None
             delivery_planner_peer = configured[11] if len(configured) >= 12 else None
             delivery_reserve_peer = configured[12] if len(configured) >= 13 else None
-            delivery_complete_peer = configured[13] if len(configured) == 14 else None
+            delivery_complete_peer = configured[13] if len(configured) >= 14 else None
+            revocation_head_peer, revocation_reserve_peer, revocation_complete_peer = (
+                configured[14:] if len(configured) == 17 else (None, None, None))
             deadline_ns = io._deadline_ns(timeout)
             if transport_deadline_ns is not None:
                 if type(transport_deadline_ns) is not int or transport_deadline_ns < 1:
@@ -252,13 +273,17 @@ class CurrentRootDecisionService:
             if peer not in (reserve_peer, complete_peer, finalization_peer,
                     finalization_complete_peer, activation_planner_peer, activation_reserve_peer,
                     activation_complete_peer, delivery_planner_peer, delivery_reserve_peer,
-                    delivery_complete_peer):
+                    delivery_complete_peer, revocation_head_peer, revocation_reserve_peer,
+                    revocation_complete_peer):
                 raise CurrentRootServiceError("current-root socket peer is not admitted")
             prefix = transport._recv_prefix(connection, deadline_ns=deadline_ns)
             expected_operation = None
             if prefix == transport.RESERVE_REQUEST_MAGIC:
                 action, required_peer = "reserve", reserve_peer
-                if delivery_reserve_peer is not None and peer == delivery_reserve_peer:
+                if revocation_reserve_peer is not None and peer == revocation_reserve_peer:
+                    required_peer = revocation_reserve_peer
+                    expected_operation = "webauthn.credential.revoke"
+                elif delivery_reserve_peer is not None and peer == delivery_reserve_peer:
                     required_peer = delivery_reserve_peer
                     expected_operation = "oidc.session.activation-delivery.consume"
                 elif activation_reserve_peer is not None and peer == activation_reserve_peer:
@@ -272,7 +297,10 @@ class CurrentRootDecisionService:
                         expected_operation = "webauthn.registration.evidence.admit"
             elif prefix == transport.COMPLETE_REQUEST_MAGIC:
                 action, required_peer = "complete", complete_peer
-                if delivery_complete_peer is not None and peer == delivery_complete_peer:
+                if revocation_complete_peer is not None and peer == revocation_complete_peer:
+                    required_peer = revocation_complete_peer
+                    expected_operation = "webauthn.credential.revoke"
+                elif delivery_complete_peer is not None and peer == delivery_complete_peer:
                     required_peer = delivery_complete_peer
                     expected_operation = "oidc.session.activation-delivery.consume"
                 elif activation_complete_peer is not None and peer == activation_complete_peer:
@@ -286,7 +314,10 @@ class CurrentRootDecisionService:
                         expected_operation = "webauthn.registration.evidence.admit"
             elif prefix == transport.QUERY_REQUEST_MAGIC:
                 action, required_peer = "query", complete_peer
-                if delivery_complete_peer is not None and peer == delivery_complete_peer:
+                if revocation_complete_peer is not None and peer == revocation_complete_peer:
+                    required_peer = revocation_complete_peer
+                    expected_operation = "webauthn.credential.revoke"
+                elif delivery_complete_peer is not None and peer == delivery_complete_peer:
                     required_peer = delivery_complete_peer
                     expected_operation = "oidc.session.activation-delivery.consume"
                 elif activation_complete_peer is not None and peer == activation_complete_peer:
@@ -299,13 +330,24 @@ class CurrentRootDecisionService:
             elif (prefix == transport.DELIVERY_HEAD_QUERY_REQUEST_MAGIC
                     and delivery_planner_peer is not None):
                 action, required_peer = "delivery-head", delivery_planner_peer
+            elif (prefix == transport.REVOCATION_HEAD_QUERY_REQUEST_MAGIC
+                    and revocation_head_peer is not None):
+                action, required_peer = "revocation-head", revocation_head_peer
             else:
                 raise CurrentRootServiceError("current-root socket purpose is not source fixed")
             if peer != required_peer:
                 raise CurrentRootServiceError("current-root socket peer is not admitted for this purpose")
             # Exact class dispatch excludes instance method overrides. No
             # branch parses signed data or creates a second work allowance.
-            if action == "delivery-head":
+            if action == "revocation-head":
+                original = transport._recv_revocation_head_query(connection,
+                    prefix=prefix, deadline_ns=deadline_ns)
+                transport._check_deadline(deadline_ns)
+                observation = decisions.CurrentRootDecisionOwner.observe_revocation_head(owner, original,
+                    transport_deadline_ns=deadline_ns)
+                transport._check_deadline(deadline_ns)
+                transport._send_revocation_head_observation(connection, observation, deadline_ns=deadline_ns)
+            elif action == "delivery-head":
                 original = transport._recv_delivery_head_query(connection,
                     prefix=prefix, deadline_ns=deadline_ns)
                 transport._check_deadline(deadline_ns)

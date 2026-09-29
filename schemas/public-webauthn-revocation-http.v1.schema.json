@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.dev/schemas/public-webauthn-revocation-http.v1.schema.json",
+  "title": "Explicit public WebAuthn revocation HTTP request profiles",
+  "description": "Closed request shapes only, not permission. Actual HTTP authentication, CSRF, cold v23 enrollment, original options, policy, optional assertion and distinct-person approval remain required. Each admitted original is at most 65536 UTF-8 bytes. Required nullable fields must be explicitly present. A local digest never permits retry.",
+  "oneOf": [
+    {"$ref": "#/$defs/options"}, {"$ref": "#/$defs/execute"}, {"$ref": "#/$defs/recover"},
+    {"$ref": "#/$defs/approvalOptions"}, {"$ref": "#/$defs/approvalSubmit"}
+  ],
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "text": {"type": "string", "minLength": 1, "maxLength": 1024, "pattern": "^[^\\u0000]+$"},
+    "optionalCredential": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/text"}]},
+    "optionalApproval": {"type": ["string", "null"], "minLength": 1, "maxLength": 256},
+    "reason": {"type": "string", "minLength": 1, "maxLength": 500},
+    "mfa": {"oneOf": [{"type": "null"}, {
+      "type": "object", "additionalProperties": false,
+      "required": ["authorityChallengeId", "credentialRecordId", "assertion"],
+      "properties": {"authorityChallengeId": {"$ref": "#/$defs/text"}, "credentialRecordId": {"$ref": "#/$defs/text"},
+        "assertion": {"type": "object", "description": "Original browser WebAuthn response; actual bounded physical-assertion verifier admits its complete format and signature. Never a supplied verified receipt."}}
+    }]},
+    "options": {
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "reason", "approvalId", "credentialRecordId"],
+      "properties": {"apiVersion": {"const": "serverware.publicWebAuthnRevocationOptionsRequest/v1"},
+        "reason": {"$ref": "#/$defs/reason"}, "approvalId": {"$ref": "#/$defs/optionalApproval"},
+        "credentialRecordId": {"$ref": "#/$defs/optionalCredential"}}
+    },
+    "execute": {
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "localDigest", "reason", "mfa"],
+      "properties": {"apiVersion": {"const": "serverware.publicWebAuthnRevocationExecuteRequest/v1"},
+        "localDigest": {"$ref": "#/$defs/digest"}, "reason": {"$ref": "#/$defs/reason"}, "mfa": {"$ref": "#/$defs/mfa"}}
+    },
+    "recover": {
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "localDigest"],
+      "properties": {"apiVersion": {"const": "serverware.publicWebAuthnRevocationRecoveryRequest/v1"},
+        "localDigest": {"$ref": "#/$defs/digest"}}
+    },
+    "approvalOptions": {
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "action", "resourceId", "reason", "approvalId", "credentialRecordId"],
+      "properties": {"apiVersion": {"const": "serverware.publicWebAuthnRevocationApprovalOptionsRequest/v1"},
+        "action": {"const": "webauthn.credential.revoke"}, "resourceId": {"$ref": "#/$defs/text"},
+        "reason": {"$ref": "#/$defs/reason"}, "approvalId": {"$ref": "#/$defs/optionalApproval"},
+        "credentialRecordId": {"$ref": "#/$defs/optionalCredential"}}
+    },
+    "approvalSubmit": {
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "localDigest", "mfa"],
+      "properties": {"apiVersion": {"const": "serverware.publicWebAuthnRevocationApprovalSubmitRequest/v1"},
+        "localDigest": {"$ref": "#/$defs/digest"}, "mfa": {"$ref": "#/$defs/mfa"}}
+    }
+  }
+}

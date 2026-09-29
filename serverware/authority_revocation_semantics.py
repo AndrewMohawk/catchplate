@@ -47,6 +47,31 @@ class RevocationSemanticsError(ValueError):
     pass
 
 
+def _verify_evidence(evidence, *, operation_id, request_digest, capability_id,
+        verifier_identity, verifier_public_key, now_epoch_ns, deadline_epoch_ns,
+        maximum_age_ns, work):
+    from serverware import authority_public_webauthn_revocation as public
+    if public.is_public(evidence):
+        return public.verify(evidence, operation_id=operation_id, request_digest=request_digest,
+            capability_id=capability_id, verifier_identity=verifier_identity,
+            verifier_public_key=verifier_public_key, now_epoch_ns=now_epoch_ns,
+            deadline_epoch_ns=deadline_epoch_ns, maximum_age_ns=maximum_age_ns, work=work)
+    receipt_work = assertion._ReceiptWork(work)
+    verified = assertion._verify_revoke_assertion_evidence(evidence,
+        operation_id=operation_id, request_digest=request_digest, capability_id=capability_id,
+        verifier_identity=verifier_identity, verifier_public_key=verifier_public_key,
+        now_epoch_ns=now_epoch_ns, deadline_epoch_ns=deadline_epoch_ns,
+        maximum_age_ns=maximum_age_ns, work=receipt_work)
+    return verified, receipt_work.signature_attempts
+
+
+def _evidence_binding(evidence):
+    from serverware import authority_public_webauthn_revocation as public
+    if public.is_public(evidence):
+        return public.binding(evidence)
+    return {name: evidence[name] for name in ("credentialRecordId", "challengeId")}
+
+
 @dataclass(frozen=True, slots=True)
 class RevocationSemanticMetrics:
     capture: QueryReadValidationMetrics
@@ -278,22 +303,20 @@ def _verify(owned, ledger, capture, verifier_public_key):
     request_binding = mixed._delta(before, work.metrics)
 
     before = work.metrics
-    receipt_work = assertion._ReceiptWork(work)
-    verified_evidence = assertion._verify_revoke_assertion_evidence(
+    verified_evidence, signature_attempts = _verify_evidence(
         owned["evidence"], operation_id=operation_id, request_digest=request_digest,
         capability_id=owned["capabilityId"], verifier_identity=owned["verifierIdentity"],
         verifier_public_key=verifier_public_key, now_epoch_ns=owned["nowEpochNs"],
         deadline_epoch_ns=owned["deadlineEpochNs"], maximum_age_ns=owned["maximumAgeNs"],
-        work=receipt_work,
+        work=work,
     )
     receipt = mixed._delta(before, work.metrics)
 
     before = work.metrics
     _equal(owned["databaseCutoffUs"], inputs["cutoffUs"], work=work,
            label="semantic database time differs from the complete-query cutoff")
-    for field in ("credentialRecordId", "challengeId"):
-        _equal(verified_evidence[field], inputs["assertionBinding"][field], work=work,
-               label="verified assertion identity differs from retained query binding")
+    _canonical_equal(_evidence_binding(verified_evidence), inputs["assertionBinding"], work=work,
+        label="verified authorization differs from retained query binding")
     for expected, supplied in (("businessBeforeRoots", "businessBeforeRoots"),
                                ("authorizationBeforeRoots", "authorizationBeforeRoots"),
                                ("indexBeforeHeads", "countedBeforeHeads")):
@@ -334,7 +357,7 @@ def _verify(owned, ledger, capture, verifier_public_key):
     mutation_binding = mixed._delta(before, work.metrics)
     return RevocationSemanticObservation(proof, kernel, mutations, total_work_units,
         RevocationSemanticMetrics(capture, request_binding, receipt, context_binding, proof_work,
-            kernel_work, capacity_work, mutation_binding, receipt_work.signature_attempts,
+            kernel_work, capacity_work, mutation_binding, signature_attempts,
             ledger.hashes, ledger.input_bytes, ledger.json_nodes))
 
 

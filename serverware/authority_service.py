@@ -3151,6 +3151,13 @@ class AuthorityRuntimeRelay:
                     "authority relay peer identity is not allowed"
                 )
             prefix = writer_transport._recv_prefix(connection, deadline_ns=deadline_ns)
+            from serverware import authority_public_revocation_transport as public_revocation_wire
+            if prefix in public_revocation_wire.REQUEST_MAGICS:
+                from serverware import authority_public_revocation_service
+                detached = True
+                authority_public_revocation_service.serve_relay(
+                    trust, connection, deadline_ns=deadline_ns, prefix=prefix)
+                return
             reconciling = prefix in custody_reconcile_transport.REQUEST_MAGICS
             detached = (reconciling or prefix in custody_caller_transport.REQUEST_MAGICS
                 or prefix in (registration_source_caller.REQUEST_MAGIC,
@@ -3506,6 +3513,8 @@ class AuthorityProcess:
         from serverware import control_plane_rbac_currentness as rbac_currentness
         self.rbac_currentness_owner = (rbac_currentness.initialize_authority(self)
             if role in {"verifier", "planner", "executor"} else None)
+        from serverware import authority_public_revocation_terminal
+        authority_public_revocation_terminal.initialize(self)
 
     def _trusted_host_local_consumption_receipt(
         self,
@@ -8162,7 +8171,16 @@ class AuthorityProcess:
         handler_name: str,
         runtime_input: dict[str, Any],
         deadline_monotonic_ns: int,
+        _public_revocation=None,
     ) -> dict[str, Any]:
+        from serverware import authority_public_revocation_approval as public_approval
+        from serverware import authority_public_revocation_approval_owner as public_approval_owner
+        if operation in public_approval.OPERATIONS:
+            if type(_public_revocation) is not public_approval_owner._ApprovalExecution:
+                raise AuthorityServiceError("public revocation approval requires its actual original-held caller")
+            _public_revocation.consume(self, operation, runtime_input, deadline_monotonic_ns)
+        elif _public_revocation is not None:
+            raise AuthorityServiceError("public approval owner cannot authorize another operation")
         if (
             operation
                 not in authority_transition_registry.LEGACY_PLANNABLE_OPERATIONS
@@ -9862,6 +9880,13 @@ class AuthorityServer:
                 *transition_custody_transport.FORWARD_REQUEST_MAGICS,
                 *transition_custody_read_transport.REQUEST_MAGICS,
                 *transition_custody_read_transport.FORWARD_REQUEST_MAGICS)
+            from serverware import authority_public_revocation_transport as public_revocation_wire
+            if prefix in public_revocation_wire.REQUEST_MAGICS:
+                from serverware import authority_public_revocation_service
+                detached = True
+                authority_public_revocation_service.serve_process(
+                    self.process, connection, deadline_ns=deadline_ns, prefix=prefix)
+                return
             reconciling = prefix in custody_reconcile_transport.REQUEST_MAGICS
             if prefix == registration_finalization_execution_caller.REQUEST_MAGIC:
                 registration_finalization_execution_caller._serve_verifier(
@@ -10038,6 +10063,17 @@ def main(argv: list[str] | None = None) -> int:
     _close_inherited_descriptors(
         authority_launch_guard.retained_descriptors()
     )
+    if process.rbac_currentness_owner is not None and process.rbac_currentness_owner.recovery is not None:
+        # The separately authorized recovery launch never opens an authority
+        # listener or reenters metadata execution, even after a known outcome.
+        from serverware import control_plane_rbac_recovery, control_plane_rbac_currentness
+        try:
+            observation = control_plane_rbac_recovery.run(process)
+            sys.stdout.write(_canonical(observation).decode("ascii") + "\n")
+            sys.stdout.flush()
+        finally:
+            control_plane_rbac_currentness.close()
+        return 0
     role_config = configuration.role(args.role)
     workers = int(role_config["workers"])
     maximum_in_flight = int(role_config["maximumInFlight"])

@@ -216,7 +216,8 @@ def _bounded_wire(value, ledger, *, maximum_bytes: int, maximum_nodes: int) -> b
 
 
 def _bundle(owned) -> dict[str, Any]:
-    return {"schema": contract.BUNDLE_SCHEMA, "profile": contract.BUNDLE_PROFILE,
+    schema, profile = contract.profile(owned["assertionBinding"])
+    return {"schema": schema, "profile": profile,
             "sourceRevision": authority_contract.SOURCE_REVISION, "inputs": owned}
 
 
@@ -239,7 +240,8 @@ def _compact_document(result, bundle_digest) -> dict[str, Any]:
                  "rootDigest": value.index_root.digest, "leafCount": value.index_root.count}
                 for value in values]
 
-    return {"schema": contract.TRANSITION_SCHEMA, "profile": contract.TRANSITION_PROFILE,
+    schema, profile = contract.profile(result.assertion_binding, transition=True)
+    return {"schema": schema, "profile": profile,
         "sourceRevision": authority_contract.SOURCE_REVISION, "operation": result.operation,
         "requestDigest": result.request_digest, "cutoffUs": result.cutoff_us,
         "assertionBinding": result.assertion_binding, "countedProfile": counted.PROFILE,
@@ -257,7 +259,7 @@ def _compute_with_graphs(*, ledger, bundle, raw_decode_bytes, capture, claim_enc
     bundle_wire = _bounded_wire(bundle, ledger,
         maximum_bytes=query_batch.MAX_TOTAL_INPUT_BYTES, maximum_nodes=query_batch.MAX_TOTAL_JSON_NODES)
     ledger.charge(hashes=1)
-    bundle_digest = core.framed_digest(contract.BUNDLE_SCHEMA, bundle_wire)
+    bundle_digest = core.framed_digest(contract.profile(bundle["inputs"]["assertionBinding"])[0], bundle_wire)
     bundle_encoding = mixed._delta(before, ledger.work.metrics)
     # One genuine private evaluation of the owned normalized graph. A decoded
     # bundle supplies no DTO constructors, callbacks or successful result tokens.
@@ -274,7 +276,7 @@ def _compute_with_graphs(*, ledger, bundle, raw_decode_bytes, capture, claim_enc
         if transition_wire != claim_wire:
             raise RevocationProofBundleError("retained transition differs from genuine raw proof recomputation")
     ledger.charge(hashes=1)
-    transition_digest = core.framed_digest(contract.TRANSITION_SCHEMA, transition_wire)
+    transition_digest = core.framed_digest(contract.profile(result.assertion_binding, transition=True)[0], transition_wire)
     finalization = mixed._delta(before, ledger.work.metrics)
     # These checks protect the reservation argument even if a future helper
     # changes its work schedule without updating the source-sized hold.

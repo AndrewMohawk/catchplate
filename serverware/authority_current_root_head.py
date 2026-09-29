@@ -51,6 +51,13 @@ _DELIVERY_PROFILE = (
     "serverware.signedPolicyAuthorityCurrentRootDeliveryHeadObservation/v1",
     "serverware.policyAuthorityCurrentRootDeliveryHeadObservation/v1",
 )
+REVOCATION_OPERATION = "webauthn.credential.revoke"
+_REVOCATION_PROFILE = (
+    "serverware.policyAuthorityCurrentRootRevocationHeadQuery/v1",
+    "serverware.policyAuthorityCurrentRootRevocationHeadQueryIdentity/v1",
+    "serverware.signedPolicyAuthorityCurrentRootRevocationHeadObservation/v1",
+    "serverware.policyAuthorityCurrentRootRevocationHeadObservation/v1",
+)
 
 
 def _profile(operation):
@@ -61,6 +68,8 @@ def _profile(operation):
         return QUERY_SCHEMA, QUERY_IDENTITY_DOMAIN, OBSERVATION_SCHEMA, PAYLOAD_SCHEMA
     if type(operation) is str and operation == DELIVERY_OPERATION:
         return _DELIVERY_PROFILE
+    if type(operation) is str and operation == REVOCATION_OPERATION:
+        return _REVOCATION_PROFILE
     raise CurrentRootHeadError("current-root head operation is not source fixed")
 
 

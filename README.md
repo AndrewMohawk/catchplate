@@ -24,11 +24,12 @@ Checkpoint: **2026-09-29 — pre-production, source-only.**
 
 [![Project checkpoints, one segment per task: 36 of 46 source-landed; 9 active and 1 todo. Evidence handoff 10/10; historical recovery 4/5; permissions and grants 10/10; finalization and sessions 8/8; workloads and native 3/6; providers and operations 1/7. H05, N04, N05, N06, O01, O03, O04, O05 and O06 are in progress. Production acceptance remains 0/6. Source only; unbuilt, unexecuted and unprovisioned.](docs/images/project-progress.svg)](docs/production-status.md#next-source-milestones)
 
-Latest [`.280` source](https://github.com/example/private-deployment) connects
-[guest socket preparation and final-router listening](docs/response-v2-guest-listener.md)
-and shares the [actual kernel peer-measurement core](docs/response-v2-peer-measurement.md).
-The confined inspector, complete guest launch and key provisioning, measured
-provider custody, deployment and end-to-end verification remain open. N06 remains partial.
+Latest [`.281` source](https://github.com/example/private-deployment) connects
+[first-policy publication](docs/control-plane-policy-file-genesis.md) through a
+restricted maintenance startup and [dedicated operator portal](docs/control-plane-policy-genesis-portal.md).
+Normal startup still requires a valid active policy; publication needs separate
+requester/approver hardware ceremonies and never automatically starts services.
+Guest launch, measured provider custody, deployment and verification remain open.
 
 The bar shows **committed source, not tested readiness or remaining effort**.
 Green means source-landed; amber means partial implementation. No current pilot

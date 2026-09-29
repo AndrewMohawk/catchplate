@@ -4164,6 +4164,14 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/response_v2/state_authority/postgres/staged_originals.rs \
 				data-plane/decision-gate-rs/src/native_target_dispatch.rs \
 				data-plane/decision-gate-rs/src/bin/serverware-native-shadow-worker.rs \
+				data-plane/decision-gate-rs/src/bin/serverware-native-shadow-verifier.rs \
+				data-plane/decision-gate-rs/src/native_shadow_verifier_runtime_v1.rs \
+				data-plane/decision-gate-rs/src/native_shadow_verifier_runtime_v1/mounts.rs \
+				data-plane/decision-gate-rs/src/native_shadow_verifier_runtime_v1/originals.rs \
+				data-plane/decision-gate-rs/src/native_shadow_verifier_supervisor_v1.rs \
+				data-plane/decision-gate-rs/src/native_shadow_verifier_supervisor_v1/child.rs \
+				data-plane/decision-gate-rs/src/native_shadow_verifier_supervisor_v1/inputs.rs \
+				data-plane/decision-gate-rs/src/native_shadow_verifier_supervisor_v1/watchdog.rs \
 				data-plane/decision-gate-rs/src/native_shadow_workers/elf.rs \
 				data-plane/decision-gate-rs/src/native_shadow_workers/identity.rs \
 				data-plane/decision-gate-rs/src/native_shadow_workers/image.rs \
@@ -4474,6 +4482,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-custody-closure.v1.schema.json \
 				schemas/native-shadow-role-keys.v1.schema.json \
 				schemas/native-shadow-nitro-verifier.v1.schema.json \
+				schemas/native-shadow-verifier-launch.v1.schema.json \
 				schemas/native-shadow-encrypted-keys.v1.schema.json \
 				schemas/native-guest-role-key-provisioner.v1.schema.json \
 				schemas/native-oauth-measured-cleanup.v1.schema.json \

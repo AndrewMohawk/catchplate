@@ -64,6 +64,9 @@ pub mod release_profile_v1;
 #[cfg(target_os = "linux")]
 pub mod erofs_loop_v1;
 pub mod native_secret_broker_v1;
+pub(crate) mod native_shadow_verifier_runtime_v1;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub mod native_shadow_verifier_supervisor_v1;
 pub mod native_serving_privileges;
 pub mod native_gate_cgroup;
 #[cfg(target_os = "linux")]

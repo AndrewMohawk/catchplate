@@ -135,10 +135,14 @@ dependencies and recursive library closure. It supplies only empty fixed
 configuration/procfs mount targets, never verifier keys, trust policy or evidence.
 The artifact is not copied into the claimant enclave and has not been built.
 
-The source still needs a real independently provisioned external launcher and
-public-result transport to that guest consumer, with actual immutable image/root
-admission, the same protected configuration inode and original lifetime watchdog
-containment. Before/after deadline checks are not proof of bounded termination.
+The [fixed external supervisor](native-shadow-verifier-supervisor.md) now joins
+actual immutable image/root admission, the same protected configuration inode,
+sealed inputs, original-deadline kernel timer, confined child and exact
+terminal/reap-before-output path. Its static artifact and separate runtime image
+are unbuilt. Independent protected installation and service launch, seed/policy
+provisioning and public-result transport to that guest consumer remain required.
+Before/after checks alone are not a watchdog, and a pending kernel deadline
+signal is not proof of completed termination or reap.
 The encrypted KMS delivery counterpart has a separate helper image producer;
 its actual image construction, provisioning and launcher joins remain required.
 Actual receipt/proof endpoint servers, native guest fixed-peer/lifetime

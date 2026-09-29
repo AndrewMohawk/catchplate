@@ -98,6 +98,11 @@ chooses that identity nor resets any allowance.
 No NSM device or network contact is required by this external verifier's fixed
 evidence-verification operation. Packaging does not claim syscall confinement,
 secret-memory zeroization, or a prohibition on self-exec by the admitted Python
-TCB. Actual immutable installation, supervisor/result transport, independent
-authority provisioning, and positive/negative end-to-end verification are still
-needed before native custody admission or pilot acceptance can be claimed.
+TCB. The [root owner](native-shadow-verifier-root.md) and
+[fixed supervisor](native-shadow-verifier-supervisor.md) now connect those
+originals to a confined child and terminal-before-output handoff in source.
+The supervisor has its own separate static artifact target, never part of the
+claimant image. Actual artifact construction and immutable installation,
+external service/result transport, independent authority provisioning, and
+positive/negative end-to-end verification are still needed before native
+custody admission or pilot acceptance can be claimed.

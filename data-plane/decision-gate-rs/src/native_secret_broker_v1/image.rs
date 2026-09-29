@@ -90,13 +90,15 @@ fn image_file(root: &File, path: &str, executable: bool, pin: &str, deadline: u6
 // mount independently after the construction mount has been removed.
 struct Workspace { parent: File, directory: File, name: CString, mount_path: CString, mounted: bool, creator: libc::pid_t }
 impl Workspace {
-    fn create() -> Result<Self, String> {
+    fn create(purpose: &Purpose) -> Result<Self, String> {
         let run = path("/run", true, false)?;
-        let name = b"serverware-native-broker\0";
+        let (name, parent_path): (&[u8], &str) = if matches!(purpose, Purpose::ExternalShadowVerifier) {
+            (b"serverware-native-shadow-verifier\0", "/run/serverware-native-shadow-verifier")
+        } else { (b"serverware-native-broker\0", "/run/serverware-native-broker") };
         let result = unsafe { libc::mkdirat(run.as_raw_fd(), name.as_ptr().cast(), 0o700) };
         ensure(result == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EEXIST),
             "native broker private parent creation failed")?;
-        let parent = path("/run/serverware-native-broker", true, false)?;
+        let parent = path(parent_path, true, false)?;
         ensure(stat(&parent)?.st_mode & 0o7777 == 0o700, "native broker private parent mode differs")?;
         let mut nonce = [0u8; 16]; SystemRandom::new().fill(&mut nonce).map_err(|_| "native broker workspace entropy unavailable")?;
         let name = CString::new(hex::encode(nonce)).unwrap();
@@ -135,7 +137,7 @@ impl Drop for Workspace {
 
 // Closed source purposes share only immutable image custody, never a child,
 // key, serving phase or caller-selected executable/helper path.
-pub(crate) enum Purpose { Broker, RoleKeyProvisioner, ShadowCustody, ShadowKeyDelivery }
+pub(crate) enum Purpose { Broker, RoleKeyProvisioner, ShadowCustody, ShadowKeyDelivery, ExternalShadowVerifier }
 impl Purpose {
     fn paths(&self) -> (&'static str, &'static str, &'static str) {
         match self {
@@ -146,6 +148,9 @@ impl Purpose {
                 super::shadow_image::EXECUTABLE_PATH, super::shadow_image::SECCOMP_PATH),
             Self::ShadowKeyDelivery => (super::shadow_key_delivery::IMAGE_PATH,
                 INTERPRETER_PATH, super::shadow_key_delivery::HELPER_PATH),
+            Self::ExternalShadowVerifier => (crate::native_shadow_verifier_runtime_v1::IMAGE_PATH,
+                crate::native_shadow_verifier_runtime_v1::INTERPRETER_PATH,
+                crate::native_shadow_verifier_runtime_v1::ENTRYPOINT_PATH),
         }
     }
 }
@@ -206,7 +211,7 @@ impl Image {
             "native broker loop control device differs")?;
         let number = unsafe { libc::ioctl(control.as_raw_fd(), LOOP_CTL_GET_FREE) };
         ensure((0..=1_048_575).contains(&number), "native broker unused loop index unavailable")?;
-        let mut workspace = Workspace::create()?;
+        let mut workspace = Workspace::create(&purpose)?;
         ensure(unsafe { libc::mknodat(workspace.directory.as_raw_fd(), b"loop\0".as_ptr().cast(),
             libc::S_IFBLK | 0o600, libc::makedev(7, number as u32)) } == 0, "native broker private loop node creation failed")?;
         let block = owned(unsafe { libc::openat(workspace.directory.as_raw_fd(), b"loop\0".as_ptr().cast(),

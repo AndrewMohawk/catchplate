@@ -56,6 +56,7 @@ fn main() -> Result<(), String> {
         Some("--gate-cgroup-v14") => { arguments.remove(0); "--native-gate-cgroup-startup-v14" },
         Some("--measured-setup-v15") => { arguments.remove(0); "--native-measured-setup-startup-v15" },
         Some("--measured-capture-retirement-v16") => { arguments.remove(0); "--native-measured-capture-retirement-startup-v16" },
+        Some("--measured-reconnect-v17") => { arguments.remove(0); "--native-measured-reconnect-startup-v17" },
         _ => "--native-encrypted-startup",
     };
     if arguments.is_empty() || arguments.len() > 9 {

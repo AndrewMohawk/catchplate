@@ -10,6 +10,37 @@ pub(super) fn setup_page(authorize:bool,portal_origin:&str)->Result<(Vec<u8>,Str
     render(authorize, portal_origin, Purpose::Setup)
 }
 enum Purpose { Unbound, Setup }
+/// Reconnect arrives with the original signed family fence. It never creates
+/// an issuance/Setup draft or sends private callback correlation to the portal.
+pub(super) fn reconnect_page(portal_origin:&str)->Result<(Vec<u8>,String),String>{
+    serverware_decision_gate::native_oauth_reconnect_v1::origin(portal_origin)?;
+    let script=r#"'use strict';
+const need=v=>{if(!v)throw new Error('Native reconnect unavailable; no automatic retry.');};
+function decode(s){need(typeof s==='string'&&s.length>0&&s.length<=11184811&&/^[A-Za-z0-9_-]+$/.test(s));const b=atob(s.replace(/-/g,'+').replace(/_/g,'/')+'='.repeat((4-s.length%4)%4));need(b.length<=8*1024*1024);return new TextDecoder('utf-8',{fatal:true}).decode(Uint8Array.from(b,c=>c.charCodeAt(0)));}
+let sent=false,original=null;
+try{need(location.hash.startsWith('#original='));original=decode(location.hash.slice(10));}
+catch(_){sent=true;document.getElementById('continue').disabled=true;document.getElementById('status').textContent='The original reconnect authorization is unavailable; no fallback.';}
+history.replaceState(null,'',location.pathname);
+document.getElementById('continue').onclick=async()=>{
+  if(sent)return;sent=true;document.getElementById('continue').disabled=true;
+  try{
+    need(original!==null);const raw=original;original=null;
+    const reply=await fetch('/oauth/begin',{method:'POST',credentials:'same-origin',redirect:'error',cache:'no-store',headers:{'Content-Type':'application/json'},body:raw,signal:AbortSignal.timeout(30000)});
+    need(reply.status===200&&reply.headers.get('content-type')==='application/json');
+    const text=await reply.text();need(new TextEncoder().encode(text).length<=64*1024);
+    const result=JSON.parse(text);need(Object.keys(result).sort().join(',')==='apiVersion,exchangeId,location'&&result.apiVersion==='serverware.nativeOAuthReconnectAuthorizationRedirect/v1');
+    const url=new URL(result.location);need(url.protocol==='https:'&&!url.username&&!url.password&&!url.hash&&!url.port
+      &&((url.hostname==='accounts.google.com'&&url.pathname==='/o/oauth2/v2/auth')||(url.hostname==='twitter.com'&&url.pathname==='/i/oauth2/authorize')));
+    location.assign(url.href);
+  }catch(_){document.getElementById('status').textContent='Reconnect stopped. No provider retry or alternate endpoint was attempted. Return to the control-plane portal for status.';}
+};
+"#;
+    let hash=STANDARD.encode(Sha256::digest(script.as_bytes()));
+    let csp=format!("default-src 'none'; script-src 'sha256-{hash}'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'");
+    let html=format!("<!doctype html><meta charset=utf-8><title>Serverware confidential reconnect</title><h1>Reconnect the authorized provider account</h1><p>The original family authorization and fence are checked before consent. The callback and private browser correlation stay at this native origin.</p><button id=continue type=button>Continue once</button><p id=status></p><script>{script}</script>");
+    Ok((html.into_bytes(),csp))
+}
+
 fn render(authorize:bool,portal_origin:&str,purpose:Purpose)->Result<(Vec<u8>,String),String>{
     serverware_decision_gate::native_oauth_exchange_v1::origin(portal_origin)?;
     let portal=serde_json::to_string(portal_origin).map_err(|_|"native portal origin encoding")?;

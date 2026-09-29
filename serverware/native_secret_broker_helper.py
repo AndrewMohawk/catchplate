@@ -32,6 +32,7 @@ from serverware import native_oauth_pending_retirement_owner
 from serverware import native_oauth_capture_retirement_owner
 from serverware import native_oauth_exchange_owner
 from serverware import native_oauth_setup_owner
+from serverware import native_oauth_reconnect_owner
 
 _SCHEMA = "serverware.nativeSecretBrokerChannel/v1"
 _WORK = "serverware.nativeBrokerOpenCredential/v1"
@@ -241,6 +242,7 @@ class _Broker:
         self.capture_retirement_owner = None
         self.exchange_owner = None
         self.setup_owner = None
+        self.reconnect_owner = None
 
     def provision(self, value):
         _require(self.kek is None and self.rsa is not None
@@ -369,6 +371,7 @@ def main():
             refresh_operation = None if broker.refresh_owner is None else broker.refresh_owner.operation
             exchange_operation = None if broker.exchange_owner is None else broker.exchange_owner.operation
             setup_operation = None if broker.setup_owner is None else broker.setup_owner.operation
+            reconnect_operation = None if broker.reconnect_owner is None else broker.reconnect_owner.operation
             cleanup_operation = None if broker.cleanup_owner is None else broker.cleanup_owner.operation
             pending_retirement_operation = None if broker.pending_retirement_owner is None else broker.pending_retirement_owner.operation
             capture_retirement_operation = None if broker.capture_retirement_owner is None else broker.capture_retirement_owner.operation
@@ -376,6 +379,7 @@ def main():
                 (native_oauth_refresh_owner.CHANNEL, refresh_operation),
                 (native_oauth_exchange_owner.CHANNEL, exchange_operation),
                 (native_oauth_setup_owner.CHANNEL, setup_operation),
+                (native_oauth_reconnect_owner.CHANNEL, reconnect_operation),
                 (native_oauth_cleanup_owner.CHANNEL, cleanup_operation),
                 (native_oauth_pending_retirement_owner.CHANNEL, pending_retirement_operation),
                 (native_oauth_capture_retirement_owner.CHANNEL, capture_retirement_operation)) if operation is not None]
@@ -422,7 +426,7 @@ def main():
             elif value.get("apiVersion") == native_oauth_exchange_owner.CHANNEL:
                 _require(refresh_operation is None and setup_operation is None and cleanup_operation is None and pending_retirement_operation is None)
                 if value.get("phase") == "configure":
-                    _require(broker.exchange_owner is None and broker.setup_owner is None)
+                    _require(broker.exchange_owner is None and broker.setup_owner is None and broker.reconnect_owner is None)
                     broker.exchange_owner = native_oauth_exchange_owner.Owner(broker, value)
                 else:
                     _require(broker.exchange_owner is not None)
@@ -430,11 +434,20 @@ def main():
             elif value.get("apiVersion") == native_oauth_setup_owner.CHANNEL:
                 _require(refresh_operation is None and exchange_operation is None and cleanup_operation is None and pending_retirement_operation is None)
                 if value.get("phase") == "configure":
-                    _require(broker.setup_owner is None and broker.exchange_owner is None)
+                    _require(broker.setup_owner is None and broker.exchange_owner is None and broker.reconnect_owner is None)
                     broker.setup_owner = native_oauth_setup_owner.Owner(broker, value)
                 else:
                     _require(broker.setup_owner is not None)
                     broker.setup_owner.handle(value)
+            elif value.get("apiVersion") == native_oauth_reconnect_owner.CHANNEL:
+                _require(refresh_operation is None and exchange_operation is None and setup_operation is None
+                    and cleanup_operation is None and pending_retirement_operation is None and capture_retirement_operation is None)
+                if value.get("phase") == "configure":
+                    _require(broker.reconnect_owner is None and broker.exchange_owner is None and broker.setup_owner is None)
+                    broker.reconnect_owner = native_oauth_reconnect_owner.Owner(broker, value)
+                else:
+                    _require(broker.reconnect_owner is not None)
+                    broker.reconnect_owner.handle(value)
             else:
                 _require(active_operation is None)
                 broker.open_credential(value)

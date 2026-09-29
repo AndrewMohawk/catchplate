@@ -1358,6 +1358,11 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/native_oauth_setup_receipts.py \
 	serverware/native_oauth_setup_tls.py \
 	serverware/native_oauth_setup_owner.py \
+	serverware/native_oauth_reconnect.py \
+	serverware/native_oauth_reconnect_owner.py \
+	serverware/native_oauth_reconnect_receipts.py \
+	serverware/native_oauth_reconnect_rows.py \
+	serverware/native_oauth_reconnect_tls.py \
 	serverware/authority_oauth_provider_retirement.py \
 	serverware/authority_oauth_measured_capture_retirement.py \
 	serverware/authority_oauth_measured_capture_retirement_policy.py \
@@ -3785,6 +3790,11 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/native_oauth_setup_receipts.py \
 				serverware/native_oauth_setup_tls.py \
 				serverware/native_oauth_setup_owner.py \
+				serverware/native_oauth_reconnect.py \
+				serverware/native_oauth_reconnect_owner.py \
+				serverware/native_oauth_reconnect_receipts.py \
+				serverware/native_oauth_reconnect_rows.py \
+				serverware/native_oauth_reconnect_tls.py \
 				serverware/authority_oauth_provider_retirement.py \
 				serverware/authority_oauth_measured_capture_retirement.py \
 				serverware/authority_oauth_measured_capture_retirement_policy.py \
@@ -4026,6 +4036,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/custody_protocol.rs \
 				data-plane/decision-gate-rs/src/native_startup_config/mod.rs \
 				data-plane/decision-gate-rs/src/native_startup_config/capture_retirement.rs \
+				data-plane/decision-gate-rs/src/native_startup_config/reconnect.rs \
 				data-plane/decision-gate-rs/src/response_v2/client_transport.rs \
 				data-plane/decision-gate-rs/src/response_v2/custody/guest_listener.rs \
 				data-plane/decision-gate-rs/src/response_v2/custody/guest_public_artifacts.rs \
@@ -4103,6 +4114,9 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/native_oauth_setup_v1.rs \
 				data-plane/decision-gate-rs/src/native_oauth_setup.rs \
 				data-plane/decision-gate-rs/src/native_secret_broker_v1/setup.rs \
+				data-plane/decision-gate-rs/src/native_oauth_reconnect_v1.rs \
+				data-plane/decision-gate-rs/src/native_oauth_reconnect.rs \
+				data-plane/decision-gate-rs/src/native_secret_broker_v1/reconnect.rs \
 				data-plane/decision-gate-rs/src/native_oauth_capture_retirement.rs \
 				data-plane/decision-gate-rs/src/native_oauth_capture_retirement_v1.rs \
 				data-plane/decision-gate-rs/src/native_secret_broker_v1/capture_retirement.rs \
@@ -4352,10 +4366,12 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-startup-configuration.v14.schema.json \
 				schemas/native-startup-configuration.v15.schema.json \
 				schemas/native-startup-configuration.v16.schema.json \
+				schemas/native-startup-configuration.v17.schema.json \
 				schemas/native-oauth-capture-retirement.v1.schema.json \
 				schemas/oauth-measured-capture-retirement-authority.v1.schema.json \
 				schemas/oauth-measured-reconnect-authority.v1.schema.json \
 				schemas/native-oauth-measured-setup.v1.schema.json \
+				schemas/native-oauth-measured-reconnect.v1.schema.json \
 				schemas/native-gate-cgroup.v1.schema.json \
 				schemas/native-shadow-workers.v1.schema.json \
 				schemas/policy-custody-guest-delivery.v1.schema.json \

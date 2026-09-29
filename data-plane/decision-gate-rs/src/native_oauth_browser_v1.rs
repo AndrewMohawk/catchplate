@@ -11,9 +11,9 @@ use std::sync::Arc;
 
 const MAX_BODY: usize = 8 * 1024 * 1024;
 #[derive(Clone,Copy)]
-pub enum Kind { BeginPage, AuthorizePage, Draft, Authorize, Callback }
+pub enum Kind { BeginPage, AuthorizePage, Draft, Authorize, Begin, Callback }
 #[derive(Clone,Copy,PartialEq,Eq)]
-enum Purpose { Unbound, Setup }
+enum Purpose { Unbound, Setup, Reconnect }
 pub struct Accepted {
     stream: StreamOwned<ServerConnection, VsockStreamV1>, ingress: Arc<BrowserTls>, deadline: u64,
     kind: Kind, purpose: Purpose, body: Vec<u8>, query: String, provider: Option<String>, cookies: BTreeMap<String,String>, responded: bool,
@@ -24,6 +24,9 @@ impl Accepted {
     }
     pub fn accept_setup(stream: VsockStreamV1, ingress: Arc<BrowserTls>, deadline: u64) -> Result<Self,String> {
         Self::accept_for(stream, ingress, deadline, Purpose::Setup)
+    }
+    pub fn accept_reconnect(stream: VsockStreamV1, ingress: Arc<BrowserTls>, deadline: u64) -> Result<Self,String> {
+        Self::accept_for(stream, ingress, deadline, Purpose::Reconnect)
     }
     fn accept_for(mut stream: VsockStreamV1, ingress: Arc<BrowserTls>, deadline: u64, purpose: Purpose) -> Result<Self,String> {
         ingress.check(deadline)?;
@@ -69,9 +72,10 @@ impl Accepted {
         let (path,query)=first[1].split_once('?').unwrap_or((first[1],""));
         owner.kind=match (first[0],path) {
             ("GET","/oauth/begin") if query.is_empty()=>Kind::BeginPage,
-            ("GET","/oauth/authorize") if query.is_empty()=>Kind::AuthorizePage,
-            ("POST","/oauth/draft") if query.is_empty()=>Kind::Draft,
-            ("POST","/oauth/authorize") if query.is_empty()=>Kind::Authorize,
+            ("GET","/oauth/authorize") if query.is_empty() && purpose != Purpose::Reconnect=>Kind::AuthorizePage,
+            ("POST","/oauth/draft") if query.is_empty() && purpose != Purpose::Reconnect=>Kind::Draft,
+            ("POST","/oauth/authorize") if query.is_empty() && purpose != Purpose::Reconnect=>Kind::Authorize,
+            ("POST","/oauth/begin") if query.is_empty() && purpose == Purpose::Reconnect=>Kind::Begin,
             ("GET","/oauth/callback/google"|"/oauth/callback/x") if !query.is_empty() && query.len()<=8192=>Kind::Callback,
             _=>return Err("native browser route is not fixed".to_owned()),
         };
@@ -113,6 +117,10 @@ impl Accepted {
         wire::ensure(self.purpose == Purpose::Setup, "unbound ingress cannot become Setup issuance")?;
         self.selected_command()
     }
+    pub(crate) fn reconnect_command(&self)->Result<Value,String>{
+        wire::ensure(self.purpose == Purpose::Reconnect, "another ingress purpose cannot become reconnect")?;
+        self.selected_command()
+    }
     pub(crate) fn verify_ingress(&self, expected:&Arc<BrowserTls>)->Result<(),String>{
         wire::ensure(Arc::ptr_eq(&self.ingress, expected), "browser request belongs to another actual TLS ingress")?;
         self.check()
@@ -122,8 +130,19 @@ impl Accepted {
         let channel = match self.purpose {
             Purpose::Unbound => wire::CHANNEL,
             Purpose::Setup => crate::native_oauth_setup_v1::CHANNEL,
+            Purpose::Reconnect => crate::native_oauth_reconnect_v1::CHANNEL,
         };
         match self.kind {
+            Kind::Begin=>{
+                wire::ensure(self.purpose == Purpose::Reconnect, "begin requires the actual reconnect ingress")?;
+                let intent=crate::native_oauth_refresh_v1::response_document(&self.body)?;
+                let command=serde_json::json!({"apiVersion":channel,"phase":"begin","intent":intent,"deadlineBoottimeNs":self.deadline});
+                // Bound the complete encoded helper envelope, not only its
+                // nested intent. The existing generic frame remains unchanged.
+                wire::ensure(crate::native_response_profile_v1::canonical_ascii_bytes(&command)?.len()<=MAX_BODY,
+                    "native reconnect complete envelope exceeds its original bound")?;
+                Ok(command)
+            },
             Kind::Draft=>{
                 let intent=crate::native_oauth_refresh_v1::response_document(&self.body)?;
                 wire::ensure(self.body.len()<=65536,"native public intent bound")?;

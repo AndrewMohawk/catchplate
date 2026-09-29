@@ -165,7 +165,7 @@ impl GateConfigV1 {
             measured_cleanup: None,
             measured_pending_retirement: None,
             measured_capture_retirement: None,
-            measured_issuance: None, measured_setup: None,
+            measured_issuance: None, measured_setup: None, measured_reconnect: None,
             measured_audit,
             credential_currentness: None,
             policy_shadow_generation_control: None,

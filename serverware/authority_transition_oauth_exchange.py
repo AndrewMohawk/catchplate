@@ -16,6 +16,7 @@ from serverware import authority_oauth_activation_policy as enrollment
 from serverware import authority_oauth_exchange as profile
 from serverware import authority_oauth_inventory as inventory
 from serverware import authority_oauth_family_retirement as family
+from serverware import authority_oauth_provider_retirement as provider_retirement
 from serverware import authority_transition_core as core
 from serverware import authority_transition_oauth_activation as activation_kernel
 from serverware import authority_transition_quota as shared
@@ -173,7 +174,9 @@ class OAuthExchangeKernel:
     def _queries(self, arguments, request_digest, evidence):
         values = _values(self.operation, arguments)
         item_id = values["resource_id"]
+        provider = enrollment.enrollment_document(activation.enrollment_bytes(values["enrollment_original"]))["payload"]["providerId"]
         queries = [shared._query(operation=self.operation, name="exchange", table=profile.TABLE, key={"id": item_id}, require_absence=self.operation == profile.OP_PREPARE),
+            provider_retirement.query(self.operation, provider),
             shared._query(operation=self.operation, name="work", table="oauth_revocation_work", key={"id": item_id}, require_absence=self.operation == profile.OP_PREPARE),
             shared._role_query(self.operation, "actor_role", values["actor_id"])]
         if self.operation == profile.OP_PREPARE:
@@ -198,6 +201,8 @@ class OAuthExchangeKernel:
         now = context.database_now.astimezone(timezone.utc)
         now_s, now_ns = now.isoformat(), shared._database_epoch_ns(now)
         payload, association = _enrollment(values, now_ns)
+        if self.operation != profile.OP_RETAIN:
+            provider_retirement.require_open(context, payload["providerId"])
         shared._require_role(context, subject_id=actor, required_role="credential_owner")
         mutations = []
         pending = None

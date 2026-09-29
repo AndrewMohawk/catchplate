@@ -1,0 +1,129 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/oauth-measured-capture-retirement-authority.v1.schema.json",
+  "title": "Measured pre-subject complete-provider retirement originals",
+  "$comment": "Data shapes only. Actual independently signed configuration/grant, original Nitro evidence, protected exact pre-subject capture joins, complete local inventories, current all-holder drains and atomic one-use claims remain mandatory. A constructible object, accepted transport response, missing acknowledgement or elapsed deadline grants no contact/retry. Canonical ASCII no-LF: grant64KiB, arguments1MiB, authenticated response6MiB, HTTP envelope8MiB. The grant has35 fields; source canonical validation does not borrow the old32-field grant parser. Native cold configuration is a separate source-selected contract.",
+  "oneOf": [{"$ref":"#/$defs/signedAuthorization"},{"$ref":"#/$defs/policy"},{"$ref":"#/$defs/httpRequest"},{"$ref":"#/$defs/httpResponse"},{"$ref":"#/$defs/transport"}],
+  "$defs": {
+    "digest": {"$ref":"credential-currentness-authority.v1.schema.json#/$defs/digest"},
+    "uuid": {"$ref":"credential-currentness-authority.v1.schema.json#/$defs/uuid"},
+    "epoch": {"$ref":"credential-currentness-authority.v1.schema.json#/$defs/integer"},
+    "deployment": {"$ref":"credential-currentness-authority.v1.schema.json#/$defs/deployment"},
+    "bytes32": {"type":"string","pattern":"^[A-Za-z0-9_-]{43}$"},
+    "encoded": {"type":"string","minLength":1,"pattern":"^[A-Za-z0-9_-]+$"},
+    "original": {"type":"string","minLength":2,"maxLength":6291456},
+    "nullableOriginal": {"oneOf":[{"type":"null"},{"$ref":"#/$defs/original"}]},
+    "lineage": {
+      "type":"object","additionalProperties":false,
+      "required":["credentialId","credentialVersion","credentialRowSha256","generationRowSha256"],
+      "properties":{"credentialId":{"$ref":"#/$defs/uuid"},"credentialVersion":{"$ref":"#/$defs/epoch"},"credentialRowSha256":{"$ref":"#/$defs/digest"},"generationRowSha256":{"$ref":"#/$defs/digest"}}
+    },
+    "barrier": {
+      "type":"object","additionalProperties":false,"required":["credentialId","credentialVersion","barrierSha256"],
+      "properties":{"credentialId":{"$ref":"#/$defs/uuid"},"credentialVersion":{"$ref":"#/$defs/epoch"},"barrierSha256":{"$ref":"#/$defs/digest"}}
+    },
+    "barriers": {"type":"array","maxItems":16,"uniqueItems":true,"items":{"$ref":"#/$defs/barrier"}},
+    "nullableDigest": {"oneOf":[{"type":"null"},{"$ref":"#/$defs/digest"}]},
+    "scope": {
+      "type":"object","additionalProperties":false,
+      "required":["profile","providerId","allLocalApplicationsAndSubjects","externalRelatedGrantImpactAuthorized","automaticReopen"],
+      "properties":{"profile":{"const":"complete-local-provider-retirement/v1"},"providerId":{"enum":["google","x"]},"allLocalApplicationsAndSubjects":{"const":true},"externalRelatedGrantImpactAuthorized":{"const":true},"automaticReopen":{"const":false}}
+    },
+    "authorization": {
+      "type":"object","additionalProperties":false,
+      "required":["schema","sourceRevision","purpose","authorizationId","configurationDigest","deploymentId","exchangeId","workSource","exchangeRowSha256","custodyRowSha256","workRowSha256","captureArgumentsSha256","enrollmentSha256","historicalEnrollmentRootSpkiSha256","rawResponseSha256","rawResponseEnvelopeSha256","tokenEnvelopeSha256","tokenSecretSha256","providerId","clientId","clientMaterialSha256","providerConfiguration","tokenPurposes","retirementScope","affectedLineages","setupSessionId","setupInitialSha256","setupStartedSha256","setupCurrentSha256","applicationMaterialSha256","providerTlsRootSha256","holderId","reason","issuedAtEpochNs","expiresAtEpochNs"],
+      "properties":{
+        "schema":{"const":"serverware.oauthMeasuredCaptureRetirementAuthorization/v1"},
+        "purpose":{"const":"measured-oauth-pre-subject-provider-retirement"},
+        "sourceRevision":{"type":"string","minLength":1,"maxLength":128},"authorizationId":{"$ref":"#/$defs/uuid"},
+        "configurationDigest":{"$ref":"#/$defs/digest"},"deploymentId":{"$ref":"#/$defs/deployment"},
+        "exchangeId":{"$ref":"#/$defs/uuid"},"workSource":{"enum":["measured-oauth-exchange/v1","measured-oauth-setup-exchange/v1"]},
+        "exchangeRowSha256":{"$ref":"#/$defs/digest"},"custodyRowSha256":{"$ref":"#/$defs/digest"},"workRowSha256":{"$ref":"#/$defs/digest"},"captureArgumentsSha256":{"$ref":"#/$defs/digest"},
+        "enrollmentSha256":{"$ref":"#/$defs/digest"},"historicalEnrollmentRootSpkiSha256":{"$ref":"#/$defs/digest"},
+        "rawResponseSha256":{"$ref":"#/$defs/digest"},"rawResponseEnvelopeSha256":{"$ref":"#/$defs/digest"},
+        "tokenEnvelopeSha256":{"$ref":"#/$defs/digest"},"tokenSecretSha256":{"$ref":"#/$defs/digest"},
+        "providerId":{"enum":["google","x"]},"clientId":{"type":"string","minLength":1,"maxLength":512},"clientMaterialSha256":{"$ref":"#/$defs/digest"},
+        "providerConfiguration":{"$ref":"oauth-revocation-authority.v1.schema.json#/$defs/provider"},
+        "tokenPurposes":{"enum":[["access_token"],["refresh_token"],["access_token","refresh_token"]]},"retirementScope":{"$ref":"#/$defs/scope"},
+        "affectedLineages":{"type":"array","maxItems":16,"uniqueItems":true,"items":{"$ref":"#/$defs/lineage"}},
+        "setupSessionId":{"oneOf":[{"type":"null"},{"$ref":"#/$defs/uuid"}]},"setupInitialSha256":{"$ref":"#/$defs/nullableDigest"},"setupStartedSha256":{"$ref":"#/$defs/nullableDigest"},"setupCurrentSha256":{"$ref":"#/$defs/nullableDigest"},
+        "applicationMaterialSha256":{"$ref":"#/$defs/digest"},"providerTlsRootSha256":{"$ref":"#/$defs/digest"},"holderId":{"$ref":"#/$defs/digest"},
+        "reason":{"enum":["abandoned","expired","unusable"]},"issuedAtEpochNs":{"$ref":"#/$defs/epoch"},"expiresAtEpochNs":{"$ref":"#/$defs/epoch"}
+      },
+      "allOf":[
+        {"if":{"properties":{"providerId":{"const":"google"}}},"then":{"properties":{"tokenPurposes":{"maxItems":1},"retirementScope":{"properties":{"providerId":{"const":"google"}}}}},"else":{"properties":{"retirementScope":{"properties":{"providerId":{"const":"x"}}}}}},
+        {"if":{"properties":{"workSource":{"const":"measured-oauth-setup-exchange/v1"}}},"then":{"properties":{"setupSessionId":{"$ref":"#/$defs/uuid"},"setupInitialSha256":{"$ref":"#/$defs/digest"},"setupStartedSha256":{"$ref":"#/$defs/digest"},"setupCurrentSha256":{"$ref":"#/$defs/digest"}}},"else":{"properties":{"setupSessionId":{"type":"null"},"setupInitialSha256":{"type":"null"},"setupStartedSha256":{"type":"null"},"setupCurrentSha256":{"type":"null"}}}}
+      ]
+    },
+    "signedAuthorization": {
+      "type":"object","additionalProperties":false,"required":["schema","payload","signatureBase64Url"],
+      "properties":{"schema":{"const":"serverware.signedOAuthMeasuredCaptureRetirementAuthorization/v1"},"payload":{"$ref":"#/$defs/authorization"},"signatureBase64Url":{"type":"string","pattern":"^[A-Za-z0-9_-]{86}$"}}
+    },
+    "assignment": {
+      "type":"object","additionalProperties":false,
+      "required":["holderId","bootId","keyId","controlPlaneResponseSigningKeyId","releaseRecordSha256","policyHash","configurationSha256","caCertificateSha256","caPublicKeySpkiSha256","expectedBinaryDigest","expectedPcrs","expectedEif","expectedModuleId","maxAgeSeconds","futureSkewSeconds","instanceId","providerId","enrollmentSha256","applicationMaterialSha256","secretKekId","providerTlsRootSha256","exchangeIds","recoveryAuthorizationSha256s"],
+      "properties": {
+        "holderId":{"$ref":"credential-currentness-authority.v1.schema.json#/$defs/assignment/properties/holderId"},
+        "bootId":{"$ref":"credential-currentness-authority.v1.schema.json#/$defs/assignment/properties/bootId"},
+        "keyId":{"$ref":"credential-currentness-authority.v1.schema.json#/$defs/assignment/properties/keyId"},
+        "controlPlaneResponseSigningKeyId":{"$ref":"credential-currentness-authority.v1.schema.json#/$defs/assignment/properties/controlPlaneResponseSigningKeyId"},
+        "releaseRecordSha256":{"$ref":"#/$defs/digest"},"policyHash":{"$ref":"#/$defs/digest"},"configurationSha256":{"$ref":"#/$defs/digest"},
+        "caCertificateSha256":{"$ref":"#/$defs/digest"},"caPublicKeySpkiSha256":{"$ref":"#/$defs/digest"},"expectedBinaryDigest":{"$ref":"#/$defs/digest"},
+        "expectedPcrs":{"$ref":"credential-currentness-authority.v1.schema.json#/$defs/assignment/properties/expectedPcrs"},
+        "expectedEif":{"$ref":"credential-currentness-authority.v1.schema.json#/$defs/assignment/properties/expectedEif"},
+        "expectedModuleId":{"$ref":"credential-currentness-authority.v1.schema.json#/$defs/assignment/properties/expectedModuleId"},
+        "maxAgeSeconds":{"$ref":"credential-currentness-authority.v1.schema.json#/$defs/assignment/properties/maxAgeSeconds"},
+        "futureSkewSeconds":{"$ref":"credential-currentness-authority.v1.schema.json#/$defs/assignment/properties/futureSkewSeconds"},
+        "instanceId":{"$ref":"native-oauth-measured-refresh.v1.schema.json#/$defs/assignment/properties/instanceId"},
+        "providerId":{"enum":["google","x"]},"enrollmentSha256":{"$ref":"#/$defs/digest"},"applicationMaterialSha256":{"$ref":"#/$defs/digest"},
+        "secretKekId":{"type":"string","pattern":"^attested-memory-kek:[0-9a-f]{24}$"},"providerTlsRootSha256":{"$ref":"#/$defs/digest"},
+        "exchangeIds":{"type":"array","minItems":1,"maxItems":64,"uniqueItems":true,"items":{"$ref":"#/$defs/uuid"}},
+        "recoveryAuthorizationSha256s":{"type":"array","maxItems":16,"uniqueItems":true,"items":{"$ref":"#/$defs/digest"}}
+      }
+    },
+    "policy": {
+      "type":"object","additionalProperties":false,
+      "required":["schema","grantRootPublicKeyBase64Url","grantRootSpkiSha256","controlPlaneConfigurationDigest","deploymentId","trustRoots","assignments"],
+      "properties":{"schema":{"const":"serverware.oauthMeasuredCaptureRetirementAuthorityPolicy/v1"},"grantRootPublicKeyBase64Url":{"$ref":"#/$defs/bytes32"},"grantRootSpkiSha256":{"$ref":"#/$defs/digest"},"controlPlaneConfigurationDigest":{"$ref":"#/$defs/digest"},"deploymentId":{"$ref":"#/$defs/deployment"},"trustRoots":{"$ref":"credential-currentness-authority.v1.schema.json#/$defs/trustRoots"},"assignments":{"type":"array","minItems":1,"maxItems":32,"items":{"$ref":"#/$defs/assignment"}}}
+    },
+    "statement": {
+      "type":"object","additionalProperties":false,
+      "required":["apiVersion","phase","holderId","bootId","keyId","controlPlaneResponseSigningKeyId","deploymentId","instanceId","providerId","enrollmentSha256","exchangeId","authorizationSha256","inputSha256","challenge","policyHash","dataPlaneBinarySha256","issuedAtEpochNs","expiresAtEpochNs"],
+      "properties":{"apiVersion":{"const":"serverware.nativeOAuthCaptureRetirementStatement/v1"},"phase":{"enum":["inspect","claim","contact","finish","recover"]},"holderId":{"$ref":"#/$defs/digest"},"bootId":{"$ref":"#/$defs/bytes32"},"keyId":{"$ref":"#/$defs/digest"},"controlPlaneResponseSigningKeyId":{"$ref":"#/$defs/digest"},"deploymentId":{"$ref":"#/$defs/deployment"},"instanceId":{"$ref":"#/$defs/assignment/properties/instanceId"},"providerId":{"enum":["google","x"]},"enrollmentSha256":{"$ref":"#/$defs/digest"},"exchangeId":{"$ref":"#/$defs/uuid"},"authorizationSha256":{"$ref":"#/$defs/digest"},"inputSha256":{"$ref":"#/$defs/digest"},"challenge":{"$ref":"#/$defs/bytes32"},"policyHash":{"$ref":"#/$defs/digest"},"dataPlaneBinarySha256":{"$ref":"#/$defs/digest"},"issuedAtEpochNs":{"$ref":"#/$defs/epoch"},"expiresAtEpochNs":{"$ref":"#/$defs/epoch"}}
+    },
+    "evidence": {
+      "type":"object","additionalProperties":false,"required":["statement","signature","nativeKeyEvidence"],
+      "properties":{"statement":{"$ref":"#/$defs/statement"},"signature":{"type":"string","pattern":"^ed25519:[A-Za-z0-9_-]{86}$"},"nativeKeyEvidence":{"$ref":"credential-currentness-authority.v1.schema.json#/$defs/nativeKeyEvidence"}}
+    },
+    "observationRequest": {"type":"object","additionalProperties":false,"required":["issuedAtEpochNs","expiresAtEpochNs"],"properties":{"issuedAtEpochNs":{"$ref":"#/$defs/epoch"},"expiresAtEpochNs":{"$ref":"#/$defs/epoch"}}},
+    "claimRequest": {"type":"object","additionalProperties":false,"required":["ownerNonceSha256","currentnessBarriers"],"properties":{"ownerNonceSha256":{"$ref":"#/$defs/digest"},"currentnessBarriers":{"$ref":"#/$defs/barriers"}}},
+    "contactRequest": {"type":"object","additionalProperties":false,"required":["journalRowSha256","ownerNonce","tokenPurpose","contactRequestSha256"],"properties":{"journalRowSha256":{"$ref":"#/$defs/digest"},"ownerNonce":{"$ref":"#/$defs/bytes32"},"tokenPurpose":{"enum":["access_token","refresh_token"]},"contactRequestSha256":{"$ref":"#/$defs/digest"}}},
+    "finishRequest": {"type":"object","additionalProperties":false,"required":["journalRowSha256","ownerNonce","attemptRowSha256","tokenPurpose","transportOriginal"],"properties":{"journalRowSha256":{"$ref":"#/$defs/digest"},"ownerNonce":{"$ref":"#/$defs/bytes32"},"attemptRowSha256":{"$ref":"#/$defs/digest"},"tokenPurpose":{"enum":["access_token","refresh_token"]},"transportOriginal":{"$ref":"#/$defs/encoded","maxLength":524288}}},
+    "arguments": {
+      "type":"object","additionalProperties":false,
+      "required":["exchange_id","authorization_original","enrollment_original","historical_root_original","control_plane_configuration_digest","assignment_original","request","evidence"],
+      "properties":{"exchange_id":{"$ref":"#/$defs/uuid"},"authorization_original":{"$ref":"#/$defs/encoded","maxLength":87382},"enrollment_original":{"$ref":"#/$defs/encoded","maxLength":43691},"historical_root_original":{"$ref":"#/$defs/encoded","maxLength":5462},"control_plane_configuration_digest":{"$ref":"#/$defs/digest"},"assignment_original":{"oneOf":[{"type":"null"},{"$ref":"#/$defs/assignment"}]},"request":{"oneOf":[{"$ref":"#/$defs/observationRequest"},{"$ref":"#/$defs/claimRequest"},{"$ref":"#/$defs/contactRequest"},{"$ref":"#/$defs/finishRequest"}]},"evidence":{"$ref":"#/$defs/evidence"}}
+    },
+    "operation": {"enum":["oauth.measured-capture-retirement.inspect","oauth.measured-capture-retirement.claim","oauth.measured-capture-retirement.contact","oauth.measured-capture-retirement.finish","oauth.measured-capture-retirement.recover"]},
+    "httpRequest": {
+      "type":"object","additionalProperties":false,"required":["apiVersion","operation","arguments"],
+      "properties":{"apiVersion":{"const":"serverware.nativeOAuthCaptureRetirementRequest/v1"},"operation":{"$ref":"#/$defs/operation"},"arguments":{"$ref":"#/$defs/arguments"}},
+      "allOf":[
+        {"if":{"properties":{"operation":{"enum":["oauth.measured-capture-retirement.inspect","oauth.measured-capture-retirement.recover"]}}},"then":{"properties":{"arguments":{"properties":{"request":{"$ref":"#/$defs/observationRequest"}}}}}},
+        {"if":{"properties":{"operation":{"const":"oauth.measured-capture-retirement.claim"}}},"then":{"properties":{"arguments":{"properties":{"request":{"$ref":"#/$defs/claimRequest"}}}}}},
+        {"if":{"properties":{"operation":{"const":"oauth.measured-capture-retirement.contact"}}},"then":{"properties":{"arguments":{"properties":{"request":{"$ref":"#/$defs/contactRequest"}}}}}},
+        {"if":{"properties":{"operation":{"const":"oauth.measured-capture-retirement.finish"}}},"then":{"properties":{"arguments":{"properties":{"request":{"$ref":"#/$defs/finishRequest"}}}}}}
+      ]
+    },
+    "httpResponse": {"type":"object","additionalProperties":false,"required":["apiVersion","requestOriginal","responseOriginal","currentnessBarriers"],"properties":{"apiVersion":{"const":"serverware.nativeOAuthCaptureRetirementResponse/v1"},"requestOriginal":{"$ref":"#/$defs/encoded","maxLength":4194304},"responseOriginal":{"$ref":"#/$defs/encoded","maxLength":8388608},"currentnessBarriers":{"oneOf":[{"type":"null"},{"$ref":"#/$defs/barriers"}]}}},
+    "affectedOriginal": {"type":"object","additionalProperties":false,"required":["credentialOriginal","generationOriginal"],"properties":{"credentialOriginal":{"$ref":"#/$defs/original","maxLength":524288},"generationOriginal":{"$ref":"#/$defs/original","maxLength":8192}}},
+    "observation": {
+      "type":"object","additionalProperties":false,
+      "required":["status","exchangeOriginal","issuanceCustodyOriginal","workOriginal","captureArgumentsOriginal","enrollmentOriginal","setupOriginal","affectedLineages","journalOriginal","custodyOriginal","attemptOriginals"],
+      "properties":{"status":{"enum":["ready","no-local-claim","outcome-unknown","unknown","observed-accepted","observed-rejected"]},"exchangeOriginal":{"$ref":"#/$defs/original"},"issuanceCustodyOriginal":{"$ref":"#/$defs/original"},"workOriginal":{"$ref":"#/$defs/original","maxLength":524288},"captureArgumentsOriginal":{"$ref":"#/$defs/original","maxLength":2097152},"enrollmentOriginal":{"$ref":"#/$defs/original","maxLength":32768},"setupOriginal":{"$ref":"#/$defs/nullableOriginal"},"affectedLineages":{"type":"array","maxItems":16,"items":{"$ref":"#/$defs/affectedOriginal"}},"journalOriginal":{"$ref":"#/$defs/nullableOriginal"},"custodyOriginal":{"$ref":"#/$defs/nullableOriginal"},"attemptOriginals":{"type":"array","maxItems":2,"items":{"$ref":"#/$defs/original","maxLength":524288}}}
+    },
+    "mutationResult": {"type":"object","additionalProperties":false,"required":["journalOriginal","attemptOriginal","custodyOriginal"],"properties":{"journalOriginal":{"$ref":"#/$defs/original"},"attemptOriginal":{"oneOf":[{"type":"null"},{"$ref":"#/$defs/original","maxLength":524288}]},"custodyOriginal":{"$ref":"#/$defs/original"}}},
+    "result": {"type":"object","additionalProperties":false,"required":["ok","operation","requestDigest","auditEventDigest","idempotentReplay","payload"],"properties":{"ok":{"const":true},"operation":{"$ref":"#/$defs/operation"},"requestDigest":{"$ref":"#/$defs/digest"},"auditEventDigest":{"$ref":"#/$defs/digest"},"idempotentReplay":{"const":false},"payload":{"oneOf":[{"$ref":"#/$defs/observation"},{"$ref":"#/$defs/mutationResult"}]}}},
+    "transport": {"type":"object","additionalProperties":false,"required":["schema","requestSha256","status","receivedAtEpochNs","rawResponseSha256","rawResponseEnvelope"],"properties":{"schema":{"const":"serverware.nativeOAuthCaptureRetirementTransport/v1"},"requestSha256":{"$ref":"#/$defs/digest"},"status":{"oneOf":[{"type":"null"},{"type":"integer","minimum":200,"maximum":599}]},"receivedAtEpochNs":{"$ref":"#/$defs/epoch"},"rawResponseSha256":{"$ref":"#/$defs/digest"},"rawResponseEnvelope":{"$ref":"oauth-exchange-authority.v1.schema.json#/$defs/envelope"}}}
+  }
+}

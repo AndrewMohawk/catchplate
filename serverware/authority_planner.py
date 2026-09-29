@@ -402,8 +402,10 @@ def reject_typed_authoritative_input(operation: str, value: Mapping[str, Any]) -
         evidence["nativeKeyEvidence"] = {name: item for name, item in evidence["nativeKeyEvidence"].items()
             if name != "attestationDocumentB64"}
         reject_authoritative_input({**value, "native_evidence": evidence})
-    elif operation.startswith("oauth.measured-refresh.") or operation.startswith("oauth.measured-refresh-cleanup.") or operation.startswith("oauth.measured-pending-retirement."):
-        if operation.startswith("oauth.measured-pending-retirement."):
+    elif operation.startswith("oauth.measured-refresh.") or operation.startswith("oauth.measured-refresh-cleanup.") or operation.startswith("oauth.measured-pending-retirement.") or operation.startswith("oauth.measured-capture-retirement."):
+        if operation.startswith("oauth.measured-capture-retirement."):
+            from serverware import authority_oauth_measured_capture_retirement as measured
+        elif operation.startswith("oauth.measured-pending-retirement."):
             from serverware import authority_oauth_measured_pending_retirement as measured
         elif operation.startswith("oauth.measured-refresh-cleanup."):
             from serverware import authority_oauth_measured_cleanup as measured
@@ -4248,6 +4250,7 @@ class MeasuredPlanner:
                                 "oauth.measured-refresh-cleanup.finish", "oauth.measured-refresh-cleanup.recover",
                                 "oauth.measured-pending-retirement.inspect", "oauth.measured-pending-retirement.claim", "oauth.measured-pending-retirement.contact",
                                 "oauth.measured-pending-retirement.finish", "oauth.measured-pending-retirement.recover",
+                                "oauth.measured-capture-retirement.inspect", "oauth.measured-capture-retirement.claim",
                                 "credential.currentness.challenge", "credential.currentness.register", "credential.currentness.quiesce", "credential.currentness.admit",
                                 "oauth.refresh-cleanup.claim", "oauth.refresh-cleanup.contact", "oauth.refresh-cleanup.finish"}:
                             authority_oauth_inventory.require_complete_populations(

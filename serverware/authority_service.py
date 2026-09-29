@@ -59,6 +59,8 @@ from serverware import authority_oauth_measured_cleanup as oauth_measured_cleanu
 from serverware import authority_oauth_measured_cleanup_policy as oauth_measured_cleanup_policy
 from serverware import authority_oauth_measured_pending_retirement as oauth_pending_retirement
 from serverware import authority_oauth_measured_pending_retirement_policy as oauth_pending_retirement_policy
+from serverware import authority_oauth_measured_capture_retirement as oauth_capture_retirement
+from serverware import authority_oauth_measured_capture_retirement_policy as oauth_capture_retirement_policy
 from serverware import authority_oauth_measured_exchange as oauth_measured_exchange
 from serverware import authority_oauth_measured_exchange_policy as oauth_measured_exchange_policy
 from serverware import authority_oauth_measured_setup as oauth_measured_setup
@@ -114,6 +116,7 @@ RUNTIME_RESPONSE_SCHEMA = authority_contract.RESULT_SCHEMA
 MEASURED_REFRESH_RESPONSE_SCHEMA = "serverware.policyAuthorityMeasuredRefreshRuntimeResponse/v1"
 MEASURED_CLEANUP_RESPONSE_SCHEMA = "serverware.policyAuthorityMeasuredCleanupRuntimeResponse/v1"
 PENDING_RETIREMENT_RESPONSE_SCHEMA = oauth_pending_retirement.RUNTIME_RESPONSE
+CAPTURE_RETIREMENT_RESPONSE_SCHEMA = oauth_capture_retirement.RUNTIME_RESPONSE
 MEASURED_EXCHANGE_RESPONSE_SCHEMA = "serverware.policyAuthorityMeasuredExchangeRuntimeResponse/v1"
 MEASURED_SETUP_RESPONSE_SCHEMA = "serverware.policyAuthorityMeasuredSetupRuntimeResponse/v1"
 INTERNAL_ENVELOPE_SCHEMA = authority_contract.INTERNAL_ENVELOPE_SCHEMA
@@ -1179,7 +1182,7 @@ class MeasuredConfiguration:
                 "authority configuration root signature is invalid"
             ) from exc
         if (
-            set(payload) - {evidence_policy.FIELD, transition_policy.FIELD, enrollment_policy.FIELD, oauth_activation_policy.FIELD, oauth_exchange_policy.FIELD, oauth_revocation_policy.FIELD, oauth_refresh_policy.FIELD, credential_currentness_policy.FIELD, oauth_refresh_cleanup_policy.FIELD, oauth_measured_refresh_policy.FIELD, oauth_measured_exchange_policy.FIELD, oauth_measured_setup_policy.FIELD, oauth_measured_cleanup_policy.FIELD, oauth_pending_retirement_policy.FIELD}
+            set(payload) - {evidence_policy.FIELD, transition_policy.FIELD, enrollment_policy.FIELD, oauth_activation_policy.FIELD, oauth_exchange_policy.FIELD, oauth_revocation_policy.FIELD, oauth_refresh_policy.FIELD, credential_currentness_policy.FIELD, oauth_refresh_cleanup_policy.FIELD, oauth_measured_refresh_policy.FIELD, oauth_measured_exchange_policy.FIELD, oauth_measured_setup_policy.FIELD, oauth_measured_cleanup_policy.FIELD, oauth_pending_retirement_policy.FIELD, oauth_capture_retirement_policy.FIELD}
                 != required_payload_fields
             or payload.get("schema") != CONFIG_SCHEMA
             or payload.get("sourceRevision") != SOURCE_REVISION
@@ -1282,6 +1285,7 @@ class MeasuredConfiguration:
         try:
             oauth_measured_cleanup_policy.validate_policy(payload.get(oauth_measured_cleanup_policy.FIELD), payload=payload, root_key=root_key)
             oauth_pending_retirement_policy.validate_policy(payload.get(oauth_pending_retirement_policy.FIELD), payload=payload, root_key=root_key)
+            oauth_capture_retirement_policy.validate_policy(payload.get(oauth_capture_retirement_policy.FIELD), payload=payload, root_key=root_key)
         except (TypeError, ValueError) as exc:
             raise AuthorityServiceError("authority measured OAuth cleanup policy is invalid") from exc
         try:
@@ -2157,7 +2161,11 @@ def _socket_request(
     measured_exchange_response: bool = False,
     measured_setup_response: bool = False,
     measured_pending_retirement_response: bool = False,
+    measured_capture_retirement_response: bool = False,
 ) -> dict[str, Any]:
+    if measured_capture_retirement_response and (measured_refresh_response or measured_exchange_response or measured_setup_response
+            or measured_pending_retirement_response or value.get("operation") not in oauth_capture_retirement.OPERATIONS or deadline_ns is None):
+        raise AuthorityServiceError("expanded capture retirement originals require their separate exact purpose")
     if measured_setup_response and (measured_refresh_response or measured_exchange_response or measured_pending_retirement_response
             or value.get("operation") not in oauth_measured_setup.OPERATIONS or deadline_ns is None):
         raise AuthorityServiceError("expanded Setup response requires its separate exact purpose")
@@ -2187,7 +2195,7 @@ def _socket_request(
             return _recv_message(connection)
         _send_message_until(connection, value, deadline_ns=deadline_ns)
         size = int.from_bytes(writer_transport._recv_exact_until(connection, 8, deadline_ns=deadline_ns), "big")
-        maximum = 6 * 1024 * 1024 if measured_refresh_response or measured_exchange_response or measured_setup_response or measured_pending_retirement_response else 128 * 1024
+        maximum = 6 * 1024 * 1024 if measured_refresh_response or measured_exchange_response or measured_setup_response or measured_pending_retirement_response or measured_capture_retirement_response else 128 * 1024
         if not 2 <= size <= maximum:
             raise AuthorityServiceError("publication authority response exceeds its fixed bound")
         raw = writer_transport._recv_exact_until(connection, size, deadline_ns=deadline_ns)
@@ -3053,11 +3061,18 @@ class AuthorityRuntimeClient:
         return self._request_result(operation=operation, input_value=input_value, deadline_ns=deadline_ns,
             measured_originals=True)
 
+    def request_measured_capture_retirement(self, *, operation, input_value, deadline_ns):
+        if operation not in oauth_capture_retirement.OPERATIONS or type(deadline_ns) is not int:
+            raise AuthorityServiceError("raw original custody requires the separate provider-wide capture purpose")
+        return self._request_result(operation=operation, input_value=input_value, deadline_ns=deadline_ns,
+            measured_originals=True)
+
     def _request_result(self, *, operation, input_value, deadline_ns, measured_originals):
-        measured = operation in oauth_measured_refresh.OPERATIONS | oauth_measured_exchange.OPERATIONS | oauth_measured_setup.OPERATIONS | oauth_measured_cleanup.OPERATIONS | oauth_pending_retirement.OPERATIONS
+        measured = operation in oauth_measured_refresh.OPERATIONS | oauth_measured_exchange.OPERATIONS | oauth_measured_setup.OPERATIONS | oauth_measured_cleanup.OPERATIONS | oauth_pending_retirement.OPERATIONS | oauth_capture_retirement.OPERATIONS
         if measured_originals and not measured or measured and type(deadline_ns) is not int:
             raise AuthorityServiceError("generic authority original export is unavailable")
-        response_schema = (PENDING_RETIREMENT_RESPONSE_SCHEMA if operation in oauth_pending_retirement.OPERATIONS else
+        response_schema = (CAPTURE_RETIREMENT_RESPONSE_SCHEMA if operation in oauth_capture_retirement.OPERATIONS else
+            PENDING_RETIREMENT_RESPONSE_SCHEMA if operation in oauth_pending_retirement.OPERATIONS else
             MEASURED_CLEANUP_RESPONSE_SCHEMA if operation in oauth_measured_cleanup.OPERATIONS else
             MEASURED_EXCHANGE_RESPONSE_SCHEMA if operation in oauth_measured_exchange.OPERATIONS else
             MEASURED_SETUP_RESPONSE_SCHEMA if operation in oauth_measured_setup.OPERATIONS else
@@ -3105,6 +3120,7 @@ class AuthorityRuntimeClient:
             measured_exchange_response=operation in oauth_measured_exchange.OPERATIONS,
             measured_setup_response=operation in oauth_measured_setup.OPERATIONS,
             measured_pending_retirement_response=operation in oauth_pending_retirement.OPERATIONS,
+            measured_capture_retirement_response=operation in oauth_capture_retirement.OPERATIONS,
         )
         signature = _b64url_decode(response.get("signature"), size=64)
         unsigned = dict(response)
@@ -6295,12 +6311,13 @@ class AuthorityProcess:
                 ),
         }
         response_schema = RUNTIME_RESPONSE_SCHEMA
-        if operation in oauth_measured_refresh.OPERATIONS | oauth_measured_exchange.OPERATIONS | oauth_measured_setup.OPERATIONS | oauth_measured_cleanup.OPERATIONS | oauth_pending_retirement.OPERATIONS:
+        if operation in oauth_measured_refresh.OPERATIONS | oauth_measured_exchange.OPERATIONS | oauth_measured_setup.OPERATIONS | oauth_measured_cleanup.OPERATIONS | oauth_pending_retirement.OPERATIONS | oauth_capture_retirement.OPERATIONS:
             original = self.configuration.original_bytes
             if (type(original) is not bytes or not 0 < len(original) <= 1024 * 1024
                     or _sha256(original) != self.configuration.file_digest):
                 raise AuthorityServiceError("measured refresh requires the actual admitted configuration original")
-            response_schema = (PENDING_RETIREMENT_RESPONSE_SCHEMA if operation in oauth_pending_retirement.OPERATIONS
+            response_schema = (CAPTURE_RETIREMENT_RESPONSE_SCHEMA if operation in oauth_capture_retirement.OPERATIONS
+                else PENDING_RETIREMENT_RESPONSE_SCHEMA if operation in oauth_pending_retirement.OPERATIONS
                 else MEASURED_CLEANUP_RESPONSE_SCHEMA if operation in oauth_measured_cleanup.OPERATIONS
                 else MEASURED_EXCHANGE_RESPONSE_SCHEMA if operation in oauth_measured_exchange.OPERATIONS
                 else MEASURED_SETUP_RESPONSE_SCHEMA if operation in oauth_measured_setup.OPERATIONS
@@ -8420,6 +8437,11 @@ class AuthorityProcess:
                 configuration_payload=self.configuration.payload, root_key=self.configuration.root_key, now_epoch_ns=time.time_ns())
             if oauth_pending_retirement.request_digest(operation, arguments) != request_digest:
                 raise AuthorityServiceError("pending retirement request commitment differs")
+        if operation in oauth_capture_retirement.OPERATIONS:
+            oauth_capture_retirement_policy.verify_original(operation, arguments,
+                configuration_payload=self.configuration.payload, root_key=self.configuration.root_key, now_epoch_ns=time.time_ns())
+            if oauth_capture_retirement.request_digest(operation, arguments) != request_digest:
+                raise AuthorityServiceError("capture retirement request commitment differs")
         if operation in oauth_measured_exchange.OPERATIONS:
             oauth_measured_exchange_policy.verify_original(operation, arguments,
                 configuration_payload=self.configuration.payload, root_key=self.configuration.root_key,
@@ -8967,6 +8989,10 @@ class AuthorityProcess:
                 root_key=self.configuration.root_key, now_epoch_ns=time.time_ns())
         if planner_request["operation"] in oauth_pending_retirement.OPERATIONS:
             oauth_pending_retirement_policy.verify_original(planner_request["operation"],
+                planner_request["typedRequest"]["arguments"], configuration_payload=self.configuration.payload,
+                root_key=self.configuration.root_key, now_epoch_ns=time.time_ns())
+        if planner_request["operation"] in oauth_capture_retirement.OPERATIONS:
+            oauth_capture_retirement_policy.verify_original(planner_request["operation"],
                 planner_request["typedRequest"]["arguments"], configuration_payload=self.configuration.payload,
                 root_key=self.configuration.root_key, now_epoch_ns=time.time_ns())
         if planner_request["operation"] in oauth_measured_exchange.OPERATIONS:

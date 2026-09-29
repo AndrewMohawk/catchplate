@@ -24,6 +24,7 @@ _PENDING_COLUMNS = ("id", "requester_id", "name", "kind", "payload_digest", "met
 _WORK_COLUMNS = ("id", "provider_id", "actor_id", "source", "status", "last_error", "created_at", "updated_at")
 _ENROLLED_SOURCE = "enrolled-oauth-exchange/v1"
 _MEASURED_SOURCE = "measured-oauth-exchange/v1"
+_SETUP_SOURCE = "measured-oauth-setup-exchange/v1"
 
 
 def _require(value):
@@ -175,8 +176,8 @@ def uncertainties(owner, *, actor_id=None):
     # held and terminal cleanup observations. Do not run an expiry writer to
     # relabel an interrupted claim, or omit it as though it were clean.
     query = ("SELECT " + ", ".join(_WORK_COLUMNS) + " FROM oauth_revocation_work "
-        "WHERE (source IN (?, ?) OR status IN ('issuance_uncertain_unreported', 'issuance_uncertain'))")
-    params = [_ENROLLED_SOURCE, _MEASURED_SOURCE]
+        "WHERE (source IN (?, ?, ?) OR status IN ('issuance_uncertain_unreported', 'issuance_uncertain'))")
+    params = [_ENROLLED_SOURCE, _MEASURED_SOURCE, _SETUP_SOURCE]
     if actor_id is not None:
         query += " AND actor_id = ?"
         params.append(actor_id)
@@ -196,11 +197,11 @@ def uncertainties(owner, *, actor_id=None):
             _text(row[field], bound)
         _actor(row["actor_id"])
         _status(row["status"])
-        _require(row["source"] in {_ENROLLED_SOURCE, _MEASURED_SOURCE} or row["status"] in {"issuance_uncertain_unreported", "issuance_uncertain"})
+        _require(row["source"] in {_ENROLLED_SOURCE, _MEASURED_SOURCE, _SETUP_SOURCE} or row["status"] in {"issuance_uncertain_unreported", "issuance_uncertain"})
         _require(_time(row["created_at"]) <= _time(row["updated_at"]))
         if row["last_error"] is not None:
             _text(row["last_error"], 2000)
-        if row["source"] in {_ENROLLED_SOURCE, _MEASURED_SOURCE}:
+        if row["source"] in {_ENROLLED_SOURCE, _MEASURED_SOURCE, _SETUP_SOURCE}:
             _require(row["last_error"] is None)
         result.append(row)
     _require(len(applications.canonical(result)) <= MAX_RESULT_BYTES)

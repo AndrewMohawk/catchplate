@@ -26,6 +26,7 @@ from serverware import authority_oauth_refresh_cleanup_policy as oauth_refresh_c
 from serverware import authority_oauth_measured_refresh_policy as oauth_measured_refresh_policy
 from serverware import authority_oauth_measured_cleanup_policy as oauth_measured_cleanup_policy
 from serverware import authority_oauth_measured_pending_retirement_policy as oauth_pending_retirement_policy
+from serverware import authority_oauth_measured_capture_retirement_policy as oauth_capture_retirement_policy
 from serverware import authority_credential_currentness_policy as credential_currentness_policy
 from serverware import authority_oauth_revocation_policy as oauth_revocation_policy
 from serverware.authority_artifact_spec import (
@@ -703,7 +704,7 @@ def _validate_configuration_document(
         expected_payload_schema = SERVICE_CONFIGURATION_PAYLOAD_SCHEMA
         expected_fields = SERVICE_CONFIGURATION_FIELDS
         if isinstance(envelope["payload"], Mapping):
-            for optional_field in (evidence_policy.FIELD, transition_policy.FIELD, enrollment_policy.FIELD, oauth_activation_policy.FIELD, oauth_exchange_policy.FIELD, oauth_measured_exchange_policy.FIELD, oauth_measured_setup_policy.FIELD, oauth_revocation_policy.FIELD, oauth_refresh_policy.FIELD, credential_currentness_policy.FIELD, oauth_refresh_cleanup_policy.FIELD, oauth_measured_refresh_policy.FIELD, oauth_measured_cleanup_policy.FIELD, oauth_pending_retirement_policy.FIELD):
+            for optional_field in (evidence_policy.FIELD, transition_policy.FIELD, enrollment_policy.FIELD, oauth_activation_policy.FIELD, oauth_exchange_policy.FIELD, oauth_measured_exchange_policy.FIELD, oauth_measured_setup_policy.FIELD, oauth_revocation_policy.FIELD, oauth_refresh_policy.FIELD, credential_currentness_policy.FIELD, oauth_refresh_cleanup_policy.FIELD, oauth_measured_refresh_policy.FIELD, oauth_measured_cleanup_policy.FIELD, oauth_pending_retirement_policy.FIELD, oauth_capture_retirement_policy.FIELD):
                 if optional_field in envelope["payload"]:
                     expected_fields = expected_fields | {optional_field}
     payload = _closed(
@@ -930,6 +931,7 @@ def _validate_configuration_document(
             oauth_measured_refresh_policy.validate_policy(payload.get(oauth_measured_refresh_policy.FIELD), payload=payload)
             oauth_measured_cleanup_policy.validate_policy(payload.get(oauth_measured_cleanup_policy.FIELD), payload=payload)
             oauth_pending_retirement_policy.validate_policy(payload.get(oauth_pending_retirement_policy.FIELD), payload=payload)
+            oauth_capture_retirement_policy.validate_policy(payload.get(oauth_capture_retirement_policy.FIELD), payload=payload)
             credential_currentness_policy.validate_policy(payload.get(credential_currentness_policy.FIELD), payload=payload)
             oauth_revocation_policy.validate_policy(payload.get(oauth_revocation_policy.FIELD), payload=payload)
         except (TypeError, ValueError) as exc:

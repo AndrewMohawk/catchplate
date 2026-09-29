@@ -23,6 +23,7 @@ from serverware import authority_transition_webauthn as assertion
 from serverware import authority_credential_currentness as currentness
 from serverware import authority_transition_credential_currentness as currentness_kernel
 from serverware import authority_oauth_family_retirement as family_retirement
+from serverware import authority_oauth_provider_retirement as provider_retirement
 
 _PROVENANCE = frozenset({"schema", "requestDigest", "requestEvidenceDigest", "credentialPolicy", "decisionDigest", "decisionEvidenceDigest", "consumptionDigest", "consumptionEvidenceDigest"})
 _CREDENTIAL_COPY = ("id", "name", "kind", "encrypted_secret", "encrypted_dek", "secret_nonce", "secret_ciphertext", "secret_kek_id", "credential_version", "secret_updated_at", "metadata")
@@ -187,7 +188,9 @@ class OAuthActivationKernel:
         profile = _contract(self.operation)
         values = _values(self.operation, arguments)
         item_id = _approval_id(self.operation, values, request_digest)
+        provider = enrollment.enrollment_document(profile.enrollment_bytes(values["enrollment_original"]))["payload"]["providerId"]
         queries = [shared._query(operation=self.operation, name="approval", table="control_plane_approvals", key={"id": item_id}),
+            provider_retirement.query(self.operation, provider),
             shared._role_query(self.operation, "actor_role", values["actor_id"]),
             shared._query(operation=self.operation, name="pending", table="pending_oauth_credentials", key={"id": values["resource_id"]})]
         if self.operation == profile.OP_REQUEST:
@@ -222,6 +225,7 @@ class OAuthActivationKernel:
         profile = _contract(self.operation)
         values = _values(self.operation, context.arguments)
         pending_selected, pending, metadata, original_enrollment = _pending(context, values)
+        provider_retirement.require_open(context, original_enrollment["providerId"])
         setup_before = _setup_pending(context, values, pending, original_enrollment) if profile is setup_profile else None
         setup_after = setup_updates = None
         item_id = _approval_id(self.operation, values, context.request_digest)

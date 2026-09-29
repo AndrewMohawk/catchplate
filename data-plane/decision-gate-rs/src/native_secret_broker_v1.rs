@@ -6,6 +6,7 @@ pub mod service_tokens;
 mod refresh;
 mod cleanup;
 mod pending_retirement;
+mod capture_retirement;
 mod exchange;
 mod setup;
 #[path = "native_verifier/json.rs"]
@@ -185,7 +186,7 @@ impl PendingBroker {
             owner_ca: self.owner_ca.ok_or("native broker CA association absent")?,
             secret_kek_id: self.config.secret_kek_id, service_phase_closed: false,
             poisoned: false, _quote: quote, serving: None, refresh_configuration: None, exchange_configuration: None, setup_configuration: None,
-            cleanup_configuration: None, pending_retirement_configuration: None })
+            cleanup_configuration: None, pending_retirement_configuration: None, capture_retirement_configuration: None })
     }
 }
 
@@ -198,6 +199,7 @@ pub struct Owner {
     refresh_configuration: Option<crate::native_oauth_refresh_v1::Configuration>,
     cleanup_configuration: Option<crate::native_oauth_cleanup_v1::Configuration>,
     pending_retirement_configuration: Option<crate::native_oauth_pending_retirement_v1::Configuration>,
+    capture_retirement_configuration: Option<crate::native_oauth_capture_retirement_v1::Configuration>,
     exchange_configuration: Option<(crate::native_oauth_exchange_v1::Configuration, Arc<crate::native_oauth_exchange_v1::BrowserTls>)>,
     setup_configuration: Option<(crate::native_oauth_setup_v1::Configuration, Arc<crate::native_oauth_exchange_v1::BrowserTls>)>,
 }

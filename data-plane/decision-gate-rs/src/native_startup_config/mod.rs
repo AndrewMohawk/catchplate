@@ -5,6 +5,7 @@
 //! scope commitment, avoiding a self-referential embedded configuration hash.
 
 mod cli;
+mod capture_retirement;
 mod gate;
 mod originals;
 mod parameters;
@@ -371,6 +372,7 @@ struct ConfigurationV12 {
 // This is only a source-local decomposition after exact version-specific
 // decoding. It is never accepted as configuration or verification authority.
 struct ConfigurationParts {
+    measured_capture_retirement: Option<serverware_decision_gate::native_oauth_capture_retirement_v1::Configuration>,
     measured_setup: Option<serverware_decision_gate::native_oauth_setup_v1::Configuration>,
     gate_cgroup: Option<serverware_decision_gate::native_gate_cgroup::Configuration>,
     measured_pending_retirement: Option<serverware_decision_gate::native_oauth_pending_retirement_v1::Configuration>,
@@ -396,7 +398,7 @@ fn configuration(raw: &[u8], mode: cli::Mode) -> Result<ConfigurationParts, Stri
     let value = json::parse(raw, MAX_CONFIGURATION_BYTES)?;
     let version = value.get("apiVersion").and_then(Value::as_str);
     ensure(match mode {
-        cli::Mode::Legacy => !matches!(version, Some("serverware.nativeStartupConfiguration/v6" | "serverware.nativeStartupConfiguration/v7" | "serverware.nativeStartupConfiguration/v8" | "serverware.nativeStartupConfiguration/v9" | "serverware.nativeStartupConfiguration/v10" | "serverware.nativeStartupConfiguration/v11" | "serverware.nativeStartupConfiguration/v12" | "serverware.nativeStartupConfiguration/v13" | "serverware.nativeStartupConfiguration/v14" | "serverware.nativeStartupConfiguration/v15")),
+        cli::Mode::Legacy => !matches!(version, Some("serverware.nativeStartupConfiguration/v6" | "serverware.nativeStartupConfiguration/v7" | "serverware.nativeStartupConfiguration/v8" | "serverware.nativeStartupConfiguration/v9" | "serverware.nativeStartupConfiguration/v10" | "serverware.nativeStartupConfiguration/v11" | "serverware.nativeStartupConfiguration/v12" | "serverware.nativeStartupConfiguration/v13" | "serverware.nativeStartupConfiguration/v14" | "serverware.nativeStartupConfiguration/v15" | "serverware.nativeStartupConfiguration/v16")),
         cli::Mode::EnclaveV5 => version == Some("serverware.nativeStartupConfiguration/v5"),
         cli::Mode::EncryptedV6 => version == Some("serverware.nativeStartupConfiguration/v6"),
         cli::Mode::MeasuredRefreshV7 => version == Some("serverware.nativeStartupConfiguration/v7"),
@@ -408,14 +410,16 @@ fn configuration(raw: &[u8], mode: cli::Mode) -> Result<ConfigurationParts, Stri
         cli::Mode::MeasuredPendingRetirementV13 => version == Some("serverware.nativeStartupConfiguration/v13"),
         cli::Mode::GateCgroupV14 => version == Some("serverware.nativeStartupConfiguration/v14"),
         cli::Mode::MeasuredSetupV15 => version == Some("serverware.nativeStartupConfiguration/v15"),
+        cli::Mode::MeasuredCaptureRetirementV16 => version == Some("serverware.nativeStartupConfiguration/v16"),
     }, "native startup mode does not admit this configuration version")?;
     match value.get("apiVersion").and_then(Value::as_str) {
+        Some("serverware.nativeStartupConfiguration/v16") => capture_retirement::configuration(value),
         Some("serverware.nativeStartupConfiguration/v1") => {
             let original: ConfigurationV1 = serde_json::from_value(value)
                 .map_err(|_| "native v1 configuration violates its closed contract")?;
             ensure(original.api_version == "serverware.nativeStartupConfiguration/v1",
                 "native startup v1 configuration version differs")?;
-            Ok(ConfigurationParts { measured_setup: None, gate_cgroup: None, measured_pending_retirement: None, guest_role_key_provisioner: None, measured_cleanup: None, guest_cohort: None, guest_inspector: None, measured_issuance: None, measured_refresh: None, service_tokens: super::native_service_tokens::Source::Legacy,
+            Ok(ConfigurationParts { measured_capture_retirement: None, measured_setup: None, gate_cgroup: None, measured_pending_retirement: None, guest_role_key_provisioner: None, measured_cleanup: None, guest_cohort: None, guest_inspector: None, measured_issuance: None, measured_refresh: None, service_tokens: super::native_service_tokens::Source::Legacy,
                 secret_broker: None, measured_audit: None, credential_currentness: None, gate: original.gate, native: original.native,
                 shadow: original.shadow.into(), response_observation_v2: original.response_observation_v2,
                 policy: original.policy, enrollment: None })
@@ -426,7 +430,7 @@ fn configuration(raw: &[u8], mode: cli::Mode) -> Result<ConfigurationParts, Stri
             ensure(original.api_version == "serverware.nativeStartupConfiguration/v2"
                 && original.enrollment_authorizer.api_version == "serverware.nativeEnrollmentAuthorizer/v1",
                 "native startup v2 authorizer version differs")?;
-            Ok(ConfigurationParts { measured_setup: None, gate_cgroup: None, measured_pending_retirement: None, guest_role_key_provisioner: None, measured_cleanup: None, guest_cohort: None, guest_inspector: None, measured_issuance: None, measured_refresh: None, service_tokens: super::native_service_tokens::Source::Legacy,
+            Ok(ConfigurationParts { measured_capture_retirement: None, measured_setup: None, gate_cgroup: None, measured_pending_retirement: None, guest_role_key_provisioner: None, measured_cleanup: None, guest_cohort: None, guest_inspector: None, measured_issuance: None, measured_refresh: None, service_tokens: super::native_service_tokens::Source::Legacy,
                 secret_broker: None, measured_audit: None, credential_currentness: None, gate: original.gate, native: original.native,
                 shadow: original.shadow.into(), response_observation_v2: original.response_observation_v2,
                 policy: original.policy,
@@ -440,7 +444,7 @@ fn configuration(raw: &[u8], mode: cli::Mode) -> Result<ConfigurationParts, Stri
                 && original.enrollment_authorizer.api_version == "serverware.nativeEnrollmentAuthorizer/v1"
                 && original.enrollment_setup_authorizer.api_version == "serverware.nativeEnrollmentSetupAuthorizer/v1",
                 "native startup v3 authorizer version differs")?;
-            Ok(ConfigurationParts { measured_setup: None, gate_cgroup: None, measured_pending_retirement: None, guest_role_key_provisioner: None, measured_cleanup: None, guest_cohort: None, guest_inspector: None, measured_issuance: None, measured_refresh: None, service_tokens: super::native_service_tokens::Source::Legacy,
+            Ok(ConfigurationParts { measured_capture_retirement: None, measured_setup: None, gate_cgroup: None, measured_pending_retirement: None, guest_role_key_provisioner: None, measured_cleanup: None, guest_cohort: None, guest_inspector: None, measured_issuance: None, measured_refresh: None, service_tokens: super::native_service_tokens::Source::Legacy,
                 secret_broker: None, measured_audit: None, credential_currentness: None, gate: original.gate, native: original.native,
                 shadow: original.shadow.into(), response_observation_v2: original.response_observation_v2,
                 policy: original.policy,
@@ -456,7 +460,7 @@ fn configuration(raw: &[u8], mode: cli::Mode) -> Result<ConfigurationParts, Stri
                 && original.enrollment_setup_authorizer.api_version == "serverware.nativeEnrollmentSetupAuthorizer/v1",
                 "native startup v4 authorizer version differs")?;
             original.credential_currentness.validate()?;
-            Ok(ConfigurationParts { measured_setup: None, gate_cgroup: None, measured_pending_retirement: None, guest_role_key_provisioner: None, measured_cleanup: None, guest_cohort: None, guest_inspector: None, measured_issuance: None, measured_refresh: None, service_tokens: super::native_service_tokens::Source::Legacy,
+            Ok(ConfigurationParts { measured_capture_retirement: None, measured_setup: None, gate_cgroup: None, measured_pending_retirement: None, guest_role_key_provisioner: None, measured_cleanup: None, guest_cohort: None, guest_inspector: None, measured_issuance: None, measured_refresh: None, service_tokens: super::native_service_tokens::Source::Legacy,
                 secret_broker: None, measured_audit: None, credential_currentness: Some(original.credential_currentness),
                 gate: original.gate, native: original.native, shadow: original.shadow.into(),
                 response_observation_v2: original.response_observation_v2, policy: original.policy,
@@ -473,7 +477,7 @@ fn configuration(raw: &[u8], mode: cli::Mode) -> Result<ConfigurationParts, Stri
                 "native startup v5 authorizer version differs")?;
             original.credential_currentness.validate()?;
             original.secret_broker.validate()?;
-            Ok(ConfigurationParts { measured_setup: None, gate_cgroup: None, measured_pending_retirement: None, guest_role_key_provisioner: None, measured_cleanup: None, guest_cohort: None, guest_inspector: None, measured_issuance: None, measured_refresh: None, service_tokens: super::native_service_tokens::Source::Legacy,
+            Ok(ConfigurationParts { measured_capture_retirement: None, measured_setup: None, gate_cgroup: None, measured_pending_retirement: None, guest_role_key_provisioner: None, measured_cleanup: None, guest_cohort: None, guest_inspector: None, measured_issuance: None, measured_refresh: None, service_tokens: super::native_service_tokens::Source::Legacy,
                 secret_broker: Some(original.secret_broker), measured_audit: Some(original.measured_audit),
                 credential_currentness: Some(original.credential_currentness),
                 gate: original.gate, native: original.native, shadow: original.shadow.into(),
@@ -506,7 +510,7 @@ fn configuration(raw: &[u8], mode: cli::Mode) -> Result<ConfigurationParts, Stri
             original.guest_role_key_provisioner.validate()?;
             original.measured_pending_retirement.validate()?;
             original.gate_cgroup.validate()?;
-            Ok(ConfigurationParts { measured_setup: Some(original.measured_setup), gate_cgroup: Some(original.gate_cgroup),
+            Ok(ConfigurationParts { measured_capture_retirement: None, measured_setup: Some(original.measured_setup), gate_cgroup: Some(original.gate_cgroup),
                 measured_pending_retirement: Some(original.measured_pending_retirement),
                 guest_role_key_provisioner: Some(original.guest_role_key_provisioner),
                 measured_cleanup: Some(original.measured_cleanup), guest_cohort: Some(original.guest_cohort),
@@ -545,7 +549,7 @@ fn configuration(raw: &[u8], mode: cli::Mode) -> Result<ConfigurationParts, Stri
             original.guest_role_key_provisioner.validate()?;
             original.measured_pending_retirement.validate()?;
             original.gate_cgroup.validate()?;
-            Ok(ConfigurationParts { measured_setup: None, gate_cgroup: Some(original.gate_cgroup),
+            Ok(ConfigurationParts { measured_capture_retirement: None, measured_setup: None, gate_cgroup: Some(original.gate_cgroup),
                 measured_pending_retirement: Some(original.measured_pending_retirement),
                 guest_role_key_provisioner: Some(original.guest_role_key_provisioner),
                 measured_cleanup: Some(original.measured_cleanup), guest_cohort: Some(original.guest_cohort),
@@ -583,7 +587,7 @@ fn configuration(raw: &[u8], mode: cli::Mode) -> Result<ConfigurationParts, Stri
             original.measured_cleanup.validate()?;
             original.guest_role_key_provisioner.validate()?;
             original.measured_pending_retirement.validate()?;
-            Ok(ConfigurationParts { measured_setup: None, gate_cgroup: None, measured_pending_retirement: Some(original.measured_pending_retirement),
+            Ok(ConfigurationParts { measured_capture_retirement: None, measured_setup: None, gate_cgroup: None, measured_pending_retirement: Some(original.measured_pending_retirement),
                 guest_role_key_provisioner: Some(original.guest_role_key_provisioner),
                 measured_cleanup: Some(original.measured_cleanup),
                 guest_cohort: Some(original.guest_cohort),
@@ -621,7 +625,7 @@ fn configuration(raw: &[u8], mode: cli::Mode) -> Result<ConfigurationParts, Stri
             original.guest_cohort.validate()?;
             original.measured_cleanup.validate()?;
             original.guest_role_key_provisioner.validate()?;
-            Ok(ConfigurationParts { measured_setup: None, gate_cgroup: None, measured_pending_retirement: None, guest_role_key_provisioner: Some(original.guest_role_key_provisioner),
+            Ok(ConfigurationParts { measured_capture_retirement: None, measured_setup: None, gate_cgroup: None, measured_pending_retirement: None, guest_role_key_provisioner: Some(original.guest_role_key_provisioner),
                 measured_cleanup: Some(original.measured_cleanup),
                 guest_cohort: Some(original.guest_cohort),
                 guest_inspector: Some(original.guest_inspector),
@@ -657,7 +661,7 @@ fn configuration(raw: &[u8], mode: cli::Mode) -> Result<ConfigurationParts, Stri
             original.measured_issuance.validate()?;
             original.guest_cohort.validate()?;
             original.measured_cleanup.validate()?;
-            Ok(ConfigurationParts { measured_setup: None, gate_cgroup: None, measured_pending_retirement: None, guest_role_key_provisioner: None, measured_cleanup: Some(original.measured_cleanup),
+            Ok(ConfigurationParts { measured_capture_retirement: None, measured_setup: None, gate_cgroup: None, measured_pending_retirement: None, guest_role_key_provisioner: None, measured_cleanup: Some(original.measured_cleanup),
                 guest_cohort: Some(original.guest_cohort),
                 guest_inspector: Some(original.guest_inspector),
                 measured_issuance: Some(original.measured_issuance),
@@ -691,7 +695,7 @@ fn configuration(raw: &[u8], mode: cli::Mode) -> Result<ConfigurationParts, Stri
             original.guest_inspector.validate()?;
             original.measured_issuance.validate()?;
             original.guest_cohort.validate()?;
-            Ok(ConfigurationParts { measured_setup: None, gate_cgroup: None, measured_pending_retirement: None, guest_role_key_provisioner: None, measured_cleanup: None,
+            Ok(ConfigurationParts { measured_capture_retirement: None, measured_setup: None, gate_cgroup: None, measured_pending_retirement: None, guest_role_key_provisioner: None, measured_cleanup: None,
                 guest_cohort: Some(original.guest_cohort),
                 guest_inspector: Some(original.guest_inspector),
                 measured_issuance: Some(original.measured_issuance),
@@ -718,7 +722,7 @@ fn configuration(raw: &[u8], mode: cli::Mode) -> Result<ConfigurationParts, Stri
                 "native v9 authorizer version differs")?;
             original.credential_currentness.validate()?; original.secret_broker.validate()?; original.measured_refresh.validate()?;
             original.guest_inspector.validate()?; original.measured_issuance.validate()?;
-            Ok(ConfigurationParts { measured_setup: None, gate_cgroup: None, measured_pending_retirement: None, guest_role_key_provisioner: None, measured_cleanup: None, guest_cohort: None, guest_inspector: Some(original.guest_inspector), measured_issuance: Some(original.measured_issuance),
+            Ok(ConfigurationParts { measured_capture_retirement: None, measured_setup: None, gate_cgroup: None, measured_pending_retirement: None, guest_role_key_provisioner: None, measured_cleanup: None, guest_cohort: None, guest_inspector: Some(original.guest_inspector), measured_issuance: Some(original.measured_issuance),
                 measured_refresh: Some(original.measured_refresh), service_tokens: super::native_service_tokens::Source::Pending(original.encrypted_service_tokens),
                 secret_broker: Some(original.secret_broker), measured_audit: Some(original.measured_audit),
                 credential_currentness: Some(original.credential_currentness), gate: original.gate, native: original.native,
@@ -739,7 +743,7 @@ fn configuration(raw: &[u8], mode: cli::Mode) -> Result<ConfigurationParts, Stri
                 "native v8 authorizer version differs")?;
             original.credential_currentness.validate()?; original.secret_broker.validate()?; original.measured_refresh.validate()?;
             original.guest_inspector.validate()?;
-            Ok(ConfigurationParts { measured_setup: None, gate_cgroup: None, measured_pending_retirement: None, guest_role_key_provisioner: None, measured_cleanup: None, guest_cohort: None, guest_inspector: Some(original.guest_inspector), measured_issuance: None,
+            Ok(ConfigurationParts { measured_capture_retirement: None, measured_setup: None, gate_cgroup: None, measured_pending_retirement: None, guest_role_key_provisioner: None, measured_cleanup: None, guest_cohort: None, guest_inspector: Some(original.guest_inspector), measured_issuance: None,
                 measured_refresh: Some(original.measured_refresh), service_tokens: super::native_service_tokens::Source::Pending(original.encrypted_service_tokens),
                 secret_broker: Some(original.secret_broker), measured_audit: Some(original.measured_audit),
                 credential_currentness: Some(original.credential_currentness), gate: original.gate, native: original.native,
@@ -759,7 +763,7 @@ fn configuration(raw: &[u8], mode: cli::Mode) -> Result<ConfigurationParts, Stri
                 && original.enrollment_setup_authorizer.api_version == "serverware.nativeEnrollmentSetupAuthorizer/v1",
                 "native v7 authorizer version differs")?;
             original.credential_currentness.validate()?; original.secret_broker.validate()?; original.measured_refresh.validate()?;
-            Ok(ConfigurationParts { measured_setup: None, gate_cgroup: None, measured_pending_retirement: None, guest_role_key_provisioner: None, measured_cleanup: None, guest_cohort: None, guest_inspector: None, measured_issuance: None, measured_refresh: Some(original.measured_refresh),
+            Ok(ConfigurationParts { measured_capture_retirement: None, measured_setup: None, gate_cgroup: None, measured_pending_retirement: None, guest_role_key_provisioner: None, measured_cleanup: None, guest_cohort: None, guest_inspector: None, measured_issuance: None, measured_refresh: Some(original.measured_refresh),
                 service_tokens: super::native_service_tokens::Source::Pending(original.encrypted_service_tokens),
                 secret_broker: Some(original.secret_broker), measured_audit: Some(original.measured_audit),
                 credential_currentness: Some(original.credential_currentness), gate: original.gate, native: original.native,
@@ -783,7 +787,7 @@ fn configuration(raw: &[u8], mode: cli::Mode) -> Result<ConfigurationParts, Stri
                 "native startup v6 authorizer version differs")?;
             original.credential_currentness.validate()?;
             original.secret_broker.validate()?;
-            Ok(ConfigurationParts { measured_setup: None, gate_cgroup: None, measured_pending_retirement: None, guest_role_key_provisioner: None, measured_cleanup: None,
+            Ok(ConfigurationParts { measured_capture_retirement: None, measured_setup: None, gate_cgroup: None, measured_pending_retirement: None, guest_role_key_provisioner: None, measured_cleanup: None,
                 guest_cohort: None,
                 guest_inspector: None, measured_issuance: None,
                 measured_refresh: None,
@@ -815,8 +819,8 @@ fn run(configuration: ArtifactV1, launch: ArtifactV1, public_identity_stdout: bo
     let raw_configuration = zeroize::Zeroizing::new(raw_configuration);
     configuration_original.require_private()?;
     let configuration = self::configuration(&raw_configuration, mode)?;
-    // Only v14/v15 retain the actual gate-cgroup producer and bind its owner
-    // before serving. A nested staging marker cannot supply that custody.
+    // Only explicit gate-cgroup profiles retain the actual producer and bind
+    // its owner before serving. A nested marker cannot supply that custody.
     ensure(!configuration.response_observation_v2.uses_native_staging()
         || configuration.gate_cgroup.is_some(),
         "native staging requires explicit gate-cgroup startup")?;
@@ -830,6 +834,7 @@ fn run(configuration: ArtifactV1, launch: ArtifactV1, public_identity_stdout: bo
     inputs.credential_currentness = configuration.credential_currentness;
     inputs.measured_issuance = configuration.measured_issuance;
     inputs.measured_setup = configuration.measured_setup;
+    inputs.measured_capture_retirement = configuration.measured_capture_retirement;
     inputs.measured_cleanup = configuration.measured_cleanup;
     inputs.measured_pending_retirement = configuration.measured_pending_retirement;
     let v2 = configuration.response_observation_v2.into_config(allow_guest_listener)?;

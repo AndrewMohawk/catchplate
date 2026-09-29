@@ -16,6 +16,7 @@ mod native_staging;
 mod native_oauth_refresh;
 mod native_oauth_cleanup;
 mod native_oauth_pending_retirement;
+mod native_oauth_capture_retirement;
 mod native_oauth_exchange;
 mod native_oauth_setup;
 mod native_oauth_browser_pages;
@@ -2578,6 +2579,7 @@ struct GateState {
     measured_refresh: Option<Mutex<native_oauth_refresh::Owner>>,
     measured_cleanup: Option<Mutex<native_oauth_cleanup::Owner>>,
     measured_pending_retirement: Option<Mutex<native_oauth_pending_retirement::Owner>>,
+    measured_capture_retirement: Option<Mutex<native_oauth_capture_retirement::Owner>>,
     measured_issuance: Option<Mutex<native_oauth_exchange::Owner>>,
     measured_setup: Option<Mutex<native_oauth_setup::Owner>>,
     native_oauth_serial: Mutex<()>,
@@ -51788,6 +51790,7 @@ fn main() -> Result<(), String> {
         measured_refresh: None,
         measured_cleanup: None,
         measured_pending_retirement: None,
+        measured_capture_retirement: None,
         measured_issuance: None, measured_setup: None,
         measured_audit: None,
         credential_currentness: None,
@@ -53132,6 +53135,7 @@ mod tests {
             measured_refresh: None,
             measured_cleanup: None,
             measured_pending_retirement: None,
+            measured_capture_retirement: None,
             measured_issuance: None, measured_setup: None,
             native_oauth_serial: Mutex::new(()),
             upstream_dispatch_authority: UpstreamDispatchAuthority::new(),

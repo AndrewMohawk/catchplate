@@ -201,6 +201,17 @@ def oauth_measured_pending_retirement_request_digest(operation: str, arguments: 
         "arguments": _authorization_arguments(typed)}))
 
 
+def oauth_measured_capture_retirement_request_digest(operation: str, arguments: Mapping[str, Any]) -> str:
+    from serverware import authority_oauth_measured_capture_retirement as oauth
+    values = oauth.arguments(operation, dict(arguments), typed="businessIntent" in arguments)
+    typed = {**values, "businessIntent": authority_contract.synthesize_business_intent(operation, values)}
+    return framed_digest("serverware.policyAuthorityV9Request/v1", canonical_bytes({
+        "schema": "serverware.policyAuthorityV9Authorization/v1", "operation": operation,
+        "handler": authority_contract.operation_spec(operation)["handler"],
+        "operationManifestDigest": authority_contract.OPERATION_MANIFEST_DIGEST,
+        "arguments": _authorization_arguments(typed)}))
+
+
 def oauth_measured_cleanup_request_digest(operation: str, arguments: Mapping[str, Any]) -> str:
     from serverware import authority_oauth_measured_cleanup as oauth
     values = oauth.arguments(operation, arguments, typed="businessIntent" in arguments)

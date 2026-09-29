@@ -100,6 +100,17 @@ def require_consumed_pending_retirement_barrier(context, credential_id, version,
     profile.digest(claim_request_digest)
 
 
+def require_consumed_capture_retirement_barrier(context, credential_id, version, barrier_sha256, *, claim_request_digest):
+    """Exact retained provider-capture claim only; no contact/expiry renewal."""
+    from serverware import authority_oauth_measured_capture_retirement as capture
+    profile.require(context.operation in {capture.OP_CONTACT, capture.OP_FINISH, capture.OP_RECOVER})
+    _, root = require_root(context, credential_id, version)
+    _, barrier, _ = _barrier(context, root, root["barrier_id"], barrier_sha256)
+    profile.require(root["status"] == "consumed" and barrier["status"] == "consumed"
+        and barrier["consume_request_digest"] == claim_request_digest)
+    profile.digest(claim_request_digest)
+
+
 def _holder(context, root, holder_id):
     selected = context.exact(profile.HOLDER_TABLE, {"id": profile.holder_record_id(root["id"], holder_id)})
     if selected["present"] is False:

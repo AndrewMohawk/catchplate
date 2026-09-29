@@ -12,6 +12,7 @@ from serverware import authority_oauth_refresh as refresh
 from serverware import authority_oauth_activation_policy as enrollment
 from serverware import authority_oauth_inventory as inventory
 from serverware import authority_oauth_family_retirement as family
+from serverware import authority_oauth_provider_retirement as provider_retirement
 from serverware import authority_transition_core as core
 from serverware import authority_transition_quota as shared
 from serverware import authority_transition_oauth_refresh as common
@@ -78,7 +79,9 @@ class MeasuredRefreshKernel:
     def queries(self, *, arguments, database_now, request_digest):
         values = _values(self.operation, arguments)
         request = values["request"]
+        provider = enrollment.enrollment_document(refresh.enrollment_bytes(values["enrollment_original"]))["payload"]["providerId"]
         queries = [shared._query(operation=self.operation, name="credential", table="credentials", key={"id": values["credential_id"]}),
+            provider_retirement.query(self.operation, provider),
             shared._query(operation=self.operation, name="generation", table="credential_generations", key={"credential_id": values["credential_id"]})]
         if self.operation == profile.OP_INSPECT and request["recoveryVersion"] is not None:
             item_id = refresh.refresh_id(values["credential_id"], request["recoveryVersion"])
@@ -110,6 +113,9 @@ class MeasuredRefreshKernel:
         request = values["request"]
         stamp, now = context.database_now.isoformat(), shared._database_epoch_ns(context.database_now)
         statement = values["evidence"]["statement"]
+        if self.operation != profile.OP_CAPTURE:
+            provider = enrollment.enrollment_document(refresh.enrollment_bytes(values["enrollment_original"]))["payload"]["providerId"]
+            provider_retirement.require_open(context, provider)
         profile.require(statement["issuedAtEpochNs"] <= now < statement["expiresAtEpochNs"])
         mutations = []
         if self.operation == profile.OP_INSPECT:

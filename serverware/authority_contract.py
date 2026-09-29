@@ -10,7 +10,7 @@ from serverware import authority_complete_query
 from serverware.authority_query_read_work import _ValidationWork
 
 
-SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.297"
+SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.298"
 SCHEMA_VERSION = 9
 CONTRACT_SCHEMA = "serverware.policyAuthorityOperationContract/v3"
 BUSINESS_INTENT_SCHEMA = "serverware.policyAuthorityBusinessIntent/v2"
@@ -280,6 +280,8 @@ _AUDIT_COUNTER_REPLACEMENT_OPERATIONS = frozenset({
     "oauth.measured-refresh-cleanup.finish", "oauth.measured-refresh-cleanup.recover",
     "oauth.measured-pending-retirement.inspect", "oauth.measured-pending-retirement.claim", "oauth.measured-pending-retirement.contact",
     "oauth.measured-pending-retirement.finish", "oauth.measured-pending-retirement.recover",
+    "oauth.measured-capture-retirement.inspect", "oauth.measured-capture-retirement.claim", "oauth.measured-capture-retirement.contact",
+    "oauth.measured-capture-retirement.finish", "oauth.measured-capture-retirement.recover",
     "credential.currentness.challenge", "credential.currentness.register", "credential.currentness.quiesce",
     "credential.currentness.ack", "credential.currentness.admit",
     "oauth.revocation.claim", "oauth.revocation.contact", "oauth.revocation.finish",
@@ -1481,6 +1483,10 @@ V9_ADDITIONAL_PROTECTED_TABLES = tuple(sorted({
     "oauth_pending_retirement_reservations",
     "oauth_pending_retirement_attempts",
     "oauth_measured_pending_retirement_custody",
+    "oauth_provider_retirements",
+    "oauth_capture_retirement_reservations",
+    "oauth_capture_retirement_attempts",
+    "oauth_measured_capture_retirement_custody",
     "oauth_revocation_work",
     "setup_sessions",
     "policy_authority_authorization_dependency_manifests",
@@ -1822,7 +1828,7 @@ _OPERATIONS = {
     **{
         operation: _spec(
             handler,
-            reads=("control_plane_approvals", "rbac_role_bindings", "pending_oauth_credentials") +
+            reads=("control_plane_approvals", "rbac_role_bindings", "pending_oauth_credentials", "oauth_provider_retirements") +
                 (("credentials", "credential_generations", "setup_sessions", "credential_currentness_roots", "oauth_family_retirements", "oauth_pending_family_retirements") if operation == "oauth.pending.activate" else ()) + _PHASE2_AGGREGATE,
             writes=("control_plane_approvals", "metadata_audit_outbox") +
                 (("credentials", "credential_generations", "pending_oauth_credentials", "credential_currentness_roots") if operation == "oauth.pending.activate" else ()) + _PHASE2_AGGREGATE,
@@ -1840,7 +1846,7 @@ _OPERATIONS = {
     **{
         operation: _spec(
             handler,
-            reads=("oauth_exchange_reservations", "oauth_revocation_work", "rbac_role_bindings") +
+            reads=("oauth_exchange_reservations", "oauth_revocation_work", "rbac_role_bindings", "oauth_provider_retirements") +
                 (("pending_oauth_credentials",) if operation == "oauth.exchange.prepare" else ()) +
                 (("credentials", "credential_generations", "pending_oauth_credentials", "setup_sessions", "oauth_family_retirements", "oauth_pending_family_retirements") if operation == "oauth.pending.stage" else ()) + _PHASE2_AGGREGATE,
             writes=("oauth_exchange_reservations", "oauth_revocation_work", "metadata_audit_outbox") +
@@ -1858,7 +1864,7 @@ _OPERATIONS = {
     **{
         operation: _spec(
             "serverware_policy_authority_" + operation.replace(".", "_").replace("-", "_"),
-            reads=("oauth_exchange_reservations", "oauth_measured_exchange_custody", "oauth_revocation_work", "rbac_role_bindings") +
+            reads=("oauth_exchange_reservations", "oauth_measured_exchange_custody", "oauth_revocation_work", "rbac_role_bindings", "oauth_provider_retirements") +
                 (("pending_oauth_credentials",) if operation in {"oauth.measured-exchange.prepare", "oauth.measured-exchange.recover"} else ()) +
                 (("credentials", "credential_generations", "pending_oauth_credentials", "setup_sessions", "oauth_family_retirements", "oauth_pending_family_retirements")
                     if operation == "oauth.measured-exchange.stage" else ()) + _PHASE2_AGGREGATE,
@@ -1874,7 +1880,7 @@ _OPERATIONS = {
         operation: _spec(
             "serverware_policy_authority_" + operation.replace(".", "_").replace("-", "_"),
             reads=("oauth_exchange_reservations", "oauth_measured_setup_custody", "oauth_revocation_work", "rbac_role_bindings",
-                "setup_sessions", "setup_session_events", "oauth_setup_audit_links") +
+                "setup_sessions", "setup_session_events", "oauth_setup_audit_links", "oauth_provider_retirements") +
                 (("pending_oauth_credentials",) if operation in {"oauth.measured-setup.prepare", "oauth.measured-setup.recover"} else ()) +
                 (("credentials", "credential_generations", "pending_oauth_credentials", "oauth_family_retirements", "oauth_pending_family_retirements")
                     if operation == "oauth.measured-setup.stage" else ()) + _PHASE2_AGGREGATE,
@@ -1892,7 +1898,7 @@ _OPERATIONS = {
         operation: _spec(
             "serverware_policy_authority_" + operation.replace(".", "_").replace("-", "_"),
             reads=("setup_sessions", "setup_session_events", "oauth_setup_audit_links", "metadata_audit_outbox", "rbac_role_bindings") +
-                (("control_plane_approvals", "pending_oauth_credentials", "oauth_measured_setup_custody")
+                (("control_plane_approvals", "pending_oauth_credentials", "oauth_measured_setup_custody", "oauth_provider_retirements")
                     if operation in {"oauth.setup.activation-request", "oauth.setup.activation-decide", "oauth.setup.activate"} else ()) +
                 (("credentials", "credential_generations", "credential_currentness_roots", "oauth_family_retirements", "oauth_pending_family_retirements")
                     if operation == "oauth.setup.activate" else ()) + _PHASE2_AGGREGATE,
@@ -1909,7 +1915,7 @@ _OPERATIONS = {
     **{
         operation: _spec(
             handler,
-            reads=("credentials", "credential_generations", "oauth_refresh_reservations", "oauth_revocation_work", "credential_currentness_roots", "credential_currentness_barriers", "oauth_family_retirements", "oauth_pending_family_retirements") + _PHASE2_AGGREGATE,
+            reads=("credentials", "credential_generations", "oauth_refresh_reservations", "oauth_revocation_work", "credential_currentness_roots", "credential_currentness_barriers", "oauth_family_retirements", "oauth_pending_family_retirements", "oauth_provider_retirements") + _PHASE2_AGGREGATE,
             writes=("oauth_refresh_reservations", "oauth_revocation_work", "metadata_audit_outbox") +
                 (("credentials", "credential_generations", "credential_currentness_roots") if operation == "oauth.refresh.commit" else ()) +
                 (("credential_currentness_roots", "credential_currentness_barriers") if operation == "oauth.refresh.claim" else ()) + _PHASE2_AGGREGATE,
@@ -1926,7 +1932,7 @@ _OPERATIONS = {
         operation: _spec(
             handler,
             reads=("credentials", "credential_generations", "oauth_refresh_reservations", "oauth_measured_refresh_custody",
-                "oauth_revocation_work", "credential_currentness_roots", "credential_currentness_barriers", "oauth_family_retirements", "oauth_pending_family_retirements") + _PHASE2_AGGREGATE,
+                "oauth_revocation_work", "credential_currentness_roots", "credential_currentness_barriers", "oauth_family_retirements", "oauth_pending_family_retirements", "oauth_provider_retirements") + _PHASE2_AGGREGATE,
             writes=("metadata_audit_outbox",) + (() if operation == "oauth.measured-refresh.inspect" else
                 ("oauth_measured_refresh_custody", "oauth_refresh_reservations", "oauth_revocation_work")) +
                 (("credentials", "credential_generations", "credential_currentness_roots") if operation == "oauth.measured-refresh.commit" else ()) +
@@ -1975,6 +1981,24 @@ _OPERATIONS = {
         ) for operation in (
             "oauth.measured-pending-retirement.inspect", "oauth.measured-pending-retirement.claim", "oauth.measured-pending-retirement.contact",
             "oauth.measured-pending-retirement.finish", "oauth.measured-pending-retirement.recover")
+    },
+    **{
+        operation: _spec(
+            "serverware_policy_authority_" + operation.replace(".", "_").replace("-", "_"),
+            reads=("credentials", "credential_generations", "pending_oauth_credentials", "setup_sessions",
+                "oauth_exchange_reservations", "oauth_refresh_reservations", "oauth_measured_exchange_custody",
+                "oauth_measured_setup_custody", "oauth_revocation_work", "oauth_provider_retirements",
+                "oauth_capture_retirement_reservations", "oauth_capture_retirement_attempts",
+                "oauth_measured_capture_retirement_custody", "credential_currentness_roots", "credential_currentness_barriers") + _PHASE2_AGGREGATE,
+            writes=("metadata_audit_outbox",) + (() if operation in {"oauth.measured-capture-retirement.inspect", "oauth.measured-capture-retirement.recover"}
+                else ("credentials", "oauth_revocation_work", "oauth_provider_retirements", "oauth_capture_retirement_reservations",
+                    "oauth_capture_retirement_attempts", "oauth_measured_capture_retirement_custody",
+                    "credential_currentness_roots", "credential_currentness_barriers")) + _PHASE2_AGGREGATE,
+            webauthn="not-required", proof_primitives=("primary-key-row", "bounded-limit-plus-one", "aggregate-high-water", "capacity-reservation"),
+            maximum_query_rows=224, maximum_mutations=64, maximum_work_units=8192,
+        ) for operation in (
+            "oauth.measured-capture-retirement.inspect", "oauth.measured-capture-retirement.claim", "oauth.measured-capture-retirement.contact",
+            "oauth.measured-capture-retirement.finish", "oauth.measured-capture-retirement.recover")
     },
     **{
         operation: _spec(

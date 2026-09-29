@@ -14,6 +14,7 @@ from serverware import authority_transition_quota as shared
 from serverware import authority_credential_currentness as currentness
 from serverware import authority_transition_credential_currentness as currentness_kernel
 from serverware import authority_oauth_family_retirement as family_retirement
+from serverware import authority_oauth_provider_retirement as provider_retirement
 
 _HANDLERS = {name: "serverware_policy_authority_" + name.replace(".", "_") for name in profile.OPERATIONS}
 _MUTABLE_METADATA = frozenset({"refreshable", "token_type", "scopes", "expires_at_epoch_ms", "refresh_token_expires_at_epoch_ms"})
@@ -138,6 +139,7 @@ class OAuthRefreshKernel:
         item_id = profile.refresh_id(values["credential_id"], values["request"]["expectedVersion"])
         payload = enrollment.enrollment_document(profile.enrollment_bytes(values["enrollment_original"]))["payload"]
         queries = [shared._query(operation=self.operation, name="credential", table="credentials", key={"id": values["credential_id"]}),
+            provider_retirement.query(self.operation, payload["providerId"]),
             shared._query(operation=self.operation, name="generation", table="credential_generations", key={"credential_id": values["credential_id"]}),
             shared._query(operation=self.operation, name="refresh", table=profile.TABLE, key={"id": item_id}, require_absence=self.operation == profile.OP_CLAIM)]
         queries.extend(currentness_kernel.effect_queries(self.operation, values["credential_id"], values["request"]["expectedVersion"],
@@ -159,6 +161,8 @@ class OAuthRefreshKernel:
         request = values["request"]
         now_s, now_ns = context.database_now.isoformat(), shared._database_epoch_ns(context.database_now)
         credential_selected, credential, generation_selected, generation, metadata, payload = _heads(context, values)
+        if self.operation != profile.OP_RETAIN:
+            provider_retirement.require_open(context, payload["providerId"])
         family_retirement.require_open_from_population(context, metadata["provider_id"], metadata["provider_subject"])
         item_id = profile.refresh_id(credential["id"], request["expectedVersion"])
         selected = context.exact(profile.TABLE, {"id": item_id})

@@ -654,6 +654,59 @@ def metadata_base_schema_source() -> str:
                 updated_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS oauth_provider_retirements (
+                id TEXT PRIMARY KEY,
+                provider_id TEXT NOT NULL UNIQUE,
+                deployment_id TEXT NOT NULL,
+                authorization_sha256 TEXT NOT NULL,
+                source_profile TEXT NOT NULL,
+                exchange_id TEXT NOT NULL,
+                claim_request_digest TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS oauth_capture_retirement_reservations (
+                id TEXT PRIMARY KEY,
+                work_source TEXT NOT NULL,
+                authorization_original TEXT NOT NULL,
+                authorization_sha256 TEXT NOT NULL,
+                original_work_json TEXT NOT NULL,
+                original_affected_json TEXT NOT NULL,
+                currentness_barriers_json TEXT NOT NULL,
+                claim_request_digest TEXT NOT NULL,
+                owner_nonce_sha256 TEXT NOT NULL,
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                CHECK (status IN ('claimed', 'unknown', 'observed-accepted', 'observed-rejected'))
+            );
+
+            CREATE TABLE IF NOT EXISTS oauth_capture_retirement_attempts (
+                id TEXT PRIMARY KEY,
+                exchange_id TEXT NOT NULL,
+                token_purpose TEXT NOT NULL,
+                contact_request_sha256 TEXT NOT NULL,
+                status TEXT NOT NULL,
+                transport_original TEXT,
+                transport_sha256 TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                CHECK (token_purpose IN ('access_token', 'refresh_token')),
+                CHECK (status IN ('contact-claimed', 'accepted', 'rejected', 'unknown')),
+                UNIQUE (exchange_id, token_purpose)
+            );
+
+            CREATE TABLE IF NOT EXISTS oauth_measured_capture_retirement_custody (
+                id TEXT PRIMARY KEY,
+                authorization_sha256 TEXT NOT NULL,
+                claim_original_json TEXT NOT NULL,
+                contact_originals_json TEXT NOT NULL,
+                finish_originals_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS oauth_revocation_work (
                 id TEXT PRIMARY KEY,
                 provider_id TEXT NOT NULL,

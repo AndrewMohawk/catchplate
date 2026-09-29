@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-startup-configuration.v16.schema.json",
+  "title": "Explicit native measured capture-retirement startup",
+  "$comment": "Exact v15 owners plus separately authorized measuredCaptureRetirement. Setup remains the single browser/helper issuance purpose. Capture retirement cannot borrow staged-pending or refresh-family permission, infer an authenticated subject, silently broaden a token-only request or reopen a retired provider scope. These cold data do not create grants, currentness barriers, native owners, signed receipts or provider success.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion", "gate", "native", "shadow", "responseObservationV2", "policy",
+    "enrollmentAuthorizer", "enrollmentSetupAuthorizer", "enrollmentProxyEndpoint",
+    "credentialCurrentness", "secretBroker", "measuredAudit", "encryptedServiceTokens",
+    "measuredRefresh", "guestInspector", "measuredSetup", "guestCohort", "measuredCleanup",
+    "guestRoleKeyProvisioner", "measuredPendingRetirement", "gateCgroup", "measuredCaptureRetirement"
+  ],
+  "properties": {
+    "apiVersion": {"const": "serverware.nativeStartupConfiguration/v16"},
+    "gate": {"$ref": "native-startup-configuration.v15.schema.json#/properties/gate"},
+    "native": {"$ref": "native-startup-configuration.v15.schema.json#/properties/native"},
+    "shadow": {"$ref": "native-startup-configuration.v15.schema.json#/properties/shadow"},
+    "responseObservationV2": {"$ref": "native-startup-configuration.v15.schema.json#/properties/responseObservationV2"},
+    "policy": {"$ref": "native-startup-configuration.v15.schema.json#/properties/policy"},
+    "enrollmentAuthorizer": {"$ref": "native-startup-configuration.v15.schema.json#/properties/enrollmentAuthorizer"},
+    "enrollmentSetupAuthorizer": {"$ref": "native-startup-configuration.v15.schema.json#/properties/enrollmentSetupAuthorizer"},
+    "enrollmentProxyEndpoint": {"$ref": "native-startup-configuration.v15.schema.json#/properties/enrollmentProxyEndpoint"},
+    "credentialCurrentness": {"$ref": "native-startup-configuration.v15.schema.json#/properties/credentialCurrentness"},
+    "secretBroker": {"$ref": "native-startup-configuration.v15.schema.json#/properties/secretBroker"},
+    "measuredAudit": {"$ref": "native-startup-configuration.v15.schema.json#/properties/measuredAudit"},
+    "encryptedServiceTokens": {"$ref": "native-startup-configuration.v15.schema.json#/properties/encryptedServiceTokens"},
+    "measuredRefresh": {"$ref": "native-startup-configuration.v15.schema.json#/properties/measuredRefresh"},
+    "guestInspector": {"$ref": "native-startup-configuration.v15.schema.json#/properties/guestInspector"},
+    "measuredSetup": {"$ref": "native-startup-configuration.v15.schema.json#/properties/measuredSetup"},
+    "guestCohort": {"$ref": "native-startup-configuration.v15.schema.json#/properties/guestCohort"},
+    "measuredCleanup": {"$ref": "native-startup-configuration.v15.schema.json#/properties/measuredCleanup"},
+    "guestRoleKeyProvisioner": {"$ref": "native-startup-configuration.v15.schema.json#/properties/guestRoleKeyProvisioner"},
+    "measuredPendingRetirement": {"$ref": "native-startup-configuration.v15.schema.json#/properties/measuredPendingRetirement"},
+    "gateCgroup": {"$ref": "native-startup-configuration.v15.schema.json#/properties/gateCgroup"},
+    "measuredCaptureRetirement": {"$ref": "native-oauth-capture-retirement.v1.schema.json#/$defs/configuration"}
+  }
+}

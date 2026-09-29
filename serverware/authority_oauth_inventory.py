@@ -21,6 +21,8 @@ def maximum_rows(table):
 
 
 def tables_for(operation):
+    if operation in {"oauth.measured-capture-retirement.inspect", "oauth.measured-capture-retirement.claim"}:
+        return ("credentials", "pending_oauth_credentials", "oauth_exchange_reservations", "oauth_refresh_reservations")
     if operation == "oauth.setup.create":
         return ("setup_sessions",)
     if operation in {"oauth.measured-pending-retirement.inspect", "oauth.measured-pending-retirement.claim",
@@ -65,7 +67,8 @@ def require_complete_populations(*, selected_rows, before_roots, work, deadline_
         check()
         work.prepare_scan(selected_rows)
         rows = [entry for entry in selected_rows if entry["table"] == table and entry["present"]]
-        profile.require(table in roots and len(rows) <= maximum_rows(table), "OAuth complete inventory exceeds its source-fixed table bound")
+        maximum = 32 if operation in {"oauth.measured-capture-retirement.inspect", "oauth.measured-capture-retirement.claim"} else maximum_rows(table)
+        profile.require(table in roots and len(rows) <= maximum, "OAuth complete inventory exceeds its source-fixed table bound")
         nodes = {}
         # Each cold empty_digest(depth) separately computes its suffix ladder.
         # Reserve the complete triangular work, regardless of cache state.

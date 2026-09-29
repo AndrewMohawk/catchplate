@@ -295,12 +295,23 @@ impl Delivery {
         }
         Ok(self.original(path)?.to_vec())
     }
+    pub(crate) fn listener_binding(&self) -> Result<super::guest_listener::AuthorityBinding, V2RuntimeError> {
+        self.check()?;
+        self.check_deadline()?;
+        if self.scoped.role != CustodyServiceRole::CustodyRouter {
+            return Err(fail("guest listener belongs only to the admitted router"));
+        }
+        let envelope: Envelope = crate::decode_canonical_json(&self.envelope.bytes)
+            .map_err(|_| fail("retained guest envelope changed"))?;
+        self.check_deadline()?;
+        Ok(listener_binding(&self.config, &self.envelope, &envelope.payload, &self.scoped))
+    }
 }
 
-pub(crate) fn load(config_path: &Path, role: CustodyServiceRole, path: &Path, sha256: &str)
-    -> Result<Config, V2RuntimeError> {
+fn admission(config_path: &Path, role: CustodyServiceRole, path: &Path, sha256: &str)
+    -> Result<(Config, Original, Original, Payload, ScopedCustodyServiceConfig), V2RuntimeError> {
     let config_original = Original::open(config_path, 0, None, super::MAX_CONFIG_BYTES, None)?;
-    let mut config: Config = crate::decode_canonical_json(&config_original.bytes)
+    let config: Config = crate::decode_canonical_json(&config_original.bytes)
         .map_err(|_| fail("invalid original guest cold configuration"))?;
     super::validate_config(&config)?;
     let authority = config.guest_delivery_authority.as_ref().ok_or_else(|| fail("guest delivery authority is not cold assigned"))?;
@@ -318,7 +329,6 @@ pub(crate) fn load(config_path: &Path, role: CustodyServiceRole, path: &Path, sh
         || payload.generation_id != scoped.generation_id || payload.generation != scoped.generation
         || payload.service_role != role || payload.boot_id != super::recovery::kernel_boot_id()?
         || issued > now || deadline <= now || deadline <= issued || deadline - issued > MAX_WINDOW_NS
-        || unsafe { libc::geteuid() } != scoped.process.uid || unsafe { libc::getegid() } != scoped.process.gid
     { return Err(fail("guest delivery configuration/generation/role/boot/deadline mismatch")); }
     let public = decode::<32>(&authority.public_key_base64url)?;
     let signature = Signature::from_bytes(&decode::<64>(&envelope.signature_base64url)?);
@@ -326,6 +336,57 @@ pub(crate) fn load(config_path: &Path, role: CustodyServiceRole, path: &Path, sh
     signed.extend_from_slice(&crate::canonical_json_bytes(&payload).map_err(|_| fail("canonical delivery payload"))?);
     VerifyingKey::from_bytes(&public).map_err(|_| fail("delivery public key"))?
         .verify_strict(&signed, &signature).map_err(|_| fail("guest delivery signature rejected"))?;
+    Ok((config, config_original, envelope_original, payload, scoped))
+}
+
+fn listener_binding(config: &Original, envelope: &Original, payload: &Payload,
+    scoped: &ScopedCustodyServiceConfig) -> super::guest_listener::AuthorityBinding {
+    super::guest_listener::AuthorityBinding {
+        configuration_sha256: digest(&config.bytes), delivery_sha256: digest(&envelope.bytes),
+        generation_id: payload.generation_id.clone(), generation: payload.generation,
+        boot_id: payload.boot_id.clone(), issued_at_boottime_ns: payload.issued_at_boottime_ns.clone(),
+        deadline_boottime_ns: payload.deadline_boottime_ns.clone(),
+        router_uid: scoped.process.uid, router_gid: scoped.process.gid,
+    }
+}
+
+// This root-only owner authorizes fresh listener preparation, not generation
+// activation, a role-key read, service readiness or an inspection permission.
+pub(crate) struct ListenerPreparation {
+    config: Original, envelope: Original, binding: super::guest_listener::AuthorityBinding,
+    owner_pid: libc::pid_t,
+}
+impl ListenerPreparation {
+    pub(crate) fn open(config_path: &Path, path: &Path, sha256: &str) -> Result<Self, V2RuntimeError> {
+        if unsafe { libc::geteuid() } != 0 { return Err(fail("listener preparation requires root")); }
+        let (config, config_original, envelope, payload, scoped) = admission(
+            config_path, CustodyServiceRole::CustodyRouter, path, sha256)?;
+        config.guest_listener.as_ref().ok_or_else(|| fail("guest listener is not cold selected"))?.validate(&config)?;
+        let binding = listener_binding(&config_original, &envelope, &payload, &scoped);
+        let result = Self { config: config_original, envelope, binding, owner_pid:unsafe { libc::getpid() } };
+        result.check()?;
+        Ok(result)
+    }
+    pub(crate) fn check(&self) -> Result<(), V2RuntimeError> {
+        if unsafe { libc::geteuid() } != 0 || unsafe { libc::getpid() } != self.owner_pid
+            || super::recovery::kernel_boot_id()? != self.binding.boot_id
+            || super::recovery::boottime_ns()? >= ns(&self.binding.deadline_boottime_ns)? {
+            return Err(fail("listener preparation root/boot/original allowance changed"));
+        }
+        self.config.check()?;
+        self.envelope.check()
+    }
+    pub(crate) fn binding(&self) -> &super::guest_listener::AuthorityBinding { &self.binding }
+}
+
+pub(crate) fn load(config_path: &Path, role: CustodyServiceRole, path: &Path, sha256: &str)
+    -> Result<Config, V2RuntimeError> {
+    let (mut config, config_original, envelope_original, payload, scoped) = admission(config_path, role, path, sha256)?;
+    if unsafe { libc::geteuid() } != scoped.process.uid || unsafe { libc::getegid() } != scoped.process.gid {
+        return Err(fail("guest delivery requires the actual final service UID/GID"));
+    }
+    let public = decode::<32>(&config.guest_delivery_authority.as_ref().ok_or_else(|| fail("guest authority absent"))?.public_key_base64url)?;
+    let deadline = ns(&payload.deadline_boottime_ns)?;
     let credentials = payload.credentials;
     if credentials.role_keys.len() != scoped.process.role_keys.len()
         || credentials.bootstrap_manifests.is_some() != (role == CustodyServiceRole::StateAuthority)

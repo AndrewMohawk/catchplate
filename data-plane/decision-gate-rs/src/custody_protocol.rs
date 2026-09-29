@@ -64,6 +64,8 @@ use enclave_runtime_identity_v1::{
 mod response_v2_http11;
 
 pub use response_observation_v2::custody::{
+    GuestResponseV2ListenerProfile, GuestResponseV2ClientPath,
+    PreparedGuestResponseV2Listener, GUEST_RESPONSE_V2_SOCKET,
     build_canonical_authority_proof_input_from_seed,
     load_root_owned_v2_config, AuthenticatedClientIdentity,
     canonical_authority_envelope_preimage_sha256,

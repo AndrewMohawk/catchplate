@@ -15,6 +15,9 @@
 //! configuration; it does not open files, contact services, invoke NSM, create
 //! threads or manufacture a client. Actual peer custody and authenticated
 //! hello/TEE/release/trust admission remain in the later startup constructor.
+//! Additive v2 requires guestListener and the fixed guest socket path; only an
+//! actual cold Pending encrypted-service-token source permits it. Old v1 forbids the new field,
+//! including explicit null, and never falls back after guest admission fails.
 
 use super::{
     validate_response_observation_v2_client_config,
@@ -39,6 +42,8 @@ const MAX_IDENTIFIER_BYTES: usize = 256;
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct NativeResponseObservationV2ConfigV1 {
     api_version: String,
+    #[serde(default, deserialize_with = "guest_profile")]
+    guest_listener: Option<serverware_decision_gate::GuestResponseV2ListenerProfile>,
     socket_path: PathBuf,
     expected_uid: libc::uid_t,
     startup_timeout_ms: u64,
@@ -58,8 +63,13 @@ pub(super) struct NativeResponseObservationV2ConfigV1 {
 }
 
 impl NativeResponseObservationV2ConfigV1 {
-    pub(super) fn into_config(self) -> Result<ResponseObservationV2ClientConfig, String> {
-        if self.api_version != VERSION
+    pub(super) fn into_config(self, allow_guest: bool) -> Result<ResponseObservationV2ClientConfig, String> {
+        let selected = match self.api_version.as_str() {
+            VERSION => self.guest_listener.is_none(),
+            "serverware.nativeResponseObservationV2Config/v2" => allow_guest && self.guest_listener.is_some(),
+            _ => false,
+        };
+        if !selected
             || self.role_keys.is_empty()
             || self.role_keys.len() > MAX_ROLES
         {
@@ -120,6 +130,7 @@ impl NativeResponseObservationV2ConfigV1 {
         }
         let config = ResponseObservationV2ClientConfig {
             socket_path: self.socket_path,
+            guest_listener: self.guest_listener,
             expected_uid: self.expected_uid,
             startup_timeout: Duration::from_millis(self.startup_timeout_ms),
             attestation_mode: V2AttestationMode::TeeHardware,
@@ -140,9 +151,17 @@ impl NativeResponseObservationV2ConfigV1 {
             expected_trust_checkpoint_sha256: self.expected_trust_checkpoint_sha256,
             minimum_revocation_epoch: self.minimum_revocation_epoch,
         };
-        validate_response_observation_v2_client_config(&config)?;
+        if config.guest_listener.is_some() {
+            super::validate_response_observation_v2_client_config_for_native_serving(&config)?;
+        } else { validate_response_observation_v2_client_config(&config)?; }
         Ok(config)
     }
+}
+
+fn guest_profile<'de, D: serde::Deserializer<'de>>(deserializer: D)
+    -> Result<Option<serverware_decision_gate::GuestResponseV2ListenerProfile>, D::Error> {
+    // Absence selects old v1; explicit null never widens that closed profile.
+    serverware_decision_gate::GuestResponseV2ListenerProfile::deserialize(deserializer).map(Some)
 }
 
 fn account_text(value: &str, maximum: usize, remaining: &mut usize) -> Result<(), String> {

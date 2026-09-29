@@ -895,9 +895,13 @@ pub struct RootOwnedResponseObservationV2Config {
     provider_router: Option<RootOwnedProviderRouterConfig>,
     #[serde(default)]
     guest_delivery_authority: Option<guest_delivery::Authority>,
+    #[serde(default, deserialize_with = "guest_listener::configuration_profile")]
+    guest_listener: Option<guest_listener::GuestResponseV2ListenerProfile>,
     // Only the explicit guest loader can construct this retained authority.
     #[serde(skip)]
     guest_delivery: Option<std::sync::Arc<guest_delivery::Delivery>>,
+    #[serde(skip)]
+    guest_listener_owner: Option<guest_listener::SharedBound>,
 }
 
 impl RootOwnedResponseObservationV2Config {
@@ -2779,6 +2783,7 @@ fn validate_config(
         ));
     }
     config::validate_signed_topology(config)?;
+    if let Some(profile) = &config.guest_listener { profile.validate(config)?; }
     if let Some(authority) = &config.guest_delivery_authority {
         authority.validate()?;
         authority.require_separate_assignment(config)?;

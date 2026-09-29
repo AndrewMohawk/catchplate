@@ -742,6 +742,7 @@ pub(super) fn response_observation_v2_client_config(
     )?;
     Ok(Some(ResponseObservationV2ClientConfig {
         socket_path,
+        guest_listener: None,
         expected_uid,
         startup_timeout:
             Duration::from_millis(startup_timeout_ms),
@@ -790,6 +791,12 @@ pub(super) fn validate_response_observation_v2_client_config_for_native_serving(
 fn validate_response_observation_v2_client_config_as_uid(
     config: &ResponseObservationV2ClientConfig, require_production: bool, caller_uid: libc::uid_t,
 ) -> Result<(), String> {
+    if let Some(profile) = &config.guest_listener {
+        profile.validate_client(&config.socket_path, config.expected_uid)?;
+        if !require_production || caller_uid != serverware_decision_gate::native_serving_privileges::UID {
+            return Err("guest response-v2 is only the explicit final-identity native client profile".to_owned());
+        }
+    }
     let socket_bytes = config.socket_path.as_os_str().as_bytes();
     let address: libc::sockaddr_un = unsafe { std::mem::zeroed() };
     if !config.socket_path.is_absolute()
@@ -969,6 +976,7 @@ fn initialize_response_observation_v2_client_until(
                 }
                 let client = ResponseObservationV2Client {
                     socket_path: config.socket_path,
+                    guest_listener: config.guest_listener,
                     expected_uid: config.expected_uid,
                     boot_id: status.boot_id,
                     authenticated_client_identity_sha256:
@@ -1036,6 +1044,7 @@ pub(super) fn response_observation_v2_hello_once(
         &config.socket_path,
         config.expected_uid,
         deadline,
+        config.guest_listener.as_ref(),
     )?;
     let remaining_ms = u64::try_from(
         deadline
@@ -1231,6 +1240,7 @@ impl ResponseObservationV2Client {
     pub(super) fn verifier_config(&self) -> ResponseObservationV2ClientConfig {
         ResponseObservationV2ClientConfig {
             socket_path: self.socket_path.clone(),
+            guest_listener: self.guest_listener.clone(),
             expected_uid: self.expected_uid,
             startup_timeout: Duration::from_millis(
                 RESPONSE_OBSERVATION_V2_MAX_OPERATION_MS,
@@ -1278,6 +1288,7 @@ impl<'a> ResponseObservationV2Session<'a> {
             &client.socket_path,
             client.expected_uid,
             lifecycle_deadline,
+            client.guest_listener.as_ref(),
         )
         .map_err(|_| {
             ResponseObservationV2TransactionError::Unavailable
@@ -3517,6 +3528,7 @@ pub(super) fn connect_response_observation_v2_socket(
     path: &Path,
     expected_uid: libc::uid_t,
     deadline: ResponseObservationV2Deadline,
+    guest: Option<&serverware_decision_gate::GuestResponseV2ListenerProfile>,
 ) -> Result<OwnedFd, String> {
     if deadline.expired() {
         return Err(
@@ -3524,6 +3536,7 @@ pub(super) fn connect_response_observation_v2_socket(
                 .to_string(),
         );
     }
+    let guest_path = guest.map(|profile| profile.open_client_path(path, expected_uid)).transpose()?;
     let metadata = fs::symlink_metadata(path)
         .map_err(|error| {
             format!("inspect response-observation v2 socket: {error}")
@@ -3672,12 +3685,14 @@ pub(super) fn connect_response_observation_v2_socket(
             != std::mem::size_of::<libc::ucred>()
         || credentials.pid <= 0
         || credentials.uid != expected_uid
+        || guest.is_some_and(|profile| credentials.gid != profile.router_gid())
     {
         return Err(
             "response-observation v2 peer credentials mismatch"
                 .to_string(),
         );
     }
+    if let Some(original) = &guest_path { original.check()?; }
     let remaining =
         deadline.remaining().unwrap_or(Duration::ZERO);
     if remaining.is_zero() {

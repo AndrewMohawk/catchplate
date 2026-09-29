@@ -3874,6 +3874,14 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/response_v2/custody/services/state_authority.rs \
 				data-plane/decision-gate-rs/src/response_v2/custody/supervisor.rs \
 				data-plane/decision-gate-rs/src/response_v2/custody/guest_delivery.rs \
+				data-plane/decision-gate-rs/src/custody_protocol.rs \
+				data-plane/decision-gate-rs/src/native_startup_config/mod.rs \
+				data-plane/decision-gate-rs/src/response_v2/client_transport.rs \
+				data-plane/decision-gate-rs/src/response_v2/custody/guest_listener.rs \
+				data-plane/decision-gate-rs/src/response_v2/custody/peer_measurement.rs \
+				data-plane/decision-gate-rs/src/response_v2/integration.rs \
+				data-plane/decision-gate-rs/src/response_v2/mod.rs \
+				data-plane/decision-gate-rs/src/response_v2/native_config.rs \
 				data-plane/decision-gate-rs/src/native_secret_broker_v1/image.rs \
 				data-plane/decision-gate-rs/src/native_secret_broker_v1/process.rs \
 				data-plane/decision-gate-rs/src/native_secret_broker_v1/service_tokens.rs \
@@ -4089,6 +4097,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/public-webauthn-revocation-http.v1.schema.json \
 				schemas/public-webauthn-revocation-portal.v1.schema.json \
 				schemas/response-v2-guest-credential-delivery.v1.schema.json \
+				schemas/response-v2-guest-listener.v1.schema.json \
 				schemas/rbac-witness-recovery.v1.schema.json \
 				schemas/native-secret-broker.v1.schema.json \
 				schemas/native-startup-configuration.v5.schema.json \

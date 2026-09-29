@@ -306,10 +306,11 @@ fn run(configuration: ArtifactV1, launch: ArtifactV1, public_identity_stdout: bo
     let launch: parameters::LaunchV1 = decode(&raw_launch, MAX_LAUNCH_BYTES)?;
     launch.validate(&configuration_pin)?;
     let lifetime = NativeRuntimeLifetimeV1::new(launch.deadline_boottime_ns)?;
+    let allow_guest_listener = matches!(&configuration.service_tokens, super::native_service_tokens::Source::Pending(_));
     let (mut inputs, control_plane_tls) = configuration.gate.into_inputs(configuration.secret_broker,
         configuration.measured_audit, configuration.service_tokens)?;
     inputs.credential_currentness = configuration.credential_currentness;
-    let v2 = configuration.response_observation_v2.into_config()?;
+    let v2 = configuration.response_observation_v2.into_config(allow_guest_listener)?;
     let shadow = configuration.shadow.into_config()?;
     lifetime.check()?;
     let (mut policy_original, policy_bytes) = HeldOriginal::read(configuration.policy, MAX_POLICY_BYTES)?;

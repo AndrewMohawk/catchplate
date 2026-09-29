@@ -10,10 +10,15 @@ pub(crate) mod config;
 pub(crate) mod generation;
 #[path = "response_v2/custody/guest_delivery.rs"]
 pub(crate) mod guest_delivery;
+#[path = "response_v2/custody/guest_listener.rs"]
+pub(crate) mod guest_listener;
 #[path = "response_v2/custody/protocol.rs"]
 pub(crate) mod protocol;
 #[path = "response_v2/custody/supervisor.rs"]
 pub(crate) mod supervisor;
+#[cfg(target_os = "linux")]
+#[path = "response_v2/custody/peer_measurement.rs"]
+pub(crate) mod peer_measurement;
 #[path = "response_v2/custody/attestation.rs"]
 pub(crate) mod attestation;
 #[path = "response_v2/custody/recovery.rs"]
@@ -27,6 +32,8 @@ pub use config::{
     CustodyServiceRole, SignedCustodyTopologyV1,
     TrustedHostNoTeeTopology,
 };
+pub use guest_listener::{GuestResponseV2ListenerProfile, GuestResponseV2ClientPath,
+    PreparedGuestResponseV2Listener, GUEST_RESPONSE_V2_SOCKET};
 pub use supervisor::{
     check_custody_service_readiness, dispatch_from_process_args,
     run_custody_service, run_provider_rpc_v1_compatibility,

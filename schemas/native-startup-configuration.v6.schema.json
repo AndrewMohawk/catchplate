@@ -11,7 +11,7 @@
     "gate": {"$ref": "#/$defs/gate"},
     "native": {"$ref": "native-startup-configuration.v4.schema.json#/$defs/native"},
     "shadow": {"$ref": "native-startup-configuration.v4.schema.json#/$defs/shadow"},
-    "responseObservationV2": {"$ref": "native-startup-configuration.v4.schema.json#/$defs/responseObservation"},
+    "responseObservationV2": {"oneOf": [{"$ref": "native-startup-configuration.v4.schema.json#/$defs/responseObservation"}, {"$ref": "response-v2-guest-listener.v1.schema.json#/$defs/nativeClient"}]},
     "policy": {"$ref": "native-startup-configuration.v4.schema.json#/$defs/artifact"},
     "enrollmentAuthorizer": {"$ref": "native-enrollment-authorizer.v1.schema.json"},
     "enrollmentSetupAuthorizer": {"$ref": "native-enrollment-setup-authorizer.v1.schema.json"},

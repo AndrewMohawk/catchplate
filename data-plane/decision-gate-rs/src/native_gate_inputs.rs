@@ -71,6 +71,7 @@ pub(super) fn validate_native_gate_static_inputs(inputs: &GateStateInputs) -> Re
         return Err("native measured audit and secret broker must share the explicit v5 cold profile".to_owned());
     }
     if let Some(config) = &inputs.secret_broker { config.validate()?; }
+    let pending_tokens = super::native_service_tokens::pending(inputs)?;
     if !inputs.is_production {
         return Err("native bootstrap requires production configuration".to_owned());
     }
@@ -142,7 +143,7 @@ pub(super) fn validate_native_gate_static_inputs(inputs: &GateStateInputs) -> Re
             return Err("native production requires a grant consume URL without atomic release authorization".to_owned());
         }
     }
-    validate_internal_service_tokens(true, &required_tokens)?;
+    if !pending_tokens { validate_internal_service_tokens(true, &required_tokens)?; }
     if measured && (inputs.audit_url.is_none() || inputs.audit_token.is_some()) {
         return Err("native v5 measured audit requires its URL and forbids a bearer token".to_owned());
     }
@@ -158,7 +159,7 @@ pub(super) fn validate_native_gate_static_inputs(inputs: &GateStateInputs) -> Re
         ("rate-limit consume", &inputs.rate_limit_consume_url, &inputs.rate_limit_consume_token),
         ("release authorization", &inputs.release_authorization_base_url, &inputs.release_authorization_token),
     ] {
-        if url.is_some() && token.is_none() {
+        if !pending_tokens && url.is_some() && token.is_none() {
             return Err(format!("native {label} URL requires its service token"));
         }
     }

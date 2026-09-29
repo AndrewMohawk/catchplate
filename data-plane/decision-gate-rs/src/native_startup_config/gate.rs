@@ -7,6 +7,9 @@
 //! strings are `credentialLeaseUrl`, `credentialLeaseToken`, `managementToken`
 //! and `instanceId`. Conditional service URL/token fields and both TLS-root
 //! lists may be omitted/null; no other configuration values have defaults.
+//! V6's separate outer parser requires every bearer slot explicitly null and
+//! supplies the actual encrypted-envelope state. The common internal shape
+//! accepts those nulls only under that mode; v1-v5 retain their strings.
 //!
 //! `controlPlaneTlsRootsPem` replaces built-in roots when supplied, whereas
 //! `upstreamTlsRootsPem` adds roots, preserving the existing client contracts.
@@ -25,7 +28,7 @@ use super::super::{
     MAX_INTERNAL_SERVICE_TOKEN_FILE_BYTES,
 };
 use super::super::native_gate_inputs::validate_native_gate_static_inputs;
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 use std::collections::BTreeSet;
 use std::time::Duration;
 
@@ -46,7 +49,8 @@ pub(super) struct GateConfigV1 {
     grant_cache_max: usize,
     gmail_proof_cache_max: usize,
     credential_lease_url: String,
-    credential_lease_token: String,
+    #[serde(deserialize_with = "required_token")]
+    credential_lease_token: Option<String>,
     credential_lease_renewal_interval_ms: u64,
     credential_lease_renewal_workers: usize,
     credential_lease_renewal_queue_capacity: usize,
@@ -62,7 +66,8 @@ pub(super) struct GateConfigV1 {
     atomic_release_authorization_enabled: bool,
     release_authorization_base_url: Option<String>,
     release_authorization_token: Option<String>,
-    management_token: String,
+    #[serde(deserialize_with = "required_token")]
+    management_token: Option<String>,
     audit_queue_max: usize,
     audit_batch_max: usize,
     request_head_deadline_ms: u64,
@@ -91,9 +96,17 @@ struct PolicyTrustConfigV1 {
 impl GateConfigV1 {
     pub(super) fn into_inputs(self,
         secret_broker: Option<serverware_decision_gate::native_secret_broker_v1::Configuration>,
-        measured_audit: Option<super::super::native_audit_transport::Configuration>)
+        measured_audit: Option<super::super::native_audit_transport::Configuration>,
+        service_tokens: super::super::native_service_tokens::Source)
         -> Result<(GateStateInputs, ControlPlaneClientConfig), String>
     {
+        // The common in-memory shape permits null only after the separate
+        // closed v6 parser selected a real encrypted envelope. Legacy wire
+        // versions still require both original non-null strings.
+        if matches!(&service_tokens, super::super::native_service_tokens::Source::Legacy)
+            && (self.credential_lease_token.is_none() || self.management_token.is_none()) {
+            return Err("legacy native startup requires its plaintext service token strings".to_owned());
+        }
         if !is_sha256_digest(&self.expected_binary_sha256)
             || self.instance_id.is_empty() || self.instance_id.len() > MAX_INSTANCE_ID_BYTES
             || !(1..=MAX_COLD_CACHE_ENTRIES).contains(&self.gmail_proof_cache_max)
@@ -102,12 +115,12 @@ impl GateConfigV1 {
             return Err("native gate binary pin, instance or cache bounds are invalid".to_owned());
         }
         for token in [
-            Some(self.credential_lease_token.as_str()),
+            self.credential_lease_token.as_deref(),
             self.audit_token.as_deref(),
             self.grant_consume_token.as_deref(),
             self.rate_limit_consume_token.as_deref(),
             self.release_authorization_token.as_deref(),
-            Some(self.management_token.as_str()),
+            self.management_token.as_deref(),
         ].into_iter().flatten() {
             if token.is_empty() || token.len() as u64 > MAX_INTERNAL_SERVICE_TOKEN_FILE_BYTES
                 || token.chars().any(|value| value.is_whitespace() || value.is_control())
@@ -142,6 +155,7 @@ impl GateConfigV1 {
             Some((_, certificates)) => certificates,
         };
         let inputs = GateStateInputs {
+            service_tokens,
             native_serving_privileges: None,
             prepared_secret_broker: None,
             secret_broker,
@@ -178,7 +192,7 @@ impl GateConfigV1 {
             credential_lease_cache_max: self.credential_lease_cache_max,
             upstream_client_config: UpstreamClientConfig { root_certificates },
             audit_url: self.audit_url,
-            credential_lease_token: Some(self.credential_lease_token),
+            credential_lease_token: self.credential_lease_token,
             audit_token: self.audit_token,
             grant_consume_url: self.grant_consume_url,
             grant_consume_token: self.grant_consume_token,
@@ -188,7 +202,7 @@ impl GateConfigV1 {
             atomic_release_authorization_enabled: self.atomic_release_authorization_enabled,
             release_authorization_base_url: self.release_authorization_base_url,
             release_authorization_token: self.release_authorization_token,
-            management_token: Some(self.management_token),
+            management_token: self.management_token,
             audit_queue_max: self.audit_queue_max,
             audit_batch_max: self.audit_batch_max,
             request_head_deadline: Duration::from_millis(self.request_head_deadline_ms),
@@ -204,6 +218,10 @@ impl GateConfigV1 {
         validate_native_gate_static_inputs(&inputs)?;
         Ok((inputs, control_plane_config))
     }
+}
+
+fn required_token<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<String>, D::Error> {
+    Option::<String>::deserialize(deserializer)
 }
 
 fn tls_roots(originals: Option<Vec<String>>, label: &str)

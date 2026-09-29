@@ -4,7 +4,7 @@ This source connects the complete existing Rust TLS proxy to a non-exporting bro
 
 ## Explicit cold selection
 
-`serverware.nativeStartupConfiguration/v5` requires both `secretBroker` and `measuredAudit`, plus the existing v4 currentness and native startup originals. The enclave packaging entrypoint uses `--native-enclave-startup`; the actual gate parser requires exactly v5 before startup. The older `--native-startup` contracts remain separate. There is no environment or incoming-request promotion.
+`serverware.nativeStartupConfiguration/v5` requires both `secretBroker` and `measuredAudit`, plus the existing v4 currentness and native startup originals. Direct `--native-enclave-startup` still requires exactly v5. The default enclave packaging entrypoint now uses `--native-encrypted-startup` and exact [v6 encrypted service-token delivery](native-encrypted-service-startup.md). The older `--native-startup` contracts remain separate. There is no environment or incoming-request promotion or fallback.
 
 The broker configuration pins the exact KMS key, encrypted KEK blob, encryption context, full plaintext KEK SHA256, `secretKekId`, parent port and immutable helper image. These values need independent release/configuration authorization; self-consistent hashes alone supply none. The full KEK pin is necessary: encrypting a parent-chosen value to a public RSA key would not authenticate that value.
 

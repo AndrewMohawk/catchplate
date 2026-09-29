@@ -25,11 +25,15 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 from serverware.native_kms_cms import unwrap_broker_kek
+from serverware import native_service_tokens
 
 _SCHEMA = "serverware.nativeSecretBrokerChannel/v1"
 _WORK = "serverware.nativeBrokerOpenCredential/v1"
 _OUTPUT = "serverware.nativeBrokerGateCiphertext/v1"
 _DOMAIN = b"serverware/native-broker-gate-ciphertext/v1\0"
+_SERVICE_WORK = "serverware.nativeBrokerOpenServiceTokens/v1"
+_SERVICE_OUTPUT = "serverware.nativeServiceTokensGateCiphertext/v1"
+_SERVICE_DOMAIN = b"serverware/native-service-tokens-gate-ciphertext/v1\0"
 _MAX = 8 * 1024 * 1024
 _ROW = {"credentialId", "credentialVersion", "secretKekId", "encryptedDek",
     "secretNonce", "secretCiphertext", "secretUpdatedAt"}
@@ -132,6 +136,22 @@ def _private_document(original, maximum):
     return value
 
 
+def _gate_ciphertext(value, plaintext, output, domain):
+    recipient = x25519.X25519PublicKey.from_public_bytes(_decoded(value["gateRecipientPublicKey"], 32, 32))
+    nonce = _decoded(value["gateRecipientNonce"], 32, 32)
+    ephemeral = x25519.X25519PrivateKey.generate()
+    request_digest = _sha(_canonical(value))
+    aad = domain + bytes.fromhex(request_digest[7:])
+    key = HKDF(algorithm=hashes.SHA256(), length=32, salt=nonce, info=aad).derive(ephemeral.exchange(recipient))
+    aead_nonce = os.urandom(12)
+    ciphertext = AESGCM(key).encrypt(aead_nonce, plaintext, aad)
+    return {"apiVersion": output, "requestSha256": request_digest,
+        "recipientPublicKey": value["gateRecipientPublicKey"],
+        "serverEphemeralPublicKey": _encoded(ephemeral.public_key().public_bytes(
+            serialization.Encoding.Raw, serialization.PublicFormat.Raw)),
+        "aeadNonce": _encoded(aead_nonce), "ciphertext": _encoded(ciphertext)}
+
+
 class _Channel:
     def __init__(self):
         _require(len(sys.argv) == 1 and os.getuid() == 65534 and os.getgid() == 65534)
@@ -208,6 +228,7 @@ class _Broker:
         channel.send({"apiVersion": _SCHEMA, "phase": "recipient",
             "recipientPublicKey": _encoded(public), "recipientPublicKeySha256": self.public_digest})
         self.kek, self.operations = None, set()
+        self.service_tokens_opened = False
 
     def provision(self, value):
         _require(self.kek is None and self.rsa is not None
@@ -225,6 +246,24 @@ class _Broker:
         self.kek = AESGCM(key)
         self.channel.check()
         self.channel.send({"apiVersion": _SCHEMA, "phase": "provisioned", "requestSha256": request_digest})
+
+    def open_service_tokens(self, value):
+        _require(self.kek is not None and self.rsa is None and not self.service_tokens_opened
+            and not self.operations and set(value) == {"apiVersion", "operationId",
+                "gateRecipientPublicKey", "gateRecipientNonce", "deadlineBoottimeNs",
+                "expectedBinding", "envelope"} and value["apiVersion"] == _SERVICE_WORK)
+        self.service_tokens_opened = True
+        operation = _text(value["operationId"], 64)
+        _require(len(operation) == 64 and all(item in "0123456789abcdef" for item in operation))
+        self.operations.add(operation)
+        deadline = _integer(value["deadlineBoottimeNs"], maximum=2**64 - 1)
+        self.channel.check(deadline)
+        plaintext = native_service_tokens.open_for_broker(value["envelope"],
+            value["expectedBinding"], self.key_id, self.kek)
+        result = _gate_ciphertext(value, plaintext, _SERVICE_OUTPUT, _SERVICE_DOMAIN)
+        self.channel.check(deadline)
+        self.channel.send(result, deadline)
+        self.channel.check(deadline)
 
     def open_credential(self, value):
         _require(self.kek is not None and self.rsa is None and set(value) == {
@@ -302,21 +341,10 @@ class _Broker:
                 _integer(refresh_expiry, maximum=9_223_372_036_854_775)
                 _require(time.time_ns() // 1_000_000 < refresh_expiry)
             plaintext = access.encode("utf-8")
-        recipient = x25519.X25519PublicKey.from_public_bytes(_decoded(value["gateRecipientPublicKey"], 32, 32))
-        nonce = _decoded(value["gateRecipientNonce"], 32, 32)
-        ephemeral = x25519.X25519PrivateKey.generate()
-        request_digest = _sha(_canonical(value))
-        aad = _DOMAIN + bytes.fromhex(request_digest[7:])
-        key = HKDF(algorithm=hashes.SHA256(), length=32, salt=nonce, info=aad).derive(ephemeral.exchange(recipient))
-        aead_nonce = os.urandom(12)
-        ciphertext = AESGCM(key).encrypt(aead_nonce, plaintext, aad)
+        result = _gate_ciphertext(value, plaintext, _OUTPUT, _DOMAIN)
         self.channel.check(deadline)
         _require(time.time_ns() // 1_000_000 < expires)
-        self.channel.send({"apiVersion": _OUTPUT, "requestSha256": request_digest,
-            "recipientPublicKey": value["gateRecipientPublicKey"],
-            "serverEphemeralPublicKey": _encoded(ephemeral.public_key().public_bytes(
-                serialization.Encoding.Raw, serialization.PublicFormat.Raw)),
-            "aeadNonce": _encoded(aead_nonce), "ciphertext": _encoded(ciphertext)}, deadline)
+        self.channel.send(result, deadline)
         self.channel.check(deadline)
 
 
@@ -326,7 +354,11 @@ def main():
         broker = _Broker(channel, channel.receive())
         broker.provision(channel.receive())
         while True:
-            broker.open_credential(channel.receive())
+            value = channel.receive()
+            if value.get("apiVersion") == _SERVICE_WORK:
+                broker.open_service_tokens(value)
+            else:
+                broker.open_credential(value)
     finally:
         channel.socket.close()
 

@@ -4,14 +4,16 @@ use super::originals::ArtifactV1;
 use std::ffi::OsString;
 use std::path::PathBuf;
 
+pub(super) enum Mode { Legacy, EnclaveV5, EncryptedV6 }
+
 pub(super) fn arguments(mut arguments: impl Iterator<Item = OsString>)
-    -> Result<Option<(ArtifactV1, ArtifactV1, bool, bool)>, String>
+    -> Result<Option<(ArtifactV1, ArtifactV1, bool, Mode)>, String>
 {
-    let Some(mode) = arguments.next() else { return Ok(None); };
-    let require_v5 = mode == "--native-enclave-startup";
-    if mode != "--native-startup" && !require_v5 {
-        return Err("decision gate accepts no arguments or an explicit native startup mode".to_owned());
-    }
+    let Some(argument) = arguments.next() else { return Ok(None); };
+    let mode = if argument == "--native-startup" { Mode::Legacy }
+        else if argument == "--native-enclave-startup" { Mode::EnclaveV5 }
+        else if argument == "--native-encrypted-startup" { Mode::EncryptedV6 }
+        else { return Err("decision gate accepts no arguments or an explicit native startup mode".to_owned()); };
     let mut configuration = None;
     let mut configuration_pin = None;
     let mut launch = None;
@@ -45,5 +47,5 @@ pub(super) fn arguments(mut arguments: impl Iterator<Item = OsString>)
     }, ArtifactV1 {
         path: launch.ok_or("native startup requires --launch")?,
         sha256: launch_pin.ok_or("native startup requires --launch-sha256")?,
-    }, public_identity_stdout, require_v5)))
+    }, public_identity_stdout, mode)))
 }

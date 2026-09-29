@@ -74,7 +74,8 @@ dependencies; it does not publish or accept that candidate.
 
 The manifest lists each packaged file's path, mode, size and SHA-256, the source
 manifest digest and image/interpreter/helper hashes. Its `helperImage` object
-is the exact five-field input for independently admitted native startup v5.
+is the exact five-field broker input for independently admitted native startup
+v5 and [encrypted service-token v6](native-encrypted-service-startup.md).
 `releaseAuthority` is always false. The `native-broker-runtime-artifact` target
 exports these same two outputs without mounting the image or starting custody.
 
@@ -82,20 +83,24 @@ exports these same two outputs without mounting the image or starting custody.
 
 The entrypoint starts as UID/GID 0 inside the enclave, checks the local NSM
 character node, ensures root-only loop-control, clears the environment and
-execs the fixed gate with `--native-enclave-startup`. It accepts configuration
+execs the fixed gate with `--native-encrypted-startup`. It accepts configuration
 and launch artifact flags/pins, not an executable or arbitrary command.
-The real parser requires v5 before constructing broker and measured audit
+The real parser requires v6 before constructing broker and measured audit
 owners. Local device checks are only early refusal, never attestation.
 
 The broker constructor needs mount/device and privilege-drop capabilities.
 The helper drops groups, capabilities and UID/GID, disables dumping and uses
 only the inherited anonymous channel. Private keys are generated inside that
 helper; no key, provider token or host socket is baked into the image.
-The gate itself still retains its initial privilege in this source checkpoint;
-steady-state gate privilege separation remains an N06 hardening requirement.
+The gate [permanently drops privilege](native-serving-privilege-separation.md)
+after retaining the actual NSM/helper preparation and before creating fresh
+serving identities. V6 opens its encrypted service-token bundle only after
+binding the actual measured broker, before publishing serving state. Separate
+guest shadow/response service startup and confidential role-key delivery remain
+required; including their binaries does not start or provision those services.
 
 Frozen verification must check actual kernel features, recursive loader/import
-closure, reproducible image bytes, refusal without v5/NSM, memfd/loop/mount
+closure, reproducible image bytes, refusal without v6/NSM, memfd/loop/mount
 association, child isolation/cleanup, real KMS recipient decryption and
 permitted/denied/revoked requests with audit delivery. The source changes do not
 establish those runtime results. Measured OAuth issuance/refresh and remaining

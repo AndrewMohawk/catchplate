@@ -42,7 +42,7 @@ fn main() -> Result<(), String> {
     }
     // Only startup artifact locations/pins and the optional public-identity
     // output flag may follow. The gate's real CLI validates this exact list and
-    // acquires protected originals; it requires v5 before constructing owners.
+    // acquires protected originals; it requires v6 before constructing owners.
     let arguments: Vec<OsString> = std::env::args_os().skip(1).collect();
     if arguments.is_empty() || arguments.len() > 9 {
         return Err("native enclave startup requires configuration and launch artifacts with independent pins".into());
@@ -59,7 +59,7 @@ fn main() -> Result<(), String> {
     device(&directory, "loop-control", Some((10, 237)))?;
     drop(directory);
     let error = Command::new("/usr/local/bin/serverware-decision-gate")
-        .arg("--native-enclave-startup")
+        .arg("--native-encrypted-startup")
         .args(arguments)
         .env_clear()
         .exec();

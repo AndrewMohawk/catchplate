@@ -2,6 +2,7 @@
 //! Configuration is an independently admitted input, not authority from a hash.
 mod process;
 mod image;
+pub mod service_tokens;
 #[path = "native_verifier/json.rs"]
 mod json;
 
@@ -177,7 +178,8 @@ impl PendingBroker {
         self.process.check(self.deadline)?;
         Ok(Owner { process: self.process, deadline: self.deadline,
             owner_ca: self.owner_ca.ok_or("native broker CA association absent")?,
-            secret_kek_id: self.config.secret_kek_id, poisoned: false, _quote: quote, serving: None })
+            secret_kek_id: self.config.secret_kek_id, service_phase_closed: false,
+            poisoned: false, _quote: quote, serving: None })
     }
 }
 
@@ -185,7 +187,7 @@ impl PendingBroker {
 /// decryption endpoint. Only the actual gate uses the private inherited pipe.
 pub struct Owner {
     process: process::Process, deadline: u64, owner_ca: [u8; 32], secret_kek_id: String,
-    poisoned: bool, _quote: RuntimeKeyQuoteV1,
+    service_phase_closed: bool, poisoned: bool, _quote: RuntimeKeyQuoteV1,
     serving: Option<Arc<native_serving_privileges::Owner>>,
 }
 
@@ -256,6 +258,7 @@ impl Owner {
 
     pub fn open_credential(&mut self, identity: &mut EnclaveRuntimeIdentityV1,
         work: CredentialWork<'_>, deadline: u64) -> Result<Zeroizing<String>, String> {
+        self.service_phase_closed = true;
         let deadline = deadline.min(self.deadline).min(identity.deadline());
         let result = (|| {
             self.check(deadline)?;

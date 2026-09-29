@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-startup-configuration.v6.schema.json",
+  "title": "Cold native proxy with purpose-bound encrypted service tokens",
+  "$comment": "Explicit v6 only through --native-encrypted-startup. Original <=16MiB duplicate-free integer-only JSON; exact owner-only original acquisition and independent release admission remain required. All plaintext bearer slots are present and null. The actual broker opens the purpose-fixed envelope only after measured executable, admitted policy and identity joins, on the unchanged deadline. Pending tokens cannot enter GateState. JSON Schema does not establish custody, exact binding equality, URL policy, valid certificates or runtime readiness. Versions 1-5 are unchanged.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "gate", "native", "shadow", "responseObservationV2", "policy", "enrollmentAuthorizer", "enrollmentSetupAuthorizer", "enrollmentProxyEndpoint", "credentialCurrentness", "secretBroker", "measuredAudit", "encryptedServiceTokens"],
+  "properties": {
+    "apiVersion": {"const": "serverware.nativeStartupConfiguration/v6"},
+    "gate": {"$ref": "#/$defs/gate"},
+    "native": {"$ref": "native-startup-configuration.v4.schema.json#/$defs/native"},
+    "shadow": {"$ref": "native-startup-configuration.v4.schema.json#/$defs/shadow"},
+    "responseObservationV2": {"$ref": "native-startup-configuration.v4.schema.json#/$defs/responseObservation"},
+    "policy": {"$ref": "native-startup-configuration.v4.schema.json#/$defs/artifact"},
+    "enrollmentAuthorizer": {"$ref": "native-enrollment-authorizer.v1.schema.json"},
+    "enrollmentSetupAuthorizer": {"$ref": "native-enrollment-setup-authorizer.v1.schema.json"},
+    "enrollmentProxyEndpoint": {"type": "string", "minLength": 1, "maxLength": 4096},
+    "credentialCurrentness": {"$ref": "native-startup-configuration.v4.schema.json#/properties/credentialCurrentness"},
+    "secretBroker": {"$ref": "native-secret-broker.v1.schema.json#/$defs/configuration"},
+    "measuredAudit": {"$ref": "measured-data-plane-audit.v1.schema.json#/$defs/nativeConfiguration"},
+    "encryptedServiceTokens": {"$ref": "native-service-tokens.v1.schema.json#/$defs/envelope"}
+  },
+  "$defs": {
+    "gate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["policyHighWater", "policyTrust", "expectedBinarySha256", "instanceId", "grantCacheMax", "gmailProofCacheMax", "credentialLeaseUrl", "credentialLeaseToken", "credentialLeaseRenewalIntervalMs", "credentialLeaseRenewalWorkers", "credentialLeaseRenewalQueueCapacity", "credentialLeaseCacheMax", "auditUrl", "auditToken", "grantConsumeToken", "rateLimitConsumeToken", "atomicReleaseAuthorizationEnabled", "releaseAuthorizationToken", "managementToken", "auditQueueMax", "auditBatchMax", "requestHeadDeadlineMs", "requestBodyDeadlineMs", "responseWriteDeadlineMs"],
+      "properties": {
+        "policyHighWater": {"$ref": "native-startup-configuration.v4.schema.json#/$defs/gate/properties/policyHighWater"},
+        "policyTrust": {"$ref": "native-startup-configuration.v4.schema.json#/$defs/gate/properties/policyTrust"},
+        "expectedBinarySha256": {"$ref": "native-startup-configuration.v4.schema.json#/$defs/sha"},
+        "instanceId": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "grantCacheMax": {"$ref": "native-startup-configuration.v4.schema.json#/$defs/cache"},
+        "gmailProofCacheMax": {"$ref": "native-startup-configuration.v4.schema.json#/$defs/cache"},
+        "credentialLeaseUrl": {"$ref": "native-startup-configuration.v4.schema.json#/$defs/url"},
+        "credentialLeaseToken": {"type": "null"},
+        "credentialLeaseRenewalIntervalMs": {"type": "integer", "minimum": 50, "maximum": 1000},
+        "credentialLeaseRenewalWorkers": {"type": "integer", "minimum": 1, "maximum": 32},
+        "credentialLeaseRenewalQueueCapacity": {"type": "integer", "minimum": 1, "maximum": 65536},
+        "credentialLeaseCacheMax": {"$ref": "native-startup-configuration.v4.schema.json#/$defs/cache"},
+        "controlPlaneTlsRootsPem": {"$ref": "native-startup-configuration.v4.schema.json#/$defs/roots"},
+        "upstreamTlsRootsPem": {"$ref": "native-startup-configuration.v4.schema.json#/$defs/roots"},
+        "auditUrl": {"$ref": "native-startup-configuration.v4.schema.json#/$defs/url"},
+        "auditToken": {"type": "null"},
+        "grantConsumeUrl": {"$ref": "native-startup-configuration.v4.schema.json#/$defs/nullableUrl"},
+        "grantConsumeToken": {"type": "null"},
+        "rateLimitConsumeUrl": {"$ref": "native-startup-configuration.v4.schema.json#/$defs/nullableUrl"},
+        "rateLimitConsumeToken": {"type": "null"},
+        "atomicReleaseAuthorizationEnabled": {"type": "boolean"},
+        "releaseAuthorizationBaseUrl": {"$ref": "native-startup-configuration.v4.schema.json#/$defs/nullableUrl"},
+        "releaseAuthorizationToken": {"type": "null"},
+        "managementToken": {"type": "null"},
+        "auditQueueMax": {"$ref": "native-startup-configuration.v4.schema.json#/$defs/cache"},
+        "auditBatchMax": {"type": "integer", "minimum": 1, "maximum": 200},
+        "requestHeadDeadlineMs": {"type": "integer", "minimum": 100, "maximum": 30000},
+        "requestBodyDeadlineMs": {"type": "integer", "minimum": 1000, "maximum": 600000},
+        "responseWriteDeadlineMs": {"type": "integer", "minimum": 1000, "maximum": 600000}
+      },
+      "allOf": [{
+        "if": {"properties": {"atomicReleaseAuthorizationEnabled": {"const": true}}},
+        "then": {"required": ["releaseAuthorizationBaseUrl"], "properties": {"releaseAuthorizationBaseUrl": {"$ref": "native-startup-configuration.v4.schema.json#/$defs/url"}}},
+        "else": {"required": ["grantConsumeUrl", "rateLimitConsumeUrl"], "properties": {
+          "grantConsumeUrl": {"$ref": "native-startup-configuration.v4.schema.json#/$defs/url"},
+          "rateLimitConsumeUrl": {"$ref": "native-startup-configuration.v4.schema.json#/$defs/url"}
+        }}
+      }]
+    }
+  }
+}

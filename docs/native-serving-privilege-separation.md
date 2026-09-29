@@ -1,6 +1,6 @@
 # Native permanent serving privilege separation
 
-The explicit native v5 path now finishes privileged local setup before constructing the long-lived gate identities and service clients. This is source integration, not a built or observed enclave, a secretless startup artifact, provider custody closure or N06 completion. No runtime, AWS or adverse-case verification has been performed.
+The explicit native v5 and encrypted v6 paths finish privileged local setup before constructing the long-lived gate identities and service clients. This is source integration, not a built or observed enclave, a secretless startup artifact, provider custody closure or N06 completion. No runtime, AWS or adverse-case verification has been performed.
 
 ## Actual one-way startup
 
@@ -25,4 +25,4 @@ Linux capabilities are per-thread, so the transition refuses an already multithr
 
 The helper and gate use the same fixed UID for owned child termination without retaining CAP_KILL. This is not a UID-isolation claim between them: their boundary remains the immutable helper, private inherited channel, purpose-fixed protocol and non-dumpable processes. The broker construction mount and names are removed before serving; held detached descriptors and read-only loop autoclear need no privileged teardown worker. Existing root-owned image hashes, seals and mapping checks remain intact.
 
-The private startup configuration still contains real credential/management and conditional service tokens. It is read under the existing owner-only original-file contract before the drop; this work does not make those bytes public, remove them from gate memory or solve confidential artifact delivery. Fresh release/launch references, nonces and deadlines still need independent provisioning. Measured OAuth issuance/refresh/cleanup, packaging acceptance and the rest of N06 remain separate work.
+Legacy v5 startup still contains real credential/management and conditional service tokens. [V6 encrypted delivery](native-encrypted-service-startup.md) instead carries explicit null bearer slots and a purpose-fixed ciphertext bundle, opened by the actual broker after the drop. Both configurations retain the owner-only original-file contract; this does not make the whole configuration public or remove tokens from serving memory. Fresh release/launch references, nonces and deadlines still need independent provisioning. Measured OAuth issuance/refresh/cleanup, guest service startup, packaging acceptance and the rest of N06 remain separate work.

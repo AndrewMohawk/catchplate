@@ -1,0 +1,216 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-service-tokens.v1.schema.json",
+  "title": "Purpose-fixed encrypted native startup service tokens",
+  "$comment": "Source enforces actual instance/binary/policy/exact endpoint joins, distinct strong role-specific tokens, canonical encodings, full KEK commitment, one-use broker startup phase and original runtime deadline. No schema result is release or rollback authority. AES-GCM envelope protects exactly32768 padded bytes; plaintext contains a four-byte big-endian length, canonical ASCII document<=24576 bytes, then zero padding. Gate output uses a separate recipient-bound ciphertext family.",
+  "$ref": "#/$defs/envelope",
+  "$defs": {
+    "binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "instanceId",
+        "dataPlaneBinaryDigest",
+        "policyHash",
+        "atomicReleaseAuthorizationEnabled",
+        "credentialLeaseUrl",
+        "grantConsumeUrl",
+        "rateLimitConsumeUrl",
+        "releaseAuthorizationBaseUrl"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeServiceTokensBinding/v1"
+        },
+        "instanceId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096,
+          "pattern": "^spiffe://"
+        },
+        "dataPlaneBinaryDigest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "policyHash": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "atomicReleaseAuthorizationEnabled": {
+          "type": "boolean"
+        },
+        "credentialLeaseUrl": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096,
+          "pattern": "^https://"
+        },
+        "grantConsumeUrl": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096,
+              "pattern": "^https://"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "rateLimitConsumeUrl": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096,
+              "pattern": "^https://"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "releaseAuthorizationBaseUrl": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096,
+              "pattern": "^https://"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "envelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "binding",
+        "secretKekId",
+        "nonce",
+        "ciphertext"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeServiceTokensEnvelope/v1"
+        },
+        "binding": {
+          "$ref": "#/$defs/binding"
+        },
+        "secretKekId": {
+          "type": "string",
+          "pattern": "^attested-memory-kek:[0-9a-f]{24}$"
+        },
+        "nonce": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{16}$"
+        },
+        "ciphertext": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{43712}$"
+        }
+      }
+    },
+    "tokens": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "credentialLeaseToken",
+        "grantConsumeToken",
+        "rateLimitConsumeToken",
+        "releaseAuthorizationToken",
+        "managementToken"
+      ],
+      "properties": {
+        "credentialLeaseToken": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 32,
+              "maxLength": 4096,
+              "pattern": "^[!-~]+$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "grantConsumeToken": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 32,
+              "maxLength": 4096,
+              "pattern": "^[!-~]+$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "rateLimitConsumeToken": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 32,
+              "maxLength": 4096,
+              "pattern": "^[!-~]+$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "releaseAuthorizationToken": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 32,
+              "maxLength": 4096,
+              "pattern": "^[!-~]+$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "managementToken": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 32,
+              "maxLength": 4096,
+              "pattern": "^[!-~]+$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "plaintext": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "tokens"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeServiceTokens/v1"
+        },
+        "tokens": {
+          "$ref": "#/$defs/tokens"
+        }
+      }
+    }
+  }
+}

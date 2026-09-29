@@ -115,14 +115,22 @@ pub(super) fn prepare_native_tls_gate_state(
     // and permanently narrow key use to this cohort's original deadline. A
     // hello label or public-key equality alone cannot establish that ownership.
     signer.transport.verify_native_identity(&mut identity, deadline)?;
-    // Both values originate only from the closed v5 cold configuration. Keep
+    // Both values originate only from the closed v5/v6 cold configuration. Keep
     // actual generated-key owners; no caller-provided readiness result enters
     // the state, and neither operation renews the cohort's original deadline.
-    let secret_broker = match inputs.prepared_secret_broker.take() {
+    let mut secret_broker = match inputs.prepared_secret_broker.take() {
         Some(prepared) => Some(prepared.bind(&mut identity,
             inputs.native_serving_privileges.as_ref().ok_or("native serving privilege owner absent")?, deadline)?),
         None => None,
     };
+    if let Some(broker) = &mut secret_broker {
+        // The expected binding comes from the actual executable measurement,
+        // admitted policy and same ingress-instance inputs, never from the
+        // envelope's claimed binding. No GateState exists while tokens open.
+        native_service_tokens::install(&mut inputs, broker, &mut identity,
+            &binary_digest, &snapshot.hash, deadline)?;
+    }
+    native_service_tokens::ready(&inputs)?;
     let measured_audit = match inputs.measured_audit.take() {
         Some(config) => Some(native_audit_transport::prepare(config, control_plane_config, &relays,
             inputs.audit_url.as_deref().ok_or("native measured audit URL absent")?, &mut identity, deadline)?),
@@ -134,7 +142,7 @@ pub(super) fn prepare_native_tls_gate_state(
         upstream_resolver: Arc::new(NativeConfiguredResolver(Arc::clone(&relays))),
         proxy_ingress_attestation: attestation, mitm_authority: Some(MitmAuthority::Native(identity)),
         response_proof: proof,
-    });
+    })?;
     state.native_policy_bytes = Some(Arc::from(policy_bytes));
     state.native_upstream_relays = Some(held_relays);
     state.native_secret_broker = secret_broker.map(Mutex::new);

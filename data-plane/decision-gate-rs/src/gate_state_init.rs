@@ -18,6 +18,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant, SystemTime};
 
 pub(super) struct GateStateInputs {
+    pub(super) service_tokens: super::native_service_tokens::Source,
     pub(super) native_serving_privileges: Option<Arc<serverware_decision_gate::native_serving_privileges::Owner>>,
     pub(super) prepared_secret_broker: Option<serverware_decision_gate::native_secret_broker_v1::PreparedBroker>,
     pub(super) secret_broker: Option<serverware_decision_gate::native_secret_broker_v1::Configuration>,
@@ -77,8 +78,9 @@ pub(super) struct GateStateRuntime {
 }
 
 impl GateStateInputs {
-    pub(super) fn into_state(self, runtime: GateStateRuntime) -> GateState {
-        GateState {
+    pub(super) fn into_state(self, runtime: GateStateRuntime) -> Result<GateState, String> {
+        super::native_service_tokens::ready(&self)?;
+        Ok(GateState {
             native_serving_privileges: self.native_serving_privileges,
             native_secret_broker: None,
             upstream_dispatch_authority: UpstreamDispatchAuthority::new(),
@@ -169,6 +171,6 @@ impl GateStateInputs {
             response_proof_attestation_command: self.response_proof_attestation_command,
             server_instance_id: self.server_instance_id,
             response_observation_v2_client: self.response_observation_v2_client,
-        }
+        })
     }
 }

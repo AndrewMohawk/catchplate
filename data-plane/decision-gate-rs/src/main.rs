@@ -12,6 +12,7 @@ mod native_audit_owner;
 mod native_audit_transport;
 mod native_secret_broker;
 mod native_gate_inputs;
+mod native_service_tokens;
 mod native_proof_signer;
 mod native_response_attestation;
 mod credential_currentness;
@@ -51869,6 +51870,7 @@ fn main() -> Result<(), String> {
     let credential_lease_client = build_control_plane_client(Duration::from_secs(3))?;
     let mitm_authority = build_mitm_authority()?;
     let state = Arc::new(GateStateInputs {
+        service_tokens: native_service_tokens::Source::Legacy,
         native_serving_privileges: None,
         prepared_secret_broker: None,
         secret_broker: None,
@@ -51921,7 +51923,7 @@ fn main() -> Result<(), String> {
             public_key_pem: response_proof_public_key_pem,
             key_id: response_proof_signing_key_id,
         },
-    }));
+    })?);
     if let Some(control) =
         state.policy_shadow_generation_control.as_ref()
     {

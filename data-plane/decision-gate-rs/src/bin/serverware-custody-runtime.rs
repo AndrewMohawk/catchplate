@@ -1,6 +1,7 @@
 use serverware_decision_gate::{
     read_frame, write_frame, CustodyRuntime, IO_DEADLINE, MAX_CONCURRENT_CONNECTIONS,
 };
+use serverware_decision_gate::release_profile_v1::ReleaseProfile;
 use std::env;
 use std::error::Error;
 use std::ffi::OsString;
@@ -19,6 +20,7 @@ use std::thread;
 const DEFAULT_SOCKET_PATH: &str = "/run/serverware-custody/custody.sock";
 const EXPECTED_CLIENT_UID_ENV: &str = "SERVERWARE_CUSTODY_EXPECTED_CLIENT_UID";
 const ATTEMPT_LEDGER_DIRECTORY_ENV: &str = "SERVERWARE_CUSTODY_ATTEMPT_LEDGER_DIRECTORY";
+const RELEASE_PROFILE_ENV: &str = "SERVERWARE_RESPONSE_PROOF_RELEASE_PROFILE";
 const SOCKET_DIRECTORY_MODE: u32 = 0o710;
 const SOCKET_MODE: u32 = 0o660;
 
@@ -31,6 +33,7 @@ struct ExpectedClient {
 
 fn main() -> Result<(), Box<dyn Error>> {
     let (socket_path, initialize_attempt_ledger) = parse_runtime_arguments(env::args().skip(1))?;
+    let release_profile = parse_release_profile(env::var_os(RELEASE_PROFILE_ENV))?;
     let attempt_ledger_directory =
         parse_attempt_ledger_directory(env::var_os(ATTEMPT_LEDGER_DIRECTORY_ENV))?;
     if initialize_attempt_ledger {
@@ -41,7 +44,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         );
         return Ok(());
     }
-    run(&socket_path, &attempt_ledger_directory)
+    run(&socket_path, &attempt_ledger_directory, release_profile)
 }
 
 fn parse_runtime_arguments<I>(mut arguments: I) -> Result<(PathBuf, bool), String>
@@ -69,7 +72,7 @@ where
             "--help" | "-h" => {
                 return Err(format!(
                     "usage: serverware-custody-runtime [--socket PATH] [--initialize-attempt-ledger]\n\
-                     environment: SERVERWARE_CUSTODY_SOCKET, {EXPECTED_CLIENT_UID_ENV}\n\
+                     environment: SERVERWARE_CUSTODY_SOCKET, {EXPECTED_CLIENT_UID_ENV}, {RELEASE_PROFILE_ENV}=legacy|policy-aware\n\
                      required: {ATTEMPT_LEDGER_DIRECTORY_ENV}\n\
                      default: {DEFAULT_SOCKET_PATH}"
                 ));
@@ -96,10 +99,19 @@ fn parse_attempt_ledger_directory(configured: Option<OsString>) -> Result<PathBu
     Ok(path)
 }
 
-fn run(socket_path: &Path, attempt_ledger_directory: &Path) -> Result<(), Box<dyn Error>> {
+fn parse_release_profile(configured: Option<OsString>) -> Result<ReleaseProfile, String> {
+    match configured {
+        None => Ok(ReleaseProfile::Legacy),
+        Some(value) => ReleaseProfile::ordinary(value.to_str()
+            .ok_or_else(|| format!("{RELEASE_PROFILE_ENV} must be UTF-8"))?),
+    }
+}
+
+fn run(socket_path: &Path, attempt_ledger_directory: &Path, release_profile: ReleaseProfile)
+    -> Result<(), Box<dyn Error>> {
     let expected_client = configured_expected_client()?;
     validate_socket_directory(socket_path, expected_client)?;
-    let runtime = Arc::new(CustodyRuntime::generate(attempt_ledger_directory)?);
+    let runtime = Arc::new(CustodyRuntime::generate_with_release_profile(attempt_ledger_directory, release_profile)?);
     remove_stale_socket(socket_path)?;
     let umask = UmaskGuard::restrict();
     let listener = UnixListener::bind(socket_path)?;
@@ -110,12 +122,13 @@ fn run(socket_path: &Path, attempt_ledger_directory: &Path) -> Result<(), Box<dy
     let active_connections = Arc::new(AtomicUsize::new(0));
 
     eprintln!(
-        "serverware custody runtime listening socket={} transport=uds-development hardwareProof=false rollbackProtection=filesystem-development bootId={} expectedClientUid={} sharedGid={} attemptLedger={}",
+        "serverware custody runtime listening socket={} transport=uds-development hardwareProof=false rollbackProtection=filesystem-development bootId={} expectedClientUid={} sharedGid={} attemptLedger={} releaseProfile={}",
         socket_path.display(),
         runtime.boot_id(),
         expected_client.uid,
         expected_client.shared_gid,
         attempt_ledger_directory.display(),
+        release_profile.label(),
     );
 
     for accepted in listener.incoming() {

@@ -77030,13 +77030,19 @@ def _release_attempt_binding_version(row: Any) -> str | None:
     return api_version
 
 
-def _require_release_native_profile(row: Any, native_profile: bool) -> None:
-    if type(native_profile) is not bool:
-        raise ReleaseAuthorizationError("release authorization profile must be explicit")
-    actual_native = (
-        _release_attempt_binding_version(row) in release_profiles.NATIVE_BINDING_VERSIONS
-    )
-    if actual_native != native_profile:
+def _release_representation(native_profile: bool, policy_aware_profile: bool) -> str:
+    try:
+        return release_profiles.representation(native=native_profile, policy_aware=policy_aware_profile)
+    except ValueError as exc:
+        raise ReleaseAuthorizationError(str(exc)) from exc
+
+
+def _require_release_native_profile(
+    row: Any, native_profile: bool, policy_aware_profile: bool = False,
+) -> None:
+    expected = _release_representation(native_profile, policy_aware_profile)
+    actual = release_profiles.binding_representation(_release_attempt_binding_version(row))
+    if actual != expected:
         raise ReleaseAuthorizationConflictError(
             "release authorization profile does not match the retained attempt"
         )
@@ -77575,14 +77581,14 @@ def reserve_release_authorization(
     approver_credential_policy: Mapping[str, Any] | None = None,
     durable_policy_binding: dict[str, Any] | None = None,
     native_profile: bool = False,
+    policy_aware_profile: bool = False,
     expected_approver_policy_sha256: str | None = None,
     _connection: Any | None = None,
     _resources_locked: bool = False,
     _authority_locked: bool = False,
     _v2_coordinator_token: object | None = None,
 ) -> dict[str, Any]:
-    if type(native_profile) is not bool:
-        raise ReleaseAuthorizationError("release authorization profile must be explicit")
+    _release_representation(native_profile, policy_aware_profile)
     if require_jit_grant:
         _require_postgres_jit_authority(
             "JIT release authorization reservation",
@@ -77615,6 +77621,7 @@ def reserve_release_authorization(
             approval_threshold=approval_threshold,
             approver_credential_policy=approver_credential_policy,
             native_profile=native_profile,
+            policy_aware_profile=policy_aware_profile,
             expected_approver_policy_sha256=expected_approver_policy_sha256,
         )
     if (
@@ -77632,7 +77639,7 @@ def reserve_release_authorization(
         maximum=_RELEASE_AUTHORIZATION_ATTEMPT_ID_MAX_BYTES,
     )
     flow_id = _release_text("release authorization flow_id", flow_id)
-    if not hmac.compare_digest(flow_id, attempt_id):
+    if not lease_profiles.text_matches(flow_id, attempt_id, native=native_profile, policy_aware=policy_aware_profile):
         raise ReleaseAuthorizationError(
             "release authorization flow_id must equal attempt_id"
         )
@@ -77643,6 +77650,14 @@ def reserve_release_authorization(
             raise ReleaseAuthorizationError(str(exc)) from exc
     else:
         principal_id = _release_text("release authorization principal_id", principal_id)
+    if policy_aware_profile:
+        try:
+            for value in (principal_id, route_id, attempt_id, flow_id):
+                lease_profiles.policy_aware_identity(value)
+            if credential_id:
+                lease_profiles.policy_aware_identity(credential_id)
+        except ValueError as exc:
+            raise ReleaseAuthorizationError(str(exc)) from exc
     route_id = _release_text("release authorization route_id", route_id)
     if credential_id:
         credential_id = _release_text(
@@ -77697,7 +77712,7 @@ def reserve_release_authorization(
             raise ReleaseAuthorizationError(
                 "release authorization policy authority hash does not match request"
             )
-        if not hmac.compare_digest(authority_route_id, route_id):
+        if not lease_profiles.text_matches(authority_route_id, route_id, native=native_profile, policy_aware=policy_aware_profile):
             raise ReleaseAuthorizationError(
                 "release authorization route authority does not match request"
             )
@@ -77731,23 +77746,23 @@ def reserve_release_authorization(
         if require_jit_grant
         else None
     )
-    if native_profile:
+    if native_profile or policy_aware_profile:
         try:
-            release_profiles.require_native_approver_policy(normalized_approver_policy)
+            release_profiles.require_versioned_approver_policy(normalized_approver_policy)
         except ValueError as exc:
             raise ReleaseAuthorizationError(str(exc)) from exc
         expected_policy_digest = _release_digest(
-            "native release approver policy digest", expected_approver_policy_sha256
+            "versioned release approver policy digest", expected_approver_policy_sha256
         )
         if not hmac.compare_digest(
             release_profiles.approver_policy_sha256(normalized_approver_policy),
             expected_policy_digest or "",
         ):
             raise ReleaseAuthorizationConflictError(
-                "native release approver policy changed before reservation"
+                "versioned release approver policy changed before reservation"
             )
     elif expected_approver_policy_sha256 is not None:
-        raise ReleaseAuthorizationError("legacy release cannot select a native approver policy")
+        raise ReleaseAuthorizationError("legacy release cannot select a prepared approver policy")
     approver_policy_json = None
     approver_policy_digest = None
     if normalized_approver_policy is not None:
@@ -77791,7 +77806,8 @@ def reserve_release_authorization(
         "shared_quotas": quotas,
     }
     binding_api_version = release_profiles.binding_version(
-        native=native_profile, durable=normalized_durable_policy is not None
+        native=native_profile, durable=normalized_durable_policy is not None,
+        policy_aware=policy_aware_profile,
     )
     if binding_api_version is not None:
         binding["api_version"] = binding_api_version
@@ -77902,7 +77918,7 @@ def reserve_release_authorization(
 
             existing = _release_attempt_row(conn, attempt_id, for_update=True)
             if existing is not None:
-                _require_release_native_profile(existing, native_profile)
+                _require_release_native_profile(existing, native_profile, policy_aware_profile)
                 if not hmac.compare_digest(str(existing["binding_digest"]), binding_digest):
                     raise ReleaseAuthorizationConflictError(
                         "release authorization attempt_id is bound to a different request"
@@ -78686,12 +78702,15 @@ def _validate_credential_lease_request_authority(
     now_epoch_ms: int,
     for_update: bool = False,
     native_profile: bool = False,
+    policy_aware_profile: bool = False,
 ) -> tuple[Any, dict[str, Any]]:
-    if type(native_profile) is not bool:
-        raise ReleaseAuthorizationError("credential request profile must be explicit")
-    if native_profile:
+    _release_representation(native_profile, policy_aware_profile)
+    if native_profile or policy_aware_profile:
         try:
-            lease_profiles.native_identity(principal_id, principal=True)
+            if native_profile:
+                lease_profiles.native_identity(principal_id, principal=True)
+            else:
+                lease_profiles.policy_aware_identity(principal_id)
             lease_profiles.native_identity(route_id)
             lease_profiles.native_identity(credential_id)
         except ValueError as exc:
@@ -78765,7 +78784,7 @@ def _validate_credential_lease_request_authority(
         raise ReleaseAuthorizationError(
             "credential request authority attempt was not found"
         )
-    _require_release_native_profile(row, native_profile)
+    _require_release_native_profile(row, native_profile, policy_aware_profile)
     expected = {
         **expected_strings,
         "credential_version": credential_version,
@@ -78778,7 +78797,7 @@ def _validate_credential_lease_request_authority(
             actual = int(actual)
         if isinstance(expected_value, str):
             if not lease_profiles.text_matches(
-                actual, expected_value, native=native_profile,
+                actual, expected_value, native=native_profile, policy_aware=policy_aware_profile,
             ):
                 raise ReleaseAuthorizationConflictError(
                     "credential request authority does not match the reserved attempt"
@@ -78820,7 +78839,7 @@ def _validate_credential_lease_request_authority(
         )
     request_authority_json = dumps(
         {
-            "apiVersion": lease_profiles.authority_version(native=native_profile),
+            "apiVersion": lease_profiles.authority_version(native=native_profile, policy_aware=policy_aware_profile),
             "attemptId": attempt_id,
             "reservationId": reservation_id,
             "bindingDigest": binding_digest,
@@ -78874,6 +78893,7 @@ def _validate_credential_lease_request_authority(
         "durable_policy": durable_policy,
         "release_protocol": _release_attempt_protocol(conn, row),
         "native_profile": native_profile,
+        "policy_aware_profile": policy_aware_profile,
     }
 
 
@@ -78898,8 +78918,10 @@ def release_credential_request_authority_snapshot(
     approval_threshold: int = 1,
     approver_credential_policy: Mapping[str, Any] | None = None,
     native_profile: bool = False,
+    policy_aware_profile: bool = False,
 ) -> dict[str, Any]:
     """Verify a v4 lease authority against the exact reserved request attempt."""
+    _release_representation(native_profile, policy_aware_profile)
     require_atomic_release_writer()
     if (
         not isinstance(approval_threshold, int)
@@ -78933,6 +78955,7 @@ def release_credential_request_authority_snapshot(
             policy_hash=policy_hash,
             now_epoch_ms=now_ms,
             native_profile=native_profile,
+            policy_aware_profile=policy_aware_profile,
         )
         _validate_release_consumption_state(conn, row)
         invalid_reason = _release_reservation_invalid_reason(
@@ -78994,8 +79017,10 @@ def claim_release_credential_issuance(
     approval_threshold: int = 1,
     approver_credential_policy: Mapping[str, Any] | None = None,
     native_profile: bool = False,
+    policy_aware_profile: bool = False,
 ) -> dict[str, Any]:
     """Atomically claim the sole credential-bearing lease for a reserved attempt."""
+    _release_representation(native_profile, policy_aware_profile)
     require_atomic_release_writer()
     if release_kind not in {"jitGrant", "atomicReservation", "decisionBound"}:
         raise ReleaseAuthorizationError(
@@ -79145,7 +79170,7 @@ def claim_release_credential_issuance(
             raise ReleaseAuthorizationError(
                 "release authorization attempt was not found"
             )
-        _require_release_native_profile(preview, native_profile)
+        _require_release_native_profile(preview, native_profile, policy_aware_profile)
         if not hmac.compare_digest(str(preview["binding_digest"]), binding_digest):
             raise ReleaseAuthorizationConflictError(
                 "release authorization binding does not match the durable attempt"
@@ -79175,6 +79200,7 @@ def claim_release_credential_issuance(
             now_epoch_ms=now_ms,
             for_update=True,
             native_profile=native_profile,
+            policy_aware_profile=policy_aware_profile,
         )
         if not hmac.compare_digest(
             request_authority["request_authority_sha256"],
@@ -79260,7 +79286,7 @@ def claim_release_credential_issuance(
                 actual = int(actual)
             if isinstance(expected_value, str):
                 if not lease_profiles.text_matches(
-                    actual, expected_value, native=native_profile,
+                    actual, expected_value, native=native_profile, policy_aware=policy_aware_profile,
                 ):
                     raise ReleaseAuthorizationConflictError(
                         "credential issuance binding does not match the durable attempt"
@@ -79467,12 +79493,14 @@ def dispatch_release_authorization(
     actor_id: str | None = None,
     required_approver_roles: set[str] | None = None,
     native_profile: bool = False,
+    policy_aware_profile: bool = False,
     _connection: Any | None = None,
     _resources_locked: bool = False,
     _authority_locked: bool = False,
     _v2_coordinator_token: object | None = None,
     _dispatch_deadline_at_epoch_ms: int | None = None,
 ) -> dict[str, Any]:
+    _release_representation(native_profile, policy_aware_profile)
     require_atomic_release_writer()
     if (
         _v2_coordinator_token is not None
@@ -79520,7 +79548,7 @@ def dispatch_release_authorization(
             raise ReleaseAuthorizationError(
                 "release authorization attempt was not found"
             )
-        _require_release_native_profile(preview, native_profile)
+        _require_release_native_profile(preview, native_profile, policy_aware_profile)
         if not hmac.compare_digest(str(preview["binding_digest"]), binding_digest):
             raise ReleaseAuthorizationConflictError(
                 "release authorization binding does not match the durable attempt"
@@ -79545,7 +79573,7 @@ def dispatch_release_authorization(
             resources_locked=True,
             allow_v2=allow_v2,
         )
-        _require_release_native_profile(row, native_profile)
+        _require_release_native_profile(row, native_profile, policy_aware_profile)
         if now_epoch_ms is None:
             try:
                 now_ms = _rate_limit_transaction_now_epoch_ms(conn, None)
@@ -79657,8 +79685,10 @@ def cancel_release_authorization_if_present(
     now_epoch_ms: int | None = None,
     actor_id: str | None = None,
     native_profile: bool = False,
+    policy_aware_profile: bool = False,
 ) -> dict[str, Any]:
     """Cancel only the exact reserved attempt; absence or mismatch is a no-op."""
+    _release_representation(native_profile, policy_aware_profile)
     require_atomic_release_writer()
     attempt_id = _release_text(
         "release authorization attempt_id",
@@ -79681,7 +79711,7 @@ def cancel_release_authorization_if_present(
         _lock_release_attempt_resources(conn, attempt_id)
         row = _release_attempt_row(conn, attempt_id, for_update=True)
         if row is not None:
-            _require_release_native_profile(row, native_profile)
+            _require_release_native_profile(row, native_profile, policy_aware_profile)
         if row is None or not hmac.compare_digest(
             str(row["binding_digest"]),
             binding_digest,
@@ -79722,10 +79752,12 @@ def complete_release_authorization(
     now_epoch_ms: int | None = None,
     actor_id: str | None = None,
     native_profile: bool = False,
+    policy_aware_profile: bool = False,
     _connection: Any | None = None,
     _resources_locked: bool = False,
     _v2_coordinator_token: object | None = None,
 ) -> dict[str, Any]:
+    _release_representation(native_profile, policy_aware_profile)
     require_atomic_release_writer()
     if (
         _v2_coordinator_token is not None
@@ -79766,7 +79798,7 @@ def complete_release_authorization(
             resources_locked=_resources_locked,
             allow_v2=allow_v2,
         )
-        _require_release_native_profile(row, native_profile)
+        _require_release_native_profile(row, native_profile, policy_aware_profile)
         if now_epoch_ms is None:
             try:
                 now_ms = _rate_limit_transaction_now_epoch_ms(conn, None)
@@ -79942,8 +79974,10 @@ def reserve_release_authorization_v2(
     approval_threshold: int = 1,
     approver_credential_policy: Mapping[str, Any] | None = None,
     native_profile: bool = False,
+    policy_aware_profile: bool = False,
     expected_approver_policy_sha256: str | None = None,
 ) -> dict[str, Any]:
+    _release_representation(native_profile, policy_aware_profile)
     if require_jit_grant:
         _require_postgres_jit_authority(
             "JIT release authorization v2 reservation"
@@ -80033,7 +80067,7 @@ def reserve_release_authorization_v2(
                 for_update=True,
             )
             if existing_before is not None:
-                _require_release_native_profile(existing_before, native_profile)
+                _require_release_native_profile(existing_before, native_profile, policy_aware_profile)
                 _release_attempt_protocol(
                     conn,
                     existing_before,
@@ -80065,6 +80099,7 @@ def reserve_release_authorization_v2(
                 approver_credential_policy=approver_credential_policy,
                 durable_policy_binding=normalized_durable,
                 native_profile=native_profile,
+                policy_aware_profile=policy_aware_profile,
                 expected_approver_policy_sha256=expected_approver_policy_sha256,
                 _connection=conn,
                 _resources_locked=True,
@@ -80170,7 +80205,9 @@ def dispatch_release_authorization_v2(
     now_epoch_ms: int | None = None,
     required_approver_roles: set[str] | None = None,
     native_profile: bool = False,
+    policy_aware_profile: bool = False,
 ) -> dict[str, Any]:
+    _release_representation(native_profile, policy_aware_profile)
     require_atomic_release_writer()
     attempt_id = (
         _release_digest(
@@ -80206,7 +80243,7 @@ def dispatch_release_authorization_v2(
             raise ReleaseAuthorizationError(
                 "release authorization attempt was not found"
             )
-        _require_release_native_profile(preview, native_profile)
+        _require_release_native_profile(preview, native_profile, policy_aware_profile)
         if not hmac.compare_digest(
             str(preview["binding_digest"]),
             binding_digest,
@@ -80240,6 +80277,7 @@ def dispatch_release_authorization_v2(
             actor_id=transition["actor_id"],
             required_approver_roles=required_approver_roles,
             native_profile=native_profile,
+            policy_aware_profile=policy_aware_profile,
             _connection=conn,
             _resources_locked=True,
             _authority_locked=True,
@@ -80294,7 +80332,9 @@ def complete_release_authorization_v2(
     durable_policy_transition: dict[str, Any],
     now_epoch_ms: int | None = None,
     native_profile: bool = False,
+    policy_aware_profile: bool = False,
 ) -> dict[str, Any]:
+    _release_representation(native_profile, policy_aware_profile)
     require_atomic_release_writer()
     if outcome not in {"forwarded", "not_forwarded", "unknown"}:
         raise ReleaseAuthorizationError(
@@ -80326,7 +80366,7 @@ def complete_release_authorization_v2(
         retained_attempt = _release_attempt_row(conn, attempt_id)
         if retained_attempt is None:
             raise ReleaseAuthorizationError("release authorization attempt was not found")
-        _require_release_native_profile(retained_attempt, native_profile)
+        _require_release_native_profile(retained_attempt, native_profile, policy_aware_profile)
         preview, claims = _lock_release_authorization_v2_resources(
             conn,
             attempt_id=attempt_id,
@@ -80412,6 +80452,7 @@ def complete_release_authorization_v2(
             now_epoch_ms=now_epoch_ms,
             actor_id=transition["actor_id"],
             native_profile=native_profile,
+            policy_aware_profile=policy_aware_profile,
             _connection=conn,
             _resources_locked=True,
             _v2_coordinator_token=(

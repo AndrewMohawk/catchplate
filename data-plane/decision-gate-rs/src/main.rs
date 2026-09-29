@@ -62,6 +62,7 @@ use serde_json::{json, Map, Value};
 use serverware_decision_gate::response_principal_compatibility_v1::{
     require_response_principal_compatible, ResponseProofPrincipalProfile,
 };
+use serverware_decision_gate::release_profile_v1::{ReleaseOperation, ReleaseProfile, StatementKind};
 use serverware_decision_gate::{native_response_profile_v1 as native_response_profile,
     native_lease_profile_v1 as native_lease_profile,
     native_approver_policy_v1,
@@ -369,6 +370,7 @@ const MAX_STREAM_RESPONSE_RUNTIME_PROOF_BYTES: usize = 96 * 1024;
 const MAX_RESPONSE_OBSERVATION_RUNTIME_PROOF_BYTES: usize = 128 * 1024;
 const MAX_LOCAL_RESPONSE_OBSERVATION_NONCES: usize = 65_536;
 const RESPONSE_PROOF_CUSTODY_SOCKET_ENV: &str = "SERVERWARE_RESPONSE_PROOF_CUSTODY_SOCKET";
+const RESPONSE_PROOF_RELEASE_PROFILE_ENV: &str = "SERVERWARE_RESPONSE_PROOF_RELEASE_PROFILE";
 const RESPONSE_PROOF_CUSTODY_EXPECTED_UID_ENV: &str =
     "SERVERWARE_RESPONSE_PROOF_CUSTODY_EXPECTED_UID";
 const RESPONSE_PROOF_CUSTODY_STARTUP_TIMEOUT_MS_ENV: &str =
@@ -2626,6 +2628,13 @@ enum ResponseProofSigner {
 }
 
 impl ResponseProofSigner {
+    fn release_profile(&self) -> ReleaseProfile {
+        match self {
+            Self::LocalEphemeral(_) => ReleaseProfile::Legacy,
+            Self::Custody(signer) => signer.release_profile,
+        }
+    }
+
     fn native_profile(&self) -> bool {
         matches!(self, Self::Custody(signer) if signer.transport.is_native())
     }
@@ -2827,6 +2836,7 @@ impl ResponseProofSigner {
 #[derive(Debug)]
 struct CustodyResponseProofSigner {
     transport: CustodySignerTransport,
+    release_profile: ReleaseProfile,
     boot_id: String,
     boot_digest: String,
     verifying_key: VerifyingKey,
@@ -3236,13 +3246,10 @@ impl CustodyResponseProofSigner {
             },
             "operations":{
                 "startup":CUSTODY_HELLO_OPERATION,
-                "sign":if self.transport.is_native() { NATIVE_RESPONSE_PROOF_SIGN_OPERATION }
-                    else { CUSTODY_RESPONSE_PROOF_SIGN_OPERATION },
-                "streaming_sign":if self.transport.is_native() { NATIVE_STREAMING_RESPONSE_PROOF_SIGN_OPERATION }
-                    else { CUSTODY_STREAMING_RESPONSE_PROOF_SIGN_OPERATION },
+                "sign":self.release_profile.sign_operation(StatementKind::Buffered),
+                "streaming_sign":self.release_profile.sign_operation(StatementKind::Streaming),
                 "observation_reserve":CUSTODY_RESPONSE_OBSERVATION_PROOF_RESERVE_OPERATION,
-                "observation_sign":if self.transport.is_native() { NATIVE_RESPONSE_OBSERVATION_PROOF_SIGN_OPERATION }
-                    else { CUSTODY_RESPONSE_OBSERVATION_PROOF_SIGN_OPERATION },
+                "observation_sign":self.release_profile.sign_operation(StatementKind::Observation),
             },
             "limits":{
                 "max_frame_bytes":CUSTODY_MAX_FRAME_BYTES,
@@ -3267,6 +3274,7 @@ struct ResponseProofSigningMaterial {
 #[derive(Debug)]
 struct ResponseProofCustodyConfig {
     socket_path: PathBuf,
+    release_profile: ReleaseProfile,
     expected_uid: libc::uid_t,
     startup_timeout: Duration,
 }
@@ -3496,7 +3504,8 @@ struct VerifiedDispatchEvidence {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct ResponseProofAuthorizationContext {
-    native: Option<NativeReleasePreparation>,
+    profile: ReleaseProfile,
+    preparation: Option<ReleasePreparation>,
     principal_id: String,
     route_id: String,
     release_authority: ResponseProofReleaseAuthority,
@@ -4002,7 +4011,7 @@ impl Drop for CredentialLeaseRenewalPendingGuard {
 
 #[derive(Clone)]
 struct CredentialLeaseReleaseBinding {
-    native: bool,
+    profile: ReleaseProfile,
     scope: CredentialLeaseScope,
     version: u64,
     secret_fingerprint: String,
@@ -4979,7 +4988,7 @@ where
 
 #[derive(Clone)]
 struct SecretLease {
-    native: bool,
+    profile: ReleaseProfile,
     scope: CredentialLeaseScope,
     version: u64,
     secret: Zeroizing<String>,
@@ -5596,12 +5605,14 @@ fn parse_release_authorization_response_contract(
     }
     let durable = object.get("durablePolicy");
     match expected_version {
-        RELEASE_AUTHORIZATION_RESPONSE_V1 | NATIVE_RELEASE_AUTHORIZATION_RESPONSE_V1 if durable.is_some() => {
+        RELEASE_AUTHORIZATION_RESPONSE_V1 | NATIVE_RELEASE_AUTHORIZATION_RESPONSE_V1
+            | "serverware.policyAwareReleaseAuthorizationResponse/v1" if durable.is_some() => {
             return Err(
                 "release authorization v1 response must omit durablePolicy".to_string(),
             )
         }
         RELEASE_AUTHORIZATION_RESPONSE_V2 | NATIVE_RELEASE_AUTHORIZATION_RESPONSE_V2
+            | "serverware.policyAwareReleaseAuthorizationResponse/v2"
             if durable.is_none_or(|value| !value.is_object()) =>
         {
             return Err(
@@ -5609,7 +5620,9 @@ fn parse_release_authorization_response_contract(
             )
         }
         RELEASE_AUTHORIZATION_RESPONSE_V1 | RELEASE_AUTHORIZATION_RESPONSE_V2
-            | NATIVE_RELEASE_AUTHORIZATION_RESPONSE_V1 | NATIVE_RELEASE_AUTHORIZATION_RESPONSE_V2 => {}
+            | NATIVE_RELEASE_AUTHORIZATION_RESPONSE_V1 | NATIVE_RELEASE_AUTHORIZATION_RESPONSE_V2
+            | "serverware.policyAwareReleaseAuthorizationResponse/v1"
+            | "serverware.policyAwareReleaseAuthorizationResponse/v2" => {}
         _ => {
             return Err(
                 "release authorization response version is unsupported".to_string(),
@@ -5618,8 +5631,10 @@ fn parse_release_authorization_response_contract(
     }
     if exact_dispatch_shape {
         let expected_fields = match expected_version {
-            RELEASE_AUTHORIZATION_RESPONSE_V1 | NATIVE_RELEASE_AUTHORIZATION_RESPONSE_V1 => &DISPATCH_V1_FIELDS[..],
-            RELEASE_AUTHORIZATION_RESPONSE_V2 | NATIVE_RELEASE_AUTHORIZATION_RESPONSE_V2 => &DISPATCH_V2_FIELDS[..],
+            RELEASE_AUTHORIZATION_RESPONSE_V1 | NATIVE_RELEASE_AUTHORIZATION_RESPONSE_V1
+                | "serverware.policyAwareReleaseAuthorizationResponse/v1" => &DISPATCH_V1_FIELDS[..],
+            RELEASE_AUTHORIZATION_RESPONSE_V2 | NATIVE_RELEASE_AUTHORIZATION_RESPONSE_V2
+                | "serverware.policyAwareReleaseAuthorizationResponse/v2" => &DISPATCH_V2_FIELDS[..],
             _ => unreachable!("supported release response version checked above"),
         };
         if !object_has_exact_fields(object, expected_fields) {
@@ -5627,7 +5642,8 @@ fn parse_release_authorization_response_contract(
                 "release authorization dispatch response fields are not exact".to_string(),
             );
         }
-        if matches!(expected_version, RELEASE_AUTHORIZATION_RESPONSE_V2 | NATIVE_RELEASE_AUTHORIZATION_RESPONSE_V2)
+        if matches!(expected_version, RELEASE_AUTHORIZATION_RESPONSE_V2 | NATIVE_RELEASE_AUTHORIZATION_RESPONSE_V2
+            | "serverware.policyAwareReleaseAuthorizationResponse/v2")
             && !durable
                 .and_then(Value::as_object)
                 .is_some_and(|durable| {
@@ -5656,7 +5672,8 @@ fn parse_release_authorization_response_contract(
                 .as_object()
                 .ok_or("release authorization dispatch quota is not an object")?;
             let expected_quota_fields = match quota.get("windowKind") {
-                None if matches!(expected_version, RELEASE_AUTHORIZATION_RESPONSE_V1 | NATIVE_RELEASE_AUTHORIZATION_RESPONSE_V1) => {
+                None if matches!(expected_version, RELEASE_AUTHORIZATION_RESPONSE_V1 | NATIVE_RELEASE_AUTHORIZATION_RESPONSE_V1
+                    | "serverware.policyAwareReleaseAuthorizationResponse/v1") => {
                     &LEGACY_FIXED_QUOTA_FIELDS[..]
                 }
                 Some(Value::String(kind)) if kind == "fixed" => {
@@ -5706,7 +5723,7 @@ struct VerifiedReleaseAuthorizationHttpResponse {
 }
 
 struct RequestedReleaseAuthorization {
-    native: bool,
+    profile: ReleaseProfile,
     response: VerifiedReleaseAuthorizationHttpResponse,
     expected_binding_digest: String,
     expected_quotas: Vec<ReleaseAuthorizationBindingQuota>,
@@ -5772,8 +5789,10 @@ fn parse_release_authorization_dispatch_request(
         request.api_version.as_str(),
         request.durable_policy.as_ref(),
     ) {
-        (RELEASE_AUTHORIZATION_DISPATCH_V1 | NATIVE_RELEASE_AUTHORIZATION_DISPATCH_V1, None) => {}
-        (RELEASE_AUTHORIZATION_DISPATCH_V2 | NATIVE_RELEASE_AUTHORIZATION_DISPATCH_V2, Some(_)) => {}
+        (RELEASE_AUTHORIZATION_DISPATCH_V1 | NATIVE_RELEASE_AUTHORIZATION_DISPATCH_V1
+            | "serverware.policyAwareReleaseAuthorizationDispatch/v1", None) => {}
+        (RELEASE_AUTHORIZATION_DISPATCH_V2 | NATIVE_RELEASE_AUTHORIZATION_DISPATCH_V2
+            | "serverware.policyAwareReleaseAuthorizationDispatch/v2", Some(_)) => {}
         _ => {
             return Err(
                 "release authorization dispatch request version and durable policy are inconsistent"
@@ -5790,13 +5809,8 @@ fn validate_release_authorization_dispatch_request_binding(
     authorization_binding: &ReleaseAuthorizationBinding,
 ) -> Result<(), String> {
     let durable_binding = authorization_binding.durable_policy.as_ref();
-    let expected_dispatch_version = if durable_binding.is_some() {
-        if native_binding(authorization_binding) { NATIVE_RELEASE_AUTHORIZATION_DISPATCH_V2 }
-        else { RELEASE_AUTHORIZATION_DISPATCH_V2 }
-    } else {
-        if native_binding(authorization_binding) { NATIVE_RELEASE_AUTHORIZATION_DISPATCH_V1 }
-        else { RELEASE_AUTHORIZATION_DISPATCH_V1 }
-    };
+    let expected_dispatch_version = binding_profile(authorization_binding)?
+        .request_version(ReleaseOperation::Dispatch, durable_binding.is_some())?;
     let durable_dispatch_binding_matches = match (
         request.durable_policy.as_ref(),
         durable_binding,
@@ -5828,7 +5842,8 @@ fn validate_release_authorization_dispatch_request_binding(
 
 #[derive(Clone, Debug)]
 struct ReleaseAuthorizationReservation {
-    native: Option<NativeReleasePreparation>,
+    profile: ReleaseProfile,
+    preparation: Option<ReleasePreparation>,
     attempt_id: String,
     binding_digest: String,
     principal_id: String,
@@ -5848,20 +5863,22 @@ struct ReleaseAuthorizationReservation {
     dispatch_expires_at_epoch_ms: Option<u64>,
 }
 
-/// Constructed only from the pinned, signed read-only CP preparation before a
-/// native reservation. This is not a caller-provided profile or policy verdict.
+/// Constructed only from pinned, signed read-only CP preparation under the
+/// cold-retained profile, never a caller-provided profile or policy verdict.
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct NativeReleasePreparation {
+struct ReleasePreparation {
+    profile: ReleaseProfile,
     policy: Value,
     policy_sha256: String,
     original: Vec<u8>,
     deadline: Instant,
 }
 
-impl NativeReleasePreparation {
+impl ReleasePreparation {
     fn check(&self) -> Result<(), String> {
         custody_deadline_remaining(self.deadline, "native release preparation")?;
-        if self.original.is_empty() || native_policy_digest(&self.policy)? != self.policy_sha256 {
+        if !self.profile.has_approver_policy() || self.original.is_empty()
+            || native_policy_digest(&self.policy)? != self.policy_sha256 {
             return Err("native release preparation original differs".to_owned());
         }
         Ok(())
@@ -5872,35 +5889,31 @@ fn native_policy_digest(value: &impl Serialize) -> Result<String, String> {
     Ok(sha256_prefixed(&native_response_profile::canonical_ascii_bytes(value)?))
 }
 
-fn release_response_version(native: bool, durable: bool) -> &'static str {
-    match (native, durable) {
-        (false, false) => RELEASE_AUTHORIZATION_RESPONSE_V1,
-        (false, true) => RELEASE_AUTHORIZATION_RESPONSE_V2,
-        (true, false) => NATIVE_RELEASE_AUTHORIZATION_RESPONSE_V1,
-        (true, true) => NATIVE_RELEASE_AUTHORIZATION_RESPONSE_V2,
-    }
+fn release_response_version(profile: ReleaseProfile, durable: bool) -> &'static str {
+    profile.response_version(durable)
 }
 
-fn release_binding_version(native: bool, durable: bool) -> Option<String> {
-    match (native, durable) {
-        (false, false) => None,
-        (false, true) => Some(RELEASE_AUTHORIZATION_BINDING_V2.to_owned()),
-        (true, false) => Some(NATIVE_RELEASE_AUTHORIZATION_BINDING_V1.to_owned()),
-        (true, true) => Some(NATIVE_RELEASE_AUTHORIZATION_BINDING_V2.to_owned()),
-    }
+fn release_binding_version(profile: ReleaseProfile, durable: bool) -> Option<String> {
+    profile.binding_version(durable).map(str::to_owned)
 }
 
-fn native_binding(binding: &ReleaseAuthorizationBinding) -> bool {
-    matches!(binding.api_version.as_deref(), Some(NATIVE_RELEASE_AUTHORIZATION_BINDING_V1
-        | NATIVE_RELEASE_AUTHORIZATION_BINDING_V2))
+fn binding_profile(binding: &ReleaseAuthorizationBinding) -> Result<ReleaseProfile, String> {
+    [ReleaseProfile::Legacy, ReleaseProfile::PolicyAware, ReleaseProfile::Native].into_iter()
+        .find(|profile| binding.api_version.as_deref() == profile.binding_version(binding.durable_policy.is_some()))
+        .ok_or_else(|| "release binding profile is unknown".to_owned())
 }
 
-fn check_native_release_profile(state: &GateState, native: Option<&NativeReleasePreparation>)
+fn check_release_profile(state: &GateState, preparation: Option<&ReleasePreparation>)
     -> Result<(), String> {
-    if state.response_proof_signer.native_profile() != native.is_some() {
+    check_preparation_profile(state.response_proof_signer.release_profile(), preparation)
+}
+
+fn check_preparation_profile(profile: ReleaseProfile, preparation: Option<&ReleasePreparation>)
+    -> Result<(), String> {
+    if preparation.map(|prepared| prepared.profile).unwrap_or(ReleaseProfile::Legacy) != profile {
         return Err("release authorization profile differs from the retained signer".to_owned());
     }
-    if let Some(native) = native { native.check()?; }
+    if let Some(prepared) = preparation { prepared.check()?; }
     Ok(())
 }
 
@@ -5915,29 +5928,29 @@ fn require_selected_response_principal(
 
 fn sign_selected_response_statement(
     state: &GateState, kind: ResponseProofKind, statement: &Value,
-    binding: Option<&ReleaseAuthorizationBinding>, native: Option<&NativeReleasePreparation>,
+    binding: Option<&ReleaseAuthorizationBinding>, preparation: Option<&ReleasePreparation>,
 ) -> Result<String, String> {
-    if let Some(native) = native {
-        check_native_release_profile(state, Some(native))?;
+    if let Some(prepared) = preparation {
+        check_release_profile(state, Some(prepared))?;
         let ResponseProofSigner::Custody(signer) = &state.response_proof_signer else {
-            return Err("native response signing owner is absent".to_owned());
+            return Err("policy-aware response signing owner is absent".to_owned());
         };
         let operation = match kind {
-            ResponseProofKind::Buffered => NATIVE_RESPONSE_PROOF_SIGN_OPERATION,
-            ResponseProofKind::Streaming => NATIVE_STREAMING_RESPONSE_PROOF_SIGN_OPERATION,
-            ResponseProofKind::Observation => NATIVE_RESPONSE_OBSERVATION_PROOF_SIGN_OPERATION,
+            ResponseProofKind::Buffered => prepared.profile.sign_operation(StatementKind::Buffered),
+            ResponseProofKind::Streaming => prepared.profile.sign_operation(StatementKind::Streaming),
+            ResponseProofKind::Observation => prepared.profile.sign_operation(StatementKind::Observation),
         };
         let observed = signer.health.begin_sign();
-        let result = signer.sign_operation_on_deadline(operation, statement, binding, Some(native.deadline))
-            .and_then(|signature| { native.check()?; Ok(signature) });
+        let result = signer.sign_operation_on_deadline(operation, statement, binding, Some(prepared.deadline))
+            .and_then(|signature| { prepared.check()?; Ok(signature) });
         match &result {
             Ok(_) => signer.health.record_sign_success(observed),
             Err(error) => signer.health.record_sign_failure(observed, error),
         }
         return result;
     }
-    if state.response_proof_signer.native_profile() && binding.is_some() {
-        return Err("native response signing lost its original preparation".to_owned());
+    if state.response_proof_signer.release_profile().has_approver_policy() && binding.is_some() {
+        return Err("response signing lost its original preparation".to_owned());
     }
     match kind {
         ResponseProofKind::Buffered => state.response_proof_signer.sign_buffered(statement,
@@ -6002,10 +6015,14 @@ struct RetainedReleaseAuthorizationCompletion {
 }
 
 impl ReleaseAuthorizationReservation {
+    fn check_profile(&self) -> Result<(), String> {
+        check_preparation_profile(self.profile, self.preparation.as_ref())
+    }
+
     fn credential_lease_request_authority(
         &self,
     ) -> Result<CredentialLeaseRequestAuthority, String> {
-        if let Some(native) = self.native.as_ref() { native.check()?; }
+        self.check_profile()?;
         let operation_digest = self
             .operation_digest
             .as_ref()
@@ -6017,8 +6034,7 @@ impl ReleaseAuthorizationReservation {
             .ok_or("release reservation operation context is unavailable")?
             .clone();
         let authority = CredentialLeaseRequestAuthority {
-            api_version: if self.native.is_some() { native_lease_profile::REQUEST_AUTHORITY }
-                else { "serverware.credentialLeaseRequestAuthority/v1" }.to_string(),
+            api_version: native_lease_profile::authority_version(self.profile).to_string(),
             attempt_id: self.attempt_id.clone(),
             reservation_id: release_reservation_id(&self.attempt_id, &self.binding_digest),
             binding_digest: self.binding_digest.clone(),
@@ -6029,14 +6045,14 @@ impl ReleaseAuthorizationReservation {
                 .reservation_expires_at_epoch_ms
                 .ok_or("release reservation expiry is unavailable")?,
         };
-        validate_credential_lease_request_authority_profile(&authority, self.native.is_some())?;
+        validate_credential_lease_request_authority_profile(&authority, self.profile)?;
         Ok(authority)
     }
 
     fn credential_lease_authorization(
         &self,
     ) -> Result<Option<CredentialLeaseReleaseAuthorization>, String> {
-        if let Some(native) = self.native.as_ref() { native.check()?; }
+        self.check_profile()?;
         let kind = match (
             self.grant_id.is_some(),
             self.approval_request_id.is_some(),
@@ -6081,13 +6097,7 @@ impl ReleaseAuthorizationReservation {
             }
         });
         let authorization = CredentialLeaseReleaseAuthorization {
-            api_version: match (self.native.is_some(), durable_policy.is_some()) {
-                (true, true) => native_lease_profile::RELEASE_DURABLE,
-                (true, false) => native_lease_profile::RELEASE_ORDINARY,
-                (false, true) => "serverware.credentialLeaseReleaseAuthorization/v2",
-                (false, false) => "serverware.credentialLeaseReleaseAuthorization/v1",
-            }
-            .to_string(),
+            api_version: native_lease_profile::release_version(durable_policy.is_some(), self.profile).to_string(),
             kind,
             state: "reserved".to_string(),
             attempt_id: self.attempt_id.clone(),
@@ -6108,7 +6118,7 @@ impl ReleaseAuthorizationReservation {
                 .reservation_expires_at_epoch_ms
                 .ok_or("release reservation expiry is unavailable")?,
         };
-        validate_credential_lease_release_authorization_profile(&authorization, self.native.is_some())?;
+        validate_credential_lease_release_authorization_profile(&authorization, self.profile)?;
         Ok(Some(authorization))
     }
 }
@@ -16696,6 +16706,18 @@ fn validate_custody_hello_response_for_transport(
     transport: CustodySignerTransport,
     deadline: Instant,
 ) -> Result<CustodyResponseProofSigner, String> {
+    let profile = if transport.is_native() { ReleaseProfile::Native } else { ReleaseProfile::Legacy };
+    validate_custody_hello_response_for_transport_profile(response_bytes, expected_request_id,
+        transport, deadline, profile)
+}
+
+fn validate_custody_hello_response_for_transport_profile(
+    response_bytes: &[u8], expected_request_id: &str, transport: CustodySignerTransport,
+    deadline: Instant, profile: ReleaseProfile,
+) -> Result<CustodyResponseProofSigner, String> {
+    if transport.is_native() != profile.is_native() {
+        return Err("cold release profile differs from the actual custody transport".to_owned());
+    }
     transport.verify_live()?;
     let (boot_id, result): (String, CustodyHelloResult) = decode_successful_custody_response(
         response_bytes,
@@ -16706,13 +16728,10 @@ fn validate_custody_hello_response_for_transport(
     )?;
     let expected_capabilities = [
         CUSTODY_HELLO_OPERATION.to_string(),
-        (if transport.is_native() { NATIVE_RESPONSE_PROOF_SIGN_OPERATION }
-            else { CUSTODY_RESPONSE_PROOF_SIGN_OPERATION }).to_string(),
-        (if transport.is_native() { NATIVE_STREAMING_RESPONSE_PROOF_SIGN_OPERATION }
-            else { CUSTODY_STREAMING_RESPONSE_PROOF_SIGN_OPERATION }).to_string(),
+        profile.sign_operation(StatementKind::Buffered).to_string(),
+        profile.sign_operation(StatementKind::Streaming).to_string(),
         CUSTODY_RESPONSE_OBSERVATION_PROOF_RESERVE_OPERATION.to_string(),
-        (if transport.is_native() { NATIVE_RESPONSE_OBSERVATION_PROOF_SIGN_OPERATION }
-            else { CUSTODY_RESPONSE_OBSERVATION_PROOF_SIGN_OPERATION }).to_string(),
+        profile.sign_operation(StatementKind::Observation).to_string(),
     ];
     if result.capabilities != expected_capabilities {
         return Err("custody hello capabilities mismatch".to_string());
@@ -16746,6 +16765,7 @@ fn validate_custody_hello_response_for_transport(
     transport.verify_live()?;
     Ok(CustodyResponseProofSigner {
         transport,
+        release_profile: profile,
         boot_id,
         boot_digest: sha256_prefixed(&boot_bytes),
         verifying_key,
@@ -16761,6 +16781,12 @@ fn custody_hello_once(
     expected_uid: libc::uid_t,
     deadline: Instant,
 ) -> Result<CustodyResponseProofSigner, CustodyHelloAttemptError> {
+    custody_hello_once_profile(socket_path, expected_uid, deadline, ReleaseProfile::Legacy)
+}
+
+fn custody_hello_once_profile(socket_path: &Path, expected_uid: libc::uid_t,
+    deadline: Instant, profile: ReleaseProfile)
+    -> Result<CustodyResponseProofSigner, CustodyHelloAttemptError> {
     let mut stream = connect_custody_socket(socket_path, expected_uid, deadline)?;
     let request_id = canonical_custody_request_id().map_err(CustodyHelloAttemptError::Fatal)?;
     let request = CustodyRequest {
@@ -16772,12 +16798,12 @@ fn custody_hello_once(
     };
     let response = custody_exchange(&mut stream, &request, deadline)
         .map_err(CustodyHelloAttemptError::Fatal)?;
-    validate_custody_hello_response(
+    validate_custody_hello_response_for_transport_profile(
         &response,
         &request_id,
-        socket_path.to_path_buf(),
-        expected_uid,
+        CustodySignerTransport::Unix { socket_path: socket_path.to_path_buf(), expected_uid },
         deadline,
+        profile,
     )
     .map_err(CustodyHelloAttemptError::Fatal)
 }
@@ -16787,10 +16813,16 @@ fn initialize_custody_response_proof_signer(
     expected_uid: libc::uid_t,
     startup_timeout: Duration,
 ) -> Result<ResponseProofSigningMaterial, String> {
+    initialize_custody_response_proof_signer_profile(socket_path, expected_uid, startup_timeout,
+        ReleaseProfile::Legacy)
+}
+
+fn initialize_custody_response_proof_signer_profile(socket_path: PathBuf, expected_uid: libc::uid_t,
+    startup_timeout: Duration, profile: ReleaseProfile) -> Result<ResponseProofSigningMaterial, String> {
     let deadline = custody_deadline_after(startup_timeout)?;
     let signer = loop {
         let attempt_deadline = custody_deadline_after(CUSTODY_IO_DEADLINE)?.min(deadline);
-        match custody_hello_once(&socket_path, expected_uid, attempt_deadline) {
+        match custody_hello_once_profile(&socket_path, expected_uid, attempt_deadline, profile) {
             Ok(signer) => break signer,
             Err(CustodyHelloAttemptError::Fatal(err)) => return Err(err),
             Err(CustodyHelloAttemptError::Retryable(err)) => {
@@ -16883,6 +16915,7 @@ fn response_proof_custody_config_from_values(
     }
     Ok(Some(ResponseProofCustodyConfig {
         socket_path,
+        release_profile: ReleaseProfile::Legacy,
         expected_uid,
         startup_timeout: Duration::from_millis(startup_timeout_ms),
     }))
@@ -16901,14 +16934,22 @@ fn configured_response_proof_signing_material(
         is_production,
         gate_effective_uid,
     )?;
-    let Some(custody_config) = custody_config else {
+    let configured_profile = env::var(RESPONSE_PROOF_RELEASE_PROFILE_ENV)
+        .map(Some).or_else(|error| if error == env::VarError::NotPresent { Ok(None) }
+            else { Err("response release profile is not UTF-8") })?;
+    let Some(mut custody_config) = custody_config else {
+        if configured_profile.is_some() {
+            return Err("ordinary release profile requires an explicit UDS custody owner".to_owned());
+        }
         validate_local_response_proof_mode(is_production, response_proof_configured)?;
         return local_response_proof_signing_material();
     };
-    initialize_custody_response_proof_signer(
+    if let Some(label) = configured_profile { custody_config.release_profile = ReleaseProfile::ordinary(&label)?; }
+    initialize_custody_response_proof_signer_profile(
         custody_config.socket_path,
         custody_config.expected_uid,
         custody_config.startup_timeout,
+        custody_config.release_profile,
     )
 }
 
@@ -16927,8 +16968,8 @@ fn validate_local_response_proof_mode(
 impl CustodyResponseProofSigner {
     fn probe(&self) -> Result<(), String> {
         let deadline = custody_deadline_after(CUSTODY_IO_DEADLINE)?;
-        let observed = self.transport.hello(deadline)?;
-        if observed.boot_id != self.boot_id {
+        let observed = self.transport.hello_profile(self.release_profile, deadline)?;
+        if observed.release_profile != self.release_profile || observed.boot_id != self.boot_id {
             return Err(
                 "custody runtime boot identity changed; decision gate restart required".to_string(),
             );
@@ -16960,8 +17001,7 @@ impl CustodyResponseProofSigner {
         authorization_binding: &ReleaseAuthorizationBinding,
     ) -> Result<String, String> {
         self.sign_operation(
-            if self.transport.is_native() { NATIVE_RESPONSE_PROOF_SIGN_OPERATION }
-                else { CUSTODY_RESPONSE_PROOF_SIGN_OPERATION },
+            self.release_profile.sign_operation(StatementKind::Buffered),
             statement,
             Some(authorization_binding),
         )
@@ -16973,8 +17013,7 @@ impl CustodyResponseProofSigner {
         authorization_binding: &ReleaseAuthorizationBinding,
     ) -> Result<String, String> {
         self.sign_operation(
-            if self.transport.is_native() { NATIVE_STREAMING_RESPONSE_PROOF_SIGN_OPERATION }
-                else { CUSTODY_STREAMING_RESPONSE_PROOF_SIGN_OPERATION },
+            self.release_profile.sign_operation(StatementKind::Streaming),
             statement,
             Some(authorization_binding),
         )
@@ -16986,8 +17025,7 @@ impl CustodyResponseProofSigner {
         authorization_binding: Option<&ReleaseAuthorizationBinding>,
     ) -> Result<String, String> {
         self.sign_operation(
-            if self.transport.is_native() { NATIVE_RESPONSE_OBSERVATION_PROOF_SIGN_OPERATION }
-                else { CUSTODY_RESPONSE_OBSERVATION_PROOF_SIGN_OPERATION },
+            self.release_profile.sign_operation(StatementKind::Observation),
             statement,
             authorization_binding,
         )
@@ -17426,26 +17464,24 @@ fn validate_control_plane_authorization_receipt(
     authorization_binding: &ReleaseAuthorizationBinding,
 ) -> Result<(), String> {
     validate_control_plane_authorization_receipt_profile(snapshot, receipt, principal_id,
-        route_id, authority, authorization_binding, false)
+        route_id, authority, authorization_binding, ReleaseProfile::Legacy)
 }
 
 fn validate_control_plane_authorization_receipt_profile(
     snapshot: &Snapshot, receipt: &ControlPlaneAuthorizationReceipt, principal_id: &str,
     route_id: &str, authority: &ResponseProofReleaseAuthority,
-    authorization_binding: &ReleaseAuthorizationBinding, native: bool,
+    authorization_binding: &ReleaseAuthorizationBinding, profile: ReleaseProfile,
 ) -> Result<(), String> {
-    if native_binding(authorization_binding) != native
-        || receipt.api_version != if native { native_response_profile::NATIVE_RECEIPT }
-            else { CONTROL_PLANE_AUTHORIZATION_RECEIPT_API_VERSION }
-        || receipt.kind != if native { native_response_profile::NATIVE_RECEIPT_KIND }
-            else { "ControlPlaneAuthorizationReceipt" }
+    if binding_profile(authorization_binding)? != profile
+        || receipt.api_version != profile.receipt_version()
+        || receipt.kind != profile.receipt_kind()
         || receipt.principal_id != principal_id
         || receipt.route_id != route_id
         || receipt.release_authority != *authority
     {
         return Err("control-plane authorization receipt authority substitution".to_string());
     }
-    if !(if native { native_response_profile::valid_principal(principal_id) }
+    if !(if profile.is_native() { native_response_profile::valid_principal(principal_id) }
         else { valid_release_authorization_identity(Some(principal_id)) })
         || !valid_release_authorization_identity(Some(route_id))
     {
@@ -17481,7 +17517,7 @@ fn validate_control_plane_authorization_receipt_profile(
         "control-plane authorization receipt dispatch request mismatch".to_string()
     })?;
     let durable_binding = authorization_binding.durable_policy.as_ref();
-    let expected_response_version = release_response_version(native, durable_binding.is_some());
+    let expected_response_version = release_response_version(profile, durable_binding.is_some());
     let response = &receipt.response;
     if response.status != 200 {
         return Err("control-plane authorization receipt response status mismatch".to_string());
@@ -17671,7 +17707,7 @@ fn validate_control_plane_authorization_receipt_profile(
         route_id,
         &snapshot.hash,
         authority,
-        native,
+        profile,
     )?;
     Ok(())
 }
@@ -17684,17 +17720,17 @@ fn validate_response_proof_authorization_binding(
     authority: &ResponseProofReleaseAuthority,
 ) -> Result<(), String> {
     validate_response_proof_authorization_binding_profile(binding, principal_id, route_id,
-        policy_digest, authority, false)
+        policy_digest, authority, ReleaseProfile::Legacy)
 }
 
 fn validate_response_proof_authorization_binding_profile(
     binding: &ReleaseAuthorizationBinding, principal_id: &str, route_id: &str,
-    policy_digest: &str, authority: &ResponseProofReleaseAuthority, native: bool,
+    policy_digest: &str, authority: &ResponseProofReleaseAuthority, profile: ReleaseProfile,
 ) -> Result<(), String> {
-    if binding.api_version != release_binding_version(native, binding.durable_policy.is_some()) {
+    if binding.api_version != release_binding_version(profile, binding.durable_policy.is_some()) {
         return Err("release binding version differs from the selected profile".to_owned());
     }
-    if native {
+    if profile.has_approver_policy() {
         native_approver_policy_v1::require_policy(binding.approver_policy.as_ref()
             .ok_or("native release approver policy absent")?, binding.require_jit_grant)?;
     } else if binding.approver_policy.is_some() {
@@ -17738,8 +17774,7 @@ fn validate_response_proof_authorization_binding_profile(
     }
     let binding_value = serde_json::to_value(binding)
         .map_err(|err| format!("serialize release authorization binding: {err}"))?;
-    let canonical_binding = if native { native_response_profile::canonical_ascii_bytes(&binding_value)? }
-        else { canonical_json_ensure_ascii(&binding_value).into_bytes() };
+    let canonical_binding = profile.canonical_ascii_bytes(&binding_value)?;
     if canonical_binding.len() > MAX_RELEASE_AUTHORIZATION_CANONICAL_REQUEST_BYTES {
         return Err(format!(
             "release authorization binding exceeds {MAX_RELEASE_AUTHORIZATION_CANONICAL_REQUEST_BYTES} bytes"
@@ -17863,7 +17898,7 @@ fn attach_response_proof_inner(
     }
     let authorization_context =
         authorization_context.ok_or("response proof authorization context is unavailable")?;
-    check_native_release_profile(state, authorization_context.native.as_ref())?;
+    check_release_profile(state, authorization_context.preparation.as_ref())?;
     let release_authority = &authorization_context.release_authority;
     let control_plane_authorization_receipt =
         &authorization_context.control_plane_authorization_receipt;
@@ -17881,7 +17916,7 @@ fn attach_response_proof_inner(
         &authorization_context.route_id,
         release_authority,
         &authorization_context.authorization_binding,
-        state.response_proof_signer.native_profile(),
+        state.response_proof_signer.release_profile(),
     )?;
     let request_digest =
         required_parsed_response_header(&parsed.headers, "x-serverware-request-digest")?;
@@ -17977,8 +18012,7 @@ fn attach_response_proof_inner(
         digest_json(&control_plane_authorization_receipt_value);
     let issued_at_unix = now_epoch_ms() / 1000;
     let statement = SensitiveJsonValue::new(json!({
-        "apiVersion":if state.response_proof_signer.native_profile() { native_response_profile::NATIVE_BUFFERED }
-            else { "serverware.proxyResponseStatement/v2" },
+        "apiVersion":state.response_proof_signer.release_profile().statement(StatementKind::Buffered),
         "issued_at_unix":issued_at_unix,
         "client_nonce":context.client_nonce,
         "client_request_digest":client_request_digest,
@@ -18007,18 +18041,18 @@ fn attach_response_proof_inner(
     }));
     let canonical_statement = Zeroizing::new(canonical_json(&statement));
     let statement_digest = sha256_prefixed(canonical_statement.as_bytes());
-    check_native_release_profile(state, authorization_context.native.as_ref())?;
+    check_release_profile(state, authorization_context.preparation.as_ref())?;
     let signature = sign_selected_response_statement(state, ResponseProofKind::Buffered, &statement,
-        Some(&authorization_context.authorization_binding), authorization_context.native.as_ref())?;
+        Some(&authorization_context.authorization_binding), authorization_context.preparation.as_ref())?;
     let runtime_proof = if let Some(proof) = native_response_runtime_proof(
         state, &statement, &signature, &context.client_nonce_bytes,
-        authorization_context.native.as_ref().map(|native| native.deadline),
+        authorization_context.preparation.as_ref().map(|native| native.deadline),
     )? {
         proof
     } else {
     let attested_claims = SensitiveJsonValue::new(json!({
         "server_statement_sha256":statement_digest,
-        "server_statement_api_version":"serverware.proxyResponseStatement/v2",
+        "server_statement_api_version":state.response_proof_signer.release_profile().statement(StatementKind::Buffered),
         "issued_at_unix":issued_at_unix,
         "client_nonce_sha256":sha256_prefixed(&context.client_nonce_bytes),
         "client_request_digest":client_request_digest,
@@ -18054,10 +18088,11 @@ fn attach_response_proof_inner(
         .response_proof_attestation_command
         .as_deref()
         .ok_or("response proof attestation command is not configured")?;
-    let attestation = SensitiveJsonValue::new(run_bounded_json_command(
+    let attestation = SensitiveJsonValue::new(run_bounded_json_command_on_deadline(
         attestation_command,
         &attestation_request,
         "response proof attestation",
+        authorization_context.preparation.as_ref().map(|prepared| prepared.deadline),
     )?);
     let vendor_tee = attestation
         .get("vendor_tee")
@@ -18099,7 +18134,7 @@ fn attach_response_proof_inner(
             ),
         ],
     );
-    check_native_release_profile(state, authorization_context.native.as_ref())?;
+    check_release_profile(state, authorization_context.preparation.as_ref())?;
     Ok(ResponseProofAttachment::Attached {
         response: output,
         runtime_proof_sha256: runtime_proof_digest,
@@ -18312,12 +18347,12 @@ fn response_observation_emitted_response(
 }
 
 fn response_observation_authorization(trace: &ResponseObservationTrace) -> SensitiveJsonValue {
-    response_observation_authorization_profile(trace, false)
+    response_observation_authorization_profile(trace, ReleaseProfile::Legacy)
         .expect("legacy observation authorization serializes")
 }
 
 fn response_observation_authorization_profile(
-    trace: &ResponseObservationTrace, native: bool,
+    trace: &ResponseObservationTrace, profile: ReleaseProfile,
 ) -> Result<SensitiveJsonValue, String> {
     let Some(context) = trace.authorization_context.as_ref() else {
         return Ok(SensitiveJsonValue::new(json!({
@@ -18328,10 +18363,10 @@ fn response_observation_authorization_profile(
             "control_plane_authorization_receipt_sha256":null,
         })));
     };
-    if native_binding(&context.authorization_binding) != native {
+    if context.profile != profile || binding_profile(&context.authorization_binding)? != profile {
         return Err("response observation authorization profile mismatch".to_string());
     }
-    if let Some(original) = context.native.as_ref() { original.check()?; }
+    if let Some(original) = context.preparation.as_ref() { original.check()?; }
     let binding = serde_json::to_value(&context.authorization_binding)
         .expect("response observation authorization binding serializes");
     let receipt = SensitiveJsonValue::new(
@@ -18340,8 +18375,7 @@ fn response_observation_authorization_profile(
     );
     Ok(SensitiveJsonValue::new(json!({
         "state":trace.authorization_state,
-        "binding_digest":if native { native_policy_digest(&binding)? }
-            else { digest_json_ensure_ascii(&binding) },
+        "binding_digest":sha256_prefixed(&profile.canonical_ascii_bytes(&binding)?),
         "release_authority":context.release_authority,
         "control_plane_authorization_receipt":&*receipt,
         "control_plane_authorization_receipt_sha256":digest_json(&receipt),
@@ -18387,13 +18421,12 @@ fn build_response_observation_runtime_proof(
     let observation_id = response_observation_id(&context.client_nonce);
     let issued_at_unix = now_epoch_ms() / 1000;
     if let Some(authorization) = trace.authorization_context.as_ref() {
-        check_native_release_profile(state, authorization.native.as_ref())?;
+        check_release_profile(state, authorization.preparation.as_ref())?;
     }
     let authorization = response_observation_authorization_profile(
-        trace, state.response_proof_signer.native_profile())?;
+        trace, state.response_proof_signer.release_profile())?;
     let statement = SensitiveJsonValue::new(json!({
-        "apiVersion":if state.response_proof_signer.native_profile() { native_response_profile::NATIVE_OBSERVATION }
-            else { "serverware.responseObservationStatement/v1" },
+        "apiVersion":state.response_proof_signer.release_profile().statement(StatementKind::Observation),
         "issued_at_unix":issued_at_unix,
         "observation_id":observation_id,
         "client_nonce":context.client_nonce,
@@ -18447,7 +18480,7 @@ fn build_response_observation_runtime_proof(
         &statement_digest,
     )?;
     if let Some(authorization) = trace.authorization_context.as_ref() {
-        check_native_release_profile(state, authorization.native.as_ref())?;
+        check_release_profile(state, authorization.preparation.as_ref())?;
     }
     let signature = sign_selected_response_statement(state, ResponseProofKind::Observation,
         &statement,
@@ -18455,18 +18488,18 @@ fn build_response_observation_runtime_proof(
             .authorization_context
             .as_ref()
             .map(|context| &context.authorization_binding),
-        trace.authorization_context.as_ref().and_then(|context| context.native.as_ref()),
+        trace.authorization_context.as_ref().and_then(|context| context.preparation.as_ref()),
     )?;
     let runtime_proof = if let Some(proof) = native_response_runtime_proof(
         state, &statement, &signature, &context.client_nonce_bytes,
-        trace.authorization_context.as_ref().and_then(|context| context.native.as_ref())
+        trace.authorization_context.as_ref().and_then(|context| context.preparation.as_ref())
             .map(|native| native.deadline),
     )? {
         proof
     } else {
     let attested_claims = SensitiveJsonValue::new(json!({
         "server_statement_sha256":statement_digest,
-        "server_statement_api_version":"serverware.responseObservationStatement/v1",
+        "server_statement_api_version":state.response_proof_signer.release_profile().statement(StatementKind::Observation),
         "issued_at_unix":issued_at_unix,
         "observation_id":observation_id,
         "client_nonce_sha256":sha256_prefixed(&context.client_nonce_bytes),
@@ -18498,10 +18531,12 @@ fn build_response_observation_runtime_proof(
         .response_proof_attestation_command
         .as_deref()
         .ok_or("response observation proof attestation command is not configured")?;
-    let attestation = SensitiveJsonValue::new(run_bounded_json_command(
+    let attestation = SensitiveJsonValue::new(run_bounded_json_command_on_deadline(
         attestation_command,
         &attestation_request,
         "response observation proof attestation",
+        trace.authorization_context.as_ref().and_then(|context| context.preparation.as_ref())
+            .map(|prepared| prepared.deadline),
     )?);
     let vendor_tee = attestation
         .get("vendor_tee")
@@ -18534,7 +18569,7 @@ fn build_response_observation_runtime_proof(
         general_purpose::URL_SAFE_NO_PAD.encode(runtime_proof_bytes.as_slice()),
     );
     if let Some(authorization) = trace.authorization_context.as_ref() {
-        check_native_release_profile(state, authorization.native.as_ref())?;
+        check_release_profile(state, authorization.preparation.as_ref())?;
     }
     Ok((runtime_proof_b64, runtime_proof_digest))
 }
@@ -18762,18 +18797,18 @@ fn release_authorization_binding_commitment(binding: &ReleaseAuthorizationBindin
 }
 
 fn release_authorization_binding_commitment_profile(
-    binding: &ReleaseAuthorizationBinding, native: bool,
+    binding: &ReleaseAuthorizationBinding, profile: ReleaseProfile,
 ) -> Result<Value, String> {
-    if native_binding(binding) != native {
+    if binding_profile(binding)? != profile {
         return Err("response authorization commitment profile mismatch".to_string());
     }
     let mut commitment = release_authorization_binding_commitment(binding);
-    if native {
+    if profile.has_approver_policy() {
         let policy = binding.approver_policy.as_ref()
             .ok_or("native response authorization policy is absent")?;
         native_approver_policy_v1::require_policy(policy, binding.require_jit_grant)?;
         let fields = commitment.as_object_mut().expect("commitment object");
-        fields.insert("apiVersion".to_string(), json!(native_response_profile::NATIVE_COMMITMENT));
+        fields.insert("apiVersion".to_string(), json!(profile.commitment_version().ok_or("commitment profile absent")?));
         fields.insert("approver_policy_sha256".to_string(), json!(native_policy_digest(policy)?));
     }
     Ok(commitment)
@@ -18794,7 +18829,7 @@ fn build_streaming_response_runtime_proof(
     selected_wire_headers: &BTreeMap<String, String>,
     stats: &StreamingResponseStats,
 ) -> Result<(SensitiveString, String), String> {
-    check_native_release_profile(state, authorization_context.native.as_ref())?;
+    check_release_profile(state, authorization_context.preparation.as_ref())?;
     if !status.is_success() {
         return Err(
             "streaming response proof is unavailable for non-success responses".to_string(),
@@ -18814,7 +18849,7 @@ fn build_streaming_response_runtime_proof(
         &authorization_context.route_id,
         release_authority,
         &authorization_context.authorization_binding,
-        state.response_proof_signer.native_profile(),
+        state.response_proof_signer.release_profile(),
     )?;
     if !is_sha256_digest(expected_client_request_digest)
         || !is_sha256_digest(&stats.body_digest)
@@ -18838,15 +18873,14 @@ fn build_streaming_response_runtime_proof(
     let authorization_binding_value =
         serde_json::to_value(&authorization_context.authorization_binding)
             .map_err(|_| "serialize_streaming_authorization_binding".to_string())?;
-    let authorization_binding_digest = if state.response_proof_signer.native_profile() {
-        native_policy_digest(&authorization_binding_value)?
-    } else { digest_json_ensure_ascii(&authorization_binding_value) };
+    let authorization_binding_digest = sha256_prefixed(&state.response_proof_signer.release_profile()
+        .canonical_ascii_bytes(&authorization_binding_value)?);
     if authorization_binding_digest != release_authority.consumption_identity_digest {
         return Err("streaming response proof authorization binding digest mismatch".to_string());
     }
     let authorization_binding_commitment =
         release_authorization_binding_commitment_profile(&authorization_context.authorization_binding,
-            state.response_proof_signer.native_profile())?;
+            state.response_proof_signer.release_profile())?;
     let receipt_value = SensitiveJsonValue::new(
         serde_json::to_value(&authorization_context.control_plane_authorization_receipt)
             .map_err(|_| "serialize_streaming_authorization_receipt".to_string())?,
@@ -18889,8 +18923,7 @@ fn build_streaming_response_runtime_proof(
     ]);
     let issued_at_unix = now_epoch_ms() / 1000;
     let statement = SensitiveJsonValue::new(json!({
-        "apiVersion":if state.response_proof_signer.native_profile() { native_response_profile::NATIVE_STREAMING }
-            else { "serverware.streamingResponseStatement/v1" },
+        "apiVersion":state.response_proof_signer.release_profile().statement(StatementKind::Streaming),
         "issued_at_unix":issued_at_unix,
         "client_nonce":context.client_nonce,
         "client_request_digest":expected_client_request_digest,
@@ -18930,12 +18963,12 @@ fn build_streaming_response_runtime_proof(
     }));
     let canonical_statement = Zeroizing::new(canonical_json(&statement));
     let statement_digest = sha256_prefixed(canonical_statement.as_bytes());
-    check_native_release_profile(state, authorization_context.native.as_ref())?;
+    check_release_profile(state, authorization_context.preparation.as_ref())?;
     let signature = sign_selected_response_statement(state, ResponseProofKind::Streaming, &statement,
-        Some(&authorization_context.authorization_binding), authorization_context.native.as_ref())?;
+        Some(&authorization_context.authorization_binding), authorization_context.preparation.as_ref())?;
     let runtime_proof = if let Some(proof) = native_response_runtime_proof(
         state, &statement, &signature, &context.client_nonce_bytes,
-        authorization_context.native.as_ref().map(|native| native.deadline),
+        authorization_context.preparation.as_ref().map(|native| native.deadline),
     )? {
         proof
     } else {
@@ -18945,7 +18978,7 @@ fn build_streaming_response_runtime_proof(
     );
     let raw_headers_digest = digest_json(&raw_headers_value);
     let attested_claims = SensitiveJsonValue::new(json!({
-        "streaming_response_statement_api_version":"serverware.streamingResponseStatement/v1",
+        "streaming_response_statement_api_version":state.response_proof_signer.release_profile().statement(StatementKind::Streaming),
         "streaming_response_statement_sha256":statement_digest,
         "issued_at_unix":issued_at_unix,
         "client_nonce_sha256":sha256_prefixed(&context.client_nonce_bytes),
@@ -18984,7 +19017,7 @@ fn build_streaming_response_runtime_proof(
     let attestation_request = SensitiveJsonValue::new(json!({
         "apiVersion":"serverware.streamingResponseProofAttestationRequest/v1",
         "kind":"ServerwareStreamingResponseProofAttestationRequest",
-        "streaming_response_statement_api_version":"serverware.streamingResponseStatement/v1",
+        "streaming_response_statement_api_version":state.response_proof_signer.release_profile().statement(StatementKind::Streaming),
         "streaming_response_statement_sha256":statement_digest,
         "response_signing_key_id":state.response_proof_signing_key_id,
         "response_signing_public_key_pem":state.response_proof_public_key_pem,
@@ -18994,10 +19027,11 @@ fn build_streaming_response_runtime_proof(
         .response_proof_attestation_command
         .as_deref()
         .ok_or("streaming response proof attestation command is not configured")?;
-    let attestation = SensitiveJsonValue::new(run_bounded_json_command(
+    let attestation = SensitiveJsonValue::new(run_bounded_json_command_on_deadline(
         attestation_command,
         &attestation_request,
         "streaming response proof attestation",
+        authorization_context.preparation.as_ref().map(|prepared| prepared.deadline),
     )?);
     let vendor_tee = attestation
         .get("vendor_tee")
@@ -19019,7 +19053,7 @@ fn build_streaming_response_runtime_proof(
     }))
     };
     let encoded = encode_streaming_response_runtime_proof(&runtime_proof)?;
-    check_native_release_profile(state, authorization_context.native.as_ref())?;
+    check_release_profile(state, authorization_context.preparation.as_ref())?;
     Ok(encoded)
 }
 
@@ -19460,8 +19494,8 @@ fn credential_lease_metadata_sha256(metadata: &BTreeMap<String, Value>) -> Strin
     )
 }
 
-fn credential_lease_metadata_sha256_profile(metadata: &BTreeMap<String, Value>, native: bool) -> String {
-    if native { native_policy_digest(metadata).expect("native metadata serialization failed") }
+fn credential_lease_metadata_sha256_profile(metadata: &BTreeMap<String, Value>, profile: ReleaseProfile) -> String {
+    if profile.has_approver_policy() { native_policy_digest(metadata).expect("native metadata serialization failed") }
     else { credential_lease_metadata_sha256(metadata) }
 }
 
@@ -19860,12 +19894,12 @@ fn exactly_one_matching_credential(
     purpose: CredentialLeasePurpose,
     entries: Vec<CredentialLeaseEntry>,
 ) -> Result<CredentialLeaseEntry, String> {
-    exactly_one_matching_credential_profile(snapshot, scope, purpose, entries, false)
+    exactly_one_matching_credential_profile(snapshot, scope, purpose, entries, ReleaseProfile::Legacy)
 }
 
 fn exactly_one_matching_credential_profile(
     snapshot: &Snapshot, scope: &CredentialLeaseScope, purpose: CredentialLeasePurpose,
-    entries: Vec<CredentialLeaseEntry>, native: bool,
+    entries: Vec<CredentialLeaseEntry>, profile: ReleaseProfile,
 ) -> Result<CredentialLeaseEntry, String> {
     let mut entries = entries.into_iter();
     let entry = entries
@@ -19902,7 +19936,7 @@ fn exactly_one_matching_credential_profile(
         );
     }
     if !is_sha256_digest(metadata_sha256)
-        || credential_lease_metadata_sha256_profile(metadata, native) != metadata_sha256
+        || credential_lease_metadata_sha256_profile(metadata, profile) != metadata_sha256
     {
         return Err("credential lease metadata digest mismatch".to_string());
     }
@@ -19921,15 +19955,22 @@ enum CredentialLeaseMaterial {
 // accepted in place of either concrete owner.
 enum LeaseRecipientOwner {
     Standalone(CredentialRecipientV1),
+    PolicyAware(CredentialRecipientV1),
     Native(QuotedCredentialRecipientV1),
 }
 
 impl LeaseRecipientOwner {
-    fn is_native(&self) -> bool { matches!(self, Self::Native(_)) }
+    fn profile(&self) -> ReleaseProfile {
+        match self {
+            Self::Standalone(_) => ReleaseProfile::Legacy,
+            Self::PolicyAware(_) => ReleaseProfile::PolicyAware,
+            Self::Native(owner) => owner.profile(),
+        }
+    }
 
     fn derive_shared_key(self, peer: [u8; 32]) -> Result<Zeroizing<[u8; 32]>, String> {
         match self {
-            Self::Standalone(owner) => owner.derive_shared_key(peer),
+            Self::Standalone(owner) | Self::PolicyAware(owner) => owner.derive_shared_key(peer),
             Self::Native(owner) => owner.derive_shared_key(peer),
         }
     }
@@ -19982,12 +20023,12 @@ fn decrypt_credential_lease_envelope_with_owner(
     body: &[u8],
     requested_ttl_seconds: u64,
 ) -> Result<CredentialLeaseMaterial, String> {
-    let native = recipient_private_key.is_native();
+    let profile = recipient_private_key.profile();
     if let Some(authority) = request_authority {
-        validate_credential_lease_request_authority_profile(authority, native)?;
+        validate_credential_lease_request_authority_profile(authority, profile)?;
     }
     if let Some(authorization) = release_authorization {
-        validate_credential_lease_release_authorization_profile(authorization, native)?;
+        validate_credential_lease_release_authorization_profile(authorization, profile)?;
     }
     let envelope_value = SensitiveJsonValue::new(
         strict_json_value_from_slice(body)
@@ -19996,12 +20037,7 @@ fn decrypt_credential_lease_envelope_with_owner(
     let request_authority_sha256 =
         request_authority.map(credential_lease_request_authority_sha256);
     let request_bound = request_authority.is_some();
-    let expected_envelope_version = match (native, request_bound) {
-        (true, true) => native_lease_profile::ENVELOPE_CONTROLLED,
-        (true, false) => native_lease_profile::ENVELOPE_UNCONTROLLED,
-        (false, true) => "serverware.credentialLeaseEnvelope/v3",
-        (false, false) => "serverware.credentialLeaseEnvelope/v2",
-    };
+    let expected_envelope_version = native_lease_profile::envelope_version(request_bound, profile);
     let envelope_fields_v2 = [
         "apiVersion",
         "algorithm",
@@ -20118,7 +20154,7 @@ fn decrypt_credential_lease_envelope_with_owner(
             "expiresAtEpochMs":expires_at_ms,
         })
     };
-    let aad_bytes = Zeroizing::new(if native {
+    let aad_bytes = Zeroizing::new(if profile.has_approver_policy() {
         native_response_profile::canonical_ascii_bytes(&aad)?
     } else { canonical_json(&aad).into_bytes() });
     let server_public_key = general_purpose::URL_SAFE_NO_PAD
@@ -20224,12 +20260,7 @@ fn decrypt_credential_lease_envelope_with_owner(
     }
     let payload: CredentialLeaseSet = serde_json::from_value(payload_value.into_value())
         .map_err(|_| "parse_decrypted_credential_lease_set_contract".to_string())?;
-    let expected_set_version = match (native, request_bound) {
-        (true, true) => native_lease_profile::SET_CONTROLLED,
-        (true, false) => native_lease_profile::SET_UNCONTROLLED,
-        (false, true) => "serverware.credentialLeaseSet/v4",
-        (false, false) => "serverware.credentialLeaseSet/v3",
-    };
+    let expected_set_version = native_lease_profile::set_version(request_bound, profile);
     if payload.api_version != expected_set_version
         || payload.purpose != purpose
         || payload.request_binding_sha256 != request_binding_sha256
@@ -20260,7 +20291,7 @@ fn decrypt_credential_lease_envelope_with_owner(
     }
     let expires_at_monotonic =
         Instant::now() + Duration::from_millis(u64::try_from(remaining_ms).unwrap_or(u64::MAX));
-    let entry = exactly_one_matching_credential_profile(snapshot, scope, purpose, payload.credentials, native)?;
+    let entry = exactly_one_matching_credential_profile(snapshot, scope, purpose, payload.credentials, profile)?;
     match entry {
         CredentialLeaseEntry::GenerationMetadata(entry) => {
             if entry.credential_version == 0 {
@@ -20268,7 +20299,7 @@ fn decrypt_credential_lease_envelope_with_owner(
             }
             Ok(CredentialLeaseMaterial::GenerationMetadata(
                 CredentialLeaseGeneration {
-                    native,
+                    profile,
                     policy_hash: snapshot.hash.clone(),
                     version: entry.credential_version,
                     metadata_sha256: entry.metadata_sha256,
@@ -20286,7 +20317,7 @@ fn decrypt_credential_lease_envelope_with_owner(
             }
             Ok(CredentialLeaseMaterial::DispatchSecret(Box::new(
                 SecretLease {
-                    native,
+                    profile,
                     scope: scope.clone(),
                     version: entry.credential_version,
                     secret: entry.secret,
@@ -20371,8 +20402,13 @@ fn validate_credential_dispatch_authorities(
     release_authorization: Option<&CredentialLeaseReleaseAuthorization>,
 ) -> Result<bool, String> {
     validate_credential_dispatch_authorities_profile(
-        snapshot, scope, request_authority, release_authorization, false,
+        snapshot, scope, request_authority, release_authorization, ReleaseProfile::Legacy,
     )
+}
+
+fn credential_lease_principal_valid(value: &str, profile: ReleaseProfile) -> bool {
+    if profile.is_native() { native_response_profile::valid_principal(value) }
+    else { valid_release_authorization_identity(Some(value)) }
 }
 
 fn validate_credential_dispatch_authorities_profile(
@@ -20380,9 +20416,9 @@ fn validate_credential_dispatch_authorities_profile(
     scope: &CredentialLeaseScope,
     request_authority: Option<&CredentialLeaseRequestAuthority>,
     release_authorization: Option<&CredentialLeaseReleaseAuthorization>,
-    native: bool,
+    profile: ReleaseProfile,
 ) -> Result<bool, String> {
-    if native && (!native_response_profile::valid_principal(&scope.principal_id)
+    if profile.has_approver_policy() && (!credential_lease_principal_valid(&scope.principal_id, profile)
         || !valid_release_authorization_identity(Some(&scope.route_id))
         || !valid_release_authorization_identity(Some(&scope.credential_id))) {
         return Err("native credential lease scope has an incompatible identity".to_owned());
@@ -20405,7 +20441,7 @@ fn validate_credential_dispatch_authorities_profile(
     }
     let request_authority = request_authority
         .ok_or("controlled credential dispatch requires exact request authority")?;
-    validate_credential_lease_request_authority_profile(request_authority, native)?;
+    validate_credential_lease_request_authority_profile(request_authority, profile)?;
     let durable_required = route_has_applicable_durable_policy_claim(
         route,
         Some(&request_authority.operation_context),
@@ -20413,11 +20449,10 @@ fn validate_credential_dispatch_authorities_profile(
     let release_required = non_durable_required || durable_required;
     match (release_required, release_authorization) {
         (true, Some(authorization)) => {
-            validate_credential_lease_authority_pair_profile(request_authority, authorization, native)?;
+            validate_credential_lease_authority_pair_profile(request_authority, authorization, profile)?;
             if durable_required {
                 if authorization.api_version
-                    != if native { native_lease_profile::RELEASE_DURABLE }
-                        else { "serverware.credentialLeaseReleaseAuthorization/v2" }
+                    != native_lease_profile::release_version(true, profile)
                     || authorization.durable_policy.is_none()
                 {
                     return Err(
@@ -20426,8 +20461,7 @@ fn validate_credential_dispatch_authorities_profile(
                     );
                 }
             } else if authorization.api_version
-                != if native { native_lease_profile::RELEASE_ORDINARY }
-                    else { "serverware.credentialLeaseReleaseAuthorization/v1" }
+                != native_lease_profile::release_version(false, profile)
                 || authorization.durable_policy.is_some()
             {
                 return Err(
@@ -20479,12 +20513,12 @@ fn credential_scope_requires_release_authorization(
 }
 
 fn credential_lease_request_binding_sha256(request: &CredentialLeaseRequest) -> String {
-    credential_lease_request_binding_sha256_profile(request, false)
+    credential_lease_request_binding_sha256_profile(request, ReleaseProfile::Legacy)
         .expect("legacy credential request commitment serializes")
 }
 
 fn credential_lease_request_binding_sha256_profile(
-    request: &CredentialLeaseRequest, native: bool,
+    request: &CredentialLeaseRequest, profile: ReleaseProfile,
 ) -> Result<String, String> {
     let binding = json!({
         "apiVersion":request.api_version,
@@ -20502,27 +20536,27 @@ fn credential_lease_request_binding_sha256_profile(
         "dataPlaneBinaryDigest":request.data_plane_binary_digest,
         "maxTtlSeconds":request.max_ttl_seconds,
     });
-    if native { native_policy_digest(&binding) }
+    if profile.has_approver_policy() { native_policy_digest(&binding) }
     else { Ok(digest_json_ensure_ascii(&binding)) }
 }
 
 fn credential_lease_request_wire_value(
     request: &CredentialLeaseRequest,
 ) -> Result<Value, String> {
-    credential_lease_request_wire_value_profile(request, false)
+    credential_lease_request_wire_value_profile(request, ReleaseProfile::Legacy)
 }
 
 fn credential_lease_request_wire_value_profile(
-    request: &CredentialLeaseRequest, native: bool,
+    request: &CredentialLeaseRequest, profile: ReleaseProfile,
 ) -> Result<Value, String> {
     let request_bound = request.request_authority.is_some();
-    let uncontrolled = if native { native_lease_profile::REQUEST_UNCONTROLLED }
-        else { "serverware.credentialLeaseRequest/v3" };
-    let controlled = if native { native_lease_profile::REQUEST_CONTROLLED }
-        else { "serverware.credentialLeaseRequest/v4" };
-    if native && (request.recipient_attestation.as_ref().and_then(|value| value.get("apiVersion"))
+    let uncontrolled = native_lease_profile::request_version(false, profile);
+    let controlled = native_lease_profile::request_version(true, profile);
+    if profile.has_approver_policy() && (request.recipient_attestation.as_ref().and_then(|value| value.get("apiVersion"))
         .and_then(Value::as_str) != Some("serverware.nativeCredentialRecipientEvidence/v1")
-        || !native_response_profile::valid_principal(&request.principal_id)) {
+        || !credential_lease_principal_valid(&request.principal_id, profile)
+        || !valid_release_authorization_identity(Some(&request.route_id))
+        || !valid_release_authorization_identity(Some(&request.credential_id))) {
         return Err("native credential request requires its original quoted owner and principal".to_owned());
     }
     match request.purpose {
@@ -20549,9 +20583,9 @@ fn credential_lease_request_wire_value_profile(
                     .request_authority
                     .as_ref()
                     .expect("request_bound requires authority");
-                validate_credential_lease_request_authority_profile(authority, native)?;
+                validate_credential_lease_request_authority_profile(authority, profile)?;
                 if let Some(authorization) = request.release_authorization.as_ref() {
-                    validate_credential_lease_authority_pair_profile(authority, authorization, native)?;
+                    validate_credential_lease_authority_pair_profile(authority, authorization, profile)?;
                 }
             } else if request.api_version != uncontrolled
                 || request.release_authorization.is_some()
@@ -20586,7 +20620,8 @@ fn credential_lease_request_authority_sha256(
 ) -> String {
     let original = serde_json::to_value(authority)
         .expect("credential lease request authority serialization cannot fail");
-    if authority.api_version == native_lease_profile::REQUEST_AUTHORITY {
+    if matches!(authority.api_version.as_str(), native_lease_profile::REQUEST_AUTHORITY
+        | native_lease_profile::POLICY_AWARE_REQUEST_AUTHORITY) {
         native_policy_digest(&original).expect("native request authority serializes")
     } else { digest_json_ensure_ascii(&original) }
 }
@@ -20611,14 +20646,14 @@ fn credential_lease_operation_context_value_is_canonical(value: &Value, depth: u
 fn validate_credential_lease_request_authority(
     authority: &CredentialLeaseRequestAuthority,
 ) -> Result<(), String> {
-    validate_credential_lease_request_authority_profile(authority, false)
+    validate_credential_lease_request_authority_profile(authority, ReleaseProfile::Legacy)
 }
 
 fn validate_credential_lease_request_authority_profile(
     authority: &CredentialLeaseRequestAuthority,
-    native: bool,
+    profile: ReleaseProfile,
 ) -> Result<(), String> {
-    let encoded_operation_context_len = if native {
+    let encoded_operation_context_len = if profile.has_approver_policy() {
         native_response_profile::canonical_ascii_bytes(&authority.operation_context)?.len()
     } else {
         canonical_json_ensure_ascii(&authority.operation_context).len()
@@ -20627,8 +20662,7 @@ fn validate_credential_lease_request_authority_profile(
         .operation_context
         .get("operation")
         .and_then(Value::as_str);
-    if authority.api_version != if native { native_lease_profile::REQUEST_AUTHORITY }
-        else { "serverware.credentialLeaseRequestAuthority/v1" }
+    if authority.api_version != native_lease_profile::authority_version(profile)
         || !is_sha256_digest(&authority.attempt_id)
         || !is_sha256_digest(&authority.reservation_id)
         || !is_sha256_digest(&authority.binding_digest)
@@ -20654,16 +20688,16 @@ fn validate_credential_lease_authority_pair(
     request_authority: &CredentialLeaseRequestAuthority,
     release_authorization: &CredentialLeaseReleaseAuthorization,
 ) -> Result<(), String> {
-    validate_credential_lease_authority_pair_profile(request_authority, release_authorization, false)
+    validate_credential_lease_authority_pair_profile(request_authority, release_authorization, ReleaseProfile::Legacy)
 }
 
 fn validate_credential_lease_authority_pair_profile(
     request_authority: &CredentialLeaseRequestAuthority,
     release_authorization: &CredentialLeaseReleaseAuthorization,
-    native: bool,
+    profile: ReleaseProfile,
 ) -> Result<(), String> {
-    validate_credential_lease_request_authority_profile(request_authority, native)?;
-    validate_credential_lease_release_authorization_profile(release_authorization, native)?;
+    validate_credential_lease_request_authority_profile(request_authority, profile)?;
+    validate_credential_lease_release_authorization_profile(release_authorization, profile)?;
     if release_authorization.attempt_id != request_authority.attempt_id
         || release_authorization.reservation_id != request_authority.reservation_id
         || release_authorization.binding_digest != request_authority.binding_digest
@@ -20683,12 +20717,12 @@ fn validate_credential_lease_authority_pair_profile(
 fn validate_credential_lease_release_authorization(
     authorization: &CredentialLeaseReleaseAuthorization,
 ) -> Result<(), String> {
-    validate_credential_lease_release_authorization_profile(authorization, false)
+    validate_credential_lease_release_authorization_profile(authorization, ReleaseProfile::Legacy)
 }
 
 fn validate_credential_lease_release_authorization_profile(
     authorization: &CredentialLeaseReleaseAuthorization,
-    native: bool,
+    profile: ReleaseProfile,
 ) -> Result<(), String> {
     let canonical_quota_order = authorization
         .quota_claims
@@ -20743,17 +20777,8 @@ fn validate_credential_lease_release_authorization_profile(
                 && durable.release_binding_digest == authorization.binding_digest
                 && u128::from(durable.reservation_deadline_at_epoch_ms) > now_epoch_ms()
         });
-    let expected_api_version = match (native, authorization.durable_policy.is_some()) {
-        (true, true) => native_lease_profile::RELEASE_DURABLE,
-        (true, false) => native_lease_profile::RELEASE_ORDINARY,
-        (false, true) => "serverware.credentialLeaseReleaseAuthorization/v2",
-        (false, false) => "serverware.credentialLeaseReleaseAuthorization/v1",
-    };
-    let principal_valid = if native {
-        native_response_profile::valid_principal(&authorization.principal_id)
-    } else {
-        valid_release_authorization_identity(Some(&authorization.principal_id))
-    };
+    let expected_api_version = native_lease_profile::release_version(authorization.durable_policy.is_some(), profile);
+    let principal_valid = credential_lease_principal_valid(&authorization.principal_id, profile);
     if authorization.api_version != expected_api_version
         || authorization.state != "reserved"
         || !is_sha256_digest(&authorization.attempt_id)
@@ -20797,7 +20822,7 @@ fn validate_credential_lease_release_scope(
     authorization: &CredentialLeaseReleaseAuthorization,
 ) -> Result<(), String> {
     validate_credential_lease_release_scope_profile(
-        snapshot, scope, expected_credential_version, authorization, false,
+        snapshot, scope, expected_credential_version, authorization, ReleaseProfile::Legacy,
     )
 }
 
@@ -20806,9 +20831,9 @@ fn validate_credential_lease_release_scope_profile(
     scope: &CredentialLeaseScope,
     expected_credential_version: u64,
     authorization: &CredentialLeaseReleaseAuthorization,
-    native: bool,
+    profile: ReleaseProfile,
 ) -> Result<(), String> {
-    validate_credential_lease_release_authorization_profile(authorization, native)?;
+    validate_credential_lease_release_authorization_profile(authorization, profile)?;
     let jit_required = credential_scope_requires_jit(snapshot, scope)?;
     let expected_kind = if jit_required {
         CredentialLeaseReleaseKind::JitGrant
@@ -20832,15 +20857,22 @@ fn validate_credential_lease_release_scope_profile(
 
 enum LeaseRecipientPreparation {
     Standalone(CredentialRecipientV1),
+    PolicyAware(CredentialRecipientV1),
     Native(PendingCredentialRecipientV1),
 }
 
 impl LeaseRecipientPreparation {
-    fn is_native(&self) -> bool { matches!(self, Self::Native(_)) }
+    fn profile(&self) -> ReleaseProfile {
+        match self {
+            Self::Standalone(_) => ReleaseProfile::Legacy,
+            Self::PolicyAware(_) => ReleaseProfile::PolicyAware,
+            Self::Native(owner) => owner.profile(),
+        }
+    }
 
     fn public_key_bytes(&self) -> Result<[u8; 32], String> {
         match self {
-            Self::Standalone(owner) => owner.public_key_bytes(),
+            Self::Standalone(owner) | Self::PolicyAware(owner) => owner.public_key_bytes(),
             Self::Native(owner) => owner.public_key_bytes(),
         }
     }
@@ -20860,24 +20892,37 @@ fn prepare_credential_lease_recipient(
     state: &GateState,
     policy_hash: &str,
 ) -> Result<LeaseRecipientPreparation, String> {
-    native_runtime_live(state)?;
-    if let Some(authority) = state.mitm_authority.as_ref() {
-        let mut authority = authority.lock()
-            .map_err(|_| "credential recipient runtime authority is poisoned".to_owned())?;
-        if let MitmAuthority::Native(identity) = &mut *authority {
-            if state.credential_lease_recipient_attestation_command.is_some() {
-                return Err("native recipient cannot use an external attestation command".to_owned());
-            }
-            let deadline = identity.deadline();
-            identity.verify_policy_commitment(native_lease_digest_bytes(policy_hash)?, deadline)?;
-            return identity.prepare_lease_recipient(deadline).map(LeaseRecipientPreparation::Native);
-        }
+    let profile = credential_lease_profile(state, policy_hash)?;
+    if profile == ReleaseProfile::PolicyAware
+        && state.credential_lease_recipient_attestation_command.is_none() {
+        return Err("policy-aware recipient requires an independently configured original attestation command".to_owned());
     }
-    CredentialRecipientV1::generate().map(LeaseRecipientPreparation::Standalone)
+    if profile.is_native() {
+        let mut authority = state.mitm_authority.as_ref()
+            .ok_or("native recipient lost its runtime authority")?
+            .lock().map_err(|_| "credential recipient runtime authority is poisoned".to_owned())?;
+        let MitmAuthority::Native(identity) = &mut *authority else {
+            return Err("native recipient cannot use an ordinary owner".to_owned());
+        };
+        if state.credential_lease_recipient_attestation_command.is_some() {
+            return Err("native recipient cannot use an external attestation command".to_owned());
+        }
+        let deadline = identity.deadline();
+        identity.verify_policy_commitment(native_lease_digest_bytes(policy_hash)?, deadline)?;
+        return identity.prepare_lease_recipient_profile(deadline, profile)
+            .map(LeaseRecipientPreparation::Native);
+    }
+    let owner = CredentialRecipientV1::generate()?;
+    Ok(match profile {
+        ReleaseProfile::Legacy => LeaseRecipientPreparation::Standalone(owner),
+        ReleaseProfile::PolicyAware => LeaseRecipientPreparation::PolicyAware(owner),
+        ReleaseProfile::Native => unreachable!("native preparation returned above"),
+    })
 }
 
-fn native_credential_lease_profile(state: &GateState, policy_hash: &str) -> Result<bool, String> {
+fn credential_lease_profile(state: &GateState, policy_hash: &str) -> Result<ReleaseProfile, String> {
     native_runtime_live(state)?;
+    let profile = state.response_proof_signer.release_profile();
     let native = if let Some(authority) = state.mitm_authority.as_ref() {
         let mut authority = authority.lock()
             .map_err(|_| "credential runtime authority is poisoned".to_owned())?;
@@ -20886,11 +20931,10 @@ fn native_credential_lease_profile(state: &GateState, policy_hash: &str) -> Resu
             true
         } else { false }
     } else { false };
-    if state.native_runtime_lifetime.is_some() && !native {
-        return Err("native credential runtime lost its actual key owner".to_owned());
+    if native != profile.is_native() || (state.native_runtime_lifetime.is_some() && !native) {
+        return Err("credential runtime and cold release profile disagree".to_owned());
     }
-    native_runtime_live(state)?;
-    Ok(native)
+    Ok(profile)
 }
 
 fn check_credential_operation_deadline(deadline: Option<Instant>) -> Result<(), String> {
@@ -20984,15 +21028,24 @@ fn fetch_scoped_credential_lease_on_deadline(
 ) -> Result<CredentialLeaseMaterial, String> {
     let opening = Instant::now();
     check_credential_operation_deadline(original_deadline)?;
-    let native = native_credential_lease_profile(state, &snapshot.hash)?;
+    let profile = credential_lease_profile(state, &snapshot.hash)?;
+    if profile.has_approver_policy() && (!credential_lease_principal_valid(&scope.principal_id, profile)
+        || !valid_release_authorization_identity(Some(&scope.route_id))
+        || !valid_release_authorization_identity(Some(&scope.credential_id))) {
+        return Err("credential scope exceeds its independently selected profile".to_owned());
+    }
     let request_bound = request_authority.is_some();
-    let deadline = if native {
+    let deadline = if profile.has_approver_policy() {
         match original_deadline {
             Some(deadline) => Some(deadline),
             None if request_bound => return Err("native controlled credential fetch lost its original operation".to_owned()),
-            None => Some(opening.checked_add(native_service_remaining(state)?
-                .ok_or("native credential runtime lifetime absent")?.min(Duration::from_secs(30)))
-                .ok_or("native credential operation deadline overflow")?),
+            None => {
+                let remaining = if profile.is_native() {
+                    native_service_remaining(state)?.ok_or("native credential runtime lifetime absent")?
+                        .min(Duration::from_secs(30))
+                } else { Duration::from_secs(30) };
+                Some(opening.checked_add(remaining).ok_or("credential operation deadline overflow")?)
+            },
         }
     } else {
         if original_deadline.is_some() { return Err("native credential operation cannot use a standalone owner".to_owned()); }
@@ -21020,7 +21073,7 @@ fn fetch_scoped_credential_lease_on_deadline(
         CredentialLeasePurpose::DispatchSecret => {
             let generation = expected_generation
                 .ok_or("dispatch secret fetch requires an exact credential generation")?;
-            if generation.native != native || !credential_generation_valid_after(
+            if generation.profile != profile || !credential_generation_valid_after(
                 generation,
                 snapshot,
                 now_epoch_ms(),
@@ -21035,7 +21088,7 @@ fn fetch_scoped_credential_lease_on_deadline(
                 scope,
                 request_authority,
                 release_authorization,
-                native,
+                profile,
             )?;
             if let Some(authorization) = release_authorization {
                 validate_credential_lease_release_scope_profile(
@@ -21043,7 +21096,7 @@ fn fetch_scoped_credential_lease_on_deadline(
                     scope,
                     generation.version,
                     authorization,
-                    native,
+                    profile,
                 )?;
             }
         }
@@ -21069,7 +21122,7 @@ fn fetch_scoped_credential_lease_on_deadline(
     let rng = ring_rand::SystemRandom::new();
     check_credential_operation_deadline(deadline)?;
     let recipient_preparation = prepare_credential_lease_recipient(state, &snapshot.hash)?;
-    if recipient_preparation.is_native() != native {
+    if recipient_preparation.profile() != profile {
         return Err("credential recipient owner changed before the original request".to_owned());
     }
     check_credential_operation_deadline(deadline)?;
@@ -21081,13 +21134,7 @@ fn fetch_scoped_credential_lease_on_deadline(
     let recipient_nonce = general_purpose::URL_SAFE_NO_PAD.encode(&recipient_nonce_bytes);
     let requested_ttl_seconds = 5u64;
     let mut request_body = CredentialLeaseRequest {
-        api_version: match (native, request_bound) {
-            (true, true) => native_lease_profile::REQUEST_CONTROLLED,
-            (true, false) => native_lease_profile::REQUEST_UNCONTROLLED,
-            (false, true) => "serverware.credentialLeaseRequest/v4",
-            (false, false) => "serverware.credentialLeaseRequest/v3",
-        }
-        .to_string(),
+        api_version: native_lease_profile::request_version(request_bound, profile).to_string(),
         purpose,
         principal_id: scope.principal_id.clone(),
         route_id: scope.route_id.clone(),
@@ -21106,7 +21153,7 @@ fn fetch_scoped_credential_lease_on_deadline(
         max_ttl_seconds: requested_ttl_seconds,
         recipient_attestation: None,
     };
-    let request_binding_sha256 = credential_lease_request_binding_sha256_profile(&request_body, native)?;
+    let request_binding_sha256 = credential_lease_request_binding_sha256_profile(&request_body, profile)?;
     let request_authority_sha256 =
         request_authority.map(credential_lease_request_authority_sha256);
     let recipient_private_key = match recipient_preparation {
@@ -21117,12 +21164,18 @@ fn fetch_scoped_credential_lease_on_deadline(
             let MitmAuthority::Native(identity) = &mut *authority else {
                 return Err("native recipient cannot switch to a standalone authority".to_owned());
             };
+            if pending.profile() != profile || profile != ReleaseProfile::Native {
+                return Err("native pending recipient profile mismatch".to_owned());
+            }
             let runtime_deadline = identity.deadline();
             identity.verify_policy_commitment(native_lease_digest_bytes(&snapshot.hash)?, runtime_deadline)?;
             check_credential_operation_deadline(deadline)?;
             let quoted = identity.quote_lease_recipient(pending,
                 native_lease_digest_bytes(&request_binding_sha256)?, *recipient_nonce_bytes, runtime_deadline)?;
             check_credential_operation_deadline(deadline)?;
+            if quoted.profile() != profile {
+                return Err("native quoted recipient profile mismatch".to_owned());
+            }
             // Only original public evidence travels out. No local successful-
             // verification claims or replacement public key can be supplied.
             request_body.recipient_attestation = Some(json!({
@@ -21132,13 +21185,16 @@ fn fetch_scoped_credential_lease_on_deadline(
             }));
             LeaseRecipientOwner::Native(quoted)
         }
-        LeaseRecipientPreparation::Standalone(owner) => {
+        LeaseRecipientPreparation::Standalone(owner) | LeaseRecipientPreparation::PolicyAware(owner) => {
             request_body.recipient_attestation = if let Some(command) = state
                 .credential_lease_recipient_attestation_command
                 .as_deref()
             {
-                let attestation_request = json!({
-                    "apiVersion":if request_bound {
+                let mut attestation_request = json!({
+                    "apiVersion":if profile == ReleaseProfile::PolicyAware {
+                        if request_bound { "serverware.policyAwareRecipientAttestationRequest/v2" }
+                        else { "serverware.policyAwareRecipientAttestationRequest/v1" }
+                    } else if request_bound {
                         "serverware.recipientAttestationRequest/v4"
                     } else {
                         "serverware.recipientAttestationRequest/v3"
@@ -21155,16 +21211,33 @@ fn fetch_scoped_credential_lease_on_deadline(
                     "routeId":scope.route_id,
                     "credentialId":scope.credential_id,
                 });
-                Some(generate_recipient_attestation(command, &attestation_request)?)
+                if profile == ReleaseProfile::PolicyAware {
+                    attestation_request.as_object_mut().expect("attestation request object")
+                        .insert("leaseRequestApiVersion".to_owned(), Value::String(request_body.api_version.clone()));
+                }
+                check_credential_operation_deadline(deadline)?;
+                let evidence = if profile == ReleaseProfile::PolicyAware {
+                    let remaining = deadline.ok_or("policy-aware recipient lost its original clock")?
+                        .checked_duration_since(Instant::now()).ok_or("policy-aware recipient deadline expired")?;
+                    run_bounded_json_command_with_timeout(command, &attestation_request,
+                        "policy-aware credential recipient attestation",
+                        remaining.min(CREDENTIAL_LEASE_RECIPIENT_ATTESTATION_TIMEOUT))?
+                } else { generate_recipient_attestation(command, &attestation_request)? };
+                check_credential_operation_deadline(deadline)?;
+                Some(evidence)
             } else {
+                if profile == ReleaseProfile::PolicyAware {
+                    return Err("policy-aware recipient lost its configured attestation command".to_owned());
+                }
                 None
             };
-            LeaseRecipientOwner::Standalone(owner)
+            if profile == ReleaseProfile::PolicyAware { LeaseRecipientOwner::PolicyAware(owner) }
+            else { LeaseRecipientOwner::Standalone(owner) }
         }
     };
-    let request_wire = credential_lease_request_wire_value_profile(&request_body, native)?;
+    let request_wire = credential_lease_request_wire_value_profile(&request_body, profile)?;
     verify_native_credential_lease_scope(state, &snapshot.hash)?;
-    if native_credential_lease_profile(state, &snapshot.hash)? != native {
+    if credential_lease_profile(state, &snapshot.hash)? != profile {
         return Err("credential recipient runtime profile changed before send".to_owned());
     }
     let mut request = state
@@ -21177,9 +21250,12 @@ fn fetch_scoped_credential_lease_on_deadline(
         request = request.timeout(remaining.min(Duration::from_secs(3)));
     }
     if let Some(deadline) = deadline {
-        request = request.timeout(custody_deadline_remaining(deadline, "native credential request")?
-            .min(native_service_remaining(state)?.ok_or("native credential service lifetime absent")?)
-            .min(Duration::from_secs(3)));
+        let mut remaining = custody_deadline_remaining(deadline, "credential original request")?;
+        if profile.is_native() {
+            remaining = remaining.min(native_service_remaining(state)?
+                .ok_or("native credential service lifetime absent")?);
+        }
+        request = request.timeout(remaining.min(Duration::from_secs(3)));
     }
     let mut response = request
         .send()
@@ -21241,7 +21317,7 @@ fn fetch_scoped_credential_lease_on_deadline(
             scope,
             request_authority,
             release_authorization,
-            native,
+            profile,
         )?;
     }
     if let (CredentialLeaseMaterial::DispatchSecret(lease), Some(expected_generation)) =
@@ -21268,7 +21344,7 @@ fn fetch_scoped_credential_lease_on_deadline(
             );
         }
     }
-    if native_credential_lease_profile(state, &snapshot.hash)? != native {
+    if credential_lease_profile(state, &snapshot.hash)? != profile {
         return Err("credential recipient runtime profile changed".to_owned());
     }
     check_credential_operation_deadline(deadline)?;
@@ -21282,6 +21358,21 @@ fn run_bounded_json_command(command: &str, request: &Value, label: &str) -> Resu
         return Ok(json!({"vendor_tee":{"provider":"unit-test"}}));
     }
     run_bounded_json_command_with_timeout(command, request, label, Duration::from_secs(10))
+}
+
+fn run_bounded_json_command_on_deadline(
+    command: &str, request: &Value, label: &str, original_deadline: Option<Instant>,
+) -> Result<Value, String> {
+    let Some(deadline) = original_deadline else {
+        return run_bounded_json_command(command, request, label);
+    };
+    custody_deadline_remaining(deadline, label)?;
+    let argv = shlex::split(command).ok_or_else(|| format!("{label} command has invalid quoting"))?;
+    let (program, args) = argv.split_first().ok_or_else(|| format!("{label} command is empty"))?;
+    run_bounded_json_program_on_deadline(
+        Path::new(program), args, request, label, Duration::from_secs(10),
+        false, None, 65_536, Some(deadline),
+    )
 }
 
 fn run_pinned_bounded_json_command(
@@ -21369,6 +21460,24 @@ fn run_bounded_json_program_with_timeout(
     authenticated_executable_fd: Option<RawFd>,
     maximum_output_bytes: usize,
 ) -> Result<Value, String> {
+    run_bounded_json_program_on_deadline(
+        program, args, request, label, timeout, restricted_environment,
+        authenticated_executable_fd, maximum_output_bytes, None,
+    )
+}
+
+fn run_bounded_json_program_on_deadline(
+    program: &Path,
+    args: &[String],
+    request: &Value,
+    label: &str,
+    timeout: Duration,
+    restricted_environment: bool,
+    authenticated_executable_fd: Option<RawFd>,
+    maximum_output_bytes: usize,
+    original_deadline: Option<Instant>,
+) -> Result<Value, String> {
+    if let Some(deadline) = original_deadline { custody_deadline_remaining(deadline, label)?; }
     #[cfg(not(target_os = "linux"))]
     if authenticated_executable_fd.is_some() {
         return Err(format!(
@@ -21447,9 +21556,16 @@ fn run_bounded_json_program_with_timeout(
             });
         }
     }
+    if let Some(deadline) = original_deadline { custody_deadline_remaining(deadline, label)?; }
     let mut child = process
         .spawn()
         .map_err(|err| format!("start {label} command: {err}"))?;
+    if let Some(deadline) = original_deadline {
+        if let Err(error) = custody_deadline_remaining(deadline, label) {
+            terminate_child_process_group(&mut child);
+            return Err(error);
+        }
+    }
     let stdout = child
         .stdout
         .take()
@@ -21475,9 +21591,15 @@ fn run_bounded_json_program_with_timeout(
         .write_all(request_wire.as_bytes())
         .map_err(|_| format!("write {label} request"))?;
     drop(child_stdin);
-    let deadline = Instant::now() + timeout;
+    let deadline = original_deadline.map_or_else(
+        || Instant::now() + timeout, |original| original.min(Instant::now() + timeout),
+    );
     let mut output: Option<Zeroizing<Vec<u8>>> = None;
     let status = loop {
+        if original_deadline.is_some() && Instant::now() >= deadline {
+            terminate_child_process_group(&mut child);
+            return Err(format!("{label} command timed out"));
+        }
         if output.is_none() {
             match stdout_rx.try_recv() {
                 Ok(Ok(value)) => {
@@ -21526,6 +21648,7 @@ fn run_bounded_json_program_with_timeout(
     if !value.is_object() {
         return Err(format!("{label} output must be an object"));
     }
+    if let Some(deadline) = original_deadline { custody_deadline_remaining(deadline, label)?; }
     Ok(value.into_value())
 }
 
@@ -21557,7 +21680,7 @@ struct CredentialLeaseInfo {
 
 #[derive(Clone)]
 struct CredentialLeaseGeneration {
-    native: bool,
+    profile: ReleaseProfile,
     policy_hash: String,
     version: u64,
     metadata_sha256: String,
@@ -21583,7 +21706,7 @@ fn credential_generation_floor_matches(
 ) -> bool {
     generation.version > 0
         && generation.policy_hash == snapshot.hash
-        && generation.metadata_sha256 == credential_lease_metadata_sha256_profile(&generation.metadata, generation.native)
+        && generation.metadata_sha256 == credential_lease_metadata_sha256_profile(&generation.metadata, generation.profile)
 }
 
 fn credential_secret_lease_valid_after(
@@ -21596,7 +21719,7 @@ fn credential_secret_lease_valid_after(
         && lease.expires_at_epoch_ms > epoch_ms
         && lease.expires_at_monotonic > monotonic
         && !lease.secret.is_empty()
-        && lease.metadata_sha256 == credential_lease_metadata_sha256_profile(&lease.metadata, lease.native)
+        && lease.metadata_sha256 == credential_lease_metadata_sha256_profile(&lease.metadata, lease.profile)
         && match (
             lease.request_authority.as_ref(),
             lease.release_authorization.as_ref(),
@@ -21605,13 +21728,13 @@ fn credential_secret_lease_valid_after(
                 u128::from(authority.reservation_expires_at_epoch_ms) > epoch_ms
                     && lease.expires_at_epoch_ms
                         <= u128::from(authority.reservation_expires_at_epoch_ms)
-                    && validate_credential_lease_authority_pair_profile(authority, authorization, lease.native).is_ok()
+                    && validate_credential_lease_authority_pair_profile(authority, authorization, lease.profile).is_ok()
             }
             (Some(authority), None) => {
                 u128::from(authority.reservation_expires_at_epoch_ms) > epoch_ms
                     && lease.expires_at_epoch_ms
                         <= u128::from(authority.reservation_expires_at_epoch_ms)
-                    && validate_credential_lease_request_authority_profile(authority, lease.native).is_ok()
+                    && validate_credential_lease_request_authority_profile(authority, lease.profile).is_ok()
             }
             (None, None) => true,
             (None, Some(_)) => false,
@@ -21675,7 +21798,7 @@ fn peek_cached_credential_lease_info(
     snapshot: &Arc<Snapshot>,
     scope: &CredentialLeaseScope,
 ) -> Option<CredentialLeaseInfo> {
-    let native = native_credential_lease_profile(state, &snapshot.hash).ok()?;
+    let profile = credential_lease_profile(state, &snapshot.hash).ok()?;
     let now = Instant::now();
     let now_epoch_ms = now_epoch_ms();
     state
@@ -21684,7 +21807,7 @@ fn peek_cached_credential_lease_info(
         .expect("credential generation mutex poisoned")
         .get(scope)
         .filter(|generation| {
-            generation.native == native
+            generation.profile == profile
                 && credential_generation_valid_after(generation, snapshot, now_epoch_ms, now)
         })
         .map(|generation| CredentialLeaseInfo {
@@ -21701,7 +21824,7 @@ fn cache_scoped_credential_generation(
     scope: &CredentialLeaseScope,
     generation: CredentialLeaseGeneration,
 ) -> Result<(), String> {
-    if generation.native != native_credential_lease_profile(state, &snapshot.hash)? {
+    if generation.profile != credential_lease_profile(state, &snapshot.hash)? {
         return Err("credential generation owner profile changed before caching".to_owned());
     }
     validate_credential_generation_metadata(&generation.metadata)?;
@@ -21725,7 +21848,7 @@ fn cache_scoped_credential_generation(
         .lock()
         .expect("credential generation mutex poisoned");
     if let Some(current) = generations.get(scope) {
-        if generation.native != current.native || generation.version < current.version {
+        if generation.profile != current.profile || generation.version < current.version {
             return Err("credential lease version regression rejected".to_string());
         }
         if generation.version == current.version
@@ -21739,7 +21862,7 @@ fn cache_scoped_credential_generation(
     }
     leases.retain(|key, lease| {
         key.scope != *scope
-            || (lease.native == generation.native && lease.version == generation.version
+            || (lease.profile == generation.profile && lease.version == generation.version
                 && lease.metadata_sha256 == generation.metadata_sha256
                 && lease.metadata == generation.metadata)
     });
@@ -21753,7 +21876,7 @@ fn cache_scoped_credential_lease(
     scope: &CredentialLeaseScope,
     lease: SecretLease,
 ) -> Result<(), String> {
-    if lease.native != native_credential_lease_profile(state, &snapshot.hash)? {
+    if lease.profile != credential_lease_profile(state, &snapshot.hash)? {
         return Err("credential secret owner profile changed before caching".to_owned());
     }
     validate_credential_generation_metadata(&lease.metadata)?;
@@ -21762,10 +21885,10 @@ fn cache_scoped_credential_lease(
         lease.release_authorization.as_ref(),
     ) {
         (Some(authority), Some(authorization)) => {
-            validate_credential_lease_authority_pair_profile(authority, authorization, lease.native)?;
+            validate_credential_lease_authority_pair_profile(authority, authorization, lease.profile)?;
         }
         (Some(authority), None) => {
-            validate_credential_lease_request_authority_profile(authority, lease.native)?;
+            validate_credential_lease_request_authority_profile(authority, lease.profile)?;
         }
         (None, Some(_)) => {
             return Err(
@@ -21807,7 +21930,7 @@ fn cache_scoped_credential_lease(
         .expect("credential generation mutex poisoned");
     let cache_key = CredentialLeaseCacheKey::for_lease(&lease);
     if let Some(current) = leases.get(&cache_key) {
-        if lease.native != current.native || lease.version < current.version {
+        if lease.profile != current.profile || lease.version < current.version {
             return Err("credential lease version regression rejected".to_string());
         }
         if lease.version == current.version
@@ -21822,7 +21945,7 @@ fn cache_scoped_credential_lease(
         return Err("credential lease cache capacity exhausted".to_string());
     }
     if let Some(current) = generations.get(scope) {
-        if current.native != lease.native || !credential_generation_valid_after(
+        if current.profile != lease.profile || !credential_generation_valid_after(
             current,
             snapshot,
             validation_epoch_ms,
@@ -22074,7 +22197,7 @@ fn ensure_scoped_credential_lease_on_deadline(
     release_authorization: Option<&CredentialLeaseReleaseAuthorization>, deadline: Option<Instant>,
 ) -> Result<CredentialLeaseInfo, String> {
     check_credential_operation_deadline(deadline)?;
-    let native = native_credential_lease_profile(state, &snapshot.hash)?;
+    let profile = credential_lease_profile(state, &snapshot.hash)?;
     if !snapshot_is_active(state, snapshot) {
         return Err("policy snapshot was revoked before credential lease lookup".to_string());
     }
@@ -22083,9 +22206,9 @@ fn ensure_scoped_credential_lease_on_deadline(
         scope,
         request_authority,
         release_authorization,
-        native,
+        profile,
     )?;
-    let generation = if native && request_authority.is_some() {
+    let generation = if profile.has_approver_policy() && request_authority.is_some() {
         peek_cached_credential_lease_info(state, snapshot, scope)
             .ok_or("native controlled credential generation expired; no renewed allowance")?
     } else { ensure_scoped_credential_generation(state, snapshot, scope)? };
@@ -22095,7 +22218,7 @@ fn ensure_scoped_credential_lease_on_deadline(
             scope,
             generation.version,
             authorization,
-            native,
+            profile,
         )?;
     }
     mark_credential_lease_activity(state, scope);
@@ -22110,7 +22233,7 @@ fn ensure_scoped_credential_lease_on_deadline(
             .expect("credential lease mutex poisoned")
             .get(&cache_key)
             .filter(|lease| {
-                lease.native == native && lease.scope == *scope
+                lease.profile == profile && lease.scope == *scope
                     && credential_secret_lease_valid_after(lease, snapshot, now_epoch_ms, now)
                     && lease.version == generation.version
                     && lease.metadata_sha256 == generation.metadata_sha256
@@ -22124,7 +22247,7 @@ fn ensure_scoped_credential_lease_on_deadline(
         check_credential_operation_deadline(deadline)?;
         return Ok(info);
     }
-    if native && request_authority.is_some() && deadline.is_none() {
+    if profile.has_approver_policy() && request_authority.is_some() && deadline.is_none() {
         return Err("native controlled credential cache miss cannot renew its operation".to_owned());
     }
     refresh_scoped_credential_material_singleflight_on_deadline(
@@ -22145,7 +22268,7 @@ fn ensure_scoped_credential_lease_on_deadline(
             scope,
             generation.version,
             authorization,
-            native,
+            profile,
         )?;
     }
     let current_generation = peek_cached_credential_lease_info(state, snapshot, scope)
@@ -22165,7 +22288,7 @@ fn ensure_scoped_credential_lease_on_deadline(
         .expect("credential lease mutex poisoned")
         .get(&cache_key)
         .filter(|lease| {
-            lease.native == native && lease.scope == *scope
+            lease.profile == profile && lease.scope == *scope
                 && credential_secret_lease_valid_after(
                     lease,
                     snapshot,
@@ -22204,12 +22327,12 @@ fn credential_generation(
 fn decision_credential_lease_release_authorization(
     decision: &Value,
 ) -> Result<Option<CredentialLeaseReleaseAuthorization>, &'static str> {
-    decision_credential_lease_release_authorization_profile(decision, false)
+    decision_credential_lease_release_authorization_profile(decision, ReleaseProfile::Legacy)
 }
 
 fn decision_credential_lease_release_authorization_profile(
     decision: &Value,
-    native: bool,
+    profile: ReleaseProfile,
 ) -> Result<Option<CredentialLeaseReleaseAuthorization>, &'static str> {
     let jit_required = decision
         .pointer("/jit/required")
@@ -22238,7 +22361,7 @@ fn decision_credential_lease_release_authorization_profile(
     let authorization: CredentialLeaseReleaseAuthorization =
         serde_json::from_value(value.clone())
             .map_err(|_| "credential_release_authority_invalid")?;
-    validate_credential_lease_release_authorization_profile(&authorization, native)
+    validate_credential_lease_release_authorization_profile(&authorization, profile)
         .map_err(|_| "credential_release_authority_invalid")?;
     Ok(Some(authorization))
 }
@@ -22246,12 +22369,12 @@ fn decision_credential_lease_release_authorization_profile(
 fn decision_credential_lease_request_authority(
     decision: &Value,
 ) -> Result<Option<CredentialLeaseRequestAuthority>, &'static str> {
-    decision_credential_lease_request_authority_profile(decision, false)
+    decision_credential_lease_request_authority_profile(decision, ReleaseProfile::Legacy)
 }
 
 fn decision_credential_lease_request_authority_profile(
     decision: &Value,
-    native: bool,
+    profile: ReleaseProfile,
 ) -> Result<Option<CredentialLeaseRequestAuthority>, &'static str> {
     let Some(release) = decision
         .get("release_authorization")
@@ -22267,7 +22390,7 @@ fn decision_credential_lease_request_authority_profile(
     }
     let authority: CredentialLeaseRequestAuthority = serde_json::from_value(value.clone())
         .map_err(|_| "credential_request_authority_invalid")?;
-    validate_credential_lease_request_authority_profile(&authority, native)
+    validate_credential_lease_request_authority_profile(&authority, profile)
         .map_err(|_| "credential_request_authority_invalid")?;
     Ok(Some(authority))
 }
@@ -22276,13 +22399,13 @@ fn validate_decision_credential_lease_request_authority(
     decision: &Value,
     authority: Option<&CredentialLeaseRequestAuthority>,
 ) -> Result<(), &'static str> {
-    validate_decision_credential_lease_request_authority_profile(decision, authority, false)
+    validate_decision_credential_lease_request_authority_profile(decision, authority, ReleaseProfile::Legacy)
 }
 
 fn validate_decision_credential_lease_request_authority_profile(
     decision: &Value,
     authority: Option<&CredentialLeaseRequestAuthority>,
-    native: bool,
+    profile: ReleaseProfile,
 ) -> Result<(), &'static str> {
     let Some(authority) = authority else {
         return Ok(());
@@ -22294,8 +22417,8 @@ fn validate_decision_credential_lease_request_authority_profile(
         .get("release_authorization")
         .and_then(Value::as_object)
         .ok_or("credential_request_authority_invalid")?;
-    let canonical_request_digest = canonical_request_digest_profile(canonical_request, native);
-    let canonical_operation_digest = operation_digest_profile(canonical_request, native);
+    let canonical_request_digest = canonical_request_digest_profile(canonical_request, profile);
+    let canonical_operation_digest = operation_digest_profile(canonical_request, profile);
     if decision.get("attempt_id").and_then(Value::as_str)
         != Some(authority.attempt_id.as_str())
         || decision.get("flow_id").and_then(Value::as_str)
@@ -22327,7 +22450,7 @@ fn credential_lease_for_release(
 ) -> Result<SecretLease, &'static str> {
     // Acquire the real recipient owner before the snapshot/cache locks. Neither
     // serialized decision versions nor a cached material flag select a backend.
-    let native = native_credential_lease_profile(state, &snapshot.hash)
+    let profile = credential_lease_profile(state, &snapshot.hash)
         .map_err(|_| "credential_recipient_authority_unavailable")?;
     let active = state
         .snapshot
@@ -22353,19 +22476,19 @@ fn credential_lease_for_release(
     }
     let scope = CredentialLeaseScope::new(principal_id, route_id, credential_ref);
     validate_credential_lease_scope(snapshot, &scope).map_err(|_| "credential_scope_mismatch")?;
-    let request_authority = decision_credential_lease_request_authority_profile(decision, native)?;
+    let request_authority = decision_credential_lease_request_authority_profile(decision, profile)?;
     validate_decision_credential_lease_request_authority_profile(
         decision,
         request_authority.as_ref(),
-        native,
+        profile,
     )?;
-    let release_authorization = decision_credential_lease_release_authorization_profile(decision, native)?;
+    let release_authorization = decision_credential_lease_release_authorization_profile(decision, profile)?;
     validate_credential_dispatch_authorities_profile(
         snapshot,
         &scope,
         request_authority.as_ref(),
         release_authorization.as_ref(),
-        native,
+        profile,
     )
     .map_err(|_| "credential_request_authority_invalid")?;
     let cache_key = CredentialLeaseCacheKey::new_bound(
@@ -22386,7 +22509,7 @@ fn credential_lease_for_release(
     let Some(lease) = leases.get(&cache_key) else {
         return Err("credential_lease_missing");
     };
-    if lease.native != native
+    if lease.profile != profile
         || lease.scope != scope
         || !credential_secret_lease_valid_after(lease, snapshot, now_epoch_ms, now)
     {
@@ -22398,7 +22521,7 @@ fn credential_lease_for_release(
     let Some(generation) = generations.get(&scope) else {
         return Err("credential_generation_missing");
     };
-    if generation.native != native
+    if generation.profile != profile
         || !credential_generation_valid_after(generation, snapshot, now_epoch_ms, now)
         || generation.version != credential_version
         || lease.metadata_sha256 != generation.metadata_sha256
@@ -22416,7 +22539,7 @@ fn credential_lease_for_release(
 
 fn credential_lease_release_binding(lease: &SecretLease) -> CredentialLeaseReleaseBinding {
     CredentialLeaseReleaseBinding {
-        native: lease.native,
+        profile: lease.profile,
         scope: lease.scope.clone(),
         version: lease.version,
         secret_fingerprint: credential_secret_fingerprint(lease.secret.as_str()),
@@ -22448,7 +22571,7 @@ fn credential_lease_still_releasable(
             binding.release_authorization.as_ref(),
         ))
         .is_some_and(|lease| {
-            lease.native == binding.native
+            lease.profile == binding.profile
                 && lease.scope == binding.scope
                 && lease.version == binding.version
                 && credential_secret_lease_valid_after(
@@ -22545,9 +22668,9 @@ fn acquire_upstream_send_authority<'a>(
     snapshot: &Arc<Snapshot>,
     binding: Option<&CredentialLeaseReleaseBinding>,
 ) -> Result<UpstreamSendAuthority<'a>, &'static str> {
-    let native = native_credential_lease_profile(state, &snapshot.hash)
+    let profile = credential_lease_profile(state, &snapshot.hash)
         .map_err(|_| "credential_runtime_owner_changed_before_upstream_send")?;
-    if binding.is_some_and(|binding| binding.native != native) {
+    if binding.is_some_and(|binding| binding.profile != profile) {
         return Err("credential_runtime_profile_changed_before_upstream_send");
     }
     let dispatch = state.upstream_dispatch_authority.acquire_send();
@@ -22561,14 +22684,14 @@ fn acquire_upstream_send_authority<'a>(
     if binding
         .and_then(|binding| binding.release_authorization.as_ref())
         .is_some_and(|authorization| {
-            validate_credential_lease_release_authorization_profile(authorization, native).is_err()
+            validate_credential_lease_release_authorization_profile(authorization, profile).is_err()
         })
     {
         return Err("credential_release_authorization_expired_before_upstream_send");
     }
     if binding
         .and_then(|binding| binding.request_authority.as_ref())
-        .is_some_and(|authority| validate_credential_lease_request_authority_profile(authority, native).is_err())
+        .is_some_and(|authority| validate_credential_lease_request_authority_profile(authority, profile).is_err())
     {
         return Err("credential_request_authority_expired_before_upstream_send");
     }
@@ -22614,11 +22737,11 @@ fn acquire_upstream_send_authority<'a>(
             binding.release_authorization.as_ref(),
         ))
         .ok_or("credential_lease_changed_before_upstream_send")?;
-    if lease.native != native || lease.scope != binding.scope
+    if lease.profile != profile || lease.scope != binding.scope
         || lease.version != binding.version
         || lease.policy_hash != snapshot.hash
         || lease.secret.is_empty()
-        || lease.metadata_sha256 != credential_lease_metadata_sha256_profile(&lease.metadata, lease.native)
+        || lease.metadata_sha256 != credential_lease_metadata_sha256_profile(&lease.metadata, lease.profile)
     {
         return Err("credential_lease_changed_before_upstream_send");
     }
@@ -22630,7 +22753,7 @@ fn acquire_upstream_send_authority<'a>(
     let generation = generations
         .get(&binding.scope)
         .ok_or("credential_generation_changed_before_upstream_send")?;
-    if generation.native != native || generation.version != binding.version
+    if generation.profile != profile || generation.version != binding.version
         || !credential_generation_floor_matches(generation, snapshot)
         || generation.expires_at_epoch_ms <= validation_epoch_ms
         || generation.expires_at_monotonic <= validation_monotonic
@@ -22867,7 +22990,7 @@ where
         if binding.is_some_and(|binding| {
             binding.release_authorization.as_ref().is_some_and(|authorization| {
                 validate_credential_lease_release_authorization_profile(
-                    authorization, binding.native,
+                    authorization, binding.profile,
                 ).is_err()
             })
         })
@@ -24888,6 +25011,7 @@ fn consume_grant(
 fn release_authorization_operation_path(operation: &str) -> Result<&'static str, String> {
     match operation {
         "native-prepare" => Ok("/api/data-plane/release-authorizations/native-prepare"),
+        "policy-prepare" => Ok("/api/data-plane/release-authorizations/policy-prepare"),
         "reserve" => Ok(RELEASE_AUTHORIZATION_RESERVE_PATH),
         "dispatch" => Ok(RELEASE_AUTHORIZATION_DISPATCH_PATH),
         "complete" => Ok(RELEASE_AUTHORIZATION_COMPLETE_PATH),
@@ -24939,15 +25063,17 @@ fn post_release_authorization_http_on_deadline<F>(
 ) -> Result<VerifiedReleaseAuthorizationHttpResponse, String>
 where F: FnMut(),
 {
-    if let Some(deadline) = deadline { custody_deadline_remaining(deadline, "native release HTTP")?; }
+    let profile = state.response_proof_signer.release_profile();
+    if profile.has_approver_policy() != deadline.is_some() {
+        return Err("release HTTP lost its original profile deadline".to_owned());
+    }
+    if let Some(deadline) = deadline { custody_deadline_remaining(deadline, "release HTTP")?; }
     let url = release_authorization_url(state, operation)?;
     let token = state
         .release_authorization_token
         .as_deref()
         .ok_or("release authorization token is not configured")?;
-    let body = Zeroizing::new(if deadline.is_some() {
-        native_response_profile::canonical_ascii_bytes(payload)?
-    } else { canonical_json_ensure_ascii(payload).into_bytes() });
+    let body = Zeroizing::new(profile.canonical_ascii_bytes(payload)?);
     let single_attempt = operation == "complete"
         && payload.get("outcome").and_then(Value::as_str) == Some("not_forwarded");
     let attempts = if deadline.is_some() || single_attempt || operation == "reserve" {
@@ -24986,7 +25112,7 @@ where F: FnMut(),
         let status = response.status();
         let bytes = Zeroizing::new(read_bounded_control_plane_response_body(
             &mut response,
-            if operation == "native-prepare" && deadline.is_some() {
+            if matches!(operation, "native-prepare" | "policy-prepare") && deadline.is_some() {
                 MAX_NATIVE_RELEASE_PREPARATION_RESPONSE_BYTES
             } else { MAX_CONTROL_PLANE_RELEASE_AUTHORIZATION_RESPONSE_BYTES },
             &format!("release authorization {operation} response"),
@@ -25099,8 +25225,9 @@ fn post_dispatch_release_authorization(
     reservation: &ReleaseAuthorizationReservation,
     stage: &mut ReleaseAuthorizationStage,
 ) -> Result<(ReleaseAuthorizationResponse, VerifiedDispatchEvidence), String> {
-    check_native_release_profile(state, reservation.native.as_ref())?;
-    let native = reservation.native.is_some();
+    reservation.check_profile()?;
+    check_release_profile(state, reservation.preparation.as_ref())?;
+    let profile = reservation.profile;
     let operation = "dispatch";
     let url = release_authorization_url(state, operation)?;
     let parsed_url = Url::parse(&url)
@@ -25128,13 +25255,7 @@ fn post_dispatch_release_authorization(
         })
         .transpose()?;
     let payload = serde_json::to_value(ReleaseAuthorizationDispatchRequestBody {
-        api_version: match (native, reservation.durable_policy.is_some()) {
-            (true, true) => NATIVE_RELEASE_AUTHORIZATION_DISPATCH_V2,
-            (true, false) => NATIVE_RELEASE_AUTHORIZATION_DISPATCH_V1,
-            (false, true) => RELEASE_AUTHORIZATION_DISPATCH_V2,
-            (false, false) => RELEASE_AUTHORIZATION_DISPATCH_V1,
-        }
-        .to_string(),
+        api_version: profile.request_version(ReleaseOperation::Dispatch, reservation.durable_policy.is_some())?.to_string(),
         attempt_id: reservation.attempt_id.clone(),
         binding_digest: reservation.binding_digest.clone(),
         durable_policy,
@@ -25156,7 +25277,7 @@ fn post_dispatch_release_authorization(
             // coordinator observed and committed the dispatch transition.
             *stage = ReleaseAuthorizationStage::DispatchUncertain;
         },
-        reservation.native.as_ref().map(|native| native.deadline),
+        reservation.preparation.as_ref().map(|native| native.deadline),
     )?;
     let VerifiedReleaseAuthorizationHttpResponse {
         status,
@@ -25168,7 +25289,7 @@ fn post_dispatch_release_authorization(
     if !status.is_success() {
         return Err(format!("release authorization dispatch returned {status}"));
     }
-    let expected_response_version = release_response_version(native, reservation.durable_policy.is_some());
+    let expected_response_version = release_response_version(profile, reservation.durable_policy.is_some());
     let response =
         parse_dispatch_release_authorization_response(&response_body, expected_response_version)
             .map_err(|err| {
@@ -25199,10 +25320,8 @@ fn post_dispatch_release_authorization(
         );
     }
     let receipt = ControlPlaneAuthorizationReceipt {
-        api_version: if native { native_response_profile::NATIVE_RECEIPT }
-            else { CONTROL_PLANE_AUTHORIZATION_RECEIPT_API_VERSION },
-        kind: if native { native_response_profile::NATIVE_RECEIPT_KIND }
-            else { "ControlPlaneAuthorizationReceipt" },
+        api_version: profile.receipt_version(),
+        kind: profile.receipt_kind(),
         principal_id: String::new(),
         route_id: String::new(),
         release_authority: ResponseProofReleaseAuthority {
@@ -25241,7 +25360,7 @@ fn post_dispatch_release_authorization(
             signature: signed.signature,
         },
     };
-    check_native_release_profile(state, reservation.native.as_ref())?;
+    check_release_profile(state, reservation.preparation.as_ref())?;
     Ok((response, VerifiedDispatchEvidence { receipt }))
 }
 
@@ -26265,23 +26384,21 @@ fn expected_release_authorization_binding(
     ),
     String,
 > {
-    expected_release_authorization_binding_with_native(state, attempt_id, principal_id, route,
+    expected_release_authorization_binding_with_profile(state, attempt_id, principal_id, route,
         credential_ref, credential_version, policy_hash, request_digest, operation_digest,
         operation, req, canonical_request, require_jit_grant, None)
 }
 
-fn expected_release_authorization_binding_with_native(
+fn expected_release_authorization_binding_with_profile(
     state: &GateState, attempt_id: &str, principal_id: &str, route: &Route,
     credential_ref: Option<&str>, credential_version: u64, policy_hash: &str,
     request_digest: &str, operation_digest: &str, operation: &Value, req: &DecisionRequest,
     canonical_request: &Value, require_jit_grant: bool,
-    native: Option<&NativeReleasePreparation>,
+    preparation: Option<&ReleasePreparation>,
 ) -> Result<(String, Vec<ReleaseAuthorizationBindingQuota>,
     Option<ReleaseAuthorizationDurablePolicyBinding>), String> {
-    if state.response_proof_signer.native_profile() != native.is_some() {
-        return Err("release binding profile differs from the retained signer".to_owned());
-    }
-    if let Some(native) = native { native.check()?; }
+    check_release_profile(state, preparation)?;
+    let profile = state.response_proof_signer.release_profile();
     let expected_quotas = expected_shared_release_authorization_quotas(
         route,
         principal_id,
@@ -26301,7 +26418,7 @@ fn expected_release_authorization_binding_with_native(
         operation,
     )?;
     let binding = ReleaseAuthorizationBinding {
-        api_version: release_binding_version(native.is_some(), durable_policy.is_some()),
+        api_version: release_binding_version(profile, durable_policy.is_some()),
         attempt_id: attempt_id.to_string(),
         flow_id: attempt_id.to_string(),
         principal_id: principal_id.to_string(),
@@ -26313,14 +26430,13 @@ fn expected_release_authorization_binding_with_native(
         operation_digest: Some(operation_digest.to_string()),
         operation_context: operation.clone(),
         require_jit_grant,
-        approver_policy: native.map(|prepared| prepared.policy.clone()),
+        approver_policy: preparation.map(|prepared| prepared.policy.clone()),
         shared_quotas: expected_quotas.clone(),
         durable_policy: durable_policy.clone(),
     };
     let binding = serde_json::to_value(binding)
         .map_err(|err| format!("serialize release authorization binding: {err}"))?;
-    let encoded = if native.is_some() { native_response_profile::canonical_ascii_bytes(&binding)? }
-        else { canonical_json_ensure_ascii(&binding).into_bytes() };
+    let encoded = profile.canonical_ascii_bytes(&binding)?;
     if encoded.len() > MAX_RELEASE_AUTHORIZATION_CANONICAL_REQUEST_BYTES {
         return Err(format!(
             "release authorization binding exceeds {MAX_RELEASE_AUTHORIZATION_CANONICAL_REQUEST_BYTES} bytes"
@@ -27228,33 +27344,33 @@ where
     result
 }
 
-fn prepare_native_release_policy(
+fn prepare_release_policy(
     state: &GateState, snapshot: &Arc<Snapshot>, authentication: &AttestedResponseAuthenticationContext,
     attempt_id: &str, principal_id: &str, route: &Route, credential_ref: Option<&str>,
     credential_version: u64, policy_hash: &str, request_digest: &str, operation_digest: &str,
     operation: &Value, canonical_request: &Value,
     durable_policy: Option<&ReleaseAuthorizationDurablePolicyBinding>,
     require_jit: bool, deadline: Instant,
-) -> Result<NativeReleasePreparation, String> {
-    if !state.response_proof_signer.native_profile() || !snapshot_is_active(state, snapshot)
-        || !native_response_profile::valid_principal(principal_id) {
-        return Err("native release preparation requires its actual active signer/policy".to_owned());
+) -> Result<ReleasePreparation, String> {
+    let profile = state.response_proof_signer.release_profile();
+    if !profile.has_approver_policy() || !snapshot_is_active(state, snapshot)
+        || !(if profile.is_native() { native_response_profile::valid_principal(principal_id) }
+            else { valid_release_authorization_identity(Some(principal_id)) }) {
+        return Err("release preparation requires its actual active signer/policy".to_owned());
     }
     let mut payload = release_authorization_reserve_payload(attempt_id, principal_id, route,
         credential_ref, credential_version, policy_hash, request_digest, operation_digest,
         operation, canonical_request, durable_policy);
-    payload["apiVersion"] = json!(if durable_policy.is_some() {
-        "serverware.nativeReleaseAuthorizationPrepare/v2"
-    } else { "serverware.nativeReleaseAuthorizationPrepare/v1" });
+    payload["apiVersion"] = json!(profile.request_version(ReleaseOperation::Prepare, durable_policy.is_some())?);
     let verified = post_release_authorization_http_on_deadline(state, authentication,
-        "native-prepare", &payload, || {}, Some(deadline))?;
+        profile.prepare_operation().ok_or("preparation profile absent")?, &payload, || {}, Some(deadline))?;
     if verified.status != StatusCode::OK { return Err("native release preparation refused".to_owned()); }
     let value = strict_json_value_from_slice(&verified.body)
         .map_err(|_| "native release preparation JSON invalid")?;
     let object = value.as_object().ok_or("native release preparation is not an object")?;
     if !object_has_exact_fields(object, &["apiVersion", "principalId", "routeId", "policyHash",
         "requestDigest", "operationDigest", "approverPolicy", "approverPolicySha256"])
-        || value["apiVersion"] != "serverware.nativeReleaseAuthorizationPreparation/v1"
+        || value["apiVersion"].as_str() != profile.preparation_version()
         || value["principalId"] != principal_id || value["routeId"] != route.id
         || value["policyHash"] != policy_hash || value["requestDigest"] != request_digest
         || value["operationDigest"] != operation_digest {
@@ -27282,7 +27398,7 @@ fn prepare_native_release_policy(
     if value["approverPolicySha256"] != policy_sha256 || !snapshot_is_active(state, snapshot) {
         return Err("native release preparation digest or policy changed".to_owned());
     }
-    let prepared = NativeReleasePreparation { policy, policy_sha256,
+    let prepared = ReleasePreparation { profile, policy, policy_sha256,
         original: verified.body.to_vec(), deadline };
     prepared.check()?;
     Ok(prepared)
@@ -27311,34 +27427,31 @@ fn request_release_authorization<'a>(
     ),
     String,
 > {
-    let native_deadline = if state.response_proof_signer.native_profile() {
+    let profile = state.response_proof_signer.release_profile();
+    let operation_deadline = if profile.has_approver_policy() {
         // The service layer has no borrowed ingress stream deadline. This one
         // pre-preparation bound only clips the original native cohort, and is
         // never restarted by preparation, reservation or later transitions.
         let opening = Instant::now();
-        let remaining = native_service_remaining(state)?
-            .ok_or("native release service lifetime is absent")?;
+        let remaining = if profile.is_native() { native_service_remaining(state)?
+            .ok_or("native release service lifetime is absent")? } else { Duration::from_secs(30) };
         Some(opening.checked_add(remaining.min(Duration::from_secs(30)))
             .ok_or("native release deadline overflow")?)
     } else { None };
     if !canonical_request.is_object() {
         return Err("release authorization canonical request must be an object".to_string());
     }
-    let encoded_request_len = if native_deadline.is_some() {
-        native_response_profile::canonical_ascii_bytes(canonical_request)?.len()
-    } else {
-        canonical_json_ensure_ascii(canonical_request).len()
-    };
+    let encoded_request_len = profile.canonical_ascii_bytes(canonical_request)?.len();
     if encoded_request_len > MAX_RELEASE_AUTHORIZATION_CANONICAL_REQUEST_BYTES
     {
         return Err(format!(
             "release authorization canonical request exceeds {MAX_RELEASE_AUTHORIZATION_CANONICAL_REQUEST_BYTES} bytes"
         ));
     }
-    if canonical_request_digest_profile(canonical_request, native_deadline.is_some()) != request_digest {
+    if canonical_request_digest_profile(canonical_request, profile) != request_digest {
         return Err("release authorization canonical request digest mismatch".to_string());
     }
-    if operation_digest_profile(canonical_request, native_deadline.is_some()) != expected_operation_digest {
+    if operation_digest_profile(canonical_request, profile) != expected_operation_digest {
         return Err("release authorization canonical operation digest mismatch".to_string());
     }
     if canonical_request.get("operation") != Some(operation) {
@@ -27359,16 +27472,16 @@ fn request_release_authorization<'a>(
             snapshot,
             "release authorization",
         )?;
-    let native = if let Some(deadline) = native_deadline {
+    let preparation = if let Some(deadline) = operation_deadline {
         let durable = expected_durable_policy_binding(state, route, req, canonical_request,
             principal_id, credential_ref, credential_version, policy_hash, operation)?;
-        Some(prepare_native_release_policy(state, snapshot, &response_authentication,
+        Some(prepare_release_policy(state, snapshot, &response_authentication,
             attempt_id, principal_id, route, credential_ref, credential_version, policy_hash,
             request_digest, expected_operation_digest, operation, canonical_request,
             durable.as_ref(), require_jit_grant, deadline)?)
     } else { None };
     let (expected_binding_digest, expected_quotas, expected_durable_policy) =
-        expected_release_authorization_binding_with_native(
+        expected_release_authorization_binding_with_profile(
         state,
         attempt_id,
         principal_id,
@@ -27382,7 +27495,7 @@ fn request_release_authorization<'a>(
         req,
         canonical_request,
         require_jit_grant,
-        native.as_ref(),
+        preparation.as_ref(),
     )?;
     let mut payload = release_authorization_reserve_payload(
         attempt_id,
@@ -27397,18 +27510,17 @@ fn request_release_authorization<'a>(
         canonical_request,
         expected_durable_policy.as_ref(),
     );
-    if let Some(native) = native.as_ref() {
-        native.check()?;
-        payload["apiVersion"] = json!(if expected_durable_policy.is_some() {
-            NATIVE_RELEASE_AUTHORIZATION_RESERVE_V2
-        } else { NATIVE_RELEASE_AUTHORIZATION_RESERVE_V1 });
-        payload["approverPolicySha256"] = json!(native.policy_sha256);
+    if let Some(prepared) = preparation.as_ref() {
+        prepared.check()?;
+        payload["apiVersion"] = json!(profile.request_version(ReleaseOperation::Reserve, expected_durable_policy.is_some())?);
+        payload["approverPolicySha256"] = json!(prepared.policy_sha256);
     }
     let mut release_authorization = ReleaseAuthorizationGuard::new_authenticated(
         state,
         response_authentication.clone(),
         ReleaseAuthorizationReservation {
-            native: native.clone(),
+            profile,
+            preparation: preparation.clone(),
             attempt_id: attempt_id.to_string(),
             binding_digest: expected_binding_digest.clone(),
             principal_id: principal_id.to_string(),
@@ -27518,7 +27630,7 @@ fn request_release_authorization<'a>(
         "reserve",
         &payload,
         || {},
-        native_deadline,
+        operation_deadline,
     );
     let (terminal_state, result_commitment) = match response_result.as_ref() {
         Ok(response) => (
@@ -27547,7 +27659,7 @@ fn request_release_authorization<'a>(
     let response = response_result?;
     Ok((
         RequestedReleaseAuthorization {
-            native: native.is_some(),
+            profile,
             response,
             expected_binding_digest,
             expected_quotas,
@@ -27568,7 +27680,7 @@ fn validate_requested_release_authorization(
             requested.response.status
         ));
     }
-    let expected_response_version = release_response_version(requested.native,
+    let expected_response_version = release_response_version(requested.profile,
         requested.expected_durable_policy.is_some());
     let mut response = parse_release_authorization_response(
         &requested.response.body,
@@ -27810,7 +27922,7 @@ fn response_proof_authorization_binding(
     receipt: &ControlPlaneAuthorizationReceipt,
     reservation: &ReleaseAuthorizationReservation,
 ) -> Result<ReleaseAuthorizationBinding, String> {
-    if let Some(native) = reservation.native.as_ref() { native.check()?; }
+    reservation.check_profile()?;
     let flow_id = decision
         .get("flow_id")
         .and_then(Value::as_str)
@@ -27836,7 +27948,7 @@ fn response_proof_authorization_binding(
         MAX_CONTROL_PLANE_AUTHORIZATION_RECEIPT_BODY_BYTES,
     )?);
     let expected_response_version = release_response_version(
-        reservation.native.is_some(), reservation.durable_policy.is_some());
+        reservation.profile, reservation.durable_policy.is_some());
     let dispatch_response =
         parse_dispatch_release_authorization_response(&response_body, expected_response_version)
             .map_err(|_| "parse_release_authorization_binding_response".to_string())?;
@@ -27847,8 +27959,8 @@ fn response_proof_authorization_binding(
         .map(|quota| quota.binding.clone())
         .collect();
     Ok(ReleaseAuthorizationBinding {
-        api_version: release_binding_version(reservation.native.is_some(), reservation.durable_policy.is_some()),
-        approver_policy: reservation.native.as_ref().map(|native| native.policy.clone()),
+        api_version: release_binding_version(reservation.profile, reservation.durable_policy.is_some()),
+        approver_policy: reservation.preparation.as_ref().map(|native| native.policy.clone()),
         attempt_id: authority.attempt_id.clone(),
         flow_id: flow_id.to_string(),
         principal_id: principal_id.to_string(),
@@ -27878,11 +27990,11 @@ fn response_proof_authorization_context(
     stage: ReleaseAuthorizationStage,
     dispatch_observation: &ReleaseAuthorizationDispatchObservation,
 ) -> Result<ResponseProofAuthorizationContext, String> {
-    if let Some(native) = reservation.native.as_ref() { native.check()?; }
+    reservation.check_profile()?;
     let principal_id = decision
         .get("principal_id")
         .and_then(Value::as_str)
-        .filter(|value| if reservation.native.is_some() { native_response_profile::valid_principal(value) }
+        .filter(|value| if reservation.profile.is_native() { native_response_profile::valid_principal(value) }
             else { valid_release_authorization_identity(Some(value)) })
         .ok_or("response proof principal identity is missing or invalid")?
         .to_string();
@@ -27913,10 +28025,11 @@ fn response_proof_authorization_context(
         &route_id,
         &release_authority,
         &authorization_binding,
-        reservation.native.is_some(),
+        reservation.profile,
     )?;
     Ok(ResponseProofAuthorizationContext {
-        native: reservation.native.clone(),
+        profile: reservation.profile,
+        preparation: reservation.preparation.clone(),
         principal_id,
         route_id,
         release_authority,
@@ -27983,7 +28096,7 @@ impl<'a> ReleaseAuthorizationGuard<'a> {
     ) -> Result<(), String> {
         let request_authority = self.reservation.credential_lease_request_authority()?;
         validate_credential_lease_authority_pair_profile(&request_authority, release_authorization,
-            self.reservation.native.is_some())?;
+            self.reservation.profile)?;
         self.credential_lease_cleanup
             .arm_bound(scope, Some(&request_authority), Some(release_authorization))
     }
@@ -28001,7 +28114,7 @@ impl<'a> ReleaseAuthorizationGuard<'a> {
         }
         if let Some(authorization) = release_authorization {
             validate_credential_lease_authority_pair_profile(request_authority, authorization,
-                self.reservation.native.is_some())?;
+                self.reservation.profile)?;
         }
         self.credential_lease_cleanup
             .arm_bound(scope, Some(request_authority), release_authorization)
@@ -28011,7 +28124,8 @@ impl<'a> ReleaseAuthorizationGuard<'a> {
         &mut self,
         snapshot: &Snapshot,
     ) -> Result<ReleaseAuthorizationDispatchObservation, String> {
-        check_native_release_profile(self.state, self.reservation.native.as_ref())?;
+        self.reservation.check_profile()?;
+        check_release_profile(self.state, self.reservation.preparation.as_ref())?;
         if self.stage != ReleaseAuthorizationStage::Reserved {
             return Err("release authorization is not reserved".to_string());
         }
@@ -28144,7 +28258,8 @@ impl<'a> ReleaseAuthorizationGuard<'a> {
         outcome: &str,
         evidence: Option<&DurablePolicyCompletionEvidence>,
     ) -> Result<RetainedReleaseAuthorizationCompletion, String> {
-        check_native_release_profile(self.state, self.reservation.native.as_ref())?;
+        self.reservation.check_profile()?;
+        check_release_profile(self.state, self.reservation.preparation.as_ref())?;
         if !matches!(outcome, "forwarded" | "not_forwarded" | "unknown") {
             return Err("release authorization completion outcome is unsupported".to_string());
         }
@@ -28188,12 +28303,8 @@ impl<'a> ReleaseAuthorizationGuard<'a> {
             })
             .transpose()?;
         let mut payload = json!({
-            "apiVersion":match (self.reservation.native.is_some(), self.reservation.durable_policy.is_some()) {
-                (true, true) => NATIVE_RELEASE_AUTHORIZATION_COMPLETE_V2,
-                (true, false) => NATIVE_RELEASE_AUTHORIZATION_COMPLETE_V1,
-                (false, true) => RELEASE_AUTHORIZATION_COMPLETE_V2,
-                (false, false) => RELEASE_AUTHORIZATION_COMPLETE_V1,
-            },
+            "apiVersion":self.reservation.profile.request_version(ReleaseOperation::Complete,
+                self.reservation.durable_policy.is_some())?,
             "attemptId":self.reservation.attempt_id,
             "bindingDigest":self.reservation.binding_digest,
             "outcome":outcome,
@@ -28208,9 +28319,7 @@ impl<'a> ReleaseAuthorizationGuard<'a> {
                         .map_err(|err| format!("serialize durable policy completion: {err}"))?,
                 );
         }
-        let request_payload_digest = if self.reservation.native.is_some() {
-            native_policy_digest(&payload)?
-        } else { digest_json_ensure_ascii(&payload) };
+        let request_payload_digest = sha256_prefixed(&self.reservation.profile.canonical_ascii_bytes(&payload)?);
         Ok(RetainedReleaseAuthorizationCompletion {
             outcome: outcome.to_string(),
             evidence: evidence.cloned(),
@@ -28229,8 +28338,7 @@ impl<'a> ReleaseAuthorizationGuard<'a> {
             retained.evidence.as_ref(),
         )?;
         if retained.request_payload_digest
-            != if self.reservation.native.is_some() { native_policy_digest(&retained.request_payload)? }
-                else { digest_json_ensure_ascii(&retained.request_payload) }
+            != sha256_prefixed(&self.reservation.profile.canonical_ascii_bytes(&retained.request_payload)?)
         {
             return Err(
                 "retained release completion request payload digest mismatch".to_string(),
@@ -28256,7 +28364,7 @@ impl<'a> ReleaseAuthorizationGuard<'a> {
             .ok_or("release authorization has no retained completion attempt")?;
         self.validate_retained_completion(&retained)?;
         let expected_response_version = release_response_version(
-            self.reservation.native.is_some(), self.reservation.durable_policy.is_some());
+            self.reservation.profile, self.reservation.durable_policy.is_some());
         let response_authentication = self
             .response_authentication
             .as_ref()
@@ -28380,7 +28488,7 @@ impl<'a> ReleaseAuthorizationGuard<'a> {
             "complete",
             &retained.request_payload,
             expected_response_version,
-            self.reservation.native.as_ref().map(|native| native.deadline),
+            self.reservation.preparation.as_ref().map(|native| native.deadline),
         );
         let (effect_state, result_commitment) =
             match response_result.as_ref() {
@@ -28415,7 +28523,7 @@ impl<'a> ReleaseAuthorizationGuard<'a> {
             &retained.outcome,
             retained.evidence.as_ref(),
         )?;
-        check_native_release_profile(self.state, self.reservation.native.as_ref())?;
+        check_release_profile(self.state, self.reservation.preparation.as_ref())?;
         self.stage = ReleaseAuthorizationStage::Completed;
         self.terminal_releasable = Some(releasable);
         self.retained_completion = None;
@@ -28456,7 +28564,7 @@ impl<'a> ReleaseAuthorizationGuard<'a> {
         }
         match self.submit_retained_completion() {
             Ok(releasable) => Ok(releasable),
-            Err(error) if self.reservation.native.is_some() => Err(error),
+            Err(error) if self.reservation.preparation.is_some() => Err(error),
             Err(first_error) => self.submit_retained_completion().map_err(|recovery_error| {
                 format!(
                     "release authorization exact retained completion recovery failed: first={first_error}; recovery={recovery_error}"
@@ -28637,20 +28745,16 @@ fn canonical_request(
 
 // Native profile selection is supplied by the actual signer/recipient owner,
 // never inferred from JSON. Preserve the historical recipe for old originals.
-fn canonical_request_digest_profile(canonical: &Value, native: bool) -> String {
-    if native {
-        sha256_prefixed(&native_response_profile::canonical_ascii_bytes(canonical)
-            .expect("native canonical request serializes"))
-    } else {
-        digest_json_ensure_ascii(canonical)
-    }
+fn canonical_request_digest_profile(canonical: &Value, profile: ReleaseProfile) -> String {
+    sha256_prefixed(&profile.canonical_ascii_bytes(canonical)
+        .expect("canonical request serializes"))
 }
 
 fn operation_digest(canonical: &Value) -> String {
-    operation_digest_profile(canonical, false)
+    operation_digest_profile(canonical, ReleaseProfile::Legacy)
 }
 
-fn operation_digest_profile(canonical: &Value, native: bool) -> String {
+fn operation_digest_profile(canonical: &Value, profile: ReleaseProfile) -> String {
     canonical_request_digest_profile(&json!({
         "principal": canonical["principal"],
         "route_id": canonical["route_id"],
@@ -28659,7 +28763,7 @@ fn operation_digest_profile(canonical: &Value, native: bool) -> String {
         "policy_hash": canonical["policy_hash"],
         "request": canonical["request"],
         "operation": canonical["operation"],
-    }), native)
+    }), profile)
 }
 
 const CANONICAL_REQUEST_TOP_LEVEL_FIELDS: &[&str] = &[
@@ -34954,9 +35058,9 @@ fn decide_internal_with_mode_and_shadow<'a>(
         &snapshot.hash,
         &operation,
     );
-    let native = state.response_proof_signer.native_profile();
-    let request_digest = canonical_request_digest_profile(&canonical, native);
-    let operation_digest = operation_digest_profile(&canonical, native);
+    let profile = state.response_proof_signer.release_profile();
+    let request_digest = canonical_request_digest_profile(&canonical, profile);
+    let operation_digest = operation_digest_profile(&canonical, profile);
     let redacted_display = json!({
         "method": req.method.clone(),
         "url": provider_url.as_str(),
@@ -35288,7 +35392,8 @@ fn decide_internal_with_mode_and_shadow<'a>(
                     ReleaseAuthorizationReservation {
                         // Missing native preparation is not reconstructible from a response.
                         // The profile guard refuses cleanup rather than minting a new authority.
-                        native: None,
+                        profile: ReleaseProfile::Legacy,
+                        preparation: None,
                         attempt_id: release.attempt_id.clone(),
                         binding_digest: release.binding_digest.clone(),
                         principal_id: principal.id.clone(),
@@ -35326,7 +35431,7 @@ fn decide_internal_with_mode_and_shadow<'a>(
                 );
             }
         };
-        let credential_release_authorization = match if state.response_proof_signer.native_profile()
+        let credential_release_authorization = match if state.response_proof_signer.release_profile().has_approver_policy()
             && credential_scope.is_none()
         {
             // There is no credential lease to authorize. The native reservation,
@@ -35446,7 +35551,7 @@ fn decide_internal_with_mode_and_shadow<'a>(
                         scope,
                         credential_request_authority.as_ref(),
                         credential_release_authorization.as_ref(),
-                        release_authorization.reservation.native.as_ref().map(|native| native.deadline),
+                        release_authorization.reservation.preparation.as_ref().map(|native| native.deadline),
                     )
                 },
             ) {
@@ -36705,13 +36810,13 @@ fn allowed_decision_discard_headers(
     snapshot: &Snapshot,
     decision: &Value,
 ) -> Result<Vec<String>, String> {
-    allowed_decision_discard_headers_profile(snapshot, decision, false)
+    allowed_decision_discard_headers_profile(snapshot, decision, ReleaseProfile::Legacy)
 }
 
 fn allowed_decision_discard_headers_profile(
     snapshot: &Snapshot,
     decision: &Value,
-    native: bool,
+    profile: ReleaseProfile,
 ) -> Result<Vec<String>, String> {
     if decision.get("allowed").and_then(Value::as_bool) != Some(true) {
         return Err("discard headers require an allowed decision".to_string());
@@ -36804,8 +36909,8 @@ fn allowed_decision_discard_headers_profile(
         .get("operation_digest")
         .and_then(Value::as_str)
         .ok_or("allowed decision operation_digest missing or invalid")?;
-    if request_digest != canonical_request_digest_profile(canonical_request, native)
-        || operation_digest_value != operation_digest_profile(canonical_request, native)
+    if request_digest != canonical_request_digest_profile(canonical_request, profile)
+        || operation_digest_value != operation_digest_profile(canonical_request, profile)
     {
         return Err(
             "allowed decision canonical request or operation digest mismatch".to_string(),
@@ -37170,8 +37275,8 @@ fn active_credential_injection_binding(
         );
     }
     let canonical_value = Value::Object(canonical.clone());
-    let expected_request_digest = canonical_request_digest_profile(&canonical_value, lease.native);
-    let expected_operation_digest = operation_digest_profile(&canonical_value, lease.native);
+    let expected_request_digest = canonical_request_digest_profile(&canonical_value, lease.profile);
+    let expected_operation_digest = operation_digest_profile(&canonical_value, lease.profile);
     if decision.get("request_digest").and_then(Value::as_str)
         != Some(expected_request_digest.as_str())
         || decision.get("operation_digest").and_then(Value::as_str)
@@ -37182,7 +37287,7 @@ fn active_credential_injection_binding(
     validate_decision_credential_lease_request_authority_profile(
         decision,
         lease.request_authority.as_ref(),
-        lease.native,
+        lease.profile,
     )
     .map_err(|_| {
         "credential injection request authority differs from the canonical decision".to_string()
@@ -37376,7 +37481,7 @@ fn credential_lease_for_gmail_child(
         child_url,
         child_headers,
         authorization,
-        state.response_proof_signer.native_profile,
+        state.response_proof_signer.release_profile(),
     )?;
     credential_lease_for_release(
         state,
@@ -37408,7 +37513,7 @@ fn apply_gmail_child_bound_credential_injection(
         precredential_child_url,
         child_headers,
         authorization,
-        lease.native,
+        lease.profile,
     )?;
     let route = snapshot
         .routes
@@ -38078,7 +38183,7 @@ fn derive_gmail_metadata_child_authorization(
 ) -> Result<GmailMetadataChildAuthorization, String> {
     derive_gmail_metadata_child_authorization_profile(
         snapshot, decision, parent_url, child_request, child_ordinal,
-        fanout_count, max_fanout, false,
+        fanout_count, max_fanout, ReleaseProfile::Legacy,
     )
 }
 
@@ -38090,7 +38195,7 @@ fn derive_gmail_metadata_child_authorization_profile(
     child_ordinal: u64,
     fanout_count: u64,
     max_fanout: u64,
-    native: bool,
+    profile: ReleaseProfile,
 ) -> Result<GmailMetadataChildAuthorization, String> {
     if decision.get("allowed").and_then(Value::as_bool) != Some(true)
         || decision.get("authorizes_forwarding").and_then(Value::as_bool) != Some(true)
@@ -38130,8 +38235,8 @@ fn derive_gmail_metadata_child_authorization_profile(
         .get("operation")
         .cloned()
         .ok_or("Gmail child authorization parent operation is missing")?;
-    let parent_request_digest = canonical_request_digest_profile(&parent_request, native);
-    let parent_operation_digest = operation_digest_profile(&parent_request, native);
+    let parent_request_digest = canonical_request_digest_profile(&parent_request, profile);
+    let parent_operation_digest = operation_digest_profile(&parent_request, profile);
     if decision.get("request_digest").and_then(Value::as_str)
         != Some(parent_request_digest.as_str())
         || decision.get("operation_digest").and_then(Value::as_str)
@@ -38282,7 +38387,7 @@ fn validate_gmail_metadata_child_authorization(
     authorization: &GmailMetadataChildAuthorization,
 ) -> Result<(), String> {
     validate_gmail_metadata_child_authorization_profile(
-        snapshot, decision, parent_url, child_url, headers, authorization, false,
+        snapshot, decision, parent_url, child_url, headers, authorization, ReleaseProfile::Legacy,
     )
 }
 
@@ -38293,7 +38398,7 @@ fn validate_gmail_metadata_child_authorization_profile(
     child_url: &Url,
     headers: &HeaderMap,
     authorization: &GmailMetadataChildAuthorization,
-    native: bool,
+    profile: ReleaseProfile,
 ) -> Result<(), String> {
     let child_request = gmail_metadata_child_canonical_request(child_url, headers)?;
     let expected = derive_gmail_metadata_child_authorization_profile(
@@ -38304,7 +38409,7 @@ fn validate_gmail_metadata_child_authorization_profile(
         authorization.material.child_ordinal,
         authorization.material.fanout_count,
         authorization.material.max_fanout,
-        native,
+        profile,
     )?;
     if &expected != authorization {
         return Err("Gmail child authorization material or digest was mutated".to_string());
@@ -38630,7 +38735,7 @@ fn fetch_gmail_metadata_child(
         child_ordinal,
         fanout_count,
         config.max_messages,
-        state.response_proof_signer.native_profile,
+        state.response_proof_signer.release_profile(),
     ) {
         Ok(authorization) => authorization,
         Err(_) => {
@@ -45154,7 +45259,7 @@ fn forward_absolute_request_inner_with_prepared<'a>(
     let response_proof_requires_authority =
         response_proof_kind.is_some_and(|kind| kind != ResponseProofKind::Observation);
     let discard_headers = match allowed_decision_discard_headers_profile(
-        snapshot, &decision, state.response_proof_signer.native_profile,
+        snapshot, &decision, state.response_proof_signer.release_profile(),
     ) {
         Ok(headers) => headers,
         Err(_) => buffered!(json_status_response(
@@ -46132,7 +46237,7 @@ fn forward_absolute_streaming_request_to(
         .and_then(|value| value.get("plan"))
         .unwrap_or(&Value::Null);
     let discard_headers = match allowed_decision_discard_headers_profile(
-        snapshot, &decision, state.response_proof_signer.native_profile,
+        snapshot, &decision, state.response_proof_signer.release_profile(),
     ) {
         Ok(headers) => headers,
         Err(_) => write_buffered!(json_status_response(
@@ -46790,7 +46895,7 @@ fn forward_intercepted_streaming_request_to<R: Read + Write + TerminalDeadlineWr
         .and_then(|value| value.get("plan"))
         .unwrap_or(&Value::Null);
     let discard_headers = match allowed_decision_discard_headers_profile(
-        snapshot, &decision, state.response_proof_signer.native_profile,
+        snapshot, &decision, state.response_proof_signer.release_profile(),
     ) {
         Ok(headers) => headers,
         Err(_) => write_buffered!(json_status_response(
@@ -51950,6 +52055,7 @@ mod tests {
         let (signing_key, public_key_pem, key_id) =
             response_proof_signing_material().expect("test custody signer material");
         ResponseProofSigner::Custody(CustodyResponseProofSigner {
+            release_profile: ReleaseProfile::Legacy,
             transport: CustodySignerTransport::Unix {
                 socket_path: PathBuf::from("/unused/custody.sock"), expected_uid: 123,
             },
@@ -52439,6 +52545,7 @@ mod tests {
             }
         });
         let signer = ResponseProofSigner::Custody(CustodyResponseProofSigner {
+            release_profile: ReleaseProfile::Legacy,
             transport: CustodySignerTransport::Unix {
                 socket_path: sign_path.clone(), expected_uid: effective_uid,
             },
@@ -53081,7 +53188,7 @@ mod tests {
         metadata: BTreeMap<String, Value>,
     ) -> CredentialLeaseGeneration {
         CredentialLeaseGeneration {
-            native: false,
+            profile: ReleaseProfile::Legacy,
             policy_hash: snapshot.hash.clone(),
             version,
             metadata_sha256: credential_lease_metadata_sha256(&metadata),
@@ -53099,7 +53206,7 @@ mod tests {
         metadata: BTreeMap<String, Value>,
     ) -> SecretLease {
         SecretLease {
-            native: false,
+            profile: ReleaseProfile::Legacy,
             scope,
             version,
             secret: Zeroizing::new(secret.to_string()),
@@ -53132,7 +53239,8 @@ mod tests {
             "operation":operation_context.clone(),
         });
         ReleaseAuthorizationReservation {
-            native: None,
+            profile: ReleaseProfile::Legacy,
+            preparation: None,
             attempt_id: format!("sha256:{marker:064x}"),
             binding_digest: format!("sha256:{:064x}", marker + 10_000),
             principal_id: scope.principal_id.clone(),
@@ -53961,6 +54069,7 @@ mod tests {
         // SAFETY: geteuid has no preconditions.
         let effective_uid = unsafe { libc::geteuid() };
         let signer = ResponseProofSigner::Custody(CustodyResponseProofSigner {
+            release_profile: ReleaseProfile::Legacy,
             transport: CustodySignerTransport::Unix {
                 socket_path: socket_path.clone(), expected_uid: effective_uid,
             },
@@ -55807,7 +55916,8 @@ mod tests {
         )
         .expect("exact calendar reserve response");
         let reservation = ReleaseAuthorizationReservation {
-            native: None,
+            profile: ReleaseProfile::Legacy,
+            preparation: None,
             attempt_id: reserved.attempt_id.clone(),
             binding_digest: reserved.binding_digest.clone(),
             principal_id: "agent:test".to_string(),
@@ -56616,7 +56726,8 @@ mod tests {
     fn release_lifecycle_response_validation_rejects_cross_state_pairs() {
         let now_ms = u64::try_from(now_epoch_ms()).expect("current epoch fits u64");
         let reservation = ReleaseAuthorizationReservation {
-            native: None,
+            profile: ReleaseProfile::Legacy,
+            preparation: None,
             attempt_id: "attempt-test".to_string(),
             binding_digest: format!("sha256:{}", "a".repeat(64)),
             principal_id: "agent:test".to_string(),
@@ -56716,7 +56827,8 @@ mod tests {
     #[test]
     fn completion_validation_binds_authority_ids_for_every_terminal_result() {
         let reservation = ReleaseAuthorizationReservation {
-            native: None,
+            profile: ReleaseProfile::Legacy,
+            preparation: None,
             attempt_id: "attempt-test".to_string(),
             binding_digest: format!("sha256:{}", "a".repeat(64)),
             principal_id: "agent:test".to_string(),
@@ -57249,7 +57361,8 @@ mod tests {
         let mut guard = ReleaseAuthorizationGuard::new(
             &state,
             ReleaseAuthorizationReservation {
-                native: None,
+                profile: ReleaseProfile::Legacy,
+                preparation: None,
                 attempt_id: "attempt-test".to_string(),
                 binding_digest: format!("sha256:{}", "a".repeat(64)),
                 principal_id: "agent:test".to_string(),
@@ -57480,7 +57593,8 @@ mod tests {
             shadow_snapshot: None,
             response_authentication: Some(response_authentication),
             reservation: ReleaseAuthorizationReservation {
-                native: None,
+                profile: ReleaseProfile::Legacy,
+                preparation: None,
                 attempt_id: "attempt-test".to_string(),
                 binding_digest: format!("sha256:{}", "a".repeat(64)),
                 principal_id: "agent:test".to_string(),
@@ -57531,7 +57645,8 @@ mod tests {
             let mut guard = ReleaseAuthorizationGuard::new(
                 &state,
                 ReleaseAuthorizationReservation {
-                    native: None,
+                    profile: ReleaseProfile::Legacy,
+                    preparation: None,
                     attempt_id: "attempt-test".to_string(),
                     binding_digest: format!("sha256:{}", "a".repeat(64)),
                     principal_id: "agent:test".to_string(),
@@ -57618,7 +57733,8 @@ mod tests {
             shadow_snapshot: None,
             response_authentication: Some(response_authentication),
             reservation: ReleaseAuthorizationReservation {
-                native: None,
+                profile: ReleaseProfile::Legacy,
+                preparation: None,
                 attempt_id: "attempt-test".to_string(),
                 binding_digest: format!("sha256:{}", "a".repeat(64)),
                 principal_id: "agent:test".to_string(),
@@ -57712,7 +57828,8 @@ mod tests {
             shadow_snapshot: None,
             response_authentication: Some(response_authentication),
             reservation: ReleaseAuthorizationReservation {
-                native: None,
+                profile: ReleaseProfile::Legacy,
+                preparation: None,
                 attempt_id: "attempt-test".to_string(),
                 binding_digest: format!("sha256:{}", "a".repeat(64)),
                 principal_id: "agent:test".to_string(),
@@ -57846,7 +57963,8 @@ mod tests {
             shadow_snapshot: None,
             response_authentication: Some(response_authentication),
             reservation: ReleaseAuthorizationReservation {
-                native: None,
+                profile: ReleaseProfile::Legacy,
+                preparation: None,
                 attempt_id: "attempt-test".to_string(),
                 binding_digest: format!("sha256:{}", "a".repeat(64)),
                 principal_id: "agent:test".to_string(),
@@ -71640,7 +71758,8 @@ mod tests {
         let request_digest = format!("sha256:{}", "c".repeat(64));
         let operation_digest = format!("sha256:{}", "d".repeat(64));
         let reservation = ReleaseAuthorizationReservation {
-            native: None,
+            profile: ReleaseProfile::Legacy,
+            preparation: None,
             attempt_id: attempt_id.clone(),
             binding_digest: binding_digest.clone(),
             principal_id: "agent:test".to_string(),
@@ -71831,7 +71950,8 @@ mod tests {
             durable_policy: None,
         };
         let authorization_context = ResponseProofAuthorizationContext {
-            native: None,
+            profile: ReleaseProfile::Legacy,
+            preparation: None,
             principal_id: "agent:test".to_string(),
             route_id: "route:test".to_string(),
             release_authority,
@@ -75409,7 +75529,7 @@ mod tests {
         let mut state = test_gate_state(Arc::clone(&snapshot));
         state.server_instance_id = Some("test-instance".to_string());
         let binding = CredentialLeaseReleaseBinding {
-            native: false,
+            profile: ReleaseProfile::Legacy,
             scope: CredentialLeaseScope::new("agent:test", "route:test", "credential:test"),
             version: 7,
             secret_fingerprint: credential_secret_fingerprint("secret"),
@@ -75507,7 +75627,7 @@ mod tests {
             .expect("lease cache")
             .insert(CredentialLeaseCacheKey::new(&scope, None), lease);
         let binding = CredentialLeaseReleaseBinding {
-            native: false,
+            profile: ReleaseProfile::Legacy,
             scope,
             version: 7,
             secret_fingerprint: credential_secret_fingerprint("secret"),
@@ -78857,7 +78977,8 @@ mod tests {
         });
         let release_now_ms = u64::try_from(now_epoch_ms()).expect("current epoch");
         let reservation = ReleaseAuthorizationReservation {
-            native: None,
+            profile: ReleaseProfile::Legacy,
+            preparation: None,
             attempt_id: format!("sha256:{}", "a".repeat(64)),
             binding_digest: format!("sha256:{}", "b".repeat(64)),
             principal_id: "agent:test".to_string(),
@@ -81478,7 +81599,8 @@ mod tests {
 
         let outer_binding_digest = sha256_prefixed(b"durable-outer-binding");
         let outer_reservation = ReleaseAuthorizationReservation {
-            native: None,
+            profile: ReleaseProfile::Legacy,
+            preparation: None,
             attempt_id: attempt_id.clone(),
             binding_digest: outer_binding_digest.clone(),
             principal_id: "agent:test".to_string(),

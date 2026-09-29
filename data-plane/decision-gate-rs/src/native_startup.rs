@@ -141,6 +141,9 @@ pub(super) fn run(
 ) -> Result<(), String> {
     // This guard starts no tasks and grants no new interval. Runtime serving
     // later installs its own cancellation owner with this SAME absolute bound.
+    if env::var_os(RESPONSE_PROOF_RELEASE_PROFILE_ENV).is_some() {
+        return Err("ordinary response release profile cannot override native startup".to_owned());
+    }
     let startup = NativeRuntimeLifetimeV1::new(parameters.deadline_boottime_ns)?;
     if inputs.policy_shadow_generation_control.is_some()
         || inputs.response_observation_v2_client.is_some()

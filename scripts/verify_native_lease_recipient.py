@@ -22,6 +22,11 @@ echoes it in output; expectations v1 retains its old input/output contract. The
 evidence never selects a request profile, and neither profile falls back to the
 other. Only the native principal bound is widened; other native IDs retain the
 existing producer's 256-byte predicate.
+
+Independently pinned policyAwareCredentialRecipientExpectations/v1 selects a
+third ordinary policy-aware lease family. All its identities retain 256-byte
+bounds. It uses the same genuine role-2 original verifier, not native transport
+ownership, and accepts neither legacy nor native request labels as substitutes.
 """
 from __future__ import annotations
 
@@ -65,6 +70,10 @@ NATIVE_EXPECTATIONS_VERSION = "serverware.nativeCredentialRecipientExpectations/
 NATIVE_REQUEST_PROFILE = "serverware.nativeCredentialLeaseRequest"
 NATIVE_REQUEST_V1 = NATIVE_REQUEST_PROFILE + "/v1"
 NATIVE_REQUEST_V2 = NATIVE_REQUEST_PROFILE + "/v2"
+POLICY_AWARE_EXPECTATIONS_VERSION = "serverware.policyAwareCredentialRecipientExpectations/v1"
+POLICY_AWARE_REQUEST_PROFILE = "serverware.policyAwareCredentialLeaseRequest"
+POLICY_AWARE_REQUEST_V1 = POLICY_AWARE_REQUEST_PROFILE + "/v1"
+POLICY_AWARE_REQUEST_V2 = POLICY_AWARE_REQUEST_PROFILE + "/v2"
 TRUST_ROOTS_VERSION = "serverware.nativeCredentialRecipientTrustRoots/v1"
 BINDING_DOMAIN = b"serverware/enclave-runtime-key-binding/v1\0"
 MAX_INPUT_BYTES = 64 * 1024
@@ -143,13 +152,18 @@ def _expectations(document: Any, *, api_version: str = EXPECTATIONS_VERSION,
 def _recipient_expectations(document: Any) -> dict[str, Any]:
     # This document has already matched an independent CLI digest pin. Never
     # choose the profile from stdin, evidence or a copied verification result.
-    if isinstance(document, dict) and document.get("apiVersion") == NATIVE_EXPECTATIONS_VERSION:
+    profiles = {
+        NATIVE_EXPECTATIONS_VERSION: NATIVE_REQUEST_PROFILE,
+        POLICY_AWARE_EXPECTATIONS_VERSION: POLICY_AWARE_REQUEST_PROFILE,
+    }
+    version = document.get("apiVersion") if isinstance(document, dict) else None
+    if isinstance(version, str) and version in profiles:
         expected = _expectations(
-            document, api_version=NATIVE_EXPECTATIONS_VERSION,
+            document, api_version=version,
             extra_fields=frozenset({"leaseRequestProfile"}),
         )
-        require(expected["leaseRequestProfile"] == NATIVE_REQUEST_PROFILE,
-                "native lease request profile mismatch")
+        require(expected["leaseRequestProfile"] == profiles[version],
+                "independent lease request profile mismatch")
         return expected
     return _expectations(document)
 
@@ -206,20 +220,23 @@ def _verify_request(raw: bytes, expected: dict[str, Any],
     request = parse_json(raw, "native recipient verifier input")
     require(isinstance(request, dict), "native recipient verifier input must be an object")
     native = expected["apiVersion"] == NATIVE_EXPECTATIONS_VERSION
+    policy_aware = expected["apiVersion"] == POLICY_AWARE_EXPECTATIONS_VERSION
+    explicit_profile = native or policy_aware
     fields = set(SCOPE_FIELDS) | {"recipientAttestation"}
-    if native:
+    if explicit_profile:
         fields.add("leaseRequestApiVersion")
     has_authority = "requestAuthoritySha256" in request
     if has_authority:
         fields.add("requestAuthoritySha256")
     request = exact_keys(request, fields, "native recipient verifier input")
     require(request["purpose"] in ("generationMetadata", "dispatchSecret"), "unknown credential purpose")
-    if native:
+    if explicit_profile:
         version = request["leaseRequestApiVersion"]
-        require(version in (NATIVE_REQUEST_V1, NATIVE_REQUEST_V2),
-                "native lease request version mismatch")
-        require((version == NATIVE_REQUEST_V1 and not has_authority)
-                or (version == NATIVE_REQUEST_V2 and has_authority
+        unbound, bound = ((NATIVE_REQUEST_V1, NATIVE_REQUEST_V2) if native else
+                          (POLICY_AWARE_REQUEST_V1, POLICY_AWARE_REQUEST_V2))
+        require(version in (unbound, bound), "lease request version mismatch")
+        require((version == unbound and not has_authority)
+                or (version == bound and has_authority
                     and request["purpose"] == "dispatchSecret"),
                 "native lease request authority profile mismatch")
     if has_authority:
@@ -229,8 +246,8 @@ def _verify_request(raw: bytes, expected: dict[str, Any],
     for field in ("recipientKeyId", "policyHash", "dataPlaneBinaryDigest"):
         _digest_bytes(request[field], field)
     for field in ("principalId", "routeId", "credentialId"):
-        if native:
-            _native_identity(request[field], field, 1024 if field == "principalId" else 256)
+        if explicit_profile:
+            _native_identity(request[field], field, 1024 if native and field == "principalId" else 256)
         else:
             _text(request[field], field, 1024)
     require(request["policyHash"] == expected["policyHash"], "request policy does not match independent expectations")
@@ -270,7 +287,7 @@ def _verify_request(raw: bytes, expected: dict[str, Any],
             "verified native key identity mismatch")
     result = {"ok": True, "debug": False}
     result.update({field: request[field] for field in SCOPE_FIELDS})
-    if native:
+    if explicit_profile:
         result["leaseRequestApiVersion"] = request["leaseRequestApiVersion"]
     if has_authority:
         result["requestAuthoritySha256"] = request["requestAuthoritySha256"]

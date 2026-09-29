@@ -170,22 +170,28 @@ impl CustodySignerTransport {
     }
 
     pub(super) fn hello(&self, deadline: Instant) -> Result<CustodyResponseProofSigner, String> {
-        match self {
-            Self::Unix { socket_path, expected_uid } => custody_hello_once(socket_path, *expected_uid, deadline)
-                .map_err(|error| match error {
-                    CustodyHelloAttemptError::Retryable(error) | CustodyHelloAttemptError::Fatal(error) => error,
-                }),
-            Self::Native(owner) => {
-                let request_id = canonical_custody_request_id()?;
-                let request = CustodyRequest {
-                    api_version: CUSTODY_PROTOCOL_API_VERSION.to_owned(), request_id: request_id.clone(),
-                    boot_id: None, operation: CUSTODY_HELLO_OPERATION.to_owned(), params: json!({}),
-                };
-                let response = self.exchange(&request, deadline)?;
-                validate_custody_hello_response_for_transport(&response, &request_id,
-                    Self::Native(Arc::clone(owner)), deadline)
-            }
+        self.hello_profile(if self.is_native() { ReleaseProfile::Native } else { ReleaseProfile::Legacy }, deadline)
+    }
+
+    pub(super) fn hello_profile(&self, profile: ReleaseProfile, deadline: Instant)
+        -> Result<CustodyResponseProofSigner, String> {
+        if profile.is_native() != self.is_native() {
+            return Err("cold release profile differs from actual custody transport".to_owned());
         }
+        let request_id = canonical_custody_request_id()?;
+        let request = CustodyRequest {
+            api_version: CUSTODY_PROTOCOL_API_VERSION.to_owned(), request_id: request_id.clone(),
+            boot_id: None, operation: CUSTODY_HELLO_OPERATION.to_owned(), params: json!({}),
+        };
+        let response = self.exchange(&request, deadline)?;
+        let retained_transport = match self {
+            Self::Unix { socket_path, expected_uid } => Self::Unix {
+                socket_path: socket_path.clone(), expected_uid: *expected_uid,
+            },
+            Self::Native(owner) => Self::Native(Arc::clone(owner)),
+        };
+        validate_custody_hello_response_for_transport_profile(&response, &request_id,
+            retained_transport, deadline, profile)
     }
 }
 
@@ -194,6 +200,9 @@ impl CustodySignerTransport {
 /// Startup separately joins this owner to the actual retained TLS identity.
 pub(super) fn initialize_native_response_proof_signer(runtime: CustodyRuntime)
     -> Result<ResponseProofSigningMaterial, String> {
+    if env::var_os(RESPONSE_PROOF_RELEASE_PROFILE_ENV).is_some() {
+        return Err("ordinary response release profile cannot override native custody".to_owned());
+    }
     if !runtime.is_native() || runtime.native_quote().is_none() {
         return Err("native proof signer requires generated and quoted native custody".to_owned());
     }

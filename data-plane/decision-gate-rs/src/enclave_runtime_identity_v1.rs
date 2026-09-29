@@ -29,6 +29,7 @@ pub(crate) use enclave_bootstrap_enrollment_key_v1::GeneratedBootstrapEnrollment
 pub use enclave_response_proof_key_v1::{PendingResponseProofKeyV1, QuotedResponseProofKeyV1};
 pub use tls_authority_v1::{GeneratedMutualTlsV1, TlsAuthorityV1};
 use enclave_nsm_v1::NsmDeviceV1;
+use crate::release_profile_v1::ReleaseProfile;
 use rustls::ServerConfig;
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
@@ -119,6 +120,7 @@ pub struct QuotedCredentialRecipientV1 {
     recipient: CredentialRecipientV1,
     quote: RuntimeKeyQuoteV1,
     deadline: u64,
+    profile: ReleaseProfile,
 }
 
 /// Actual unquoted key, retained while the caller constructs its exact request.
@@ -128,9 +130,11 @@ pub struct PendingCredentialRecipientV1 {
     recipient: CredentialRecipientV1,
     owner_ca_sha256: [u8; 32],
     deadline: u64,
+    profile: ReleaseProfile,
 }
 
 impl PendingCredentialRecipientV1 {
+    pub fn profile(&self) -> ReleaseProfile { self.profile }
     pub fn public_key_bytes(&self) -> Result<[u8; 32], String> {
         live(self.deadline)?;
         let public = self.recipient.public_key_bytes()?;
@@ -141,6 +145,7 @@ impl PendingCredentialRecipientV1 {
 
 impl QuotedCredentialRecipientV1 {
     pub fn quote(&self) -> &RuntimeKeyQuoteV1 { &self.quote }
+    pub fn profile(&self) -> ReleaseProfile { self.profile }
 
     /// The existing authenticated lease/KDF must verify its complete envelope
     /// before using this secret. The caller also owns remote quote admission.
@@ -354,18 +359,28 @@ impl EnclaveRuntimeIdentityV1 {
 
     pub fn prepare_lease_recipient(&mut self, deadline: u64)
         -> Result<PendingCredentialRecipientV1, String> {
+        self.prepare_lease_recipient_profile(deadline, ReleaseProfile::Native)
+    }
+
+    /// Native key custody cannot stand in for independently selected ordinary
+    /// PolicyAware custody. Refuse that substitution before generating a key.
+    pub fn prepare_lease_recipient_profile(&mut self, deadline: u64, profile: ReleaseProfile)
+        -> Result<PendingCredentialRecipientV1, String> {
+        if profile != ReleaseProfile::Native {
+            return Err("native recipient requires the native lease profile".to_owned());
+        }
         let deadline = self.begin(deadline)?;
         let recipient = CredentialRecipientV1::generate()?;
         let owner_ca_sha256 = Sha256::digest(self.authority.certificate_der()).into();
         self.finish(deadline)?;
-        Ok(PendingCredentialRecipientV1 { recipient, owner_ca_sha256, deadline })
+        Ok(PendingCredentialRecipientV1 { recipient, owner_ca_sha256, deadline, profile })
     }
 
     pub fn quote_lease_recipient(&mut self, pending: PendingCredentialRecipientV1,
         request_binding: [u8; 32], nonce: [u8; 32],
         deadline: u64) -> Result<QuotedCredentialRecipientV1, String> {
         let deadline = self.begin(deadline.min(pending.deadline))?;
-        if request_binding == [0; 32] {
+        if request_binding == [0; 32] || pending.profile != ReleaseProfile::Native {
             return Err("native recipient requires an original request commitment".to_owned());
         }
         let actual_ca: [u8; 32] = Sha256::digest(self.authority.certificate_der()).into();
@@ -377,7 +392,7 @@ impl EnclaveRuntimeIdentityV1 {
         let user_data = self.binding(LEASE_RECIPIENT, &public_key, request_binding);
         let document = self.nsm.attest(&public_key, &nonce, &user_data, deadline)?;
         self.finish(deadline)?;
-        Ok(QuotedCredentialRecipientV1 { recipient, deadline,
+        Ok(QuotedCredentialRecipientV1 { recipient, deadline, profile: pending.profile,
             quote: RuntimeKeyQuoteV1 { document, user_data, public_key, nonce } })
     }
 

@@ -50,7 +50,7 @@ pub(super) struct NativeVerifierConfigV1 {
     pub(super) trust_roots_sha256: String,
 }
 
-struct HeldInput {
+pub(super) struct HeldInput {
     path: PathBuf,
     pin: String,
     file: File,
@@ -212,7 +212,7 @@ impl NativeResponseVerifierV1 {
 }
 
 impl HeldInput {
-    fn open(path: PathBuf, pin: String, maximum: usize, retain: bool, deadline: Instant)
+    pub(super) fn open(path: PathBuf, pin: String, maximum: usize, retain: bool, deadline: Instant)
         -> Result<(Self, Vec<u8>), String> {
         live(deadline)?;
         if !path.is_absolute() || path.as_os_str().len() > 4096 || !nonzero_digest(&pin) {
@@ -234,7 +234,11 @@ impl HeldInput {
             original: retain.then(|| bytes.clone()) }, bytes))
     }
 
-    fn verify(&self, deadline: Instant) -> Result<(), String> {
+    pub(super) fn protect_target(&self, target: &super::ResolvedOutputTarget) -> Result<(), String> {
+        super::proof_client_native_session_v1::reject_alias(target, &self.path, &self.chain, &self.metadata)
+    }
+
+    pub(super) fn verify(&self, deadline: Instant) -> Result<(), String> {
         live(deadline)?;
         let (_, chain, metadata) = super::open_trusted_input_path(
             &self.path, "native verifier retained input", false, self.maximum,
@@ -558,7 +562,7 @@ impl<'de> Deserialize<'de> for UniqueValue {
     }
 }
 
-fn strict_json(bytes: &[u8], maximum: usize, deadline: Instant) -> Result<Value, String> {
+pub(super) fn strict_json(bytes: &[u8], maximum: usize, deadline: Instant) -> Result<Value, String> {
     live(deadline)?;
     if bytes.is_empty() || bytes.len() > maximum { return Err("native verifier JSON exceeds byte bound".to_owned()); }
     let parsed: UniqueValue = serde_json::from_slice(bytes).map_err(|_| "native verifier JSON is not strict")?;

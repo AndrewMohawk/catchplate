@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/policy-aware-response-expectations.v1.schema.json",
+  "title": "Independently pinned policy-aware ordinary response expectations v1",
+  "description": "Closed nine-field protected input, bounded to 16 KiB and pinned by its exact original SHA-256 before contact. It selects ordinary PolicyAware, never Native, and creates no signature, attestation or authorization verdict. Runtime retains the actual file owner and original deadline and rejoins these pins to genuine response originals.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "statementProfile", "responseSigningKeyId", "controlPlaneResponseSigningKeyId", "policyDigest", "releaseDigest", "dataPlaneBinaryDigest", "serverInstanceId", "principalId"],
+  "properties": {
+    "apiVersion": {"const": "serverware.policyAwareResponseExpectations/v1"},
+    "statementProfile": {"const": "serverware.policyAwareResponseStatements/v1"},
+    "responseSigningKeyId": {"$ref": "#/$defs/nonzeroSha256"},
+    "controlPlaneResponseSigningKeyId": {"$ref": "#/$defs/nonzeroSha256"},
+    "policyDigest": {"$ref": "#/$defs/nonzeroSha256"},
+    "releaseDigest": {"$ref": "#/$defs/nonzeroSha256"},
+    "dataPlaneBinaryDigest": {"$ref": "#/$defs/nonzeroSha256"},
+    "serverInstanceId": {
+      "description": "Runtime requires valid UTF-8 of 1..2048 bytes, trim-stable with no Unicode Cc controls, exactly matching the independently configured expected instance.",
+      "type": "string", "minLength": 1, "maxLength": 2048,
+      "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+    },
+    "principalId": {
+      "description": "Runtime requires valid UTF-8 of 1..256 bytes, trim-stable with no Unicode Cc controls, exactly matching the independently configured expected principal. No native-wide identity allowance.",
+      "type": "string", "minLength": 1, "maxLength": 256,
+      "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+    }
+  },
+  "$defs": {
+    "nonzeroSha256": {
+      "type": "string", "minLength": 71, "maxLength": 71,
+      "pattern": "^sha256:(?!0{64}$)[0-9a-f]{64}$"
+    }
+  }
+}

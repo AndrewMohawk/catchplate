@@ -3685,6 +3685,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/native_principal_preflight_v1.rs \
 				data-plane/decision-gate-rs/src/response_principal_compatibility_v1.rs \
 				data-plane/decision-gate-rs/src/native_response_profile_v1.rs \
+				data-plane/decision-gate-rs/src/release_profile_v1.rs \
+				data-plane/decision-gate-rs/src/proof_client_policy_expectations_v1.rs \
 				data-plane/decision-gate-rs/src/native_approver_policy_v1.rs \
 				data-plane/decision-gate-rs/src/native_lease_profile_v1.rs \
 				serverware/release_authorization_profiles.py \
@@ -3735,6 +3737,23 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-response-capture.v2.schema.json \
 				schemas/native-response-attestation-expectations.v2.schema.json \
 				schemas/native-release-authorization-preparation.v1.schema.json \
+				schemas/policy-aware-credential-lease-envelope.v1.schema.json \
+				schemas/policy-aware-credential-lease-envelope.v2.schema.json \
+				schemas/policy-aware-credential-lease-release-authorization.v1.schema.json \
+				schemas/policy-aware-credential-lease-release-authorization.v2.schema.json \
+				schemas/policy-aware-credential-lease-request-authority.v1.schema.json \
+				schemas/policy-aware-credential-lease-request.v1.schema.json \
+				schemas/policy-aware-credential-lease-request.v2.schema.json \
+				schemas/policy-aware-credential-lease-set.v1.schema.json \
+				schemas/policy-aware-credential-lease-set.v2.schema.json \
+				schemas/policy-aware-credential-lease.common.schema.json \
+				schemas/policy-aware-credential-recipient-expectations.v1.schema.json \
+				schemas/policy-aware-recipient-attestation-request.v1.schema.json \
+				schemas/policy-aware-recipient-attestation-request.v2.schema.json \
+				schemas/policy-aware-release-authorization-preparation.v1.schema.json \
+				schemas/policy-aware-response-expectations.v1.schema.json \
+				schemas/policy-aware-response-statements.v1.schema.json \
+				schemas/policy-aware-response-artifacts.v1.schema.json \
 				schemas/native-credential-lease.common.schema.json \
 				schemas/native-credential-lease-request.v1.schema.json \
 				schemas/native-credential-lease-request.v2.schema.json \

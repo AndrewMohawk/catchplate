@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/policy-aware-release-authorization-preparation.v1.schema.json",
+  "title": "Policy-aware ordinary release authorization preparation v1",
+  "description": "Read-only preparation body authenticated by the unchanged responseSignature/v3 contract. An independently selected ordinary PolicyAware profile verifies the actual response, original request scope and deadline; this schema is not authority and does not imply native custody. approverPolicySha256 hashes compact sorted ensure_ascii=True JSON of approverPolicy, including null and escaped DEL. Null is permitted only for the actual non-JIT route. No new time allowance.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "principalId", "routeId", "policyHash", "requestDigest", "operationDigest", "approverPolicy", "approverPolicySha256"],
+  "properties": {
+    "apiVersion": {"const": "serverware.policyAwareReleaseAuthorizationPreparation/v1"},
+    "principalId": {"$ref": "#/$defs/identity"},
+    "routeId": {"$ref": "#/$defs/identity"},
+    "policyHash": {"$ref": "#/$defs/sha256"},
+    "requestDigest": {"$ref": "#/$defs/sha256"},
+    "operationDigest": {"$ref": "#/$defs/sha256"},
+    "approverPolicy": {
+      "anyOf": [{"type": "null"}, {"$ref": "#/$defs/normalizedApproverPolicy"}]
+    },
+    "approverPolicySha256": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {
+    "identity": {
+      "description": "Runtime additionally requires trim-stable valid UTF-8 of 1..256 bytes with no Unicode Cc controls. The PolicyAware profile does not widen ordinary identity bounds.",
+      "type": "string", "minLength": 1, "maxLength": 256,
+      "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"
+    },
+    "sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$", "minLength": 71, "maxLength": 71},
+    "normalizedApproverPolicy": {
+      "description": "Only the existing exact normalized policy shape is shared: eight top-level fields and twelve credentialPolicy fields, canonical escaped total <=64 KiB, sorted unique arrays and minimumTrustBundleSequence null or positive u64. This reference imports no native transport or quote authority.",
+      "$ref": "native-release-authorization-preparation.v1.schema.json#/$defs/normalizedApproverPolicy"
+    }
+  }
+}

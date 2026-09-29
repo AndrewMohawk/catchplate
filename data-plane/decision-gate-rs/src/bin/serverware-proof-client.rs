@@ -7,6 +7,7 @@ use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName};
 use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
 use serde_json::{json, Map, Value};
 use serverware_decision_gate::native_response_profile_v1 as native_profile;
+use serverware_decision_gate::release_profile_v1::{ReleaseProfile, ReleaseOperation, StatementKind};
 use serverware_decision_gate::{
     ControlPlaneAuthorizationReceipt, ProxyResponseStatement, ReleaseAuthority,
 };
@@ -38,6 +39,9 @@ mod proof_client_native_transport_v1;
 mod proof_client_native_ingress_v1;
 #[path = "../proof_client_native_io_v1.rs"]
 mod proof_client_native_io_v1;
+#[path = "../proof_client_policy_expectations_v1.rs"]
+mod proof_client_policy_expectations_v1;
+use proof_client_policy_expectations_v1::PolicyAwareExpectations;
 use proof_client_native_io_v1::CaptureIo;
 use proof_client_native_session_v1::NativeCaptureSessionV1;
 use proof_client_native_verifier_v1::NativeVerifierConfigV1;
@@ -97,6 +101,7 @@ struct Args {
     collector_key: PathBuf,
     verifier_key: Option<PathBuf>,
     native_verifier: Option<NativeVerifierConfigV1>,
+    policy_aware: Option<PolicyAwareExpectations>,
     native_ingress_configuration: Option<(PathBuf, String)>,
     control_plane_response_key: PathBuf,
     expected_server_instance_id: Option<String>,
@@ -113,6 +118,26 @@ struct Args {
 struct ProxyEndpoint {
     address: String,
     server_name: String,
+}
+
+impl Args {
+    fn ordinary_release_profile(&self) -> ReleaseProfile {
+        if self.policy_aware.is_some() { ReleaseProfile::PolicyAware } else { ReleaseProfile::Legacy }
+    }
+
+    fn check_policy_inputs(&self) -> Result<(), String> {
+        if let Some(owner) = &self.policy_aware { owner.check()?; }
+        Ok(())
+    }
+
+    fn require_policy_statement(&self, proof: &Value, field: &str,
+        key: &VerifyingKey, kind: StatementKind) -> Result<(), String> {
+        if let Some(owner) = &self.policy_aware {
+            owner.require_statement(proof.get(field).ok_or("policy-aware response statement is absent")?,
+                required_object(proof, "server_signature")?, key, kind)?;
+        }
+        Ok(())
+    }
 }
 
 enum ProxyTransport {
@@ -347,6 +372,7 @@ fn parse_args_from<I>(values: I) -> Result<Args, String>
 where
     I: IntoIterator<Item = String>,
 {
+    let opened_at = Instant::now();
     let mut stream = false;
     let mut observation = false;
     let mut proxy = None;
@@ -364,6 +390,7 @@ where
     let mut collector_key = None;
     let mut verifier_key = None;
     let mut native_options = BTreeMap::new();
+    let mut policy_options = BTreeMap::new();
     let mut native_ingress_options = BTreeMap::new();
     let mut control_plane_response_key = None;
     let mut expected_server_instance_id = None;
@@ -421,6 +448,11 @@ where
             | "--native-expectations" | "--native-expectations-sha256"
             | "--native-trust-roots" | "--native-trust-roots-sha256" => {
                 if value.is_empty() || native_options.insert(flag.clone(), value).is_some() {
+                    return Err(format!("{flag} requires one nonempty value and cannot repeat"));
+                }
+            }
+            "--policy-aware-expectations" | "--policy-aware-expectations-sha256" => {
+                if value.is_empty() || policy_options.insert(flag.clone(), value).is_some() {
                     return Err(format!("{flag} requires one nonempty value and cannot repeat"));
                 }
             }
@@ -665,6 +697,18 @@ where
         }
         Some((path, pin))
     };
+    let policy_aware = if policy_options.is_empty() { None } else {
+        if policy_options.len() != 2 || native_verifier.is_some() || native_ingress_configuration.is_some() {
+            return Err("policy-aware expectations require both independent inputs and cannot select native verification/ingress".to_owned());
+        }
+        let (_, control_plane_key_id) = load_control_plane_response_key(control_plane_response_key.as_deref()
+            .ok_or("--control-plane-response-key is required")?)?;
+        Some(PolicyAwareExpectations::open(
+            PathBuf::from(policy_options.remove("--policy-aware-expectations").ok_or("policy-aware expectations path absent")?),
+            policy_options.remove("--policy-aware-expectations-sha256").ok_or("policy-aware expectations pin absent")?,
+            opened_at.checked_add(Duration::from_secs(timeout_seconds)).ok_or("policy-aware deadline overflow")?,
+            &expected_principal_id, expected_server_instance_id.as_deref(), &control_plane_key_id)?)
+    };
     Ok(Args {
         stream,
         observation,
@@ -683,6 +727,7 @@ where
         collector_key: collector_key.ok_or("--collector-key is required")?,
         verifier_key,
         native_verifier,
+        policy_aware,
         native_ingress_configuration,
         control_plane_response_key: control_plane_response_key
             .ok_or("--control-plane-response-key is required")?,
@@ -3580,6 +3625,16 @@ fn validated_control_plane_authorization_receipt_profile(
     control_plane_response_key: &VerifyingKey,
     native_principal: bool,
 ) -> Result<Value, String> {
+    validated_control_plane_authorization_receipt_representation(statement, control_plane_response_key,
+        if native_principal { ReleaseProfile::Native } else { ReleaseProfile::Legacy })
+}
+
+fn validated_control_plane_authorization_receipt_representation(
+    statement: &Value,
+    control_plane_response_key: &VerifyingKey,
+    profile: ReleaseProfile,
+) -> Result<Value, String> {
+    let native_principal = profile.is_native();
     const FIELDS: [&str; 7] = [
         "apiVersion",
         "kind",
@@ -3598,11 +3653,9 @@ fn validated_control_plane_authorization_receipt_profile(
         return Err("control-plane authorization receipt has unexpected fields".to_string());
     }
     if receipt.get("apiVersion").and_then(Value::as_str)
-        != Some(if native_principal { native_profile::NATIVE_RECEIPT }
-            else { "serverware.controlPlaneAuthorizationReceipt/v1" })
+        != Some(profile.receipt_version())
         || receipt.get("kind").and_then(Value::as_str)
-            != Some(if native_principal { native_profile::NATIVE_RECEIPT_KIND }
-                else { "ControlPlaneAuthorizationReceipt" })
+            != Some(profile.receipt_kind())
         || receipt.get("principal_id") != statement.get("principal_id")
         || receipt.get("route_id") != statement.get("route_id")
         || receipt.get("release_authority") != statement.get("release_authority")
@@ -3663,10 +3716,8 @@ fn validated_control_plane_authorization_receipt_profile(
         .and_then(Value::as_str)
         .ok_or("authorization receipt request body version is missing")?;
     let durable_request = request_object.get("durablePolicy");
-    let expected_dispatch_v1 = if native_principal { "serverware.nativeReleaseAuthorizationDispatch/v1" }
-        else { "serverware.releaseAuthorizationDispatch/v1" };
-    let expected_dispatch_v2 = if native_principal { "serverware.nativeReleaseAuthorizationDispatch/v2" }
-        else { "serverware.releaseAuthorizationDispatch/v2" };
+    let expected_dispatch_v1 = profile.request_version(ReleaseOperation::Dispatch, false)?;
+    let expected_dispatch_v2 = profile.request_version(ReleaseOperation::Dispatch, true)?;
     match request_version {
         version if version == expected_dispatch_v1 => {
             require_exact_fields(
@@ -3778,12 +3829,7 @@ fn validated_control_plane_authorization_receipt_profile(
         .and_then(Value::as_str)
         .ok_or("authorization receipt response body version is missing")?;
     let durable_profile = request_version == expected_dispatch_v2;
-    let expected_response_version = match (native_principal, durable_profile) {
-        (false, false) => "serverware.releaseAuthorization/v1",
-        (false, true) => "serverware.releaseAuthorization/v2",
-        (true, false) => "serverware.nativeReleaseAuthorizationResponse/v1",
-        (true, true) => "serverware.nativeReleaseAuthorizationResponse/v2",
-    };
+    let expected_response_version = profile.response_version(durable_profile);
     if response_version != expected_response_version {
         return Err("authorization receipt response protocol is inconsistent".to_string());
     }
@@ -4133,7 +4179,8 @@ fn validate_attested_dispatch_quotas(
             .ok_or("authorization receipt response quota is not an object")?;
         let window_kind = quota.get("windowKind").and_then(Value::as_str);
         let fields = match (response_version, window_kind) {
-            ("serverware.releaseAuthorization/v1" | "serverware.nativeReleaseAuthorizationResponse/v1", None) => &LEGACY_FIXED_FIELDS[..],
+            ("serverware.releaseAuthorization/v1" | "serverware.nativeReleaseAuthorizationResponse/v1"
+                | "serverware.policyAwareReleaseAuthorizationResponse/v1", None) => &LEGACY_FIXED_FIELDS[..],
             (_, Some("fixed")) => &CURRENT_FIXED_FIELDS[..],
             (_, Some("utcDay" | "utcIsoWeek" | "utcMonth")) => {
                 &CURRENT_CALENDAR_FIELDS[..]
@@ -4205,7 +4252,8 @@ fn validate_attested_dispatch_quotas(
                 .and_then(Value::as_u64)
                 .is_some_and(|window_end| window_end != calculated_end)
                 || matches!(response_version, "serverware.releaseAuthorization/v2"
-                    | "serverware.nativeReleaseAuthorizationResponse/v2")
+                    | "serverware.nativeReleaseAuthorizationResponse/v2"
+                    | "serverware.policyAwareReleaseAuthorizationResponse/v2")
                     && quota.get("windowEndEpochMs").and_then(Value::as_u64)
                         != Some(calculated_end)
                 || dispatch_started_at_epoch_ms < window_start
@@ -4741,6 +4789,13 @@ fn validate_streaming_authorization_binding(statement: &Value) -> Result<Value, 
 
 fn validate_streaming_authorization_binding_profile(statement: &Value,
     native_principal: bool) -> Result<Value, String> {
+    validate_streaming_authorization_binding_representation(statement,
+        if native_principal { ReleaseProfile::Native } else { ReleaseProfile::Legacy })
+}
+
+fn validate_streaming_authorization_binding_representation(statement: &Value,
+    profile: ReleaseProfile) -> Result<Value, String> {
+    let native_principal = profile.is_native();
     const VALIDATION_FIELDS: [&str; 3] = ["status", "binding_commitment", "binding_digest"];
     const BINDING_FIELDS: [&str; 12] = [
         "attempt_id",
@@ -4785,15 +4840,17 @@ fn validate_streaming_authorization_binding_profile(statement: &Value,
         .and_then(Value::as_object)
         .ok_or("streaming authorization binding commitment is not an object")?;
     let mut binding_fields = BINDING_FIELDS.to_vec();
-    if native_principal { binding_fields.extend_from_slice(&["apiVersion", "approver_policy_sha256"]); }
+    if profile.has_approver_policy() { binding_fields.extend_from_slice(&["apiVersion", "approver_policy_sha256"]); }
     require_exact_fields(binding, &binding_fields, "streaming authorization binding commitment")?;
     let binding_value = Value::Object(binding.clone());
-    if native_principal {
-        if required_string(&binding_value, "apiVersion")? != native_profile::NATIVE_COMMITMENT {
+    if profile.has_approver_policy() {
+        if Some(required_string(&binding_value, "apiVersion")?) != profile.commitment_version() {
             return Err("native authorization commitment profile differs".to_owned());
         }
         required_digest(&binding_value, "approver_policy_sha256")?;
-        if !required_string(&binding_value, "principal_id").is_ok_and(native_profile::valid_principal) {
+        if !required_string(&binding_value, "principal_id").is_ok_and(|value| if native_principal {
+            native_profile::valid_principal(value)
+        } else { valid_bounded_identity(value) }) {
             return Err("native authorization commitment principal is invalid".to_owned());
         }
     }
@@ -4940,6 +4997,15 @@ fn validate_streaming_statement_with_shared_contract_profile(
     control_plane_response_key: &VerifyingKey,
     native_principal: bool,
 ) -> Result<(), String> {
+    validate_streaming_statement_with_shared_contract_representation(statement, control_plane_response_key,
+        if native_principal { ReleaseProfile::Native } else { ReleaseProfile::Legacy })
+}
+
+fn validate_streaming_statement_with_shared_contract_representation(
+    statement: &Value,
+    control_plane_response_key: &VerifyingKey,
+    profile: ReleaseProfile,
+) -> Result<(), String> {
     const STATEMENT_FIELDS: [&str; 20] = [
         "apiVersion",
         "issued_at_unix",
@@ -4971,17 +5037,14 @@ fn validate_streaming_statement_with_shared_contract_profile(
         "streaming server response statement",
     )?;
     if statement.get("apiVersion").and_then(Value::as_str)
-        != Some(if native_principal { native_profile::NATIVE_STREAMING }
-            else { "serverware.streamingResponseStatement/v1" })
+        != Some(profile.statement(StatementKind::Streaming))
     {
         return Err("streaming server response statement has the wrong version".to_string());
     }
 
-    let authorization_binding = if native_principal {
-        validate_streaming_authorization_binding_profile(statement, true)?
-    } else { validate_streaming_authorization_binding(statement)? };
-    let receipt = validated_control_plane_authorization_receipt_profile(
-        statement, control_plane_response_key, native_principal)?;
+    let authorization_binding = validate_streaming_authorization_binding_representation(statement, profile)?;
+    let receipt = validated_control_plane_authorization_receipt_representation(
+        statement, control_plane_response_key, profile)?;
     validate_streaming_receipt_quotas_against_binding(&receipt, &authorization_binding)?;
     let receipt_digest = sha256_prefixed(canonical_json(&receipt).as_bytes());
     if statement
@@ -5060,9 +5123,7 @@ fn validate_streaming_statement_with_shared_contract_profile(
     let mut surrogate = statement.clone();
     // This copy is only a typed shape check. Signatures, digests and quotes
     // always use the unchanged original streaming statement above and below.
-    surrogate["apiVersion"] = Value::String(if native_principal {
-        native_profile::NATIVE_BUFFERED
-    } else { "serverware.proxyResponseStatement/v2" }.to_owned());
+    surrogate["apiVersion"] = Value::String(profile.statement(StatementKind::Buffered).to_owned());
     let surrogate_object = surrogate
         .as_object_mut()
         .ok_or("streaming statement is not an object")?;
@@ -5144,6 +5205,30 @@ fn verify_vendor_tee_for_mode(
     max_age_seconds: u64,
     streaming: bool,
 ) -> Result<&'static str, String> {
+    verify_vendor_tee_for_mode_representation(
+        proof, statement, nonce_bytes, verifier_key_path, control_plane_response_key,
+        expected_server_instance_id, max_age_seconds, streaming, ReleaseProfile::Legacy,
+    )
+}
+
+fn verify_vendor_tee_for_mode_representation(
+    proof: &Value,
+    statement: &Value,
+    nonce_bytes: &[u8],
+    verifier_key_path: Option<&Path>,
+    control_plane_response_key: &VerifyingKey,
+    expected_server_instance_id: Option<&str>,
+    max_age_seconds: u64,
+    streaming: bool,
+    profile: ReleaseProfile,
+) -> Result<&'static str, String> {
+    if profile == ReleaseProfile::Native {
+        return Err("native response proof cannot use the ordinary vendor verifier".to_owned());
+    }
+    let kind = if streaming { StatementKind::Streaming } else { StatementKind::Buffered };
+    if required_string(statement, "apiVersion")? != profile.statement(kind) {
+        return Err("vendor response statement differs from the independently selected profile".to_owned());
+    }
     let vendor = required_object(proof, "vendor_tee")?;
     let vendor_value = Value::Object(vendor.clone());
     let platform = required_string(&vendor_value, "platform")?;
@@ -5309,9 +5394,10 @@ fn verify_vendor_tee_for_mode(
     )?;
     let response_value = Value::Object(response.clone());
     let release_authority = validated_release_authority(statement)?;
-    let control_plane_authorization_receipt = validated_control_plane_authorization_receipt(
+    let control_plane_authorization_receipt = validated_control_plane_authorization_receipt_representation(
         statement,
         control_plane_response_key,
+        profile,
     )?;
     let control_plane_authorization_receipt_sha256 =
         sha256_prefixed(canonical_json(&control_plane_authorization_receipt).as_bytes());
@@ -5339,7 +5425,7 @@ fn verify_vendor_tee_for_mode(
             .get("selected_raw_policy_headers_b64")
             .ok_or("streaming upstream response raw headers are missing")?;
         json!({
-            "streaming_response_statement_api_version":"serverware.streamingResponseStatement/v1",
+            "streaming_response_statement_api_version":profile.statement(StatementKind::Streaming),
             "streaming_response_statement_sha256":statement_digest,
             "issued_at_unix":issued_at,
             "client_nonce_sha256":sha256_prefixed(nonce_bytes),
@@ -5378,7 +5464,7 @@ fn verify_vendor_tee_for_mode(
     } else {
         json!({
             "server_statement_sha256":statement_digest,
-            "server_statement_api_version":"serverware.proxyResponseStatement/v2",
+            "server_statement_api_version":profile.statement(StatementKind::Buffered),
             "issued_at_unix":issued_at,
             "client_nonce_sha256":sha256_prefixed(nonce_bytes),
             "client_request_digest":required_digest(statement, "client_request_digest")?,
@@ -5556,6 +5642,16 @@ fn verify_runtime_proof(
     response: &HttpResponse,
     expectations: &RuntimeProofExpectations<'_>,
 ) -> Result<Value, String> {
+    verify_runtime_proof_representation(proof, response, expectations, ReleaseProfile::Legacy)
+}
+
+fn verify_runtime_proof_representation(
+    proof: &Value,
+    response: &HttpResponse,
+    expectations: &RuntimeProofExpectations<'_>,
+    profile: ReleaseProfile,
+) -> Result<Value, String> {
+    if profile.is_native() { return Err("ordinary runtime proof cannot select native verification".to_owned()); }
     if proof.get("apiVersion").and_then(Value::as_str)
         != Some("serverware.proxyResponseRuntimeProof/v2")
         || proof.get("kind").and_then(Value::as_str) != Some("ServerwareProxyResponseRuntimeProof")
@@ -5564,9 +5660,9 @@ fn verify_runtime_proof(
     }
     let statement = proof.get("server_statement").filter(|value| value.is_object())
         .ok_or("runtime proof is missing server_statement")?;
-    verify_buffered_capture(
+    verify_buffered_capture_representation(
         statement, required_string(proof, "server_statement_sha256")?,
-        required_object(proof, "server_signature")?, response, expectations,
+        required_object(proof, "server_signature")?, response, expectations, profile,
     )
 }
 
@@ -5588,6 +5684,19 @@ fn verify_buffered_capture_profile(
     expectations: &RuntimeProofExpectations<'_>,
     native_principal: bool,
 ) -> Result<Value, String> {
+    verify_buffered_capture_representation(statement, declared_statement_digest, signature, response, expectations,
+        if native_principal { ReleaseProfile::Native } else { ReleaseProfile::Legacy })
+}
+
+fn verify_buffered_capture_representation(
+    statement: &Value,
+    declared_statement_digest: &str,
+    signature: &Map<String, Value>,
+    response: &HttpResponse,
+    expectations: &RuntimeProofExpectations<'_>,
+    profile: ReleaseProfile,
+) -> Result<Value, String> {
+    let native_principal = profile.is_native();
     let nonce = expectations.nonce;
     let tls_exporter = expectations.tls_exporter;
     let peer_spiffe_id = expectations.peer_spiffe_id;
@@ -5596,8 +5705,7 @@ fn verify_buffered_capture_profile(
     let expected_principal_id = expectations.principal_id;
     let max_age_seconds = expectations.max_age_seconds;
     if statement.get("apiVersion").and_then(Value::as_str)
-        != Some(if native_principal { native_profile::NATIVE_BUFFERED }
-            else { "serverware.proxyResponseStatement/v2" })
+        != Some(profile.statement(StatementKind::Buffered))
     {
         return Err("server response statement has the wrong version".to_string());
     }
@@ -5667,10 +5775,10 @@ fn verify_buffered_capture_profile(
     required_digest(statement, "request_digest")?;
     required_digest(statement, "operation_digest")?;
     let release_authority = validated_release_authority(statement)?;
-    let control_plane_authorization_receipt = validated_control_plane_authorization_receipt_profile(
+    let control_plane_authorization_receipt = validated_control_plane_authorization_receipt_representation(
         statement,
         expectations.control_plane_response_key,
-        native_principal,
+        profile,
     )?;
     let upstream_response = validated_upstream_response(statement)?;
     required_digest(statement, "policy_digest")?;
@@ -5795,7 +5903,7 @@ fn verify_buffered_capture_profile(
         return Err("server response statement selected-header digest mismatch".to_string());
     }
     Ok(json!({
-        "apiVersion":"serverware.proxyResponseCapture/v2",
+        "apiVersion":if profile == ReleaseProfile::PolicyAware { "serverware.policyAwareProxyResponseCapture/v1" } else { "serverware.proxyResponseCapture/v2" },
         "environment":"production",
         "collection_mode":"external-client-capture",
         "captured_at_unix":now_unix(),
@@ -6244,6 +6352,16 @@ fn verify_stream_runtime_proof(
     response: &StreamResponse,
     expectations: &RuntimeProofExpectations<'_>,
 ) -> Result<Value, String> {
+    verify_stream_runtime_proof_representation(proof, response, expectations, ReleaseProfile::Legacy)
+}
+
+fn verify_stream_runtime_proof_representation(
+    proof: &Value,
+    response: &StreamResponse,
+    expectations: &RuntimeProofExpectations<'_>,
+    profile: ReleaseProfile,
+) -> Result<Value, String> {
+    if profile.is_native() { return Err("ordinary runtime proof cannot select native verification".to_owned()); }
     validate_stream_runtime_proof_shape(proof)?;
     if proof.get("apiVersion").and_then(Value::as_str)
         != Some("serverware.streamingResponseRuntimeProof/v1")
@@ -6256,9 +6374,9 @@ fn verify_stream_runtime_proof(
         .get("streaming_response_statement")
         .filter(|value| value.is_object())
         .ok_or("stream runtime proof is missing streaming_response_statement")?;
-    verify_stream_capture(
+    verify_stream_capture_representation(
         statement, required_digest(proof, "streaming_response_statement_sha256")?,
-        required_object(proof, "server_signature")?, response, expectations,
+        required_object(proof, "server_signature")?, response, expectations, profile,
     )
 }
 
@@ -6280,12 +6398,20 @@ fn verify_stream_capture_profile(
     expectations: &RuntimeProofExpectations<'_>,
     native_principal: bool,
 ) -> Result<Value, String> {
-    if native_principal {
-        validate_streaming_statement_with_shared_contract_profile(
-            statement, expectations.control_plane_response_key, true)?;
-    } else {
-        validate_streaming_statement_with_shared_contract(statement, expectations.control_plane_response_key)?;
-    }
+    verify_stream_capture_representation(statement, declared_statement_digest, signature, response, expectations,
+        if native_principal { ReleaseProfile::Native } else { ReleaseProfile::Legacy })
+}
+
+fn verify_stream_capture_representation(
+    statement: &Value,
+    declared_statement_digest: &str,
+    signature: &Map<String, Value>,
+    response: &StreamResponse,
+    expectations: &RuntimeProofExpectations<'_>,
+    profile: ReleaseProfile,
+) -> Result<Value, String> {
+    validate_streaming_statement_with_shared_contract_representation(
+        statement, expectations.control_plane_response_key, profile)?;
     let canonical_statement = canonical_json(statement);
     let statement_digest = sha256_prefixed(canonical_statement.as_bytes());
     if declared_statement_digest != statement_digest {
@@ -6348,11 +6474,11 @@ fn verify_stream_capture_profile(
     required_digest(statement, "request_digest")?;
     required_digest(statement, "operation_digest")?;
     let release_authority = validated_release_authority(statement)?;
-    let authorization_binding = validate_streaming_authorization_binding_profile(statement, native_principal)?;
-    let control_plane_authorization_receipt = validated_control_plane_authorization_receipt_profile(
+    let authorization_binding = validate_streaming_authorization_binding_representation(statement, profile)?;
+    let control_plane_authorization_receipt = validated_control_plane_authorization_receipt_representation(
         statement,
         expectations.control_plane_response_key,
-        native_principal,
+        profile,
     )?;
     let upstream_response = validated_streaming_upstream_response(statement)?;
     required_digest(statement, "policy_digest")?;
@@ -6447,7 +6573,7 @@ fn verify_stream_capture_profile(
     }
 
     Ok(json!({
-        "apiVersion":"serverware.streamingProxyResponseCapture/v1",
+        "apiVersion":if profile == ReleaseProfile::PolicyAware { "serverware.policyAwareStreamingProxyResponseCapture/v1" } else { "serverware.streamingProxyResponseCapture/v1" },
         "environment":"production",
         "collection_mode":"strict-incremental-stream-capture",
         "classification":"runtime-verified-complete-stream",
@@ -6556,11 +6682,16 @@ fn validate_observation_authorization_receipt(receipt: &Value) -> Result<(), Str
 
 fn validate_observation_authorization_receipt_profile(receipt: &Value,
     native_principal: bool) -> Result<(), String> {
+    validate_observation_authorization_receipt_representation(receipt,
+        if native_principal { ReleaseProfile::Native } else { ReleaseProfile::Legacy })
+}
+
+fn validate_observation_authorization_receipt_representation(receipt: &Value,
+    profile: ReleaseProfile) -> Result<(), String> {
+    let native_principal = profile.is_native();
     if receipt.get("apiVersion").and_then(Value::as_str)
-        != Some(if native_principal { native_profile::NATIVE_RECEIPT }
-            else { "serverware.controlPlaneAuthorizationReceipt/v1" })
-        || receipt.get("kind").and_then(Value::as_str) != Some(if native_principal {
-            native_profile::NATIVE_RECEIPT_KIND } else { "ControlPlaneAuthorizationReceipt" })
+        != Some(profile.receipt_version())
+        || receipt.get("kind").and_then(Value::as_str) != Some(profile.receipt_kind())
     {
         return Err("observation authorization receipt has the wrong type".to_string());
     }
@@ -6637,6 +6768,16 @@ fn validate_observation_state_invariants_profile(
     control_plane_response_key: &VerifyingKey,
     native_principal: bool,
 ) -> Result<(), String> {
+    validate_observation_state_invariants_representation(statement, control_plane_response_key,
+        if native_principal { ReleaseProfile::Native } else { ReleaseProfile::Legacy })
+}
+
+fn validate_observation_state_invariants_representation(
+    statement: &Value,
+    control_plane_response_key: &VerifyingKey,
+    profile: ReleaseProfile,
+) -> Result<(), String> {
+    let native_principal = profile.is_native();
     let policy = required_object(statement, "policy")?;
     let policy_value = Value::Object(policy.clone());
     required_digest(&policy_value, "digest")?;
@@ -6892,9 +7033,7 @@ fn validate_observation_state_invariants_profile(
             .ok_or("dispatch evidence receipt is missing")?;
         serde_json::from_value::<ControlPlaneAuthorizationReceipt>(Value::Object(receipt.clone()))
             .map_err(|err| format!("observation authorization receipt schema is invalid: {err}"))?;
-        if native_principal {
-            validate_observation_authorization_receipt_profile(&Value::Object(receipt.clone()), true)?;
-        } else { validate_observation_authorization_receipt(&Value::Object(receipt.clone()))?; }
+        validate_observation_authorization_receipt_representation(&Value::Object(receipt.clone()), profile)?;
         let mut wrapper = statement.clone();
         // Receipt validation uses the shared policy_digest view. The original
         // observation signs policy.digest instead; never change signed bytes.
@@ -6910,10 +7049,10 @@ fn validate_observation_state_invariants_profile(
                 }
             }
         }
-        let validated_receipt = validated_control_plane_authorization_receipt_profile(
+        let validated_receipt = validated_control_plane_authorization_receipt_representation(
             &wrapper,
             control_plane_response_key,
-            native_principal,
+            profile,
         )?;
         if validated_receipt.get("release_authority") != Some(&validated_authority)
             || validated_receipt
@@ -6959,6 +7098,19 @@ fn observation_attested_claims(
     statement: &Value,
     nonce_bytes: &[u8],
 ) -> Result<Value, String> {
+    observation_attested_claims_representation(proof, statement, nonce_bytes, ReleaseProfile::Legacy)
+}
+
+fn observation_attested_claims_representation(
+    proof: &Value,
+    statement: &Value,
+    nonce_bytes: &[u8],
+    profile: ReleaseProfile,
+) -> Result<Value, String> {
+    if profile == ReleaseProfile::Native
+        || required_string(statement, "apiVersion")? != profile.statement(StatementKind::Observation) {
+        return Err("ordinary observation claims differ from the independently selected profile".to_owned());
+    }
     let statement_digest = sha256_prefixed(canonical_json(statement).as_bytes());
     let signature = required_object(proof, "server_signature")?;
     let signature_value = Value::Object(signature.clone());
@@ -6976,7 +7128,7 @@ fn observation_attested_claims(
         .unwrap_or(Value::Null);
     Ok(json!({
         "server_statement_sha256":statement_digest,
-        "server_statement_api_version":"serverware.responseObservationStatement/v1",
+        "server_statement_api_version":profile.statement(StatementKind::Observation),
         "issued_at_unix":required_u64(statement, "issued_at_unix")?,
         "observation_id":required_digest(statement, "observation_id")?,
         "client_nonce_sha256":sha256_prefixed(nonce_bytes),
@@ -7006,6 +7158,27 @@ fn verify_observation_vendor_tee(
     expected_server_instance_id: Option<&str>,
     max_age_seconds: u64,
 ) -> Result<&'static str, String> {
+    verify_observation_vendor_tee_representation(
+        proof, statement, nonce_bytes, verifier_key_path, expected_server_instance_id,
+        max_age_seconds, ReleaseProfile::Legacy,
+    )
+}
+
+fn verify_observation_vendor_tee_representation(
+    proof: &Value,
+    statement: &Value,
+    nonce_bytes: &[u8],
+    verifier_key_path: Option<&Path>,
+    expected_server_instance_id: Option<&str>,
+    max_age_seconds: u64,
+    profile: ReleaseProfile,
+) -> Result<&'static str, String> {
+    if profile == ReleaseProfile::Native {
+        return Err("native observation proof cannot use the ordinary vendor verifier".to_owned());
+    }
+    if required_string(statement, "apiVersion")? != profile.statement(StatementKind::Observation) {
+        return Err("vendor observation differs from the independently selected profile".to_owned());
+    }
     let vendor = required_object(proof, "vendor_tee")?;
     let vendor_value = Value::Object(vendor.clone());
     let platform = required_string(&vendor_value, "platform")?;
@@ -7038,7 +7211,7 @@ fn verify_observation_vendor_tee(
         .get("statement")
         .filter(|value| value.is_object())
         .ok_or("observation vendor verifier result is missing its statement")?;
-    let expected_claims = observation_attested_claims(proof, statement, nonce_bytes)?;
+    let expected_claims = observation_attested_claims_representation(proof, statement, nonce_bytes, profile)?;
     let statement_digest = sha256_prefixed(canonical_json(statement).as_bytes());
     let signing_key_id = required_object(proof, "server_signature")?
         .get("key_id")
@@ -7151,6 +7324,16 @@ fn verify_observation_runtime_proof(
     response: &StreamResponse,
     expectations: &ObservationExpectations<'_>,
 ) -> Result<Value, String> {
+    verify_observation_runtime_proof_representation(proof, response, expectations, ReleaseProfile::Legacy)
+}
+
+fn verify_observation_runtime_proof_representation(
+    proof: &Value,
+    response: &StreamResponse,
+    expectations: &ObservationExpectations<'_>,
+    profile: ReleaseProfile,
+) -> Result<Value, String> {
+    if profile.is_native() { return Err("ordinary runtime proof cannot select native verification".to_owned()); }
     validate_observation_runtime_proof_shape(proof)?;
     if proof.get("apiVersion").and_then(Value::as_str)
         != Some("serverware.responseObservationRuntimeProof/v1")
@@ -7163,9 +7346,9 @@ fn verify_observation_runtime_proof(
         .get("server_statement")
         .filter(|value| value.is_object())
         .ok_or("observation runtime proof is missing server_statement")?;
-    verify_observation_capture(
+    verify_observation_capture_representation(
         statement, required_digest(proof, "server_statement_sha256")?,
-        required_object(proof, "server_signature")?, response, expectations,
+        required_object(proof, "server_signature")?, response, expectations, profile,
     )
 }
 
@@ -7187,9 +7370,21 @@ fn verify_observation_capture_profile(
     expectations: &ObservationExpectations<'_>,
     native_principal: bool,
 ) -> Result<Value, String> {
+    verify_observation_capture_representation(statement, declared_statement_digest, signature, response, expectations,
+        if native_principal { ReleaseProfile::Native } else { ReleaseProfile::Legacy })
+}
+
+fn verify_observation_capture_representation(
+    statement: &Value,
+    declared_statement_digest: &str,
+    signature: &Map<String, Value>,
+    response: &StreamResponse,
+    expectations: &ObservationExpectations<'_>,
+    profile: ReleaseProfile,
+) -> Result<Value, String> {
+    let native_principal = profile.is_native();
     if statement.get("apiVersion").and_then(Value::as_str)
-        != Some(if native_principal { native_profile::NATIVE_OBSERVATION }
-            else { "serverware.responseObservationStatement/v1" })
+        != Some(profile.statement(StatementKind::Observation))
     {
         return Err("observation statement has the wrong version".to_string());
     }
@@ -7259,9 +7454,7 @@ fn verify_observation_capture_profile(
     if request != &expectations.request.statement_value() {
         return Err("observation statement request commitments mismatch".to_string());
     }
-    if native_principal {
-        validate_observation_state_invariants_profile(statement, expectations.control_plane_response_key, true)?;
-    } else { validate_observation_state_invariants(statement, expectations.control_plane_response_key)?; }
+    validate_observation_state_invariants_representation(statement, expectations.control_plane_response_key, profile)?;
 
     let headers_value = serde_json::to_value(&response.headers)
         .map_err(|err| format!("serialize observation response headers: {err}"))?;
@@ -7348,6 +7541,26 @@ fn verify_observation_capture_profile(
     }))
 }
 
+fn publish_ordinary_stream_outputs(staged_body: StagedBody, proof_target: ResolvedOutputTarget,
+    payload: &[u8], body_digest: &str, body_bytes: u64,
+    policy_aware: Option<&PolicyAwareExpectations>) -> Result<PathBuf, String> {
+    if let Some(owner) = policy_aware {
+        let body_target = ResolvedOutputTarget { display_path: staged_body.target.clone(),
+            name: staged_body.target_name.clone(), directory: Arc::clone(&staged_body.directory) };
+        let proof_original = ResolvedOutputTarget { display_path: proof_target.display_path.clone(),
+            name: proof_target.name.clone(), directory: Arc::clone(&proof_target.directory) };
+        owner.protect_target(&body_target)?;
+        owner.protect_target(&proof_original)?;
+        publish_verified_stream_outputs_resolved_with_precommit(staged_body, proof_target,
+            payload, body_digest, body_bytes, || {
+                owner.protect_target(&body_target)?;
+                owner.protect_target(&proof_original)
+            })
+    } else {
+        publish_verified_stream_outputs_resolved(staged_body, proof_target, payload, body_digest, body_bytes)
+    }
+}
+
 fn finish_stream_collection<T: Read + Write>(
     args: &Args,
     mut tls: StreamOwned<ClientConnection, T>,
@@ -7362,7 +7575,7 @@ fn finish_stream_collection<T: Read + Write>(
         nonce_bytes,
     } = pending;
     let proof_path = proof_target.display_path.clone();
-    let response = read_stream_response(&mut CaptureIo::new(&mut tls, native),
+    let response = read_stream_response(&mut CaptureIo::new_with_policy(&mut tls, native, args.policy_aware.as_ref()),
         staged_body.file_mut()?, args.max_stream_bytes)?;
     staged_body.sync()?;
     let exporter = tls
@@ -7407,7 +7620,8 @@ fn finish_stream_collection<T: Read + Write>(
     }
     let (control_plane_response_key, _) =
         load_control_plane_response_key(&args.control_plane_response_key)?;
-    let mut external_capture = verify_stream_runtime_proof(
+    args.require_policy_statement(&runtime_proof, "streaming_response_statement", &control_plane_response_key, StatementKind::Streaming)?;
+    let mut external_capture = verify_stream_runtime_proof_representation(
         &runtime_proof,
         &response,
         &RuntimeProofExpectations {
@@ -7419,13 +7633,13 @@ fn finish_stream_collection<T: Read + Write>(
             principal_id: &args.expected_principal_id,
             control_plane_response_key: &control_plane_response_key,
             max_age_seconds: args.max_age_seconds,
-        },
+        }, args.ordinary_release_profile(),
     )?;
     let statement = runtime_proof
         .get("streaming_response_statement")
         .filter(|value| value.is_object())
         .ok_or("stream runtime proof is missing streaming_response_statement")?;
-    let proof_environment = verify_vendor_tee_for_mode(
+    let proof_environment = verify_vendor_tee_for_mode_representation(
         &runtime_proof,
         statement,
         &nonce_bytes,
@@ -7433,7 +7647,7 @@ fn finish_stream_collection<T: Read + Write>(
         &control_plane_response_key,
         args.expected_server_instance_id.as_deref(),
         args.max_age_seconds,
-        true,
+        true, args.ordinary_release_profile(),
     )?;
     external_capture["environment"] = Value::String(proof_environment.to_string());
     external_capture["runtime_proof_sha256"] = Value::String(runtime_proof_digest);
@@ -7446,8 +7660,8 @@ fn finish_stream_collection<T: Read + Write>(
         .verify(capture_bytes.as_bytes(), &collector_signature)
         .map_err(|_| "collector signature self-verification failed".to_string())?;
     let proof = json!({
-        "apiVersion":"serverware.streamingProxyResponseProof/v1",
-        "kind":"ServerwareStreamingProxyResponseProof",
+        "apiVersion":if args.policy_aware.is_some() { "serverware.policyAwareStreamingProxyResponseProof/v1" } else { "serverware.streamingProxyResponseProof/v1" },
+        "kind":if args.policy_aware.is_some() { "ServerwarePolicyAwareStreamingProxyResponseProof" } else { "ServerwareStreamingProxyResponseProof" },
         "external_capture":external_capture,
         "collector_signature":{
             "algorithm":"Ed25519",
@@ -7466,12 +7680,12 @@ fn finish_stream_collection<T: Read + Write>(
         .map_err(|err| format!("serialize streaming proxy response proof: {err}"))?;
     let proof_payload = [output.as_slice(), b"\n"].concat();
     let proof_digest = sha256_prefixed(&proof_payload);
-    let body_path = publish_verified_stream_outputs_resolved(
+    let body_path = publish_ordinary_stream_outputs(
         staged_body,
         proof_target,
         &proof_payload,
         &response.body_digest,
-        response.body_bytes,
+        response.body_bytes, args.policy_aware.as_ref(),
     )?;
     Ok(json!({
         "ok":true,
@@ -7509,7 +7723,7 @@ fn finish_observation_collection<T: Read + Write>(
 ) -> Result<Value, String> {
     let proof_path = proof_target.display_path.clone();
     let response = read_observation_response(
-        &mut CaptureIo::new(&mut tls, native),
+        &mut CaptureIo::new_with_policy(&mut tls, native, args.policy_aware.as_ref()),
         staged_body.file_mut()?,
         args.max_observation_body_bytes,
     )
@@ -7574,7 +7788,8 @@ fn finish_observation_collection<T: Read + Write>(
     }
     let (control_plane_response_key, _) =
         load_control_plane_response_key(&args.control_plane_response_key)?;
-    let verified = verify_observation_runtime_proof(
+    args.require_policy_statement(&runtime_proof, "server_statement", &control_plane_response_key, StatementKind::Observation)?;
+    let verified = verify_observation_runtime_proof_representation(
         &runtime_proof,
         &response,
         &ObservationExpectations {
@@ -7588,24 +7803,24 @@ fn finish_observation_collection<T: Read + Write>(
             control_plane_response_key: &control_plane_response_key,
             request: &request,
             max_age_seconds: args.max_age_seconds,
-        },
+        }, args.ordinary_release_profile(),
     )?;
     let statement = runtime_proof
         .get("server_statement")
         .filter(|value| value.is_object())
         .ok_or("observation runtime proof is missing server_statement")?;
-    let environment = verify_observation_vendor_tee(
+    let environment = verify_observation_vendor_tee_representation(
         &runtime_proof,
         statement,
         &nonce_bytes,
         args.verifier_key.as_deref(),
         args.expected_server_instance_id.as_deref(),
-        args.max_age_seconds,
+        args.max_age_seconds, args.ordinary_release_profile(),
     )?;
     let captured_at_unix = now_unix();
     let mut artifact = json!({
-        "apiVersion":"serverware.responseObservationProof/v1",
-        "kind":"ServerwareResponseObservationProof",
+        "apiVersion":if args.policy_aware.is_some() { "serverware.policyAwareResponseObservationProof/v1" } else { "serverware.responseObservationProof/v1" },
+        "kind":if args.policy_aware.is_some() { "ServerwarePolicyAwareResponseObservationProof" } else { "ServerwareResponseObservationProof" },
         "captured_at_unix":captured_at_unix,
         "request":verified.get("request").cloned().ok_or("verified observation request is missing")?,
         "response":verified.get("response").cloned().ok_or("verified observation response is missing")?,
@@ -7637,12 +7852,12 @@ fn finish_observation_collection<T: Read + Write>(
         .map_err(|err| format!("serialize response observation proof: {err}"))?;
     let proof_payload = [output.as_slice(), b"\n"].concat();
     let proof_digest = sha256_prefixed(&proof_payload);
-    let body_path = publish_verified_stream_outputs_resolved(
+    let body_path = publish_ordinary_stream_outputs(
         staged_body,
         proof_target,
         &proof_payload,
         &response.body_digest,
-        response.body_bytes,
+        response.body_bytes, args.policy_aware.as_ref(),
     )?;
     Ok(json!({
         "ok":true,
@@ -7669,6 +7884,7 @@ fn collect(mut args: Args) -> Result<Value, String> {
     // staging. A native failure never falls back to the vendor/dev profile.
     let native = args.native_verifier.take()
         .map(|config| NativeCaptureSessionV1::open(&args, config)).transpose()?;
+    args.check_policy_inputs()?;
     let method = if args.observation {
         validate_observation_method(&args.method)?
     } else {
@@ -7693,13 +7909,18 @@ fn collect(mut args: Args) -> Result<Value, String> {
             native.protect_target(&body_target)?;
             native.protect_target(&proof_target)?;
         }
+        if let Some(owner) = args.policy_aware.as_ref() {
+            owner.protect_target(&body_target)?;
+            owner.protect_target(&proof_target)?;
+        }
         Some((StagedBody::create_resolved(body_target)?, proof_target))
     } else {
         None
     };
-    let native_buffered_output = if native.is_some() && !args.stream && !args.observation {
+    let native_buffered_output = if (native.is_some() || args.policy_aware.is_some()) && !args.stream && !args.observation {
         let target = ResolvedOutputTarget::resolve(&args.out, "native buffered proof output", true, true)?;
-        native.as_ref().expect("native session").protect_target(&target)?;
+        if let Some(native) = native.as_ref() { native.protect_target(&target)?; }
+        if let Some(owner) = args.policy_aware.as_ref() { owner.protect_target(&target)?; }
         Some(target)
     } else { None };
     let host = args.url.host_str().ok_or("--url has no host")?.to_string();
@@ -7714,6 +7935,7 @@ fn collect(mut args: Args) -> Result<Value, String> {
     };
     let timeout = Duration::from_secs(args.timeout_seconds);
     if let Some(native) = native.as_ref() { native.recheck()?; }
+    args.check_policy_inputs()?;
     let mut proxy = match native.as_ref() {
         Some(owner) => ProxyTransport::NativeMutualTls(owner.connect_proxy(&args.proxy_headers)?),
         None => connect_proxy(&args, timeout)?,
@@ -7723,11 +7945,13 @@ fn collect(mut args: Args) -> Result<Value, String> {
         connect.push_str(&format!("{name}: {value}\r\n"));
     }
     connect.push_str("Connection: keep-alive\r\n\r\n");
-    proxy.write_all(connect.as_bytes())
-        .map_err(|err| format!("write CONNECT request: {err}"))?;
-    proxy.flush()
-        .map_err(|err| format!("flush CONNECT request: {err}"))?;
-    let connect_head = read_head(&mut proxy, 64 * 1024)?;
+    args.check_policy_inputs()?;
+    let connect_head = {
+        let mut io = CaptureIo::new_with_policy(&mut proxy, native.as_ref(), args.policy_aware.as_ref());
+        io.write_all(connect.as_bytes()).map_err(|err| format!("write CONNECT request: {err}"))?;
+        io.flush().map_err(|err| format!("flush CONNECT request: {err}"))?;
+        read_head(&mut io, 64 * 1024)?
+    };
     let (connect_status, _, body_start) = parse_head(&connect_head)?;
     if connect_head.len() != body_start || connect_status != 200 {
         return Err(format!("proxy CONNECT failed with status {connect_status}"));
@@ -7796,7 +8020,7 @@ fn collect(mut args: Args) -> Result<Value, String> {
         )?;
         if let Some(native) = native.as_ref() { native.recheck()?; }
         {
-            let mut io = CaptureIo::new(&mut tls, native.as_ref());
+            let mut io = CaptureIo::new_with_policy(&mut tls, native.as_ref(), args.policy_aware.as_ref());
             io.write_all(&prepared.head).and_then(|_| io.write_all(&prepared.body))
                 .map_err(|err| format!("write observation request: {err}"))?;
             io.flush().map_err(|err| format!("flush observation request: {err}"))?;
@@ -7828,7 +8052,7 @@ fn collect(mut args: Args) -> Result<Value, String> {
     request.push_str("Connection: close\r\n\r\n");
     if let Some(native) = native.as_ref() { native.recheck()?; }
     {
-        let mut io = CaptureIo::new(&mut tls, native.as_ref());
+        let mut io = CaptureIo::new_with_policy(&mut tls, native.as_ref(), args.policy_aware.as_ref());
         io.write_all(request.as_bytes())
             .map_err(|err| format!("write proof request: {err}"))?;
         io.flush().map_err(|err| format!("flush proof request: {err}"))?;
@@ -7848,7 +8072,7 @@ fn collect(mut args: Args) -> Result<Value, String> {
             native.as_ref(),
         );
     }
-    let response = read_response(&mut CaptureIo::new(&mut tls, native.as_ref()))?;
+    let response = read_response(&mut CaptureIo::new_with_policy(&mut tls, native.as_ref(), args.policy_aware.as_ref()))?;
     let exporter = tls
         .conn
         .export_keying_material([0u8; 32], EXPORTER_LABEL, Some(&nonce_bytes))
@@ -7904,7 +8128,8 @@ fn collect(mut args: Args) -> Result<Value, String> {
     }
     let (control_plane_response_key, _) =
         load_control_plane_response_key(&args.control_plane_response_key)?;
-    let external_capture = verify_runtime_proof(
+    args.require_policy_statement(&runtime_proof, "server_statement", &control_plane_response_key, StatementKind::Buffered)?;
+    let external_capture = verify_runtime_proof_representation(
         &runtime_proof,
         &response,
         &RuntimeProofExpectations {
@@ -7918,20 +8143,20 @@ fn collect(mut args: Args) -> Result<Value, String> {
             principal_id: &args.expected_principal_id,
             control_plane_response_key: &control_plane_response_key,
             max_age_seconds: args.max_age_seconds,
-        },
+        }, args.ordinary_release_profile(),
     )?;
     let statement = runtime_proof
         .get("server_statement")
         .filter(|value| value.is_object())
         .ok_or("runtime proof is missing server_statement")?;
-    let proof_environment = verify_vendor_tee(
+    let proof_environment = verify_vendor_tee_for_mode_representation(
         &runtime_proof,
         statement,
         &nonce_bytes,
         args.verifier_key.as_deref(),
         &control_plane_response_key,
         args.expected_server_instance_id.as_deref(),
-        args.max_age_seconds,
+        args.max_age_seconds, false, args.ordinary_release_profile(),
     )?;
     let mut external_capture = external_capture;
     external_capture["environment"] = Value::String(proof_environment.to_string());
@@ -7939,8 +8164,8 @@ fn collect(mut args: Args) -> Result<Value, String> {
     let (collector_public_key_pem, collector_key_id) = public_key_material(&collector_key);
     let collector_signature = collector_key.sign(canonical_json(&external_capture).as_bytes());
     let proof = json!({
-        "apiVersion":"serverware.proxyResponseProof/v3",
-        "kind":"ServerwareProxyResponseProof",
+        "apiVersion":if args.policy_aware.is_some() { "serverware.policyAwareProxyResponseProof/v1" } else { "serverware.proxyResponseProof/v3" },
+        "kind":if args.policy_aware.is_some() { "ServerwarePolicyAwareProxyResponseProof" } else { "ServerwareProxyResponseProof" },
         "external_capture":external_capture,
         "collector_signature":{
             "algorithm":"Ed25519",
@@ -7957,7 +8182,16 @@ fn collect(mut args: Args) -> Result<Value, String> {
     }
     let output = serde_json::to_vec_pretty(&proof)
         .map_err(|err| format!("serialize proxy response proof: {err}"))?;
-    atomic_write_private(&args.out, &[output.as_slice(), b"\n"].concat())?;
+    if let Some(owner) = args.policy_aware.as_ref() {
+        let target = native_buffered_output.ok_or("policy-aware buffered output not admitted")?;
+        atomic_write_private_noreplace_in_directory_with_precommit(&target.directory,
+            &target.name, &[output.as_slice(), b"\n"].concat(), || owner.protect_target(&target))
+            .map_err(|error| if error.destination_published {
+                format!("{}; policy-aware proof retained because destination was published", error.message)
+            } else { error.message })?;
+    } else {
+        atomic_write_private(&args.out, &[output.as_slice(), b"\n"].concat())?;
+    }
     let capture = required_object(&proof, "external_capture")?;
     Ok(json!({
         "ok":true,

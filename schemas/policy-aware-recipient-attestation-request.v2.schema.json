@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/policy-aware-recipient-attestation-request.v2.schema.json",
+  "title": "Policy-aware ordinary recipient attestation command input v2",
+  "description": "Closed controlled dispatch input. Original reservation deadline, exact full request and authority digests remain mandatory. The configured command's raw role-2 evidence is independently verified; a success DTO is not accepted. No native custody, startup selection or dispatch permission follows from schema validity.",
+  "type": "object", "additionalProperties": false,
+  "required": ["apiVersion", "leaseRequestApiVersion", "purpose", "requestBindingSha256", "requestAuthoritySha256", "recipientPublicKey", "recipientKeyId", "recipientNonce", "policyHash", "dataPlaneBinaryDigest", "principalId", "routeId", "credentialId"],
+  "properties": {
+    "apiVersion": {"const": "serverware.policyAwareRecipientAttestationRequest/v2"},
+    "leaseRequestApiVersion": {"const": "serverware.policyAwareCredentialLeaseRequest/v2"},
+    "purpose": {"const": "dispatchSecret"},
+    "requestBindingSha256": {"$ref": "policy-aware-credential-lease.common.schema.json#/$defs/digest"},
+    "requestAuthoritySha256": {"$ref": "policy-aware-credential-lease.common.schema.json#/$defs/digest"},
+    "recipientPublicKey": {"$ref": "policy-aware-credential-lease.common.schema.json#/$defs/raw32"},
+    "recipientKeyId": {"$ref": "policy-aware-credential-lease.common.schema.json#/$defs/digest"},
+    "recipientNonce": {"$ref": "policy-aware-credential-lease.common.schema.json#/$defs/raw32"},
+    "policyHash": {"$ref": "policy-aware-credential-lease.common.schema.json#/$defs/digest"},
+    "dataPlaneBinaryDigest": {"$ref": "policy-aware-credential-lease.common.schema.json#/$defs/digest"},
+    "principalId": {"$ref": "policy-aware-credential-lease.common.schema.json#/$defs/identity"},
+    "routeId": {"$ref": "policy-aware-credential-lease.common.schema.json#/$defs/identity"},
+    "credentialId": {"$ref": "policy-aware-credential-lease.common.schema.json#/$defs/identity"}
+  }
+}

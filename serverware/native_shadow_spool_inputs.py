@@ -50,6 +50,8 @@ class SpoolInputs:
         self._closed = self._seal_attempted = self._delivery_attempted = False
         self._genesis = self._scope = self._head = None
         self._effect_listeners = {}
+        self._retrieval_attempted = False
+        self._retrieval_activation = None
 
     _parent = existing.PersistenceInputs._parent
 
@@ -195,6 +197,75 @@ class SpoolInputs:
             selected["bridge"] += ((slug + "-peer-directory", parent),)
         p.require(role in selected); return selected[role]
 
+    def prepare_retrieval(self, *, configuration_raw, configuration_sha256, peer_raw, peer_sha256,
+                          object_directory_fd, startup_deadline_boottime_ns):
+        """Actual full4 effects Retrieval owner, not another signing authority.
+
+        Keep the old RetrievalActivation.prepare path exact2. Here the real
+        cohort selects the cold identity/window and retains the resource owner
+        before binding its already held store/lock OFDs. Partial preparation
+        remains fenced until the cohort's actual cleanup; no old path adoption.
+        """
+        from serverware.native_shadow_retrieval_activation import RetrievalActivation
+        from serverware import native_shadow_guest_delivery as d
+        from serverware import native_shadow_retrieval_artifacts as a
+        self.check()
+        p.require(self._effects_selected and not self._retrieval_attempted)
+        self._retrieval_attempted = True
+        cold = d.configuration(configuration_raw, configuration_sha256)
+        p.require(configuration_sha256 == self._cohort._config["retrievalConfiguration"]["sha256"]
+            and p.canonical(cold) == p.canonical(self._cohort._cold["retrieval"])
+            and p.ns(startup_deadline_boottime_ns) == self._cohort.startup_deadline_boottime_ns())
+        peer = a._peer(peer_raw)
+        p.require(p.sha(peer_raw) == p.digest(peer_sha256)
+            and (peer["uid"], peer["gid"]) == (self._cohort._cold["bridge"]["uid"], self._cohort._cold["bridge"]["gid"]))
+        if self._cohort._external_driver is None:
+            original = self._cohort.bridge_original()
+            process = original
+        else:
+            original = self._cohort._external_driver.value
+            process = original["driver"]
+        p.require(peer["pid"] == process["processId"] and peer["startTimeTicks"] == process["startTimeTicks"])
+        for field, source in (("executableDevice", "device"), ("executableInode", "inode"),
+                              ("executableLength", "length"), ("executableSha256", "sha256")):
+            p.require(peer[field] == original["executable"][source])
+        owner = RetrievalActivation.prepare(configuration_raw=configuration_raw,
+            configuration_sha256=configuration_sha256, peer_raw=peer_raw, peer_sha256=peer_sha256,
+            object_directory_fd=object_directory_fd, startup_deadline_boottime_ns=startup_deadline_boottime_ns)
+        self._retrieval_activation = owner
+        owner.bind_spool(self)
+        self.check()
+        return owner
+
+    def retrieval_additions(self, owner):
+        """Actual retained store/lock, only for this source-created Retrieval."""
+        from serverware.native_shadow_retrieval_activation import RetrievalActivation
+        self.check()
+        p.require(self._effects_selected and type(owner) is RetrievalActivation
+            and owner is self._retrieval_activation)
+        return self.additions("retrieval")
+
+    def require_retrieval_delivery(self, owner, original):
+        """Bind the verified full4 original to the exact original cohort window."""
+        from serverware import native_shadow_guest_delivery as d
+        self.retrieval_additions(owner)
+        payload = p.fields(p.document(original, d.MAX_DELIVERY)["payload"], d.FIELDS)
+        p.require(payload["configurationSha256"] == self._cohort._config["retrievalConfiguration"]["sha256"])
+        for name in ("authorityKeyId", "invocationId", "bootIdBase64url", "timeNamespaceDevice",
+                     "timeNamespaceInode", "issuedAtBoottimeNs", "startupDeadlineBoottimeNs", "lifetimeDeadlineBoottimeNs"):
+            p.require(p.canonical(payload[name]) == p.canonical(self._cohort._window[name]))
+        self.check()
+
+    def retain_retrieval_transfer(self, owner, *, launch_pin):
+        self.retrieval_additions(owner)
+        p.require(self._genesis is not None and self._retrieval_delivery == owner.signed_original())
+        return self._cohort.retain_retrieval_activation(activation=owner, launch_pin=launch_pin)
+
+    def require_retrieval_retired(self, owner):
+        # Deliberately no preparation/live check after release. Only the same
+        # spool's terminal cleanup may discard this shared resource owner.
+        p.require(owner is self._retrieval_activation and self._closed)
+
     def initialize_store(self, *, retrieval_delivery_original, proof_scope_original):
         """Empty storage identity only; never a fabricated shadow ledger head."""
         self.check(); p.require(not self._seal_attempted); self._seal_attempted = True
@@ -291,10 +362,14 @@ class SpoolInputs:
         # children. Files survive for operator reconciliation; no unlink.
         if self._closed:
             return
+        if self._retrieval_activation is not None:
+            p.require(self._cohort._parent_reaped)
         if self._cohort._external_driver is not None:
             p.require(self._cohort._parent_reaped)
             self._cohort._external_driver.terminal()
         self._closed = True
+        if self._retrieval_activation is not None:
+            self._retrieval_activation.close()
         if hasattr(self, "_relay"):
             self._relay.close()
         for channel in self._sockets:

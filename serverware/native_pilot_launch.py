@@ -14,6 +14,8 @@ from serverware.custody_generation_business import BusinessResources
 from serverware.custody_generation_launch import FiveServiceLaunch
 from serverware.native_shadow_driver_bootstrap import DriverBootstrap
 from serverware.native_shadow_driver_inputs import OperationalInputs
+from serverware.native_shadow_driver_outgoing import OutgoingResources
+from serverware.native_shadow_driver_resources import BridgeResources
 from serverware.native_shadow_proof_cohort_control import EndpointStartError, ParkedProofCohort
 
 _TOKEN = object()
@@ -38,6 +40,9 @@ class NativePilotLaunch:
         self._pid = os.getpid()
         self._driver = self._cohort = self._five = None
         self._business = self._generation = self._spool = None
+        self._commit_request = self._generation_install = self._bridge = self._outgoing = None
+        self._operation = None
+        self._connections_attempted = self._operation_attempted = False
         self._release_attempted = self._cleanup_attempted = self._closed = False
         self._continuation = None
         self._stage = "starting"
@@ -79,6 +84,11 @@ class NativePilotLaunch:
         self._business.check()
         self._generation.check()
         self._spool.check()
+        self._commit_request.check()
+        self._generation_install.check()
+        self._bridge.check()
+        if self._outgoing is not None:
+            self._outgoing.check()
 
     def start_endpoints(self):
         """Use independently installed originals bound to this actual driver."""
@@ -105,12 +115,49 @@ class NativePilotLaunch:
         self._driver.check()
         self._cohort.check()
         self._five.check()
+        _require(self._driver._gate_binding is not None)
         self._stage = "resource-preparation-attempted"
         self._business = BusinessResources.prepare_commitment(self._five)
         self._generation = self._business.commitment_inputs()
         self._spool = self._cohort.prepare_spool_inputs()
+        self._commit_request = self._cohort.prepare_commit_request_inputs()
+        self._generation_install = self._cohort.prepare_generation_install_inputs()
+        self._bridge = BridgeResources.prepare(self._driver)
         self._stage = "resources"
         self._preparing()
+
+    def prepare_bridge_connections(self):
+        """Allocate the exact live clients after all endpoint paths exist.
+
+        The protected outgoing runtime must bind the already allocated journal
+        and actual measured peers. These still-unconnected sockets become C9
+        observations; allocation is not authentication or permission to send.
+        """
+        self._preparing()
+        _require(not self._connections_attempted and not self._operation_attempted)
+        self._connections_attempted = True
+        self._outgoing = OutgoingResources.prepare(self._driver)
+        self._bridge.prepare_native_peers(outgoing=self._outgoing, spool=self._spool)
+        self._preparing()
+
+    def bridge_activation(self):
+        """Actual complete C9 FD6+ metadata for the independent delivery signer."""
+        self._preparing()
+        _require(self._connections_attempted and self._outgoing is not None)
+        records = self._bridge.activation_originals() + self._outgoing.activation_originals()
+        _require(len(records) == 41 and len({entry["name"] for entry in records}) == 41)
+        return [dict(entry, fd=target) for target, entry
+                in enumerate(sorted(records, key=lambda item: item["name"]), 6)]
+
+    def prepare_operational_inputs(self, *, launch_pin, production):
+        """Join independent launch originals to these exact retained resources."""
+        self._preparing()
+        _require(self._connections_attempted and not self._operation_attempted)
+        self._operation_attempted = True
+        self._operation = OperationalInputs.prepare_pilot(self._driver, outgoing=self._outgoing,
+            resources=self._bridge, launch_pin=launch_pin, production=production)
+        self._preparing()
+        return self._operation
 
     @property
     def driver(self):
@@ -142,6 +189,21 @@ class NativePilotLaunch:
         self._origin()
         return self._spool
 
+    @property
+    def commit_request_inputs(self):
+        self._origin()
+        return self._commit_request
+
+    @property
+    def generation_install_inputs(self):
+        self._origin()
+        return self._generation_install
+
+    @property
+    def bridge_resources(self):
+        self._origin()
+        return self._bridge
+
     def release(self, *, operational_inputs, endpoint_release_original,
                 endpoint_transfers, phase_two_scope_original,
                 phase_two_public_originals):
@@ -159,6 +221,7 @@ recreates them. No user callback or arbitrary executable runs between releases.
                  and type(phase_two_scope_original) is bytes
                  and type(phase_two_public_originals) is bytes)
         operational_inputs.check()
+        _require(self._operation_attempted and operational_inputs is self._operation)
         self._release_attempted = True
         transfer = self._generation.transfer()
         self._five.release(transfer)

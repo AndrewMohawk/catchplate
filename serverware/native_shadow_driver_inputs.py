@@ -79,7 +79,9 @@ class OperationalInputs:
         self._driver, self._files, self._activation = driver, [], []
         self._descriptors = {}
         self._begun = self._closed = False
+        self._failed = False
         self._outgoing = None
+        self._resources = None
 
     def _public(self, name, pin, maximum):
         pin = _pin(pin)
@@ -94,7 +96,7 @@ class OperationalInputs:
         # Original direct inventory caller remains unchanged and does not
         # silently select the new resource creator or spool bridge purpose.
         return cls._prepare(driver, launch_pin=launch_pin, activation_fds=activation_fds,
-            production=production, outgoing=None)
+            production=production, outgoing=None, resources=None)
 
     @classmethod
     def prepare_outgoing(cls, driver, *, outgoing, launch_pin, activation_fds, production):
@@ -112,16 +114,38 @@ class OperationalInputs:
         combined = dict(activation_fds)
         combined.update(outgoing._descriptors)
         return cls._prepare(driver, launch_pin=launch_pin, activation_fds=combined,
-            production=production, outgoing=outgoing)
+            production=production, outgoing=outgoing, resources=None)
 
     @classmethod
-    def _prepare(cls, driver, *, launch_pin, activation_fds, production, outgoing):
+    def prepare_pilot(cls, driver, *, outgoing, resources, launch_pin, production):
+        """Consume only the two actual fixed pilot resource owners.
+
+        Their observations feed independent signing before this call. No
+        caller-supplied descriptor inventory can replace a socket or journal.
+        """
+        from serverware.native_shadow_driver_outgoing import OutgoingResources
+        from serverware.native_shadow_driver_resources import BridgeResources
+        p.require(cls is OperationalInputs and type(outgoing) is OutgoingResources
+            and type(resources) is BridgeResources and outgoing._driver is driver
+            and resources._driver is driver and type(driver) is bootstrap.DriverBootstrap)
+        outgoing.check(); resources.check()
+        p.require(not outgoing._begun and outgoing._inputs is None
+            and not resources._begun and resources._inputs is None
+            and not set(resources._descriptors).intersection(outgoing._descriptors))
+        combined = dict(resources._descriptors)
+        combined.update(outgoing._descriptors)
+        return cls._prepare(driver, launch_pin=launch_pin, activation_fds=combined,
+            production=production, outgoing=outgoing, resources=resources)
+
+    @classmethod
+    def _prepare(cls, driver, *, launch_pin, activation_fds, production, outgoing, resources):
         p.require(type(driver) is bootstrap.DriverBootstrap)
         driver.check()
         p.require(driver._config["apiVersion"] in ("serverware.nativeShadowDriverBootstrapConfiguration/v2", "serverware.nativeShadowDriverBootstrapConfiguration/v3", "serverware.nativeShadowDriverBootstrapConfiguration/v4")
             and not driver._attempted and not hasattr(driver, "_prepared_inputs"))
         owner = cls(_TOKEN, driver)
         owner._outgoing = outgoing
+        owner._resources = resources
         driver._prepared_inputs = owner  # no second preparation/reset for this bootstrap
         try:
             launch = p.fields(p.document(owner._public("launch", launch_pin, 32768), 32768),
@@ -152,6 +176,8 @@ class OperationalInputs:
             owner._runtime_raw = owner._public("c9-runtime", payload["runtimeConfig"], 65536)
             if outgoing is not None:
                 outgoing._associate(owner, driver, owner._runtime_raw, launch, payload)
+            if resources is not None:
+                resources._associate(owner, driver, owner._runtime_raw, launch, payload)
             if driver._config["apiVersion"] == "serverware.nativeShadowDriverBootstrapConfiguration/v4":
                 p.require(driver._gate_binding is not None)
                 gate = driver._gate_binding["binding"]
@@ -209,12 +235,14 @@ class OperationalInputs:
             raise
 
     def check(self):
-        p.require(not self._closed)
+        p.require(not self._closed and not self._failed)
         self._driver._origin()  # never recursively calls DriverBootstrap.check
         for original in self._files:
             original.check()
         if self._outgoing is not None:
             self._outgoing.check()
+        if self._resources is not None:
+            self._resources.check()
         p.require([_record(name, fd) for name, fd in sorted(self._descriptors.items())] == self._records)
 
     def operation_original(self):
@@ -225,11 +253,19 @@ class OperationalInputs:
         self.check(); p.require(driver is self._driver and not self._begun)
         if self._outgoing is not None:
             self._outgoing._begin(self)
+        if self._resources is not None:
+            self._resources._begin(self)
         self._begun = True
         return tuple(fd for _, fd in sorted(self._descriptors.items()))
 
     def _close_unreleased(self):
         p.require(not self._begun)
+        if self._resources is not None:
+            # _prepared_inputs already fences a second attempt. Keep the full
+            # partial graph until actual driver cleanup, without presenting it
+            # as a usable input or closing descriptors that cleanup still owns.
+            self._failed = True
+            return
         self._close()
 
     def _close_after_exit(self, driver):
@@ -249,4 +285,12 @@ class OperationalInputs:
             else:
                 p.require(not self._outgoing._begun and self._outgoing._inputs is None)
                 self._outgoing._close()
+        if self._resources is not None:
+            # Unlike the direct inventory path, these real resources remain
+            # retained on preparation failure while the driver subtree lives.
+            # Only the genuine driver cleanup may retire them.
+            if self._resources._inputs is self:
+                self._resources._close_after_exit(self)
+            else:
+                self._resources._close_after_driver_exit(self._driver)
         self._closed = True

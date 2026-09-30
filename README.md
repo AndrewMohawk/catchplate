@@ -22,12 +22,12 @@ Checkpoint: **2026-09-30 — pre-production, pilot assembly.**
 
 [![Project checkpoints, one segment per task: 36 of 46 source-landed; 10 active and 0 todo. Evidence handoff 10/10; historical recovery 4/5; permissions and grants 10/10; finalization and sessions 8/8; workloads and native 3/6; providers and operations 1/7. H05, N04, N05, N06 and O01 through O06 are in progress. Production acceptance remains 0/6. Engineering assembly is not an accepted pilot or production deployment.](docs/images/project-progress.svg)](docs/production-status.md#next-source-milestones)
 
-The current `.353` source batch connects [independently signed launch inputs](docs/native-pilot-signed-inputs.md),
-fixes native effect-session startup and adds a bounded operator-tool build command.
+The current `.354` source batch connects the remaining fixed [pilot resource owners](docs/native-pilot-resource-owners.md):
+Retrieval, GenerationInstall, CommitRequest and the bridge's 41-descriptor handoff.
 The [persistent workload sidecar](docs/native-workload-sidecar.md) supports ordinary
 HTTPS libraries without direct proxy mTLS; provider credentials stay out of the
 application. These latest changes are not yet compiled or deployed. Remaining
-pilot work includes resource factories, the operator launcher, artifact assembly
+pilot work includes the executable operator conductor, artifact assembly
 and provisioned inputs. Broad testing follows the connected pilot build.
 
 The bar shows **committed source, not tested readiness or remaining effort**.

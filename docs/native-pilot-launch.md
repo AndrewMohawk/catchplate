@@ -7,9 +7,10 @@ connection still requires the consolidated build and connected pilot acceptance.
 
 The [signed-input receiving APIs](native-pilot-signed-inputs.md) now let its real
 ordinary/native resource and driver owners admit independent signatures without
-loading authority private keys into the launcher. A complete executable
-conductor and the remaining fixed resource factories are still required; this
-class alone is not an operator launch command.
+loading authority private keys into the launcher. The [fixed resource owners](native-pilot-resource-owners.md)
+now join Retrieval, GenerationInstall, CommitRequest and the real production/
+proof resources. A complete executable conductor is still required; this class
+alone is not an operator launch command.
 
 The selected topology is one measured `DriverBootstrap` bridge, ten native
 endpoint children and five ordinary custody services. Configuration/v7 selects
@@ -31,7 +32,9 @@ configuration, launch and separate trust-original paths and independent pins.
 | --- | --- | --- |
 | Measure driver | `NativePilotLaunch.start()` | Protected bootstrap configuration/v4, image, window and installed supervisor |
 | Start endpoint and ordinary owners | `start_endpoints()` | Cohort configuration/v7 and signed precreation bound to the driver observation that now exists; protected ordinary-effects configuration |
-| Allocate resources | `prepare_resources()` | Existing protected business configuration and fresh, provisioned resource directories |
+| Allocate resources | `prepare_resources()` | Actual gate binding, existing protected business configuration and fresh, provisioned resource directories |
+| Allocate bridge clients | `prepare_bridge_connections()` | All real endpoint paths and an independently installed outgoing runtime bound to the observed journal identity |
+| Observe bridge and admit launch | `bridge_activation()` then `prepare_operational_inputs(...)` | Independent C9/launch originals for the exact sorted 41-descriptor inventory; no caller-supplied FD map |
 | Admit live originals | Existing methods on `driver`, `cohort`, `generation_inputs`, `business_resources` and `spool_inputs` | Actual gate binding, independently approved C9 deliveries, grants, service histories and phase-two scope; real resource producers supply retained descriptors |
 | Release once | `release(...)` | Genuine `OperationalInputs`, ten endpoint transfers and exact signed endpoint-release/phase-two originals |
 | Retire | `close()` | Actual driver subtree termination, endpoint cleanup and ordinary-service reaps |
@@ -48,7 +51,9 @@ existing methods perform the actual resource allocation, independent-signature
 checks and one-use transfers. The wrapper supplies no signing keys or permissive
 default policy, and cannot import an unsigned observation as authority.
 
-`release` first consumes the real generation transfer for the ordinary five.
+`release` requires the operational input owner returned by this pilot's own
+`prepare_operational_inputs`; it cannot replace the prepared bridge resources
+with an unrelated inventory. It first consumes the real generation transfer for the ordinary five.
 The retained driver association and actual signed peer originals are checked
 before the ten endpoints are released, and all five authenticated final-role
 listening notices must be present. Only then does the same cohort invoke the

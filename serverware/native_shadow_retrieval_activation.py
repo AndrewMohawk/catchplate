@@ -39,6 +39,8 @@ class RetrievalActivation:
         self._socket = None
         self._closed = self._sign_attempted = self._taken = False
         self._signed = None
+        self._spool, self._spool_fds = None, ()
+        self._cohort_handoff = False
 
     @classmethod
     def prepare(cls, *, configuration_raw, configuration_sha256, peer_raw, peer_sha256,
@@ -117,12 +119,42 @@ class RetrievalActivation:
             and fcntl.fcntl(self._socket.fileno(), fcntl.F_GETFL) & os.O_NONBLOCK)
         for fd in (self._objects, self._socket.fileno()):
             p.require(not os.get_inheritable(fd))
+        if self._spool is not None:
+            actual = self._spool.retrieval_additions(self)
+            p.require(len(self._spool_fds) == len(actual) == 2)
+            for (name, fd), (source_name, source_fd) in zip(self._spool_fds, actual, strict=True):
+                p.require(name == source_name and _structural(os.fstat(fd)) == _structural(os.fstat(source_fd))
+                    and not os.get_inheritable(fd)
+                    and fcntl.fcntl(fd, fcntl.F_GETFL) == fcntl.fcntl(source_fd, fcntl.F_GETFL))
+
+    def bind_spool(self, spool_inputs):
+        """Only SpoolInputs.prepare_retrieval may select the real full4 owner.
+
+        The actual SpoolInputs must already retain this exact pristine object.
+        Duplicate its store/lock descriptors, preserving the held lock OFD.
+        """
+        from serverware.native_shadow_spool_inputs import SpoolInputs
+        p.require(type(self) is RetrievalActivation and type(spool_inputs) is SpoolInputs)
+        self.check()
+        p.require(self._spool is None and not self._sign_attempted and not self._taken)
+        additions = spool_inputs.retrieval_additions(self)
+        p.require(tuple(name for name, _ in additions) == delivery.SPOOL_RETRIEVAL_NAMES[2:])
+        self._spool = spool_inputs  # Retained through any partial failure.
+        held = []
+        for name, source in additions:
+            fd = fcntl.fcntl(source, fcntl.F_DUPFD_CLOEXEC, 128)
+            self._fds.append(fd)
+            held.append((name, fd))
+        self._spool_fds = tuple(held)
+        self.check()
+
+    def _descriptors(self):
+        return (("retrieval-listener", self._socket.fileno()), ("retrieval-objects", self._objects)) + self._spool_fds
 
     def activation(self):
         self.check()
         entries = []
-        for target, (name, fd) in enumerate((("retrieval-listener", self._socket.fileno()),
-                                           ("retrieval-objects", self._objects)), 6):
+        for target, (name, fd) in enumerate(self._descriptors(), 6):
             info = os.fstat(fd)
             entries.append({"name": name, "fd": target, "device": info.st_dev, "inode": info.st_ino,
                 "mode": info.st_mode, "uid": info.st_uid, "gid": info.st_gid})
@@ -131,7 +163,7 @@ class RetrievalActivation:
 
     def sign_delivery(self, *, payload_raw, signing_key):
         self.check()
-        p.require(not self._sign_attempted and not self._taken)
+        p.require(self._spool is None and not self._sign_attempted and not self._taken)
         self._sign_attempted = True
         signed = delivery.sign_retrieval_delivery(configuration_raw=self._configuration_raw,
             configuration_sha256=self._configuration_sha256, payload_raw=payload_raw, signing_key=signing_key,
@@ -140,6 +172,48 @@ class RetrievalActivation:
         self._signed = signed
         return signed
 
+    def admit_delivery(self, *, signed_delivery_original):
+        """One full4 signature intake; failed intake cannot be retried/signed."""
+        self.check()
+        p.require(self._spool is not None and not self._sign_attempted and not self._taken)
+        self._sign_attempted = True
+        signed = delivery.verify_spool_retrieval_delivery(configuration_raw=self._configuration_raw,
+            configuration_sha256=self._configuration_sha256, signed_delivery_original=signed_delivery_original,
+            activation=self.activation(), boot=self._boot, startup_deadline=self._deadline, now=_clock())
+        self._spool.require_retrieval_delivery(self, signed)
+        self.check()
+        self._signed = signed
+        return signed
+
+    def signed_original(self):
+        self.check()
+        p.require(self._spool is not None and self._signed is not None)
+        return self._signed
+
+    def cohort_descriptors(self, spool_inputs):
+        """Borrowed real FDs only for the exact retained cohort adapter."""
+        self.check()
+        p.require(self._spool is spool_inputs and self._spool is not None
+            and self._taken and self._signed is not None and self._cohort_handoff)
+        self._cohort_handoff = False
+        return tuple((target, fd) for target, (_, fd) in enumerate(self._descriptors(), 6))
+
+    def take_for_cohort(self, *, launch_pin):
+        """One full4 retained transfer; no send, listen or launch result.
+
+        Spool genesis must already retain this same admitted C9. The existing
+        cohort adapter checks this owner immediately before its one release,
+        then retains resources without reapplying preparation checks.
+        """
+        self.check()
+        p.require(self._spool is not None and not self._taken and self._signed is not None)
+        self._taken = True
+        self._cohort_handoff = True
+        try:
+            return self._spool.retain_retrieval_transfer(self, launch_pin=launch_pin)
+        finally:
+            self._cohort_handoff = False
+
     def take_for_launch(self, *, signed_delivery_sha256):
         """One ownership transfer of actual dup FDs; caller owns successful FDs.
 
@@ -147,7 +221,7 @@ class RetrievalActivation:
         descriptor number, tuple or returned signature proves that launch ran.
         """
         self.check()
-        p.require(not self._taken and self._signed is not None
+        p.require(self._spool is None and not self._taken and self._signed is not None
             and p.sha(self._signed) == p.digest(signed_delivery_sha256))
         self._taken = True
         owned = []
@@ -164,6 +238,8 @@ class RetrievalActivation:
     def close(self):
         if self._closed:
             return
+        if self._spool is not None:
+            self._spool.require_retrieval_retired(self)
         self._closed = True
         if self._socket is not None:
             self._socket.close()

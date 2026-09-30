@@ -140,10 +140,18 @@ class RetainedActivationFds:
         p.require(token is _TOKEN)
         self._fds, self._originals = [], []
         self._begun = self._closed = False
+        self._retrieval_owner = None
+        self._commit_request_owner = self._generation_install_owner = None
 
     def check(self):
         p.require(not self._closed and not self._begun)
         self._cohort.check()
+        if self._retrieval_owner is not None:
+            self._retrieval_owner.check()
+        if self._commit_request_owner is not None:
+            self._commit_request_owner.check()
+        if self._generation_install_owner is not None:
+            self._generation_install_owner.check()
         for original in self._originals:
             original.check()
         for fd, entry in zip(self._fds, self._entries, strict=True):
@@ -184,6 +192,7 @@ class ParkedProofCohort:
         self._originals, self._parked, self._transfers = [], [], []
         self._retained = []
         self._spool_resources = None
+        self._commit_request_resources = self._generation_install_resources = None
         self._socket = self._pidfd = self._exec = self._child_pid = None
         self._observed = None
         self._attempted = self._closed = False
@@ -533,15 +542,80 @@ class ParkedProofCohort:
             p.require(entry["fd"] == index)
         return launch_original, delivery_original, grant, copy.deepcopy(entries)
 
-    def retain_activation_fds(self, *, role, launch_pin, descriptors):
+    def prepare_commit_request_inputs(self):
+        """Retain the actual fixed server socket before independent C9 signing."""
+        from serverware.native_shadow_commit_request_inputs import CommitRequestInputs
+        self.check()
+        p.require(self._commit_request_resources is None and self.commitment_selected())
+        return CommitRequestInputs.prepare(self)
+
+    def prepare_generation_install_inputs(self):
+        """Allocate actual listener/journal resources, never their authority."""
+        from serverware.native_shadow_generation_install_inputs import GenerationInstallInputs
+        self.check()
+        p.require(self._generation_install_resources is None and "generationInstall" in self._roles)
+        return GenerationInstallInputs.prepare(self)
+
+    def activation_originals(self, *, role, launch_pin):
+        """Retained exact launch/C9/grant originals, never a service verdict.
+
+        The existing role selection and C9 signature/pins are checked here.
+        Grant authority admission remains with the actual native Rust owner.
+        """
+        launch, signed, grant, _ = self._role_files(role, launch_pin)
+        return bytes(launch.raw), bytes(signed.raw), bytes(grant.raw)
+
+    def retain_retrieval_activation(self, *, activation, launch_pin):
+        """Fixed full4 adapter; retain its real purpose owner through release.
+
+        This is not a caller-selected callback or resource registry. Other
+        roles retain their existing exact transfer paths unchanged.
+        """
+        from serverware.native_shadow_retrieval_activation import RetrievalActivation
+        from serverware.native_shadow_spool_inputs import SpoolInputs
+        self.check()
+        p.require(self.effects_selected() and type(activation) is RetrievalActivation
+            and type(self._spool_resources) is SpoolInputs)
+        self._spool_resources.retrieval_additions(activation)
+        descriptors = activation.cohort_descriptors(self._spool_resources)
+        owner = self.retain_activation_fds(role="retrieval", launch_pin=launch_pin, descriptors=descriptors)
+        owner._retrieval_owner = activation
+        p.require(owner._delivery_bytes == activation.signed_original()
+            and tuple(entry["name"] for entry in owner._entries) == delivery.SPOOL_RETRIEVAL_NAMES)
+        owner.check()
+        return owner
+
+    def retain_activation_fds(self, *, role, launch_pin, descriptors,
+                              commit_request_owner=None, generation_install_owner=None):
         """Retain real already-created non-Persistence FDs; never create service authority."""
         self.check()
         p.require(role in self._roles and role != "persistence")
         p.require(all(value._role != role for value in self._retained))
+        if commit_request_owner is not None:
+            from serverware.native_shadow_commit_request_inputs import CommitRequestInputs
+            p.require(role == "commitRequest" and type(commit_request_owner) is CommitRequestInputs
+                and commit_request_owner is self._commit_request_resources
+                and commit_request_owner._cohort is self
+                and commit_request_owner._transfer_attempted
+                and descriptors == ((6, commit_request_owner._socket.fileno()),))
+            commit_request_owner.check()
+        if generation_install_owner is not None:
+            from serverware.native_shadow_generation_install_inputs import GenerationInstallInputs
+            p.require(role == "generationInstall" and type(generation_install_owner) is GenerationInstallInputs
+                and generation_install_owner is self._generation_install_resources
+                and generation_install_owner._cohort is self
+                and generation_install_owner._ready and generation_install_owner._retain_attempted
+                and launch_pin == generation_install_owner._launch_pin)
+            generation_install_owner.check()
+            p.require(descriptors == tuple((target, fd) for target, (_, fd)
+                in enumerate(generation_install_owner.additions(), 6)))
         launch, signed, grant, entries = self._role_files(role, launch_pin)
+        if generation_install_owner is not None:
+            p.require((launch.raw, signed.raw, grant.raw) == generation_install_owner._originals)
         p.require(type(descriptors) is tuple and len(descriptors) == len(entries))
         owner = RetainedActivationFds(_TOKEN)
         owner._cohort, owner._role, owner._entries = self, role, entries
+        owner._commit_request_owner, owner._generation_install_owner = commit_request_owner, generation_install_owner
         owner._launch_sha, owner._delivery_bytes, owner._grant_bytes = p.sha(launch.raw), signed.raw, grant.raw
         try:
             for pair, entry in zip(descriptors, entries, strict=True):
@@ -824,6 +898,10 @@ class ParkedProofCohort:
             transfer.close()
         if self._spool_resources is not None:
             self._spool_resources.close()
+        if self._commit_request_resources is not None:
+            self._commit_request_resources.close()
+        if self._generation_install_resources is not None:
+            self._generation_install_resources.close()
         for fd, _, _ in self._parked:
             os.close(fd)
         for fd in (self._pidfd, self._exec):

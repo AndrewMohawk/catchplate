@@ -13,6 +13,7 @@ DOMAIN = b"serverware.policyCustodyGuestDelivery.signature/v1\0"
 FIELDS = ("configurationSha256", "authorityKeyId", "serviceRole", "uid", "gid", "bootIdBase64url",
     "timeNamespaceDevice", "timeNamespaceInode", "issuedAtBoottimeNs", "startupDeadlineBoottimeNs",
     "lifetimeDeadlineBoottimeNs", "invocationId", "runtimeConfig", "credentials", "activation")
+SPOOL_RETRIEVAL_NAMES = ("retrieval-listener", "retrieval-objects", "ledger-spool-store", "ledger-spool-lock")
 
 
 def configuration(raw, expected_sha256):
@@ -65,7 +66,7 @@ def _validate_delivery_payload(*, configuration_raw, configuration_sha256, paylo
                                activation, boot, startup_deadline, now, names):
     """Shared public checks; only retained callers supply actual resource facts."""
     p.require(names in (("retrieval-listener", "retrieval-objects"), ("activation-channel", "activation-journal"),
-        ("persistence-listener", "persistence-journal", "persistence-lock")))
+        ("persistence-listener", "persistence-journal", "persistence-lock"), SPOOL_RETRIEVAL_NAMES))
     cold = configuration(configuration_raw, configuration_sha256)
     payload = p.fields(p.document(payload_raw, MAX_DELIVERY), FIELDS)
     p.require(payload["configurationSha256"] == configuration_sha256
@@ -134,6 +135,28 @@ def verify_persistence_delivery(*, configuration_raw, configuration_sha256, sign
         configuration_sha256=configuration_sha256, payload_raw=payload_raw,
         activation=activation, boot=boot, startup_deadline=startup_deadline, now=now,
         names=("persistence-listener", "persistence-journal", "persistence-lock"))
+    public = Ed25519PublicKey.from_public_bytes(p.decoded(cold["authority"]["publicKeyBase64url"], size=32))
+    public.verify(p.decoded(signed["signatureBase64url"], size=64), DOMAIN + payload_raw)
+    _delivery_guest(payload, signed_delivery_original)
+    return signed_delivery_original
+
+
+def verify_spool_retrieval_delivery(*, configuration_raw, configuration_sha256, signed_delivery_original,
+                                   activation, boot, startup_deadline, now):
+    """Verify the fixed four-FD original; no private signer or resource creation.
+
+    The retained Retrieval/Spool owners choose this profile and supply actual
+    metadata. The two-FD retrieval producer remains a separate closed API.
+    """
+    signed = p.fields(p.document(signed_delivery_original, MAX_DELIVERY),
+        ("apiVersion", "payload", "signatureBase64url"))
+    p.require(signed["apiVersion"] == "serverware.policyCustodyGuestDelivery/v1")
+    payload_raw = p.canonical(signed["payload"])
+    cold, payload = _validate_delivery_payload(configuration_raw=configuration_raw,
+        configuration_sha256=configuration_sha256, payload_raw=payload_raw,
+        activation=activation, boot=boot, startup_deadline=startup_deadline, now=now,
+        names=SPOOL_RETRIEVAL_NAMES)
+    p.require(p.canonical(payload["activation"]) == p.canonical(activation))
     public = Ed25519PublicKey.from_public_bytes(p.decoded(cold["authority"]["publicKeyBase64url"], size=32))
     public.verify(p.decoded(signed["signatureBase64url"], size=64), DOMAIN + payload_raw)
     _delivery_guest(payload, signed_delivery_original)

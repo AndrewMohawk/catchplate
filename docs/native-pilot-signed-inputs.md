@@ -64,19 +64,13 @@ new role or permission and preserves ordinary fallback for unselected profiles.
 
 ## Remaining launch work
 
-`NativePilotLaunch` remains a same-process staged API. Its executable conductor
-still needs the following actual resource producers before it can assemble
-the complete request path:
-
-- An explicit four-descriptor Retrieval receiver joining its existing listener
-  and objects with the real spool store and lock; the old two-descriptor profile
-  must remain unchanged.
-- A GenerationInstall listener and durable journal producer consuming genuine
-  independently admitted genesis/head originals, not generating that authority.
-- A fixed CommitRequest server listener, plus the actual remaining production
-  listener/journal and selected proof resources expected by `OperationalInputs`.
-- The fixed operator phase machine, retaining all these owners across external
-  signing and ordered release under the existing startup deadlines.
+`NativePilotLaunch` remains a same-process staged API. The subsequent `.354`
+[resource-owner batch](native-pilot-resource-owners.md) implements the explicit
+four-descriptor Retrieval receiver, GenerationInstall listener/journal,
+CommitRequest server listener and actual bridge production/proof resources.
+The old two-descriptor Retrieval profile remains unchanged. The fixed executable
+operator phase machine must still retain all these owners across independent
+signing and ordered release under the existing startup deadlines.
 
 The cohort already has signed-original receiving for nine non-Persistence
 endpoints; Persistence retains its separate transfer owner. Outgoing client

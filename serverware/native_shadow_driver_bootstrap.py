@@ -579,6 +579,9 @@ class DriverBootstrap:
         outgoing = getattr(self, "_outgoing_resources", None)
         if outgoing is not None:
             outgoing._close_after_driver_exit(self)
+        bridge_resources = getattr(self, "_bridge_resources", None)
+        if bridge_resources is not None:
+            bridge_resources._close_after_driver_exit(self)
         for fd in (self._driver_pidfd, self._pidfd, self._exec, self._bundle, self._gate_pidfd, self._constructed_public_fd, self._admission_namespace_fd):
             if fd is not None:
                 os.close(fd)

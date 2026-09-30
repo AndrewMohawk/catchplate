@@ -10,7 +10,7 @@ use zeroize::Zeroizing;
 mod verifier_result;
 #[path="native_verifier_transport.rs"]
 mod verifier_transport;
-pub(crate) use verifier_transport::NativeVerifierTransportPin;
+pub(crate) use verifier_transport::{NativeVerifierTransportPin,NativeVerifierTransportRole};
 #[path="native_key_delivery.rs"]
 mod encrypted;
 #[path="native_commitment_key.rs"]

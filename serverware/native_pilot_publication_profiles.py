@@ -14,6 +14,10 @@ from serverware import native_shadow_nitro_profile as p
 from serverware import native_shadow_proof_cohort_assignment as cohort
 
 _ROOT = "/etc/serverware/native-pilot-inputs/"
+_NATIVE_OPERATIONS = ("ingress", "ledger", "terminal", "dispatchBarrier", "activeEffectBarrier",
+    "activeEffectCommit", "retrieval", "commitRequest", "persistence", "trustedTime")
+_LAUNCH_INPUTS = {"trust": 1024 * 1024, "time-bootstrap": 65536, "assignment": 4 * 1024 * 1024,
+    "closure": 1024 * 1024, "keys": 65536, "encrypted-keys": 65536, "admission": 65536, "verifier": 32768}
 # family, exact role (if encoded by that wire), maximum original bytes
 PROFILES = {
     "cohort-configuration": ("cohort-config", None, 32768),
@@ -22,6 +26,14 @@ PROFILES = {
     "bridge-runtime": ("bridge-runtime", None, 65536),
     "bridge-outgoing": ("bridge-outgoing", None, 8192),
     "native-generation-install-grant": ("generation-install", None, 65536),
+    **{"native-service-" + operation: ("native-service", operation, 65536)
+       for operation in _NATIVE_OPERATIONS},
+    **{"native-launch-" + role: ("native-launch", role, 32768)
+       for role in cohort.ENDPOINT_ROLES + ("bridge",)},
+    **{"native-runtime-" + role: ("native-runtime", role, 65536)
+       for role in cohort.ENDPOINT_ROLES},
+    **{"native-" + role + "-" + suffix: ("native-launch-input", role, maximum)
+       for role in cohort.ENDPOINT_ROLES + ("bridge",) for suffix, maximum in _LAUNCH_INPUTS.items()},
     **{"native-cold-" + role: ("native-cold", role, 65536)
        for role in cohort.ENDPOINT_ROLES},
     **{"ordinary-cold-" + role: ("ordinary-cold", role, 65536)
@@ -130,6 +142,20 @@ def shape(purpose, raw):
     """Validate the selected public envelope, never authenticate its authority."""
     p.require(type(purpose) is str and purpose in PROFILES)
     family, role, maximum = PROFILES[purpose]
+    if family in ("native-launch", "native-runtime", "native-launch-input"):
+        from serverware import native_pilot_launch_publication as launch
+        launch.shape(purpose, raw)
+        return
+    if family == "native-service":
+        from serverware import native_pilot_native_service_authority as authority
+        signed = _signed(raw, maximum, native=True)
+        value = p.fields(signed["payload"], authority.PAYLOAD_FIELDS[role])
+        api, purpose_name, _ = authority.PROFILES[role]
+        p.require(value["apiVersion"] == api and value["purpose"] == purpose_name)
+        p.guest(value["guest"])
+        for field in ("assignmentPayloadSha256", "keyAuthorizationSha256", "signingKeyId", "signingKeySpkiSha256"):
+            p.digest(value[field])
+        return
     if family in ("bridge-runtime", "bridge-outgoing"):
         from serverware import native_pilot_bridge_install as bridge_install
         bridge_install.shape(purpose, raw)

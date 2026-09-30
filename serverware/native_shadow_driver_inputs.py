@@ -190,7 +190,10 @@ class OperationalInputs:
                     ("keys", "keys", 65536), ("encrypted", "encryptedKeys", 65536), ("admission", "admission", 65536),
                     ("verifier", "verifierTransport", 32768)):
                 owner._public(name, inner[field], bound)
-            p.require(inner["verifierTransport"]["path"] == "/etc/serverware/native-shadow-public-exchange.json")
+            verifier_paths = ("/etc/serverware/native-shadow-public-exchange.json",)
+            if launch["apiVersion"] == "serverware.nativeProofBridgeLaunch/v5":
+                verifier_paths += ("/etc/serverware/native-pilot-inputs/native-bridge-verifier.json",)
+            p.require(inner["verifierTransport"]["path"] in verifier_paths)
             owner._public("time-grant", launch["trustedTime"], 65536)
             p.require(type(payload["credentials"]) is list and 1 <= len(payload["credentials"]) <= 64)
             total = 0

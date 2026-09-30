@@ -6,6 +6,12 @@ does not approve requests, hold signing keys, provision private credentials, or
 automatically run the authority/install commands. This is an implemented
 process-and-transport connection, not a running or accepted pilot.
 
+The separate `scripts/run_native_pilot_authority_coordinator.py` now connects
+the same real process owner to fixed signing/publication jobs. It requires a
+distinct independent approval exchange for every job; it does not make those
+decisions itself. The transparent relay above is unchanged. Neither command has
+been executed as evidence of pilot readiness.
+
 ## Prerequisites and fixed command
 
 The coordinator runs as root under independently protected source and Python
@@ -88,6 +94,100 @@ There is no skipped phase, unsolicited future reply, automatic retry or new
 startup window. See [authority commands](native-pilot-authority-commands.md) for
 the separate purpose-specific producers and restricted public installers.
 
+## Authority coordinator: separately approved jobs
+
+The authority coordinator runs **60 fixed jobs** across those same eleven phases
+and accepts **42 fixed key-purpose selectors**. Its invocation synopsis is:
+
+```text
+python3 -I -B scripts/run_native_pilot_authority_coordinator.py --run-native-pilot --runtime-inventory-fd N --runtime-inventory-sha256 SHA --authority-key PURPOSE=FD [repeat for every fixed purpose]
+```
+
+This is a synopsis, not a ready-to-run command. `N`, `SHA` and every key FD must
+come from independent provisioning. The exact selector inventory is
+`native_pilot_phase_execution.KEY_PURPOSES`; all selectors are required once:
+
+| Selector family | Fixed selections | Count |
+| --- | --- | --- |
+| Driver/cohort | `driver-bootstrap`, `driver-constructed`, `cohort-precreation`, `cohort-release`, `driver-scope` | 5 |
+| `native-delivery-<role>` | The ten endpoint roles in the operator-input guide, plus `bridge` | 11 |
+| `ordinary-delivery-<role>`, `ordinary-generation-<role>` | Each of the five ordinary roles | 10 |
+| `native-service-<operation>` | `ingress`, `ledger`, `terminal`, `dispatchBarrier`, `activeEffectBarrier`, `activeEffectCommit`, `retrieval`, `commitRequest`, `persistence`, `trustedTime` | 10 |
+| Generation/dispatch | `native-generation-install-grant`; `ordinary-dispatch-durable-recovery-store`; `ordinary-dispatch-current-signature-authority` | 3 |
+| Ordinary spool | `ordinary-head`, `ordinary-cleanup`, `ordinary-current` | 3 |
+
+Each supplied key FD is an already provisioned root:root `0400`, sealed 32-byte
+Ed25519 memfd. The existing purpose producer verifies the selected authority;
+the selector itself grants no permission. The coordinator consumes the supplied
+FDs, retains private CLOEXEC duplicates, and starts the conductor with
+`close_fds=True`. No key or key FD enters its request/reply protocol or the
+conductor. These software-key controls are not measured/non-exportable custody.
+
+This coordinator, its authority scripts and dependencies need their own
+independently protected execution environment. They are **not** included in the
+conductor runtime's two-script package. Native artifacts, private service
+credentials, protected directories and the independently operated supervisor
+still must be provisioned; this command generates none of them.
+
+The separate job channel uses `serverware.nativePilotAuthorityJobRequest/v1`
+and `serverware.nativePilotAuthorityJobReply/v1`. Each request binds its global
+exchange `sequence`, `conductorSequence`, `conductorRequestSha256`, `phase`,
+`jobIndex`, fixed `job`, and original `deadlineBoottimeNs`. The first job of a
+phase includes the actual `conductorRequest`; subsequent jobs use that retained
+binding. `previousResult` exposes only the preceding actual public output or
+installation result. The source-selected job order is not a caller job list.
+
+For each job the independent supervisor must approve the complete next input
+and install these two new files before replying:
+
+```text
+/etc/serverware/native-pilot-authority/<phase>/<job>.approval.json
+/etc/serverware/native-pilot-authority/<phase>/<job>.input.json
+```
+
+Names come only from the fixed source job table. Both files must be protected
+root:root `0400`, single-link regular originals, opened read-only/no-follow under
+protected root-owned ancestors. No path is accepted in the reply. The approval
+original is canonical ASCII JSON without LF, at most 8 KiB, with exactly:
+
+```text
+apiVersion = serverware.nativePilotAuthorityJobApproval/v1
+conductorSequence, conductorRequestSha256, phase, jobIndex, job,
+deadlineBoottimeNs, inputSha256
+```
+
+The job reply has exactly these ten fields:
+
+```text
+apiVersion = serverware.nativePilotAuthorityJobReply/v1
+sequence, conductorSequence, conductorRequestSha256, phase, jobIndex, job,
+requestSha256, approvalSha256, inputSha256
+```
+
+`requestSha256` binds the complete canonical job request without LF. The two
+approved hashes identify the exact protected files; the approval's input hash
+and original deadline must match. The input retains its existing purpose-specific
+grammar and byte ceiling. Job frames remain canonical ASCII plus one LF, bounded
+to 32 MiB each and 128 MiB aggregate; retained job originals are also bounded
+to 128 MiB. A pipe or matching hash alone does not establish independent approval
+provenance: the separately operated supervisor and its protected-install
+capability are mandatory external prerequisites.
+
+Later inputs may embed signatures just produced by earlier jobs. Each therefore
+gets a **new independent approval of its complete bytes after the actual prior
+output exists**. The executor does not fill placeholders, infer permission from
+child observations, or treat one phase approval as permission for future inputs.
+It calls the existing purpose producers/installers and constructs conductor
+replies only from successful actual publication results or independently pinned
+existing originals it opened. The original startup/lifetime and cleanup reserve
+remain unchanged throughout all jobs; there is no per-job renewal.
+
+Any failed or partial operation fences the attempt. New files remain in place;
+there is no rollback, replacement or automatic signing/publication retry.
+Retained authority inputs and key capabilities are released only after the real
+conductor's terminal cleanup result and reap, or proof no child was started.
+Unknown cleanup retains the owners for external supervision.
+
 ## Cleanup and evidence boundary
 
 The owner retains the actual child, PIDFD and pipes. After normal completion or
@@ -95,7 +195,9 @@ failure, the coordinator makes one cleanup attempt. A spawned child's clean
 result requires its genuine stderr terminal original, terminal PIDFD, actual
 reap and a matching exit status. The child result is
 `serverware.nativePilotOperatorResult/v1`; the coordinator emits its own
-`serverware.nativePilotCoordinatorResult/v1` summary. Neither substitutes for
+`serverware.nativePilotCoordinatorResult/v1` summary (or
+`serverware.nativePilotAuthorityCoordinatorResult/v1` for the authority caller).
+Neither substitutes for
 the other's process evidence. Closing before start returns the distinct
 `serverware.nativePilotCoordinatorNotStarted/v1`, never workload-cleanup proof.
 
@@ -111,7 +213,8 @@ Both `pilotAcceptanceVerified` and `productionReleaseEligible` remain false,
 including on that exit. Process cleanup is not ordinary application allow/deny
 acceptance, request-evidence validation, or production readiness.
 
-The independent approval/signing/install orchestration is still external.
-Supplied authority commands do not make that policy decision, and the relay
-does not assemble artifacts or provision services/private inputs. No coordinator
-or pilot was executed while this implementation and guide were authored.
+Fixed signing/install execution is connected by the authority caller; independent
+approval decisions and provisioning remain external. The transparent relay still
+executes no authority jobs. Neither path establishes production acceptance, and
+no coordinator or pilot was executed while this implementation and guide were
+authored.

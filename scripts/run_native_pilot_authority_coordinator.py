@@ -1,0 +1,119 @@
+#!/usr/bin/env python3
+"""Run fixed pilot jobs under a separately provisioned independent supervisor.
+
+The supervisor must independently approve and install each complete job input
+at the source-fixed paths before replying. Root pipes alone are not approval
+provenance. This command creates no approval service, keys, credentials or new
+windows. Its purpose-key FDs are not passed to the conductor. The existing
+transparent run_native_pilot_coordinator.py command remains unchanged.
+"""
+from __future__ import annotations
+
+import argparse
+import fcntl
+import json
+import os
+from pathlib import Path
+import signal
+import sys
+
+
+class _Parser(argparse.ArgumentParser):
+    def error(self, _message):
+        raise ValueError("native pilot authority coordinator invocation refused")
+
+
+def _stop(_signum, _frame):
+    raise KeyboardInterrupt
+
+
+def _result(status, phase):
+    raw = json.dumps({"apiVersion": "serverware.nativePilotAuthorityCoordinatorResult/v1", "status": status,
+        "phase": phase, "pilotAcceptanceVerified": False, "productionReleaseEligible": False},
+        sort_keys=True, separators=(",", ":")).encode("ascii") + b"\n"
+    try:
+        fcntl.fcntl(2, fcntl.F_SETFL, fcntl.fcntl(2, fcntl.F_GETFL) | os.O_NONBLOCK)
+        os.write(2, raw)
+    except OSError:
+        pass
+
+
+def main():
+    owner = executor = channel = None
+    phase, failed = "open", False
+    signal.signal(signal.SIGTERM, _stop)
+    signal.signal(signal.SIGINT, _stop)
+    try:
+        if not (sys.flags.isolated and sys.flags.dont_write_bytecode
+                and os.getresuid() == (0, 0, 0) and os.getresgid() == (0, 0, 0)):
+            raise ValueError("isolated privileged authority coordinator required")
+        parser = _Parser(description=__doc__, allow_abbrev=False, add_help=False)
+        parser.add_argument("--run-native-pilot", required=True, action="store_true")
+        parser.add_argument("--runtime-inventory-fd", required=True, type=int)
+        parser.add_argument("--runtime-inventory-sha256", required=True)
+        parser.add_argument("--authority-key", required=True, action="append")
+        args = parser.parse_args()
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+        from serverware import native_shadow_nitro_profile as p
+        from serverware.native_pilot_authority_channel import ApprovalChannel
+        from serverware.native_pilot_coordinator_process import ConductorProcess
+        from serverware.native_pilot_operator_channel import STAGES
+        from serverware.native_pilot_phase_execution import KEY_PURPOSES, PhaseExecution
+
+        p.require(len(args.authority_key) == len(KEY_PURPOSES))
+        declared = {}
+        for literal in args.authority_key:
+            p.require(type(literal) is str and literal.count("=") == 1)
+            purpose, number = literal.split("=", 1)
+            p.require(purpose in KEY_PURPOSES and purpose not in declared and number.isascii()
+                and number.isdecimal() and len(number) <= 10)
+            fd = int(number)
+            p.require(str(fd) == number and 3 <= fd < (1 << 31) and fd != args.runtime_inventory_fd)
+            declared[purpose] = fd
+        channel = ApprovalChannel.open()
+        owner = ConductorProcess.prepare(runtime_inventory_fd=args.runtime_inventory_fd,
+            runtime_inventory_sha256=args.runtime_inventory_sha256)
+        executor = PhaseExecution.open(owner)
+        executor.prepare_keys(declared)
+        phase = "starting"
+        owner.start()
+        for phase in STAGES:
+            request = owner.receive()
+            p.require(request.phase == phase)
+            executor.begin(request)
+            while executor.has_job():
+                # Only this separately provided supervisor can install an
+                # approved next input. The child request is observation data.
+                reply = channel.exchange(executor)
+                executor.execute(reply)
+            executor.complete()  # Reply is built from real publications/reads.
+    except BaseException:
+        failed = True
+
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    terminal = None
+    try:
+        if owner is not None:
+            terminal = owner.close()
+        # Never release authority originals/capabilities before the actual
+        # child cleanup result and reap, or proof it was never spawned.
+        if executor is not None:
+            executor.close()
+        if channel is not None:
+            channel.close()
+    except BaseException:
+        _result("cleanup-unknown-owner-retained", phase)
+        while True:
+            signal.pause()
+    stopped = terminal is not None and terminal.get("status") == "stopped-cleanup-complete"
+    if not failed and stopped:
+        _result("stopped-cleanup-complete", phase)
+        return 0
+    cleaned = terminal is not None and terminal.get("status") in ("stopped-cleanup-complete", "failed-cleanup-complete")
+    _result("failed-cleanup-complete" if cleaned else "not-started", phase)
+    return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

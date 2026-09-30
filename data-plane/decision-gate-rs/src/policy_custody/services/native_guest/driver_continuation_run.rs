@@ -20,6 +20,7 @@ pub(super) fn run(mut prepared:Prepared,identity:driver_identity::Owner,
     let launch=original(&mut rights,"launch",operation.launch_pin(),0,0,32768)?;
     let launch_bytes=launch.read(32768).map_err(fail)?.to_vec();
     let (selected,service)=selection(&launch_bytes)?;
+    let verifier_role=service.verifier_role();
     let (time_pin,commitment_bridge,spool_bridge,terminal_bridge,effects_bridge)=match service {
         SelectedService::ProofBridge(p)=>(p,false,false,false,false),SelectedService::CommitmentBridge(p)=>(p,true,false,false,false),
         SelectedService::SpoolBridge(p)=>(p,true,true,false,false),SelectedService::TerminalBridge(p)=>(p,true,true,true,false),
@@ -91,7 +92,7 @@ pub(super) fn run(mut prepared:Prepared,identity:driver_identity::Owner,
     let encrypted_original=original(&mut rights,"encrypted",&selected.encrypted_keys,0,0,65536)?;
     let admission_original=original(&mut rights,"admission",&selected.admission,0,0,65536)?;
     let time_grant=original(&mut rights,"time-grant",&time_pin,0,0,65536)?;
-    let (path,digest)=selected.verifier_transport.retained_pin()?;
+    let (path,digest)=selected.verifier_transport.retained_selected_pin(verifier_role)?;
     let verifier=original(&mut rights,"verifier",&Pin{path:path.into(),sha256:digest.clone()},0,0,32768)?;
     require(rights.is_empty())?;
     let notice=canonical_json_bytes(&serde_json::json!({"apiVersion":"serverware.nativeShadowDriverPhaseTwoRetained/v1",

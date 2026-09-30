@@ -1,0 +1,533 @@
+"""Execute the fixed pilot's separately approved authority jobs, once each.
+
+The independent supervisor approves every complete input after any prerequisite
+signature exists and installs the two protected fixed job files. An approval
+hash received on a root pipe is not independently authenticated provenance by
+itself. Provisioning that supervisor and its installation/key capabilities is
+mandatory. Child observations are never approval, and no future signed input
+is assembled from placeholders. The actual conductor retains its live owners.
+
+Only existing purpose producers/installers are called. No commands, arbitrary
+destinations, keys, windows, journals or success pins are generated. Partial
+publications remain on failure; the entire attempt is fenced without retry.
+"""
+from __future__ import annotations
+
+import copy
+import fcntl
+import os
+from typing import NamedTuple
+
+from scripts.authority import native_pilot_authority_io as io
+from serverware import custody_commitment_inputs as commitment
+from serverware import custody_generation_grants as generation
+from serverware import custody_spool_inputs as spool
+from serverware import native_pilot_bridge_install as bridge_install
+from serverware import native_pilot_delivery_authority as delivery_authority
+from serverware import native_pilot_driver_authority as driver_authority
+from serverware import native_pilot_generation_install_authority as generation_authority
+from serverware import native_pilot_launch_publication as launch_install
+from serverware import native_pilot_native_service_authority as native_authority
+from serverware import native_pilot_precreation_install as precreation_install
+from serverware import native_pilot_scope_authority as scope_authority
+from serverware import native_pilot_service_authority as service_authority
+from serverware import native_shadow_nitro_originals as originals
+from serverware import native_shadow_nitro_profile as p
+from serverware import native_shadow_proof_cohort_assignment as cohort
+from serverware import native_shadow_retrieval_artifacts as retrieval
+from serverware.native_pilot_coordinator_channel import Request
+from serverware.native_pilot_coordinator_process import ConductorProcess
+from serverware.native_pilot_operator_channel import STAGES
+from serverware.native_pilot_public_inputs import PublicInputs
+from serverware.native_pilot_publication import PublicPublisher
+from serverware.native_pilot_service_inputs import ENDPOINT_INPUT_ROLES
+from serverware.native_shadow_generation_install_inputs import MAX_RECORD, MAX_RECORDS
+from serverware.native_shadow_proof_cohort_control import _Original
+
+APPROVAL_ROOT = "/etc/serverware/native-pilot-authority"
+MAX_RETAINED_BYTES = 128 * 1024 * 1024
+MAX_APPROVAL = 8192
+_TOKEN = object()
+_LIVE = None
+_USED = False
+_NATIVE_ENDPOINT = {"ingress": "ingressAdmission", "ledger": "commitRequest", "terminal": "terminalAppend",
+    "dispatchBarrier": "dispatchBarrier", "activeEffectBarrier": "activeEffectBarrier",
+    "activeEffectCommit": "activeEffectCommit", "retrieval": "retrieval", "persistence": "persistence",
+    "trustedTime": "trustedTime", "commitRequest": "commitRequest"}
+_GRANT_FOR_ENDPOINT = {role: operation for operation, role in _NATIVE_ENDPOINT.items() if operation != "commitRequest"}
+_COHORT_ARGUMENTS = ("retrieval_configuration_raw", "persistence_configuration_raw", "trusted_time_configuration_raw",
+    "generation_install_configuration_raw", "commit_request_configuration_raw", "ingress_admission_configuration_raw",
+    "terminal_append_configuration_raw", "dispatch_barrier_configuration_raw",
+    "active_effect_barrier_configuration_raw", "active_effect_commit_configuration_raw")
+
+
+class _Job(NamedTuple):
+    name: str
+    family: str
+    role: str | None
+    maximum: int
+    purpose: str | None
+    key: str | None
+
+
+def _signed(name, family, role, maximum, purpose=None):
+    return _Job(name, family, role, maximum, purpose, name)
+
+
+def _plain(name, family, maximum, role=None):
+    return _Job(name, family, role, maximum, None, None)
+
+
+# No user-controlled operation list. Dependencies intentionally precede later
+# approval requests; every later producer receives its complete approved bytes.
+JOBS = {
+    "bootstrap-admission": (_signed("driver-bootstrap", "driver", "bootstrap", driver_authority.MAX_INPUT,
+                                   "driver-bootstrap-admission"),),
+    "endpoint-precreation": (_signed("cohort-precreation", "cohort", "precreation", 2 * 1024 * 1024),
+        _plain("install-precreation", "precreation", precreation_install.MAX_INPUT)),
+    "endpoint-inputs": (_plain("endpoint-inputs", "endpoint-inputs", 65536),),
+    "endpoint-deliveries": tuple(_signed("native-delivery-" + role, "delivery", role,
+        delivery_authority.MAX_INPUT, "native-delivery-" + role) for role in ENDPOINT_INPUT_ROLES),
+    "service-originals": (
+        *(_signed("ordinary-delivery-" + role, "ordinary-delivery", role, service_authority.MAX_INPUT_BYTES,
+                  "ordinary-delivery-" + role) for role in generation.ROLES),
+        *(_signed("ordinary-generation-" + role, "ordinary-generation", role, service_authority.MAX_INPUT_BYTES,
+                  "ordinary-generation-" + role) for role in generation.ROLES),
+        *(_signed("native-delivery-" + role, "delivery", role, delivery_authority.MAX_INPUT,
+                  "native-delivery-" + role) for role in cohort.ENDPOINT_ROLES if role not in ENDPOINT_INPUT_ROLES),
+        _signed("native-service-commitRequest", "native", "commitRequest", native_authority.MAX_INPUT,
+                "native-service-commitRequest"),
+        *(_signed("native-service-" + operation, "native", operation, native_authority.MAX_INPUT,
+                  "native-service-" + operation) for operation in native_authority.OPERATIONS if operation != "commitRequest"),
+        _signed("native-generation-install-grant", "generation-install", None,
+                generation_authority.MAX_INPUT_BYTES, "native-generation-install-grant"),
+        *(_signed("ordinary-dispatch-" + role, "ordinary-dispatch", role, service_authority.MAX_INPUT_BYTES,
+                  "ordinary-dispatch-" + role) for role in commitment.ROLES),
+        *(_signed("ordinary-" + operation, "ordinary-" + operation, role, service_authority.MAX_INPUT_BYTES,
+                  "ordinary-" + operation) for operation, role in zip(("head", "cleanup", "current"), spool.EFFECT_ROLES, strict=True)),
+        *(_plain("install-launch-" + role, "launch", launch_install.MAX_INPUT, role) for role in cohort.ENDPOINT_ROLES),
+        _plain("service-material", "service-material", 32768),
+    ),
+    "bridge-runtime": (_plain("install-bridge-runtime", "bridge-runtime", bridge_install.MAX_INPUT),),
+    "bridge-delivery": (_signed("native-delivery-bridge", "delivery", "bridge", delivery_authority.MAX_INPUT,
+                                "native-delivery-bridge"),
+        _plain("install-launch-bridge", "launch", launch_install.MAX_INPUT, "bridge")),
+    "release": (_signed("cohort-release", "cohort", "release", 2 * 1024 * 1024, "cohort-release"),
+        _signed("driver-scope", "scope", None, scope_authority.MAX_INPUT, "driver-scope"),
+        _plain("phase-two-public", "phase-two-public", 1024)),
+    "constructed-admission": (_signed("driver-constructed", "driver", "constructed", driver_authority.MAX_INPUT,
+                                      "driver-constructed-admission"),),
+    "generation-origin": (_plain("observe-generation-origin", "origin", 1024),),
+    "shutdown": (_plain("stop", "stop", 1024),),
+}
+KEY_PURPOSES = tuple(sorted({job.key for jobs in JOBS.values() for job in jobs if job.key is not None}))
+
+
+def _same(first, second):
+    p.require(p.canonical(first) == p.canonical(second))
+
+
+def _raw(value, maximum):
+    p.require(type(value) is str and value.isascii())
+    raw = value.encode("ascii")
+    p.document(raw, maximum)
+    return raw
+
+
+class PhaseExecution:
+    """Actual pending child request plus separately retained authority inputs."""
+
+    def __init__(self, token, process):
+        p.require(token is _TOKEN)
+        self._process = process
+        self._pid, self._boot = os.getpid(), originals._boot()
+        self._held, self._keys = [], {}
+        self._publisher = self._public = None
+        self._bytes = self._exchange = self._phase_index = self._job_index = 0
+        self._request = self._ticket = None
+        self._failed = self._closed = self._keys_attempted = False
+        self._outputs, self._pins, self._installations, self._observations = {}, {}, {}, {}
+        self._previous = None
+        self._material = self._endpoint_inputs = self._public_bundle_pin = self._scope_bundle = None
+
+    @classmethod
+    def open(cls, process):
+        global _USED, _LIVE
+        p.require(cls is PhaseExecution and not _USED and type(process) is ConductorProcess)
+        process._origin()
+        p.require(not process._started and tuple(JOBS) == STAGES)
+        _USED = True
+        owner = cls(_TOKEN, process)
+        _LIVE = owner
+        return owner  # Caller retains this before any key/file/publication work.
+
+    def prepare_keys(self, declared):
+        self._check()
+        p.require(not self._keys_attempted and not self._process._started)
+        self._keys_attempted = True
+        try:
+            p.fields(declared, KEY_PURPOSES)
+            for purpose in KEY_PURPOSES:
+                source = declared[purpose]
+                identity = io._input(source, 32, private=True)
+                p.require(identity[6] == 32)
+                held = fcntl.fcntl(source, fcntl.F_DUPFD_CLOEXEC, 3)
+                self._keys[purpose] = (held, identity)
+                p.require(io._input(held, 32, private=True) == identity)
+            # Explicit transferred capability FDs are consumed. Only the
+            # retained CLOEXEC copies remain; conductor Popen uses close_fds.
+            for fd in set(declared.values()):
+                os.close(fd)
+            self._publisher = PublicPublisher.open()
+            self._public = PublicInputs.open()
+            self._check()
+        except BaseException:
+            self._failed = True
+            raise
+
+    def _check(self, *, pending=False):
+        p.require(_LIVE is self and not self._closed and not self._failed and os.getpid() == self._pid
+            and originals._boot() == self._boot)
+        self._process._origin()
+        if pending:
+            p.require(type(self._request) is Request and self._process._channel._pending is self._request)
+            self._process._io_check(self._request.deadline_boottime_ns)
+        for original in self._held:
+            original.check()
+        if self._publisher is not None:
+            self._publisher.check()
+        if self._public is not None:
+            self._public.check()
+
+    def begin(self, request):
+        self._check()
+        p.require(self._keys_attempted and self._public is not None and self._request is None
+            and type(request) is Request and self._process._channel._pending is request
+            and self._phase_index < len(STAGES) and request.phase == STAGES[self._phase_index]
+            and request.sequence == self._phase_index + 1)
+        self._request, self._job_index = request, 0
+        self._observations[request.phase] = request.payload
+        self._check(pending=True)
+
+    def has_job(self):
+        self._check(pending=True)
+        return self._job_index < len(JOBS[self._request.phase])
+
+    def job_request(self):
+        self._check(pending=True)
+        p.require(self.has_job() and self._ticket is None)
+        request = self._request
+        job = JOBS[request.phase][self._job_index]
+        value = {"apiVersion": "serverware.nativePilotAuthorityJobRequest/v1", "sequence": self._exchange + 1,
+            "conductorSequence": request.sequence, "conductorRequestSha256": p.sha(request.raw),
+            "phase": request.phase, "jobIndex": self._job_index + 1, "job": job.name,
+            "deadlineBoottimeNs": str(request.deadline_boottime_ns),
+            "conductorRequest": p.document(request.raw, 32 * 1024 * 1024) if self._job_index == 0 else None,
+            "previousResult": copy.deepcopy(self._previous)}
+        self._ticket = p.canonical(value)
+        return value
+
+    def _retain(self, path, digest, maximum):
+        p.require(self._bytes < MAX_RETAINED_BYTES)
+        original = _Original(path, min(maximum, MAX_RETAINED_BYTES - self._bytes), digest, mode=0o400)
+        self._held.append(original)
+        self._bytes += len(original.raw)
+        p.require(self._bytes <= MAX_RETAINED_BYTES)
+        return original.raw
+
+    def execute(self, reply):
+        """Consume one job before input validation, signing or filesystem writes."""
+        self._check(pending=True)
+        p.require(self._ticket is not None and self.has_job())
+        request = self._request
+        job = JOBS[request.phase][self._job_index]
+        self._failed = True  # Only definite completion releases this attempt fence.
+        ticket = p.document(self._ticket, 32 * 1024 * 1024)
+        p.fields(reply, ("apiVersion", "sequence", "conductorSequence", "conductorRequestSha256", "phase",
+            "jobIndex", "job", "requestSha256", "approvalSha256", "inputSha256"))
+        p.require(reply["apiVersion"] == "serverware.nativePilotAuthorityJobReply/v1"
+            and reply["requestSha256"] == p.sha(self._ticket))
+        for field in ("sequence", "conductorSequence", "conductorRequestSha256", "phase", "jobIndex", "job"):
+            _same(reply[field], ticket[field])
+        stem = APPROVAL_ROOT + "/" + request.phase + "/" + job.name
+        approval_raw = self._retain(stem + ".approval.json", p.digest(reply["approvalSha256"]), MAX_APPROVAL)
+        approval = p.fields(p.document(approval_raw, MAX_APPROVAL), ("apiVersion", "conductorSequence",
+            "conductorRequestSha256", "phase", "jobIndex", "job", "deadlineBoottimeNs", "inputSha256"))
+        p.require(approval["apiVersion"] == "serverware.nativePilotAuthorityJobApproval/v1")
+        for field in ("conductorSequence", "conductorRequestSha256", "phase", "jobIndex", "job", "deadlineBoottimeNs"):
+            _same(approval[field], ticket[field])
+        p.require(p.digest(approval["inputSha256"]) == p.digest(reply["inputSha256"]))
+        raw = self._retain(stem + ".input.json", approval["inputSha256"], job.maximum)
+        value = p.document(raw, job.maximum)
+        self._process._io_check(request.deadline_boottime_ns)
+        self._bind(job, value)
+        key = None
+        if job.key is not None:
+            fd, identity = self._keys[job.key]
+            p.require(io._input(fd, 32, private=True) == identity)
+            key = io.signing_key(fd)
+        result = self._perform(job, raw, value, key)
+        del key  # Not a hardware/non-exportable or guaranteed-zeroization claim.
+        if job.key is not None:
+            p.require(io._input(fd, 32, private=True) == identity)
+        for original in self._held:
+            original.check()
+        self._process._io_check(request.deadline_boottime_ns)
+        self._publisher.check(); self._public.check()
+        self._previous = {"phase": request.phase, "job": job.name, "result": result}
+        self._job_index += 1
+        self._exchange += 1
+        self._ticket = None
+        self._failed = False
+
+    def _known(self, field, value, output):
+        p.require(_raw(value[field], 131072) == self._outputs[output])
+
+    def _bind(self, job, value):
+        """Join approved input originals to this actual request and prior outputs."""
+        observed = self._request.payload
+        if job.family == "driver":
+            if job.role == "bootstrap":
+                _same(value["observationOriginal"], observed["bootstrapObservationOriginal"])
+                _same(value["payloadOriginal"], observed["admissionPayloadOriginal"])
+            else:
+                for field, original in observed.items():
+                    _same(value[field], original)
+                self._known("bootstrapAdmissionOriginal", value, "driver-bootstrap")
+        elif job.family == "cohort":
+            if job.role == "precreation":
+                config = p.document(_raw(value["configurationOriginal"], 32768), 32768)
+                _same(config["externalDriver"]["observationSha256"],
+                    p.sha(_raw(observed["bootstrapObservationOriginal"], 65536)))
+            else:
+                _same(value["observationsOriginal"], self._observations["service-originals"]["cohortObservationOriginal"])
+                self._known("precreationOriginal", value, "cohort-precreation")
+        elif job.family == "precreation":
+            _same(value["driverObservationOriginal"], observed["bootstrapObservationOriginal"])
+            self._known("cohortPrecreationOriginal", value, "cohort-precreation")
+        elif job.family == "delivery":
+            expected = observed["activation"] if job.role == "bridge" else observed["nativeActivations"][job.role]
+            p.require(type(expected) is list)
+            _same(self._array_original(value["activationOriginal"]), expected)
+            _same(value["role"], job.role)
+            _same(value["observationOriginal"], self._observations["bootstrap-admission"]["bootstrapObservationOriginal"]
+                if job.role == "bridge" else observed["cohortObservationOriginal"])
+        elif job.family.startswith("ordinary-"):
+            operation = job.family.removeprefix("ordinary-")
+            _same(value["serviceRole"], job.role)
+            if operation == "delivery":
+                _same(value["activation"], observed["ordinaryActivations"][job.role])
+            else:
+                for role, service in value["services"].items():
+                    self._known("deliveryOriginal", service, "ordinary-delivery-" + role)
+                    if operation != "generation":
+                        self._known("generationGrantOriginal", service, "ordinary-generation-" + role)
+                if operation == "dispatch":
+                    self._known("nativeGrantOriginal", value, "native-service-commitRequest")
+                if operation in ("head", "cleanup", "current"):
+                    for name in spool.EFFECT_NATIVE:
+                        p.require(_raw(value["nativeOriginals"][name], 65536) == self._outputs["native-service-" + name])
+                    if operation != "head":
+                        self._known("headGrantOriginal", value, "ordinary-head")
+                    if operation == "current":
+                        self._known("cleanupGrantOriginal", value, "ordinary-cleanup")
+        elif job.family == "native":
+            self._known("deliveryOriginal", value, "native-delivery-" + _NATIVE_ENDPOINT[job.role])
+            _same(value["observationOriginal"], observed["cohortObservationOriginal"])
+            if job.role == "ledger":
+                self._known("companionOriginal", value, "native-service-commitRequest")
+                _same(value["companionPin"], self._pins["native-service-commitRequest"])
+            elif job.role == "retrieval":
+                _same(p.document(_raw(value["endpointDeliveryResultOriginal"], 32768), 32768), observed["endpointDeliveryResult"])
+                for name in native_authority.SIGNERS:
+                    p.require(_raw(value["nativeGrantOriginals"][name], 65536) == self._outputs["native-service-" + name])
+        elif job.family == "generation-install":
+            self._known("coordinatorDeliveryOriginal", value, "native-delivery-generationInstall")
+            _same(value["observationOriginal"], observed["cohortObservationOriginal"])
+            for role, service in p.fields(value["services"], generation.ROLES).items():
+                self._known("deliveryOriginal", service, "ordinary-delivery-" + role)
+                self._known("generationGrantOriginal", service, "ordinary-generation-" + role)
+        elif job.family == "launch":
+            _same(value["role"], job.role)
+            _same(value["keyAdmission"]["delivery"], self._pins["native-delivery-" + job.role])
+            key = "native-generation-install-grant" if job.role == "generationInstall" else "native-service-" + (
+                "trustedTime" if job.role == "bridge" else _GRANT_FOR_ENDPOINT[job.role])
+            _same(value["serviceGrant"], self._pins[key])
+            _same(value["observationOriginal"], self._observations["bootstrap-admission"]["bootstrapObservationOriginal"]
+                if job.role == "bridge" else observed["cohortObservationOriginal"])
+        elif job.family == "bridge-runtime":
+            _same(value["driverObservationOriginal"], self._observations["bootstrap-admission"]["bootstrapObservationOriginal"])
+            runtime = p.document(_raw(value["runtimeOriginal"], 65536), 65536)
+            _same(runtime["generationAdmission"]["grants"], observed["ordinaryGenerationGrants"])
+            _same(observed["ordinaryGenerationGrants"], {role: self._pins["ordinary-generation-" + role]["sha256"]
+                for role in generation.ROLES})
+            _same(runtime["journalDirectoryIdentity"], observed["bridgeJournal"])
+            for role in commitment.ROLES:
+                p.require(_raw(runtime["commitRequest"]["serviceGrantOriginals"][role], 65536)
+                    == self._outputs["ordinary-dispatch-" + role])
+            for field, output in (("headGrantOriginal", "ordinary-head"), ("cleanupGrantOriginal", "ordinary-cleanup"),
+                                  ("currentGrantOriginal", "ordinary-current")):
+                self._known(field, runtime["spool"], output)
+        elif job.family == "scope":
+            _same(value["operationOriginal"], observed["operationOriginal"])
+            self._known("bootstrapAdmissionOriginal", value, "driver-bootstrap")
+            p.require(_raw(value["launchOriginal"], 32768) == self._public.read(
+                self._installations["install-launch-bridge"]["launch"], maximum=32768))
+            self._scope_bundle = _raw(value["publicBundleOriginal"], 1024 * 1024)
+
+    @staticmethod
+    def _array_original(value):
+        # Activation is an existing canonical array, not p.document's object.
+        import json
+        p.require(type(value) is str and value.isascii() and 0 < len(value) <= 65536)
+        decoded = json.loads(value, object_pairs_hook=p._pairs, parse_float=p._reject, parse_constant=p._reject)
+        p.require(type(decoded) is list and p.canonical(decoded) == value.encode("ascii"))
+        return decoded
+
+    def _cohort_sign(self, operation, value, key):
+        fields = ("apiVersion", "operation", "configurationOriginal", "configurationSha256", "coldOriginals", "payloadOriginal")
+        p.fields(value, fields + (("precreationOriginal", "observationsOriginal") if operation == "release" else ()))
+        p.require(value["apiVersion"] == "serverware.nativePilotCohortAuthorityInput/v1" and value["operation"] == operation)
+        raw = _raw(value["configurationOriginal"], cohort.MAX_BYTES)
+        digest = p.digest(value["configurationSha256"])
+        config = cohort.configuration(raw)
+        p.require(config["apiVersion"] == "serverware.nativeShadowProofCohortConfiguration/v7"
+            and cohort.roles(config) == cohort.ENDPOINT_ROLES and p.sha(raw) == digest)
+        cold = p.fields(value["coldOriginals"], cohort.ENDPOINT_ROLES)
+        kwargs = {name: _raw(cold[role], 65536) for role, name in zip(cohort.ENDPOINT_ROLES, _COHORT_ARGUMENTS, strict=True)}
+        if operation == "release":
+            kwargs["precreation_raw"] = _raw(value["precreationOriginal"], cohort.MAX_BYTES)
+            kwargs["observations_raw"] = _raw(value["observationsOriginal"], cohort.MAX_BYTES)
+            producer = cohort.sign_release
+        else:
+            producer = cohort.sign_precreation
+        return producer(configuration_raw=raw, configuration_sha256=digest, bridge_configuration_raw=None,
+            payload_raw=_raw(value["payloadOriginal"], cohort.MAX_BYTES), boot=originals._boot(),
+            now=originals._clock(), signing_key=key, **kwargs)
+
+    def _perform(self, job, raw, value, key):
+        signed = None
+        if job.family == "driver":
+            signed = driver_authority.sign(job.role, raw, key)
+        elif job.family == "cohort":
+            signed = self._cohort_sign(job.role, value, key)
+        elif job.family == "delivery":
+            signed = delivery_authority.sign(raw, key)
+        elif job.family == "native":
+            signed = native_authority.sign(job.role, raw, key)
+        elif job.family == "generation-install":
+            signed, _ = generation_authority.sign(input_original=raw, signing_key=key)
+        elif job.family.startswith("ordinary-"):
+            signed, _ = service_authority.sign(operation=job.family.removeprefix("ordinary-"), role=job.role,
+                input_original=raw, signing_key=key)
+        elif job.family == "scope":
+            signed = scope_authority.sign(raw, key)
+        if signed is not None:
+            self._outputs[job.name] = signed  # Retain even if publication fails.
+            result = {"original": signed.decode("ascii"), "sha256": p.sha(signed)}
+            if job.purpose is not None:
+                self._process._io_check(self._request.deadline_boottime_ns)
+                pin = self._publisher.publish(purpose=job.purpose, raw=signed, expected_sha256=p.sha(signed))
+                self._pins[job.name] = pin
+                result["pin"] = pin  # Measured output of this approved job, not a new approval.
+            return result
+        if job.family == "precreation":
+            result = precreation_install.install(raw, expected_sha256=p.sha(raw))
+        elif job.family == "bridge-runtime":
+            result = bridge_install.install(raw, expected_sha256=p.sha(raw))
+        elif job.family == "launch":
+            result = launch_install.install(raw, expected_sha256=p.sha(raw))
+            _same(result["role"], job.role)
+        elif job.family == "endpoint-inputs":
+            p.fields(value, ("coldOriginals", "peer", "proofScope", "retrievalManifest", "objectDirectory", "assignment", "production"))
+            for pin in p.fields(value["coldOriginals"], ENDPOINT_INPUT_ROLES).values():
+                self._public.read(pin, maximum=p.MAX_CONFIG)
+            for name, maximum in (("peer", 16384), ("proofScope", 16384), ("retrievalManifest", retrieval.MAX_MANIFEST),
+                                  ("assignment", 4 * 1024 * 1024)):
+                self._public.read(value[name], maximum=maximum)
+            p.fields(value["production"], scope_authority.PRODUCTION_FIELDS)
+            # The actual conductor alone opens/owns this separately provisioned
+            # object store. A path here is not reconstructed resource evidence.
+            p.require(type(value["objectDirectory"]) is str and value["objectDirectory"].startswith("/")
+                and len(value["objectDirectory"]) <= 4096 and "\0" not in value["objectDirectory"])
+            self._endpoint_inputs = copy.deepcopy(value)
+            result = {"publicPinsOpened": True}
+        elif job.family == "service-material":
+            p.fields(value, ("persistence", "generationJournal"))
+            persistence = p.fields(value["persistence"], ("configuration", "genesis", "journal"))
+            for name, maximum in (("configuration", p.MAX_CONFIG), ("genesis", 16384), ("journal", 1024)):
+                self._public.read(persistence[name], maximum=maximum)
+            journal = p.fields(value["generationJournal"], ("genesis", "records"))
+            self._public.read(journal["genesis"], maximum=MAX_RECORD)
+            p.require(type(journal["records"]) is list and len(journal["records"]) <= MAX_RECORDS)
+            for pin in journal["records"]:
+                self._public.read(pin, maximum=MAX_RECORD)
+            self._material = copy.deepcopy(value)
+            result = {"publicPinsOpened": True}
+        elif job.family == "phase-two-public":
+            p.fields(value, ("phaseTwoPublic",))
+            p.require(self._public.read(value["phaseTwoPublic"], maximum=1024 * 1024) == self._scope_bundle)
+            self._public_bundle_pin = copy.deepcopy(value["phaseTwoPublic"])
+            result = {"pin": self._public_bundle_pin}
+        else:
+            p.require(job.family in ("origin", "stop"))
+            p.fields(value, ("action",))
+            p.require(value["action"] == ("observe-installed-generation" if job.family == "origin" else "stop"))
+            result = dict(value)  # A requested action, never an installed verdict.
+        self._installations[job.name] = result
+        return result
+
+    def complete(self):
+        self._check(pending=True)
+        p.require(not self.has_job() and self._ticket is None)
+        phase = self._request.phase
+        if phase == "bootstrap-admission":
+            reply = {"bootstrapAdmission": self._pins["driver-bootstrap"]}
+        elif phase in ("endpoint-precreation", "bridge-runtime"):
+            reply = {}
+        elif phase == "endpoint-inputs":
+            reply = self._endpoint_inputs
+        elif phase == "endpoint-deliveries":
+            reply = {"endpointDeliveries": {role: self._pins["native-delivery-" + role] for role in ENDPOINT_INPUT_ROLES}}
+        elif phase == "service-originals":
+            reply = {"ordinaryDeliveries": {role: self._pins["ordinary-delivery-" + role] for role in generation.ROLES},
+                "ordinaryGrants": {role: self._pins["ordinary-generation-" + role] for role in generation.ROLES},
+                "dispatchGrants": {role: self._pins["ordinary-dispatch-" + role] for role in commitment.ROLES},
+                "dispatchNativeGrant": self._pins["native-service-commitRequest"],
+                "spoolGrants": {role: self._pins["ordinary-" + name] for name, role in
+                    zip(("head", "cleanup", "current"), spool.EFFECT_ROLES, strict=True)},
+                "nativeSpoolGrants": {name: self._pins["native-service-" + name] for name in spool.EFFECT_NATIVE},
+                "endpointLaunches": {role: self._installations["install-launch-" + role]["launch"] for role in cohort.ENDPOINT_ROLES},
+                **self._material}
+        elif phase == "bridge-delivery":
+            reply = {"launch": self._installations["install-launch-bridge"]["launch"]}
+        elif phase == "release":
+            reply = {"endpointRelease": self._pins["cohort-release"], "phaseTwoScope": self._pins["driver-scope"],
+                "phaseTwoPublic": self._public_bundle_pin}
+        elif phase == "constructed-admission":
+            reply = {"constructedAdmission": self._pins["driver-constructed"]}
+        else:
+            reply = {"action": "observe-installed-generation" if phase == "generation-origin" else "stop"}
+        self._failed = True
+        self._process.reply(self._request, copy.deepcopy(reply))
+        self._request = None
+        self._phase_index += 1
+        self._failed = False
+
+    def close(self):
+        """Release only after actual child cleanup, never retry any job or unlink."""
+        global _LIVE
+        if self._closed:
+            return
+        p.require(_LIVE is self and os.getpid() == self._pid and self._process._closed)
+        p.require(self._process._result["status"] in ("not-started", "stopped-cleanup-complete", "failed-cleanup-complete"))
+        for original in reversed(self._held):
+            original.close()
+        for fd, _ in self._keys.values():
+            os.close(fd)
+        if self._public is not None:
+            self._public.close()
+        if self._publisher is not None:
+            self._publisher.close()
+        self._closed = True
+        _LIVE = None

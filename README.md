@@ -22,18 +22,18 @@ Checkpoint: **2026-09-30 — pre-production, pilot assembly.**
 
 [![Project checkpoints, one segment per task: 36 of 46 source-landed; 10 active and 0 todo. Evidence handoff 10/10; historical recovery 4/5; permissions and grants 10/10; finalization and sessions 8/8; workloads and native 3/6; providers and operations 1/7. H05, N04, N05, N06 and O01 through O06 are in progress. Production acceptance remains 0/6. Engineering assembly is not an accepted pilot or production deployment.](docs/images/project-progress.svg)](docs/production-status.md#next-source-milestones)
 
-The current `.359` source batch adds a [process-owning coordinator relay](docs/native-pilot-coordinator.md),
-corrects startup ordering so dependent grants bind the real initialized store,
-and connects protected bridge-runtime installation and initial generation-install
-signing. Signing keys remain outside the launcher.
+The current `.360` source batch connects the [authority coordinator](docs/native-pilot-coordinator.md)
+to the real startup process: 60 fixed, separately approved jobs produce grants
+and install the ten endpoint launches plus the bridge. Per-service verifier
+files remove a shared-path startup conflict. Signing keys stay outside the conductor.
 The [launcher runtime package](docs/native-pilot-build.md#conductor-runtime-package)
 and [live owner composition](docs/native-pilot-operator-inputs.md) are source-landed;
-the independent approval/signing automation is still incomplete. This is not an
+the independent approval service and protected deployment are not provisioned. This is not an
 interactive quickstart or a running pilot.
 The [persistent workload sidecar](docs/native-workload-sidecar.md) supports ordinary
 HTTPS libraries without direct proxy mTLS; provider credentials stay out of the
 application. These latest changes are not yet compiled or deployed. Remaining
-pilot work includes remaining grant/launch integration, artifact assembly, authority automation and
+pilot work includes complete artifact assembly, authority deployment and
 provisioned inputs/services. Broad testing follows the connected pilot build.
 
 The bar shows **committed source, not tested readiness or remaining effort**.

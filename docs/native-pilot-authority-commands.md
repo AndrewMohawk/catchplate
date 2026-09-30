@@ -3,9 +3,9 @@
 These are purpose-specific commands for an independently operated authority,
 not independent approval automation or a pilot quickstart. They produce the existing
 cohort precreation/release, driver admission/continuation, native and ordinary
-delivery, and ordinary service grants from explicitly approved input. Restricted
-installers publish literal public originals and the fixed endpoint-precreation
-configuration bundle at the paths consumed by the existing pilot owners.
+delivery, and native and ordinary service grants from explicitly approved input.
+Restricted installers publish literal public originals, configuration bundles
+and fixed endpoint/bridge launches at the paths consumed by the pilot owners.
 
 The commands do not generate keys, approve their own inputs, start the pilot,
 provision private service credentials or replace any independent signer. A protected
@@ -117,15 +117,23 @@ fixed inventory, never a caller-supplied path or extensible role list.
 | `native-cold-<role>`, `ordinary-cold-<role>` | Ten endpoint and five ordinary cold configurations | 65,536 |
 | `bridge-runtime` | Approved bridge runtime/v9 public original | 65,536 |
 | `native-generation-install-grant` | Existing native coordinator assignment envelope | 65,536 |
+| `native-service-<operation>` | Ten native operations listed below | 65,536 |
+| `native-launch-<role>` | Ten endpoint roles plus `bridge` | 32,768 |
+| `native-runtime-<role>` | Ten endpoint roles only; bridge uses `bridge-runtime` | 65,536 |
+| `native-<role>-trust`, `native-<role>-closure` | Eleven launch roles | 1 MiB each |
+| `native-<role>-assignment` | Eleven launch roles | 4 MiB |
+| `native-<role>-time-bootstrap`, `-keys`, `-encrypted-keys`, `-admission` | Eleven launch roles, each suffix appended to `native-<role>` | 65,536 each |
+| `native-<role>-verifier` | Eleven independently pinned verifier transport originals | 32,768 |
 
 The precreation installer also uses `cohort-configuration`, `ordinary-launch`
 and `cohort-control` at their fixed `/etc/serverware/` loader paths. Their limits
 are respectively 32,768, 65,536 and 4,096 bytes. The original three purposes keep
 their 32,768-byte ceilings. `bridge-outgoing` uses the fixed
 `/etc/serverware/native-shadow-driver-outgoing.json` loader path with an
-8,192-byte bound. Aggregate publication stays bounded to 128 originals
+8,192-byte bound. The 4 MiB global single-original ceiling does not enlarge any
+older per-purpose limit. Aggregate publication stays bounded to 128 originals
 and 32 MiB. Native C9 files are delivery originals, **not** endpoint/bridge launch
-envelopes; independently approved launch files must still reference them.
+envelopes; the launch installer below references their retained exact pins.
 
 ```text
 python3 -I -B scripts/install_native_pilot_public_original.py --purpose cohort-release --input-fd 3 --sha256 sha256:INDEPENDENTLY_APPROVED_ORIGINAL_DIGEST
@@ -197,6 +205,64 @@ producers handle delivery/generation/dispatch; the effects grants bind the
 actual signed public predecessors without constructing a `GenerationInputs`
 owner. Native signature/quote/currentness and retained-resource admission remain
 with their purpose-specific receivers; no output is a service-ready verdict.
+
+## Native operational grant producers
+
+```text
+python3 -I -B scripts/authority/sign_native_pilot_native_service.py --operation retrieval --input-fd 3 --authority-key-fd 4
+```
+
+The approved `serverware.nativePilotNativeServiceAuthorityInput/v1` input is
+bounded to 4 MiB and has these exact 15 common fields, plus only the selected
+operation's fields below:
+
+```text
+apiVersion                    operation
+configurationOriginal         configurationSha256
+assignmentPayloadOriginal     cohortConfigurationOriginal
+precreationOriginal           observationOriginal
+coldConfigurationOriginal     deliveryOriginal
+runtimeOriginal               peerOriginal
+peerSha256                    issuedAtUnixNanos
+expiresAtUnixNanos
+```
+
+`configurationOriginal` is the independently approved native verifier/key
+admission configuration, distinct from the cold C9 configuration. All named
+originals are literal canonical ASCII strings; pins and epoch bounds are
+supplied, not generated. CLI and input operation must match. In this table,
+**S** means the three additional fields `spoolScopeOriginal`,
+`proofScopeOriginal`, `originVerifierOriginal`—not an input field named `S`.
+Every signature domain is fixed by the operation:
+
+| Operation | Additional fields | Existing signature domain |
+| --- | --- | --- |
+| `ingress` | S | `serverware.nativeShadowIngressServiceAssignment.signature/v1` |
+| `ledger` | S, `companionPin`, `companionOriginal` | `serverware.nativeShadowLedgerSpoolServiceAssignment.signature/v2` |
+| `terminal` | S | `serverware.nativeShadowTerminalSpoolServiceAssignment.signature/v1` |
+| `dispatchBarrier` | S | `serverware.nativeShadowDispatchBarrierServiceAssignment.signature/v1` |
+| `activeEffectBarrier` | S | `serverware.nativeShadowActiveEffectBarrierServiceAssignment.signature/v1` |
+| `activeEffectCommit` | S | `serverware.nativeShadowActiveEffectCommitServiceAssignment.signature/v1` |
+| `retrieval` | `spoolScopeOriginal`, `proofScopeOriginal`, `endpointDeliveryResultOriginal`, `nativeGrantOriginals` | `serverware.nativeLedgerSpoolRetrievalGrant.signature/v3` |
+| `commitRequest` | `commitmentScopeOriginal` | `serverware.nativeShadowCommitRequestServiceAssignment.signature/v1` |
+| `persistence` | `proofScopeOriginal`, `genesisOriginal`, `journalOriginal`, `permissions` | `serverware.nativeShadowPersistenceServiceAssignment.signature/v1` |
+| `trustedTime` | `bootstrapOriginal` | `serverware.nativeShadowTrustedTimeServiceAssignment.signature/v1` |
+
+Outputs are the existing `{payload,signature}` envelopes, at most 65,536 bytes,
+published under `native-service-<operation>`. `commitRequest` produces the
+separate companion grant for the same actual ledger guest; `ledger` verifies
+that original before binding its pin. Retrieval's `nativeGrantOriginals` has
+exactly the six signer operation names (`ingress`, `ledger`, `terminal` and the
+three effects), each containing its already signed original.
+`endpointDeliveryResultOriginal` carries the retained three endpoint guests and
+physical `spoolJournal` observation from the preceding endpoint-deliveries
+phase; it is not substituted for a live resource owner or approval.
+
+The producers preserve existing signature transcripts, original boot/time
+namespace and startup deadline, and authenticate the supplied predecessor
+associations. They do not synthesize peers, journal history, permissions, keys
+or evidence. Native operational consumers still check their actual retained
+resources, trusted time and admission before use.
 
 ## Endpoint-precreation configuration installation
 
@@ -318,13 +384,86 @@ publication purpose is `native-generation-install-grant`, beneath
 `/etc/serverware/native-pilot-inputs/`; publication is not signature admission,
 actual generation installation or pilot readiness.
 
+## Endpoint and bridge launch installation
+
+```text
+python3 -I -B scripts/install_native_pilot_launch.py --input-fd 3 --input-sha256 sha256:INDEPENDENTLY_APPROVED_BUNDLE_DIGEST
+```
+
+This exclusive filesystem installer accepts a protected public input FD, never
+a signing key or credential FD. Its canonical no-LF
+`serverware.nativePilotLaunchBundle/v1` bundle is bounded to **16 MiB**, with
+exactly these nine fields:
+
+```text
+apiVersion                    role
+ownerConfigurationSha256       windowSha256
+observationOriginal           keyAdmission
+runtimeOriginal               originals
+serviceGrant
+```
+
+The eleven fixed roles are `retrieval`, `persistence`, `trustedTime`,
+`generationInstall`, `commitRequest`, `ingressAdmission`, `terminalAppend`,
+`dispatchBarrier`, `activeEffectBarrier`, `activeEffectCommit`, and `bridge`.
+`keyAdmission` is the complete supplied `nativeShadowGuestLaunch/v1` object:
+`apiVersion` plus exact pins for `deliveryConfiguration`, `delivery`, `trust`,
+`timeBootstrap`, `assignment`, `closure`, `keys`, `encryptedKeys`, `admission`
+and `verifierTransport`. `originals` has exactly the latter eight component
+names, each mapped to its literal canonical public original. `serviceGrant` is
+the pin of the previously published role-specific grant, not a new signature.
+
+Endpoint owner pins select the existing fixed cohort configuration/precreation;
+bridge pins select the existing driver configuration/window. The installer
+retains those files and the existing cold, C9 and service-grant originals,
+checks their supplied associations and signatures, and preserves the original
+boot/window/epoch limits. Observations remain independently approved inputs,
+not authenticated kernel evidence merely because this command parsed them.
+
+For each endpoint it publishes the supplied runtime at
+`native-runtime-<role>.json`, then the eight nested public originals, then
+**`native-launch-<role>.json` last**. These names are beneath the fixed public
+input directory in the publication table. The first three endpoint C9 intake
+methods check runtime pins without opening the files; this later publication
+therefore precedes the actual native runtime read. The bridge instead retains
+and compares the already installed `bridge-runtime.json`; it never replaces it.
+Bridge launch/v5 references the actual `native-service-trustedTime` endpoint
+grant, not an invented bridge-guest time grant. The `commitRequest` launch uses
+`native-service-ledger` and retains its separately pinned `native-service-commitRequest`
+companion. GenerationInstall uses `native-generation-install-grant`.
+
+Every new launch requires its own fixed `native-<role>-verifier.json` pin. The
+runtime successor admits that role-specific selection; this is not a shared
+global verifier file rewritten for each guest. Existing legacy profiles remain
+separate. Key files here contain public authorization and encrypted-delivery
+metadata only. The installer neither opens nor copies the separately
+provisioned ciphertext/private C9 credential files, and cannot generate keys,
+renew authorization, release endpoints or start a service.
+
+All public joins and destination preflight precede writes. Publication remains
+root:root `0400`, exclusive, fsynced and read back; each role has one attempt,
+with at most 128 new originals and 32 MiB across calls in the process. Existing
+files are not adopted or repaired. A partial installation or output failure
+retains all created paths and fences further attempts; no rollback or retry is
+provided. Require complete `nativePilotLaunchInstallation/v1` output and
+successful exit. Its `launch` pin and component `pins` report file publication,
+not native admission, readiness or request success. Filesystem/crypto stalls
+still require the independent supervisor's watchdog.
+
 ## What remains
 
-These commands close specific producer/publication gaps. The implemented
-[process coordinator and eleven-phase relay](native-pilot-coordinator.md) owns
-the real conductor process and transport, but does not automate independent
-approval, signing or installation. Still required are that authority's actual
-approval/observation and supervision, all required service-grant and launch
-originals, artifact assembly and protected installation, service/private-input
-and workload provisioning, then the connected ordinary application allow/deny
-and cleanup run. No command in this guide was executed when authored.
+The source-connected per-job executor now joins approved inputs to these actual
+producer and installation APIs, then forms replies from their real returned
+originals/pins. The existing [process coordinator and eleven-phase transparent
+relay](native-pilot-coordinator.md) is unchanged; neither mode supplies
+independent approval or converts conductor observations into signing authority.
+
+The remaining pilot work is operational: provision the independent supervisor
+and its approved complete public inputs, matching authority keys and required
+artifacts; build/package and protectively install the current runtimes; provision
+service/private inputs, native hardware and workload identity/namespace/sidecar;
+then deploy and run one connected ordinary application allow/deny and genuine
+cleanup sequence. Initial generation issuance remains initial-only; historical
+issuance and full production acceptance are not credited. These source changes
+do not prove any command was executed, any service is admitted, or a user-testable
+pilot is running.

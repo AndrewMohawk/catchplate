@@ -76,6 +76,7 @@ pub(super) fn verify_parent(cold:&Cold,phase:&PhaseTwo,rights:&[OwnedFd])->Resul
     let rights=operation.take(duplicates)?;
     let raw=parent_file(&rights,"launch",&operation.launch,0,0,32768)?;
     let (launch,service)=selection(&raw)?;
+    let verifier_role=service.verifier_role();
     let time_grant=match service {SelectedService::ProofBridge(p)|SelectedService::CommitmentBridge(p)|SelectedService::SpoolBridge(p)|SelectedService::TerminalBridge(p)|SelectedService::ActiveEffectBridge(p)=>p,
         _=>return Err(ShadowError::BindingDrift)};
     require(launch.delivery_configuration.sha256==cold.config.delivery_configuration.sha256
@@ -103,7 +104,7 @@ pub(super) fn verify_parent(cold:&Cold,phase:&PhaseTwo,rights:&[OwnedFd])->Resul
         ("admission",&launch.admission,65536),("time-grant",&time_grant,65536)];
     let mut names=BTreeSet::from(["launch".to_owned(),"c9-configuration".into(),"c9-delivery".into(),"c9-runtime".into(),"verifier".into()]);
     for (name,pin,bound) in pins {parent_file(&rights,name,pin,0,0,bound)?;names.insert(name.into());}
-    let (path,digest)=launch.verifier_transport.retained_pin()?;
+    let (path,digest)=launch.verifier_transport.retained_selected_pin(verifier_role)?;
     let pin=Pin{path:path.into(),sha256:digest.clone()};
     parent_file(&rights,"verifier",&pin,0,0,32768)?;
     for entry in &p.credentials {

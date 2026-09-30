@@ -18,9 +18,40 @@ const MAX_RESULT: usize = 32 * 1024;
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all="camelCase", deny_unknown_fields)]
 pub(crate) struct NativeVerifierTransportPin { path: String, sha256: Sha256Digest }
+
+/// Chosen from the actual launch variant, never deserialized from a pin.
+/// The shared legacy path remains explicit; there is no fallback file lookup.
+#[derive(Clone,Copy)]
+pub(crate) enum NativeVerifierTransportRole {
+    Retrieval, Persistence, TrustedTime, GenerationInstall, CommitRequest,
+    IngressAdmission, TerminalAppend, DispatchBarrier, ActiveEffectBarrier,
+    ActiveEffectCommit, Bridge,
+}
+impl NativeVerifierTransportRole {
+    fn path(self)->&'static str {
+        match self {
+            Self::Retrieval=>"/etc/serverware/native-pilot-inputs/native-retrieval-verifier.json",
+            Self::Persistence=>"/etc/serverware/native-pilot-inputs/native-persistence-verifier.json",
+            Self::TrustedTime=>"/etc/serverware/native-pilot-inputs/native-trustedTime-verifier.json",
+            Self::GenerationInstall=>"/etc/serverware/native-pilot-inputs/native-generationInstall-verifier.json",
+            Self::CommitRequest=>"/etc/serverware/native-pilot-inputs/native-commitRequest-verifier.json",
+            Self::IngressAdmission=>"/etc/serverware/native-pilot-inputs/native-ingressAdmission-verifier.json",
+            Self::TerminalAppend=>"/etc/serverware/native-pilot-inputs/native-terminalAppend-verifier.json",
+            Self::DispatchBarrier=>"/etc/serverware/native-pilot-inputs/native-dispatchBarrier-verifier.json",
+            Self::ActiveEffectBarrier=>"/etc/serverware/native-pilot-inputs/native-activeEffectBarrier-verifier.json",
+            Self::ActiveEffectCommit=>"/etc/serverware/native-pilot-inputs/native-activeEffectCommit-verifier.json",
+            Self::Bridge=>"/etc/serverware/native-pilot-inputs/native-bridge-verifier.json",
+        }
+    }
+}
 impl NativeVerifierTransportPin {
     pub(in crate::policy_shadow::policy_custody::services) fn retained_pin(&self)->Result<(&str,&Sha256Digest),ShadowError>{
-        require(self.path==CONFIGURATION_PATH)?;Ok((&self.path,&self.sha256))
+        self.retained_selected_pin(None)
+    }
+    pub(in crate::policy_shadow::policy_custody::services) fn retained_selected_pin(&self,
+        role:Option<NativeVerifierTransportRole>)->Result<(&str,&Sha256Digest),ShadowError>{
+        require(self.path==CONFIGURATION_PATH || role.map(|role|self.path==role.path()).unwrap_or(false))?;
+        Ok((&self.path,&self.sha256))
     }
 }
 
@@ -153,12 +184,21 @@ impl PreparedNativeCustodyKeys {
     /// selects one protected public original; its signature admits the purpose.
     pub(crate) fn prepare_external_verifier(&mut self, pin: NativeVerifierTransportPin,
         trust: &dyn EnvelopeKeyTrust, time: &dyn TrustedTime) -> Result<(),ShadowError> {
+        self.prepare_selected_external_verifier(pin,None,trust,time)
+    }
+    pub(in crate::policy_shadow::policy_custody::services) fn prepare_selected_external_verifier(&mut self,
+        pin:NativeVerifierTransportPin,role:Option<NativeVerifierTransportRole>,
+        trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime)->Result<(),ShadowError>{
         self.association.check_preparation().map_err(fail)?;
-        require(self.verifier_transport.is_none() && pin.path == CONFIGURATION_PATH)?;
+        require(self.verifier_transport.is_none())?;
+        let (path,digest)=match role {
+            Some(role)=>pin.retained_selected_pin(Some(role))?,
+            None=>pin.retained_pin()?,
+        };
         let checkpoint = trust.current_checkpoint()?;
         require(self.checkpoint.permits_successor(&checkpoint))?;
         super::verify(&self.configuration,&self.assignment,&self.association,&checkpoint,trust,time)?;
-        let original = Original::open(Path::new(CONFIGURATION_PATH),0,0,32768,pin.sha256).map_err(fail)?;
+        let original = Original::open(Path::new(path),0,0,32768,digest.clone()).map_err(fail)?;
         let bytes = original.read(32768).map_err(fail)?;
         let configuration: Configuration = serde_json::from_slice(bytes.as_slice()).map_err(fail)?;
         require(canonical_json_bytes(&configuration)?.as_slice() == bytes.as_slice())?;

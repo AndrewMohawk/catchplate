@@ -7,23 +7,36 @@ is the existing root-only pipe channel on stdin/stdout. Interactive terminals,
 arbitrary configuration paths, executable arguments, callbacks and commands
 are not supported. An external root-owned automation process must establish
 the pipes and coordinate the independently operated input authorities within
-the original deadlines. This CLI does not supply that authority automation.
+the original deadlines. The conductor itself contains no authority automation.
 The separate [coordinator process owner](native-pilot-coordinator.md) establishes
-the actual child and relays these exact exchanges to an independent supervisor.
-It does not implement that supervisor's approval/signing/provisioning decisions.
+the actual child. `scripts/run_native_pilot_coordinator.py` remains the unchanged
+transparent relay; `scripts/run_native_pilot_authority_coordinator.py` executes
+60 fixed signing/publication/input jobs using 42 explicitly supplied key-purpose
+capabilities outside the conductor. The latter uses a distinct per-job approval
+dialogue, not a broader interpretation of the eleven-phase protocol below.
 
 The separate [authority commands and protected installers](native-pilot-authority-commands.md)
-provide cohort precreation/release, driver admission/scope, native/bridge C9 and
-ordinary-service grant production, plus fixed precreation and bridge-runtime installation.
+provide cohort precreation/release, driver admission/scope, native/bridge C9,
+native/ordinary service grants and fixed precreation, bridge-runtime and launch installation.
 They require independently approved complete originals and keys, not raw
-unapproved requests from this channel. Remaining native service-grant/launch
-inputs and independent authority automation remain open. The installer does not
-create the bridge's separately provisioned service-owned credentials.
+unapproved requests from this channel. Each dependent job is approved only after
+the actual preceding public output exists; no future signed input is filled from
+templates or approved by its own observation. Fixed protected approval/input
+files bind the actual request, job and original deadline; replies contain only
+their independently approved hashes, never commands, paths or success pins.
+The [coordinator guide](native-pilot-coordinator.md#authority-coordinator-separately-approved-jobs)
+defines that separate dialogue and exact fields. Independent approval decisions,
+protected installation capability, authority runtimes/keys and private service
+credentials remain required external provisioning, not outputs of the conductor.
 
 The separate [runtime package](native-pilot-build.md#conductor-runtime-package)
 provides an isolated Python entrypoint and portable filesystem bytes. Building
 or extracting that package does not install its privileged execution environment,
 provision the independent authorities or authorize this live command.
+Its two-script runtime does not package either coordinator or the authority
+execution environment. Source connections described here have not been executed
+as pilot acceptance or readiness evidence; original deadlines and actual cleanup
+requirements are unchanged.
 
 The conductor retains the actual driver, endpoint, ordinary-service and
 resource owners in one process. Operator replies supply independently produced

@@ -5,7 +5,7 @@ use crate::policy_shadow::native_custody_closure::{Configuration as ClosureConfi
 use super::{GuestClosureAssociation,GuestClosureBinding,PreparedGuestServiceDelivery};
 use super::super::guest_original::Original;
 use super::native_keys::{NativeCustodyKeyConfiguration,NativeShadowEncryptedKeysConfiguration,
-    NativeVerifierTransportPin,PreparedNativeCustodyKeys,admission};
+    NativeVerifierTransportPin,NativeVerifierTransportRole,PreparedNativeCustodyKeys,admission};
 use std::collections::{BTreeMap,BTreeSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64,Ordering};
@@ -88,6 +88,25 @@ enum SelectedService {None,Retrieval(Pin),LedgerRetrieval(Pin),RetrievalBridge,A
     TrustedTime(Pin),ProofBridge(Pin),Generation(Pin),CommitmentBridge(Pin),SpoolBridge(Pin),CommitRequest(Pin),LedgerSpool(Pin),Ingress(Pin),
     TerminalSpool(Pin),CompletionLedgerSpool(Pin),CompletionRetrieval(Pin),TerminalBridge(Pin),
     DispatchSpool(Pin),ActiveEffectBarrier(Pin),ActiveEffectCommit(Pin),EffectRetrieval(Pin),ActiveEffectBridge(Pin)}
+impl SelectedService {
+    fn verifier_role(&self)->Option<NativeVerifierTransportRole>{
+        use NativeVerifierTransportRole as Role;
+        match self {
+            Self::EffectRetrieval(_)=>Some(Role::Retrieval),
+            Self::PersistenceLocked(_)=>Some(Role::Persistence),
+            Self::TrustedTime(_)=>Some(Role::TrustedTime),
+            Self::Generation(_)=>Some(Role::GenerationInstall),
+            Self::CompletionLedgerSpool(_)=>Some(Role::CommitRequest),
+            Self::Ingress(_)=>Some(Role::IngressAdmission),
+            Self::TerminalSpool(_)=>Some(Role::TerminalAppend),
+            Self::DispatchSpool(_)=>Some(Role::DispatchBarrier),
+            Self::ActiveEffectBarrier(_)=>Some(Role::ActiveEffectBarrier),
+            Self::ActiveEffectCommit(_)=>Some(Role::ActiveEffectCommit),
+            Self::ActiveEffectBridge(_)=>Some(Role::Bridge),
+            _=>None,
+        }
+    }
+}
 #[derive(Serialize,Deserialize)]
 #[serde(untagged)]
 enum Selection {KeyAdmission(Launch),Retrieval(RetrievalLaunch),RetrievalBridge(RetrievalBridgeLaunch),Activation(ActivationLaunch),
@@ -207,6 +226,7 @@ impl AdmittedGuest {
         let launch=Original::native_launch().map_err(fail)?;
         let launch_bytes=launch.read(32768).map_err(fail)?.to_vec();
         let (selected,service_selection)=selection(&launch_bytes)?;
+        let verifier_role=service_selection.verifier_role();
         let commitment_selected=matches!(&service_selection,SelectedService::CommitRequest(_)|SelectedService::LedgerSpool(_)|SelectedService::CompletionLedgerSpool(_));
         let sampling_selected=matches!(&service_selection,SelectedService::LedgerSpool(_)|SelectedService::CompletionLedgerSpool(_));
         let commitment_bridge=matches!(&service_selection,SelectedService::CommitmentBridge(_)|SelectedService::SpoolBridge(_)|SelectedService::TerminalBridge(_)|SelectedService::ActiveEffectBridge(_));
@@ -304,7 +324,11 @@ impl AdmittedGuest {
         let closure=PreparedNativeCustodyClosure::open(closure_configuration,&assignment,&trust,time.as_ref(),&delivery)?;
         closure.require_prekey(&prekey)?;drop(prekey);
         let mut keys=PreparedNativeCustodyKeys::open_encrypted(keys_configuration,encrypted_configuration,&assignment,&trust,time.as_ref(),&delivery)?;
-        keys.prepare_external_verifier(selected.verifier_transport,&trust,time.as_ref())?;
+        if verifier_role.is_some() {
+            keys.prepare_selected_external_verifier(selected.verifier_transport,verifier_role,&trust,time.as_ref())?;
+        } else {
+            keys.prepare_external_verifier(selected.verifier_transport,&trust,time.as_ref())?;
+        }
         process::enter(&closure,&delivery,&lifetime)?;
         let closure=closure.bind_current_process()?;
         let context=process::ContextOwner::bind(&delivery,closure.clone())?;

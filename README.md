@@ -26,15 +26,18 @@ The `.360` source batch connects the [authority coordinator](docs/native-pilot-c
 to the real startup process: 60 fixed, separately approved jobs produce grants
 and install the ten endpoint launches plus the bridge. Per-service verifier
 files remove a shared-path startup conflict. Signing keys stay outside the conductor.
-The current `.361` batch adds its [separate runtime package](docs/native-pilot-build.md#authority-coordinator-runtime-package)
+The `.361` batch adds its [separate runtime package](docs/native-pilot-build.md#authority-coordinator-runtime-package)
 and a bounded non-release build path for the two Python runtime artifacts.
+The current `.362` batch adds installation of independently approved job inputs,
+workload-sidecar/operator exports and permission-preserving strict Python packaging.
 The [launcher runtime package](docs/native-pilot-build.md#conductor-runtime-package)
 and [live owner composition](docs/native-pilot-operator-inputs.md) are source-landed;
 the independent approval service and protected deployment are not provisioned. This is not an
 interactive quickstart or a running pilot.
 The [persistent workload sidecar](docs/native-workload-sidecar.md) supports ordinary
 HTTPS libraries without direct proxy mTLS; provider credentials stay out of the
-application. The latest Rust changes have not been recompiled or deployed. Remaining
+application. The current native compile exposed two sidecar portability/type
+errors; both source fixes are pushed, with a successful corrected build still pending. Remaining
 pilot work includes complete artifact assembly, authority deployment and
 provisioned inputs/services. Broad testing follows the connected pilot build.
 

@@ -91,9 +91,14 @@ NATIVE_PILOT_TARGET = "native-pilot-artifacts"
 NATIVE_PILOT_OPERATOR_TARGET = "native-pilot-operator-artifact"
 NATIVE_PILOT_CONDUCTOR_TARGET = "native-pilot-conductor-artifact"
 NATIVE_PILOT_AUTHORITY_TARGET = "native-pilot-authority-artifact"
+NATIVE_WORKLOAD_SIDECAR_TARGET = "native-workload-sidecar-artifact"
 ENGINEERING_RAW_ARTIFACT_TARGETS = {
     ("Dockerfile.production", NATIVE_PILOT_CONDUCTOR_TARGET),
     ("Dockerfile.production", NATIVE_PILOT_AUTHORITY_TARGET),
+    # Source-fixed, credential-free exports only; never the guest/public-input
+    # bundle or independently operated issuer/runtime targets.
+    ("data-plane/decision-gate-rs/Dockerfile.production", NATIVE_PILOT_OPERATOR_TARGET),
+    ("data-plane/decision-gate-rs/Dockerfile.production", NATIVE_WORKLOAD_SIDECAR_TARGET),
 }
 PUBLIC_GUEST_FILES = {
     "seccomp.bpf": ("seccompSha256", 32768),
@@ -585,10 +590,14 @@ def artifact_build_command(
         raise RuntimeError("production artifact builds require network=none")
     if platform != PRODUCTION_PLATFORM:
         raise RuntimeError(f"production artifact platform must be {PRODUCTION_PLATFORM}")
-    if not engineering_bounded_build and (
-        not output.startswith("type=local,dest=") or output == "type=local,dest="
-    ):
-        raise RuntimeError("production artifact output must be a non-empty local destination")
+    if not engineering_bounded_build:
+        if output.startswith("type=tar,dest="):
+            if (not native_pilot_bounded_build or dockerfile != "Dockerfile.production"
+                    or target not in {NATIVE_PILOT_CONDUCTOR_TARGET, NATIVE_PILOT_AUTHORITY_TARGET}):
+                raise RuntimeError("strict tar export requires a fixed bounded Python runtime build")
+            _engineering_artifact_destination(output)
+        elif not output.startswith("type=local,dest=") or output == "type=local,dest=":
+            raise RuntimeError("production artifact output must be a non-empty local destination")
     pilot_resources: list[str] = []
     if engineering_bounded_build:
         if (
@@ -597,14 +606,15 @@ def artifact_build_command(
             or metadata["source_identity_mode"] != "development-dirty-tree"
             or metadata["production_release_eligible"] is not False
         ):
-            raise RuntimeError("engineering artifact export requires a fixed Python runtime target and non-production dirty-tree identity")
+            raise RuntimeError("engineering artifact export requires a fixed raw pilot target and non-production dirty-tree identity")
         _engineering_artifact_destination(output)
         pilot_resources = [
             argument for resource in ENGINEERING_BUILD_RESOURCES
             for argument in ("--resource", resource)
         ]
     if native_pilot_bounded_build:
-        if target not in {NATIVE_PILOT_TARGET, NATIVE_PILOT_OPERATOR_TARGET, NATIVE_PILOT_CONDUCTOR_TARGET, NATIVE_PILOT_AUTHORITY_TARGET}:
+        if target not in {NATIVE_PILOT_TARGET, NATIVE_PILOT_OPERATOR_TARGET, NATIVE_PILOT_CONDUCTOR_TARGET,
+                          NATIVE_PILOT_AUTHORITY_TARGET, NATIVE_WORKLOAD_SIDECAR_TARGET}:
             raise RuntimeError("native pilot resource limits require a fixed pilot artifact target")
         pilot_resources = _native_pilot_resource_arguments(metadata)
     if target == NATIVE_PILOT_TARGET:
@@ -728,12 +738,12 @@ def main() -> None:
     parser.add_argument(
         "--development-dirty-tree",
         action="store_true",
-        help="Build explicitly non-production images or selected raw Python runtime artifacts from filesystem bytes.",
+        help="Build explicitly non-production images or fixed raw pilot artifacts from filesystem bytes.",
     )
     parser.add_argument(
         "--engineering-bounded-build",
         action="store_true",
-        help="Require dirty-tree image or selected raw Python artifact mode; request fixed Linux per-step 8-CPU/24-GiB BuildKit limits.",
+        help="Require dirty-tree image or fixed raw pilot artifact mode; request fixed Linux per-step 8-CPU/24-GiB BuildKit limits.",
     )
     args = parser.parse_args()
     if args.engineering_bounded_build and not args.development_dirty_tree:
@@ -757,7 +767,7 @@ def main() -> None:
         engineering_destination: Path | None = None
         if args.engineering_bounded_build:
             if (args.dockerfile, args.target) not in ENGINEERING_RAW_ARTIFACT_TARGETS:
-                parser.error("engineering raw artifact export supports only the fixed conductor and authority Python runtime targets")
+                parser.error("engineering raw artifact export supports only the fixed conductor, authority, operator-tool and workload-sidecar targets")
             engineering_destination = _engineering_artifact_destination(args.output)
         metadata = build_metadata(development_dirty_tree=args.development_dirty_tree)
         engineering_result: dict[str, Any] = {}

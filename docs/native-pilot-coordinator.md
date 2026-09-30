@@ -174,6 +174,26 @@ to 128 MiB. A pipe or matching hash alone does not establish independent approva
 provenance: the separately operated supervisor and its protected-install
 capability are mandatory external prerequisites.
 
+The supervisor can use `scripts/install_native_pilot_approval.py` for that
+protected-install step. It takes the actual job-request original and the
+**already independently approved** literal approval/input originals on three
+distinct protected FDs, plus independently authenticated approval/input hashes.
+It accepts only the existing fixed job table, checks the original request,
+sequence, deadline and complete-input binding, and publishes input first and
+approval last at the two paths above. Both destinations must be absent; parents
+must already be protected and provisioned. Actual exclusive creation, fsync,
+readback and retained-file checks precede the returned exact ten-field job reply.
+This is not atomic: any partial pair remains, with no replacement or retry.
+
+The [installer invocation](native-pilot-authority-commands.md#per-job-approval-installation)
+belongs to the independently protected supervisor environment, not either
+runtime package's entrypoint. It creates neither an approval policy nor an
+approval service. Its root-owned pipe output is canonical JSON without LF; the
+supervisor must capture successful completion and the full reply before adding
+the channel's one LF and forwarding it. The existing coordinator still binds
+that reply to its actual pending request and independently opens the originals.
+Neither publication nor a matching hash establishes an independent decision.
+
 Later inputs may embed signatures just produced by earlier jobs. Each therefore
 gets a **new independent approval of its complete bytes after the actual prior
 output exists**. The executor does not fill placeholders, infer permission from

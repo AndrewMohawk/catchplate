@@ -1314,6 +1314,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	scripts/package_native_setup_issuers_runtime.py \
 	scripts/build_native_pilot_artifacts.py \
 	scripts/native_pilot_runtime_artifacts.py \
+	scripts/native_pilot_tar_export.py \
 	scripts/package_native_pilot_runtime.py \
 	scripts/native_pilot_runtime_entrypoint.py \
 	scripts/native_pilot_authority_runtime_entrypoint.py \
@@ -1329,6 +1330,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	scripts/install_native_pilot_precreation.py \
 	scripts/install_native_pilot_bridge.py \
 	scripts/install_native_pilot_launch.py \
+	scripts/install_native_pilot_approval.py \
 	scripts/run_native_pilot_coordinator.py \
 	scripts/run_native_pilot_authority_coordinator.py \
 	scripts/export_native_shadow_bootstrap_runtime.py \
@@ -1610,6 +1612,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/native_pilot_coordinator_channel.py \
 	serverware/native_pilot_phase_execution.py \
 	serverware/native_pilot_authority_channel.py \
+	serverware/native_pilot_approval_install.py \
 	serverware/native_pilot_service_inputs.py \
 	scripts/run_native_pilot.py \
 	serverware/native_shadow_proof_cohort_cleanup.py \
@@ -4003,6 +4006,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				scripts/package_native_setup_issuers_runtime.py \
 				scripts/build_native_pilot_artifacts.py \
 				scripts/native_pilot_runtime_artifacts.py \
+				scripts/native_pilot_tar_export.py \
 				scripts/package_native_pilot_runtime.py \
 				scripts/native_pilot_runtime_entrypoint.py \
 				scripts/native_pilot_authority_runtime_entrypoint.py \
@@ -4018,6 +4022,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				scripts/install_native_pilot_precreation.py \
 				scripts/install_native_pilot_bridge.py \
 				scripts/install_native_pilot_launch.py \
+				scripts/install_native_pilot_approval.py \
 				scripts/run_native_pilot_coordinator.py \
 				scripts/run_native_pilot_authority_coordinator.py \
 				scripts/export_native_shadow_bootstrap_runtime.py \
@@ -4293,6 +4298,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/native_pilot_coordinator_channel.py \
 				serverware/native_pilot_phase_execution.py \
 				serverware/native_pilot_authority_channel.py \
+				serverware/native_pilot_approval_install.py \
 				serverware/native_pilot_service_inputs.py \
 				scripts/run_native_pilot.py \
 				serverware/native_shadow_proof_cohort_cleanup.py \
@@ -9291,7 +9297,7 @@ build-production-images: verify-production-dependency-cache
 	python3 scripts/build_production_images.py --platform "$(PRODUCTION_PLATFORM)" --out "$(PRODUCTION_IMAGES_BUILD_FILE)"
 
 # Build/preparation only: fixed native effects profiles, no signing or launch.
-.PHONY: prepare-native-pilot-build build-native-pilot-operator-tools build-native-pilot-conductor-runtime build-native-pilot-authority-runtime build-native-pilot-artifacts
+.PHONY: prepare-native-pilot-build build-native-pilot-operator-tools build-native-pilot-workload-sidecar build-native-pilot-conductor-runtime build-native-pilot-authority-runtime build-native-pilot-artifacts
 NATIVE_PILOT_OUTPUT ?=
 NATIVE_PILOT_PREPARATION ?=
 NATIVE_PILOT_PUBLIC_INPUTS ?=
@@ -9304,6 +9310,10 @@ prepare-native-pilot-build:
 build-native-pilot-operator-tools:
 	@test -n "$(NATIVE_PILOT_OUTPUT)" || { echo "NATIVE_PILOT_OUTPUT must name a new absolute directory on the build filesystem" >&2; exit 2; }
 	python3 -B scripts/build_native_pilot_artifacts.py operator-tools --out "$(NATIVE_PILOT_OUTPUT)"
+
+build-native-pilot-workload-sidecar:
+	@test -n "$(NATIVE_PILOT_OUTPUT)" || { echo "NATIVE_PILOT_OUTPUT must name a new absolute directory on the build filesystem" >&2; exit 2; }
+	python3 -B scripts/build_native_pilot_artifacts.py workload-sidecar --out "$(NATIVE_PILOT_OUTPUT)"
 
 build-native-pilot-conductor-runtime:
 	@test -n "$(NATIVE_PILOT_OUTPUT)" || { echo "NATIVE_PILOT_OUTPUT must name a new absolute directory on the build filesystem" >&2; exit 2; }

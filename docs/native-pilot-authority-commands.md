@@ -54,6 +54,48 @@ zeroization guarantee. The helper requires isolated/no-bytecode Python and
 disables process dumps before reading a key. Those controls do not establish
 the outstanding production custody requirements.
 
+## Per-job approval installation
+
+The separate supervisor-side `scripts/install_native_pilot_approval.py` connects
+an existing independent approval to the fixed files and reply consumed by the
+[authority coordinator](native-pilot-coordinator.md). It issues no approval or
+signature and accepts no key, command or destination argument.
+
+```text
+python3 -I -B scripts/install_native_pilot_approval.py --request-fd 3 --approval-fd 4 --approval-sha256 sha256:INDEPENDENTLY_APPROVED_APPROVAL_DIGEST --input-fd 5 --input-sha256 sha256:INDEPENDENTLY_APPROVED_INPUT_DIGEST
+```
+
+These placeholders are deliberately invalid. The three distinct descriptors
+use the protected public-FD contract above. They contain, respectively, the
+actual canonical `nativePilotAuthorityJobRequest/v1`, the already approved
+`nativePilotAuthorityJobApproval/v1`, and the complete purpose-specific input.
+The request is observation data, never approval. The supplied hashes must come
+from the independent decision; recomputing them from unapproved bytes does not
+meet that prerequisite. The request ceiling is 32 MiB minus its channel LF;
+approval is at most 8 KiB, and input retains its existing per-job byte ceiling.
+
+The installer derives both destinations solely from the existing fixed job
+table, under `/etc/serverware/native-pilot-authority/<phase>/`. All ancestors
+must already be root-owned and non-group/other-writable. It refuses either
+existing target, writes the exact `<job>.input.json` first and
+`<job>.approval.json` last as exclusive root:root `0400` single-link files, then
+fsyncs, reads back and retains/checks both originals before returning the existing
+exact ten-field job reply. It checks the original absolute BOOTTIME deadline
+and unchanged local boot/time namespace throughout; it cannot renew a window
+or attest that the supplied request owns a process. Run on the admitted pilot
+host/time namespace. The coordinator's retained request and purpose producer
+still perform their actual admission checks.
+
+Stdout is the root-owned supervisor pipe, with canonical reply bytes and no LF.
+Only after successful exit and complete output may the supervisor forward that
+reply with the channel's one LF. Output is clipped to the original deadline.
+Filesystem stalls still require external supervision. Installation is not an
+atomic transaction: a failed write, deadline or output leaves all partial files
+for explicit reconciliation, with no rollback, adoption or automatic retry.
+This CLI requires separately protected supervisor source/dependencies; it is not
+added to either conductor or authority runtime entrypoint/package. No pilot or
+service is started, and no execution/readiness result follows from installation.
+
 ## Exact input contracts
 
 The cohort command accepts `serverware.nativePilotCohortAuthorityInput/v1`,

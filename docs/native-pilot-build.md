@@ -51,6 +51,46 @@ The [collector's fixed configuration](native-pilot-request-collection.md) can bi
 the recorded client/verifier bytes after independent artifact admission; hashes
 in this local build report do not establish that admission by themselves.
 
+## Workload sidecar artifact and unit-helper join
+
+The fixed `workload-sidecar` command builds the existing static-musl
+`native-workload-sidecar-artifact` target without public guest inputs, keys or
+workload configuration. This is a separate workload-side export, not part of
+the enclave or the Python conductor rootfs. The full gate build already
+compiles this executable, but does not copy it into its final image.
+
+From strict clean-source and reviewed dependency prerequisites:
+
+```sh
+python3 -B scripts/build_native_pilot_artifacts.py workload-sidecar \
+  --out /srv/catchplate-fast/tmp/NEW-SIDECAR-OUTPUT
+```
+
+The new output contains `attempt.json`, exactly three files under `artifacts/`,
+and `workload-sidecar.json` only after successful build and inventory:
+
+| Exported path beneath `artifacts/` | Mode | Consumer |
+| --- | --- | --- |
+| `usr/local/libexec/serverware-workload-sidecar` | 0555 | Fixed workload service executable |
+| `usr/share/serverware/install_workload_sidecar_unit.py` | 0444 | Offline unit-file output helper |
+| `usr/share/serverware/native-workload-sidecar.v1.schema.json` | 0444 | Existing fourteen-field cold configuration contract |
+
+The existing Docker owner retains its no-interpreter/no-needed-library ELF and
+64 MiB executable checks. The post-export inventory refuses extra entries,
+symlinks, regular hardlinks, wrong file modes and changed originals. It records
+the actual Linux/amd64 executable digest and requires the helper/schema bytes
+to match the captured source manifest. The helper is not imported or executed.
+The fixed per-RUN build bounds and strict source/cache owner are unchanged;
+this command has no dirty-tree option. Partial output is retained on failure.
+
+After independent artifact admission and protected installation at those exact
+paths, the [existing unit helper](native-workload-sidecar.md#fixed-artifact-and-offline-unit-preparation)
+consumes separately provisioned configuration, its independent pin, and an
+already admitted workload network namespace. It emits a unit only; it does not
+install/start/enable it or provision credentials, a namespace or egress rules.
+The build report likewise keeps release authority, live readiness, launch and
+execution acceptance false. A built executable does not prove usable traffic.
+
 ## Conductor runtime package
 
 The separate `native-pilot-conductor-artifact` target in the top-level
@@ -79,11 +119,29 @@ The resulting layout is:
 
 ```text
 attempt.json                    source and bounded-build selection
+raw-rootfs.tar                  retained original Docker export
 artifacts/                      actual exported operator rootfs
 package/runtime-rootfs.tar      deterministic, uncompressed portable rootfs
 package/package.json            unsigned inventory, source and archive hashes
 conductor-runtime.json          successful local build/package report
 ```
+
+Both strict Python runtime commands now export a raw tar into the new private
+attempt directory, then materialize it with bounded build-only tooling. Files
+are created exclusively, directory modes are applied after descendants, and
+runtime symlinks are created last without being traversed. Duplicate/traversing
+paths, hardlinks, special files and set-id modes are refused. This preserves
+protected `0555` directories without privileged local export. Staging ownership
+is not installed root ownership, and raw export/staging never supplies source
+admission. The unchanged strict inventory and package checks run afterward;
+failures retain the original tar and partial staging.
+
+The first actual staging check of the earlier `c972f02b` conductor TAR stopped
+before destination creation on inherited `/var/local` mode `02775`. The pilot
+image now stages that unused directory explicitly as root-owned `0755`; the
+authority target inherits the correction, and the default control-plane image
+is unchanged. Existing set-id rejection is retained. This source correction
+still requires a corrected export and staging run.
 
 The inventory bounds tree depth, path length, entry count, per-file bytes and
 aggregate bytes. It hashes stable regular files, refuses special files and
@@ -435,13 +493,23 @@ independent review/publication, reviewed-pin commitment and the clean-source
 production build/admission remain separate requirements. A successful local
 build is not live readiness or production acceptance.
 
-### Engineering-only raw Python runtime exports
+### Engineering-only raw prerequisite exports
 
-Exactly two top-level `Dockerfile.production` targets also support the paired
-engineering flags: `native-pilot-conductor-artifact` and
-`native-pilot-authority-artifact`. No native guest, operator-tool or other
-artifact target is added to this exception. From an isolated engineering
-checkout with explicitly staged candidate dependency inputs:
+Exactly four fixed Dockerfile/target pairs support the paired engineering
+flags. They need no independently approved public guest inputs:
+
+| Dockerfile | Target |
+| --- | --- |
+| `Dockerfile.production` | `native-pilot-conductor-artifact` |
+| `Dockerfile.production` | `native-pilot-authority-artifact` |
+| `data-plane/decision-gate-rs/Dockerfile.production` | `native-pilot-operator-artifact` |
+| `data-plane/decision-gate-rs/Dockerfile.production` | `native-workload-sidecar-artifact` |
+
+The operator export supplies the existing seccomp exporter, and the sidecar
+export supplies the three workload-side files above. No native guest bundle,
+independent Setup issuer or other artifact target is added to this exception.
+From an isolated engineering checkout with explicitly staged candidate
+dependency inputs:
 
 ```sh
 SOURCE_DATE_EPOCH=0 python3 -B scripts/build_production_images.py \
@@ -453,7 +521,24 @@ SOURCE_DATE_EPOCH=0 python3 -B scripts/build_production_images.py \
 ```
 
 Use `native-pilot-authority-artifact` with a different fresh output for the
-authority bytes. The exact absolute destination must not exist, and its private
+authority bytes. For the workload sidecar, select its exact Dockerfile pair:
+
+```sh
+SOURCE_DATE_EPOCH=0 python3 -B scripts/build_production_images.py \
+  --development-dirty-tree --engineering-bounded-build \
+  --dockerfile data-plane/decision-gate-rs/Dockerfile.production \
+  --target native-workload-sidecar-artifact \
+  --output type=tar,dest=/srv/catchplate-fast/tmp/EXISTING-JOB/workload-sidecar.tar \
+  --network none --platform linux/amd64
+```
+
+Use `native-pilot-operator-artifact` in that same gate Dockerfile with a separate
+new output for the operator tool. This tool is dynamically linked and still
+requires its documented compatible runtime; raw export does not create a
+standalone runtime closure. Wrong Dockerfile/target pairs, unpaired engineering
+flags and supplied guest inputs fail closed.
+
+The exact absolute destination must not exist, and its private
 task-owned parent must already exist without symlink traversal. The builder
 reserves the new tar file exclusively at `0600`; partial output remains after
 failure. No automatic repair/retry is provided.
@@ -466,7 +551,7 @@ The same engineering targets also accept `type=local,dest=...` with a fresh
 directory, but exporting this protected tree that way requires a suitably
 privileged build client. No automatic elevation or permission relaxation occurs.
 
-Both builds retain source-context/cache verification, network-disabled build
+All four targets retain source-context/cache verification, network-disabled build
 steps and the same fixed per-step resources. Their output explicitly reports
 `identity_mode=development-dirty-tree`, `production_release_eligible=false` and
 `raw_artifact_export_only=true`. These raw archives/trees are not strict inventories or

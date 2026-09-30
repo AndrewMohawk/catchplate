@@ -1606,13 +1606,32 @@ impl RpcProductionPolicyShadowCustodyProcess {
                     exact_signed_artifact,
                 },
             ) => {
-                let wire = Self::decode_artifact::<
-                    SpoolAppendReservationReceiptWire,
-                >(
-                    &exact_signed_artifact.artifact,
-                    ProductionArtifactKindV4::
-                        SpoolAppendReservationOutcome,
-                )?;
+                let artifact=&exact_signed_artifact.artifact;
+                let value=Self::decode_artifact::<serde_json::Value>(artifact,
+                    ProductionArtifactKindV4::SpoolAppendReservationOutcome)?;
+                let wire=if value.get("apiVersion").is_some() {
+                    if configuration.native_execution_closure().is_none(){return Err(ShadowError::CustodyUnavailable);}
+                    let original=Self::decode_artifact::<super::super::NativeSpoolReservationOutcomeWire>(
+                        artifact,ProductionArtifactKindV4::SpoolAppendReservationOutcome)?;
+                    if original.api_version!="serverware.nativeSpoolReservationOutcome/v1" {
+                        return Err(ShadowError::CustodyUnavailable);
+                    }
+                    match original.result {
+                        super::super::NativeSpoolReservationResultWire::Reserved(value)=>value,
+                        super::super::NativeSpoolReservationResultWire::Unavailable(value)=>{
+                            let verified=verify_production_shadow_spill_receipt(value,&event,&configuration,
+                                self.key_trust.as_ref(),self.trusted_time.as_ref(),&self.persistence_verifier)?;
+                            if verified.disposition()!=super::super::ShadowSpoolDisposition::Unavailable {
+                                return Err(ShadowError::CustodyUnavailable);
+                            }
+                            // A definite, durably verified refusal is not a
+                            // reservation and never creates an append capability.
+                            return Ok(ProductionCustodyDispatchResponse::SpoolAppendReserved(
+                                super::super::SpoolAppendReservationOutcome::Unavailable(verified)));
+                        },
+                    }
+                }else{Self::decode_artifact::<SpoolAppendReservationReceiptWire>(artifact,
+                    ProductionArtifactKindV4::SpoolAppendReservationOutcome)?};
                 let verified =
                     verify_production_spool_append_reservation_receipt(
                         wire,

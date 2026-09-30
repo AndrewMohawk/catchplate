@@ -28,17 +28,21 @@ pub(super) struct Payload {
 pub(super) struct Grant {pub(super) payload:Payload,pub(super) signature_base64url:String}
 impl Grant {
     pub(super) fn verify(&self,history:&RuntimeAuthorityHistory)->Result<(spool_head::Grant,VerifyingKey),ServiceError>{
-        let p=&self.payload;require(p.api_version=="serverware.nativeSpoolCurrentGrant/v1" && p.purpose=="native-spool-current-signature"
+        let p=&self.payload;let completion=p.api_version=="serverware.nativeSpoolCurrentGrant/v2";
+        require((completion || p.api_version=="serverware.nativeSpoolCurrentGrant/v1") && p.purpose=="native-spool-current-signature"
             && p.guest.service_role=="current-signature-authority" && p.runtime_configuration_sha256==p.guest.runtime_configuration_sha256
             && &p.authority_history_manifest_sha256==history.manifest_sha256()
             && p.head_grant_original.is_ascii() && !p.head_grant_original.is_empty() && p.head_grant_original.len()<=65536
             && p.initial_transition_head_sha256!=Sha256Digest::compute(&[]))?;
         let sig=URL_SAFE_NO_PAD.decode(&self.signature_base64url).map_err(|_|invalid())?;
         require(sig.len()==64 && URL_SAFE_NO_PAD.encode(&sig)==self.signature_base64url)?;
-        history.root_authority_key().verify_strict(&super::super::protocol::domain_separated_signature_preimage(DOMAIN,&encode_canonical_frame(p)?)?,
+        history.root_authority_key().verify_strict(&super::super::protocol::domain_separated_signature_preimage(
+            if completion{b"serverware.nativeSpoolCurrentGrant.signature/v2"}else{DOMAIN},&encode_canonical_frame(p)?)?,
             &Signature::from_slice(&sig).map_err(|_|invalid())?).map_err(|_|invalid())?;
         let head:spool_head::Grant=decode_canonical_frame(p.head_grant_original.as_bytes())?;
-        require(head.payload.api_version=="serverware.nativeSpoolHeadGrant/v1" && head.payload.purpose=="native-shared-spool-head"
+        require(head.completion_selected()==completion && head.payload.completion.is_some()==completion
+            && head.payload.api_version==(if completion{"serverware.nativeSpoolHeadGrant/v2"}else{"serverware.nativeSpoolHeadGrant/v1"})
+            && head.payload.purpose=="native-shared-spool-head"
             && head.payload.guest.service_role=="durable-recovery-store" && head.payload.guest.uid!=p.guest.uid
             && head.payload.guest.boot_id_base64url==p.guest.boot_id_base64url
             && head.payload.guest.time_namespace_device==p.guest.time_namespace_device && head.payload.guest.time_namespace_inode==p.guest.time_namespace_inode
@@ -115,7 +119,8 @@ impl Gate {
     fn validate<'a>(&self,command:&'a Command)->Result<(&'a ResultBody,&'a Transition),ServiceError>{
         command.deadline()?;let p=&command.completion.payload;let grant=&self.head_grant.payload;
         p.claim.validate(&grant.scope)?;
-        let role=if matches!(p.claim.request,super::super::production_dispatch::ClosedProductionDispatchRequestV4::BeginIngress{..}){&grant.ingress}else{&grant.ledger};
+        let role=self.head_grant.key(&p.claim.request)?;
+        require((p.prepared.core.api_version==super::ledger_spool_values::COMPLETION_CORE_API)==self.head_grant.completion_selected())?;
         command.completion.verify_signature(role)?;
         let Reply::Committed{result,transition}=&command.durable else{return Err(invalid());};
         let artifact=match result{ResultBody::Artifact(v)=>v,ResultBody::SealedArtifact{exact_signed_artifact,..}=>&exact_signed_artifact.artifact,_=>return Err(invalid())};

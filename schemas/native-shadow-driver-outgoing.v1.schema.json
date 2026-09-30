@@ -12,7 +12,7 @@
         "invocationId":{"$ref":"native-shadow-driver-bootstrap.v1.schema.json#/$defs/invocation"},
         "deliveryConfiguration":{"$ref":"policy-custody-guest-delivery.v1.schema.json#/$defs/pin"},
         "runtime":{"$ref":"policy-custody-guest-delivery.v1.schema.json#/$defs/pin"},
-        "bridgeLaunchVersion":{"enum":["serverware.nativeProofBridgeLaunch/v1","serverware.nativeProofBridgeLaunch/v2","serverware.nativeProofBridgeLaunch/v3"]}}},
+        "bridgeLaunchVersion":{"enum":["serverware.nativeProofBridgeLaunch/v1","serverware.nativeProofBridgeLaunch/v2","serverware.nativeProofBridgeLaunch/v3","serverware.nativeProofBridgeLaunch/v4"]}}},
     "activationOriginal":{"type":"object","additionalProperties":false,"required":["name","device","inode","mode","uid","gid"],
       "description":"Actual retained FD metadata for the independent C9 signer to place in its complete ordered activation inventory. Not caller assertions; no target FD ordinal is invented before the complete inventory is assembled.",
       "properties":{"name":{"type":"string","minLength":1,"maxLength":64,"pattern":"^[A-Za-z0-9_.-]+$"},
@@ -21,7 +21,7 @@
         "mode":{"type":"integer","minimum":0,"maximum":4294967295},
         "uid":{"type":"integer","minimum":0,"maximum":4294967295},
         "gid":{"type":"integer","minimum":0,"maximum":4294967295}}},
-    "activationOriginals":{"type":"array","minItems":26,"maxItems":30,"items":{"$ref":"#/$defs/activationOriginal"},
-      "description":"Exactly one fresh unconnected socket and one separately retained root O_RDONLY parent-directory FD for every filtered outgoing endpoint. Launch1/runtime5 yields30 entries, launch2/runtime6 yields28, launch3/runtime7 yields26. Endpoint names sorted lexicographically after source-fixed native exclusions define bridge-outgoing-directory-0 through the last filtered ordinal. All original inode pairs remain distinct under existing strict C9/operation admission."}
+    "activationOriginals":{"type":"array","minItems":24,"maxItems":30,"items":{"$ref":"#/$defs/activationOriginal"},
+      "description":"Exactly one fresh unconnected socket and one separately retained root O_RDONLY parent-directory FD for every filtered outgoing endpoint. Launch1/runtime5 yields30 entries, launch2/runtime6 yields28, launch3/runtime7 yields26, launch4/runtime8 yields24. Endpoint names sorted lexicographically after source-fixed native exclusions define bridge-outgoing-directory-0 through the last filtered ordinal. All original inode pairs remain distinct under existing strict C9/operation admission."}
   }
 }

@@ -4936,6 +4936,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-ledger-spool.v1.schema.json \
 				schemas/native-policy-canary-opening.v2.schema.json \
 				schemas/native-shadow-proof-cohort.v4.schema.json \
+				schemas/native-shadow-proof-cohort.v5.schema.json \
+				schemas/native-ledger-completion.v1.schema.json \
 				schemas/native-shadow-driver-bootstrap.v1.schema.json \
 				schemas/native-shadow-driver-continuation.v1.schema.json \
 				schemas/native-shadow-driver-lifecycle.v1.schema.json \

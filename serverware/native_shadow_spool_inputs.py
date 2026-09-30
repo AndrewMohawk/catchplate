@@ -1,7 +1,7 @@
-"""Fixed-seven retained resources, not an installed generation or authority.
+"""Fixed-seven/eight retained resources, not installed generation authority.
 
-Creates only the new Ingress listener, an empty durable retrieval-core store,
-and the one signed-origin channel. Old retrieval objects/listeners and every
+Creates the Ingress listener, the explicitly selected Terminal listener, an empty
+durable retrieval-core store, and the one signed-origin channel. Old retrieval objects/listeners and every
 other role still have their own producers. Partial state is never adopted,
 removed, repaired, or credited as a successful effect.
 """
@@ -52,6 +52,7 @@ class SpoolInputs:
         from serverware.native_shadow_proof_cohort_control import ParkedProofCohort
         p.require(cls is SpoolInputs and type(cohort) is ParkedProofCohort and cohort.spool_selected())
         value = cls(_TOKEN); value._cohort = cohort
+        value._terminal_selected = cohort.terminal_selected()
         # Retained even if preparation fails: no new owner may adopt partial
         # resources, and parent cleanup is responsible for the real children.
         cohort._spool_resources = value
@@ -82,6 +83,18 @@ class SpoolInputs:
         os.chmod("listener.sock", 0o660, dir_fd=value._listener_parent, follow_symlinks=False)
         value._listener_id = o.identity(os.fstat(value._listener.fileno()))
         value._path_id = o.identity(os.stat("listener.sock", dir_fd=value._listener_parent, follow_symlinks=False))
+        if value._terminal_selected:
+            value._terminal_parent = value._parent(("run", "serverware-shadow-terminal-append"))
+            value._terminal_listener = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET | socket.SOCK_CLOEXEC | socket.SOCK_NONBLOCK)
+            value._sockets.append(value._terminal_listener)
+            value._terminal_listener.setsockopt(socket.SOL_SOCKET, socket.SO_PASSCRED, 1)
+            value._terminal_listener.setsockopt(socket.SOL_SOCKET, 76, 1)
+            value._terminal_listener.bind("/run/serverware-shadow-terminal-append/listener.sock")
+            os.chown("listener.sock", cohort._cold["terminalAppend"]["uid"], cohort._cold["bridge"]["gid"],
+                dir_fd=value._terminal_parent, follow_symlinks=False)
+            os.chmod("listener.sock", 0o660, dir_fd=value._terminal_parent, follow_symlinks=False)
+            value._terminal_id = o.identity(os.fstat(value._terminal_listener.fileno()))
+            value._terminal_path_id = o.identity(os.stat("listener.sock", dir_fd=value._terminal_parent, follow_symlinks=False))
         value._local, value._remote = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET | socket.SOCK_CLOEXEC | socket.SOCK_NONBLOCK)
         value._sockets += [value._local, value._remote]
         for channel in (value._local, value._remote):
@@ -129,6 +142,10 @@ class SpoolInputs:
                 and o.read(self._genesis_fd, 16384) == self._genesis)
         p.require(o.identity(os.fstat(self._listener.fileno())) == self._listener_id
             and o.identity(os.stat("listener.sock", dir_fd=self._listener_parent, follow_symlinks=False)) == self._path_id)
+        p.require(self._terminal_selected == ("terminalAppend" in self._cohort._roles))
+        if self._terminal_selected:
+            p.require(o.identity(os.fstat(self._terminal_listener.fileno())) == self._terminal_id
+                and o.identity(os.stat("listener.sock", dir_fd=self._terminal_parent, follow_symlinks=False)) == self._terminal_path_id)
         for fd, expected in self._channels:
             p.require(o.identity(os.fstat(fd)) == expected and not os.get_inheritable(fd))
         self._relay.check()
@@ -139,6 +156,9 @@ class SpoolInputs:
         selected = {"retrieval": (("ledger-spool-store", self._store), ("ledger-spool-lock", self._lock)),
             "ingressAdmission": (("ingress-admission-listener", self._listener.fileno()),),
             "bridge": (("ingress-admission-peer-directory", self._listener_parent), ("generation-origin", self._remote.fileno()))}
+        if self._terminal_selected:
+            selected["terminalAppend"] = (("terminal-append-listener", self._terminal_listener.fileno()),)
+            selected["bridge"] += (("terminal-append-peer-directory", self._terminal_parent),)
         p.require(role in selected); return selected[role]
 
     def initialize_store(self, *, retrieval_delivery_original, proof_scope_original):
@@ -182,12 +202,19 @@ class SpoolInputs:
     def require_release(self, transfers, head_original):
         self.check(); p.require(self._genesis is not None and self._head is None)
         head = p.document(head_original, 65536)["payload"]
+        p.require(head["apiVersion"] == ("serverware.nativeSpoolHeadGrant/v2" if self._terminal_selected else "serverware.nativeSpoolHeadGrant/v1"))
         self._scope, self._head = head["scope"], bytes(head_original)
         retrieval = p.document(transfers["retrieval"]._grant_bytes, 65536)["payload"]
         p.require(transfers["retrieval"]._delivery_bytes == self._retrieval_delivery
             and retrieval["store"] == {"genesisSha256": p.sha(self._genesis), "sequence": 0, "headSha256": p.sha(self._genesis)}
             and retrieval["spoolScope"] == self._scope)
-        for role in ("retrieval", "ingressAdmission", "bridge"):
+        roles = ("retrieval", "ingressAdmission", "bridge")
+        if self._terminal_selected:
+            terminal = head["completion"]["terminal"]
+            p.require(terminal["grantSha256"] == p.sha(transfers["terminalAppend"]._grant_bytes)
+                and retrieval["terminal"] == terminal)
+            roles += ("terminalAppend",)
+        for role in roles:
             transfer = transfers[role]; transfer.check()
             held = {entry["name"]: fd for entry, fd in zip(transfer._entries, transfer._fds, strict=True)}
             for name, fd in self.additions(role):

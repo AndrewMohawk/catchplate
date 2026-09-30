@@ -114,7 +114,8 @@ impl Running {
         process::isolate_mounts()?;
         let image=image::Image::prepare(&selected.closure,&files)?;
         let (inspector,inspection)=match service_selection {
-            service @ (SelectedService::LedgerRetrieval(_)|SelectedService::LedgerSpool(_)|SelectedService::Ingress(_)|SelectedService::SpoolBridge(_))=>{
+            service @ (SelectedService::LedgerRetrieval(_)|SelectedService::LedgerSpool(_)|SelectedService::Ingress(_)|SelectedService::SpoolBridge(_)
+                |SelectedService::CompletionRetrieval(_)|SelectedService::CompletionLedgerSpool(_)|SelectedService::TerminalSpool(_)|SelectedService::TerminalBridge(_))=>{
                 let (owner,channel)=proof_cohort::prepare_inspection(service,&files,&activation)?;
                 (Some(owner),Some(channel))
             }

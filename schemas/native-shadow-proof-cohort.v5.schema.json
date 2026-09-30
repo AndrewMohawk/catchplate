@@ -1,0 +1,420 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-shadow-proof-cohort.v5.schema.json",
+  "$ref": "#/$defs/configuration",
+  "$defs": {
+    "sha": {
+      "$ref": "native-shadow-proof-cohort.v1.schema.json#/$defs/sha"
+    },
+    "pin": {
+      "$ref": "native-shadow-proof-cohort.v1.schema.json#/$defs/pin"
+    },
+    "ns": {
+      "$ref": "native-shadow-proof-cohort.v1.schema.json#/$defs/ns"
+    },
+    "invocation": {
+      "$ref": "native-shadow-proof-cohort.v1.schema.json#/$defs/invocation"
+    },
+    "signature": {
+      "$ref": "native-shadow-proof-cohort.v1.schema.json#/$defs/signature"
+    },
+    "childOriginal": {
+      "$ref": "native-shadow-proof-cohort.v1.schema.json#/$defs/childOriginal"
+    },
+    "childTerminal": {
+      "$ref": "native-shadow-proof-cohort.v2.schema.json#/$defs/childTerminal"
+    },
+    "roleRelease": {
+      "$ref": "native-shadow-proof-cohort.v1.schema.json#/$defs/roleRelease"
+    },
+    "configuration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "authority",
+        "executableSha256",
+        "retrievalConfiguration",
+        "persistenceConfiguration",
+        "trustedTimeConfiguration",
+        "generationInstallConfiguration",
+        "bridgeConfiguration",
+        "commitRequestConfiguration",
+        "ingressAdmissionConfiguration",
+        "terminalAppendConfiguration",
+        "cleanup"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeShadowProofCohortConfiguration/v5"
+        },
+        "authority": {
+          "$ref": "policy-custody-guest-delivery.v1.schema.json#/$defs/authority"
+        },
+        "executableSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "retrievalConfiguration": {
+          "$ref": "#/$defs/pin"
+        },
+        "persistenceConfiguration": {
+          "$ref": "#/$defs/pin"
+        },
+        "trustedTimeConfiguration": {
+          "$ref": "#/$defs/pin"
+        },
+        "generationInstallConfiguration": {
+          "$ref": "#/$defs/pin"
+        },
+        "bridgeConfiguration": {
+          "$ref": "#/$defs/pin"
+        },
+        "commitRequestConfiguration": {
+          "$ref": "#/$defs/pin"
+        },
+        "ingressAdmissionConfiguration": {
+          "$ref": "#/$defs/pin"
+        },
+        "cleanup": {
+          "$ref": "native-shadow-proof-cohort.v2.schema.json#/$defs/cleanupConfiguration"
+        },
+        "terminalAppendConfiguration": {
+          "$ref": "#/$defs/pin"
+        }
+      },
+      "description": "Exactly eight independently pinned cold C9 originals and distinct nonroot UIDs/GIDs in one original window. Fixed order retrieval, persistence, trustedTime, generationInstall, bridge, commitRequest, ingressAdmission, terminalAppend. Bridge selects nativeProofBridgeLaunch/v4, Ledger selects nativeShadowCommitRequestGuestLaunch/v3, Retrieval selects nativeShadowRetrievalGuestLaunch/v3, Terminal selects nativeShadowTerminalSpoolGuestLaunch/v1. Old five/six/seven profiles reject the extra slot. Configuration <=32768 bytes."
+    },
+    "controlConfiguration": {
+      "$ref": "native-shadow-proof-cohort.v1.schema.json#/$defs/controlConfiguration"
+    },
+    "precreation": {
+      "$ref": "native-shadow-proof-cohort.v1.schema.json#/$defs/precreation"
+    },
+    "observations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "configurationSha256",
+        "precreationSha256",
+        "invocationId",
+        "retrieval",
+        "persistence",
+        "trustedTime",
+        "generationInstall",
+        "bridge",
+        "commitRequest",
+        "ingressAdmission",
+        "terminalAppend"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeShadowProofCohortOriginals/v4"
+        },
+        "configurationSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "precreationSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "invocationId": {
+          "$ref": "#/$defs/invocation"
+        },
+        "retrieval": {
+          "$ref": "#/$defs/childOriginal"
+        },
+        "persistence": {
+          "$ref": "#/$defs/childOriginal"
+        },
+        "trustedTime": {
+          "$ref": "#/$defs/childOriginal"
+        },
+        "generationInstall": {
+          "$ref": "#/$defs/childOriginal"
+        },
+        "bridge": {
+          "$ref": "#/$defs/childOriginal"
+        },
+        "commitRequest": {
+          "$ref": "#/$defs/childOriginal"
+        },
+        "ingressAdmission": {
+          "$ref": "#/$defs/childOriginal"
+        },
+        "terminalAppend": {
+          "$ref": "#/$defs/childOriginal"
+        }
+      },
+      "description": "Actual parked children and sealed executable identities, not final driver identity, readiness or attestation. Complete canonical ASCII original <=32768 bytes."
+    },
+    "releasePayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "configurationSha256",
+        "precreationSha256",
+        "observationSha256",
+        "invocationId",
+        "retrieval",
+        "persistence",
+        "trustedTime",
+        "generationInstall",
+        "bridge",
+        "commitRequest",
+        "ingressAdmission",
+        "signingKeyId",
+        "terminalAppend"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeShadowProofCohortRelease/v4"
+        },
+        "configurationSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "precreationSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "observationSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "invocationId": {
+          "$ref": "#/$defs/invocation"
+        },
+        "retrieval": {
+          "$ref": "#/$defs/roleRelease"
+        },
+        "persistence": {
+          "$ref": "#/$defs/roleRelease"
+        },
+        "trustedTime": {
+          "$ref": "#/$defs/roleRelease"
+        },
+        "generationInstall": {
+          "$ref": "#/$defs/roleRelease"
+        },
+        "bridge": {
+          "$ref": "#/$defs/roleRelease"
+        },
+        "commitRequest": {
+          "$ref": "#/$defs/roleRelease"
+        },
+        "ingressAdmission": {
+          "$ref": "#/$defs/roleRelease"
+        },
+        "signingKeyId": {
+          "$ref": "#/$defs/sha"
+        },
+        "terminalAppend": {
+          "$ref": "#/$defs/roleRelease"
+        }
+      }
+    },
+    "release": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "payload",
+        "signatureBase64url"
+      ],
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/releasePayload"
+        },
+        "signatureBase64url": {
+          "$ref": "#/$defs/signature"
+        }
+      },
+      "description": "Independent existing C9 key signs ASCII serverware.nativeShadowProofCohortRelease.signature/v4, NUL, full canonical payload. One original root-authenticated seqpacket <=32768 bytes and <=128 total SCM_RIGHTS. Eight fixed role inventories, each in original C9 FD6..69 order, joined before any child release. No automatic retry or readiness claim."
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "purpose",
+        "configurationSha256",
+        "precreationSha256",
+        "observationSha256",
+        "releaseSha256",
+        "invocationId",
+        "operationIdSha256",
+        "requestedAtBoottimeNs",
+        "deadlineBoottimeNs",
+        "signingKeyId"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeShadowProofCohortCleanup/v4"
+        },
+        "purpose": {
+          "const": "terminate-owned-proof-cohort"
+        },
+        "configurationSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "precreationSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "observationSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "releaseSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "invocationId": {
+          "$ref": "#/$defs/invocation"
+        },
+        "operationIdSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "requestedAtBoottimeNs": {
+          "$ref": "#/$defs/ns"
+        },
+        "deadlineBoottimeNs": {
+          "$ref": "#/$defs/ns"
+        },
+        "signingKeyId": {
+          "$ref": "#/$defs/sha"
+        }
+      }
+    },
+    "authorization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "payload",
+        "signatureBase64url"
+      ],
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/payload"
+        },
+        "signatureBase64url": {
+          "$ref": "#/$defs/signature"
+        }
+      },
+      "description": "Distinct cleanup key signs ASCII serverware.nativeShadowProofCohortCleanup.signature/v4, NUL, full canonical payload. Actual original boot/lifetime, requested <= now < deadline <= lifetime-250ms and deadline-requested <=30s. Never borrows five/six/seven-child cleanup/v1, /v2 or /v3."
+    },
+    "terminal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "authorizationSha256",
+        "configurationSha256",
+        "precreationSha256",
+        "observationSha256",
+        "releaseSha256",
+        "invocationId",
+        "completedAtBoottimeNs",
+        "children"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeShadowProofCohortTerminal/v4"
+        },
+        "authorizationSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "configurationSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "precreationSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "observationSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "releaseSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "invocationId": {
+          "$ref": "#/$defs/invocation"
+        },
+        "completedAtBoottimeNs": {
+          "$ref": "#/$defs/ns"
+        },
+        "children": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "retrieval",
+            "persistence",
+            "trustedTime",
+            "generationInstall",
+            "bridge",
+            "commitRequest",
+            "ingressAdmission",
+            "terminalAppend"
+          ],
+          "properties": {
+            "retrieval": {
+              "$ref": "#/$defs/childTerminal"
+            },
+            "persistence": {
+              "$ref": "#/$defs/childTerminal"
+            },
+            "trustedTime": {
+              "$ref": "#/$defs/childTerminal"
+            },
+            "generationInstall": {
+              "$ref": "#/$defs/childTerminal"
+            },
+            "bridge": {
+              "$ref": "#/$defs/childTerminal"
+            },
+            "commitRequest": {
+              "$ref": "#/$defs/childTerminal"
+            },
+            "ingressAdmission": {
+              "$ref": "#/$defs/childTerminal"
+            },
+            "terminalAppend": {
+              "$ref": "#/$defs/childTerminal"
+            }
+          }
+        }
+      }
+    },
+    "result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "authorizationSha256",
+        "intentRecordSha256",
+        "terminalOriginal",
+        "terminalRecordSha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeShadowProofCohortCleanupResult/v4"
+        },
+        "authorizationSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "intentRecordSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "terminalRecordSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "terminalOriginal": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32256,
+          "pattern": "^[\\u0000-\\u007f]+$"
+        }
+      },
+      "description": "Complete response <=32768 bytes; data-only exact terminal original after all eight actual PIDFD terminal observations and reaps, journal fsync/readback, and caller verification of parent status0 plus reap. Not operation Settle, TEE evidence, driver construction or permission."
+    },
+    "genesis": {
+      "$ref": "native-shadow-proof-cohort.v2.schema.json#/$defs/genesis"
+    },
+    "record": {
+      "$ref": "native-shadow-proof-cohort.v2.schema.json#/$defs/record"
+    }
+  }
+}

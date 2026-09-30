@@ -10,6 +10,7 @@ const PRECREATE_DOMAIN:&[u8]=b"serverware.nativeShadowProofCohortPrecreation.sig
 const RELEASE_DOMAIN:&[u8]=b"serverware.nativeShadowProofCohortRelease.signature/v1\0";
 const SIX_RELEASE_DOMAIN:&[u8]=b"serverware.nativeShadowProofCohortRelease.signature/v2\0";
 const SEVEN_RELEASE_DOMAIN:&[u8]=b"serverware.nativeShadowProofCohortRelease.signature/v3\0";
+const EIGHT_RELEASE_DOMAIN:&[u8]=b"serverware.nativeShadowProofCohortRelease.signature/v4\0";
 const SOURCE:&str="/opt/serverware/native-shadow-custody-guest.elf";
 const MAX_EXECUTABLE:usize=64*1024*1024;
 const SEALS:i32=libc::F_SEAL_WRITE|libc::F_SEAL_GROW|libc::F_SEAL_SHRINK|libc::F_SEAL_SEAL;
@@ -27,7 +28,9 @@ struct Configuration {api_version:String,authority:Authority,executable_sha256:S
     #[serde(default,skip_serializing_if="Option::is_none")]
     commit_request_configuration:Option<Pin>,
     #[serde(default,skip_serializing_if="Option::is_none")]
-    ingress_admission_configuration:Option<Pin>}
+    ingress_admission_configuration:Option<Pin>,
+    #[serde(default,skip_serializing_if="Option::is_none")]
+    terminal_append_configuration:Option<Pin>}
 #[derive(Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 struct Window {configuration_sha256:Sha256Digest,authority_key_id:Sha256Digest,boot_id_base64url:String,
@@ -47,7 +50,9 @@ struct ReleasePayload {api_version:String,configuration_sha256:Sha256Digest,prec
     #[serde(default,skip_serializing_if="Option::is_none")]
     commit_request:Option<RoleRelease>,
     #[serde(default,skip_serializing_if="Option::is_none")]
-    ingress_admission:Option<RoleRelease>}
+    ingress_admission:Option<RoleRelease>,
+    #[serde(default,skip_serializing_if="Option::is_none")]
+    terminal_append:Option<RoleRelease>}
 #[derive(Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 struct Release {payload:ReleasePayload,signature_base64url:String}
@@ -73,13 +78,15 @@ impl Admission {
         let configuration=Original::proof_cohort_configuration().map_err(fail)?;
         let configuration_bytes=configuration.read(32768).map_err(fail)?.to_vec();
         let config:Configuration=exact(&configuration_bytes)?;
-        require(match (config.api_version.as_str(),&config.cleanup,&config.commit_request_configuration,&config.ingress_admission_configuration) {
-            ("serverware.nativeShadowProofCohortConfiguration/v1",None,None,None)=>true,
-            ("serverware.nativeShadowProofCohortConfiguration/v2",Some(value),None,None)=>{
+        require(match (config.api_version.as_str(),&config.cleanup,&config.commit_request_configuration,&config.ingress_admission_configuration,&config.terminal_append_configuration) {
+            ("serverware.nativeShadowProofCohortConfiguration/v1",None,None,None,None)=>true,
+            ("serverware.nativeShadowProofCohortConfiguration/v2",Some(value),None,None,None)=>{
                 value.validate(&config.authority.public_key_base64url)?;true},
-            ("serverware.nativeShadowProofCohortConfiguration/v3",Some(value),Some(_),None)=>{
+            ("serverware.nativeShadowProofCohortConfiguration/v3",Some(value),Some(_),None,None)=>{
                 value.validate(&config.authority.public_key_base64url)?;true},
-            ("serverware.nativeShadowProofCohortConfiguration/v4",Some(value),Some(_),Some(_))=>{
+            ("serverware.nativeShadowProofCohortConfiguration/v4",Some(value),Some(_),Some(_),None)=>{
+                value.validate(&config.authority.public_key_base64url)?;true},
+            ("serverware.nativeShadowProofCohortConfiguration/v5",Some(value),Some(_),Some(_),Some(_))=>{
                 value.validate(&config.authority.public_key_base64url)?;true},
             _=>false,
         })?;
@@ -91,6 +98,7 @@ impl Admission {
             config.bridge_configuration.open(65536)?];
         if let Some(pin)=&config.commit_request_configuration {cold.push(pin.open(65536)?);}
         if let Some(pin)=&config.ingress_admission_configuration {cold.push(pin.open(65536)?);}
+        if let Some(pin)=&config.terminal_append_configuration {cold.push(pin.open(65536)?);}
         let count=cold.len();
         let mut identities=vec![(0,0);count];
         for (i,original) in cold.iter().enumerate() {
@@ -137,10 +145,12 @@ impl Admission {
     pub(in crate::policy_shadow::policy_custody::services::guest::native_guest::parent) fn check_startup(&self)->Result<(),ShadowError> {self.check()?;require(now()?<self.startup)}
     pub(in crate::policy_shadow::policy_custody::services::guest::native_guest::parent) fn lifetime(&self)->u64 {self.lifetime}
     pub(in crate::policy_shadow::policy_custody::services::guest::native_guest::parent) fn issued(&self)->u64 {self.issued}
-    pub(super) fn six(&self)->bool {matches!(self.config.api_version.as_str(),"serverware.nativeShadowProofCohortConfiguration/v3"|"serverware.nativeShadowProofCohortConfiguration/v4")}
-    pub(super) fn seven(&self)->bool {self.config.api_version=="serverware.nativeShadowProofCohortConfiguration/v4"}
+    pub(super) fn six(&self)->bool {matches!(self.config.api_version.as_str(),"serverware.nativeShadowProofCohortConfiguration/v3"|"serverware.nativeShadowProofCohortConfiguration/v4"|"serverware.nativeShadowProofCohortConfiguration/v5")}
+    pub(super) fn seven(&self)->bool {matches!(self.config.api_version.as_str(),"serverware.nativeShadowProofCohortConfiguration/v4"|"serverware.nativeShadowProofCohortConfiguration/v5")}
+    pub(super) fn eight(&self)->bool {self.config.api_version=="serverware.nativeShadowProofCohortConfiguration/v5"}
     pub(super) fn roles(&self)->&'static [&'static str] {
-        if self.seven(){&["retrieval","persistence","trustedTime","generationInstall","bridge","commitRequest","ingressAdmission"]}
+        if self.eight(){&["retrieval","persistence","trustedTime","generationInstall","bridge","commitRequest","ingressAdmission","terminalAppend"]}
+        else if self.seven(){&["retrieval","persistence","trustedTime","generationInstall","bridge","commitRequest","ingressAdmission"]}
         else if self.six(){&["retrieval","persistence","trustedTime","generationInstall","bridge","commitRequest"]}
         else{&["retrieval","persistence","trustedTime","generationInstall","bridge"]}
     }
@@ -159,17 +169,19 @@ impl Admission {
     pub(in crate::policy_shadow::policy_custody::services::guest::native_guest::parent) fn executable_sha256(&self)->&Sha256Digest {&self.config.executable_sha256}
     pub(in crate::policy_shadow::policy_custody::services::guest::native_guest::parent) fn release(&self,bytes:&[u8],observed:&[u8])->Result<Vec<RoleRelease>,ShadowError> {
         self.check_startup()?;let release:Release=exact(bytes)?;
-        verify(&self.key,if self.seven(){SEVEN_RELEASE_DOMAIN}else if self.six(){SIX_RELEASE_DOMAIN}else{RELEASE_DOMAIN},&release.payload,&release.signature_base64url)?;
+        verify(&self.key,if self.eight(){EIGHT_RELEASE_DOMAIN}else if self.seven(){SEVEN_RELEASE_DOMAIN}else if self.six(){SIX_RELEASE_DOMAIN}else{RELEASE_DOMAIN},&release.payload,&release.signature_base64url)?;
         let p=release.payload;
-        require(p.api_version==(if self.seven(){"serverware.nativeShadowProofCohortRelease/v3"}else if self.six(){"serverware.nativeShadowProofCohortRelease/v2"}else{"serverware.nativeShadowProofCohortRelease/v1"})
+        require(p.api_version==(if self.eight(){"serverware.nativeShadowProofCohortRelease/v4"}else if self.seven(){"serverware.nativeShadowProofCohortRelease/v3"}else if self.six(){"serverware.nativeShadowProofCohortRelease/v2"}else{"serverware.nativeShadowProofCohortRelease/v1"})
             && p.commit_request.is_some()==self.six()
             && p.ingress_admission.is_some()==self.seven()
+            && p.terminal_append.is_some()==self.eight()
             && p.configuration_sha256==self.configuration_sha256() && p.precreation_sha256==self.precreation_sha256()
             && p.observation_sha256==Sha256Digest::compute(observed) && p.invocation_id==self.window.invocation_id
             && p.signing_key_id==self.config.authority.key_id)?;
         let mut roles=vec![p.retrieval,p.persistence,p.trusted_time,p.generation_install,p.bridge];
         if let Some(role)=p.commit_request {roles.push(role);}
         if let Some(role)=p.ingress_admission {roles.push(role);}
+        if let Some(role)=p.terminal_append {roles.push(role);}
         self.check_startup()?;Ok(roles)
     }
     pub(in crate::policy_shadow::policy_custody::services::guest::native_guest::parent) fn join(&self,index:usize,launch:&Launch,files:&FileAdmission)->Result<(),ShadowError> {
@@ -178,6 +190,7 @@ impl Admission {
             2=>&self.config.trusted_time_configuration,3=>&self.config.generation_install_configuration,
             4=>&self.config.bridge_configuration,5=>self.config.commit_request_configuration.as_ref().ok_or(ShadowError::BindingDrift)?,
             6=>self.config.ingress_admission_configuration.as_ref().ok_or(ShadowError::BindingDrift)?,
+            7=>self.config.terminal_append_configuration.as_ref().ok_or(ShadowError::BindingDrift)?,
             _=>return Err(ShadowError::BindingDrift)};
         let p=&files.payload;
         require(canonical_json_bytes(&launch.delivery_configuration)?==canonical_json_bytes(expected)?

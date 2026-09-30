@@ -1,4 +1,4 @@
-"""Real fixed DRS/current journal and sealed-grant owners for spool/v7.
+"""Real fixed DRS/current journal and sealed-grant owners for spool/v7-v8.
 
 Only supplied independently signed grants are admitted. This module creates no
 key, head, native signature, generation, or successful effect observation.
@@ -26,6 +26,10 @@ SCOPE = ("productionConfigurationBindingSha256", "kernelDriverIdentitySha256", "
 NATIVE = {"ingress": ("custody-ingress-admission", "serverware.nativeShadowIngressServiceAssignment/v1"),
           "ledger": ("custody-ledger-append", "serverware.nativeShadowLedgerSpoolServiceAssignment/v1"),
           "retrieval": ("custody-retrieval-response", "serverware.nativeLedgerSpoolRetrievalGrant/v1")}
+COMPLETION_NATIVE = {**NATIVE,
+    "ledger": ("custody-ledger-append", "serverware.nativeShadowLedgerSpoolServiceAssignment/v2"),
+    "retrieval": ("custody-retrieval-response", "serverware.nativeLedgerSpoolRetrievalGrant/v2"),
+    "terminal": ("custody-terminal-append", "serverware.nativeShadowTerminalSpoolServiceAssignment/v1")}
 
 
 def sign_delivery(**values):
@@ -100,27 +104,35 @@ class RoleInputs:
         p.require(item["grant_raw"] is not None and item["delivery_raw"] is not None)
         signed = p.fields(g.document(raw, 131072), ("payload", "signatureBase64url"))
         head = self._role == ROLES[0]
-        value = p.fields(signed["payload"], HEAD if head else CURRENT)
         stem, purpose = ("Head", "native-shared-spool-head") if head else ("Current", "native-spool-current-signature")
+        completion = signed["payload"].get("apiVersion") == "serverware.nativeSpool" + stem + "Grant/v2"
+        fields = HEAD + (("completion",) if completion else ()) if head else CURRENT
+        value = p.fields(signed["payload"], fields)
+        version = "2" if completion else "1"
         root, semantic = _root(item)
-        p.require(value["apiVersion"] == "serverware.nativeSpool" + stem + "Grant/v1" and value["purpose"] == purpose
+        p.require(value["apiVersion"] == "serverware.nativeSpool" + stem + "Grant/v" + version and value["purpose"] == purpose
             and value["guest"] == item["guest"] and value["runtimeConfigurationSha256"] == item["runtime"].sha
             and value["authorityHistoryManifestSha256"] == semantic and p.digest(value["initialTransitionHeadSha256"]) != p.sha(b""))
         payload_raw = g.canonical(value)
-        domain = ("serverware.nativeSpool" + stem + "Grant.signature/v1").encode("ascii")
+        domain = ("serverware.nativeSpool" + stem + "Grant.signature/v" + version).encode("ascii")
         message = b"serverware-signature-v1\0" + len(domain).to_bytes(8, "big") + domain + len(payload_raw).to_bytes(8, "big") + payload_raw
         root.verify(p.decoded(signed["signatureBase64url"], size=64), message)
         header = g.document(item["runtime_raw"], g.MAX_BYTES)["runtime"]
         own, other = ("spoolHead", "spoolCurrent") if head else ("spoolCurrent", "spoolHead")
         p.require(header["apiVersion"] == "serverware.policyCustodyServiceRuntimeConfig/v7"
             and header[own] == {"grantFdName": self._prefix + "-grant"} and other not in header)
-        p.fields(native_originals, NATIVE)
+        native_roles = COMPLETION_NATIVE if completion else NATIVE
+        p.fields(native_originals, native_roles)
         if head:
             p.require(len(raw) <= 65536)
             scope = p.fields(value["scope"], SCOPE)
             commitment._scope_join(scope, g.document(item["grant_raw"], 65536)["payload"]["scope"])
-            for name, (role, api) in NATIVE.items():
-                public = p.fields(value[name], ("role", "keyId", "keySpkiSha256", "publicKeyBase64url", "grantSha256"))
+            if completion:
+                selected = p.fields(value["completion"], ("terminal", "regularAppendCapacity"))
+                p.integer(selected["regularAppendCapacity"], minimum=1, maximum=32)
+            for name, (role, api) in native_roles.items():
+                public = p.fields(value["completion"]["terminal"] if name == "terminal" else value[name],
+                    ("role", "keyId", "keySpkiSha256", "publicKeyBase64url", "grantSha256"))
                 key = p.decoded(public["publicKeyBase64url"], size=32)
                 p.require(public["role"] == role and public["grantSha256"] == p.sha(native_originals[name])
                     and p.sha(bytes.fromhex("302a300506032b6570032100") + key) == public["keySpkiSha256"])
@@ -134,6 +146,7 @@ class RoleInputs:
         else:
             first = self._owner._spools[ROLES[0]]
             p.require(value["headGrantOriginal"] == first.original().decode("ascii") and native_originals == first._native)
+            p.require(first._payload["apiVersion"] == "serverware.nativeSpoolHeadGrant/v" + version)
             scope = first._payload["scope"]
         p.require(p.ns(item["guest"]["issuedAtBoottimeNs"]) <= scope["issuedAtBoottimeNanos"] <= o.clock()
             < scope["expiresAtBoottimeNanos"] <= self._owner._launcher._lifetime and o.clock() < self._owner._launcher._startup)
@@ -158,18 +171,23 @@ def _release_current(owner):
 
 def bridge_selection(owner):
     _release_current(owner)
-    return {"apiVersion": "serverware.nativeSpoolServices/v1", "headGrantOriginal": owner._spools[ROLES[0]].original().decode("ascii"),
+    version = "2" if owner._spools[ROLES[0]]._payload["apiVersion"] == "serverware.nativeSpoolHeadGrant/v2" else "1"
+    return {"apiVersion": "serverware.nativeSpoolServices/v" + version, "headGrantOriginal": owner._spools[ROLES[0]].original().decode("ascii"),
         "currentGrantOriginal": owner._spools[ROLES[1]].original().decode("ascii"), "originFdName": "generation-origin"}
 
 
 def _require_native_release(launcher, cohort, transfers):
     from serverware.native_shadow_proof_cohort_control import ParkedProofCohort, RetainedActivationFds
-    p.require(type(cohort) is ParkedProofCohort and cohort.spool_selected() and type(transfers) is dict
-        and set(transfers) == {"retrieval", "persistence", "trustedTime", "generationInstall", "bridge", "commitRequest", "ingressAdmission"})
+    p.require(type(cohort) is ParkedProofCohort and cohort.spool_selected() and type(transfers) is dict)
+    terminal = cohort.terminal_selected()
+    roles = {"retrieval", "persistence", "trustedTime", "generationInstall", "bridge", "commitRequest", "ingressAdmission"}
+    p.require(set(transfers) == roles | ({"terminalAppend"} if terminal else set()))
     owner = launcher._input_owner; _release_current(owner)
     p.require(owner._released and launcher._spool)
     expected = bridge_selection(owner)
-    for name, role in (("ingress", "ingressAdmission"), ("ledger", "commitRequest"), ("retrieval", "retrieval")):
+    p.require(expected["apiVersion"] == ("serverware.nativeSpoolServices/v2" if terminal else "serverware.nativeSpoolServices/v1"))
+    native_roles = (("ingress", "ingressAdmission"), ("ledger", "commitRequest"), ("retrieval", "retrieval"))
+    for name, role in native_roles + ((("terminal", "terminalAppend"),) if terminal else ()):
         value = transfers[role]
         p.require(type(value) is RetainedActivationFds and value._cohort is cohort and value._role == role)
         value.check(); p.require(value._grant_bytes == owner._spools[ROLES[0]]._native[name])
@@ -187,7 +205,7 @@ def _require_native_release(launcher, cohort, transfers):
     pin = g.document(bridge._delivery_bytes, 65536)["payload"]["runtimeConfig"]
     original = o.Original(pin["path"], g.MAX_BYTES, sha=pin["sha256"]); owner._originals.append(original)
     runtime = g.document(original.read(), g.MAX_BYTES)
-    p.require(runtime["apiVersion"] == "serverware.policyCustodyProductionRpcRuntime/v7" and runtime["spool"] == expected
+    p.require(runtime["apiVersion"] == ("serverware.policyCustodyProductionRpcRuntime/v8" if terminal else "serverware.policyCustodyProductionRpcRuntime/v7") and runtime["spool"] == expected
         and runtime["commitRequest"] == expected_commitment)
     from serverware.native_shadow_spool_inputs import SpoolInputs
     p.require(type(cohort._spool_resources) is SpoolInputs)

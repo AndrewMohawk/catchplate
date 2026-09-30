@@ -72,12 +72,17 @@ struct CommitRequestLaunch {api_version:String,key_admission:Launch,commit_reque
 #[derive(Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 struct IngressLaunch {api_version:String,key_admission:Launch,ingress:Pin}
+#[derive(Serialize,Deserialize)]
+#[serde(rename_all="camelCase",deny_unknown_fields)]
+struct TerminalSpoolLaunch {api_version:String,key_admission:Launch,terminal_spool:Pin}
 enum SelectedService {None,Retrieval(Pin),LedgerRetrieval(Pin),RetrievalBridge,Activation(Pin),Persistence(Pin),PersistenceLocked(Pin),
-    TrustedTime(Pin),ProofBridge(Pin),Generation(Pin),CommitmentBridge(Pin),SpoolBridge(Pin),CommitRequest(Pin),LedgerSpool(Pin),Ingress(Pin)}
+    TrustedTime(Pin),ProofBridge(Pin),Generation(Pin),CommitmentBridge(Pin),SpoolBridge(Pin),CommitRequest(Pin),LedgerSpool(Pin),Ingress(Pin),
+    TerminalSpool(Pin),CompletionLedgerSpool(Pin),CompletionRetrieval(Pin),TerminalBridge(Pin)}
 #[derive(Serialize,Deserialize)]
 #[serde(untagged)]
 enum Selection {KeyAdmission(Launch),Retrieval(RetrievalLaunch),RetrievalBridge(RetrievalBridgeLaunch),Activation(ActivationLaunch),
-    Persistence(PersistenceLaunch),TrustedTime(TrustedTimeLaunch),Generation(GenerationLaunch),CommitRequest(CommitRequestLaunch),Ingress(IngressLaunch)}
+    Persistence(PersistenceLaunch),TrustedTime(TrustedTimeLaunch),Generation(GenerationLaunch),CommitRequest(CommitRequestLaunch),Ingress(IngressLaunch),
+    TerminalSpool(TerminalSpoolLaunch)}
 fn selection(raw:&[u8])->Result<(Launch,SelectedService),ShadowError> {
     let value:Selection=exact(raw)?;
     let (launch,service)=match value {
@@ -86,6 +91,7 @@ fn selection(raw:&[u8])->Result<(Launch,SelectedService),ShadowError> {
             match value.api_version.as_str(){
                 "serverware.nativeShadowRetrievalGuestLaunch/v1"=>(value.key_admission,SelectedService::Retrieval(value.retrieval)),
                 "serverware.nativeShadowRetrievalGuestLaunch/v2"=>(value.key_admission,SelectedService::LedgerRetrieval(value.retrieval)),
+                "serverware.nativeShadowRetrievalGuestLaunch/v3"=>(value.key_admission,SelectedService::CompletionRetrieval(value.retrieval)),
                 _=>return Err(ShadowError::BindingDrift),
             }
         }
@@ -111,6 +117,8 @@ fn selection(raw:&[u8])->Result<(Launch,SelectedService),ShadowError> {
                 (value.key_admission,SelectedService::CommitmentBridge(value.trusted_time))
             } else if value.api_version=="serverware.nativeProofBridgeLaunch/v3" {
                 (value.key_admission,SelectedService::SpoolBridge(value.trusted_time))
+            } else if value.api_version=="serverware.nativeProofBridgeLaunch/v4" {
+                (value.key_admission,SelectedService::TerminalBridge(value.trusted_time))
             } else {
                 require(value.api_version=="serverware.nativeShadowTrustedTimeGuestLaunch/v1")?;
                 (value.key_admission,SelectedService::TrustedTime(value.trusted_time))
@@ -124,12 +132,17 @@ fn selection(raw:&[u8])->Result<(Launch,SelectedService),ShadowError> {
             match value.api_version.as_str(){
                 "serverware.nativeShadowCommitRequestGuestLaunch/v1"=>(value.key_admission,SelectedService::CommitRequest(value.commit_request)),
                 "serverware.nativeShadowCommitRequestGuestLaunch/v2"=>(value.key_admission,SelectedService::LedgerSpool(value.commit_request)),
+                "serverware.nativeShadowCommitRequestGuestLaunch/v3"=>(value.key_admission,SelectedService::CompletionLedgerSpool(value.commit_request)),
                 _=>return Err(ShadowError::BindingDrift),
             }
         }
         Selection::Ingress(value)=>{
             require(value.api_version=="serverware.nativeShadowIngressGuestLaunch/v1")?;
             (value.key_admission,SelectedService::Ingress(value.ingress))
+        }
+        Selection::TerminalSpool(value)=>{
+            require(value.api_version=="serverware.nativeShadowTerminalSpoolGuestLaunch/v1")?;
+            (value.key_admission,SelectedService::TerminalSpool(value.terminal_spool))
         }
     };
     require(launch.api_version=="serverware.nativeShadowGuestLaunch/v1")?;
@@ -175,17 +188,18 @@ impl AdmittedGuest {
         let launch=Original::native_launch().map_err(fail)?;
         let launch_bytes=launch.read(32768).map_err(fail)?.to_vec();
         let (selected,service_selection)=selection(&launch_bytes)?;
-        let commitment_selected=matches!(&service_selection,SelectedService::CommitRequest(_)|SelectedService::LedgerSpool(_));
-        let sampling_selected=matches!(&service_selection,SelectedService::LedgerSpool(_));
-        let commitment_bridge=matches!(&service_selection,SelectedService::CommitmentBridge(_)|SelectedService::SpoolBridge(_));
-        let spool_bridge=matches!(&service_selection,SelectedService::SpoolBridge(_));
+        let commitment_selected=matches!(&service_selection,SelectedService::CommitRequest(_)|SelectedService::LedgerSpool(_)|SelectedService::CompletionLedgerSpool(_));
+        let sampling_selected=matches!(&service_selection,SelectedService::LedgerSpool(_)|SelectedService::CompletionLedgerSpool(_));
+        let commitment_bridge=matches!(&service_selection,SelectedService::CommitmentBridge(_)|SelectedService::SpoolBridge(_)|SelectedService::TerminalBridge(_));
+        let spool_bridge=matches!(&service_selection,SelectedService::SpoolBridge(_)|SelectedService::TerminalBridge(_));
         require(inspection.is_some()==matches!(&service_selection,SelectedService::Retrieval(_)|SelectedService::LedgerRetrieval(_)|SelectedService::RetrievalBridge
             |SelectedService::Persistence(_)|SelectedService::PersistenceLocked(_)|SelectedService::TrustedTime(_)|SelectedService::ProofBridge(_)
             |SelectedService::Generation(_)|SelectedService::CommitRequest(_)|SelectedService::CommitmentBridge(_)
-            |SelectedService::LedgerSpool(_)|SelectedService::Ingress(_)|SelectedService::SpoolBridge(_)))?;
+            |SelectedService::LedgerSpool(_)|SelectedService::Ingress(_)|SelectedService::SpoolBridge(_)
+            |SelectedService::TerminalSpool(_)|SelectedService::CompletionLedgerSpool(_)|SelectedService::CompletionRetrieval(_)|SelectedService::TerminalBridge(_)))?;
         let native_lock=match &service_selection {
             SelectedService::PersistenceLocked(_)=>Some(super::NativeLock::Persistence),
-            SelectedService::LedgerRetrieval(_)=>Some(super::NativeLock::Ledger),
+            SelectedService::LedgerRetrieval(_)|SelectedService::CompletionRetrieval(_)=>Some(super::NativeLock::Ledger),
             _=>None,
         };
         let mut delivery=PreparedGuestServiceDelivery::admit_selected(&selected.delivery_configuration.path,selected.delivery_configuration.sha256,
@@ -193,6 +207,10 @@ impl AdmittedGuest {
         require(inherited.iter().filter(|fd|**fd>=6).copied().eq(6..6+delivery.activation.len() as i32))?;
         let lifetime=process::Lifetime::arm(&delivery)?;
         let (spool_signer,service_selection,inspection)=match (service_selection,inspection){
+            (SelectedService::TerminalSpool(pin),Some(channel))=>(Some(admission::spool_endpoint::Prepared::open_completion(
+                &pin,admission::spool_signer::Kind::Terminal,&mut delivery,channel)?),SelectedService::None,None),
+            (SelectedService::CompletionLedgerSpool(pin),Some(channel))=>(Some(admission::spool_endpoint::Prepared::open_completion(
+                &pin,admission::spool_signer::Kind::Ledger,&mut delivery,channel)?),SelectedService::None,None),
             (SelectedService::LedgerSpool(pin),Some(channel))=>(Some(admission::spool_endpoint::Prepared::open(
                 &pin,admission::spool_signer::Kind::Ledger,&mut delivery,channel)?),SelectedService::None,None),
             (SelectedService::Ingress(pin),Some(channel))=>(Some(admission::spool_endpoint::Prepared::open(
@@ -202,6 +220,8 @@ impl AdmittedGuest {
         // The successor takes its complete four-resource inventory before any
         // other purpose consumes a descriptor. It is not old v1 plus a flag.
         let (ledger_retrieval,service_selection,inspection)=match (service_selection,inspection){
+            (SelectedService::CompletionRetrieval(pin),Some(channel))=>(
+                Some(admission::ledger_retrieval::Prepared::open_completion(&pin,&mut delivery,channel)?),SelectedService::None,None),
             (SelectedService::LedgerRetrieval(pin),Some(channel))=>(
                 Some(admission::ledger_retrieval::Prepared::open(&pin,&mut delivery,channel)?),SelectedService::None,None),
             (selected,inspection)=>(None,selected,inspection),
@@ -224,6 +244,10 @@ impl AdmittedGuest {
             }
             (SelectedService::SpoolBridge(pin),Some(channel))=>{
                 let (prepared,grant)=proof_client::Prepared::open_spool(&mut delivery,channel,&pin)?;
+                (None,None,None,None,None,Some(prepared),Some(grant),None,None)
+            }
+            (SelectedService::TerminalBridge(pin),Some(channel))=>{
+                let (prepared,grant)=proof_client::Prepared::open_terminal(&mut delivery,channel,&pin)?;
                 (None,None,None,None,None,Some(prepared),Some(grant),None,None)
             }
             (SelectedService::CommitRequest(pin),Some(channel))=>(None,None,None,None,None,None,None,None,

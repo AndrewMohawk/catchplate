@@ -11216,6 +11216,21 @@ pub(crate) enum SpoolAppendReservationOutcome {
     Unavailable(VerifiedShadowSpillReceipt),
 }
 
+/// Explicit native result: a definite durable refusal is a signed spill, not
+/// a missing reservation, timeout or permission to try a different operation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all="camelCase",deny_unknown_fields)]
+pub(in crate::policy_shadow) struct NativeSpoolReservationOutcomeWire {
+    pub(in crate::policy_shadow) api_version:String,
+    pub(in crate::policy_shadow) result:NativeSpoolReservationResultWire,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag="outcome",content="receipt",rename_all="kebab-case",deny_unknown_fields)]
+pub(in crate::policy_shadow) enum NativeSpoolReservationResultWire {
+    Reserved(SpoolAppendReservationReceiptWire),
+    Unavailable(SignedShadowSpillReceipt),
+}
+
 impl SpoolAppendReservationReceiptWire {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn from_custody(

@@ -28,14 +28,30 @@ pub(super) struct Payload {
     pub(super) scope:Scope,pub(super) origin_verifier:super::spool_origin::Key,
     pub(super) ingress:RoleKey,pub(super) ledger:RoleKey,pub(super) retrieval:RoleKey,
     pub(super) proof_scope_original:String,pub(super) initial_transition_head_sha256:Sha256Digest,
+    #[serde(default,skip_serializing_if="Option::is_none")]
+    pub(super) completion:Option<CompletionPolicy>,
 }
+#[derive(Serialize,Deserialize)]
+#[serde(rename_all="camelCase",deny_unknown_fields)]
+pub(super) struct CompletionPolicy {pub(super) terminal:RoleKey,pub(super) regular_append_capacity:u64}
 #[derive(Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 pub(super) struct Grant {pub(super) payload:Payload,pub(super) signature_base64url:String}
 impl Grant {
+    pub(super) fn completion_selected(&self)->bool{self.payload.api_version=="serverware.nativeSpoolHeadGrant/v2"}
+    pub(super) fn key(&self,request:&Dispatch)->Result<&RoleKey,ServiceError>{
+        match request {
+            Dispatch::BeginIngress{..}=>Ok(&self.payload.ingress),
+            Dispatch::AppendTerminal{..}=>Ok(&self.payload.completion.as_ref().ok_or_else(invalid)?.terminal),
+            Dispatch::ReserveSpoolAppend{..}|Dispatch::AppendSpoolEvent{..}=>Ok(&self.payload.ledger),
+            _=>Err(invalid()),
+        }
+    }
     pub(super) fn verify(&self,history:&RuntimeAuthorityHistory)->Result<(),ServiceError>{
         let p=&self.payload;
-        require(p.api_version=="serverware.nativeSpoolHeadGrant/v1" && p.purpose=="native-shared-spool-head"
+        let completion=self.completion_selected();
+        require((completion || p.api_version=="serverware.nativeSpoolHeadGrant/v1") && completion==p.completion.is_some()
+            && p.purpose=="native-shared-spool-head"
             && p.guest.service_role=="durable-recovery-store"
             && &p.authority_history_manifest_sha256==history.manifest_sha256()
             && p.runtime_configuration_sha256==p.guest.runtime_configuration_sha256
@@ -46,14 +62,19 @@ impl Grant {
             && p.proof_scope_original.is_ascii() && !p.proof_scope_original.is_empty() && p.proof_scope_original.len()<=16384
             && Sha256Digest::compute(p.proof_scope_original.as_bytes())==p.scope.proof_scope_sha256
             && p.initial_transition_head_sha256!=Sha256Digest::compute(&[]))?;
-        let keys=[p.ingress.material()?,p.ledger.material()?,p.retrieval.material()?,p.origin_verifier.material()?];
+        let mut keys=vec![p.ingress.material()?,p.ledger.material()?,p.retrieval.material()?,p.origin_verifier.material()?];
+        if let Some(value)=&p.completion {
+            require(value.terminal.role==Role::CustodyTerminalAppend && (1..=32).contains(&value.regular_append_capacity))?;
+            keys.push(value.terminal.material()?);
+        }
         let current=history.current_epoch().map_err(|_|invalid())?;
         require(keys.iter().enumerate().all(|(index,key)|keys[..index].iter().all(|prior|prior!=key)
             && key!=history.root_authority_key() && key!=current.service_signing_key()))?;
         let raw=URL_SAFE_NO_PAD.decode(&self.signature_base64url).map_err(|_|invalid())?;
         require(raw.len()==64 && URL_SAFE_NO_PAD.encode(&raw)==self.signature_base64url)?;
         history.root_authority_key().verify_strict(&super::super::protocol::domain_separated_signature_preimage(
-            GRANT_DOMAIN,&encode_canonical_frame(p)?)?,&Signature::from_slice(&raw).map_err(|_|invalid())?).map_err(|_|invalid())
+            if completion{b"serverware.nativeSpoolHeadGrant.signature/v2"}else{GRANT_DOMAIN},
+            &encode_canonical_frame(p)?)?,&Signature::from_slice(&raw).map_err(|_|invalid())?).map_err(|_|invalid())
     }
 }
 /// Opaque inputs ensure that a service owner cannot be used as a raw signer.
@@ -86,7 +107,7 @@ struct Record {command:Command,grant_sha256:Sha256Digest,owner_state_sha256:Sha2
 #[derive(Clone)]
 struct Pending {claim:Claim,allocation:Allocation,reservation:Option<ResultBody>}
 struct State {generation:ShadowGenerationIdentity,origin:Sha256Digest,ordinal:u64,head:Sha256Digest,next_ingress:u64,
-    openings:BTreeMap<u64,(Sha256Digest,Sha256Digest)>,pending:Option<Pending>}
+    openings:BTreeMap<u64,(Sha256Digest,Sha256Digest)>,pending:Option<Pending>,terminals:BTreeSet<u64>,regular_appends:u64}
 struct Append {key:Sha256Digest,request:Vec<u8>,response:Vec<u8>}
 pub(super) struct Gate {
     grant:Grant,grant_raw:Vec<u8>,grant_file:std::fs::File,history:RuntimeAuthorityHistory,bootstrap:Bootstrap,
@@ -149,20 +170,23 @@ impl Gate {
                 let original=original.ok_or_else(invalid)?;let g=original.generation();
                 require(self.records.is_empty())?;
                 return Ok(Some(State{generation:g.clone(),origin:original.sha256().clone(),ordinal:g.authoritative_ledger_event_ordinal(),
-                    head:g.authoritative_ledger_head_sha256().clone(),next_ingress:g.ingress_range_start_sequence(),openings:BTreeMap::new(),pending:None}));
+                    head:g.authoritative_ledger_head_sha256().clone(),next_ingress:g.ingress_range_start_sequence(),openings:BTreeMap::new(),pending:None,
+                    terminals:BTreeSet::new(),regular_appends:0}));
             }
         }else{require(self.state.is_some())?;}Ok(None)
     }
     fn allocation_payload(&self,claim:&Claim,owner_state:Sha256Digest,observed:u64)->Result<AllocationPayload,ServiceError>{
         let initial=self.origin(claim)?;let state=self.state.as_ref().or(initial.as_ref()).ok_or_else(invalid)?;
+        self.grant.key(&claim.request)?;
         require(self.records.iter().all(|(record,_)|record.command.request().binding().operation_id_sha256!=claim.request.binding().operation_id_sha256
             && record.command.request().binding().replay_id_sha256!=claim.request.binding().replay_id_sha256))?;
         let (ordinal,predecessor,head,ingress,lane)=match &claim.request {
             Dispatch::BeginIngress{..}=>{require(state.pending.is_none() && state.openings.len()<64)?;
                 (state.ordinal.checked_add(1).ok_or_else(invalid)?,state.ordinal,state.head.clone(),state.next_ingress,0)},
-            Dispatch::ReserveSpoolAppend{..}=>{
+            Dispatch::ReserveSpoolAppend{..}|Dispatch::AppendTerminal{..}=>{
                 require(state.pending.is_none())?;let (_,event)=self.grant.payload.scope.request(&claim.request)?;
-                require(state.openings.get(&event.ingress_sequence)==Some(&(event.request_binding_sha256.clone(),event.request_commitment_sha256.clone())))?;
+                require((!matches!(claim.request,Dispatch::AppendTerminal{..}) || !state.terminals.contains(&event.ingress_sequence))
+                    && state.openings.get(&event.ingress_sequence)==Some(&(event.request_binding_sha256.clone(),event.request_commitment_sha256.clone())))?;
                 (state.ordinal.checked_add(1).ok_or_else(invalid)?,state.ordinal,state.head.clone(),event.ingress_sequence,0)
             },
             Dispatch::AppendSpoolEvent{reservation,..}=>{
@@ -175,18 +199,25 @@ impl Gate {
                 let a=&pending.allocation.payload;(a.event_ordinal,a.predecessor_event_ordinal,a.predecessor_head_sha256.clone(),a.ingress_sequence,a.lane)
             },_=>return Err(invalid()),
         };
-        Ok(AllocationPayload{api_version:"serverware.nativeSpoolAllocation/v1".into(),authority_epoch:self.history.current_epoch().map_err(|_|invalid())?.epoch_reference(),
+        let completion=self.grant.payload.completion.as_ref().map(|policy|wire::CapacityDecision{
+            regular_append_capacity:policy.regular_append_capacity,committed_regular_appends:state.regular_appends,
+            disposition:if matches!(claim.request,Dispatch::ReserveSpoolAppend{..}) && state.regular_appends==policy.regular_append_capacity {
+                wire::CapacityDisposition::ReservationUnavailable}else{wire::CapacityDisposition::Proceed}});
+        if let Some(value)=&completion{value.verify(&claim.request)?;}
+        Ok(AllocationPayload{api_version:if completion.is_some(){"serverware.nativeSpoolAllocation/v2"}else{"serverware.nativeSpoolAllocation/v1"}.into(),
+            authority_epoch:self.history.current_epoch().map_err(|_|invalid())?.epoch_reference(),
             service_grant_sha256:Sha256Digest::compute(&self.grant_raw),claim_sha256:sha(claim)?,generation_id:self.grant.payload.scope.generation_id.clone(),
             origin_sha256:state.origin.clone(),owner_state_sha256:owner_state,event_ordinal:ordinal,predecessor_event_ordinal:predecessor,
             predecessor_head_sha256:head,ingress_sequence:ingress,lane,journal_sequence:self.records.len() as u64+1,
             previous_journal_head_sha256:self.journal_head.clone(),allocated_at_boottime_nanos:observed,
-            original_deadline_boottime_nanos:claim.request.binding().operation_deadline_boottime_nanos})
+            original_deadline_boottime_nanos:claim.request.binding().operation_deadline_boottime_nanos,completion})
     }
     fn completion(&self,value:&Completion)->Result<Option<SignedShadowSpillReceipt>,ServiceError>{
         let p=&value.payload;let scope=&self.grant.payload.scope;
         let pending=self.state.as_ref().and_then(|v|v.pending.as_ref()).ok_or_else(invalid)?;
         require(pending.reservation.is_none() && pending.claim==p.claim && pending.allocation==p.allocation)?;
-        let key=if matches!(p.claim.request,Dispatch::BeginIngress{..}){&self.grant.payload.ingress}else{&self.grant.payload.ledger};
+        let key=self.grant.key(&p.claim.request)?;
+        require((p.prepared.core.api_version==fixed::COMPLETION_CORE_API)==self.grant.completion_selected())?;
         value.verify_signature(key)?;scope.prepared(&p.prepared,&key.grant_sha256,&key.material()?)?;
         p.stored.verify(&p.prepared,self.grant.payload.proof_scope_original.as_bytes(),&scope.retrieval_namespace_sha256,
             &self.grant.payload.retrieval.material()?)?;
@@ -196,10 +227,15 @@ impl Gate {
         match p.prepared.core.phase {
             Phase::Reserve=>{
                 require(p.artifact.kind==Kind::SpoolAppendReservationOutcome)?;
-                let receipt:SpoolAppendReservationReceiptWire=decode_canonical_frame(&p.artifact.exact_bytes().map_err(|_|invalid())?)?;
+                let raw=p.artifact.exact_bytes().map_err(|_|invalid())?;
+                let receipt:SpoolAppendReservationReceiptWire=if self.grant.completion_selected(){
+                    let wire:crate::policy_shadow::NativeSpoolReservationOutcomeWire=decode_canonical_frame(&raw)?;
+                    require(wire.api_version=="serverware.nativeSpoolReservationOutcome/v1")?;
+                    let crate::policy_shadow::NativeSpoolReservationResultWire::Reserved(value)=wire.result else{return Err(invalid());};value
+                }else{decode_canonical_frame(&raw)?};
                 fixed::require_final_payload(&p.prepared.core,&p.stored,&receipt.canonical_signature_payload().map_err(|_|invalid())?)?;Ok(None)
             },
-            Phase::Append|Phase::Ingress=>{
+            Phase::Append|Phase::Ingress|Phase::Terminal|Phase::Unavailable=>{
                 let receipt:SignedShadowSpillReceipt=if p.prepared.core.phase==Phase::Ingress {
                     require(p.artifact.kind==Kind::IngressCustodyAdmission)?;
                     let original:crate::policy_shadow::IngressCustodyAdmissionWire=decode_canonical_frame(&p.artifact.exact_bytes().map_err(|_|invalid())?)?;
@@ -208,6 +244,15 @@ impl Gate {
                     wire.require_binding(&state.generation,&p.prepared.core.event.request_binding_sha256,
                         state.generation.ingress_range_start_sequence(),p.allocation.payload.ingress_sequence).map_err(|_|invalid())?;
                     wire.opening_spill_receipt
+                }else if p.prepared.core.phase==Phase::Terminal {
+                    require(p.artifact.kind==Kind::TerminalSlotAppendOutcome)?;
+                    let wire:crate::policy_shadow::TerminalSlotAppendOutcomeWire=decode_canonical_frame(&p.artifact.exact_bytes().map_err(|_|invalid())?)?;
+                    let crate::policy_shadow::TerminalSlotAppendOutcomeWire::Committed(value)=wire else{return Err(invalid());};value
+                }else if p.prepared.core.phase==Phase::Unavailable {
+                    require(p.artifact.kind==Kind::SpoolAppendReservationOutcome)?;
+                    let wire:crate::policy_shadow::NativeSpoolReservationOutcomeWire=decode_canonical_frame(&p.artifact.exact_bytes().map_err(|_|invalid())?)?;
+                    require(wire.api_version=="serverware.nativeSpoolReservationOutcome/v1")?;
+                    let crate::policy_shadow::NativeSpoolReservationResultWire::Unavailable(value)=wire.result else{return Err(invalid());};value
                 }else{
                     require(p.artifact.kind==Kind::ShadowSpillReceipt)?;
                     decode_canonical_frame(&p.artifact.exact_bytes().map_err(|_|invalid())?)?
@@ -236,11 +281,22 @@ impl Gate {
                     self.history.verify_service_signature(epoch,domain,payload,signature).map_err(|_|"spool transition signature differs")).map_err(|_|invalid())?;
                 let state=self.state.as_mut().ok_or_else(invalid)?;
                 if let Some(receipt)=receipt {
-                    require(*result==ResultBody::Artifact(p.artifact.clone()))?;
+                    if p.prepared.core.phase==Phase::Unavailable {
+                        let ResultBody::SealedArtifact{reference,exact_signed_artifact}=result else{return Err(invalid());};
+                        require(exact_signed_artifact.artifact==p.artifact && reference.kind==Kind::SpoolAppendReservationOutcome
+                            && reference.issuing_service_role==HistoricalServiceRoleV3::DurableRecoveryStore
+                            && reference.origin_operation_id_sha256==p.claim.request.binding().operation_id_sha256
+                            && reference.origin_request_sha256==p.claim.request.binding().request_sha256
+                            && exact_signed_artifact.signed_receipt_sha256==reference.signed_receipt_sha256)?;
+                    }else{require(*result==ResultBody::Artifact(p.artifact.clone()))?;}
                     if receipt.event_phase==ShadowSpoolPhase::IngressOpen {
                         require(receipt.ingress_sequence==state.next_ingress
                             && state.openings.insert(receipt.ingress_sequence,(receipt.request_binding_sha256.clone(),receipt.request_commitment_sha256.clone())).is_none())?;
                         state.next_ingress=state.next_ingress.checked_add(1).ok_or_else(invalid)?;
+                    }
+                    if p.prepared.core.phase==Phase::Terminal{require(state.terminals.insert(receipt.ingress_sequence))?;}
+                    if p.prepared.core.phase==Phase::Append {
+                        state.regular_appends=state.regular_appends.checked_add(1).ok_or_else(invalid)?;
                     }
                     state.ordinal=receipt.event_ordinal;state.head=receipt.resulting_head_sha256.clone();state.pending=None;
                 }else{

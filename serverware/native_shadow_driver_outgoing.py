@@ -34,6 +34,7 @@ _PROOFS = {
 _NATIVE_SIGNERS = {
     "ledger-append": ("/run/serverware-shadow-commit-request/listener.sock", "commit-request-peer-directory"),
     "ingress-admission": ("/run/serverware-shadow-ingress-admission/listener.sock", "ingress-admission-peer-directory"),
+    "terminal-append": ("/run/serverware-shadow-terminal-append/listener.sock", "terminal-append-peer-directory"),
 }
 _RUNTIME_FIELDS = ("apiVersion", "startupTimeoutMillis", "listenerSocketPath", "expectedFacadePeer",
     "journalDirectoryIdentity", "expectedHelperEndpointRoles", "expectedDriverProcessIdentitySha256",
@@ -83,9 +84,9 @@ def _peer(value, bridge_uid):
 def _selection(raw, launch_version, bridge_uid):
     """Closed native purpose selection, not a substitute for Rust admission."""
     suffix = {"serverware.nativeProofBridgeLaunch/v1": 5, "serverware.nativeProofBridgeLaunch/v2": 6,
-        "serverware.nativeProofBridgeLaunch/v3": 7}.get(launch_version)
+        "serverware.nativeProofBridgeLaunch/v3": 7, "serverware.nativeProofBridgeLaunch/v4": 8}.get(launch_version)
     p.require(suffix is not None)
-    fields = _RUNTIME_FIELDS + (("commitRequest",) if suffix >= 6 else ()) + (("spool",) if suffix == 7 else ())
+    fields = _RUNTIME_FIELDS + (("commitRequest",) if suffix >= 6 else ()) + (("spool",) if suffix >= 7 else ())
     runtime = p.fields(p.document(raw, 65536), fields)
     p.require(runtime["apiVersion"] == f"serverware.policyCustodyProductionRpcRuntime/v{suffix}"
         and 0 < p.integer(runtime["startupTimeoutMillis"]) <= 30000)
@@ -100,9 +101,10 @@ def _selection(raw, launch_version, bridge_uid):
         p.fields(commitment["serviceGrantOriginals"], ("durable-recovery-store", "current-signature-authority"))
         for value in commitment["serviceGrantOriginals"].values():
             p.require(type(value) is str and value.isascii()); p.document(value.encode("ascii"), 65536)
-    if suffix == 7:
+    if suffix >= 7:
         spool = p.fields(runtime["spool"], ("apiVersion", "headGrantOriginal", "currentGrantOriginal", "originFdName"))
-        p.require(spool["apiVersion"] == "serverware.nativeSpoolServices/v1" and spool["originFdName"] == "generation-origin")
+        p.require(spool["apiVersion"] == ("serverware.nativeSpoolServices/v2" if suffix == 8 else "serverware.nativeSpoolServices/v1")
+            and spool["originFdName"] == "generation-origin")
         for key in ("headGrantOriginal", "currentGrantOriginal"):
             p.require(type(spool[key]) is str and spool[key].isascii()); p.document(spool[key].encode("ascii"), 65536)
     outgoing, names, roles, excluded = {}, {"production-listener", "production-journal", "generation-origin"}, set(), set()
@@ -117,7 +119,8 @@ def _selection(raw, launch_version, bridge_uid):
         outgoing[name] = entry
     signers, roles = runtime["parentSignerEndpoints"], set()
     p.require(type(signers) is list and len(signers) == 10)
-    selected_signers = {"ledger-append"} if suffix == 6 else ({"ledger-append", "ingress-admission"} if suffix == 7 else set())
+    selected_signers = {5: set(), 6: {"ledger-append"}, 7: {"ledger-append", "ingress-admission"},
+        8: {"ledger-append", "ingress-admission", "terminal-append"}}[suffix]
     for entry in signers:
         p.fields(entry, ("signerRole", "authorityBindingCredential", "activationFdName", "expectedSocketPath", "expectedPeer", "authorityKeyId", "authorityKeySpkiSha256"))
         role, name = entry["signerRole"], _name(entry["activationFdName"])
@@ -141,7 +144,7 @@ def _selection(raw, launch_version, bridge_uid):
         roles.add(role); names.add(name); names.add(directory_name); excluded.add(name)
         _peer(entry["expectedPeer"], bridge_uid)
         _name(entry["authorityBindingCredential"]); p.digest(entry["authorityKeyId"]); p.digest(entry["authorityKeySpkiSha256"])
-    p.require(len(outgoing) == {5: 15, 6: 14, 7: 13}[suffix])
+    p.require(len(outgoing) == {5: 15, 6: 14, 7: 13, 8: 12}[suffix])
     for ordinal in range(len(outgoing)):
         p.require(_DIRECTORY_PREFIX + str(ordinal) not in names)
     return runtime, tuple((name, outgoing[name]) for name in sorted(outgoing)), frozenset(excluded)

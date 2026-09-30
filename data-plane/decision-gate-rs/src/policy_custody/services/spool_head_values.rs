@@ -90,7 +90,7 @@ impl Claim {
         scope.binding(&self.request)?;
         match (&self.request,&self.ingress) {
             (Dispatch::BeginIngress{..},Some(original))=>require(original.payload.request==self.request),
-            (Dispatch::ReserveSpoolAppend{..}|Dispatch::AppendSpoolEvent{..},None)=>{scope.request(&self.request)?;Ok(())},
+            (Dispatch::ReserveSpoolAppend{..}|Dispatch::AppendSpoolEvent{..}|Dispatch::AppendTerminal{..},None)=>{scope.request(&self.request)?;Ok(())},
             _=>Err(invalid()),
         }
     }
@@ -104,6 +104,24 @@ pub(super) struct AllocationPayload {
     pub(super) predecessor_head_sha256:Sha256Digest,pub(super) ingress_sequence:u64,pub(super) lane:u16,
     pub(super) journal_sequence:u64,pub(super) previous_journal_head_sha256:Sha256Digest,
     pub(super) allocated_at_boottime_nanos:u64,pub(super) original_deadline_boottime_nanos:u64,
+    #[serde(default,skip_serializing_if="Option::is_none")]
+    pub(super) completion:Option<CapacityDecision>,
+}
+#[derive(Debug,Clone,Copy,PartialEq,Eq,Serialize,Deserialize)]
+#[serde(rename_all="kebab-case")]
+pub(super) enum CapacityDisposition {Proceed,ReservationUnavailable}
+#[derive(Debug,Clone,PartialEq,Eq,Serialize,Deserialize)]
+#[serde(rename_all="camelCase",deny_unknown_fields)]
+pub(super) struct CapacityDecision {
+    pub(super) regular_append_capacity:u64,pub(super) committed_regular_appends:u64,
+    pub(super) disposition:CapacityDisposition,
+}
+impl CapacityDecision {
+    pub(super) fn verify(&self,request:&Dispatch)->Result<(),ServiceError>{
+        require((1..=32).contains(&self.regular_append_capacity) && self.committed_regular_appends<=self.regular_append_capacity
+            && (self.disposition==CapacityDisposition::ReservationUnavailable)
+                ==(matches!(request,Dispatch::ReserveSpoolAppend{..}) && self.committed_regular_appends==self.regular_append_capacity))
+    }
 }
 #[derive(Debug,Clone,PartialEq,Eq,Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
@@ -111,7 +129,9 @@ pub(super) struct Allocation {pub(super) payload:AllocationPayload,pub(super) si
 impl Allocation {
     pub(super) fn verify(&self,claim:&Claim,scope:&Scope,grant:&Sha256Digest,history:&RuntimeAuthorityHistory)->Result<(),ServiceError>{
         claim.validate(scope)?;let p=&self.payload;let b=claim.request.binding();
-        require(p.api_version=="serverware.nativeSpoolAllocation/v1" && &p.service_grant_sha256==grant
+        let completion=p.api_version=="serverware.nativeSpoolAllocation/v2";
+        require((completion || p.api_version=="serverware.nativeSpoolAllocation/v1") && completion==p.completion.is_some()
+            && (completion || !matches!(claim.request,Dispatch::AppendTerminal{..})) && &p.service_grant_sha256==grant
             && p.authority_epoch==history.current_epoch().map_err(|_|invalid())?.epoch_reference()
             && p.claim_sha256==sha(claim)? && p.generation_id==scope.generation_id
             && p.event_ordinal==p.predecessor_event_ordinal.checked_add(1).ok_or_else(invalid)?
@@ -119,6 +139,7 @@ impl Allocation {
             && p.allocated_at_boottime_nanos>=b.opened_at_boottime_nanos
             && p.allocated_at_boottime_nanos<b.operation_deadline_boottime_nanos
             && p.original_deadline_boottime_nanos==b.operation_deadline_boottime_nanos)?;
+        if let Some(value)=&p.completion{value.verify(&claim.request)?;}
         history.verify_service_signature(&p.authority_epoch,ALLOCATION_DOMAIN,&encode_canonical_frame(p)?,&self.signature_base64url)
             .map_err(|_|invalid())
     }
@@ -142,6 +163,8 @@ impl Completion {
             && c.predecessor_head_sha256==a.predecessor_head_sha256 && c.event.ingress_sequence==a.ingress_sequence && c.lane==a.lane
             && p.completed_at_boottime_nanos>=p.stored.payload.stored_at_boottime_nanos
             && p.completed_at_boottime_nanos<b.operation_deadline_boottime_nanos)?;
+        require((c.api_version==fixed::COMPLETION_CORE_API)==a.completion.is_some()
+            && (c.phase==fixed::Phase::Unavailable)==a.completion.as_ref().is_some_and(|v|v.disposition==CapacityDisposition::ReservationUnavailable))?;
         p.artifact.exact_bytes().map_err(|_|invalid())?;
         key.material()?.verify_strict(&signature_preimage(COMPLETE_DOMAIN,&encode_canonical_frame(p)?),
             &Signature::from_bytes(&self.signature.decode().map_err(|_|invalid())?)).map_err(|_|invalid())

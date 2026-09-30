@@ -11,7 +11,7 @@ const MAX_IPC:usize=4096;
 /// Source-selected endpoint mechanics only. This is not a purpose grant.
 #[derive(Debug,Clone,Copy,PartialEq,Eq,PartialOrd,Ord,Serialize,Deserialize)]
 #[serde(rename_all="kebab-case")]
-pub(in crate::policy_shadow::policy_custody::services) enum EndpointKind {Retrieval,Persistence,TrustedTime,GenerationInstallEnvelope,CommitRequest,IngressAdmission}
+pub(in crate::policy_shadow::policy_custody::services) enum EndpointKind {Retrieval,Persistence,TrustedTime,GenerationInstallEnvelope,CommitRequest,IngressAdmission,TerminalAppend}
 impl EndpointKind {
     pub(in crate::policy_shadow::policy_custody::services) fn socket_path(self)->&'static str {match self {
         Self::Retrieval=>"/run/serverware-shadow-retrieval/listener.sock",
@@ -19,22 +19,26 @@ impl EndpointKind {
         Self::TrustedTime=>"/run/serverware-shadow-trusted-time/listener.sock",
         Self::CommitRequest=>"/run/serverware-shadow-commit-request/listener.sock",
         Self::IngressAdmission=>"/run/serverware-shadow-ingress-admission/listener.sock",
+        Self::TerminalAppend=>"/run/serverware-shadow-terminal-append/listener.sock",
         Self::GenerationInstallEnvelope=>"/run/serverware-shadow-generation-install/listener.sock"}}
     pub(in crate::policy_shadow::policy_custody::services) fn directory_path(self)->&'static str {match self {
         Self::Retrieval=>"/run/serverware-shadow-retrieval",Self::Persistence=>"/run/serverware-shadow-persistence",
         Self::TrustedTime=>"/run/serverware-shadow-trusted-time",
         Self::CommitRequest=>"/run/serverware-shadow-commit-request",
         Self::IngressAdmission=>"/run/serverware-shadow-ingress-admission",
+        Self::TerminalAppend=>"/run/serverware-shadow-terminal-append",
         Self::GenerationInstallEnvelope=>"/run/serverware-shadow-generation-install"}}
     pub(in crate::policy_shadow::policy_custody::services) fn listener_name(self)->&'static str {match self {
         Self::Retrieval=>"retrieval-listener",Self::Persistence=>"persistence-listener",Self::TrustedTime=>"trusted-time-listener",
         Self::CommitRequest=>"commit-request-listener",
         Self::IngressAdmission=>"ingress-admission-listener",
+        Self::TerminalAppend=>"terminal-append-listener",
         Self::GenerationInstallEnvelope=>"shadow-generation-install-listener"}}
     pub(in crate::policy_shadow::policy_custody::services) fn peer_directory_name(self)->&'static str {match self {
         Self::Retrieval=>"retrieval-peer-directory",Self::Persistence=>"persistence-peer-directory",Self::TrustedTime=>"trusted-time-peer-directory",
         Self::CommitRequest=>"commit-request-peer-directory",
         Self::IngressAdmission=>"ingress-admission-peer-directory",
+        Self::TerminalAppend=>"terminal-append-peer-directory",
         Self::GenerationInstallEnvelope=>"shadow-generation-install-directory"}}
     pub(in crate::policy_shadow::policy_custody::services) fn inspection_api(self)->&'static str {match self {
         Self::Retrieval=>"serverware.nativeShadowRetrievalInspection/v1",
@@ -42,13 +46,20 @@ impl EndpointKind {
         Self::TrustedTime=>"serverware.nativeShadowTrustedTimeInspection/v1",
         Self::CommitRequest=>"serverware.nativeShadowCommitRequestInspection/v1",
         Self::IngressAdmission=>"serverware.nativeShadowIngressAdmissionInspection/v1",
+        Self::TerminalAppend=>"serverware.nativeShadowTerminalAppendInspection/v1",
         Self::GenerationInstallEnvelope=>"serverware.nativeShadowGenerationInstallPeerInspection/v1"}}
     pub(in crate::policy_shadow::policy_custody::services) fn production_kind(self)->Option<services::production::ProductionProofEndpointKindV4> {match self {
         Self::Retrieval=>Some(services::production::ProductionProofEndpointKindV4::Retrieval),
         Self::Persistence=>Some(services::production::ProductionProofEndpointKindV4::Persistence),
         Self::TrustedTime=>Some(services::production::ProductionProofEndpointKindV4::TrustedTime),
         Self::GenerationInstallEnvelope=>Some(services::production::ProductionProofEndpointKindV4::GenerationInstallEnvelope),
-        Self::CommitRequest|Self::IngressAdmission=>None}}
+        Self::CommitRequest|Self::IngressAdmission|Self::TerminalAppend=>None}}
+    pub(super) fn signer_role(self)->Option<PolicyShadowCustodySignerRole>{match self{
+        Self::CommitRequest=>Some(PolicyShadowCustodySignerRole::LedgerAppend),
+        Self::IngressAdmission=>Some(PolicyShadowCustodySignerRole::IngressAdmission),
+        Self::TerminalAppend=>Some(PolicyShadowCustodySignerRole::TerminalAppend),
+        _=>None,
+    }}
 }
 use std::os::unix::fs::MetadataExt;
 #[derive(PartialEq,Eq)]

@@ -1,4 +1,4 @@
-"""Closed five- or six-child input authoring; no process or readiness authority.
+"""Closed fixed-child input authoring; no process or readiness authority.
 
 These functions sign explicitly approved data using an already provisioned C9
 delivery key. Actual kernel originals and descriptor transfer remain owned by
@@ -17,9 +17,11 @@ PRECREATE_DOMAIN = b"serverware.nativeShadowProofCohortPrecreation.signature/v1\
 RELEASE_DOMAIN = b"serverware.nativeShadowProofCohortRelease.signature/v1\0"
 SIX_RELEASE_DOMAIN = b"serverware.nativeShadowProofCohortRelease.signature/v2\0"
 SEVEN_RELEASE_DOMAIN = b"serverware.nativeShadowProofCohortRelease.signature/v3\0"
+EIGHT_RELEASE_DOMAIN = b"serverware.nativeShadowProofCohortRelease.signature/v4\0"
 ROLES = ("retrieval", "persistence", "trustedTime", "generationInstall", "bridge")
 SIX_ROLES = ROLES + ("commitRequest",)
 SEVEN_ROLES = SIX_ROLES + ("ingressAdmission",)
+EIGHT_ROLES = SEVEN_ROLES + ("terminalAppend",)
 COLD_NAMES = tuple(role + "Configuration" for role in ROLES)
 CONFIG_FIELDS = ("apiVersion", "authority", "executableSha256") + COLD_NAMES
 WINDOW_FIELDS = ("configurationSha256", "authorityKeyId", "bootIdBase64url", "timeNamespaceDevice",
@@ -40,19 +42,23 @@ def configuration(raw):
         p.fields(value, CONFIG_FIELDS + ("cleanup",))
     elif value.get("apiVersion") == "serverware.nativeShadowProofCohortConfiguration/v3":
         p.fields(value, CONFIG_FIELDS + ("cleanup", "commitRequestConfiguration"))
-    else:
+    elif value.get("apiVersion") == "serverware.nativeShadowProofCohortConfiguration/v4":
         p.fields(value, CONFIG_FIELDS + ("cleanup", "commitRequestConfiguration", "ingressAdmissionConfiguration"))
-        p.require(value["apiVersion"] == "serverware.nativeShadowProofCohortConfiguration/v4")
+    else:
+        p.fields(value, CONFIG_FIELDS + ("cleanup", "commitRequestConfiguration", "ingressAdmissionConfiguration", "terminalAppendConfiguration"))
+        p.require(value["apiVersion"] == "serverware.nativeShadowProofCohortConfiguration/v5")
     from serverware import native_shadow_proof_cohort_cleanup as cleanup
     cleanup.configuration(value)
     return value
 
 
 def roles(config):
-    """Only fixed five/six/seven inventories; never a supplied endpoint list."""
+    """Only fixed five/six/seven/eight inventories; never a supplied endpoint list."""
     p.require(config["apiVersion"] in ("serverware.nativeShadowProofCohortConfiguration/v1",
         "serverware.nativeShadowProofCohortConfiguration/v2", "serverware.nativeShadowProofCohortConfiguration/v3",
-        "serverware.nativeShadowProofCohortConfiguration/v4"))
+        "serverware.nativeShadowProofCohortConfiguration/v4", "serverware.nativeShadowProofCohortConfiguration/v5"))
+    if config["apiVersion"] == "serverware.nativeShadowProofCohortConfiguration/v5":
+        return EIGHT_ROLES
     if config["apiVersion"] == "serverware.nativeShadowProofCohortConfiguration/v4":
         return SEVEN_ROLES
     return SIX_ROLES if config["apiVersion"] == "serverware.nativeShadowProofCohortConfiguration/v3" else ROLES
@@ -67,18 +73,24 @@ def release_fields(config):
 
 
 def originals_api(config):
+    if roles(config) == EIGHT_ROLES:
+        return "serverware.nativeShadowProofCohortOriginals/v4"
     if roles(config) == SEVEN_ROLES:
         return "serverware.nativeShadowProofCohortOriginals/v3"
     return "serverware.nativeShadowProofCohortOriginals/v2" if roles(config) == SIX_ROLES else "serverware.nativeShadowProofCohortOriginals/v1"
 
 
 def release_api(config):
+    if roles(config) == EIGHT_ROLES:
+        return "serverware.nativeShadowProofCohortRelease/v4"
     if roles(config) == SEVEN_ROLES:
         return "serverware.nativeShadowProofCohortRelease/v3"
     return "serverware.nativeShadowProofCohortRelease/v2" if roles(config) == SIX_ROLES else "serverware.nativeShadowProofCohortRelease/v1"
 
 
 def release_domain(config):
+    if roles(config) == EIGHT_ROLES:
+        return EIGHT_RELEASE_DOMAIN
     if roles(config) == SEVEN_ROLES:
         return SEVEN_RELEASE_DOMAIN
     return SIX_RELEASE_DOMAIN if roles(config) == SIX_ROLES else RELEASE_DOMAIN
@@ -96,18 +108,21 @@ def _key(signing_key, authority):
               and authority["keyId"] == p.sha(raw))
 
 
-def _configuration(raw, expected_sha256, originals, signing_key, commit_request_original, ingress_admission_original):
+def _configuration(raw, expected_sha256, originals, signing_key, commit_request_original, ingress_admission_original, terminal_append_original):
     config = configuration(raw)
     p.require(p.sha(raw) == p.digest(expected_sha256))
     p.digest(config["executableSha256"])
     _key(signing_key, config["authority"])
     selected = roles(config)
-    p.require((commit_request_original is not None) == (selected in (SIX_ROLES, SEVEN_ROLES)))
-    p.require((ingress_admission_original is not None) == (selected == SEVEN_ROLES))
+    p.require((commit_request_original is not None) == (selected in (SIX_ROLES, SEVEN_ROLES, EIGHT_ROLES)))
+    p.require((ingress_admission_original is not None) == (selected in (SEVEN_ROLES, EIGHT_ROLES)))
+    p.require((terminal_append_original is not None) == (selected == EIGHT_ROLES))
     if commit_request_original is not None:
         originals += (commit_request_original,)
     if ingress_admission_original is not None:
         originals += (ingress_admission_original,)
+    if terminal_append_original is not None:
+        originals += (terminal_append_original,)
     cold_names = tuple(role + "Configuration" for role in selected)
     cold = []
     for name, original in zip(cold_names, originals, strict=True):
@@ -147,11 +162,11 @@ def _signed(signing_key, domain, payload):
 def sign_precreation(*, configuration_raw, configuration_sha256, retrieval_configuration_raw,
                      persistence_configuration_raw, trusted_time_configuration_raw, generation_install_configuration_raw,
                      bridge_configuration_raw, payload_raw, boot, now, signing_key,
-                     commit_request_configuration_raw=None, ingress_admission_configuration_raw=None):
+                     commit_request_configuration_raw=None, ingress_admission_configuration_raw=None, terminal_append_configuration_raw=None):
     """Authorize only bounded cohort resource preparation, not any service."""
     config = _configuration(configuration_raw, configuration_sha256,
         (retrieval_configuration_raw, persistence_configuration_raw, trusted_time_configuration_raw,
-         generation_install_configuration_raw, bridge_configuration_raw), signing_key, commit_request_configuration_raw, ingress_admission_configuration_raw)
+         generation_install_configuration_raw, bridge_configuration_raw), signing_key, commit_request_configuration_raw, ingress_admission_configuration_raw, terminal_append_configuration_raw)
     payload = p.document(payload_raw, MAX_BYTES)
     _window(payload, config, configuration_sha256, boot, now)
     result = p.canonical({"apiVersion": "serverware.nativeShadowProofCohortPrecreation/v1",
@@ -163,7 +178,7 @@ def sign_precreation(*, configuration_raw, configuration_sha256, retrieval_confi
 def sign_release(*, configuration_raw, configuration_sha256, retrieval_configuration_raw,
                  persistence_configuration_raw, trusted_time_configuration_raw, generation_install_configuration_raw,
                  bridge_configuration_raw, precreation_raw, observations_raw, payload_raw,
-                 boot, now, signing_key, commit_request_configuration_raw=None, ingress_admission_configuration_raw=None):
+                 boot, now, signing_key, commit_request_configuration_raw=None, ingress_admission_configuration_raw=None, terminal_append_configuration_raw=None):
     """Sign exact separately approved originals; never synthesize peer14.
 
     observations_raw must come from the retained actual cohort's one observation
@@ -173,7 +188,7 @@ def sign_release(*, configuration_raw, configuration_sha256, retrieval_configura
     """
     config = _configuration(configuration_raw, configuration_sha256,
         (retrieval_configuration_raw, persistence_configuration_raw, trusted_time_configuration_raw,
-         generation_install_configuration_raw, bridge_configuration_raw), signing_key, commit_request_configuration_raw, ingress_admission_configuration_raw)
+         generation_install_configuration_raw, bridge_configuration_raw), signing_key, commit_request_configuration_raw, ingress_admission_configuration_raw, terminal_append_configuration_raw)
     precreation = p.fields(p.document(precreation_raw, MAX_BYTES), ("apiVersion", "payload", "signatureBase64url"))
     p.require(precreation["apiVersion"] == "serverware.nativeShadowProofCohortPrecreation/v1")
     _window(precreation["payload"], config, configuration_sha256, boot, now)

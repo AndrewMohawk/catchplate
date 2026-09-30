@@ -76,13 +76,15 @@ def _input(configuration_original, configuration_sha256, assignment_payload_orig
 
 
 def _sign_signer(*, configuration_original, configuration_sha256, assignment_payload_original, scope_original,
-                 proof_scope_original, origin_verifier, peer_original, companion_pin, issued_at, expires_at, now, signing_key, ingress):
-    role = "custody-ingress-admission" if ingress else "custody-ledger-append"
+                 proof_scope_original, origin_verifier, peer_original, companion_pin, issued_at, expires_at, now, signing_key,
+                 ingress, completion=False, terminal=False):
+    p.require(not (ingress and completion) and (not terminal or completion and not ingress))
+    role = "custody-terminal-append" if terminal else "custody-ingress-admission" if ingress else "custody-ledger-append"
     config, admitted, keys = _input(configuration_original, configuration_sha256, assignment_payload_original, role, now, signing_key)
     scope = _scope(scope_original, proof_scope_original, admitted, admitted["guest"])
     key_live(origin_verifier, now)
     p.require(origin_verifier["keyId"] not in {key["keyId"] for key in keys})
-    if ingress:
+    if ingress or terminal:
         p.require(companion_pin is None)
     else:
         from serverware.native_shadow_guest_delivery import _pin
@@ -90,28 +92,44 @@ def _sign_signer(*, configuration_original, configuration_sha256, assignment_pay
     peer = retrieval._peer(peer_original)
     p.require(peer["uid"] != admitted["guest"]["uid"])
     value = old._common(config, admitted, keys, issued_at, expires_at, now)
-    value.update(apiVersion="serverware.nativeShadowIngressServiceAssignment/v1" if ingress else "serverware.nativeShadowLedgerSpoolServiceAssignment/v1",
-        purpose="native-first-ingress" if ingress else "native-ledger-spool-and-sampling", scope=scope,
+    stem = "TerminalSpool" if terminal else "Ingress" if ingress else "LedgerSpool"
+    version = "2" if completion and not terminal else "1"
+    purpose = ("native-terminal-slot-append" if terminal else "native-first-ingress" if ingress else
+        "native-ledger-spool-and-sampling-with-unavailability" if completion else "native-ledger-spool-and-sampling")
+    value.update(apiVersion="serverware.nativeShadow" + stem + "ServiceAssignment/v" + version,
+        purpose=purpose, scope=scope,
         proofScopeOriginal=proof_scope_original.decode("ascii"), originVerifier=origin_verifier, expectedPeer=peer, commitRequest=companion_pin)
-    domain = "serverware.nativeShadowIngressServiceAssignment.signature/v1" if ingress else "serverware.nativeShadowLedgerSpoolServiceAssignment.signature/v1"
+    domain = "serverware.nativeShadow" + stem + "ServiceAssignment.signature/v" + version
     return old._signed(value, domain, signing_key)
 
 
 def sign_ingress_service(**values):
-    return _sign_signer(**values, companion_pin=None, ingress=True)
+    return _sign_signer(**values, companion_pin=None, ingress=True, completion=False, terminal=False)
 
 
 def sign_ledger_service(**values):
-    return _sign_signer(**values, ingress=False)
+    return _sign_signer(**values, ingress=False, completion=False, terminal=False)
 
 
-def sign_retrieval_service(*, configuration_original, configuration_sha256, assignment_payload_original, scope_original,
+def sign_completion_ledger_service(**values):
+    return _sign_signer(**values, ingress=False, completion=True, terminal=False)
+
+
+def sign_terminal_service(**values):
+    return _sign_signer(**values, companion_pin=None, ingress=False, completion=True, terminal=True)
+
+
+def _sign_retrieval_service(*, configuration_original, configuration_sha256, assignment_payload_original, scope_original,
                            proof_scope_original, peer_original, ingress_key, ledger_key, store_admission,
-                           issued_at, expires_at, now, signing_key):
+                           issued_at, expires_at, now, signing_key, terminal_key=None, completion=False):
     config, admitted, keys = _input(configuration_original, configuration_sha256, assignment_payload_original,
         "custody-retrieval-response", now, signing_key)
     scope = _scope(scope_original, proof_scope_original, admitted, admitted["guest"])
-    for value, role in ((ingress_key, "custody-ingress-admission"), (ledger_key, "custody-ledger-append")):
+    p.require(completion == (terminal_key is not None))
+    role_keys = ((ingress_key, "custody-ingress-admission"), (ledger_key, "custody-ledger-append"))
+    if completion:
+        role_keys += ((terminal_key, "custody-terminal-append"),)
+    for value, role in role_keys:
         p.fields(value, ("role", "keyId", "keySpkiSha256", "publicKeyBase64url", "grantSha256"))
         actual = keys[p.ROLES.index(role)]
         p.require(value["role"] == role and all(value[name] == actual[name] for name in ("keyId", "keySpkiSha256", "publicKeyBase64url")))
@@ -122,13 +140,24 @@ def sign_retrieval_service(*, configuration_original, configuration_sha256, assi
     p.require(store["sequence"] != 0 or store["headSha256"] == store["genesisSha256"])
     peer = retrieval._peer(peer_original); p.require(peer["uid"] != admitted["guest"]["uid"])
     value = old._common(config, admitted, keys, issued_at, expires_at, now)
-    value.update(apiVersion="serverware.nativeLedgerSpoolRetrievalGrant/v1", purpose="native-ledger-spool-retrieval",
+    version = "2" if completion else "1"
+    value.update(apiVersion="serverware.nativeLedgerSpoolRetrievalGrant/v" + version, purpose="native-ledger-spool-retrieval",
         proofScopeOriginalBase64url=p.encoded(proof_scope_original), expectedPeer=peer, spoolScope=scope,
         ingress=ingress_key, ledger=ledger_key, store=store)
-    return old._signed(value, "serverware.nativeLedgerSpoolRetrievalGrant.signature/v1", signing_key)
+    if completion:
+        value["terminal"] = terminal_key
+    return old._signed(value, "serverware.nativeLedgerSpoolRetrievalGrant.signature/v" + version, signing_key)
 
 
-def sign_and_seal_service_grant(*, owner, role, approved_payload_original, native_originals, history_root_authority):
+def sign_retrieval_service(**values):
+    return _sign_retrieval_service(**values, terminal_key=None, completion=False)
+
+
+def sign_completion_retrieval_service(**values):
+    return _sign_retrieval_service(**values, completion=True)
+
+
+def _sign_and_seal_service_grant(*, owner, role, approved_payload_original, native_originals, history_root_authority, completion):
     """Actual root key and actual retained runtime/history/C9/grant writer."""
     from serverware.custody_generation_inputs import GenerationInputs
     p.require(type(owner) is GenerationInputs and owner._spool and role in inputs.ROLES and not owner._taken)
@@ -139,13 +168,15 @@ def sign_and_seal_service_grant(*, owner, role, approved_payload_original, nativ
         and history_root_authority.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
             == root.public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw))
     head = role == inputs.ROLES[0]
-    value = p.fields(p.document(approved_payload_original, 131072), inputs.HEAD if head else inputs.CURRENT)
+    fields = inputs.HEAD + (("completion",) if completion else ()) if head else inputs.CURRENT
+    value = p.fields(p.document(approved_payload_original, 131072), fields)
     p.require(value["guest"] == item["guest"] and value["runtimeConfigurationSha256"] == item["runtime"].sha
         and value["authorityHistoryManifestSha256"] == semantic)
     stem = "Head" if head else "Current"
-    p.require(value["apiVersion"] == "serverware.nativeSpool" + stem + "Grant/v1"
+    version = "2" if completion else "1"
+    p.require(value["apiVersion"] == "serverware.nativeSpool" + stem + "Grant/v" + version
         and value["purpose"] == ("native-shared-spool-head" if head else "native-spool-current-signature"))
-    domain = ("serverware.nativeSpool" + stem + "Grant.signature/v1").encode("ascii")
+    domain = ("serverware.nativeSpool" + stem + "Grant.signature/v" + version).encode("ascii")
     message = b"serverware-signature-v1\0" + len(domain).to_bytes(8, "big") + domain
     message += len(approved_payload_original).to_bytes(8, "big") + approved_payload_original
     raw = p.canonical({"payload": value, "signatureBase64url": p.encoded(history_root_authority.sign(message))})
@@ -153,3 +184,11 @@ def sign_and_seal_service_grant(*, owner, role, approved_payload_original, nativ
     # independent root and exact C9/runtime joins before sealing the memfd.
     owner.seal_spool_grant(role, approved_grant_original=raw, native_originals=native_originals)
     return raw
+
+
+def sign_and_seal_service_grant(**values):
+    return _sign_and_seal_service_grant(**values, completion=False)
+
+
+def sign_and_seal_completion_service_grant(**values):
+    return _sign_and_seal_service_grant(**values, completion=True)

@@ -1,4 +1,4 @@
-//! Real separately inspected endpoint for the fixed ingress or Ledger owner.
+//! Real separately inspected endpoint for one fixed ingress, Ledger or terminal owner.
 use super::*;
 use crate::policy_shadow::policy_custody::services as services;
 use services::guest::native_guest::{self as guest,retrieval_peer as peer};
@@ -9,15 +9,23 @@ use crate::policy_shadow::policy_custody::protocol::domain_separated_signature_p
 use super::spool_signer::{self as signer,Kind};
 use std::os::fd::OwnedFd;
 impl Kind {
-    pub(super) fn endpoint(self)->peer::EndpointKind{match self{Self::Ingress=>peer::EndpointKind::IngressAdmission,Self::Ledger=>peer::EndpointKind::CommitRequest}}
+    pub(super) fn endpoint(self)->peer::EndpointKind{match self{Self::Ingress=>peer::EndpointKind::IngressAdmission,Self::Ledger=>peer::EndpointKind::CommitRequest,Self::Terminal=>peer::EndpointKind::TerminalAppend}}
 }
 pub(crate) struct Prepared {work:signer::Prepared,listener:OwnedFd,inspection:OwnedFd,kind:Kind}
 impl Prepared {
     pub(in crate::policy_shadow::policy_custody::services) fn open(pin:&guest::Pin,kind:Kind,delivery:&mut PreparedGuestServiceDelivery,
         inspection:OwnedFd)->Result<Self,ShadowError>{
+        Self::open_selected(pin,kind,delivery,inspection,false)
+    }
+    pub(in crate::policy_shadow::policy_custody::services) fn open_completion(pin:&guest::Pin,kind:Kind,delivery:&mut PreparedGuestServiceDelivery,
+        inspection:OwnedFd)->Result<Self,ShadowError>{
+        Self::open_selected(pin,kind,delivery,inspection,true)
+    }
+    fn open_selected(pin:&guest::Pin,kind:Kind,delivery:&mut PreparedGuestServiceDelivery,
+        inspection:OwnedFd,completion:bool)->Result<Self,ShadowError>{
         delivery.closure_association().map_err(fail)?.check_preparation().map_err(fail)?;
         let name=kind.endpoint().listener_name();require(delivery.activation.len()==1 && delivery.activation.contains_key(name))?;
-        let work=signer::Prepared::open(pin,kind,delivery)?;
+        let work=if completion{signer::Prepared::open_completion(pin,kind,delivery)?}else{signer::Prepared::open(pin,kind,delivery)?};
         let listener=delivery.activation.remove(name).ok_or(ShadowError::BindingDrift)?;
         Ok(Self{work,listener,inspection,kind})
     }

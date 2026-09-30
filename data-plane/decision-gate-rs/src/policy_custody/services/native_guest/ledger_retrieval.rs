@@ -24,14 +24,20 @@ struct Payload {
     ingress:services::spool_head_values::RoleKey,ledger:services::spool_head_values::RoleKey,
     store:store::Admission,trust_checkpoint_id:Sha256Digest,revocation_generation:u64,revocation_root_sha256:Sha256Digest,
     issued_at_unix_nanos:i64,expires_at_unix_nanos:i64,signing_key_id:Sha256Digest,signing_key_spki_sha256:Sha256Digest,
+    #[serde(default,skip_serializing_if="Option::is_none")]
+    terminal:Option<services::spool_head_values::RoleKey>,
 }
 #[derive(Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 pub(crate) struct Configuration {payload:Payload,signature:CanonicalEd25519Signature}
 impl Configuration {
+    pub(in crate::policy_shadow::policy_custody::services) fn completion_selected(&self)->bool {
+        self.payload.api_version=="serverware.nativeLedgerSpoolRetrievalGrant/v2"
+    }
     pub(in crate::policy_shadow::policy_custody::services) fn validate_shape(&self)->Result<(),ShadowError>{
         let p=&self.payload;
-        require(p.api_version=="serverware.nativeLedgerSpoolRetrievalGrant/v1" && p.purpose=="native-ledger-spool-retrieval"
+        require((self.completion_selected() || p.api_version=="serverware.nativeLedgerSpoolRetrievalGrant/v1")
+            && self.completion_selected()==p.terminal.is_some() && p.purpose=="native-ledger-spool-retrieval"
             && p.guest.service_role=="production-bridge" && p.expected_peer.uid>0 && p.expected_peer.gid>0
             && p.expected_peer.uid!=p.guest.uid && p.proof_scope_original_base64url.len()<=21846
             && p.spool_scope.issued_at_boottime_nanos>=guest::decimal(&p.guest.issued_at_boottime_ns)?
@@ -62,11 +68,14 @@ impl Configuration {
         let key=trust.resolve_ed25519_key(&checkpoint,authority_role_signature_domain(AuthorityRole::CustodySupervisorCapability),
             &signer.key_id,&signer.key_spki_sha256)?;
         require(ed25519_public_key_material_sha256(&key)==signer.key_material_sha256)?;
-        key.verify_strict(&signature_preimage(DOMAIN,&canonical_json_bytes(p)?),&Signature::from_bytes(&self.signature.decode()?))
+        key.verify_strict(&signature_preimage(if self.completion_selected(){"serverware.nativeLedgerSpoolRetrievalGrant.signature/v2"}else{DOMAIN},
+            &canonical_json_bytes(p)?),&Signature::from_bytes(&self.signature.decode()?))
             .map_err(|_|ShadowError::SignatureInvalid)?;
         require(p.ingress.role==AuthorityRole::CustodyIngressAdmission && p.ledger.role==AuthorityRole::CustodyLedgerAppend)?;
         let mut keys=BTreeMap::new();
-        for admitted in [&p.ingress,&p.ledger] {
+        let mut roles=vec![&p.ingress,&p.ledger];
+        if let Some(terminal)=&p.terminal{require(terminal.role==AuthorityRole::CustodyTerminalAppend)?;roles.push(terminal);}
+        for admitted in roles {
             let binding=a.authority_key_independence.binding(admitted.role,&a.assignment_id)?;
             let key=trust.resolve_ed25519_key(&checkpoint,authority_role_signature_domain(admitted.role),&binding.key_id,&binding.key_spki_sha256)?;
             require(admitted.key_id==binding.key_id && admitted.key_spki_sha256==binding.key_spki_sha256
@@ -76,7 +85,9 @@ impl Configuration {
         require(trust.current_checkpoint()?==checkpoint)?;Ok(keys)
     }
     fn preparation(&self,prepared:&wire::Prepared,keys:&BTreeMap<AuthorityRole,VerifyingKey>)->Result<(),ShadowError>{
-        let role=if prepared.core.phase==wire::Phase::Ingress{&self.payload.ingress}else{&self.payload.ledger};
+        require((prepared.core.api_version==wire::COMPLETION_CORE_API)==self.completion_selected())?;
+        let role=match prepared.core.phase{wire::Phase::Ingress=>&self.payload.ingress,
+            wire::Phase::Terminal=>self.payload.terminal.as_ref().ok_or(ShadowError::BindingDrift)?,_=>&self.payload.ledger};
         self.payload.spool_scope.prepared(prepared,&role.grant_sha256,keys.get(&role.role).ok_or(ShadowError::BindingDrift)?).map_err(fail)
     }
 }
@@ -85,11 +96,18 @@ pub(crate) struct Prepared {original:services::guest_original::Original,configur
 impl Prepared {
     pub(in crate::policy_shadow::policy_custody::services) fn open(pin:&guest::Pin,delivery:&mut PreparedGuestServiceDelivery,
         inspection:OwnedFd)->Result<Self,ShadowError>{
+        Self::open_selected(pin,delivery,inspection,false)
+    }
+    pub(in crate::policy_shadow::policy_custody::services) fn open_completion(pin:&guest::Pin,delivery:&mut PreparedGuestServiceDelivery,
+        inspection:OwnedFd)->Result<Self,ShadowError>{
+        Self::open_selected(pin,delivery,inspection,true)
+    }
+    fn open_selected(pin:&guest::Pin,delivery:&mut PreparedGuestServiceDelivery,inspection:OwnedFd,completion:bool)->Result<Self,ShadowError>{
         delivery.closure_association().map_err(fail)?.check_preparation().map_err(fail)?;
         require(delivery.activation.keys().map(String::as_str).collect::<BTreeSet<_>>()
             ==BTreeSet::from(["retrieval-listener","retrieval-objects","ledger-spool-store","ledger-spool-lock"]))?;
         let original=pin.open(65536)?;let configuration:Configuration=guest::exact(&original.read(65536).map_err(fail)?)?;
-        configuration.validate_shape()?;
+        configuration.validate_shape()?;require(configuration.completion_selected()==completion)?;
         require(configuration.payload.guest==GuestClosureAssociation{owner:Arc::clone(&delivery.owner)}.binding())?;
         let scope_raw=URL_SAFE_NO_PAD.decode(&configuration.payload.proof_scope_original_base64url).map_err(fail)?;
         require(!scope_raw.is_empty() && scope_raw.len()<=16384
@@ -174,7 +192,7 @@ impl Service {
                         else{return Err(ShadowError::BindingDrift);};
                     require(proof_scope_canonical_bytes==&self.scope_raw)?;
                     if let Some((prepared,stored))=self.store.originals().iter().find(|(_,s)|&s.payload.retrieval_id_sha256==retrieval_id_sha256){
-                        let role=if prepared.core.phase==wire::Phase::Ingress{PolicyShadowCustodySignerRole::IngressAdmission}else{PolicyShadowCustodySignerRole::LedgerAppend};
+                        let role=prepared.core.role();
                         require(*signer_role==role && &stored.payload.retrieval_proof_sha256==retrieval_proof_sha256)?;
                         wire::require_final_payload(&prepared.core,stored,canonical_receipt_payload).map_err(fail)?;
                         self.scope.require_payload(*signer_role,canonical_receipt_payload,signed_authority_payload)?;

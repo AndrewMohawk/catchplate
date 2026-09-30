@@ -357,7 +357,10 @@ impl ProductionRpcRuntimeConfigV4 {
         if !matches!((self.api_version.as_str(),self.generation_admission.as_ref(),self.commit_request.as_ref(),self.spool.as_ref()),
             (PRODUCTION_RPC_RUNTIME_CONFIG_VERSION,None,None,None)|(super::generation_service_client::RUNTIME,Some(_),None,None)
             |(super::dispatch_service::client::BRIDGE_RUNTIME,Some(_),Some(_),None)
-            |(super::spool_head_client::RUNTIME,Some(_),Some(_),Some(_)))
+            |(super::spool_head_client::RUNTIME,Some(_),Some(_),Some(_))
+            |(super::spool_head_client::COMPLETION_RUNTIME,Some(_),Some(_),Some(_)))
+            || self.spool.as_ref().is_some_and(|value|value.completion_selected())
+                != (self.api_version==super::spool_head_client::COMPLETION_RUNTIME)
             || self.startup_timeout_millis == 0
             || self.startup_timeout_millis > 30_000
             || !self.listener_socket_path.is_absolute()
@@ -1123,10 +1126,16 @@ impl ConcreteFiveV3ProductionAuthoritiesV4 {
                 ProductionRpcRejectionCodeV4::ArtifactPrimitiveUnavailable,"CommitRequest owner is busy"))?
         } else {None};
         let mut spool=if matches!(request,ClosedProductionDispatchRequestV4::BeginIngress{..}
-            |ClosedProductionDispatchRequestV4::ReserveSpoolAppend{..}|ClosedProductionDispatchRequestV4::AppendSpoolEvent{..}) {
+            |ClosedProductionDispatchRequestV4::ReserveSpoolAppend{..}|ClosedProductionDispatchRequestV4::AppendSpoolEvent{..}
+            |ClosedProductionDispatchRequestV4::AppendTerminal{..}) {
             self.spool.as_ref().map(|v|v.try_lock()).transpose().map_err(|_|ProductionPrimitiveRejectionV4::rejected(
                 ProductionRpcRejectionCodeV4::ArtifactPrimitiveUnavailable,"native spool owner is busy"))?
         }else{None};
+        if matches!(request,ClosedProductionDispatchRequestV4::AppendTerminal{..})
+            && spool.as_ref().is_some_and(|owner|!owner.completion_selected()) {
+            // Old v7 keeps its independently configured legacy terminal path.
+            spool=None;
+        }
         let (wire,reply)=if let Some(owner)=spool.as_mut(){
             owner.run(&self.sessions,request,|identity,body|{
                 let target=match identity {
@@ -2487,7 +2496,9 @@ fn run_production_rpc_service_loaded_inner(
             .map_err(|_|ServiceRunnerError::invalid("native proof endpoint construction refused"))?
     } else {(BTreeMap::new(),BTreeMap::new(),None)};
     if loaded.value.commit_request.is_some()!=native_signers.contains_key(&super::super::super::PolicyShadowCustodySignerRole::LedgerAppend)
-        || loaded.value.spool.is_some()!=native_signers.contains_key(&super::super::super::PolicyShadowCustodySignerRole::IngressAdmission) {
+        || loaded.value.spool.is_some()!=native_signers.contains_key(&super::super::super::PolicyShadowCustodySignerRole::IngressAdmission)
+        || loaded.value.spool.as_ref().is_some_and(|value|value.completion_selected())
+            !=native_signers.contains_key(&super::super::super::PolicyShadowCustodySignerRole::TerminalAppend) {
         return Err(ServiceRunnerError::invalid("CommitRequest requires its actual inspected native endpoint owner"));
     }
 
@@ -2600,7 +2611,8 @@ fn run_production_rpc_service_loaded_inner(
     )?;
     let mut parent_signer_endpoints = Vec::with_capacity(10);
     for configured in &loaded.value.parent_signer_endpoints {
-        if matches!(configured.signer_role,super::super::super::PolicyShadowCustodySignerRole::LedgerAppend|super::super::super::PolicyShadowCustodySignerRole::IngressAdmission) {
+        if matches!(configured.signer_role,super::super::super::PolicyShadowCustodySignerRole::LedgerAppend
+            |super::super::super::PolicyShadowCustodySignerRole::IngressAdmission|super::super::super::PolicyShadowCustodySignerRole::TerminalAppend) {
             if let Some(session)=native_signers.remove(&configured.signer_role) {
                 parent_signer_endpoints.push(load_pinned_endpoint_session(
                     ProductionAuthorityEndpointIdentityV4::ParentSigner(configured.signer_role),EndpointSession::NativeProof(session),

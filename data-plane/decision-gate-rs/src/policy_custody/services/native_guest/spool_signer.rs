@@ -1,6 +1,6 @@
-//! Two explicitly selected, separately keyed native owners. IngressAdmission
-//! never obtains LedgerAppend's key or HMAC; Ledger performs only fixed early
-//! sampling and its own reserve/append operations. No arbitrary signing RPC.
+//! Explicitly selected, separately keyed native owners. IngressAdmission and
+//! TerminalAppend never obtain LedgerAppend's key or HMAC. Ledger performs
+//! fixed early sampling and its own reserve/append operations, not a generic MAC.
 use super::*;
 use crate::policy_shadow::policy_custody::services as services;
 use services::{guest::native_guest as guest,ledger_spool_values as fixed,spool_head_values as head};
@@ -11,11 +11,10 @@ use crate::policy_shadow::policy_custody::production_dispatch::{ClosedProduction
 use crate::policy_shadow::policy_custody::authority_history::HistoricalServiceRoleV3;
 #[path="retrieval_scope.rs"] mod scope;
 #[derive(Debug,Clone,Copy,PartialEq,Eq)]
-pub(in crate::policy_shadow::policy_custody::services) enum Kind {Ingress,Ledger}
+pub(in crate::policy_shadow::policy_custody::services) enum Kind {Ingress,Ledger,Terminal}
 impl Kind {
-    pub(super) fn role(self)->AuthorityRole{match self{Self::Ingress=>AuthorityRole::CustodyIngressAdmission,Self::Ledger=>AuthorityRole::CustodyLedgerAppend}}
-    pub(super) fn signer(self)->PolicyShadowCustodySignerRole{match self{Self::Ingress=>PolicyShadowCustodySignerRole::IngressAdmission,Self::Ledger=>PolicyShadowCustodySignerRole::LedgerAppend}}
-    fn domain(self)->&'static str{match self{Self::Ingress=>"serverware.nativeShadowIngressServiceAssignment.signature/v1",Self::Ledger=>"serverware.nativeShadowLedgerSpoolServiceAssignment.signature/v1"}}
+    pub(super) fn role(self)->AuthorityRole{match self{Self::Ingress=>AuthorityRole::CustodyIngressAdmission,Self::Ledger=>AuthorityRole::CustodyLedgerAppend,Self::Terminal=>AuthorityRole::CustodyTerminalAppend}}
+    pub(super) fn signer(self)->PolicyShadowCustodySignerRole{match self{Self::Ingress=>PolicyShadowCustodySignerRole::IngressAdmission,Self::Ledger=>PolicyShadowCustodySignerRole::LedgerAppend,Self::Terminal=>PolicyShadowCustodySignerRole::TerminalAppend}}
 }
 #[derive(Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
@@ -30,10 +29,21 @@ struct Payload {
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 pub(crate) struct Configuration {payload:Payload,signature:CanonicalEd25519Signature}
 impl Configuration {
+    pub(in crate::policy_shadow::policy_custody::services) fn completion_selected(&self)->bool {
+        matches!(self.payload.api_version.as_str(),"serverware.nativeShadowLedgerSpoolServiceAssignment/v2"|"serverware.nativeShadowTerminalSpoolServiceAssignment/v1")
+    }
+    fn domain(&self)->Result<&'static str,ShadowError>{Ok(match self.kind()? {
+        Kind::Ingress=>"serverware.nativeShadowIngressServiceAssignment.signature/v1",
+        Kind::Ledger if self.completion_selected()=>"serverware.nativeShadowLedgerSpoolServiceAssignment.signature/v2",
+        Kind::Ledger=>"serverware.nativeShadowLedgerSpoolServiceAssignment.signature/v1",
+        Kind::Terminal=>"serverware.nativeShadowTerminalSpoolServiceAssignment.signature/v1",
+    })}
     pub(in crate::policy_shadow::policy_custody::services) fn kind(&self)->Result<Kind,ShadowError>{
         match (self.payload.api_version.as_str(),self.payload.purpose.as_str(),self.payload.commit_request.is_some()) {
             ("serverware.nativeShadowIngressServiceAssignment/v1","native-first-ingress",false)=>Ok(Kind::Ingress),
             ("serverware.nativeShadowLedgerSpoolServiceAssignment/v1","native-ledger-spool-and-sampling",true)=>Ok(Kind::Ledger),
+            ("serverware.nativeShadowLedgerSpoolServiceAssignment/v2","native-ledger-spool-and-sampling-with-unavailability",true)=>Ok(Kind::Ledger),
+            ("serverware.nativeShadowTerminalSpoolServiceAssignment/v1","native-terminal-slot-append",false)=>Ok(Kind::Terminal),
             _=>Err(ShadowError::BindingDrift),
         }
     }
@@ -66,7 +76,7 @@ impl Configuration {
         require(binding.key_id==p.signing_key_id && binding.key_spki_sha256==p.signing_key_spki_sha256)?;
         let key=trust.resolve_ed25519_key(&checkpoint,authority_role_signature_domain(role),&binding.key_id,&binding.key_spki_sha256)?;
         require(ed25519_public_key_material_sha256(&key)==binding.key_material_sha256)?;
-        key.verify_strict(&signature_preimage(kind.domain(),&canonical_json_bytes(p)?),&Signature::from_bytes(&self.signature.decode()?))
+        key.verify_strict(&signature_preimage(self.domain()?,&canonical_json_bytes(p)?),&Signature::from_bytes(&self.signature.decode()?))
             .map_err(|_|ShadowError::SignatureInvalid)?;
         let scope:scope::Scope=guest::exact(p.proof_scope_original.as_bytes())?;scope.check(keys)?;
         require(scope.configuration_binding()==&p.scope.production_configuration_binding_sha256
@@ -78,8 +88,14 @@ struct Flight {claim:head::Claim,allocation:Option<head::Allocation>,prepared:Op
 pub(super) struct Prepared {original:services::guest_original::Original,configuration:Configuration,kind:Kind}
 impl Prepared {
     pub(super) fn open(pin:&guest::Pin,kind:Kind,delivery:&PreparedGuestServiceDelivery)->Result<Self,ShadowError>{
+        Self::open_selected(pin,kind,delivery,false)
+    }
+    pub(super) fn open_completion(pin:&guest::Pin,kind:Kind,delivery:&PreparedGuestServiceDelivery)->Result<Self,ShadowError>{
+        Self::open_selected(pin,kind,delivery,true)
+    }
+    fn open_selected(pin:&guest::Pin,kind:Kind,delivery:&PreparedGuestServiceDelivery,completion:bool)->Result<Self,ShadowError>{
         let original=pin.open(65536)?;let configuration:Configuration=guest::exact(&original.read(65536).map_err(fail)?)?;
-        configuration.validate_shape()?;require(configuration.kind()?==kind
+        configuration.validate_shape()?;require(configuration.kind()?==kind && configuration.completion_selected()==completion
             && configuration.payload.guest==GuestClosureAssociation{owner:Arc::clone(&delivery.owner)}.binding())?;
         Ok(Self{original,configuration,kind})
     }
@@ -116,9 +132,12 @@ impl Work {
         let history=keyrings.history(HistoricalServiceRoleV3::DurableRecoveryStore);
         grant.verify(history).map_err(fail)?;
         require(p.scope==self.configuration.payload.scope && p.proof_scope_original==self.configuration.payload.proof_scope_original
-            && p.origin_verifier==self.configuration.payload.origin_verifier)?;
+            && p.origin_verifier==self.configuration.payload.origin_verifier
+            && (self.kind()?==Kind::Ingress || grant.completion_selected()==self.configuration.completion_selected()))?;
         let checkpoint=trust.current_checkpoint()?;let a=keys.assignment.payload();
-        for key in [&p.ingress,&p.ledger,&p.retrieval] {
+        let mut admitted=vec![&p.ingress,&p.ledger,&p.retrieval];
+        if let Some(completion)=&p.completion{admitted.push(&completion.terminal);}
+        for key in admitted {
             let expected=a.authority_key_independence.binding(key.role,&a.assignment_id)?;
             let actual=key.material().map_err(fail)?;
             require(key.key_id==expected.key_id && key.key_spki_sha256==expected.key_spki_sha256
@@ -209,12 +228,21 @@ impl Work {
                         claim.ingress.as_ref().ok_or(ShadowError::BindingDrift)?.payload.trusted_time_checkpoint_sha256.clone())
                 }else{
                     require(sampling.is_none() && self.flight.is_none() && self.used.len()<128 && self.used.insert(b.operation_id_sha256.clone()))?;
-                    let (phase,event)=grant.payload.scope.request(&claim.request).map_err(fail)?;
+                    let (mut phase,event)=grant.payload.scope.request(&claim.request).map_err(fail)?;
+                    require((kind==Kind::Terminal)==(phase==fixed::Phase::Terminal))?;
+                    if allocation.payload.completion.as_ref().is_some_and(|v|v.disposition==head::CapacityDisposition::ReservationUnavailable){
+                        require(kind==Kind::Ledger && self.configuration.completion_selected() && phase==fixed::Phase::Reserve)?;
+                        phase=fixed::Phase::Unavailable;
+                    }
                     self.flight=Some(Flight{claim:claim.clone(),allocation:None,prepared:None,completion:None});
                     (phase,event,latest,trust.current_checkpoint()?.checkpoint_id)
                 };
                 let a=&allocation.payload;
-                let core=fixed::Core{api_version:fixed::CORE_API.into(),phase,request:claim.request.clone(),proof_scope_sha256:grant.payload.scope.proof_scope_sha256.clone(),
+                require(allocation.payload.completion.is_some()==grant.completion_selected())?;
+                if let Some(decision)=&allocation.payload.completion {
+                    require(decision.regular_append_capacity==grant.payload.completion.as_ref().ok_or(ShadowError::BindingDrift)?.regular_append_capacity)?;
+                }
+                let core=fixed::Core{api_version:if grant.completion_selected(){fixed::COMPLETION_CORE_API}else{fixed::CORE_API}.into(),phase,request:claim.request.clone(),proof_scope_sha256:grant.payload.scope.proof_scope_sha256.clone(),
                     native_grant_sha256:own,allocation_sha256:fixed::sha(allocation).map_err(fail)?,event,event_ordinal:a.event_ordinal,
                     predecessor_event_ordinal:a.predecessor_event_ordinal,predecessor_head_sha256:a.predecessor_head_sha256.clone(),lane:a.lane,
                     observed_at_unix_nanos:observed,trusted_time_checkpoint_sha256:checkpoint,signing_key_id:local.binding.key_id.clone(),

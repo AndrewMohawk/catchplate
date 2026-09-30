@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/custody-ordinary-peer-inspection.v1.schema.json",
+  "$ref": "#/$defs/policy",
+  "description": "Explicit non-signing C9 inspection purpose. Shapes are not peer measurements, constructed service notices, native custody or generation readiness. The genuine worker independently performs the existing full host peer checks on one actual session.",
+  "$defs": {
+    "sha256": {"$ref": "custody-five-service-launch.v1.schema.json#/$defs/sha256"},
+    "ns": {"$ref": "custody-five-service-launch.v1.schema.json#/$defs/ns"},
+    "role": {"enum": ["durable-recovery-store", "cleanup-authorization-consumer", "recovery-target-provider", "current-signature-authority", "bounded-cleanup-helper"]},
+    "configuration": {
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "bootIdBase64url", "timeNamespaceDevice", "timeNamespaceInode", "startupDeadlineBoottimeNs", "lifetimeDeadlineBoottimeNs", "invocationId", "services"],
+      "properties": {
+        "apiVersion": {"const": "serverware.custodyFiveServiceLaunch/v2"},
+        "bootIdBase64url": {"type": "string", "pattern": "^[A-Za-z0-9_-]{22}$"},
+        "timeNamespaceDevice": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807},
+        "timeNamespaceInode": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807},
+        "startupDeadlineBoottimeNs": {"$ref": "#/$defs/ns"},
+        "lifetimeDeadlineBoottimeNs": {"$ref": "#/$defs/ns"},
+        "invocationId": {"type": "string", "pattern": "^[0-9a-f]{32}$", "not": {"const": "00000000000000000000000000000000"}},
+        "services": {"$ref": "custody-five-service-launch.v1.schema.json#/$defs/configuration/properties/services"}
+      }
+    },
+    "guestLaunch": {
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "deliveryConfiguration", "delivery", "peerInspectionCredential"],
+      "properties": {
+        "apiVersion": {"const": "serverware.custodyOrdinaryServiceGuestLaunch/v2"},
+        "deliveryConfiguration": {"$ref": "custody-five-service-launch.v1.schema.json#/$defs/pin"},
+        "delivery": {"$ref": "custody-five-service-launch.v1.schema.json#/$defs/pin"},
+        "peerInspectionCredential": {"const": "peer-inspection-policy"}
+      }
+    },
+    "policy": {
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "purpose", "runtimeConfigurationSha256", "serviceRole", "uid", "gid", "startupDeadlineBoottimeNs", "lifetimeDeadlineBoottimeNs"],
+      "properties": {
+        "apiVersion": {"const": "serverware.custodyOrdinaryPeerInspection/v1"},
+        "purpose": {"const": "ordinary-service-peer-inspection"},
+        "runtimeConfigurationSha256": {"$ref": "#/$defs/sha256"},
+        "serviceRole": {"$ref": "#/$defs/role"},
+        "uid": {"type": "integer", "minimum": 1, "maximum": 4294967295},
+        "gid": {"type": "integer", "minimum": 1, "maximum": 4294967295},
+        "startupDeadlineBoottimeNs": {"$ref": "#/$defs/ns"},
+        "lifetimeDeadlineBoottimeNs": {"$ref": "#/$defs/ns"}
+      },
+      "description": "At most 4096 exact canonical bytes in fixed peer-inspection-policy C9 credential, signing:null; C9 binds exact bytes. Runtime supplies the complete independently approved expectedPeer and listener. Original deadlines/role/runtime must match, never a request-selected target or delivery digest cycle."
+    },
+    "listeningNotice": {
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "deliverySha256", "serviceRole", "invocationId", "phase"],
+      "properties": {
+        "apiVersion": {"const": "serverware.custodyOrdinaryListening/v1"},
+        "deliverySha256": {"$ref": "#/$defs/sha256"},
+        "serviceRole": {"$ref": "#/$defs/role"},
+        "invocationId": {"type": "string", "pattern": "^[0-9a-f]{32}$"},
+        "phase": {"const": "final-role-listening"}
+      },
+      "description": "Actual final-role listen transport observation from same retained child/PIDFD/start and SCM credentials. No readiness credit and no disarming startup."
+    }
+  }
+}

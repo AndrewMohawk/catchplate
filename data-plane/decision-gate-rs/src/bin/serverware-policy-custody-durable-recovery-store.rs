@@ -4,6 +4,9 @@ mod policy_shadow;
 
 #[cfg(target_os = "linux")]
 fn main() {
+    if std::env::args().nth(1).as_deref()==Some("--guest-c9-generation-inspected") {
+        policy_shadow::run_inspected_ordinary_custody_guest("durable-recovery-store");
+    }
     if std::env::args().nth(1).as_deref()==Some("--guest-c9-generation") {
         policy_shadow::run_ordinary_custody_guest("durable-recovery-store");
     }

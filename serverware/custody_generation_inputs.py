@@ -160,6 +160,19 @@ class GenerationInputs:
             self._originals.append(credential)
             p.require(credential.expected[6] == entry["length"])
             originals[entry["name"]] = credential
+        if self._launcher._inspected:
+            selected_policy = [entry for entry in payload["credentials"] if entry["name"] == "peer-inspection-policy"]
+            p.require(len(selected_policy) == 1 and selected_policy[0]["signing"] is None
+                and selected_policy[0]["length"] <= 4096)
+            policy_raw = originals["peer-inspection-policy"].read()
+            p.require(p.sha(policy_raw) == selected_policy[0]["original"]["sha256"])
+            policy = p.fields(g.document(policy_raw, 4096), ("apiVersion", "purpose", "runtimeConfigurationSha256",
+                "serviceRole", "uid", "gid", "startupDeadlineBoottimeNs", "lifetimeDeadlineBoottimeNs"))
+            p.require(policy == {"apiVersion": "serverware.custodyOrdinaryPeerInspection/v1",
+                "purpose": "ordinary-service-peer-inspection", "runtimeConfigurationSha256": runtime.sha,
+                "serviceRole": role, "uid": item["cold"]["uid"], "gid": item["cold"]["gid"],
+                "startupDeadlineBoottimeNs": str(self._launcher._startup),
+                "lifetimeDeadlineBoottimeNs": str(self._launcher._lifetime)})
         history_name = header["authorityHistoryManifestCredential"]
         selected = [entry for entry in payload["credentials"] if entry["name"] == history_name]
         p.require(len(selected) == 1 and selected[0]["signing"] is None)
@@ -187,9 +200,13 @@ class GenerationInputs:
         fcntl.fcntl(item["grant"], fcntl.F_ADD_SEALS, o.SEALS)
         p.require(o.read(item["grant"], 65536) == raw and fcntl.fcntl(item["grant"], fcntl.F_GET_SEALS) == o.SEALS)
         item["grant_raw"] = raw
-        launch_raw = g.canonical({"apiVersion": "serverware.custodyOrdinaryServiceGuestLaunch/v1",
+        launch_value = {"apiVersion": "serverware.custodyOrdinaryServiceGuestLaunch/v1",
             "deliveryConfiguration": {"path": item["configuration"].path, "sha256": item["configuration"].sha},
-            "delivery": {"path": item["delivery"].path, "sha256": item["delivery"].sha}})
+            "delivery": {"path": item["delivery"].path, "sha256": item["delivery"].sha}}
+        if self._launcher._inspected:
+            launch_value.update(apiVersion="serverware.custodyOrdinaryServiceGuestLaunch/v2",
+                peerInspectionCredential="peer-inspection-policy")
+        launch_raw = g.canonical(launch_value)
         launch = o.publish(f"/etc/serverware/custody-{role}-guest.json", launch_raw)
         self._originals.append(launch); item["launch"] = launch
         self.check(); return raw

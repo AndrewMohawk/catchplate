@@ -48,7 +48,7 @@ def _packet(channel, maximum, descriptors):
         raise
 
 
-def _park(channel, executable, parent, role, startup):
+def _park(channel, executable, parent, role, startup, inspected):
     """Same fork child performs the fixed exec; no future PID prediction."""
     try:
         libc = ctypes.CDLL(None, use_errno=True)
@@ -82,7 +82,8 @@ def _park(channel, executable, parent, role, startup):
             os.dup2(fd, target, inheritable=True)
         os.closerange(6 + count - 1, limit)
         p.require(o.clock() < startup and os.getppid() == parent)
-        os.execve(5, [f"/usr/local/bin/serverware-policy-custody-{role}", "--guest-c9-generation"], {})
+        selector = "--guest-c9-generation-inspected" if inspected else "--guest-c9-generation"
+        os.execve(5, [f"/usr/local/bin/serverware-policy-custody-{role}", selector], {})
     except BaseException:
         os._exit(1)
 
@@ -95,6 +96,7 @@ class FiveServiceLaunch:
         self._stop = threading.Event(); self._input_owner = None
         self._business_resources = None
         self._thread = self._transfer = None
+        self._listening = threading.Event(); self._bridge_attempted = False
 
     @classmethod
     def start(cls):
@@ -113,10 +115,13 @@ class FiveServiceLaunch:
             cold = p.fields(g.document(original.read(), 65536), ("apiVersion", "bootIdBase64url",
                 "timeNamespaceDevice", "timeNamespaceInode", "startupDeadlineBoottimeNs",
                 "lifetimeDeadlineBoottimeNs", "invocationId", "services"))
-            p.require(cold["apiVersion"] == "serverware.custodyFiveServiceLaunch/v1"
+            p.require(cold["apiVersion"] in {"serverware.custodyFiveServiceLaunch/v1", "serverware.custodyFiveServiceLaunch/v2"}
                 and (cold["bootIdBase64url"], cold["timeNamespaceDevice"], cold["timeNamespaceInode"]) == owner._boot
                 and type(cold["invocationId"]) is str and re.fullmatch(r"[0-9a-f]{32}", cold["invocationId"])
                 and cold["invocationId"] != "0" * 32)
+            # Only the protected cold original selects inspection. Neither an
+            # environment variable nor a release argument can switch modes.
+            owner._inspected = cold["apiVersion"] == "serverware.custodyFiveServiceLaunch/v2"
             owner._startup = p.ns(cold["startupDeadlineBoottimeNs"])
             owner._lifetime = p.ns(cold["lifetimeDeadlineBoottimeNs"])
             owner._issued = o.clock(); owner._invocation = cold["invocationId"]
@@ -151,7 +156,7 @@ class FiveServiceLaunch:
                 child.setsockopt(socket.SOL_SOCKET, socket.SO_PASSCRED, 1)
                 pid = os.fork()
                 if pid == 0:
-                    _park(child, owner._configurations[role][2].fd, owner._pid, role, owner._startup)
+                    _park(child, owner._configurations[role][2].fd, owner._pid, role, owner._startup, owner._inspected)
                     os._exit(1)
                 child.close()
                 try:
@@ -225,6 +230,46 @@ class FiveServiceLaunch:
         self.check()
         return all(item["phase"] == "constructed" for item in self._children.values())
 
+    def release_proof_cohort(self, cohort, *, release_original, transfers):
+        """Release the actual bridge only after all five final-role listens.
+
+        This is transport ordering, not a readiness/installation assertion. The
+        native cohort still independently admits every supplied signed launch.
+        Unknown release remains irreversible in both actual owners.
+        """
+        from serverware.native_shadow_proof_cohort_control import ParkedProofCohort
+        self.check()
+        p.require(type(cohort) is ParkedProofCohort and self._inspected and self._attempted
+            and not self._bridge_attempted and threading.current_thread() is threading.main_thread())
+        self._bridge_attempted = True
+        try:
+            cohort.check()
+            bridge = cohort.bridge_original()
+            # Parked identity provides PID/start and the retained executable
+            # only. Final UID/cgroup/label/IMA are NOT manufactured here; the
+            # independent root workers measure the actual post-exec peer.
+            for role in g.ROLES:
+                runtime = self._input_owner._roles[role]["runtime_raw"]
+                expected = g.document(runtime, g.MAX_BYTES)["runtime"]["expectedPeer"]
+                p.require(expected["pid"] == bridge["processId"]
+                    and expected["startTimeTicks"] == bridge["startTimeTicks"]
+                    and expected["executableDevice"] == bridge["executable"]["device"]
+                    and expected["executableInode"] == bridge["executable"]["inode"]
+                    and expected["executableLength"] == bridge["executable"]["length"]
+                    and expected["executableSha256"] == bridge["executable"]["sha256"])
+            while not self._listening.is_set():
+                self.check(); cohort.check()
+                remaining = self._startup - o.clock(); p.require(remaining > 0)
+                self._listening.wait(min(0.01, remaining / 1_000_000_000))
+            self.check(); cohort.check()
+            p.require(o.clock() < self._startup and all(item["phase"] in {"listening", "constructed"}
+                for item in self._children.values()))
+            # Exact native release retains its own original deadlines and
+            # purpose checks; this method cannot renew or replace them.
+            return cohort.release(release_original=release_original, transfers=transfers)
+        except BaseException:
+            self._failed = True; self._stop.set(); raise
+
     def _watch(self):
         try:
             while not self._stop.is_set():
@@ -233,12 +278,22 @@ class FiveServiceLaunch:
                     poll = select.poll(); poll.register(item["channel"], select.POLLIN)
                     events = poll.poll(0)
                     if events:
-                        p.require(item["phase"] == "released" and events[0][1] == select.POLLIN)
+                        allowed = {"released", "listening"} if self._inspected else {"released"}
+                        p.require(item["phase"] in allowed and events[0][1] == select.POLLIN)
                         raw, _, peer = _packet(item["channel"], 4096, 0)
                         config = self._configurations[role][1]
-                        p.require(peer == (item["pid"], config["uid"], config["gid"])
-                            and g.document(raw, 4096) == item["expected_notice"])
-                        item["phase"] = "constructed"
+                        p.require(peer == (item["pid"], config["uid"], config["gid"]))
+                        o.live(item["pidfd"], item["pid"], item["start"], self._pid)
+                        expected = dict(item["expected_notice"])
+                        if self._inspected and item["phase"] == "released":
+                            expected.update(apiVersion="serverware.custodyOrdinaryListening/v1", phase="final-role-listening")
+                            p.require(g.document(raw, 4096) == expected)
+                            item["phase"] = "listening"
+                            if all(child["phase"] in {"listening", "constructed"} for child in self._children.values()):
+                                self._listening.set()
+                        else:
+                            p.require(g.document(raw, 4096) == expected)
+                            item["phase"] = "constructed"
                 deadline = min(self._lifetime, self._startup if not all(
                     item["phase"] == "constructed" for item in self._children.values()) else self._lifetime)
                 self._stop.wait(min(0.01, max(0, deadline - o.clock()) / 1_000_000_000))

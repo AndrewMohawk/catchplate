@@ -11,10 +11,35 @@ fn require(value:bool)->Result<(),ServiceRunnerError> {
 #[derive(Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 struct Launch {api_version:String,delivery_configuration:Pin,delivery:Pin}
+#[derive(Serialize,Deserialize)]
+#[serde(rename_all="camelCase",deny_unknown_fields)]
+struct InspectedLaunch {api_version:String,delivery_configuration:Pin,delivery:Pin,peer_inspection_credential:String}
 
-struct Timer {handle:usize,pid:i32,deadline:u64}
+enum EntryProfile {Generation,InspectedGeneration}
+impl EntryProfile {
+    fn selector(&self)->&'static str {match self {
+        Self::Generation=>"--guest-c9-generation",
+        Self::InspectedGeneration=>"--guest-c9-generation-inspected",
+    }}
+    fn inspected(&self)->bool {matches!(self,Self::InspectedGeneration)}
+    fn launch(&self,raw:&[u8])->Result<(Pin,Pin),ServiceRunnerError> {match self {
+        Self::Generation=>{
+            let value:Launch=exact(raw)?;
+            require(value.api_version=="serverware.custodyOrdinaryServiceGuestLaunch/v1")?;
+            Ok((value.delivery_configuration,value.delivery))
+        },
+        Self::InspectedGeneration=>{
+            let value:InspectedLaunch=exact(raw)?;
+            require(value.api_version=="serverware.custodyOrdinaryServiceGuestLaunch/v2"
+                && value.peer_inspection_credential==super::ordinary_inspection::CREDENTIAL)?;
+            Ok((value.delivery_configuration,value.delivery))
+        },
+    }}
+}
+
+pub(super) struct Timer {handle:usize,pid:i32,deadline:u64}
 impl Timer {
-    fn arm(deadline:u64)->Result<Self,ServiceRunnerError> {
+    pub(super) fn arm(deadline:u64)->Result<Self,ServiceRunnerError> {
         require(now()?<deadline)?;
         let mut event:libc::sigevent=unsafe{std::mem::zeroed()};
         event.sigev_notify=libc::SIGEV_SIGNAL;event.sigev_signo=libc::SIGKILL;
@@ -26,7 +51,7 @@ impl Timer {
         require(unsafe{libc::timer_settime(timer,libc::TIMER_ABSTIME,&value,std::ptr::null_mut())}==0)?;
         owner.check()?;Ok(owner)
     }
-    fn check(&self)->Result<(),ServiceRunnerError> {
+    pub(super) fn check(&self)->Result<(),ServiceRunnerError> {
         require(unsafe{libc::getpid()}==self.pid)?;
         let before=now()?;let mut value:libc::itimerspec=unsafe{std::mem::zeroed()};
         require(unsafe{libc::timer_gettime(self.handle as libc::timer_t,&mut value)}==0)?;
@@ -64,9 +89,9 @@ impl Lifetime {
     }
 }
 
-fn entry(role:&str)->Result<(),ServiceRunnerError> {
+fn entry(role:&str,profile:EntryProfile)->Result<(),ServiceRunnerError> {
     let args=std::env::args().collect::<Vec<_>>();
-    require(args.len()==2 && args[1]=="--guest-c9-generation" && std::env::vars_os().next().is_none()
+    require(args.len()==2 && args[1]==profile.selector() && std::env::vars_os().next().is_none()
         && unsafe{libc::getuid()}==0 && unsafe{libc::geteuid()}==0)?;
     let core=libc::rlimit{rlim_cur:0,rlim_max:0};
     require(unsafe{libc::setrlimit(libc::RLIMIT_CORE,&core)}==0 && unsafe{libc::prctl(libc::PR_SET_DUMPABLE,0)}==0)?;
@@ -85,10 +110,9 @@ fn entry(role:&str)->Result<(),ServiceRunnerError> {
     }
     require(inherited.contains(&3) && inherited.contains(&4))?;
     let original=Original::ordinary_service_launch(role)?;
-    let launch:Launch=exact(&original.read(32768)?)?;
-    require(launch.api_version=="serverware.custodyOrdinaryServiceGuestLaunch/v1")?;
-    let delivery=PreparedGuestServiceDelivery::admit(&launch.delivery_configuration.path,launch.delivery_configuration.sha256,
-        &launch.delivery.path,launch.delivery.sha256)?;
+    let (configuration,envelope)=profile.launch(&original.read(32768)?)?;
+    let delivery=PreparedGuestServiceDelivery::admit(&configuration.path,configuration.sha256,
+        &envelope.path,envelope.sha256)?;
     require(delivery.closure_association()?.binding().service_role==role
         && delivery.owner.payload.service_role!=Role::ProductionBridge
         && inherited.iter().filter(|fd|**fd>=6).copied().eq(6..6+delivery.activation.len() as i32))?;
@@ -96,6 +120,9 @@ fn entry(role:&str)->Result<(),ServiceRunnerError> {
     require(runtime.get("runtime").and_then(|v|v.get("apiVersion")).and_then(|v|v.as_str())==Some(generation_service::RUNTIME))?;
     let lifetime=Lifetime::arm(&delivery.owner)?;
     *delivery.owner.ordinary_lifetime.lock().map_err(|_|fail("ordinary lifetime owner poisoned"))?=Some(lifetime);
+    // The only fork is before service threads, private key reads and role drop.
+    // Keep its stop/reap owner on this stack across the actual serving loop.
+    let worker=if profile.inspected() {Some(super::ordinary_inspection::prepare(&delivery)?)} else {None};
     require(unsafe{libc::prctl(libc::PR_SET_NO_NEW_PRIVS,1,0,0,0)}==0 && unsafe{libc::prctl(47,4,0,0,0)}==0)?;
     for capability in 0..64 {
         let present=unsafe{libc::prctl(libc::PR_CAPBSET_READ,capability,0,0,0)};
@@ -113,11 +140,16 @@ fn entry(role:&str)->Result<(),ServiceRunnerError> {
         && unsafe{libc::prctl(libc::PR_SET_DUMPABLE,0)}==0
         && unsafe{libc::prctl(libc::PR_SET_PDEATHSIG,libc::SIGKILL)}==0)?;
     original.check()?;delivery.owner.check_startup()?;
+    if let Some(worker)=worker.as_ref() {super::ordinary_inspection::final_role_listening(&delivery,worker)?;}
     // The real software serving owner constructs, journals and signs through
     // its existing keys. No native-key admission or NSM proof is synthesized.
     delivery.run_after_drop()
 }
 pub(crate) fn run(role:&str)->! {
-    let _=entry(role);
+    let _=entry(role,EntryProfile::Generation);
+    unsafe{libc::_exit(1)}
+}
+pub(crate) fn run_inspected(role:&str)->! {
+    let _=entry(role,EntryProfile::InspectedGeneration);
     unsafe{libc::_exit(1)}
 }

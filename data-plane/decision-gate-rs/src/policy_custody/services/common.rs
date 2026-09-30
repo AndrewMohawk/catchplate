@@ -1375,13 +1375,22 @@ pub(in crate::policy_shadow::policy_custody) struct AuthenticatedInheritedSeqpac
     peer_credentials: PeerCredentialsV3,
     peer_pidfd: OwnedFd,
     peer_start_time_ticks: u64,
+    inspection: PeerInspection,
+    peer_process_identity_sha256: Sha256Digest,
+    peer_configuration_generation_sha256: Sha256Digest,
+}
+
+enum PeerInspection {
+    Direct(DirectPeerInspection),
+    Retained(std::sync::Arc<super::guest::ordinary_inspection::client::Session>),
+}
+
+struct DirectPeerInspection {
     peer_executable: OwnedFd,
     peer_executable_identity: PeerExecutableIdentity,
     peer_executable_sha256: [u8; 32],
     peer_cgroup_identity: PeerCgroupIdentity,
     peer_security_label_sha256: Sha256Digest,
-    peer_process_identity_sha256: Sha256Digest,
-    peer_configuration_generation_sha256: Sha256Digest,
 }
 
 impl AuthenticatedInheritedSeqpacket {
@@ -1389,6 +1398,20 @@ impl AuthenticatedInheritedSeqpacket {
         socket: OwnedFd,
         expected_peer: ExpectedPeerCredentials,
     ) -> Result<Self, ServiceError> {
+        Self::admit(socket, expected_peer, true)
+    }
+
+    /// Used only by the actual retained privileged inspection worker. This
+    /// still executes every original host measurement and never re-enters IPC.
+    pub(super) fn from_inherited_direct(
+        socket: OwnedFd,
+        expected_peer: ExpectedPeerCredentials,
+    ) -> Result<Self, ServiceError> {
+        Self::admit(socket, expected_peer, false)
+    }
+
+    fn admit(socket: OwnedFd, expected_peer: ExpectedPeerCredentials, inspected: bool)
+        -> Result<Self, ServiceError> {
         validate_connected_unix_seqpacket(socket.as_raw_fd())?;
         set_nonblocking_cloexec(socket.as_raw_fd())?;
         enable_passcred(socket.as_raw_fd())?;
@@ -1406,6 +1429,18 @@ impl AuthenticatedInheritedSeqpacket {
             return Err(ServiceError::Invalid(
                 "service peer process start time differs from configuration",
             ));
+        }
+        if inspected {
+            if let Some(session) = super::guest::ordinary_inspection::client::bind_if_enabled(
+                socket.as_fd(), &expected_peer, peer_pidfd.as_fd(),
+            )? {
+                let authenticated = Self { socket, peer_credentials, peer_pidfd, peer_start_time_ticks,
+                    inspection: PeerInspection::Retained(session),
+                    peer_process_identity_sha256: expected_peer.process_identity_sha256,
+                    peer_configuration_generation_sha256: expected_peer.configuration_generation_sha256 };
+                authenticated.revalidate_peer()?;
+                return Ok(authenticated);
+            }
         }
         let peer_executable =
             open_process_executable(peer_credentials.pid)?;
@@ -1453,12 +1488,11 @@ impl AuthenticatedInheritedSeqpacket {
             peer_credentials,
             peer_pidfd,
             peer_start_time_ticks,
-            peer_executable,
-            peer_executable_identity,
-            peer_executable_sha256:
-                expected_peer.executable_sha256,
-            peer_cgroup_identity,
-            peer_security_label_sha256,
+            inspection: PeerInspection::Direct(DirectPeerInspection {
+                peer_executable, peer_executable_identity,
+                peer_executable_sha256: expected_peer.executable_sha256,
+                peer_cgroup_identity, peer_security_label_sha256,
+            }),
             peer_process_identity_sha256:
                 expected_peer.process_identity_sha256,
             peer_configuration_generation_sha256:
@@ -1573,10 +1607,15 @@ impl AuthenticatedInheritedSeqpacket {
                 "connected service peer start identity changed",
             ));
         }
+        let direct = match &self.inspection {
+            PeerInspection::Retained(session) => return session.revalidate(
+                self.socket.as_fd(), self.peer_pidfd.as_fd()),
+            PeerInspection::Direct(direct) => direct,
+        };
         let retained = peer_executable_identity(
-            self.peer_executable.as_raw_fd(),
+            direct.peer_executable.as_raw_fd(),
         )?;
-        if retained != self.peer_executable_identity {
+        if retained != direct.peer_executable_identity {
             return Err(ServiceError::Invalid(
                 "retained service peer executable changed",
             ));
@@ -1585,15 +1624,15 @@ impl AuthenticatedInheritedSeqpacket {
             open_process_executable(self.peer_credentials.pid)?;
         let current_identity =
             peer_executable_identity(current.as_raw_fd())?;
-        if current_identity != self.peer_executable_identity {
+        if current_identity != direct.peer_executable_identity {
             return Err(ServiceError::Invalid(
                 "service peer executable was substituted",
             ));
         }
         if process_cgroup_identity(self.peer_credentials.pid)?
-                != self.peer_cgroup_identity
+                != direct.peer_cgroup_identity
             || peer_security_label_sha256(self.socket.as_raw_fd())?
-                != self.peer_security_label_sha256
+                != direct.peer_security_label_sha256
         {
             return Err(ServiceError::Invalid(
                 "service peer cgroup or SO_PEERSEC identity changed",
@@ -1607,17 +1646,17 @@ impl AuthenticatedInheritedSeqpacket {
                     &self.peer_credentials.gid.to_be_bytes(),
                     &self.peer_credentials.pid.to_be_bytes(),
                     &self.peer_start_time_ticks.to_be_bytes(),
-                    &self.peer_executable_identity.device.to_be_bytes(),
-                    &self.peer_executable_identity.inode.to_be_bytes(),
-                    &self.peer_executable_identity.length.to_be_bytes(),
-                    &self.peer_executable_sha256,
-                    self.peer_cgroup_identity
+                    &direct.peer_executable_identity.device.to_be_bytes(),
+                    &direct.peer_executable_identity.inode.to_be_bytes(),
+                    &direct.peer_executable_identity.length.to_be_bytes(),
+                    &direct.peer_executable_sha256,
+                    direct.peer_cgroup_identity
                         .path_sha256
                         .as_str()
                         .as_bytes(),
-                    &self.peer_cgroup_identity.mount_id.to_be_bytes(),
-                    &self.peer_cgroup_identity.inode.to_be_bytes(),
-                    self.peer_security_label_sha256
+                    &direct.peer_cgroup_identity.mount_id.to_be_bytes(),
+                    &direct.peer_cgroup_identity.inode.to_be_bytes(),
+                    direct.peer_security_label_sha256
                         .as_str()
                         .as_bytes(),
                     self.peer_configuration_generation_sha256

@@ -4490,6 +4490,9 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/policy_custody/services/native_verifier_transport.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/guest_original.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/guest_ordinary.rs \
+				data-plane/decision-gate-rs/src/policy_custody/services/guest_ordinary_inspection.rs \
+				data-plane/decision-gate-rs/src/policy_custody/services/guest_ordinary_inspection_client.rs \
+				data-plane/decision-gate-rs/src/policy_custody/services/guest_ordinary_inspection_wire.rs \
 				data-plane/decision-gate-rs/src/native_staging.rs \
 				data-plane/decision-gate-rs/src/native_staging_v1.rs \
 				data-plane/decision-gate-rs/src/native_staging_v1/config.rs \
@@ -4807,6 +4810,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-generation-coordinator.v1.schema.json \
 				schemas/custody-five-service-launch.v1.schema.json \
 				schemas/custody-five-service-business-inputs.v1.schema.json \
+				schemas/custody-ordinary-peer-inspection.v1.schema.json \
 				schemas/native-policy-activation.v1.schema.json \
 				schemas/native-policy-activation-recovery.v1.schema.json \
 				schemas/native-policy-observation-result.v1.schema.json \

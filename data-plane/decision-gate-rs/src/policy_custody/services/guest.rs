@@ -8,6 +8,8 @@ pub(crate) mod native_keys;
 pub(crate) mod native_guest;
 #[path="guest_ordinary.rs"]
 pub(crate) mod ordinary;
+#[path="guest_ordinary_inspection.rs"]
+pub(in crate::policy_shadow::policy_custody::services) mod ordinary_inspection;
 
 const SIGNATURE_DOMAIN: &[u8] = b"serverware.policyCustodyGuestDelivery.signature/v1\0";
 const MAX_DELIVERY: usize = 64 * 1024;

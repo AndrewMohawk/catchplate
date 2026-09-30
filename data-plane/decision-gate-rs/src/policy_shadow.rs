@@ -67,6 +67,10 @@ pub(crate) fn run_ordinary_custody_guest(role:&str)->! {
     policy_custody::services::guest::ordinary::run(role)
 }
 #[cfg(target_os="linux")]
+pub(crate) fn run_inspected_ordinary_custody_guest(role:&str)->! {
+    policy_custody::services::guest::ordinary::run_inspected(role)
+}
+#[cfg(target_os="linux")]
 pub(crate) fn run_native_shadow_guest_supervisor()->! {
     policy_custody::services::guest::native_guest::run_parent()
 }

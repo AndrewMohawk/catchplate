@@ -28,7 +28,7 @@ from serverware import native_shadow_driver_bootstrap as bootstrap
 from serverware import native_shadow_nitro_originals as originals
 from serverware.native_pilot_coordinator_process import _Runtime, _clock, _structural
 from serverware.native_pilot_operator_channel import MAX_FRAME, MAX_TOTAL, STAGES
-from serverware.native_pilot_phase_execution import APPROVAL_ROOT, JOBS, KEY_PURPOSES
+from serverware.native_pilot_phase_execution import APPROVAL_ROOT, JOBS, KEY_PURPOSES, MAX_RETAINED_BYTES
 from serverware.native_pilot_scope_authority import PRODUCTION_FIELDS
 from serverware.native_shadow_proof_cohort_control import _Original
 
@@ -180,6 +180,7 @@ class AuthorityCoordinatorProcess:
         self._runtimes = (_Runtime(), _Runtime())
         self._inventories, self._keys, self._originals = [], {}, []
         self._bootstrap, self._conductors, self._results, self._replies = {}, {}, {}, {}
+        self._approved_inputs, self._approved_bytes = {}, 0
         self._child = self._pidfd = self._channel = None
         self._started = self._closed = self._close_attempted = self._signaled = False
         self._bootstrap_attempted = self._bootstrap_prepared = False
@@ -291,6 +292,15 @@ class AuthorityCoordinatorProcess:
         self._capabilities()
         _require((phase, job) in self._replies)
         return self._replies[(phase, job)]["inputSha256"]
+
+    def approved_input_original(self, phase, job):
+        """Actual installed input for a fully sent reply, not reconstructed history."""
+        self._capabilities()
+        slot = (phase, job)
+        _require(slot in self._replies and slot in self._approved_inputs)
+        raw = self._approved_inputs[slot]
+        _require(p.sha(raw) == self._replies[slot]["inputSha256"])
+        return raw
 
     def _open(self, path, maximum, digest=None):
         original = _Original(path, maximum, digest, mode=0o400)
@@ -427,11 +437,16 @@ class AuthorityCoordinatorProcess:
         self.check_request(request)
         try:
             self._channel._reply_value(request, reply)
+            phase, _, job = _ORDER[self._channel._index]
+            slot = (phase, job.name)
+            _require(slot not in self._approved_inputs and self._approved_bytes < MAX_RETAINED_BYTES)
+            raw = self._open(APPROVAL_ROOT + "/" + phase + "/" + job.name + ".input.json",
+                min(job.maximum, MAX_RETAINED_BYTES - self._approved_bytes), p.digest(reply["inputSha256"]))
+            self._approved_bytes += len(raw)
+            self._approved_inputs[slot] = raw
             if request.phase == "endpoint-inputs":
                 # This approved fixed input supplies the actual production
                 # cleanup reserve. It cannot extend any original deadline.
-                raw = self._open(APPROVAL_ROOT + "/endpoint-inputs/endpoint-inputs.input.json", 65536,
-                    p.digest(reply["inputSha256"]))
                 production = p.fields(p.document(raw, 65536)["production"], PRODUCTION_FIELDS)
                 self._reserve = max(self._reserve,
                     p.integer(production["cleanupReserveNanos"], maximum=5_000_000_000))

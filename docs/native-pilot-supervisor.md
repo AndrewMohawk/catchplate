@@ -68,7 +68,22 @@ The returned `approval-installed-and-replied` status is not a claim that the
 authority has executed that job successfully. `close()` retains both owners on
 unknown cleanup; it does not delete partial files or authorize a retry.
 
+The process also retains each actual fixed installed input before sending its
+reply, bounded by existing per-job limits and a cumulative 128 MiB. The
+`approved_input_original(phase, job)` accessor returns it only after the complete
+reply was sent. Future composers must still validate the actual returned result;
+retained bytes and a reply hash are not proof of successful execution.
+
 ## Remaining work
+
+The first endpoint extension is **held, not admitted**. Source review found
+[two concrete commissioning contradictions](native-pilot-endpoint-commissioning-design.md):
+pre-start inputs depend on a future measured driver identity, and a shared
+assignment hash cannot simultaneously identify the endpoint and bridge closure
+manifests. The draft is preserved separately; none of its policy/runtime changes
+are active, and coverage remains three jobs. Fixing these joins requires explicit
+derived-input and closure-set producer/consumer contracts, not guessed hashes,
+empty retrieval stores or relaxed admission checks.
 
 The other 57 jobs, from `endpoint-inputs` through `shutdown`, still need fixed
 policy composition and applicable prior-result verification. Existing signers,

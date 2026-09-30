@@ -31,6 +31,10 @@ NATIVE_POLICY_ACTIVATION_HTML = r"""
               <p class="hint">A successful publication fills this in memory. Keep this signed operational evidence private. It is not a retry token. If it is missing after an interruption, use authenticated inspection; do not fabricate it or publish again.</p>
               <label for="native-activation-handoff">Exact publication handoff (nativeRequest and publicationOriginal)</label>
               <textarea id="native-activation-handoff" class="policy-result" spellcheck="false" autocomplete="off" oninput="nativeActivationInvalidate()"></textarea>
+              <label for="native-activation-recovery-file">Private recovery handoff exported from the retained native journal</label>
+              <input id="native-activation-recovery-file" type="file" accept=".json,application/json" onchange="nativeActivationInvalidate()">
+              <button type="button" class="secondary" onclick="runUiAction('Import retained native publication', nativeActivationImport)">Import for review only</button>
+              <p class="hint">Import does not authenticate the file or perform an action. Review record-inclusion against current protected state, then finalize after audit delivery. Partial journals require separate reconciliation; never publish again to replace missing evidence.</p>
             </details>
             <button type="button" class="secondary" onclick="runUiAction('Inspect native activation', nativeActivationLookup)">Read approval/preparation/finalization only</button>
             <button type="button" class="secondary" onclick="runUiAction('Restore native request locator', nativeActivationRestore)">Restore this requester's submitted approval ID</button>
@@ -253,6 +257,46 @@ NATIVE_POLICY_ACTIVATION_SCRIPT = r"""
         $('native-activation-observation').textContent = oauthConsentCanonical(result);
         $('native-activation-status').textContent = 'Read-only protected observation. No native contact, approval, publication or retry was performed.';
       } finally { operation.close(); }
+    }
+    async function nativeActivationImport() {
+      nativeActivationInvalidate(); const operation = nativeActivationBegin();
+      const picker = $('native-activation-recovery-file'), file = picker.files?.[0];
+      let raw = null;
+      try {
+        nativeActivationNeed(picker.files.length === 1 && file && file.size > 0 && file.size <= nativeActivationLimit);
+        raw = new TextDecoder('utf-8', {fatal: true}).decode(await file.arrayBuffer());
+        operation.current(); nativeActivationNeed(picker.files.length === 1 && picker.files[0] === file);
+        const handoff = oauthConsentParse(raw, nativeActivationLimit).value;
+        nativeActivationNeed(oauthConsentClosed(handoff, ['nativeRequest', 'publicationOriginal'])
+          && oauthConsentClosed(handoff.nativeRequest, ['apiVersion', 'requestId', 'replayId', 'prepareRequestOriginal', 'prepareResponseOriginal'])
+          && handoff.nativeRequest.apiVersion === 'serverware.nativePolicyActivationRequest/v1'
+          && nativeSetupId(handoff.nativeRequest.requestId) && nativeSetupId(handoff.nativeRequest.replayId)
+          && typeof handoff.nativeRequest.prepareRequestOriginal === 'string' && typeof handoff.nativeRequest.prepareResponseOriginal === 'string'
+          && typeof handoff.publicationOriginal === 'string' && new TextEncoder().encode(handoff.publicationOriginal).byteLength <= 32768);
+        const response = oauthConsentParse(handoff.nativeRequest.prepareResponseOriginal, nativeActivationLimit).value;
+        nativeActivationNeed(response.schema === 'serverware.policyAuthorityNativeActivationRuntimeResponse/v1'
+          && response.operation === 'native-policy-activation.consume' && response.result?.ok === true
+          && nativeSetupId(response.result.approval?.id) && typeof response.result.preparedOriginal === 'string');
+        const prepared = oauthConsentParse(response.result.preparedOriginal, 1024 * 1024).value;
+        nativeActivationNeed(prepared.apiVersion === 'serverware.nativePolicyActivationPrepared/v1'
+          && prepared.activationId === handoff.nativeRequest.requestId && prepared.replayId === handoff.nativeRequest.replayId
+          && nativeSetupId(prepared.readinessRequestId) && /^sha256:[0-9a-f]{64}$/.test(prepared.generationPublicationEnvelopeSha256));
+        const s = operation.selection, approval = response.result.approval.id;
+        nativeActivationNeed((!s.approval || s.approval === approval) && (!s.readiness || s.readiness === prepared.readinessRequestId)
+          && (!s.generation || s.generation === prepared.generationPublicationEnvelopeSha256));
+        const original = oauthConsentCanonical(handoff);
+        nativeActivationNeed(new TextEncoder().encode(original).byteLength <= nativeActivationLimit);
+        operation.current();
+        $('native-activation-approval').value = approval;
+        $('native-activation-readiness').value = prepared.readinessRequestId;
+        $('native-activation-generation').value = prepared.generationPublicationEnvelopeSha256;
+        $('native-activation-handoff').value = original;
+        $('native-activation-phase').value = 'record-inclusion';
+        $('native-activation-status').textContent = 'Untrusted retained handoff imported into page memory. Read and review record-inclusion against current protected state; no action or native contact was performed.';
+      } finally {
+        raw = null; if (picker.files?.[0] === file) picker.value = '';
+        operation.close();
+      }
     }
     function nativeActivationRestore() {
       nativeActivationInvalidate(); const operation = nativeActivationBegin();

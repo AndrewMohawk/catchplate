@@ -304,6 +304,8 @@ pub(super) struct ProductionRpcRuntimeConfigV4 {
     histories: Vec<ProductionHistoryConfigV4>,
     parent_signer_endpoints: Vec<ProductionParentSignerEndpointConfigV4>,
     pub(super) proof_endpoints: Vec<ProductionProofEndpointConfigV4>,
+    #[serde(default,skip_serializing_if="Option::is_none")]
+    generation_admission:Option<super::generation_service_client::Selection>,
 }
 
 impl ProductionRpcRuntimeConfigV4 {
@@ -325,7 +327,8 @@ impl ProductionRpcRuntimeConfigV4 {
             .iter()
             .map(|history| history.service_role)
             .collect::<BTreeSet<_>>();
-        if self.api_version != PRODUCTION_RPC_RUNTIME_CONFIG_VERSION
+        if !matches!((self.api_version.as_str(),self.generation_admission.as_ref()),
+            (PRODUCTION_RPC_RUNTIME_CONFIG_VERSION,None)|(super::generation_service_client::RUNTIME,Some(_)))
             || self.startup_timeout_millis == 0
             || self.startup_timeout_millis > 30_000
             || !self.listener_socket_path.is_absolute()
@@ -356,6 +359,7 @@ impl ProductionRpcRuntimeConfigV4 {
             ));
         }
         self.expected_facade_peer.checked()?;
+        if let Some(selection)=&self.generation_admission {selection.validate()?;}
         self.journal_directory_identity.validate()?;
         let mut names = BTreeSet::from([
             PRODUCTION_RPC_LISTENER_FD_NAME.to_owned(),
@@ -485,6 +489,13 @@ pub(super) enum ProductionAuthorityEndpointRequestBodyV4 {
     SampleTrustedTime {operation_sha256:super::super::super::Sha256Digest},
     Dispatch(ClosedProductionDispatchRequestV4),
     Generation(ClosedProductionGenerationRequestV4),
+    /// Explicit selected successor: actual five local effects/observations.
+    /// The coordinator must verify them and perform its own durable effect;
+    /// their existence is not a completed generation-installation receipt.
+    GenerationAdmission {
+        request:ClosedProductionGenerationRequestV4,
+        services:super::generation_service_client::Replies,
+    },
     RequestTermination {
         request: ProductionRpcRequestV4,
     },
@@ -702,6 +713,7 @@ pub(super) struct ConcreteFiveV3ProductionAuthoritiesV4 {
     parent_signer_endpoints: Vec<ProductionPinnedEndpointV4>,
     proof_endpoints:
         BTreeMap<ProductionProofEndpointKindV4, ProductionPinnedEndpointV4>,
+    generation_admission:Option<std::sync::Mutex<super::generation_service_client::Client>>,
 }
 
 impl ConcreteFiveV3ProductionAuthoritiesV4 {
@@ -755,6 +767,7 @@ impl ConcreteFiveV3ProductionAuthoritiesV4 {
             _readiness: readiness,
             parent_signer_endpoints,
             proof_endpoints,
+            generation_admission:None,
         })
     }
 
@@ -1035,6 +1048,12 @@ impl ConcreteFiveV3ProductionAuthoritiesV4 {
         ProductionPrimitiveRejectionV4,
     > {
         self.require_all_services_current()?;
+        if let Some(owner)=&self.generation_admission {
+            owner.try_lock().map_err(|_|ProductionPrimitiveRejectionV4::rejected(
+                ProductionRpcRejectionCodeV4::RecoveryNotReady,"generation admission is busy"))?
+                .require_committed().map_err(|_|ProductionPrimitiveRejectionV4::rejected(
+                    ProductionRpcRejectionCodeV4::RecoveryNotReady,"cold generation is not definitely installed"))?;
+        }
         request.validate().map_err(|_| {
             ProductionPrimitiveRejectionV4::rejected(
                 ProductionRpcRejectionCodeV4::InvalidRequest,
@@ -1109,13 +1128,19 @@ impl ConcreteFiveV3ProductionAuthoritiesV4 {
         let endpoint = self.proof_endpoint(
             ProductionProofEndpointKindV4::GenerationInstallEnvelope,
         )?;
+        let mut admission=self.generation_admission.as_ref().map(|v|v.try_lock())
+            .transpose().map_err(|_|ProductionPrimitiveRejectionV4::rejected(
+                ProductionRpcRejectionCodeV4::GenerationConflict,"generation admission is busy"))?;
+        let body=if let Some(owner)=admission.as_mut() {
+            let services=owner.exchange(&self.sessions,request).map_err(|_|ProductionPrimitiveRejectionV4::rejected(
+                ProductionRpcRejectionCodeV4::GenerationConflict,"service admission is incomplete or outcome unknown"))?;
+            ProductionAuthorityEndpointRequestBodyV4::GenerationAdmission{request:request.clone(),services}
+        } else {ProductionAuthorityEndpointRequestBodyV4::Generation(request.clone())};
         let wire = ProductionAuthorityEndpointRequestV4::new(
             endpoint.identity,
             request.replay_id_sha256().clone(),
             request.deadline_boottime_nanos(),
-            ProductionAuthorityEndpointRequestBodyV4::Generation(
-                request.clone(),
-            ),
+            body,
         )?;
         match self.call_endpoint(
             endpoint,
@@ -1123,6 +1148,10 @@ impl ConcreteFiveV3ProductionAuthoritiesV4 {
             ProductionRpcRejectionCodeV4::GenerationConflict,
         )? {
             ProductionAuthorityEndpointResultV4::Generation(response) => {
+                if let Some(owner)=admission.as_mut() {
+                    owner.completed(request,&response).map_err(|_|ProductionPrimitiveRejectionV4::rejected(
+                        ProductionRpcRejectionCodeV4::GenerationConflict,"coordinator did not prove actual complete installation"))?;
+                }
                 Ok(response)
             }
             ProductionAuthorityEndpointResultV4::Rejected(rejection) => {
@@ -1490,7 +1519,7 @@ impl ProductionServiceHistoricalKeyringsV4 {
         Ok(histories)
     }
 
-    fn borrowed(&self) -> FiveServiceHistoricalKeyringsV4<'_> {
+    pub(super) fn borrowed(&self) -> FiveServiceHistoricalKeyringsV4<'_> {
         FiveServiceHistoricalKeyringsV4 {
             durable_recovery_store: &self.durable_recovery_store,
             cleanup_authorization_consumer:
@@ -2485,6 +2514,10 @@ fn run_production_rpc_service_loaded_inner(
         proof_endpoints,
     )?;
     if let Some(owner)=native_proof_owner {authority.enable_native_proofs(owner)?;}
+    if let Some(selection)=loaded.value.generation_admission.clone() {
+        authority.generation_admission=Some(std::sync::Mutex::new(super::generation_service_client::Client::new(
+            selection,load_production_histories(&loaded.value,&loaded.credentials)?,bootstrap.clone())?));
+    }
     let bridge = ProductionRpcServiceBridgeV4::recover(
         authority,
         histories,

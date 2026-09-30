@@ -137,9 +137,10 @@ The publication handoff stays in page memory for a separate receipt-inclusion
 step. Its signed operational evidence must be kept private; it is not a replay
 capability. Browser storage never contains passkey assertions, argument originals
 or PREPARE evidence. Read-only lookup and locator restoration do not clear phase
-markers or seed a new publication. Recovering a lost native publication receipt
-still requires its actual retained signed original; this locator does not solve
-that separate effect-recovery path. Receipt inclusion and finalization are
+markers or seed a new publication. Recovering a lost native publication reply
+uses the [read-only journal exporter](native-policy-activation-recovery.md) when
+the exact request and signed receipt both survive. Portal import is review-only;
+partial journals remain unresolved. Receipt inclusion and finalization are
 explicit, audit-gated steps; no action runs automatically.
 
 ## Frozen original contract

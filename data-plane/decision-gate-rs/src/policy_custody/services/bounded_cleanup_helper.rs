@@ -2034,6 +2034,31 @@ pub(super) struct TrustedHostNoTeeBoundedCleanupHelperServer {
     pending_effect: Option<PendingEffectExecution>,
     pending_reply: Option<Vec<u8>>,
 }
+impl super::generation_service::Owner for TrustedHostNoTeeBoundedCleanupHelperServer {
+    fn generation_state(&self,deadline:u64)->Result<Sha256Digest,ServiceError> {
+        if self.pending_effect.is_some() || self.pending_reply.is_some() {
+            return Err(ServiceError::Invalid("generation cannot fence active cleanup work"));
+        }
+        self.peer_authentication.revalidate_peer()?;
+        for worker in &self.ready_reap_workers {
+            let observed=observe_retained_descriptor(WatchdogRegistrationFdRole::WorkerPidfd,worker.worker_pidfd.as_fd())?;
+            if observed!=worker.intent.retained_descriptors.worker_pidfd {
+                return Err(ServiceError::Invalid("generation cleanup worker descriptor changed"));
+            }
+            self.signer.verify_parent_proof(&worker.proof,&worker.intent)?;
+        }
+        let workers:Vec<_>=self.ready_reap_workers.iter().map(|w|(&w.intent,&w.proof)).collect();
+        Ok(Sha256Digest::compute(&super::encode_canonical_frame(&(
+            &self.report,self.readiness_seal()?,self.journal.current_head(deadline)?,
+            &self.registered_reap_ordinals,&self.reconciled_executing_ordinals,workers))?))
+    }
+    fn sign_generation_effect(&self,effect:super::generation_service::Effect)->Result<super::generation_service::Receipt,ServiceError> {
+        super::generation_service::sign(effect,&self.signer.signing_key)
+    }
+    fn sign_generation_observation(&self,payload:super::generation_service::ObservationPayload)->Result<super::generation_service::Observation,ServiceError> {
+        super::generation_service::sign_observation(payload,&self.signer.signing_key)
+    }
+}
 
 impl TrustedHostNoTeeBoundedCleanupHelperServer {
     pub(super) fn from_inherited_socket(
@@ -2777,6 +2802,12 @@ impl TrustedHostNoTeeBoundedCleanupHelperServer {
         &mut self,
         bootstrap: &super::Bootstrap,
     ) -> Result<CleanupHelperServerProgress, ServiceError> {
+        self.try_serve_one_generation_scoped(bootstrap,&mut None)
+    }
+
+    pub(super) fn try_serve_one_generation_scoped(
+        &mut self,bootstrap:&super::Bootstrap,generation:&mut Option<super::generation_service::Gate>,
+    )->Result<CleanupHelperServerProgress,ServiceError> {
         bootstrap.check().map_err(|_| ServiceError::Invalid(
             "cleanup helper guest originals or lifetime unavailable",
         ))?;
@@ -2804,7 +2835,7 @@ impl TrustedHostNoTeeBoundedCleanupHelperServer {
                 }
                 EffectProgress::Complete(reply) => {
                     self.pending_reply = Some(reply);
-                    return self.try_serve_one_bounded_blocking_scoped(bootstrap);
+                    return self.try_serve_one_generation_scoped(bootstrap,generation);
                 }
             }
         }
@@ -2816,9 +2847,22 @@ impl TrustedHostNoTeeBoundedCleanupHelperServer {
         else {
             return Ok(CleanupHelperServerProgress::Idle);
         };
+        if let Some(gate)=generation {
+            if !packet.rights.is_empty() && super::generation_service::is_command(&packet.frame)? {
+                return Err(ServiceError::Invalid("generation command carried descriptors"));
+            }
+            if let Some(reply)=gate.handle(&packet.frame,self)? {
+                let deadline=super::generation_service::frame_deadline(&packet.frame)?;
+                bootstrap.require_deadline(deadline).map_err(|_|ServiceError::Invalid("generation deadline changed"))?;
+                super::send_packet_until(self.socket.as_raw_fd(),&reply,&[],Some(deadline))
+                    .map_err(|_|ServiceError::Invalid("generation reply outcome unknown"))?;
+                self.peer_authentication.revalidate_peer()?;
+                return Ok(CleanupHelperServerProgress::ReplySent);
+            }
+        }
         if let Some(reply) = self.handle_packet(packet, bootstrap)? {
             self.pending_reply = Some(reply);
-            return self.try_serve_one_bounded_blocking_scoped(bootstrap);
+            return self.try_serve_one_generation_scoped(bootstrap,generation);
         }
         Ok(CleanupHelperServerProgress::EffectPending)
     }

@@ -16,6 +16,8 @@ pub(super) mod production;
 pub(super) mod recovery_target_provider;
 pub(super) mod wire;
 pub(super) mod guest;
+pub(super) mod generation_service;
+pub(super) mod generation_service_client;
 mod guest_original;
 use guest::Bootstrap;
 
@@ -285,12 +287,15 @@ struct RuntimeConfigHeaderV3 {
     expected_peer: ExpectedPeerCredentialV3,
     activation_directory_identities:
         BTreeMap<String, ActivationDirectoryIdentityV3>,
+    #[serde(default,skip_serializing_if="Option::is_none")]
+    generation_admission:Option<generation_service::Selection>,
 }
 
 impl RuntimeConfigHeaderV3 {
     fn validate(&self) -> Result<(), ServiceRunnerError> {
         self.expected_peer.checked()?;
-        if self.api_version != SERVICE_RUNTIME_CONFIG_VERSION
+        if !matches!((self.api_version.as_str(),self.generation_admission.as_ref()),
+                (SERVICE_RUNTIME_CONFIG_VERSION,None)|(generation_service::RUNTIME,Some(_)))
             || self.startup_timeout_millis == 0
             || self.startup_timeout_millis
                 > MAX_STARTUP_TIMEOUT_MILLIS
@@ -327,7 +332,7 @@ impl RuntimeConfigHeaderV3 {
                 .as_os_str()
                 .as_bytes()
                 .contains(&0)
-            || self.activation_directory_identities.len() > 2
+            || self.activation_directory_identities.len() > if self.generation_admission.is_some(){3}else{2}
         {
             return Err(ServiceRunnerError::invalid(
                 "service runtime config header is incomplete or invalid",
@@ -336,6 +341,12 @@ impl RuntimeConfigHeaderV3 {
         validate_credential_name(
             &self.authority_history_manifest_credential,
         )?;
+        if let Some(selection)=&self.generation_admission {
+            if selection.grant_fd_name!=generation_service::GRANT_FD {
+                return Err(ServiceRunnerError::invalid("generation grant descriptor name changed"));
+            }
+            self.activation_directory_identity(generation_service::DIRECTORY)?;
+        }
         for (name, identity) in
             &self.activation_directory_identities
         {
@@ -1053,6 +1064,8 @@ fn run_durable_recovery_store_loaded(
 ) -> Result<(), ServiceRunnerError> {
     bootstrap.check()?;
     loaded.value.runtime.validate()?;
+    let mut generation=generation_service::Gate::open(&loaded,&loaded.value.runtime,&bootstrap,&mut activation,
+        TrustedHostServiceRoleV3::DurableRecoveryStore)?;
     let _authority_history =
         loaded.value.runtime.load_authority_history(
             &loaded.credentials,
@@ -1219,6 +1232,9 @@ fn run_durable_recovery_store_loaded(
             .runtime
             .maximum_durability_worker_nanos,
         move |request: Vec<u8>| {
+            if let Some(gate)=&mut generation {
+                if let Some(reply)=gate.handle(&request,&server)? {return Ok(reply);}
+            }
             server.handle_exact_request_frame(&request)
         },
     )
@@ -1241,6 +1257,8 @@ fn run_cleanup_authorization_consumer_loaded(
 ) -> Result<(), ServiceRunnerError> {
     bootstrap.check()?;
     loaded.value.runtime.validate()?;
+    let mut generation=generation_service::Gate::open(&loaded,&loaded.value.runtime,&bootstrap,&mut activation,
+        TrustedHostServiceRoleV3::CleanupAuthorizationConsumer)?;
     let _authority_history =
         loaded.value.runtime.load_authority_history(
             &loaded.credentials,
@@ -1452,6 +1470,9 @@ fn run_cleanup_authorization_consumer_loaded(
             .runtime
             .maximum_durability_worker_nanos,
         move |request: Vec<u8>| {
+            if let Some(gate)=&mut generation {
+                if let Some(reply)=gate.handle(&request,&server)? {return Ok(reply);}
+            }
             server.handle_exact_request_frame(&request)
         },
     )
@@ -1473,6 +1494,8 @@ fn run_recovery_target_provider_loaded(
 ) -> Result<(), ServiceRunnerError> {
     bootstrap.check()?;
     loaded.value.runtime.validate()?;
+    let mut generation=generation_service::Gate::open(&loaded,&loaded.value.runtime,&bootstrap,&mut activation,
+        TrustedHostServiceRoleV3::RecoveryTargetProvider)?;
     let _authority_history =
         loaded.value.runtime.load_authority_history(
             &loaded.credentials,
@@ -1625,12 +1648,22 @@ fn run_recovery_target_provider_loaded(
         move |packet: ReceivedSeqpacket,
               fence: &BoundedDurabilityFence| {
             fence.require_open()?;
+            if let Some(gate)=&mut generation {
+                if !packet.rights.is_empty() && generation_service::is_command(&packet.frame)? {
+                    return Err(ServiceError::Invalid("generation request carried descriptors"));
+                }
+                if let Some(reply)=gate.handle(&packet.frame,&server)? {
+                    fence.require_open()?;
+                    return Ok((reply,Vec::new(),generation_service::frame_deadline(&packet.frame)?));
+                }
+            }
             let prepared = server.handle_authenticated_packet(
                 &authenticated,
                 packet,
             )?;
             fence.require_open()?;
-            Ok(prepared)
+            Ok((encode_canonical_frame(&prepared.frame)?,prepared.rights,
+                prepared.frame.request_binding.deadline.absolute_boottime_nanos()))
         },
     )?;
     bootstrap.ready(
@@ -1639,26 +1672,15 @@ fn run_recovery_target_provider_loaded(
     loop {
         bootstrap.check()?;
         let packet = receive_packet(connection.as_raw_fd(), bootstrap.receive_deadline())?;
-        let request: ServiceRequestFrameV3 =
-            decode_canonical_frame(&packet.frame)?;
-        let deadline = request
-            .binding
-            .deadline
-            .absolute_boottime_nanos();
+        let deadline = generation_service::frame_deadline(&packet.frame)?;
         bootstrap.require_deadline(deadline)?;
-        let prepared = worker.execute(
+        let (exact,rights,response_deadline) = worker.execute(
             ReceivedSeqpacket {
                 frame: packet.frame,
                 rights: packet.rights,
             },
             deadline,
         )?;
-        let exact = encode_canonical_frame(&prepared.frame)?;
-        let response_deadline = prepared
-            .frame
-            .request_binding
-            .deadline
-            .absolute_boottime_nanos();
         if response_deadline != deadline {
             return Err(ServiceRunnerError::invalid(
                 "recovery-target response changed the exact request deadline",
@@ -1667,7 +1689,7 @@ fn run_recovery_target_provider_loaded(
         send_packet_until(
             connection.as_raw_fd(),
             &exact,
-            &prepared.rights,
+            &rights,
             Some(response_deadline),
         )?;
     }
@@ -1690,6 +1712,8 @@ fn run_current_signature_authority_loaded(
 ) -> Result<(), ServiceRunnerError> {
     bootstrap.check()?;
     loaded.value.runtime.validate()?;
+    let mut generation=generation_service::Gate::open(&loaded,&loaded.value.runtime,&bootstrap,&mut activation,
+        TrustedHostServiceRoleV3::CurrentSignatureAuthority)?;
     let _authority_history =
         loaded.value.runtime.load_authority_history(
             &loaded.credentials,
@@ -1823,6 +1847,15 @@ fn run_current_signature_authority_loaded(
                 "current-signature request carried SCM_RIGHTS",
             ));
         }
+        if let Some(gate)=&mut generation {
+            if let Some(reply)=gate.handle(&packet.frame,&server)? {
+                let deadline=generation_service::frame_deadline(&packet.frame)?;
+                bootstrap.require_deadline(deadline)?;
+                send_packet_until(connection.as_raw_fd(),&reply,&[],Some(deadline))?;
+                authenticated.revalidate_peer()?;
+                continue;
+            }
+        }
         let request: ServiceRequestFrameV3 = decode_canonical_frame(&packet.frame)?;
         bootstrap.require_deadline(request.binding.deadline.absolute_boottime_nanos())?;
         let prepared = server.handle_authenticated_packet(
@@ -1864,6 +1897,8 @@ fn run_bounded_cleanup_helper_loaded(
 ) -> Result<(), ServiceRunnerError> {
     bootstrap.check()?;
     loaded.value.runtime.validate()?;
+    let mut generation=generation_service::Gate::open(&loaded,&loaded.value.runtime,&bootstrap,&mut activation,
+        TrustedHostServiceRoleV3::BoundedCleanupHelper)?;
     let _authority_history =
         loaded.value.runtime.load_authority_history(
             &loaded.credentials,
@@ -2033,7 +2068,7 @@ fn run_bounded_cleanup_helper_loaded(
 
     loop {
         bootstrap.check()?;
-        match server.try_serve_one_bounded_blocking_scoped(&bootstrap)? {
+        match server.try_serve_one_generation_scoped(&bootstrap,&mut generation)? {
             CleanupHelperServerProgress::ReplySent => {}
             CleanupHelperServerProgress::Idle => {
                 wait_for_fd(
@@ -2467,19 +2502,14 @@ where
                 "descriptor-free authority request carried SCM_RIGHTS",
             ));
         }
-        let request: ServiceRequestFrameV3 =
-            decode_canonical_frame(&packet.frame)?;
-        let request_deadline =
-            request.binding.deadline.absolute_boottime_nanos();
+        let request_deadline = generation_service::frame_deadline(&packet.frame)?;
         bootstrap.require_deadline(request_deadline)?;
         let response = worker.execute(
             packet.frame,
             request_deadline,
         )?;
-        let frame: ServiceResponseFrameV3 =
-            decode_canonical_frame(&response)?;
-        let deadline =
-            frame.request_binding.deadline.absolute_boottime_nanos();
+        generation_service::check_response_deadline(&response,request_deadline)?;
+        let deadline = request_deadline;
         send_packet_until(
             connection.as_raw_fd(),
             &response,
@@ -2970,9 +3000,11 @@ fn require_exact_directory_identity_names(
     runtime: &RuntimeConfigHeaderV3,
     required: &[&str],
 ) -> Result<(), ServiceRunnerError> {
-    let required_names: BTreeSet<&str> =
+    let mut required_names: BTreeSet<&str> =
         required.iter().copied().collect();
-    if required_names.len() != required.len()
+    let unique=required_names.len()==required.len();
+    if runtime.generation_admission.is_some() {required_names.insert(generation_service::DIRECTORY);}
+    if !unique
         || runtime
             .activation_directory_identities
             .keys()

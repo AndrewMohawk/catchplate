@@ -231,9 +231,18 @@ fn take_activation(entries:&[Activation])->Result<(BTreeMap<String,OwnedFd>,BTre
         set_cloexec(entry.fd)?;
         let fd=unsafe { OwnedFd::from_raw_fd(entry.fd) };
         let stat=descriptor_stat(fd.as_fd())?;
+        let generation_grant=entry.name==super::generation_service::GRANT_FD
+            && stat.st_mode & libc::S_IFMT==libc::S_IFREG;
+        if generation_grant {
+            let seals=unsafe{libc::fcntl(fd.as_raw_fd(),libc::F_GET_SEALS)};
+            let full=libc::F_SEAL_SEAL|libc::F_SEAL_GROW|libc::F_SEAL_SHRINK|libc::F_SEAL_WRITE;
+            if seals<0 || seals&full!=full || stat.st_size<=0 || stat.st_size>65536 {
+                return Err(fail("generation grant is not one bounded fully sealed original"));
+            }
+        }
         if (stat.st_dev,stat.st_ino,stat.st_mode,stat.st_uid,stat.st_gid)
             !=(entry.device,entry.inode,entry.mode,entry.uid,entry.gid)
-            || ![libc::S_IFDIR,libc::S_IFSOCK].contains(&(stat.st_mode & libc::S_IFMT))
+            || (!generation_grant && ![libc::S_IFDIR,libc::S_IFSOCK].contains(&(stat.st_mode & libc::S_IFMT)))
             || !fd_identities.insert((stat.st_dev,stat.st_ino)) {
             return Err(fail("guest activation original substituted or aliased"));
         }
@@ -374,6 +383,14 @@ impl Delivery {
 #[derive(Clone)]
 pub(super) enum Bootstrap { Host, Guest(Arc<Delivery>), NativeRetrieval(Arc<native_guest::AdmittedGuest>) }
 impl Bootstrap {
+    pub(super) fn generation_association(&self)->Result<GuestClosureAssociation,ServiceRunnerError> {
+        // Existing software authority reports remain software authority. This
+        // proves the same signed guest/process/lifetime owner, not NSM custody.
+        match self {
+            Self::Guest(owner)=>{owner.check_startup()?;Ok(GuestClosureAssociation{owner:Arc::clone(owner)})},
+            _=>Err(fail("generation service v5 requires its actual guest delivery owner")),
+        }
+    }
     fn guest(&self)->Option<&Arc<Delivery>> {match self {
         Self::Host=>None,Self::Guest(v)=>Some(v),Self::NativeRetrieval(v)=>Some(v.delivery()),
     }}

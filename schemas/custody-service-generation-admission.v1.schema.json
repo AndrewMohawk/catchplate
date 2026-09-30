@@ -1,0 +1,787 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/custody-service-generation-admission.v1.schema.json",
+  "$ref": "#/$defs/grant",
+  "$comment": "Closed subordinate service-admission records, not a completed generation installation or native attestation. Rust additionally checks actual C9 ownership, full signatures, role epochs, current state, exact original lifetime and fsync completion.",
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "u64": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 18446744073709551615
+    },
+    "epochNs": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9223372036854775807
+    },
+    "nullableSha": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/sha256"
+        }
+      ]
+    },
+    "signature": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{86}$"
+    },
+    "role": {
+      "enum": [
+        "durable-recovery-store",
+        "cleanup-authorization-consumer",
+        "recovery-target-provider",
+        "current-signature-authority",
+        "bounded-cleanup-helper"
+      ]
+    },
+    "guest": {
+      "$ref": "native-custody-closure.v1.schema.json#/$defs/guest"
+    },
+    "serviceSelection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "grantFdName"
+      ],
+      "properties": {
+        "grantFdName": {
+          "const": "generation-grant"
+        }
+      }
+    },
+    "bridgeSelection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "grants"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.custodyGenerationServices/v1"
+        },
+        "grants": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "durable-recovery-store",
+            "cleanup-authorization-consumer",
+            "recovery-target-provider",
+            "current-signature-authority",
+            "bounded-cleanup-helper"
+          ],
+          "properties": {
+            "durable-recovery-store": {
+              "$ref": "#/$defs/sha256"
+            },
+            "cleanup-authorization-consumer": {
+              "$ref": "#/$defs/sha256"
+            },
+            "recovery-target-provider": {
+              "$ref": "#/$defs/sha256"
+            },
+            "current-signature-authority": {
+              "$ref": "#/$defs/sha256"
+            },
+            "bounded-cleanup-helper": {
+              "$ref": "#/$defs/sha256"
+            }
+          }
+        }
+      }
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "previousConfigurationBindingSha256",
+        "successorConfigurationBindingSha256",
+        "dispatchManifestSha256",
+        "kernelDriverIdentitySha256",
+        "retainedDescriptorSetSha256",
+        "driverGenerationReceiptSha256",
+        "assignmentId",
+        "assignmentPayloadSha256",
+        "assignmentRevision",
+        "operationCoverageRootSha256",
+        "fiveServiceProtocolSetSha256",
+        "envelopeAuthorityKeyId",
+        "envelopeAuthorityKeySpkiSha256",
+        "trustedTimeCheckpointSha256",
+        "trustedTimeRevocationGeneration",
+        "trustedTimeRevocationRootSha256",
+        "installationIssuedAtUnixNanos",
+        "installationExpiresAtUnixNanos"
+      ],
+      "properties": {
+        "previousConfigurationBindingSha256": {
+          "$ref": "#/$defs/nullableSha"
+        },
+        "successorConfigurationBindingSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "dispatchManifestSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "kernelDriverIdentitySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "retainedDescriptorSetSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "driverGenerationReceiptSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "assignmentId": {
+          "$ref": "#/$defs/sha256"
+        },
+        "assignmentPayloadSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "assignmentRevision": {
+          "$ref": "#/$defs/u64"
+        },
+        "operationCoverageRootSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "fiveServiceProtocolSetSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "envelopeAuthorityKeyId": {
+          "$ref": "#/$defs/sha256"
+        },
+        "envelopeAuthorityKeySpkiSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "trustedTimeCheckpointSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "trustedTimeRevocationGeneration": {
+          "$ref": "#/$defs/u64"
+        },
+        "trustedTimeRevocationRootSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "installationIssuedAtUnixNanos": {
+          "$ref": "#/$defs/epochNs"
+        },
+        "installationExpiresAtUnixNanos": {
+          "$ref": "#/$defs/epochNs"
+        }
+      }
+    },
+    "grantPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "purpose",
+        "serviceRole",
+        "guest",
+        "runtimeConfigurationSha256",
+        "authorityHistoryManifestSha256",
+        "scope",
+        "issuedAtBoottimeNanos",
+        "expiresAtBoottimeNanos"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.custodyServiceGenerationGrant/v1"
+        },
+        "purpose": {
+          "const": "cold-service-generation-admission"
+        },
+        "serviceRole": {
+          "$ref": "#/$defs/role"
+        },
+        "guest": {
+          "$ref": "#/$defs/guest"
+        },
+        "runtimeConfigurationSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "authorityHistoryManifestSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "scope": {
+          "$ref": "#/$defs/scope"
+        },
+        "issuedAtBoottimeNanos": {
+          "$ref": "#/$defs/u64"
+        },
+        "expiresAtBoottimeNanos": {
+          "$ref": "#/$defs/u64"
+        }
+      }
+    },
+    "grant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "payload",
+        "signatureBase64url"
+      ],
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/grantPayload"
+        },
+        "signatureBase64url": {
+          "$ref": "#/$defs/signature"
+        }
+      }
+    },
+    "installContext": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "assignmentId",
+        "assignmentPayloadSha256",
+        "assignmentRevision",
+        "operationCoverageRootSha256",
+        "fiveServiceProtocolSetSha256",
+        "envelopeAuthorityRole",
+        "envelopeAuthorityKeyId",
+        "envelopeAuthorityKeySpkiSha256",
+        "trustedTimeCheckpointSha256",
+        "trustedTimeRevocationGeneration",
+        "trustedTimeRevocationRootSha256",
+        "issuedAtUnixNanos",
+        "expiresAtUnixNanos"
+      ],
+      "properties": {
+        "assignmentId": {
+          "$ref": "#/$defs/sha256"
+        },
+        "assignmentPayloadSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "assignmentRevision": {
+          "$ref": "#/$defs/u64"
+        },
+        "operationCoverageRootSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "fiveServiceProtocolSetSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "envelopeAuthorityRole": {
+          "const": "custody-result-envelope"
+        },
+        "envelopeAuthorityKeyId": {
+          "$ref": "#/$defs/sha256"
+        },
+        "envelopeAuthorityKeySpkiSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "trustedTimeCheckpointSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "trustedTimeRevocationGeneration": {
+          "$ref": "#/$defs/u64"
+        },
+        "trustedTimeRevocationRootSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "issuedAtUnixNanos": {
+          "$ref": "#/$defs/epochNs"
+        },
+        "expiresAtUnixNanos": {
+          "$ref": "#/$defs/epochNs"
+        }
+      }
+    },
+    "prepareBody": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "transition_id_sha256",
+        "previous_configuration_binding_sha256",
+        "successor_configuration_binding_sha256",
+        "dispatch_manifest_sha256",
+        "kernel_driver_identity_sha256",
+        "retained_descriptor_set_sha256",
+        "driver_generation_receipt_sha256",
+        "install_context",
+        "deadline_boottime_nanos",
+        "replay_id_sha256"
+      ],
+      "properties": {
+        "transition_id_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "previous_configuration_binding_sha256": {
+          "$ref": "#/$defs/nullableSha"
+        },
+        "successor_configuration_binding_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "dispatch_manifest_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "kernel_driver_identity_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "retained_descriptor_set_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "driver_generation_receipt_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "install_context": {
+          "$ref": "#/$defs/installContext"
+        },
+        "deadline_boottime_nanos": {
+          "$ref": "#/$defs/u64"
+        },
+        "replay_id_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "decisionBody": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "transition_id_sha256",
+        "preparation_receipt_sha256",
+        "deadline_boottime_nanos",
+        "replay_id_sha256"
+      ],
+      "properties": {
+        "transition_id_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "preparation_receipt_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "deadline_boottime_nanos": {
+          "$ref": "#/$defs/u64"
+        },
+        "replay_id_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "request": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "transition",
+            "body"
+          ],
+          "properties": {
+            "transition": {
+              "enum": [
+                "prepare",
+                "recover"
+              ]
+            },
+            "body": {
+              "$ref": "#/$defs/prepareBody"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "transition",
+            "body"
+          ],
+          "properties": {
+            "transition": {
+              "enum": [
+                "commit",
+                "abort"
+              ]
+            },
+            "body": {
+              "$ref": "#/$defs/decisionBody"
+            }
+          }
+        }
+      ]
+    },
+    "command": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "request",
+        "preparedEffectSha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.custodyServiceGenerationCommand/v1"
+        },
+        "request": {
+          "$ref": "#/$defs/request"
+        },
+        "preparedEffectSha256": {
+          "$ref": "#/$defs/nullableSha"
+        }
+      }
+    },
+    "authorityEpoch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "authorityRole",
+        "authorityEpochSequence",
+        "authorityEpochSha256",
+        "checkpointSequence",
+        "checkpointSha256",
+        "checkpointAuthorityKeyId",
+        "checkpointAuthorityKeySpkiSha256",
+        "serviceSigningKeyId",
+        "serviceSigningKeySpkiSha256",
+        "endpointProcessIdentitySha256",
+        "endpointGeneration",
+        "serviceGeneration",
+        "operationGeneration",
+        "durableEpoch",
+        "durableEpochHeadSha256",
+        "deploymentGenerationSha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.policyCustodyAuthorityHistory/v3"
+        },
+        "authorityRole": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "authorityKind",
+            "role"
+          ],
+          "properties": {
+            "authorityKind": {
+              "const": "isolated-service"
+            },
+            "role": {
+              "$ref": "#/$defs/role"
+            }
+          }
+        },
+        "authorityEpochSequence": {
+          "$ref": "#/$defs/u64"
+        },
+        "authorityEpochSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "checkpointSequence": {
+          "$ref": "#/$defs/u64"
+        },
+        "checkpointSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "checkpointAuthorityKeyId": {
+          "$ref": "#/$defs/sha256"
+        },
+        "checkpointAuthorityKeySpkiSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "serviceSigningKeyId": {
+          "$ref": "#/$defs/sha256"
+        },
+        "serviceSigningKeySpkiSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "endpointProcessIdentitySha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "endpointGeneration": {
+          "$ref": "#/$defs/u64"
+        },
+        "serviceGeneration": {
+          "$ref": "#/$defs/u64"
+        },
+        "operationGeneration": {
+          "$ref": "#/$defs/u64"
+        },
+        "durableEpoch": {
+          "$ref": "#/$defs/u64"
+        },
+        "durableEpochHeadSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "deploymentGenerationSha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "effect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "purpose",
+        "serviceRole",
+        "authorityEpoch",
+        "grantSha256",
+        "commandSha256",
+        "transitionIdSha256",
+        "requestSha256",
+        "successorConfigurationBindingSha256",
+        "ownerStateSha256",
+        "preparedEffectSha256",
+        "phase",
+        "observedAtBoottimeNanos",
+        "deadlineBoottimeNanos"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.custodyServiceGenerationEffect/v1"
+        },
+        "purpose": {
+          "const": "cold-service-generation-admission"
+        },
+        "serviceRole": {
+          "$ref": "#/$defs/role"
+        },
+        "authorityEpoch": {
+          "$ref": "#/$defs/authorityEpoch"
+        },
+        "grantSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "commandSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "transitionIdSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "requestSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "successorConfigurationBindingSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "ownerStateSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "preparedEffectSha256": {
+          "$ref": "#/$defs/nullableSha"
+        },
+        "phase": {
+          "enum": [
+            "prepared",
+            "committed",
+            "aborted"
+          ]
+        },
+        "observedAtBoottimeNanos": {
+          "$ref": "#/$defs/u64"
+        },
+        "deadlineBoottimeNanos": {
+          "$ref": "#/$defs/u64"
+        }
+      }
+    },
+    "receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "payload",
+        "signatureBase64url"
+      ],
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/effect"
+        },
+        "signatureBase64url": {
+          "$ref": "#/$defs/signature"
+        }
+      }
+    },
+    "observationPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "purpose",
+        "serviceRole",
+        "authorityEpoch",
+        "grantSha256",
+        "commandSha256",
+        "ownerStateSha256",
+        "prepared",
+        "decision",
+        "observedAtBoottimeNanos",
+        "deadlineBoottimeNanos"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.custodyServiceGenerationObservation/v1"
+        },
+        "purpose": {
+          "const": "cold-service-generation-observation"
+        },
+        "serviceRole": {
+          "$ref": "#/$defs/role"
+        },
+        "authorityEpoch": {
+          "$ref": "#/$defs/authorityEpoch"
+        },
+        "grantSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "commandSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "ownerStateSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "prepared": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/receipt"
+            }
+          ]
+        },
+        "decision": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/receipt"
+            }
+          ]
+        },
+        "observedAtBoottimeNanos": {
+          "$ref": "#/$defs/u64"
+        },
+        "deadlineBoottimeNanos": {
+          "$ref": "#/$defs/u64"
+        }
+      }
+    },
+    "observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "payload",
+        "signatureBase64url"
+      ],
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/observationPayload"
+        },
+        "signatureBase64url": {
+          "$ref": "#/$defs/signature"
+        }
+      }
+    },
+    "response": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "resultKind",
+            "body"
+          ],
+          "properties": {
+            "resultKind": {
+              "const": "effect"
+            },
+            "body": {
+              "$ref": "#/$defs/receipt"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "resultKind",
+            "body"
+          ],
+          "properties": {
+            "resultKind": {
+              "const": "observation"
+            },
+            "body": {
+              "$ref": "#/$defs/observation"
+            }
+          }
+        }
+      ]
+    },
+    "exchange": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "command",
+        "response"
+      ],
+      "properties": {
+        "command": {
+          "$ref": "#/$defs/command"
+        },
+        "response": {
+          "$ref": "#/$defs/response"
+        }
+      }
+    },
+    "replies": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "requestSha256",
+        "services"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.custodyGenerationServicesResult/v1"
+        },
+        "requestSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "services": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "durable-recovery-store",
+            "cleanup-authorization-consumer",
+            "recovery-target-provider",
+            "current-signature-authority",
+            "bounded-cleanup-helper"
+          ],
+          "properties": {
+            "durable-recovery-store": {
+              "$ref": "#/$defs/exchange"
+            },
+            "cleanup-authorization-consumer": {
+              "$ref": "#/$defs/exchange"
+            },
+            "recovery-target-provider": {
+              "$ref": "#/$defs/exchange"
+            },
+            "current-signature-authority": {
+              "$ref": "#/$defs/exchange"
+            },
+            "bounded-cleanup-helper": {
+              "$ref": "#/$defs/exchange"
+            }
+          }
+        }
+      }
+    }
+  }
+}

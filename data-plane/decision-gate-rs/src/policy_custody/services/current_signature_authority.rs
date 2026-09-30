@@ -248,6 +248,25 @@ pub(super) struct TrustedHostNoTeeCurrentSignatureAuthorityServer {
     signer: CurrentSignatureServiceSigner,
     subjects: BTreeMap<CurrentAuthoritySubjectKey, EndpointTrustPin>,
 }
+impl super::generation_service::Owner for TrustedHostNoTeeCurrentSignatureAuthorityServer {
+    fn generation_state(&self,_deadline:u64)->Result<Sha256Digest,ServiceError> {
+        self.signer.pin.validate().map_err(|_|ServiceError::Invalid("generation signer currentness unavailable"))?;
+        let mut originals=Vec::new();
+        for pin in self.subjects.values() {
+            pin.validate().map_err(|_|ServiceError::Invalid("generation subject currentness unavailable"))?;
+            originals.push((&pin.endpoint_process_identity,&pin.current_key_authorization.signed_current_key_authorization,
+                pin.consume_cursor.sequence_high_water,pin.consume_cursor.expected_next_sequence,
+                &pin.consume_cursor.expected_predecessor_receipt_sha256));
+        }
+        Ok(Sha256Digest::compute(&super::encode_canonical_frame(&(&self.signer.report,originals))?))
+    }
+    fn sign_generation_effect(&self,effect:super::generation_service::Effect)->Result<super::generation_service::Receipt,ServiceError> {
+        super::generation_service::sign(effect,&self.signer.signing_key)
+    }
+    fn sign_generation_observation(&self,payload:super::generation_service::ObservationPayload)->Result<super::generation_service::Observation,ServiceError> {
+        super::generation_service::sign_observation(payload,&self.signer.signing_key)
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum CurrentAuthoritySubjectKey {

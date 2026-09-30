@@ -501,6 +501,25 @@ pub(super) struct TrustedHostNoTeeRecoveryTargetProviderServer {
     registrations:
         BTreeMap<Sha256Digest, RegisteredRecoveryTarget>,
 }
+impl super::generation_service::Owner for TrustedHostNoTeeRecoveryTargetProviderServer {
+    fn generation_state(&self,_deadline:u64)->Result<Sha256Digest,ServiceError> {
+        self.signer.pin.validate().map_err(|_|ServiceError::Invalid("generation target currentness unavailable"))?;
+        let mut originals=Vec::new();
+        for (id,registered) in &self.registrations {
+            verify_registration_descriptors(&registered.registration,&registered.retained)?;
+            originals.push((id,&registered.registration,&registered.reap_lineage_proof_sha256));
+        }
+        Ok(Sha256Digest::compute(&super::encode_canonical_frame(&(
+            self.readiness_seal()?,self.operation_generation,&self.shared_configuration_sha256,
+            self.journal.as_ref().ok_or(ServiceError::Invalid("generation target journal absent"))?.current_head_sha256(),originals))?))
+    }
+    fn sign_generation_effect(&self,effect:super::generation_service::Effect)->Result<super::generation_service::Receipt,ServiceError> {
+        super::generation_service::sign(effect,&self.signer.signing_key)
+    }
+    fn sign_generation_observation(&self,payload:super::generation_service::ObservationPayload)->Result<super::generation_service::Observation,ServiceError> {
+        super::generation_service::sign_observation(payload,&self.signer.signing_key)
+    }
+}
 
 impl TrustedHostNoTeeRecoveryTargetProviderServer {
     pub(super) fn new(

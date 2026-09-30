@@ -1186,6 +1186,21 @@ pub(super) struct TrustedHostNoTeeDurableRecoveryStoreServer {
     journal: DurableAppendJournal,
     signer: TrustedHostNoTeeRecoveryStoreSigningAuthority,
 }
+impl super::generation_service::Owner for TrustedHostNoTeeDurableRecoveryStoreServer {
+    fn generation_state(&self,_deadline:u64)->Result<Sha256Digest,ServiceError> {
+        Ok(Sha256Digest::compute(&super::encode_canonical_frame(&(
+            self.state.state_root_sha256()?,self.version_sequence,&self.version_head_sha256,
+            self.journal.current_head_sha256(),&self.signer.endpoint_process_identity,
+            self.signer.endpoint_generation,&self.signer.current_key_authorization_checkpoint_sha256,
+            self.signer.revocation_generation,&self.signer.revocation_root_sha256))?))
+    }
+    fn sign_generation_effect(&self,effect:super::generation_service::Effect)->Result<super::generation_service::Receipt,ServiceError> {
+        super::generation_service::sign(effect,&self.signer.signing_key)
+    }
+    fn sign_generation_observation(&self,payload:super::generation_service::ObservationPayload)->Result<super::generation_service::Observation,ServiceError> {
+        super::generation_service::sign_observation(payload,&self.signer.signing_key)
+    }
+}
 
 impl TrustedHostNoTeeDurableRecoveryStoreServer {
     pub(super) fn from_seed(

@@ -1813,6 +1813,18 @@ pub(super) struct TrustedHostNoTeeCleanupAuthorizationConsumerServer {
     response_journal: DurableAppendJournal,
     report: TrustedHostNoTeeServiceReportV3,
 }
+impl super::generation_service::Owner for TrustedHostNoTeeCleanupAuthorizationConsumerServer {
+    fn generation_state(&self,_deadline:u64)->Result<Sha256Digest,ServiceError> {
+        Ok(Sha256Digest::compute(&super::encode_canonical_frame(&(
+            &self.state.state,self.response_journal.current_head_sha256(),&self.report))?))
+    }
+    fn sign_generation_effect(&self,effect:super::generation_service::Effect)->Result<super::generation_service::Receipt,ServiceError> {
+        super::generation_service::sign(effect,&self.signing_key)
+    }
+    fn sign_generation_observation(&self,payload:super::generation_service::ObservationPayload)->Result<super::generation_service::Observation,ServiceError> {
+        super::generation_service::sign_observation(payload,&self.signing_key)
+    }
+}
 
 impl TrustedHostNoTeeCleanupAuthorizationConsumerServer {
     #[allow(clippy::too_many_arguments)]

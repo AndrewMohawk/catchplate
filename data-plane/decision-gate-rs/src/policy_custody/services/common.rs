@@ -3262,13 +3262,36 @@ pub(super) struct DurableAppendJournal {
     current_head: Option<JournalHeadV3>,
     current_head_bytes: Option<Vec<u8>>,
     temporary_sequence: u64,
+    orphan_policy: JournalOrphanPolicy,
 }
+
+enum JournalOrphanPolicy { RepairUnique, Refuse }
 
 impl DurableAppendJournal {
     pub(super) fn from_directory(
         directory: OwnedFd,
         service_role: TrustedHostServiceRoleV3,
         maximum_response_bytes: usize,
+    ) -> Result<Self, ServiceError> {
+        Self::open_directory(directory,service_role,maximum_response_bytes,JournalOrphanPolicy::RepairUnique)
+    }
+
+    /// Generation admission must never turn a detached/unknown append into an
+    /// admission decision. This source-selected owner keeps that rule for every
+    /// subsequent lookup, append and recovery, not only the initial read.
+    pub(super) fn from_directory_without_orphan_repair(
+        directory: OwnedFd,
+        service_role: TrustedHostServiceRoleV3,
+        maximum_response_bytes: usize,
+    ) -> Result<Self, ServiceError> {
+        Self::open_directory(directory,service_role,maximum_response_bytes,JournalOrphanPolicy::Refuse)
+    }
+
+    fn open_directory(
+        directory: OwnedFd,
+        service_role: TrustedHostServiceRoleV3,
+        maximum_response_bytes: usize,
+        orphan_policy: JournalOrphanPolicy,
     ) -> Result<Self, ServiceError> {
         if maximum_response_bytes == 0
             || maximum_response_bytes > MAX_SERVICE_FRAME_BYTES
@@ -3351,6 +3374,7 @@ impl DurableAppendJournal {
             current_head,
             current_head_bytes,
             temporary_sequence: 0,
+            orphan_policy,
         };
         journal.repair_unique_orphan_record()?;
         Ok(journal)
@@ -3659,6 +3683,9 @@ impl DurableAppendJournal {
         let (_, detached) = self.load_chain_partition()?;
         if detached.is_empty() {
             return Ok(());
+        }
+        if matches!(self.orphan_policy,JournalOrphanPolicy::Refuse) {
+            return Err(ServiceError::Invalid("strict journal has an unknown detached append"));
         }
         if detached.len() != 1 {
             return Err(ServiceError::Invalid(

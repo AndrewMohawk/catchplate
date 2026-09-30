@@ -4650,6 +4650,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/native_loaded_policy_v1.rs \
 				data-plane/decision-gate-rs/src/native_loaded_policy.rs \
 				data-plane/decision-gate-rs/src/policy_shadow_runtime.rs \
+				data-plane/decision-gate-rs/src/policy_shadow_generation.rs \
 				data-plane/decision-gate-rs/src/policy_shadow_checkpoint.rs \
 				data-plane/decision-gate-rs/src/policy_core_cumulative.rs \
 				data-plane/decision-gate-rs/src/policy_core_native_response.rs \
@@ -4766,6 +4767,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/authority.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/time.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/generation_service.rs \
+				data-plane/decision-gate-rs/src/policy_custody/services/initial_history.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/generation_service_client.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/dispatch_commitment.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/dispatch_service.rs \

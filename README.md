@@ -18,28 +18,19 @@ Checkpoint: **2026-09-30 — pre-production, pilot assembly.**
 
 **36/46 source checkpoints landed · 10 active · 0 todo.**
 
-**Production acceptance: 0/6 verified.** Service images built from `172f6b4e`; both Python pilot runtime artifacts now also build from `c972f02b`, with the corrected permissions confirmed by targeted artifact readback. These used the unpublished dependency candidate in isolated non-release checkouts. Provisioning and connected verification remain. No production deployment.
+**Production acceptance: 0/6 verified.** Both service images, the operator tool and workload sidecar now build from `04cf155a`. Both Python runtime artifacts build and pass file staging from `7193b2a1`. These are engineering builds using the unpublished dependency candidate, not approved release packages or a deployed pilot. [Build results](docs/native-pilot-build.md#current-engineering-assembly).
 
 [![Project checkpoints, one segment per task: 36 of 46 source-landed; 10 active and 0 todo. Evidence handoff 10/10; historical recovery 4/5; permissions and grants 10/10; finalization and sessions 8/8; workloads and native 3/6; providers and operations 1/7. H05, N04, N05, N06 and O01 through O06 are in progress. Production acceptance remains 0/6. Engineering assembly is not an accepted pilot or production deployment.](docs/images/project-progress.svg)](docs/production-status.md#next-source-milestones)
 
-The `.360` source batch connects the [authority coordinator](docs/native-pilot-coordinator.md)
-to the real startup process: 60 fixed, separately approved jobs produce grants
-and install the ten endpoint launches plus the bridge. Per-service verifier
-files remove a shared-path startup conflict. Signing keys stay outside the conductor.
-The `.361` batch adds its [separate runtime package](docs/native-pilot-build.md#authority-coordinator-runtime-package)
-and a bounded non-release build path for the two Python runtime artifacts.
-The current `.362` batch adds installation of independently approved job inputs,
-workload-sidecar/operator exports and permission-preserving strict Python packaging.
-The [launcher runtime package](docs/native-pilot-build.md#conductor-runtime-package)
-and [live owner composition](docs/native-pilot-operator-inputs.md) are source-landed;
-the independent approval service and protected deployment are not provisioned. This is not an
-interactive quickstart or a running pilot.
+The [startup coordinator](docs/native-pilot-coordinator.md), separately approved
+input installation and runtime packaging are connected in source. Signing keys
+stay outside the conductor. Independent approval services and protected deployment
+are not provisioned, so this is not yet an interactive quickstart or running pilot.
 The [persistent workload sidecar](docs/native-workload-sidecar.md) supports ordinary
 HTTPS libraries without direct proxy mTLS; provider credentials stay out of the
-application. The current native compile exposed two sidecar portability/type
-errors; both source fixes are pushed, with a successful corrected build still pending. Remaining
-pilot work includes complete artifact assembly, authority deployment and
-provisioned inputs/services. Broad testing follows the connected pilot build.
+application. Remaining pilot work is native guest assembly with approved inputs,
+service provisioning and the connected application allow/deny/cleanup run.
+Broad testing follows that assembly.
 
 The bar shows **committed source, not tested readiness or remaining effort**.
 Green means source-landed; amber means partial implementation. No current pilot

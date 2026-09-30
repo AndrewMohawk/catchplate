@@ -9,6 +9,25 @@ sign grants, install files, start services, contact providers, or replace any
 independent authority with a local manifest. No build or runtime acceptance was
 performed when this source was authored.
 
+## Current engineering assembly
+
+Actual local results as of **2026-09-30 18:12 UTC**:
+
+| Artifacts | Frozen source | Verified assembly result |
+| --- | --- | --- |
+| Control-plane and gate images | `04cf155a` | Both built; glibc 9m25s, static musl 11m03s; image/no-shell report passed. |
+| Seccomp operator tool and workload sidecar | `04cf155a` | Both raw exports built; sidecar directory-mode repair awaits a corrected export. |
+| Python conductor runtime | `7193b2a1` | Raw export and complete caller-owned staging passed, 6,060 entries. |
+| Python authority runtime | `7193b2a1` | Raw export and complete caller-owned staging passed, 6,068 entries. |
+
+These used the same unpublished dependency candidate in isolated engineering
+checkouts. Every build retains `production_release_eligible=false`; raw exports
+and materialized trees are not strict-source packages, approved installations
+or pilot acceptance. The later Python-only revision closes inherited directory
+and timezone-link layout defects; it does not change or restart the native
+compilation. Full native guest assembly still requires approved public inputs.
+No broad test suite, service deployment, signing or paid cloud operation ran.
+
 ## Existing build owners, explicit profile
 
 `scripts/build_native_pilot_artifacts.py` calls the existing
@@ -126,14 +145,14 @@ package/package.json            unsigned inventory, source and archive hashes
 conductor-runtime.json          successful local build/package report
 ```
 
-Both strict Python runtime commands now export a raw tar into the new private
+All four fixed prerequisite commands now export a raw tar into the new private
 attempt directory, then materialize it with bounded build-only tooling. Files
 are created exclusively, directory modes are applied after descendants, and
 runtime symlinks are created last without being traversed. Duplicate/traversing
 paths, hardlinks, special files and set-id modes are refused. This preserves
 protected `0555` directories without privileged local export. Staging ownership
 is not installed root ownership, and raw export/staging never supplies source
-admission. The unchanged strict inventory and package checks run afterward;
+admission. Strict source and role-specific inventory/package checks run afterward;
 failures retain the original tar and partial staging.
 
 The first actual staging check of the earlier `c972f02b` conductor TAR stopped
@@ -146,7 +165,9 @@ one dangling base link: `usr/share/zoneinfo/localtime` points to absent
 failures. The pilot layout now supplies that target as a fixed link to the
 genuine 114-byte `usr/share/zoneinfo/Etc/UTC` file already in the pinned image,
 not host timezone data. Set-id and logical-root link checks remain unchanged.
-Successful staging of this latest correction is still pending.
+Both corrected `7193b2a1` exports and their materializations subsequently
+succeeded, observed complete by `2026-09-30T18:10:57.721Z`. This checks actual
+build-output staging, not strict-source package admission or runtime execution.
 
 The inventory bounds tree depth, path length, entry count, per-file bytes and
 aggregate bytes. It hashes stable regular files, refuses special files and

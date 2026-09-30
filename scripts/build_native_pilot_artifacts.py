@@ -266,8 +266,12 @@ def sidecar_inventory(output, metadata):
     for relative, expected in directories.items():
         path = root / relative
         before = path.lstat()
-        if not stat.S_ISDIR(before.st_mode) or path.resolve() != path:
-            raise RuntimeError("sidecar artifact directory must be an actual non-symlink directory")
+        # materialize owns the private 0700 staging root; archive directories
+        # below it retain the source-fixed traversable 0555 installation mode.
+        expected_mode = 0o555 if relative else 0o700
+        if (not stat.S_ISDIR(before.st_mode) or path.resolve() != path
+                or stat.S_IMODE(before.st_mode) != expected_mode):
+            raise RuntimeError("sidecar artifact directory type, path or fixed mode differs")
         identities[relative] = tuple(getattr(before, field) for field in fields)
         names = set()
         with os.scandir(path) as entries:
@@ -317,15 +321,12 @@ def assemble_sidecar(metadata, output):
         "target": target, "buildResourceProfile": profile,
         "releaseAuthority": False, "liveReady": False, "launchPrepared": False,
     })
-    build.verify_dependency_cache()
-    with build.private_build_context(metadata) as context:
-        build.run_build(build.artifact_build_command(DOCKERFILE, target,
-            "type=local,dest=" + str(output / "artifacts"), network="none", platform=build.PRODUCTION_PLATFORM,
-            metadata=metadata, context=context, native_pilot_bounded_build=True))
+    _, exported = export_fixed_runtime(metadata, output, target)
     artifacts = sidecar_inventory(output, metadata)
     write_original(output / "workload-sidecar.json", {
         "apiVersion": "serverware.nativePilotWorkloadSidecarArtifacts/v1", "artifactBuildComplete": True,
         "source": source, "target": target, "buildResourceProfile": profile, "artifacts": artifacts,
+        "rawExport": exported,
         "releaseAuthority": False, "liveReady": False, "launchPrepared": False, "executionAccepted": False,
         "boundary": "Unsigned workload-side static executable, unit-output helper and schema only. Independent artifact admission and protected installation remain required before separately provisioned cold originals, namespace, workload credentials, egress and explicit service start. No installer, binary, service or network request was executed.",
     })
@@ -342,30 +343,33 @@ def assemble_operator_tools(metadata, output):
         "target": build.NATIVE_PILOT_OPERATOR_TARGET, "buildResourceProfile": profile,
         "releaseAuthority": False, "liveReady": False, "launchPrepared": False,
     })
-    build.verify_dependency_cache()
-    with build.private_build_context(metadata) as context:
-        build.run_build(build.artifact_build_command(DOCKERFILE, build.NATIVE_PILOT_OPERATOR_TARGET,
-            "type=local,dest=" + str(output / "artifacts"), network="none", platform=build.PRODUCTION_PLATFORM,
-            metadata=metadata, context=context, native_pilot_bounded_build=True))
+    _, exported = export_fixed_runtime(metadata, output, build.NATIVE_PILOT_OPERATOR_TARGET)
     artifacts = operator_inventory(output)
     write_original(output / "operator-tools.json", {
         "apiVersion": "serverware.nativePilotOperatorTools/v1", "artifactBuildComplete": True,
         "source": source, "target": build.NATIVE_PILOT_OPERATOR_TARGET,
         "buildResourceProfile": profile, "artifacts": artifacts,
+        "rawExport": exported,
         "releaseAuthority": False, "liveReady": False, "launchPrepared": False, "executionAccepted": False,
         "boundary": "Unsigned local operator executable only, not a standalone runtime closure. Requires a compatible Linux/amd64 host and independently selected seccomp policy. No exporter, filter, guest or service was executed; no policy, provenance, signature or input-manifest approval was produced.",
     })
 
 
-def export_python_runtime(metadata, output, target):
+def export_fixed_runtime(metadata, output, target):
     """Stage exact exported modes without a privileged local-export client."""
-    if target not in (build.NATIVE_PILOT_CONDUCTOR_TARGET, build.NATIVE_PILOT_AUTHORITY_TARGET):
-        raise RuntimeError("Python runtime export requires a fixed conductor or authority target")
+    dockerfiles = {
+        build.NATIVE_PILOT_CONDUCTOR_TARGET: "Dockerfile.production",
+        build.NATIVE_PILOT_AUTHORITY_TARGET: "Dockerfile.production",
+        build.NATIVE_PILOT_OPERATOR_TARGET: DOCKERFILE,
+        build.NATIVE_WORKLOAD_SIDECAR_TARGET: DOCKERFILE,
+    }
+    if target not in dockerfiles:
+        raise RuntimeError("runtime export requires a fixed pilot prerequisite target")
     build.verify_dependency_cache()
     raw = output / "raw-rootfs.tar"
     root = output / "artifacts"
     with build.private_build_context(metadata) as context:
-        command = build.artifact_build_command("Dockerfile.production", target,
+        command = build.artifact_build_command(dockerfiles[target], target,
             "type=tar,dest=" + str(raw), network="none", platform=build.PRODUCTION_PLATFORM,
             metadata=metadata, context=context, native_pilot_bounded_build=True)
         descriptor = os.open(raw, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
@@ -395,7 +399,7 @@ def assemble_conductor_runtime(metadata, output):
         "target": target, "buildResourceProfile": profile,
         "releaseAuthority": False, "liveReady": False, "launchPrepared": False,
     })
-    root, exported = export_python_runtime(metadata, output, target)
+    root, exported = export_fixed_runtime(metadata, output, target)
     runtime = conductor_runtime.inventory(root, metadata)
     package = conductor_package.package(root, runtime, output / "package")
     write_original(output / "conductor-runtime.json", {
@@ -419,7 +423,7 @@ def assemble_authority_runtime(metadata, output):
         "target": target, "buildResourceProfile": profile,
         "releaseAuthority": False, "liveReady": False, "launchPrepared": False,
     })
-    root, exported = export_python_runtime(metadata, output, target)
+    root, exported = export_fixed_runtime(metadata, output, target)
     runtime = conductor_runtime.authority_inventory(root, metadata)
     package = conductor_package.package_authority(root, runtime, output / "package")
     write_original(output / "authority-runtime.json", {

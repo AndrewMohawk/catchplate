@@ -592,9 +592,9 @@ def artifact_build_command(
         raise RuntimeError(f"production artifact platform must be {PRODUCTION_PLATFORM}")
     if not engineering_bounded_build:
         if output.startswith("type=tar,dest="):
-            if (not native_pilot_bounded_build or dockerfile != "Dockerfile.production"
-                    or target not in {NATIVE_PILOT_CONDUCTOR_TARGET, NATIVE_PILOT_AUTHORITY_TARGET}):
-                raise RuntimeError("strict tar export requires a fixed bounded Python runtime build")
+            if (not native_pilot_bounded_build
+                    or (dockerfile, target) not in ENGINEERING_RAW_ARTIFACT_TARGETS):
+                raise RuntimeError("strict tar export requires a fixed bounded pilot prerequisite build")
             _engineering_artifact_destination(output)
         elif not output.startswith("type=local,dest=") or output == "type=local,dest=":
             raise RuntimeError("production artifact output must be a non-empty local destination")

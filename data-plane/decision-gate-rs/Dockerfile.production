@@ -241,10 +241,25 @@ FROM scratch AS native-bootstrap-client-artifact
 COPY --from=launcher-build /src/target/release/serverware-native-bootstrap-client /serverware-native-bootstrap-client
 
 # Workload-side installation, separate from the measured claimant closure.
+FROM source-preparation AS native-workload-sidecar-runtime
+COPY --from=launcher-build /src/target/release/serverware-workload-sidecar /sidecar-build/serverware-workload-sidecar
+RUN --network=none set -eu; \
+    install -d -o 0 -g 0 -m 0755 /sidecar-runtime/usr/local/libexec /sidecar-runtime/usr/share/serverware; \
+    install -o 0 -g 0 -m 0555 /sidecar-build/serverware-workload-sidecar /sidecar-runtime/usr/local/libexec/serverware-workload-sidecar; \
+    install -o 0 -g 0 -m 0444 /source/scripts/install_workload_sidecar_unit.py /sidecar-runtime/usr/share/serverware/install_workload_sidecar_unit.py; \
+    install -o 0 -g 0 -m 0444 /source/schemas/native-workload-sidecar.v1.schema.json /sidecar-runtime/usr/share/serverware/native-workload-sidecar.v1.schema.json; \
+    chmod 0555 /sidecar-runtime /sidecar-runtime/usr /sidecar-runtime/usr/local \
+        /sidecar-runtime/usr/local/libexec /sidecar-runtime/usr/share /sidecar-runtime/usr/share/serverware; \
+    touch -d "@${SOURCE_DATE_EPOCH}" /sidecar-runtime /sidecar-runtime/usr /sidecar-runtime/usr/local \
+        /sidecar-runtime/usr/local/libexec /sidecar-runtime/usr/share /sidecar-runtime/usr/share/serverware \
+        /sidecar-runtime/usr/local/libexec/serverware-workload-sidecar \
+        /sidecar-runtime/usr/share/serverware/install_workload_sidecar_unit.py \
+        /sidecar-runtime/usr/share/serverware/native-workload-sidecar.v1.schema.json
+
 FROM scratch AS native-workload-sidecar-artifact
-COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-workload-sidecar /usr/local/libexec/serverware-workload-sidecar
-COPY --from=source-preparation --chown=0:0 --chmod=0444 /source/scripts/install_workload_sidecar_unit.py /usr/share/serverware/install_workload_sidecar_unit.py
-COPY --from=source-preparation --chown=0:0 --chmod=0444 /source/schemas/native-workload-sidecar.v1.schema.json /usr/share/serverware/native-workload-sidecar.v1.schema.json
+# Copy the explicit child directory so its 0555 mode and nested modes survive;
+# --chmod=0444 on individual files would also make implicit parents unsearchable.
+COPY --from=native-workload-sidecar-runtime --chown=0:0 /sidecar-runtime/ /
 
 FROM scratch AS native-parent-relay-artifact
 COPY --from=launcher-build /src/target/release/serverware-native-parent-relay /serverware-native-parent-relay

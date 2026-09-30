@@ -12,6 +12,33 @@ distinct independent approval exchange for every job; it does not make those
 decisions itself. The transparent relay above is unchanged. Neither command has
 been executed as evidence of pilot readiness.
 
+## Remaining supervisor implementation
+
+The per-job executor and approval installer do not implement the independent
+decision service. The former waits for 60 approved complete inputs; the latter
+only publishes approval/input originals supplied by that missing service.
+Calling this solely operational provisioning was incorrect. The original driver
+startup interval is at most 30 seconds, so a human cannot be the assumed per-job
+automation, and waiting does not renew the interval.
+
+The selected implementation direction is a source-fixed supervisor with its own
+independently authorized, pinned commissioning policy for one attempt. Before
+startup it must admit both runtime inventories, fixed original configurations,
+key purposes, permissions, histories and original boot/time bounds. It must own
+the actual coordinator process and pipes. Purpose-specific composers can then
+combine those retained originals with genuine observations and independently
+verified preceding results, evaluate the complete input, and use the existing
+approval installer. No arbitrary templates, callbacks, future-result placeholders
+or success flags can replace those checks. The original per-job protocol remains
+valid; commissioning policy is not approval of arbitrary future JSON.
+
+This design is not implemented or admitted. Its process owner, commissioning
+policy admission, all purpose composers, prior-result verification and bounded
+cleanup still need code and connected verification. Independent policy selection,
+dependency approval, private key/service provisioning and actual hardware remain
+external requirements. Completing an individual signer or installer does not
+close this supervisor gap or establish a testable pilot.
+
 ## Prerequisites and fixed command
 
 The coordinator runs as root under independently protected source and Python

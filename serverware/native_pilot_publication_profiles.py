@@ -20,6 +20,9 @@ _LAUNCH_INPUTS = {"trust": 1024 * 1024, "time-bootstrap": 65536, "assignment": 4
     "closure": 1024 * 1024, "keys": 65536, "encrypted-keys": 65536, "admission": 65536, "verifier": 32768}
 # family, exact role (if encoded by that wire), maximum original bytes
 PROFILES = {
+    "driver-bootstrap-configuration": ("driver-bootstrap-input", None, 65536),
+    "driver-bootstrap-window": ("driver-bootstrap-input", None, 32768),
+    "driver-bootstrap-control": ("driver-bootstrap-input", None, 4096),
     "cohort-configuration": ("cohort-config", None, 32768),
     "cohort-control": ("cohort-control", None, 4096),
     "ordinary-launch": ("ordinary-launch", None, 65536),
@@ -54,6 +57,9 @@ PROFILES = {
 }
 DESTINATIONS = {purpose: _ROOT + purpose + ".json" for purpose in PROFILES}
 DESTINATIONS.update({
+    "driver-bootstrap-configuration": "/etc/serverware/native-shadow-driver-bootstrap.json",
+    "driver-bootstrap-window": "/etc/serverware/native-shadow-driver-bootstrap-window.json",
+    "driver-bootstrap-control": "/etc/serverware/native-shadow-driver-bootstrap-control.json",
     "cohort-configuration": "/etc/serverware/native-shadow-proof-cohort.json",
     "cohort-control": "/etc/serverware/native-shadow-proof-cohort-control.json",
     "ordinary-launch": "/etc/serverware/custody-effects-five.json",
@@ -142,6 +148,10 @@ def shape(purpose, raw):
     """Validate the selected public envelope, never authenticate its authority."""
     p.require(type(purpose) is str and purpose in PROFILES)
     family, role, maximum = PROFILES[purpose]
+    if family == "driver-bootstrap-input":
+        from serverware import native_pilot_bootstrap_install as bootstrap_install
+        bootstrap_install.shape(purpose, raw)
+        return
     if family in ("native-launch", "native-runtime", "native-launch-input"):
         from serverware import native_pilot_launch_publication as launch
         launch.shape(purpose, raw)

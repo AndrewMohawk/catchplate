@@ -24,12 +24,13 @@ Checkpoint: **2026-09-30 — pre-production, pilot assembly.**
 
 The [startup coordinator](docs/native-pilot-coordinator.md), separately approved
 input installation and runtime packaging are connected in source. Signing keys
-stay outside the conductor. Independent approval services and protected deployment
-are not provisioned, so this is not yet an interactive quickstart or running pilot.
+stay outside the conductor. The automated independent approval supervisor still
+needs implementation, and protected deployment is not provisioned. This is not
+yet an interactive quickstart or running pilot.
 The [persistent workload sidecar](docs/native-workload-sidecar.md) supports ordinary
 HTTPS libraries without direct proxy mTLS; provider credentials stay out of the
-application. Remaining pilot work is native guest assembly with approved inputs,
-service provisioning and the connected application allow/deny/cleanup run.
+application. Remaining pilot work is that supervisor, native guest assembly with
+approved inputs, service provisioning and the connected application allow/deny/cleanup run.
 Broad testing follows that assembly.
 
 The bar shows **committed source, not tested readiness or remaining effort**.

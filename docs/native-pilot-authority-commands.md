@@ -16,6 +16,15 @@ command without that authority's own approval and observation checks.
 
 ## Authority-side execution
 
+The [driver-window issuer](native-pilot-window-authority.md) handles the existing
+pre-start Window/v1 under the bootstrap authority. The
+[bootstrap installer](native-pilot-bootstrap-installation.md) verifies that
+window and the actual fixed supervisor executable before publishing the control
+file last. The separate [closure issuer](native-pilot-closure-authority.md)
+authorizes the v2 late-runtime execution closure after genuine observation and
+C9 delivery. None is called by the current 60-job coordinator, and none supplies
+the missing independently authorized commissioning decision engine.
+
 Use a separately admitted Linux Python runtime and protected source/dependencies.
 These commands are deliberately not added to the conductor's two-script runtime
 package. Run them under an external supervisor, on the admitted pilot host and
@@ -500,8 +509,15 @@ originals/pins. The existing [process coordinator and eleven-phase transparent
 relay](native-pilot-coordinator.md) is unchanged; neither mode supplies
 independent approval or converts conductor observations into signing authority.
 
-The remaining pilot work is operational: provision the independent supervisor
-and its approved complete public inputs, matching authority keys and required
+The independent supervisor is a **remaining source implementation**, not just a
+service to provision. The coordinator waits for 60 dependent decisions, and the
+approval installer only consumes an existing decision. No current executable
+composes and evaluates all complete inputs against an independently authorized
+commissioning policy. Human per-job interaction cannot be assumed to fit the
+original startup window. See the [supervisor gap](native-pilot-coordinator.md#remaining-supervisor-implementation).
+
+Remaining work also includes independently approved complete public inputs,
+matching authority keys and required
 artifacts; build/package and protectively install the current runtimes; provision
 service/private inputs, native hardware and workload identity/namespace/sidecar;
 then deploy and run one connected ordinary application allow/deny and genuine

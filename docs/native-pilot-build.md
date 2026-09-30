@@ -29,6 +29,12 @@ and timezone-link layout defects; it does not change or restart the native
 compilation. Full native guest assembly still requires approved public inputs.
 No broad test suite, service deployment, signing or paid cloud operation ran.
 
+The subsequent `.363` source adds separate startup-window issuance, protected
+bootstrap installation and late-runtime closure authorization. Those changes
+are not included in the builds above. The [automated commissioning supervisor](native-pilot-coordinator.md#remaining-supervisor-implementation)
+still needs implementation; admitted inputs and deployment alone will not close
+that source gap. Retain these build results rather than rebuilding for status.
+
 Exact logs/reports, provenance and copy-verified hashes are retained under
 `/home/catchplate/codex-offload/serverware/engineering-builds/`:
 `04cf155a-native-images-jg1ez3`, `7193b2a1-python-jg1ez3`, and
@@ -261,6 +267,16 @@ strict package or its execution environment. The actual process/signing workflow
 remains separately authorized operator work.
 
 ## Operator commands
+
+Before a live driver can start, an independently authorized provisioner uses
+the [window issuer](native-pilot-window-authority.md) and
+[fixed bootstrap installer](native-pilot-bootstrap-installation.md). The latter
+requires the actual admitted supervisor executable and cold delivery original;
+it publishes configuration/window first and control last. It does not launch the
+driver or choose a new window. After real observation and C9 delivery, the
+[late-runtime closure issuer](native-pilot-closure-authority.md) supplies the
+existing v2 authorization for independent bridge-launch preparation. These are
+separate trusted provisioner operations, not steps performed by the build tool.
 
 The separate [authority commands](native-pilot-authority-commands.md) produce
 cohort, driver, delivery and ordinary-service originals from explicitly approved

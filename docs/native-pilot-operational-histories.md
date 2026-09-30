@@ -101,6 +101,28 @@ supervisor packaging, independently approved dependencies, provisioning and
 connected application allow/deny/cleanup acceptance. All original production
 requirements remain open where no independent evidence exists.
 
-Focused verification of this assembled batch is pending. No cloud or paid
-action is part of it. Only the changed native source requires a cached offline
-compiler check; broad runtime acceptance follows actual pilot assembly.
+### Focused verification
+
+Native source `03d4075d` passed the cached, offline Rust 1.88 check of
+`serverware-decision-gate` (exit **0**, compiler-reported **1m 01s**). Its
+**312 library / 2,449 binary warnings** remain in the retained log.
+Python source `efccf551` passed **99 focused Python 3.11.15 controls**, seventeen
+Python grammar/both Make inventories, thirteen native/schema inventory entries,
+**55 relative links** and **1,175 local schema-reference joins** (exit **0**).
+Only Makefile differs between those sources; runtime/native/schema/lock inputs
+are identical. Two earlier inventory checks exited **1 before tests ran**:
+the GenerationInstall input module, initial-history adapter and startup-receipt
+module needed existing-source inventory entries. Both snapshots and logs remain
+available rather than being discarded as successful runs.
+
+The Python run used an environment-cleared, CPU-0 private-network invocation;
+the compiler used a network-none, read-only, one-CPU/8-GiB container. Both reused
+unpublished engineering dependency candidates. Controls use synthetic public
+contracts/signatures; the ten history-grant tests are shape controls, not
+signature admission. Schema-reference joins are not full semantic validation.
+No real protected owner, issuer command, installer, service, cloud or paid action
+ran. These results are not hardware, deployed-pilot or production acceptance.
+
+Exact source archives, commands, failed and successful logs, `result.json` and
+verified `SHA256SUMS` are retained outside disposable scratch at
+`codex-offload/serverware/engineering-builds/03d4075d-operational-histories-K1NmLz/`.

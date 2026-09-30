@@ -91,9 +91,29 @@ factory must verify the same common root and its own v2 membership. This is a
 new explicit admission contract requiring matching producer and consumer work,
 not replacement of the existing equality checks with an unchecked lookup.
 
+## Implemented prerequisites; admission remains open
+
+The [measured configuration recipe](native-pilot-measured-configuration.md) now
+retains independently pinned static inputs before spawn and derives the existing
+legacy configuration binding from the real process-owned bootstrap observation.
+It emits data only. Scope-bound nonempty retrieval objects and their protected
+store still require genuine preparation within the unchanged original window.
+
+The [static closure-set producer and native validator](native-pilot-closure-set.md)
+now bind the exact eleven ordered role manifests. They expose two distinct
+aggregate commitments: the closure-set root and the seccomp-set root. The latter
+is necessary because the legacy assignment also pins one individual seccomp
+policy; a multi-role release may contain different filters. Neither aggregate
+may be substituted into a legacy individual-manifest or individual-policy field.
+
+These are prerequisites, not the successor admission. Versioned independently
+signed assignment, guest authorization, proof-scope and receiving-owner contracts
+still need to authenticate both common roots and each source-selected role's
+actual leaf. The held endpoint composers are not enabled by static validation.
+
 ## Preserved limits and decision boundary
 
-Neither proposal is implemented or independently approved by this document.
+Neither complete successor admission is implemented or independently approved.
 The exact old profiles, original expiry/currentness checks, nonempty retrieval
 requirements and real-FD/process ownership remain unchanged. No zero IDs,
 predicted hashes, fabricated history, locally self-approved snapshot, automatic

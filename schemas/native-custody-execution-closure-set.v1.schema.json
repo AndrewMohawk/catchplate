@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-custody-execution-closure-set.v1.schema.json",
+  "description": "Unsigned static exact-eleven-guest commitments. Canonical ASCII no-LF original <=12MiB; each canonical manifest <=1MiB. Neither schema validation nor matching roots is independent assignment authority or live-owner admission. Existing legacy assignment and proof-scope fields keep their original meaning.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "members", "setRootSha256", "seccompSetRootSha256"],
+  "properties": {
+    "apiVersion": {"const": "serverware.nativeCustodyExecutionClosureSet/v1"},
+    "setRootSha256": {"$ref": "#/$defs/digest"},
+    "seccompSetRootSha256": {"$ref": "#/$defs/digest"},
+    "members": {
+      "type": "array", "minItems": 11, "maxItems": 11, "items": false,
+      "prefixItems": [
+        {"allOf": [{"$ref": "#/$defs/endpoint"}, {"properties": {"role": {"const": "retrieval"}}}]},
+        {"allOf": [{"$ref": "#/$defs/endpoint"}, {"properties": {"role": {"const": "persistence"}}}]},
+        {"allOf": [{"$ref": "#/$defs/endpoint"}, {"properties": {"role": {"const": "trustedTime"}}}]},
+        {"allOf": [{"$ref": "#/$defs/endpoint"}, {"properties": {"role": {"const": "generationInstall"}}}]},
+        {"allOf": [{"$ref": "#/$defs/endpoint"}, {"properties": {"role": {"const": "commitRequest"}}}]},
+        {"allOf": [{"$ref": "#/$defs/endpoint"}, {"properties": {"role": {"const": "ingressAdmission"}}}]},
+        {"allOf": [{"$ref": "#/$defs/endpoint"}, {"properties": {"role": {"const": "terminalAppend"}}}]},
+        {"allOf": [{"$ref": "#/$defs/endpoint"}, {"properties": {"role": {"const": "dispatchBarrier"}}}]},
+        {"allOf": [{"$ref": "#/$defs/endpoint"}, {"properties": {"role": {"const": "activeEffectBarrier"}}}]},
+        {"allOf": [{"$ref": "#/$defs/endpoint"}, {"properties": {"role": {"const": "activeEffectCommit"}}}]},
+        {"$ref": "#/$defs/bridge"}
+      ]
+    }
+  },
+  "$defs": {
+    "digest": {
+      "type": "string", "pattern": "^sha256:[0-9a-f]{64}$",
+      "not": {"const": "sha256:0000000000000000000000000000000000000000000000000000000000000000"}
+    },
+    "endpoint": {
+      "type": "object", "additionalProperties": false, "required": ["role", "manifest"],
+      "properties": {
+        "role": {"enum": ["retrieval", "persistence", "trustedTime", "generationInstall", "commitRequest", "ingressAdmission", "terminalAppend", "dispatchBarrier", "activeEffectBarrier", "activeEffectCommit"]},
+        "manifest": {"$ref": "native-custody-closure.v1.schema.json#/$defs/manifest"}
+      }
+    },
+    "bridge": {
+      "type": "object", "additionalProperties": false, "required": ["role", "manifest"],
+      "properties": {
+        "role": {"const": "bridge"},
+        "manifest": {"$ref": "native-custody-closure.v2.schema.json#/$defs/manifest"}
+      }
+    }
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-pilot-closure-set-preparation.v1.schema.json",
+  "description": "Pinned public input for unsigned static closure-set preparation. Canonical ASCII JSON without LF, at most 12MiB. Neither the input digest nor preparation output establishes approval, signing or native admission.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "members"],
+  "properties": {
+    "apiVersion": {"const": "serverware.nativePilotClosureSetPreparation/v1"},
+    "members": {"$ref": "native-custody-execution-closure-set.v1.schema.json#/properties/members"}
+  }
+}

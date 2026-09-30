@@ -11,6 +11,7 @@ const PROFILE:&str="sealed-memfd-squashfs-static-amd64-v1";
 const BOOTSTRAP_PROFILE:&str="measured-bootstrap-late-runtime-static-amd64-v1";
 #[path="native_closure_late.rs"] mod late;
 #[path="native_closure_remote.rs"] mod remote;
+#[path="native_closure_set.rs"] pub(in crate::policy_shadow) mod closure_set;
 pub(in crate::policy_shadow) use remote::RemoteNativeCustodyClosure;
 const DOMAIN:&str="serverware.nativeCustodyClosureAssignment.signature/v1";
 const MANIFEST_DOMAIN:&[u8]=b"serverware.nativeCustodyExecutionClosure/v1";

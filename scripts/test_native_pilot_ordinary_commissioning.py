@@ -32,7 +32,7 @@ from test_native_pilot_ordinary_initial import DOMAINS, checkpoint, fixture as i
 from test_native_pilot_ordinary_keys import PROCESS_DOMAIN, ROLES, canonical, encoded, framed, labelled, sha
 from test_native_pilot_endpoint_commissioning import peer
 
-ENDPOINT_ROLES = ("settlement-store", "fence-authority", "ingress-witness", "signer-hsm", "termination-ledger")
+ENDPOINT_ROLES = ("settlement-store", "fence-authority", "cleanup-watchdog", "signer-hsm", "termination-ledger")
 
 
 def private(label):

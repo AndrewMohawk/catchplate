@@ -1,5 +1,7 @@
 """Small purpose-specific Setup association flow; browser state grants nothing."""
 
+from serverware.portal_setup_native import SETUP_NATIVE_POLICY_HTML, SETUP_NATIVE_POLICY_SCRIPT
+
 SETUP_POLICY_HTML = r"""
           <details id="setup-policy-controls">
             <summary>Associate an activated Setup with a protected candidate</summary>
@@ -29,8 +31,9 @@ SETUP_POLICY_HTML = r"""
             <button type="button" class="secondary" onclick="runUiAction('Observe installed Setup policy', setupPolicyInstalled)">Owner: observe CONTROL-PLANE loader only</button>
             <pre id="setup-policy-file-observation">No installation observation. nativeGateVerified: false.</pre>
             <p id="setup-policy-file-status" class="hint" role="status" aria-live="polite">No publication sent. Share only the unchanged data-only draft and nonsecret IDs; uncertain effects remain locked locally.</p>
+            __SETUP_NATIVE_POLICY_HTML__
           </details>
-"""
+""".replace("__SETUP_NATIVE_POLICY_HTML__", SETUP_NATIVE_POLICY_HTML)
 
 SETUP_POLICY_SCRIPT = r"""
     const setupPolicyPrefix = '/api/setup/policy-candidate';
@@ -63,21 +66,21 @@ SETUP_POLICY_SCRIPT = r"""
       try { operation.current(); setupPolicyBusy = true; return operation; }
       catch (error) { clearTimeout(timer); controller.abort(); throw error; }
     }
-    async function setupPolicyRead(response, operation) {
+    async function setupPolicyRead(response, operation, maximum = setupPolicyMaximumResponse) {
       operation.current(); setupPolicyNeed(response.body && /^application\/json(?:\s*;|$)/i.test(response.headers.get('Content-Type') || ''));
       const reader = response.body.getReader(), decoder = new TextDecoder('utf-8', {fatal: true});
       let original = '', size = 0, done = false;
       try {
         for (;;) { operation.current(); const chunk = await reader.read(); operation.current();
           if (chunk.done) { done = true; break; }
-          size += chunk.value.byteLength; setupPolicyNeed(size <= setupPolicyMaximumResponse);
+          size += chunk.value.byteLength; setupPolicyNeed(size <= maximum);
           original += decoder.decode(chunk.value, {stream: true});
         }
-        original += decoder.decode(); return oauthConsentParse(original, setupPolicyMaximumResponse).value;
+        original += decoder.decode(); return oauthConsentParse(original, maximum).value;
       } finally { if (!done) { try { await reader.cancel(); } catch (_) {} } reader.releaseLock(); original = ''; }
     }
     async function setupPolicyPost(suffix, body, operation, sent = null) {
-      setupPolicyNeed(['/draft', '/options', '/bind', '/lookup', '/materialize-draft', '/installed'].includes(suffix));
+      setupPolicyNeed(['/draft', '/options', '/bind', '/lookup', '/materialize-draft', '/installed', '/native-installed'].includes(suffix));
       const csrfReply = await fetch('/api/csrf', {credentials: 'same-origin', mode: 'same-origin', redirect: 'error',
         cache: 'no-store', signal: operation.signal});
       const csrf = await setupPolicyRead(csrfReply, operation);
@@ -90,7 +93,7 @@ SETUP_POLICY_SCRIPT = r"""
         const response = await fetch(setupPolicyPrefix + suffix, {method: 'POST', credentials: 'same-origin', mode: 'same-origin',
           redirect: 'error', cache: 'no-store', signal: operation.signal,
           headers: {'Content-Type': 'application/json', [csrf.header]: csrf.token}, body: original});
-        const value = await setupPolicyRead(response, operation);
+        const value = await setupPolicyRead(response, operation, suffix === '/native-installed' ? 524288 : setupPolicyMaximumResponse);
         setupPolicyNeed(response.ok); return value;
       } finally { original = null; }
     }
@@ -430,4 +433,4 @@ SETUP_POLICY_SCRIPT = r"""
         setupFileMessage('Actual control-plane loaded observation only. Native immutable policy/startup enrollment is separate; this grants no action, proxy readiness, retry or Setup completion.');
       } finally { operation.close(); }
     }
-"""
+""" + SETUP_NATIVE_POLICY_SCRIPT

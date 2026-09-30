@@ -8,8 +8,10 @@ The explicit [owner candidate association](setup-policy-candidate-portal.md)
 now joins the real activated session, completed activation audit, active
 credential/currentness root and protected native generation into one immutable
 successor row. It includes the actual review/passkey/bind/lookup portal and
-purpose-specific controlled writer. Policy-file materialization, current loader
-evidence and later enrollment/runtime/final-receipt continuation remain required.
+purpose-specific controlled writer. The separate publication controls now join
+the actual materializer and control-plane loader; a distinct native observation
+joins fresh native loaded-policy evidence without advancing Setup. Later
+enrollment/runtime/final-receipt continuation remains required.
 The historical dependency description below is not a claim that those later
 producers or runtime acceptance are complete.
 

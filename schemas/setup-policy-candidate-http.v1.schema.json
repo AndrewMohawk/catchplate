@@ -1,15 +1,16 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://serverware.dev/schemas/setup-policy-candidate-http.v1.schema.json",
-  "title": "Protected Setup association, separate publication draft and control-plane observation HTTP",
+  "title": "Protected Setup association, publication and separate control-plane/native observations",
   "description": "Exact originals remain strings, preserving nanosecond integers. Neither a draft nor a stored continuation is policy loading, Setup completion, retry permission or proxy readiness. Complete requests <=4227072 bytes and responses <=5242880 bytes; individual limits never enlarge those bounds.",
   "anyOf": [{"$ref": "#/$defs/draftRequest"}, {"$ref": "#/$defs/draftResponse"}, {"$ref": "#/$defs/optionsRequest"},
     {"$ref": "#/$defs/optionsResponse"}, {"$ref": "#/$defs/bindRequest"}, {"$ref": "#/$defs/bindResponse"},
     {"$ref": "#/$defs/lookupRequest"}, {"$ref": "#/$defs/observation"}, {"$ref": "#/$defs/authorityPolicy"},
-    {"$ref": "#/$defs/materializationRequest"}, {"$ref": "#/$defs/materializationDraft"}, {"$ref": "#/$defs/installedObservation"}],
+    {"$ref": "#/$defs/materializationRequest"}, {"$ref": "#/$defs/materializationDraft"}, {"$ref": "#/$defs/installedObservation"},
+    {"$ref": "#/$defs/nativeObservation"}],
   "$defs": {
     "materializationRequest": {
-      "description": "POST /materialize-draft or /installed; exact three fields and <=4096 raw bytes. Actual Setup owner with credential_owner, Setup revision3 and continuation0 required. Draft additionally requires literal policy_publisher.",
+      "description": "POST /materialize-draft, /installed or /native-installed; exact three fields and <=4096 raw bytes. Actual Setup owner with credential_owner, Setup revision3 and continuation0 required. Draft additionally requires literal policy_publisher. Native observation does not perform enrollment, hot reload or a filesystem effect.",
       "type": "object", "additionalProperties": false, "required": ["apiVersion", "sessionId", "expectedRevision"],
       "properties": {"apiVersion": {"const": "serverware.setupPolicyMaterializationRequest/v1"},
         "sessionId": {"$ref": "#/$defs/uuid"}, "expectedRevision": {"const": 3}}
@@ -54,6 +55,34 @@
         "okForAction": {"const": false}, "automaticRetryAllowed": {"const": false}, "nativeGateVerified": {"const": false},
         "observationOriginal": {"type": "string", "minLength": 2, "maxLength": 131072,
           "description": "Exact canonical ASCII setupLoadedPolicyObservation/v1 from LoadedPublication; scope control-plane-loaded-policy-only, all action/retry/native-gate flags false. Nested original preserves file identity, assignment, journal, approval, audit and exact epoch integers."}
+      }
+    },
+    "nativeObservation": {
+      "description": "POST /native-installed response, <=524288 bytes including escaping. The real backend verifies native evidence; this read-only wrapper grants no action, enrollment, policy reload, retry or proxy readiness. Old installedObservation remains control-plane-only.",
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "okForAction", "automaticRetryAllowed", "proxyReady", "setupSessionId", "observationOriginal"],
+      "properties": {
+        "apiVersion": {"const": "serverware.setupNativePolicyObservation/v1"},
+        "okForAction": {"const": false}, "automaticRetryAllowed": {"const": false}, "proxyReady": {"const": false},
+        "setupSessionId": {"$ref": "#/$defs/uuid"},
+        "observationOriginal": {"type": "string", "minLength": 2, "maxLength": 262144,
+          "contentMediaType": "application/json", "contentSchema": {"$ref": "#/$defs/nativeLoadedObservation"},
+          "description": "Unchanged canonical ASCII original; preserve every integer and nested original. This is not a transferable permission or browser-verifiable completion receipt."}
+      }
+    },
+    "nativeLoadedObservation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "scope", "okForAction", "automaticRetryAllowed", "nativeLoadedPolicyVerified", "proxyReady",
+        "continuationSha256", "currentCredentialStateSha256", "requestOriginal", "evidenceOriginal"],
+      "properties": {
+        "apiVersion": {"const": "serverware.setupNativeLoadedPolicyObservation/v1"},
+        "scope": {"const": "native-loaded-policy-only"}, "okForAction": {"const": false},
+        "automaticRetryAllowed": {"const": false}, "nativeLoadedPolicyVerified": {"const": true}, "proxyReady": {"const": false},
+        "continuationSha256": {"$ref": "#/$defs/digest"}, "currentCredentialStateSha256": {"$ref": "#/$defs/digest"},
+        "requestOriginal": {"type": "string", "minLength": 2, "maxLength": 4096,
+          "description": "Exact canonical original request retaining its fresh native nonce, context, policy/principal/route/credential and original bounded interval."},
+        "evidenceOriginal": {"type": "string", "minLength": 2, "maxLength": 131072,
+          "description": "Exact native signed and quoted evidence independently admitted by the backend. This schema is a wire description, not signature, quote or live-owner verification."}
       }
     },
     "authorityPolicy": {

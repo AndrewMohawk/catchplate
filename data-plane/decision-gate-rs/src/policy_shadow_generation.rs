@@ -3090,6 +3090,31 @@ impl PolicyShadowGenerationControl {
         ->Result<super::policy_shadow::native_runtime::Observation,String> {
         self.native_observation(receipt,opening,terminal,None)
     }
+    pub(crate) fn native_checkpoint_window(&self)->Result<(Sha256Digest,u64),String> {
+        if !self.is_production || self.native_workers.is_none() {
+            return Err("checkpoint window requires actual native custody".into());
+        }
+        let _installation=self.installation_lock.try_lock().map_err(|_|"checkpoint installation busy")?;
+        let retained=self.retained_generation.try_lock().map_err(|_|"checkpoint generation busy")?;
+        let retained=retained.as_ref().ok_or("checkpoint generation absent")?;
+        let remaining=super::policy_shadow::native_checkpoint::remaining_window(&retained.assignment,&retained.load_receipt,
+            &retained.generation_identity,retained.trusted_time.as_ref()).map_err(|error|error.to_string())?;
+        Ok((retained.generation_identity.generation_id().clone(),remaining))
+    }
+    pub(crate) fn native_checkpoint_observation(&self,applied:&super::policy_core::AppliedSpoolCheckpoint)
+        ->Result<super::policy_shadow::native_checkpoint::Checkpoint,String> {
+        if !self.is_production || self.native_workers.is_none() {
+            return Err("checkpoint requires the actual native custody generation owner".into());
+        }
+        let _installation=self.installation_lock.try_lock().map_err(|_|"checkpoint generation installation is busy")?;
+        let retained=self.retained_generation.try_lock().map_err(|_|"checkpoint retained generation is busy")?;
+        let retained=retained.as_ref().ok_or("checkpoint has no successfully installed generation")?;
+        self.key_trust.authorize_at(retained.trusted_time.now_unix_nanos().map_err(|error|error.to_string())?)?;
+        let configuration=retained.custody.production_configuration_binding_sha256().ok_or("checkpoint custody configuration absent")?;
+        super::policy_shadow::native_checkpoint::Checkpoint::from_receipt(applied.receipt(),applied.ordered_range(),&retained.generation_identity,
+            &retained.assignment,&retained.runtime_identity,&retained.publication_receipt.internal_envelope_sha256,
+            &configuration,self.key_trust.as_ref(),retained.trusted_time.as_ref()).map_err(|error|error.to_string())
+    }
     pub(crate) fn native_response_observation(&self,receipt:&super::policy_shadow::VerifiedShadowSpillReceipt,
         opening:&Sha256Digest,terminal:&Sha256Digest,request:&Sha256Digest)
         ->Result<super::policy_shadow::native_runtime::Observation,String> {

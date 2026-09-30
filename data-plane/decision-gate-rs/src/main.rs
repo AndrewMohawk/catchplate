@@ -30,6 +30,7 @@ mod native_gate_inputs;
 mod native_service_tokens;
 mod native_proof_signer;
 mod native_response_attestation;
+mod native_loaded_policy;
 mod credential_currentness;
 mod native_runtime_lifetime;
 mod native_background_workers;
@@ -49651,6 +49652,7 @@ fn handle_gate_connection(
             && head.target == POLICY_SHADOW_ACTIVATION_PATH;
     let management_post = head.method == "POST"
         && (matches!(head.target.as_str(), "/v1/decide" | "/v1/grants")
+            || head.target == serverware_decision_gate::native_loaded_policy_v1::PATH
             || policy_shadow_install_post
             || policy_shadow_activation_post);
     let proxy_request = head.method == "CONNECT" || absolute_form_target(&head.target);
@@ -49669,6 +49671,10 @@ fn handle_gate_connection(
             );
             let _ = stream.write_all(&response);
             let _ = stream.flush();
+            return;
+        }
+        if head.method == "POST" && head.target == serverware_decision_gate::native_loaded_policy_v1::PATH {
+            native_loaded_policy::handle(&state,head,&mut stream);
             return;
         }
         if policy_shadow_install_post || policy_shadow_activation_post {

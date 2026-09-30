@@ -22,14 +22,12 @@ Checkpoint: **2026-09-29 — pre-production, source-only.**
 
 [![Project checkpoints, one segment per task: 36 of 46 source-landed; 10 active and 0 todo. Evidence handoff 10/10; historical recovery 4/5; permissions and grants 10/10; finalization and sessions 8/8; workloads and native 3/6; providers and operations 1/7. H05, N04, N05, N06 and O01 through O06 are in progress. Production acceptance remains 0/6. Source only; unbuilt, unexecuted and unprovisioned.](docs/images/project-progress.svg)](docs/production-status.md#next-source-milestones)
 
-The current `.315` source batch connects
-[terminal and candidate request/response evidence](docs/native-canary-response-observations.md),
-[guest process/image packaging](docs/native-shadow-guest-supervisor.md),
-[independent time-service packaging](docs/native-shadow-guest-time-runtime.md), and
-[Setup policy installation and loaded-policy observation](docs/setup-policy-candidate-portal.md).
-Checkpoint/readiness evidence, native receipt/proof services, native gate policy
-loading and later Setup steps remain open. These are code milestones, not a
-runnable or verified pilot release.
+The current `.316` source batch adds [actual ledger-interval checkpoint delivery](docs/native-canary-checkpoint-observations.md)
+and [native loaded-policy observation in Setup](docs/setup-policy-candidate-portal.md#separate-native-loaded-policy-observation).
+This builds on the request/response evidence, guest/time-service packaging and
+policy installation already landed. Full-range canary readiness, native
+receipt/proof services, enrollment and final Setup steps remain open.
+These are code milestones, not a runnable or verified pilot release.
 Broad testing follows the connected pilot flow.
 
 The bar shows **committed source, not tested readiness or remaining effort**.

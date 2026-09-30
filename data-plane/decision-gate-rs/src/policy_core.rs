@@ -2334,6 +2334,10 @@ const SHADOW_MAX_ACCOUNTING_GENERATIONS: usize = 8;
 const SHADOW_SPOOL_RECEIPT_CACHE_ITEMS: usize = 4_096;
 const SHADOW_SPOOL_COMPACTION_TRIGGER_ITEMS: usize = 3_072;
 const SHADOW_SPOOL_COMPACTION_PREFIX_ITEMS: usize = 2_048;
+// The explicitly selected native durable observation profile must produce a
+// genuine interval before its bounded intake journal fills. Legacy unchanged.
+const NATIVE_CHECKPOINT_TRIGGER_ITEMS: usize = 16;
+const NATIVE_CHECKPOINT_PREFIX_ITEMS: usize = 8;
 const SHADOW_UNAVAILABLE_RECEIPT_CACHE_ITEMS: usize = 256;
 const SHADOW_APPEND_RECONCILE_LANES: usize = 64;
 const SHADOW_MODELED_RECEIPT_COMPACTION_TRIGGER_BYTES: usize =
@@ -2801,6 +2805,18 @@ struct AccountingLedger {
     custody: Arc<OnceLock<Arc<dyn PolicyShadowCustodyRpcSupervisor>>>,
     hard_unready_signal: AtomicBool,
     compaction_in_progress: AtomicBool,
+    native_observation_owner: OnceLock<std::sync::Weak<GateState>>,
+}
+
+/// Constructed only after exact successful local application of a completed
+/// custody compaction. Neither a decoded receipt nor an arbitrary range DTO.
+pub(super) struct AppliedSpoolCheckpoint {
+    receipt: VerifiedSpoolCompactionReceipt,
+    ordered_range: Value,
+}
+impl AppliedSpoolCheckpoint {
+    pub(super) fn receipt(&self)->&VerifiedSpoolCompactionReceipt {&self.receipt}
+    pub(super) fn ordered_range(&self)->&Value {&self.ordered_range}
 }
 
 struct ReceiptReconciliationCapacity<'a> {
@@ -3752,6 +3768,7 @@ impl AccountingLedger {
             custody,
             hard_unready_signal: AtomicBool::new(!receipt_arena_ready),
             compaction_in_progress: AtomicBool::new(false),
+            native_observation_owner: OnceLock::new(),
         }
     }
 
@@ -4178,7 +4195,9 @@ impl AccountingLedger {
         accounting.compaction_requested |=
             !accounting.local_ordering_gap
                 && (cached_receipt_items
-                    >= SHADOW_SPOOL_COMPACTION_TRIGGER_ITEMS
+                    >= (if self.native_observation_owner.get().is_some() {
+                        NATIVE_CHECKPOINT_TRIGGER_ITEMS
+                    } else {SHADOW_SPOOL_COMPACTION_TRIGGER_ITEMS})
                     || cached_receipt_bytes
                         >= SHADOW_MODELED_RECEIPT_COMPACTION_TRIGGER_BYTES);
         true
@@ -4584,7 +4603,9 @@ impl AccountingLedger {
             accounting.compaction_requested |=
                 !accounting.local_ordering_gap
                     && (cached_receipt_items
-                        >= SHADOW_SPOOL_COMPACTION_TRIGGER_ITEMS
+                        >= (if self.native_observation_owner.get().is_some() {
+                            NATIVE_CHECKPOINT_TRIGGER_ITEMS
+                        } else {SHADOW_SPOOL_COMPACTION_TRIGGER_ITEMS})
                         || cached_receipt_bytes
                             >= SHADOW_MODELED_RECEIPT_COMPACTION_TRIGGER_BYTES);
         }
@@ -4599,48 +4620,48 @@ impl AccountingLedger {
         custody: &dyn PolicyShadowCustodyRpcSupervisor,
         request: &AuthenticatedSpoolCompactionRequest,
     ) -> bool {
-        let context = match custody_call_context(
+        let result=(|| {
+        let delivery=self.checkpoint_delivery()?;
+        let context = custody_call_context(
             custody,
             PolicyShadowCustodyOperation::CompactSpool,
             "compact-spool",
             request.old_spool_head_sha256().as_str(),
-        ) {
-            Ok(context) => context,
-            Err(_) => {
-                self.compaction_in_progress
-                    .store(false, Ordering::Release);
-                self.mark_hard_unready();
-                return false;
-            }
-        };
+        )?;
         let receipt = custody.compact_spool(&context, request);
         let completed = finish_custody_call(custody, context);
-        let compacted = completed
-            && receipt
-                .map_err(shadow_error)
-                .and_then(|receipt| {
-                    if receipt.matches_request(request) {
-                        self.apply_authenticated_compaction(
-                            request,
-                            &receipt,
-                        )
-                    } else {
-                        Err(
-                            "custody compaction receipt does not match request"
-                                .to_string(),
-                        )
-                    }
-                })
-                .is_ok();
+        if !completed {return Err("compaction custody completion is unknown".to_string());}
+        let receipt=receipt.map_err(shadow_error)?;
+        let applied=self.apply_authenticated_compaction(request,&receipt)?;
+        if let Some(delivery)=delivery {delivery.submit(applied)?;}
+        Ok::<(),String>(())
+        })();
         self.compaction_in_progress
             .store(false, Ordering::Release);
-        if !compacted {
+        if result.is_err() {
             self.mark_hard_unready();
+            if let Some(state)=self.native_observation_owner.get().and_then(std::sync::Weak::upgrade) {
+                state.policy_shadow.fail_native_observation();
+            }
         }
-        compacted
+        result.is_ok()
+    }
+
+    fn checkpoint_delivery(&self)->Result<Option<native_canary_runtime::CheckpointAttempt>,String> {
+        let Some(owner)=self.native_observation_owner.get() else {return Ok(None);};
+        if self.hard_unready_signal.load(Ordering::Acquire) {
+            return Err("native checkpoint cannot renew an uncertain ledger".into());
+        }
+        let state=owner.upgrade().ok_or("native checkpoint outlived its serving owner")?;
+        native_canary_runtime::CheckpointAttempt::prepare(state).map(Some)
     }
 
     fn compact_one_requested(&self) {
+        if self.native_observation_owner.get().is_some()
+            && self.hard_unready_signal.load(Ordering::Acquire) {return;}
+        let prefix=if self.native_observation_owner.get().is_some() {
+            NATIVE_CHECKPOINT_PREFIX_ITEMS
+        } else {SHADOW_SPOOL_COMPACTION_PREFIX_ITEMS};
         if self
             .compaction_in_progress
             .compare_exchange(
@@ -4664,7 +4685,7 @@ impl AccountingLedger {
                     && state
                         .receipt_index
                         .spill_len(entry.receipt_arena_lane)
-                        >= SHADOW_SPOOL_COMPACTION_PREFIX_ITEMS
+                        >= prefix
             }) else {
                 self.compaction_in_progress
                     .store(false, Ordering::Release);
@@ -4701,6 +4722,7 @@ impl AccountingLedger {
             match Self::compaction_request(
                 &state.generations[index],
                 &state.receipt_index,
+                prefix,
             ) {
                 Ok(request) => (request, reservation, scope),
                 Err(_) => {
@@ -4738,12 +4760,13 @@ impl AccountingLedger {
     fn compaction_request(
         accounting: &GenerationAccounting,
         receipt_index: &ReceiptMetadataIndex,
+        prefix: usize,
     ) -> Result<AuthenticatedSpoolCompactionRequest, String> {
         let compacted = receipt_index
             .spill_iter(accounting.receipt_arena_lane)
-            .take(SHADOW_SPOOL_COMPACTION_PREFIX_ITEMS)
+            .take(prefix)
             .collect::<Vec<_>>();
-        if compacted.len() != SHADOW_SPOOL_COMPACTION_PREFIX_ITEMS {
+        if compacted.len() != prefix {
             return Err("insufficient ordered spill prefix".to_string());
         }
         if compacted.windows(2).any(|pair| {
@@ -4790,7 +4813,7 @@ impl AccountingLedger {
         }))?;
         let retained = receipt_index.spill_get(
             accounting.receipt_arena_lane,
-            SHADOW_SPOOL_COMPACTION_PREFIX_ITEMS,
+            prefix,
         );
         let retained_ordinal =
             retained.map(|receipt| receipt.event_ordinal());
@@ -4825,7 +4848,7 @@ impl AccountingLedger {
         &self,
         request: &AuthenticatedSpoolCompactionRequest,
         receipt: &VerifiedSpoolCompactionReceipt,
-    ) -> Result<(), String> {
+    ) -> Result<AppliedSpoolCheckpoint, String> {
         let mut state = match self.state.lock() {
             Ok(state) => state,
             Err(poisoned) => poisoned.into_inner(),
@@ -4885,9 +4908,9 @@ impl AccountingLedger {
                     .to_string(),
             );
         }
-        let exact_root = {
+        let ordered_range = {
             let accounting = &state.generations[index];
-            canonical_digest(&json!({
+            json!({
                 "domain":"serverware.policyShadowSpoolCompactedOrderedRange/v1",
                 "generationId":accounting.generation_id,
                 "firstEventOrdinal":receipt.compacted_first_event_ordinal(),
@@ -4905,8 +4928,9 @@ impl AccountingLedger {
                     "retrievalIdSha256":cached.retrieval_id_sha256,
                     "retrievalProofSha256":cached.retrieval_proof_sha256,
                 })).collect::<Vec<_>>(),
-            }))?
+            })
         };
+        let exact_root=canonical_digest(&ordered_range)?;
         if &exact_root != receipt.compacted_ordered_range_root_sha256() {
             state.generations[index].permanent_readiness_invalid = true;
             state.hard_unready = true;
@@ -5027,7 +5051,7 @@ impl AccountingLedger {
                 .receipt_index
                 .release_spill_lane(removed.receipt_arena_lane)?;
         }
-        Ok(())
+        Ok(AppliedSpoolCheckpoint{receipt:receipt.clone(),ordered_range})
     }
 
     fn generation_is_live(&self, generation_id: &str, generation_epoch: u64) -> bool {
@@ -9037,6 +9061,8 @@ impl ShadowRuntime {
         if !std::ptr::eq(self,&state.policy_shadow) || state.measured_canary_delivery.is_none() {
             return Err("native observation must bind the actual selected serving owner".into());
         }
+        self.ledger.native_observation_owner.set(Arc::downgrade(state))
+            .map_err(|_|"native checkpoint owner bound twice")?;
         self.native_observation_owner.set(Arc::downgrade(state)).map_err(|_|"native observation owner bound twice".into())
     }
 
@@ -10590,6 +10616,7 @@ impl ShadowRuntime {
             .custody
             .get()
             .ok_or_else(|| "production shadow custody is not bound".to_string())?;
+        let delivery=self.ledger.checkpoint_delivery()?;
         // Custody performs durable compaction without a runtime ledger lock.
         // The local bounded receipt cache advances only after its authenticated
         // compaction receipt is checked against the exact retained spill head.
@@ -10614,8 +10641,8 @@ impl ShadowRuntime {
                     .to_string(),
             );
         }
-        self.ledger
-            .apply_authenticated_compaction(request, &receipt)?;
+        let applied=self.ledger.apply_authenticated_compaction(request, &receipt)?;
+        if let Some(delivery)=delivery {delivery.submit(applied)?;}
         Ok(receipt)
     }
 

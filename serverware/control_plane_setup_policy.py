@@ -20,7 +20,8 @@ PREFIX = "/api/setup/policy-candidate"
 PATHS = frozenset(PREFIX + suffix for suffix in ("/draft", "/options", "/bind", "/lookup"))
 MATERIALIZE_PATH = PREFIX + "/materialize-draft"
 INSTALLED_PATH = PREFIX + "/installed"
-PATHS = PATHS | {MATERIALIZE_PATH, INSTALLED_PATH}
+NATIVE_INSTALLED_PATH = PREFIX + "/native-installed"
+PATHS = PATHS | {MATERIALIZE_PATH, INSTALLED_PATH, NATIVE_INSTALLED_PATH}
 MATERIALIZE_REQUEST_SCHEMA = "serverware.setupPolicyMaterializationRequest/v1"
 MATERIALIZE_DRAFT_SCHEMA = "serverware.setupPolicyMaterializationDraft/v1"
 INSTALLED_SCHEMA = "serverware.setupPolicyInstalledObservation/v1"
@@ -359,7 +360,7 @@ def on_request(request, raw):
     profile.require(type(raw) is bytes and 0 < len(raw) <= MAX_REQUEST
         and request.headers.get("content-length") == str(len(raw)))
     path = request.url.path
-    if path in {MATERIALIZE_PATH, INSTALLED_PATH}:
+    if path in {MATERIALIZE_PATH, INSTALLED_PATH, NATIVE_INSTALLED_PATH}:
         profile.require(len(raw) <= MAX_MATERIALIZE_REQUEST)
         value = setup.document(raw, MAX_MATERIALIZE_REQUEST)
         profile.require(type(value) is dict and set(value) == {"apiVersion", "sessionId", "expectedRevision"}
@@ -368,7 +369,11 @@ def on_request(request, raw):
         owner = _PostBindOwner(request)
         try:
             owner.retain_bound(value["sessionId"])
-            result = _materialize_draft(owner) if path == MATERIALIZE_PATH else _installed(owner)
+            if path == NATIVE_INSTALLED_PATH:
+                from serverware import control_plane_setup_native_policy
+                result = control_plane_setup_native_policy.observe(owner)
+            else:
+                result = _materialize_draft(owner) if path == MATERIALIZE_PATH else _installed(owner)
             profile.require(len(profile.canonical(result)) <= MAX_RESPONSE)
             owner.check()
             return result

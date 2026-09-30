@@ -23,6 +23,7 @@ OAUTH_REVOCATION_CONFIG_MAX_BYTES = 2 * 1024 * 1024
 MEASURED_AUDIT_CONFIG_NAME = "SERVERWARE_MEASURED_AUDIT_CONFIG_FD"
 MEASURED_AUDIT_CONFIG_MAX_BYTES = 3 * 1024 * 1024
 POLICY_CANARY_CONFIG_NAME = "SERVERWARE_POLICY_CANARY_INTAKE_CONFIG_FD"
+SETUP_NATIVE_CONFIG_NAME = "SERVERWARE_SETUP_NATIVE_OBSERVATION_CONFIG_FD"
 OAUTH_REFRESH_CLEANUP_CONFIG_NAME = "SERVERWARE_OAUTH_REFRESH_CLEANUP_CONFIG_FD"
 OAUTH_REFRESH_CLEANUP_CONFIG_MAX_BYTES = 2 * 1024 * 1024
 RBAC_WITNESS_CONFIG_NAME = "SERVERWARE_RBAC_WITNESS_CONFIG_FD"
@@ -608,6 +609,41 @@ def _open_measured_audit_material(config_fd, *, occupied_descriptors):
     finally:
         if descriptor != target: os.close(descriptor)
     return (target,)
+
+
+def _open_setup_native_material(config_fd, *, occupied_descriptors):
+    """Read-only native identity originals at two fixed administrator paths."""
+    from serverware import control_plane_native_loaded_trust as cold
+    value = cold.configuration(cold.codec.document(os.pread(config_fd, 16385, 0), 16384))
+    selections = ((value["authorityRootFd"], "/run/serverware/authority-trust/setup-native-observation-root-public-key", 4096),
+        (value["authorityConfigurationFd"], "/run/serverware/authority-trust/setup-native-observation-authority-configuration.json", cold.contract.MAX_REQUEST_BYTES))
+    opened = []
+    try:
+        for target, path, maximum in selections:
+            if type(target) is not int or not 32 <= target <= 1023 or target in occupied_descriptors or target in opened:
+                raise RuntimeError("native observation public-original descriptor overlaps")
+            try:
+                os.fstat(target)
+            except OSError as exc:
+                if exc.errno != errno.EBADF:
+                    raise
+            else:
+                raise RuntimeError("native observation public-original descriptor is occupied")
+            descriptor = _open_source(path, expected_owner_uid=0, maximum_bytes=maximum)
+            try:
+                if descriptor != target:
+                    os.dup2(descriptor, target, inheritable=True)
+                else:
+                    os.set_inheritable(target, True)
+                opened.append(target)
+            finally:
+                if descriptor != target:
+                    os.close(descriptor)
+        return tuple(opened)
+    except BaseException:
+        for descriptor in opened:
+            os.close(descriptor)
+        raise
 
 
 def _open_policy_canary_material(config_fd, *, occupied_descriptors):
@@ -2681,13 +2717,16 @@ def _control_plane_health() -> int:
     return 1
 
 
-def _normal_main(role: str, *, public_revocation: bool = False, genesis_maintenance: bool = False, policy_canary_intake: bool = False) -> int:
+def _normal_main(role: str, *, public_revocation: bool = False, genesis_maintenance: bool = False, policy_canary_intake: bool = False,
+        setup_native_observation: bool = False) -> int:
     if type(public_revocation) is not bool or public_revocation and role not in {"verifier", "issuer", "executor"}:
         raise RuntimeError("public revocation cold selection requires its fixed measured roles")
     if type(genesis_maintenance) is not bool or genesis_maintenance and (role != "control-plane" or public_revocation):
         raise RuntimeError("genesis maintenance cold selection requires the fixed control-plane role")
     if type(policy_canary_intake) is not bool or policy_canary_intake and (role != "control-plane" or genesis_maintenance or public_revocation):
         raise RuntimeError("canary intake cold selection requires the fixed normal control-plane role")
+    if type(setup_native_observation) is not bool or setup_native_observation and (role != "control-plane" or genesis_maintenance or public_revocation):
+        raise RuntimeError("native observation requires the fixed normal control-plane role")
     trusted_host_local = (
         os.environ.get("SERVERWARE_AUTHORITY_TRUST_MODE")
         == "trusted-host-local"
@@ -2755,7 +2794,7 @@ def _normal_main(role: str, *, public_revocation: bool = False, genesis_maintena
             )
     for name in tuple(environment):
         if name.startswith(("SERVERWARE_CONTROL_PLANE_CUSTODY_",
-                "SERVERWARE_CONTROL_PLANE_ENROLLMENT_", "SERVERWARE_OAUTH_APPLICATION_", "SERVERWARE_OAUTH_REVOCATION_", "SERVERWARE_OAUTH_REFRESH_CLEANUP_", "SERVERWARE_MEASURED_AUDIT_", "SERVERWARE_RBAC_WITNESS_", "SERVERWARE_POLICY_CANARY_INTAKE_")):
+                "SERVERWARE_CONTROL_PLANE_ENROLLMENT_", "SERVERWARE_OAUTH_APPLICATION_", "SERVERWARE_OAUTH_REVOCATION_", "SERVERWARE_OAUTH_REFRESH_CLEANUP_", "SERVERWARE_MEASURED_AUDIT_", "SERVERWARE_RBAC_WITNESS_", "SERVERWARE_POLICY_CANARY_INTAKE_", "SERVERWARE_SETUP_NATIVE_OBSERVATION_")):
             environment.pop(name, None)
     environment.pop("SERVERWARE_AUTHORITY_BOOTSTRAP_FD", None)
     environment.pop("SERVERWARE_PROCESS_MODE", None)
@@ -2851,6 +2890,12 @@ def _normal_main(role: str, *, public_revocation: bool = False, genesis_maintena
                 )
             )
         if role == "control-plane":
+            if setup_native_observation:
+                native_descriptor = _open_source("/run/serverware/authority-trust/setup-native-observation.json",
+                    expected_owner_uid=0, maximum_bytes=16384)
+                descriptors.append(native_descriptor)
+                environment[SETUP_NATIVE_CONFIG_NAME] = str(native_descriptor)
+                descriptors.extend(_open_setup_native_material(native_descriptor, occupied_descriptors=set(descriptors)))
             if policy_canary_intake:
                 from serverware import control_plane_policy_canary_startup as canary_cold
                 canary_descriptor = _open_source("/run/serverware/authority-trust/policy-canary-intake.json",
@@ -2969,6 +3014,9 @@ def _normal_main(role: str, *, public_revocation: bool = False, genesis_maintena
 
 
 def main() -> int:
+    if sys.argv[1:] in (["control-plane", "--setup-native-observation"],
+            ["control-plane", "--policy-canary-intake", "--setup-native-observation"]):
+        return _normal_main("control-plane", setup_native_observation=True, policy_canary_intake=len(sys.argv) == 4)
     if len(sys.argv) == 3 and sys.argv[1:] == ["control-plane", "--policy-canary-intake"]:
         return _normal_main("control-plane", policy_canary_intake=True)
     if len(sys.argv) == 3 and sys.argv[1:] == ["control-plane", "--policy-file-genesis-maintenance"]:

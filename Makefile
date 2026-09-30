@@ -1264,6 +1264,8 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_transition_policy_file_approval.py \
 	serverware/control_plane_policy_file_publication.py \
 	serverware/control_plane_policy_loaded.py \
+	serverware/control_plane_native_loaded_trust.py \
+	serverware/control_plane_setup_native_policy.py \
 	serverware/authority_store/policy_file_genesis_sql.py \
 	serverware/control_plane_policy_file_genesis.py \
 	serverware/control_plane_policy_genesis_bootstrap.py \
@@ -1445,9 +1447,12 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_transition_setup_policy.py \
 	serverware/control_plane_setup_policy.py \
 	serverware/portal_setup_policy.py \
+	serverware/portal_setup_native.py \
 	serverware/authority_policy_candidate_evidence.py \
 	serverware/authority_policy_canary_native_opening.py \
 	serverware/authority_policy_canary_native_runtime.py \
+	serverware/authority_policy_canary_native_checkpoint.py \
+	serverware/authority_transition_policy_canary_native_checkpoint.py \
 	serverware/authority_transition_policy_canary_native_runtime.py \
 	serverware/authority_transition_policy_canary_native_opening.py \
 	serverware/authority_policy_candidate_inventory.py \
@@ -3790,6 +3795,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_transition_policy_file_approval.py \
 				serverware/control_plane_policy_file_publication.py \
 				serverware/control_plane_policy_loaded.py \
+				serverware/control_plane_native_loaded_trust.py \
+				serverware/control_plane_setup_native_policy.py \
 				serverware/authority_store/policy_file_genesis_sql.py \
 				serverware/control_plane_policy_file_genesis.py \
 				serverware/control_plane_policy_genesis_bootstrap.py \
@@ -3971,9 +3978,12 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_transition_setup_policy.py \
 				serverware/control_plane_setup_policy.py \
 				serverware/portal_setup_policy.py \
+				serverware/portal_setup_native.py \
 				serverware/authority_policy_candidate_evidence.py \
 				serverware/authority_policy_canary_native_opening.py \
 				serverware/authority_policy_canary_native_runtime.py \
+				serverware/authority_policy_canary_native_checkpoint.py \
+				serverware/authority_transition_policy_canary_native_checkpoint.py \
 				serverware/authority_transition_policy_canary_native_runtime.py \
 				serverware/authority_transition_policy_canary_native_opening.py \
 				serverware/authority_policy_candidate_inventory.py \
@@ -4210,7 +4220,10 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/native_canary_delivery.rs \
 				data-plane/decision-gate-rs/src/native_canary_opening.rs \
 				data-plane/decision-gate-rs/src/native_canary_runtime.rs \
+				data-plane/decision-gate-rs/src/native_loaded_policy_v1.rs \
+				data-plane/decision-gate-rs/src/native_loaded_policy.rs \
 				data-plane/decision-gate-rs/src/policy_shadow_runtime.rs \
+				data-plane/decision-gate-rs/src/policy_shadow_checkpoint.rs \
 				data-plane/decision-gate-rs/src/policy_shadow_opening.rs \
 				data-plane/decision-gate-rs/src/native_canary_delivery_v1.rs \
 				data-plane/decision-gate-rs/src/native_canary_delivery_v1/wire.rs \
@@ -4626,6 +4639,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-policy-canary-opening.v1.schema.json \
 				schemas/native-policy-canary-runtime-observation.v1.schema.json \
 				schemas/native-policy-canary-response-observation.v1.schema.json \
+				schemas/native-policy-canary-checkpoint-observation.v1.schema.json \
 				schemas/setup-policy-candidate-http.v1.schema.json \
 				schemas/native-oauth-measured-setup.v1.schema.json \
 				schemas/native-oauth-measured-reconnect.v1.schema.json \

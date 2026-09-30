@@ -88,6 +88,44 @@ Each phase retains the actual actor/cookie scope, field selection and original b
 
 Before EACH request/decide/consume dispatch, session storage must successfully retain a nonsecret unresolved marker with phase, publication ID, payload digest, approval ID (nullable), actor ID and status. No assertion, draft, policy original or authorization original enters storage. Request marker scope blocks replacing an uncertain publication with a newly generated ID; later-phase markers block repeating the same publication/approval. Observed responses only annotate the marker; journal/installed observations never clear it. This browser anti-repeat aid is not durable server authority or a completion receipt, and cannot replace server-side one-shot/journal guards across browsers. Data-only draft transfer is explicit and manual; local originals remain in page memory/text controls only.
 
-The separate journal button performs only the existing read-only bounded publication observation, with no resolve/retry action. The installed button is always labeled **CONTROL-PLANE loader only**, `nativeGateVerified:false`. Its original has scope `control-plane-loaded-policy-only` and retains exact file identity9, reviewed assignment6, journal/approval/audit originals and observation time. Setup still stays revision3. Native gate immutable policy/startup enrollment and actual native loaded evidence are separate, unfinished acceptance joins; installed observation is not proxy-ready, action permission, canary completion or full Setup completion.
+The separate journal button performs only the existing read-only bounded publication observation, with no resolve/retry action. The installed button is always labeled **CONTROL-PLANE loader only**, `nativeGateVerified:false`. Its original has scope `control-plane-loaded-policy-only` and retains exact file identity9, reviewed assignment6, journal/approval/audit originals and observation time. Setup still stays revision3. The separate native observation below does not promote that control-plane result into native evidence. Neither observation is proxy-ready, action permission, canary completion or full Setup completion.
 
 New original bounds: continuation <=2170880 ASCII bytes, materialize requestOriginal <=1400000, bindingOriginal <=8192, signed candidate decoded <=1048576, installed observationOriginal <=131072. Whole escaped responses remain <=5242880; aggregate overflow refuses. Existing policy-file HTTP schemas define the unchanged WebAuthn/materialize/result envelopes; the Setup HTTP schema adds only the exact draft and observation contracts. No builds, parsers, browser tests, runtime requests or provider contacts were executed for this source slice.
+
+## Separate native loaded-policy observation
+
+The owner button calls `/api/setup/policy-candidate/native-installed` with the
+same exact three-field materialization request. It does not invoke the legacy
+Setup policy/enrollment mutations, reload a native policy, install a client CA,
+issue a workload certificate or send provider traffic. The backend retains the
+actual current Setup association and credential state while independently
+verifying fresh native loaded-policy evidence. Independently admitted native
+trust and cold configuration remain necessary; a portal label cannot supply them.
+The [native producer and cold-input guide](setup-native-policy-observation.md)
+records the fixed management route, signed trust association and explicit
+entrypoint selection; no roots or descriptors are provisioned by the portal.
+
+The exact six-field response is `apiVersion: serverware.setupNativePolicyObservation/v1`,
+`okForAction:false`, `automaticRetryAllowed:false`, `proxyReady:false`,
+`setupSessionId` and `observationOriginal`. The nested canonical ASCII original
+is `serverware.setupNativeLoadedPolicyObservation/v1`, scope
+`native-loaded-policy-only`, with the three false flags, the narrowly scoped
+`nativeLoadedPolicyVerified:true`, exact continuation/current-credential hashes,
+and unchanged native request/evidence strings. The original signed request and
+actual native evidence remain separate from their browser presentation.
+
+The portal uses the existing fresh cookie/Origin/CSRF flow and one original
+30-second browser operation. A streamed response over 524288 bytes is refused;
+the nested observation, request and evidence are limited to 262144, 4096 and
+131072 ASCII bytes respectively. Exact-integer parsing and canonical equality
+preserve all originals. The displayed Setup ID must match the retained selection;
+actor, session and input changes or expiry abort observation. Output uses text,
+not executable HTML, and is never cached in local/session storage. No existing
+publication/recovery marker is changed and no automatic polling/retry is added.
+
+Success describes only the policy held by the observed native gate. It does not
+establish native secret availability, client trust installation, completed
+enrollment, an allowed/denied proxy journey, canary readiness or final Setup.
+Failure is unavailable/uncertain, not proof that policy is unloaded. A changed
+immutable policy may need a separately authorized new native gate instance;
+this button cannot authorize that instance or extend an expired owner.

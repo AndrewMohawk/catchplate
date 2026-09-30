@@ -8986,6 +8986,7 @@ def _policy_shadow_generation_url(
     if path not in {
         _POLICY_SHADOW_GENERATION_PATH,
         _POLICY_SHADOW_GENERATION_ACTIVATION_PATH,
+        "/v1/native-loaded-policy",
     }:
         raise HTTPException(
             status_code=503,
@@ -11097,6 +11098,7 @@ async def policy_authority_candidate_handoff(
 @app.post(control_plane_setup_policy.PREFIX + "/lookup")
 @app.post(control_plane_setup_policy.MATERIALIZE_PATH)
 @app.post(control_plane_setup_policy.INSTALLED_PATH)
+@app.post(control_plane_setup_policy.NATIVE_INSTALLED_PATH)
 async def controlled_setup_policy_candidate(request: Request, response: Response) -> dict[str, Any]:
     response.headers["Cache-Control"] = "no-store"
     response.headers["Pragma"] = "no-cache"

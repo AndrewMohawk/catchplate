@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-policy-canary-checkpoint-observation.v1.schema.json",
+  "title": "Actual native custody compaction interval",
+  "$comment": "Closed record11, original compaction receipt19 and exact ordered range6/reference10. One atomic event. Complete canonical record <=32768 bytes. Actual assigned spool-compaction signature and protected current lineage required. Eight contiguous event commitments are not complete ingress, fleet, client delivery, sealed checkpoint or readiness evidence. No new signature permission, contact/retry or physical-storage authority.",
+  "$ref": "#/$defs/event",
+  "$defs": {
+    "sha256": {"$ref": "native-policy-canary-opening.v1.schema.json#/$defs/sha256"},
+    "positive": {"$ref": "native-policy-canary-opening.v1.schema.json#/$defs/positive"},
+    "nonnegative": {"$ref": "native-policy-canary-opening.v1.schema.json#/$defs/nonnegative"},
+    "record": {
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "canary_id", "instance_id", "boot_id", "assignment_envelope_digest", "assignment_payload_digest", "load_receipt_envelope_digest", "publication_envelope_digest", "receipt", "ordered_range", "signing_public_key_base64url"],
+      "properties": {
+        "apiVersion": {"const": "serverware.nativeCustodyCheckpointObservation/v1"},
+        "canary_id": {"$ref": "#/$defs/sha256"},
+        "instance_id": {"type": "string", "minLength": 1, "maxLength": 256},
+        "boot_id": {"$ref": "#/$defs/sha256"},
+        "assignment_envelope_digest": {"$ref": "#/$defs/sha256"},
+        "assignment_payload_digest": {"$ref": "#/$defs/sha256"},
+        "load_receipt_envelope_digest": {"$ref": "#/$defs/sha256"},
+        "publication_envelope_digest": {"$ref": "#/$defs/sha256"},
+        "receipt": {"$ref": "#/$defs/receipt"},
+        "ordered_range": {"$ref": "#/$defs/range"},
+        "signing_public_key_base64url": {"$ref": "native-policy-canary-opening.v1.schema.json#/$defs/record/properties/signing_public_key_base64url"}
+      }
+    },
+    "receipt": {
+      "type": "object", "additionalProperties": false,
+      "required": ["generation_id", "old_spool_head_sha256", "compacted_first_event_ordinal", "compacted_last_event_ordinal", "compacted_ordered_range_root_sha256", "compacted_record_count", "compacted_through_spill_receipt_sha256", "retained_successor_event_ordinal", "retained_successor_head_sha256", "new_spool_root_sha256", "trusted_observed_at_unix_nanos", "trusted_time_checkpoint_sha256", "persistence_receipt_sha256", "retrieval_id_sha256", "retrieval_proof_sha256", "signing_key_id", "signing_key_spki_sha256", "signature", "signed_receipt_sha256"],
+      "properties": {
+        "generation_id": {"$ref": "#/$defs/sha256"},
+        "old_spool_head_sha256": {"$ref": "#/$defs/sha256"},
+        "compacted_first_event_ordinal": {"$ref": "#/$defs/positive"},
+        "compacted_last_event_ordinal": {"$ref": "#/$defs/positive"},
+        "compacted_ordered_range_root_sha256": {"$ref": "#/$defs/sha256"},
+        "compacted_record_count": {"const": 8},
+        "compacted_through_spill_receipt_sha256": {"$ref": "#/$defs/sha256"},
+        "retained_successor_event_ordinal": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/positive"}]},
+        "retained_successor_head_sha256": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/sha256"}]},
+        "new_spool_root_sha256": {"$ref": "#/$defs/sha256"},
+        "trusted_observed_at_unix_nanos": {"$ref": "#/$defs/positive"},
+        "trusted_time_checkpoint_sha256": {"$ref": "#/$defs/sha256"},
+        "persistence_receipt_sha256": {"$ref": "#/$defs/sha256"},
+        "retrieval_id_sha256": {"$ref": "#/$defs/sha256"},
+        "retrieval_proof_sha256": {"$ref": "#/$defs/sha256"},
+        "signing_key_id": {"$ref": "#/$defs/sha256"},
+        "signing_key_spki_sha256": {"$ref": "#/$defs/sha256"},
+        "signature": {"$ref": "native-policy-canary-opening.v1.schema.json#/$defs/receipt/properties/signature"},
+        "signed_receipt_sha256": {"$ref": "#/$defs/sha256"}
+      },
+      "allOf": [{"if": {"properties": {"retained_successor_event_ordinal": {"type": "null"}}},
+        "then": {"properties": {"retained_successor_head_sha256": {"type": "null"}}},
+        "else": {"properties": {"retained_successor_head_sha256": {"$ref": "#/$defs/sha256"}}}}]
+    },
+    "range": {
+      "type": "object", "additionalProperties": false,
+      "required": ["domain", "generationId", "firstEventOrdinal", "lastEventOrdinal", "recordCount", "receipts"],
+      "properties": {
+        "domain": {"const": "serverware.policyShadowSpoolCompactedOrderedRange/v1"},
+        "generationId": {"$ref": "#/$defs/sha256"},
+        "firstEventOrdinal": {"$ref": "#/$defs/positive"},
+        "lastEventOrdinal": {"$ref": "#/$defs/positive"},
+        "recordCount": {"const": 8},
+        "receipts": {"type": "array", "minItems": 8, "maxItems": 8, "items": {"$ref": "#/$defs/reference"}}
+      }
+    },
+    "reference": {
+      "type": "object", "additionalProperties": false,
+      "required": ["eventOrdinal", "eventSha256", "canonicalEventLength", "canonicalEventSha256", "predecessorEventOrdinal", "predecessorHeadSha256", "resultingHeadSha256", "signedReceiptSha256", "retrievalIdSha256", "retrievalProofSha256"],
+      "properties": {
+        "eventOrdinal": {"$ref": "#/$defs/positive"},
+        "eventSha256": {"$ref": "#/$defs/sha256"},
+        "canonicalEventLength": {"type": "integer", "minimum": 1, "maximum": 262144},
+        "canonicalEventSha256": {"$ref": "#/$defs/sha256"},
+        "predecessorEventOrdinal": {"$ref": "#/$defs/nonnegative"},
+        "predecessorHeadSha256": {"$ref": "#/$defs/sha256"},
+        "resultingHeadSha256": {"$ref": "#/$defs/sha256"},
+        "signedReceiptSha256": {"$ref": "#/$defs/sha256"},
+        "retrievalIdSha256": {"$ref": "#/$defs/sha256"},
+        "retrievalProofSha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "event": {
+      "type": "object", "additionalProperties": false, "required": ["kind", "record"],
+      "properties": {"kind": {"const": "checkpoint"}, "record": {"$ref": "#/$defs/record"}}
+    },
+    "result": {
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "generationId", "firstEventOrdinal", "lastEventOrdinal", "orderedRangeRootSha256", "receiptSha256", "signatureMessageSha256", "recordSha256", "coverage"],
+      "properties": {
+        "apiVersion": {"const": "serverware.nativeCustodyCheckpointObservation/v1"},
+        "generationId": {"$ref": "#/$defs/sha256"},
+        "firstEventOrdinal": {"$ref": "#/$defs/positive"},
+        "lastEventOrdinal": {"$ref": "#/$defs/positive"},
+        "orderedRangeRootSha256": {"$ref": "#/$defs/sha256"},
+        "receiptSha256": {"$ref": "#/$defs/sha256"},
+        "signatureMessageSha256": {"$ref": "#/$defs/sha256"},
+        "recordSha256": {"$ref": "#/$defs/sha256"},
+        "coverage": {"const": "contiguous-spool-interval"}
+      }
+    }
+  }
+}

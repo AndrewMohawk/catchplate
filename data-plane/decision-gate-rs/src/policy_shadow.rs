@@ -38,6 +38,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub(crate) mod native_opening;
 #[path="policy_shadow_runtime.rs"]
 pub(crate) mod native_runtime;
+#[path="policy_shadow_checkpoint.rs"]
+pub(crate) mod native_checkpoint;
 
 #[cfg(target_os = "linux")]
 #[path = "policy_custody/mod.rs"]

@@ -144,9 +144,11 @@ def verify(value, *, assignment, load, context, publication, now):
     for name in RECEIPT_FIELDS - {"ingress_sequence", "event_ordinal", "predecessor_event_ordinal", "event_phase", "disposition",
             "canonical_event_bytes", "trusted_observed_at_unix_nanos", "signature"}:
         profile.digest(receipt[name])
-    for name in ("ingress_sequence", "event_ordinal", "predecessor_event_ordinal", "trusted_observed_at_unix_nanos"):
+    for name in ("ingress_sequence", "event_ordinal", "trusted_observed_at_unix_nanos"):
         profile.epoch(receipt[name])
-    profile.require(receipt["ingress_sequence"] > 0 and receipt["event_ordinal"] == receipt["predecessor_event_ordinal"] + 1)
+    profile.require(type(receipt["predecessor_event_ordinal"]) is int
+        and 0 <= receipt["predecessor_event_ordinal"] < receipt["event_ordinal"]
+        and receipt["ingress_sequence"] > 0 and receipt["event_ordinal"] == receipt["predecessor_event_ordinal"] + 1)
     raw = receipt["canonical_event_bytes"]
     profile.require(type(raw) is list and 0 < len(raw) <= 16 * 1024 and all(type(v) is int and 0 <= v <= 255 for v in raw))
     raw = bytes(raw)

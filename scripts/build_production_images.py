@@ -100,6 +100,21 @@ def run(command: list[str]) -> str:
     return result.stdout.strip()
 
 
+def run_build(command: list[str]) -> None:
+    """Stream only Docker builds; keep stdout available for the CLI result."""
+    if command[:2] != ["docker", "build"] and command[:3] != ["docker", "buildx", "build"]:
+        raise RuntimeError("streaming runner requires a Docker build command")
+    sys.stdout.flush()
+    sys.stderr.flush()
+    # Inherit the caller's evidence stream rather than retaining compiler
+    # diagnostics in memory until exit. No shell, retry or argument rewriting.
+    result = subprocess.run(command, cwd=ROOT, stdout=sys.stderr, stderr=sys.stderr, check=False)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"{' '.join(command)} failed with exit {result.returncode}; Docker output was streamed to stderr"
+        )
+
+
 def image_id(tag: str) -> str:
     return run(["docker", "image", "inspect", "--format", "{{.Id}}", tag])
 
@@ -681,7 +696,7 @@ def main() -> None:
                 context=context,
                 public_inputs_sha256=args.shadow_custody_inputs_sha256,
             )
-            run(command)
+            run_build(command)
         print(
             canonical_json(
                 {
@@ -783,7 +798,7 @@ def main() -> None:
         ]
         for spec in commands:
             print(f"==> building {spec['service']} with {spec['dockerfile']}", file=sys.stderr)
-            run(spec["argv"])
+            run_build(spec["argv"])
             built_image_id = image_id(spec["tag"])
             verify_image_platform(built_image_id, args.platform)
             binary_digests: dict[str, str] = {}

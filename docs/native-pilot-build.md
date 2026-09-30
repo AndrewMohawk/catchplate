@@ -119,6 +119,13 @@ copies source and pinned public inputs into one private build context, builds
 the two images and the aggregate export, then records real output hashes.
 Private build context storage uses `TMPDIR` or the NVMe scratch directory.
 
+Docker image and artifact build output streams directly to the command's
+stderr, so the caller can retain or tee diagnostics as they arrive; stdout stays
+available for the structured CLI result. A failed build reports its command and
+exit code without embedding the already-streamed compiler output in an error
+JSON field. Metadata, dependency verification, hashing and image inspection
+keep their captured-output behavior. No automatic retry is introduced.
+
 Only complete assembly creates `artifacts.json` with `artifactBuildComplete:true`.
 It always has `releaseAuthority:false`, `liveReady:false`,
 `launchPrepared:false`, and `executionAccepted:false`. `attempt.json` and

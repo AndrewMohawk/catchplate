@@ -197,7 +197,7 @@ def assemble(args, metadata, plan, output):
             "publicInputsSha256": args.public_inputs_sha256})
         for service, dockerfile in (("control", "Dockerfile.production"), ("gate", DOCKERFILE)):
             tag = "serverware/native-pilot-" + service + ":" + metadata["revision"]
-            build.run(build.build_command(dockerfile, tag, platform=build.PRODUCTION_PLATFORM, metadata=metadata, context=context))
+            build.run_build(build.build_command(dockerfile, tag, platform=build.PRODUCTION_PLATFORM, metadata=metadata, context=context))
             image = build.image_id(tag)
             build.verify_image_platform(image, build.PRODUCTION_PLATFORM)
             paths = (["/usr/local/bin/serverware-decision-gate",
@@ -207,7 +207,7 @@ def assemble(args, metadata, plan, output):
             # Existing stopped-container export owner; no image entrypoint runs.
             originals = {path: build.image_file_sha256(image, path) for path in paths}
             images.append({"service": service, "imageId": image, "tag": tag, "originalSha256s": originals})
-        build.run(build.artifact_build_command(DOCKERFILE, build.NATIVE_PILOT_TARGET,
+        build.run_build(build.artifact_build_command(DOCKERFILE, build.NATIVE_PILOT_TARGET,
             "type=local,dest=" + str(output / "artifacts"), network="none", platform=build.PRODUCTION_PLATFORM,
             metadata=metadata, context=context, public_inputs_sha256=args.public_inputs_sha256))
     artifacts, guest = native_inventory(output)

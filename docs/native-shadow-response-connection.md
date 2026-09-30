@@ -21,6 +21,10 @@ legacy transport signatures.
 
 The normal terminal accounting and candidate-response worker then receive the
 bounded exact capture. All required terminal effects must genuinely complete.
+Credential generation, lease and decrypt terminals use their actual retained
+verified outer receipts. The injection path now retains its own verified
+completion before returning to the caller; it cannot be overwritten or attached
+after finalization. These owners do not stand in for nested OAuth operations.
 Missing quota, credential or OAuth completion evidence remains unavailable.
 Gmail hydration requires its separate actual metadata evidence; informational
 response chains are not yet covered by this shadow join. The ordinary reqwest

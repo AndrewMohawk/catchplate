@@ -48,6 +48,10 @@ struct Assignment {payload:AssignmentPayload,signature:CanonicalEd25519Signature
 pub(in crate::policy_shadow) struct Configuration {api_version:String,manifest:Manifest,authorization:Assignment}
 
 impl Configuration {
+    pub(in crate::policy_shadow) fn require_pair_image(&self,image:&Sha256Digest,executable:&Sha256Digest)->Result<(),ShadowError> {
+        require(self.api_version=="serverware.nativeCustodyClosure/v1")?;self.manifest.validate()?;
+        require(&self.manifest.image_sha256==image && &self.manifest.worker_executable_sha256==executable)
+    }
     /// Root parent cold-original selection only. The child independently
     /// verifies the NEW closure signature after genuine trusted-time delivery.
     /// No native assignment/TEE authority is returned by this image mechanism.

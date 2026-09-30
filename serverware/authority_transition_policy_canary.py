@@ -26,6 +26,11 @@ from serverware import authority_policy_canary_native_checkpoint as checkpoint_p
 from serverware import authority_transition_policy_canary_native_checkpoint as native_checkpoint
 from serverware import authority_policy_canary_native_cumulative as cumulative_profile
 from serverware import authority_transition_policy_canary_native_cumulative as native_cumulative
+from serverware import authority_policy_canary_native_readiness as readiness_profile
+from serverware import authority_transition_policy_canary_native_readiness as native_readiness
+from serverware import authority_policy_canary_finalization_policy as finalization_profile
+from serverware import authority_policy_canary_native_final_cumulative as final_cumulative_profile
+from serverware import authority_transition_policy_canary_native_finalization as native_finalization
 from serverware.authority_transition_policy_canary_state import State
 
 
@@ -48,23 +53,35 @@ def _program(values, database_now, request_digest, snapshot):
         for field, expected in (("instance_id", signed["instanceId"]), ("boot_id", signed["canaryBootId"]),
                 ("assignment_envelope_digest", signed["canaryAssignmentSha256"])):
             profile.require(field not in item or item[field] == expected, "native sender cannot select another assigned evidence lane")
-        if kind == "custody" and item.get("apiVersion") == heartbeat_profile.RECORD:
+        if kind == "custody" and item.get("apiVersion") == finalization_profile.RECORD:
+            profile.require(len(original["events"]) == 1)
+            stored = native_finalization.apply_heartbeat(state, item)
+        elif kind == "checkpoint" and item.get("apiVersion") == final_cumulative_profile.SCHEMA:
+            profile.require(len(original["events"]) == 1)
+            stored = native_finalization.apply_checkpoint(state, item)
+        elif kind == "custody" and item.get("apiVersion") == heartbeat_profile.RECORD:
             profile.require(len(original["events"]) == 1, "native heartbeat owns one original batch")
             stored = native_heartbeat.apply(state, item)
         elif kind == "custody" and item.get("apiVersion") == opening_profile.SCHEMA:
             profile.require(len(original["events"]) == 1, "native opening owns one indivisible original batch")
+            native_finalization.require_unsealed(state, item, item["opening_receipt"]["generation_id"])
             stored = native_opening.apply(state, item)
         elif kind in {"active-decision", "shadow-observation"} and item.get("apiVersion") in {runtime_profile.SCHEMA, runtime_profile.RESPONSE_SCHEMA}:
             profile.require(len(original["events"]) == 1, "native runtime observation owns one indivisible original batch")
+            native_finalization.require_unsealed(state, item, item["receipt"]["generation_id"])
             stored = native_runtime.apply(state, item, kind)
         elif kind == "checkpoint" and item.get("apiVersion") == checkpoint_profile.SCHEMA:
             profile.require(len(original["events"]) == 1, "native checkpoint owns one indivisible original batch")
+            native_finalization.require_unsealed(state, item, item["receipt"]["generation_id"])
             stored = native_checkpoint.apply(state, item)
         elif kind == "checkpoint" and item.get("apiVersion") == cumulative_profile.SCHEMA:
             profile.require(len(original["events"]) == 1, "native cumulative checkpoint owns one indivisible original")
             stored = native_cumulative.apply(state, item)
         elif kind == "checkpoint":
             stored = db.stage_policy_canary_checkpoint(item, _controlled_state=state)
+        elif kind == "readiness" and item.get("apiVersion") == readiness_profile.REQUEST:
+            profile.require(len(original["events"]) == 1, "native readiness owns one exact derivation request")
+            stored = native_readiness.apply(state, item)
         elif kind == "readiness":
             stored = db.stage_policy_canary_readiness(item, _controlled_state=state)
         else:

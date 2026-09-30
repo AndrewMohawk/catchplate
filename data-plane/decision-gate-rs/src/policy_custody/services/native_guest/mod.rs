@@ -161,3 +161,4 @@ pub(crate) fn run()->! {
     unsafe{libc::_exit(1)}
 }
 pub(crate) fn run_parent()->! {parent::run()}
+pub(crate) fn run_retrieval_pair()->! {parent::run_pair()}

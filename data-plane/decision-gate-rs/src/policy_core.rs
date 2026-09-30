@@ -47,7 +47,7 @@ use std::sync::atomic::{
 use std::sync::mpsc::{
     self, Receiver, SyncSender, TrySendError,
 };
-use std::sync::{Arc, Condvar, Mutex, OnceLock, RwLock};
+use std::sync::{Arc, Condvar, Mutex, OnceLock, RwLock, Weak};
 use std::thread;
 use std::time::Duration;
 use url::Url;
@@ -56,10 +56,15 @@ use zeroize::{Zeroize, Zeroizing};
 #[path="policy_core_cumulative.rs"]
 mod cumulative;
 pub(crate) use cumulative::{NativeAccountingSnapshot,NativeCumulativeAttempt};
+#[path="policy_core_drain.rs"]
+mod native_drain;
+pub(crate) use native_drain::Snapshot as NativeDrainSnapshot;
 
 #[path="policy_core_native_response.rs"]
 mod native_response;
 pub(crate) use native_response::NativeResponseRetention;
+#[path="policy_core_effect_completion.rs"]
+mod effect_completion;
 
 const SHADOW_QUEUE_ITEMS: usize = 1_024;
 const SHADOW_QUEUE_BYTES: usize = 128 * 1024 * 1024;
@@ -74,6 +79,7 @@ const SHADOW_ACTIVE_TERMINAL_RETENTION_BYTES: usize = 384;
 // retained in this increment. This remains a modeled queue budget, not RSS.
 const SHADOW_CREDENTIAL_PREREQUISITE_RETENTION_BYTES: usize = 4 * 4096;
 const SHADOW_NATIVE_OBSERVATION_RETENTION_BYTES: usize = 2048;
+const SHADOW_INJECTION_COMPLETION_RETENTION_BYTES: usize = 1024;
 
 fn shadow_job_bytes_with_terminal_retention(payload_bytes: usize) -> usize {
     payload_bytes.saturating_add(SHADOW_ACTIVE_TERMINAL_RETENTION_BYTES)
@@ -81,6 +87,7 @@ fn shadow_job_bytes_with_terminal_retention(payload_bytes: usize) -> usize {
         // Fixed weak-owner/phase/digest retention; originals are transient and
         // bounded independently, not retained in each queued lifecycle.
         .saturating_add(SHADOW_NATIVE_OBSERVATION_RETENTION_BYTES)
+        .saturating_add(SHADOW_INJECTION_COMPLETION_RETENTION_BYTES)
 }
 const SHADOW_MAX_FACT_HEADERS: usize = 128;
 const SHADOW_MAX_FACT_HEADER_BYTES: usize = 64 * 1024;
@@ -4685,6 +4692,10 @@ impl AccountingLedger {
     }
 
     fn compact_one_requested(&self) {
+        // V3 final accounting retains the complete originals. Once admission
+        // closes, do not manufacture/renew an old window-bound interval RPC.
+        if self.native_observation_owner.get().and_then(Weak::upgrade)
+            .is_some_and(|state|state.policy_shadow.native_drain.get().is_some_and(|owner|owner.closed())) {return;}
         if self.native_observation_owner.get().is_some()
             && self.hard_unready_signal.load(Ordering::Acquire) {return;}
         let prefix=if self.native_observation_owner.get().is_some() {
@@ -5818,6 +5829,7 @@ struct LifecycleState {
     response_finished: bool,
     credential_prerequisites: CredentialPrerequisiteEvidence,
     credential_prerequisites_sealed: bool,
+    credential_injection_completion: Option<effect_completion::InjectionCompletion>,
 }
 
 struct ShadowRequestLifecycle {
@@ -5836,6 +5848,13 @@ struct ShadowRequestLifecycle {
     finalization_consumed: AtomicBool,
     response_terminal_recorded: AtomicBool,
     native_observation: Option<super::native_canary_runtime::Opening>,
+    native_drain:Option<native_drain::Lifecycle>,
+}
+
+impl Drop for ShadowRequestLifecycle {
+    fn drop(&mut self) {
+        if let Some(permit)=self.native_drain.take() {permit.settle(self);}
+    }
 }
 
 impl ShadowRequestLifecycle {
@@ -6420,6 +6439,11 @@ impl ShadowRequestHandle {
             return Err(
                 "active effect commit receipt binding mismatch".to_string(),
             );
+        }
+        if effect_kind == ActiveMutableEffectKind::CredentialInjection {
+            self.retain_injection_completion(
+                &expected_preparation, &expected_barrier, terminal_state, &result_sha256, &receipt,
+            )?;
         }
         if matches!(
             terminal_state,
@@ -7232,6 +7256,15 @@ impl ShadowRequestHandle {
             pending.effect_requirements.as_slice().len(),
         );
         for requirement in pending.effect_requirements.as_slice() {
+            let retained = if native_dispatch_completion_sha256.is_some() {
+                self.native_credential_terminal(pending, *requirement)?
+            } else {
+                None
+            };
+            if let Some((state, digest)) = retained {
+                evidence.push(ActiveEffectTerminalEvidence::from_active_executor(*requirement, state, digest));
+                continue;
+            }
             let (state, digest) = match requirement {
                 ActiveEffectRequirement::TrustFreshness => {
                     let value = effect_results
@@ -9067,6 +9100,7 @@ pub(crate) struct ShadowRuntime {
         RwLock<Option<ShadowActivationPublicationGate>>,
     #[cfg(test)]
     inactive_for_forwarding_tests: bool,
+    native_drain:OnceLock<Arc<native_drain::Owner>>,
 }
 
 struct ShadowInstallationGuard<'a> {
@@ -9105,6 +9139,7 @@ impl ShadowRuntime {
             native_opening_failed: AtomicBool::new(false),
             native_observation_owner: OnceLock::new(),
             activation_publication_gate: RwLock::new(None),
+            native_drain:OnceLock::new(),
             #[cfg(test)]
             inactive_for_forwarding_tests: false,
         }
@@ -9114,18 +9149,49 @@ impl ShadowRuntime {
         if !std::ptr::eq(self,&state.policy_shadow) || state.measured_canary_delivery.is_none() {
             return Err("native observation must bind the actual selected serving owner".into());
         }
+        if native_canary_delivery::native_finalization_selected(state)? {
+            self.native_drain.set(Arc::new(native_drain::Owner::new())).map_err(|_|"native drain owner bound twice")?;
+        }
         if native_canary_delivery::native_cumulative_selected(state)? {
             self.ledger.native_original_budget.set((Arc::clone(&self.queued_bytes),Arc::clone(&self.queue_poisoned)))
                 .map_err(|_|"native cumulative budget bound twice")?;
         }
         self.ledger.native_observation_owner.set(Arc::downgrade(state))
             .map_err(|_|"native checkpoint owner bound twice")?;
-        self.native_observation_owner.set(Arc::downgrade(state)).map_err(|_|"native observation owner bound twice".into())
+        self.native_observation_owner.set(Arc::downgrade(state)).map_err(|_|"native observation owner bound twice")?;
+        if self.native_drain.get().is_some(){
+            self.sender.try_send(ShadowWork::CompactionWake).map_err(|_|"native finalization worker wake unavailable")?;
+        }
+        Ok(())
     }
 
     pub(crate) fn fail_native_observation(&self) {
         self.native_opening_failed.store(true,Ordering::Release);
         self.ledger.mark_hard_unready();
+    }
+
+    pub(crate) fn native_finalization_tick(&self,state:&GateState)->Result<(),String> {
+        if self.native_drain.get().is_none() {return Ok(());}
+        let Ok(_admission)=self.native_opening_gate.try_lock() else{return Ok(());};
+        native_canary_finalization::tick(state)
+    }
+    pub(crate) fn native_drain_snapshot(&self,generation:&Sha256Digest,now:i64,end:i64,deadline:i64)
+        ->Result<Option<NativeDrainSnapshot>,String>{
+        self.native_drain.get().ok_or("native drain not selected")?.close(generation.as_str(),now,end,deadline)
+    }
+    pub(crate) fn native_drain_arm(&self,generation:&Sha256Digest,now:i64,end:i64,deadline:i64)->Result<(),String>{
+        self.native_drain.get().ok_or("native drain not selected")?.arm(generation.as_str(),now,end,deadline)
+    }
+    pub(crate) fn native_finalization_begin(&self,snapshot:&NativeAccountingSnapshot,sealed:bool)->Result<NativeCumulativeAttempt,String>{
+        if self.native_drain.get().is_none() || self.native_opening_failed.load(Ordering::Acquire) {return Err("native finalization owner absent".into());}
+        let mut state=self.ledger.state.try_lock().map_err(|_|"native finalization ledger busy")?;
+        if state.hard_unready {return Err("native finalization ledger uncertain".into());}
+        let accounting=state.generations.iter_mut().find(|entry|entry.generation_id.matches_digest(snapshot.generation_id()))
+            .ok_or("native finalization generation missing")?;
+        if !accounting.live || accounting.prepared || accounting.local_ordering_gap || accounting.spool_backpressure {
+            return Err("native finalization current ledger unavailable".into());
+        }
+        accounting.native_history.begin_finalization(snapshot,sealed)
     }
 
     pub(crate) fn native_accounting_snapshot(&self,expected:&Sha256Digest,clock:&dyn policy_shadow::TrustedTime)
@@ -9167,7 +9233,9 @@ impl ShadowRuntime {
         let batch:Value=serde_json::from_str(original).map_err(|_|"native cumulative committed batch malformed")?;
         let events=batch["events"].as_array().ok_or("native cumulative committed events absent")?;
         if events.len()!=1 || events[0]["kind"]!="checkpoint"
-            || events[0]["record"]["apiVersion"]!=policy_shadow::native_cumulative::PROFILE
+            || events[0]["record"]["apiVersion"]!=(if attempt.final_profile {policy_shadow::native_final_cumulative::PROFILE}
+                else {policy_shadow::native_cumulative::PROFILE})
+            || (attempt.final_profile && events[0]["record"]["seal"].is_null()==attempt.sealed)
             || Sha256Digest::compute(&canonical_json_bytes(&events[0]["record"]).map_err(shadow_error)?)!=*checkpoint
             || events[0]["record"]["checkpoint_sequence"].as_u64()!=Some(attempt.sequence()) {
             return Err("native cumulative completion differs from its exact original".into());
@@ -9987,10 +10055,19 @@ impl ShadowRuntime {
         let binding=request_binding(snapshot,request,authenticated_principal_id);
         let fail=||ShadowAdmission::custody_fail_closed(snapshot,binding.clone(),ingress,
             PolicyShadowTerminalReason::AccountingCustodyUnavailable);
-        let Ok(_serial)=self.native_opening_gate.try_lock() else {return fail();};
+        let Ok(_serial)=self.native_opening_gate.try_lock() else {
+            if let Some(owner)=self.native_drain.get(){owner.rejected_while_open();}
+            return fail();
+        };
         if self.native_opening_failed.load(Ordering::Acquire) {return fail();}
-        let deadline=match super::native_canary_opening::deadline(state) {
+        let _native_admission=match self.native_drain.get().map(|owner|owner.enter()).transpose() {
             Ok(value)=>value,Err(_)=>return fail(),
+        };
+        let deadline=match super::native_canary_opening::deadline(state) {
+            Ok(value)=>value,Err(_)=>{
+                if let Some(owner)=self.native_drain.get(){owner.rejected_while_open();}
+                return fail();
+            },
         };
         let exported=std::cell::Cell::new(false);
         let result=self.capture_inner(snapshot,request,authenticated_principal_id,ingress,captured_at_epoch_ms,raw_body,Some((state,deadline,&exported)));
@@ -10325,6 +10402,12 @@ impl ShadowRuntime {
                 }
             }
         } else {None};
+        let native_drain=match self.native_drain.get().map(|owner|owner.lifecycle(generation.generation_id(),ingress_sequence)).transpose() {
+            Ok(value)=>value,Err(_)=>{
+                self.fail_native_observation();
+                return ShadowAdmission::custody_fail_closed(snapshot,binding,ingress,PolicyShadowTerminalReason::AccountingCustodyUnavailable);
+            }
+        };
         let lifecycle = Arc::new(ShadowRequestLifecycle {
             generation,
             current_generation: Arc::clone(&self.generation),
@@ -10343,6 +10426,7 @@ impl ShadowRuntime {
             finalization_consumed: AtomicBool::new(false),
             response_terminal_recorded: AtomicBool::new(false),
             native_observation,
+            native_drain,
         });
         admission.finalization = Some(ShadowRequestHandle { inner: lifecycle });
         admission
@@ -11166,7 +11250,19 @@ fn evaluate_candidate_response(
 }
 
 fn shadow_worker(receiver: Receiver<ShadowWork>, ledger: Arc<AccountingLedger>) {
-    while let Ok(work) = receiver.recv() {
+    loop {
+        let final_owner=ledger.native_observation_owner.get().and_then(Weak::upgrade)
+            .filter(|state|state.policy_shadow.native_drain.get().is_some());
+        let work=if let Some(state)=&final_owner {
+            match receiver.recv_timeout(Duration::from_millis(250)) {
+                Ok(work)=>work,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout)=>{
+                    if state.policy_shadow.native_finalization_tick(state).is_err(){state.policy_shadow.fail_native_observation();}
+                    continue;
+                },
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected)=>break,
+            }
+        } else {match receiver.recv(){Ok(work)=>work,Err(_)=>break}};
         match work {
             ShadowWork::CompactionWake => {}
             ShadowWork::Request(job) => {
@@ -11467,6 +11563,9 @@ fn shadow_worker(receiver: Receiver<ShadowWork>, ledger: Arc<AccountingLedger>) 
                     ledger.mark_hard_unready();
                 }
             }
+        }
+        if let Some(state)=&final_owner {
+            if state.policy_shadow.native_finalization_tick(&state).is_err(){state.policy_shadow.fail_native_observation();}
         }
         ledger.compact_one_requested();
     }

@@ -1,0 +1,475 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-policy-canary-readiness.v1.schema.json",
+  "title": "Native complete-fleet readiness derivation prerequisite",
+  "$comment": "Closed request <=16 KiB; policy <=8 KiB; full result <=256 KiB. Structural schema is never authority. Actual signed configuration, complete protected populations, current finalization/detail purposes, all real final original seals and semantic facts are required. Not a legacy Fleet READY envelope or activation permission.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/policy"
+    },
+    {
+      "$ref": "#/$defs/request"
+    },
+    {
+      "$ref": "#/$defs/result"
+    }
+  ],
+  "$defs": {
+    "policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "deploymentId",
+        "issuedAtEpochNs",
+        "expiresAtEpochNs",
+        "maximumReadinessAgeNanos",
+        "canaries"
+      ],
+      "properties": {
+        "schema": {
+          "const": "serverware.policyCanaryNativeReadinessAuthorityPolicy/v1"
+        },
+        "deploymentId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._-]{1,128}$"
+        },
+        "issuedAtEpochNs": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9223372036854775807
+        },
+        "expiresAtEpochNs": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9223372036854775807
+        },
+        "maximumReadinessAgeNanos": {
+          "type": "integer",
+          "minimum": 1000000000,
+          "maximum": 300000000000
+        },
+        "canaries": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "canaryId",
+              "assignmentSha256"
+            ],
+            "properties": {
+              "canaryId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "assignmentSha256": {
+                "type": "string",
+                "pattern": "^sha256:[0-9a-f]{64}$"
+              }
+            }
+          }
+        }
+      }
+    },
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "canary_id",
+        "instance_id",
+        "boot_id",
+        "assignment_envelope_digest",
+        "assignment_payload_digest",
+        "final_checkpoint_sha256",
+        "readiness_policy"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativePolicyReadinessRequest/v1"
+        },
+        "canary_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "instance_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._-]{1,128}$"
+        },
+        "boot_id": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "assignment_envelope_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "assignment_payload_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "final_checkpoint_sha256": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "readiness_policy": {
+          "$ref": "#/$defs/policy"
+        }
+      }
+    },
+    "member": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "member_ordinal",
+        "member_id",
+        "instance_id",
+        "boot_id",
+        "membership_root_digest",
+        "checkpointSha256",
+        "generationId",
+        "finalLedgerHeadSha256",
+        "finalLedgerEventOrdinal",
+        "receiptRootSha256",
+        "eventRootSha256",
+        "observationsRootSha256",
+        "sealSha256",
+        "coverageStartedAtUnixNanos",
+        "coverageClosedAtUnixNanos",
+        "aggregateCounters"
+      ],
+      "properties": {
+        "member_ordinal": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9223372036854775807
+        },
+        "member_id": {
+          "type": "string"
+        },
+        "instance_id": {
+          "type": "string"
+        },
+        "boot_id": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "membership_root_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "checkpointSha256": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "generationId": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "finalLedgerHeadSha256": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "finalLedgerEventOrdinal": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9223372036854775807
+        },
+        "receiptRootSha256": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "eventRootSha256": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "observationsRootSha256": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "sealSha256": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "coverageStartedAtUnixNanos": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9223372036854775807
+        },
+        "coverageClosedAtUnixNanos": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9223372036854775807
+        },
+        "aggregateCounters": {
+          "$ref": "policy-shadow-checkpoint.v1.schema.json#/$defs/cumulativeCounters"
+        }
+      }
+    },
+    "publication": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scope",
+        "policy_id",
+        "sequence",
+        "rollback_epoch",
+        "policy_hash",
+        "updated_at",
+        "preparation_digest",
+        "activation_attempt_id",
+        "finalization_digest",
+        "inclusion_identity_set_digest",
+        "publication_receipt_payload_digest",
+        "consumption_digest"
+      ],
+      "properties": {
+        "scope": {
+          "const": "active"
+        },
+        "policy_id": {
+          "type": "string"
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9223372036854775807
+        },
+        "rollback_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9223372036854775807
+        },
+        "policy_hash": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "updated_at": {
+          "type": "string"
+        },
+        "preparation_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "activation_attempt_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "finalization_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "inclusion_identity_set_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "publication_receipt_payload_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "consumption_digest": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^sha256:[0-9a-f]{64}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "core": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "canaryId",
+        "assignmentSha256",
+        "assignmentPayloadSha256",
+        "predecessorCanaryRevision",
+        "predecessorCanaryStateSha256",
+        "designatedReadyRevision",
+        "policyIdentity",
+        "compilerAnalysisSha256",
+        "compilerAnalysisPayloadSha256",
+        "authorityAnalysis",
+        "pilotRestrictions",
+        "fleet",
+        "memberEvidence",
+        "memberEvidenceRootSha256",
+        "aggregateCounters",
+        "readinessThresholds",
+        "calculatedRates",
+        "responseValidationObligationsRootSha256",
+        "trustCheckpoint",
+        "currentPublication",
+        "readinessPolicySha256",
+        "issuedAtUnixNanos",
+        "expiresAtUnixNanos"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativePolicyReadinessCore/v1"
+        },
+        "canaryId": {
+          "type": "string"
+        },
+        "assignmentSha256": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "assignmentPayloadSha256": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "predecessorCanaryRevision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9223372036854775807
+        },
+        "predecessorCanaryStateSha256": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "designatedReadyRevision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9223372036854775807
+        },
+        "policyIdentity": {
+          "$ref": "policy-shadow-assignment.v1.schema.json#/$defs/policyIdentity"
+        },
+        "compilerAnalysisSha256": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "compilerAnalysisPayloadSha256": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "authorityAnalysis": {
+          "$ref": "policy-activation-readiness.v2.schema.json#/$defs/authorityAnalysis"
+        },
+        "pilotRestrictions": {
+          "$ref": "policy-activation-readiness.v2.schema.json#/$defs/pilotRestrictions"
+        },
+        "fleet": {
+          "$ref": "policy-shadow-assignment.v1.schema.json#/$defs/fleet"
+        },
+        "memberEvidence": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "items": {
+            "$ref": "#/$defs/member"
+          }
+        },
+        "memberEvidenceRootSha256": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "aggregateCounters": {
+          "$ref": "policy-shadow-checkpoint.v1.schema.json#/$defs/cumulativeCounters"
+        },
+        "readinessThresholds": {
+          "$ref": "policy-shadow-assignment.v1.schema.json#/$defs/readinessThresholds"
+        },
+        "calculatedRates": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "candidateEvaluationP99Nanos",
+            "shadowTotalP99Nanos"
+          ],
+          "properties": {
+            "candidateEvaluationP99Nanos": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9223372036854775807
+            },
+            "shadowTotalP99Nanos": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9223372036854775807
+            }
+          }
+        },
+        "responseValidationObligationsRootSha256": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "trustCheckpoint": {
+          "$ref": "policy-activation-readiness.v2.schema.json#/$defs/trustCheckpoint"
+        },
+        "currentPublication": {
+          "$ref": "#/$defs/publication"
+        },
+        "readinessPolicySha256": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "issuedAtUnixNanos": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9223372036854775807
+        },
+        "expiresAtUnixNanos": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9223372036854775807
+        }
+      }
+    },
+    "result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "recordSha256",
+        "coverage",
+        "core",
+        "coreSha256",
+        "okForAction",
+        "activationApprovalConsumed",
+        "automaticRetryAllowed"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativePolicyReadinessResult/v1"
+        },
+        "recordSha256": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "coverage": {
+          "const": "complete-native-fleet-readiness-derived"
+        },
+        "core": {
+          "$ref": "#/$defs/core"
+        },
+        "coreSha256": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "okForAction": {
+          "const": false
+        },
+        "activationApprovalConsumed": {
+          "const": false
+        },
+        "automaticRetryAllowed": {
+          "const": false
+        }
+      }
+    }
+  }
+}

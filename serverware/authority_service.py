@@ -72,6 +72,8 @@ from serverware import authority_setup_policy_admission as setup_policy_admissio
 from serverware import authority_policy_canary as policy_canary
 from serverware import authority_policy_canary_policy as policy_canary_policy
 from serverware import authority_policy_canary_heartbeat_policy as heartbeat_policy
+from serverware import authority_policy_canary_finalization_policy as finalization_policy
+from serverware import authority_policy_canary_native_readiness as native_readiness_policy
 from serverware import authority_policy_canary_delivery as canary_delivery
 from serverware import authority_policy_canary_delivery_policy as canary_delivery_policy
 from serverware import authority_policy_canary_delivery_completion as canary_delivery_completion
@@ -1198,7 +1200,7 @@ class MeasuredConfiguration:
                 "authority configuration root signature is invalid"
             ) from exc
         if (
-            set(payload) - {evidence_policy.FIELD, transition_policy.FIELD, enrollment_policy.FIELD, oauth_activation_policy.FIELD, oauth_exchange_policy.FIELD, oauth_revocation_policy.FIELD, oauth_refresh_policy.FIELD, credential_currentness_policy.FIELD, oauth_refresh_cleanup_policy.FIELD, oauth_measured_refresh_policy.FIELD, oauth_measured_exchange_policy.FIELD, oauth_measured_setup_policy.FIELD, oauth_reconnect_policy.FIELD, oauth_measured_cleanup_policy.FIELD, oauth_pending_retirement_policy.FIELD, oauth_capture_retirement_policy.FIELD, policy_candidate_policy.FIELD, setup_policy_admission.FIELD, policy_canary_policy.FIELD, heartbeat_policy.FIELD, canary_delivery_policy.FIELD, oauth_succession_policy.FIELD}
+            set(payload) - {evidence_policy.FIELD, transition_policy.FIELD, enrollment_policy.FIELD, oauth_activation_policy.FIELD, oauth_exchange_policy.FIELD, oauth_revocation_policy.FIELD, oauth_refresh_policy.FIELD, credential_currentness_policy.FIELD, oauth_refresh_cleanup_policy.FIELD, oauth_measured_refresh_policy.FIELD, oauth_measured_exchange_policy.FIELD, oauth_measured_setup_policy.FIELD, oauth_reconnect_policy.FIELD, oauth_measured_cleanup_policy.FIELD, oauth_pending_retirement_policy.FIELD, oauth_capture_retirement_policy.FIELD, policy_candidate_policy.FIELD, setup_policy_admission.FIELD, policy_canary_policy.FIELD, heartbeat_policy.FIELD, finalization_policy.FIELD, native_readiness_policy.FIELD, canary_delivery_policy.FIELD, oauth_succession_policy.FIELD}
                 != required_payload_fields
             or payload.get("schema") != CONFIG_SCHEMA
             or payload.get("sourceRevision") != SOURCE_REVISION
@@ -1301,6 +1303,8 @@ class MeasuredConfiguration:
         try:
             policy_canary_policy.validate_policy(payload.get(policy_canary_policy.FIELD), payload=payload, root_key=root_key)
             heartbeat_policy.validate_policy(payload.get(heartbeat_policy.FIELD), payload=payload, root_key=root_key)
+            finalization_policy.validate_policy(payload.get(finalization_policy.FIELD), payload=payload, root_key=root_key)
+            native_readiness_policy.validate_policy(payload.get(native_readiness_policy.FIELD), payload=payload, root_key=root_key)
             canary_delivery_policy.validate_policy(payload.get(canary_delivery_policy.FIELD), payload=payload, root_key=root_key)
         except (TypeError, ValueError) as exc:
             raise AuthorityServiceError("authority native canary intake policy is invalid") from exc

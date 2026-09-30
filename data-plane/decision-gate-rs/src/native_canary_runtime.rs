@@ -13,7 +13,7 @@ pub(super) struct Opening {
 enum Phase {
     Open, Terminal(policy_shadow::Sha256Digest),
     Request {terminal:policy_shadow::Sha256Digest,request:policy_shadow::Sha256Digest},
-    Attempted, Complete,
+    Attempted, Complete{terminal:policy_shadow::Sha256Digest,request:policy_shadow::Sha256Digest,response:policy_shadow::Sha256Digest},
 }
 
 /// One processing owner fixed before the actual custody compaction. Consumed
@@ -45,7 +45,12 @@ impl CheckpointAttempt {
                 String::from_utf8(raw).map_err(|_|"checkpoint ASCII")?)?;
             let complete=native_canary_delivery::submit(&self.state,batch,self.deadline)?;
             if complete.observation().status()!="consumed" {return Err("checkpoint not definitely consumed".into());}
-            if native_canary_delivery::native_cumulative_selected(&self.state)? {
+            if native_canary_delivery::native_finalization_selected(&self.state)? {
+                let mut owner=self.state.measured_canary_delivery.as_ref().ok_or("finalization owner absent")?
+                    .try_lock().map_err(|_|"finalization interval owner busy")?;
+                owner.check(&self.state)?;
+                owner.finalization.interval=Some(applied.receipt().signed_receipt_sha256().clone());
+            } else if native_canary_delivery::native_cumulative_selected(&self.state)? {
                 // Same original processing window; the heartbeat's ledger lock
                 // fixes both the complete retained head and its observation time.
                 let heartbeat=native_canary_heartbeat::checkpoint(&self.state,self.deadline)?;
@@ -71,6 +76,16 @@ impl CheckpointAttempt {
     }
 }
 impl Opening {
+    pub(super) fn completed_lifecycle(&self,dispatch:bool)->Result<Value,String> {
+        let phase=self.phase.try_lock().map_err(|_|"native lifecycle observation still active")?;
+        let (terminal,request,response)=match (&*phase,dispatch) {
+            (Phase::Request{terminal,request},false)=>(terminal,request,None),
+            (Phase::Complete{terminal,request,response},true)=>(terminal,request,Some(response)),
+            _=>return Err("native lifecycle observation is unfinished or unresolved".into()),
+        };
+        Ok(json!({"openingReceiptSha256":self.opening,"terminalReceiptSha256":terminal,
+            "candidateReceiptSha256":request,"responseReceiptSha256":response}))
+    }
     pub(super) fn new(gate:Weak<GateState>,admission:&policy_shadow::PersistedIngressAdmission)->Result<Self,String> {
         let state=gate.upgrade().ok_or("native runtime has no actual serving owner")?;
         if state.measured_canary_delivery.is_none(){return Err("runtime exporter lacks selected durable owner".into());}
@@ -114,7 +129,7 @@ impl Opening {
             *phase=match (terminal,request_observation) {
                 (None,None)=>Phase::Terminal(receipt.signed_receipt_sha256().clone()),
                 (Some(terminal),None)=>Phase::Request{terminal,request:receipt.signed_receipt_sha256().clone()},
-                (Some(_),Some(_))=>Phase::Complete,
+                (Some(terminal),Some(request))=>Phase::Complete{terminal,request,response:receipt.signed_receipt_sha256().clone()},
                 _=>return Err("runtime observation phase is impossible".into()),
             };
             Ok(())

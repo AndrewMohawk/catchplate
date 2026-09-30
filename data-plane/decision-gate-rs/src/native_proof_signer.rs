@@ -184,6 +184,18 @@ impl CustodySignerTransport {
         prepared.check(deadline)?;self.verify_live()?;Ok(result)
     }
 
+    pub(super) fn canary_finalization(&self,identity:&mut EnclaveRuntimeIdentityV1,
+        prepared:&serverware_decision_gate::native_canary_finalization_v1::Prepared,deadline:u64)->Result<Value,String>{
+        let Self::Native(owner)=self else{return Err("finalization refuses imported custody".into());};
+        self.verify_live()?;prepared.check(deadline)?;
+        owner.active.fetch_update(Ordering::AcqRel,Ordering::Acquire,
+            |active|(active<CUSTODY_MAX_CONCURRENT_CONNECTIONS).then_some(active+1)).map_err(|_|"finalization signer concurrency")?;
+        let _permit=NativeOperationPermit(&owner.active);let binary=current_binary_digest()?;
+        let result=owner.runtime.sign_native_canary_finalization(identity,prepared,&binary,deadline).map_err(|e|e.to_string())?;
+        if current_binary_digest()?!=binary{return Err("finalization native binary changed".into());}
+        prepared.check(deadline)?;self.verify_live()?;Ok(result)
+    }
+
     pub(super) fn target_dispatch_evidence(&self,identity:&mut EnclaveRuntimeIdentityV1,
         prepared:&native_target_dispatch::Prepared<'_>,deadline:u64)
         ->Result<serverware_decision_gate::native_target_dispatch_v1::NativeCaptureEnvelope,String> {

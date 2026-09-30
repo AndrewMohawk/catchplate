@@ -29,11 +29,13 @@ pub(super) struct History {
     committed_checkpoint:Option<Sha256Digest>,
     committed_through:u64,
     attempted:bool,
+    committed_observed:i64,finalized:bool,
 }
 impl History {
     pub(super) fn new(baseline:u64,baseline_head:InlineSha256Digest)->Self {
         Self{baseline,baseline_head,originals:BTreeMap::new(),bytes:0,observed:0,
-            committed_sequence:0,committed_checkpoint:None,committed_through:baseline,attempted:false}
+            committed_sequence:0,committed_checkpoint:None,committed_through:baseline,attempted:false,
+            committed_observed:0,finalized:false}
     }
     pub(super) fn retain(&mut self,receipt:&VerifiedShadowSpillReceipt,budget:&(Arc<AtomicUsize>,Arc<AtomicBool>))->Result<(),String> {
         if budget.1.load(Ordering::Acquire) || receipt.event_ordinal()<=self.baseline
@@ -105,13 +107,26 @@ impl History {
         self.through(&snapshot.generation,snapshot.ordinal,&InlineSha256Digest::from_digest(&snapshot.head)?)?;
         self.attempted=true;
         Ok(NativeCumulativeAttempt{generation:snapshot.generation.clone(),through:snapshot.ordinal,
-            sequence:self.committed_sequence+1,previous:self.committed_checkpoint.clone()})
+            sequence:self.committed_sequence+1,previous:self.committed_checkpoint.clone(),final_profile:false,sealed:false,observed:snapshot.observed})
+    }
+    pub(super) fn begin_finalization(&mut self,snapshot:&NativeAccountingSnapshot,sealed:bool)->Result<NativeCumulativeAttempt,String> {
+        if self.attempted || self.finalized || snapshot.baseline!=self.baseline
+            || !self.baseline_head.matches_digest(&snapshot.baseline_head) || snapshot.ordinal<self.committed_through
+            || snapshot.observed<=self.committed_observed || self.committed_sequence>=32 {
+            return Err("native finalization cannot reset, renew or pass uncertainty".into());
+        }
+        self.through(&snapshot.generation,snapshot.ordinal,&InlineSha256Digest::from_digest(&snapshot.head)?)?;
+        self.attempted=true;
+        Ok(NativeCumulativeAttempt{generation:snapshot.generation.clone(),through:snapshot.ordinal,
+            sequence:self.committed_sequence+1,previous:self.committed_checkpoint.clone(),final_profile:true,sealed,observed:snapshot.observed})
     }
     pub(super) fn complete(&mut self,attempt:&NativeCumulativeAttempt,checkpoint:Sha256Digest)->Result<(),String> {
         if !self.attempted || attempt.sequence!=self.committed_sequence+1 || attempt.previous!=self.committed_checkpoint
-            || attempt.through<=self.committed_through {return Err("native cumulative completion changed its attempt".into());}
+            || (if attempt.final_profile {attempt.through<self.committed_through || attempt.observed<=self.committed_observed || self.finalized}
+                else {attempt.through<=self.committed_through}) {return Err("native cumulative completion changed its attempt".into());}
         self.committed_sequence=attempt.sequence;self.committed_checkpoint=Some(checkpoint);
-        self.committed_through=attempt.through;self.attempted=false;Ok(())
+        self.committed_through=attempt.through;self.committed_observed=attempt.observed;
+        self.finalized=attempt.sealed;self.attempted=false;Ok(())
     }
 }
 
@@ -119,6 +134,7 @@ impl History {
 pub(crate) struct NativeCumulativeAttempt {
     pub(super) generation:Sha256Digest,pub(super) through:u64,
     sequence:u64,previous:Option<Sha256Digest>,
+    pub(super) final_profile:bool,pub(super) sealed:bool,observed:i64,
 }
 impl NativeCumulativeAttempt {
     pub(crate) fn sequence(&self)->u64 {self.sequence}

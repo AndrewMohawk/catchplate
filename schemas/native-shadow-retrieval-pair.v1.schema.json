@@ -1,0 +1,87 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "$id":"https://serverware.invalid/schemas/native-shadow-retrieval-pair.v1.schema.json",
+  "$ref":"#/$defs/configuration",
+  "$defs":{
+    "sha":{"$ref":"policy-custody-guest-delivery.v1.schema.json#/$defs/sha256"},
+    "pin":{"$ref":"policy-custody-guest-delivery.v1.schema.json#/$defs/pin"},
+    "ns":{"$ref":"policy-custody-guest-delivery.v1.schema.json#/$defs/ns"},
+    "u64":{"type":"integer","minimum":1,"maximum":18446744073709551615},
+    "invocation":{"type":"string","pattern":"^[0-9a-f]{32}$","not":{"const":"00000000000000000000000000000000"}},
+    "signature":{"type":"string","pattern":"^[A-Za-z0-9_-]{86}$"},
+    "configuration":{
+      "type":"object","additionalProperties":false,
+      "required":["apiVersion","authority","executableSha256","serverConfiguration","bridgeConfiguration"],
+      "properties":{
+        "apiVersion":{"const":"serverware.nativeShadowRetrievalPairConfiguration/v1"},
+        "authority":{"$ref":"policy-custody-guest-delivery.v1.schema.json#/$defs/authority"},
+        "executableSha256":{"$ref":"#/$defs/sha"},
+        "serverConfiguration":{"$ref":"#/$defs/pin"},
+        "bridgeConfiguration":{"$ref":"#/$defs/pin"}
+      },
+      "description":"Protected fixed root0400 original. Both cold C9 configurations independently select production-bridge, distinct final UIDs and this exact delivery key. Preparation only."
+    },
+    "window":{
+      "type":"object","additionalProperties":false,
+      "required":["configurationSha256","authorityKeyId","bootIdBase64url","timeNamespaceDevice","timeNamespaceInode","issuedAtBoottimeNs","startupDeadlineBoottimeNs","lifetimeDeadlineBoottimeNs","invocationId"],
+      "properties":{
+        "configurationSha256":{"$ref":"#/$defs/sha"},"authorityKeyId":{"$ref":"#/$defs/sha"},
+        "bootIdBase64url":{"type":"string","pattern":"^[A-Za-z0-9_-]{22}$"},
+        "timeNamespaceDevice":{"$ref":"#/$defs/u64"},"timeNamespaceInode":{"$ref":"#/$defs/u64"},
+        "issuedAtBoottimeNs":{"$ref":"#/$defs/ns"},"startupDeadlineBoottimeNs":{"$ref":"#/$defs/ns"},
+        "lifetimeDeadlineBoottimeNs":{"$ref":"#/$defs/ns"},"invocationId":{"$ref":"#/$defs/invocation"}
+      },
+      "description":"Actual boot/time namespace. issued <= now < startup <= lifetime; startup-issued <=30s. Subsequent C9 deliveries preserve every original interval and invocation."
+    },
+    "precreation":{
+      "type":"object","additionalProperties":false,"required":["apiVersion","payload","signatureBase64url"],
+      "properties":{
+        "apiVersion":{"const":"serverware.nativeShadowRetrievalPairPrecreation/v1"},
+        "payload":{"$ref":"#/$defs/window"},"signatureBase64url":{"$ref":"#/$defs/signature"}
+      },
+      "description":"Ed25519 over ASCII serverware.nativeShadowRetrievalPairPrecreation.signature/v1, NUL, full canonical payload. Independent existing C9 delivery key; not TEE/driver/service authority."
+    },
+    "executable":{
+      "type":"object","additionalProperties":false,"required":["device","inode","length","sha256"],
+      "properties":{"device":{"$ref":"#/$defs/u64"},"inode":{"$ref":"#/$defs/u64"},
+        "length":{"type":"integer","minimum":1,"maximum":67108864},"sha256":{"$ref":"#/$defs/sha"}}
+    },
+    "childOriginal":{
+      "type":"object","additionalProperties":false,"required":["processId","startTimeTicks","executable"],
+      "properties":{"processId":{"type":"integer","minimum":2,"maximum":2147483647},
+        "startTimeTicks":{"$ref":"#/$defs/u64"},"executable":{"$ref":"#/$defs/executable"}},
+      "description":"Actual parked clone PID/start and retained sealed executable inode. NOT final credentials, measured peer14, key admission or readiness."
+    },
+    "observations":{
+      "type":"object","additionalProperties":false,
+      "required":["apiVersion","configurationSha256","precreationSha256","invocationId","server","bridge"],
+      "properties":{
+        "apiVersion":{"const":"serverware.nativeShadowRetrievalPairOriginals/v1"},
+        "configurationSha256":{"$ref":"#/$defs/sha"},"precreationSha256":{"$ref":"#/$defs/sha"},
+        "invocationId":{"$ref":"#/$defs/invocation"},"server":{"$ref":"#/$defs/childOriginal"},
+        "bridge":{"$ref":"#/$defs/childOriginal"}
+      }
+    },
+    "roleRelease":{
+      "type":"object","additionalProperties":false,"required":["launch","image"],
+      "properties":{"launch":{"$ref":"#/$defs/pin"},"image":{"$ref":"#/$defs/pin"}},
+      "description":"Protected root0400 originals. Server selects nativeShadowRetrievalGuestLaunch/v1; bridge selects nativeShadowRetrievalBridgeLaunch/v1."
+    },
+    "releasePayload":{
+      "type":"object","additionalProperties":false,
+      "required":["apiVersion","configurationSha256","precreationSha256","observationSha256","invocationId","server","bridge","signingKeyId"],
+      "properties":{
+        "apiVersion":{"const":"serverware.nativeShadowRetrievalPairRelease/v1"},
+        "configurationSha256":{"$ref":"#/$defs/sha"},"precreationSha256":{"$ref":"#/$defs/sha"},
+        "observationSha256":{"$ref":"#/$defs/sha"},"invocationId":{"$ref":"#/$defs/invocation"},
+        "server":{"$ref":"#/$defs/roleRelease"},"bridge":{"$ref":"#/$defs/roleRelease"},
+        "signingKeyId":{"$ref":"#/$defs/sha"}
+      }
+    },
+    "release":{
+      "type":"object","additionalProperties":false,"required":["payload","signatureBase64url"],
+      "properties":{"payload":{"$ref":"#/$defs/releasePayload"},"signatureBase64url":{"$ref":"#/$defs/signature"}},
+      "description":"Ed25519 over ASCII serverware.nativeShadowRetrievalPairRelease.signature/v1, NUL, canonical payload. One packet <=32768 bytes with original root-sender credentials/PIDFD and both actual C9 activation inventories as SCM_RIGHTS, server then bridge in signed6..69 order."
+    }
+  }
+}

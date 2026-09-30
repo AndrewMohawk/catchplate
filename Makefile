@@ -1455,6 +1455,12 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_policy_canary_native_cumulative.py \
 	serverware/authority_transition_policy_canary_native_cumulative.py \
 	serverware/authority_policy_canary_heartbeat_policy.py \
+	serverware/authority_policy_canary_finalization_policy.py \
+	serverware/authority_policy_canary_native_final_cumulative.py \
+	serverware/authority_transition_policy_canary_native_finalization.py \
+	serverware/authority_policy_canary_native_readiness.py \
+	serverware/authority_policy_canary_native_readiness_counters.py \
+	serverware/authority_transition_policy_canary_native_readiness.py \
 	serverware/authority_transition_policy_canary_native_heartbeat.py \
 	serverware/authority_transition_policy_canary_native_checkpoint.py \
 	serverware/authority_transition_policy_canary_native_runtime.py \
@@ -1509,6 +1515,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/native_shadow_retrieval_store.py \
 	serverware/native_shadow_guest_delivery.py \
 	serverware/native_shadow_retrieval_activation.py \
+	serverware/native_shadow_retrieval_pair_assignment.py \
 	scripts/install_native_shadow_retrieval_store.py \
 	serverware/native_shadow_time_profile.py \
 	serverware/native_shadow_time_originals.py \
@@ -3995,6 +4002,12 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_policy_canary_native_cumulative.py \
 				serverware/authority_transition_policy_canary_native_cumulative.py \
 				serverware/authority_policy_canary_heartbeat_policy.py \
+				serverware/authority_policy_canary_finalization_policy.py \
+				serverware/authority_policy_canary_native_final_cumulative.py \
+				serverware/authority_transition_policy_canary_native_finalization.py \
+				serverware/authority_policy_canary_native_readiness.py \
+				serverware/authority_policy_canary_native_readiness_counters.py \
+				serverware/authority_transition_policy_canary_native_readiness.py \
 				serverware/authority_transition_policy_canary_native_heartbeat.py \
 				serverware/authority_transition_policy_canary_native_checkpoint.py \
 				serverware/authority_transition_policy_canary_native_runtime.py \
@@ -4049,6 +4062,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/native_shadow_retrieval_store.py \
 				serverware/native_shadow_guest_delivery.py \
 				serverware/native_shadow_retrieval_activation.py \
+				serverware/native_shadow_retrieval_pair_assignment.py \
 				scripts/install_native_shadow_retrieval_store.py \
 				serverware/native_shadow_time_profile.py \
 				serverware/native_shadow_time_originals.py \
@@ -4239,6 +4253,9 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/native_canary_opening.rs \
 				data-plane/decision-gate-rs/src/native_canary_runtime.rs \
 				data-plane/decision-gate-rs/src/native_canary_heartbeat.rs \
+				data-plane/decision-gate-rs/src/native_canary_finalization.rs \
+				data-plane/decision-gate-rs/src/native_canary_finalization_v1.rs \
+				data-plane/decision-gate-rs/src/native_canary_readiness.rs \
 				data-plane/decision-gate-rs/src/native_canary_heartbeat_v1.rs \
 				data-plane/decision-gate-rs/src/native_loaded_policy_v1.rs \
 				data-plane/decision-gate-rs/src/native_loaded_policy.rs \
@@ -4246,8 +4263,11 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/policy_shadow_checkpoint.rs \
 				data-plane/decision-gate-rs/src/policy_core_cumulative.rs \
 				data-plane/decision-gate-rs/src/policy_core_native_response.rs \
+				data-plane/decision-gate-rs/src/policy_core_effect_completion.rs \
+				data-plane/decision-gate-rs/src/policy_core_drain.rs \
 				data-plane/decision-gate-rs/src/policy_shadow_cumulative.rs \
 				data-plane/decision-gate-rs/src/policy_shadow_heartbeat.rs \
+				data-plane/decision-gate-rs/src/policy_shadow_final_cumulative.rs \
 				data-plane/decision-gate-rs/src/policy_shadow_opening.rs \
 				data-plane/decision-gate-rs/src/native_canary_delivery_v1.rs \
 				data-plane/decision-gate-rs/src/native_canary_delivery_v1/wire.rs \
@@ -4282,6 +4302,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/native_startup_config/succession.rs \
 				data-plane/decision-gate-rs/src/native_startup_config/canary_delivery.rs \
 				data-plane/decision-gate-rs/src/native_startup_config/canary_heartbeat.rs \
+				data-plane/decision-gate-rs/src/native_startup_config/canary_readiness.rs \
 				data-plane/decision-gate-rs/src/response_v2/client_transport.rs \
 				data-plane/decision-gate-rs/src/response_v2/custody/guest_listener.rs \
 				data-plane/decision-gate-rs/src/response_v2/custody/guest_public_artifacts.rs \
@@ -4325,6 +4346,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/bin/serverware-native-shadow-time-issuer.rs \
 				data-plane/decision-gate-rs/src/bin/serverware-native-shadow-guest-supervisor.rs \
 				data-plane/decision-gate-rs/src/bin/serverware-native-shadow-verifier-transport.rs \
+				data-plane/decision-gate-rs/src/bin/serverware-native-shadow-retrieval-pair.rs \
 				data-plane/decision-gate-rs/src/bin/serverware-policy-shadow-custody-guest.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/mod.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/parent.rs \
@@ -4337,6 +4359,9 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/retrieval.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/retrieval_peer.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/retrieval_client.rs \
+				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/retrieval_pair.rs \
+				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/retrieval_pair_inputs.rs \
+				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/parent_parked.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/retrieval_client_peer.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/retrieval_scope.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/retrieval_store.rs \
@@ -4659,6 +4684,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-startup-configuration.v18.schema.json \
 				schemas/native-startup-configuration.v19.schema.json \
 				schemas/native-startup-configuration.v20.schema.json \
+				schemas/native-startup-configuration.v21.schema.json \
 				schemas/native-oauth-succession-runtime.v1.schema.json \
 				schemas/native-oauth-capture-retirement.v1.schema.json \
 				schemas/oauth-measured-capture-retirement-authority.v1.schema.json \
@@ -4674,6 +4700,9 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-policy-canary-checkpoint-observation.v1.schema.json \
 				schemas/native-policy-canary-cumulative-checkpoint.v1.schema.json \
 				schemas/native-policy-canary-heartbeat.v1.schema.json \
+				schemas/native-policy-canary-finalization.v1.schema.json \
+				schemas/native-policy-canary-cumulative-checkpoint.v2.schema.json \
+				schemas/native-policy-canary-readiness.v1.schema.json \
 				schemas/setup-policy-candidate-http.v1.schema.json \
 				schemas/native-oauth-measured-setup.v1.schema.json \
 				schemas/native-oauth-measured-reconnect.v1.schema.json \
@@ -4691,6 +4720,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-shadow-retrieval-store.v1.schema.json \
 				schemas/native-shadow-retrieval-service.v1.schema.json \
 				schemas/native-shadow-retrieval-client.v1.schema.json \
+				schemas/native-shadow-retrieval-pair.v1.schema.json \
 				schemas/native-shadow-guest-time-issuer.v1.schema.json \
 				schemas/native-shadow-time-issuer-launch.v1.schema.json \
 				schemas/native-shadow-custody-image-inputs.v1.schema.json \

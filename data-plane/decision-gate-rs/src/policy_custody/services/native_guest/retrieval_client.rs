@@ -13,6 +13,10 @@ pub(super) const DIRECTORY_NAME:&str="retrieval-peer-directory";
 pub(super) const SOCKET_PATH:&str="/run/serverware-shadow-retrieval/listener.sock";
 
 struct Selection {endpoint:ProductionProofEndpointConfigV4,runtime_sha256:Sha256Digest}
+pub(super) fn assigned_peer(files:&FileAdmission)->Result<services::ExpectedPeerCredentialV3,ShadowError> {
+    files.check_preparation().map_err(fail)?;
+    Ok(Selection::original(&files.retrieval_client_runtime().map_err(fail)?)?.endpoint.expected_peer)
+}
 impl Selection {
     // Data decoding is private and reachable only from the retained C9
     // preparation owners below, never a caller-asserted measurement object.

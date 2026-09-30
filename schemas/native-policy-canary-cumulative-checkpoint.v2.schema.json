@@ -1,0 +1,102 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-policy-canary-cumulative-checkpoint.v2.schema.json",
+  "title": "Complete retained native receipt-prefix checkpoint",
+  "$comment": "New record16 permits a genuine zero baseline and distinct idle observations. Exact full originals/root/counters remain mandatory. seal matches the separately authorized signed heartbeat-v2 statement byte for byte and every included ingress has its actual completed lifecycle originals. Final is irrevocable. This is not readiness, delivery to clients, semantic coverage or activation. Existing byte/work/population bounds are unchanged.",
+  "$ref": "#/$defs/event",
+  "$defs": {
+    "sha256": {"$ref": "native-policy-canary-opening.v1.schema.json#/$defs/sha256"},
+    "positive": {"$ref": "native-policy-canary-opening.v1.schema.json#/$defs/positive"},
+    "nonnegative": {"$ref": "native-policy-canary-opening.v1.schema.json#/$defs/nonnegative"},
+    "publicKey": {"type": "string", "pattern": "^[A-Za-z0-9_-]{43}$"},
+    "record": {
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "canary_id", "instance_id", "boot_id", "assignment_envelope_digest", "assignment_payload_digest", "load_receipt_envelope_digest", "publication_envelope_digest", "checkpoint_sequence", "previous_checkpoint_sha256", "heartbeat", "heartbeat_sha256", "interval_receipt_sha256", "accounting", "signing_public_keys", "seal"],
+      "properties": {
+        "apiVersion": {"const": "serverware.nativeCumulativeCheckpoint/v2"},
+        "seal": {"oneOf":[{"type":"null"},{"$ref":"native-policy-canary-finalization.v1.schema.json#/$defs/seal"}]},
+        "canary_id": {"$ref": "#/$defs/sha256"},
+        "instance_id": {"type": "string", "minLength": 1, "maxLength": 256},
+        "boot_id": {"$ref": "#/$defs/sha256"},
+        "assignment_envelope_digest": {"$ref": "#/$defs/sha256"},
+        "assignment_payload_digest": {"$ref": "#/$defs/sha256"},
+        "load_receipt_envelope_digest": {"$ref": "#/$defs/sha256"},
+        "publication_envelope_digest": {"$ref": "#/$defs/sha256"},
+        "checkpoint_sequence": {"type": "integer", "minimum": 1, "maximum": 32},
+        "previous_checkpoint_sha256": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/sha256"}]},
+        "heartbeat": {"$ref": "native-policy-canary-finalization.v1.schema.json#/$defs/record"},
+        "heartbeat_sha256": {"$ref": "#/$defs/sha256"},
+        "interval_receipt_sha256": {"oneOf":[{"type":"null"},{"$ref": "#/$defs/sha256"}]},
+        "accounting": {"$ref": "#/$defs/accounting"},
+        "signing_public_keys": {
+          "type": "object", "additionalProperties": false, "minProperties": 0, "maxProperties": 4,
+          "properties": {"ingress-admission": {"$ref": "#/$defs/publicKey"}, "dispatch-barrier": {"$ref": "#/$defs/publicKey"},
+            "terminal-append": {"$ref": "#/$defs/publicKey"}, "ledger-append": {"$ref": "#/$defs/publicKey"}}
+        }
+      },
+      "allOf": [{"if": {"properties": {"checkpoint_sequence": {"const": 1}}},
+        "then": {"properties": {"previous_checkpoint_sha256": {"type": "null"}}},
+        "else": {"properties": {"previous_checkpoint_sha256": {"$ref": "#/$defs/sha256"}}}}]
+    },
+    "accounting": {
+      "type": "object", "additionalProperties": false,
+      "required": ["generationId", "baselineEventOrdinal", "baselineHeadSha256", "lastEventOrdinal", "lastHeadSha256", "observedAtUnixNanos", "originalCount", "receiptRootSha256", "eventRootSha256", "counters", "lastIngress", "originals"],
+      "properties": {
+        "generationId": {"$ref": "#/$defs/sha256"}, "baselineEventOrdinal": {"$ref": "#/$defs/nonnegative"},
+        "baselineHeadSha256": {"$ref": "#/$defs/sha256"}, "lastEventOrdinal": {"$ref": "#/$defs/nonnegative"},
+        "lastHeadSha256": {"$ref": "#/$defs/sha256"}, "observedAtUnixNanos": {"$ref": "#/$defs/positive"},
+        "originalCount": {"type": "integer", "minimum": 0, "maximum": 64},
+        "receiptRootSha256": {"$ref": "#/$defs/sha256"}, "eventRootSha256": {"$ref": "#/$defs/sha256"},
+        "counters": {"$ref": "#/$defs/counters"},
+        "lastIngress": {"oneOf": [{"type": "null"}, {"type": "object", "additionalProperties": false,
+          "required": ["ingressSequence", "openingReceiptSha256"], "properties": {"ingressSequence": {"$ref": "#/$defs/positive"}, "openingReceiptSha256": {"$ref": "#/$defs/sha256"}}}]},
+        "originals": {"type": "array", "minItems": 0, "maxItems": 64, "items": {"$ref": "#/$defs/receipt"}}
+      }
+    },
+    "counters": {
+      "type": "object", "additionalProperties": false,
+      "required": ["admitted", "active-pre-dispatch-terminal", "response-terminal-appended", "dispatch-barrier-appended", "response-capture-enqueued", "candidate-evaluated", "response-evaluated", "sampled-out", "transport-excluded", "unsupported-required-ingress", "cleanup-quarantined", "failure"],
+      "properties": {
+        "admitted": {"$ref": "#/$defs/nonnegative"}, "active-pre-dispatch-terminal": {"$ref": "#/$defs/nonnegative"},
+        "response-terminal-appended": {"$ref": "#/$defs/nonnegative"}, "dispatch-barrier-appended": {"$ref": "#/$defs/nonnegative"},
+        "response-capture-enqueued": {"$ref": "#/$defs/nonnegative"}, "candidate-evaluated": {"$ref": "#/$defs/nonnegative"},
+        "response-evaluated": {"$ref": "#/$defs/nonnegative"}, "sampled-out": {"$ref": "#/$defs/nonnegative"},
+        "transport-excluded": {"$ref": "#/$defs/nonnegative"}, "unsupported-required-ingress": {"$ref": "#/$defs/nonnegative"},
+        "cleanup-quarantined": {"$ref": "#/$defs/nonnegative"}, "failure": {"$ref": "#/$defs/nonnegative"}
+      }
+    },
+    "receipt": {
+      "type": "object", "additionalProperties": false,
+      "required": ["generation_id", "ingress_sequence", "request_binding_sha256", "request_commitment_sha256", "event_ordinal", "event_phase", "disposition", "event_sha256", "canonical_event_bytes", "predecessor_event_ordinal", "predecessor_head_sha256", "resulting_head_sha256", "trusted_observed_at_unix_nanos", "trusted_time_checkpoint_sha256", "persistence_receipt_sha256", "retrieval_id_sha256", "retrieval_proof_sha256", "signing_key_id", "signing_key_spki_sha256", "signature", "signed_receipt_sha256"],
+      "properties": {
+        "generation_id": {"$ref": "#/$defs/sha256"}, "ingress_sequence": {"$ref": "#/$defs/positive"},
+        "request_binding_sha256": {"$ref": "#/$defs/sha256"}, "request_commitment_sha256": {"$ref": "#/$defs/sha256"},
+        "event_ordinal": {"$ref": "#/$defs/positive"},
+        "event_phase": {"enum": ["ingress-open", "capture", "decision", "pre-dispatch-terminal", "dispatch-barrier", "post-dispatch-terminal", "response", "candidate", "range-closure"]},
+        "disposition": {"const": "appended"}, "event_sha256": {"$ref": "#/$defs/sha256"},
+        "canonical_event_bytes": {"$ref": "native-policy-canary-opening.v1.schema.json#/$defs/receipt/properties/canonical_event_bytes"},
+        "predecessor_event_ordinal": {"$ref": "#/$defs/nonnegative"}, "predecessor_head_sha256": {"$ref": "#/$defs/sha256"},
+        "resulting_head_sha256": {"$ref": "#/$defs/sha256"}, "trusted_observed_at_unix_nanos": {"$ref": "#/$defs/positive"},
+        "trusted_time_checkpoint_sha256": {"$ref": "#/$defs/sha256"}, "persistence_receipt_sha256": {"$ref": "#/$defs/sha256"},
+        "retrieval_id_sha256": {"$ref": "#/$defs/sha256"}, "retrieval_proof_sha256": {"$ref": "#/$defs/sha256"},
+        "signing_key_id": {"$ref": "#/$defs/sha256"}, "signing_key_spki_sha256": {"$ref": "#/$defs/sha256"},
+        "signature": {"$ref": "native-policy-canary-opening.v1.schema.json#/$defs/receipt/properties/signature"},
+        "signed_receipt_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "event": {"type": "object", "additionalProperties": false, "required": ["kind", "record"],
+      "properties": {"kind": {"const": "checkpoint"}, "record": {"$ref": "#/$defs/record"}}},
+    "result": {
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "generationId", "checkpointSequence", "baselineEventOrdinal", "lastEventOrdinal", "lastHeadSha256", "originalCount", "counters", "heartbeatSha256", "recordSha256", "coverage"],
+      "properties": {
+        "apiVersion": {"const": "serverware.nativeCumulativeCheckpoint/v2"}, "generationId": {"$ref": "#/$defs/sha256"},
+        "checkpointSequence": {"type": "integer", "minimum": 1, "maximum": 32},
+        "baselineEventOrdinal": {"$ref": "#/$defs/nonnegative"}, "lastEventOrdinal": {"$ref": "#/$defs/nonnegative"},
+        "lastHeadSha256": {"$ref": "#/$defs/sha256"}, "originalCount": {"type": "integer", "minimum": 0, "maximum": 64},
+        "counters": {"$ref": "#/$defs/counters"}, "heartbeatSha256": {"$ref": "#/$defs/sha256"}, "recordSha256": {"$ref": "#/$defs/sha256"},
+        "coverage": {"enum": ["complete-native-finalization-prefix","complete-native-final-seal"]}
+      }
+    }
+  }
+}

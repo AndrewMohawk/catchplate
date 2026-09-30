@@ -2,6 +2,8 @@
 use super::*;
 use std::mem::{size_of,zeroed};
 use std::os::fd::{AsFd,AsRawFd,BorrowedFd,FromRawFd,OwnedFd};
+#[path="parent_parked.rs"]
+mod parked;
 
 fn duplicate(fd:BorrowedFd<'_>)->Result<OwnedFd,ShadowError> {
     let raw=unsafe{libc::fcntl(fd.as_raw_fd(),libc::F_DUPFD_CLOEXEC,128)};
@@ -56,7 +58,7 @@ impl PreparedChild {
 }
 pub(in crate::policy_shadow::policy_custody::services::guest::native_guest) struct Child {
     channel:OwnedFd,pidfd:OwnedFd,gate:Option<OwnedFd>,pid:i32,parent:i32,start:Option<u64>,
-    deadline:u64,reaped:bool,
+    deadline:u64,reaped:bool,pair_mode:bool,
 }
 impl Child {
     pub(super) fn spawn(executable:BorrowedFd<'_>,activation:&[BorrowedFd<'_>],inspection:Option<BorrowedFd<'_>>,
@@ -88,7 +90,7 @@ impl Child {
         if pid>0 && pidfd<0 {unsafe{libc::_exit(1);}}
         require(pid>0 && pidfd>=0)?;
         Ok(Self{channel,pidfd:unsafe{OwnedFd::from_raw_fd(pidfd)},gate:Some(write),pid:pid as i32,
-            parent,start:None,deadline,reaped:false})
+            parent,start:None,deadline,reaped:false,pair_mode:false})
     }
     fn terminal(&self,consume:bool)->Result<Option<(i32,i32)>,ShadowError> {
         require(unsafe{libc::getpid()}==self.parent && !self.reaped)?;
@@ -114,7 +116,7 @@ impl Child {
         require(pids.len()==1 && pids[0].trim().parse::<i32>().map_err(fail)?==self.pid)?;Ok(start)
     }
     pub(super) fn release(&mut self)->Result<(),ShadowError> {
-        require(now()?<self.deadline && self.gate.is_some() && self.start.is_none() && self.terminal(false)?.is_none())?;
+        require(!self.pair_mode && now()?<self.deadline && self.gate.is_some() && self.start.is_none() && self.terminal(false)?.is_none())?;
         let start=self.identity()?;self.start=Some(start);
         require(self.identity()?==start && self.terminal(false)?.is_none())?;
         let gate=self.gate.take().ok_or(ShadowError::BindingDrift)?;let byte=0xa5u8;
@@ -129,13 +131,18 @@ impl Child {
         // The private lifetime channel has no message/readiness protocol.
         require(poll.revents==0)?;Ok(true)
     }
-    pub(super) fn stop_and_reap(&mut self)->Result<(),ShadowError> {
+    pub(super) fn request_stop(&mut self)->Result<(),ShadowError> {
         require(unsafe{libc::getpid()}==self.parent)?;if self.reaped{return Ok(());}
         unsafe{libc::shutdown(self.channel.as_raw_fd(),libc::SHUT_RDWR);}
         self.gate.take();
         let killed=unsafe{libc::syscall(libc::SYS_pidfd_send_signal,self.pidfd.as_raw_fd(),libc::SIGKILL,
             std::ptr::null::<libc::siginfo_t>(),0)};
         require(killed==0 || std::io::Error::last_os_error().raw_os_error()==Some(libc::ESRCH))?;
+        Ok(())
+    }
+    pub(super) fn stop_and_reap(&mut self)->Result<(),ShadowError> {
+        require(unsafe{libc::getpid()}==self.parent)?;if self.reaped{return Ok(());}
+        self.request_stop()?;
         loop {
             if let Some(expected)=self.terminal(false)? {
                 require(self.terminal(true)?==Some(expected))?;self.reaped=true;return Ok(());
@@ -145,6 +152,16 @@ impl Child {
             let result=unsafe{libc::poll(&mut wait,1,1)};
             require(result>=0 || std::io::Error::last_os_error().raw_os_error()==Some(libc::EINTR))?;
         }
+    }
+    pub(super) fn precreate(executable:BorrowedFd<'_>,launch_target:BorrowedFd<'_>,image_target:BorrowedFd<'_>,
+        startup:u64,deadline:u64)->Result<Self,ShadowError> {parked::spawn(executable,launch_target,image_target,startup,deadline)}
+    pub(super) fn parked_identity(&self)->Result<(i32,u64),ShadowError> {
+        require(self.pair_mode && self.gate.is_some() && self.check()?)?;
+        Ok((self.pid,self.identity()?))
+    }
+    pub(super) fn release_pair(&mut self,launch:BorrowedFd<'_>,image:BorrowedFd<'_>,inspection:BorrowedFd<'_>,
+        activation:&[BorrowedFd<'_>])->Result<(),ShadowError> {
+        self.parked_identity()?;parked::release(self,launch,image,inspection,activation)
     }
     pub(in crate::policy_shadow::policy_custody::services::guest::native_guest) fn require_inspection_sender(
         &self,packet:&retrieval_peer::Packet,uid:u32,gid:u32)->Result<(),ShadowError> {

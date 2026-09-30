@@ -14,6 +14,30 @@ pub(super) struct Image {
     executable:File,identity:(u64,u64,u64),
 }
 impl Image {
+    /// Explicit pair-only continuation: retain the executable allocated before
+    /// assignment. Equality is checked against the actual admitted image, not
+    /// against a caller assertion about what the child will execute.
+    pub(super) fn prepare_pair(pin:&Pin,delivery:&FileAdmission,executable:BorrowedFd<'_>,
+        image_sha256:&Sha256Digest,executable_sha256:&Sha256Digest)->Result<Self,ShadowError> {
+        delivery.check_preparation().map_err(fail)?;
+        let configuration=pin.open(1024*1024)?;
+        let configuration_bytes=configuration.read(1024*1024).map_err(fail)?.to_vec();
+        let selected:ClosureConfiguration=exact(&configuration_bytes)?;
+        selected.require_pair_image(image_sha256,executable_sha256)?;
+        let image=selected.prepare_parent_image(delivery)?;
+        let source=image.executable();let stat=source.metadata().map_err(fail)?;
+        require(stat.is_file() && stat.len()>0 && stat.len()<=MAX_EXECUTABLE)?;
+        let raw=unsafe{libc::fcntl(executable.as_raw_fd(),libc::F_DUPFD_CLOEXEC,128)};
+        require(raw>=128)?;let executable=unsafe{File::from_raw_fd(raw)};
+        require(executable.metadata().map_err(fail)?.len()==stat.len())?;
+        let mut expected=vec![0;stat.len() as usize];let mut actual=vec![0;expected.len()];
+        source.read_exact_at(&mut expected,0).map_err(fail)?;
+        executable.read_exact_at(&mut actual,0).map_err(fail)?;
+        require(expected==actual && Sha256Digest::compute(&actual)==*executable_sha256)?;
+        let stat=executable.metadata().map_err(fail)?;
+        let owner=Self{image,configuration,configuration_bytes,executable,identity:(stat.dev(),stat.ino(),stat.len())};
+        owner.check(delivery)?;delivery.check_preparation().map_err(fail)?;Ok(owner)
+    }
     pub(super) fn prepare(pin:&Pin,delivery:&FileAdmission)->Result<Self,ShadowError> {
         delivery.check_preparation().map_err(fail)?;
         let configuration=pin.open(1024*1024)?;

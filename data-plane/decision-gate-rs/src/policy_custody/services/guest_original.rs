@@ -29,9 +29,17 @@ impl Original {
     /// A hash derived here is consistency only; protected provisioning is the
     /// trust boundary. There is no unpinned caller-selected path constructor.
     pub(super) fn native_launch() -> Result<Self, Error> {
-        const PATH: &str = "/etc/serverware/native-shadow-guest-launch.json";
+        Self::fixed_native("native-shadow-guest-launch.json",32768)
+    }
+    pub(super) fn retrieval_pair_configuration() -> Result<Self, Error> {
+        Self::fixed_native("native-shadow-retrieval-pair.json",32768)
+    }
+    pub(super) fn retrieval_pair_precreation() -> Result<Self, Error> {
+        Self::fixed_native("native-shadow-retrieval-pair-precreation.json",32768)
+    }
+    fn fixed_native(leaf:&str, maximum:u64) -> Result<Self, Error> {
         let mut file = File::open("/")?;
-        for name in ["etc", "serverware", "native-shadow-guest-launch.json"] {
+        for name in ["etc", "serverware", leaf] {
             let parent = file.metadata()?;
             if !parent.is_dir() || parent.uid() != 0 || parent.mode() & 0o022 != 0 {
                 return Err(fail("native guest launch ancestor is not protected"));
@@ -44,8 +52,8 @@ impl Original {
         }
         let m = file.metadata()?;
         if !m.is_file() || m.uid() != 0 || m.gid() != 0 || m.mode() & 0o7777 != 0o400
-            || m.nlink() != 1 || m.len() == 0 || m.len() > 32768 {
-            return Err(fail(PATH));
+            || m.nlink() != 1 || m.len() == 0 || m.len() > maximum {
+            return Err(fail("fixed native original metadata differs"));
         }
         let identity = Identity::of(&m);
         let mut bytes = vec![0; m.len() as usize];
@@ -104,6 +112,7 @@ impl Original {
         Ok(())
     }
     pub(super) fn identity(&self) -> (u64,u64) { (self.identity.dev,self.identity.ino) }
+    pub(super) fn descriptor(&self) -> BorrowedFd<'_> {self.file.as_fd()}
 }
 
 pub(super) fn live(pidfd: BorrowedFd<'_>) -> Result<(), Error> {

@@ -156,3 +156,9 @@ def verify_original(operation, arguments, *, configuration_payload, root_key, no
     from serverware import authority_policy_canary_heartbeat_policy as heartbeat
     heartbeat.verify_batch(values["batch_original"], configuration_payload=configuration_payload,
         root_key=root_key, now_epoch_ns=now_epoch_ns, before_original=values["before_original"])
+    from serverware import authority_policy_canary_native_readiness as readiness
+    readiness.verify_batch(values["batch_original"], configuration_payload=configuration_payload,
+        root_key=root_key, now_epoch_ns=now_epoch_ns, before_original=values["before_original"])
+    from serverware import authority_policy_canary_finalization_policy as finalization
+    finalization.verify_batch(values["batch_original"], configuration_payload=configuration_payload,
+        root_key=root_key, now_epoch_ns=now_epoch_ns, before_original=values["before_original"])

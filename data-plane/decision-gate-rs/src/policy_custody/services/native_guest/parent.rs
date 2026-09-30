@@ -6,11 +6,25 @@ use std::os::fd::{AsFd,AsRawFd,OwnedFd};
 mod image;
 #[path="parent_process.rs"]
 pub(in crate::policy_shadow::policy_custody::services::guest::native_guest) mod child;
+#[path="retrieval_pair.rs"]
+mod pair;
 
 // Cleanup is a narrowing of the signed lifetime, never a fresh interval.
 const REAP_RESERVE_NS:u64=250_000_000;
 struct Watchdog(libc::timer_t);
 impl Watchdog {
+    fn arm_pair(admission:&pair::inputs::Admission)->Result<Self,ShadowError> {
+        admission.check_startup()?;
+        let mut event:libc::sigevent=unsafe{std::mem::zeroed()};
+        event.sigev_notify=libc::SIGEV_SIGNAL;event.sigev_signo=libc::SIGKILL;
+        let mut timer=std::ptr::null_mut();
+        require(unsafe{libc::timer_create(libc::CLOCK_BOOTTIME,&mut event,&mut timer)}==0)?;
+        let owner=Self(timer);let deadline=admission.lifetime();
+        let value=libc::itimerspec{it_interval:libc::timespec{tv_sec:0,tv_nsec:0},
+            it_value:libc::timespec{tv_sec:(deadline/1_000_000_000) as _,tv_nsec:(deadline%1_000_000_000) as _}};
+        require(unsafe{libc::timer_settime(timer,libc::TIMER_ABSTIME,&value,std::ptr::null_mut())}==0)?;
+        admission.check_startup()?;Ok(owner)
+    }
     fn arm(files:&FileAdmission)->Result<Self,ShadowError> {
         files.check_preparation().map_err(fail)?;
         let mut event:libc::sigevent=unsafe{std::mem::zeroed()};
@@ -140,3 +154,4 @@ pub(super) fn run()->! {
     let _=Running::start().and_then(Running::hold);
     unsafe{libc::_exit(1)}
 }
+pub(super) fn run_pair()->! {pair::run()}

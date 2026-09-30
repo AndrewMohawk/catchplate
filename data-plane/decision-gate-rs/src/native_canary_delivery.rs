@@ -16,6 +16,14 @@ pub(crate) fn native_cumulative_selected(state:&GateState)->Result<bool,String>{
     if owner.heartbeat.poisoned {return Err("native heartbeat owner is poisoned".into());}
     owner.authority.native_cumulative_selected()
 }
+pub(crate) fn native_finalization_selected(state:&GateState)->Result<bool,String>{
+    let Some(holder)=&state.measured_canary_delivery else{return Ok(false);};
+    let owner=holder.try_lock().map_err(|_|"native finalization delivery owner busy")?;
+    if owner.authority.configuration().api_version!="serverware.nativeCanaryDurableDelivery/v3" {return Ok(false);}
+    owner.check(state)?;
+    if owner.finalization.poisoned {return Err("native finalization owner is poisoned".into());}
+    owner.authority.native_finalization_selected()
+}
 
 #[derive(Clone,Copy,PartialEq,Eq)]
 enum Phase { PrepareAttempted, Prepared, ClaimAttempted, IntakeAttempted, Consumed }
@@ -27,6 +35,7 @@ pub(super) struct Owner {
     pub(super) authority:wire::Authority,transport:native_canary_transport::Owner,
     pending:BTreeMap<String,Pending>,heads:BTreeMap<String,String>,observations:BTreeMap<String,wire::Completion>,
     pub(super) initialized:bool,pid:u32,pub(super) heartbeat:native_canary_heartbeat::Chain,
+    pub(super) finalization:native_canary_finalization::Chain,
 }
 
 pub(super) fn prepare(config:Configuration,inputs:&gate_state_init::GateStateInputs,
@@ -38,7 +47,7 @@ pub(super) fn prepare(config:Configuration,inputs:&gate_state_init::GateStateInp
         return Err("canary durable delivery requires the same explicit native instance/encrypted cold profile".into());
     }
     let transport=native_canary_transport::prepare(roots,relays,&config.intake_url,&config.deployment_id,&config.instance_id,identity,deadline)?;
-    Ok(Owner{authority,transport,pending:BTreeMap::new(),heads:BTreeMap::new(),observations:BTreeMap::new(),initialized:false,pid:std::process::id(),heartbeat:native_canary_heartbeat::Chain::new()})
+    Ok(Owner{authority,transport,pending:BTreeMap::new(),heads:BTreeMap::new(),observations:BTreeMap::new(),initialized:false,pid:std::process::id(),heartbeat:native_canary_heartbeat::Chain::new(),finalization:native_canary_finalization::Chain::new()})
 }
 fn original_deadline(state:&GateState,deadline:u64)->Result<u64,String>{
     let remaining=native_service_remaining(state)?.ok_or("canary actual native lifetime absent")?;

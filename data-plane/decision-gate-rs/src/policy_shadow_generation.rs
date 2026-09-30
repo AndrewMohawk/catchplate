@@ -3106,6 +3106,56 @@ impl PolicyShadowGenerationControl {
         consume(snapshot,scope)
     }
 
+    pub(crate) fn with_native_finalization_snapshot<T>(&self,state:&GateState,
+        consume:impl FnOnce(super::policy_core::NativeAccountingSnapshot,Value,Option<super::policy_core::NativeDrainSnapshot>)->Result<T,String>)
+        ->Result<Option<T>,String>{
+        if !self.is_production || self.native_workers.is_none(){return Err("finalization needs native generation".into());}
+        let _installation=match self.installation_lock.try_lock(){
+            Ok(guard)=>guard,Err(std::sync::TryLockError::WouldBlock)=>return Ok(None),
+            Err(std::sync::TryLockError::Poisoned(_))=>return Err("finalization installation poisoned".into())};
+        let retained=match self.retained_generation.try_lock(){
+            Ok(guard)=>guard,Err(std::sync::TryLockError::WouldBlock)=>return Ok(None),
+            Err(std::sync::TryLockError::Poisoned(_))=>return Err("finalization generation poisoned".into())};
+        let Some(retained)=retained.as_ref() else{return Ok(None);};
+        let now=retained.trusted_time.now_unix_nanos().map_err(|e|e.to_string())?;
+        self.key_trust.authorize_at(now)?;
+        let scope=super::policy_shadow::native_heartbeat::finalization_scope(&retained.generation_identity,&retained.assignment,
+            &retained.load_receipt,&retained.runtime_identity,&retained.publication_receipt.internal_envelope_sha256,
+            self.key_trust.as_ref(),retained.trusted_time.as_ref()).map_err(|e|e.to_string())?;
+        let start=scope["startsAtUnixNanos"].as_i64().ok_or("finalization start")?;
+        let end=scope["windowEndsAtUnixNanos"].as_i64().ok_or("finalization end")?;
+        let expires=scope["expiresAtUnixNanos"].as_i64().ok_or("finalization expiry")?;
+        state.policy_shadow.native_drain_arm(retained.generation_identity.generation_id(),now,end,
+            scope["sealDeadlineUnixNanos"].as_i64().ok_or("original seal deadline")?)?;
+        if now<=start {return Ok(None);}
+        if now>=expires {return Err("original finalization window elapsed".into());}
+        let seal=if now>=end {state.policy_shadow.native_drain_snapshot(retained.generation_identity.generation_id(),now,end,
+            scope["sealDeadlineUnixNanos"].as_i64().ok_or("original seal deadline")?)?}else{None};
+        let snapshot=state.policy_shadow.native_accounting_snapshot(retained.generation_identity.generation_id(),retained.trusted_time.as_ref())?;
+        if snapshot.observed_at_unix_nanos()>=expires {return Err("snapshot passed original finalization expiry".into());}
+        if let Some(seal)=&seal {seal.require_complete(&snapshot)?;}
+        // SAME installed generation and key/trusted-time guards survive the
+        // signature and definite heartbeat delivery; no retained DTO adoption.
+        consume(snapshot,scope,seal).map(Some)
+    }
+
+    pub(crate) fn native_final_cumulative_observation(&self,heartbeat:&super::native_canary_finalization::RetainedHeartbeat,
+        attempt:&super::policy_core::NativeCumulativeAttempt,interval:Option<&Sha256Digest>)
+        ->Result<super::policy_shadow::native_final_cumulative::Checkpoint,String>{
+        let _installation=self.installation_lock.try_lock().map_err(|_|"final cumulative installation busy")?;
+        let retained=self.retained_generation.try_lock().map_err(|_|"final cumulative generation busy")?;
+        let retained=retained.as_ref().ok_or("final cumulative generation absent")?;
+        self.key_trust.authorize_at(retained.trusted_time.now_unix_nanos().map_err(|e|e.to_string())?)?;
+        let snapshot=heartbeat.snapshot();
+        if snapshot.generation_id()!=retained.generation_identity.generation_id(){return Err("final heartbeat generation changed".into());}
+        let configuration=retained.custody.production_configuration_binding_sha256().ok_or("final custody configuration absent")?;
+        super::policy_shadow::native_final_cumulative::Checkpoint::from_originals(&retained.generation_identity,
+            snapshot.baseline_event_ordinal(),snapshot.baseline_head_sha256(),snapshot.event_ordinal(),snapshot.head_sha256(),
+            snapshot.observed_at_unix_nanos(),snapshot.originals(),heartbeat.original(),heartbeat.sha256(),attempt.sequence(),attempt.previous(),
+            interval,heartbeat.seal(),&retained.assignment,&retained.runtime_identity,&retained.publication_receipt.internal_envelope_sha256,
+            &configuration,self.key_trust.as_ref(),retained.trusted_time.as_ref()).map_err(|e|e.to_string())
+    }
+
     pub(crate) fn native_runtime_observation(&self,receipt:&super::policy_shadow::VerifiedShadowSpillReceipt,
         opening:&Sha256Digest,terminal:Option<&Sha256Digest>)
         ->Result<super::policy_shadow::native_runtime::Observation,String> {

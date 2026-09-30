@@ -44,6 +44,8 @@ pub(crate) mod native_runtime;
 pub(crate) mod native_checkpoint;
 #[path="policy_shadow_cumulative.rs"]
 pub(crate) mod native_cumulative;
+#[path = "policy_shadow_final_cumulative.rs"]
+pub(crate) mod native_final_cumulative;
 
 #[cfg(target_os = "linux")]
 #[path = "policy_custody/mod.rs"]
@@ -60,6 +62,10 @@ pub(crate) fn run_native_shadow_guest()->! {
 #[cfg(target_os="linux")]
 pub(crate) fn run_native_shadow_guest_supervisor()->! {
     policy_custody::services::guest::native_guest::run_parent()
+}
+#[cfg(target_os="linux")]
+pub(crate) fn run_native_shadow_retrieval_pair()->! {
+    policy_custody::services::guest::native_guest::run_retrieval_pair()
 }
 
 #[cfg(target_os = "linux")]

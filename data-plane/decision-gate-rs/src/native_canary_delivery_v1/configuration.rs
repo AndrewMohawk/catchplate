@@ -46,7 +46,7 @@ pub(crate) fn signed(value:&Value,key:&str,schema:&str)->Result<(),String> {
 }
 impl Authority {
     pub fn admit(config:Configuration)->Result<Self,String> {
-        require(matches!(config.api_version.as_str(),"serverware.nativeCanaryDurableDelivery/v1"|"serverware.nativeCanaryDurableDelivery/v2")
+        require(matches!(config.api_version.as_str(),"serverware.nativeCanaryDurableDelivery/v1"|"serverware.nativeCanaryDurableDelivery/v2"|"serverware.nativeCanaryDurableDelivery/v3")
             && crate::native_canary_evidence_v1::component(&config.deployment_id)
             && crate::native_canary_evidence_v1::component(&config.instance_id)
             && (1..=16).contains(&config.canaries.len()),"native canary cold profile")?;
@@ -88,18 +88,62 @@ impl Authority {
                 && target.original_expires_at_epoch_ns>0 && target.original_expires_at_epoch_ns<=i64::MAX as u64,"canary explicit recovery selector")?;
         }
         let result=Self{config,payload,original,digest,pid:std::process::id()}; result.check()?;
-        if result.native_cumulative_selected()? {
+        if result.native_finalization_selected()? {
+            for binding in &result.config.canaries {result.finalization_assignment(&binding.canary_id)?;}
+        } else if result.native_cumulative_selected()? {
             for binding in &result.config.canaries {result.heartbeat_assignment(&binding.canary_id)?;}
         }
         Ok(result)
     }
     pub fn configuration(&self)->&Configuration { &self.config }
+    pub fn native_readiness_policy(&self)->Result<&Value,String> {
+        self.check()?;
+        require(self.config.api_version=="serverware.nativeCanaryDurableDelivery/v3","native readiness requires explicit finalization profile")?;
+        let policy=&self.payload["policyCanaryNativeReadinessPolicy"];
+        exact(policy,&["schema","deploymentId","issuedAtEpochNs","expiresAtEpochNs","maximumReadinessAgeNanos","canaries"])?;
+        let now=crate::native_canary_evidence_v1::now_epoch()?;
+        let issued=number(policy,"issuedAtEpochNs")?;let expires=number(policy,"expiresAtEpochNs")?;
+        require(policy["schema"]=="serverware.policyCanaryNativeReadinessAuthorityPolicy/v1"
+            && policy["deploymentId"]==self.config.deployment_id && issued<=now && now<expires
+            && expires.checked_sub(issued).is_some_and(|value|value<=86_400_000_000_000)
+            && (1_000_000_000..=300_000_000_000).contains(&number(policy,"maximumReadinessAgeNanos")?),
+            "native readiness independent policy scope/lifetime")?;
+        let canaries=policy["canaries"].as_array().ok_or("native readiness policy canaries")?;
+        require((1..=32).contains(&canaries.len()) && ascii(policy)?.len()<=8192,"native readiness policy capacity")?;
+        let mut previous=None;
+        for item in canaries {
+            exact(item,&["canaryId","assignmentSha256"])?;
+            let id=text(item,"canaryId")?;let assignment=text(item,"assignmentSha256")?;
+            require(!id.is_empty() && id.chars().count()<=256 && crate::native_currentness_v1::digest(assignment),
+                "native readiness policy canary identity")?;
+            let pair=(id,assignment);require(previous.is_none_or(|old|old<pair),"native readiness policy order/duplicate")?;
+            previous=Some(pair);
+        }
+        Ok(policy)
+    }
     pub fn native_cumulative_selected(&self)->Result<bool,String> {
         if self.config.api_version=="serverware.nativeCanaryDurableDelivery/v1" {return Ok(false);}
         self.check()?;
-        Ok(self.config.api_version=="serverware.nativeCanaryDurableDelivery/v2")
+        Ok(matches!(self.config.api_version.as_str(),"serverware.nativeCanaryDurableDelivery/v2"|"serverware.nativeCanaryDurableDelivery/v3"))
+    }
+    pub fn native_finalization_selected(&self)->Result<bool,String> {
+        if self.config.api_version!="serverware.nativeCanaryDurableDelivery/v3" {return Ok(false);}
+        self.check()?;Ok(true)
+    }
+    pub fn finalization_policy(&self)->Result<&Value,String> {
+        require(self.native_finalization_selected()?,"native finalization not cold selected")?;
+        Ok(&self.payload["policyCanaryFinalizationPolicy"])
+    }
+    pub fn finalization_assignment(&self,canary:&str)->Result<(&Value,String),String> {
+        let policy=self.finalization_policy()?;let binding=self.binding(canary)?;
+        let matches=policy["assignments"].as_array().ok_or("finalization assignments")?.iter()
+            .filter(|item|item["canaryId"]==canary && item["instanceId"]==self.config.instance_id
+                && item["canaryAssignmentSha256"]==binding.canary_assignment_sha256 && item["canaryBootId"]==binding.canary_boot_id).collect::<Vec<_>>();
+        require(matches.len()==1,"finalization independent assignment missing/ambiguous")?;
+        Ok((matches[0],crate::sha256_prefixed(&ascii(matches[0])?)))
     }
     pub fn heartbeat_assignment(&self,canary:&str)->Result<(&Value,String),String> {
+        require(self.config.api_version=="serverware.nativeCanaryDurableDelivery/v2","v1 heartbeat requires its original cold profile")?;
         require(self.native_cumulative_selected()?,"native heartbeat not cold selected")?;
         let binding=self.binding(canary)?;
         let policy=&self.payload["policyCanaryHeartbeatPolicy"];
@@ -110,6 +154,7 @@ impl Authority {
         Ok((matches[0],crate::sha256_prefixed(&ascii(matches[0])?)))
     }
     pub fn heartbeat_policy(&self)->Result<&Value,String> {
+        require(self.config.api_version=="serverware.nativeCanaryDurableDelivery/v2","v1 heartbeat requires its original cold profile")?;
         require(self.native_cumulative_selected()?,"heartbeat profile absent")?;
         Ok(&self.payload["policyCanaryHeartbeatPolicy"])
     }
@@ -130,6 +175,9 @@ impl Authority {
         require(self.pid==std::process::id(),"canary authority owner process changed")?;
         if self.config.api_version=="serverware.nativeCanaryDurableDelivery/v2" {
             crate::native_canary_heartbeat_v1::validate_policy(&self.payload["policyCanaryHeartbeatPolicy"],&self.config.deployment_id,now)?;
+        }
+        if self.config.api_version=="serverware.nativeCanaryDurableDelivery/v3" {
+            crate::native_canary_finalization_v1::validate_policy(&self.payload["policyCanaryFinalizationPolicy"],&self.config.deployment_id,now)?;
         }
         for (field,schema) in [("policyCanaryIntakePolicy","serverware.policyCanaryIntakeAuthorityPolicy/v2"),
             ("policyCanaryDeliveryPolicy","serverware.policyCanaryDeliveryAuthorityPolicy/v1")] {

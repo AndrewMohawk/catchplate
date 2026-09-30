@@ -22,10 +22,10 @@ Checkpoint: **2026-09-30 — pre-production, pilot assembly.**
 
 [![Project checkpoints, one segment per task: 36 of 46 source-landed; 10 active and 0 todo. Evidence handoff 10/10; historical recovery 4/5; permissions and grants 10/10; finalization and sessions 8/8; workloads and native 3/6; providers and operations 1/7. H05, N04, N05, N06 and O01 through O06 are in progress. Production acceptance remains 0/6. Engineering assembly is not an accepted pilot or production deployment.](docs/images/project-progress.svg)](docs/production-status.md#next-source-milestones)
 
-The current `.357` source batch adds [purpose-specific authority commands and
-protected public-input publication](docs/native-pilot-authority-commands.md).
-They produce cohort precreation/release and driver continuation originals from
-independently approved input, without placing signing keys in the launcher.
+The current `.358` source batch extends [purpose-specific authority production
+and protected installation](docs/native-pilot-authority-commands.md) with driver
+admissions, native/bridge delivery, ordinary-service grants and a fixed
+19-file precreation installer. Signing keys remain outside the launcher.
 The [launcher runtime package](docs/native-pilot-build.md#conductor-runtime-package)
 and [live owner composition](docs/native-pilot-operator-inputs.md) are source-landed;
 the independently operated coordinator is still incomplete. This is not an

@@ -11,11 +11,13 @@ the original deadlines. This CLI does not supply that authority automation.
 The same-process assembly does not yet provide an external independent
 authority coordinator.
 
-The separate [authority commands and protected publisher](native-pilot-authority-commands.md)
-now provide cohort precreation/release and driver-scope production. They require
-independently approved complete originals and keys, not raw unapproved requests
-from this channel. Driver admission, remaining C9/grant production and the
-coordinator's actual process/pipe/installation joins remain open.
+The separate [authority commands and protected installers](native-pilot-authority-commands.md)
+provide cohort precreation/release, driver admission/scope, native/bridge C9 and
+ordinary-service grant production, plus fixed precreation-file installation.
+They require independently approved complete originals and keys, not raw
+unapproved requests from this channel. Remaining native service-grant/launch
+inputs, bridge runtime installation and the coordinator's actual process/pipe
+and authority-automation joins remain open.
 
 The separate [runtime package](native-pilot-build.md#conductor-runtime-package)
 provides an isolated Python entrypoint and portable filesystem bytes. Building

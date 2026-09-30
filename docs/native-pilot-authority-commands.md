@@ -2,9 +2,10 @@
 
 These are purpose-specific commands for an independently operated authority,
 not a completed coordinator or a pilot quickstart. They produce the existing
-cohort precreation, endpoint release and driver continuation originals from
-explicitly approved input. A separate restricted installer publishes literal
-public originals at the paths consumed by the existing pilot owners.
+cohort precreation/release, driver admission/continuation, native and ordinary
+delivery, and ordinary service grants from explicitly approved input. Restricted
+installers publish literal public originals and the fixed endpoint-precreation
+configuration bundle at the paths consumed by the existing pilot owners.
 
 The commands do not generate keys, approve their own inputs, start the pilot,
 install service configurations or replace any independent signer. A protected
@@ -92,7 +93,7 @@ request has independently passed runtime acceptance.
 
 ## Protected publication
 
-`scripts/install_native_pilot_public_original.py` accepts only three fixed
+`scripts/install_native_pilot_public_original.py` accepts only source-fixed
 purposes. Its public input is a protected root:root `0400` read-only single-link
 file on an inherited FD. No authority private-key FD is accepted.
 
@@ -101,6 +102,26 @@ file on an inherited FD. No authority private-key FD is accepted.
 | `cohort-precreation` | `/etc/serverware/native-shadow-proof-cohort-precreation.json` |
 | `cohort-release` | `/etc/serverware/native-pilot-inputs/cohort-release.json` |
 | `driver-scope` | `/etc/serverware/native-pilot-inputs/driver-scope.json` |
+
+The additional purposes below use
+`/etc/serverware/native-pilot-inputs/<purpose>.json`. Role suffixes are the exact
+fixed inventory, never a caller-supplied path or extensible role list.
+
+| Purpose family | Fixed selection | Maximum bytes |
+| --- | --- | --- |
+| `driver-bootstrap-admission`, `driver-constructed-admission` | Two existing driver admission envelopes | 8,192 / 16,384 |
+| `native-delivery-<role>` | Ten cohort endpoint roles plus `bridge` | 65,536 |
+| `ordinary-delivery-<role>`, `ordinary-generation-<role>` | Five ordinary roles | 65,536 |
+| `ordinary-dispatch-<role>` | DRS and CurrentSignatureAuthority only | 65,536 |
+| `ordinary-head`, `ordinary-cleanup`, `ordinary-current` | DRS, Cleanup, Current respectively | 65,536 / 131,072 / 131,072 |
+| `native-cold-<role>`, `ordinary-cold-<role>` | Ten endpoint and five ordinary cold configurations | 65,536 |
+
+The precreation installer also uses `cohort-configuration`, `ordinary-launch`
+and `cohort-control` at their fixed `/etc/serverware/` loader paths. Their limits
+are respectively 32,768, 65,536 and 4,096 bytes. The original three purposes keep
+their 32,768-byte ceilings; aggregate publication stays bounded to 128 originals
+and 32 MiB. Native C9 files are delivery originals, **not** endpoint/bridge launch
+envelopes; independently approved launch files must still reference them.
 
 ```text
 python3 -I -B scripts/install_native_pilot_public_original.py --purpose cohort-release --input-fd 3 --sha256 sha256:INDEPENDENTLY_APPROVED_ORIGINAL_DIGEST
@@ -116,11 +137,99 @@ There is no overwrite, leftover adoption, delete, automatic retry or deadline
 renewal. A failed publication leaves its exact partial file for explicit
 reconciliation, even if output delivery subsequently fails.
 
+## Driver, delivery and ordinary service producers
+
+These commands use the same approved-public-FD/sealed-key-FD contract and
+supervisor pipe as the earlier authority commands:
+
+```text
+python3 -I -B scripts/authority/sign_native_pilot_driver.py --operation bootstrap --input-fd 3 --authority-key-fd 4
+python3 -I -B scripts/authority/sign_native_pilot_driver.py --operation constructed --input-fd 3 --authority-key-fd 4
+python3 -I -B scripts/authority/sign_native_pilot_delivery.py --input-fd 3 --authority-key-fd 4
+python3 -I -B scripts/authority/sign_native_pilot_service.py --operation generation --role durable-recovery-store --input-fd 3 --authority-key-fd 4
+```
+
+Driver input is the closed `serverware.nativePilotDriverAuthorityInput/v1`
+wrapper (at most 24 MiB). Common fields are `apiVersion`, `operation`,
+`controlOriginal`, `configurationOriginal`, `windowOriginal`,
+`deliveryConfigurationOriginal` and `payloadOriginal`. Bootstrap adds
+`observationOriginal`. Constructed adds `bootstrapAdmissionOriginal`,
+`censusOriginal`, `publicAdmissionOriginal`, `verifierConfigurationOriginal`,
+`verifierConfigurationSha256`, `assignmentPublicKeyOriginal`,
+`assignmentPublicKeySha256` and `launchOriginal`. Trust/key configuration and
+pins must be independently approved, not taken from an untrusted measurement's
+own key selection. The producer checks exact prepared payload associations and
+existing signature domains; it does not authenticate kernel observations or
+re-run hardware attestation merely by parsing exported originals.
+
+Delivery input is the closed `serverware.nativePilotDeliverySigningInput/v1`
+wrapper (at most 1 MiB): `apiVersion`, `role`, `configurationOriginal`,
+`ownerConfigurationOriginal`, `windowOriginal`, `observationOriginal`,
+`runtimeOriginal`, `payloadOriginal`, `activationOriginal`. Endpoint owners use
+cohort/v7 and signed precreation; bridge ownership uses driver/v4 and its signed
+window. The activation original is a canonical array matching the actual
+operator observation. Fixed inventories select the exact endpoint descriptors
+or the runtime/v9-derived 41-descriptor bridge. No peer, socket, journal or
+runtime configuration is fabricated by the signer.
+
+Ordinary-service input is `serverware.nativePilotServiceAuthorityInput/v1`
+(at most 32 MiB), with common fields `apiVersion`, `operation`, `serviceRole`,
+`launchOriginal`, `payloadOriginal`. Operation and CLI role must agree:
+
+| Operation | Roles | Additional approved input |
+| --- | --- | --- |
+| `delivery` | All five | `configurationOriginal`, `configurationSha256`, `runtimeOriginal`, actual `activation` array |
+| `generation` | All five | `services` containing the selected role |
+| `dispatch` | DRS, Current | Selected `services`, `nativeGrantOriginal`, `nativeConfigurationOriginal`, `nativeConfigurationSha256` |
+| `head` | DRS | DRS and Cleanup `services`, exact seven `nativeOriginals` |
+| `cleanup` | Cleanup | Same two `services` and `nativeOriginals`, plus `headGrantOriginal` |
+| `current` | Current | All three `services` and `nativeOriginals`, plus `headGrantOriginal`, `cleanupGrantOriginal` |
+
+Each service bundle contains `configurationOriginal`, `configurationSha256`,
+`deliveryOriginal`, `runtimeOriginal`, `historyOriginal`; all operations except
+generation also include `generationGrantOriginal`. The ordinary launch is the
+approved existing FiveServiceLaunch/v6, not a fresh clock. Existing byte
+producers handle delivery/generation/dispatch; the effects grants bind the
+actual signed public predecessors without constructing a `GenerationInputs`
+owner. Native signature/quote/currentness and retained-resource admission remain
+with their purpose-specific receivers; no output is a service-ready verdict.
+
+## Endpoint-precreation configuration installation
+
+```text
+python3 -I -B scripts/install_native_pilot_precreation.py --input-fd 3 --input-sha256 sha256:INDEPENDENTLY_APPROVED_BUNDLE_DIGEST
+```
+
+This is a real filesystem mutation when invoked, not a planning command. Its
+closed `serverware.nativePilotPrecreationBundle/v1` input (at most 4 MiB) has
+exactly `apiVersion`, `driverConfigurationOriginal`, `driverWindowOriginal`,
+`driverObservationOriginal`, `cohortConfigurationOriginal`,
+`cohortPrecreationOriginal`, `cohortControlOriginal`, `ordinaryLaunchOriginal`,
+`nativeColdOriginals` and `ordinaryColdOriginals`. The last two maps contain the
+fixed ten/five literal cold originals. The independently approved bundle digest
+binds every byte; a digest computed locally after accepting untrusted input is
+not independent approval.
+
+Before creating anything, the installer checks the complete bundle, signed
+driver/precreation windows, external-driver observation binding, all cold-file
+pins and the fixed destination names. It preflights all 19 names for absence,
+then publishes the 15 cold originals, cohort configuration, precreation and
+ordinary launch; **cohort control is last**. Every creation remains exclusive,
+with fsync and exact readback. Preflight is not a filesystem transaction: a
+later race or failure can leave a partial bundle. It is never rolled back,
+adopted, overwritten or automatically retried.
+
+Cohort and driver retain their existing equal window binding. Ordinary services
+keep their supplied original interval; publication and output use the earliest
+startup deadline without extending either window. Successful installation only
+reports file pins. It neither starts a service, acknowledges conductor progress,
+nor proves a pilot request or cleanup succeeded.
+
 ## What remains
 
 These commands close specific producer/publication gaps, not the ten-phase
 coordinator. Still required: independently operated approval/observation and
-supervision, remaining driver admission and ordinary/native C9/grant producers,
+supervision, remaining native service-grant issuance and launch/runtime inputs,
 approved bridge runtime/configuration installation, coordinator process/pipe
 ownership and ordering, artifact assembly and protected installation, services
 and workload provisioning, then the connected ordinary application allow/deny

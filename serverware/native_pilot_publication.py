@@ -1,4 +1,4 @@
-"""Exclusive publication of three fixed native-pilot public originals.
+"""Exclusive publication of source-fixed native-pilot public originals.
 
 The independent operator supplies the exact original and its approved hash.
 Closed shape and byte-integrity checks are not signature verification: actual
@@ -16,16 +16,20 @@ import threading
 from serverware import native_shadow_guest_delivery as delivery
 from serverware import native_shadow_nitro_profile as p
 from serverware import native_shadow_proof_cohort_assignment as cohort
+from serverware import native_pilot_publication_profiles as profiles
 from serverware.native_shadow_proof_cohort_control import _Original
 
-MAX_BYTES = 32768
+MAX_BYTES = 131072
 MAX_ORIGINALS = 128
 MAX_PUBLIC_BYTES = 32 * 1024 * 1024
 DESTINATIONS = {
     "cohort-precreation": "/etc/serverware/native-shadow-proof-cohort-precreation.json",
     "cohort-release": "/etc/serverware/native-pilot-inputs/cohort-release.json",
     "driver-scope": "/etc/serverware/native-pilot-inputs/driver-scope.json",
+    **profiles.DESTINATIONS,
 }
+LIMITS = {purpose: profiles.PROFILES[purpose][2] if purpose in profiles.PROFILES else 32768
+          for purpose in DESTINATIONS}
 _ROOTS = ("/", "/etc", "/etc/serverware", "/etc/serverware/native-pilot-inputs")
 _FLAGS = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK
 _TOKEN = object()
@@ -75,7 +79,10 @@ def _operation(value):
 
 
 def _shape(purpose, raw):
-    signed = p.document(raw, MAX_BYTES)  # Exact canonical ASCII, no terminal LF.
+    if purpose in profiles.PROFILES:
+        profiles.shape(purpose, raw)
+        return
+    signed = p.document(raw, LIMITS[purpose])  # Exact canonical ASCII, no terminal LF.
     p.fields(signed, ("apiVersion", "payload", "signatureBase64url")
              if purpose == "cohort-precreation" else ("payload", "signatureBase64url"))
     p.decoded(signed["signatureBase64url"], size=64)
@@ -195,7 +202,8 @@ class PublicPublisher:
         p.require(type(purpose) is str and purpose in DESTINATIONS and purpose not in self._attempted)
         self._attempted.add(purpose)  # Consumed before validation or any write.
         try:
-            p.require(type(raw) is bytes and 0 < len(raw) <= MAX_BYTES
+            maximum = LIMITS[purpose]
+            p.require(type(raw) is bytes and 0 < len(raw) <= maximum
                 and len(self._files) < MAX_ORIGINALS and self._bytes + len(raw) <= MAX_PUBLIC_BYTES)
             p.require(p.sha(raw) == p.digest(expected_sha256))
             _shape(purpose, raw)
@@ -216,7 +224,7 @@ class PublicPublisher:
                 p.require(written > 0)
                 offset += written
             os.fsync(descriptor)
-            p.require(os.pread(descriptor, MAX_BYTES + 1, 0) == raw)
+            p.require(os.pread(descriptor, maximum + 1, 0) == raw)
             written_identity = os.fstat(descriptor)
             p.require(stat.S_IMODE(written_identity.st_mode) == 0o400
                 and written_identity.st_nlink == 1 and written_identity.st_size == len(raw)
@@ -227,7 +235,7 @@ class PublicPublisher:
             os.fsync(parent_fd)
             # Existing reader owns the exact protected file, bytes, hash and
             # all named ancestors. Keep only its read-only descriptors.
-            original = _Original(path, MAX_BYTES, expected_sha256, mode=0o400)
+            original = _Original(path, maximum, expected_sha256, mode=0o400)
             self._files[purpose] = original
             self._bytes += len(raw)
             p.require(original.raw == raw and _file_identity(os.fstat(original.fd))
@@ -242,6 +250,27 @@ class PublicPublisher:
                 os.close(descriptor)
             self._pending.clear()
             raise
+
+    def require_absent(self, purposes):
+        """Preflight a fixed bundle before writes; O_EXCL still decides races.
+
+        This reserves no name and approves no input. A later concurrent create
+        can still leave a partial bundle, which must never be retried or rolled
+        back automatically. Existing objects are neither read nor adopted.
+        """
+        self.check()
+        p.require(type(purposes) is tuple and 0 < len(purposes) <= MAX_ORIGINALS
+            and all(type(purpose) is str and purpose in DESTINATIONS for purpose in purposes)
+            and len(set(purposes)) == len(purposes)
+            and not self._attempted.intersection(purposes))
+        for purpose in purposes:
+            parent, name = DESTINATIONS[purpose].rsplit("/", 1)
+            try:
+                os.stat(name, dir_fd=self._roots[parent][0], follow_symlinks=False)
+            except FileNotFoundError:
+                continue
+            raise ValueError("native pilot publication destination already exists")
+        self.check()
 
     def close(self):
         """Release only this publisher's descriptors; never remove originals."""

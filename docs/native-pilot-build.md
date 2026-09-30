@@ -114,9 +114,9 @@ This source batch has not built or executed the new target.
 ## Operator commands
 
 The separate [authority commands](native-pilot-authority-commands.md) produce
-cohort precreation/release and driver continuation originals from explicitly
-approved input and already provisioned keys. Their fixed public installer is
-not part of artifact building. They do not complete the external coordinator,
+cohort, driver, delivery and ordinary-service originals from explicitly approved
+input and already provisioned keys. Their fixed public/precreation installers
+are not part of artifact building. They do not complete the external coordinator,
 provision services, approve the builder or enter the conductor runtime package.
 
 For the full pilot commands below, use a clean committed checkout;

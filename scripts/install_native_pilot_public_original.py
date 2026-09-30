@@ -31,7 +31,7 @@ def main():
         raise ValueError("isolated no-bytecode Python is required")
     # Fixed sibling installed/source package only; no supplied import selector.
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-    from serverware.native_pilot_publication import DESTINATIONS, MAX_BYTES, PublicPublisher, p
+    from serverware.native_pilot_publication import DESTINATIONS, LIMITS, PublicPublisher, p
 
     parser = Parser(description=__doc__, allow_abbrev=False)
     parser.add_argument("--purpose", choices=tuple(DESTINATIONS), required=True)
@@ -39,6 +39,7 @@ def main():
                         help="inherited root:root0400 read-only regular public-original FD >=3")
     parser.add_argument("--sha256", required=True, help="independently approved exact original hash")
     args = parser.parse_args()
+    maximum = LIMITS[args.purpose]
     p.require(args.input_fd >= 3 and os.getresuid() == (0, 0, 0) and os.getresgid() == (0, 0, 0))
     p.digest(args.sha256)
     flags = fcntl.fcntl(args.input_fd, fcntl.F_GETFL)
@@ -46,18 +47,18 @@ def main():
     before = os.fstat(args.input_fd)
     p.require(stat.S_ISREG(before.st_mode) and before.st_uid == before.st_gid == 0
         and before.st_nlink == 1 and stat.S_IMODE(before.st_mode) == 0o400
-        and 0 < before.st_size <= MAX_BYTES)
+        and 0 < before.st_size <= maximum)
     descriptor = fcntl.fcntl(args.input_fd, fcntl.F_DUPFD_CLOEXEC, 3)
     owner = None
     try:
         p.require(identity(os.fstat(descriptor)) == identity(before))
-        raw = os.pread(descriptor, MAX_BYTES + 1, 0)
+        raw = os.pread(descriptor, maximum + 1, 0)
         p.require(len(raw) == before.st_size and p.sha(raw) == args.sha256)
 
         def check_input():
             p.require(identity(os.fstat(args.input_fd)) == identity(before)
                 and identity(os.fstat(descriptor)) == identity(before)
-                and os.pread(descriptor, MAX_BYTES + 1, 0) == raw)
+                and os.pread(descriptor, maximum + 1, 0) == raw)
 
         check_input()
         owner = PublicPublisher.open()

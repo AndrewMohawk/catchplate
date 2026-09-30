@@ -11,6 +11,11 @@ the original deadlines. This CLI does not supply that authority automation.
 The same-process assembly does not yet provide an external independent
 authority coordinator.
 
+The separate [runtime package](native-pilot-build.md#conductor-runtime-package)
+provides an isolated Python entrypoint and portable filesystem bytes. Building
+or extracting that package does not install its privileged execution environment,
+provision the independent authorities or authorize this live command.
+
 The conductor retains the actual driver, endpoint, ordinary-service and
 resource owners in one process. Operator replies supply independently produced
 public originals or pins; they cannot reconstruct those owners from JSON or

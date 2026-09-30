@@ -16,6 +16,8 @@ import stat
 import sys
 
 import build_production_images as build
+import native_pilot_runtime_artifacts as conductor_runtime
+import package_native_pilot_runtime as conductor_package
 
 DOCKERFILE = "data-plane/decision-gate-rs/Dockerfile.production"
 PROFILES = {
@@ -74,10 +76,11 @@ def preparation(metadata):
             "Actual listeners, persistent fs-verity-capable stores, held locks, cgroups, IMA/LSM identities, UID separation and PIDFD support",
             "Control-plane database/OIDC/WebAuthn/protected-authority configuration and operator two-person approvals",
             "Independent Setup hardware/proxy/final issuer artifacts, protected configurations and sealed key delivery",
-            "Separately operated authority coordinator and protected conductor runtime; exclusive stdin/stdout pipes and independently provisioned live services",
+            "Independent admission/installation of the conductor runtime package, separately operated authority coordinator, exclusive stdin/stdout pipes and provisioned live services",
         ],
         "existingOwners": {
             "operatorConductor": "python3 -B scripts/run_native_pilot.py --run-native-pilot",
+            "packagedOperatorConductor": "/runtime/python/bin/python3 -I -B /app/scripts/native_pilot_runtime_entrypoint.py --run-native-pilot",
             "operatorChannel": "serverware.native_pilot_operator_channel.Channel: exclusive machine pipes, canonical request/reply originals, original absolute deadlines, no authority or retries",
             "operatorPhases": "bootstrap-admission / endpoint-precreation / endpoint-inputs / service-originals / bridge-runtime / bridge-delivery / release / constructed-admission / generation-origin / shutdown",
             "liveComposition": "serverware.native_pilot_launch.NativePilotLaunch.start / start_endpoints / prepare_resources / prepare_bridge_connections / prepare_operational_inputs / release",
@@ -89,7 +92,7 @@ def preparation(metadata):
             "outgoingAndContinuation": "serverware.native_shadow_driver_outgoing.OutgoingResources.prepare / serverware.native_shadow_driver_resources.BridgeResources.prepare_native_peers / serverware.native_shadow_driver_inputs.OperationalInputs.prepare_pilot",
             "orderedRelease": "serverware.custody_generation_launch.FiveServiceLaunch.release_endpoint_cohort / ParkedProofCohort.continue_driver",
         },
-        "boundary": "Preparation is build data only. Actual live owners must measure, admit, sign independently, retain and release under original deadlines; no launch is performed. Current seccomp/native artifacts do not package the Python conductor runtime or its external authority coordinator; their installation and independently provisioned live services remain required.",
+        "boundary": "Preparation is build data only. Actual live owners must measure, admit, sign independently, retain and release under original deadlines; no launch is performed. The separate conductor-runtime command packages the Python operator rootfs, not its independent authority coordinator or service configuration. Independent admission, installation and provisioned live services remain required.",
     }
 
 
@@ -259,6 +262,39 @@ def assemble_operator_tools(metadata, output):
     })
 
 
+def assemble_conductor_runtime(metadata, output):
+    """Build and package the fixed operator rootfs without invoking its CLI.
+
+    This requires only the existing source/dependency owners, not native guest
+    inputs or authority keys. The exact exported files are inventoried and then
+    rechecked while creating a portable archive. Local hashes are not approval.
+    """
+    profile = build.native_pilot_build_resource_profile(metadata)
+    source = {key: metadata[key] for key in ("revision", "source_tree_digest", "source_manifest_digest",
+                                           "source_archive_digest", "source_date_epoch")}
+    target = build.NATIVE_PILOT_CONDUCTOR_TARGET
+    write_original(output / "attempt.json", {
+        "apiVersion": "serverware.nativePilotConductorBuildAttempt/v1", "source": source,
+        "target": target, "buildResourceProfile": profile,
+        "releaseAuthority": False, "liveReady": False, "launchPrepared": False,
+    })
+    build.verify_dependency_cache()
+    root = output / "artifacts"
+    with build.private_build_context(metadata) as context:
+        build.run_build(build.artifact_build_command("Dockerfile.production", target,
+            "type=local,dest=" + str(root), network="none", platform=build.PRODUCTION_PLATFORM,
+            metadata=metadata, context=context, native_pilot_bounded_build=True))
+    runtime = conductor_runtime.inventory(root, metadata)
+    package = conductor_package.package(root, runtime, output / "package")
+    write_original(output / "conductor-runtime.json", {
+        "apiVersion": "serverware.nativePilotConductorArtifacts/v1", "artifactBuildComplete": True,
+        "source": source, "target": target, "buildResourceProfile": profile,
+        "runtimeInventorySha256": package["inventorySha256"], "package": package,
+        "releaseAuthority": False, "liveReady": False, "launchPrepared": False, "executionAccepted": False,
+        "boundary": "Unsigned local operator rootfs and portable package only. Independent admission, protected installation, native executables, configuration, resource environment and external authority coordinator remain required. No pilot, service or authority was launched.",
+    })
+
+
 def assemble(args, metadata, plan, output):
     raw = read_original(args.preparation, 128 * 1024)
     if raw != build.canonical_json(plan).encode("ascii"):
@@ -309,6 +345,8 @@ def main():
     prepare.add_argument("--out", type=Path, required=True)
     operator_tools = sub.add_parser("operator-tools", help="build only the fixed offline seccomp exporter with strict source and per-RUN resource bounds; no guest inputs or execution")
     operator_tools.add_argument("--out", type=Path, required=True)
+    conductor = sub.add_parser("conductor-runtime", help="build and package the fixed Python conductor rootfs; no guest inputs, installation or launch")
+    conductor.add_argument("--out", type=Path, required=True)
     public_inputs = sub.add_parser("public-inputs", help="copy operator public originals and measure an unapproved manifest; never build or sign")
     public_inputs.add_argument("--out", type=Path, required=True)
     public_inputs.add_argument("--preparation", type=Path, required=True)
@@ -323,8 +361,11 @@ def main():
     compile_command.add_argument("--public-inputs-sha256", required=True)
     args = parser.parse_args()
     metadata = build.build_metadata()  # strict clean committed source, no dirty-tree escape
-    if args.command == "operator-tools":
-        assemble_operator_tools(metadata, new_output(args.out))
+    if args.command in ("operator-tools", "conductor-runtime"):
+        if args.command == "operator-tools":
+            assemble_operator_tools(metadata, new_output(args.out))
+        else:
+            assemble_conductor_runtime(metadata, new_output(args.out))
         print(build.canonical_json({"apiVersion": "serverware.nativePilotBuildCommand/v1", "command": args.command,
             "output": str(args.out), "artifactBuildComplete": True,
             "releaseAuthority": False, "liveReady": False, "launchPrepared": False}))

@@ -22,11 +22,12 @@ Checkpoint: **2026-09-30 — pre-production, pilot assembly.**
 
 [![Project checkpoints, one segment per task: 36 of 46 source-landed; 10 active and 0 todo. Evidence handoff 10/10; historical recovery 4/5; permissions and grants 10/10; finalization and sessions 8/8; workloads and native 3/6; providers and operations 1/7. H05, N04, N05, N06 and O01 through O06 are in progress. Production acceptance remains 0/6. Engineering assembly is not an accepted pilot or production deployment.](docs/images/project-progress.svg)](docs/production-status.md#next-source-milestones)
 
-The current `.355` source batch adds the fixed [pilot launcher](docs/native-pilot-operator-inputs.md),
-connecting the real resource owners through independent signed inputs, ordered
-release, generation-origin handoff and cleanup. Its machine-pipe interface
-requires an independently operated authority coordinator; it is not an
-interactive quickstart or a running pilot.
+The current `.356` source batch adds a separate [pilot launcher runtime package](docs/native-pilot-build.md#conductor-runtime-package),
+with pinned Python dependencies, source-bound file inventory and a portable
+archive. The [launcher](docs/native-pilot-operator-inputs.md) connects real
+resource owners through independent signed inputs, ordered release and cleanup.
+Its machine-pipe interface requires an independently operated authority
+coordinator; it is not an interactive quickstart or a running pilot.
 The [persistent workload sidecar](docs/native-workload-sidecar.md) supports ordinary
 HTTPS libraries without direct proxy mTLS; provider credentials stay out of the
 application. These latest changes are not yet compiled or deployed. Remaining

@@ -277,6 +277,36 @@ RUN --network=none printf 'serverware.productionImage/v1\n' > /runtime/app/.serv
     && chmod 0444 /runtime/app/.serverware-production-image \
     && find /runtime -exec touch -h -d "@${SOURCE_DATE_EPOCH}" {} +
 
+# Separate unsigned conductor filesystem, not the control-plane image or a
+# configured service. Source verification and the offline Python dependency
+# owners above remain prerequisites; no live owner is invoked during assembly.
+FROM verified-production-source AS native-pilot-conductor-files
+
+ARG SOURCE_DATE_EPOCH="0"
+RUN --network=none set -eu; \
+    install -d -m 0555 /conductor/app/scripts /conductor/usr/share/serverware; \
+    cp -R /source/serverware /conductor/app/serverware; \
+    install -m 0444 /source/scripts/run_native_pilot.py /conductor/app/scripts/run_native_pilot.py; \
+    install -m 0444 /source/scripts/native_pilot_runtime_entrypoint.py /conductor/app/scripts/native_pilot_runtime_entrypoint.py; \
+    install -m 0444 /source-contract/source-manifest.json /conductor/usr/share/serverware/source-manifest.json; \
+    test -z "$(find /conductor -type l -print -quit)"; \
+    find /conductor -type d -exec chmod 0555 {} +; \
+    find /conductor -type f -exec chmod 0444 {} +; \
+    find /conductor -exec touch -h -d "@${SOURCE_DATE_EPOCH}" {} +
+
+FROM gcr.io/distroless/python3-debian12:nonroot@sha256:7d1042ce588ab97019fe95c24ffca7bc5a82ccdac572511d5e09bda4435c89c5 AS native-pilot-conductor-rootfs
+
+# Keep the pinned base's genuine ELF interpreter and system DSOs alongside the
+# existing relocated CPython/libpython/stdlib/vendor artifact. Native service
+# executables, protected configurations, resources and authority are external.
+COPY --from=production-python-runtime-artifact --chown=0:0 /runtime /runtime
+COPY --from=production-python-runtime-artifact --chown=0:0 /vendor /vendor
+COPY --from=native-pilot-conductor-files --chown=0:0 /conductor/app /app
+COPY --from=native-pilot-conductor-files --chown=0:0 /conductor/usr/share/serverware /usr/share/serverware
+
+FROM scratch AS native-pilot-conductor-artifact
+COPY --from=native-pilot-conductor-rootfs / /
+
 FROM gcr.io/distroless/python3-debian12:nonroot@sha256:7d1042ce588ab97019fe95c24ffca7bc5a82ccdac572511d5e09bda4435c89c5
 
 ARG SERVERWARE_IMAGE_SOURCE="https://github.com/example/private-deployment"

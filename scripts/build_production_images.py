@@ -69,6 +69,8 @@ PRODUCTION_ARTIFACT_TARGETS = {
     ("data-plane/decision-gate-rs/Dockerfile.production", "native-pilot-artifacts"),
     # Offline public-input preparation only; not part of the guest closure.
     ("data-plane/decision-gate-rs/Dockerfile.production", "native-pilot-operator-artifact"),
+    # Fixed Python conductor rootfs, separate from seccomp and native guests.
+    ("Dockerfile.production", "native-pilot-conductor-artifact"),
     # Separately installed in the admitted application network namespace.
     ("data-plane/decision-gate-rs/Dockerfile.production", "native-workload-sidecar-artifact"),
     # Separately installed independent authorities; never part of the claimant
@@ -86,6 +88,7 @@ PRODUCTION_ARTIFACT_TARGETS = {
 }
 NATIVE_PILOT_TARGET = "native-pilot-artifacts"
 NATIVE_PILOT_OPERATOR_TARGET = "native-pilot-operator-artifact"
+NATIVE_PILOT_CONDUCTOR_TARGET = "native-pilot-conductor-artifact"
 PUBLIC_GUEST_FILES = {
     "seccomp.bpf": ("seccompSha256", 32768),
     "runtime.json": ("runtimeConfigurationSha256", 4 * 1024 * 1024),
@@ -554,8 +557,8 @@ def artifact_build_command(
         raise RuntimeError("production artifact output must be a non-empty local destination")
     pilot_resources: list[str] = []
     if native_pilot_bounded_build:
-        if target not in {NATIVE_PILOT_TARGET, NATIVE_PILOT_OPERATOR_TARGET}:
-            raise RuntimeError("native pilot resource limits require the fixed pilot or operator artifact target")
+        if target not in {NATIVE_PILOT_TARGET, NATIVE_PILOT_OPERATOR_TARGET, NATIVE_PILOT_CONDUCTOR_TARGET}:
+            raise RuntimeError("native pilot resource limits require a fixed pilot artifact target")
         pilot_resources = _native_pilot_resource_arguments(metadata)
     if target == NATIVE_PILOT_TARGET:
         if not isinstance(public_inputs_sha256, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", public_inputs_sha256):

@@ -51,6 +51,66 @@ The [collector's fixed configuration](native-pilot-request-collection.md) can bi
 the recorded client/verifier bytes after independent artifact admission; hashes
 in this local build report do not establish that admission by themselves.
 
+## Conductor runtime package
+
+The separate `native-pilot-conductor-artifact` target in the top-level
+`Dockerfile.production` supplies the Python operator's filesystem. It combines
+the existing pinned Python/libpython/stdlib/vendor artifact, the pinned
+distroless base's system libraries, verified `serverware` sources, the conductor
+script and its fixed isolated bootstrap. The default control-plane image stage
+remains unchanged. This does not include native service executables, protected
+configuration, keys, resource mounts or an independent authority coordinator.
+
+After provisioning the same strict clean-source/dependency build prerequisites,
+the explicit build command is:
+
+```sh
+make build-native-pilot-conductor-runtime \
+  NATIVE_PILOT_OUTPUT=/srv/catchplate-fast/tmp/pilot-conductor-runtime
+```
+
+The output must be a new absolute directory. Inspect filesystem capacity first;
+the exported rootfs plus archive can exceed 1 GiB. As with the other commands,
+the build is offline at each RUN step, source/cache admission is mandatory,
+and the existing 8-CPU/24-GiB/no-swap limits apply per RUN rather than in aggregate.
+No independent guest build inputs are needed for this Python-only target.
+
+The resulting layout is:
+
+```text
+attempt.json                    source and bounded-build selection
+artifacts/                      actual exported operator rootfs
+package/runtime-rootfs.tar      deterministic, uncompressed portable rootfs
+package/package.json            unsigned inventory, source and archive hashes
+conductor-runtime.json          successful local build/package report
+```
+
+The inventory bounds tree depth, path length, entry count, per-file bytes and
+aggregate bytes. It hashes stable regular files, refuses special files and
+regular hardlinks, and resolves admitted distribution symlinks only inside the
+inventoried rootfs namespace. An absolute link names that runtime root, never
+the build host. Packaged application/script content must match the source
+manifest. The tar uses sorted paths, root ownership and the source epoch;
+the packager rechecks the inventory and copied bytes before writing completion
+metadata. A failed attempt leaves its exact partial output for reconciliation,
+not automatic deletion, repair or retry.
+
+Within a separately admitted and provisioned execution root, the fixed command
+is:
+
+```text
+/runtime/python/bin/python3 -I -B /app/scripts/native_pilot_runtime_entrypoint.py --run-native-pilot
+```
+
+Do **not** run this against a merely extracted build directory: the operator
+still needs its genuine protected installation, root process/environment,
+native executables, kernel/resource setup, independent authorities and exclusive
+machine pipes. The bootstrap uses only fixed packaged import roots; it accepts
+no module/path selector. The build does not install, mount, chroot into or launch
+the operator. Its local archive hash is a measurement, not independent approval,
+a dynamic-loader closure proof, a successful pilot or production release evidence.
+This source batch has not built or executed the new target.
+
 ## Operator commands
 
 For the full pilot commands below, use a clean committed checkout;
@@ -444,10 +504,11 @@ claims that testing passed. Final bounded status goes to stderr, while stdout
 remains solely the phase protocol. Cleanup uncertainty retains the actual owner
 graph rather than retrying or claiming retirement.
 
-The current seccomp operator and native guest artifact targets do **not** package
-this Python conductor runtime or implement its independent coordinator. Their
-protected installation/packaging, independently provisioned services and
-connected pilot acceptance remain open prerequisites, not build outputs.
+The seccomp operator and native guest targets remain distinct from the separate
+[conductor runtime package](#conductor-runtime-package). None implements its
+independent authority coordinator. Protected installation, independently
+provisioned services and connected pilot acceptance remain open prerequisites,
+not local build outputs.
 
 The [live composition](native-pilot-launch.md) uses an explicit endpoint-only
 cohort bound to the retained measured driver, with separate genuine cleanup

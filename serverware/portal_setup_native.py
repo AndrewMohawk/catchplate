@@ -1,4 +1,9 @@
-"""Setup native-policy observation UI; no enrollment or effect authority."""
+"""Native Setup observation and protected enrollment UI; browser state grants no authority."""
+
+from serverware.portal_setup_native_enrollment import (
+    SETUP_NATIVE_ENROLLMENT_HTML,
+    SETUP_NATIVE_ENROLLMENT_SCRIPT,
+)
 
 SETUP_NATIVE_POLICY_HTML = r"""
             <hr>
@@ -7,7 +12,7 @@ SETUP_NATIVE_POLICY_HTML = r"""
             <button type="button" class="secondary" onclick="runUiAction('Observe native loaded policy', setupNativePolicyObserve)">Owner: request native loaded-policy observation</button>
             <pre id="setup-native-policy-observation">No native loaded-policy observation.</pre>
             <p id="setup-native-policy-status" class="hint" role="status" aria-live="polite">A matching policy is not proxy readiness, credential availability, installed client trust, enrollment or completed Setup. No policy reload or enrollment action is performed here.</p>
-"""
+""" + SETUP_NATIVE_ENROLLMENT_HTML
 
 SETUP_NATIVE_POLICY_SCRIPT = r"""
     function setupNativeOriginal(text, maximum) {
@@ -57,4 +62,4 @@ SETUP_NATIVE_POLICY_SCRIPT = r"""
         throw error;
       } finally { operation.close(); }
     }
-"""
+""" + SETUP_NATIVE_ENROLLMENT_SCRIPT

@@ -22,6 +22,7 @@ from serverware.authority_radix_mutation import PrimaryTableContract
 # Keep this inventory exact: an operation adding a relation must add its reviewed
 # source key, rather than learning a key from the same database being verified.
 PRIMARY_KEY_COLUMNS: Mapping[str, tuple[str, ...]] = MappingProxyType({
+    "setup_native_enrollments": ("session_id",),
     "setup_policy_continuations": ("session_id",),
     "policy_native_canary_ready": ("canary_id",),
     "policy_native_canary_heads": ("canary_id",),

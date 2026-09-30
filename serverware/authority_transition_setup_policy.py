@@ -134,7 +134,7 @@ class BindCandidateKernel:
         credential = shared._row(context.exact("credentials", {"id": session["credential_id"]}), "actual active Setup credential")
         generation = shared._row(context.exact("credential_generations", {"credential_id": session["credential_id"]}), "actual credential version")
         _, root = currentness.require_root(context, session["credential_id"], session["credential_version"])
-        profile.require(credential["lifecycle_status"] == "active" and credential["version"] == session["credential_version"]
+        profile.require(credential["lifecycle_status"] == "active" and credential["credential_version"] == session["credential_version"]
             == generation["last_version"] and root["status"] == "open")
         actual_claim = shared._row(context.exact(candidate.TABLE, {"request_id": claim["request_id"]}), "actual completed generation claim")
         profile.require(actual_claim == claim and claim["configuration_digest"] == values["control_plane_configuration_digest"])

@@ -6,6 +6,29 @@ from serverware.authority_store.v9_schema_source import authority_v9_schema_sour
 
 def metadata_base_schema_source() -> str:
     return """
+            CREATE TABLE IF NOT EXISTS setup_native_enrollments (
+                session_id TEXT PRIMARY KEY, revision BIGINT NOT NULL, phase TEXT NOT NULL, owner_id TEXT NOT NULL,
+                intent_original TEXT NOT NULL, intent_sha256 TEXT NOT NULL UNIQUE, approval_id TEXT NOT NULL UNIQUE,
+                approval_original TEXT NOT NULL, prepare_request_digest TEXT NOT NULL UNIQUE,
+                certificate_original TEXT, certificate_sha256 TEXT UNIQUE, association_original TEXT,
+                complete_request_digest TEXT UNIQUE, configuration_digest TEXT NOT NULL,
+                created_at TEXT NOT NULL, expires_at BIGINT NOT NULL, completed_at TEXT,
+                CHECK (length(session_id) = 36 AND length(approval_id) = 36),
+                CHECK (length(owner_id) BETWEEN 1 AND 1024),
+                CHECK (length(intent_original) BETWEEN 2 AND 1200000),
+                CHECK (length(approval_original) BETWEEN 2 AND 131072),
+                CHECK (length(intent_sha256) = 71 AND length(prepare_request_digest) = 71 AND length(configuration_digest) = 71),
+                CHECK (expires_at > 0),
+                CHECK ((revision = 0 AND phase = 'issuance_unknown' AND certificate_original IS NULL
+                    AND certificate_sha256 IS NULL AND association_original IS NULL AND complete_request_digest IS NULL AND completed_at IS NULL)
+                    OR (revision = 1 AND phase = 'certificate_issued' AND certificate_original IS NOT NULL
+                    AND certificate_sha256 IS NOT NULL AND association_original IS NOT NULL AND complete_request_digest IS NOT NULL AND completed_at IS NOT NULL)),
+                CHECK (certificate_original IS NULL OR length(certificate_original) BETWEEN 1 AND 87382),
+                CHECK (association_original IS NULL OR length(association_original) BETWEEN 2 AND 4096),
+                CHECK (certificate_sha256 IS NULL OR length(certificate_sha256) = 71),
+                CHECK (complete_request_digest IS NULL OR length(complete_request_digest) = 71)
+            );
+
             CREATE TABLE IF NOT EXISTS setup_policy_continuations (
                 session_id TEXT PRIMARY KEY,
                 revision BIGINT NOT NULL,

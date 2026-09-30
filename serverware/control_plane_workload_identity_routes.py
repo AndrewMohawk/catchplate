@@ -27,6 +27,8 @@ ACTION = "workload.identity.issue"
 POST_PATH = "/api/agents/workload-identity/issue"
 OPTIONS_PATH = POST_PATH + "/options"
 PATHS = frozenset({POST_PATH, OPTIONS_PATH})
+from serverware import control_plane_setup_native_enrollment as native_setup
+PATHS = PATHS | native_setup.PATHS
 REQUEST_SCHEMA = "serverware.workloadIdentityIssuanceRequest/v1"
 RESPONSE_SCHEMA = "serverware.workloadIdentityIssuanceResponse/v1"
 MAX_REQUEST_BYTES = 12 * 1024 * 1024
@@ -156,6 +158,7 @@ class _Frame:
         self.original, self.request, self.identity, self.policy = None, None, None, None
         self.credential, self.result, self.response = None, None, None
         self.started, self.dispatched, self.closed = False, False, False
+        self.approver = False
 
     def base(self):
         self.context.work.charge(input_bytes=2 * sum(len(k) + len(v) for k, v in self.headers))
@@ -179,7 +182,7 @@ class _Frame:
 
         self.base()
         self.context.work.charge(input_bytes=64 * 1024, json_nodes=512)
-        identity = transport._native(lambda: _cookie_identity(self.request),
+        identity = transport._native(lambda: _cookie_identity(self.request, approver=self.approver),
             work=self.context.work, current=self.base, deadline_ns=self.context.deadline_ns)
         if (identity != self.identity
                 or application._control_plane_mutation_authn_policy() != self.policy):
@@ -198,21 +201,25 @@ class _Frame:
                 current=self.base, deadline_ns=self.context.deadline_ns)
         return self.base()
 
-    def bind(self, request):
+    def bind(self, request, *, approver=False):
         from serverware import app as application
 
         self.base()
         if self.request is not None or request.scope is not self.scope or type(self.original) is not bytes:
             _fail()
         self.request = request
-        self.identity = self.native(lambda: _cookie_identity(request))
+        if approver and self.path not in native_setup.PATHS:
+            _fail()
+        self.approver = approver
+        self.identity = self.native(lambda: _cookie_identity(request, approver=approver))
         self.policy = application._control_plane_mutation_authn_policy()
         self.context._retain_current(self.auth_current, self.context.window, self.context.deadline_ns)
 
     def stage(self, response):
         self.context.current()
         self.context.work.charge(input_bytes=2 * len(response.body))
-        if self.response is not None or len(response.body) > 128 * 1024:
+        maximum = native_setup.MAX_RESPONSE if self.path in native_setup.PATHS else 128 * 1024
+        if self.response is not None or len(response.body) > maximum:
             _fail()
         self.response = (response.status_code, response.body)
         return response
@@ -248,19 +255,21 @@ def _open_frame(request, size):
 
 
 async def _frame_request(request):
+    refusal = native_setup.error if request.scope.get("path") in native_setup.PATHS else error
     if request.scope.get("path") not in PATHS or request.method != "POST":
-        return error(405)
+        return refusal(405)
     lengths = request.headers.getlist("content-length")
     if (len(lengths) != 1 or re.fullmatch(r"[1-9][0-9]{0,7}", lengths[0]) is None
             or request.headers.getlist("transfer-encoding") or request.headers.getlist("content-encoding")
             or request.scope.get("query_string", b"") != b""
             or sum(len(k) + len(v) for k, v in request.scope["headers"]) > 8 * 1024):
-        return error(400)
+        return refusal(400)
     if request.headers.getlist("content-type") != ["application/json"]:
-        return error(415)
+        return refusal(415)
     size = int(lengths[0])
-    if not 2 <= size <= MAX_REQUEST_BYTES:
-        return error(413)
+    maximum = native_setup.MAX_HTTP if request.scope.get("path") in native_setup.PATHS else MAX_REQUEST_BYTES
+    if not 2 <= size <= maximum:
+        return refusal(413)
     body = bytearray()
     try:
         frame = await _blocking(lambda: _open_frame(request, size))
@@ -287,9 +296,9 @@ async def _frame_request(request):
         frame.context.current()
         return None
     except HTTPException as exc:
-        return error(exc.status_code)
+        return refusal(exc.status_code)
     except Exception:
-        return error()
+        return refusal()
 
 
 def _original(value, maximum, work):
@@ -421,13 +430,29 @@ def issue(request: Request):
     return _run(request, issue=True)
 
 
+@router.post(native_setup.PREFIX + "/draft")
+@router.post(native_setup.PREFIX + "/options")
+@router.post(native_setup.PREFIX + "/request")
+@router.post(native_setup.PREFIX + "/decide")
+@router.post(native_setup.PREFIX + "/issue")
+def setup_enrollment(request: Request):
+    frame = request.scope.get(_SCOPE_KEY)
+    if type(frame) is not _Frame:
+        return native_setup.error(400)
+    response = native_setup.run(frame, request)
+    if frame.response is None:
+        return frame.stage(response)
+    return response
+
+
 async def _send_response(scope, receive, send, response, *, before_dispatch=False, downstream_failed=False):
     frame = scope.get(_SCOPE_KEY)
+    refusal = native_setup.error if scope.get("path") in native_setup.PATHS else error
     if (before_dispatch or downstream_failed or type(frame) is not _Frame
             or frame.response is None):
         # Never propagate generic exception text or an unstaged success. Failure
         # bodies contain no original request, token or issuance authority.
-        safe = error(503 if downstream_failed else min(response.status_code, 503),
+        safe = refusal(503 if downstream_failed else min(response.status_code, 503),
             unknown=type(frame) is _Frame and frame.dispatched)
         await safe(scope, receive, send)
         return
@@ -449,7 +474,7 @@ async def _send_response(scope, receive, send, response, *, before_dispatch=Fals
     except Exception:
         if started:
             raise RuntimeError("workload issuance response lost its current send guard") from None
-        await error(unknown=frame.dispatched)(scope, receive, send)
+        await refusal(unknown=frame.dispatched)(scope, receive, send)
 
 
 def _discard_scope(scope):

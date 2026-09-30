@@ -11,7 +11,7 @@ from serverware import authority_oauth_retirement_succession_catalog as retireme
 from serverware.authority_query_read_work import _ValidationWork
 
 
-SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.335"
+SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.336"
 SCHEMA_VERSION = 9
 CONTRACT_SCHEMA = "serverware.policyAuthorityOperationContract/v3"
 BUSINESS_INTENT_SCHEMA = "serverware.policyAuthorityBusinessIntent/v2"
@@ -262,6 +262,8 @@ VERIFIER_READ_TABLES = frozenset({
     "policy_authority_consumed_envelopes",
 })
 _AUDIT_COUNTER_REPLACEMENT_OPERATIONS = frozenset({
+    "setup.native-enrollment.request", "setup.native-enrollment.decide",
+    "setup.native-enrollment.prepare", "setup.native-enrollment.complete",
     "native-policy-activation.request", "native-policy-activation.decide", "native-policy-activation.consume",
     "native-policy-activation.record-inclusion", "native-policy-activation.finalize",
     "setup.policy.bind-candidate",
@@ -1469,6 +1471,7 @@ PHASE2_STORE_TABLES = tuple(sorted({
     *_PHASE3_ACTIVATION_EVIDENCE,
 }))
 V9_ADDITIONAL_PROTECTED_TABLES = tuple(sorted({
+    "setup_native_enrollments",
     "policy_native_canary_ready", "policy_native_canary_heads", "policy_native_activation_preparations", "policy_native_activation_finalizations", "policy_native_activation_holds",
     "setup_policy_continuations",
     "policy_canary_delivery_slots", "policy_canary_delivery_heads", "policy_canary_delivery_parts",
@@ -1604,6 +1607,20 @@ _OPERATIONS = {
             proof_primitives=("primary-key-row", "bounded-limit-plus-one", "aggregate-high-water", "capacity-reservation"),
             maximum_query_rows=256, maximum_mutations=16, maximum_work_units=8192,
         ) for phase in ("request", "decide", "consume", "record-inclusion", "finalize")
+    },
+    **{
+        "setup.native-enrollment." + phase: _spec(
+            "serverware_policy_authority_setup_native_enrollment_" + phase,
+            reads=("setup_native_enrollments", "setup_policy_continuations", "setup_sessions", "control_plane_approvals",
+                "credentials", "credential_generations", "credential_currentness_roots", "policy_high_water",
+                "policy_publications", "policy_candidate_artifacts", "rbac_role_bindings", "metadata_audit_outbox",
+                "webauthn_credentials", "webauthn_challenges", "webauthn_trust_publication_high_water", "webauthn_trust_publications") + _PHASE2_AGGREGATE,
+            writes=("setup_native_enrollments", "control_plane_approvals", "metadata_audit_outbox") + _PHASE2_AGGREGATE,
+            mutation_kinds={"setup_native_enrollments": ("INSERT", "UPDATE"), "control_plane_approvals": ("INSERT", "UPDATE")},
+            webauthn="not-required" if phase == "complete" else "bound-verified-assertion-receipt",
+            proof_primitives=("primary-key-row", "bounded-limit-plus-one", "aggregate-high-water", "capacity-reservation"),
+            maximum_query_rows=64, maximum_mutations=12, maximum_work_units=8192,
+        ) for phase in ("request", "decide", "prepare", "complete")
     },
     "setup.policy.bind-candidate": _spec(
         "serverware_policy_authority_setup_policy_bind_candidate",

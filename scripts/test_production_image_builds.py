@@ -1001,6 +1001,43 @@ def assert_native_runtime_loader_paths() -> None:
                 capture_output=True, text=True, timeout=30,
             )
 
+    extension = Path("/source/no-needed.so")
+    traces = (
+        (extension, "\tstatically linked\n", "", 0, None),
+        (Path(interpreter), "\tstatically linked\n", "", 0, None),
+        (extension, "statically linked\nlibmissing.so => not found\n", "", 0, ValueError),
+        (Path(interpreter), "statically linked\nlinux-vdso.so.1 (0x1)\n", "", 0, ValueError),
+        (extension, "statically linked\n/usr/lib/libfoo.so (0x1)\n", "", 0, ValueError),
+        (extension, "libmissing.so => not found\n", "", 0, ValueError),
+        (extension, "unexpected diagnostic\n", "", 0, ValueError),
+        (extension, "", "", 0, ValueError),
+        (extension, " \t\n", "", 0, ValueError),
+        (extension, "statically linked\n", "warning\n", 0, ValueError),
+        (extension, "statically linked\n", "", 1, subprocess.CalledProcessError),
+    )
+    for source, stdout, stderr, returncode, expected_error in traces:
+        closure = package.Closure(0)
+        closure.elf_sources = [source]
+        command = ["/usr/bin/ldd", str(source)]
+        observation = subprocess.CompletedProcess(command, returncode, stdout, stderr)
+        failure = subprocess.CalledProcessError(returncode, command, stdout, stderr) if returncode else None
+        with mock.patch.object(package.subprocess, "run", return_value=observation, side_effect=failure) as loader, \
+                mock.patch.object(Path, "resolve", side_effect=AssertionError("unexpected trace path resolution")), \
+                mock.patch.object(closure, "add") as add:
+            try:
+                closure.libraries()
+            except (ValueError, subprocess.CalledProcessError) as error:
+                if expected_error is None or not isinstance(error, expected_error):
+                    raise
+            else:
+                if expected_error is not None:
+                    raise AssertionError(f"native runtime accepted an invalid loader trace: {stdout!r}, {stderr!r}")
+            add.assert_not_called()
+            loader.assert_called_once_with(
+                command, env=package.ENV, check=True,
+                capture_output=True, text=True, timeout=30,
+            )
+
 
 def assert_native_runtime_stdlib_build_directory() -> None:
     """Exercise the fixed stdlib exclusion without reading or copying files."""

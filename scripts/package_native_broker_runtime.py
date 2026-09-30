@@ -143,17 +143,20 @@ class Closure:
             inspected.add(source)
             result = subprocess.run(["/usr/bin/ldd", str(source)], env=ENV, check=True,
                                     capture_output=True, text=True, timeout=30)
-            require(len(result.stdout) <= 65536 and not result.stderr, "loader trace is not bounded and clean")
+            require(0 < len(result.stdout) <= 65536 and not result.stderr,
+                    f"loader trace is not bounded and clean: source={str(source)[:512]!r}")
+            if result.stdout.strip() == "statically linked":
+                # The pinned loader reports this for no-DT_NEEDED shared
+                # modules (including _contextvars), not only its interpreter.
+                # add() admits only ET_EXEC/ET_DYN; accept only the whole trace.
+                continue
             for line in result.stdout.splitlines():
                 line = line.strip()
                 if re.fullmatch(r"linux-vdso\.so\.1 \(0x[0-9a-f]+\)", line):
                     continue
-                if line == "statically linked" and source.name == "ld-linux-x86-64.so.2":
-                    # The glibc interpreter itself has no external DT_NEEDED
-                    # closure. This is not a general unresolved-ELF fallback.
-                    continue
                 match = re.fullmatch(r"(?:[A-Za-z0-9_.+-]+ => )?(/[A-Za-z0-9_./+-]+) \(0x[0-9a-f]+\)", line)
-                require(match is not None, "loader trace contains unresolved or unexpected dependencies")
+                require(match is not None, "loader trace contains unresolved or unexpected dependencies: "
+                        f"source={str(source)[:512]!r} line={line[:512]!r}")
                 library = Path(match.group(1))
                 diagnostic = f"source={str(source)[:512]!r} selected={str(library)[:512]!r}"
                 normalized = Path(os.path.normpath(str(library)))

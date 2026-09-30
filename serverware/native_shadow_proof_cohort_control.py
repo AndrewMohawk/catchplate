@@ -32,12 +32,12 @@ CONFIGURATION = "/etc/serverware/native-shadow-proof-cohort.json"
 PRECREATION = "/etc/serverware/native-shadow-proof-cohort-precreation.json"
 EXECUTABLE = "/opt/serverware/serverware-native-shadow-proof-cohort"
 _READ = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK
-_ROLES = profile.ROLES
 _APIS = {"retrieval": ("serverware.nativeShadowRetrievalGuestLaunch/v1", "retrieval"),
     "persistence": ("serverware.nativeShadowPersistenceGuestLaunch/v2", "persistence"),
     "trustedTime": ("serverware.nativeShadowTrustedTimeGuestLaunch/v1", "trustedTime"),
     "generationInstall": ("serverware.nativeShadowGenerationGuestLaunch/v1", "generation"),
-    "bridge": ("serverware.nativeProofBridgeLaunch/v1", "trustedTime")}
+    "bridge": ("serverware.nativeProofBridgeLaunch/v1", "trustedTime"),
+    "commitRequest": ("serverware.nativeShadowCommitRequestGuestLaunch/v1", "commitRequest")}
 
 
 def _clock():
@@ -200,19 +200,20 @@ class ParkedProofCohort:
             owner._config_original = owner._open(CONFIGURATION, profile.MAX_BYTES, control["configurationSha256"])
             owner._precreate_original = owner._open(PRECREATION, profile.MAX_BYTES, control["precreationSha256"])
             owner._config = profile.configuration(owner._config_original.raw)
+            owner._roles = profile.roles(owner._config)
             authority = p.fields(owner._config["authority"], ("publicKeyBase64url", "keyId"))
             public = p.decoded(authority["publicKeyBase64url"], size=32)
             p.require(public != bytes(32) and authority["keyId"] == p.sha(public))
             owner._key = Ed25519PublicKey.from_public_bytes(public)
             owner._cold = {}
-            for role in _ROLES:
+            for role in owner._roles:
                 pin = owner._config[role + "Configuration"]
                 delivery._pin(pin)
                 value = delivery.configuration(owner._open(pin["path"], 65536, pin["sha256"]).raw, pin["sha256"])
                 p.require(value["authority"] == authority)
                 owner._cold[role] = value
-            p.require(len({value["uid"] for value in owner._cold.values()}) == 5
-                and len({value["gid"] for value in owner._cold.values()}) == 5)
+            p.require(len({value["uid"] for value in owner._cold.values()}) == len(owner._roles)
+                and len({value["gid"] for value in owner._cold.values()}) == len(owner._roles))
             signed = p.fields(p.document(owner._precreate_original.raw, profile.MAX_BYTES),
                 ("apiVersion", "payload", "signatureBase64url"))
             p.require(signed["apiVersion"] == "serverware.nativeShadowProofCohortPrecreation/v1")
@@ -352,13 +353,13 @@ class ParkedProofCohort:
                 p.require(raw and flags & (socket.MSG_TRUNC | socket.MSG_CTRUNC) == 0
                     and credentials == (self._child_pid, 0, 0) and len(received) == 1
                     and _pidfd_pid(received[0]) == self._child_pid and not _terminal(received[0]))
-                observed = p.fields(p.document(raw, profile.MAX_BYTES), profile.ORIGINAL_FIELDS)
-                p.require(observed["apiVersion"] == "serverware.nativeShadowProofCohortOriginals/v1"
+                observed = p.fields(p.document(raw, profile.MAX_BYTES), profile.originals_fields(self._config))
+                p.require(observed["apiVersion"] == profile.originals_api(self._config)
                     and observed["configurationSha256"] == p.sha(self._config_original.raw)
                     and observed["precreationSha256"] == p.sha(self._precreate_original.raw)
                     and observed["invocationId"] == self._window["invocationId"])
                 identities = set()
-                for role in _ROLES:
+                for role in self._roles:
                     value = p.fields(observed[role], ("processId", "startTimeTicks", "executable"))
                     pid = p.integer(value["processId"], minimum=2, maximum=(1 << 31) - 1)
                     start = p.integer(value["startTimeTicks"], maximum=(1 << 64) - 1)
@@ -371,7 +372,7 @@ class ParkedProofCohort:
                     identities.add((exe["device"], exe["inode"]))
                     fd = os.pidfd_open(pid, 0)
                     self._parked.append((fd, pid, start))
-                p.require(len({pid for _, pid, _ in self._parked}) == 5)
+                p.require(len({pid for _, pid, _ in self._parked}) == len(self._roles))
                 self._observed, self._observation_bytes = observed, bytes(raw)
                 self.check()
                 return
@@ -393,16 +394,23 @@ class ParkedProofCohort:
         self.check()
         return self._startup
 
+    def commitment_selected(self):
+        """Source selection only; never proof that any service is ready."""
+        self.check()
+        return self._config["apiVersion"] == "serverware.nativeShadowProofCohortConfiguration/v3"
+
     def lifetime_deadline_boottime_ns(self):
         self.check()
         return self._lifetime
 
     def _role_files(self, role, pin):
         self.check()
-        p.require(role in _ROLES)
+        p.require(role in self._roles)
         delivery._pin(pin)
         launch_original = self._open(pin["path"], profile.MAX_BYTES, pin["sha256"])
         api, field = _APIS[role]
+        if role == "bridge" and self.commitment_selected():
+            api = "serverware.nativeProofBridgeLaunch/v2"
         launch = p.fields(p.document(launch_original.raw, profile.MAX_BYTES), ("apiVersion", "keyAdmission", field))
         p.require(launch["apiVersion"] == api)
         nested = launch["keyAdmission"]
@@ -431,7 +439,7 @@ class ParkedProofCohort:
     def retain_activation_fds(self, *, role, launch_pin, descriptors):
         """Retain real already-created non-Persistence FDs; never create service authority."""
         self.check()
-        p.require(role in ("retrieval", "trustedTime", "generationInstall", "bridge"))
+        p.require(role in self._roles and role != "persistence")
         p.require(all(value._role != role for value in self._retained))
         launch, signed, grant, entries = self._role_files(role, launch_pin)
         p.require(type(descriptors) is tuple and len(descriptors) == len(entries))
@@ -454,19 +462,19 @@ class ParkedProofCohort:
         """One SCM_RIGHTS attempt; no automatic retry, acknowledgement or ready return."""
         from serverware.native_shadow_persistence_inputs import PersistenceTransfer
         self.check()
-        p.require(type(transfers) is dict and set(transfers) == set(_ROLES))
+        p.require(type(transfers) is dict and set(transfers) == set(self._roles))
         signed = p.fields(p.document(release_original, profile.MAX_BYTES), ("payload", "signatureBase64url"))
-        payload = p.fields(signed["payload"], profile.RELEASE_FIELDS)
-        p.require(payload["apiVersion"] == "serverware.nativeShadowProofCohortRelease/v1"
+        payload = p.fields(signed["payload"], profile.release_fields(self._config))
+        p.require(payload["apiVersion"] == profile.release_api(self._config)
             and payload["configurationSha256"] == p.sha(self._config_original.raw)
             and payload["precreationSha256"] == p.sha(self._precreate_original.raw)
             and payload["observationSha256"] == p.sha(self.original_bytes())
             and payload["invocationId"] == self._window["invocationId"]
             and payload["signingKeyId"] == self._config["authority"]["keyId"])
         self._key.verify(p.decoded(signed["signatureBase64url"], size=64),
-            profile.RELEASE_DOMAIN + p.canonical(payload))
+            profile.release_domain(self._config) + p.canonical(payload))
         expected, identities = {}, set()
-        for role in _ROLES:
+        for role in self._roles:
             pins = p.fields(payload[role], ("launch", "image"))
             delivery._pin(pins["image"])
             launch, c9, grant, entries = self._role_files(role, pins["launch"])
@@ -485,14 +493,14 @@ class ParkedProofCohort:
                     ("device", "inode", "mode", "uid", "gid")) and (info.st_dev, info.st_ino) not in identities)
                 identities.add((info.st_dev, info.st_ino))
             expected[role] = descriptors
-        p.require(5 <= sum(len(value) for value in expected.values()) <= 128)
+        p.require(len(self._roles) <= sum(len(value) for value in expected.values()) <= 128)
         self.check()
-        self._transfers = [transfers[role] for role in _ROLES]
+        self._transfers = [transfers[role] for role in self._roles]
         rights = []
         # Freeze every source capability before contact. A failure in this
         # sequence is also nonretryable and retains all resources for cleanup.
         try:
-            for role in _ROLES:
+            for role in self._roles:
                 actual = transfers[role].begin_release()
                 p.require(actual == expected[role])
                 rights.extend(fd for _, fd in actual)
@@ -514,7 +522,8 @@ class ParkedProofCohort:
         """
         self._origin(); self._child_live()
         p.require(self._release_sent and not self._cleanup_attempted
-                  and self._config["apiVersion"] == "serverware.nativeShadowProofCohortConfiguration/v2")
+                  and self._config["apiVersion"] in ("serverware.nativeShadowProofCohortConfiguration/v2",
+                "serverware.nativeShadowProofCohortConfiguration/v3"))
         command = cleanup_profile.authorization(authorization_original, self._config_original.raw,
             self._precreate_original.raw, self._observation_bytes, self._release_original, self._boot, _clock())
         for fd, pid, start in self._parked:
@@ -537,8 +546,8 @@ class ParkedProofCohort:
     def _admit_cleanup(self, raw):
         self._cleanup_check()
         value, terminal = cleanup_profile.result(raw, self._cleanup_authorization,
-            cleanup_profile.configuration(self._config), self._observed)
-        for role, (fd, pid, start) in zip(_ROLES, self._parked, strict=True):
+            cleanup_profile.configuration(self._config), self._observed, cohort_configuration=self._config)
+        for role, (fd, pid, start) in zip(self._roles, self._parked, strict=True):
             child = terminal["children"][role]
             info = os.fstat(fd)
             p.require(_terminal(fd) and (pid, start) == (child["processId"], child["startTimeTicks"])
@@ -629,7 +638,8 @@ class ParkedProofCohort:
                 p.require(_process(self._child_pid)[0] == self._pid)
                 self._pidfd = os.pidfd_open(self._child_pid, 0)
             cleanup_end = _clock() + 250_000_000
-            if self._config["apiVersion"] == "serverware.nativeShadowProofCohortConfiguration/v2":
+            if self._config["apiVersion"] in ("serverware.nativeShadowProofCohortConfiguration/v2",
+                "serverware.nativeShadowProofCohortConfiguration/v3"):
                 cleanup_end = min(cleanup_end, self._cleanup_deadline or self._lifetime, self._lifetime)
             while not _terminal(self._pidfd) and _clock() < cleanup_end:
                 select.select([self._pidfd], [], [], 0.01)
@@ -639,7 +649,8 @@ class ParkedProofCohort:
                         signal.pidfd_send_signal(fd, signal.SIGKILL)
                 signal.pidfd_send_signal(self._pidfd, signal.SIGKILL)
             cleanup_end = _clock() + 250_000_000
-            if self._config["apiVersion"] == "serverware.nativeShadowProofCohortConfiguration/v2":
+            if self._config["apiVersion"] in ("serverware.nativeShadowProofCohortConfiguration/v2",
+                "serverware.nativeShadowProofCohortConfiguration/v3"):
                 cleanup_end = min(cleanup_end, self._cleanup_deadline or self._lifetime, self._lifetime)
             while (not _terminal(self._pidfd) or any(not _terminal(fd) for fd, _, _ in self._parked)) and _clock() < cleanup_end:
                 select.select([], [], [], 0.01)

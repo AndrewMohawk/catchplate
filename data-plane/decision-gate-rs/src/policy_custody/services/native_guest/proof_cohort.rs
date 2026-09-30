@@ -115,7 +115,7 @@ impl Control {
                 } else {good=false;}
                 item=unsafe{libc::CMSG_NXTHDR(&message,item)};
             }
-            require(good && rights_seen && (5..=128).contains(&rights.len())
+            require(good && rights_seen && (cohort.admission.roles().len()..=128).contains(&rights.len())
                 && retrieval_peer::same_credentials(&credentials.ok_or(ShadowError::BindingDrift)?,&self.peer))?;
             retrieval_peer::same_process(pidfd.ok_or(ShadowError::BindingDrift)?.as_fd(),self.peer.pid)?;
             bytes.truncate(count as usize);cohort.check_startup()?;self.check()?;return Ok((bytes,rights));
@@ -184,12 +184,14 @@ struct ChildOriginal {process_id:i32,start_time_ticks:u64,executable:inputs::Exe
 #[serde(rename_all="camelCase")]
 struct Observations {api_version:&'static str,configuration_sha256:Sha256Digest,precreation_sha256:Sha256Digest,
     invocation_id:String,retrieval:ChildOriginal,persistence:ChildOriginal,trusted_time:ChildOriginal,
-    generation_install:ChildOriginal,bridge:ChildOriginal}
+    generation_install:ChildOriginal,bridge:ChildOriginal,
+    #[serde(skip_serializing_if="Option::is_none")]
+    commit_request:Option<ChildOriginal>}
 struct Program {launch:Original,launch_bytes:Vec<u8>,image_original:Original,image:image::Image,
     files:FileAdmission,activation:BTreeMap<String,OwnedFd>,inspection:Inspection,remote:OwnedFd}
 struct Cohort {
-    // Explicit Drop signals ALL five before any wait. Images/originals remain
-    // fields until actual same-PIDFD terminal evidence and all five reaps.
+    // Explicit Drop signals the COMPLETE selected cohort before any wait.
+    // Images/originals remain until same-PIDFD terminal evidence and all reaps.
     children:Vec<child::Child>,programs:Vec<Program>,executables:Vec<inputs::Executable>,
     launch_target:Target,image_target:Target,admission:inputs::Admission,_watchdog:Watchdog,
     cleanup:Option<cleanup::Owner>,
@@ -199,8 +201,8 @@ impl Cohort {
         let admission=inputs::Admission::open()?;let watchdog=Watchdog::arm_proof_cohort(&admission)?;
         let cleanup=admission.cleanup()?;
         let launch_target=Target::open(LAUNCH_PATH)?;let image_target=Target::open(IMAGE_PATH)?;
-        let mut executables=Vec::with_capacity(5);
-        for _ in 0..5 {executables.push(inputs::Executable::create(&admission)?);}
+        let mut executables=Vec::with_capacity(admission.roles().len());
+        for _ in admission.roles() {executables.push(inputs::Executable::create(&admission)?);}
         process::isolate_mounts()?;
         let mut owner=Self{children:Vec::new(),programs:Vec::new(),executables,launch_target,image_target,admission,_watchdog:watchdog,cleanup};
         for executable in &owner.executables {
@@ -231,14 +233,15 @@ impl Cohort {
         }Ok(())
     }
     fn observations(&self)->Result<Vec<u8>,ShadowError> {
-        self.check_startup()?;require(self.children.len()==5 && self.programs.is_empty())?;
+        self.check_startup()?;require(self.children.len()==self.admission.roles().len() && self.programs.is_empty())?;
         let child=|index:usize|->Result<ChildOriginal,ShadowError> {
             let identity=self.children[index].parked_identity()?;
             Ok(ChildOriginal{process_id:identity.0,start_time_ticks:identity.1,executable:self.executables[index].observation()?})
         };
-        let original=Observations{api_version:SOURCE_API,configuration_sha256:self.admission.configuration_sha256(),
+        let original=Observations{api_version:if self.admission.six(){"serverware.nativeShadowProofCohortOriginals/v2"}else{SOURCE_API},configuration_sha256:self.admission.configuration_sha256(),
             precreation_sha256:self.admission.precreation_sha256(),invocation_id:self.admission.invocation_id().into(),
-            retrieval:child(0)?,persistence:child(1)?,trusted_time:child(2)?,generation_install:child(3)?,bridge:child(4)?};
+            retrieval:child(0)?,persistence:child(1)?,trusted_time:child(2)?,generation_install:child(3)?,bridge:child(4)?,
+            commit_request:if self.admission.six(){Some(child(5)?)}else{None}};
         let bytes=canonical_json_bytes(&original)?;self.check_startup()?;Ok(bytes)
     }
     fn release(&mut self,bytes:&[u8],observed:&[u8],rights:Vec<OwnedFd>)->Result<(),ShadowError> {
@@ -252,7 +255,7 @@ impl Cohort {
             let files=admit_files(&selected.delivery_configuration.path,selected.delivery_configuration.sha256.clone(),
                 &selected.delivery.path,selected.delivery.sha256.clone()).map_err(fail)?;
             self.admission.join(index,&selected,&files)?;
-            require_role(index,&service)?;
+            require_role(index,&service,self.admission.six())?;
             let mut activation=BTreeMap::new();
             for (slot,entry) in files.payload.activation.iter().enumerate() {
                 require(entry.fd==6+slot as i32)?;
@@ -284,12 +287,12 @@ impl Cohort {
             view.retire()?;
             self.programs.push(Program{launch,launch_bytes,image_original,image,files,activation,inspection,remote});
         }
-        require(rights.next().is_none() && self.programs.len()==5)?;
+        require(rights.next().is_none() && self.programs.len()==self.admission.roles().len())?;
         self.check_startup()?;
-        // All signed originals and ALL five parked actual targets are joined
-        // before the first effect. Failure of any send kills/reaps all five;
-        // it cannot be represented as an atomic five-process readiness claim.
-        for index in 0..5 {
+        // All selected signed originals and actual parked targets are joined
+        // before the first effect. A partial send kills/reaps the WHOLE cohort;
+        // it is not an atomic process-readiness claim.
+        for index in 0..self.admission.roles().len() {
             self.check_startup()?;
             let p=&self.programs[index];
             let ordered=p.files.payload.activation.iter().map(|e|
@@ -320,16 +323,23 @@ impl Cohort {
 }
 // The exact slot does not create a service. Unknown or not-yet-connected
 // selectors refuse before ANY child is released.
-fn require_role(index:usize,service:&SelectedService)->Result<(),ShadowError> {
+fn require_role(index:usize,service:&SelectedService,six:bool)->Result<(),ShadowError> {
     require(match (index,service) {
         (0,SelectedService::Retrieval(_))|(1,SelectedService::Persistence(_))|(1,SelectedService::PersistenceLocked(_))|
-        (2,SelectedService::TrustedTime(_))|(3,SelectedService::Generation(_))|(4,SelectedService::ProofBridge(_))=>true,
+        (2,SelectedService::TrustedTime(_))|(3,SelectedService::Generation(_))=>true,
+        (4,SelectedService::ProofBridge(_))=>!six,
+        (4,SelectedService::CommitmentBridge(_))|(5,SelectedService::CommitRequest(_))=>six,
         _=>false,
     })
 }
 fn assigned_peers(service:&SelectedService,files:&FileAdmission)
     ->Result<Vec<(usize,super::super::super::super::ExpectedPeerCredentialV3)>,ShadowError> {
     match service {
+        SelectedService::CommitRequest(pin)=>{
+            let original=pin.open(65536)?;
+            let grant:admission::commit_request::Configuration=exact(&original.read(65536).map_err(fail)?)?;
+            grant.validate_shape()?;Ok(vec![(4,grant.expected_peer().clone())])
+        }
         SelectedService::Generation(pin)=>{
             let original=pin.open(65536)?;
             let grant:admission::generation_install::Configuration=exact(&original.read(65536).map_err(fail)?)?;
@@ -350,13 +360,16 @@ fn assigned_peers(service:&SelectedService,files:&FileAdmission)
             let grant:admission::trusted_time::Configuration=exact(&original.read(65536).map_err(fail)?)?;
             grant.validate_shape()?;Ok(vec![(4,grant.expected_peer().clone())])
         }
-        SelectedService::ProofBridge(_)=>{
-            let mut assigned=proof_client::assigned_peers(files)?;
+        SelectedService::ProofBridge(_)|SelectedService::CommitmentBridge(_)=>{
+            let commitment=matches!(service,SelectedService::CommitmentBridge(_));
+            let mut assigned=if commitment {proof_client::assigned_peers_selected(files,true)?}
+                else {proof_client::assigned_peers(files)?};
             let mut peers=Vec::new();
             for (index,kind) in [retrieval_peer::EndpointKind::Retrieval,retrieval_peer::EndpointKind::Persistence,
                 retrieval_peer::EndpointKind::TrustedTime,retrieval_peer::EndpointKind::GenerationInstallEnvelope].into_iter().enumerate() {
                 peers.push((index,assigned.remove(&kind).ok_or(ShadowError::BindingDrift)?));
             }
+            if commitment {peers.push((5,assigned.remove(&retrieval_peer::EndpointKind::CommitRequest).ok_or(ShadowError::BindingDrift)?));}
             require(assigned.is_empty())?;Ok(peers)
         }
         _=>Err(ShadowError::CustodyUnavailable),
@@ -365,6 +378,16 @@ fn assigned_peers(service:&SelectedService,files:&FileAdmission)
 fn prepare_inspection(service:SelectedService,files:&FileAdmission,activation:&BTreeMap<String,OwnedFd>)
     ->Result<(Inspection,OwnedFd),ShadowError> {
     match service {
+        SelectedService::CommitRequest(pin)=>{
+            require(activation.len()==1)?;
+            let original=pin.open(65536)?;
+            let grant:admission::commit_request::Configuration=exact(&original.read(65536).map_err(fail)?)?;
+            grant.validate_shape()?;
+            let socket=activation.get("commit-request-listener").ok_or(ShadowError::BindingDrift)?;
+            let (owner,remote)=retrieval_peer::Inspector::prepare_endpoint(original,
+                grant.expected_peer().checked().map_err(fail)?,grant.guest_uid(),socket,retrieval_peer::EndpointKind::CommitRequest)?;
+            Ok((Inspection::Server(owner),remote))
+        }
         SelectedService::Generation(pin)=>{
             require(activation.len()==2 && activation.contains_key("generation-install-journal"))?;
             let original=pin.open(65536)?;
@@ -412,6 +435,10 @@ fn prepare_inspection(service:SelectedService,files:&FileAdmission,activation:&B
         }
         SelectedService::ProofBridge(_)=>{
             let (owner,remote)=proof_client::Inspector::prepare(files,activation)?;
+            Ok((Inspection::ProofClient(owner),remote))
+        }
+        SelectedService::CommitmentBridge(_)=>{
+            let (owner,remote)=proof_client::Inspector::prepare_selected(files,activation,true)?;
             Ok((Inspection::ProofClient(owner),remote))
         }
         _=>Err(ShadowError::CustodyUnavailable),

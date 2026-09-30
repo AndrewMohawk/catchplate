@@ -4,6 +4,7 @@ use super::*;
 use std::io::Write;
 use std::os::unix::fs::FileExt;
 const DOMAIN:&[u8]=b"serverware.nativeShadowProofCohortCleanup.signature/v1\0";
+const SIX_DOMAIN:&[u8]=b"serverware.nativeShadowProofCohortCleanup.signature/v2\0";
 const DIRECTORY:&str="/var/lib/serverware/native-shadow-proof-cohort-cleanup";
 const MAX_RECORD:usize=65536;
 #[derive(Clone,Serialize,Deserialize)]
@@ -139,11 +140,14 @@ impl Owner {
     }
     pub(super) fn perform(mut self,raw:&[u8],cohort:&mut Cohort,observed:&[u8],release:&[u8],control:&Control)
         ->Result<(Self,Vec<u8>,u64),ShadowError>{
-        require(!self.attempted && raw.len()<=MAX_WIRE && cohort.children.len()==5 && cohort.programs.len()==5)?;
+        require(!self.attempted && raw.len()<=MAX_WIRE && cohort.children.len()==cohort.admission.roles().len()
+            && cohort.programs.len()==cohort.admission.roles().len())?;
         self.attempted=true;let authorization:Authorization=exact(raw)?;let p=&authorization.payload;
         let issued=decimal(&p.requested_at_boottime_ns)?;let deadline=decimal(&p.deadline_boottime_ns)?;
         let a=&cohort.admission;
-        require(p.api_version=="serverware.nativeShadowProofCohortCleanup/v1" && p.purpose=="terminate-owned-proof-cohort"
+        let six=a.six();let roles=a.roles();
+        require(p.api_version==(if six{"serverware.nativeShadowProofCohortCleanup/v2"}else{"serverware.nativeShadowProofCohortCleanup/v1"})
+            && p.purpose=="terminate-owned-proof-cohort"
             && p.configuration_sha256==a.configuration_sha256() && p.precreation_sha256==a.precreation_sha256()
             && p.observation_sha256==Sha256Digest::compute(observed) && p.release_sha256==Sha256Digest::compute(release)
             && p.invocation_id==a.invocation_id() && p.signing_key_id==self.config.authority.key_id
@@ -152,7 +156,7 @@ impl Owner {
             && deadline<=a.lifetime().checked_sub(REAP_RESERVE_NS).ok_or(ShadowError::BindingDrift)?)?;
         let signature=URL_SAFE_NO_PAD.decode(&authorization.signature_base64url).map_err(fail)?;
         require(signature.len()==64 && URL_SAFE_NO_PAD.encode(&signature)==authorization.signature_base64url)?;
-        let mut preimage=DOMAIN.to_vec();preimage.extend(canonical_json_bytes(p)?);
+        let mut preimage=(if six{SIX_DOMAIN}else{DOMAIN}).to_vec();preimage.extend(canonical_json_bytes(p)?);
         self.key.verify_strict(&preimage,&Signature::from_bytes(&signature.try_into().map_err(fail)?)).map_err(fail)?;
         cohort.check()?;control.check()?;
         let intent=self.append("intent.json",raw,&||{cohort.check()?;control.check()?;require(now()?<deadline)})?;
@@ -162,17 +166,17 @@ impl Owner {
         for child in &mut cohort.children {require(now()?<deadline)?;signalled &= child.request_stop().is_ok();}
         require(signalled)?;
         let mut children=BTreeMap::new();
-        for (role,child) in ["retrieval","persistence","trustedTime","generationInstall","bridge"].into_iter().zip(&mut cohort.children) {
-            children.insert(role,child.reap_observed(deadline)?);
+        for (role,child) in roles.iter().zip(&mut cohort.children) {
+            children.insert(*role,child.reap_observed(deadline)?);
         }
         let completed=now()?;require(completed<deadline)?;
-        let terminal=Terminal{api_version:"serverware.nativeShadowProofCohortTerminal/v1",authorization_sha256:Sha256Digest::compute(raw),
+        let terminal=Terminal{api_version:if six{"serverware.nativeShadowProofCohortTerminal/v2"}else{"serverware.nativeShadowProofCohortTerminal/v1"},authorization_sha256:Sha256Digest::compute(raw),
             configuration_sha256:p.configuration_sha256.clone(),precreation_sha256:p.precreation_sha256.clone(),
             observation_sha256:p.observation_sha256.clone(),release_sha256:p.release_sha256.clone(),
             invocation_id:p.invocation_id.clone(),completed_at_boottime_ns:completed.to_string(),children};
         let terminal_raw=canonical_json_bytes(&terminal)?;
         let terminal_head=self.append("terminal.json",&terminal_raw,&||{cohort.check_resources()?;control.check()?;require(now()?<deadline)})?;
-        let response=canonical_json_bytes(&ResultOriginal{api_version:"serverware.nativeShadowProofCohortCleanupResult/v1",
+        let response=canonical_json_bytes(&ResultOriginal{api_version:if six{"serverware.nativeShadowProofCohortCleanupResult/v2"}else{"serverware.nativeShadowProofCohortCleanupResult/v1"},
             authorization_sha256:terminal.authorization_sha256,intent_record_sha256:intent,
             terminal_original:String::from_utf8(terminal_raw).map_err(fail)?,terminal_record_sha256:terminal_head})?;
         require(response.len()<=MAX_WIRE)?;Ok((self,response,deadline))

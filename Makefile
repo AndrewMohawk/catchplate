@@ -1527,6 +1527,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/custody_generation_grants.py \
 	serverware/custody_generation_originals.py \
 	serverware/custody_generation_inputs.py \
+	serverware/custody_commitment_inputs.py \
 	serverware/custody_generation_launch.py \
 	serverware/custody_generation_business.py \
 	serverware/native_shadow_persistence_artifacts.py \
@@ -4108,6 +4109,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/custody_generation_grants.py \
 				serverware/custody_generation_originals.py \
 				serverware/custody_generation_inputs.py \
+				serverware/custody_commitment_inputs.py \
 				serverware/custody_generation_launch.py \
 				serverware/custody_generation_business.py \
 				serverware/native_shadow_persistence_artifacts.py \
@@ -4817,12 +4819,14 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-shadow-persistence-inputs.v1.schema.json \
 				schemas/native-shadow-proof-cohort.v1.schema.json \
 				schemas/native-shadow-proof-cohort.v2.schema.json \
+				schemas/native-shadow-proof-cohort.v3.schema.json \
 				schemas/custody-service-generation-admission.v1.schema.json \
 				schemas/native-generation-coordinator.v1.schema.json \
 				schemas/native-shadow-commit-request.v1.schema.json \
 				schemas/native-shadow-commitment-keys.v1.schema.json \
 				schemas/custody-five-service-launch.v1.schema.json \
 				schemas/custody-five-service-business-inputs.v1.schema.json \
+				schemas/custody-commitment-inputs.v1.schema.json \
 				schemas/custody-ordinary-peer-inspection.v1.schema.json \
 				schemas/native-policy-activation.v1.schema.json \
 				schemas/native-policy-activation-recovery.v1.schema.json \

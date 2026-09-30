@@ -17,6 +17,7 @@ from serverware.custody_generation_launch import FiveServiceLaunch
 p = g.p
 _TOKEN = object()
 CONFIGURATION = "/etc/serverware/custody-generation-business.json"
+COMMITMENT_CONFIGURATION = "/etc/serverware/custody-commitment-business.json"
 RUN = "/run/serverware-custody-business"
 STORE = "/var/lib/serverware/custody-business"
 
@@ -40,15 +41,28 @@ class BusinessResources:
 
     @classmethod
     def prepare(cls, launcher):
+        p.require(type(launcher) is FiveServiceLaunch and not launcher._commitment)
+        return cls._prepare(launcher)
+
+    @classmethod
+    def prepare_commitment(cls, launcher):
+        p.require(type(launcher) is FiveServiceLaunch and launcher._commitment)
+        return cls._prepare(launcher)
+
+    @classmethod
+    def _prepare(cls, launcher):
+        p.require(cls is BusinessResources)
         p.require(type(launcher) is FiveServiceLaunch and threading.current_thread() is threading.main_thread()
             and launcher._business_resources is None and launcher._input_owner is None and not launcher._attempted)
         launcher.check()
         owner = cls(_TOKEN, launcher)
         try:
-            original = o.Original(CONFIGURATION, 65536); owner._originals.append(original)
+            original = o.Original(COMMITMENT_CONFIGURATION if launcher._commitment else CONFIGURATION, 65536)
+            owner._originals.append(original)
             config = p.fields(g.document(original.read(), 65536),
                 ("apiVersion", "launchConfigurationSha256", "invocationId", "clientConfiguration"))
-            p.require(config["apiVersion"] == "serverware.custodyFiveServiceBusinessInputs/v1"
+            version = "serverware.custodyFiveServiceBusinessInputs/v2" if launcher._commitment else "serverware.custodyFiveServiceBusinessInputs/v1"
+            p.require(config["apiVersion"] == version
                 and config["launchConfigurationSha256"] == p.sha(launcher._originals[0].read())
                 and config["invocationId"] == launcher._invocation)
             g.c9._pin(config["clientConfiguration"])
@@ -188,12 +202,24 @@ class BusinessResources:
         # intended C9 IDs do not manufacture an observed final process identity.
 
     def generation_inputs(self):
+        p.require(not self._launcher._commitment)
+        return self._inputs_for_profile()
+
+    def commitment_inputs(self):
+        p.require(self._launcher._commitment)
+        return self._inputs_for_profile()
+
+    def _inputs_for_profile(self):
         self.check(); p.require(not self._taken and threading.current_thread() is threading.main_thread())
         self._taken = True
         descriptors = {role: {"listener": self._roles[role]["listener"].fileno(),
             **self._roles[role]["directories"]} for role in g.ROLES}
         try:
-            inputs = GenerationInputs.prepare(self._launcher, business_descriptors=descriptors)
+            if self._launcher._commitment:
+                from serverware.custody_commitment_inputs import prepare
+                inputs = prepare(self._launcher, business_descriptors=descriptors)
+            else:
+                inputs = GenerationInputs.prepare(self._launcher, business_descriptors=descriptors)
             inputs._business_owner = self
             self._inputs = inputs
             self.check()

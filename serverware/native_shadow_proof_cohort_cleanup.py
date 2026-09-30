@@ -1,4 +1,4 @@
-"""Separate, fixed five-child lifecycle permission and data-only observations.
+"""Separate fixed-inventory lifecycle permission and data-only observations.
 
 No key creation, process selection, file mutation or operation-settlement
 authority. The actual retained control owner performs contact and waitid.
@@ -14,6 +14,7 @@ from serverware import native_shadow_guest_delivery as delivery
 
 p = delivery.p
 DOMAIN = b"serverware.nativeShadowProofCohortCleanup.signature/v1\0"
+SIX_DOMAIN = b"serverware.nativeShadowProofCohortCleanup.signature/v2\0"
 DIRECTORY = "/var/lib/serverware/native-shadow-proof-cohort-cleanup"
 MAX_BYTES = 32768
 ROLES = ("retrieval", "persistence", "trustedTime", "generationInstall", "bridge")
@@ -27,7 +28,8 @@ CHILD_FIELDS = ("processId", "startTimeTicks", "pidfdDevice", "pidfdInode", "ter
 
 
 def configuration(value):
-    p.require(value["apiVersion"] == "serverware.nativeShadowProofCohortConfiguration/v2")
+    p.require(value["apiVersion"] in ("serverware.nativeShadowProofCohortConfiguration/v2",
+        "serverware.nativeShadowProofCohortConfiguration/v3"))
     selected = p.fields(value["cleanup"], ("authority", "scopeId", "journal", "genesisSha256"))
     authority = p.fields(selected["authority"], ("publicKeyBase64url", "keyId"))
     raw = p.decoded(authority["publicKeyBase64url"], size=32)
@@ -41,6 +43,11 @@ def configuration(value):
     p.integer(identity["uid"], minimum=0, maximum=0); p.integer(identity["gid"], minimum=0, maximum=0)
     p.require(identity["mode"] == (stat.S_IFDIR | 0o700) and identity["uid"] == identity["gid"] == 0)
     return selected
+
+
+def _six(config):
+    configuration(config)
+    return config["apiVersion"] == "serverware.nativeShadowProofCohortConfiguration/v3"
 
 
 def authorize(*, configuration_raw, precreation_raw, observations_raw, release_raw, payload_raw,
@@ -58,7 +65,8 @@ def authorize(*, configuration_raw, precreation_raw, observations_raw, release_r
     p.require(isinstance(signing_key, Ed25519PrivateKey))
     public = signing_key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
     p.require(p.encoded(public) == selected["authority"]["publicKeyBase64url"])
-    result = p.canonical({"payload": payload, "signatureBase64url": p.encoded(signing_key.sign(DOMAIN + p.canonical(payload)))})
+    domain = SIX_DOMAIN if _six(config) else DOMAIN
+    result = p.canonical({"payload": payload, "signatureBase64url": p.encoded(signing_key.sign(domain + p.canonical(payload)))})
     authorization(result, configuration_raw, precreation_raw, observations_raw, release_raw, boot, now)
     p.require(len(result) <= MAX_BYTES)
     return result
@@ -68,8 +76,9 @@ def authorization(raw, config_raw, precreate_raw, observed_raw, release_raw, boo
     signed = p.fields(p.document(raw, MAX_BYTES), ("payload", "signatureBase64url"))
     value = p.fields(signed["payload"], FIELDS)
     selected = _scope(value, config_raw, precreate_raw, observed_raw, release_raw, boot, now)
+    domain = SIX_DOMAIN if value["apiVersion"] == "serverware.nativeShadowProofCohortCleanup/v2" else DOMAIN
     Ed25519PublicKey.from_public_bytes(p.decoded(selected["authority"]["publicKeyBase64url"], size=32)).verify(
-        p.decoded(signed["signatureBase64url"], size=64), DOMAIN + p.canonical(value))
+        p.decoded(signed["signatureBase64url"], size=64), domain + p.canonical(value))
     return value
 
 
@@ -88,18 +97,18 @@ def _scope(value, config_raw, precreate_raw, observed_raw, release_raw, boot, no
     issued, startup, lifetime = (p.ns(window[field]) for field in
         ("issuedAtBoottimeNs", "startupDeadlineBoottimeNs", "lifetimeDeadlineBoottimeNs"))
     p.require(issued < startup <= lifetime and startup - issued <= 30_000_000_000 and issued <= now < lifetime)
-    observed = p.fields(p.document(observed_raw, MAX_BYTES), profile.ORIGINAL_FIELDS)
-    p.require(observed["apiVersion"] == "serverware.nativeShadowProofCohortOriginals/v1"
+    observed = p.fields(p.document(observed_raw, MAX_BYTES), profile.originals_fields(config))
+    p.require(observed["apiVersion"] == profile.originals_api(config)
         and observed["configurationSha256"] == p.sha(config_raw) and observed["precreationSha256"] == p.sha(precreate_raw)
         and observed["invocationId"] == window["invocationId"])
     release = p.fields(p.document(release_raw, MAX_BYTES), ("payload", "signatureBase64url"))
-    released = p.fields(release["payload"], profile.RELEASE_FIELDS)
-    launch_key.verify(p.decoded(release["signatureBase64url"], size=64), profile.RELEASE_DOMAIN + p.canonical(released))
-    p.require(released["apiVersion"] == "serverware.nativeShadowProofCohortRelease/v1"
+    released = p.fields(release["payload"], profile.release_fields(config))
+    launch_key.verify(p.decoded(release["signatureBase64url"], size=64), profile.release_domain(config) + p.canonical(released))
+    p.require(released["apiVersion"] == profile.release_api(config)
         and released["configurationSha256"] == p.sha(config_raw) and released["precreationSha256"] == p.sha(precreate_raw)
         and released["observationSha256"] == p.sha(observed_raw) and released["invocationId"] == window["invocationId"]
         and released["signingKeyId"] == config["authority"]["keyId"])
-    p.require(value["apiVersion"] == "serverware.nativeShadowProofCohortCleanup/v1"
+    p.require(value["apiVersion"] == ("serverware.nativeShadowProofCohortCleanup/v2" if _six(config) else "serverware.nativeShadowProofCohortCleanup/v1")
         and value["purpose"] == "terminate-owned-proof-cohort" and value["configurationSha256"] == p.sha(config_raw)
         and value["precreationSha256"] == p.sha(precreate_raw) and value["observationSha256"] == p.sha(observed_raw)
         and value["releaseSha256"] == p.sha(release_raw) and value["invocationId"] == window["invocationId"]
@@ -116,10 +125,12 @@ def record(sequence, previous, original):
                         "previousHeadSha256": previous, "original": original.decode("ascii")})
 
 
-def result(raw, authorization_raw, selected, observed):
+def result(raw, authorization_raw, selected, observed, *, cohort_configuration=None):
     """Data validation only. Caller MUST prove actual retained parent/children."""
     value = p.fields(p.document(raw, MAX_BYTES), RESULT_FIELDS)
-    p.require(value["apiVersion"] == "serverware.nativeShadowProofCohortCleanupResult/v1"
+    six = cohort_configuration is not None and _six(cohort_configuration)
+    roles = ROLES + ("commitRequest",) if six else ROLES
+    p.require(value["apiVersion"] == ("serverware.nativeShadowProofCohortCleanupResult/v2" if six else "serverware.nativeShadowProofCohortCleanupResult/v1")
               and value["authorizationSha256"] == p.sha(authorization_raw))
     intent = p.sha(record(1, selected["genesisSha256"], authorization_raw))
     p.require(value["intentRecordSha256"] == intent and type(value["terminalOriginal"]) is str
@@ -127,15 +138,16 @@ def result(raw, authorization_raw, selected, observed):
     terminal_raw = value["terminalOriginal"].encode("ascii")
     terminal = p.fields(p.document(terminal_raw, MAX_BYTES), TERMINAL_FIELDS)
     p.require(value["terminalRecordSha256"] == p.sha(record(2, intent, terminal_raw))
-              and terminal["apiVersion"] == "serverware.nativeShadowProofCohortTerminal/v1"
+              and terminal["apiVersion"] == ("serverware.nativeShadowProofCohortTerminal/v2" if six else "serverware.nativeShadowProofCohortTerminal/v1")
               and terminal["authorizationSha256"] == p.sha(authorization_raw))
     command = p.document(authorization_raw, MAX_BYTES)["payload"]
+    p.require(command["apiVersion"] == ("serverware.nativeShadowProofCohortCleanup/v2" if six else "serverware.nativeShadowProofCohortCleanup/v1"))
     for field in ("configurationSha256", "precreationSha256", "observationSha256", "releaseSha256", "invocationId"):
         p.require(terminal[field] == command[field])
-    children = p.fields(terminal["children"], ROLES)
+    children = p.fields(terminal["children"], roles)
     completed = p.ns(terminal["completedAtBoottimeNs"])
     p.require(p.ns(command["requestedAtBoottimeNs"]) <= completed < p.ns(command["deadlineBoottimeNs"]))
-    for role in ROLES:
+    for role in roles:
         child = p.fields(children[role], CHILD_FIELDS)
         p.integer(child["processId"], minimum=2, maximum=(1 << 31) - 1)
         p.integer(child["startTimeTicks"], maximum=(1 << 64) - 1)
@@ -206,7 +218,7 @@ def recover(config, authorization_raw):
                       and original_identity(os.stat(name, dir_fd=current, follow_symlinks=False)) == expected
                       and (raw is None or os.pread(fd, len(raw) + 1, 0) == raw))
         names(current)
-        return p.canonical({"apiVersion": "serverware.nativeShadowProofCohortCleanupResult/v1",
+        return p.canonical({"apiVersion": "serverware.nativeShadowProofCohortCleanupResult/v2" if _six(config) else "serverware.nativeShadowProofCohortCleanupResult/v1",
             "authorizationSha256": p.sha(authorization_raw), "intentRecordSha256": p.sha(originals["intent.json"]),
             "terminalOriginal": terminal["original"], "terminalRecordSha256": p.sha(originals["terminal.json"])})
     finally:

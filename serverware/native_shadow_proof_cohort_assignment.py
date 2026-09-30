@@ -1,4 +1,4 @@
-"""Closed independent five-child cohort input authoring; no process or readiness.
+"""Closed five- or six-child input authoring; no process or readiness authority.
 
 These functions sign explicitly approved data using an already provisioned C9
 delivery key. Actual kernel originals and descriptor transfer remain owned by
@@ -15,7 +15,9 @@ from serverware import native_shadow_guest_delivery as delivery
 p = delivery.p
 PRECREATE_DOMAIN = b"serverware.nativeShadowProofCohortPrecreation.signature/v1\0"
 RELEASE_DOMAIN = b"serverware.nativeShadowProofCohortRelease.signature/v1\0"
+SIX_RELEASE_DOMAIN = b"serverware.nativeShadowProofCohortRelease.signature/v2\0"
 ROLES = ("retrieval", "persistence", "trustedTime", "generationInstall", "bridge")
+SIX_ROLES = ROLES + ("commitRequest",)
 COLD_NAMES = tuple(role + "Configuration" for role in ROLES)
 CONFIG_FIELDS = ("apiVersion", "authority", "executableSha256") + COLD_NAMES
 WINDOW_FIELDS = ("configurationSha256", "authorityKeyId", "bootIdBase64url", "timeNamespaceDevice",
@@ -32,11 +34,41 @@ def configuration(raw):
     value = p.document(raw, MAX_BYTES)
     if value.get("apiVersion") == "serverware.nativeShadowProofCohortConfiguration/v1":
         return p.fields(value, CONFIG_FIELDS)
-    p.fields(value, CONFIG_FIELDS + ("cleanup",))
-    p.require(value["apiVersion"] == "serverware.nativeShadowProofCohortConfiguration/v2")
+    if value.get("apiVersion") == "serverware.nativeShadowProofCohortConfiguration/v2":
+        p.fields(value, CONFIG_FIELDS + ("cleanup",))
+    else:
+        p.fields(value, CONFIG_FIELDS + ("cleanup", "commitRequestConfiguration"))
+        p.require(value["apiVersion"] == "serverware.nativeShadowProofCohortConfiguration/v3")
     from serverware import native_shadow_proof_cohort_cleanup as cleanup
     cleanup.configuration(value)
     return value
+
+
+def roles(config):
+    """Only two source-fixed inventories; never a supplied endpoint list."""
+    p.require(config["apiVersion"] in ("serverware.nativeShadowProofCohortConfiguration/v1",
+        "serverware.nativeShadowProofCohortConfiguration/v2", "serverware.nativeShadowProofCohortConfiguration/v3"))
+    return SIX_ROLES if config["apiVersion"] == "serverware.nativeShadowProofCohortConfiguration/v3" else ROLES
+
+
+def originals_fields(config):
+    return ("apiVersion", "configurationSha256", "precreationSha256", "invocationId") + roles(config)
+
+
+def release_fields(config):
+    return ("apiVersion", "configurationSha256", "precreationSha256", "observationSha256", "invocationId") + roles(config) + ("signingKeyId",)
+
+
+def originals_api(config):
+    return "serverware.nativeShadowProofCohortOriginals/v2" if roles(config) == SIX_ROLES else "serverware.nativeShadowProofCohortOriginals/v1"
+
+
+def release_api(config):
+    return "serverware.nativeShadowProofCohortRelease/v2" if roles(config) == SIX_ROLES else "serverware.nativeShadowProofCohortRelease/v1"
+
+
+def release_domain(config):
+    return SIX_RELEASE_DOMAIN if roles(config) == SIX_ROLES else RELEASE_DOMAIN
 
 
 def _invocation(value):
@@ -51,19 +83,25 @@ def _key(signing_key, authority):
               and authority["keyId"] == p.sha(raw))
 
 
-def _configuration(raw, expected_sha256, originals, signing_key):
+def _configuration(raw, expected_sha256, originals, signing_key, commit_request_original):
     config = configuration(raw)
     p.require(p.sha(raw) == p.digest(expected_sha256))
     p.digest(config["executableSha256"])
     _key(signing_key, config["authority"])
+    selected = roles(config)
+    p.require((commit_request_original is not None) == (selected == SIX_ROLES))
+    if commit_request_original is not None:
+        originals += (commit_request_original,)
+    cold_names = tuple(role + "Configuration" for role in selected)
     cold = []
-    for name, original in zip(COLD_NAMES, originals, strict=True):
+    for name, original in zip(cold_names, originals, strict=True):
         delivery._pin(config[name])
         value = delivery.configuration(original, config[name]["sha256"])
         p.require(value["authority"] == config["authority"])
         cold.append(value)
-    p.require(len(cold) == 5 and len({v["uid"] for v in cold}) == 5 and len({v["gid"] for v in cold}) == 5
-        and len({config[name]["path"] for name in COLD_NAMES}) == 5)
+    p.require(len(cold) == len(selected) and len({v["uid"] for v in cold}) == len(selected)
+        and len({v["gid"] for v in cold}) == len(selected)
+        and len({config[name]["path"] for name in cold_names}) == len(selected))
     return config
 
 
@@ -92,11 +130,12 @@ def _signed(signing_key, domain, payload):
 
 def sign_precreation(*, configuration_raw, configuration_sha256, retrieval_configuration_raw,
                      persistence_configuration_raw, trusted_time_configuration_raw, generation_install_configuration_raw,
-                     bridge_configuration_raw, payload_raw, boot, now, signing_key):
+                     bridge_configuration_raw, payload_raw, boot, now, signing_key,
+                     commit_request_configuration_raw=None):
     """Authorize only bounded cohort resource preparation, not any service."""
     config = _configuration(configuration_raw, configuration_sha256,
         (retrieval_configuration_raw, persistence_configuration_raw, trusted_time_configuration_raw,
-         generation_install_configuration_raw, bridge_configuration_raw), signing_key)
+         generation_install_configuration_raw, bridge_configuration_raw), signing_key, commit_request_configuration_raw)
     payload = p.document(payload_raw, MAX_BYTES)
     _window(payload, config, configuration_sha256, boot, now)
     result = p.canonical({"apiVersion": "serverware.nativeShadowProofCohortPrecreation/v1",
@@ -108,7 +147,7 @@ def sign_precreation(*, configuration_raw, configuration_sha256, retrieval_confi
 def sign_release(*, configuration_raw, configuration_sha256, retrieval_configuration_raw,
                  persistence_configuration_raw, trusted_time_configuration_raw, generation_install_configuration_raw,
                  bridge_configuration_raw, precreation_raw, observations_raw, payload_raw,
-                 boot, now, signing_key):
+                 boot, now, signing_key, commit_request_configuration_raw=None):
     """Sign exact separately approved originals; never synthesize peer14.
 
     observations_raw must come from the retained actual cohort's one observation
@@ -118,19 +157,19 @@ def sign_release(*, configuration_raw, configuration_sha256, retrieval_configura
     """
     config = _configuration(configuration_raw, configuration_sha256,
         (retrieval_configuration_raw, persistence_configuration_raw, trusted_time_configuration_raw,
-         generation_install_configuration_raw, bridge_configuration_raw), signing_key)
+         generation_install_configuration_raw, bridge_configuration_raw), signing_key, commit_request_configuration_raw)
     precreation = p.fields(p.document(precreation_raw, MAX_BYTES), ("apiVersion", "payload", "signatureBase64url"))
     p.require(precreation["apiVersion"] == "serverware.nativeShadowProofCohortPrecreation/v1")
     _window(precreation["payload"], config, configuration_sha256, boot, now)
     signing_key.public_key().verify(p.decoded(precreation["signatureBase64url"], size=64),
                                    PRECREATE_DOMAIN + p.canonical(precreation["payload"]))
-    observed = p.fields(p.document(observations_raw, MAX_BYTES), ORIGINAL_FIELDS)
-    p.require(observed["apiVersion"] == "serverware.nativeShadowProofCohortOriginals/v1"
+    observed = p.fields(p.document(observations_raw, MAX_BYTES), originals_fields(config))
+    p.require(observed["apiVersion"] == originals_api(config)
               and observed["configurationSha256"] == configuration_sha256
               and observed["precreationSha256"] == p.sha(precreation_raw)
               and observed["invocationId"] == precreation["payload"]["invocationId"])
     identities = []
-    for role in ROLES:
+    for role in roles(config):
         child = p.fields(observed[role], ("processId", "startTimeTicks", "executable"))
         p.integer(child["processId"], minimum=2, maximum=(1 << 31) - 1)
         p.integer(child["startTimeTicks"], maximum=(1 << 64) - 1)
@@ -140,17 +179,17 @@ def sign_release(*, configuration_raw, configuration_sha256, retrieval_configura
         p.integer(exe["length"], maximum=64 * 1024 * 1024)
         p.require(exe["sha256"] == config["executableSha256"])
         identities.append((child["processId"], exe["device"], exe["inode"]))
-    p.require(len({v[0] for v in identities}) == 5 and len({v[1:] for v in identities}) == 5)
-    payload = p.fields(p.document(payload_raw, MAX_BYTES), RELEASE_FIELDS)
-    p.require(payload["apiVersion"] == "serverware.nativeShadowProofCohortRelease/v1"
+    p.require(len({v[0] for v in identities}) == len(roles(config)) and len({v[1:] for v in identities}) == len(roles(config)))
+    payload = p.fields(p.document(payload_raw, MAX_BYTES), release_fields(config))
+    p.require(payload["apiVersion"] == release_api(config)
               and payload["configurationSha256"] == configuration_sha256
               and payload["precreationSha256"] == p.sha(precreation_raw)
               and payload["observationSha256"] == p.sha(observations_raw)
               and payload["invocationId"] == observed["invocationId"]
               and payload["signingKeyId"] == config["authority"]["keyId"])
-    for name in ROLES:
+    for name in roles(config):
         role = p.fields(payload[name], ("launch", "image"))
         delivery._pin(role["launch"]); delivery._pin(role["image"])
-    result = p.canonical({"payload": payload, "signatureBase64url": _signed(signing_key, RELEASE_DOMAIN, payload)})
+    result = p.canonical({"payload": payload, "signatureBase64url": _signed(signing_key, release_domain(config), payload)})
     p.require(len(result) <= MAX_BYTES)
     return result

@@ -1,4 +1,4 @@
-//! Five fixed purpose slots under one independently signed original boot
+//! Explicit five- or six-purpose selection under one signed original boot
 //! window. Preparation is not service, TEE or production-driver authority.
 use super::*;
 use super::super::super::super::super::guest_original::Process;
@@ -8,6 +8,7 @@ use std::os::fd::{AsFd,AsRawFd,BorrowedFd,FromRawFd};
 use std::os::unix::fs::{FileExt,MetadataExt};
 const PRECREATE_DOMAIN:&[u8]=b"serverware.nativeShadowProofCohortPrecreation.signature/v1\0";
 const RELEASE_DOMAIN:&[u8]=b"serverware.nativeShadowProofCohortRelease.signature/v1\0";
+const SIX_RELEASE_DOMAIN:&[u8]=b"serverware.nativeShadowProofCohortRelease.signature/v2\0";
 const SOURCE:&str="/opt/serverware/native-shadow-custody-guest.elf";
 const MAX_EXECUTABLE:usize=64*1024*1024;
 const SEALS:i32=libc::F_SEAL_WRITE|libc::F_SEAL_GROW|libc::F_SEAL_SHRINK|libc::F_SEAL_SEAL;
@@ -21,7 +22,9 @@ struct Configuration {api_version:String,authority:Authority,executable_sha256:S
     retrieval_configuration:Pin,persistence_configuration:Pin,trusted_time_configuration:Pin,
     generation_install_configuration:Pin,bridge_configuration:Pin,
     #[serde(default,skip_serializing_if="Option::is_none")]
-    cleanup:Option<cleanup::Configuration>}
+    cleanup:Option<cleanup::Configuration>,
+    #[serde(default,skip_serializing_if="Option::is_none")]
+    commit_request_configuration:Option<Pin>}
 #[derive(Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 struct Window {configuration_sha256:Sha256Digest,authority_key_id:Sha256Digest,boot_id_base64url:String,
@@ -37,14 +40,16 @@ pub(in crate::policy_shadow::policy_custody::services::guest::native_guest::pare
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 struct ReleasePayload {api_version:String,configuration_sha256:Sha256Digest,precreation_sha256:Sha256Digest,
     observation_sha256:Sha256Digest,invocation_id:String,retrieval:RoleRelease,persistence:RoleRelease,
-    trusted_time:RoleRelease,generation_install:RoleRelease,bridge:RoleRelease,signing_key_id:Sha256Digest}
+    trusted_time:RoleRelease,generation_install:RoleRelease,bridge:RoleRelease,signing_key_id:Sha256Digest,
+    #[serde(default,skip_serializing_if="Option::is_none")]
+    commit_request:Option<RoleRelease>}
 #[derive(Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 struct Release {payload:ReleasePayload,signature_base64url:String}
 pub(in crate::policy_shadow::policy_custody::services::guest::native_guest::parent) struct Admission {
     process:Process,configuration:Original,configuration_bytes:Vec<u8>,config:Configuration,
     precreation:Original,precreation_bytes:Vec<u8>,window:Window,key:VerifyingKey,
-    cold:[Original;5],identities:[(u32,u32);5],issued:u64,startup:u64,lifetime:u64,
+    cold:Vec<Original>,identities:Vec<(u32,u32)>,issued:u64,startup:u64,lifetime:u64,
 }
 fn public(s:&str)->Result<[u8;32],ShadowError> {
     let raw=URL_SAFE_NO_PAD.decode(s).map_err(fail)?;
@@ -63,19 +68,23 @@ impl Admission {
         let configuration=Original::proof_cohort_configuration().map_err(fail)?;
         let configuration_bytes=configuration.read(32768).map_err(fail)?.to_vec();
         let config:Configuration=exact(&configuration_bytes)?;
-        require(match (config.api_version.as_str(),&config.cleanup) {
-            ("serverware.nativeShadowProofCohortConfiguration/v1",None)=>true,
-            ("serverware.nativeShadowProofCohortConfiguration/v2",Some(value))=>{
+        require(match (config.api_version.as_str(),&config.cleanup,&config.commit_request_configuration) {
+            ("serverware.nativeShadowProofCohortConfiguration/v1",None,None)=>true,
+            ("serverware.nativeShadowProofCohortConfiguration/v2",Some(value),None)=>{
+                value.validate(&config.authority.public_key_base64url)?;true},
+            ("serverware.nativeShadowProofCohortConfiguration/v3",Some(value),Some(_))=>{
                 value.validate(&config.authority.public_key_base64url)?;true},
             _=>false,
         })?;
         let raw=public(&config.authority.public_key_base64url)?;
         require(Sha256Digest::compute(&raw)==config.authority.key_id)?;
         let key=VerifyingKey::from_bytes(&raw).map_err(fail)?;
-        let cold=[config.retrieval_configuration.open(65536)?,config.persistence_configuration.open(65536)?,
+        let mut cold=vec![config.retrieval_configuration.open(65536)?,config.persistence_configuration.open(65536)?,
             config.trusted_time_configuration.open(65536)?,config.generation_install_configuration.open(65536)?,
             config.bridge_configuration.open(65536)?];
-        let mut identities=[(0,0);5];
+        if let Some(pin)=&config.commit_request_configuration {cold.push(pin.open(65536)?);}
+        let count=cold.len();
+        let mut identities=vec![(0,0);count];
         for (i,original) in cold.iter().enumerate() {
             let c:super::super::super::super::Configuration=exact(&original.read(65536).map_err(fail)?)?;
             require(c.api_version=="serverware.policyCustodyGuestConfiguration/v1"
@@ -86,9 +95,9 @@ impl Admission {
                 && ![64988,64989,64990,65534].contains(&c.gid))?;
             identities[i]=(c.uid,c.gid);
         }
-        require(identities.iter().map(|v|v.0).collect::<BTreeSet<_>>().len()==5
-            && identities.iter().map(|v|v.1).collect::<BTreeSet<_>>().len()==5)?;
-        for first in 0..5 {for second in first+1..5 {require(cold[first].identity()!=cold[second].identity())?;}}
+        require(identities.iter().map(|v|v.0).collect::<BTreeSet<_>>().len()==count
+            && identities.iter().map(|v|v.1).collect::<BTreeSet<_>>().len()==count)?;
+        for first in 0..count {for second in first+1..count {require(cold[first].identity()!=cold[second].identity())?;}}
         let precreation=Original::proof_cohort_precreation().map_err(fail)?;
         let precreation_bytes=precreation.read(32768).map_err(fail)?.to_vec();
         let signed:Precreation=exact(&precreation_bytes)?;
@@ -120,6 +129,11 @@ impl Admission {
     pub(in crate::policy_shadow::policy_custody::services::guest::native_guest::parent) fn check_startup(&self)->Result<(),ShadowError> {self.check()?;require(now()?<self.startup)}
     pub(in crate::policy_shadow::policy_custody::services::guest::native_guest::parent) fn lifetime(&self)->u64 {self.lifetime}
     pub(in crate::policy_shadow::policy_custody::services::guest::native_guest::parent) fn issued(&self)->u64 {self.issued}
+    pub(super) fn six(&self)->bool {self.config.api_version=="serverware.nativeShadowProofCohortConfiguration/v3"}
+    pub(super) fn roles(&self)->&'static [&'static str] {
+        if self.six(){&["retrieval","persistence","trustedTime","generationInstall","bridge","commitRequest"]}
+        else{&["retrieval","persistence","trustedTime","generationInstall","bridge"]}
+    }
     pub(in crate::policy_shadow::policy_custody::services::guest::native_guest::parent) fn cleanup(&self)->Result<Option<cleanup::Owner>,ShadowError>{
         self.check_startup()?;
         self.config.cleanup.as_ref().map(|value|cleanup::Owner::open(value,
@@ -133,21 +147,25 @@ impl Admission {
     pub(in crate::policy_shadow::policy_custody::services::guest::native_guest::parent) fn precreation_sha256(&self)->Sha256Digest {Sha256Digest::compute(&self.precreation_bytes)}
     pub(in crate::policy_shadow::policy_custody::services::guest::native_guest::parent) fn invocation_id(&self)->&str {&self.window.invocation_id}
     pub(in crate::policy_shadow::policy_custody::services::guest::native_guest::parent) fn executable_sha256(&self)->&Sha256Digest {&self.config.executable_sha256}
-    pub(in crate::policy_shadow::policy_custody::services::guest::native_guest::parent) fn release(&self,bytes:&[u8],observed:&[u8])->Result<[RoleRelease;5],ShadowError> {
+    pub(in crate::policy_shadow::policy_custody::services::guest::native_guest::parent) fn release(&self,bytes:&[u8],observed:&[u8])->Result<Vec<RoleRelease>,ShadowError> {
         self.check_startup()?;let release:Release=exact(bytes)?;
-        verify(&self.key,RELEASE_DOMAIN,&release.payload,&release.signature_base64url)?;
+        verify(&self.key,if self.six(){SIX_RELEASE_DOMAIN}else{RELEASE_DOMAIN},&release.payload,&release.signature_base64url)?;
         let p=release.payload;
-        require(p.api_version=="serverware.nativeShadowProofCohortRelease/v1"
+        require(p.api_version==(if self.six(){"serverware.nativeShadowProofCohortRelease/v2"}else{"serverware.nativeShadowProofCohortRelease/v1"})
+            && p.commit_request.is_some()==self.six()
             && p.configuration_sha256==self.configuration_sha256() && p.precreation_sha256==self.precreation_sha256()
             && p.observation_sha256==Sha256Digest::compute(observed) && p.invocation_id==self.window.invocation_id
             && p.signing_key_id==self.config.authority.key_id)?;
-        self.check_startup()?;Ok([p.retrieval,p.persistence,p.trusted_time,p.generation_install,p.bridge])
+        let mut roles=vec![p.retrieval,p.persistence,p.trusted_time,p.generation_install,p.bridge];
+        if let Some(role)=p.commit_request {roles.push(role);}
+        self.check_startup()?;Ok(roles)
     }
     pub(in crate::policy_shadow::policy_custody::services::guest::native_guest::parent) fn join(&self,index:usize,launch:&Launch,files:&FileAdmission)->Result<(),ShadowError> {
         self.check_startup()?;files.check_preparation().map_err(fail)?;
         let expected=match index {0=>&self.config.retrieval_configuration,1=>&self.config.persistence_configuration,
             2=>&self.config.trusted_time_configuration,3=>&self.config.generation_install_configuration,
-            4=>&self.config.bridge_configuration,_=>return Err(ShadowError::BindingDrift)};
+            4=>&self.config.bridge_configuration,5=>self.config.commit_request_configuration.as_ref().ok_or(ShadowError::BindingDrift)?,
+            _=>return Err(ShadowError::BindingDrift)};
         let p=&files.payload;
         require(canonical_json_bytes(&launch.delivery_configuration)?==canonical_json_bytes(expected)?
             && (p.uid,p.gid)==self.identities[index]

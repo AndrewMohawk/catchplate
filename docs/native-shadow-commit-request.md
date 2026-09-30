@@ -132,15 +132,15 @@ rerun or orphan repair. Nothing reconstructs a successful native computation
 from a journal DTO after process loss. Restart/settlement needs its own real
 authorized continuation; existing driver/cleanup obligations remain.
 
-The five-child proof cohort does **not** contain a LedgerAppend child. A
-genuine six-process precreate/independent-sign/release owner, plus the explicit
-ordinary commitment resource/launcher successor that transfers both grants
-and both actual journals, remains required for whole-cohort launch. The
-existing generation-only operator must not be relabeled or fed extra FDs.
-The fixed inherited entry and live service call path here do not claim that
-those missing parent producers, all remaining signer families, or full bridge
-readiness are implemented. The new helper bytes also require normal independent
-image rebuilding/admission and actual HMAC/KMS provisioning. No build, parser,
+The older five-child proof cohort does **not** contain a LedgerAppend child.
+The explicit [six-child successor](native-six-proof-cohort.md) now owns that
+actual endpoint, and the [ordinary commitment launcher](custody-commitment-inputs.md)
+creates and transfers both additional grants and journals before its one-shot
+release. The generation-only operator must not be relabeled or fed extra FDs.
+These parent/resource producers do not complete final driver admission,
+remaining signer families, per-operation settlement or full bridge readiness.
+The new helper bytes also require normal independent image rebuilding/admission
+and actual HMAC/KMS provisioning. No build, parser,
 test, runtime, launch, installation or provider call was executed for this
 slice; connected pilot acceptance remains unverified.
 

@@ -23,6 +23,10 @@ _TOKEN = object()
 CONFIGURATION = "/etc/serverware/custody-generation-five.json"
 RELEASE = b"serverware.custodyFiveServiceRelease/v1"
 PARKED = b"serverware.custodyFiveServiceParked/v1"
+COMMITMENT_CONFIGURATION = "/etc/serverware/custody-commitment-five.json"
+COMMITMENT_RELEASE = b"serverware.custodyFiveServiceRelease/v2"
+COMMITMENT_PARKED = b"serverware.custodyFiveServiceParked/v2"
+COMMITMENT_ROLES = (g.ROLES[0], g.ROLES[3])
 
 
 def _packet(channel, maximum, descriptors):
@@ -48,7 +52,7 @@ def _packet(channel, maximum, descriptors):
         raise
 
 
-def _park(channel, executable, parent, role, startup, inspected):
+def _park(channel, executable, parent, role, startup, inspected, commitment):
     """Same fork child performs the fixed exec; no future PID prediction."""
     try:
         libc = ctypes.CDLL(None, use_errno=True)
@@ -68,13 +72,16 @@ def _park(channel, executable, parent, role, startup, inspected):
         if null > 5:
             os.close(null)
         wire = socket.socket(fileno=3)
-        p.require(wire.send(PARKED) == len(PARKED))
+        parked = COMMITMENT_PARKED if commitment else PARKED
+        release = COMMITMENT_RELEASE if commitment else RELEASE
+        p.require(wire.send(parked) == len(parked))
         poll = select.poll(); poll.register(3, select.POLLIN)
         remaining = startup - o.clock(); p.require(remaining > 0)
         p.require(poll.poll((remaining + 999_999) // 1_000_000) and o.clock() < startup)
-        count = 1 + len(g.BUSINESS[role]) + 2
-        raw, rights, peer = _packet(wire, len(RELEASE), count)
-        p.require(raw == RELEASE and peer == (parent, 0, 0) and os.getppid() == parent)
+        selected = commitment and role in COMMITMENT_ROLES
+        count = 1 + len(g.BUSINESS[role]) + 2 + (2 if selected else 0)
+        raw, rights, peer = _packet(wire, len(release), count)
+        p.require(raw == release and peer == (parent, 0, 0) and os.getppid() == parent)
         safe = [fcntl.fcntl(fd, fcntl.F_DUPFD_CLOEXEC, 256) for fd in rights]
         for fd in rights:
             os.close(fd)
@@ -82,7 +89,10 @@ def _park(channel, executable, parent, role, startup, inspected):
             os.dup2(fd, target, inheritable=True)
         os.closerange(6 + count - 1, limit)
         p.require(o.clock() < startup and os.getppid() == parent)
-        selector = "--guest-c9-generation-inspected" if inspected else "--guest-c9-generation"
+        if selected:
+            selector = "--guest-c9-commitment-inspected" if inspected else "--guest-c9-commitment"
+        else:
+            selector = "--guest-c9-generation-inspected" if inspected else "--guest-c9-generation"
         os.execve(5, [f"/usr/local/bin/serverware-policy-custody-{role}", selector], {})
     except BaseException:
         os._exit(1)
@@ -100,6 +110,16 @@ class FiveServiceLaunch:
 
     @classmethod
     def start(cls):
+        return cls._start(False)
+
+    @classmethod
+    def start_commitment(cls):
+        """A separate fixed protected profile, never an argument to release."""
+        return cls._start(True)
+
+    @classmethod
+    def _start(cls, commitment):
+        p.require(cls is FiveServiceLaunch and type(commitment) is bool)
         p.require(os.getresuid() == (0, 0, 0) and os.getresgid() == (0, 0, 0)
             and threading.current_thread() is threading.main_thread())
         # Fixed kernel-owned self link is intentional, not a supplied ancestor.
@@ -111,17 +131,21 @@ class FiveServiceLaunch:
         owner = cls(_TOKEN)
         try:
             owner._pid = os.getpid(); owner._start = o.native._start(); owner._boot = o.native._boot()
-            original = o.Original(CONFIGURATION, 65536); owner._originals.append(original)
+            original = o.Original(COMMITMENT_CONFIGURATION if commitment else CONFIGURATION, 65536)
+            owner._originals.append(original)
             cold = p.fields(g.document(original.read(), 65536), ("apiVersion", "bootIdBase64url",
                 "timeNamespaceDevice", "timeNamespaceInode", "startupDeadlineBoottimeNs",
                 "lifetimeDeadlineBoottimeNs", "invocationId", "services"))
-            p.require(cold["apiVersion"] in {"serverware.custodyFiveServiceLaunch/v1", "serverware.custodyFiveServiceLaunch/v2"}
+            versions = ("serverware.custodyFiveServiceLaunch/v3", "serverware.custodyFiveServiceLaunch/v4") if commitment else (
+                "serverware.custodyFiveServiceLaunch/v1", "serverware.custodyFiveServiceLaunch/v2")
+            p.require(cold["apiVersion"] in versions
                 and (cold["bootIdBase64url"], cold["timeNamespaceDevice"], cold["timeNamespaceInode"]) == owner._boot
                 and type(cold["invocationId"]) is str and re.fullmatch(r"[0-9a-f]{32}", cold["invocationId"])
                 and cold["invocationId"] != "0" * 32)
             # Only the protected cold original selects inspection. Neither an
             # environment variable nor a release argument can switch modes.
-            owner._inspected = cold["apiVersion"] == "serverware.custodyFiveServiceLaunch/v2"
+            owner._inspected = cold["apiVersion"] == versions[1]
+            owner._commitment = commitment
             owner._startup = p.ns(cold["startupDeadlineBoottimeNs"])
             owner._lifetime = p.ns(cold["lifetimeDeadlineBoottimeNs"])
             owner._issued = o.clock(); owner._invocation = cold["invocationId"]
@@ -156,7 +180,8 @@ class FiveServiceLaunch:
                 child.setsockopt(socket.SOL_SOCKET, socket.SO_PASSCRED, 1)
                 pid = os.fork()
                 if pid == 0:
-                    _park(child, owner._configurations[role][2].fd, owner._pid, role, owner._startup, owner._inspected)
+                    _park(child, owner._configurations[role][2].fd, owner._pid, role, owner._startup,
+                        owner._inspected, owner._commitment)
                     os._exit(1)
                 child.close()
                 try:
@@ -171,8 +196,9 @@ class FiveServiceLaunch:
                 poll = select.poll(); poll.register(parent, select.POLLIN)
                 remaining = owner._startup - o.clock(); p.require(remaining > 0)
                 p.require(poll.poll((remaining + 999_999) // 1_000_000) and o.clock() < owner._startup)
-                raw, _, peer = _packet(parent, len(PARKED), 0)
-                p.require(raw == PARKED and peer == (pid, 0, 0))
+                parked = COMMITMENT_PARKED if owner._commitment else PARKED
+                raw, _, peer = _packet(parent, len(parked), 0)
+                p.require(raw == parked and peer == (pid, 0, 0))
                 o.live(pidfd, pid, start, owner._pid)
                 parent.setblocking(False)
             owner.check()
@@ -211,6 +237,7 @@ class FiveServiceLaunch:
             and type(transfer) is GenerationTransfer and transfer._owner._launcher is self
             and not self._attempted)
         transfer.check(); prepared = transfer._prepared()
+        p.require(transfer._owner._commitment == self._commitment)
         p.require(tuple(prepared) == g.ROLES)
         self._attempted = True; self._transfer = transfer
         # Irreversible before the first possible send. A failed/unknown release
@@ -222,7 +249,8 @@ class FiveServiceLaunch:
                 item["expected_notice"] = prepared[role][0]
                 item["phase"] = "released"
                 fds = array.array("i", prepared[role][1])
-                p.require(item["channel"].sendmsg([RELEASE], [(socket.SOL_SOCKET, socket.SCM_RIGHTS, fds)]) == len(RELEASE))
+                release = COMMITMENT_RELEASE if self._commitment else RELEASE
+                p.require(item["channel"].sendmsg([release], [(socket.SOL_SOCKET, socket.SCM_RIGHTS, fds)]) == len(release))
         except BaseException:
             self._failed = True; self._stop.set(); raise
 
@@ -244,6 +272,10 @@ class FiveServiceLaunch:
         self._bridge_attempted = True
         try:
             cohort.check()
+            if self._commitment:
+                p.require(cohort.commitment_selected())
+                from serverware.custody_commitment_inputs import _require_native_release
+                _require_native_release(self, cohort, transfers)
             bridge = cohort.bridge_original()
             # Parked identity provides PID/start and the retained executable
             # only. Final UID/cgroup/label/IMA are NOT manufactured here; the
@@ -264,6 +296,9 @@ class FiveServiceLaunch:
             self.check(); cohort.check()
             p.require(o.clock() < self._startup and all(item["phase"] in {"listening", "constructed"}
                 for item in self._children.values()))
+            if self._commitment:
+                from serverware.custody_commitment_inputs import _release_current
+                _release_current(self._input_owner)
             # Exact native release retains its own original deadlines and
             # purpose checks; this method cannot renew or replace them.
             return cohort.release(release_original=release_original, transfers=transfers)

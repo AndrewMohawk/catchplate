@@ -11,12 +11,13 @@ performed when this source was authored.
 
 ## Current engineering assembly
 
-Actual local results as of **2026-09-30 18:12 UTC**:
+Actual local results as of **2026-09-30 18:23 UTC**:
 
 | Artifacts | Frozen source | Verified assembly result |
 | --- | --- | --- |
 | Control-plane and gate images | `04cf155a` | Both built; glibc 9m25s, static musl 11m03s; image/no-shell report passed. |
-| Seccomp operator tool and workload sidecar | `04cf155a` | Both raw exports built; sidecar directory-mode repair awaits a corrected export. |
+| Seccomp operator tool | `04cf155a` | Raw export, ELF readback and caller-owned staging passed, 4 entries. |
+| Workload sidecar | `facdb895` | Corrected raw export, exact three-file/source readback and caller-owned staging passed, 8 entries. |
 | Python conductor runtime | `7193b2a1` | Raw export and complete caller-owned staging passed, 6,060 entries. |
 | Python authority runtime | `7193b2a1` | Raw export and complete caller-owned staging passed, 6,068 entries. |
 
@@ -27,6 +28,13 @@ or pilot acceptance. The later Python-only revision closes inherited directory
 and timezone-link layout defects; it does not change or restart the native
 compilation. Full native guest assembly still requires approved public inputs.
 No broad test suite, service deployment, signing or paid cloud operation ran.
+
+Exact logs/reports, provenance and copy-verified hashes are retained under
+`/home/catchplate/codex-offload/serverware/engineering-builds/`:
+`04cf155a-native-images-jg1ez3`, `7193b2a1-python-jg1ez3`, and
+`facdb895-native-tools-jg1ez3`. Each contains `RESULT.md` and `SHA256SUMS`, with
+earlier failed attempts kept separately. Extracted staging remains private
+scratch; no runtime was installed or started.
 
 ## Existing build owners, explicit profile
 
@@ -168,6 +176,14 @@ not host timezone data. Set-id and logical-root link checks remain unchanged.
 Both corrected `7193b2a1` exports and their materializations subsequently
 succeeded, observed complete by `2026-09-30T18:10:57.721Z`. This checks actual
 build-output staging, not strict-source package admission or runtime execution.
+
+The sidecar's original file-level Docker `--chmod=0444` also created unusable
+implicit data directories. Its dedicated staged tree now supplies traversable
+`0555` directories explicitly, with `0555` executable and `0444` companions.
+The corrected `facdb895` export passed exact file/mode/source readback. Both it
+and the existing `04cf155a` operator export passed bounded caller-owned
+materialization by `2026-09-30T18:23:03.606Z`; their strict commands now use that
+same TAR staging path before their existing role-specific inventory checks.
 
 The inventory bounds tree depth, path length, entry count, per-file bytes and
 aggregate bytes. It hashes stable regular files, refuses special files and

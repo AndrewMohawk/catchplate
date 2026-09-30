@@ -66,6 +66,8 @@ PRODUCTION_ARTIFACT_TARGETS = {
         "native-broker-runtime-artifact",
     ),
     ("data-plane/decision-gate-rs/Dockerfile.production", "native-pilot-artifacts"),
+    # Offline public-input preparation only; not part of the guest closure.
+    ("data-plane/decision-gate-rs/Dockerfile.production", "native-pilot-operator-artifact"),
     # Separately installed independent authorities; never part of the claimant
     # bundle. Their fixed Docker stages own their respective runtime closures.
     ("data-plane/decision-gate-rs/Dockerfile.production", "native-setup-hardware-artifact"),

@@ -79,6 +79,61 @@ independent author, rather than treating a locally calculated hash as authority.
 No launch, C9 delivery, policy secret, seed or credential belongs in this public
 build directory. Only these five bounded files enter the private Docker context.
 
+For the selected measured-bootstrap/late-runtime profile, the public
+`runtime.json` is a fixed bootstrap document, not the eventual operational
+runtime or C9 configuration. Produce that exact existing profile with:
+
+```sh
+python3 -B scripts/export_native_shadow_bootstrap_runtime.py \
+  --out /srv/catchplate-fast/tmp/pilot-bootstrap-runtime
+```
+
+Use the resulting `runtime.json` as `--runtime` below. Its two source-fixed
+fields select `serverware.nativeShadowDriverBootstrapRuntime/v1` and
+`measure-final-driver-before-operational-admission`; the existing guest parser
+requires those exact values. The original is canonical ASCII without a terminal
+LF, unlike `inputs.json`. This avoids embedding the later image-bound runtime
+into its own bootstrap image. The operational runtime, C9 bindings and signed
+admissions still come from their actual independent owners after measurement.
+The producer supplies no credentials, policy, signature or deployment approval;
+its measured digest still needs the same independent input-manifest admission.
+
+The seccomp input comes from an independently selected policy, not a generated
+permissive default. The separate offline exporter checks the existing policy
+type, recompiles its rules, verifies every claimed policy/stream/semantics hash,
+and writes only the matching raw BPF bytes:
+
+```sh
+serverware-export-custody-seccomp \
+  --policy /srv/operator-guest-originals/seccomp-policy.json \
+  --output /srv/operator-guest-originals/seccomp.bpf
+```
+
+Both paths must be absolute and symlink-free; the output must not exist. The
+input is the existing `StructurallyVerifiedCustodySeccompPolicy` document, not a
+signed closure, arbitrary BPF or new policy format. Structural validation and
+reported hashes do not authenticate its author or grant permission to use it.
+The exporter never changes the supplied policy, installs a filter or starts a
+guest. The runtime will still enforce its independent admission checks.
+
+Build/export this operator executable separately from a clean source snapshot
+and the reviewed dependency cache:
+
+```sh
+python3 -B scripts/build_production_images.py \
+  --dockerfile data-plane/decision-gate-rs/Dockerfile.production \
+  --target native-pilot-operator-artifact --network none \
+  --output type=local,dest=/srv/catchplate-fast/tmp/pilot-operator-tools
+```
+
+The export contains `usr/local/bin/serverware-export-custody-seccomp`, produced
+by the existing pinned Debian/glibc build. Run it on a compatible Linux/amd64
+operator host; this single executable export is not a complete runtime closure.
+It is excluded from the default gate and measured guest images. This build does
+not need public guest inputs, so producing `seccomp.bpf` does not depend on first
+building the image that embeds it. Build-recipe and provenance originals still
+come from the independent build owner; neither exporter manufactures them.
+
 To package operator-owned originals against that exact clean-source preparation:
 
 ```sh

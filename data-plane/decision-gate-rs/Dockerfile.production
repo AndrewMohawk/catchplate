@@ -98,6 +98,11 @@ RUN --network=none /usr/local/bin/serverware-cargo-build --release --frozen \
     && find /policy-custody-assets -type f -exec chmod 0444 {} + \
     && find /policy-custody-assets -exec touch -h -d "@${SOURCE_DATE_EPOCH}" {} +
 
+# Offline operator tool only, built by the existing glibc owner. This explicit
+# export is not copied into any claimant/default runtime or guest closure.
+FROM scratch AS native-pilot-operator-artifact
+COPY --from=build --chown=0:0 --chmod=0555 /src/target/release/serverware-export-custody-seccomp /usr/local/bin/serverware-export-custody-seccomp
+
 FROM rust:1.88-alpine3.22@sha256:64eba3726734dcfe89e0a62a0485007a3ab7c7372ce5b38c621d8812f70215f0 AS launcher-build
 
 ARG SOURCE_DATE_EPOCH="0"

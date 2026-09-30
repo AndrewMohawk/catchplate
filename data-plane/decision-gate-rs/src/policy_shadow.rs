@@ -34,6 +34,10 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[cfg(target_os = "linux")]
+#[path = "policy_shadow_seccomp_export.rs"]
+pub(crate) mod seccomp_export;
+
 #[path = "policy_shadow_opening.rs"]
 pub(crate) mod native_opening;
 #[path = "policy_shadow_native_ingress.rs"]

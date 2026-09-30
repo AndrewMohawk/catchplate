@@ -1311,6 +1311,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	scripts/package_native_shadow_custody_runtime.py \
 	scripts/package_native_setup_issuers_runtime.py \
 	scripts/build_native_pilot_artifacts.py \
+	scripts/export_native_shadow_bootstrap_runtime.py \
 	ops/native-setup-issuers/serverware-setup-native-final.conf \
 	ops/native-setup-issuers/serverware-setup-native-final.service \
 	ops/native-setup-issuers/serverware-setup-native-hardware.conf \
@@ -3954,6 +3955,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				scripts/package_native_shadow_custody_runtime.py \
 				scripts/package_native_setup_issuers_runtime.py \
 				scripts/build_native_pilot_artifacts.py \
+				scripts/export_native_shadow_bootstrap_runtime.py \
 				scripts/prepare_native_role_keys.py \
 				scripts/seal_native_service_tokens.py \
 				scripts/sign_native_guest_credential_delivery.py \
@@ -4540,6 +4542,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/bin/serverware-native-shadow-verifier-transport.rs \
 				data-plane/decision-gate-rs/src/bin/serverware-native-shadow-retrieval-pair.rs \
 				data-plane/decision-gate-rs/src/bin/serverware-policy-shadow-custody-guest.rs \
+				data-plane/decision-gate-rs/src/bin/serverware-export-custody-seccomp.rs \
+				data-plane/decision-gate-rs/src/policy_shadow_seccomp_export.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/mod.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/parent.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/driver_bootstrap.rs \

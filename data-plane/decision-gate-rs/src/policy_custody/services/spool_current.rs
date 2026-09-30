@@ -53,7 +53,7 @@ impl Grant {
         let raw=URL_SAFE_NO_PAD.decode(&p.durable_public_key_base64url).map_err(|_|invalid())?;
         require(raw.len()==32 && URL_SAFE_NO_PAD.encode(&raw)==p.durable_public_key_base64url)?;
         let key=VerifyingKey::from_bytes(&<[u8;32]>::try_from(raw.as_slice()).map_err(|_|invalid())?).map_err(|_|invalid())?;
-        require(verifying_key_spki_sha256(&key)?==p.durable_authority_epoch.service_signing_key_spki_sha256
+        require(verifying_key_spki_sha256(&key).map_err(|_|invalid())?==p.durable_authority_epoch.service_signing_key_spki_sha256
             && key!=*history.current_epoch().map_err(|_|invalid())?.service_signing_key() && key!=*history.root_authority_key())?;
         Ok((head,key))
     }

@@ -15,7 +15,7 @@ pub(super) mod durable_recovery_store;
 pub(super) mod production;
 pub(super) mod recovery_target_provider;
 pub(super) mod wire;
-pub(super) mod guest;
+pub(in crate::policy_shadow) mod guest;
 pub(super) mod generation_service;
 pub(super) mod generation_service_client;
 pub(super) mod dispatch_commitment;

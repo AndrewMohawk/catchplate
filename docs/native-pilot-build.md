@@ -186,6 +186,14 @@ stopped with 18 Rust integration errors; no gate image, complete two-image
 report, service deployment or pilot acceptance resulted from that attempt.
 The engineering resource flags were accepted and retained throughout.
 
+The follow-up from `a2556cf0` built control image
+`sha256:45c9631526f7dee729fd87542cf4bae282a7d07cebe2dbb0dea5d53f06e43bc9`
+and reached proxy binary compilation, which stopped on 95 distinct diagnostics
+across 53 files. Actual RUN-worker cgroup values were `cpu.max=800000 100000`,
+`memory.max=25769803776` and `memory.swap.max=0`. The corresponding source fixes
+are integrated for the next build; neither attempt is a complete pilot or a
+successful two-image build report.
+
 The source-fixed prerequisite list points at the actual existing callers:
 `ParkedProofCohort.start`, `FiveServiceLaunch.start_effects`,
 `GenerationInputs.prepare`, `SpoolInputs.prepare`, `DriverBootstrap.start`,

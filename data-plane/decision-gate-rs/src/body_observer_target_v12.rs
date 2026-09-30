@@ -384,7 +384,7 @@ fn require_filesystem(fd: RawFd, expected: libc::c_long, deadline: u64) -> PlanR
     let mut value: libc::statfs = unsafe { std::mem::zeroed() };
     if unsafe { libc::fstatfs(fd, &mut value) } != 0 { return Err(std::io::Error::last_os_error().into()); }
     live(deadline)?;
-    if value.f_type != expected as _ { return Err(invalid("body observer target uses another kernel filesystem")); }
+    if value.f_type as u64 != expected as u64 { return Err(invalid("body observer target uses another kernel filesystem")); }
     Ok(())
 }
 

@@ -52,7 +52,7 @@ fn socket_path(fd: BorrowedFd<'_>, path: &Path) -> Result<(), ServiceRunnerError
     require(unsafe { libc::getsockname(fd.as_raw_fd(), (&mut address as *mut libc::sockaddr_un).cast(), &mut length) } == 0)?;
     let expected = path.as_os_str().as_bytes();
     let offset = std::ptr::addr_of!(address.sun_path) as usize - std::ptr::addr_of!(address) as usize;
-    require(address.sun_family == libc::AF_UNIX as _ && path.is_absolute()
+    require(address.sun_family == libc::AF_UNIX as libc::sa_family_t && path.is_absolute()
         && !expected.is_empty() && !expected.contains(&0) && expected.len() < address.sun_path.len()
         && length as usize == offset + expected.len() + 1)?;
     let observed = unsafe { std::slice::from_raw_parts(address.sun_path.as_ptr().cast::<u8>(), expected.len()+1) };

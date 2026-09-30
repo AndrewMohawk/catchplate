@@ -1,7 +1,7 @@
 //! Source-selected gate factory over actual retained native originals. The
 //! receiving gate is not the measured bridge and never uses the host factory.
 use super::super::*;
-use super as policy_custody;
+use crate::policy_shadow::policy_custody;
 use super::services::{ConstructedDriver,NativeCustodyLifecycleOwner};
 use native_custody_closure::RemoteNativeCustodyClosure;
 use base64::Engine;
@@ -145,7 +145,9 @@ impl Factory {
         Ok(Self{configuration,manifest,driver,prior_admission_sha256:retained.bootstrap_admission_sha256().clone(),settings,retained,operation_boundary})
     }
     pub(in crate::policy_shadow) fn check(&self,trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime)->Result<(),ShadowError>{
-        self.retained.check(trust,time)?;self.configuration.revalidate_active_attestation(trust,time)
+        self.retained.check(trust,time)?;
+        self.configuration.revalidate_active_attestation(trust,time)?;
+        Ok(())
     }
     pub(super) fn take_sessions(&self)->Result<Vec<policy_custody::services::common::AuthenticatedInheritedSeqpacket>,ShadowError>{
         self.retained.take_sessions()

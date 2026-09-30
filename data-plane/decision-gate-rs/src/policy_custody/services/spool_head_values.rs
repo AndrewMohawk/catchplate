@@ -22,7 +22,7 @@ impl RoleKey {
         let bytes=URL_SAFE_NO_PAD.decode(&self.public_key_base64url).map_err(|_|invalid())?;
         require(bytes.len()==32 && URL_SAFE_NO_PAD.encode(&bytes)==self.public_key_base64url)?;
         let key=VerifyingKey::from_bytes(&<[u8;32]>::try_from(bytes.as_slice()).map_err(|_|invalid())?).map_err(|_|invalid())?;
-        require(verifying_key_spki_sha256(&key)?==self.key_spki_sha256 && self.key_id!=Sha256Digest::compute(&[])
+        require(verifying_key_spki_sha256(&key).map_err(|_|invalid())?==self.key_spki_sha256 && self.key_id!=Sha256Digest::compute(&[])
             && self.grant_sha256!=Sha256Digest::compute(&[]))?;Ok(key)
     }
 }

@@ -43,7 +43,8 @@ impl Client {
                 && p.initial_head_sha256!=Sha256Digest::compute(&[]))?;
             let signature=URL_SAFE_NO_PAD.decode(&grant.signature_base64url).map_err(|_|invalid())?;
             require(signature.len()==64 && URL_SAFE_NO_PAD.encode(&signature)==grant.signature_base64url)?;
-            let preimage=super::super::super::protocol::domain_separated_signature_preimage(DOMAIN,&encode_canonical_frame(p)?)?;
+            let preimage=super::super::super::protocol::domain_separated_signature_preimage(DOMAIN,&encode_canonical_frame(p)?)
+                .map_err(ServiceError::from)?;
             history.root_authority_key().verify_strict(&preimage,&Signature::from_slice(&signature).map_err(|_|invalid())?).map_err(|_|invalid())?;
             let common=sha(&(&p.scope,&p.native_grant_sha256,&p.native_ledger_key_id,&p.native_ledger_key_spki_sha256,
                 &p.native_ledger_public_key_base64url))?;

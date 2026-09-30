@@ -1,7 +1,7 @@
 //! Real single-owner continuation: C9 -> time -> closure -> one encrypted key
 //! admission/NSM quote -> inspected proof clients -> actual bridge constructor.
 use super::*;
-use super::super::super::super as guest;
+use crate::policy_shadow::policy_custody::services::guest;
 use inputs::original;
 
 pub(super) fn run(mut prepared:Prepared,identity:driver_identity::Owner,

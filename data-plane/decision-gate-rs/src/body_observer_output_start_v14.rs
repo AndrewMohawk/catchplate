@@ -82,7 +82,7 @@ fn filesystem(fd: RawFd, expected: libc::c_long, deadline: u64) -> PlanResult<()
     if unsafe { libc::fstatfs(fd, &mut value) } != 0 {
         return Err(std::io::Error::last_os_error().into());
     }
-    if value.f_type != expected as _ { return Err(invalid("observer output filesystem differs")); }
+    if value.f_type as u64 != expected as u64 { return Err(invalid("observer output filesystem differs")); }
     live(deadline)
 }
 

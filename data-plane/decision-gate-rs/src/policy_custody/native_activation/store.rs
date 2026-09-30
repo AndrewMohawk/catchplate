@@ -22,9 +22,11 @@ fn identity(fd:BorrowedFd<'_>)->Result<Identity,ShadowError>{
 }
 fn durable_filesystem(fd:BorrowedFd<'_>)->Result<(),ShadowError>{
     let mut fs:libc::statfs=unsafe{std::mem::zeroed()};
+    let mut flags:libc::statvfs=unsafe{std::mem::zeroed()};
     require(unsafe{libc::fstatfs(fd.as_raw_fd(),&mut fs)}==0
         && matches!(fs.f_type as u64,0xef53|0x5846_5342|0x9123_683e)
-        && fs.f_flags as u64&1==0)
+        && unsafe{libc::fstatvfs(fd.as_raw_fd(),&mut flags)}==0
+        && flags.f_flag&libc::ST_RDONLY==0)
 }
 fn file_at(directory:BorrowedFd<'_>,name:&[u8],flags:i32)->Result<File,ShadowError>{
     let fd=unsafe{libc::openat(directory.as_raw_fd(),name.as_ptr().cast(),flags|libc::O_CLOEXEC|libc::O_NOFOLLOW,0o600)};

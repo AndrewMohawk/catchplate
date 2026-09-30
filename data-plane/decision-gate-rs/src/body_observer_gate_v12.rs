@@ -56,7 +56,7 @@ fn open_proc(parent: RawFd, name: &CStr, directory: bool, deadline: u64) -> Plan
         return Err(std::io::Error::last_os_error().into());
     }
     let kind = if directory { libc::S_IFDIR } else { libc::S_IFREG };
-    if filesystem.f_type != PROC_MAGIC as _ || opened.st_dev != parent_stat.st_dev
+    if filesystem.f_type as u64 != PROC_MAGIC as u64 || opened.st_dev != parent_stat.st_dev
         || opened.st_mode & libc::S_IFMT != kind {
         return Err(invalid("body gate observation left the held procfs object"));
     }

@@ -662,7 +662,7 @@ pub(crate) trait EnvelopeKeyTrust {
     ) -> Result<VerifyingKey, ShadowError>;
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum PolicyShadowCustodySignerRole {
     IngressAdmission,
@@ -7675,6 +7675,10 @@ impl ProductionCustodyConfiguration {
     pub(in crate::policy_shadow) fn retains_native_closure_owner(&self)->bool{
         matches!(&self.execution_closure_manifest,RetainedProductionCustodyClosure::Native(_)
             |RetainedProductionCustodyClosure::RemoteNative(_))
+    }
+
+    pub(in crate::policy_shadow) fn worker_executable_sha256(&self) -> &Sha256Digest {
+        &self.worker_executable_sha256
     }
 
     pub(in crate::policy_shadow) fn execution_closure_manifest_sha256(

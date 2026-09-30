@@ -65,7 +65,7 @@ pub(in crate::policy_shadow::policy_custody::services::guest::native_guest) stru
 /// only the original clone parent can produce it after consuming waitid.
 #[derive(Serialize)]
 #[serde(rename_all="camelCase")]
-pub(super) struct TerminalObservation {
+pub(in crate::policy_shadow::policy_custody::services::guest::native_guest) struct TerminalObservation {
     process_id:i32,start_time_ticks:u64,pidfd_device:u64,pidfd_inode:u64,
     terminal_code:i32,terminal_status:i32,observed_at_boottime_ns:String,reaped_at_boottime_ns:String,
 }
@@ -191,7 +191,7 @@ impl Child {
         // The private lifetime channel has no message/readiness protocol.
         require(poll.revents==0)?;Ok(true)
     }
-    pub(super) fn request_stop(&mut self)->Result<(),ShadowError> {
+    pub(in crate::policy_shadow::policy_custody::services::guest::native_guest) fn request_stop(&mut self)->Result<(),ShadowError> {
         require(unsafe{libc::getpid()}==self.parent)?;if self.reaped{return Ok(());}
         unsafe{libc::shutdown(self.channel.as_raw_fd(),libc::SHUT_RDWR);}
         self.gate.take();
@@ -213,7 +213,7 @@ impl Child {
             require(result>=0 || std::io::Error::last_os_error().raw_os_error()==Some(libc::EINTR))?;
         }
     }
-    pub(super) fn reap_observed(&mut self,deadline:u64)->Result<TerminalObservation,ShadowError> {
+    pub(in crate::policy_shadow::policy_custody::services::guest::native_guest) fn reap_observed(&mut self,deadline:u64)->Result<TerminalObservation,ShadowError> {
         require(!self.reaped && self.gate.is_none() && self.start.is_some()
             && unsafe{libc::getpid()}==self.parent && now()?<deadline && deadline<=self.deadline)?;
         loop {

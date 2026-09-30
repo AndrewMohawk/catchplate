@@ -55,7 +55,7 @@ pub(super) fn unconnected(socket:BorrowedFd<'_>)->Result<(),ShadowError> {
     packet::configure(socket)?;
     let mut address:libc::sockaddr_un=unsafe{zeroed()};let mut length=size_of::<libc::sockaddr_un>() as _;
     require(unsafe{libc::getsockname(socket.as_raw_fd(),(&mut address as *mut libc::sockaddr_un).cast(),&mut length)}==0
-        && address.sun_family==libc::AF_UNIX as _ && length as usize==size_of::<libc::sa_family_t>())?;
+        && address.sun_family==libc::AF_UNIX as libc::sa_family_t && length as usize==size_of::<libc::sa_family_t>())?;
     length=size_of::<libc::sockaddr_un>() as _;
     require(unsafe{libc::getpeername(socket.as_raw_fd(),(&mut address as *mut libc::sockaddr_un).cast(),&mut length)}<0
         && std::io::Error::last_os_error().raw_os_error()==Some(libc::ENOTCONN))

@@ -2127,7 +2127,7 @@ fn require_cgroup_v2_descriptor(
         || unsafe {
             libc::fstat(descriptor.as_raw_fd(), &mut stat)
         } != 0
-        || filesystem.f_type != CGROUP2_SUPER_MAGIC as _
+        || filesystem.f_type as u64 != CGROUP2_SUPER_MAGIC as u64
         || stat.st_mode & libc::S_IFMT != libc::S_IFDIR
     {
         return Err(ServiceError::Invalid(

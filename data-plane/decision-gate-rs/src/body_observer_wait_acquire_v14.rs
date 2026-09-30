@@ -59,7 +59,7 @@ fn filesystem(fd: RawFd, expected: libc::c_long, deadline: u64) -> PlanResult<()
         return Err(std::io::Error::last_os_error().into());
     }
     live(deadline)?;
-    if value.f_type != expected as _ { return Err(invalid("initial wait descriptor filesystem differs")); }
+    if value.f_type as u64 != expected as u64 { return Err(invalid("initial wait descriptor filesystem differs")); }
     Ok(())
 }
 

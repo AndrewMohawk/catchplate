@@ -181,5 +181,5 @@ pub(super) fn run_with_input_limit(
     result.push(b'\n');
     let mut output = std::io::stdout().lock();
     output.write_all(&result).map_err(|_| "publish native verifier result")?;
-    output.flush().map_err(|_| "flush native verifier result")
+    output.flush().map_err(|_| "flush native verifier result".to_owned())
 }

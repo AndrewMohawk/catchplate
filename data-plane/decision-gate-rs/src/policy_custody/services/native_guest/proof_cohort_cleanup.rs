@@ -81,8 +81,10 @@ impl Owner {
         }
         require(identity(&current)?==config.journal)?;
         let mut fs:libc::statfs=unsafe{zeroed()};
+        let mut flags:libc::statvfs=unsafe{zeroed()};
         require(unsafe{libc::fstatfs(current.as_raw_fd(),&mut fs)}==0
-            && matches!(fs.f_type as u64,0xef53|0x5846_5342|0x9123_683e) && fs.f_flags as u64&1==0)?;
+            && matches!(fs.f_type as u64,0xef53|0x5846_5342|0x9123_683e)
+            && unsafe{libc::fstatvfs(current.as_raw_fd(),&mut flags)}==0 && flags.f_flag&libc::ST_RDONLY==0)?;
         let lock=at(&current,"cleanup.lock",libc::O_RDWR)?;let m=lock.metadata().map_err(fail)?;
         require(m.is_file() && m.uid()==0 && m.gid()==0 && m.nlink()==1 && m.len()==0
             && m.mode()&0o7777==0o600 && m.dev()==config.journal.device
@@ -98,8 +100,10 @@ impl Owner {
     pub(super) fn check(&self)->Result<(),ShadowError>{
         require(unsafe{libc::getuid()}==0 && unsafe{libc::geteuid()}==0 && identity(&self.directory)?==self.config.journal)?;
         let mut fs:libc::statfs=unsafe{zeroed()};
+        let mut flags:libc::statvfs=unsafe{zeroed()};
         require(unsafe{libc::fstatfs(self.directory.as_raw_fd(),&mut fs)}==0
-            && matches!(fs.f_type as u64,0xef53|0x5846_5342|0x9123_683e) && fs.f_flags as u64&1==0)?;
+            && matches!(fs.f_type as u64,0xef53|0x5846_5342|0x9123_683e)
+            && unsafe{libc::fstatvfs(self.directory.as_raw_fd(),&mut flags)}==0 && flags.f_flag&libc::ST_RDONLY==0)?;
         for (parent,name,id) in &self.ancestors {
             let m=parent.metadata().map_err(fail)?;
             require(m.is_dir() && m.uid()==0 && m.gid()==0 && m.mode()&0o022==0

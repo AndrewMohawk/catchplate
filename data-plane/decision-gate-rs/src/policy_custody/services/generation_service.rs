@@ -55,12 +55,32 @@ pub(super) fn frame_deadline(raw:&[u8])->Result<u64,ServiceError> {
 }
 pub(super) fn check_response_deadline(raw:&[u8],deadline:u64)->Result<(),ServiceError> {
     let value:serde_json::Value=decode_canonical_frame(raw)?;
-    if matches!(value.get("phase").and_then(|v|v.as_str()),Some("native-spool-allocated"|"native-spool-committed")) {
+    if matches!(value.get("phase").and_then(|v|v.as_str()),
+        Some("native-spool-allocated"|"native-spool-committed"|"effect-allocated"|"effect-committed")) {
         return ensure(match decode_canonical_frame::<super::spool_head_values::Reply>(raw)? {
             super::spool_head_values::Reply::Allocated(v)=>v.payload.original_deadline_boottime_nanos==deadline
                 && v.payload.allocated_at_boottime_nanos<deadline,
             super::spool_head_values::Reply::Committed{transition,..}=>transition.completed_at_boottime_nanos<deadline,
+            super::spool_head_values::Reply::EffectAllocated(v)=>v.payload.original_deadline_boottime_nanos==deadline
+                && v.payload.allocated_at_boottime_nanos<deadline,
+            super::spool_head_values::Reply::EffectCommitted{transition,..}=>transition.completed_at_boottime_nanos<deadline,
         });
+    }
+    if value.as_object().is_some_and(|fields| fields.len()==2
+        && fields.contains_key("result") && fields.contains_key("transition")) {
+        // The real cleanup gate has already verified the completion, signed
+        // this exact result and synced/read back its journal exchange. This
+        // final send guard preserves its typed reply and original deadline;
+        // it does not turn the reply's shape into independent authority.
+        let response:super::active_effect_values::Cleanup=decode_canonical_frame(raw)?;
+        let transition=&response.transition;
+        use super::super::protocol::PolicyCustodyOperation as Operation;
+        return ensure(transition.api_version==super::super::production_dispatch::PRODUCTION_DISPATCH_PROTOCOL_VERSION
+            && transition.service_role==HistoricalServiceRoleV3::CleanupAuthorizationConsumer
+            && matches!(transition.operation,Operation::AppendActiveEffectBarrier|Operation::CommitActiveEffect|Operation::ReconcileActiveEffect)
+            && transition.result_sha256==sha(&response.result)?
+            && transition.completed_at_boottime_nanos>0
+            && transition.completed_at_boottime_nanos<deadline);
     }
     if value.get("apiVersion").and_then(|v|v.as_str())==Some(super::super::production_dispatch::PRODUCTION_DISPATCH_PROTOCOL_VERSION)
         && value.get("exactSignedEnvelopeBytes").is_some() {
@@ -247,7 +267,8 @@ impl Gate {
             && p.issued_at_boottime_nanos>=p.guest.issued_at_boottime_ns.parse::<u64>().map_err(|_|invalid())?
             && p.issued_at_boottime_nanos<p.expires_at_boottime_nanos
             && p.expires_at_boottime_nanos<=association.lifetime())?;
-        let preimage=super::super::protocol::domain_separated_signature_preimage(GRANT_DOMAIN,&encode_canonical_frame(p)?)?;
+        let preimage=super::super::protocol::domain_separated_signature_preimage(GRANT_DOMAIN,&encode_canonical_frame(p)?)
+            .map_err(ServiceError::from)?;
         history.root_authority_key().verify_strict(&preimage,
             &Signature::from_slice(&sig).map_err(|_|invalid())?).map_err(|_|invalid())?;
         let directory=take_activation_fd(activation,DIRECTORY)?;

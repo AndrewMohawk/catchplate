@@ -37,8 +37,8 @@ fn filesystem(fd: RawFd, deadline: u64) -> PlanResult<Filesystem> {
     let mut value: libc::statfs = unsafe { std::mem::zeroed() };
     if unsafe { libc::fstatfs(fd, &mut value) } != 0 { return Err(std::io::Error::last_os_error().into()); }
     live(deadline)?;
-    if value.f_type == 0xef53u64 as _ { Ok(Filesystem::ExtFamily) }
-    else if value.f_type == 0x5846_5342u64 as _ { Ok(Filesystem::Xfs) }
+    if value.f_type as u64 == 0xef53 { Ok(Filesystem::ExtFamily) }
+    else if value.f_type as u64 == 0x5846_5342 { Ok(Filesystem::Xfs) }
     else { Err(invalid("history store is not an admitted filesystem structural candidate")) }
 }
 

@@ -27,7 +27,7 @@ pub(crate) mod process;
 fn fail<T>(_:T)->ShadowError {ShadowError::CustodyUnavailable}
 fn require(ok:bool)->Result<(),ShadowError> {if ok {Ok(())} else {Err(ShadowError::BindingDrift)}}
 pub(in crate::policy_shadow::policy_custody::services) fn now()->Result<u64,ShadowError> {production_now_boottime_nanos()}
-fn decimal(s:&str)->Result<u64,ShadowError> {
+pub(in crate::policy_shadow::policy_custody::services) fn decimal(s:&str)->Result<u64,ShadowError> {
     let value=s.parse::<u64>().map_err(fail)?;require(value>0 && value.to_string()==s)?;Ok(value)
 }
 pub(in crate::policy_shadow::policy_custody::services) fn exact<T:serde::de::DeserializeOwned+Serialize>(raw:&[u8])->Result<T,ShadowError> {
@@ -385,7 +385,7 @@ impl AdmittedGuest {
     }
     pub(in crate::policy_shadow::policy_custody::services) fn commitment_bridge_selected(&self)->bool {self.commitment_bridge}
     pub(in crate::policy_shadow::policy_custody::services) fn spool_bridge_selected(&self)->bool {self.spool_bridge}
-    pub(in crate::policy_shadow::policy_custody::services) fn guest_binding(&self)->GuestClosureBinding {self.keys.association.binding()}
+    pub(in crate::policy_shadow::policy_custody::services) fn guest_binding(&self)->GuestClosureBinding {self.keys.guest_binding()}
     pub(in crate::policy_shadow::policy_custody::services) fn delivery(&self)->&Arc<super::Delivery> {
         &self._delivery.owner
     }

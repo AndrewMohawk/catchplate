@@ -1,7 +1,7 @@
 //! Purpose-fixed descriptor transfer. Old endpoint framing remains unchanged.
 use super::*;
 use std::mem::{size_of,size_of_val,zeroed};
-use super::super::super::super as guest;
+use crate::policy_shadow::policy_custody::services::guest;
 const MAX_RIGHTS:usize=96;
 
 #[derive(Clone,Serialize,Deserialize)]

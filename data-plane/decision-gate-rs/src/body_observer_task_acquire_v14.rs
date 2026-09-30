@@ -54,7 +54,7 @@ fn filesystem(fd: RawFd, expected: u64, deadline: u64) -> PlanResult<()> {
     let mut value: libc::statfs = unsafe { std::mem::zeroed() };
     if unsafe { libc::fstatfs(fd, &mut value) } != 0 { return Err(std::io::Error::last_os_error().into()); }
     live(deadline)?;
-    if value.f_type != expected as _ { return Err(invalid("stopped task descriptor filesystem differs")); }
+    if value.f_type as u64 != expected as u64 { return Err(invalid("stopped task descriptor filesystem differs")); }
     Ok(())
 }
 

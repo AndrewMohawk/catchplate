@@ -3,7 +3,7 @@
 use super::*;
 use super::ledger_spool_values::{invalid,Scope};
 use crate::policy_shadow::{ShadowGenerationIdentity,RuntimeIdentity,CanonicalEd25519Signature,signature_preimage};
-use crate::native_generation_origin_v1 as wire;
+use serverware_decision_gate::native_generation_origin_v1 as wire;
 fn require(v:bool)->Result<(),ServiceError>{if v{Ok(())}else{Err(invalid())}}
 #[derive(Debug,Clone,PartialEq,Eq,Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
@@ -17,7 +17,7 @@ impl Key {
         require(raw.len()==32 && URL_SAFE_NO_PAD.encode(&raw)==self.public_key_base64url
             && self.not_before_unix_nanos>0 && self.not_before_unix_nanos<self.not_after_unix_nanos)?;
         let key=VerifyingKey::from_bytes(&<[u8;32]>::try_from(raw.as_slice()).map_err(|_|invalid())?).map_err(|_|invalid())?;
-        require(self.key_id==self.key_spki_sha256 && verifying_key_spki_sha256(&key)?==self.key_spki_sha256)?;Ok(key)
+        require(self.key_id==self.key_spki_sha256 && verifying_key_spki_sha256(&key).map_err(|_|invalid())?==self.key_spki_sha256)?;Ok(key)
     }
 }
 #[derive(Serialize,Deserialize)]

@@ -51,7 +51,7 @@ impl EffectPolicy {
         let key=VerifyingKey::from_bytes(&<[u8;32]>::try_from(raw.as_slice()).map_err(|_|invalid())?).map_err(|_|invalid())?;
         require(self.cleanup_authority_epoch.authority_role==super::super::authority_history::HistoricalAuthorityRoleV3::IsolatedService(
                 HistoricalServiceRoleV3::CleanupAuthorizationConsumer)
-            && verifying_key_spki_sha256(&key)?==self.cleanup_authority_epoch.service_signing_key_spki_sha256
+            && verifying_key_spki_sha256(&key).map_err(|_|invalid())?==self.cleanup_authority_epoch.service_signing_key_spki_sha256
             && self.cleanup_initial_transition_head_sha256!=Sha256Digest::compute(&[]))?;Ok(key)
     }
 }

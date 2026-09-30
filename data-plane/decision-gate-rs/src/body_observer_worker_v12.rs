@@ -60,7 +60,7 @@ fn stat(fd: RawFd) -> PlanResult<libc::stat> {
 fn filesystem(fd: RawFd, expected: libc::c_long) -> PlanResult<()> {
     let mut value: libc::statfs = unsafe { std::mem::zeroed() };
     if unsafe { libc::fstatfs(fd, &mut value) } != 0 { return Err(std::io::Error::last_os_error().into()); }
-    if value.f_type != expected as _ { return Err(invalid("namespace worker descriptor filesystem differs")); }
+    if value.f_type as u64 != expected as u64 { return Err(invalid("namespace worker descriptor filesystem differs")); }
     Ok(())
 }
 

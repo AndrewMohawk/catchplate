@@ -99,7 +99,7 @@ fn path_identity(uid:u32,gid:u32,endpoint:EndpointKind)->Result<PathOriginal,Sha
 fn local_path(fd:BorrowedFd<'_>,endpoint:EndpointKind)->Result<(),ShadowError> {
     let mut name:libc::sockaddr_un=unsafe{zeroed()};let mut length=size_of::<libc::sockaddr_un>() as _;
     require(unsafe{libc::getsockname(fd.as_raw_fd(),(&mut name as *mut libc::sockaddr_un).cast(),&mut length)}==0
-        && name.sun_family==libc::AF_UNIX as _)?;
+        && name.sun_family==libc::AF_UNIX as libc::sa_family_t)?;
     let raw:Vec<_>=name.sun_path.iter().map(|c|*c as u8).collect();
     let expected=endpoint.socket_path().as_bytes();
     require(length as usize==size_of::<libc::sa_family_t>()+expected.len()+1

@@ -7,7 +7,7 @@ use super::*;
 struct Command {api_version:String,operation:String,original:Option<String>}
 
 impl Owner {
-    pub(super) fn constructed_selected(&self)->bool{self.configuration.constructed_selected()}
+    pub(in crate::policy_shadow::policy_custody::services::guest::native_guest) fn constructed_selected(&self)->bool{self.configuration.constructed_selected()}
     pub(super) fn check_constructed(&self)->Result<(),ShadowError>{
         self.check()?;require(self.configuration.constructed_selected())?;
         let raw=self.constructed_census.as_ref().ok_or(ShadowError::BindingDrift)?;
@@ -41,7 +41,7 @@ impl Owner {
     }
     /// The caller is authenticated by the real clone parent's existing control
     /// owner. No request supplies a PID, path, descriptor list, or measurement.
-    pub(super) fn constructed_control(&mut self,raw:&[u8],child:&Child,observation:&driver_identity::Observation,
+    pub(in crate::policy_shadow::policy_custody::services::guest::native_guest) fn constructed_control(&mut self,raw:&[u8],child:&Child,observation:&driver_identity::Observation,
         scope:&[u8])->Result<(Vec<u8>,Option<OwnedFd>),ShadowError>{
         self.check()?;require(self.configuration.constructed_selected() && self.bound && self.listening && now()?<self.startup)?;
         let command:Command=exact(raw)?;

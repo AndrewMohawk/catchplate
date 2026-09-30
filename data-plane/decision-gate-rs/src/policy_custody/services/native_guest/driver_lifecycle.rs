@@ -138,7 +138,7 @@ impl Owner {
         let held=executable.metadata().map_err(fail)?;
         require(expected.pid==*pid && expected.start_time_ticks==*start
             && expected.uid==self.configuration.gate.uid && expected.gid==self.configuration.gate.gid
-            && expected.executable_sha256==self.configuration.gate.executable_sha256
+            && expected.executable_sha256==self.configuration.gate.executable_sha256.raw_bytes()?
             && (expected.executable_device,expected.executable_inode,expected.executable_length)==*id
             && (actual.dev(),actual.ino(),actual.len())==*id && (held.dev(),held.ino(),held.len())==*id
             && census::process(*pid)?.1==*start)?;

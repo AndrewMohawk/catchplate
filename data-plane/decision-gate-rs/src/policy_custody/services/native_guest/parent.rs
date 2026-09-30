@@ -110,7 +110,12 @@ impl Running {
             && now()?.checked_add(REAP_RESERVE_NS).ok_or(ShadowError::BindingDrift)?<files.lifetime())?;
         // Arm the ORIGINAL absolute deadline before image, loop or mount work.
         let watchdog=Watchdog::arm(&files)?;
-        let (activation,_)=take_activation(&files.payload.activation).map_err(fail)?;
+        let native_lock=match &service_selection {
+            SelectedService::PersistenceLocked(_)=>Some(super::super::NativeLock::Persistence),
+            SelectedService::LedgerRetrieval(_)|SelectedService::CompletionRetrieval(_)|SelectedService::EffectRetrieval(_)=>Some(super::super::NativeLock::Ledger),
+            _=>None,
+        };
+        let (activation,_)=take_activation(&files.payload.activation,false,false,false,native_lock).map_err(fail)?;
         process::isolate_mounts()?;
         let image=image::Image::prepare(&selected.closure,&files)?;
         let (inspector,inspection)=match service_selection {

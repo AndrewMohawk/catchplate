@@ -36,7 +36,7 @@ const RELATIONS:&[(&str,&[&str])]=&[
     ("webauthn_trust_publication_high_water",&["authority_scope"]),("webauthn_trust_publications",&["id"]),
 ];
 pub(super) fn tables()->Vec<&'static str>{let mut names=RELATIONS.iter().map(|r|r.0).collect::<Vec<_>>();names.sort();names}
-pub(super) fn population_tables()->Vec<&'static str>{tables().into_iter().filter(|t|!matches!(*t,
+pub(in crate::policy_shadow::native_activation) fn population_tables()->Vec<&'static str>{tables().into_iter().filter(|t|!matches!(*t,
     "control_plane_approvals"|"metadata_audit_outbox"|"policy_authority_bounded_aggregate_states"|"rbac_role_bindings"|
     "webauthn_challenges"|"webauthn_credentials"|"webauthn_trust_publication_high_water"|"webauthn_trust_publications")).collect()}
 pub(super) fn key_columns(table:&str)->Result<&'static [&'static str],ShadowError>{
@@ -61,14 +61,14 @@ pub(super) fn template(table:&str,kind:&str)->Result<Value,ShadowError>{
         "before":if kind=="INSERT"{"absent"}else{"present"},"after":"present","predicate":"exact-primary-key-and-full-row-cas-v1","cardinality":1});
     v["templateId"]=serde_json::to_value(tree("serverware.policyAuthorityMutationTemplate/v1",&[&canonical_json_bytes(&v)?])).map_err(fail)?;Ok(v)
 }
-pub(super) fn guard_commitment()->Result<Sha256Digest,ShadowError>{Ok(Sha256Digest::compute(&canonical_json_bytes(&json!({
+pub(in crate::policy_shadow::native_activation) fn guard_commitment()->Result<Sha256Digest,ShadowError>{Ok(Sha256Digest::compute(&canonical_json_bytes(&json!({
     "apiVersion":"serverware.nativePolicyActivationEffectGuard/v1","scope":"native-policy-publication",
     "authority":"all-source-admitted-controlled-business-and-authorization-mutations",
     "serialization":"exclusive-held-table-lock-before-any-business-mutation",
     "exemptTables":["metadata_audit_outbox","policy_authority_bounded_aggregate_states","policy_authority_transition_audits"],
     "ownerOperations":["native-policy-activation.record-inclusion","native-policy-activation.finalize"],
     "expiryUnlockAllowed":false,"unknownEffectUnlockAllowed":false}))?))}
-pub(super) fn handler_commitment(source:&str)->Result<Sha256Digest,ShadowError>{
+pub(in crate::policy_shadow::native_activation) fn handler_commitment(source:&str)->Result<Sha256Digest,ShadowError>{
     let tables=tables();let writes=tables.iter().copied().filter(|t|writable(t)).collect::<Vec<_>>();
     let reads=tables.iter().copied().filter(|t|!writable(t)&&!AUTHORIZATION.contains(t)).collect::<Vec<_>>();
     let pre=["policy_authority_authorization_dependency_manifests","policy_authority_fence_heads","policy_authority_query_dependency_manifests"];

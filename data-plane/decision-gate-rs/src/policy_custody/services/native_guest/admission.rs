@@ -140,6 +140,9 @@ impl PreparedNativeCustodyKeys {
     }
 }
 impl AdmittedKeys {
+    pub(in crate::policy_shadow::policy_custody::services) fn guest_binding(&self)->GuestClosureBinding {
+        self.association.binding()
+    }
     pub(in crate::policy_shadow::policy_custody::services) fn assignment_payload_sha256(&self)->&Sha256Digest {
         self.assignment.payload_sha256()
     }

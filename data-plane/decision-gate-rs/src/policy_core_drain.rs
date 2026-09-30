@@ -115,6 +115,10 @@ impl Drop for Lifecycle {
 pub(crate) struct Snapshot {
     generation:String,armed_at:i64,closed_at:i64,observed:i64,window_end:i64,deadline:i64,requests:Vec<Value>,attempts:u64,
 }
+impl policy_shadow::native_final_cumulative::NativeDrainSnapshotView for Snapshot {
+    fn generation_id(&self)->&str {Snapshot::generation_id(self)}
+    fn value(&self)->Value {Snapshot::value(self)}
+}
 impl Snapshot {
     pub(crate) fn generation_id(&self)->&str {&self.generation}
     pub(crate) fn require_complete(&self,snapshot:&NativeAccountingSnapshot)->Result<(),String>{

@@ -25,7 +25,7 @@ fn ordinary_unconnected(fd:BorrowedFd<'_>)->Result<(),ShadowError> {
         && descriptor_flags>=0 && descriptor_flags&libc::FD_CLOEXEC!=0)?;
     let mut address:libc::sockaddr_un=unsafe{zeroed()};let mut length=size_of::<libc::sockaddr_un>() as _;
     require(unsafe{libc::getsockname(fd.as_raw_fd(),(&mut address as *mut libc::sockaddr_un).cast(),&mut length)}==0
-        && address.sun_family==libc::AF_UNIX as _ && length as usize==size_of::<libc::sa_family_t>())?;
+        && address.sun_family==libc::AF_UNIX as libc::sa_family_t && length as usize==size_of::<libc::sa_family_t>())?;
     length=size_of::<libc::sockaddr_un>() as _;
     require(unsafe{libc::getpeername(fd.as_raw_fd(),(&mut address as *mut libc::sockaddr_un).cast(),&mut length)}<0
         && std::io::Error::last_os_error().raw_os_error()==Some(libc::ENOTCONN))
@@ -63,7 +63,7 @@ fn local_path(fd:BorrowedFd<'_>,path:&Path)->Result<(),ShadowError> {
     let mut length=size_of::<libc::sockaddr_un>() as libc::socklen_t;
     require(!expected.is_empty() && expected.len()<address.sun_path.len() && !expected.contains(&0)
         && unsafe{libc::getsockname(fd.as_raw_fd(),(&mut address as *mut libc::sockaddr_un).cast(),&mut length)}==0
-        && address.sun_family==libc::AF_UNIX as _)?;
+        && address.sun_family==libc::AF_UNIX as libc::sa_family_t)?;
     let offset=std::ptr::addr_of!(address.sun_path) as usize-std::ptr::addr_of!(address) as usize;
     let actual=unsafe{std::slice::from_raw_parts(address.sun_path.as_ptr().cast::<u8>(),expected.len()+1)};
     require(length as usize==offset+expected.len()+1 && &actual[..expected.len()]==expected && actual[expected.len()]==0)

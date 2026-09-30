@@ -106,7 +106,7 @@ impl Grant {
             && effects.cleanup_key()? == *own.service_signing_key()
             && effects.cleanup_initial_transition_head_sha256 == p.initial_transition_head_sha256
             && p.durable_authority_epoch.authority_role == HistoricalAuthorityRoleV3::IsolatedService(HistoricalServiceRoleV3::DurableRecoveryStore)
-            && verifying_key_spki_sha256(&durable)? == p.durable_authority_epoch.service_signing_key_spki_sha256)?;
+            && verifying_key_spki_sha256(&durable).map_err(|_| invalid())? == p.durable_authority_epoch.service_signing_key_spki_sha256)?;
         let keys = [h.ingress.material()?, h.ledger.material()?, h.retrieval.material()?,
             h.origin_verifier.material()?, completed.terminal.material()?, effects.dispatch_barrier.material()?,
             effects.active_effect_barrier.material()?, effects.active_effect_commit.material()?, durable];

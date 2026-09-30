@@ -58,11 +58,20 @@ impl Accounting {
 /// Complete native accounting plus a separately authorized, already delivered
 /// heartbeat. Neither this carrier nor its counters asserts readiness.
 pub(crate) struct Checkpoint {record:Value}
+
+/// Read-only source interface to the gate's opaque drain snapshot. The actual
+/// snapshot constructor remains in the closed-admission/last-lifecycle owner;
+/// shared custody binaries do not acquire the gate runtime or a DTO constructor.
+pub(crate) trait NativeDrainSnapshotView {
+    fn generation_id(&self)->&str;
+    fn value(&self)->Value;
+}
+
 impl Checkpoint {
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn from_originals<'a>(generation:&ShadowGenerationIdentity,baseline:u64,baseline_head:&Sha256Digest,
+    pub(crate) fn from_originals<'a,S:NativeDrainSnapshotView>(generation:&ShadowGenerationIdentity,baseline:u64,baseline_head:&Sha256Digest,
         last:u64,head:&Sha256Digest,observed:i64,originals:impl Iterator<Item=&'a VerifiedShadowSpillReceipt>,
-        heartbeat:&str,heartbeat_sha256:&str,sequence:u64,previous:Option<&Sha256Digest>,interval:Option<&Sha256Digest>,seal:Option<&super::super::policy_core::NativeDrainSnapshot>,
+        heartbeat:&str,heartbeat_sha256:&str,sequence:u64,previous:Option<&Sha256Digest>,interval:Option<&Sha256Digest>,seal:Option<&S>,
         assignment:&VerifiedAssignment,runtime:&RuntimeIdentity,publication:&Sha256Digest,
         configuration:&Sha256Digest,trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime)->Result<Self,ShadowError> {
         let originals=originals.collect::<Vec<_>>();

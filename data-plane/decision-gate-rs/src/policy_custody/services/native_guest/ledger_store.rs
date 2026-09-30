@@ -1,6 +1,7 @@
 //! The retained writer for acyclic LedgerAppend cores. A complete, separately
 //! pinned append head is mandatory; orphan/unknown records are never repaired.
 use super::*;
+use guest::exact;
 use crate::policy_shadow::policy_custody::services::ledger_spool_values as wire;
 use crate::policy_shadow::policy_custody::services::active_effect_values as effect;
 use std::fs::File;
@@ -28,7 +29,9 @@ fn at(directory:&File,name:&str,flags:i32)->Result<File,ShadowError>{
     require(raw>=0)?;Ok(unsafe{File::from_raw_fd(raw)})
 }
 fn fs(file:&File)->Result<(),ShadowError>{let mut s:libc::statfs=unsafe{std::mem::zeroed()};
-    require(unsafe{libc::fstatfs(file.as_raw_fd(),&mut s)}==0 && matches!(s.f_type as u64,0xef53|0x9123_683e) && s.f_flags as u64&1==0)}
+    let mut flags:libc::statvfs=unsafe{std::mem::zeroed()};
+    require(unsafe{libc::fstatfs(file.as_raw_fd(),&mut s)}==0 && matches!(s.f_type as u64,0xef53|0x9123_683e)
+        && unsafe{libc::fstatvfs(file.as_raw_fd(),&mut flags)}==0 && flags.f_flag&libc::ST_RDONLY==0)}
 fn measure(file:&File)->Result<Sha256Digest,ShadowError>{
     #[repr(C)] struct Digest {algorithm:u16,size:u16,bytes:[u8;32]}
     let mut d=Digest{algorithm:0,size:32,bytes:[0;32]};

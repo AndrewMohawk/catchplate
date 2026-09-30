@@ -124,7 +124,7 @@ impl Work {
     fn from_prepared(prepared:Prepared,keys:&AdmittedKeys,delivery:&PreparedGuestServiceDelivery,
         trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime)->Result<Self,ShadowError>{
         let Prepared{original,configuration,kind}=prepared;
-        require(configuration.kind()?==kind && original.read(65536).map_err(fail)?==canonical_json_bytes(&configuration)?)?;
+        require(configuration.kind()?==kind && original.read(65536).map_err(fail)?.as_slice()==canonical_json_bytes(&configuration)?.as_slice())?;
         configuration.verify(keys,trust,time)?;
         let loaded=delivery.owner.load::<ProductionRpcRuntimeConfigV4>().map_err(fail)?;loaded.value.validate().map_err(fail)?;
         let histories=services::production::load_production_histories(&loaded.value,&loaded.credentials).map_err(fail)?;
@@ -135,7 +135,7 @@ impl Work {
     pub(super) fn expected_peer(&self)->&services::ExpectedPeerCredentialV3{self.configuration.expected_peer()}
     pub(super) fn kind(&self)->Result<Kind,ShadowError>{self.configuration.kind()}
     pub(super) fn check(&self,keys:&AdmittedKeys,trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime)->Result<(),ShadowError>{
-        require(self.original.read(65536).map_err(fail)?==canonical_json_bytes(&self.configuration)?)?;
+        require(self.original.read(65536).map_err(fail)?.as_slice()==canonical_json_bytes(&self.configuration)?.as_slice())?;
         self.configuration.verify(keys,trust,time)?;
         if let Some(value)=&self.commitment{value.check(keys,trust,time)?;}Ok(())
     }

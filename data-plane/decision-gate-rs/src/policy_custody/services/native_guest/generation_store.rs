@@ -28,8 +28,11 @@ fn identity(fd:BorrowedFd<'_>)->Result<Identity,ShadowError>{
     Ok(Identity{device:stat.st_dev,inode:stat.st_ino,mode:stat.st_mode,uid:stat.st_uid,gid:stat.st_gid})
 }
 fn durable(fd:BorrowedFd<'_>)->Result<(),ShadowError>{
-    let mut stat:libc::statfs=unsafe{std::mem::zeroed()};require(unsafe{libc::fstatfs(fd.as_raw_fd(),&mut stat)}==0
-        && matches!(stat.f_type as u64,0xef53|0x5846_5342|0x9123_683e) && stat.f_flags as u64&1==0)
+    let mut stat:libc::statfs=unsafe{std::mem::zeroed()};
+    let mut flags:libc::statvfs=unsafe{std::mem::zeroed()};
+    require(unsafe{libc::fstatfs(fd.as_raw_fd(),&mut stat)}==0
+        && matches!(stat.f_type as u64,0xef53|0x5846_5342|0x9123_683e)
+        && unsafe{libc::fstatvfs(fd.as_raw_fd(),&mut flags)}==0 && flags.f_flag&libc::ST_RDONLY==0)
 }
 fn at(directory:BorrowedFd<'_>,name:&str,flags:i32)->Result<File,ShadowError>{
     let name=std::ffi::CString::new(name).map_err(fail)?;

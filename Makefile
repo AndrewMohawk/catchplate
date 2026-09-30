@@ -1524,6 +1524,10 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/native_shadow_retrieval_artifacts.py \
 	serverware/native_shadow_retrieval_store.py \
 	serverware/native_shadow_guest_delivery.py \
+	serverware/custody_generation_grants.py \
+	serverware/custody_generation_originals.py \
+	serverware/custody_generation_inputs.py \
+	serverware/custody_generation_launch.py \
 	serverware/native_shadow_persistence_artifacts.py \
 	serverware/native_shadow_persistence_inputs.py \
 	serverware/native_shadow_proof_cohort_assignment.py \
@@ -4098,6 +4102,10 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/native_shadow_retrieval_artifacts.py \
 				serverware/native_shadow_retrieval_store.py \
 				serverware/native_shadow_guest_delivery.py \
+				serverware/custody_generation_grants.py \
+				serverware/custody_generation_originals.py \
+				serverware/custody_generation_inputs.py \
+				serverware/custody_generation_launch.py \
 				serverware/native_shadow_persistence_artifacts.py \
 				serverware/native_shadow_persistence_inputs.py \
 				serverware/native_shadow_proof_cohort_assignment.py \
@@ -4474,6 +4482,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/policy_custody/services/native_key_delivery.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_verifier_transport.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/guest_original.rs \
+				data-plane/decision-gate-rs/src/policy_custody/services/guest_ordinary.rs \
 				data-plane/decision-gate-rs/src/native_staging.rs \
 				data-plane/decision-gate-rs/src/native_staging_v1.rs \
 				data-plane/decision-gate-rs/src/native_staging_v1/config.rs \
@@ -4788,6 +4797,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-shadow-persistence-inputs.v1.schema.json \
 				schemas/native-shadow-proof-cohort.v1.schema.json \
 				schemas/custody-service-generation-admission.v1.schema.json \
+				schemas/custody-five-service-launch.v1.schema.json \
 				schemas/native-policy-activation.v1.schema.json \
 				schemas/native-policy-activation-recovery.v1.schema.json \
 				schemas/native-policy-observation-result.v1.schema.json \

@@ -385,15 +385,21 @@ impl RuntimeConfigHeaderV3 {
             &self.authority_history_manifest_credential,
             MAX_CONFIG_BYTES,
         )?;
-        if Sha256Digest::compute(&bytes)
-            != self.authority_history_manifest_sha256
-        {
+        let exact_original_pinned_by_guest = self.api_version==generation_service::RUNTIME
+            && matches!(credentials,CredentialDirectory::Guest(_));
+        if (self.api_version==generation_service::RUNTIME && !exact_original_pinned_by_guest)
+            || (!exact_original_pinned_by_guest && Sha256Digest::compute(&bytes)
+                != self.authority_history_manifest_sha256) {
             return Err(ServiceRunnerError::invalid(
                 "authority-history credential differs from its startup-pinned manifest digest",
             ));
         }
         let manifest: AuthorityHistoryManifestV3 =
             common::decode_canonical_frame(&bytes)?;
+        // v5's actual Guest credential reader already authenticates the full
+        // byte SHA from signed C9. Its semantic manifest SHA is a DIFFERENT
+        // framed commitment, verified below by the complete history owner.
+        // Legacy v4 keeps its existing exact-original admission unchanged.
         let history = RuntimeAuthorityHistory::from_manifest(
             manifest,
             &self.authority_history_root_key_id,

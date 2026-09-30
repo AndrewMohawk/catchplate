@@ -31,6 +31,27 @@ impl Original {
     pub(super) fn native_launch() -> Result<Self, Error> {
         Self::fixed_native("native-shadow-guest-launch.json",32768)
     }
+    pub(super) fn ordinary_service_launch(role:&str)->Result<Self,Error> {
+        let leaf=match role {
+            "durable-recovery-store"=>"custody-durable-recovery-store-guest.json",
+            "cleanup-authorization-consumer"=>"custody-cleanup-authorization-consumer-guest.json",
+            "recovery-target-provider"=>"custody-recovery-target-provider-guest.json",
+            "current-signature-authority"=>"custody-current-signature-authority-guest.json",
+            "bounded-cleanup-helper"=>"custody-bounded-cleanup-helper-guest.json",
+            _=>return Err(fail("unknown ordinary custody service")),
+        };
+        let named=Self::fixed_native(leaf,32768)?;
+        // This explicit ordinary profile reserves FD4 for the same protected
+        // launch original retained by the real parent, not a new path selector.
+        let file=unsafe{File::from_raw_fd(4)};
+        let flags=unsafe{libc::fcntl(4,libc::F_GETFL)};
+        if Identity::of(&file.metadata()?)!=named.identity || flags<0
+            || flags&(libc::O_ACCMODE|libc::O_PATH|libc::O_APPEND)!=libc::O_RDONLY {
+            return Err(fail("ordinary launch descriptor differs from protected original"));
+        }
+        super::set_cloexec(4)?;
+        Ok(Self{file,identity:named.identity,sha256:named.sha256})
+    }
     pub(super) fn retrieval_pair_configuration() -> Result<Self, Error> {
         Self::fixed_native("native-shadow-retrieval-pair.json",32768)
     }

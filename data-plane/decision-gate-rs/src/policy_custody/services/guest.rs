@@ -6,6 +6,8 @@ use std::path::Path;
 pub(crate) mod native_keys;
 #[path="native_guest/mod.rs"]
 pub(crate) mod native_guest;
+#[path="guest_ordinary.rs"]
+pub(crate) mod ordinary;
 
 const SIGNATURE_DOMAIN: &[u8] = b"serverware.policyCustodyGuestDelivery.signature/v1\0";
 const MAX_DELIVERY: usize = 64 * 1024;
@@ -119,6 +121,7 @@ pub(super) struct Delivery {
     credentials:BTreeMap<String,(Credential,Original)>,
     process:Process, parent:Parent, payload:Payload, delivery_sha256:Sha256Digest,
     startup:u64, lifetime:u64, ready:AtomicBool,
+    ordinary_lifetime:std::sync::Mutex<Option<ordinary::Lifetime>>,
 }
 /// Same-process root file admission shared by the fixed parent and child.
 /// Not a final-role owner, admission result, or authority reconstructed from data.
@@ -268,7 +271,8 @@ impl PreparedGuestServiceDelivery {
             (entry.name.clone(),(entry,original))
         }).collect();
         let owner=Arc::new(Delivery { configuration,envelope,runtime,credentials,process,parent,payload:p,
-            delivery_sha256:expected_delivery_sha256,startup,lifetime,ready:AtomicBool::new(false) });
+            delivery_sha256:expected_delivery_sha256,startup,lifetime,ready:AtomicBool::new(false),
+            ordinary_lifetime:std::sync::Mutex::new(None) });
         owner.check_originals()?;
         Ok(Self { owner,activation })
     }
@@ -316,6 +320,9 @@ impl Delivery {
     }
     pub(super) fn check(&self)->Result<(),ServiceRunnerError> {
         self.check_originals()?;
+        if let Some(lifetime)=self.ordinary_lifetime.lock().map_err(|_|fail("ordinary lifetime owner poisoned"))?.as_ref() {
+            lifetime.check()?;
+        }
         let (mut ru,mut eu,mut su)=(0u32,0u32,0u32);
         let (mut rg,mut eg,mut sg)=(0u32,0u32,0u32);
         if unsafe { libc::getresuid(&mut ru,&mut eu,&mut su) }!=0
@@ -376,7 +383,11 @@ impl Delivery {
         let bytes=canonical_json_bytes(&Notice { api_version:"serverware.policyCustodyGuestStartup/v1",
             delivery_sha256:&self.delivery_sha256,service_role:self.payload.service_role,
             invocation_id:&self.payload.invocation_id,phase:"constructed" }).map_err(|_|fail("guest notice encoding failed"))?;
-        self.parent.send(&bytes,self.startup)
+        self.parent.send(&bytes,self.startup)?;
+        if let Some(lifetime)=self.ordinary_lifetime.lock().map_err(|_|fail("ordinary lifetime owner poisoned"))?.as_mut() {
+            lifetime.constructed()?;
+        }
+        Ok(())
     }
 }
 

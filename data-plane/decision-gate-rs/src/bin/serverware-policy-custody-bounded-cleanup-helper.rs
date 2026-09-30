@@ -4,6 +4,9 @@ mod policy_shadow;
 
 #[cfg(target_os = "linux")]
 fn main() {
+    if std::env::args().nth(1).as_deref()==Some("--guest-c9-generation") {
+        policy_shadow::run_ordinary_custody_guest("bounded-cleanup-helper");
+    }
     if let Err(error) =
         policy_shadow::run_bounded_cleanup_helper_from_env()
     {

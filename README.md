@@ -15,36 +15,41 @@ long-lived credential.
 For example, an application or CI job can publish an updated version of
 `@acme/widgets` with `npm publish`, while policy permits that package's releases
 only **09:00–17:00 UTC daily**. The workload authenticates to Serverware, not with
-the upstream npm token. These diagrams illustrate intended production flows,
-not deployed integrations.
+the upstream npm token. The diagrams use `username:password` as an illustrative
+workload credential—not a configured default or a real secret. Serverware
+consumes that credential at ingress and uses the protected provider credential
+on the upstream request only after authorization succeeds. The credential swap
+does not forward the workload credential to the provider.
+These diagrams illustrate intended production flows, not deployed integrations.
 
 ### Example: time-limited npm publishing
 
-![An application asks Serverware to publish @acme/widgets. Only 09:00–17:00 UTC is allowed; otherwise no request reaches npm. The npm token stays inside Serverware.](docs/images/npm-time-window-flow.svg)
+![An application sends npm publish with the example workload credential username:password. Serverware checks the package and time window, removes the workload credential and attaches its protected npm token before forwarding to npm. A denied request never reaches npm; the validated result returns without the npm token.](docs/images/npm-time-window-flow.svg)
 
 <details>
-<summary>Editable Mermaid source</summary>
+<summary>Equivalent Mermaid sequence (editable)</summary>
 
 ```mermaid
-flowchart LR
-    APP["Application / CI<br/>npm publish<br/>@acme/widgets v1.2.4"]
-    subgraph SW["Serverware"]
-        AUTH["Authenticate workload"]
-        POLICY{"Package permitted<br/>and within 09:00–17:00 UTC?"}
-        USE["Attach npm token<br/>Validate registry response"]
-        STORE["Protected npm credential"]
-        DENY["Deny request<br/>No call to npm"]
-        AUTH --> POLICY
-        POLICY -->|Allowed| USE
-        POLICY -->|Outside window or wrong package| DENY
-        STORE -.->|Available only inside Serverware| USE
+sequenceDiagram
+    participant APP as Application / CI
+    box Serverware trust boundary
+        participant SW as Serverware proxy
+        participant STORE as Protected credential store
     end
-    NPM["npm registry<br/>registry.npmjs.org"]
-    APP -->|Publish request + workload identity| AUTH
-    USE -->|Authenticated HTTPS publish| NPM
-    NPM -->|Registry response| USE
-    USE -->|Validated response, no npm token| APP
-    DENY -->|Policy denial| APP
+    participant NPM as npm registry
+    APP->>SW: Publish @acme/widgets via npm + username:password
+    SW->>SW: Authenticate and consume workload credential; never forward it
+    SW->>SW: Check package and 09:00–17:00 UTC
+    alt Wrong package or outside allowed hours
+        SW-->>APP: Deny; no request to npm
+    else Authorized
+        SW->>STORE: Select authorized npm token
+        STORE-->>SW: npm token (inside Serverware only)
+        SW->>NPM: Publish request with protected npm token
+        NPM-->>SW: Registry response
+        SW->>SW: Validate response
+        SW-->>APP: Publish result; no npm token
+    end
 ```
 
 </details>
@@ -56,38 +61,53 @@ The time window authorizes requests; it does not schedule or queue releases.
 
 A build pipeline publishes an updated TEE container image to
 [Amazon ECR](https://docs.aws.amazon.com/AmazonECR/latest/userguide/docker-push-ecr-image.html),
-but only after an authorized developer approves that specific update using a
-**YubiKey with FIDO2/WebAuthn**. Approval is bound to the AWS account, region,
-repository and image digest—not blanket permission to push arbitrary images.
-The pipeline does not receive the upstream AWS/ECR credential.
+but the pipeline **attempts the action first**. Serverware holds that action
+and only then asks an authorized developer to approve it using a
+**YubiKey with FIDO2/WebAuthn**. Once the fresh, one-use approval is verified,
+Serverware replaces the workload credential with its protected AWS/ECR
+credential and resumes that exact publication. Rejection, timeout or a mismatch
+blocks it. Approval is bound to the AWS account, region, repository and image
+digest—not blanket permission to push arbitrary images. The pipeline never
+receives the upstream AWS/ECR credential.
 
-![A build pipeline and a developer's YubiKey approval meet at Serverware. Only a fresh approval for the exact image and repository allows an ECR push; otherwise it is blocked. AWS credentials stay inside Serverware.](docs/images/ecr-yubikey-flow.svg)
+![A pipeline attempts an ECR image update using username:password. Serverware holds the action and then challenges the developer, who approves with a YubiKey. Only after verifying fresh approval for that exact action does Serverware replace the workload credential with its protected AWS/ECR credential and resume publication. Denial or timeout blocks the update.](docs/images/ecr-yubikey-flow.svg)
 
 <details>
-<summary>Editable Mermaid source</summary>
+<summary>Equivalent Mermaid sequence (editable)</summary>
 
 ```mermaid
-flowchart TD
-    CI["Build pipeline<br/>Request TEE image publication"]
-    DEV["Authorized developer<br/>YubiKey hardware approval"]
-    subgraph SW["Serverware"]
-        INTENT["Bind publish intent<br/>Account + region + repository + image digest"]
-        CHECK{"Policy permits update<br/>and fresh matching WebAuthn approval?"}
-        USE["Authorize this image publication<br/>Use scoped AWS/ECR credential"]
-        STORE["Protected AWS/ECR credential"]
-        DENY["Deny publication<br/>Missing, stale or mismatched approval"]
-        INTENT --> CHECK
-        CHECK -->|Yes| USE
-        CHECK -->|No| DENY
-        STORE -.->|Never returned to the pipeline| USE
+sequenceDiagram
+    participant CI as Build pipeline
+    box Serverware trust boundary
+        participant SW as Serverware proxy
+        participant STORE as Protected credential store
     end
-    CI -->|Image + workload identity| INTENT
-    INTENT -->|Challenge for this exact update| DEV
-    DEV -->|Signed WebAuthn assertion| CHECK
-    USE -->|Authenticated image push| ECR["Amazon ECR<br/>Approved image digest"]
-    ECR -->|Publication result, no credential| CI
-    DENY -->|Policy denial| CI
-    ECR -.->|Separate build and rollout authorization| TEE["AWS Nitro Enclaves<br/>Build EIF, deploy and attest"]
+    participant DEV as Developer / approval UI
+    participant KEY as YubiKey
+    participant ECR as Amazon ECR
+    CI->>SW: Attempt TEE image publication + username:password
+    SW->>SW: Authenticate and consume workload credential; never forward it
+    SW->>SW: Check policy; bind exact publication intent
+    alt Policy denies this action
+        SW-->>CI: Deny; no publication to ECR
+    else Policy requires human approval
+        Note over CI,SW: Action is held; no upstream credential injected yet
+        SW-->>DEV: Request approval now for account, region, repository, image digest
+        DEV->>KEY: Review action; authenticate with YubiKey
+        KEY-->>DEV: WebAuthn assertion
+        DEV->>SW: Return request-bound approval
+        alt Fresh matching one-use approval verified
+            SW->>SW: Consume one-use approval for this exact action
+            SW->>STORE: Select scoped AWS/ECR credential
+            STORE-->>SW: Upstream credential (inside Serverware only)
+            SW->>ECR: Resume this image publication with upstream authentication
+            ECR-->>SW: Publication result
+            SW->>SW: Validate response
+            SW-->>CI: Result; no AWS/ECR credential
+        else Rejected, timed out, stale or mismatched
+            SW-->>CI: Block; no image publication
+        end
+    end
 ```
 
 </details>

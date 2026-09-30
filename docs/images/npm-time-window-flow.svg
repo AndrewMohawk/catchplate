@@ -1,41 +1,86 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="720" height="790" viewBox="0 0 720 790" role="img" aria-labelledby="title desc">
-  <title id="title">npm publishing only during approved hours</title>
-  <desc id="desc">An application sends a package publish request to Serverware. Serverware allows only @acme/widgets between 09:00 and 17:00 UTC, then uses its protected npm token to publish. Otherwise the request is blocked without contacting npm. The application never receives the npm token. Illustrative production flow.</desc>
-  <defs>
-    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="#475569"/></marker>
-    <marker id="yes" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#047857"/></marker>
-    <marker id="no" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#b91c1c"/></marker>
-  </defs>
-  <rect width="720" height="790" rx="20" fill="#f8fafc"/>
-  <g font-family="Arial, Helvetica, sans-serif" text-anchor="middle">
-    <text x="360" y="48" fill="#0f172a" font-size="32" font-weight="700">Publish only during approved hours</text>
-    <rect x="90" y="82" width="540" height="120" rx="16" fill="#fff" stroke="#94a3b8" stroke-width="2"/>
-    <text x="360" y="128" fill="#0f172a" font-size="32" font-weight="700">Application / CI</text>
-    <text x="360" y="170" fill="#334155" font-size="27">npm publish · @acme/widgets</text>
-    <path d="M360 206V270" fill="none" stroke="#475569" stroke-width="3"/>
-    <path d="M352 268L360 282L368 268Z" fill="#475569"/>
-    <rect x="373" y="222" width="238" height="34" rx="8" fill="#f8fafc"/>
-    <text x="490" y="247" fill="#334155" font-size="23">Workload identity</text>
-    <rect x="62" y="288" width="596" height="218" rx="18" fill="#eef2ff" stroke="#4338ca" stroke-width="3"/>
-    <text x="360" y="335" fill="#312e81" font-size="34" font-weight="700">Serverware checks policy</text>
-    <text x="360" y="380" fill="#1e1b4b" font-size="30" font-weight="700">09:00–17:00 UTC daily</text>
-    <text x="360" y="418" fill="#312e81" font-size="25">Only this package is permitted</text>
-    <rect x="93" y="441" width="534" height="44" rx="10" fill="#fff"/>
-    <text x="360" y="471" fill="#312e81" font-size="24" font-weight="700">The npm token stays inside Serverware</text>
-    <path d="M250 510V550H190V587" fill="none" stroke="#047857" stroke-width="3"/>
-    <path d="M182 585L190 600L198 585Z" fill="#047857"/>
-    <path d="M470 510V550H530V587" fill="none" stroke="#b91c1c" stroke-width="3"/>
-    <path d="M522 585L530 600L538 585Z" fill="#b91c1c"/>
-    <rect x="62" y="521" width="132" height="35" rx="8" fill="#f8fafc"/>
-    <text x="128" y="547" fill="#047857" font-size="24" font-weight="700">Allowed</text>
-    <rect x="526" y="521" width="134" height="35" rx="8" fill="#f8fafc"/>
-    <text x="593" y="547" fill="#b91c1c" font-size="24" font-weight="700">Otherwise</text>
-    <rect x="38" y="606" width="304" height="128" rx="16" fill="#ecfdf5" stroke="#047857" stroke-width="2"/>
-    <text x="190" y="650" fill="#065f46" font-size="31" font-weight="700">npm registry</text>
-    <text x="190" y="691" fill="#065f46" font-size="25">Publish the new version</text>
-    <rect x="378" y="606" width="304" height="128" rx="16" fill="#fef2f2" stroke="#b91c1c" stroke-width="2"/>
-    <text x="530" y="650" fill="#991b1b" font-size="31" font-weight="700">Blocked</text>
-    <text x="530" y="691" fill="#991b1b" font-size="25">No request reaches npm</text>
-    <text x="360" y="768" fill="#475569" font-size="22">The application receives a result—not the npm token.</text>
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="1200" viewBox="0 0 900 1200" role="img" aria-labelledby="title desc">
+  <title id="title">A policy-checked npm publish with credential replacement inside Serverware</title>
+  <desc id="desc">Intended flow, not a deployed-pilot claim. Application or CI sends npm publish for @acme/widgets using a Serverware workload credential, illustrated by username:password, and has no npm token. Inside its trust boundary Serverware authenticates and consumes the workload credential, then checks the package and 09:00 to 17:00 UTC time window for this request. A failed check blocks the request without contacting npm. If allowed, Serverware attaches the npm token from its protected credential store instead of the removed workload credential. The npm registry receives an authenticated publish. Serverware validates the response and returns the result to the application without returning the npm token. The illustrative username:password value is not a production default, and credential labels are conceptual rather than literal HTTP headers.</desc>
+  <rect width="900" height="1200" rx="24" fill="#f8fafc"/>
+  <g font-family="Arial, Helvetica, sans-serif">
+    <text x="52" y="54" fill="#14243d" font-size="32" font-weight="700">Publish safely, one request at a time</text>
+    <text x="52" y="92" fill="#536176" font-size="23">Allow @acme/widgets only from 09:00–17:00 UTC.</text>
+
+    <!-- The request carries only the application's scoped workload credential. -->
+    <rect x="52" y="126" width="796" height="152" rx="18" fill="#ffffff" stroke="#b7c4d6" stroke-width="2"/>
+    <text x="82" y="168" fill="#14243d" font-size="26" font-weight="700">Application / CI</text>
+    <text x="82" y="207" fill="#273952" font-family="monospace" font-size="23">npm publish</text>
+    <text x="82" y="246" fill="#536176" font-size="21">No npm token in the application</text>
+    <rect x="475" y="147" width="351" height="111" rx="12" fill="#edf2ff" stroke="#c6d2f4" stroke-width="1.5"/>
+    <text x="496" y="178" fill="#304b9a" font-size="23" font-weight="700">Workload credential</text>
+    <text x="496" y="214" fill="#243c7c" font-family="monospace" font-size="24">username:password</text>
+    <text x="496" y="244" fill="#536176" font-size="21">Illustrative placeholder</text>
+
+    <!-- Every secret-bearing replacement step stays within this boundary. -->
+    <rect x="68" y="336" width="780" height="622" rx="22" fill="#eef2ff" stroke="#4338ca" stroke-width="2.5"/>
+    <text x="92" y="376" fill="#4338ca" font-size="25" font-weight="700" letter-spacing="1">SERVERWARE</text>
+    <text x="641" y="376" fill="#4b6197" font-size="21">Trust boundary</text>
+
+    <path d="M450 278V404" fill="none" stroke="#405bb3" stroke-width="3"/>
+    <path d="M442 394L450 408L458 394Z" fill="#405bb3"/>
+    <rect x="466" y="293" width="246" height="31" rx="7" fill="#f8fafc"/>
+    <text x="478" y="317" fill="#304b9a" font-size="22" font-weight="700">1  Publish request</text>
+
+    <rect x="92" y="412" width="474" height="156" rx="15" fill="#ffffff" stroke="#aebfdf" stroke-width="2"/>
+    <text x="114" y="449" fill="#20395f" font-size="24" font-weight="700">2  Authenticate + check policy</text>
+    <text x="114" y="486" fill="#344962" font-size="23">Consume workload credential</text>
+    <text x="114" y="521" fill="#344962" font-size="23">Package: @acme/widgets</text>
+    <text x="114" y="553" fill="#20395f" font-size="24" font-weight="700">09:00–17:00 UTC only</text>
+
+    <path d="M566 487H608" fill="none" stroke="#b53f4d" stroke-width="3"/>
+    <path d="M602 479L616 487L602 495Z" fill="#b53f4d"/>
+    <rect x="620" y="425" width="206" height="130" rx="15" fill="#fff2f2" stroke="#d799a0" stroke-width="2"/>
+    <text x="640" y="462" fill="#983541" font-size="25" font-weight="700">Blocked</text>
+    <text x="640" y="496" fill="#983541" font-size="21">Any check fails</text>
+    <text x="640" y="529" fill="#983541" font-size="21" font-weight="700">No npm request</text>
+
+    <path d="M328 568V617" fill="none" stroke="#047857" stroke-width="3"/>
+    <path d="M320 607L328 621L336 607Z" fill="#047857"/>
+    <text x="347" y="600" fill="#047857" font-size="22" font-weight="700">Allowed</text>
+    <rect x="92" y="625" width="474" height="148" rx="15" fill="#ffffff" stroke="#87bcae" stroke-width="2"/>
+    <text x="114" y="662" fill="#146350" font-size="25" font-weight="700">3  Replace credentials</text>
+    <text x="114" y="702" fill="#75424a" font-size="23">Workload credential: removed</text>
+    <text x="114" y="740" fill="#146350" font-size="23" font-weight="700">Attach protected npm token</text>
+
+    <rect x="604" y="638" width="222" height="124" rx="15" fill="#ecfdf5" stroke="#87bcae" stroke-width="2"/>
+    <text x="623" y="672" fill="#146350" font-size="23" font-weight="700">Protected store</text>
+    <rect x="621" y="689" width="187" height="51" rx="9" fill="#ffffff"/>
+    <text x="648" y="724" fill="#146350" font-size="25" font-weight="700">npm token</text>
+    <path d="M604 714H572" fill="none" stroke="#047857" stroke-width="3"/>
+    <path d="M584 706L570 714L584 722Z" fill="#047857"/>
+
+    <path d="M438 773V796H647V812" fill="none" stroke="#047857" stroke-width="3"/>
+    <path d="M639 802L647 816L655 802Z" fill="#047857"/>
+    <rect x="475" y="820" width="351" height="115" rx="15" fill="#ecfdf5" stroke="#87bcae" stroke-width="2"/>
+    <text x="496" y="853" fill="#146350" font-size="24" font-weight="700">4  Outbound request</text>
+    <text x="496" y="887" fill="#285e53" font-size="21">Publish @acme/widgets</text>
+    <text x="496" y="919" fill="#146350" font-size="23" font-weight="700">Credential: npm token</text>
+
+    <!-- The provider sees the npm credential, never the incoming placeholder. -->
+    <path d="M706 935V990" fill="none" stroke="#047857" stroke-width="3"/>
+    <path d="M698 980L706 994L714 980Z" fill="#047857"/>
+    <text x="727" y="978" fill="#047857" font-size="21">To npm</text>
+    <rect x="565" y="998" width="283" height="112" rx="17" fill="#ffffff" stroke="#87bcae" stroke-width="2"/>
+    <text x="590" y="1040" fill="#20394d" font-size="26" font-weight="700">npm registry</text>
+    <text x="590" y="1079" fill="#285e53" font-size="22">Authenticated publish</text>
+
+    <!-- Separate response route: provider -> validation -> original application. -->
+    <path d="M565 1055H48V880H86" fill="none" stroke="#57657b" stroke-width="2.5"/>
+    <path d="M74 872L88 880L74 888Z" fill="#57657b"/>
+    <text x="255" y="1040" fill="#536176" font-size="22">npm response</text>
+    <rect x="92" y="821" width="343" height="114" rx="15" fill="#ffffff" stroke="#b7c4d6" stroke-width="2"/>
+    <text x="112" y="858" fill="#20395f" font-size="24" font-weight="700">5  Validate response</text>
+    <text x="112" y="893" fill="#344962" font-size="21">Result back to application</text>
+    <text x="112" y="924" fill="#344962" font-size="21" font-weight="700">No npm token returned</text>
+    <path d="M92 842H26V215H46" fill="none" stroke="#57657b" stroke-width="2.5"/>
+    <path d="M34 207L48 215L34 223Z" fill="#57657b"/>
+
+    <text x="52" y="1151" fill="#536176" font-size="21">Intended flow—not a deployed-pilot claim. Credentials shown conceptually.</text>
+    <text x="52" y="1182" fill="#536176" font-size="21">username:password is illustrative, not a production default.</text>
   </g>
 </svg>

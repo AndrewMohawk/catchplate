@@ -1,51 +1,100 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="720" height="900" viewBox="0 0 720 900" role="img" aria-labelledby="title desc">
-  <title id="title">An ECR image update requires a developer's YubiKey approval</title>
-  <desc id="desc">A build pipeline requests an AWS TEE container image publication. An authorized developer approves that exact account, region, repository and image digest with a YubiKey using WebAuthn. Serverware checks the approval and uses its protected AWS credential to push to ECR, or blocks publication. Nitro enclave build, rollout and attestation remain separate. This integration is illustrative and not yet implemented.</desc>
-  <defs>
-    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#475569"/></marker>
-    <marker id="yes" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#047857"/></marker>
-    <marker id="no" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#b91c1c"/></marker>
-  </defs>
-  <rect width="720" height="900" rx="20" fill="#f8fafc"/>
-  <g font-family="Arial, Helvetica, sans-serif" text-anchor="middle">
-    <text x="360" y="48" fill="#0f172a" font-size="32" font-weight="700">An image update needs human approval</text>
-    <rect x="34" y="82" width="310" height="156" rx="16" fill="#fff" stroke="#94a3b8" stroke-width="2"/>
-    <text x="189" y="129" fill="#0f172a" font-size="31" font-weight="700">Build pipeline</text>
-    <text x="189" y="171" fill="#334155" font-size="26">Requests publication</text>
-    <text x="189" y="208" fill="#334155" font-size="26">of a TEE image</text>
-    <rect x="376" y="82" width="310" height="156" rx="16" fill="#fff" stroke="#94a3b8" stroke-width="2"/>
-    <text x="531" y="129" fill="#0f172a" font-size="31" font-weight="700">Developer</text>
-    <text x="531" y="171" fill="#334155" font-size="26">Approves this update</text>
-    <text x="531" y="208" fill="#312e81" font-size="28" font-weight="700">with a YubiKey</text>
-    <path d="M189 242V318" fill="none" stroke="#475569" stroke-width="3"/>
-    <path d="M181 316L189 331L197 316Z" fill="#475569"/>
-    <path d="M531 242V318" fill="none" stroke="#475569" stroke-width="3"/>
-    <path d="M523 316L531 331L539 316Z" fill="#475569"/>
-    <rect x="72" y="255" width="234" height="34" rx="8" fill="#f8fafc"/>
-    <rect x="414" y="255" width="234" height="34" rx="8" fill="#f8fafc"/>
-    <text x="189" y="280" fill="#334155" font-size="23">Image + identity</text>
-    <text x="531" y="280" fill="#334155" font-size="23">WebAuthn approval</text>
-    <rect x="62" y="337" width="596" height="225" rx="18" fill="#eef2ff" stroke="#4338ca" stroke-width="3"/>
-    <text x="360" y="383" fill="#312e81" font-size="34" font-weight="700">Serverware checks both</text>
-    <text x="360" y="428" fill="#1e1b4b" font-size="28" font-weight="700">Fresh approval for this exact image</text>
-    <text x="360" y="466" fill="#312e81" font-size="25">Account · region · repository · image digest</text>
-    <rect x="93" y="490" width="534" height="49" rx="10" fill="#fff"/>
-    <text x="360" y="523" fill="#312e81" font-size="24" font-weight="700">AWS/ECR credentials stay inside Serverware</text>
-    <path d="M250 566V612H190V650" fill="none" stroke="#047857" stroke-width="3"/>
-    <path d="M182 648L190 663L198 648Z" fill="#047857"/>
-    <path d="M470 566V612H530V650" fill="none" stroke="#b91c1c" stroke-width="3"/>
-    <path d="M522 648L530 663L538 648Z" fill="#b91c1c"/>
-    <rect x="63" y="584" width="128" height="35" rx="8" fill="#f8fafc"/>
-    <text x="127" y="610" fill="#047857" font-size="24" font-weight="700">Approved</text>
-    <rect x="526" y="584" width="134" height="35" rx="8" fill="#f8fafc"/>
-    <text x="593" y="610" fill="#b91c1c" font-size="24" font-weight="700">Otherwise</text>
-    <rect x="38" y="669" width="304" height="128" rx="16" fill="#ecfdf5" stroke="#047857" stroke-width="2"/>
-    <text x="190" y="714" fill="#065f46" font-size="31" font-weight="700">Amazon ECR</text>
-    <text x="190" y="755" fill="#065f46" font-size="25">Publish the exact image</text>
-    <rect x="378" y="669" width="304" height="128" rx="16" fill="#fef2f2" stroke="#b91c1c" stroke-width="2"/>
-    <text x="530" y="714" fill="#991b1b" font-size="31" font-weight="700">Blocked</text>
-    <text x="530" y="755" fill="#991b1b" font-size="25">No image is published</text>
-    <text x="360" y="846" fill="#475569" font-size="23">Nitro build, deployment and attestation are separate.</text>
-    <text x="360" y="882" fill="#64748b" font-size="21">Intended integration—not a deployed capability.</text>
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="1435" viewBox="0 0 900 1435" role="img" aria-labelledby="title desc">
+  <title id="title">Request first, YubiKey approval next, then resume the exact ECR publication</title>
+  <desc id="desc">Illustrative integration, not yet implemented. First CI requests an exact image publication using the illustrative workload credential username:password. Serverware authenticates the workload, consumes that credential, checks policy and holds the action without contacting ECR or injecting a provider credential. Only then does Serverware challenge the developer with the account, region, repository, image digest and publication action. The developer reviews the action and returns a YubiKey WebAuthn assertion. Serverware verifies fresh request-bound one-use approval, attaches its protected AWS/ECR credential and resumes only that held image action. It validates the provider response and returns only the result to CI. Denial, rejection, timeout or mismatch blocks publication. ECR publication is separate from Nitro EIF construction, deployment and attestation.</desc>
+  <rect width="900" height="1435" rx="22" fill="#f8fafc"/>
+  <g font-family="Arial, Helvetica, sans-serif" fill="#0f172a">
+    <text x="450" y="44" text-anchor="middle" font-size="28" font-weight="700">Request first. Approve that action. Then publish.</text>
+    <text x="450" y="77" text-anchor="middle" font-size="22" fill="#475569">The developer is challenged only after CI makes the request.</text>
+    <rect x="170" y="97" width="560" height="40" rx="20" fill="#e2e8f0"/>
+    <text x="450" y="124" text-anchor="middle" font-size="21" font-weight="700" fill="#334155">Intended ECR integration · not yet implemented</text>
+
+    <!-- First: an attempted workload request, not an AWS credential. -->
+    <rect x="40" y="162" width="820" height="135" rx="16" fill="#eff6ff" stroke="#2563eb" stroke-width="2"/>
+    <circle cx="76" cy="198" r="18" fill="#2563eb"/>
+    <text x="76" y="205" text-anchor="middle" font-size="22" font-weight="700" fill="#fff">1</text>
+    <text x="108" y="206" font-size="26" font-weight="700" fill="#1e3a8a">CI pipeline attempts an exact image publication</text>
+    <text x="66" y="241" font-size="22" fill="#1e40af">Account · region · repository · image digest · publication action</text>
+    <text x="66" y="276" font-size="22" fill="#1e40af">Workload credential:</text>
+    <text x="286" y="276" font-size="22" font-family="monospace" font-weight="700" fill="#1e40af">username:password</text>
+    <text x="535" y="276" font-size="22" fill="#1e40af">(illustrative)</text>
+
+    <!-- Every use of the provider credential remains inside this boundary. -->
+    <rect x="40" y="336" width="554" height="880" rx="20" fill="#eef2ff" stroke="#4338ca" stroke-width="3"/>
+    <text x="66" y="375" font-size="27" font-weight="700" fill="#312e81">Serverware</text>
+    <text x="570" y="375" text-anchor="end" font-size="22" fill="#4338ca">Trust boundary</text>
+
+    <path d="M317 297V395" fill="none" stroke="#2563eb" stroke-width="3"/>
+    <path d="M309 393L317 407L325 393Z" fill="#2563eb"/>
+    <rect x="64" y="407" width="506" height="148" rx="14" fill="#fff" stroke="#a5b4fc" stroke-width="2"/>
+    <text x="88" y="442" font-size="24" font-weight="700" fill="#312e81">2  Authenticate, consume, hold</text>
+    <text x="88" y="477" font-size="21" fill="#334155">Consume workflow credential; check policy.</text>
+    <text x="88" y="510" font-size="21" font-weight="700" fill="#92400e">HOLD action. No ECR contact or provider</text>
+    <text x="88" y="539" font-size="21" font-weight="700" fill="#92400e">credential injection while approval is pending.</text>
+
+    <!-- A refusal terminates the held action; there is no publish fallback. -->
+    <text x="755" y="369" text-anchor="middle" font-size="21" fill="#991b1b">At any failed check</text>
+    <rect x="650" y="385" width="210" height="172" rx="14" fill="#fef2f2" stroke="#b91c1c" stroke-width="2"/>
+    <text x="755" y="424" text-anchor="middle" font-size="25" font-weight="700" fill="#991b1b">BLOCKED</text>
+    <text x="755" y="458" text-anchor="middle" font-size="21" fill="#991b1b">Deny or reject</text>
+    <text x="755" y="490" text-anchor="middle" font-size="21" fill="#991b1b">Timeout / mismatch</text>
+    <text x="755" y="529" text-anchor="middle" font-size="22" font-weight="700" fill="#991b1b">No publication</text>
+    <path d="M570 474H636" fill="none" stroke="#b91c1c" stroke-width="3" stroke-dasharray="6 5"/>
+    <path d="M635 466L650 474L635 482Z" fill="#b91c1c"/>
+
+    <path d="M317 555V581" fill="none" stroke="#d97706" stroke-width="3"/>
+    <path d="M309 580L317 594L325 580Z" fill="#d97706"/>
+    <rect x="64" y="594" width="506" height="118" rx="14" fill="#fffbeb" stroke="#d97706" stroke-width="2"/>
+    <text x="88" y="628" font-size="24" font-weight="700" fill="#92400e">3  THEN send an approval challenge</text>
+    <text x="88" y="662" font-size="22" fill="#92400e">Account · region · repository</text>
+    <text x="88" y="693" font-size="22" fill="#92400e">Exact image digest + publication action</text>
+
+    <!-- Separate directed paths: challenge out, signed assertion back. -->
+    <path d="M570 634H636" fill="none" stroke="#d97706" stroke-width="3"/>
+    <path d="M635 626L650 634L635 642Z" fill="#d97706"/>
+    <rect x="650" y="585" width="210" height="170" rx="14" fill="#fff" stroke="#64748b" stroke-width="2"/>
+    <text x="755" y="621" text-anchor="middle" font-size="25" font-weight="700">4  Developer</text>
+    <text x="755" y="657" text-anchor="middle" font-size="21" fill="#334155">Review exact action</text>
+    <text x="755" y="692" text-anchor="middle" font-size="21" font-weight="700" fill="#4338ca">YubiKey WebAuthn</text>
+    <text x="755" y="729" text-anchor="middle" font-size="21" fill="#4338ca">Return assertion</text>
+    <path d="M650 734H615V790H584" fill="none" stroke="#4338ca" stroke-width="3"/>
+    <path d="M585 782L570 790L585 798Z" fill="#4338ca"/>
+
+    <rect x="64" y="768" width="506" height="159" rx="14" fill="#fff" stroke="#4338ca" stroke-width="2"/>
+    <text x="88" y="805" font-size="24" font-weight="700" fill="#312e81">5  Verify + replace credentials</text>
+    <text x="88" y="838" font-size="21" fill="#334155">Fresh and bound to this held request.</text>
+    <text x="88" y="872" font-size="21" fill="#334155">Workflow credential already consumed.</text>
+    <text x="88" y="906" font-size="21" font-weight="700" fill="#047857">Now attach protected AWS/ECR credential.</text>
+
+    <rect x="85" y="955" width="464" height="88" rx="12" fill="#ecfdf5" stroke="#047857" stroke-width="2"/>
+    <text x="317" y="990" text-anchor="middle" font-size="23" font-weight="700" fill="#065f46">Protected AWS/ECR credential store</text>
+    <text x="317" y="1022" text-anchor="middle" font-size="21" fill="#065f46">Stays inside Serverware</text>
+    <path d="M317 955V941" fill="none" stroke="#047857" stroke-width="3"/>
+    <path d="M309 942L317 928L325 942Z" fill="#047857"/>
+
+    <!-- Only the approved continuation crosses the provider boundary. -->
+    <path d="M570 885H617V957H636" fill="none" stroke="#047857" stroke-width="3"/>
+    <path d="M635 949L650 957L635 965Z" fill="#047857"/>
+    <rect x="650" y="919" width="210" height="155" rx="14" fill="#ecfdf5" stroke="#047857" stroke-width="2"/>
+    <text x="755" y="958" text-anchor="middle" font-size="24" font-weight="700" fill="#065f46">6  Amazon ECR</text>
+    <text x="755" y="993" text-anchor="middle" font-size="22" fill="#065f46">Resume only the</text>
+    <text x="755" y="1024" text-anchor="middle" font-size="22" fill="#065f46">approved image</text>
+    <text x="755" y="1055" text-anchor="middle" font-size="22" fill="#065f46">publication</text>
+
+    <path d="M755 1074V1116H584" fill="none" stroke="#475569" stroke-width="3"/>
+    <path d="M585 1108L570 1116L585 1124Z" fill="#475569"/>
+    <text x="669" y="1102" text-anchor="middle" font-size="21" fill="#475569">Response</text>
+    <rect x="64" y="1072" width="506" height="116" rx="14" fill="#fff" stroke="#a5b4fc" stroke-width="2"/>
+    <text x="88" y="1108" font-size="24" font-weight="700" fill="#312e81">Validate the provider response</text>
+    <text x="88" y="1142" font-size="22" fill="#334155">Only the result goes back to CI.</text>
+    <text x="88" y="1173" font-size="22" fill="#334155">Never return the AWS/ECR credential.</text>
+
+    <path d="M317 1188V1228" fill="none" stroke="#475569" stroke-width="3"/>
+    <path d="M309 1227L317 1242L325 1227Z" fill="#475569"/>
+    <rect x="40" y="1242" width="820" height="72" rx="14" fill="#eff6ff" stroke="#2563eb" stroke-width="2"/>
+    <text x="450" y="1287" text-anchor="middle" font-size="23" font-weight="700" fill="#1e3a8a">CI receives the validated result — never the provider credential</text>
+
+    <text x="450" y="1357" text-anchor="middle" font-size="22" fill="#334155">ECR publication ≠ Nitro EIF build, deployment or attestation.</text>
+    <text x="450" y="1391" text-anchor="middle" font-size="21" fill="#475569">No implemented or deployed ECR integration is claimed.</text>
+    <text x="450" y="1421" text-anchor="middle" font-size="21" fill="#475569">username:password is a literal example, not a production credential.</text>
   </g>
 </svg>

@@ -1,12 +1,61 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://serverware.dev/schemas/setup-policy-candidate-http.v1.schema.json",
-  "title": "Owner-authorized protected Setup candidate association HTTP",
+  "title": "Protected Setup association, separate publication draft and control-plane observation HTTP",
   "description": "Exact originals remain strings, preserving nanosecond integers. Neither a draft nor a stored continuation is policy loading, Setup completion, retry permission or proxy readiness. Complete requests <=4227072 bytes and responses <=5242880 bytes; individual limits never enlarge those bounds.",
   "anyOf": [{"$ref": "#/$defs/draftRequest"}, {"$ref": "#/$defs/draftResponse"}, {"$ref": "#/$defs/optionsRequest"},
     {"$ref": "#/$defs/optionsResponse"}, {"$ref": "#/$defs/bindRequest"}, {"$ref": "#/$defs/bindResponse"},
-    {"$ref": "#/$defs/lookupRequest"}, {"$ref": "#/$defs/observation"}, {"$ref": "#/$defs/authorityPolicy"}],
+    {"$ref": "#/$defs/lookupRequest"}, {"$ref": "#/$defs/observation"}, {"$ref": "#/$defs/authorityPolicy"},
+    {"$ref": "#/$defs/materializationRequest"}, {"$ref": "#/$defs/materializationDraft"}, {"$ref": "#/$defs/installedObservation"}],
   "$defs": {
+    "materializationRequest": {
+      "description": "POST /materialize-draft or /installed; exact three fields and <=4096 raw bytes. Actual Setup owner with credential_owner, Setup revision3 and continuation0 required. Draft additionally requires literal policy_publisher.",
+      "type": "object", "additionalProperties": false, "required": ["apiVersion", "sessionId", "expectedRevision"],
+      "properties": {"apiVersion": {"const": "serverware.setupPolicyMaterializationRequest/v1"},
+        "sessionId": {"$ref": "#/$defs/uuid"}, "expectedRevision": {"const": 3}}
+    },
+    "materializationDraft": {
+      "description": "Data-only exact strings, not permission. Whole escaped response <=5242880 bytes. Use the SAME request for separate policy-file request(428), distinct publisher approval and requester consume; no automatic replay or new publication ID after uncertainty.",
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "okForAction", "automaticRetryAllowed", "continuationOriginal", "requestOriginal", "bindingOriginal"],
+      "properties": {
+        "apiVersion": {"const": "serverware.setupPolicyMaterializationDraft/v1"},
+        "okForAction": {"const": false}, "automaticRetryAllowed": {"const": false},
+        "continuationOriginal": {"$ref": "#/$defs/continuationOriginal"},
+        "requestOriginal": {"type": "string", "minLength": 2, "maxLength": 1400000,
+          "contentMediaType": "application/json", "contentSchema": {"$ref": "#/$defs/materializationBody"},
+          "description": "Exact canonical ASCII materialize body without mfa; strings/integers are never normalized via floating point."},
+        "bindingOriginal": {"type": "string", "minLength": 2, "maxLength": 8192,
+          "contentMediaType": "application/json", "contentSchema": {"$ref": "#/$defs/materializationBinding"},
+          "description": "Exact existing policy-file materialize binding. payloadDigest is SHA256 of these unchanged ASCII bytes."}
+      }
+    },
+    "materializationBody": {
+      "type": "object", "additionalProperties": false,
+      "required": ["publicationId", "policyOriginalBase64url", "artifactEnvelopeSha256", "expectedFileSha256", "reason"],
+      "properties": {
+        "publicationId": {"$ref": "control-plane-policy-file-publication.v1.schema.json#/$defs/id"},
+        "policyOriginalBase64url": {"type": "string", "minLength": 1, "maxLength": 1398102, "pattern": "^[A-Za-z0-9_-]+$",
+          "description": "Canonical unpadded base64url; decoded original <=1048576 bytes, from actual protected completed generation."},
+        "artifactEnvelopeSha256": {"$ref": "#/$defs/digest"}, "expectedFileSha256": {"$ref": "#/$defs/digest"},
+        "reason": {"const": null}
+      }
+    },
+    "materializationBinding": {
+      "allOf": [{"$ref": "control-plane-policy-file-publication.v1.schema.json#/$defs/materializeBinding"},
+        {"properties": {"reason": {"const": null}, "expectedFileSha256": {"$ref": "#/$defs/digest"}}}]
+    },
+    "installedObservation": {
+      "description": "Read-only original from the actual control-plane loader and settled publication owners. Not native gate proof, proxy readiness, action authorization, retry permission or Setup completion.",
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "okForAction", "automaticRetryAllowed", "nativeGateVerified", "observationOriginal"],
+      "properties": {
+        "apiVersion": {"const": "serverware.setupPolicyInstalledObservation/v1"},
+        "okForAction": {"const": false}, "automaticRetryAllowed": {"const": false}, "nativeGateVerified": {"const": false},
+        "observationOriginal": {"type": "string", "minLength": 2, "maxLength": 131072,
+          "description": "Exact canonical ASCII setupLoadedPolicyObservation/v1 from LoadedPublication; scope control-plane-loaded-policy-only, all action/retry/native-gate flags false. Nested original preserves file identity, assignment, journal, approval, audit and exact epoch integers."}
+      }
+    },
     "authorityPolicy": {
       "type": "object", "additionalProperties": false,
       "required": ["schema", "controlPlaneConfigurationDigest", "credentialPolicy", "operationMaxSeconds", "maximumArgumentBytes"],

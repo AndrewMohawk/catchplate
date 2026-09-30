@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-policy-canary-response-observation.v1.schema.json",
+  "title": "Actual candidate response comparison original",
+  "$comment": "Additive closed profile; existing runtime observation12 is unchanged. One original LedgerAppend ResponseEvaluated receipt. Exact consumed opening, post-dispatch terminal and request-observation associations are mandatory. Schema grants no signer permission, provider action, checkpoint or readiness credit. Complete record <=65536 bytes and canonical event <=16384 bytes.",
+  "$ref": "#/$defs/event",
+  "$defs": {
+    "sha256": {"$ref": "native-policy-canary-opening.v1.schema.json#/$defs/sha256"},
+    "positive": {"$ref": "native-policy-canary-opening.v1.schema.json#/$defs/positive"},
+    "nonnegative": {"$ref": "native-policy-canary-opening.v1.schema.json#/$defs/nonnegative"},
+    "record": {
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "canary_id", "instance_id", "boot_id", "assignment_envelope_digest", "assignment_payload_digest", "load_receipt_envelope_digest", "publication_envelope_digest", "receipt", "opening_receipt_sha256", "terminal_receipt_sha256", "request_observation_receipt_sha256", "signing_public_key_base64url"],
+      "properties": {
+        "apiVersion": {"const": "serverware.nativeCustodyResponseObservation/v1"},
+        "canary_id": {"$ref": "#/$defs/sha256"},
+        "instance_id": {"type": "string", "minLength": 1, "maxLength": 256},
+        "boot_id": {"$ref": "#/$defs/sha256"},
+        "assignment_envelope_digest": {"$ref": "#/$defs/sha256"},
+        "assignment_payload_digest": {"$ref": "#/$defs/sha256"},
+        "load_receipt_envelope_digest": {"$ref": "#/$defs/sha256"},
+        "publication_envelope_digest": {"$ref": "#/$defs/sha256"},
+        "receipt": {"$ref": "#/$defs/receipt"},
+        "opening_receipt_sha256": {"$ref": "#/$defs/sha256"},
+        "terminal_receipt_sha256": {"$ref": "#/$defs/sha256"},
+        "request_observation_receipt_sha256": {"$ref": "#/$defs/sha256"},
+        "signing_public_key_base64url": {"$ref": "native-policy-canary-opening.v1.schema.json#/$defs/record/properties/signing_public_key_base64url"}
+      }
+    },
+    "receipt": {
+      "type": "object", "additionalProperties": false,
+      "required": ["generation_id", "ingress_sequence", "request_binding_sha256", "request_commitment_sha256", "event_ordinal", "event_phase", "disposition", "event_sha256", "canonical_event_bytes", "predecessor_event_ordinal", "predecessor_head_sha256", "resulting_head_sha256", "trusted_observed_at_unix_nanos", "trusted_time_checkpoint_sha256", "persistence_receipt_sha256", "retrieval_id_sha256", "retrieval_proof_sha256", "signing_key_id", "signing_key_spki_sha256", "signature", "signed_receipt_sha256"],
+      "properties": {
+        "generation_id": {"$ref": "#/$defs/sha256"},
+        "ingress_sequence": {"$ref": "#/$defs/positive"},
+        "request_binding_sha256": {"$ref": "#/$defs/sha256"},
+        "request_commitment_sha256": {"$ref": "#/$defs/sha256"},
+        "event_ordinal": {"$ref": "#/$defs/positive"},
+        "event_phase": {"const": "response"}, "disposition": {"const": "appended"},
+        "event_sha256": {"$ref": "#/$defs/sha256"},
+        "canonical_event_bytes": {"$ref": "native-policy-canary-opening.v1.schema.json#/$defs/receipt/properties/canonical_event_bytes"},
+        "predecessor_event_ordinal": {"$ref": "#/$defs/nonnegative"},
+        "predecessor_head_sha256": {"$ref": "#/$defs/sha256"},
+        "resulting_head_sha256": {"$ref": "#/$defs/sha256"},
+        "trusted_observed_at_unix_nanos": {"$ref": "#/$defs/positive"},
+        "trusted_time_checkpoint_sha256": {"$ref": "#/$defs/sha256"},
+        "persistence_receipt_sha256": {"$ref": "#/$defs/sha256"},
+        "retrieval_id_sha256": {"$ref": "#/$defs/sha256"},
+        "retrieval_proof_sha256": {"$ref": "#/$defs/sha256"},
+        "signing_key_id": {"$ref": "#/$defs/sha256"},
+        "signing_key_spki_sha256": {"$ref": "#/$defs/sha256"},
+        "signature": {"$ref": "native-policy-canary-opening.v1.schema.json#/$defs/receipt/properties/signature"},
+        "signed_receipt_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "event": {
+      "type": "object", "additionalProperties": false, "required": ["kind", "record"],
+      "properties": {"kind": {"const": "shadow-observation"}, "record": {"$ref": "#/$defs/record"}}
+    },
+    "result": {
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "generationId", "ingressSequence", "openingReceiptSha256", "receiptSha256", "requestObservationReceiptSha256", "signatureMessageSha256", "recordSha256", "coverage"],
+      "properties": {
+        "apiVersion": {"const": "serverware.nativeCustodyResponseObservation/v1"},
+        "generationId": {"$ref": "#/$defs/sha256"}, "ingressSequence": {"$ref": "#/$defs/positive"},
+        "openingReceiptSha256": {"$ref": "#/$defs/sha256"}, "receiptSha256": {"$ref": "#/$defs/sha256"},
+        "requestObservationReceiptSha256": {"$ref": "#/$defs/sha256"},
+        "signatureMessageSha256": {"$ref": "#/$defs/sha256"}, "recordSha256": {"$ref": "#/$defs/sha256"},
+        "coverage": {"const": "candidate-response-observation"}
+      }
+    }
+  }
+}

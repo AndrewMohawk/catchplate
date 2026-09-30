@@ -12,6 +12,7 @@ use std::sync::atomic::{AtomicU64,Ordering};
 use std::sync::Arc;
 mod authority;
 mod time;
+mod parent;
 pub(crate) mod process;
 fn fail<T>(_:T)->ShadowError {ShadowError::CustodyUnavailable}
 fn require(ok:bool)->Result<(),ShadowError> {if ok {Ok(())} else {Err(ShadowError::BindingDrift)}}
@@ -101,3 +102,4 @@ pub(crate) fn run()->! {
     let _=AdmittedGuest::start().and_then(AdmittedGuest::hold);
     unsafe{libc::_exit(1)}
 }
+pub(crate) fn run_parent()->! {parent::run()}

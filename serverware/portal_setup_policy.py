@@ -12,6 +12,23 @@ SETUP_POLICY_HTML = r"""
             <button type="button" onclick="runUiAction('Bind Setup candidate', setupPolicyBind)">Fresh hardware passkey + bind once</button>
             <button type="button" class="secondary" onclick="runUiAction('Inspect Setup candidate', setupPolicyLookup)">Read retained association only</button>
             <p id="setup-policy-status" class="hint" role="status" aria-live="polite">Keep the nonsecret session and generation IDs. An uncertain submission is not retried.</p>
+            <hr>
+            <h4>Separately approved policy-file publication</h4>
+            <p class="hint">The Setup owner also needs the literal policy_publisher role to request or consume publication. A DIFFERENT policy_publisher approves. credential_owner alone grants no publication authority. Setup remains revision 3.</p>
+            <button type="button" onclick="runUiAction('Draft policy-file publication', setupPolicyFileDraft)">Read actual association + draft publication</button>
+            <label>Exact data-only materialization draft for manual handoff (no passkeys or credentials)
+              <textarea id="setup-policy-file-draft" class="policy-result" spellcheck="false" autocomplete="off"></textarea></label>
+            <button type="button" class="secondary" onclick="runUiAction('Review publication draft', setupPolicyFileImport)">Review this same draft; do not create a replacement</button>
+            <label>Exact approval ID <input id="setup-policy-file-approval" maxlength="36" autocomplete="off"></label>
+            <label><input id="setup-policy-file-confirm" type="checkbox">I reviewed the exact Setup owner, candidate, signed policy bytes, existing-file pin and this publication ID.</label>
+            <pre id="setup-policy-file-review">No publication draft reviewed.</pre>
+            <button type="button" onclick="runUiAction('Request policy publication approval', () => setupPolicyFileEffect('request'))">Requester passkey + request once (expects 428)</button>
+            <button type="button" onclick="runUiAction('Approve policy publication', () => setupPolicyFileEffect('decide'))">Distinct publisher passkey + approve once</button>
+            <button type="button" onclick="runUiAction('Materialize policy file', () => setupPolicyFileEffect('consume'))">Requester NEW passkey + materialize once</button>
+            <button type="button" class="secondary" onclick="runUiAction('Read publication journal', setupPolicyFileInspect)">Read publication journal; never unlock retry</button>
+            <button type="button" class="secondary" onclick="runUiAction('Observe installed Setup policy', setupPolicyInstalled)">Owner: observe CONTROL-PLANE loader only</button>
+            <pre id="setup-policy-file-observation">No installation observation. nativeGateVerified: false.</pre>
+            <p id="setup-policy-file-status" class="hint" role="status" aria-live="polite">No publication sent. Share only the unchanged data-only draft and nonsecret IDs; uncertain effects remain locked locally.</p>
           </details>
 """
 
@@ -60,7 +77,7 @@ SETUP_POLICY_SCRIPT = r"""
       } finally { if (!done) { try { await reader.cancel(); } catch (_) {} } reader.releaseLock(); original = ''; }
     }
     async function setupPolicyPost(suffix, body, operation, sent = null) {
-      setupPolicyNeed(['/draft', '/options', '/bind', '/lookup'].includes(suffix));
+      setupPolicyNeed(['/draft', '/options', '/bind', '/lookup', '/materialize-draft', '/installed'].includes(suffix));
       const csrfReply = await fetch('/api/csrf', {credentials: 'same-origin', mode: 'same-origin', redirect: 'error',
         cache: 'no-store', signal: operation.signal});
       const csrf = await setupPolicyRead(csrfReply, operation);
@@ -166,6 +183,251 @@ SETUP_POLICY_SCRIPT = r"""
           $('setup-policy-review').textContent = result.continuationOriginal;
           setupPolicyMessage('Retained association observed read-only. It is not loaded policy, completed Setup, retry permission or proxy readiness.');
         }
+      } finally { operation.close(); }
+    }
+
+    // Separate policy-file ceremonies. Data-only drafts/observations are never
+    // bearer permissions; every effect uses the existing hardware authority.
+    const setupFileOptions = 'serverware.policyFileApprovalOptions/v1';
+    const setupFileRequest = 'serverware.setupPolicyMaterializationRequest/v1';
+    const setupFileBase = '/api/policy/file-publication';
+    let setupFileHeld = null;
+    const setupFileBytes = value => new TextEncoder().encode(value);
+    const setupFileId = value => typeof value === 'string' && /^[0-9a-f]{32}$/.test(value);
+    function setupFileMessage(text) { $('setup-policy-file-status').textContent = text; }
+    function setupFileBegin(held = null) {
+      setupPolicyNeed(!setupPolicyBusy && window.isSecureContext && window.top === window && !adminToken()
+        && state.authStatus?.authenticated === true && state.authStatus.authMethod === 'oidc-session'
+        && state.authStatus.roles.includes('policy_publisher'));
+      const actor = state.authStatus.userId, scope = sessionActivationAuthScope(), session = $('setup-policy-session').value.trim();
+      const draft = $('setup-policy-file-draft').value, approval = $('setup-policy-file-approval').value.trim();
+      setupPolicyNeed(nativeSetupId(session));
+      const controller = new AbortController(), until = performance.now() + 30000, expires = Date.now() + 30000;
+      const timer = setTimeout(() => controller.abort(), 30000); setupPolicyBusy = true;
+      return {actor, scope, session, approval, signal: controller.signal, current() {
+        setupPolicyNeed(!controller.signal.aborted && performance.now() < until && Date.now() < expires
+          && !adminToken() && state.authStatus?.authenticated === true && state.authStatus.authMethod === 'oidc-session'
+          && state.authStatus.userId === actor && state.authStatus.roles.includes('policy_publisher')
+          && sessionActivationAuthScope() === scope && $('setup-policy-session').value.trim() === session
+          && $('setup-policy-file-draft').value === draft && $('setup-policy-file-approval').value.trim() === approval);
+        if (held) setupPolicyNeed(setupFileHeld === held && held.raw === draft && held.session === session
+          && $('setup-policy-file-confirm').checked);
+      }, close() { clearTimeout(timer); controller.abort(); setupPolicyBusy = false; }};
+    }
+    async function setupFileCookie(operation) {
+      const reply = await oauthConsentRequest('/api/auth/status', null, operation), value = reply.value;
+      setupPolicyNeed(reply.status === 200 && value.authenticated === true && value.authMethod === 'oidc-session'
+        && value.userId === operation.actor && value.sessionState === 'active' && value.webauthnRequired === false
+        && Array.isArray(value.roles) && value.roles.length <= 64 && value.roles.includes('policy_publisher')
+        && value.roles.every(role => oauthConsentText(role, 128)) && new Set(value.roles).size === value.roles.length
+        && JSON.stringify([...value.roles].sort()) === JSON.stringify([...state.authStatus.roles].sort()));
+      operation.current();
+    }
+    async function setupFileCall(path, body, operation, sent = null) {
+      const get = body === null;
+      setupPolicyNeed(get ? [setupFileBase, '/api/control-plane/approvals?limit=100'].includes(path)
+        : [setupFileBase + '/webauthn/options', setupFileBase + '/materialize'].includes(path)
+          || /^\/api\/control-plane\/approvals\/[0-9a-f-]{36}\/approve$/.test(path));
+      let original = null, csrf = null;
+      try {
+        if (!get) {
+          const reply = await oauthConsentRequest('/api/csrf', null, operation), value = reply.value;
+          setupPolicyNeed(reply.status === 200 && value.ok === true && value.header === 'X-Serverware-CSRF-Token'
+            && oauthConsentText(value.token, 1024)); csrf = value.token;
+          original = oauthConsentCanonical(body); setupPolicyNeed(setupFileBytes(original).length <= 4227072);
+        }
+        operation.current(); if (sent) sent();
+        const response = await fetch(path, {method: get ? 'GET' : 'POST', credentials: 'same-origin', mode: 'same-origin',
+          redirect: 'error', cache: 'no-store', signal: operation.signal,
+          headers: get ? {} : {'Content-Type': 'application/json', 'X-Serverware-CSRF-Token': csrf}, body: original});
+        return {status: response.status, ok: response.ok, value: await setupPolicyRead(response, operation)};
+      } finally { original = null; csrf = null; }
+    }
+    function setupFileHistory(session) {
+      const key = 'serverware.setup-policy.file-attempts:' + session, raw = sessionStorage.getItem(key);
+      setupPolicyNeed(raw === null || setupFileBytes(raw).length <= 65536);
+      const rows = raw === null ? [] : oauthConsentParse(raw, 65536).value;
+      setupPolicyNeed(Array.isArray(rows) && rows.length <= 32 && rows.every(row =>
+        oauthConsentClosed(row, ['phase', 'publicationId', 'payloadDigest', 'approvalId', 'actorId', 'status'])
+        && ['request', 'decide', 'consume'].includes(row.phase) && setupFileId(row.publicationId)
+        && oauthConsentDigest(row.payloadDigest) && (row.approvalId === null || nativeSetupId(row.approvalId))
+        && oauthConsentText(row.actorId, 512) && row.actorId.startsWith('oidc:')
+        && ['unresolved', 'approval-observed', 'completion-observed'].includes(row.status)));
+      return {key, rows};
+    }
+    function setupFileSave(history) {
+      const raw = oauthConsentCanonical(history.rows);
+      setupPolicyNeed(history.rows.length <= 32 && setupFileBytes(raw).length <= 65536);
+      sessionStorage.setItem(history.key, raw); setupPolicyNeed(sessionStorage.getItem(history.key) === raw);
+    }
+    function setupFileBlocked(history, held, phase, approval) {
+      return history.rows.some(row => row.phase === phase && (phase === 'request'
+        || row.publicationId === held.body.publicationId || row.approvalId === approval));
+    }
+    async function setupFileAccept(raw, operation) {
+      setupPolicyNeed(typeof raw === 'string' && setupFileBytes(raw).length <= setupPolicyMaximumResponse);
+      const draft = oauthConsentParse(raw, setupPolicyMaximumResponse).value;
+      setupPolicyNeed(oauthConsentClosed(draft, ['apiVersion', 'okForAction', 'automaticRetryAllowed', 'continuationOriginal', 'requestOriginal', 'bindingOriginal'])
+        && draft.apiVersion === 'serverware.setupPolicyMaterializationDraft/v1' && draft.okForAction === false && draft.automaticRetryAllowed === false);
+      for (const [name, maximum] of [['continuationOriginal', 2170880], ['requestOriginal', 1400000], ['bindingOriginal', 8192]]) {
+        setupPolicyNeed(typeof draft[name] === 'string' && /^[\x00-\x7f]*$/.test(draft[name])
+          && setupFileBytes(draft[name]).length <= maximum);
+      }
+      const continuation = oauthConsentParse(draft.continuationOriginal, 2170880).value;
+      const body = oauthConsentParse(draft.requestOriginal, 1400000).value, binding = oauthConsentParse(draft.bindingOriginal, 8192).value;
+      setupPolicyNeed(oauthConsentCanonical(body) === draft.requestOriginal && oauthConsentCanonical(binding) === draft.bindingOriginal
+        && oauthConsentClosed(body, ['publicationId', 'policyOriginalBase64url', 'artifactEnvelopeSha256', 'expectedFileSha256', 'reason'])
+        && oauthConsentClosed(binding, ['kind', 'publicationId', 'reason', 'policyOriginalSha256', 'policyId', 'sequence',
+          'rollbackEpoch', 'policyHash', 'policyBundleSha256', 'expectedFileSha256', 'artifactEnvelopeSha256'])
+        && setupFileId(body.publicationId) && body.reason === null && binding.reason === null && binding.kind === 'materialize'
+        && binding.publicationId === body.publicationId && oauthConsentDigest(body.expectedFileSha256)
+        && binding.expectedFileSha256 === body.expectedFileSha256 && oauthConsentDigest(body.artifactEnvelopeSha256)
+        && binding.artifactEnvelopeSha256 === body.artifactEnvelopeSha256 && oauthConsentText(binding.policyId, 256)
+        && ['policyOriginalSha256', 'policyHash', 'policyBundleSha256'].every(name => oauthConsentDigest(binding[name])));
+      for (const name of ['sequence', 'rollbackEpoch']) setupPolicyNeed(oauthConsentInteger(binding[name]) > 0n && oauthConsentInteger(binding[name]) <= 9223372036854775807n);
+      setupPolicyNeed(continuation.session_id === operation.session && continuation.phase === 'candidate_bound'
+        && oauthConsentInteger(continuation.revision) === 0n && oauthConsentText(continuation.owner_id, 512)
+        && continuation.owner_id.startsWith('oidc:') && continuation.artifact_envelope_digest === binding.artifactEnvelopeSha256
+        && continuation.policy_hash === binding.policyHash && nativeSetupId(continuation.generation_request_id));
+      const encoded = body.policyOriginalBase64url;
+      setupPolicyNeed(typeof encoded === 'string' && encoded.length > 0 && encoded.length <= 1398102 && /^[A-Za-z0-9_-]+$/.test(encoded));
+      const binary = atob(encoded.replaceAll('-', '+').replaceAll('_', '/') + '='.repeat((4 - encoded.length % 4) % 4));
+      const bytes = Uint8Array.from(binary, c => c.charCodeAt(0));
+      setupPolicyNeed(bytes.length <= 1048576 && btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '') === encoded
+        && await workloadIssuanceHash(bytes) === binding.policyOriginalSha256);
+      const digest = await workloadIssuanceHash(setupFileBytes(draft.bindingOriginal)); operation.current();
+      const held = {raw, session: operation.session, draft, continuation, body, binding, digest};
+      $('setup-policy-file-review').textContent = 'Data-only review; signatures and permission are checked by the real server owners.\n'
+        + 'Setup owner: ' + continuation.owner_id + '\nCandidate: ' + continuation.candidate_id + '\nExact binding:\n'
+        + draft.bindingOriginal + '\nPayload digest: ' + digest + '\nExact signed policy bytes (decoded):\n'
+        + new TextDecoder('utf-8', {fatal: true}).decode(bytes);
+      return held;
+    }
+    async function setupPolicyFileDraft() {
+      const operation = setupFileBegin(); setupFileHeld = null; $('setup-policy-file-confirm').checked = false;
+      try {
+        setupPolicyNeed(state.authStatus.roles.includes('credential_owner') && setupFileHistory(operation.session).rows.length === 0);
+        await setupFileCookie(operation);
+        const draft = await setupPolicyPost('/materialize-draft', {apiVersion: setupFileRequest, sessionId: operation.session, expectedRevision: 3}, operation);
+        const raw = oauthConsentCanonical(draft), held = await setupFileAccept(raw, operation);
+        setupPolicyNeed(held.continuation.owner_id === operation.actor); operation.current();
+        $('setup-policy-file-draft').value = raw; setupFileHeld = held;
+        setupFileMessage('Exact draft retained in this page only. Review it, then request approval once; share the SAME data-only draft with a different publisher.');
+      } finally { operation.close(); }
+    }
+    async function setupPolicyFileImport() {
+      const operation = setupFileBegin(); setupFileHeld = null; $('setup-policy-file-confirm').checked = false;
+      try { await setupFileCookie(operation); setupFileHeld = await setupFileAccept($('setup-policy-file-draft').value, operation);
+        setupFileMessage('Data-only draft reviewed. An approval phase also requires the actual authenticated approval row and a fresh hardware assertion.');
+      } finally { operation.close(); }
+    }
+    async function setupFileApproval(held, phase, operation) {
+      setupPolicyNeed(nativeSetupId(operation.approval));
+      const reply = await setupFileCall('/api/control-plane/approvals?limit=100', null, operation);
+      setupPolicyNeed(reply.ok && Array.isArray(reply.value) && reply.value.length <= 100);
+      const matches = reply.value.filter(row => row?.id === operation.approval); setupPolicyNeed(matches.length === 1);
+      const row = matches[0];
+      // The authenticated listing exposes parsed `request`, not request_json.
+      // Exact-integer canonicalization must reproduce the reviewed binding and
+      // its stored digest; real effect owners still check the DB original.
+      setupPolicyNeed(row.action === 'policy.file.materialize' && row.resource_id === 'active-policy-file'
+        && row.payload_digest === held.digest && row.request && oauthConsentCanonical(row.request) === held.draft.bindingOriginal
+        && row.requester_id === held.continuation.owner_id && oauthConsentText(row.requester_id, 512)
+        && typeof row.expires_at === 'string' && row.expires_at.length <= 128 && Date.parse(row.expires_at) > Date.now());
+      setupPolicyNeed(phase === 'decide' ? row.status === 'pending' && row.requester_id !== operation.actor && row.approved_by === null
+        : row.status === 'approved' && row.requester_id === operation.actor && oauthConsentText(row.approved_by, 512) && row.approved_by !== operation.actor);
+      return row;
+    }
+    async function setupPolicyFileEffect(phase) {
+      setupPolicyNeed(['request', 'decide', 'consume'].includes(phase) && setupFileHeld && $('setup-policy-file-confirm').checked);
+      const held = setupFileHeld, operation = setupFileBegin(held); let assertion = null, sent = false;
+      try {
+        const history = setupFileHistory(operation.session);
+        setupPolicyNeed(!setupFileBlocked(history, held, phase, operation.approval) && history.rows.length < 32);
+        await setupFileCookie(operation);
+        const row = phase === 'request' ? null : await setupFileApproval(held, phase, operation);
+        if (phase !== 'decide') setupPolicyNeed(held.continuation.owner_id === operation.actor && state.authStatus.roles.includes('credential_owner'));
+        if (phase === 'request') setupPolicyNeed(operation.approval === '');
+        const optionsBody = {apiVersion: setupFileOptions, action: 'policy.file.materialize', resourceId: 'active-policy-file',
+          payloadDigest: held.digest, request: held.binding}; if (row) optionsBody.approvalId = row.id;
+        const optionsReply = await setupFileCall(setupFileBase + '/webauthn/options', optionsBody, operation);
+        const options = optionsReply.value, proof = options?.serverware;
+        setupPolicyNeed(optionsReply.ok && oauthConsentClosed(options, ['publicKey', 'serverware'])
+          && oauthConsentClosed(proof, ['schema', 'operation', 'operationId', 'challengeId', 'credentialRecordId', 'payloadDigest', 'expiresAt'])
+          && proof.schema === setupFileOptions && proof.operation === 'policy-file-approval.' + phase
+          && proof.payloadDigest === held.digest && oauthConsentDigest(proof.operationId) && oauthConsentDigest(proof.challengeId)
+          && oauthConsentText(proof.credentialRecordId, 256));
+        assertion = await nativeSetupPasskey(options, operation);
+        // Refresh the same real approval immediately before the effect; never
+        // take a UI flag, draft, row status from storage or missing row as permission.
+        if (row) await setupFileApproval(held, phase, operation);
+        const mfa = {publicationProfile: setupFileOptions, assertion}; if (phase === 'consume') mfa.approvalId = row.id;
+        const path = phase === 'decide' ? '/api/control-plane/approvals/' + row.id + '/approve' : setupFileBase + '/materialize';
+        const body = phase === 'decide' ? {note: null, mfa} : {...held.body, mfa};
+        let marker;
+        const reply = await setupFileCall(path, body, operation, () => {
+          const current = setupFileHistory(operation.session);
+          setupPolicyNeed(!setupFileBlocked(current, held, phase, operation.approval) && current.rows.length < 32);
+          marker = {phase, publicationId: held.body.publicationId, payloadDigest: held.digest,
+            approvalId: row?.id || null, actorId: operation.actor, status: 'unresolved'};
+          current.rows.push(marker); setupFileSave(current); sent = true;
+          history.rows = current.rows;
+        });
+        if (phase === 'request') {
+          const detail = reply.value?.detail;
+          setupPolicyNeed(reply.status === 428 && detail?.error === 'control_plane_approval_required' && nativeSetupId(detail.approvalId)
+            && detail.status === 'pending' && detail.action === 'policy.file.materialize' && detail.resourceId === 'active-policy-file' && detail.payloadDigest === held.digest);
+          marker.approvalId = detail.approvalId; marker.status = 'approval-observed'; setupFileSave(history);
+          $('setup-policy-file-approval').value = detail.approvalId;
+          setupFileMessage('Pending approval observed, not materialization. Give the same draft and approval ID to a DIFFERENT policy_publisher.');
+        } else if (phase === 'decide') {
+          setupPolicyNeed(reply.ok && reply.value.id === row.id && reply.value.status === 'approved'
+            && reply.value.requester_id === row.requester_id && reply.value.approved_by === operation.actor && reply.value.payload_digest === held.digest);
+          marker.status = 'approval-observed'; setupFileSave(history);
+          setupFileMessage('Distinct publisher approval observed. The original requester must review this SAME draft and approval, then provide a NEW consume assertion.');
+        } else {
+          const value = reply.value;
+          setupPolicyNeed(reply.ok && oauthConsentClosed(value, ['schema', 'ok', 'publicationId', 'completionSha256', 'outcome', 'automaticRetryAllowed'])
+            && value.schema === 'serverware.policyFilePublicationResult/v1' && value.ok === true && value.publicationId === held.body.publicationId
+            && oauthConsentDigest(value.completionSha256) && value.outcome === 'materialized' && value.automaticRetryAllowed === false);
+          marker.status = 'completion-observed'; setupFileSave(history);
+          setupFileMessage('Materializer completion observed. This is NOT native gate verification, proxy readiness, action authorization or Setup completion. Use the separate installed observation.');
+        }
+      } catch (error) { setupFileMessage(sent ? 'Outcome may be unresolved. Keep the nonsecret IDs and inspect only; the dispatched ceremony remains locked and must not be resent.'
+          : 'No materialization/approval effect sent. Required role, unchanged draft, approval or fresh passkey was unavailable.'); throw error;
+      } finally { assertion = null; setupFileHeld = null; $('setup-policy-file-confirm').checked = false; operation.close(); }
+    }
+    async function setupPolicyFileInspect() {
+      const operation = setupFileBegin();
+      try { await setupFileCookie(operation); const reply = await setupFileCall(setupFileBase, null, operation), value = reply.value;
+        setupPolicyNeed(reply.ok && value?.schema === 'serverware.policyFilePublicationObservation/v1'
+          && value.automaticRetryAllowed === false && Array.isArray(value.attempts) && value.attempts.length <= 16);
+        $('setup-policy-file-observation').textContent = oauthConsentCanonical(value);
+        setupFileMessage('Read-only bounded journal observation. Missing or incomplete publication remains unknown; no local marker was cleared and no retry was authorized.');
+      } finally { operation.close(); }
+    }
+    async function setupPolicyInstalled() {
+      const operation = setupPolicyBegin();
+      try {
+        await oauthConsentCookie(operation);
+        const value = await setupPolicyPost('/installed', {apiVersion: setupFileRequest, sessionId: operation.session, expectedRevision: 3}, operation);
+        setupPolicyNeed(oauthConsentClosed(value, ['apiVersion', 'okForAction', 'automaticRetryAllowed', 'nativeGateVerified', 'observationOriginal'])
+          && value.apiVersion === 'serverware.setupPolicyInstalledObservation/v1' && value.okForAction === false
+          && value.automaticRetryAllowed === false && value.nativeGateVerified === false && typeof value.observationOriginal === 'string');
+        const observed = oauthConsentParse(value.observationOriginal, 131072).value;
+        setupPolicyNeed(oauthConsentClosed(observed, ['schema', 'scope', 'okForAction', 'automaticRetryAllowed', 'nativeGateVerified',
+          'setupSessionId', 'continuationSha256', 'publicationId', 'completionSha256', 'policyFileSha256', 'policyFileIdentity',
+          'assignment', 'journalOriginals', 'approvalOriginal', 'settlementAuditOriginal', 'observedAtEpochNs'])
+          && observed.schema === 'serverware.setupLoadedPolicyObservation/v1' && observed.scope === 'control-plane-loaded-policy-only'
+          && observed.okForAction === false && observed.automaticRetryAllowed === false && observed.nativeGateVerified === false
+          && observed.setupSessionId === operation.session && setupFileId(observed.publicationId)
+          && ['continuationSha256', 'completionSha256', 'policyFileSha256'].every(name => oauthConsentDigest(observed[name]))
+          && Array.isArray(observed.policyFileIdentity) && observed.policyFileIdentity.length === 9
+          && oauthConsentClosed(observed.assignment, ['principalId', 'routeId', 'credentialId', 'credentialVersion', 'policyHash', 'routePolicyDigest'])
+          && oauthConsentInteger(observed.assignment.credentialVersion) === 1n
+          && oauthConsentInteger(observed.observedAtEpochNs) > 0n && oauthConsentInteger(observed.observedAtEpochNs) <= 9223372036854775807n);
+        $('setup-policy-file-observation').textContent = 'CONTROL-PLANE loader only — nativeGateVerified: false.\n' + value.observationOriginal;
+        setupFileMessage('Actual control-plane loaded observation only. Native immutable policy/startup enrollment is separate; this grants no action, proxy readiness, retry or Setup completion.');
       } finally { operation.close(); }
     }
 """

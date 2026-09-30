@@ -4,6 +4,8 @@ mod child;
 mod exchange;
 mod inputs;
 mod transport;
+mod time_inputs;
+mod time_issuer;
 mod watchdog;
 #[path = "native_verifier/json.rs"]
 mod json;
@@ -262,3 +264,5 @@ pub fn run() -> ! {
 }
 /// Separate fixed binary selection, never inferred from an inherited socket.
 pub fn run_transport() -> ! { transport::run() }
+/// Fixed external issuer only; no profile inference from socket/config bytes.
+pub fn run_time_issuer() -> ! { time_issuer::run() }

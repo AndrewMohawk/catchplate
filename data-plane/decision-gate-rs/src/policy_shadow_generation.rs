@@ -3085,6 +3085,38 @@ impl PolicyShadowGenerationControl {
             &configuration,self.key_trust.as_ref(),retained.trusted_time.as_ref()).map_err(|error|error.to_string())
     }
 
+    pub(crate) fn native_runtime_observation(&self,receipt:&super::policy_shadow::VerifiedShadowSpillReceipt,
+        opening:&Sha256Digest,terminal:Option<&Sha256Digest>)
+        ->Result<super::policy_shadow::native_runtime::Observation,String> {
+        self.native_observation(receipt,opening,terminal,None)
+    }
+    pub(crate) fn native_response_observation(&self,receipt:&super::policy_shadow::VerifiedShadowSpillReceipt,
+        opening:&Sha256Digest,terminal:&Sha256Digest,request:&Sha256Digest)
+        ->Result<super::policy_shadow::native_runtime::Observation,String> {
+        self.native_observation(receipt,opening,Some(terminal),Some(request))
+    }
+    fn native_observation(&self,receipt:&super::policy_shadow::VerifiedShadowSpillReceipt,
+        opening:&Sha256Digest,terminal:Option<&Sha256Digest>,request:Option<&Sha256Digest>)
+        ->Result<super::policy_shadow::native_runtime::Observation,String> {
+        if !self.is_production || self.native_workers.is_none() {
+            return Err("runtime observation requires the actual native custody generation owner".into());
+        }
+        let _installation=self.installation_lock.try_lock().map_err(|_|"runtime generation installation is busy")?;
+        let retained=self.retained_generation.try_lock().map_err(|_|"runtime retained generation is busy")?;
+        let retained=retained.as_ref().ok_or("runtime observation has no installed generation")?;
+        self.key_trust.authorize_at(retained.trusted_time.now_unix_nanos().map_err(|error|error.to_string())?)?;
+        let configuration=retained.custody.production_configuration_binding_sha256().ok_or("runtime custody configuration absent")?;
+        match (terminal,request) {
+            (Some(terminal),Some(request))=>super::policy_shadow::native_runtime::Observation::from_response(receipt,opening,terminal,request,
+                &retained.generation_identity,&retained.assignment,&retained.runtime_identity,
+                &retained.publication_receipt.internal_envelope_sha256,&configuration,self.key_trust.as_ref(),retained.trusted_time.as_ref()),
+            (_,None)=>super::policy_shadow::native_runtime::Observation::from_receipt(receipt,opening,terminal,&retained.generation_identity,
+                &retained.assignment,&retained.runtime_identity,&retained.publication_receipt.internal_envelope_sha256,
+                &configuration,self.key_trust.as_ref(),retained.trusted_time.as_ref()),
+            _=>return Err("response observation lacks its terminal".into()),
+        }.map_err(|error|error.to_string())
+    }
+
     pub(crate) fn install(
         &self,
         state: &GateState,

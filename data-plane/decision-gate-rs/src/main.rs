@@ -5,6 +5,7 @@ mod policy_core;
 mod policy_shadow;
 mod policy_shadow_generation;
 mod native_canary_opening;
+mod native_canary_runtime;
 mod response_v2;
 mod gate_state_init;
 mod control_plane_client_config;

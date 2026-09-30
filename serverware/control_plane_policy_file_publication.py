@@ -80,7 +80,10 @@ def _signed(raw):
         "policyBundleSha256": app._policy_canary_bundle_digest(value)}
 
 
-def _directory(parent, *, create):
+def _directory(parent, *, create, shared=False):
+    # Retained observation and the real loader may inspect the same journal.
+    # Writers retain the exclusive default; a shared opener cannot create it.
+    _require(type(shared) is bool and (not shared or create is False))
     created = False
     if create:
         try:
@@ -94,7 +97,7 @@ def _directory(parent, *, create):
     try:
         _require(stat.S_ISDIR(value.st_mode) and value.st_uid == os.geteuid()
             and stat.S_IMODE(value.st_mode) == 0o700 and value.st_dev == os.fstat(parent).st_dev)
-        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fcntl.flock(descriptor, (fcntl.LOCK_SH if shared else fcntl.LOCK_EX) | fcntl.LOCK_NB)
         return descriptor, files._file_identity(value), created
     except BaseException:
         os.close(descriptor)
@@ -528,7 +531,7 @@ def inspect_publication(*, expected_identity=None):
     try:
         fcntl.flock(parent, fcntl.LOCK_SH | fcntl.LOCK_NB)
         try:
-            directory, _, _ = _directory(parent, create=False)
+            directory, _, _ = _directory(parent, create=False, shared=True)
         except FileNotFoundError:
             items, incomplete, terminal_sha, terminal = {}, None, None, None
         else:

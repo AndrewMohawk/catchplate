@@ -1,5 +1,7 @@
-"""Owner-bound Setup candidate association; no policy contact or runtime DML."""
+"""Owner-bound Setup association and read-only materialization handoff."""
+import base64
 import os
+import secrets
 import threading
 import time
 
@@ -16,6 +18,14 @@ from serverware.control_plane_approval_verification import _epoch_ns, _request_p
 
 PREFIX = "/api/setup/policy-candidate"
 PATHS = frozenset(PREFIX + suffix for suffix in ("/draft", "/options", "/bind", "/lookup"))
+MATERIALIZE_PATH = PREFIX + "/materialize-draft"
+INSTALLED_PATH = PREFIX + "/installed"
+PATHS = PATHS | {MATERIALIZE_PATH, INSTALLED_PATH}
+MATERIALIZE_REQUEST_SCHEMA = "serverware.setupPolicyMaterializationRequest/v1"
+MATERIALIZE_DRAFT_SCHEMA = "serverware.setupPolicyMaterializationDraft/v1"
+INSTALLED_SCHEMA = "serverware.setupPolicyInstalledObservation/v1"
+MAX_MATERIALIZE_REQUEST = 4096
+MAX_MATERIALIZE_ORIGINAL = 1400000
 MAX_REQUEST = 4 * 1024 * 1024 + 32768
 MAX_RESPONSE = 5 * 1024 * 1024
 MFA_FIELD = "setupPolicyProfile"
@@ -199,6 +209,133 @@ def _draft(owner, value):
         "argumentsOriginal": profile.canonical(arguments).decode("ascii"), "review": review}
 
 
+class _PostBindOwner(_Owner):
+    """Retain the actual existing association, never call pre-bind retain().
+
+    This is a short-lived read owner, not an approval, publication reservation,
+    authority receipt or policy-loaded permission.
+    """
+    def __init__(self, request):
+        self.continuation = self.continuation_original = None
+        self.current_original = self.file_observation = None
+        super().__init__(request)
+
+    def retain_bound(self, session_id):
+        profile.require(self.session is None and self.continuation is None)
+        self.continuation = _continuation(session_id)
+        profile.require(self.continuation is not None, "actual protected Setup candidate association is required")
+        self.continuation_original = profile.row_original(self.continuation)
+        self.session = _session(session_id)
+        self.claim = _claim(self.continuation["generation_request_id"])
+        self.session_original, self.claim_original = setup.row_original(self.session), candidate.row_original(self.claim)
+        row = self.session
+        profile.require(row["owner_id"] == self.identity.user_id == self.continuation["owner_id"]
+            and row["current_assignee_id"] in {None, self.identity.user_id}
+            and row["revision"] == 3 and row["phase"] == "credential_activated" and row["status"] == "active"
+            and row["terminal_at"] is None and row["credential_version"] == 1
+            and self.continuation["setup_original"].encode("ascii") == self.session_original
+            and self.continuation["generation_claim_sha256"] == profile.sha256(self.claim_original)
+            and self.continuation["generation_publication_digest"] == self.claim["publication_envelope_digest"]
+            and self.continuation["configuration_digest"] == self.configuration == self.claim["configuration_digest"])
+        arguments = setup.document(self.continuation["request_original"].encode("ascii"), profile.MAX_ARGUMENT_BYTES)
+        profile.require(arguments["request"]["generationClaimOriginal"].encode("ascii") == self.claim_original)
+        self.clip(setup.epoch(row["expires_at"]))
+        self.check()
+
+    def current(self):
+        # These are the actual protected read APIs and committed high-water
+        # joins. This short observation does NOT acquire the materializer's
+        # effect lock or replace its independent current-policy authority.
+        artifact = db.get_policy_candidate_artifact(artifact_envelope_digest=self.continuation["artifact_envelope_digest"])
+        high = db.get_policy_high_water()
+        publication = db.get_policy_publication(self.continuation["policy_hash"])
+        profile.require(artifact is not None and high is not None and publication is not None,
+            "candidate has not reached the current committed publication")
+        artifact = dict(artifact)
+        profile.require(artifact["scope"] == publication["scope"] == "active" and publication["status"] == "committed"
+            and artifact["artifact_envelope_digest"] == self.continuation["artifact_envelope_digest"]
+            and artifact["candidate_id"] == self.continuation["candidate_id"]
+            and artifact["policy_hash"] == high["policy_hash"] == publication["policy_hash"] == self.continuation["policy_hash"]
+            and artifact["policy_id"] == high["policy_id"] == publication["policy_id"]
+            and artifact["policy_sequence"] == high["sequence"] == publication["sequence"]
+            and artifact["rollback_epoch"] == high["rollback_epoch"] == publication["rollback_epoch"])
+        for name in ("artifact_envelope", "artifact_payload"):
+            raw = artifact[name + "_json"].encode("ascii")
+            profile.require(0 < len(raw) <= 8 * 1024 * 1024 and profile.sha256(raw) == artifact[name + "_digest"])
+        return {"artifact": artifact, "highWater": high, "publication": publication}
+
+    def check(self):
+        super().check()
+        if self.request.url.path == MATERIALIZE_PATH:
+            profile.require("policy_publisher" in self.identity.roles,
+                "materialization draft requires the actual owner's policy_publisher role")
+        if self.continuation is not None:
+            row = _continuation(self.continuation["session_id"])
+            profile.require(row is not None and profile.row_original(row) == self.continuation_original)
+        if self.current_original is not None:
+            profile.require(profile.canonical(self.current()) == self.current_original)
+        if self.file_observation is not None:
+            from serverware import control_plane_policy_file_publication as files
+            profile.require(files.inspect_publication() == self.file_observation)
+        # Recheck the original request/configuration/rows/time after potentially
+        # blocking reads. A new read never receives a fresh allowance.
+        super().check()
+
+
+def _materialize_draft(owner):
+    from serverware import control_plane_policy_file_publication as files
+    from serverware import authority_policy_file_approval as file_profile
+    management = candidate.management_original(owner.claim["management_request_json"])
+    raw = profile.canonical(management["candidatePolicyBundle"])
+    profile.require(0 < len(raw) <= candidate.MAX_ORIGINAL_BYTES)
+    snapshot, trust, signed = files._signed(raw)
+    assignment, assignment_sha = profile.reviewed_assignment(owner.session, management)
+    profile.require(snapshot.hash == owner.continuation["policy_hash"] == assignment["policyHash"]
+        and assignment_sha == owner.continuation["assignment_digest"]
+        and assignment["routePolicyDigest"] == owner.continuation["route_policy_digest"])
+    current = owner.current()
+    owner.current_original = profile.canonical(current)
+    profile.require(current["artifact"]["policy_bundle_digest"] == signed["policyBundleSha256"]
+        and current["highWater"]["policy_id"] == signed["policyId"]
+        and current["highWater"]["sequence"] == signed["sequence"]
+        and current["highWater"]["rollback_epoch"] == signed["rollbackEpoch"])
+    observed = files.inspect_publication()
+    profile.require(observed["incompletePublicationId"] is None and observed["terminalMatches"] is True
+        and observed["fileSha256"] is not None and len(observed["attempts"]) < files.MAX_SLOTS,
+        "ordinary materialization requires an existing unambiguous policy file; no genesis or repair fallback")
+    owner.file_observation = observed
+    identifier = secrets.token_hex(16)
+    profile.require(identifier not in {item["publicationId"] for item in observed["attempts"]})
+    body = {"publicationId": identifier, "policyOriginalBase64url": base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii"),
+        "artifactEnvelopeSha256": owner.continuation["artifact_envelope_digest"],
+        "expectedFileSha256": observed["fileSha256"], "reason": None}
+    bound = file_profile.request_binding({"kind": "materialize", "publicationId": identifier, **signed,
+        "artifactEnvelopeSha256": body["artifactEnvelopeSha256"], "expectedFileSha256": body["expectedFileSha256"], "reason": None})
+    original = profile.canonical(body)
+    profile.require(len(original) <= MAX_MATERIALIZE_ORIGINAL)
+    owner.check()
+    _, checked_trust, checked_signed = files._signed(raw)
+    profile.require(checked_trust == trust and checked_signed == signed)
+    owner.check()
+    return {"apiVersion": MATERIALIZE_DRAFT_SCHEMA, "okForAction": False, "automaticRetryAllowed": False,
+        "continuationOriginal": owner.continuation_original.decode("ascii"),
+        "requestOriginal": original.decode("ascii"), "bindingOriginal": profile.canonical(bound).decode("ascii")}
+
+
+def _installed(owner):
+    from serverware.control_plane_policy_loaded import LoadedPublication
+    reader = LoadedPublication(continuation=owner.continuation, deadline_ns=owner.deadline, check_owner=owner.check)
+    try:
+        reader.open()
+        original = reader.observation()
+        profile.require(type(original) is str and 0 < len(original.encode("ascii")) <= 128 * 1024)
+        owner.check()
+        return {"apiVersion": INSTALLED_SCHEMA, "okForAction": False, "automaticRetryAllowed": False,
+            "nativeGateVerified": False, "observationOriginal": original}
+    finally:
+        reader.close()
+
+
 def _options(owner, arguments):
     descriptors = webauthn._credential_descriptors_for_policy(owner.identity.user_id, activation._authenticator_policy(owner.policy))
     profile.require(type(descriptors) is list and 1 <= len(descriptors) <= 64)
@@ -221,9 +358,27 @@ def _options(owner, arguments):
 def on_request(request, raw):
     profile.require(type(raw) is bytes and 0 < len(raw) <= MAX_REQUEST
         and request.headers.get("content-length") == str(len(raw)))
+    path = request.url.path
+    if path in {MATERIALIZE_PATH, INSTALLED_PATH}:
+        profile.require(len(raw) <= MAX_MATERIALIZE_REQUEST)
+        value = setup.document(raw, MAX_MATERIALIZE_REQUEST)
+        profile.require(type(value) is dict and set(value) == {"apiVersion", "sessionId", "expectedRevision"}
+            and value["apiVersion"] == MATERIALIZE_REQUEST_SCHEMA
+            and type(value["expectedRevision"]) is int and value["expectedRevision"] == 3)
+        owner = _PostBindOwner(request)
+        try:
+            owner.retain_bound(value["sessionId"])
+            result = _materialize_draft(owner) if path == MATERIALIZE_PATH else _installed(owner)
+            profile.require(len(profile.canonical(result)) <= MAX_RESPONSE)
+            owner.check()
+            return result
+        except Exception:
+            # Includes absent/locked journals, policy-loader/trust errors,
+            # transition provenance errors and invalid original encodings.
+            # No path, receipt fragment, retry signal or raw exception escapes.
+            raise ValueError("Setup publication observation unavailable; no automatic retry") from None
     value = setup.document(raw, MAX_REQUEST)
     owner = _Owner(request)
-    path = request.url.path
     if path.endswith("/draft"):
         result = _draft(owner, value)
     elif path.endswith("/lookup"):

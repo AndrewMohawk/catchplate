@@ -1,6 +1,7 @@
 //! External verifier runtime/root custody only: no claimant NSM, keys or exec.
 pub(crate) mod originals;
 mod mounts;
+mod time_issuer;
 #[path = "native_verifier/json.rs"]
 mod json;
 use crate::native_response_profile_v1::canonical_ascii_bytes;
@@ -14,6 +15,22 @@ use sha2::{Digest, Sha256};
 pub(crate) const IMAGE_PATH: &str = "/opt/serverware/native-shadow-verifier-runtime.squashfs";
 pub(crate) const INTERPRETER_PATH: &str = "/usr/local/bin/python3.11";
 pub(crate) const ENTRYPOINT_PATH: &str = "/opt/serverware/scripts/verify_native_shadow_custody.py";
+pub(crate) const TIME_IMAGE_PATH: &str = "/opt/serverware/native-shadow-time-issuer-runtime.squashfs";
+pub(crate) const TIME_ENTRYPOINT_PATH: &str = "/opt/serverware/scripts/issue_native_shadow_guest_time.py";
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Profile { Verifier, TimeIssuer }
+impl Profile {
+    fn configuration_path(self) -> &'static str {
+        match self { Self::Verifier => "/etc/serverware/native-shadow-nitro-verifier.json",
+            Self::TimeIssuer => "/etc/serverware/native-shadow-guest-time-issuer.json" }
+    }
+    pub(crate) fn entrypoint(self) -> &'static str {
+        match self { Self::Verifier => ENTRYPOINT_PATH, Self::TimeIssuer => TIME_ENTRYPOINT_PATH }
+    }
+    fn image_purpose(self) -> Purpose {
+        match self { Self::Verifier => Purpose::ExternalShadowVerifier, Self::TimeIssuer => Purpose::ExternalShadowTimeIssuer }
+    }
+}
 fn ensure(value: bool, message: &str) -> Result<(), String> { if value { Ok(()) } else { Err(message.to_owned()) } }
 fn digest(value: &str) -> Result<(), String> {
     ensure(value.len() == 71 && value.starts_with("sha256:") && value[7..].bytes().all(|byte|
@@ -58,7 +75,7 @@ struct Operation {
 }
 #[derive(Clone,Copy,PartialEq,Eq)]
 pub(crate) enum ResultPurpose { Production, KeyAdmission }
-struct Policy { uid: u32, gid: u32, issued: u64, deadline: u64, purpose:ResultPurpose }
+struct Policy { uid: u32, gid: u32, issued: u64, deadline: u64, purpose:Option<ResultPurpose>, profile:Profile }
 fn policy(value: &Value, origin: &Origin) -> Result<Policy, String> {
     let fields = value.as_object().ok_or("verifier policy is not an object")?;
     let (purpose,scope,expected):(_,_,&[&str])=match value["apiVersion"].as_str() {
@@ -84,7 +101,7 @@ fn policy(value: &Value, origin: &Origin) -> Result<Policy, String> {
     let issued = decimal(&op.issued_at_boottime_ns)?; let deadline = decimal(&op.deadline_boottime_ns)?;
     ensure(deadline.checked_sub(issued).is_some_and(|window| window > 0 && window <= 30_000_000_000),
         "verifier original operation interval differs")?;
-    Ok(Policy { uid, gid, issued, deadline, purpose })
+    Ok(Policy { uid, gid, issued, deadline, purpose:Some(purpose), profile:Profile::Verifier })
 }
 
 enum Phase { Prepared, Exported, Reaped }
@@ -100,6 +117,7 @@ pub(crate) struct RuntimeAdmission {
     image_config: ImageConfiguration,
 }
 impl RuntimeAdmission {
+    pub(crate) fn open_time_issuer() -> Result<Self, String> { time_issuer::open() }
     pub(crate) fn open() -> Result<Self, String> {
         let origin = Origin::capture()?;
         let launch = Original::open("native-shadow-verifier-launch.json", 16384)?;
@@ -130,6 +148,12 @@ impl RuntimeAdmission {
     pub(crate) fn gid(&self) -> u32 { self.policy.gid }
     pub(crate) fn issued_boottime_ns(&self) -> u64 { self.policy.issued }
     pub(crate) fn deadline_boottime_ns(&self) -> u64 { self.policy.deadline }
+    pub(crate) fn profile(&self) -> Profile { self.policy.profile }
+    pub(crate) fn time_transport(&self) -> Result<(String, u16, String), String> {
+        self.check()?;
+        ensure(self.policy.profile == Profile::TimeIssuer, "time transport requires its actual issuer admission")?;
+        time_issuer::transport(&document(&self.configuration.bytes, 512 * 1024)?)
+    }
     /// Public consistency pins from the SAME retained originals, not a new
     /// policy/deadline admission or a caller-selected transport authority.
     pub(crate) fn public_transport_pins(&self) -> Result<(String, String), String> {
@@ -138,7 +162,10 @@ impl RuntimeAdmission {
         self.check()?;
         Ok(pins)
     }
-    pub(crate) fn result_purpose(&self)->Result<ResultPurpose,String> {self.check()?;Ok(self.policy.purpose)}
+    pub(crate) fn result_purpose(&self)->Result<ResultPurpose,String> {
+        self.check()?;
+        self.policy.purpose.ok_or_else(||"issuer admission has no verifier result purpose".into())
+    }
     pub(crate) fn evidence_api(&self)->Result<&'static str,String> {
         Ok(match self.result_purpose()? {
             ResultPurpose::Production=>"serverware.nativeShadowRoleKeyEvidence/v1",
@@ -149,9 +176,9 @@ impl RuntimeAdmission {
         self.check()?;
         let Self { launch, configuration, origin, policy, image_config } = self;
         let namespace = mounts::Namespace::enter()?;
-        let image = Image::open_for(&image_config, policy.deadline, Purpose::ExternalShadowVerifier)?;
+        let image = Image::open_for(&image_config, policy.deadline, policy.profile.image_purpose())?;
         origin.check()?; within(policy.issued, policy.deadline)?;
-        let mounts = mounts::Mounts::install(&image, &configuration, policy.issued, policy.deadline)?;
+        let mounts = mounts::Mounts::install(&image, &configuration, policy.issued, policy.deadline, policy.profile)?;
         let owner = PreparedRuntime { mounts, image, launch, configuration, origin, policy, phase: Phase::Prepared, namespace };
         owner.check()?; Ok(owner)
     }
@@ -184,6 +211,7 @@ impl PreparedRuntime {
 }
 pub(crate) struct RuntimeBorrow<'a> { runtime: &'a PreparedRuntime }
 impl RuntimeBorrow<'_> {
+    pub(crate) fn profile(&self) -> Profile { self.runtime.policy.profile }
     pub(crate) fn root(&self) -> BorrowedFd<'_> { self.runtime.image.root.as_fd() }
     pub(crate) fn interpreter(&self) -> BorrowedFd<'_> { self.runtime.image.interpreter.as_fd() }
     pub(crate) fn configuration(&self) -> BorrowedFd<'_> { self.runtime.configuration.file.as_fd() }

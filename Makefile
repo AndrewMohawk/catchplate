@@ -1263,6 +1263,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_policy_file_approval.py \
 	serverware/authority_transition_policy_file_approval.py \
 	serverware/control_plane_policy_file_publication.py \
+	serverware/control_plane_policy_loaded.py \
 	serverware/authority_store/policy_file_genesis_sql.py \
 	serverware/control_plane_policy_file_genesis.py \
 	serverware/control_plane_policy_genesis_bootstrap.py \
@@ -1304,6 +1305,8 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	scripts/package_native_role_key_runtime.py \
 	scripts/package_native_shadow_key_runtime.py \
 	scripts/package_native_shadow_verifier_runtime.py \
+	scripts/package_native_shadow_time_runtime.py \
+	scripts/package_native_shadow_custody_runtime.py \
 	scripts/prepare_native_role_keys.py \
 	scripts/seal_native_service_tokens.py \
 	scripts/sign_native_guest_credential_delivery.py \
@@ -1444,6 +1447,8 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/portal_setup_policy.py \
 	serverware/authority_policy_candidate_evidence.py \
 	serverware/authority_policy_canary_native_opening.py \
+	serverware/authority_policy_canary_native_runtime.py \
+	serverware/authority_transition_policy_canary_native_runtime.py \
 	serverware/authority_transition_policy_canary_native_opening.py \
 	serverware/authority_policy_candidate_inventory.py \
 	serverware/authority_policy_candidate_policy.py \
@@ -3784,6 +3789,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_policy_file_approval.py \
 				serverware/authority_transition_policy_file_approval.py \
 				serverware/control_plane_policy_file_publication.py \
+				serverware/control_plane_policy_loaded.py \
 				serverware/authority_store/policy_file_genesis_sql.py \
 				serverware/control_plane_policy_file_genesis.py \
 				serverware/control_plane_policy_genesis_bootstrap.py \
@@ -3825,6 +3831,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				scripts/package_native_role_key_runtime.py \
 				scripts/package_native_shadow_key_runtime.py \
 				scripts/package_native_shadow_verifier_runtime.py \
+				scripts/package_native_shadow_time_runtime.py \
+				scripts/package_native_shadow_custody_runtime.py \
 				scripts/prepare_native_role_keys.py \
 				scripts/seal_native_service_tokens.py \
 				scripts/sign_native_guest_credential_delivery.py \
@@ -3965,6 +3973,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/portal_setup_policy.py \
 				serverware/authority_policy_candidate_evidence.py \
 				serverware/authority_policy_canary_native_opening.py \
+				serverware/authority_policy_canary_native_runtime.py \
+				serverware/authority_transition_policy_canary_native_runtime.py \
 				serverware/authority_transition_policy_canary_native_opening.py \
 				serverware/authority_policy_candidate_inventory.py \
 				serverware/authority_policy_candidate_policy.py \
@@ -4199,6 +4209,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/native_canary_transport.rs \
 				data-plane/decision-gate-rs/src/native_canary_delivery.rs \
 				data-plane/decision-gate-rs/src/native_canary_opening.rs \
+				data-plane/decision-gate-rs/src/native_canary_runtime.rs \
+				data-plane/decision-gate-rs/src/policy_shadow_runtime.rs \
 				data-plane/decision-gate-rs/src/policy_shadow_opening.rs \
 				data-plane/decision-gate-rs/src/native_canary_delivery_v1.rs \
 				data-plane/decision-gate-rs/src/native_canary_delivery_v1/wire.rs \
@@ -4272,9 +4284,14 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/native_target_dispatch.rs \
 				data-plane/decision-gate-rs/src/bin/serverware-native-shadow-worker.rs \
 				data-plane/decision-gate-rs/src/bin/serverware-native-shadow-verifier.rs \
+				data-plane/decision-gate-rs/src/bin/serverware-native-shadow-time-issuer.rs \
+				data-plane/decision-gate-rs/src/bin/serverware-native-shadow-guest-supervisor.rs \
 				data-plane/decision-gate-rs/src/bin/serverware-native-shadow-verifier-transport.rs \
 				data-plane/decision-gate-rs/src/bin/serverware-policy-shadow-custody-guest.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/mod.rs \
+				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/parent.rs \
+				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/parent_image.rs \
+				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/parent_process.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/authority.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/time.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/process.rs \
@@ -4282,10 +4299,13 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/result.rs \
 				data-plane/decision-gate-rs/src/native_shadow_verifier_runtime_v1.rs \
 				data-plane/decision-gate-rs/src/native_shadow_verifier_runtime_v1/mounts.rs \
+				data-plane/decision-gate-rs/src/native_shadow_verifier_runtime_v1/time_issuer.rs \
 				data-plane/decision-gate-rs/src/native_shadow_verifier_runtime_v1/originals.rs \
 				data-plane/decision-gate-rs/src/native_shadow_verifier_supervisor_v1.rs \
 				data-plane/decision-gate-rs/src/native_shadow_verifier_supervisor_v1/child.rs \
 				data-plane/decision-gate-rs/src/native_shadow_verifier_supervisor_v1/inputs.rs \
+				data-plane/decision-gate-rs/src/native_shadow_verifier_supervisor_v1/time_inputs.rs \
+				data-plane/decision-gate-rs/src/native_shadow_verifier_supervisor_v1/time_issuer.rs \
 				data-plane/decision-gate-rs/src/native_shadow_verifier_supervisor_v1/exchange.rs \
 				data-plane/decision-gate-rs/src/native_shadow_verifier_supervisor_v1/transport.rs \
 				data-plane/decision-gate-rs/src/native_shadow_verifier_supervisor_v1/watchdog.rs \
@@ -4604,6 +4624,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-policy-canary-sender.v1.schema.json \
 				schemas/native-policy-canary-durable-delivery.v1.schema.json \
 				schemas/native-policy-canary-opening.v1.schema.json \
+				schemas/native-policy-canary-runtime-observation.v1.schema.json \
+				schemas/native-policy-canary-response-observation.v1.schema.json \
 				schemas/setup-policy-candidate-http.v1.schema.json \
 				schemas/native-oauth-measured-setup.v1.schema.json \
 				schemas/native-oauth-measured-reconnect.v1.schema.json \
@@ -4619,6 +4641,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-shadow-verifier-transport.v1.schema.json \
 				schemas/native-shadow-guest-admission.v1.schema.json \
 				schemas/native-shadow-guest-time-issuer.v1.schema.json \
+				schemas/native-shadow-time-issuer-launch.v1.schema.json \
+				schemas/native-shadow-custody-image-inputs.v1.schema.json \
 				schemas/native-shadow-encrypted-keys.v1.schema.json \
 				schemas/native-guest-role-key-provisioner.v1.schema.json \
 				schemas/native-oauth-measured-cleanup.v1.schema.json \

@@ -10,9 +10,8 @@ from serverware import authority_transition_policy_canary_custody as custody
 from serverware.authority_transition_policy_canary_state import exact
 
 
-def apply(state, value):
+def retained(state, value):
     from serverware import db
-    profile.require(type(value) is dict and set(value) == opening.FIELDS and value["apiVersion"] == opening.SCHEMA)
     context = state.runtime_context(value)
     exact(value, context, ("assignment_envelope_digest", "assignment_payload_digest", "load_receipt_envelope_digest"))
     custody.observing(state, value)
@@ -31,6 +30,12 @@ def apply(state, value):
     handoff.generation(state, publication)
     assignment_payload = db.loads(assignment["assignment_payload_json"], None)
     load_payload = db.loads(load["load_receipt_payload_json"], None)
+    return context, assignment_payload, load_payload, publication
+
+
+def apply(state, value):
+    profile.require(type(value) is dict and set(value) == opening.FIELDS and value["apiVersion"] == opening.SCHEMA)
+    context, assignment_payload, load_payload, publication = retained(state, value)
     result = opening.verify(value, assignment=assignment_payload, load=load_payload, context=context, publication=publication, now=state.now)
     state.charge(512 + len(assignment_payload["authorityKeyIndependence"]["bindings"]))
     key = value["opening_receipt"]["signing_key_spki_sha256"]

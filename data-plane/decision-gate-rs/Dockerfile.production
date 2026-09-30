@@ -136,8 +136,11 @@ RUN --network=none cargo build --release --frozen \
         --bin serverware-response-v2-guest-inspector \
         --bin serverware-response-v2-guest-role \
         --bin serverware-native-shadow-worker \
+        --bin serverware-policy-shadow-custody-guest \
+        --bin serverware-native-shadow-guest-supervisor \
         --bin serverware-native-shadow-verifier \
         --bin serverware-native-shadow-verifier-transport \
+        --bin serverware-native-shadow-time-issuer \
         --bin serverware-native-parent-relay --bin serverware-native-parent-ingress \
     && test "$(readelf -l /src/target/release/serverware-production-launcher | grep -c INTERP)" -eq 0 \
     && test "$(readelf -d /src/target/release/serverware-production-launcher | grep -c NEEDED)" -eq 0 \
@@ -173,7 +176,16 @@ RUN --network=none cargo build --release --frozen \
     && test "$(stat -c %s /src/target/release/serverware-native-shadow-verifier)" -le 67108864 \
     && test "$(readelf -l /src/target/release/serverware-native-shadow-verifier-transport | grep -c INTERP)" -eq 0 \
     && test "$(readelf -d /src/target/release/serverware-native-shadow-verifier-transport | grep -c NEEDED)" -eq 0 \
-    && test "$(stat -c %s /src/target/release/serverware-native-shadow-verifier-transport)" -le 67108864
+    && test "$(stat -c %s /src/target/release/serverware-native-shadow-verifier-transport)" -le 67108864 \
+    && test "$(readelf -l /src/target/release/serverware-policy-shadow-custody-guest | grep -c INTERP)" -eq 0 \
+    && test "$(readelf -d /src/target/release/serverware-policy-shadow-custody-guest | grep -c NEEDED)" -eq 0 \
+    && test "$(stat -c %s /src/target/release/serverware-policy-shadow-custody-guest)" -le 67108864 \
+    && test "$(readelf -l /src/target/release/serverware-native-shadow-guest-supervisor | grep -c INTERP)" -eq 0 \
+    && test "$(readelf -d /src/target/release/serverware-native-shadow-guest-supervisor | grep -c NEEDED)" -eq 0 \
+    && test "$(stat -c %s /src/target/release/serverware-native-shadow-guest-supervisor)" -le 67108864 \
+    && test "$(readelf -l /src/target/release/serverware-native-shadow-time-issuer | grep -c INTERP)" -eq 0 \
+    && test "$(readelf -d /src/target/release/serverware-native-shadow-time-issuer | grep -c NEEDED)" -eq 0 \
+    && test "$(stat -c %s /src/target/release/serverware-native-shadow-time-issuer)" -le 67108864
 
 FROM scratch AS production-launcher-artifact
 COPY --from=launcher-build /src/target/release/serverware-production-launcher /serverware-production-launcher
@@ -208,8 +220,14 @@ COPY --from=launcher-build /src/target/release/serverware-native-shadow-worker /
 FROM scratch AS native-shadow-verifier-supervisor-artifact
 COPY --from=launcher-build /src/target/release/serverware-native-shadow-verifier /serverware-native-shadow-verifier
 
+FROM scratch AS native-shadow-guest-supervisor-artifact
+COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-native-shadow-guest-supervisor /serverware-native-shadow-guest-supervisor
+
 FROM scratch AS native-shadow-verifier-transport-artifact
 COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-native-shadow-verifier-transport /serverware-native-shadow-verifier-transport
+
+FROM scratch AS native-shadow-time-issuer-supervisor-artifact
+COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-native-shadow-time-issuer /serverware-native-shadow-time-issuer
 
 FROM python:3.11-slim-bookworm@sha256:0030323c9ce4d6dfab5f0812577cb0abd13c806f86b3a1f5b5d8f200ebb1421c AS native-python-runtime-build
 ARG SOURCE_DATE_EPOCH="0"
@@ -261,6 +279,34 @@ RUN --network=none python -I -B /source/scripts/package_native_shadow_verifier_r
 
 FROM scratch AS native-shadow-verifier-runtime-artifact
 COPY --from=native-shadow-verifier-runtime /shadow-verifier-output /shadow-verifier-output
+
+# Independent issuer deployment only. No time key, configuration, launch
+# original, issuer image or supervisor is installed in the claimant target.
+FROM native-python-runtime-build AS native-shadow-time-issuer-runtime
+RUN --network=none python -I -B /source/scripts/package_native_shadow_time_runtime.py
+
+FROM scratch AS native-shadow-time-issuer-runtime-artifact
+COPY --from=native-shadow-time-issuer-runtime /shadow-time-issuer-output /shadow-time-issuer-output
+
+# Explicit static claimant image only. These public inputs must be independently
+# supplied and pinned; no keys, boot delivery, verifier policy or time authority.
+# The ordinary native-enclave target below does not select this profile.
+FROM scratch AS native-shadow-custody-inputs
+COPY production-shadow-custody/inputs.json /inputs.json
+COPY production-shadow-custody/seccomp.bpf /seccomp.bpf
+COPY production-shadow-custody/runtime.json /runtime.json
+COPY production-shadow-custody/build-recipe.json /build-recipe.json
+COPY production-shadow-custody/provenance.json /provenance.json
+
+FROM native-python-runtime-build AS native-shadow-custody-runtime
+ARG SHADOW_CUSTODY_INPUTS_SHA256
+ENV SHADOW_CUSTODY_INPUTS_SHA256=$SHADOW_CUSTODY_INPUTS_SHA256
+COPY --from=native-shadow-custody-inputs / /shadow-custody-inputs/
+COPY --from=launcher-build /src/target/release/serverware-policy-shadow-custody-guest /shadow-static/serverware-policy-shadow-custody-guest
+RUN --network=none python -I -B /source/scripts/package_native_shadow_custody_runtime.py
+
+FROM scratch AS native-shadow-custody-runtime-artifact
+COPY --from=native-shadow-custody-runtime /shadow-custody-output /shadow-custody-output
 
 # The old host-side target remains explicit for migration work. The default,
 # last target below is the native-only enclave image.

@@ -57,7 +57,8 @@ pub(crate) struct Original {
 impl Original {
     pub(crate) fn open(name: &'static str, maximum: usize) -> Result<Self, String> {
         ensure(matches!(name, "native-shadow-verifier-launch.json" | "native-shadow-nitro-verifier.json"
-            | "native-shadow-verifier-transport.json"),
+            | "native-shadow-verifier-transport.json" | "native-shadow-time-issuer-launch.json"
+            | "native-shadow-guest-time-issuer.json"),
             "verifier original name is not a fixed purpose")?;
         let root = owned(unsafe { libc::open(b"/\0".as_ptr().cast(), libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC) })?;
         protected_directory(root.as_raw_fd())?;

@@ -1,5 +1,5 @@
 //! Fixed clone-child trampoline. No authority acquisition or secret read here.
-use crate::native_shadow_verifier_runtime_v1::{RuntimeBorrow, INTERPRETER_PATH, ENTRYPOINT_PATH};
+use crate::native_shadow_verifier_runtime_v1::{Profile, RuntimeBorrow, INTERPRETER_PATH};
 use std::ffi::CString;
 use std::os::fd::{AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
 
@@ -12,7 +12,7 @@ const OUTPUT: usize = 5;
 const GATE: usize = 6;
 const PARENT: usize = 7;
 const NULL: usize = 8;
-const MAX_FILTER: usize = 512;
+const MAX_FILTER: usize = 768;
 const SECUREBITS: libc::c_ulong = 0xef;
 const GATE_BYTE: u8 = 0xa5;
 fn require(value: bool, reason: &str) -> Result<(), String> {
@@ -64,8 +64,18 @@ pub(super) struct PreparedChild {
     filter: Vec<libc::sock_filter>, self_pid_instruction: usize,
 }
 impl PreparedChild {
-    #[cfg(target_arch = "x86_64")]
+    pub(super) fn prepare_time(runtime: &RuntimeBorrow<'_>, seed: BorrowedFd<'_>, transport: BorrowedFd<'_>,
+        output: BorrowedFd<'_>, gate: BorrowedFd<'_>) -> Result<Self, String> {
+        require(runtime.profile() == Profile::TimeIssuer, "issuer child requires its actual fixed runtime")?;
+        Self::prepare_for(runtime, seed, transport, output, gate)
+    }
     pub(super) fn prepare(runtime: &RuntimeBorrow<'_>, seed: BorrowedFd<'_>, evidence: BorrowedFd<'_>,
+        output: BorrowedFd<'_>, gate: BorrowedFd<'_>) -> Result<Self, String> {
+        require(runtime.profile() == Profile::Verifier, "verifier child cannot select an issuer")?;
+        Self::prepare_for(runtime, seed, evidence, output, gate)
+    }
+    #[cfg(target_arch = "x86_64")]
+    fn prepare_for(runtime: &RuntimeBorrow<'_>, seed: BorrowedFd<'_>, evidence: BorrowedFd<'_>,
         output: BorrowedFd<'_>, gate: BorrowedFd<'_>) -> Result<Self, String> {
         use std::os::fd::AsFd;
         let parent = unsafe { libc::getpid() };
@@ -107,7 +117,11 @@ impl PreparedChild {
             "verifier child final identity is not admitted nonroot")?;
         // Parent inputs own the full independent key/evidence admission. These
         // metadata checks only keep exactly those separately sealed originals.
-        for (index, maximum) in [(SEED,32),(EVIDENCE,128 * 1024)] {
+        let sealed: &[(usize, i64)] = match runtime.profile() {
+            Profile::Verifier => &[(SEED,32),(EVIDENCE,128 * 1024)],
+            Profile::TimeIssuer => &[(SEED,32)],
+        };
+        for &(index, maximum) in sealed {
             let original = originals[index];
             let seals = unsafe { libc::fcntl(fds[index].as_raw_fd(), libc::F_GET_SEALS) };
             require(original.mode & libc::S_IFMT == libc::S_IFREG && original.mode & 0o7777 == 0o600
@@ -120,10 +134,17 @@ impl PreparedChild {
         }
         require(originals[SEED].size == 32 && (originals[SEED].device, originals[SEED].inode)
             != (originals[EVIDENCE].device, originals[EVIDENCE].inode), "verifier child seed/evidence alias or bound")?;
+        if runtime.profile() == Profile::TimeIssuer {
+            let original = originals[EVIDENCE];
+            require(original.mode & libc::S_IFMT == libc::S_IFSOCK && original.uid == 0 && original.gid == 0
+                && original.flags & libc::O_ACCMODE == libc::O_RDWR && original.flags & libc::O_NONBLOCK != 0
+                && original.flags & (libc::O_ASYNC | libc::O_APPEND | libc::O_PATH) == 0,
+                "issuer child did not inherit the admitted nonblocking socket")?;
+        }
         let arguments = [CString::new(INTERPRETER_PATH).unwrap(), CString::new("-I").unwrap(),
-            CString::new("-B").unwrap(), CString::new(ENTRYPOINT_PATH).unwrap()];
+            CString::new("-B").unwrap(), CString::new(runtime.profile().entrypoint()).unwrap()];
         let argv = [arguments[0].as_ptr(),arguments[1].as_ptr(),arguments[2].as_ptr(),arguments[3].as_ptr(),std::ptr::null()];
-        let (filter, self_pid_instruction) = filter(fds[EXECUTABLE].as_raw_fd())?;
+        let (filter, self_pid_instruction) = filter(fds[EXECUTABLE].as_raw_fd(), runtime.profile())?;
         let owner = Self { fds, originals, parent, uid, gid, issued:runtime.issued_boottime_ns(),
             deadline:runtime.deadline_boottime_ns(), last_cap:last_capability()?, _arguments:arguments,
             argv, filter, self_pid_instruction };
@@ -131,7 +152,7 @@ impl PreparedChild {
         Ok(owner)
     }
     #[cfg(not(target_arch = "x86_64"))]
-    pub(super) fn prepare(_: &RuntimeBorrow<'_>, _: BorrowedFd<'_>, _: BorrowedFd<'_>,
+    fn prepare_for(_: &RuntimeBorrow<'_>, _: BorrowedFd<'_>, _: BorrowedFd<'_>,
         _: BorrowedFd<'_>, _: BorrowedFd<'_>) -> Result<Self, String> {
         Err("external native-shadow verifier requires x86_64".to_owned())
     }
@@ -240,7 +261,7 @@ struct Capabilities { effective:u32,permitted:u32,inheritable:u32 }
 struct Action { handler:usize,flags:usize,restorer:usize,mask:u64 }
 
 #[cfg(target_arch = "x86_64")]
-fn filter(executable: RawFd) -> Result<(Vec<libc::sock_filter>,usize),String> {
+fn filter(executable: RawFd, profile: Profile) -> Result<(Vec<libc::sock_filter>,usize),String> {
     const ALLOW: u32 = 0x7fff_0000;
     const DENY: u32 = 0x0005_0000 | libc::EPERM as u32;
     const KILL: u32 = 0x8000_0000;
@@ -277,9 +298,45 @@ fn filter(executable: RawFd) -> Result<(Vec<libc::sock_filter>,usize),String> {
     // its inherited originals non-inheritable, never clear CLOEXEC.
     let mut fcntl=vec![s(0x20,0,0,24),s(0x15,0,4,libc::F_SETFD as u32)];
     fcntl.extend(equals(32,libc::FD_CLOEXEC as u32));fcntl.push(s(0x06,0,0,ALLOW));
+    if profile == Profile::TimeIssuer {
+        // CPython may use F_SETFL for setblocking(False). Only the inherited
+        // channel and exactly its already-admitted flags may be selected.
+        let mut set = equals(16,5); set.extend(equals(20,0));
+        set.extend(equals(32,(libc::O_RDWR | libc::O_NONBLOCK) as u32));set.extend(equals(36,0));
+        set.push(s(0x06,0,0,ALLOW));
+        fcntl.extend([s(0x20,0,0,24),s(0x15,0,set.len() as u8,libc::F_SETFL as u32)]);fcntl.extend(set);
+    }
     fcntl.extend(one_of(24,&[libc::F_GETFD as u32,libc::F_GETFL as u32,libc::F_GET_SEALS as u32,libc::F_GETPIPE_SZ as u32]));
     branch(&mut out,libc::SYS_fcntl,fcntl)?;
-    branch(&mut out,libc::SYS_ioctl,one_of(24,&[libc::TCGETS as u32,libc::FIONREAD as u32,libc::FIOCLEX as u32]))?;
+    let mut ioctl = Vec::new();
+    if profile == Profile::TimeIssuer {
+        let mut io = equals(16,5);io.extend(equals(20,0));io.push(s(0x06,0,0,ALLOW));
+        ioctl.extend([s(0x20,0,0,24),s(0x15,0,io.len() as u8,libc::FIONBIO as u32)]);ioctl.extend(io);
+    }
+    ioctl.extend(one_of(24,&[libc::TCGETS as u32,libc::FIONREAD as u32,libc::FIOCLEX as u32]));
+    branch(&mut out,libc::SYS_ioctl,ioctl)?;
+    if profile == Profile::TimeIssuer {
+        for syscall in [libc::SYS_getsockname,libc::SYS_getpeername] {
+            let mut body=equals(16,5);body.extend(equals(20,0));body.push(s(0x06,0,0,ALLOW));
+            branch(&mut out,syscall,body)?;
+        }
+        let mut options=equals(16,5);options.extend(equals(20,0));options.extend(equals(24,libc::SOL_SOCKET as u32));
+        options.extend(equals(28,0));options.extend(one_of(32,&[libc::SO_TYPE as u32,libc::SO_DOMAIN as u32,
+            libc::SO_PROTOCOL as u32,libc::SO_ACCEPTCONN as u32,57]));
+        branch(&mut out,libc::SYS_getsockopt,options)?;
+        let mut send=equals(16,5);send.extend(equals(20,0));send.extend(equals(40,libc::MSG_NOSIGNAL as u32));
+        send.extend(equals(44,0));send.extend(equals(48,0));send.extend(equals(52,0));
+        send.extend(equals(56,0));send.extend(equals(60,0));send.push(s(0x06,0,0,ALLOW));
+        branch(&mut out,libc::SYS_sendto,send)?;
+        let mut receive=equals(16,5);receive.extend(equals(20,0));
+        receive.extend(one_of(40,&[0,(libc::MSG_PEEK | libc::MSG_DONTWAIT) as u32]));
+        branch(&mut out,libc::SYS_recvfrom,receive)?;
+        let mut shutdown=equals(16,5);shutdown.extend(equals(20,0));shutdown.extend(equals(24,libc::SHUT_RDWR as u32));
+        shutdown.extend(equals(28,0));shutdown.push(s(0x06,0,0,ALLOW));
+        branch(&mut out,libc::SYS_shutdown,shutdown)?;
+        // No socket/connect/bind/listen/accept, sendmsg/SCM_RIGHTS, exec variants
+        // or writable files. The existing closed default remains EPERM.
+    }
     let mut prctl=vec![s(0x20,0,0,16),s(0x15,0,4,libc::PR_SET_DUMPABLE as u32)];
     prctl.extend(equals(24,0));prctl.push(s(0x06,0,0,ALLOW));
     prctl.extend([s(0x20,0,0,16),s(0x15,0,4,libc::PR_SET_NO_NEW_PRIVS as u32)]);

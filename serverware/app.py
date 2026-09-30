@@ -11095,7 +11095,11 @@ async def policy_authority_candidate_handoff(
 @app.post(control_plane_setup_policy.PREFIX + "/options")
 @app.post(control_plane_setup_policy.PREFIX + "/bind")
 @app.post(control_plane_setup_policy.PREFIX + "/lookup")
-async def controlled_setup_policy_candidate(request: Request) -> dict[str, Any]:
+@app.post(control_plane_setup_policy.MATERIALIZE_PATH)
+@app.post(control_plane_setup_policy.INSTALLED_PATH)
+async def controlled_setup_policy_candidate(request: Request, response: Response) -> dict[str, Any]:
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Pragma"] = "no-cache"
     raw = await request.body()
     try:
         return await _run_bounded_blocking(_POLICY_AUTHORITY_HANDOFF_SLOTS,

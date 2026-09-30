@@ -120,88 +120,131 @@ pub(super) struct Delivery {
     process:Process, parent:Parent, payload:Payload, delivery_sha256:Sha256Digest,
     startup:u64, lifetime:u64, ready:AtomicBool,
 }
+/// Same-process root file admission shared by the fixed parent and child.
+/// Not a final-role owner, admission result, or authority reconstructed from data.
+pub(in crate::policy_shadow) struct FileAdmission {
+    process:Process, configuration:Original, envelope:Original, runtime:Original,
+    credentials:BTreeMap<String,Original>, payload:Payload, delivery_sha256:Sha256Digest,
+    startup:u64, lifetime:u64,
+}
+impl FileAdmission {
+    pub(in crate::policy_shadow) fn check(&self)->Result<(),ServiceRunnerError> {
+        self.process.check()?;
+        if unsafe{libc::getuid()}!=0 || unsafe{libc::geteuid()}!=0
+            || boottime_now_nanos().map_err(|e|fail(&e.to_string()))?>=self.lifetime {
+            return Err(fail("original root launch lifetime expired"));
+        }
+        self.configuration.read(MAX_DELIVERY)?;self.envelope.read(MAX_DELIVERY)?;
+        self.runtime.read(MAX_CONFIG_BYTES)?;
+        for original in self.credentials.values(){original.check()?;}
+        Ok(())
+    }
+    pub(in crate::policy_shadow) fn check_preparation(&self)->Result<(),ServiceRunnerError> {
+        self.check()?;
+        if boottime_now_nanos().map_err(|e|fail(&e.to_string()))?>=self.startup {
+            return Err(fail("original root launch startup deadline expired"));
+        }
+        Ok(())
+    }
+    pub(in crate::policy_shadow) fn startup(&self)->u64 {self.startup}
+    pub(in crate::policy_shadow) fn lifetime(&self)->u64 {self.lifetime}
+    pub(in crate::policy_shadow) fn runtime_sha256(&self)->&Sha256Digest {&self.payload.runtime_config.sha256}
+}
+fn admit_files(configuration_path:&Path,expected_configuration_sha256:Sha256Digest,
+    delivery_path:&Path,expected_delivery_sha256:Sha256Digest)->Result<FileAdmission,ServiceRunnerError> {
+    if unsafe { libc::getuid() }!=0 || unsafe { libc::geteuid() }!=0 {
+        return Err(fail("guest service admission requires root preparation"));
+    }
+    let process=Process::capture()?;
+    let configuration=Original::open(configuration_path,0,0,MAX_DELIVERY,expected_configuration_sha256.clone())?;
+    let cold:Configuration=exact(&configuration.read(MAX_DELIVERY)?)?;
+    if cold.api_version!="serverware.policyCustodyGuestConfiguration/v1" || cold.uid==0 || cold.gid==0
+        || cold.uid==u32::MAX || cold.gid==u32::MAX
+        || cold.uid==65534 || cold.gid==65534 || (64988..=64990).contains(&cold.uid)
+        || (64988..=64990).contains(&cold.gid) {
+        return Err(fail("invalid or reserved guest service role identity"));
+    }
+    let public=decode::<32>(&cold.authority.public_key_base64url)?;
+    if Sha256Digest::compute(&public)!=cold.authority.key_id { return Err(fail("guest delivery authority key ID mismatch")); }
+    let key=VerifyingKey::from_bytes(&public).map_err(|_|fail("invalid delivery authority"))?;
+    let envelope=Original::open(delivery_path,0,0,MAX_DELIVERY,expected_delivery_sha256.clone())?;
+    let wire:Envelope=exact(&envelope.read(MAX_DELIVERY)?)?;
+    let signature=Signature::from_bytes(&decode::<64>(&wire.signature_base64url)?);
+    let mut preimage=SIGNATURE_DOMAIN.to_vec();
+    preimage.extend(canonical_json_bytes(&wire.payload).map_err(|_|fail("invalid signed delivery payload"))?);
+    key.verify_strict(&preimage,&signature).map_err(|_|fail("invalid guest delivery signature"))?;
+    let p=wire.payload;
+    let domain=process.domain();
+    let now=boottime_now_nanos().map_err(|e|ServiceRunnerError::invalid(e.to_string()))?;
+    let issued=ns(&p.issued_at_boottime_ns)?;
+    let startup=ns(&p.startup_deadline_boottime_ns)?;
+    let lifetime=ns(&p.lifetime_deadline_boottime_ns)?;
+    if wire.api_version!="serverware.policyCustodyGuestDelivery/v1"
+        || p.configuration_sha256!=expected_configuration_sha256 || p.authority_key_id!=cold.authority.key_id
+        || p.service_role!=cold.service_role || p.uid!=cold.uid || p.gid!=cold.gid
+        || decode::<16>(&p.boot_id_base64url)?!=domain.authority_boot_id()
+        || p.time_namespace_device!=domain.time_namespace().device()
+        || p.time_namespace_inode!=domain.time_namespace().inode()
+        || issued>now || now>=startup || startup>lifetime || startup-issued>30_000_000_000
+        || p.invocation_id.len()!=32 || !p.invocation_id.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        || p.invocation_id.bytes().all(|b|b==b'0') || p.credentials.is_empty() || p.credentials.len()>MAX_CREDENTIALS
+        || p.activation.is_empty() || p.activation.len()>MAX_ACTIVATION_FDS {
+        return Err(fail("guest delivery role, original boot, invocation or deadline mismatch"));
+    }
+    let runtime=Original::open(&p.runtime_config.path,0,0,MAX_CONFIG_BYTES,p.runtime_config.sha256.clone())?;
+    let mut identities=BTreeSet::from([configuration.identity(),envelope.identity(),runtime.identity()]);
+    if identities.len()!=3 { return Err(fail("guest configuration originals alias")); }
+    let mut credentials=BTreeMap::new();
+    let mut total=0u64;
+    for entry in &p.credentials {
+        validate_credential_name(&entry.name)?;
+        total=total.checked_add(entry.length).ok_or_else(||fail("credential size overflow"))?;
+        if entry.length==0 || entry.length>MAX_CONFIG_BYTES as u64 || total>MAX_TOTAL_CREDENTIAL_BYTES {
+            return Err(fail("guest credential inventory exceeds fixed bounds"));
+        }
+        if let Some(signing)=&entry.signing {
+            let raw=decode::<32>(&signing.public_key_base64url)?;
+            if entry.length!=32 || raw==public || signing.key_id==cold.authority.key_id {
+                return Err(fail("runtime signer aliases independent delivery authority"));
+            }
+            VerifyingKey::from_bytes(&raw).map_err(|_|fail("invalid assigned runtime public key"))?;
+        }
+        let original=Original::open(&entry.original.path,p.uid,p.gid,entry.length as usize,entry.original.sha256.clone())?;
+        if !identities.insert(original.identity()) { return Err(fail("guest credential originals alias")); }
+        if credentials.insert(entry.name.clone(),original).is_some() { return Err(fail("duplicate guest credential name")); }
+    }
+    let owner=FileAdmission {process,configuration,envelope,runtime,credentials,payload:p,
+        delivery_sha256:expected_delivery_sha256,startup,lifetime};
+    owner.check_preparation()?;Ok(owner)
+}
+fn take_activation(entries:&[Activation])->Result<(BTreeMap<String,OwnedFd>,BTreeSet<(u64,u64)>),ServiceRunnerError> {
+    let mut activation=BTreeMap::new();
+    let mut fd_identities=BTreeSet::new();
+    for (index,entry) in entries.iter().enumerate() {
+        validate_fd_name(&entry.name)?;
+        if entry.fd!=6+index as i32 { return Err(fail("guest activation slots must be exact contiguous 6..69")); }
+        set_cloexec(entry.fd)?;
+        let fd=unsafe { OwnedFd::from_raw_fd(entry.fd) };
+        let stat=descriptor_stat(fd.as_fd())?;
+        if (stat.st_dev,stat.st_ino,stat.st_mode,stat.st_uid,stat.st_gid)
+            !=(entry.device,entry.inode,entry.mode,entry.uid,entry.gid)
+            || ![libc::S_IFDIR,libc::S_IFSOCK].contains(&(stat.st_mode & libc::S_IFMT))
+            || !fd_identities.insert((stat.st_dev,stat.st_ino)) {
+            return Err(fail("guest activation original substituted or aliased"));
+        }
+        if activation.insert(entry.name.clone(),fd).is_some() { return Err(fail("duplicate guest activation name")); }
+    }
+    Ok((activation,fd_identities))
+}
 impl PreparedGuestServiceDelivery {
     /// Paths and expected digest must originate in the independent cold parent assignment.
     /// FD3 is its actual private parent channel; signed activation slots are 6..69.
     pub(crate) fn admit(configuration_path:&Path, expected_configuration_sha256:Sha256Digest,
         delivery_path:&Path, expected_delivery_sha256:Sha256Digest)->Result<Self,ServiceRunnerError> {
-        if unsafe { libc::getuid() }!=0 || unsafe { libc::geteuid() }!=0 {
-            return Err(fail("guest service admission requires root preparation"));
-        }
-        let process=Process::capture()?;
-        let configuration=Original::open(configuration_path,0,0,MAX_DELIVERY,expected_configuration_sha256.clone())?;
-        let cold:Configuration=exact(&configuration.read(MAX_DELIVERY)?)?;
-        if cold.api_version!="serverware.policyCustodyGuestConfiguration/v1" || cold.uid==0 || cold.gid==0
-            || cold.uid==u32::MAX || cold.gid==u32::MAX
-            || cold.uid==65534 || cold.gid==65534 || (64988..=64990).contains(&cold.uid)
-            || (64988..=64990).contains(&cold.gid) {
-            return Err(fail("invalid or reserved guest service role identity"));
-        }
-        let public=decode::<32>(&cold.authority.public_key_base64url)?;
-        if Sha256Digest::compute(&public)!=cold.authority.key_id { return Err(fail("guest delivery authority key ID mismatch")); }
-        let key=VerifyingKey::from_bytes(&public).map_err(|_|fail("invalid delivery authority"))?;
-        let envelope=Original::open(delivery_path,0,0,MAX_DELIVERY,expected_delivery_sha256.clone())?;
-        let wire:Envelope=exact(&envelope.read(MAX_DELIVERY)?)?;
-        let signature=Signature::from_bytes(&decode::<64>(&wire.signature_base64url)?);
-        let mut preimage=SIGNATURE_DOMAIN.to_vec();
-        preimage.extend(canonical_json_bytes(&wire.payload).map_err(|_|fail("invalid signed delivery payload"))?);
-        key.verify_strict(&preimage,&signature).map_err(|_|fail("invalid guest delivery signature"))?;
-        let p=wire.payload;
-        let domain=process.domain();
-        let now=boottime_now_nanos().map_err(|e|ServiceRunnerError::invalid(e.to_string()))?;
-        let issued=ns(&p.issued_at_boottime_ns)?;
-        let startup=ns(&p.startup_deadline_boottime_ns)?;
-        let lifetime=ns(&p.lifetime_deadline_boottime_ns)?;
-        if wire.api_version!="serverware.policyCustodyGuestDelivery/v1"
-            || p.configuration_sha256!=expected_configuration_sha256 || p.authority_key_id!=cold.authority.key_id
-            || p.service_role!=cold.service_role || p.uid!=cold.uid || p.gid!=cold.gid
-            || decode::<16>(&p.boot_id_base64url)?!=domain.authority_boot_id()
-            || p.time_namespace_device!=domain.time_namespace().device()
-            || p.time_namespace_inode!=domain.time_namespace().inode()
-            || issued>now || now>=startup || startup>lifetime || startup-issued>30_000_000_000
-            || p.invocation_id.len()!=32 || !p.invocation_id.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-            || p.invocation_id.bytes().all(|b|b==b'0') || p.credentials.is_empty() || p.credentials.len()>MAX_CREDENTIALS
-            || p.activation.is_empty() || p.activation.len()>MAX_ACTIVATION_FDS {
-            return Err(fail("guest delivery role, original boot, invocation or deadline mismatch"));
-        }
-        let runtime=Original::open(&p.runtime_config.path,0,0,MAX_CONFIG_BYTES,p.runtime_config.sha256.clone())?;
-        let mut identities=BTreeSet::from([configuration.identity(),envelope.identity(),runtime.identity()]);
-        if identities.len()!=3 { return Err(fail("guest configuration originals alias")); }
-        let mut credentials=BTreeMap::new();
-        let mut total=0u64;
-        for entry in &p.credentials {
-            validate_credential_name(&entry.name)?;
-            total=total.checked_add(entry.length).ok_or_else(||fail("credential size overflow"))?;
-            if entry.length==0 || entry.length>MAX_CONFIG_BYTES as u64 || total>MAX_TOTAL_CREDENTIAL_BYTES {
-                return Err(fail("guest credential inventory exceeds fixed bounds"));
-            }
-            if let Some(signing)=&entry.signing {
-                let raw=decode::<32>(&signing.public_key_base64url)?;
-                if entry.length!=32 || raw==public || signing.key_id==cold.authority.key_id {
-                    return Err(fail("runtime signer aliases independent delivery authority"));
-                }
-                VerifyingKey::from_bytes(&raw).map_err(|_|fail("invalid assigned runtime public key"))?;
-            }
-            let original=Original::open(&entry.original.path,p.uid,p.gid,entry.length as usize,entry.original.sha256.clone())?;
-            if !identities.insert(original.identity()) { return Err(fail("guest credential originals alias")); }
-            if credentials.insert(entry.name.clone(),original).is_some() { return Err(fail("duplicate guest credential name")); }
-        }
-        let mut activation=BTreeMap::new();
-        let mut fd_identities=BTreeSet::new();
-        for (index,entry) in p.activation.iter().enumerate() {
-            validate_fd_name(&entry.name)?;
-            if entry.fd!=6+index as i32 { return Err(fail("guest activation slots must be exact contiguous 6..69")); }
-            set_cloexec(entry.fd)?;
-            let fd=unsafe { OwnedFd::from_raw_fd(entry.fd) };
-            let stat=descriptor_stat(fd.as_fd())?;
-            if (stat.st_dev,stat.st_ino,stat.st_mode,stat.st_uid,stat.st_gid)
-                !=(entry.device,entry.inode,entry.mode,entry.uid,entry.gid)
-                || ![libc::S_IFDIR,libc::S_IFSOCK].contains(&(stat.st_mode & libc::S_IFMT))
-                || !fd_identities.insert((stat.st_dev,stat.st_ino)) {
-                return Err(fail("guest activation original substituted or aliased"));
-            }
-            if activation.insert(entry.name.clone(),fd).is_some() { return Err(fail("duplicate guest activation name")); }
-        }
+        let FileAdmission {process,configuration,envelope,runtime,mut credentials,payload:p,
+            delivery_sha256:expected_delivery_sha256,startup,lifetime}=admit_files(configuration_path,
+                expected_configuration_sha256,delivery_path,expected_delivery_sha256)?;
+        let (activation,fd_identities)=take_activation(&p.activation)?;
         let parent=Parent::inherited()?;
         if fd_identities.contains(&parent.identity()) { return Err(fail("activation aliases private parent channel")); }
         let mut p=p;

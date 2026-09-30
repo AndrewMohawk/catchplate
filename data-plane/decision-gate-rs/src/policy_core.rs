@@ -65,10 +65,14 @@ const SHADOW_ACTIVE_TERMINAL_RETENTION_BYTES: usize = 384;
 // credential metadata graph, provider secret, or receipt-arena allocation is
 // retained in this increment. This remains a modeled queue budget, not RSS.
 const SHADOW_CREDENTIAL_PREREQUISITE_RETENTION_BYTES: usize = 4 * 4096;
+const SHADOW_NATIVE_OBSERVATION_RETENTION_BYTES: usize = 2048;
 
 fn shadow_job_bytes_with_terminal_retention(payload_bytes: usize) -> usize {
     payload_bytes.saturating_add(SHADOW_ACTIVE_TERMINAL_RETENTION_BYTES)
         .saturating_add(SHADOW_CREDENTIAL_PREREQUISITE_RETENTION_BYTES)
+        // Fixed weak-owner/phase/digest retention; originals are transient and
+        // bounded independently, not retained in each queued lifecycle.
+        .saturating_add(SHADOW_NATIVE_OBSERVATION_RETENTION_BYTES)
 }
 const SHADOW_MAX_FACT_HEADERS: usize = 128;
 const SHADOW_MAX_FACT_HEADER_BYTES: usize = 64 * 1024;
@@ -4202,8 +4206,14 @@ impl AccountingLedger {
         &self,
         generation_id: &str,
         record: ShadowAccountingEvent,
-        _admitted: bool,
+        admitted: bool,
     ) -> Option<DurableShadowEventReceipt> {
+        self.record_with_original(generation_id,record,admitted).map(|(receipt,_)|receipt)
+    }
+
+    fn record_with_original(
+        &self,generation_id:&str,record:ShadowAccountingEvent,_admitted:bool,
+    )->Option<(DurableShadowEventReceipt,VerifiedShadowSpillReceipt)> {
         let generation_id_digest = match Sha256Digest::parse(
             generation_id.to_string(),
         ) {
@@ -4446,11 +4456,12 @@ impl AccountingLedger {
                         .signed_receipt_sha256()
                         .matches_digest(receipt.signed_receipt_sha256())
                 {
-                    return spool_appended.then_some(
+                    return spool_appended.then_some((
                         cached.durable_receipt(
                             receipt.ingress_sequence(),
                         ),
-                    );
+                        receipt,
+                    ));
                 }
                 state.generations[index].permanent_readiness_invalid = true;
                 state.hard_unready = true;
@@ -4580,7 +4591,7 @@ impl AccountingLedger {
         if !spool_appended {
             self.mark_hard_unready();
         }
-        spool_appended.then_some(durable_receipt)
+        spool_appended.then_some((durable_receipt,receipt))
     }
 
     fn apply_custody_compaction(
@@ -5772,6 +5783,7 @@ struct ShadowRequestLifecycle {
     state: Mutex<LifecycleState>,
     finalization_consumed: AtomicBool,
     response_terminal_recorded: AtomicBool,
+    native_observation: Option<super::native_canary_runtime::Opening>,
 }
 
 impl ShadowRequestLifecycle {
@@ -6698,7 +6710,7 @@ impl ShadowRequestHandle {
             self.record_failure(PolicyShadowTerminalReason::DecisionTimePlanBindingMismatch);
             error
         })?;
-        let receipt = self.inner.ledger.record_with_receipt(
+        let (receipt,original) = self.inner.ledger.record_with_original(
             self.inner.generation.generation_id(),
             terminal_event,
             false,
@@ -6767,6 +6779,12 @@ impl ShadowRequestHandle {
         state.final_active = Some(matched_record.into_record());
         state.response_finished = true;
         drop(state);
+        if let Some(export)=&self.inner.native_observation {
+            export.append(&original).map_err(|error| {
+                self.inner.ledger.mark_hard_unready();
+                error
+            })?;
+        }
         if let Err(error) = self.enqueue_request_evaluation() {
             self.record_failure(
                 PolicyShadowTerminalReason::CandidateEnqueueFailed,
@@ -8967,6 +8985,7 @@ pub(crate) struct ShadowRuntime {
     authoritative_publication_revision: AtomicU64,
     native_opening_gate: Mutex<()>,
     native_opening_failed: AtomicBool,
+    native_observation_owner: OnceLock<std::sync::Weak<GateState>>,
     activation_publication_gate:
         RwLock<Option<ShadowActivationPublicationGate>>,
     #[cfg(test)]
@@ -9007,10 +9026,23 @@ impl ShadowRuntime {
             authoritative_publication_revision: AtomicU64::new(0),
             native_opening_gate: Mutex::new(()),
             native_opening_failed: AtomicBool::new(false),
+            native_observation_owner: OnceLock::new(),
             activation_publication_gate: RwLock::new(None),
             #[cfg(test)]
             inactive_for_forwarding_tests: false,
         }
+    }
+
+    pub(crate) fn bind_native_observation_owner(&self,state:&Arc<GateState>)->Result<(),String> {
+        if !std::ptr::eq(self,&state.policy_shadow) || state.measured_canary_delivery.is_none() {
+            return Err("native observation must bind the actual selected serving owner".into());
+        }
+        self.native_observation_owner.set(Arc::downgrade(state)).map_err(|_|"native observation owner bound twice".into())
+    }
+
+    pub(crate) fn fail_native_observation(&self) {
+        self.native_opening_failed.store(true,Ordering::Release);
+        self.ledger.mark_hard_unready();
     }
 
     #[cfg(test)]
@@ -10146,6 +10178,19 @@ impl ShadowRuntime {
                 };
             }
         };
+        let native_observation=if native_export.is_some() {
+            let retained=self.native_observation_owner.get().cloned()
+                .ok_or_else(||"actual native observation owner absent".to_string())
+                .and_then(|owner|super::native_canary_runtime::Opening::new(owner,&custody_admission));
+            match retained {
+                Ok(value)=>Some(value),
+                Err(_)=>{
+                    self.fail_native_observation();
+                    return ShadowAdmission::custody_fail_closed(snapshot,binding,ingress,
+                        PolicyShadowTerminalReason::AccountingCustodyUnavailable);
+                }
+            }
+        } else {None};
         let lifecycle = Arc::new(ShadowRequestLifecycle {
             generation,
             current_generation: Arc::clone(&self.generation),
@@ -10163,6 +10208,7 @@ impl ShadowRuntime {
             state: Mutex::new(LifecycleState::default()),
             finalization_consumed: AtomicBool::new(false),
             response_terminal_recorded: AtomicBool::new(false),
+            native_observation,
         });
         admission.finalization = Some(ShadowRequestHandle { inner: lifecycle });
         admission
@@ -11128,12 +11174,23 @@ fn shadow_worker(receiver: Receiver<ShadowWork>, ledger: Arc<AccountingLedger>) 
                     }
                     Err(_) => {}
                 }
-                let durably_recorded = ledger.record(
+                let durably_recorded = ledger.record_with_original(
                     lifecycle.generation.generation_id(),
                     record,
                     true,
                 );
-                if durably_recorded {
+                if let Some((_,original))=durably_recorded {
+                    if accepted_candidate.is_none() && lifecycle.native_observation.is_some() {
+                        ledger.mark_hard_unready();
+                    }
+                    if accepted_candidate.is_some() {
+                        if let Some(export)=&lifecycle.native_observation {
+                            if export.append(&original).is_err() {
+                                ledger.mark_hard_unready();
+                                continue;
+                            }
+                        }
+                    }
                     if let (Some(candidate), Ok(mut state)) =
                         (accepted_candidate, lifecycle.state.try_lock())
                     {
@@ -11259,11 +11316,18 @@ fn shadow_worker(receiver: Receiver<ShadowWork>, ledger: Arc<AccountingLedger>) 
                         }
                     }
                 }
-                job.comparison_terminal_appended = ledger.record(
-                    lifecycle.generation.generation_id(),
-                    record,
-                    false,
-                );
+                // Export only the real validated response comparison, never
+                // the failure/error-hash record or a caller success flag.
+                let response_evaluated=matches!(record.event,ShadowRuntimeEvent::ResponseEvaluated);
+                let appended=ledger.record_with_original(lifecycle.generation.generation_id(),record,false);
+                job.comparison_terminal_appended=appended.is_some();
+                if let Some(export)=&lifecycle.native_observation {
+                    if let Some((_,original))=&appended {
+                        if !response_evaluated || export.append(original).is_err() {
+                            ledger.mark_hard_unready();
+                        }
+                    }
+                }
                 if !job.comparison_terminal_appended {
                     ledger.mark_hard_unready();
                 }
@@ -11838,7 +11902,8 @@ mod active_terminal_record_tests {
             - std::mem::size_of::<FinalActiveDecision>() <= SHADOW_ACTIVE_TERMINAL_RETENTION_BYTES);
         assert!(std::mem::size_of::<Option<ActiveTerminalRecord>>()
             - std::mem::size_of::<Option<FinalActiveDecision>>() <= SHADOW_ACTIVE_TERMINAL_RETENTION_BYTES);
-        let surcharge = SHADOW_ACTIVE_TERMINAL_RETENTION_BYTES + SHADOW_CREDENTIAL_PREREQUISITE_RETENTION_BYTES;
+        let surcharge = SHADOW_ACTIVE_TERMINAL_RETENTION_BYTES + SHADOW_CREDENTIAL_PREREQUISITE_RETENTION_BYTES
+            + SHADOW_NATIVE_OBSERVATION_RETENTION_BYTES;
         assert_eq!(shadow_job_bytes_with_terminal_retention(0), surcharge);
         assert_eq!(shadow_job_bytes_with_terminal_retention(SHADOW_MAX_JOB_BYTES - surcharge),
             SHADOW_MAX_JOB_BYTES);

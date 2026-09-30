@@ -227,5 +227,9 @@ pub(super) fn prepare_native_tls_gate_state(
     if state.measured_succession.is_some() { native_oauth_succession::initialize(&state)?; }
     ingress.verify_live(deadline)?;
     native_service_remaining(&state)?;
-    Ok(NativeTlsGateV1 { state: Arc::new(state), ingress, deadline })
+    let state=Arc::new(state);
+    if state.measured_canary_delivery.is_some() {
+        state.policy_shadow.bind_native_observation_owner(&state)?;
+    }
+    Ok(NativeTlsGateV1 { state, ingress, deadline })
 }

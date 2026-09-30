@@ -36,6 +36,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 #[path = "policy_shadow_opening.rs"]
 pub(crate) mod native_opening;
+#[path="policy_shadow_runtime.rs"]
+pub(crate) mod native_runtime;
 
 #[cfg(target_os = "linux")]
 #[path = "policy_custody/mod.rs"]
@@ -48,6 +50,10 @@ pub(in crate::policy_shadow) mod native_custody_closure;
 #[cfg(target_os = "linux")]
 pub(crate) fn run_native_shadow_guest()->! {
     policy_custody::services::guest::native_guest::run()
+}
+#[cfg(target_os="linux")]
+pub(crate) fn run_native_shadow_guest_supervisor()->! {
+    policy_custody::services::guest::native_guest::run_parent()
 }
 
 #[cfg(target_os = "linux")]
@@ -12618,6 +12624,10 @@ impl Deref for VerifiedShadowSpillReceipt {
 }
 
 impl VerifiedShadowSpillReceipt {
+    pub(crate) fn request_binding_sha256(&self)->&Sha256Digest {
+        &self.wire.request_binding_sha256
+    }
+
     pub(crate) fn canonical_payload_sha256(&self) -> &Sha256Digest {
         &self.canonical_payload_sha256
     }

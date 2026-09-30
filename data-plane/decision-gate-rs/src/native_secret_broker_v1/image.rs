@@ -94,6 +94,8 @@ impl Workspace {
         let run = path("/run", true, false)?;
         let (name, parent_path): (&[u8], &str) = if matches!(purpose, Purpose::ExternalShadowVerifier) {
             (b"serverware-native-shadow-verifier\0", "/run/serverware-native-shadow-verifier")
+        } else if matches!(purpose, Purpose::ExternalShadowTimeIssuer) {
+            (b"serverware-native-shadow-time-issuer\0", "/run/serverware-native-shadow-time-issuer")
         } else { (b"serverware-native-broker\0", "/run/serverware-native-broker") };
         let result = unsafe { libc::mkdirat(run.as_raw_fd(), name.as_ptr().cast(), 0o700) };
         ensure(result == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EEXIST),
@@ -137,7 +139,7 @@ impl Drop for Workspace {
 
 // Closed source purposes share only immutable image custody, never a child,
 // key, serving phase or caller-selected executable/helper path.
-pub(crate) enum Purpose { Broker, RoleKeyProvisioner, ShadowCustody, ShadowKeyDelivery, ExternalShadowVerifier }
+pub(crate) enum Purpose { Broker, RoleKeyProvisioner, ShadowCustody, ShadowKeyDelivery, ExternalShadowVerifier, ExternalShadowTimeIssuer }
 impl Purpose {
     fn paths(&self) -> (&'static str, &'static str, &'static str) {
         match self {
@@ -151,6 +153,9 @@ impl Purpose {
             Self::ExternalShadowVerifier => (crate::native_shadow_verifier_runtime_v1::IMAGE_PATH,
                 crate::native_shadow_verifier_runtime_v1::INTERPRETER_PATH,
                 crate::native_shadow_verifier_runtime_v1::ENTRYPOINT_PATH),
+            Self::ExternalShadowTimeIssuer => (crate::native_shadow_verifier_runtime_v1::TIME_IMAGE_PATH,
+                crate::native_shadow_verifier_runtime_v1::INTERPRETER_PATH,
+                crate::native_shadow_verifier_runtime_v1::TIME_ENTRYPOINT_PATH),
         }
     }
 }

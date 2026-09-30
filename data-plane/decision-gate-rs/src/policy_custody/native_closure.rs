@@ -47,6 +47,25 @@ struct Assignment {payload:AssignmentPayload,signature:CanonicalEd25519Signature
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 pub(in crate::policy_shadow) struct Configuration {api_version:String,manifest:Manifest,authorization:Assignment}
 
+impl Configuration {
+    /// Root parent cold-original selection only. The child independently
+    /// verifies the NEW closure signature after genuine trusted-time delivery.
+    /// No native assignment/TEE authority is returned by this image mechanism.
+    pub(in crate::policy_shadow) fn prepare_parent_image(&self,
+        delivery:&policy_custody::services::guest::FileAdmission)->Result<ShadowImage,ShadowError> {
+        delivery.check_preparation().map_err(unavailable)?;
+        require(self.api_version=="serverware.nativeCustodyClosure/v1")?;self.manifest.validate()?;
+        let m=&self.manifest;let b=&m.build_provenance;
+        require(&m.runtime_configuration_sha256==delivery.runtime_sha256())?;
+        let image=ShadowImage::open(m.image_sha256.as_str(),m.worker_executable_sha256.as_str(),[
+            m.seccomp_policy.raw_bpf_sha256().as_str(),m.runtime_configuration_sha256.as_str(),
+            b.dependency_lock_sha256.as_str(),b.build_recipe_sha256.as_str(),b.provenance_statement_sha256.as_str()],
+            delivery.startup()).map_err(unavailable)?;
+        require(read(image.seccomp(),32768)?==custody_seccomp_raw_bytes(m.seccomp_policy.exact_instructions()))?;
+        delivery.check_preparation().map_err(unavailable)?;Ok(image)
+    }
+}
+
 fn verify_assignment(wire:&Assignment,manifest:&Manifest,guest:&GuestClosureBinding,
     assignment:&VerifiedAssignment,checkpoint:&AtomicTrustCheckpoint,trust:&dyn EnvelopeKeyTrust)->Result<(),ShadowError> {
     let p=&wire.payload;let original=assignment.payload();

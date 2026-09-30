@@ -18,8 +18,18 @@ fn identity(value: libc::stat) -> Identity {
         uid: value.st_uid, gid: value.st_gid, links: value.st_nlink, size: value.st_size,
         modified: (value.st_mtime, value.st_mtime_nsec), changed: (value.st_ctime, value.st_ctime_nsec) }
 }
-struct Sealed { fd: OwnedFd, identity: Identity, flags: i32 }
+pub(super) struct Sealed { fd: OwnedFd, identity: Identity, flags: i32 }
 impl Sealed {
+    pub(super) fn exact_seed(fd: OwnedFd) -> Result<Self, String> {
+        let seed = Self::admit(fd, 32)?;
+        ensure(seed.identity.size == 32, "issuer seed must be exactly 32 sealed bytes")?;
+        Ok(seed)
+    }
+    pub(super) fn assigned(&self, uid: u32, gid: u32) -> Result<(), String> {
+        self.check()?;
+        ensure((self.identity.uid, self.identity.gid) == (uid, gid), "issuer seed assignment differs")
+    }
+    pub(super) fn fd(&self) -> BorrowedFd<'_> { self.fd.as_fd() }
     fn admit(fd: OwnedFd, maximum: i64) -> Result<Self, String> {
         let info = stat(fd.as_raw_fd())?;
         let flags = unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_GETFL) };
@@ -33,7 +43,7 @@ impl Sealed {
         let owner = Self { fd, identity: identity(info), flags };
         owner.check()?; Ok(owner)
     }
-    fn check(&self) -> Result<(), String> {
+    pub(super) fn check(&self) -> Result<(), String> {
         let fd = self.fd.as_raw_fd();
         let seals = unsafe { libc::fcntl(fd, libc::F_GET_SEALS) };
         ensure(identity(stat(fd)?) == self.identity

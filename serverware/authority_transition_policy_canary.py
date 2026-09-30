@@ -18,6 +18,8 @@ from serverware import authority_transition_policy_canary_compiler as compiler
 from serverware import authority_transition_policy_canary_delivery as delivery
 from serverware import authority_transition_policy_canary_native_opening as native_opening
 from serverware import authority_policy_canary_native_opening as opening_profile
+from serverware import authority_policy_canary_native_runtime as runtime_profile
+from serverware import authority_transition_policy_canary_native_runtime as native_runtime
 from serverware.authority_transition_policy_canary_state import State
 
 
@@ -43,6 +45,9 @@ def _program(values, database_now, request_digest, snapshot):
         if kind == "custody" and item.get("apiVersion") == opening_profile.SCHEMA:
             profile.require(len(original["events"]) == 1, "native opening owns one indivisible original batch")
             stored = native_opening.apply(state, item)
+        elif kind in {"active-decision", "shadow-observation"} and item.get("apiVersion") in {runtime_profile.SCHEMA, runtime_profile.RESPONSE_SCHEMA}:
+            profile.require(len(original["events"]) == 1, "native runtime observation owns one indivisible original batch")
+            stored = native_runtime.apply(state, item, kind)
         elif kind == "checkpoint":
             stored = db.stage_policy_canary_checkpoint(item, _controlled_state=state)
         elif kind == "readiness":

@@ -53,7 +53,7 @@ def assignment_payload(value):
     return value
 
 
-def _keys(assignment):
+def _keys(assignment, selected_role="custody-ingress-admission"):
     authority = assignment["authorityKeyIndependence"]
     profile.require(type(authority) is dict and set(authority) == {"bindings", "keyIdSetRootSha256", "spkiSetRootSha256",
         "keyMaterialSetRootSha256", "independenceRootSha256"} and type(authority["bindings"]) is list
@@ -97,7 +97,8 @@ def _keys(assignment):
         profile.require(key["keyId"] == custody[prefix + "KeyId"] and key["keySpkiSha256"] == custody[prefix + "KeySpkiSha256"])
         digest = material("serverware.policyShadowCustodyAssertedKey/v1", [role, key["keyId"], key["keySpkiSha256"], key["keyMaterialSha256"]])
         leaves.append(digest)
-    return result[ROLES[0]], _merkle(leaves)
+    profile.require(selected_role in ROLES)
+    return result[selected_role], _merkle(leaves)
 
 
 def _merkle(values):
@@ -168,7 +169,20 @@ def verify(value, *, assignment, load, context, publication, now):
         and window["startsAtUnixNanos"] <= event[2] < window["endsAtUnixNanos"]
         and 0 <= now - event[2] <= window["maximumEvidenceAgeNanos"]
         and now < min(assignment["expiresAtUnixNanos"], window["endsAtUnixNanos"]))
-    key, key_root = _keys(assignment)
+    message = verify_receipt_signature(value, receipt, assignment=assignment, context=context,
+        publication=publication, role="ingress-admission")
+    return {"apiVersion": SCHEMA, "generationId": receipt["generation_id"], "ingressSequence": receipt["ingress_sequence"],
+        "openingReceiptSha256": receipt["signed_receipt_sha256"], "signatureMessageSha256": profile.sha256(message),
+        "recordSha256": profile.sha256(profile.canonical(value)), "coverage": "opening-only"}
+
+
+def verify_receipt_signature(value, receipt, *, assignment, context, publication, role):
+    """Source-fixed role selected only after a closed event/phase admission."""
+    from serverware import db
+    domains = {"ingress-admission": b"serverware.policyShadowIngressAdmission/v1",
+        "terminal-append": b"serverware.policyShadowTerminalAppend/v1", "ledger-append": b"serverware.policyShadowLedgerAppend/v1"}
+    profile.require(role in domains)
+    key, key_root = _keys(assignment, "custody-" + role)
     public = profile.decoded(value["signing_public_key_base64url"], 32, length=32)
     verifier = Ed25519PublicKey.from_public_bytes(public)
     der = verifier.public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
@@ -186,7 +200,7 @@ def verify(value, *, assignment, load, context, publication, now):
         "event_ordinal", "event_phase", "disposition", "event_sha256", "canonical_event_bytes", "predecessor_event_ordinal",
         "predecessor_head_sha256", "resulting_head_sha256", "trusted_observed_at_unix_nanos", "trusted_time_checkpoint_sha256",
         "persistence_receipt_sha256", "retrieval_id_sha256", "retrieval_proof_sha256")]
-    payload += ["ingress-admission", receipt["signing_key_id"], receipt["signing_key_spki_sha256"]]
+    payload += [role, receipt["signing_key_id"], receipt["signing_key_spki_sha256"]]
     authority = assignment["custodyAuthority"]
     evidence = db.loads(publication["generation_evidence_json"], None)
     scope = material("serverware.policyShadowProductionCustodyProofScope/v1", [assignment["assignmentId"],
@@ -195,10 +209,8 @@ def verify(value, *, assignment, load, context, publication, now):
         evidence["custody"]["custodyConfigurationSha256"], key_root, authority["executionClosureManifestSha256"],
         authority["structurallyVerifiedSeccompPolicySha256"]])
     bound = ["serverware.policyShadowAssignmentBoundCustodyReceipt/v1", scope, authority["executionClosureManifestSha256"],
-        authority["structurallyVerifiedSeccompPolicySha256"], "ingress-admission", profile.sha256(profile.canonical(payload))]
-    message = b"\0".join((db._POLICY_AUTHORITY_SIGNATURE_FRAME, b"serverware.policyShadowIngressAdmission/v1",
+        authority["structurallyVerifiedSeccompPolicySha256"], role, profile.sha256(profile.canonical(payload))]
+    message = b"\0".join((db._POLICY_AUTHORITY_SIGNATURE_FRAME, domains[role],
         db._POLICY_AUTHORITY_CANONICAL_PROFILE.encode("ascii"), profile.canonical(bound)))
     verifier.verify(profile.decoded(receipt["signature"], 64, length=64), message)
-    return {"apiVersion": SCHEMA, "generationId": receipt["generation_id"], "ingressSequence": receipt["ingress_sequence"],
-        "openingReceiptSha256": receipt["signed_receipt_sha256"], "signatureMessageSha256": profile.sha256(message),
-        "recordSha256": profile.sha256(profile.canonical(value)), "coverage": "opening-only"}
+    return message

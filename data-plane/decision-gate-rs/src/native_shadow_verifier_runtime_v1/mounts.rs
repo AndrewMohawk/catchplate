@@ -1,5 +1,5 @@
 //! Purpose-fixed private root attachments, retained until actual child reap.
-use super::{ensure, within, originals::{self, identity, owned, protected_directory, stat, Original}};
+use super::{ensure, within, Profile, originals::{self, identity, owned, protected_directory, stat, Original}};
 use crate::native_secret_broker_v1::image::Image;
 use ring::rand::{SecureRandom, SystemRandom};
 use std::ffi::CString;
@@ -10,7 +10,8 @@ const FLAGS: libc::c_ulong = libc::MS_RDONLY | libc::MS_NOSUID | libc::MS_NODEV 
 #[repr(C)]
 struct OpenHow { flags: u64, mode: u64, resolve: u64 }
 fn fixed(root: &File, name: &'static str, directory: bool) -> Result<File, String> {
-    ensure(matches!(name, "/proc" | "/etc/serverware/native-shadow-nitro-verifier.json"), "verifier mount target differs")?;
+    ensure(matches!(name, "/proc" | "/etc/serverware/native-shadow-nitro-verifier.json"
+        | "/etc/serverware/native-shadow-guest-time-issuer.json"), "verifier mount target differs")?;
     let name = CString::new(name).unwrap();
     let how = OpenHow { flags: (libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW
         | if directory { libc::O_DIRECTORY } else { 0 }) as u64, mode: 0, resolve: 0x10 | 2 | 4 };
@@ -88,17 +89,21 @@ pub(super) struct Mounts {
     underlying: File, underlying_identity: originals::Identity, mount_path: CString,
     root: Option<Mount>, policy: Option<Mount>, procfs: Option<Mount>,
     root_mounted: bool, policy_mounted: bool, proc_mounted: bool, root_removed: bool, removed: bool,
-    creator: libc::pid_t, pub(super) automatic: bool,
+    creator: libc::pid_t, configuration_path: &'static str, pub(super) automatic: bool,
 }
 impl Mounts {
-    pub(super) fn install(image: &Image, configuration: &Original, issued: u64, deadline: u64) -> Result<Self, String> {
+    pub(super) fn install(image: &Image, configuration: &Original, issued: u64, deadline: u64, profile: Profile) -> Result<Self, String> {
         within(issued, deadline)?;
         let root = owned(unsafe { libc::open(b"/\0".as_ptr().cast(), libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC) })?;
         protected_directory(root.as_raw_fd())?;
         let run = owned(unsafe { libc::openat(root.as_raw_fd(), b"run\0".as_ptr().cast(), libc::O_RDONLY
             | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC) })?;
         protected_directory(run.as_raw_fd())?;
-        let base = b"serverware-native-shadow-verifier\0";
+        let base: &[u8] = match profile {
+            Profile::Verifier => b"serverware-native-shadow-verifier\0",
+            Profile::TimeIssuer => b"serverware-native-shadow-time-issuer\0",
+        };
+        let configuration_path = profile.configuration_path();
         within(issued, deadline)?;
         let created = unsafe { libc::mkdirat(run.as_raw_fd(), base.as_ptr().cast(), 0o700) };
         ensure(created == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EEXIST), "verifier workspace parent unavailable")?;
@@ -121,8 +126,8 @@ impl Mounts {
         let mut owner = Self { directory_identity: identity(directory.as_raw_fd())?, underlying_identity: identity(underlying.as_raw_fd())?,
             parent, directory, name, underlying, mount_path, root: None, policy: None, procfs: None,
             root_mounted: false, policy_mounted: false, proc_mounted: false, root_removed: false, removed: false,
-            creator: unsafe { libc::getpid() }, automatic: true };
-        let placeholder = fixed(&image.root, "/etc/serverware/native-shadow-nitro-verifier.json", false)?;
+            creator: unsafe { libc::getpid() }, configuration_path, automatic: true };
+        let placeholder = fixed(&image.root, configuration_path, false)?;
         let info = stat(placeholder.as_raw_fd())?;
         ensure(info.st_uid == 0 && info.st_gid == 0 && info.st_mode & libc::S_IFMT == libc::S_IFREG
             && info.st_mode & 0o7777 == 0o400 && info.st_size == 0, "verifier policy placeholder is not the fixed empty file")?;
@@ -139,12 +144,12 @@ impl Mounts {
             libc::AT_FDCWD, owner.mount_path.as_ptr(), 4u32) } == 0, "verifier immutable root attachment failed")?;
         owner.root_mounted = true;
         let source = CString::new(format!("/proc/self/fd/{}", configuration.file.as_raw_fd())).unwrap();
-        let policy_target = target(&image.root, "/etc/serverware/native-shadow-nitro-verifier.json");
+        let policy_target = target(&image.root, configuration_path);
         configuration.check()?; within(issued, deadline)?;
         ensure(unsafe { libc::mount(source.as_ptr(), policy_target.as_ptr(), std::ptr::null(), libc::MS_BIND, std::ptr::null()) } == 0,
             "verifier original policy bind failed")?;
         owner.policy_mounted = true;
-        owner.policy = Some(Mount::capture(fixed(&image.root, "/etc/serverware/native-shadow-nitro-verifier.json", false)?)?);
+        owner.policy = Some(Mount::capture(fixed(&image.root, configuration_path, false)?)?);
         within(issued, deadline)?;
         ensure(unsafe { libc::mount(std::ptr::null(), policy_target.as_ptr(), std::ptr::null(),
             libc::MS_BIND | libc::MS_REMOUNT | FLAGS, std::ptr::null()) } == 0, "verifier policy bind is not readonly")?;
@@ -180,7 +185,7 @@ impl Mounts {
         self.root.as_ref().ok_or("verifier root original absent")?.matches(&image.root)?;
         self.root.as_ref().unwrap().matches(&self.named_root()?)?;
         let policy = self.policy.as_ref().ok_or("verifier policy mount original absent")?;
-        policy.matches(&fixed(&image.root, "/etc/serverware/native-shadow-nitro-verifier.json", false)?)?;
+        policy.matches(&fixed(&image.root, self.configuration_path, false)?)?;
         policy.restricted(None)?;
         ensure(identity(policy.file.as_raw_fd())? == identity(configuration.file.as_raw_fd())?, "verifier FD3 and named policy differ")?;
         let procfs = self.procfs.as_ref().ok_or("verifier proc mount original absent")?;
@@ -205,8 +210,8 @@ impl Mounts {
             let root = self.root.as_ref().ok_or("verifier cleanup root original absent")?;
             root.matches(&self.named_root()?)?;
             let policy = self.policy.as_ref().ok_or("verifier policy mount original was not captured")?;
-            policy.matches(&fixed(&root.file, "/etc/serverware/native-shadow-nitro-verifier.json", false)?)?;
-            ensure(unsafe { libc::umount2(target(&root.file, "/etc/serverware/native-shadow-nitro-verifier.json").as_ptr(), libc::MNT_DETACH) } == 0,
+            policy.matches(&fixed(&root.file, self.configuration_path, false)?)?;
+            ensure(unsafe { libc::umount2(target(&root.file, self.configuration_path).as_ptr(), libc::MNT_DETACH) } == 0,
                 "verifier policy detach failed")?;
             self.policy_mounted = false;
         }

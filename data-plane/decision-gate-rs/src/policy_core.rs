@@ -3290,7 +3290,7 @@ impl ImmutableUnavailableReceiptRef {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct InlineSha256Digest {
     bytes: [u8; SHADOW_RECEIPT_DIGEST_BYTES],
 }

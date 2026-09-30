@@ -3,6 +3,34 @@
 
 use std::os::fd::RawFd;
 
+// Raw Linux statfs ABI for the LP64 x86-64/aarch64 owners admitted by child.rs.
+// UAPI asm-generic/statfs.h uses signed kernel longs and a two-int fsid;
+// x86 asm/statfs.h changes only compat_statfs64, not this syscall layout.
+// Do not use libc's musl statfs layout or a libc helper after clone.
+#[repr(C)]
+struct KernelStatfs {
+    f_type: i64,
+    f_bsize: i64,
+    f_blocks: i64,
+    f_bfree: i64,
+    f_bavail: i64,
+    f_files: i64,
+    f_ffree: i64,
+    f_fsid: [i32; 2],
+    f_namelen: i64,
+    f_frsize: i64,
+    f_flags: i64,
+    f_spare: [i64; 4],
+}
+
+const _: () = {
+    assert!(std::mem::size_of::<libc::c_long>() == 8);
+    assert!(std::mem::size_of::<KernelStatfs>() == 120);
+    assert!(std::mem::align_of::<KernelStatfs>() == 8);
+    assert!(std::mem::offset_of!(KernelStatfs, f_fsid) == 56);
+    assert!(std::mem::offset_of!(KernelStatfs, f_flags) == 80);
+};
+
 /// Constructed from the retained filesystem/claim by child.rs before clone.
 pub(super) struct Spec {
     pub(super) root: RawFd,
@@ -231,8 +259,8 @@ pub(super) unsafe fn run(spec: &Spec) -> ! {
         || libc::syscall(libc::SYS_pivot_root, b".\0".as_ptr(), b".\0".as_ptr()) != 0
         || libc::syscall(libc::SYS_umount2, b".\0".as_ptr(), libc::MNT_DETACH) != 0
         || libc::syscall(libc::SYS_fchdir, spec.cwd) != 0 { die(); }
-    let mut root: libc::statfs = std::mem::zeroed();
-    if libc::syscall(libc::SYS_fstatfs, spec.root, &mut root as *mut libc::statfs) != 0
+    let mut root: KernelStatfs = std::mem::zeroed();
+    if libc::syscall(libc::SYS_fstatfs, spec.root, &mut root as *mut KernelStatfs) != 0
         || root.f_type != 0xe0f5_e1e2 || root.f_flags & 7 != 7 || root.f_flags & 8 != 0 { die(); }
     libc::syscall(libc::SYS_umask, 0o077u32);
     let core = libc::rlimit { rlim_cur: 0, rlim_max: 0 };

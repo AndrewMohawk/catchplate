@@ -5,6 +5,7 @@
 use super::*;
 use serverware_decision_gate::native_audit_batch_v1 as wire;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD,Engine as _};
+use ring::rand::{SecureRandom, SystemRandom};
 
 pub(super) struct Prepared { statement:wire::Statement }
 impl Prepared { pub(super) fn statement(&self)->&wire::Statement { &self.statement } }

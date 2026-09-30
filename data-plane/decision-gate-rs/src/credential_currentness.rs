@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 
 const PATH: &str = "/api/data-plane/credential-currentness";
 const MAX_HOLDERS: usize = 64;
-const MAX_REPLY: usize = 128 * 1024;
+const MAX_REPLY: u64 = 128 * 1024;
 
 pub(super) struct LocalHolder {
     configuration: Option<wire::Configuration>,

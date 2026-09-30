@@ -449,10 +449,10 @@ pub(super) struct ResponseObservationV2ResponseDataReply {
 /// Produced only by the actual retained-session target-dispatch exchange,
 /// after its normal reply attestation and exact request/original joins.
 pub(super) struct AuthenticatedTargetDispatchReply {
-    permit:serverware_decision_gate::response_observation_v2::custody::target_dispatch::wire::SignedTargetDispatchPermit,
+    permit:serverware_decision_gate::native_response_gate::target_dispatch::SignedTargetDispatchPermit,
 }
 impl AuthenticatedTargetDispatchReply {
-    pub(super) fn into_permit(self)->serverware_decision_gate::response_observation_v2::custody::target_dispatch::wire::SignedTargetDispatchPermit {self.permit}
+    pub(super) fn into_permit(self)->serverware_decision_gate::native_response_gate::target_dispatch::SignedTargetDispatchPermit {self.permit}
 }
 
 pub(super) struct ResponseObservationV2Session<'a> {

@@ -5,7 +5,7 @@ use super::outcome_record as record;
 use super::super::{lifecycle::LifecycleObservation, parent::DirectoryChain, start_authority};
 use super::super::super::{ensure, json, originals::{ArtifactV1, HeldOriginal}, OriginalClock};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::ffi::{CStr, CString};

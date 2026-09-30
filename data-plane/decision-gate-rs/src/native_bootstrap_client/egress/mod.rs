@@ -102,7 +102,7 @@ impl PrecreationOwner {
     pub(super) fn check(&self) -> Result<(), String> {
         ensure(!self.stopped.replace(true), "native egress precreation owner is stopped")?;
         self.clock.check()?;
-        self.connection.check_egress_originals(&mut self.proof.try_borrow_mut()
+        self.connection.check_egress_originals(&mut *self.proof.try_borrow_mut()
             .map_err(|_| "native egress proof already borrowed")?, &self.clock)?;
         self.host.try_borrow_mut().map_err(|_| "native egress host already borrowed")?
             .check(&self.clock)?;

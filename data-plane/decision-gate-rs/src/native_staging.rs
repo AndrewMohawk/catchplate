@@ -2,7 +2,7 @@
 //! captures real process originals and cannot be constructed by deserialization.
 use super::*;
 use serverware_decision_gate::native_staging_v1 as profile;
-use serverware_decision_gate::response_observation_v2::custody::staging::{wire,process::CurrentProcess};
+use serverware_decision_gate::native_response_gate::staging::{self as wire, CurrentProcess};
 
 pub(super) struct Prepared<'a> {
     state:&'a GateState,

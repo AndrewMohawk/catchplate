@@ -124,6 +124,41 @@ pub use response_observation_v2::custody::{
     PUBLIC_CUSTODY_API_VERSION,
     run_response_observation_v2_provider_from_env,
 };
+/// Gate-side access to the existing native staging and target-dispatch owners.
+/// These are exact reexports, not a second protocol or a public custody runtime.
+pub mod native_response_gate {
+    pub mod staging {
+        pub use crate::response_observation_v2::custody::staging::process::CurrentProcess;
+        pub use crate::response_observation_v2::custody::staging::wire::{
+            NativeStatement, Original, StagingRequest,
+            ORIGINAL, REQUEST, RESULT, RESULT_DOMAIN, STATEMENT,
+        };
+    }
+
+    pub mod target_dispatch {
+        pub use crate::response_observation_v2::custody::target_dispatch::wire::{
+            BeginRequest, CapturePersistRequest, CompletedCapture, DispatchOriginal,
+            NativeCaptureEnvelope, NativeStatement, SignedAttemptStateObservationV1,
+            SignedStateMutationReceiptV1, SignedTargetDispatchPermit, Target, TlsObservation,
+            MAX_RAW_BYTES, NATIVE_STATEMENT, ORIGINAL, PERMIT, PERMIT_DOMAIN, PERSIST,
+            STATE_OBSERVATION_DOMAIN, STATE_RECEIPT_DOMAIN,
+        };
+    }
+
+    /// Pure receipt canonicalization and typed request/result inspection only.
+    pub mod state_receipt {
+        pub use crate::response_observation_v2::state_authority::canonical::{
+            canonical_jcs_bytes, sha256_digest,
+        };
+        pub use crate::response_observation_v2::state_authority::contract::{Digest, Identifier};
+        pub use crate::response_observation_v2::state_authority::lifecycle::{
+            AttemptState, OperationKind, TargetEffectState,
+        };
+        pub use crate::response_observation_v2::state_authority::rpc::{
+            MutationPayload, RawObjectReference, ResultDisposition, RpcRequestFrame,
+        };
+    }
+}
 #[cfg(target_os = "linux")]
 pub use response_observation_v2::custody::run_guest_inspector;
 #[cfg(target_os = "linux")]

@@ -185,21 +185,23 @@ build is not live readiness or production acceptance.
 
 ## Live preparation remains with the genuine owners
 
-The first engineering assembly used source `0fdce4ef` and the unpublished
-`v3-candidate-cba01916` dependencies on 2026-09-30. It produced the Linux/amd64
-control image `sha256:c28fafd8a60b7a55bc3bfadceee50d22358d054f5c1f334a1b104666208db401`,
-explicitly labeled `production_release_eligible=false`. The proxy compilation
-stopped with 18 Rust integration errors; no gate image, complete two-image
-report, service deployment or pilot acceptance resulted from that attempt.
-The engineering resource flags were accepted and retained throughout.
+Engineering attempt 3 on 2026-09-30 used source `1d2ffb80` and the unchanged,
+unpublished `v3-candidate-cba01916` dependencies in an isolated dirty-tree
+checkout. It built the nonrelease Linux/amd64 control image
+`sha256:751ec6e9b738c1fabc888f7381343372b3bbfeaa4aa99ade8c634b397c2bb959`.
+The gate ended in an ordinary Rust compiler failure: 37 emitted diagnostics,
+32 unique diagnostics across 19 files. Fixes for the reported diagnostics are
+source-integrated for the next consolidated build; compilation has not passed.
+Retained evidence is under
+`codex-offload/serverware/engineering-builds/1d2ffb80-ukwn3y`.
+There is no gate image, complete two-image report, project test result,
+service deployment or pilot acceptance from this attempt. Canonical reviewed
+dependency pins and the nonrelease boundary remain unchanged.
 
-The follow-up from `a2556cf0` built control image
-`sha256:45c9631526f7dee729fd87542cf4bae282a7d07cebe2dbb0dea5d53f06e43bc9`
-and reached proxy binary compilation, which stopped on 95 distinct diagnostics
-across 53 files. Actual RUN-worker cgroup values were `cpu.max=800000 100000`,
-`memory.max=25769803776` and `memory.swap.max=0`. The corresponding source fixes
-are integrated for the next build; neither attempt is a complete pilot or a
-successful two-image build report.
+Earlier attempts stopped at 18 library errors and then 95 distinct diagnostics
+across 53 files. The second attempt's actual RUN-worker limits were
+`cpu.max=800000 100000`, `memory.max=25769803776` and `memory.swap.max=0`;
+these historical observations are not a fresh resource measurement.
 
 The source-fixed prerequisite list points at the actual existing callers:
 `ParkedProofCohort.start`, `FiveServiceLaunch.start_effects`,

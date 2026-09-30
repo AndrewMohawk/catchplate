@@ -1942,7 +1942,7 @@ impl EnvelopePayload for GenerationPublicationPayload {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
 pub(crate) struct GenerationPublicationReceipt {
     envelope: SignedEnvelope<GenerationPublicationExternalPayload>,
     internal_envelope: SignedEnvelope<GenerationPublicationPayload>,

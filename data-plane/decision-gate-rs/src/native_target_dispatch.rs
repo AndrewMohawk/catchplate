@@ -2,7 +2,7 @@
 //! snapshot and dispatch mutation guards remain in this actual measured gate.
 use super::*;
 use serverware_decision_gate::native_target_dispatch_v1 as profile;
-use serverware_decision_gate::response_observation_v2::custody::target_dispatch::wire;
+use serverware_decision_gate::native_response_gate::{state_receipt::RawObjectReference, target_dispatch as wire};
 use rustls::{ClientConfig,ClientConnection,RootCertStore,StreamOwned};
 use rustls::pki_types::{CertificateDer,ServerName};
 
@@ -60,7 +60,7 @@ impl<'a> Prepared<'a> {
     pub(super) fn open(state:&'a GateState,snapshot:&Arc<Snapshot>,decision:&Value,
         request:&IncomingRequest,url:&Url,headers:&BTreeMap<String,String>,injection:&Value,
         binding:V2OperationBinding,stable_resume_id:&str,
-        staged_request:serverware_decision_gate::response_observation_v2::state_authority::rpc::RawObjectReference,
+        staged_request:RawObjectReference,
         staged_bytes:&[u8],session:&ResponseObservationV2Session<'_>,
         shadow:Option<&policy_core::ShadowRequestHandle>)->Result<Self,String> {
         let lifetime=state.native_runtime_lifetime.as_ref().ok_or("capture lacks actual native lifetime")?;

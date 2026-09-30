@@ -202,7 +202,7 @@ pub(super) fn admit<'a>(state: &'a GateState, head: &'a RequestHead,
         "identityPolicySha256":principal.identity_policy_digest(), "policySha256":snapshot.hash,
         "clientCertificateSha256":trusted.certificate_sha256, "clientSpkiSha256":trusted.spki_sha256,
         "sourceAddress":source, "requestBindingSha256":sha256_digest_text(&request_binding),
-    }))?;
+    })).map_err(|error| error.to_string())?;
     require(!statement.is_empty() && statement.len() <= wire::MAX_STATEMENT_BYTES)?;
     let nonce = wire::derive_nonce(challenge, exporter, &statement)?;
     let policy = native_lease_digest_bytes(&snapshot.hash)?;

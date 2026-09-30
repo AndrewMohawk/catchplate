@@ -433,7 +433,7 @@ impl PreparedNativeBootstrapPacket<'_> {
         self.admission.stream.restrict_operation_deadline(deadline);
         self.admission.stream.set_terminal_write_deadline(Some(deadline));
         self.admission.stream.check_operation_deadline()
-            .map_err(|_| "native bootstrap final transport deadline expired")
+            .map_err(|_| "native bootstrap final transport deadline expired".to_owned())
     }
 }
 

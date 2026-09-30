@@ -49103,7 +49103,7 @@ fn handle_connect_request(
                 ResponseProofKind::Observation => ResponseProofPrincipalProfile::Observation,
             };
             if require_selected_response_principal(
-                state, profile, &connect_authentication.principal_id).is_err()
+                &state, profile, &connect_authentication.principal_id).is_err()
             {
                 let response = override_response_connection(json_status_response(
                     StatusCode::UNPROCESSABLE_ENTITY,

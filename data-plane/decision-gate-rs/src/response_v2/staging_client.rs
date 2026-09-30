@@ -2,8 +2,7 @@
 //! A lost result never enters the old re-sign/reopen/recovery loop.
 use super::*;
 use serverware_decision_gate::native_staging_v1 as profile;
-use serverware_decision_gate::response_observation_v2::custody::staging::wire;
-use serverware_decision_gate::response_observation_v2::state_authority::{canonical,lifecycle,rpc};
+use serverware_decision_gate::native_response_gate::{staging as wire, state_receipt};
 fn invalid()->ResponseObservationV2TransactionError{ResponseObservationV2TransactionError::InvalidResponse}
 fn same<T:Serialize>(left:&T,right:&T)->Result<bool,ResponseObservationV2TransactionError>{
     Ok(profile::canonical(left).map_err(|_|invalid())?==profile::canonical(right).map_err(|_|invalid())?)
@@ -41,20 +40,20 @@ pub(super) fn execute(state:&GateState,snapshot:&Arc<Snapshot>,decision:&Value,s
     for (index,value) in terminal.body.state_originals.iter().enumerate(){
         let frame=&value.frame.request;let result=&value.result.body;
         let (operation,from,to)=match (request,index){
-            (V2OperationRequest::Reserve{..},0)=>(lifecycle::OperationKind::AttemptReserve,lifecycle::AttemptState::Absent,lifecycle::AttemptState::Reserved),
-            (V2OperationRequest::Authority{..},0)=>(lifecycle::OperationKind::AttemptAuthorize,lifecycle::AttemptState::Reserved,lifecycle::AttemptState::Authorized),
-            (V2OperationRequest::Stage{..},0)=>(lifecycle::OperationKind::ObjectCommitRaw,lifecycle::AttemptState::Authorized,lifecycle::AttemptState::Authorized),
-            (V2OperationRequest::Stage{..},1)=>(lifecycle::OperationKind::AttemptStage,lifecycle::AttemptState::Authorized,lifecycle::AttemptState::Staged),
+            (V2OperationRequest::Reserve{..},0)=>(state_receipt::OperationKind::AttemptReserve,state_receipt::AttemptState::Absent,state_receipt::AttemptState::Reserved),
+            (V2OperationRequest::Authority{..},0)=>(state_receipt::OperationKind::AttemptAuthorize,state_receipt::AttemptState::Reserved,state_receipt::AttemptState::Authorized),
+            (V2OperationRequest::Stage{..},0)=>(state_receipt::OperationKind::ObjectCommitRaw,state_receipt::AttemptState::Authorized,state_receipt::AttemptState::Authorized),
+            (V2OperationRequest::Stage{..},1)=>(state_receipt::OperationKind::AttemptStage,state_receipt::AttemptState::Authorized,state_receipt::AttemptState::Staged),
             _=>return Err(invalid()),};
         let expected_revision=binding.attempt_revision.checked_add(index as u64).ok_or_else(invalid)?;
         let expected_request=if stage&&index==0 {format!("staged-put:{}",&terminal.original_sha256[7..])}
             else {binding.request_id.clone()};
-        if value.exact_request_sha256!=canonical::sha256_digest(&canonical::canonical_jcs_bytes(&value.frame).map_err(|_|invalid())?).0
-            ||value.exact_result_sha256!=canonical::sha256_digest(&canonical::canonical_jcs_bytes(&value.result).map_err(|_|invalid())?).0
+        if value.exact_request_sha256!=state_receipt::sha256_digest(&state_receipt::canonical_jcs_bytes(&value.frame).map_err(|_|invalid())?).0
+            ||value.exact_result_sha256!=state_receipt::sha256_digest(&state_receipt::canonical_jcs_bytes(&value.result).map_err(|_|invalid())?).0
             ||frame.generation_id.0!=session.client.generation_id||frame.attempt_id.0!=binding.attempt_id||frame.request_id.0!=expected_request
             ||frame.operation!=operation||frame.expected_state!=from||frame.expected_revision!=expected_revision
             ||frame.deadline.clock!="CLOCK_BOOTTIME"||frame.deadline.deadline_boot_millis.checked_mul(1_000_000)!=Some(deadline)
-            ||result.disposition!=rpc::ResultDisposition::Applied||result.operation!=operation||result.authoritative_state!=to
+            ||result.disposition!=state_receipt::ResultDisposition::Applied||result.operation!=operation||result.authoritative_state!=to
             ||result.generation_id!=frame.generation_id||result.attempt_id!=frame.attempt_id||result.request_id!=frame.request_id
             ||result.operation_id!=frame.operation_id||result.exact_request_sha256.0!=value.exact_request_sha256
             ||result.authoritative_revision!=expected_revision.checked_add(1).ok_or_else(invalid)?||result.stable_resume_id.0!=stable_resume_id
@@ -78,14 +77,14 @@ pub(super) fn execute(state:&GateState,snapshot:&Arc<Snapshot>,decision:&Value,s
                 ||value.staged_request.retrieval_id!=params.credential_free_request.object_id
                 ||value.staged_request.object_sha256!=params.credential_free_request.sha256
                 ||value.staged_request.byte_length!=params.credential_free_request.byte_length{return Err(invalid());}
-            let rpc::MutationPayload::Stage(selection)=&terminal.body.state_originals[1].frame.request.payload else{return Err(invalid());};
+            let state_receipt::MutationPayload::Stage(selection)=&terminal.body.state_originals[1].frame.request.payload else{return Err(invalid());};
             if selection.staged_request_object.object_id.0!=value.staged_request.retrieval_id
                 ||selection.staged_request_object.content_sha256.0!=value.staged_request.object_sha256
                 ||selection.staged_request_object.content_length!=value.staged_request.byte_length
                 ||Some(selection.credential_binding_sha256.0.as_str())!=binding.transaction.credential_binding_sha256.as_deref(){return Err(invalid());}
             (&value.attempt,&value.staging_evidence)
         },_=>return Err(invalid()),};
-    let expected_evidence=canonical::sha256_digest(&canonical::canonical_jcs_bytes(&terminal.body.state_originals).map_err(|_|invalid())?).0;
+    let expected_evidence=state_receipt::sha256_digest(&state_receipt::canonical_jcs_bytes(&terminal.body.state_originals).map_err(|_|invalid())?).0;
     let expected_state=match request{V2OperationRequest::Reserve{..}=>V2AttemptState::Reserved,
         V2OperationRequest::Authority{..}=>V2AttemptState::AuthorityReady,_=>V2AttemptState::Staged};
     if evidence.evidence_sha256!=expected_evidence||attempt.attempt_id!=binding.attempt_id||attempt.state!=expected_state

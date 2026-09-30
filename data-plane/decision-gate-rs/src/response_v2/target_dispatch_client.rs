@@ -1,8 +1,8 @@
 //! One retained authenticated session, no target-contact retry or reopen path.
 use super::*;
 use serverware_decision_gate::native_target_dispatch_v1 as profile;
-use serverware_decision_gate::response_observation_v2::custody::target_dispatch::wire;
-use serverware_decision_gate::response_observation_v2::state_authority::{canonical,lifecycle,rpc};
+use serverware_decision_gate::native_response_gate::{state_receipt, target_dispatch as wire};
+use serverware_decision_gate::{CustodyServiceRole, ServiceOperationV1};
 use base64::{engine::general_purpose::STANDARD,Engine as _};
 
 fn invalid()->ResponseObservationV2TransactionError {ResponseObservationV2TransactionError::InvalidResponse}
@@ -79,9 +79,9 @@ pub(super) fn scope(client:&ResponseObservationV2Client,value:&serverware_decisi
     }
     Ok(())
 }
-fn receipt(client:&ResponseObservationV2Client,value:&wire::SignedStateMutationReceiptV1,frame:&rpc::RpcRequestFrame,
+fn receipt(client:&ResponseObservationV2Client,value:&wire::SignedStateMutationReceiptV1,frame:&state_receipt::RpcRequestFrame,
     original:&wire::DispatchOriginal,revision:u64,state:&str)->Result<(),ResponseObservationV2TransactionError> {
-    let digest=canonical::sha256_digest(&canonical::canonical_jcs_bytes(frame).map_err(|_|invalid())?).0;
+    let digest=state_receipt::sha256_digest(&state_receipt::canonical_jcs_bytes(frame).map_err(|_|invalid())?).0;
     if value.api_version!="serverware.responseObservationV2StateMutationReceipt/v1"
         || value.generation_id!=client.generation_id || value.generation!=client.provider_generation
         || value.operation!=ServiceOperationV1::StateCas || value.signer_logical_role!="linearizable-store"
@@ -96,7 +96,7 @@ fn receipt(client:&ResponseObservationV2Client,value:&wire::SignedStateMutationR
     signed(client,"linearizable-store",&value.signer_key_id,wire::STATE_RECEIPT_DOMAIN,&unsigned,&value.signature)
 }
 fn observation(client:&ResponseObservationV2Client,value:&wire::SignedAttemptStateObservationV1,
-    original:&wire::DispatchOriginal,revision:u64,state:lifecycle::AttemptState)->Result<(),ResponseObservationV2TransactionError> {
+    original:&wire::DispatchOriginal,revision:u64,state:state_receipt::AttemptState)->Result<(),ResponseObservationV2TransactionError> {
     if value.api_version!="serverware.responseObservationV2AttemptStateObservation/v1"
         || !is_sha256_digest(&value.authoritative_state_sha256) || value.proof_material.is_some()
         || value.generation_id!=client.generation_id || value.generation!=client.provider_generation
@@ -141,13 +141,13 @@ impl ResponseObservationV2Session<'_> {
         verify_nested_authority_signature(self.client,&permit.credential_use,&FINAL_ARTIFACTS[1],&original.binding.attempt_id,
             original.binding.attempt_revision,original.binding.fencing_token,u64::try_from(now_epoch_ms()).map_err(|_|invalid())?)?;
         let frame=&permit.dispatch_request;
-        let rpc::MutationPayload::BeginDispatch(intent)=&frame.request.payload else {return Err(invalid());};
+        let state_receipt::MutationPayload::BeginDispatch(intent)=&frame.request.payload else {return Err(invalid());};
         let operation=format!("dispatch:{}",&profile::sha256(&profile::canonical(original).map_err(|_|invalid())?)[7..]);
         if frame.request.generation_id.0!=original.generation_id || frame.request.attempt_id.0!=original.binding.attempt_id
             || frame.request.operation_id.0!=operation || permit.credential_use.body.operation_id.0!=operation
             || permit.credential_use.body.artifact_id.0!=operation
             || frame.request.request_id.0!=original.binding.request_id || frame.request.expected_revision!=original.binding.attempt_revision
-            || frame.request.expected_state!=lifecycle::AttemptState::Staged || frame.request.operation!=lifecycle::OperationKind::DispatchBegin
+            || frame.request.expected_state!=state_receipt::AttemptState::Staged || frame.request.operation!=state_receipt::OperationKind::DispatchBegin
             || frame.request.fence.fence_token.as_ref().map(|v|v.0.as_str())!=Some(original.binding.fencing_token.to_string().as_str())
             || frame.request.deadline.deadline_boot_millis.checked_mul(1_000_000)!=self.monotonic_deadline.absolute_boottime_ns.parse().ok()
             || !same(&intent.request_object,&original.staged_request)? || !same(&intent.transport_authorization,&permit.credential_use)?
@@ -156,7 +156,7 @@ impl ResponseObservationV2Session<'_> {
         }
         let next=original.binding.attempt_revision.checked_add(1).ok_or_else(invalid)?;
         receipt(self.client,&permit.dispatch_receipt,frame,original,next,"DISPATCHING")?;
-        observation(self.client,&permit.post_state,original,next,lifecycle::AttemptState::Dispatching)?;
+        observation(self.client,&permit.post_state,original,next,state_receipt::AttemptState::Dispatching)?;
         Ok(AuthenticatedTargetDispatchReply {permit})
     }
     pub(super) fn persist_target_capture(&self,captured:&native_target_dispatch::Captured)
@@ -177,18 +177,18 @@ impl ResponseObservationV2Session<'_> {
             || completed.object.byte_length!=captured.request.raw_response.byte_length
             || completed.object.object_type!=ImmutableObjectType::UpstreamResponse
             || completed.outcome_request.request.expected_revision!=next-1
-            || completed.outcome_request.request.operation!=lifecycle::OperationKind::DispatchRecordOutcome {
+            || completed.outcome_request.request.operation!=state_receipt::OperationKind::DispatchRecordOutcome {
             return Err(invalid());
         }
-        let rpc::MutationPayload::RecordDispatchOutcome(outcome)=&completed.outcome_request.request.payload else {return Err(invalid());};
-        if outcome.outcome!=lifecycle::TargetEffectState::Observed || outcome.uncertainty_code.is_some()
+        let state_receipt::MutationPayload::RecordDispatchOutcome(outcome)=&completed.outcome_request.request.payload else {return Err(invalid());};
+        if outcome.outcome!=state_receipt::TargetEffectState::Observed || outcome.uncertainty_code.is_some()
             || outcome.response_object.as_ref().is_none_or(|raw|raw.content_sha256.0!=captured.request.raw_response.sha256
                 || raw.content_length!=captured.request.raw_response.byte_length || raw.object_id.0!=captured.request.raw_response.object_id)
             || !same(&outcome.transport_evidence,&completed.target_effect)? {return Err(invalid());}
         verify_nested_authority_signature(self.client,&completed.target_effect,&FINAL_ARTIFACTS[2],&original.binding.attempt_id,
             next-1,original.binding.fencing_token,u64::try_from(now_epoch_ms()).map_err(|_|invalid())?)?;
         receipt(self.client,&completed.outcome_receipt,&completed.outcome_request,original,next,"OBSERVED")?;
-        observation(self.client,&completed.post_state,original,next,lifecycle::AttemptState::Observed)?;
+        observation(self.client,&completed.post_state,original,next,state_receipt::AttemptState::Observed)?;
         Ok(completed)
     }
 }
@@ -203,7 +203,7 @@ pub(super) fn execute_native_capture(state:&GateState,snapshot:&Arc<Snapshot>,de
     stable_resume_id:&str,staged:&ImmutableObjectReference,staged_input:&ExactByteObjectDescriptor,
     staged_bytes:&[u8],shadow:Option<&policy_core::ShadowRequestHandle>,barrier_crossed:&mut bool)
     ->Result<(EvidenceReference,ImmutableObjectReference,ResponseSecretGuard,Option<CommittedNativeCapture>),ResponseObservationV2TransactionError> {
-    use serverware_decision_gate::response_observation_v2::state_authority::contract::{Digest,Identifier};
+    use serverware_decision_gate::native_response_gate::state_receipt::{Digest,Identifier};
     if staged.object_type!=ImmutableObjectType::StagedRequest || staged.object_sha256!=staged_input.sha256
         || staged.byte_length!=staged_input.byte_length || cursor.attempt.state!=V2AttemptState::Staged {
         return Err(invalid());
@@ -212,7 +212,7 @@ pub(super) fn execute_native_capture(state:&GateState,snapshot:&Arc<Snapshot>,de
     let binding=cursor.operation_binding(&request_id,&session.client.boot_id,&session.client.authenticated_client_identity_sha256);
     // The requested selection comes from our retained exact, credential-free
     // input. The role independently matches it to the actual signed Stage.
-    let staged_original=rpc::RawObjectReference {generation_id:Identifier(session.client.generation_id.clone()),
+    let staged_original=state_receipt::RawObjectReference {generation_id:Identifier(session.client.generation_id.clone()),
         object_id:Identifier(staged_input.object_id.clone()),object_kind:Identifier("staged-request".to_owned()),
         content_sha256:Digest(staged_input.sha256.clone()),content_length:staged_input.byte_length,media_type:"http11-request".to_owned()};
     let prepared=native_target_dispatch::Prepared::open(state,snapshot,decision,request,url,headers,injection,

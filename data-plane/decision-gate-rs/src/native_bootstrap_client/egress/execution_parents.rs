@@ -150,7 +150,7 @@ impl ExecutionParents {
         ensure(!self.stopped.replace(true), "native execution parents are permanently stopped")?;
         self.clock.check()?;
         ensure(self.authorization.execution_profile, "execution parent profile changed")?;
-        self.connection.check_egress_originals(&mut self.proof.try_borrow_mut()
+        self.connection.check_egress_originals(&mut *self.proof.try_borrow_mut()
             .map_err(|_| "execution parent proof already borrowed")?, &self.clock)?;
         self.host.try_borrow_mut().map_err(|_| "execution parent host already borrowed")?.check(&self.clock)?;
         self.launch.try_borrow_mut().map_err(|_| "execution launch already borrowed")?.check(&self.clock)?;

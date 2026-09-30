@@ -14,7 +14,7 @@ use ed25519_dalek::{Signer, SigningKey};
 use ring::{rand::SystemRandom, signature::{EcdsaKeyPair, KeyPair, ECDSA_P256_SHA256_ASN1_SIGNING}};
 use rustls::{pki_types::{CertificateDer, UnixTime}, server::WebPkiClientVerifier, RootCertStore};
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::sync::Arc;
 use zeroize::Zeroizing;
 

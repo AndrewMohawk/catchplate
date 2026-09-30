@@ -33,6 +33,12 @@ const MAX_EXPECTATIONS: usize = 16 * 1024;
 const MAX_ROOTS: usize = 1024 * 1024;
 const MAX_WORKLOAD_ISSUER: usize = 64 * 1024;
 
+// The shared strict parser calls its immediate owner's guard in both the
+// standalone proof client and the embedded native execution transport.
+fn ensure(condition: bool, message: &'static str) -> Result<(), String> {
+    if condition { Ok(()) } else { Err(message.to_owned()) }
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Configuration {

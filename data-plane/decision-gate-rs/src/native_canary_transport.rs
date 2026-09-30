@@ -4,6 +4,7 @@ use super::*;
 use serverware_decision_gate::{native_canary_evidence_v1 as wire,
     enclave_runtime_identity_v1::NativeCanaryHttpClient};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use ring::rand::{SecureRandom, SystemRandom};
 
 pub(super) struct Owner {
     client: NativeCanaryHttpClient, deployment: String, instance: String,

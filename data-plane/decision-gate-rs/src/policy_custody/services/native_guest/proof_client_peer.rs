@@ -9,6 +9,8 @@ use std::mem::{size_of,zeroed};
 use std::sync::Mutex;
 const API:&str="serverware.nativeShadowProofClientInspection/v1";
 const MAX_IPC:usize=4096;
+#[path="proof_client_facade.rs"]
+pub(in crate::policy_shadow::policy_custody::services) mod facade;
 #[derive(PartialEq,Eq)]
 struct Identity {dev:u64,ino:u64,mode:u32,uid:u32,gid:u32}
 fn stat(fd:BorrowedFd<'_>)->Result<Identity,ShadowError> {
@@ -76,6 +78,7 @@ struct InspectedEndpoint {
 pub(in crate::policy_shadow::policy_custody::services) struct Inspector {
     channel:OwnedFd,entries:BTreeMap<EndpointKind,InspectedEndpoint>,runtime_sha256:Sha256Digest,
     sequence:u64,pending:Option<(EndpointKind,Vec<u8>,u64,packet::Packet)>,
+    facade:Option<facade::Inspector>,
 }
 impl Inspector {
     pub(in crate::policy_shadow::policy_custody::services) fn prepare(files:&FileAdmission,
@@ -84,6 +87,14 @@ impl Inspector {
     }
     pub(in crate::policy_shadow::policy_custody::services) fn prepare_selected(files:&FileAdmission,
         activation:&BTreeMap<String,OwnedFd>,commitment:bool)->Result<(Self,OwnedFd),ShadowError> {
+        Self::prepare_inner(files,activation,commitment,false)
+    }
+    pub(in crate::policy_shadow::policy_custody::services) fn prepare_native_facade(files:&FileAdmission,
+        activation:&BTreeMap<String,OwnedFd>,commitment:bool)->Result<(Self,OwnedFd),ShadowError> {
+        Self::prepare_inner(files,activation,commitment,true)
+    }
+    fn prepare_inner(files:&FileAdmission,activation:&BTreeMap<String,OwnedFd>,commitment:bool,native_facade:bool)
+        ->Result<(Self,OwnedFd),ShadowError> {
         let selected=Selection::original(&files.retrieval_client_runtime().map_err(fail)?,commitment)?;
         let mut entries=BTreeMap::new();
         for (kind,endpoint) in &selected.entries {
@@ -100,12 +111,17 @@ impl Inspector {
         require(unsafe{libc::socketpair(libc::AF_UNIX,libc::SOCK_SEQPACKET|libc::SOCK_CLOEXEC,0,pair.as_mut_ptr())}==0)?;
         let (channel,child)=unsafe{(OwnedFd::from_raw_fd(pair[0]),OwnedFd::from_raw_fd(pair[1]))};
         packet::configure(channel.as_fd())?;packet::configure(child.as_fd())?;
-        Ok((Self{channel,entries,runtime_sha256:selected.runtime_sha256,sequence:0,pending:None},child))
+        let native_names=selected.entries.values().map(|v|v.activation_fd_name.clone()).collect();
+        let facade=if native_facade {Some(facade::Inspector::prepare(files,activation,&native_names)?)} else {None};
+        Ok((Self{channel,entries,runtime_sha256:selected.runtime_sha256,sequence:0,pending:None,facade},child))
     }
     pub(in crate::policy_shadow::policy_custody::services) fn progress(&mut self,
         child:&super::super::parent::child::Child,files:&FileAdmission)->Result<(),ShadowError> {
         files.check().map_err(fail)?;require(files.runtime_sha256()==&self.runtime_sha256)?;
         for entry in self.entries.values() {require(entry.directory.path_originals()?==entry.paths)?;}
+        if let Some(facade)=self.facade.as_mut() {
+            if facade.progress(self.channel.as_fd(),child,files)? {return Ok(());}
+        }
         if let Some((kind,bytes,deadline,original))=&self.pending {
             child.require_inspection_sender(original,files.payload.uid,files.payload.gid)?;
             self.entries.get(kind).and_then(|v|v.peer.as_ref()).ok_or(ShadowError::BindingDrift)?
@@ -116,6 +132,16 @@ impl Inspector {
         }
         let Some(original)=packet::receive(self.channel.as_fd(),MAX_IPC,1)? else {return Ok(());};
         child.require_inspection_sender(&original,files.payload.uid,files.payload.gid)?;
+        let header:serde_json::Value=exact(&original.bytes)?;
+        if header.get("apiVersion").and_then(|v|v.as_str()).is_some_and(facade::is_api) {
+            require(self.pending.is_none())?;
+            let facade=self.facade.as_mut().ok_or(ShadowError::BindingDrift)?;
+            let sequence=self.sequence.checked_add(1).ok_or(ShadowError::CounterOverflow)?;
+            facade.receive(original,sequence,child,files)?;
+            self.sequence=sequence;
+            facade.progress(self.channel.as_fd(),child,files)?;
+            return Ok(());
+        }
         let request:Request=exact(&original.bytes)?;let deadline=decimal(&request.deadline_boottime_ns)?;
         let entry=self.entries.get_mut(&request.endpoint).ok_or(ShadowError::BindingDrift)?;
         require(request.api_version==API && request.sequence==self.sequence.checked_add(1).ok_or(ShadowError::CounterOverflow)?

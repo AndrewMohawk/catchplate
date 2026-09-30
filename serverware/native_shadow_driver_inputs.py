@@ -79,6 +79,7 @@ class OperationalInputs:
         self._driver, self._files, self._activation = driver, [], []
         self._descriptors = {}
         self._begun = self._closed = False
+        self._outgoing = None
 
     def _public(self, name, pin, maximum):
         pin = _pin(pin)
@@ -90,16 +91,44 @@ class OperationalInputs:
 
     @classmethod
     def prepare(cls, driver, *, launch_pin, activation_fds, production):
+        # Original direct inventory caller remains unchanged and does not
+        # silently select the new resource creator or spool bridge purpose.
+        return cls._prepare(driver, launch_pin=launch_pin, activation_fds=activation_fds,
+            production=production, outgoing=None)
+
+    @classmethod
+    def prepare_outgoing(cls, driver, *, outgoing, launch_pin, activation_fds, production):
+        """Join real allocated sockets/directories to the independently signed C9.
+
+        activation_fds contains only the other actual native/business resources;
+        it cannot replace or select this owner's fixed outgoing inventory.
+        """
+        from serverware.native_shadow_driver_outgoing import OutgoingResources
+        p.require(cls is OperationalInputs and type(outgoing) is OutgoingResources
+            and outgoing._driver is driver and type(activation_fds) is dict)
+        outgoing.check()
+        p.require(not outgoing._begun and outgoing._inputs is None
+            and not set(activation_fds).intersection(outgoing._descriptors))
+        combined = dict(activation_fds)
+        combined.update(outgoing._descriptors)
+        return cls._prepare(driver, launch_pin=launch_pin, activation_fds=combined,
+            production=production, outgoing=outgoing)
+
+    @classmethod
+    def _prepare(cls, driver, *, launch_pin, activation_fds, production, outgoing):
         p.require(type(driver) is bootstrap.DriverBootstrap)
         driver.check()
-        p.require(driver._config["apiVersion"] in ("serverware.nativeShadowDriverBootstrapConfiguration/v2", "serverware.nativeShadowDriverBootstrapConfiguration/v3")
+        p.require(driver._config["apiVersion"] in ("serverware.nativeShadowDriverBootstrapConfiguration/v2", "serverware.nativeShadowDriverBootstrapConfiguration/v3", "serverware.nativeShadowDriverBootstrapConfiguration/v4")
             and not driver._attempted and not hasattr(driver, "_prepared_inputs"))
         owner = cls(_TOKEN, driver)
+        owner._outgoing = outgoing
         driver._prepared_inputs = owner  # no second preparation/reset for this bootstrap
         try:
             launch = p.fields(p.document(owner._public("launch", launch_pin, 32768), 32768),
                 ("apiVersion", "keyAdmission", "trustedTime"))
-            p.require(launch["apiVersion"] in ("serverware.nativeProofBridgeLaunch/v1", "serverware.nativeProofBridgeLaunch/v2"))
+            allowed = ("serverware.nativeProofBridgeLaunch/v1", "serverware.nativeProofBridgeLaunch/v2")
+            p.require(launch["apiVersion"] in allowed
+                or (outgoing is not None and launch["apiVersion"] == "serverware.nativeProofBridgeLaunch/v3"))
             inner = p.fields(launch["keyAdmission"], ("apiVersion", "deliveryConfiguration", "delivery", "trust", "timeBootstrap",
                 "assignment", "closure", "keys", "encryptedKeys", "admission", "verifierTransport"))
             p.require(inner["apiVersion"] == "serverware.nativeShadowGuestLaunch/v1"
@@ -120,6 +149,15 @@ class OperationalInputs:
                     "startupDeadlineBoottimeNs", "lifetimeDeadlineBoottimeNs", "invocationId"):
                 p.require(payload[name] == driver._window[name])
             owner._runtime_raw = owner._public("c9-runtime", payload["runtimeConfig"], 65536)
+            if outgoing is not None:
+                outgoing._associate(owner, driver, owner._runtime_raw, launch, payload)
+            if driver._config["apiVersion"] == "serverware.nativeShadowDriverBootstrapConfiguration/v4":
+                p.require(driver._gate_binding is not None)
+                gate = driver._gate_binding["binding"]
+                expected = p.document(owner._runtime_raw, 65536)["expectedFacadePeer"]
+                p.require((expected["pid"], expected["startTimeTicks"], expected["uid"], expected["gid"])
+                    == (gate["gateProcessId"], gate["gateStartTimeTicks"], gate["uid"], gate["gid"])
+                    and expected["executableSha256"] == driver._gate_binding["gateExecutableSha256"])
             for name, field, bound in (("trust", "trust", 1024 * 1024), ("time", "timeBootstrap", 65536),
                     ("assignment", "assignment", 4 * 1024 * 1024), ("closure", "closure", 1024 * 1024),
                     ("keys", "keys", 65536), ("encrypted", "encryptedKeys", 65536), ("admission", "admission", 65536),
@@ -174,6 +212,8 @@ class OperationalInputs:
         self._driver._origin()  # never recursively calls DriverBootstrap.check
         for original in self._files:
             original.check()
+        if self._outgoing is not None:
+            self._outgoing.check()
         p.require([_record(name, fd) for name, fd in sorted(self._descriptors.items())] == self._records)
 
     def operation_original(self):
@@ -182,6 +222,8 @@ class OperationalInputs:
 
     def _begin(self, driver):
         self.check(); p.require(driver is self._driver and not self._begun)
+        if self._outgoing is not None:
+            self._outgoing._begin(self)
         self._begun = True
         return tuple(fd for _, fd in sorted(self._descriptors.items()))
 
@@ -200,4 +242,10 @@ class OperationalInputs:
             os.close(fd)
         for original in reversed(self._files):
             original.close()
+        if self._outgoing is not None:
+            if self._outgoing._inputs is self:
+                self._outgoing._close_after_exit(self)
+            else:
+                p.require(not self._outgoing._begun and self._outgoing._inputs is None)
+                self._outgoing._close()
         self._closed = True

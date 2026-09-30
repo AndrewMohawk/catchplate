@@ -50,6 +50,7 @@ pub(crate) use facade::{
 };
 
 pub(crate) use services::{
+    PreparedNativeCustodyLifecycle,NativeCustodyLifecycleOwner,
     run_bounded_cleanup_helper_from_env,
     run_cleanup_authorization_consumer_from_env,
     run_current_signature_authority_from_env,

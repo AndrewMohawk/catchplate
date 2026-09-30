@@ -97,6 +97,7 @@ pub(crate) fn run_native_shadow_proof_cohort()->! {
 
 #[cfg(target_os = "linux")]
 pub(crate) use policy_custody::{
+    PreparedNativeCustodyLifecycle,NativeCustodyLifecycleOwner,
     PreparedGuestServiceDelivery,
     install_policy_shadow_custody_generation_from_retained_file,
     run_bounded_cleanup_helper_from_env,

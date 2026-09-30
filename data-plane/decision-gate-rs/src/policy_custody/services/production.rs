@@ -8,7 +8,7 @@
 
 use super::common::{
     decode_canonical_frame, encode_canonical_frame,
-    perform_client_handshake, AuthenticatedInheritedSeqpacket,
+    perform_authenticated_client_handshake, AuthenticatedInheritedSeqpacket,
     DurableAppendJournal, ExpectedPeerCredentials,
     ServiceHandshakeRequestV3, TrustedHostServiceRoleV3,
     MAX_SERVICE_FRAME_BYTES, validate_exact_peer_path,
@@ -311,6 +311,25 @@ pub(super) struct ProductionRpcRuntimeConfigV4 {
 }
 
 impl ProductionRpcRuntimeConfigV4 {
+    pub(super) fn native_facade_selection(&self)->Result<(PathBuf,ExpectedPeerCredentials),ServiceRunnerError> {
+        self.validate()?;
+        Ok((self.listener_socket_path.clone(),self.expected_facade_peer.checked()?))
+    }
+    pub(super) fn native_outgoing_selections(&self)->Result<Vec<(String,PathBuf,ExpectedPeerCredentials)>,ServiceRunnerError> {
+        self.validate()?;
+        let mut selected=Vec::with_capacity(15);
+        for entry in &self.service_sessions {
+            selected.push((entry.activation_fd_name.clone(),entry.expected_socket_path.clone(),entry.expected_peer.checked()?));
+        }
+        for entry in &self.parent_signer_endpoints {
+            selected.push((entry.activation_fd_name.clone(),entry.expected_socket_path.clone(),entry.expected_peer.checked()?));
+        }
+        selected.sort_by(|a,b|a.0.cmp(&b.0));
+        if selected.windows(2).any(|pair|pair[0].0==pair[1].0) {
+            return Err(ServiceRunnerError::invalid("native bridge outgoing activation is duplicated"));
+        }
+        Ok(selected)
+    }
     pub(super) fn validate(&self) -> Result<(), ServiceRunnerError> {
         let expected_roles = BTreeSet::from([
             TrustedHostServiceRoleV3::DurableRecoveryStore,
@@ -2414,10 +2433,10 @@ fn run_production_rpc_service_loaded_inner(
     } else {None};
 
     let native_proof_owner=inspected_proofs.as_ref().map(|(_,v)|Arc::clone(v));
-    let (mut native_proofs,mut native_commitment)=if let Some((prepared,owner))=inspected_proofs.take() {
+    let (mut native_proofs,mut native_commitment,mut native_facade)=if let Some((prepared,owner))=inspected_proofs.take() {
         prepared.attach(&mut activation,&loaded.value,owner)
             .map_err(|_|ServiceRunnerError::invalid("native proof endpoint construction refused"))?
-    } else {(BTreeMap::new(),None)};
+    } else {(BTreeMap::new(),None,None)};
     if loaded.value.commit_request.is_some()!=native_commitment.is_some() {
         return Err(ServiceRunnerError::invalid("CommitRequest requires its actual inspected native endpoint owner"));
     }
@@ -2439,6 +2458,10 @@ fn run_production_rpc_service_loaded_inner(
         PRODUCTION_RPC_JOURNAL_FD_NAME,
         &loaded.value.journal_directory_identity,
     )?;
+    if let Some(acceptor)=native_facade.as_ref() {
+        acceptor.listen(listener.as_fd())
+            .map_err(|_|ServiceRunnerError::invalid("native final-role facade listen refused"))?;
+    }
 
     let mut service_sessions = BTreeMap::new();
     let mut handshakes = Vec::new();
@@ -2448,6 +2471,12 @@ fn run_production_rpc_service_loaded_inner(
             &configured.activation_fd_name,
         )?;
         let expected_peer = configured.expected_peer.checked()?;
+        let authenticated = if let Some(acceptor)=native_facade.as_mut() {
+            acceptor.outgoing(&configured.activation_fd_name,socket)
+                .map_err(|_|ServiceRunnerError::invalid("native ordinary service connection refused"))?
+        } else {
+            AuthenticatedInheritedSeqpacket::from_inherited(socket,expected_peer)?
+        };
         for configured_handshake in &configured.handshakes {
             if configured_handshake
                     .request
@@ -2459,13 +2488,12 @@ fn run_production_rpc_service_loaded_inner(
                     "production service handshake exceeds the startup deadline",
                 ));
             }
-            let reply = perform_client_handshake(
-                socket.as_fd(),
+            let reply = perform_authenticated_client_handshake(
+                &authenticated,
                 &configured_handshake.request,
                 configured.service_role,
                 configured_handshake.endpoint_role,
                 &configured.expected_socket_path,
-                expected_peer.clone(),
                 configured_handshake.request.request_rights_count,
                 configured_handshake.request.reply_rights_count,
             )?;
@@ -2475,10 +2503,6 @@ fn run_production_rpc_service_loaded_inner(
                 reply,
             });
         }
-        let authenticated = AuthenticatedInheritedSeqpacket::from_inherited(
-            socket,
-            expected_peer,
-        )?;
         if service_sessions
             .insert(configured.service_role, authenticated)
             .is_some()
@@ -2539,7 +2563,14 @@ fn run_production_rpc_service_loaded_inner(
             &mut activation,
             &configured.activation_fd_name,
         )?;
-        parent_signer_endpoints.push(load_pinned_endpoint(
+        let endpoint=if let Some(acceptor)=native_facade.as_mut() {
+            let session=acceptor.outgoing(&configured.activation_fd_name,socket)
+                .map_err(|_|ServiceRunnerError::invalid("native ordinary authority connection refused"))?;
+            load_pinned_endpoint_session(
+                ProductionAuthorityEndpointIdentityV4::ParentSigner(configured.signer_role),
+                EndpointSession::Host(session),&configured.authority_binding_credential,
+                configured.authority_key_id.clone(),configured.authority_key_spki_sha256.clone(),&loaded.credentials)?
+        } else {load_pinned_endpoint(
             ProductionAuthorityEndpointIdentityV4::ParentSigner(
                 configured.signer_role,
             ),
@@ -2550,7 +2581,8 @@ fn run_production_rpc_service_loaded_inner(
             configured.authority_key_id.clone(),
             configured.authority_key_spki_sha256.clone(),
             &loaded.credentials,
-        )?);
+        )?};
+        parent_signer_endpoints.push(endpoint);
     }
     let mut proof_endpoints = BTreeMap::new();
     for configured in &loaded.value.proof_endpoints {
@@ -2588,6 +2620,10 @@ fn run_production_rpc_service_loaded_inner(
             ));
         }
     }
+    if let Some(acceptor)=native_facade.as_ref() {
+        acceptor.require_outgoing_complete()
+            .map_err(|_|ServiceRunnerError::invalid("native ordinary endpoint owner remained unconsumed"))?;
+    }
     if !activation.is_empty() {
         return Err(ServiceRunnerError::invalid(
             "production RPC retained an unexpected activation descriptor",
@@ -2622,15 +2658,17 @@ fn run_production_rpc_service_loaded_inner(
         PRODUCTION_RPC_SESSION_COUNT,
     );
     for _ in 0..PRODUCTION_RPC_SESSION_COUNT {
-        let connection = super::accept_authenticated_peer(
-            listener.as_fd(),
-            &facade_peer,
-            startup_deadline,
-        )?;
-        facade_sessions.push(authenticate_production_rpc_session(
-            connection,
-            facade_peer.clone(),
-        )?);
+        if let Some(acceptor)=native_facade.as_mut() {
+            // The actual final-role bridge cannot inspect a nondumpable peer's
+            // executable after drop. Its retained root parent performs every
+            // original check on this exact accepted socket instead.
+            let connection=super::accept_peer(listener.as_fd(),startup_deadline)?;
+            facade_sessions.push(acceptor.authenticate(connection)
+                .map_err(|_|ServiceRunnerError::invalid("native facade peer inspection refused"))?);
+        } else {
+            let connection = super::accept_authenticated_peer(listener.as_fd(), &facade_peer, startup_deadline)?;
+            facade_sessions.push(authenticate_production_rpc_session(connection, facade_peer.clone())?);
+        }
     }
     drop(listener);
     bootstrap.ready_status(

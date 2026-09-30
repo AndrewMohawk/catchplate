@@ -59,11 +59,15 @@ class DriverBootstrap:
     def __init__(self, token):
         p.require(token is _TOKEN)
         self._originals = []
-        self._socket = self._pidfd = self._driver_pidfd = self._exec = self._bundle = None
+        self._socket = self._pidfd = self._driver_pidfd = self._exec = self._bundle = self._gate_pidfd = None
         self._child_pid = None
         self._closed = self._attempted = False
         self._constructed = False
         self._operational_inputs = None
+        self._gate_binding = None
+        self._gate_attempted = False
+        self._cleanup_attempted = False
+        self._subtree_terminal_original = None
 
     def _open(self, path, maximum, digest=None, mode=0o400):
         original = mechanics._Original(path, maximum, digest, mode)
@@ -84,13 +88,21 @@ class DriverBootstrap:
             config_raw = owner._open(CONFIGURATION, 65536, control["configurationSha256"]).raw
             config = p.document(config_raw, 65536)
             fields = ("apiVersion", "bootstrapAuthority", "phaseTwoAuthority", "deliveryConfiguration", "uid", "gid", "image")
-            if config.get("apiVersion") in ("serverware.nativeShadowDriverBootstrapConfiguration/v2", "serverware.nativeShadowDriverBootstrapConfiguration/v3"):
+            if config.get("apiVersion") in ("serverware.nativeShadowDriverBootstrapConfiguration/v2", "serverware.nativeShadowDriverBootstrapConfiguration/v3", "serverware.nativeShadowDriverBootstrapConfiguration/v4"):
                 fields += ("continuation",)
                 continuation = p.fields(config["continuation"], ("apiVersion", "keyTransport"))
-                expected = ("serverware.nativeShadowDriverContinuationPreparation/v2"
-                    if config["apiVersion"] == "serverware.nativeShadowDriverBootstrapConfiguration/v3"
-                    else "serverware.nativeShadowDriverContinuationPreparation/v1")
+                expected = {"serverware.nativeShadowDriverBootstrapConfiguration/v2": "serverware.nativeShadowDriverContinuationPreparation/v1",
+                    "serverware.nativeShadowDriverBootstrapConfiguration/v3": "serverware.nativeShadowDriverContinuationPreparation/v2",
+                    "serverware.nativeShadowDriverBootstrapConfiguration/v4": "serverware.nativeShadowDriverContinuationPreparation/v3"}[config["apiVersion"]]
                 p.require(continuation["apiVersion"] == expected)
+                if config["apiVersion"] == "serverware.nativeShadowDriverBootstrapConfiguration/v4":
+                    fields += ("lifecycle",)
+                    policy = p.fields(config["lifecycle"], ("apiVersion", "gate", "cleanupReserveNanos"))
+                    gate = p.fields(policy["gate"], ("uid", "gid", "executableSha256"))
+                    p.require(policy["apiVersion"] == "serverware.nativeShadowDriverLifecyclePolicy/v1"
+                        and p.integer(gate["uid"]) == 65534 and p.integer(gate["gid"]) == 65534
+                        and 1_000_000 <= p.integer(policy["cleanupReserveNanos"]) <= 5_000_000_000)
+                    p.digest(gate["executableSha256"])
             else:
                 p.require(config.get("apiVersion") == "serverware.nativeShadowDriverBootstrapConfiguration/v1")
             owner._config = p.fields(config, fields)
@@ -109,6 +121,8 @@ class DriverBootstrap:
                 and (window["bootIdBase64url"], window["timeNamespaceDevice"], window["timeNamespaceInode"]) == owner._boot)
             owner._window = window
             owner._startup, owner._lifetime = p.ns(window["startupDeadlineBoottimeNs"]), p.ns(window["lifetimeDeadlineBoottimeNs"])
+            if "lifecycle" in owner._config:
+                p.require(owner._startup < owner._lifetime - owner._config["lifecycle"]["cleanupReserveNanos"])
             issued = p.ns(window["issuedAtBoottimeNs"])
             p.require(issued <= mechanics._clock() < owner._startup <= owner._lifetime
                 and owner._startup - issued <= 30_000_000_000 and p.sha(window_raw) not in _USED and len(_USED) < 1024)
@@ -198,6 +212,11 @@ class DriverBootstrap:
                 and mechanics._process(self._driver_pid) == (self._child_pid, self._driver_start))
         if self._operational_inputs is not None:
             self._operational_inputs.check()
+        if self._gate_binding is not None:
+            gate = self._gate_binding["binding"]
+            p.require(not mechanics._terminal(self._gate_pidfd)
+                and mechanics._pidfd_pid(self._gate_pidfd) == gate["gateProcessId"]
+                and mechanics._process(gate["gateProcessId"])[1] == gate["gateStartTimeTicks"])
 
     def _receive(self, maximum):
         while True:
@@ -233,6 +252,39 @@ class DriverBootstrap:
     def observation_original(self):
         self.check()
         return bytes(self._observation_raw)
+
+    def await_gate_binding(self):
+        """One actual post-drop gate observation for independent phase-two signing.
+
+        This does not supply cgroup, label, IMA, readiness, or a generation grant.
+        The gate waits on its original startup deadline until phase two arrives.
+        """
+        self.check()
+        p.require(self._config["apiVersion"] == "serverware.nativeShadowDriverBootstrapConfiguration/v4"
+            and not self._gate_attempted and not self._attempted)
+        self._gate_attempted = True
+        raw = self._receive(8192)
+        notice = p.fields(p.document(raw, 8192), ("apiVersion", "configurationSha256", "windowSha256",
+            "bootstrapObservationSha256", "gateExecutableSha256", "binding"))
+        binding = p.fields(notice["binding"], ("apiVersion", "preparedSha256", "gateProcessId", "gateStartTimeTicks",
+            "uid", "gid", "observedAtBoottimeNs"))
+        gate = self._config["lifecycle"]["gate"]
+        p.require(notice["apiVersion"] == "serverware.nativeShadowDriverGateBound/v1"
+            and notice["configurationSha256"] == self._config_sha and notice["windowSha256"] == self._window_sha
+            and notice["bootstrapObservationSha256"] == p.sha(self._observation_raw)
+            and notice["gateExecutableSha256"] == gate["executableSha256"]
+            and binding["apiVersion"] == "serverware.nativeShadowDriverLifecycleBound/v1"
+            and (binding["uid"], binding["gid"]) == (gate["uid"], gate["gid"])
+            and p.ns(binding["observedAtBoottimeNs"]) <= mechanics._clock() < self._startup)
+        p.digest(binding["preparedSha256"])
+        pid = p.integer(binding["gateProcessId"]); start = p.integer(binding["gateStartTimeTicks"])
+        p.require(pid > 1 and start > 0)
+        self._gate_pidfd = os.pidfd_open(pid, 0)
+        p.require(mechanics._pidfd_pid(self._gate_pidfd) == pid and not mechanics._terminal(self._gate_pidfd)
+            and mechanics._process(pid)[1] == start)
+        self._gate_binding = notice
+        self.check()
+        return bytes(raw)
 
     def retain_scope(self, *, signed_scope_original, public_originals):
         """One signed-public-original handoff, not permission to operate/retry."""
@@ -278,16 +330,18 @@ class DriverBootstrap:
         from serverware.native_shadow_driver_inputs import OperationalInputs
         self.check()
         p.require(type(inputs) is OperationalInputs and inputs._driver is self
-            and self._config["apiVersion"] in ("serverware.nativeShadowDriverBootstrapConfiguration/v2", "serverware.nativeShadowDriverBootstrapConfiguration/v3")
+            and self._config["apiVersion"] in ("serverware.nativeShadowDriverBootstrapConfiguration/v2", "serverware.nativeShadowDriverBootstrapConfiguration/v3", "serverware.nativeShadowDriverBootstrapConfiguration/v4")
             and not self._attempted and type(signed_scope_original) is bytes and type(public_originals) is bytes)
         inputs.check()
         signed = p.fields(p.document(signed_scope_original, 32768), ("payload", "signatureBase64url"))
         scope = p.fields(signed["payload"], ("apiVersion", "configurationSha256", "windowSha256", "observationSha256",
             "kernelDriverIdentitySha256", "invocationId", "startupDeadlineBoottimeNs", "lifetimeDeadlineBoottimeNs",
             "originals", "publicBundleSha256", "signingKeyId", "operation"))
-        combined = self._config["apiVersion"] == "serverware.nativeShadowDriverBootstrapConfiguration/v3"
-        domain = b"serverware.nativeShadowDriverScope.signature/v3\0" if combined else b"serverware.nativeShadowDriverScope.signature/v2\0"
-        version = "serverware.nativeShadowDriverScope/v3" if combined else "serverware.nativeShadowDriverScope/v2"
+        suffix = self._config["apiVersion"].rsplit("/", 1)[1]
+        if suffix == "v4":
+            p.require(self._gate_binding is not None)
+        domain = ("serverware.nativeShadowDriverScope.signature/" + suffix).encode("ascii") + b"\0"
+        version = "serverware.nativeShadowDriverScope/" + suffix
         self._phase_key.verify(p.decoded(signed["signatureBase64url"], size=64), domain + p.canonical(scope))
         p.require(scope["apiVersion"] == version
             and scope["configurationSha256"] == self._config_sha and scope["windowSha256"] == self._window_sha
@@ -324,10 +378,89 @@ class DriverBootstrap:
         self.check()
         return copy.deepcopy(expected)
 
+    def _receive_subtree_terminal(self):
+        """One parent-authenticated waitid observation, never a settlement grant."""
+        while True:
+            self._origin()
+            remaining = self._lifetime - mechanics._clock(); p.require(remaining > 0)
+            if select.select([self._socket], [], [], min(remaining / 1_000_000_000, 0.05))[0]:
+                break
+        raw, ancillary, flags, _ = self._socket.recvmsg(65536,
+            socket.CMSG_SPACE(12) + socket.CMSG_SPACE(4), socket.MSG_CMSG_CLOEXEC)
+        credentials, pidfds = [], []
+        try:
+            for level, kind, value in ancillary:
+                p.require(level == socket.SOL_SOCKET)
+                if kind == socket.SCM_CREDENTIALS:
+                    p.require(len(value) == 12); credentials.append(struct.unpack("3i", value))
+                elif kind == 4:
+                    p.require(len(value) == 4); pidfds.append(struct.unpack("i", value)[0])
+                elif kind == socket.SCM_RIGHTS:
+                    received = array.array("i"); received.frombytes(value)
+                    for fd in received:
+                        os.close(fd)
+                    raise ValueError("lifecycle terminal original cannot carry descriptors")
+                else:
+                    raise ValueError("unknown lifecycle terminal ancillary data")
+            p.require(raw and not flags & (socket.MSG_TRUNC | socket.MSG_CTRUNC)
+                and credentials == [(self._child_pid, 0, 0)] and len(pidfds) == 1)
+            # The parent can exit after sending. Match the retained kernel
+            # PIDFD object rather than inventing a live proc identity then.
+            actual, retained = os.fstat(pidfds[0]), os.fstat(self._pidfd)
+            p.require((actual.st_dev, actual.st_ino) == (retained.st_dev, retained.st_ino))
+            value = p.fields(p.document(raw, 65536), ("apiVersion", "configurationSha256", "windowSha256",
+                "parent", "driver", "adopted", "completedAtBoottimeNs", "lifetimeDeadlineBoottimeNs"))
+            p.require(value["apiVersion"] == "serverware.nativeShadowDriverSubtreeReaped/v1"
+                and value["configurationSha256"] == self._config_sha and value["windowSha256"] == self._window_sha
+                and value["lifetimeDeadlineBoottimeNs"] == self._window["lifetimeDeadlineBoottimeNs"]
+                and p.ns(value["completedAtBoottimeNs"]) <= mechanics._clock() < self._lifetime)
+            parent = p.fields(value["parent"], ("processId", "startTimeTicks", "parentId", "pidfdDevice", "pidfdInode"))
+            p.require((parent["processId"], parent["startTimeTicks"], parent["parentId"])
+                == (self._child_pid, self._child_start, self._pid)
+                and (parent["pidfdDevice"], parent["pidfdInode"]) == (retained.st_dev, retained.st_ino))
+            driver = p.fields(value["driver"], ("processId", "startTimeTicks", "pidfdDevice", "pidfdInode",
+                "terminalCode", "terminalStatus", "observedAtBoottimeNs", "reapedAtBoottimeNs"))
+            p.require((driver["processId"], driver["startTimeTicks"]) == (self._driver_pid, self._driver_start)
+                and p.integer(driver["terminalCode"]) in (1, 2, 3)
+                and type(driver["terminalStatus"]) is int and 0 <= driver["terminalStatus"] <= 255
+                and p.ns(driver["observedAtBoottimeNs"]) <= p.ns(driver["reapedAtBoottimeNs"])
+                <= p.ns(value["completedAtBoottimeNs"]))
+            held_driver = os.fstat(self._driver_pidfd)
+            p.require((driver["pidfdDevice"], driver["pidfdInode"]) == (held_driver.st_dev, held_driver.st_ino)
+                and type(value["adopted"]) is list and len(value["adopted"]) <= 15)
+            seen = {(self._driver_pid, self._driver_start)}
+            for item in value["adopted"]:
+                item = p.fields(item, ("process", "terminalCode", "terminalStatus", "reapedAtBoottimeNs"))
+                process = p.fields(item["process"], ("processId", "startTimeTicks", "parentId", "pidfdDevice", "pidfdInode"))
+                identity = (p.integer(process["processId"]), p.integer(process["startTimeTicks"]))
+                p.require(identity not in seen and identity[0] > 1 and identity[1] > 0
+                    and process["parentId"] == self._child_pid and p.integer(item["terminalCode"]) in (1, 2, 3)
+                    and type(item["terminalStatus"]) is int and 0 <= item["terminalStatus"] <= 255
+                    and type(process["pidfdDevice"]) is int and process["pidfdDevice"] >= 0
+                    and p.integer(process["pidfdInode"]) > 0
+                    and p.ns(item["reapedAtBoottimeNs"]) <= p.ns(value["completedAtBoottimeNs"]))
+                seen.add(identity)
+            return bytes(raw)
+        finally:
+            for fd in pidfds:
+                os.close(fd)
+
     def close(self):
         global _LIVE
         if self._closed:
             return
+        lifecycle = getattr(self, "_config", {}).get("apiVersion") == "serverware.nativeShadowDriverBootstrapConfiguration/v4"
+        cleanup_error = None
+        if lifecycle and self._socket is not None and self._driver_pidfd is not None:
+            p.require(not self._cleanup_attempted)
+            self._cleanup_attempted = True
+            try:
+                # A half-close requests actual subreaper cleanup while keeping
+                # the sole authenticated terminal-original receive path alive.
+                self._socket.shutdown(socket.SHUT_WR)
+                self._subtree_terminal_original = self._receive_subtree_terminal()
+            except BaseException as error:
+                cleanup_error = error
         if self._socket is not None:
             self._socket.close(); self._socket = None
         if self._child_pid is not None:
@@ -346,10 +479,18 @@ class DriverBootstrap:
             p.require(terminal is not None and terminal.si_pid == self._child_pid)
             reaped = os.waitid(os.P_PIDFD, self._pidfd, os.WEXITED)
             p.require((reaped.si_pid, reaped.si_code, reaped.si_status) == (terminal.si_pid, terminal.si_code, terminal.si_status))
+        if cleanup_error is not None:
+            # No second cleanup/contact attempt and no release of business
+            # originals on an unknown subtree result. The retained live owner
+            # is deliberately not reset into a new bootstrap invocation.
+            raise cleanup_error
         prepared_inputs = getattr(self, "_prepared_inputs", None)
         if prepared_inputs is not None:
             prepared_inputs._close_after_exit(self)
-        for fd in (self._driver_pidfd, self._pidfd, self._exec, self._bundle):
+        outgoing = getattr(self, "_outgoing_resources", None)
+        if outgoing is not None:
+            outgoing._close_after_driver_exit(self)
+        for fd in (self._driver_pidfd, self._pidfd, self._exec, self._bundle, self._gate_pidfd):
             if fd is not None:
                 os.close(fd)
         for original in reversed(self._originals):
@@ -357,6 +498,11 @@ class DriverBootstrap:
         self._closed = True
         if _LIVE is self:
             _LIVE = None
+
+    def subtree_terminal_original(self):
+        """Completed local observation only; not a grant or retry permission."""
+        p.require(self._closed and self._subtree_terminal_original is not None)
+        return bytes(self._subtree_terminal_original)
 
     def __enter__(self):
         self.check(); return self

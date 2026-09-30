@@ -2314,6 +2314,8 @@ pub(crate) struct PolicyShadowGenerationConfig {
 
 pub(crate) struct PolicyShadowGenerationControl {
     native_workers: Option<Arc<serverware_decision_gate::native_shadow_workers::Owner>>,
+    #[cfg(target_os="linux")]
+    native_custody_lifecycle:Option<Arc<super::policy_shadow::NativeCustodyLifecycleOwner>>,
     native_activation:Mutex<Option<activation::Owner>>,
     is_production: bool,
     trust_manifest_sha256: Sha256Digest,
@@ -2565,6 +2567,8 @@ impl PolicyShadowGenerationControl {
 
         Ok(Arc::new(Self {
             native_workers: None,
+            #[cfg(target_os="linux")]
+            native_custody_lifecycle:None,
             native_activation:Mutex::new(None),
             is_production,
             trust_manifest_sha256,
@@ -3752,6 +3756,11 @@ impl PolicyShadowGenerationControl {
         self.custody_config.revalidate().map_err(|error| {
             GenerationInstallError::unavailable(error)
         })?;
+        #[cfg(target_os="linux")]
+        if let Some(owner)=&self.native_custody_lifecycle {
+            owner.check(self.custody_config.content_sha256())
+                .map_err(GenerationInstallError::unavailable)?;
+        }
         let generation_identity = ShadowGenerationIdentity::derive(
             &assignment,
             &load_receipt,

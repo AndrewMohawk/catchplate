@@ -9,6 +9,7 @@ use super::retrieval_peer::EndpointKind;
 use std::os::fd::{AsFd,OwnedFd};
 #[path="proof_client_peer.rs"] mod inspection;
 pub(in crate::policy_shadow::policy_custody::services) use inspection::{Inspector,Session};
+pub(in crate::policy_shadow::policy_custody::services) use inspection::facade::{Acceptor as FacadeAcceptor,Session as FacadeSession};
 const KINDS:[EndpointKind;4]=[EndpointKind::Retrieval,EndpointKind::Persistence,
     EndpointKind::TrustedTime,EndpointKind::GenerationInstallEnvelope];
 #[derive(Clone)]
@@ -52,6 +53,8 @@ impl Selection {
 }
 pub(in crate::policy_shadow::policy_custody::services) struct Prepared {
     selection:Selection,channel:OwnedFd,directories:BTreeMap<EndpointKind,inspection::Directory>,
+    native_facade:bool,
+    outgoing_directories:BTreeMap<String,inspection::facade::OutgoingDirectory>,
 }
 impl Prepared {
     pub(super) fn open(delivery:&mut PreparedGuestServiceDelivery,channel:OwnedFd,time_grant:&Pin)
@@ -80,14 +83,30 @@ impl Prepared {
             directories.insert(*kind,inspection::Directory::open(fd,endpoint.expected_peer.uid,delivery.role_gid(),*kind)?);
         }
         retrieval_peer::configure(channel.as_fd())?;
-        Ok(Self{selection,channel,directories})
+        let native_facade=delivery.owner.native_continuation.as_ref().is_some_and(|v|v.bridge_admission_selected());
+        let mut outgoing_directories=BTreeMap::new();
+        if native_facade {
+            let runtime:ProductionRpcRuntimeConfigV4=exact(&delivery.retrieval_client_runtime().map_err(fail)?)?;
+            let native_names:BTreeSet<_>=selection.entries.values().map(|v|v.activation_fd_name.clone()).collect();
+            for (name,_,_) in runtime.native_outgoing_selections().map_err(fail)? {
+                if native_names.contains(&name) {continue;}
+                let name=inspection::facade::outgoing_directory_name(outgoing_directories.len());
+                let fd=delivery.activation.remove(&name).ok_or(ShadowError::BindingDrift)?;
+                outgoing_directories.insert(name,inspection::facade::OutgoingDirectory::open(fd)?);
+            }
+        }
+        Ok(Self{selection,channel,directories,native_facade,outgoing_directories})
     }
     pub(in crate::policy_shadow::policy_custody::services) fn attach(mut self,
         activation:&mut BTreeMap<String,OwnedFd>,runtime:&ProductionRpcRuntimeConfigV4,owner:Arc<AdmittedGuest>)
-        ->Result<(BTreeMap<ProductionProofEndpointKindV4,Session>,Option<Session>),ShadowError> {
+        ->Result<(BTreeMap<ProductionProofEndpointKindV4,Session>,Option<Session>,Option<FacadeAcceptor>),ShadowError> {
         owner.check()?;owner.delivery().check_startup().map_err(fail)?;
         require(owner.delivery().payload.runtime_config.sha256==self.selection.runtime_sha256)?;
         let channel=inspection::Channel::bind(self.channel,&owner)?;
+        let native_names=self.selection.entries.values().map(|v|v.activation_fd_name.clone()).collect();
+        let facade=if self.native_facade {
+            Some(FacadeAcceptor::new(Arc::clone(&channel),Arc::clone(&owner),runtime,&native_names,self.outgoing_directories)?)
+        } else {None};
         let mut sessions=BTreeMap::new();let mut signer=None;
         for (kind,expected) in self.selection.entries {
             let actual=if let Some(proof)=kind.production_kind() {
@@ -102,7 +121,7 @@ impl Prepared {
             session.check()?;
             if let Some(proof)=kind.production_kind(){sessions.insert(proof,session);}else{require(signer.is_none())?;signer=Some(session);}
         }
-        require(self.directories.is_empty())?;Ok((sessions,signer))
+        require(self.directories.is_empty())?;Ok((sessions,signer,facade))
     }
 }
 pub(super) fn run(owner:Arc<AdmittedGuest>,prepared:Prepared)->Result<(),ShadowError> {

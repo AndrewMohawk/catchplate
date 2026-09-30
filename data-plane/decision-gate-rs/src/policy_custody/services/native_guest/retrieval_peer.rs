@@ -90,12 +90,12 @@ pub(in crate::policy_shadow::policy_custody::services) fn configure(fd:BorrowedF
     let flags=unsafe{libc::fcntl(fd.as_raw_fd(),libc::F_GETFL)};
     require(flags>=0 && unsafe{libc::fcntl(fd.as_raw_fd(),libc::F_SETFL,flags|libc::O_NONBLOCK)}==0)
 }
-pub(super) fn credentials(fd:BorrowedFd<'_>)->Result<libc::ucred,ShadowError> {
+pub(in crate::policy_shadow::policy_custody::services) fn credentials(fd:BorrowedFd<'_>)->Result<libc::ucred,ShadowError> {
     let mut value:libc::ucred=unsafe{zeroed()};let mut length=size_of::<libc::ucred>() as _;
     require(unsafe{libc::getsockopt(fd.as_raw_fd(),libc::SOL_SOCKET,libc::SO_PEERCRED,
         (&mut value as *mut libc::ucred).cast(),&mut length)}==0 && length as usize==size_of::<libc::ucred>())?;Ok(value)
 }
-pub(super) fn peer_pidfd(fd:BorrowedFd<'_>)->Result<OwnedFd,ShadowError> {
+pub(in crate::policy_shadow::policy_custody::services) fn peer_pidfd(fd:BorrowedFd<'_>)->Result<OwnedFd,ShadowError> {
     let mut value=-1i32;let mut length=size_of::<i32>() as _;
     let result=unsafe{libc::getsockopt(fd.as_raw_fd(),libc::SOL_SOCKET,77,(&mut value as *mut i32).cast(),&mut length)};
     require(result==0 && value>=0)?;let owned=unsafe{OwnedFd::from_raw_fd(value)};

@@ -40,7 +40,9 @@ struct ImagePins {image_sha256:Sha256Digest,executable_sha256:Sha256Digest,
 struct Configuration {api_version:String,bootstrap_authority:Authority,phase_two_authority:Authority,
     delivery_configuration:Pin,uid:u32,gid:u32,image:ImagePins,
     #[serde(default,skip_serializing_if="Option::is_none")]
-    continuation:Option<continuation::ColdInputs>}
+    continuation:Option<continuation::ColdInputs>,
+    #[serde(default,skip_serializing_if="Option::is_none")]
+    lifecycle:Option<driver_lifecycle::wire::Configuration>}
 #[derive(Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 struct Window {configuration_sha256:Sha256Digest,signing_key_id:Sha256Digest,boot_id_base64url:String,
@@ -62,10 +64,11 @@ impl Cold {
         let configuration=Original::driver_bootstrap_configuration().map_err(fail)?;
         let configuration_bytes=configuration.read(65536).map_err(fail)?.to_vec();
         let config:Configuration=exact(&configuration_bytes)?;
-        require(matches!((config.api_version.as_str(),config.continuation.is_some()),
-            ("serverware.nativeShadowDriverBootstrapConfiguration/v1",false)
-            |("serverware.nativeShadowDriverBootstrapConfiguration/v2",true)
-            |("serverware.nativeShadowDriverBootstrapConfiguration/v3",true))
+        require(matches!((config.api_version.as_str(),config.continuation.is_some(),config.lifecycle.is_some()),
+            ("serverware.nativeShadowDriverBootstrapConfiguration/v1",false,false)
+            |("serverware.nativeShadowDriverBootstrapConfiguration/v2",true,false)
+            |("serverware.nativeShadowDriverBootstrapConfiguration/v3",true,false)
+            |("serverware.nativeShadowDriverBootstrapConfiguration/v4",true,true))
             && config.uid>0 && config.gid>0 && config.uid!=u32::MAX && config.gid!=u32::MAX
             && ![64988,64989,64990,65534].contains(&config.uid) && ![64988,64989,64990,65534].contains(&config.gid)
             && config.bootstrap_authority.key_id!=config.phase_two_authority.key_id)?;
@@ -89,6 +92,7 @@ impl Cold {
             && issued<=now()? && now()?<startup && startup<=lifetime && startup-issued<=30_000_000_000
             && w.invocation_id.len()==32 && w.invocation_id.bytes().all(|b|b.is_ascii_digit()||(b'a'..=b'f').contains(&b))
             && w.invocation_id.bytes().any(|b|b!=b'0'))?;
+        if let Some(policy)=&config.lifecycle {policy.validate(startup,lifetime)?;}
         Ok(Self{process,configuration,window,configuration_bytes,window_bytes,config,signed,delivery_configuration,
             delivery_cold,startup,lifetime})
     }
@@ -103,6 +107,9 @@ impl Cold {
     }
     pub(super) fn startup(&self)->u64 {self.startup}
     pub(super) fn operational(&self)->bool {self.config.continuation.is_some()}
+    pub(super) fn bridge_admission_selected(&self)->bool {matches!(self.config.api_version.as_str(),
+        "serverware.nativeShadowDriverBootstrapConfiguration/v3"|"serverware.nativeShadowDriverBootstrapConfiguration/v4")}
+    pub(super) fn lifecycle(&self)->Option<driver_lifecycle::wire::Configuration>{self.config.lifecycle.clone()}
     pub(super) fn lifetime(&self)->u64 {self.lifetime}
     pub(super) fn uid(&self)->u32 {self.config.uid}
     pub(super) fn gid(&self)->u32 {self.config.gid}
@@ -236,6 +243,7 @@ impl PhaseTwo {
             ("serverware.nativeShadowDriverBootstrapConfiguration/v1","serverware.nativeShadowDriverScope/v1",false)=>SCOPE_DOMAIN,
             ("serverware.nativeShadowDriverBootstrapConfiguration/v2","serverware.nativeShadowDriverScope/v2",true)=>b"serverware.nativeShadowDriverScope.signature/v2\0".as_slice(),
             ("serverware.nativeShadowDriverBootstrapConfiguration/v3","serverware.nativeShadowDriverScope/v3",true)=>b"serverware.nativeShadowDriverScope.signature/v3\0".as_slice(),
+            ("serverware.nativeShadowDriverBootstrapConfiguration/v4","serverware.nativeShadowDriverScope/v4",true)=>b"serverware.nativeShadowDriverScope.signature/v4\0".as_slice(),
             _=>return Err(ShadowError::BindingDrift),
         };
         verify(&cold.config.phase_two_authority.key()?,domain,s,&signed.signature_base64url)?;
@@ -295,6 +303,10 @@ impl PhaseTwo {
     }
     pub(super) fn descriptor(&self)->BorrowedFd<'_>{self.bundle.as_fd()}
     pub(super) fn scope(&self)->&[u8]{&self.scope}
+    pub(super) fn runtime_original(&self)->Result<Vec<u8>,ShadowError>{
+        self.check()?;let originals:Originals=exact(&read_file(&self.bundle,MAX_BUNDLE)?)?;
+        Ok(originals.runtime_original.into_bytes())
+    }
 }
 fn run_inner()->Result<(),ShadowError> {
     let prepared=Prepared::open()?;

@@ -13,6 +13,7 @@ struct Running {
     cold:Cold,control:OwnedFd,caller_pidfd:OwnedFd,caller:i32,
     startup:Option<process::Timer>,lifetime:process::Timer,phase_two:Option<PhaseTwo>,
     operational:Option<driver_continuation::ParentInputs>,held_rights:Vec<OwnedFd>,
+    lifecycle:Option<driver_lifecycle::Owner>,observation:Option<driver_identity::Observation>,constructed:bool,
 }
 impl Running {
     fn start()->Result<Self,ShadowError> {
@@ -38,9 +39,10 @@ impl Running {
             && unsafe{libc::fchmod(executable.as_raw_fd(),0o500)}==0
             && unsafe{libc::fcntl(executable.as_raw_fd(),libc::F_ADD_SEALS,SEALS)}==0)?;
         let mut copied=vec![0;bytes.len()];executable.read_exact_at(&mut copied,0).map_err(fail)?;require(copied==bytes)?;
+        let lifecycle=cold.lifecycle().map(|policy|driver_lifecycle::Owner::prepare(policy,&cold)).transpose()?;
         let child=Child::spawn_driver_bootstrap(executable.as_fd(),cold.configuration.descriptor(),cold.window.descriptor(),cold.lifetime())?;
         Ok(Self{child,executable,image,cold,control,caller_pidfd,caller,startup:Some(startup),lifetime,phase_two:None,
-            operational:None,held_rights:Vec::new()})
+            operational:None,held_rights:Vec::new(),lifecycle,observation:None,constructed:false})
     }
     fn check(&self)->Result<(),ShadowError> {
         self.cold.check_lifetime()?;if let Some(timer)=&self.startup{self.cold.check()?;timer.check()?;}self.lifetime.check()?;
@@ -48,25 +50,54 @@ impl Running {
         retrieval_peer::same_process(self.caller_pidfd.as_fd(),self.caller)?;
         require(unsafe{libc::getppid()}==self.caller && unsafe{libc::geteuid()}==0
             && unsafe{libc::fcntl(self.executable.as_raw_fd(),libc::F_GET_SEALS)}==SEALS)?;
-        if let Some(v)=&self.phase_two {v.check()?;}Ok(())
+        if let Some(v)=&self.phase_two {v.check()?;}
+        if let Some(owner)=&self.lifecycle {owner.check()?;require(now()?<owner.retirement_boundary()?)?;}
+        Ok(())
+    }
+    fn progress_lifecycle(&mut self)->Result<(),ShadowError>{
+        if let (Some(owner),Some(observation))=(&mut self.lifecycle,&self.observation){
+            owner.progress(&self.child,observation,self.phase_two.as_ref().map(PhaseTwo::scope),self.constructed)?;
+            if let Some(original)=owner.take_gate_notice()? {
+                // Same authenticated operator channel, one notice, no caller
+                // PID prediction or post-exec isolation fields invented.
+                require(retrieval_peer::send(self.control.as_fd(),&original,&[])?)?;
+            }
+        }Ok(())
     }
     fn receive_child(&mut self)->Result<retrieval_peer::Packet,ShadowError> {
         loop {
             self.check()?;
-            if let Some(packet)=self.child.bootstrap_receive(self.cold.uid(),self.cold.gid())? {return Ok(packet);}
+            if let Some(packet)=self.child.bootstrap_receive(self.cold.uid(),self.cold.gid())? {
+                let selected:serde_json::Value=serde_json::from_slice(&packet.bytes).map_err(fail)?;
+                if self.lifecycle.is_some() && selected.get("apiVersion").and_then(serde_json::Value::as_str)
+                    ==Some("serverware.nativeShadowDriverFacadeListening/v1") {
+                    let notice:driver_lifecycle::wire::Listening=exact(&packet.bytes)?;
+                    let observation=self.observation.as_ref().ok_or(ShadowError::BindingDrift)?;
+                    observation.require_child(&packet,&self.executable)?;
+                    self.lifecycle.as_mut().ok_or(ShadowError::BindingDrift)?.facade_listening(&notice,observation,
+                        self.phase_two.as_ref().ok_or(ShadowError::BindingDrift)?,
+                        self.operational.as_ref().ok_or(ShadowError::BindingDrift)?)?;
+                    self.progress_lifecycle()?;continue;
+                }
+                return Ok(packet);
+            }
             if let Some(owner)=&mut self.operational{owner.progress(&self.child)?;}
-            let mut wait=libc::pollfd{fd:self.caller_pidfd.as_raw_fd(),events:libc::POLLIN,revents:0};
-            require(unsafe{libc::poll(&mut wait,1,1)}==0)?;
+            self.progress_lifecycle()?;
+            let mut wait=[libc::pollfd{fd:self.caller_pidfd.as_raw_fd(),events:libc::POLLIN,revents:0},
+                libc::pollfd{fd:self.control.as_raw_fd(),events:libc::POLLIN,revents:0}];
+            require(unsafe{libc::poll(wait.as_mut_ptr(),wait.len() as _,1)}==0)?;
         }
     }
     fn run(&mut self)->Result<(),ShadowError> {
         let packet=self.receive_child()?;let observation:driver_identity::Observation=exact(&packet.bytes)?;
         self.cold.check_observation(&observation)?;observation.require_child(&packet,&self.executable)?;
+        self.observation=Some(observation.clone());
         // Public data over the retained authenticated parent channel. This is
         // not a signature or a freely replayable native attestation.
         require(retrieval_peer::send(self.control.as_fd(),&packet.bytes,&[])?)?;
         let release=loop {
             self.check()?;
+            self.progress_lifecycle()?;
             let packet=if self.cold.operational(){driver_continuation::receive_operational(self.control.as_fd(),32768)?}
                 else{retrieval_peer::receive(self.control.as_fd(),32768,1)?};
             if let Some(packet)=packet {break packet;}
@@ -78,6 +109,7 @@ impl Running {
         observation.require_child(&packet,&self.executable)?;
         let mut rights=release.rights.into_iter();let phase=PhaseTwo::retain(&self.cold,&observation,&release.bytes,
             rights.next().ok_or(ShadowError::BindingDrift)?)?;
+        if let Some(owner)=&self.lifecycle {owner.require_phase_peer(&phase)?;}
         self.held_rights=rights.collect();
         if self.cold.operational(){
             self.operational=Some(driver_continuation::ParentInputs::open(&self.cold,&phase,&self.held_rights)?);
@@ -107,6 +139,7 @@ impl Running {
             // The actual child has completed its real inspected bridge
             // constructor. This is not attestation/readiness/fleet activation.
             require(retrieval_peer::send(self.control.as_fd(),&completed.bytes,&[])?)?;
+            self.constructed=true;
             self.startup.take();
         }
         // Legacy v1 retains only; v2 services the actual inspected bridge.
@@ -116,10 +149,23 @@ impl Running {
             self.check()?;
             if let Some(owner)=&mut self.operational{owner.progress(&self.child)?;}
             else{observation.require_child(&retained,&self.executable)?;}
+            self.progress_lifecycle()?;
             require(self.child.bootstrap_receive(self.cold.uid(),self.cold.gid())?.is_none())?;
             let mut wait=libc::pollfd{fd:self.control.as_raw_fd(),events:libc::POLLIN,revents:0};
             require(unsafe{libc::poll(&mut wait,1,1)}==0)?;
         }
     }
 }
-pub(super) fn run()->! {if let Ok(mut owner)=Running::start(){let _=owner.run();}std::process::exit(1)}
+pub(super) fn run()->! {
+    if let Ok(mut owner)=Running::start(){
+        let _=owner.run();
+        if let Some(lifecycle)=&mut owner.lifecycle {
+            // Original parent timers remain armed. The only success record is
+            // made after actual same-child plus all adopted-descendant waitid.
+            if let Ok(terminal)=lifecycle.terminate(&mut owner.child){
+                let _=retrieval_peer::send(owner.control.as_fd(),&terminal,&[]);
+            }else{unsafe{libc::_exit(1);}}
+        }
+    }
+    std::process::exit(1)
+}

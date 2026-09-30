@@ -166,6 +166,14 @@ impl Child {
     pub(in crate::policy_shadow::policy_custody::services::guest::native_guest) fn bootstrap_configure(&self)->Result<(),ShadowError> {
         retrieval_peer::configure(self.channel.as_fd())
     }
+    /// Source-only borrow of the original clone identity for its own lifecycle
+    /// subreaper. A serialized PID cannot construct this ownership capability.
+    pub(in crate::policy_shadow::policy_custody::services::guest::native_guest) fn lifecycle_identity(
+        &self)->Result<(i32,u64,BorrowedFd<'_>),ShadowError>{
+        require(!self.pair_mode && self.start.is_some() && self.gate.is_none() && now()?<self.deadline
+            && self.terminal(false)?.is_none() && Some(self.identity()?)==self.start)?;
+        Ok((self.pid,self.start.ok_or(ShadowError::BindingDrift)?,self.pidfd.as_fd()))
+    }
     pub(super) fn check(&self)->Result<bool,ShadowError> {
         require(now()?<self.deadline && self.start.is_some())?;
         if self.terminal(false)?.is_some(){return Ok(false);}

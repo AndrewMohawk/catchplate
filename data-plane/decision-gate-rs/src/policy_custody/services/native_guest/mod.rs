@@ -17,6 +17,7 @@ mod parent;
 mod driver_bootstrap;
 pub(in crate::policy_shadow) use driver_bootstrap::continuation as driver_continuation;
 mod driver_identity;
+pub(in crate::policy_shadow::policy_custody::services) mod driver_lifecycle;
 mod driver_bootstrap_parent;
 mod bridge_configuration;
 pub(in crate::policy_shadow::policy_custody::services) mod retrieval_peer;

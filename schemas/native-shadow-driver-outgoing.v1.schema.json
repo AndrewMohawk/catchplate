@@ -1,0 +1,27 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "$id":"https://serverware.invalid/schemas/native-shadow-driver-outgoing.v1.schema.json",
+  "$ref":"#/$defs/configuration",
+  "$defs":{
+    "sha":{"$ref":"native-shadow-driver-bootstrap.v1.schema.json#/$defs/sha"},
+    "configuration":{"type":"object","additionalProperties":false,
+      "required":["apiVersion","driverConfigurationSha256","driverWindowSha256","driverObservationSha256","invocationId","deliveryConfiguration","runtime","bridgeLaunchVersion"],
+      "description":"Exact <=8192-byte protected root-owned mode0400 /etc/serverware/native-shadow-driver-outgoing.json. Source-owned fresh allocation only: no endpoint/signing permission. The actual independent C9 signature must subsequently bind these exact runtime bytes and observed FD identities, then the original phase-two signature binds the full operation.",
+      "properties":{"apiVersion":{"const":"serverware.nativeShadowDriverOutgoingInputs/v1"},
+        "driverConfigurationSha256":{"$ref":"#/$defs/sha"},"driverWindowSha256":{"$ref":"#/$defs/sha"},"driverObservationSha256":{"$ref":"#/$defs/sha"},
+        "invocationId":{"$ref":"native-shadow-driver-bootstrap.v1.schema.json#/$defs/invocation"},
+        "deliveryConfiguration":{"$ref":"policy-custody-guest-delivery.v1.schema.json#/$defs/pin"},
+        "runtime":{"$ref":"policy-custody-guest-delivery.v1.schema.json#/$defs/pin"},
+        "bridgeLaunchVersion":{"enum":["serverware.nativeProofBridgeLaunch/v1","serverware.nativeProofBridgeLaunch/v2","serverware.nativeProofBridgeLaunch/v3"]}}},
+    "activationOriginal":{"type":"object","additionalProperties":false,"required":["name","device","inode","mode","uid","gid"],
+      "description":"Actual retained FD metadata for the independent C9 signer to place in its complete ordered activation inventory. Not caller assertions; no target FD ordinal is invented before the complete inventory is assembled.",
+      "properties":{"name":{"type":"string","minLength":1,"maxLength":64,"pattern":"^[A-Za-z0-9_.-]+$"},
+        "device":{"type":"integer","minimum":0,"maximum":18446744073709551615},
+        "inode":{"type":"integer","minimum":1,"maximum":18446744073709551615},
+        "mode":{"type":"integer","minimum":0,"maximum":4294967295},
+        "uid":{"type":"integer","minimum":0,"maximum":4294967295},
+        "gid":{"type":"integer","minimum":0,"maximum":4294967295}}},
+    "activationOriginals":{"type":"array","minItems":26,"maxItems":30,"items":{"$ref":"#/$defs/activationOriginal"},
+      "description":"Exactly one fresh unconnected socket and one separately retained root O_RDONLY parent-directory FD for every filtered outgoing endpoint. Launch1/runtime5 yields30 entries, launch2/runtime6 yields28, launch3/runtime7 yields26. Endpoint names sorted lexicographically after source-fixed native exclusions define bridge-outgoing-directory-0 through the last filtered ordinal. All original inode pairs remain distinct under existing strict C9/operation admission."}
+  }
+}

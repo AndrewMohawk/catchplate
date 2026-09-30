@@ -966,6 +966,19 @@ pub(super) fn perform_client_handshake(
         duplicate_cloexec(socket.as_raw_fd())?,
         expected_peer,
     )?;
+    perform_authenticated_client_handshake(&authenticated,request,expected_service_role,
+        expected_endpoint_role,expected_peer_path,exact_request_rights_count,exact_reply_rights_count)
+}
+
+/// Reuse the exact retained socket/inspection owner. Native callers cannot
+/// recreate a direct-proc owner after privilege drop merely for the handshake.
+pub(super) fn perform_authenticated_client_handshake(
+    authenticated:&AuthenticatedInheritedSeqpacket,request:&ServiceHandshakeRequestV3,
+    expected_service_role:TrustedHostServiceRoleV3,expected_endpoint_role:PolicyCustodyEndpointRole,
+    expected_peer_path:&Path,exact_request_rights_count:u8,exact_reply_rights_count:u8,
+)->Result<ServiceHandshakeReplyV3,ServiceError> {
+    authenticated.revalidate_peer()?;
+    let socket=authenticated.progress_fd();
     validate_exact_peer_path(
         socket.as_raw_fd(),
         expected_peer_path,
@@ -989,11 +1002,9 @@ pub(super) fn perform_client_handshake(
         )
     })?;
     let exact_request = encode_canonical_frame(request)?;
-    while !try_send_seqpacket_with_rights(
-        socket.as_raw_fd(),
-        &exact_request,
-        &[],
-    )? {
+    loop {
+        request.deadline.to_runtime()?.require_live().map_err(|_|ServiceError::Invalid("client handshake deadline expired"))?;
+        if authenticated.try_send(&exact_request,&[],0)? {break;}
         wait_for_handshake_io(
             socket.as_raw_fd(),
             libc::POLLOUT,
@@ -1001,12 +1012,8 @@ pub(super) fn perform_client_handshake(
         )?;
     }
     let packet = loop {
-        if let Some(packet) = try_receive_seqpacket_with_rights(
-            socket.as_raw_fd(),
-            MAX_SERVICE_FRAME_BYTES,
-            0,
-            authenticated.peer_credentials(),
-        )? {
+        request.deadline.to_runtime()?.require_live().map_err(|_|ServiceError::Invalid("client handshake deadline expired"))?;
+        if let Some(packet) = authenticated.try_receive(0)? {
             break packet;
         }
         wait_for_handshake_io(
@@ -1017,6 +1024,7 @@ pub(super) fn perform_client_handshake(
     };
     let reply: ServiceHandshakeReplyV3 =
         decode_canonical_frame(&packet.frame)?;
+    request.deadline.to_runtime()?.require_live().map_err(|_|ServiceError::Invalid("client handshake deadline expired"))?;
     reply.validate_for_request(request, expected_endpoint_role)?;
     authenticated.revalidate_peer()?;
     if reply.service_role != expected_service_role
@@ -1383,6 +1391,7 @@ pub(in crate::policy_shadow::policy_custody) struct AuthenticatedInheritedSeqpac
 enum PeerInspection {
     Direct(DirectPeerInspection),
     Retained(std::sync::Arc<super::guest::ordinary_inspection::client::Session>),
+    NativeFacade(std::sync::Arc<super::guest::native_guest::proof_client::FacadeSession>),
 }
 
 struct DirectPeerInspection {
@@ -1394,6 +1403,30 @@ struct DirectPeerInspection {
 }
 
 impl AuthenticatedInheritedSeqpacket {
+    /// Only a live full-admission bridge's retained parent-inspection owner
+    /// can construct this branch. No JSON verdict or generic inspector callback.
+    pub(super) fn from_native_facade(
+        socket: OwnedFd, expected_peer: ExpectedPeerCredentials,
+        inspection: std::sync::Arc<super::guest::native_guest::proof_client::FacadeSession>,
+    ) -> Result<Self, ServiceError> {
+        validate_connected_unix_seqpacket(socket.as_raw_fd())?;
+        set_nonblocking_cloexec(socket.as_raw_fd())?;
+        enable_passcred(socket.as_raw_fd())?;
+        let peer_credentials=read_peer_credentials(socket.as_raw_fd())?;
+        expected_peer.validate(peer_credentials)?;
+        let peer_pidfd=peer_pidfd(socket.as_raw_fd())?;
+        require_live_pidfd(peer_pidfd.as_raw_fd(),peer_credentials.pid)?;
+        inspection.require_expected(&expected_peer)
+            .map_err(|_|ServiceError::Invalid("native facade inspection binding differs"))?;
+        let authenticated=Self{socket,peer_credentials,peer_pidfd,
+            peer_start_time_ticks:expected_peer.start_time_ticks,
+            peer_process_identity_sha256:expected_peer.process_identity_sha256,
+            peer_configuration_generation_sha256:expected_peer.configuration_generation_sha256,
+            inspection:PeerInspection::NativeFacade(inspection)};
+        authenticated.revalidate_peer()?;
+        Ok(authenticated)
+    }
+
     pub(in crate::policy_shadow::policy_custody) fn from_inherited(
         socket: OwnedFd,
         expected_peer: ExpectedPeerCredentials,
@@ -1578,6 +1611,9 @@ impl AuthenticatedInheritedSeqpacket {
     ) -> Result<(), ServiceError> {
         self.revalidate_peer()?;
         require_live_pidfd(sender.as_raw_fd(), self.peer_credentials.pid)?;
+        if matches!(&self.inspection,PeerInspection::NativeFacade(_)) {
+            return self.revalidate_peer();
+        }
         if process_start_time_ticks(self.peer_credentials.pid)? != self.peer_start_time_ticks {
             return Err(ServiceError::Invalid("packet sender start identity changed"));
         }
@@ -1600,6 +1636,10 @@ impl AuthenticatedInheritedSeqpacket {
             self.peer_pidfd.as_raw_fd(),
             self.peer_credentials.pid,
         )?;
+        if let PeerInspection::NativeFacade(session)=&self.inspection {
+            return session.revalidate(self.socket.as_fd(),self.peer_pidfd.as_fd())
+                .map_err(|_|ServiceError::Invalid("native facade retained inspection refused"));
+        }
         if process_start_time_ticks(self.peer_credentials.pid)?
             != self.peer_start_time_ticks
         {
@@ -1611,6 +1651,7 @@ impl AuthenticatedInheritedSeqpacket {
             PeerInspection::Retained(session) => return session.revalidate(
                 self.socket.as_fd(), self.peer_pidfd.as_fd()),
             PeerInspection::Direct(direct) => direct,
+            PeerInspection::NativeFacade(_) => return Err(ServiceError::Invalid("native facade inspection state differs")),
         };
         let retained = peer_executable_identity(
             direct.peer_executable.as_raw_fd(),

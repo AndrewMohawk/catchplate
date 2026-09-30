@@ -1,6 +1,7 @@
 //! Fixed operational continuation of the real final-identity bootstrap.
 //! No constructor accepts an observed-driver DTO or caller admission verdict.
 use super::*;
+use std::mem::{size_of,zeroed};
 use serverware_decision_gate::enclave_runtime_identity_v1::{PreparedShadowNsmV1,PreparedShadowTimeNsmV1};
 use serverware_decision_gate::native_secret_broker_v1::shadow_key_delivery::{Configuration as Transport,PreparedShadowKeyHelper};
 #[path="driver_continuation_inputs.rs"] mod inputs;
@@ -19,7 +20,8 @@ impl Resources {
     pub(super) fn open(inputs:&ColdInputs,cold:&Cold)->Result<Self,ShadowError>{
         cold.check()?;require(matches!((cold.config.api_version.as_str(),inputs.api_version.as_str()),
             ("serverware.nativeShadowDriverBootstrapConfiguration/v2","serverware.nativeShadowDriverContinuationPreparation/v1")
-            |("serverware.nativeShadowDriverBootstrapConfiguration/v3","serverware.nativeShadowDriverContinuationPreparation/v2"))
+            |("serverware.nativeShadowDriverBootstrapConfiguration/v3","serverware.nativeShadowDriverContinuationPreparation/v2")
+            |("serverware.nativeShadowDriverBootstrapConfiguration/v4","serverware.nativeShadowDriverContinuationPreparation/v3"))
             && inputs.key_transport.api_version=="serverware.nativeShadowKeyKmsTransport/v1")?;
         inputs.key_transport.validate().map_err(fail)?;
         // Root owns only mechanisms here. No ciphertext, seed, business
@@ -48,10 +50,25 @@ pub(in crate::policy_shadow) struct Retained {
 }
 impl Retained {
     pub(in crate::policy_shadow::policy_custody::services) fn bridge_admission_selected(&self)->bool{
-        self.prepared.cold.config.api_version=="serverware.nativeShadowDriverBootstrapConfiguration/v3"
+        self.prepared.cold.bridge_admission_selected()
     }
     pub(in crate::policy_shadow::policy_custody::services) fn driver_identity(&self)->Result<&ProductionCustodyKernelDriverIdentity,ShadowError>{
         self.check()?;Ok(&self.observation.driver)
+    }
+    pub(in crate::policy_shadow::policy_custody::services) fn facade_listening(&self,listener:BorrowedFd<'_>)->Result<(),ShadowError>{
+        self.check_startup()?;
+        // Earlier scopes do not permit an extra bootstrap-channel message.
+        if self.prepared.cold.lifecycle().is_none(){return Ok(());}
+        let mut stat:libc::stat=unsafe{zeroed()};let mut listening=0i32;let mut length=size_of::<i32>() as libc::socklen_t;
+        require(unsafe{libc::fstat(listener.as_raw_fd(),&mut stat)}==0 && stat.st_ino>0
+            && stat.st_mode&libc::S_IFMT==libc::S_IFSOCK
+            && unsafe{libc::getsockopt(listener.as_raw_fd(),libc::SOL_SOCKET,libc::SO_ACCEPTCONN,
+                (&mut listening as *mut i32).cast(),&mut length)}==0 && length as usize==size_of::<i32>() && listening==1)?;
+        let raw=canonical_json_bytes(&serde_json::json!({"apiVersion":"serverware.nativeShadowDriverFacadeListening/v1",
+            "observationSha256":Sha256Digest::compute(&canonical_json_bytes(&self.observation)?),
+            "scopeSha256":Sha256Digest::compute(self.phase.scope()),"listenerDevice":stat.st_dev,"listenerInode":stat.st_ino}))?;
+        // Same retained channel, original startup interval, one send attempt.
+        require(retrieval_peer::send(self.prepared.channel.as_fd(),&raw,&[])?)?;self.check_startup()
     }
     pub(in crate::policy_shadow::policy_custody::services) fn constructed(&self)->Result<(),ShadowError>{
         self.check_startup()?;

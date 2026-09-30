@@ -34,7 +34,8 @@ pub(in crate::policy_shadow::policy_custody::services::guest::native_guest) stru
 impl Operation {
     pub(super) fn parse(phase:&PhaseTwo)->Result<Self,ShadowError>{
         phase.check()?;let signed:SignedScope=exact(phase.scope())?;
-        require(matches!(signed.payload.api_version.as_str(),"serverware.nativeShadowDriverScope/v2"|"serverware.nativeShadowDriverScope/v3"))?;
+        require(matches!(signed.payload.api_version.as_str(),"serverware.nativeShadowDriverScope/v2"|"serverware.nativeShadowDriverScope/v3"
+            |"serverware.nativeShadowDriverScope/v4"))?;
         let value=signed.payload.operation.ok_or(ShadowError::BindingDrift)?;
         require(value.api_version=="serverware.nativeShadowDriverOperation/v1"
             && !value.descriptors.is_empty() && value.descriptors.len()<=MAX_RIGHTS-2
@@ -127,6 +128,7 @@ pub(super) fn verify_parent(cold:&Cold,phase:&PhaseTwo,rights:&[OwnedFd])->Resul
 
 pub(in crate::policy_shadow::policy_custody::services::guest::native_guest) struct ParentInputs {
     files:guest::FileAdmission,inspector:proof_client::Inspector,
+    lifecycle_listener:Option<OwnedFd>,
     pub(in crate::policy_shadow::policy_custody::services::guest::native_guest) channel:OwnedFd,
 }
 impl ParentInputs {
@@ -143,8 +145,23 @@ impl ParentInputs {
             let fd=owned.get(&format!("activation:{}",entry.name)).ok_or(ShadowError::BindingDrift)?;
             Ok((entry.name.clone(),retrieval_peer::duplicate(fd.as_fd())?))
         }).collect::<Result<BTreeMap<_,_>,ShadowError>>()?;
-        let (inspector,channel)=proof_client::Inspector::prepare_selected(&files,&activation,commitment)?;
-        Ok(Self{files,inspector,channel})
+        let (inspector,channel)=if cold.bridge_admission_selected() {
+            proof_client::Inspector::prepare_native_facade(&files,&activation,commitment)?
+        } else {proof_client::Inspector::prepare_selected(&files,&activation,commitment)?};
+        let lifecycle_listener=if cold.lifecycle().is_some(){Some(retrieval_peer::duplicate(
+            activation.get("production-listener").ok_or(ShadowError::BindingDrift)?.as_fd())?)}else{None};
+        Ok(Self{files,inspector,channel,lifecycle_listener})
+    }
+    pub(in crate::policy_shadow::policy_custody::services::guest::native_guest) fn require_facade_listening(
+        &self,device:u64,inode:u64)->Result<(),ShadowError>{
+        let fd=self.lifecycle_listener.as_ref().ok_or(ShadowError::BindingDrift)?;
+        let expected=self.files.payload.activation.iter().find(|v|v.name=="production-listener").ok_or(ShadowError::BindingDrift)?;
+        let mut stat:libc::stat=unsafe{zeroed()};let mut listening=0i32;let mut n=size_of::<i32>() as libc::socklen_t;
+        require(unsafe{libc::fstat(fd.as_raw_fd(),&mut stat)}==0
+            && (stat.st_dev,stat.st_ino)==(device,inode) && (device,inode)==(expected.device,expected.inode)
+            && stat.st_mode&libc::S_IFMT==libc::S_IFSOCK
+            && unsafe{libc::getsockopt(fd.as_raw_fd(),libc::SOL_SOCKET,libc::SO_ACCEPTCONN,
+                (&mut listening as *mut i32).cast(),&mut n)}==0 && n as usize==size_of::<i32>() && listening==1)
     }
     pub(in crate::policy_shadow::policy_custody::services::guest::native_guest) fn progress(&mut self,child:&super::super::super::parent::child::Child)->Result<(),ShadowError>{
         self.inspector.progress(child,&self.files)

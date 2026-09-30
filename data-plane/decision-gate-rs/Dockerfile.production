@@ -262,6 +262,9 @@ ENV SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH \
 COPY --from=build /source /source
 COPY --from=build /source-contract /source-contract
 COPY --from=rust-production-dependency-cache /dependency-cache /dependency-cache
+# Keep liblzo2's real archive /lib directory away from this merged-/usr base's
+# /lib symlink and ELF interpreter links. Stage both verified packages separately
+# and install only the fixed build-tool files.
 RUN --network=none set -eu; \
     cp /source/requirements.lock /dependency-cache/requirements.lock; \
     cp /source/production-dependencies/python-linux-amd64.sha256 /dependency-cache/python-linux-amd64.sha256; \
@@ -271,8 +274,22 @@ RUN --network=none set -eu; \
     test "$(grep -Ec '^[0-9a-f]{64}  ' native-broker-linux-amd64.sha256)" -eq 2; \
     grep -E '^[0-9a-f]{64}  ' python-linux-amd64.sha256 | sha256sum -c -; \
     grep -E '^[0-9a-f]{64}  ' native-broker-linux-amd64.sha256 | sha256sum -c -; \
-    dpkg-deb --extract cache/squashfs-tools_4.5.1-1_amd64.deb /; \
-    dpkg-deb --extract cache/liblzo2-2_2.10-2_amd64.deb /; \
+    test "$(readlink /lib)" = usr/lib; \
+    test "$(readlink /lib64)" = usr/lib64; \
+    mkdir -m 0755 /native-build-packages /native-build-packages/squashfs /native-build-packages/lzo; \
+    dpkg-deb --extract cache/squashfs-tools_4.5.1-1_amd64.deb /native-build-packages/squashfs; \
+    dpkg-deb --extract cache/liblzo2-2_2.10-2_amd64.deb /native-build-packages/lzo; \
+    test -f /native-build-packages/squashfs/usr/bin/mksquashfs; \
+    test ! -L /native-build-packages/squashfs/usr/bin/mksquashfs; \
+    test -f /native-build-packages/lzo/lib/x86_64-linux-gnu/liblzo2.so.2.0.0; \
+    test ! -L /native-build-packages/lzo/lib/x86_64-linux-gnu/liblzo2.so.2.0.0; \
+    test "$(readlink /native-build-packages/lzo/lib/x86_64-linux-gnu/liblzo2.so.2)" = liblzo2.so.2.0.0; \
+    test ! -e /usr/bin/mksquashfs; test ! -L /usr/bin/mksquashfs; \
+    test ! -e /usr/lib/x86_64-linux-gnu/liblzo2.so.2.0.0; test ! -L /usr/lib/x86_64-linux-gnu/liblzo2.so.2.0.0; \
+    test ! -e /usr/lib/x86_64-linux-gnu/liblzo2.so.2; test ! -L /usr/lib/x86_64-linux-gnu/liblzo2.so.2; \
+    install -o 0 -g 0 -m 0755 /native-build-packages/squashfs/usr/bin/mksquashfs /usr/bin/mksquashfs; \
+    install -o 0 -g 0 -m 0644 /native-build-packages/lzo/lib/x86_64-linux-gnu/liblzo2.so.2.0.0 /usr/lib/x86_64-linux-gnu/liblzo2.so.2.0.0; \
+    ln -s liblzo2.so.2.0.0 /usr/lib/x86_64-linux-gnu/liblzo2.so.2; \
     tar -xzf cache/python-wheelhouse-linux-amd64.tar.gz; \
     python -m pip install --no-cache-dir --no-compile --no-index --only-binary=:all: \
         --find-links=/dependency-cache/wheelhouse --require-hashes --target=/deps \

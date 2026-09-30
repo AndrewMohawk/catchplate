@@ -52,13 +52,17 @@ This candidate may be staged for an engineering-only build in an isolated dirty
 worktree. Such staging never authorizes a production build, publication, or
 reviewed-pin installation; those still require the dependency-owner handoff.
 
-A later engineering build may reuse these exact candidate bytes after an
-explicitly reviewed logging-only Dockerfile change. The hashes of
+A later engineering build may reuse these exact candidate bytes after the
+reviewed Dockerfile changes for bounded Cargo diagnostics and staged offline
+Debian-package installation. The latter preserves the base's merged-`/usr`
+layout and installs only the already-pinned build tool and liblzo files; it does
+not introduce a new package or dependency source. The hashes of
 `requirements.lock`, `Cargo.toml`, `Cargo.lock`, and all six cache artifacts,
 the pinned base images, and the dependency-verification steps must remain
 unchanged; existing manifest and archive checks still apply. Preserve the
 original candidate, report, and proposed manifests unchanged. Record the exact
-Dockerfile drift and its review in **new build evidence**, and capture the new
+Dockerfile drift (including installation semantics, not just logging) and its
+review in **new build evidence**, and capture the new
 build source identity. The report's eleven captured inputs remain preparation
 provenance, not a claim that the later source is identical. This requires no
 candidate regeneration or rebinding and grants no production approval.

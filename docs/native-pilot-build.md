@@ -202,24 +202,37 @@ build is not live readiness or production acceptance.
 
 ## Live preparation remains with the genuine owners
 
-Engineering attempt 6 on 2026-09-30 used source `abdca80f` and the unchanged,
+Engineering attempt 7 on 2026-09-30 used source `269ad88f` and the unchanged,
 unpublished `v3-candidate-cba01916` dependencies in an isolated dirty-tree
 checkout. It built the nonrelease Linux/amd64 control image
-`sha256:4b5cfa3ddcc36768e272f148716689ca60657b3e9278c7c91964b487883e8fb9`.
-The shared library compiled, but Cargo exited 101 with one `E0282`
-filesystem-comparison error in `serverware-coder-body-supervisor-v12`. Its source
-fix is integrated for the next consolidated build. The new runner preserved the
-full diagnostic and Cargo's exit code while reducing 13,024 compiler warnings to
-eight bounded summaries and a count. No log clipping occurred in this attempt;
-the runner has executed, but the complete proxy image has not yet built.
+`sha256:3081c142885e57060cbe2f5a6c13c8fe3fed0c9e1d62c41fbc67898192620ec4`.
+The main glibc Cargo build completed successfully in 9m03s, and the actual custody
+ledger initializer ran. The runner reduced 30,170 compiler warnings to eight
+bounded summaries and a count without clipping. This attempt predates the
+runner's `--keep-going` change.
+
+Assembly then stopped with exit 127 (`tar: not found`) immediately after the
+verified Debian packages were extracted onto the pinned Python image's root.
+The base contains tar and a merged-`/usr` layout; the liblzo archive contains a
+real `lib` directory. A loader-path collision is the supported diagnosis, not
+an independently reproduced failure. The next build stages both verified
+packages separately and installs only `mksquashfs`, the real liblzo library and
+its SONAME link under `/usr`, preserving the base's directory symlinks. No
+package hashes, base pins, offline constraints or dependency checks change.
+One disposable, network-disabled probe of that corrected installation in the
+exact pinned base passed: both package hashes matched, tar and mksquashfs
+launched, shared libraries resolved and `/lib` links remained unchanged. This
+checked only the packaging blocker, not project behavior or full image assembly.
+The static Alpine launcher Cargo build was not reached in attempt 7.
 Retained evidence is under
-`codex-offload/serverware/engineering-builds/abdca80f-eziorc`.
+`codex-offload/serverware/engineering-builds/269ad88f-pfw5lv`.
 There is no gate image, complete two-image report, project test result,
 service deployment or pilot acceptance from this attempt. Canonical reviewed
 dependency pins and the nonrelease boundary remain unchanged.
 
 Earlier attempts stopped at 18 library errors, then 95 distinct diagnostics
-across 53 files, then 32 distinct diagnostics across 19 files, then five errors.
+across 53 files, then 32 distinct diagnostics across 19 files, then five errors,
+then one filesystem-comparison type error in attempt 6.
 Attempt 5 stopped before Rust when BuildKit could not materialize a pinned base;
 all five exact base-image references were subsequently found missing and restored
 without changing their digests. Their removal cause is unproven; separate

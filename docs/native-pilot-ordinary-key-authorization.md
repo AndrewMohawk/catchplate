@@ -1,8 +1,10 @@
 # Ordinary-service process binding and current-key authorization
 
-The `.371` batch adds the measurements and independent checkpoint issuer needed
-before ordinary-service runtime preparation. It does not add supervisor job
-coverage: **7/60** jobs are implemented and startup still refuses before spawn.
+The `.371` batch adds process measurements and a direct-next checkpoint issuer.
+The `.372` [initial-history ceremony](native-pilot-ordinary-initial-history.md)
+adds the explicit initial-state/checkpoint/anchor source path. Neither adds
+supervisor job coverage: **7/60** jobs are implemented, **53** remain unsupported
+and startup still refuses before spawn. Production acceptance remains **0/6**.
 
 ## Why this precedes delivery
 
@@ -51,7 +53,7 @@ original driver configuration/window, ordinary launch/cold configuration,
 actual preparation observation, independently pinned history-root identity,
 genuine authority-history original and complete approved checkpoint payload.
 
-This initial profile accepts one genuinely signed retained epoch with empty
+This fresh-retained-epoch profile accepts one genuinely signed retained epoch with empty
 transition, compaction and replay-tombstone collections. It authenticates the
 existing root, checkpoint and service signatures and separate key identities
 before using the current checkpoint-authority key. It does not claim general
@@ -59,16 +61,18 @@ history-chain admission or silently select the last unverified history entry.
 Rotated histories need a separately connected verified admission path. This
 issuer produces the direct next checkpoint: its predecessor is the supplied
 epoch's actual checkpoint and its sequence advances by one. The retained epoch
-already binds the same intended process and service key. Initial checkpoint
-and three-party retained-anchor issuance therefore remain required source work;
-this successor issuer does not bootstrap them from nothing.
+already binds the same intended process and service key. This successor issuer
+does not bootstrap them from nothing.
 
-The existing native initial-state contract is also incomplete: it requires
-nonzero checkpoint-predecessor, pruned-history-root and durable-head digests but
-does not define a fresh empty-state origin for them. Completing that path needs
-genuine supplied originals or an explicit authenticated initial-state profile
-implemented in both producer and native consumer. Passing nonzero shape checks
-with arbitrary digests is not an acceptable initialization procedure.
+The separate [initial-history ceremony](native-pilot-ordinary-initial-history.md)
+uses the actual parked-child preparation and retained empty-directory observation,
+then independently approved initial state. It issues checkpoint one, signs the
+same retained anchor in three separate one-key calls, and assembles the opt-in
+wrapper only after verification. Distinct typed INITIAL commitments define the
+predecessor, pruned-root and durable-head meanings; they are not fabricated past
+receipts. Native admission authenticates the wrapper and checks the real process
+and still-empty directories before any state-writing gate. The existing raw v3
+history formats and this direct-next issuer remain unchanged.
 
 Output uses the unchanged native `policyCustodyCurrentKeyAuthorization/v3`
 payload, signature preimage and checkpoint digest. It binds the intended fixed
@@ -79,9 +83,9 @@ hardware custody proof. Loss or partial output does not authorize a retry.
 
 ## Remaining integration
 
-Implement the initial checkpoint/retained-anchor ceremony, then add explicit
-checkpoint-authority capabilities and fixed coordinator jobs
-before ordinary delivery, then consume their actual results in the five runtime
+Connect the initial ceremony through independently approved supervisor policy,
+explicit authority capabilities, fixed coordinator jobs and output publication
+before ordinary delivery, then consume its actual results in the five runtime
 and C9 composers. The runtime/inspection-policy installation must preserve
 service ownership, exclusive creation and retained readback. Generation and the
 remaining native/bridge/release/lifetime jobs, real provisioning and connected

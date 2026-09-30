@@ -176,7 +176,8 @@ def sign_grant(*, payload_raw, guest, runtime_raw, history_raw, delivery_raw, si
 def _grant_values(*, payload_raw, guest, runtime_raw, history_raw, delivery_raw, now, commitment, spool=False, effects=False):
     payload = p.fields(document(payload_raw, 65536), GRANT)
     runtime = document(runtime_raw, MAX_BYTES)["runtime"]
-    history = p.fields(document(history_raw, MAX_BYTES), HISTORY)
+    from serverware import native_pilot_ordinary_initial_profile as initial
+    history = initial.runtime_manifest(history_raw, runtime=runtime, guest=guest)
     delivery = document(delivery_raw, 65536)["payload"]
     p.guest(guest)
     scope = p.fields(payload["scope"], SCOPE)

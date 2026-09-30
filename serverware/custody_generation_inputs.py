@@ -40,6 +40,8 @@ class GenerationInputs:
         self._spool = launcher._spool
         self._effects = launcher._effects
         self._spools = {}
+        self._initial_state_attempted = False
+        self._initial_state = None
 
     @classmethod
     def prepare(cls, launcher, *, business_descriptors):
@@ -152,6 +154,11 @@ class GenerationInputs:
         return {name: o.directory_identity(fd) for name, fd in self._roles[role]["descriptors"]
             if name not in {"listener", "generation-grant", "dispatch-grant", "spool-head-grant", "spool-current-grant", "active-effect-cleanup-grant"}}
 
+    def initial_resources_original(self):
+        """Actual empty fixed-role directories, not a genesis or authority."""
+        from serverware.custody_generation_initial_state import initial_resources_original
+        return initial_resources_original(self)
+
     def _claim_delivery(self, role):
         self.check(); p.require(role in g.ROLES and not self._taken)
         item = self._roles[role]
@@ -250,6 +257,8 @@ class GenerationInputs:
         p.require(len(selected) == 1 and selected[0]["signing"] is None)
         history_raw = originals[history_name].read()
         p.require(p.sha(history_raw) == selected[0]["original"]["sha256"])
+        from serverware import native_pilot_ordinary_initial_profile as initial
+        initial.runtime_manifest(history_raw, runtime=header, guest=guest)
         delivery = o.publish(f"/etc/serverware/custody-{role}-delivery.json", signed)
         self._originals.append(delivery)
         item.update(delivery=delivery, delivery_raw=signed, guest=guest, runtime=runtime,

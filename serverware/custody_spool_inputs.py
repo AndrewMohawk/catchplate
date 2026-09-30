@@ -103,8 +103,9 @@ def _epoch_key(epoch, role, encoded, item):
 
 
 def _root(item):
-    history = p.fields(g.document(item["history_raw"], g.MAX_BYTES), g.HISTORY)
     header = g.document(item["runtime_raw"], g.MAX_BYTES)["runtime"]
+    from serverware import native_pilot_ordinary_initial_profile as initial
+    history = initial.runtime_manifest(item["history_raw"], runtime=header, guest=item["guest"])
     semantic = p.framed(b"serverware.policyCustodyAuthorityHistoryManifest/v3", (g.canonical([history[k] for k in g.HISTORY[:-1]]),))
     p.require(history["manifestSha256"] == semantic == header["authorityHistoryManifestSha256"])
     root = p.fields(history["rootAuthority"], ("keyId", "keySpkiSha256", "publicKeySpkiBase64"))

@@ -191,7 +191,18 @@ def sign(*, input_original: bytes, signing_key) -> tuple[bytes, int]:
     observation = profile.preparation(preparation_raw)
     p.require(observation["configurationSha256"] == p.sha(launch_raw))
     history_raw, _ = _original(value["historyOriginal"], MAX_HISTORY)
-    epoch, authority = _history(history_raw, role=role, root_pin=value["rootAuthority"])
+    from serverware import native_pilot_ordinary_initial_profile as initial
+    history = initial.manifest(history_raw, role=role, root_pin=value["rootAuthority"])
+    supplied_history = generation.document(history_raw, MAX_HISTORY)
+    if supplied_history.get("apiVersion") == initial.WRAPPER_API:
+        state = supplied_history["initialState"]
+        p.require(state["preparationSha256"] == p.sha(preparation_raw)
+            and state["launchSha256"] == p.sha(launch_raw)
+            and p.ns(state["issuedAtBoottimeNs"]) <= now)
+        for name in ("bootIdBase64url", "timeNamespaceDevice", "timeNamespaceInode",
+                     "startupDeadlineBoottimeNs", "lifetimeDeadlineBoottimeNs", "invocationId"):
+            _same(state[name], window[name])
+    epoch, authority = _history(generation.canonical(history), role=role, root_pin=value["rootAuthority"])
     identity = profile.prepared_identity(observation, role=role,
         endpoint_role=epoch["endpointProcessIdentity"]["endpointRole"], launch=launch,
         configuration=cold, window=window, now=now)

@@ -30,6 +30,7 @@ pub(super) mod active_effect_cleanup;
 pub(super) mod dispatch_service;
 pub(super) mod generation_certification;
 pub(super) mod generation_recovery;
+mod initial_history;
 mod native_facade_lifecycle;
 pub(crate) use native_facade_lifecycle::{Prepared as PreparedNativeCustodyLifecycle,Owner as NativeCustodyLifecycleOwner};
 pub(in crate::policy_shadow) use native_facade_lifecycle::constructed::ConstructedDriver;
@@ -426,11 +427,10 @@ impl RuntimeConfigHeaderV3 {
         Ok(Sha256Digest::compute(invocation_id.as_bytes()))
     }
 
-    fn load_authority_history(
+    fn authority_history_original(
         &self,
         credentials: &CredentialDirectory,
-        expected_role: TrustedHostServiceRoleV3,
-    ) -> Result<RuntimeAuthorityHistory, ServiceRunnerError> {
+    ) -> Result<Vec<u8>, ServiceRunnerError> {
         let bytes = credentials.read(
             &self.authority_history_manifest_credential,
             MAX_CONFIG_BYTES,
@@ -445,8 +445,44 @@ impl RuntimeConfigHeaderV3 {
                 "authority-history credential differs from its startup-pinned manifest digest",
             ));
         }
+        if initial_history::selected(&bytes)? && !exact_original_pinned_by_guest {
+            return Err(ServiceRunnerError::invalid(
+                "initial authority history requires the actual signed guest credential owner",
+            ));
+        }
+        Ok(bytes)
+    }
+
+    fn load_authority_history(
+        &self, credentials: &CredentialDirectory,
+        expected_role: TrustedHostServiceRoleV3,
+    ) -> Result<RuntimeAuthorityHistory, ServiceRunnerError> {
+        let bytes = self.authority_history_original(credentials)?;
+        self.history_from_original(&bytes, expected_role)
+    }
+
+    fn admit_authority_history(
+        &self, credentials: &CredentialDirectory,
+        expected_role: TrustedHostServiceRoleV3,
+        bootstrap: &Bootstrap, activation: &BTreeMap<String, OwnedFd>,
+    ) -> Result<RuntimeAuthorityHistory, ServiceRunnerError> {
+        let bytes = self.authority_history_original(credentials)?;
+        if initial_history::selected(&bytes)? {
+            return initial_history::admit(&bytes, self, expected_role, bootstrap, activation);
+        }
+        self.history_from_original(&bytes, expected_role)
+    }
+
+    fn history_from_original(
+        &self, bytes: &[u8], expected_role: TrustedHostServiceRoleV3,
+    ) -> Result<RuntimeAuthorityHistory, ServiceRunnerError> {
+        if initial_history::selected(bytes)? {
+            // Gate-owned re-reads authenticate the same wrapper, but never
+            // repeat initial empty-directory admission after a gate writes.
+            return initial_history::load(bytes, self, expected_role);
+        }
         let manifest: AuthorityHistoryManifestV3 =
-            common::decode_canonical_frame(&bytes)?;
+            common::decode_canonical_frame(bytes)?;
         // v5's actual Guest credential reader already authenticates the full
         // byte SHA from signed C9. Its semantic manifest SHA is a DIFFERENT
         // framed commitment, verified below by the complete history owner.
@@ -1121,16 +1157,15 @@ fn run_durable_recovery_store_loaded(
 ) -> Result<(), ServiceRunnerError> {
     bootstrap.check()?;
     loaded.value.runtime.validate()?;
+    let _authority_history = loaded.value.runtime.admit_authority_history(
+        &loaded.credentials, TrustedHostServiceRoleV3::DurableRecoveryStore,
+        &bootstrap, &activation,
+    )?;
     let mut generation=generation_service::Gate::open(&loaded,&loaded.value.runtime,&bootstrap,&mut activation,
         TrustedHostServiceRoleV3::DurableRecoveryStore)?;
     let mut dispatch=dispatch_service::Gate::open(&loaded,&loaded.value.runtime,&bootstrap,&mut activation,
         TrustedHostServiceRoleV3::DurableRecoveryStore)?;
     let mut spool=spool_head::Gate::open(&loaded,&loaded.value.runtime,&bootstrap,&mut activation)?;
-    let _authority_history =
-        loaded.value.runtime.load_authority_history(
-            &loaded.credentials,
-            TrustedHostServiceRoleV3::DurableRecoveryStore,
-        )?;
     let startup_deadline = bootstrap.deadline(
         loaded.value.runtime.startup_timeout_millis,
     )?;
@@ -1323,15 +1358,13 @@ fn run_cleanup_authorization_consumer_loaded(
 ) -> Result<(), ServiceRunnerError> {
     bootstrap.check()?;
     loaded.value.runtime.validate()?;
+    let _authority_history = loaded.value.runtime.admit_authority_history(
+        &loaded.credentials, TrustedHostServiceRoleV3::CleanupAuthorizationConsumer,
+        &bootstrap, &activation,
+    )?;
     let mut generation=generation_service::Gate::open(&loaded,&loaded.value.runtime,&bootstrap,&mut activation,
         TrustedHostServiceRoleV3::CleanupAuthorizationConsumer)?;
     let mut effects=active_effect_cleanup::Gate::open(&loaded,&loaded.value.runtime,&bootstrap,&mut activation)?;
-    let _authority_history =
-        loaded.value.runtime.load_authority_history(
-            &loaded.credentials,
-            TrustedHostServiceRoleV3::
-                CleanupAuthorizationConsumer,
-        )?;
     let startup_deadline = bootstrap.deadline(
         loaded.value.runtime.startup_timeout_millis,
     )?;
@@ -1562,13 +1595,12 @@ fn run_recovery_target_provider_loaded(
 ) -> Result<(), ServiceRunnerError> {
     bootstrap.check()?;
     loaded.value.runtime.validate()?;
+    let _authority_history = loaded.value.runtime.admit_authority_history(
+        &loaded.credentials, TrustedHostServiceRoleV3::RecoveryTargetProvider,
+        &bootstrap, &activation,
+    )?;
     let mut generation=generation_service::Gate::open(&loaded,&loaded.value.runtime,&bootstrap,&mut activation,
         TrustedHostServiceRoleV3::RecoveryTargetProvider)?;
-    let _authority_history =
-        loaded.value.runtime.load_authority_history(
-            &loaded.credentials,
-            TrustedHostServiceRoleV3::RecoveryTargetProvider,
-        )?;
     let startup_deadline = bootstrap.deadline(
         loaded.value.runtime.startup_timeout_millis,
     )?;
@@ -1780,17 +1812,15 @@ fn run_current_signature_authority_loaded(
 ) -> Result<(), ServiceRunnerError> {
     bootstrap.check()?;
     loaded.value.runtime.validate()?;
+    let _authority_history = loaded.value.runtime.admit_authority_history(
+        &loaded.credentials, TrustedHostServiceRoleV3::CurrentSignatureAuthority,
+        &bootstrap, &activation,
+    )?;
     let mut generation=generation_service::Gate::open(&loaded,&loaded.value.runtime,&bootstrap,&mut activation,
         TrustedHostServiceRoleV3::CurrentSignatureAuthority)?;
     let mut dispatch=dispatch_service::Gate::open(&loaded,&loaded.value.runtime,&bootstrap,&mut activation,
         TrustedHostServiceRoleV3::CurrentSignatureAuthority)?;
     let mut spool=spool_current::Gate::open(&loaded,&loaded.value.runtime,&bootstrap,&mut activation)?;
-    let _authority_history =
-        loaded.value.runtime.load_authority_history(
-            &loaded.credentials,
-            TrustedHostServiceRoleV3::
-                CurrentSignatureAuthority,
-        )?;
     if loaded.value.current_subjects.is_empty()
         || loaded.value.current_subjects.len() > MAX_CURRENT_SUBJECTS
     {
@@ -1984,13 +2014,12 @@ fn run_bounded_cleanup_helper_loaded(
 ) -> Result<(), ServiceRunnerError> {
     bootstrap.check()?;
     loaded.value.runtime.validate()?;
+    let _authority_history = loaded.value.runtime.admit_authority_history(
+        &loaded.credentials, TrustedHostServiceRoleV3::BoundedCleanupHelper,
+        &bootstrap, &activation,
+    )?;
     let mut generation=generation_service::Gate::open(&loaded,&loaded.value.runtime,&bootstrap,&mut activation,
         TrustedHostServiceRoleV3::BoundedCleanupHelper)?;
-    let _authority_history =
-        loaded.value.runtime.load_authority_history(
-            &loaded.credentials,
-            TrustedHostServiceRoleV3::BoundedCleanupHelper,
-        )?;
     let startup_deadline = bootstrap.deadline(
         loaded.value.runtime.startup_timeout_millis,
     )?;

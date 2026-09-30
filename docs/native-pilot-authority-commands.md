@@ -19,9 +19,19 @@ command without that authority's own approval and observation checks.
 The [ordinary current-key issuer](native-pilot-ordinary-key-authorization.md)
 produces an existing v3 checkpoint under an authenticated supplied fresh retained
 epoch. Its `--input-fd` and `--authority-key-fd` select independently approved
-originals and the distinct checkpoint key. The initial checkpoint/three-party
-retained-anchor ceremony and fixed coordinator jobs remain separate missing
-work; this command is not a cold-history bootstrap or a running-service proof.
+originals and the distinct checkpoint key. This successor command is not a
+cold-history bootstrap or a running-service proof.
+
+The separate [ordinary initial-history ceremony](native-pilot-ordinary-initial-history.md)
+uses actual parked-child/empty-resource observations and an independently
+approved initial state. `sign_native_pilot_ordinary_initial.py` issues checkpoint
+one, obtains three separate one-key anchor signatures, then verifies and
+assembles the explicit wrapper without a private key. Typed INITIAL commitments
+are not past receipts. Native opt-in admission checks the actual process and
+empty directories before gates write; legacy raw history remains unchanged.
+Supervisor policy/job/output-publication wiring and ordinary runtime/delivery
+composition remain open. Coverage is still 7/60 fixed jobs, 53 unsupported and
+0/6 production acceptance; these commands do not bypass the startup guard.
 
 The [driver-window issuer](native-pilot-window-authority.md) handles the existing
 pre-start Window/v1 under the bootstrap authority. The
@@ -47,6 +57,25 @@ python3 -I -B scripts/authority/sign_native_pilot_cohort.py --operation release 
 python3 -I -B scripts/authority/sign_native_pilot_scope.py --input-fd 3 --authority-key-fd 4
 ```
 
+The initial-history command additionally has the fixed operations `checkpoint`,
+`root-anchor`, `checkpoint-anchor`, `service-anchor` and `assemble`. Each requires
+its own complete independently approved input; the latter stages consume actual
+prior public outputs. For example:
+
+```text
+python3 -I -B scripts/authority/sign_native_pilot_ordinary_initial.py --operation checkpoint --input-fd 3 --authority-key-fd 4
+python3 -I -B scripts/authority/sign_native_pilot_ordinary_initial.py --operation root-anchor --input-fd 3 --authority-key-fd 4
+python3 -I -B scripts/authority/sign_native_pilot_ordinary_initial.py --operation checkpoint-anchor --input-fd 3 --authority-key-fd 4
+python3 -I -B scripts/authority/sign_native_pilot_ordinary_initial.py --operation service-anchor --input-fd 3 --authority-key-fd 4
+python3 -I -B scripts/authority/sign_native_pilot_ordinary_initial.py --operation assemble --input-fd 3
+```
+
+These are separate invocations with separately supplied purpose-matching FDs,
+not a script which provisions inputs or loads all three private keys. Assembly
+forbids `--authority-key-fd`. The [ceremony guide](native-pilot-ordinary-initial-history.md)
+specifies its exact input11/12/13 contracts and wrapper4. No fixed publication
+purpose or coordinator job for these outputs is added by this source batch.
+
 FD 3 must hold the independently approved canonical ASCII JSON input, without
 a terminal newline. It must be a root:root `0400` read-only, single-link regular
 file, or a sealed `0400` memfd. FD 4 must be the already provisioned root:root
@@ -55,8 +84,9 @@ descriptors must be distinct and at least 3; the helpers mark them non-inheritab
 The purpose-specific producer verifies the key against its approved authority.
 There is no default key or key generation path.
 
-Stdout must be a root-owned supervisor pipe. It receives only the existing signed
-original, without a newline. Capture the complete output and successful exit
+Stdout must be a root-owned supervisor pipe. It receives only the purpose-specific
+signed original, detached signature or verified public wrapper, without a newline.
+Capture the complete output and successful exit
 before treating it as available; a partial write is an unknown failed output,
 not permission to sign again. Output writes are nonblocking and bounded to one
 second or the original startup deadline, whichever is earlier. The external

@@ -242,7 +242,7 @@ def require_deliveries(policy, *, process, request) -> dict:
         originals[role], guests[role] = _result(process, role, inputs[role], cold[role])
     current = p.fields(_phase(process, "service-originals")["payload"],
         _RESOURCE_FIELDS + ("driverGenerationRecipe", "endpointDeliveries", "endpointDeliveryResult",
-            "ordinaryPreparationOriginal"))
+            "ordinaryPreparationOriginal", "ordinaryInitialResourcesOriginal"))
     _ordinary_preparation(process, current, now=before)
     previous = _phase(process, "endpoint-deliveries")["payload"]
     for field in _RESOURCE_FIELDS + ("driverGenerationRecipe",):
@@ -268,6 +268,12 @@ def _ordinary_preparation(process, current, *, now):
 
     raw, _ = scope._original(current["ordinaryPreparationOriginal"], ordinary.MAX_PREPARATION)
     measured = ordinary.preparation(raw)
+    from serverware import native_pilot_ordinary_initial_profile as initial
+    resources_raw, _ = scope._original(current["ordinaryInitialResourcesOriginal"], initial.MAX_STATE)
+    resources = initial.resources(resources_raw)
+    p.require(resources["preparationSha256"] == p.sha(raw)
+        and p.ns(measured["issuedAtBoottimeNs"]) <= p.ns(resources["issuedAtBoottimeNs"]) <= now)
+    p.fields(current["ordinaryDirectories"], generation.ROLES)
     installed_raw = process.approved_input_original("endpoint-precreation", "install-precreation")
     p.require(p.sha(installed_raw) == process.approved_input_sha256("endpoint-precreation", "install-precreation"))
     installed = p.document(installed_raw, precreation.MAX_INPUT)
@@ -292,3 +298,8 @@ def _ordinary_preparation(process, current, *, now):
         c9._same({name: row["targetExecutable"][name] for name in ("device", "inode", "length", "sha256")},
             actual["executable"])
         p.require(row["targetExecutable"]["sha256"] == launch["services"][role]["executableSha256"])
+        directories = resources["services"][role]["directories"]
+        c9._same({name: item["identity"] for name, item in directories.items()},
+            current["ordinaryDirectories"][role])
+        for item in directories.values():
+            p.require(item["identity"]["uid"] == cold["uid"] and item["identity"]["gid"] == cold["gid"])

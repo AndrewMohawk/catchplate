@@ -74,18 +74,22 @@ def preparation(metadata):
             "Actual listeners, persistent fs-verity-capable stores, held locks, cgroups, IMA/LSM identities, UID separation and PIDFD support",
             "Control-plane database/OIDC/WebAuthn/protected-authority configuration and operator two-person approvals",
             "Independent Setup hardware/proxy/final issuer artifacts, protected configurations and sealed key delivery",
+            "Separately operated authority coordinator and protected conductor runtime; exclusive stdin/stdout pipes and independently provisioned live services",
         ],
         "existingOwners": {
-            "liveComposition": "serverware.native_pilot_launch.NativePilotLaunch.start / start_endpoints / prepare_resources / release",
+            "operatorConductor": "python3 -B scripts/run_native_pilot.py --run-native-pilot",
+            "operatorChannel": "serverware.native_pilot_operator_channel.Channel: exclusive machine pipes, canonical request/reply originals, original absolute deadlines, no authority or retries",
+            "operatorPhases": "bootstrap-admission / endpoint-precreation / endpoint-inputs / service-originals / bridge-runtime / bridge-delivery / release / constructed-admission / generation-origin / shutdown",
+            "liveComposition": "serverware.native_pilot_launch.NativePilotLaunch.start / start_endpoints / prepare_resources / prepare_bridge_connections / prepare_operational_inputs / release",
             "nativeCohort": "serverware.native_shadow_proof_cohort_control.ParkedProofCohort.start_for_driver",
             "ordinaryFive": "serverware.custody_generation_launch.FiveServiceLaunch.start_effects",
             "generationInputs": "serverware.custody_generation_business.BusinessResources.prepare_commitment(five).commitment_inputs()",
             "spoolResources": "serverware.native_shadow_spool_inputs.SpoolInputs.prepare",
             "driver": "serverware.native_shadow_driver_bootstrap.DriverBootstrap.start",
-            "outgoingAndContinuation": "serverware.native_shadow_driver_inputs.OperationalInputs.prepare_outgoing",
+            "outgoingAndContinuation": "serverware.native_shadow_driver_outgoing.OutgoingResources.prepare / serverware.native_shadow_driver_resources.BridgeResources.prepare_native_peers / serverware.native_shadow_driver_inputs.OperationalInputs.prepare_pilot",
             "orderedRelease": "serverware.custody_generation_launch.FiveServiceLaunch.release_endpoint_cohort / ParkedProofCohort.continue_driver",
         },
-        "boundary": "Preparation is build data only. Actual live owners must measure, admit, sign independently, retain and release under original deadlines; no launch is performed.",
+        "boundary": "Preparation is build data only. Actual live owners must measure, admit, sign independently, retain and release under original deadlines; no launch is performed. Current seccomp/native artifacts do not package the Python conductor runtime or its external authority coordinator; their installation and independently provisioned live services remain required.",
     }
 
 

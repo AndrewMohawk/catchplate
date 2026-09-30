@@ -108,6 +108,20 @@ def _park(channel, executable, parent, role, startup, inspected, commitment, spo
         os._exit(1)
 
 
+class FiveServiceStartError(ValueError):
+    """Startup failed and its single cleanup attempt did not complete."""
+
+    launch: "FiveServiceLaunch"
+    startup_error: BaseException
+    cleanup_error: BaseException
+
+    def __init__(self, launch: "FiveServiceLaunch", startup_error: BaseException, cleanup_error: BaseException):
+        super().__init__("five service start failed; cleanup uncertain; owner retained")
+        self.launch = launch
+        self.startup_error = startup_error
+        self.cleanup_error = cleanup_error
+
+
 class FiveServiceLaunch:
     def __init__(self, token):
         p.require(token is _TOKEN)
@@ -232,8 +246,14 @@ class FiveServiceLaunch:
             owner._thread = threading.Thread(target=owner._watch, name="custody-five-lifetime", daemon=True)
             owner._thread.start()
             return owner
-        except BaseException:
-            owner.close(); raise
+        except BaseException as startup_error:
+            try:
+                owner.close()
+            except BaseException as cleanup_error:
+                # Preserve this actual partial owner and both failures. The
+                # caller must not mistake retention for permission to retry.
+                raise FiveServiceStartError(owner, startup_error, cleanup_error) from cleanup_error
+            raise
 
     def check(self):
         p.require(not self._closed and not self._failed and os.getpid() == self._pid

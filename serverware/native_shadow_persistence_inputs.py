@@ -64,10 +64,11 @@ class PersistenceInputs:
         self._closed = self._delivery_attempted = self._genesis_attempted = False
         self._grant_attempted = self._taken = self._poisoned = False
         self._signed = self._grant = self._genesis = None
+        self._pilot_inputs = None
 
     @classmethod
     def prepare(cls, *, cohort, configuration_raw, configuration_sha256, peer_original, peer_sha256,
-                scope_original, scope_sha256, startup_deadline_boottime_ns):
+                scope_original, scope_sha256, startup_deadline_boottime_ns, pilot_inputs=None):
         # Imported lazily to keep the resource producer distinct from the real
         # launcher and prevent a raw observation/duck-typed DTO from substituting.
         from serverware.native_shadow_proof_cohort_control import ParkedProofCohort
@@ -91,6 +92,14 @@ class PersistenceInputs:
                                  ("executableLength", "length"), ("executableSha256", "sha256")):
             p.require(peer[expected] == child["executable"][actual])
         owner = cls(_TOKEN)
+        if pilot_inputs is not None:
+            from serverware.native_pilot_endpoint_inputs import PilotEndpointInputs
+            p.require(cls is PersistenceInputs and type(pilot_inputs) is PilotEndpointInputs
+                and pilot_inputs._cohort is cohort and pilot_inputs._persistence is None
+                and pilot_inputs._pilot._endpoint_inputs is pilot_inputs)
+            pilot_inputs._origin()
+            owner._pilot_inputs = pilot_inputs
+            pilot_inputs._persistence = owner  # Before any allocation; failure stays retained.
         try:
             owner._cohort, owner._child, owner._endpoint = cohort, child, endpoint
             owner._pid, owner._start, owner._boot = os.getpid(), originals._start(), originals._boot()
@@ -140,7 +149,10 @@ class PersistenceInputs:
             owner.check()
             return owner
         except BaseException:
-            owner.close()
+            if owner._pilot_inputs is None:
+                owner.close()
+            else:
+                owner._poisoned = True
             raise
 
     def _parent(self, components):
@@ -360,6 +372,8 @@ class PersistenceInputs:
     def close(self):
         if self._closed:
             return
+        if self._pilot_inputs is not None:
+            self._pilot_inputs.require_retired()
         self._closed = True
         if self._socket is not None:
             self._socket.close()

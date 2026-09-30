@@ -349,13 +349,13 @@ class SpoolInputs:
             for name, fd in self.additions(role):
                 p.require(name in held and o.structural(os.fstat(held[name])) == o.structural(os.fstat(fd)))
 
-    def deliver_origin(self):
+    def deliver_origin(self, *, deadline_boottime_ns=None):
         """Explicit post-install attempt, not a poll, retry or ready assertion."""
         self.check(preparation=False)
         p.require(self._head is not None and not self._delivery_attempted)
         self._delivery_attempted = True
         from serverware.native_generation_origin_relay import deliver
-        return deliver(self)
+        return deliver(self, deadline_boottime_ns=deadline_boottime_ns)
 
     def close(self):
         # Called only after the actual cohort close has observed/reaped all

@@ -53,7 +53,7 @@ class Configuration:
         self.original.close()
 
 
-def deliver(owner):
+def deliver(owner, *, deadline_boottime_ns=None):
     from serverware.native_shadow_spool_inputs import SpoolInputs
     p.require(type(owner) is SpoolInputs and owner._delivery_attempted)
     config = owner._relay; config.check()
@@ -61,7 +61,14 @@ def deliver(owner):
     scope, key_pin = head["scope"], head["originVerifier"]
     # This is the one observation's original transport budget, not a renewal
     # of any independently signed grant, generation or cohort lifetime.
-    deadline = min(o.clock() + 30_000_000_000, scope["expiresAtBoottimeNanos"], owner._cohort._lifetime)
+    now_boottime = o.clock()
+    deadline = min(now_boottime + 30_000_000_000, scope["expiresAtBoottimeNanos"], owner._cohort._lifetime)
+    if deadline_boottime_ns is not None:
+        p.require(type(deadline_boottime_ns) is int
+            and now_boottime < deadline_boottime_ns <= owner._cohort._lifetime)
+        # The caller may reserve original lifetime for cleanup, never extend
+        # this observation's transport budget or any independently held scope.
+        deadline = min(deadline, deadline_boottime_ns)
     previous_wall = 0
 
     def check(expires=None):

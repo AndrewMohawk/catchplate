@@ -11,8 +11,8 @@ import os
 import threading
 
 from serverware.custody_generation_business import BusinessResources
-from serverware.custody_generation_launch import FiveServiceLaunch
-from serverware.native_shadow_driver_bootstrap import DriverBootstrap
+from serverware.custody_generation_launch import FiveServiceLaunch, FiveServiceStartError
+from serverware.native_shadow_driver_bootstrap import DriverBootstrap, DriverBootstrapStartError
 from serverware.native_shadow_driver_inputs import OperationalInputs
 from serverware.native_shadow_driver_outgoing import OutgoingResources
 from serverware.native_shadow_driver_resources import BridgeResources
@@ -25,6 +25,14 @@ _LIVE = None
 def _require(condition):
     if not condition:
         raise ValueError("native pilot owner or phase does not match")
+
+
+class PilotStartError(ValueError):
+    """The actual partial pilot remains owned; cleanup is not retryable."""
+
+    def __init__(self, pilot, failure):
+        super().__init__("native pilot start failed; cleanup uncertain; owner retained")
+        self.pilot, self.failure = pilot, failure
 
 
 class NativePilotLaunch:
@@ -42,6 +50,9 @@ class NativePilotLaunch:
         self._business = self._generation = self._spool = None
         self._commit_request = self._generation_install = self._bridge = self._outgoing = None
         self._operation = None
+        self._endpoint_inputs = None
+        self._service_inputs_attempted = False
+        self._five_cleanup_failure = None
         self._connections_attempted = self._operation_attempted = False
         self._release_attempted = self._cleanup_attempted = self._closed = False
         self._continuation = None
@@ -61,12 +72,17 @@ class NativePilotLaunch:
             # It cannot be prepared from a predicted identity before start().
             owner._stage = "driver"
             return owner
+        except DriverBootstrapStartError as failure:
+            owner._driver = failure.driver
+            owner._cleanup_attempted = True  # Driver already attempted cleanup once.
+            raise PilotStartError(owner, failure) from failure
         except BaseException as failure:
             try:
                 owner.close()
             except BaseException as cleanup_failure:
-                raise BaseExceptionGroup("native pilot preparation and cleanup failed",
-                                         [failure, cleanup_failure]) from None
+                combined = BaseExceptionGroup("native pilot preparation and cleanup failed",
+                                              [failure, cleanup_failure])
+                raise PilotStartError(owner, combined) from None
             raise
 
     def _origin(self):
@@ -89,6 +105,8 @@ class NativePilotLaunch:
         self._bridge.check()
         if self._outgoing is not None:
             self._outgoing.check()
+        if self._endpoint_inputs is not None:
+            self._endpoint_inputs.check()
 
     def start_endpoints(self):
         """Use independently installed originals bound to this actual driver."""
@@ -105,7 +123,12 @@ class NativePilotLaunch:
             # cleanup must happen before shared endpoint resources may close.
             self._cohort = failure.cohort
             raise
-        self._five = FiveServiceLaunch.start_effects()
+        try:
+            self._five = FiveServiceLaunch.start_effects()
+        except FiveServiceStartError as failure:
+            self._five = failure.launch
+            self._five_cleanup_failure = failure.cleanup_error
+            raise
         self._stage = "endpoints"
 
     def prepare_resources(self):
@@ -264,6 +287,8 @@ resources. There is no cleanup retry or deadline renewal in this wrapper.
             try:
                 # This reaps real ordinary children without discarding the
                 # separate generation/business descriptors on unknown cleanup.
+                if self._five_cleanup_failure is not None:
+                    raise self._five_cleanup_failure  # No second cleanup attempt.
                 self._five.close()
             except BaseException as error:
                 failures.append(error)
@@ -273,6 +298,8 @@ resources. There is no cleanup retry or deadline renewal in this wrapper.
                     self._generation.close()
                 elif self._business is not None:
                     self._business.close()
+                if self._endpoint_inputs is not None:
+                    self._endpoint_inputs.close()
             except BaseException as error:
                 failures.append(error)
         if failures:

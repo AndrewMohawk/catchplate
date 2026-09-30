@@ -27,12 +27,21 @@ def _identity(value):
 
 
 def _names(fd):
-    names = []
-    with os.scandir(fd) as entries:
-        for item in entries:
-            names.append(item.name)
-            p.require(len(names) <= a.MAX_OBJECTS)
-    return sorted(names)
+    # scandir(fd) duplicates the same OFD, sharing its readdir offset. Each
+    # bounded population check needs a fresh OFD for the same held directory.
+    scan = os.open(".", READ_FLAGS | os.O_DIRECTORY, dir_fd=fd)
+    try:
+        before = _identity(os.fstat(fd))
+        p.require(stat.S_ISDIR(before[2]) and _identity(os.fstat(scan)) == before)
+        names = []
+        with os.scandir(scan) as entries:
+            for item in entries:
+                names.append(item.name)
+                p.require(len(names) <= a.MAX_OBJECTS)
+        p.require(_identity(os.fstat(fd)) == _identity(os.fstat(scan)) == before)
+        return sorted(names)
+    finally:
+        os.close(scan)
 
 
 @contextmanager

@@ -141,6 +141,7 @@ class RetainedActivationFds:
         self._fds, self._originals = [], []
         self._begun = self._closed = False
         self._retrieval_owner = None
+        self._trusted_time_owner = None
         self._commit_request_owner = self._generation_install_owner = None
 
     def check(self):
@@ -148,6 +149,8 @@ class RetainedActivationFds:
         self._cohort.check()
         if self._retrieval_owner is not None:
             self._retrieval_owner.check()
+        if self._trusted_time_owner is not None:
+            self._trusted_time_owner.check()
         if self._commit_request_owner is not None:
             self._commit_request_owner.check()
         if self._generation_install_owner is not None:
@@ -490,12 +493,12 @@ class ParkedProofCohort:
         from serverware.native_shadow_spool_inputs import SpoolInputs
         return SpoolInputs.prepare(self)
 
-    def deliver_generation_origin(self):
+    def deliver_generation_origin(self, *, deadline_boottime_ns=None):
         """One explicit post-install observation handoff, never a retry loop."""
         self._origin(); self._child_live()
         from serverware.native_shadow_spool_inputs import SpoolInputs
         p.require(type(self._spool_resources) is SpoolInputs)
-        return self._spool_resources.deliver_origin()
+        return self._spool_resources.deliver_origin(deadline_boottime_ns=deadline_boottime_ns)
 
     def lifetime_deadline_boottime_ns(self):
         self.check()
@@ -586,11 +589,20 @@ class ParkedProofCohort:
         return owner
 
     def retain_activation_fds(self, *, role, launch_pin, descriptors,
-                              commit_request_owner=None, generation_install_owner=None):
+                              commit_request_owner=None, generation_install_owner=None,
+                              trusted_time_owner=None):
         """Retain real already-created non-Persistence FDs; never create service authority."""
         self.check()
         p.require(role in self._roles and role != "persistence")
         p.require(all(value._role != role for value in self._retained))
+        if trusted_time_owner is not None:
+            from serverware.native_shadow_trusted_time_inputs import TrustedTimeActivation
+            p.require(role == "trustedTime" and type(trusted_time_owner) is TrustedTimeActivation
+                and trusted_time_owner._cohort is self and trusted_time_owner._taken
+                and trusted_time_owner._pilot_inputs is not None
+                and trusted_time_owner._pilot_inputs._trusted_time is trusted_time_owner
+                and descriptors == trusted_time_owner._cohort_descriptors)
+            trusted_time_owner.check()
         if commit_request_owner is not None:
             from serverware.native_shadow_commit_request_inputs import CommitRequestInputs
             p.require(role == "commitRequest" and type(commit_request_owner) is CommitRequestInputs
@@ -610,12 +622,15 @@ class ParkedProofCohort:
             p.require(descriptors == tuple((target, fd) for target, (_, fd)
                 in enumerate(generation_install_owner.additions(), 6)))
         launch, signed, grant, entries = self._role_files(role, launch_pin)
+        if trusted_time_owner is not None:
+            p.require(signed.raw == trusted_time_owner._signed)
         if generation_install_owner is not None:
             p.require((launch.raw, signed.raw, grant.raw) == generation_install_owner._originals)
         p.require(type(descriptors) is tuple and len(descriptors) == len(entries))
         owner = RetainedActivationFds(_TOKEN)
         owner._cohort, owner._role, owner._entries = self, role, entries
         owner._commit_request_owner, owner._generation_install_owner = commit_request_owner, generation_install_owner
+        owner._trusted_time_owner = trusted_time_owner
         owner._launch_sha, owner._delivery_bytes, owner._grant_bytes = p.sha(launch.raw), signed.raw, grant.raw
         try:
             for pair, entry in zip(descriptors, entries, strict=True):

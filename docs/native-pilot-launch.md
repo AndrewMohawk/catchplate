@@ -9,8 +9,10 @@ The [signed-input receiving APIs](native-pilot-signed-inputs.md) now let its rea
 ordinary/native resource and driver owners admit independent signatures without
 loading authority private keys into the launcher. The [fixed resource owners](native-pilot-resource-owners.md)
 now join Retrieval, GenerationInstall, CommitRequest and the real production/
-proof resources. A complete executable conductor is still required; this class
-alone is not an operator launch command.
+proof resources. The [fixed executable conductor](native-pilot-operator-inputs.md)
+now joins these APIs using ten closed machine-pipe exchanges. This class alone
+is not an operator command, and the executable still requires separately
+provisioned inputs and independent authority automation.
 
 The selected topology is one measured `DriverBootstrap` bridge, ten native
 endpoint children and five ordinary custody services. Configuration/v7 selects
@@ -82,6 +84,13 @@ If driver cleanup is uncertain, the wrapper may stop its local endpoints and
 ordinary children but retains shared spool, transfer and business originals.
 It does not convert a failed cleanup into a fresh invocation or retry it.
 Persistent files remain available for explicit operator reconciliation.
+
+The fixed conductor also retains the real endpoint-input composite. If driver
+or ordinary-service startup itself fails and its one cleanup attempt is
+uncertain, a typed exception carries the actual partial owner to the pilot;
+the wrapper does not repeat that cleanup. The CLI reports a fixed diagnostic
+and remains alive holding the unknown state for its external supervisor. It
+does not exit, infer retirement or renew a startup/authority deadline.
 
 See [artifact assembly](native-pilot-build.md), the
 [v7 wire schema](../schemas/native-shadow-proof-cohort.v7.schema.json) and the

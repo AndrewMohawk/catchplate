@@ -55,6 +55,20 @@ def _sealed(name, raw, mode):
         raise
 
 
+class DriverBootstrapStartError(ValueError):
+    """Startup failed and its single cleanup attempt did not complete."""
+
+    driver: DriverBootstrap
+    startup_error: BaseException
+    cleanup_error: BaseException
+
+    def __init__(self, driver: DriverBootstrap, startup_error: BaseException, cleanup_error: BaseException):
+        super().__init__("driver bootstrap start failed; cleanup uncertain; owner retained")
+        self.driver = driver
+        self.startup_error = startup_error
+        self.cleanup_error = cleanup_error
+
+
 class DriverBootstrap:
     def __init__(self, token):
         p.require(token is _TOKEN)
@@ -176,8 +190,13 @@ class DriverBootstrap:
                 and owner._driver_start == observation["driver"]["processStartTimeTicks"])
             owner.check()
             return owner
-        except BaseException:
-            owner.close()
+        except BaseException as startup_error:
+            try:
+                owner.close()
+            except BaseException as cleanup_error:
+                # Preserve this actual partial owner and both failures. The
+                # caller must not mistake retention for permission to retry.
+                raise DriverBootstrapStartError(owner, startup_error, cleanup_error) from cleanup_error
             raise
 
     def _spawn(self):

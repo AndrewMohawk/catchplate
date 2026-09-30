@@ -400,14 +400,54 @@ remain deferred. Canonical reviewed dependency pins, independent admission
 requirements and the nonrelease boundary are unchanged; production acceptance
 remains **0/6 verified**.
 
-The source-fixed prerequisite list points at the actual existing callers:
-`NativePilotLaunch.start`, `ParkedProofCohort.start_for_driver`,
-`FiveServiceLaunch.start_effects`,
-`BusinessResources.prepare_commitment(five).commitment_inputs()`,
-`SpoolInputs.prepare`, `DriverBootstrap.start`,
-and `OperationalInputs.prepare_outgoing`. These require genuine privileged
-owners and separately provisioned originals; this build script does not call
-them and does not serialize fake substitutes for their private types.
+The source-fixed prerequisite list points at the actual conductor command:
+
+```sh
+python3 -B scripts/run_native_pilot.py --run-native-pilot
+```
+
+This is a privileged live launch, not another build/preparation command. It must
+be started by a separately operated coordinator with exclusive machine pipes
+for stdin/stdout, real root credentials, protected source/runtime and the
+independently provisioned services and originals below. An interactive terminal,
+regular-file redirection or an invented reply cannot substitute for that setup.
+The build script never invokes this command.
+
+The conductor calls `NativePilotLaunch.start`, then `start_endpoints`,
+`prepare_resources`, `prepare_bridge_connections`, `prepare_operational_inputs`
+and `release`. Those retain the real `DriverBootstrap`, endpoint-only
+`ParkedProofCohort.start_for_driver`, `FiveServiceLaunch.start_effects`, business,
+spool, endpoint-listener, bridge-resource and operational-input owners. It does
+not reconstruct private owners from JSON or load independent signing keys.
+
+The coordinator must implement ten one-shot phases in exactly this order:
+`bootstrap-admission`, `endpoint-precreation`, `endpoint-inputs`,
+`service-originals`, `bridge-runtime`, `bridge-delivery`, `release`,
+`constructed-admission`, `generation-origin`, `shutdown`. Requests use
+`serverware.nativePilotOperatorRequest/v1` with `sequence`, `phase`, public
+`payload` and decimal-string `deadlineBoottimeNs`; replies use
+`serverware.nativePilotOperatorReply/v1` with the same sequence/phase,
+`requestSha256` of the exact canonical request excluding LF, and phase-specific
+`inputs`. Frames are canonical ASCII JSON plus one LF, bounded to 32 MiB each
+and 128 MiB total in both directions. The retained owners still validate every
+supplied original; pipe framing is not authorization.
+
+The first eight exchanges use the minimum actual original startup deadline.
+The final two use the minimum actual lifetime minus the maximum original
+driver/production cleanup reserve; the generation-origin relay is clipped to
+that same bound. There are no renewed human pauses, heartbeats or retries.
+`generation-origin` accepts only the request to observe the installed generation,
+not an uploaded success verdict. `shutdown` supplies the actual origin handoff
+and accepts exactly `{"action":"stop"}`. The original bounded interval can be
+used for external pilot work before stop; neither the handoff nor the command
+claims that testing passed. Final bounded status goes to stderr, while stdout
+remains solely the phase protocol. Cleanup uncertainty retains the actual owner
+graph rather than retrying or claiming retirement.
+
+The current seccomp operator and native guest artifact targets do **not** package
+this Python conductor runtime or implement its independent coordinator. Their
+protected installation/packaging, independently provisioned services and
+connected pilot acceptance remain open prerequisites, not build outputs.
 
 The [live composition](native-pilot-launch.md) uses an explicit endpoint-only
 cohort bound to the retained measured driver, with separate genuine cleanup

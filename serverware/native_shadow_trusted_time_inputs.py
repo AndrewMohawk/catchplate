@@ -42,10 +42,13 @@ class TrustedTimeActivation:
         self._socket = None
         self._closed = self._sign_attempted = self._taken = False
         self._signed = None
+        self._pilot_inputs = self._cohort = self._cohort_transfer = None
+        self._cohort_descriptors = ()
+        self._poisoned = False
 
     @classmethod
     def prepare(cls, *, configuration_raw, configuration_sha256, peer_raw, peer_sha256,
-                startup_deadline_boottime_ns):
+                startup_deadline_boottime_ns, pilot_inputs=None):
         p.require(os.getresuid() == (0, 0, 0) and os.getresgid() == (0, 0, 0))
         cold = delivery.configuration(configuration_raw, configuration_sha256)
         peer = artifacts._peer(peer_raw)
@@ -53,6 +56,14 @@ class TrustedTimeActivation:
         deadline = p.ns(startup_deadline_boottime_ns)
         p.require(_clock() < deadline <= _clock() + 30_000_000_000)
         owner = cls(_TOKEN)
+        if pilot_inputs is not None:
+            from serverware.native_pilot_endpoint_inputs import PilotEndpointInputs
+            p.require(cls is TrustedTimeActivation and type(pilot_inputs) is PilotEndpointInputs
+                and pilot_inputs._trusted_time is None and pilot_inputs._pilot._endpoint_inputs is pilot_inputs
+                and deadline == pilot_inputs._cohort.startup_deadline_boottime_ns())
+            pilot_inputs._origin()
+            owner._pilot_inputs = pilot_inputs
+            pilot_inputs._trusted_time = owner  # Retain partial allocation before side effects.
         try:
             owner._pid, owner._start, owner._boot = os.getpid(), originals._start(), originals._boot()
             owner._deadline, owner._configuration_raw = deadline, configuration_raw
@@ -91,11 +102,14 @@ class TrustedTimeActivation:
             owner.check()
             return owner
         except BaseException:
-            owner.close()
+            if owner._pilot_inputs is None:
+                owner.close()
+            else:
+                owner._poisoned = True
             raise
 
     def check(self):
-        p.require(not self._closed and os.getresuid() == (0, 0, 0) and os.getresgid() == (0, 0, 0)
+        p.require(not self._closed and not self._poisoned and os.getresuid() == (0, 0, 0) and os.getresgid() == (0, 0, 0)
             and os.getpid() == self._pid and originals._start() == self._start
             and originals._boot() == self._boot and _clock() < self._deadline)
         for parent, component, child, expected in self._parents:
@@ -112,6 +126,11 @@ class TrustedTimeActivation:
             and fcntl.fcntl(self._socket.fileno(), fcntl.F_GETFL) & os.O_NONBLOCK)
         for fd in (self._socket.fileno(),):
             p.require(not os.get_inheritable(fd))
+        if self._cohort is not None:
+            self._cohort.check()
+            for target, fd in self._cohort_descriptors:
+                p.require(target == 6 and not os.get_inheritable(fd)
+                    and _identity(os.fstat(fd)) == self._socket_identity)
 
     def activation(self):
         self.check()
@@ -167,9 +186,36 @@ class TrustedTimeActivation:
         self._signed = signed
         return signed
 
+    def take_for_cohort(self, *, cohort, launch_pin):
+        """Pilot-only retained transfer; never release unowned temporary FDs.
+
+        The existing one-use launch handoff allocates the actual duplicates.
+        Keep them here even if the cohort's independent original intake fails.
+        The cohort checks this exact activation again before begin_release.
+        """
+        from serverware.native_shadow_proof_cohort_control import ParkedProofCohort
+        self.check()
+        p.require(type(cohort) is ParkedProofCohort and self._pilot_inputs is not None
+            and self._pilot_inputs._cohort is cohort and self._pilot_inputs._trusted_time is self
+            and self._cohort is None and not self._taken and self._signed is not None)
+        self._cohort = cohort
+        try:
+            held = self.take_for_launch(signed_delivery_sha256=p.sha(self._signed))
+            self._fds.extend(fd for _, fd in held)
+            self._cohort_descriptors = held
+            self._cohort_transfer = cohort.retain_activation_fds(role="trustedTime", launch_pin=launch_pin,
+                descriptors=held, trusted_time_owner=self)
+            self.check()
+            return self._cohort_transfer
+        except BaseException:
+            self._poisoned = True
+            raise
+
     def close(self):
         if self._closed:
             return
+        if self._pilot_inputs is not None:
+            self._pilot_inputs.require_retired()
         self._closed = True
         if self._socket is not None:
             self._socket.close()

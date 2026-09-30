@@ -1,0 +1,427 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-ordinary-history-grants.v1.schema.json",
+  "description": "Eight explicit signed successors carry authenticated ordinary history/runtime originals without treating a native endpoint marker as production RPC configuration. Entire canonical signed grant <=4 MiB, each history <=1 MiB, each ordinary generation grant <=64 KiB. Version-specific signature domains use the corresponding API base plus .signature/vN. Legacy schemas and 64 KiB profiles are unchanged. Runtime verifies the outer independent supervisor before embedded roots, complete member history/generation signatures, byte hashes, same boot/time namespace, original interval containment, role independence and shared scope. Schema alone provides no authority or runtime evidence. GenerationCoordinator/v2 retains closed journal record bounds 8 MiB+1024 and total32 MiB; v1 remains512 KiB/4 MiB.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "payload",
+    "signature"
+  ],
+  "properties": {
+    "payload": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/commitRequest"
+        },
+        {
+          "$ref": "#/$defs/spool"
+        },
+        {
+          "$ref": "#/$defs/generation"
+        }
+      ]
+    },
+    "signature": {
+      "$ref": "native-shadow-role-keys.v1.schema.json#/$defs/signature"
+    }
+  },
+  "$defs": {
+    "sha": {
+      "$ref": "native-shadow-role-keys.v1.schema.json#/$defs/sha256"
+    },
+    "common": {
+      "type": "object",
+      "required": [
+        "guest",
+        "assignmentPayloadSha256",
+        "keyAuthorizationSha256",
+        "expectedPeer",
+        "trustCheckpointId",
+        "revocationGeneration",
+        "revocationRootSha256",
+        "issuedAtUnixNanos",
+        "expiresAtUnixNanos",
+        "signingKeyId",
+        "signingKeySpkiSha256"
+      ],
+      "properties": {
+        "guest": {
+          "$ref": "native-shadow-commit-request.v1.schema.json#/$defs/payload/properties/guest"
+        },
+        "assignmentPayloadSha256": {
+          "$ref": "native-shadow-commit-request.v1.schema.json#/$defs/payload/properties/assignmentPayloadSha256"
+        },
+        "keyAuthorizationSha256": {
+          "$ref": "native-shadow-commit-request.v1.schema.json#/$defs/payload/properties/keyAuthorizationSha256"
+        },
+        "expectedPeer": {
+          "$ref": "native-shadow-commit-request.v1.schema.json#/$defs/payload/properties/expectedPeer"
+        },
+        "trustCheckpointId": {
+          "$ref": "native-shadow-commit-request.v1.schema.json#/$defs/payload/properties/trustCheckpointId"
+        },
+        "revocationGeneration": {
+          "$ref": "native-shadow-commit-request.v1.schema.json#/$defs/payload/properties/revocationGeneration"
+        },
+        "revocationRootSha256": {
+          "$ref": "native-shadow-commit-request.v1.schema.json#/$defs/payload/properties/revocationRootSha256"
+        },
+        "issuedAtUnixNanos": {
+          "$ref": "native-shadow-commit-request.v1.schema.json#/$defs/payload/properties/issuedAtUnixNanos"
+        },
+        "expiresAtUnixNanos": {
+          "$ref": "native-shadow-commit-request.v1.schema.json#/$defs/payload/properties/expiresAtUnixNanos"
+        },
+        "signingKeyId": {
+          "$ref": "native-shadow-commit-request.v1.schema.json#/$defs/payload/properties/signingKeyId"
+        },
+        "signingKeySpkiSha256": {
+          "$ref": "native-shadow-commit-request.v1.schema.json#/$defs/payload/properties/signingKeySpkiSha256"
+        }
+      }
+    },
+    "ordinaryMember": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "generationGrantOriginal",
+        "runtimeOriginal",
+        "historyOriginal",
+        "rootKeyId",
+        "rootKeySpkiSha256"
+      ],
+      "properties": {
+        "generationGrantOriginal": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 65536,
+          "pattern": "^[\\u0000-\\u007f]+$"
+        },
+        "runtimeOriginal": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4194304,
+          "pattern": "^[\\u0000-\\u007f]+$"
+        },
+        "historyOriginal": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1048576,
+          "pattern": "^[\\u0000-\\u007f]+$"
+        },
+        "rootKeyId": {
+          "$ref": "#/$defs/sha"
+        },
+        "rootKeySpkiSha256": {
+          "$ref": "#/$defs/sha"
+        }
+      }
+    },
+    "generationMember": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "grantOriginal",
+        "runtimeOriginal",
+        "historyOriginal",
+        "rootKeyId",
+        "rootKeySpkiSha256"
+      ],
+      "properties": {
+        "grantOriginal": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 65536,
+          "pattern": "^[\\u0000-\\u007f]+$"
+        },
+        "runtimeOriginal": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4194304,
+          "pattern": "^[\\u0000-\\u007f]+$"
+        },
+        "historyOriginal": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1048576,
+          "pattern": "^[\\u0000-\\u007f]+$"
+        },
+        "rootKeyId": {
+          "$ref": "#/$defs/sha"
+        },
+        "rootKeySpkiSha256": {
+          "$ref": "#/$defs/sha"
+        }
+      }
+    },
+    "ordinaryServices": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "durable-recovery-store",
+        "cleanup-authorization-consumer",
+        "recovery-target-provider",
+        "current-signature-authority",
+        "bounded-cleanup-helper"
+      ],
+      "properties": {
+        "durable-recovery-store": {
+          "$ref": "#/$defs/ordinaryMember"
+        },
+        "cleanup-authorization-consumer": {
+          "$ref": "#/$defs/ordinaryMember"
+        },
+        "recovery-target-provider": {
+          "$ref": "#/$defs/ordinaryMember"
+        },
+        "current-signature-authority": {
+          "$ref": "#/$defs/ordinaryMember"
+        },
+        "bounded-cleanup-helper": {
+          "$ref": "#/$defs/ordinaryMember"
+        }
+      }
+    },
+    "generationServices": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "durable-recovery-store",
+        "cleanup-authorization-consumer",
+        "recovery-target-provider",
+        "current-signature-authority",
+        "bounded-cleanup-helper"
+      ],
+      "properties": {
+        "durable-recovery-store": {
+          "$ref": "#/$defs/generationMember"
+        },
+        "cleanup-authorization-consumer": {
+          "$ref": "#/$defs/generationMember"
+        },
+        "recovery-target-provider": {
+          "$ref": "#/$defs/generationMember"
+        },
+        "current-signature-authority": {
+          "$ref": "#/$defs/generationMember"
+        },
+        "bounded-cleanup-helper": {
+          "$ref": "#/$defs/generationMember"
+        }
+      }
+    },
+    "commitRequest": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/common"
+        },
+        {
+          "type": "object",
+          "required": [
+            "apiVersion",
+            "purpose",
+            "scope",
+            "ordinaryServices"
+          ],
+          "properties": {
+            "apiVersion": {
+              "const": "serverware.nativeShadowCommitRequestServiceAssignment/v2"
+            },
+            "purpose": {
+              "const": "native-shadow-ledger-commit-request"
+            },
+            "scope": {
+              "$ref": "native-shadow-commit-request.v1.schema.json#/$defs/scope"
+            },
+            "ordinaryServices": {
+              "$ref": "#/$defs/ordinaryServices"
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "spool": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/common"
+        },
+        {
+          "type": "object",
+          "required": [
+            "apiVersion",
+            "purpose",
+            "scope",
+            "proofScopeOriginal",
+            "originVerifier",
+            "commitRequest",
+            "ordinaryServices"
+          ],
+          "properties": {
+            "apiVersion": {
+              "enum": [
+                "serverware.nativeShadowIngressServiceAssignment/v2",
+                "serverware.nativeShadowLedgerSpoolServiceAssignment/v3",
+                "serverware.nativeShadowTerminalSpoolServiceAssignment/v2",
+                "serverware.nativeShadowDispatchBarrierServiceAssignment/v2",
+                "serverware.nativeShadowActiveEffectBarrierServiceAssignment/v2",
+                "serverware.nativeShadowActiveEffectCommitServiceAssignment/v2"
+              ]
+            },
+            "purpose": {
+              "enum": [
+                "native-first-ingress",
+                "native-ledger-spool-and-sampling-with-unavailability",
+                "native-terminal-slot-append",
+                "native-dispatch-barrier",
+                "native-active-effect-barrier",
+                "native-active-effect-commit"
+              ]
+            },
+            "scope": {
+              "$ref": "native-ledger-spool.v1.schema.json#/$defs/scope"
+            },
+            "proofScopeOriginal": {
+              "$ref": "native-ledger-spool.v1.schema.json#/$defs/signerPayload/properties/proofScopeOriginal"
+            },
+            "originVerifier": {
+              "$ref": "native-ledger-spool.v1.schema.json#/$defs/key"
+            },
+            "commitRequest": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "policy-custody-guest-delivery.v1.schema.json#/$defs/pin"
+                }
+              ]
+            },
+            "ordinaryServices": {
+              "$ref": "#/$defs/ordinaryServices"
+            }
+          }
+        },
+        {
+          "oneOf": [
+            {
+              "properties": {
+                "apiVersion": {
+                  "const": "serverware.nativeShadowIngressServiceAssignment/v2"
+                },
+                "purpose": {
+                  "const": "native-first-ingress"
+                },
+                "commitRequest": {
+                  "type": "null"
+                }
+              }
+            },
+            {
+              "properties": {
+                "apiVersion": {
+                  "const": "serverware.nativeShadowLedgerSpoolServiceAssignment/v3"
+                },
+                "purpose": {
+                  "const": "native-ledger-spool-and-sampling-with-unavailability"
+                },
+                "commitRequest": {
+                  "$ref": "policy-custody-guest-delivery.v1.schema.json#/$defs/pin"
+                }
+              }
+            },
+            {
+              "properties": {
+                "apiVersion": {
+                  "const": "serverware.nativeShadowTerminalSpoolServiceAssignment/v2"
+                },
+                "purpose": {
+                  "const": "native-terminal-slot-append"
+                },
+                "commitRequest": {
+                  "type": "null"
+                }
+              }
+            },
+            {
+              "properties": {
+                "apiVersion": {
+                  "const": "serverware.nativeShadowDispatchBarrierServiceAssignment/v2"
+                },
+                "purpose": {
+                  "const": "native-dispatch-barrier"
+                },
+                "commitRequest": {
+                  "type": "null"
+                }
+              }
+            },
+            {
+              "properties": {
+                "apiVersion": {
+                  "const": "serverware.nativeShadowActiveEffectBarrierServiceAssignment/v2"
+                },
+                "purpose": {
+                  "const": "native-active-effect-barrier"
+                },
+                "commitRequest": {
+                  "type": "null"
+                }
+              }
+            },
+            {
+              "properties": {
+                "apiVersion": {
+                  "const": "serverware.nativeShadowActiveEffectCommitServiceAssignment/v2"
+                },
+                "purpose": {
+                  "const": "native-active-effect-commit"
+                },
+                "commitRequest": {
+                  "type": "null"
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "generation": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/common"
+        },
+        {
+          "type": "object",
+          "required": [
+            "apiVersion",
+            "purpose",
+            "services",
+            "keyHistory",
+            "journal"
+          ],
+          "properties": {
+            "apiVersion": {
+              "const": "serverware.nativeGenerationCoordinatorAssignment/v2"
+            },
+            "purpose": {
+              "const": "native-generation-installation"
+            },
+            "services": {
+              "$ref": "#/$defs/generationServices"
+            },
+            "keyHistory": {
+              "$ref": "native-generation-coordinator.v1.schema.json#/$defs/keyHistory"
+            },
+            "journal": {
+              "$ref": "native-generation-coordinator.v1.schema.json#/$defs/journal"
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    }
+  }
+}

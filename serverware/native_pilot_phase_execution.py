@@ -309,6 +309,23 @@ class PhaseExecution:
     def _known(self, field, value, output):
         p.require(_raw(value[field], 131072) == self._outputs[output])
 
+    def _known_native(self, field, value, operation):
+        raw = _raw(value[field], native_authority.MAX_OUTPUT)
+        native_authority.grant_original(operation, raw)
+        p.require(raw == self._outputs["native-service-" + operation])
+
+    def _native_histories(self, value):
+        """Bind the new grant bundle to all five actual earlier approved jobs."""
+        for role, service in p.fields(value["services"], generation.ROLES).items():
+            prior = generation.document(self._inputs["ordinary-generation-" + role],
+                service_authority.MAX_INPUT_BYTES)
+            _same(value["ordinaryLaunchOriginal"], prior["launchOriginal"])
+            _same(service, {**prior["services"][role], "generationGrantOriginal":
+                self._outputs["ordinary-generation-" + role].decode("ascii")})
+            p.require(service_authority._original(service["historyOriginal"], generation.MAX_BYTES)
+                == self._outputs["ordinary-initial-assemble-" + role])
+            self._known("deliveryOriginal", service, "ordinary-delivery-" + role)
+
     def _key_configuration(self, role, original):
         """Downstream verifier settings must retain this attempt's two outputs."""
         value = p.document(_raw(original, p.MAX_CONFIG), p.MAX_CONFIG)
@@ -430,10 +447,10 @@ class PhaseExecution:
                     if operation != "generation":
                         self._known("generationGrantOriginal", service, "ordinary-generation-" + role)
                 if operation == "dispatch":
-                    self._known("nativeGrantOriginal", value, "native-service-commitRequest")
+                    self._known_native("nativeGrantOriginal", value, "commitRequest")
                 if operation in ("head", "cleanup", "current"):
                     for name in spool.EFFECT_NATIVE:
-                        p.require(_raw(value["nativeOriginals"][name], 65536) == self._outputs["native-service-" + name])
+                        self._known_native(name, value["nativeOriginals"], name)
                     if operation != "head":
                         self._known("headGrantOriginal", value, "ordinary-head")
                     if operation == "current":
@@ -447,16 +464,21 @@ class PhaseExecution:
             if operation == "admission":
                 self._known("roleKeyOriginal", value, "native-role-keys-" + role)
         elif job.family == "native":
+            if value["apiVersion"] == "serverware.nativePilotNativeServiceAuthorityInput/v3":
+                self._native_histories(value)
+                if job.role == "commitRequest":
+                    keys = p.document(self._inputs["native-role-keys-commitRequest"], key_authority.MAX_INPUT)
+                    _same(value["assignmentOriginal"], keys["recipeOriginals"]["assignmentOriginal"])
             self._key_configuration(_NATIVE_ENDPOINT[job.role], value["configurationOriginal"])
             self._known("deliveryOriginal", value, "native-delivery-" + _NATIVE_ENDPOINT[job.role])
             _same(value["observationOriginal"], observed["cohortObservationOriginal"])
             if job.role == "ledger":
-                self._known("companionOriginal", value, "native-service-commitRequest")
+                self._known_native("companionOriginal", value, "commitRequest")
                 _same(value["companionPin"], self._pins["native-service-commitRequest"])
             elif job.role == "retrieval":
                 _same(p.document(_raw(value["endpointDeliveryResultOriginal"], 32768), 32768), observed["endpointDeliveryResult"])
                 for name in native_authority.SIGNERS:
-                    p.require(_raw(value["nativeGrantOriginals"][name], 65536) == self._outputs["native-service-" + name])
+                    self._known_native(name, value["nativeGrantOriginals"], name)
         elif job.family == "generation-install":
             self._key_configuration("generationInstall", value["nativeConfigurationOriginal"])
             self._known("coordinatorDeliveryOriginal", value, "native-delivery-generationInstall")
@@ -464,6 +486,11 @@ class PhaseExecution:
             for role, service in p.fields(value["services"], generation.ROLES).items():
                 self._known("deliveryOriginal", service, "ordinary-delivery-" + role)
                 self._known("generationGrantOriginal", service, "ordinary-generation-" + role)
+                prior = generation.document(self._inputs["ordinary-generation-" + role],
+                    service_authority.MAX_INPUT_BYTES)
+                _same(value["ordinaryLaunchOriginal"], prior["launchOriginal"])
+                _same(service, {**prior["services"][role], "generationGrantOriginal":
+                    self._outputs["ordinary-generation-" + role].decode("ascii")})
         elif job.family == "launch":
             _same(value["role"], job.role)
             if job.role != "bridge":

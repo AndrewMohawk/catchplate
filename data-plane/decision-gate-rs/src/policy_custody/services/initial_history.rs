@@ -208,6 +208,30 @@ pub(super) fn load(raw: &[u8], runtime: &RuntimeConfigHeaderV3, role: TrustedHos
     Ok(authenticate(raw, runtime, role)?.history)
 }
 
+/// Bind an authenticated initial wrapper to an already signature-admitted
+/// remote generation grant. This checks public data only: it never constructs
+/// a Bootstrap or claims to measure the remote process or its directories.
+/// The ordinary local owner retains its separate live admission below.
+pub(super) fn require_remote_guest(raw: &[u8], runtime: &RuntimeConfigHeaderV3,
+    role: TrustedHostServiceRoleV3, grant: &generation_service::RemoteGrant)
+    -> Result<(), ServiceRunnerError> {
+    if !selected(raw)? { return Ok(()); }
+    let owner = authenticate(raw, runtime, role)?;
+    let state = &owner.state;
+    let binding = grant.guest();
+    let identity = &owner.history.current_epoch().map_err(error)?.statement().endpoint_process_identity;
+    require(owner.history.manifest_sha256() == grant.history().manifest_sha256()
+        && binding.service_role == role_name(state.service_role)
+        && binding.uid == identity.endpoint_uid && binding.gid == identity.endpoint_gid
+        && binding.boot_id_base64url == state.boot_id_base64url
+        && binding.time_namespace_device == state.time_namespace_device
+        && binding.time_namespace_inode == state.time_namespace_inode
+        && binding.invocation_id == state.invocation_id
+        && binding.startup_deadline_boottime_ns == state.startup_deadline_boottime_ns
+        && binding.lifetime_deadline_boottime_ns == state.lifetime_deadline_boottime_ns
+        && ns(&state.issued_at_boottime_ns)? <= ns(&binding.issued_at_boottime_ns)?)
+}
+
 fn check_window(owner: &Authenticated, bootstrap: &Bootstrap, process: &guest_original::Process)
     -> Result<(), ServiceRunnerError> {
     bootstrap.check()?;

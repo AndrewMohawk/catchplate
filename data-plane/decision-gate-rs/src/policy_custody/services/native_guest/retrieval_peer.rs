@@ -234,7 +234,7 @@ struct Reply {api_version:String,request_sha256:Sha256Digest,process_identity_sh
 pub(in crate::policy_shadow::policy_custody::services) struct Inspector {
     endpoint:EndpointKind,
     channel:OwnedFd,peer:Option<AuthenticatedInheritedSeqpacket>,listener:OwnedFd,path:PathOriginal,
-    expected:services::common::ExpectedPeerCredentials,original:Original,sequence:u64,pending:Option<(Vec<u8>,u64,Packet)>,
+    expected:services::common::ExpectedPeerCredentials,original:Original,original_maximum:usize,sequence:u64,pending:Option<(Vec<u8>,u64,Packet)>,
 }
 impl Inspector {
     pub(in crate::policy_shadow::policy_custody::services) fn prepare(pin:&Pin,activation:&BTreeMap<String,OwnedFd>)->Result<(Self,OwnedFd),ShadowError> {
@@ -248,6 +248,19 @@ impl Inspector {
     pub(in crate::policy_shadow::policy_custody::services) fn prepare_endpoint(original:Original,
         expected:services::common::ExpectedPeerCredentials,guest_uid:u32,socket:&OwnedFd,endpoint:EndpointKind)
         ->Result<(Self,OwnedFd),ShadowError> {
+        Self::prepare_bounded(original,expected,guest_uid,socket,endpoint,65536)
+    }
+    /// Only callers that already checked a closed history-bearing grant use
+    /// this larger transport cap. Legacy profile caps remain in that parser.
+    pub(in crate::policy_shadow::policy_custody::services) fn prepare_history_endpoint(original:Original,
+        expected:services::common::ExpectedPeerCredentials,guest_uid:u32,socket:&OwnedFd,endpoint:EndpointKind)
+        ->Result<(Self,OwnedFd),ShadowError> {
+        require(matches!(endpoint,EndpointKind::CommitRequest|EndpointKind::IngressAdmission|EndpointKind::TerminalAppend
+            |EndpointKind::DispatchBarrier|EndpointKind::ActiveEffectBarrier|EndpointKind::ActiveEffectCommit|EndpointKind::GenerationInstallEnvelope))?;
+        Self::prepare_bounded(original,expected,guest_uid,socket,endpoint,super::super::native_keys::admission::ordinary_histories::MAX_CONFIGURATION)
+    }
+    fn prepare_bounded(original:Original,expected:services::common::ExpectedPeerCredentials,guest_uid:u32,
+        socket:&OwnedFd,endpoint:EndpointKind,original_maximum:usize)->Result<(Self,OwnedFd),ShadowError>{
         configure(socket.as_fd())?;local_path(socket.as_fd(),endpoint)?;
         let path=path_identity(guest_uid,expected.gid,endpoint)?;
         let listener=duplicate(socket.as_fd())?;
@@ -255,10 +268,10 @@ impl Inspector {
         require(unsafe{libc::socketpair(libc::AF_UNIX,libc::SOCK_SEQPACKET|libc::SOCK_CLOEXEC,0,fds.as_mut_ptr())}==0)?;
         let (channel,remote)=unsafe{(OwnedFd::from_raw_fd(fds[0]),OwnedFd::from_raw_fd(fds[1]))};
         configure(channel.as_fd())?;configure(remote.as_fd())?;
-        Ok((Self{endpoint,channel,peer:None,listener,path,expected,original,sequence:0,pending:None},remote))
+        Ok((Self{endpoint,channel,peer:None,listener,path,expected,original,original_maximum,sequence:0,pending:None},remote))
     }
     pub(in crate::policy_shadow::policy_custody::services) fn progress(&mut self,child:&super::parent::child::Child,lifetime:u64,uid:u32,gid:u32)->Result<(),ShadowError> {
-        self.original.read(65536).map_err(fail)?;require(now()?<lifetime)?;
+        self.original.read(self.original_maximum).map_err(fail)?;require(now()?<lifetime)?;
         local_path(self.listener.as_fd(),self.endpoint)?;
         require(path_identity(self.path.socket.uid,self.path.socket.gid,self.endpoint)?==self.path)?;
         if let Some((bytes,deadline,packet))=&self.pending {

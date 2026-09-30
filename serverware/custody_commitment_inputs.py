@@ -98,7 +98,8 @@ class _RoleInputs:
         signed = p.fields(g.document(raw, 65536), ("payload", "signatureBase64url"))
         value = p.fields(signed["payload"], a.SERVICE_FIELDS)
         runtime = g.document(item["runtime_raw"], g.MAX_BYTES)["runtime"]
-        history = p.fields(g.document(item["history_raw"], g.MAX_BYTES), g.HISTORY)
+        from serverware import native_pilot_ordinary_initial_profile as initial
+        history = initial.runtime_manifest(item["history_raw"], runtime=runtime, guest=item["guest"])
         c9 = g.document(item["delivery_raw"], 65536)["payload"]
         scope = a.scope_original(g.canonical(value["scope"]))
         p.require(value["apiVersion"] == "serverware.custodyCommitRequestServiceGrant/v1"
@@ -141,11 +142,13 @@ class _RoleInputs:
         # verified service-root signature. Its own supervisor/quote/currentness
         # checks are still performed by the actual native receiver, not inferred
         # from the envelope's shape or a local wall-clock timestamp here.
-        native = p.fields(g.document(native_raw, 65536), ("payload", "signature"))
-        np = p.fields(native["payload"], a.NATIVE_FIELDS)
+        from serverware import native_pilot_native_service_authority as native_authority
+        native = native_authority.grant_original("commitRequest", native_raw)
+        np = native["payload"]
+        native_authority.require_ordinary_member(np, self._role, runtime_raw=item["runtime_raw"],
+            history_raw=item["history_raw"], generation_raw=item["grant_raw"])
         p.decoded(native["signature"], size=64); p.guest(np["guest"])
         p.require(value["nativeGrantSha256"] == p.sha(native_raw) and np["scope"] == scope
-            and np["apiVersion"] == "serverware.nativeShadowCommitRequestServiceAssignment/v1"
             and np["purpose"] == "native-shadow-ledger-commit-request"
             and np["expectedPeer"] == runtime["expectedPeer"])
         generation = g.document(item["grant_raw"], 65536)["payload"]

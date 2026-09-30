@@ -10,6 +10,7 @@ from __future__ import annotations
 from serverware import custody_commitment_inputs as commitment
 from serverware import custody_generation_grants as generation
 from serverware import custody_spool_inputs as spool
+from serverware import native_pilot_native_service_authority as native_authority
 from serverware import native_shadow_guest_delivery as delivery
 from serverware import native_shadow_nitro_profile as p
 from serverware import native_shadow_proof_cohort_assignment as cohort_profile
@@ -95,13 +96,16 @@ def admit_services(pilot, *, endpoints, originals: PublicInputs, inputs: dict):
         ordinary.admit_grant(role, signed_grant_original=originals.read(
             inputs["ordinaryGrants"][role], maximum=MAX_SIGNED_ORIGINAL))
 
-    dispatch_native = originals.read(inputs["dispatchNativeGrant"], maximum=MAX_SIGNED_ORIGINAL)
+    dispatch_native = originals.read(inputs["dispatchNativeGrant"], maximum=native_authority.MAX_OUTPUT)
+    native_authority.grant_original("commitRequest", dispatch_native)
     for role in commitment.ROLES:
         ordinary.seal_dispatch_grant(role, approved_grant_original=originals.read(
             inputs["dispatchGrants"][role], maximum=MAX_SIGNED_ORIGINAL),
             native_grant_original=dispatch_native)
-    native_spool = {name: originals.read(pin, maximum=MAX_SIGNED_ORIGINAL)
+    native_spool = {name: originals.read(pin, maximum=native_authority.MAX_OUTPUT)
         for name, pin in inputs["nativeSpoolGrants"].items()}
+    for name, raw in native_spool.items():
+        native_authority.grant_original(name, raw)
     # Source-fixed insertion/order: Head(DRS), Cleanup, Current(CSA). All three
     # retain the same seven original bytes, not caller-generated projections.
     for role in spool.EFFECT_ROLES:

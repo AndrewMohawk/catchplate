@@ -132,10 +132,10 @@ impl Running {
             SelectedService::Generation(pin)=>{
                 require(activation.len()==2 && activation.contains_key("shadow-generation-install-listener")
                     && activation.contains_key("generation-install-journal"))?;
-                let original=pin.open(65536)?;
-                let configuration:admission::generation_install::Configuration=exact(&original.read(65536).map_err(fail)?)?;
+                let original=pin.open(admission::generation_install::MAX_CONFIGURATION)?;
+                let configuration:admission::generation_install::Configuration=exact(&original.read(admission::generation_install::MAX_CONFIGURATION).map_err(fail)?)?;
                 configuration.validate_shape()?;
-                let (owner,channel)=retrieval_peer::Inspector::prepare_endpoint(original,
+                let (owner,channel)=retrieval_peer::Inspector::prepare_history_endpoint(original,
                     configuration.expected_peer().checked().map_err(fail)?,configuration.guest_uid(),
                     activation.get("shadow-generation-install-listener").ok_or(ShadowError::BindingDrift)?,retrieval_peer::EndpointKind::GenerationInstallEnvelope)?;
                 (Some(Inspection::Server(owner)),Some(channel))
@@ -192,10 +192,10 @@ impl Running {
             }
             SelectedService::CommitRequest(pin)=>{
                 require(activation.len()==1)?;
-                let original=pin.open(65536)?;
-                let config:admission::commit_request::Configuration=exact(&original.read(65536).map_err(fail)?)?;
+                let original=pin.open(admission::commit_request::MAX_CONFIGURATION)?;
+                let config:admission::commit_request::Configuration=exact(&original.read(admission::commit_request::MAX_CONFIGURATION).map_err(fail)?)?;
                 config.validate_shape()?;
-                let (owner,channel)=retrieval_peer::Inspector::prepare_endpoint(original,config.expected_peer().checked().map_err(fail)?,
+                let (owner,channel)=retrieval_peer::Inspector::prepare_history_endpoint(original,config.expected_peer().checked().map_err(fail)?,
                     config.guest_uid(),activation.get("commit-request-listener").ok_or(ShadowError::BindingDrift)?,
                     retrieval_peer::EndpointKind::CommitRequest)?;
                 (Some(Inspection::Server(owner)),Some(channel))

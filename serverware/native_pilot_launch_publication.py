@@ -372,14 +372,14 @@ def _public_joins(role, documents, guest, runtime_raw, grant, observed, config, 
             and descriptor["keyEpoch"] == a["observationWindow"]["requestCommitmentKeyEpoch"]
             and descriptor["keyId"] not in {key["keyId"] for key in public_keys})
         p.require(companion is not None)
-        verify(companion, services.PROFILES["commitRequest"][2])
+        verify(companion, services.grant_shape("commitRequest", companion["payload"]))
         c9._same(companion["payload"]["expectedPeer"], grant["payload"]["expectedPeer"])
     verifier = documents["verifierTransport"]["authorization"]
     verify(verifier, "serverware.nativeShadowVerifierTransport.signature/v1")
     for field in ("keyId", "keySpkiSha256", "keyMaterialSha256"):
         p.require(verifier["payload"]["verifier" + field[0].upper() + field[1:]] == public_keys[-2][field])
     operation = LAUNCHES[role][2]
-    domain = generation.DOMAIN if operation is None else services.grant_shape(operation, grant["payload"])
+    domain = generation.grant_shape(grant["payload"]) if operation is None else services.grant_shape(operation, grant["payload"])
     # Bridge consumes the endpoint's trusted-time grant, not a bridge-guest grant.
     if role == "bridge":
         retained = common.pop("keyAuthorizationSha256")
@@ -481,25 +481,23 @@ def install(bundle_original: bytes, *, expected_sha256: str) -> dict:
         delivery._pin(grant_pin)
         grant_purpose = _grant_purpose(role)
         p.require(grant_pin["path"] == publication.DESTINATIONS[grant_purpose])
-        grant_raw = retain(grant_pin, 65536)
+        grant_raw = retain(grant_pin, publication.LIMITS[grant_purpose])
         publication._shape(grant_purpose, grant_raw)
-        grant = p.document(grant_raw, 65536)
         operation = LAUNCHES[role][2]
         if operation is None:
-            _signed(grant, generation.PAYLOAD_FIELDS)
+            grant = generation.grant_original(grant_raw)
         else:
             # Publication has checked the envelope; select the exact domain
             # from its closed versioned payload, then authenticate below.
-            services.grant_shape(operation, grant["payload"])
+            grant = services.grant_original(operation, grant_raw)
         companion = None
         if role == "commitRequest":
             pin = grant["payload"]["commitRequest"]
             delivery._pin(pin)
             p.require(pin["path"] == publication.DESTINATIONS["native-service-commitRequest"])
-            raw = retain(pin, 65536)
+            raw = retain(pin, publication.LIMITS["native-service-commitRequest"])
             publication._shape("native-service-commitRequest", raw)
-            companion = p.document(raw, 65536)
-            _signed(companion, services.PAYLOAD_FIELDS["commitRequest"])
+            companion = services.grant_original("commitRequest", raw)
         now = time.time_ns()
         expiry = _public_joins(role, documents, guest, runtime_raw, grant, observed, config, companion, now)
         if companion is not None:

@@ -4,6 +4,9 @@ The complete input and matching supervisor key must be independently approved.
 No owner, peer, key epoch, genesis, journal record, history or deadline is made
 here. The initial profile requires SUPPLIED epoch 1/empty predecessors and an
 empty supplied journal, plus five authenticated initial-generation grants.
+Explicit input/output v2 additionally signs each actual ordinary runtime
+original beside its history; the native receiver uses that retained runtime's
+history adapter. Legacy v1 keeps four-field members and its 64-KiB output cap.
 Historical installation/recovery authoring is deliberately unsupported; the
 existing native historical verifier and all full-project gates are unchanged.
 
@@ -30,8 +33,10 @@ from serverware import native_shadow_retrieval_artifacts as retrieval
 
 p = g.p
 MAX_INPUT_BYTES = 32 * 1024 * 1024
-MAX_BYTES = 65536
+MAX_LEGACY_BYTES = 65536
+MAX_BYTES = 4 * 1024 * 1024
 DOMAIN = "serverware.nativeGenerationCoordinatorAssignment.signature/v1"
+HISTORY_DOMAIN = "serverware.nativeGenerationCoordinatorAssignment.signature/v2"
 PAYLOAD_FIELDS = ("apiVersion", "purpose", "guest", "assignmentPayloadSha256",
     "keyAuthorizationSha256", "services", "keyHistory", "journal", "expectedPeer",
     "trustCheckpointId", "revocationGeneration", "revocationRootSha256",
@@ -47,17 +52,41 @@ def _same(first, second):
     p.require(g.canonical(first) == g.canonical(second))
 
 
-def _coordinator(value):
-    cold_raw = ordinary._original(value["coordinatorConfigurationOriginal"], MAX_BYTES)
+def grant_shape(payload):
+    p.fields(payload, PAYLOAD_FIELDS)
+    history = payload["apiVersion"] == "serverware.nativeGenerationCoordinatorAssignment/v2"
+    p.require(payload["apiVersion"] == "serverware.nativeGenerationCoordinatorAssignment/v" + ("2" if history else "1")
+        and payload["purpose"] == "native-generation-installation")
+    for row in p.fields(payload["services"], g.ROLES).values():
+        p.fields(row, ("grantOriginal", "historyOriginal", "rootKeyId", "rootKeySpkiSha256")
+            + (("runtimeOriginal",) if history else ()))
+        ordinary._original(row["grantOriginal"], MAX_LEGACY_BYTES)
+        ordinary._original(row["historyOriginal"], 1024 * 1024)
+        p.digest(row["rootKeyId"]); p.digest(row["rootKeySpkiSha256"])
+        if history:
+            ordinary._original(row["runtimeOriginal"], g.MAX_BYTES)
+    return HISTORY_DOMAIN if history else DOMAIN
+
+
+def grant_original(raw):
+    signed = p.fields(p.document(raw, MAX_BYTES), ("payload", "signature"))
+    domain = grant_shape(signed["payload"])
+    p.require(domain == HISTORY_DOMAIN or len(raw) <= MAX_LEGACY_BYTES)
+    p.decoded(signed["signature"], size=64)
+    return signed
+
+
+def _coordinator(value, *, boot, now):
+    cold_raw = ordinary._original(value["coordinatorConfigurationOriginal"], MAX_LEGACY_BYTES)
     cold = delivery.configuration(cold_raw, p.sha(cold_raw))
     config_raw = ordinary._original(value["cohortConfigurationOriginal"], 32768)
     window_raw = ordinary._original(value["precreationOriginal"], 32768)
     observed_raw = ordinary._original(value["observationOriginal"], 32768)
     observed = p.document(observed_raw, 32768)
-    window = c9._endpoint_owner("generationInstall", cold, cold_raw, config_raw, window_raw,
-        p.document(window_raw, 32768), observed)
-    signed_raw = ordinary._original(value["coordinatorDeliveryOriginal"], MAX_BYTES)
-    signed = p.fields(p.document(signed_raw, MAX_BYTES), ("apiVersion", "payload", "signatureBase64url"))
+    window = c9.endpoint_owner("generationInstall", cold, cold_raw, config_raw, window_raw,
+        p.document(window_raw, 32768), observed, boot=boot, now=now)
+    signed_raw = ordinary._original(value["coordinatorDeliveryOriginal"], MAX_LEGACY_BYTES)
+    signed = p.fields(p.document(signed_raw, MAX_LEGACY_BYTES), ("apiVersion", "payload", "signatureBase64url"))
     p.require(signed["apiVersion"] == "serverware.policyCustodyGuestDelivery/v1")
     payload = p.fields(signed["payload"], delivery.FIELDS)
     p.require(payload["configurationSha256"] == p.sha(cold_raw)
@@ -67,7 +96,7 @@ def _coordinator(value):
     for name in c9.WINDOW_FIELDS:
         _same(payload[name], window[name])
     delivery._pin(payload["runtimeConfig"])
-    runtime = ordinary._original(value["coordinatorRuntimeOriginal"], MAX_BYTES)
+    runtime = ordinary._original(value["coordinatorRuntimeOriginal"], MAX_LEGACY_BYTES)
     p.require(payload["runtimeConfig"]["sha256"] == p.sha(runtime))
     c9._activation(payload["activation"], c9.ENDPOINTS["generationInstall"])
     c9._credentials(payload["credentials"], cold["authority"])
@@ -114,27 +143,23 @@ def _live(window, payload, *, deadline, epoch_limit, previous_boot, previous_wal
     return now, wall
 
 
-def sign(*, input_original: bytes, signing_key):
-    """Return (unchanged existing signed-envelope bytes, original deadline).
+def prepare_input(input_original: bytes, *, boot, now_boottime_ns, now_unix_ns):
+    """Pure verification of complete public originals at explicit caller clocks.
 
-    INPUT_FIELDS is the closed input object for
-    serverware.nativePilotGenerationInstallAuthorityInput/v1. All *Original
-    values are literal canonical ASCII strings. services is the fixed-five map
-    of the existing ordinary authority's checked service bundles, including
-    generationGrantOriginal. recordOriginals MUST be an explicitly supplied [];
-    keyHistory and journal MUST be the supplied initial values, never defaults.
-    No caller-selected clock, output payload construction or alternate domain.
+    This does not establish their kernel provenance or authorize a signature.
+    The live signer below supplies its actual clocks and independently held key.
     """
-    p.require(isinstance(signing_key, Ed25519PrivateKey))
+    now, wall = now_boottime_ns, now_unix_ns
+    p.integer(now, maximum=p.MAX_U64); p.integer(wall)
     value = p.fields(p.document(input_original, MAX_INPUT_BYTES), INPUT_FIELDS)
-    p.require(value["apiVersion"] == "serverware.nativePilotGenerationInstallAuthorityInput/v1")
+    history = value["apiVersion"] == "serverware.nativePilotGenerationInstallAuthorityInput/v2"
+    p.require(value["apiVersion"] == "serverware.nativePilotGenerationInstallAuthorityInput/v" + ("2" if history else "1"))
     payload_raw = ordinary._original(value["payloadOriginal"], MAX_BYTES)
     payload = p.fields(p.document(payload_raw, MAX_BYTES), PAYLOAD_FIELDS)
-    p.require(payload["apiVersion"] == "serverware.nativeGenerationCoordinatorAssignment/v1"
-        and payload["purpose"] == "native-generation-installation")
-    guest, window, observed = _coordinator(value)
+    domain = grant_shape(payload)
+    p.require(history == (domain == HISTORY_DOMAIN) and (history or len(payload_raw) <= MAX_LEGACY_BYTES))
+    guest, window, observed = _coordinator(value, boot=boot, now=now)
     _same(payload["guest"], guest)
-    boot, now, wall = originals._boot(), originals._clock(), time.time_ns()
     native_raw = ordinary._original(value["nativeConfigurationOriginal"], p.MAX_CONFIG)
     p.require(p.sha(native_raw) == p.digest(value["nativeConfigurationSha256"]))
     native = p.document(native_raw, p.MAX_CONFIG)
@@ -150,9 +175,7 @@ def sign(*, input_original: bytes, signing_key):
         and payload["assignmentPayloadSha256"] == admitted["assignmentPayloadSha256"]
         and payload["keyAuthorizationSha256"] == admitted["keyAuthorizationSha256"])
     supervisor = keys[p.ROLES.index("custody-supervisor-capability")]
-    public = signing_key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
-    p.require(p.encoded(public) == supervisor["publicKeyBase64url"]
-        and payload["signingKeyId"] == supervisor["keyId"]
+    p.require(payload["signingKeyId"] == supervisor["keyId"]
         and payload["signingKeySpkiSha256"] == supervisor["keySpkiSha256"])
     checkpoint = native["trustCheckpoint"]
     for field, source in (("trustCheckpointId", "checkpointId"),
@@ -163,7 +186,7 @@ def sign(*, input_original: bytes, signing_key):
                       for name in ("authorization", "admissionAuthorization"))
     p.require(payload["expiresAtUnixNanos"] <= epoch_limit)
     peer = _peer(payload, observed, guest)
-    launch_raw = ordinary._original(value["ordinaryLaunchOriginal"], MAX_BYTES)
+    launch_raw = ordinary._original(value["ordinaryLaunchOriginal"], MAX_LEGACY_BYTES)
     launch, startup, lifetime = ordinary._launch(launch_raw, boot, now)
     contexts = p.fields(value["services"], g.ROLES)
     members = p.fields(payload["services"], g.ROLES)
@@ -171,10 +194,12 @@ def sign(*, input_original: bytes, signing_key):
     scopes, uids, gids = [], {guest["uid"], peer["uid"]}, {guest["gid"], peer["gid"]}
     for role in g.ROLES:
         item = ordinary._service(contexts[role], role, launch, boot, startup, lifetime, now, granted=True)
-        member = p.fields(members[role], ("grantOriginal", "historyOriginal", "rootKeyId", "rootKeySpkiSha256"))
+        member = members[role]
         p.require(member["grantOriginal"] == item["grant_raw"].decode("ascii")
             and member["historyOriginal"] == item["history_raw"].decode("ascii")
             and len(item["history_raw"]) <= 1024 * 1024)
+        if history:
+            p.require(member["runtimeOriginal"] == item["runtime_raw"].decode("ascii"))
         root = initial.runtime_manifest(item["history_raw"], runtime=item["header"],
             guest=item["guest"])["rootAuthority"]
         p.require(member["rootKeyId"] == root["keyId"] and member["rootKeySpkiSha256"] == root["keySpkiSha256"])
@@ -195,13 +220,33 @@ def sign(*, input_original: bytes, signing_key):
     epoch_limit = min(epoch_limit, scope["installationExpiresAtUnixNanos"])
     p.require(payload["expiresAtUnixNanos"] <= epoch_limit)
     _journal(value, payload, guest)
+    p.require(now < deadline and wall < epoch_limit)
+    return {"payload": payload, "supervisor": supervisor, "window": window,
+        "deadline": deadline, "epochLimit": epoch_limit, "domain": domain}
+
+
+def sign(*, input_original: bytes, signing_key):
+    """Sign one independently approved existing input; return its original bound.
+
+    services retains all five real service bundles. Explicit initial keyHistory,
+    genesisOriginal and empty recordOriginals are required, never defaulted.
+    No caller clock, signing domain, owner or private key is synthesized.
+    """
+    p.require(isinstance(signing_key, Ed25519PrivateKey))
+    boot, now, wall = originals._boot(), originals._clock(), time.time_ns()
+    prepared = prepare_input(input_original, boot=boot, now_boottime_ns=now, now_unix_ns=wall)
+    payload, supervisor, window = (prepared[name] for name in ("payload", "supervisor", "window"))
+    deadline, epoch_limit = prepared["deadline"], prepared["epochLimit"]
+    public = signing_key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+    p.require(p.encoded(public) == supervisor["publicKeyBase64url"] and originals._boot() == boot)
     before_boot, before_wall = _live(window, payload, deadline=deadline, epoch_limit=epoch_limit,
                                     previous_boot=now, previous_wall=wall)
-    message = p.preimage(DOMAIN, payload)
+    message = p.preimage(prepared["domain"], payload)
     signature = signing_key.sign(message)
     p.public_key(supervisor).verify(signature, message)
     raw = p.canonical({"payload": payload, "signature": p.encoded(signature)})
-    p.require(len(raw) <= MAX_BYTES and originals._boot() == boot)
+    grant_original(raw)
+    p.require(originals._boot() == boot)
     _live(window, payload, deadline=deadline, epoch_limit=epoch_limit,
           previous_boot=before_boot, previous_wall=before_wall)
     return raw, deadline

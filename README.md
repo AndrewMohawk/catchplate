@@ -140,6 +140,8 @@ authorizations; it refuses launch until
 the remaining 36 are implemented.
 The total includes 20 newly connected authorization prerequisites missing from
 the earlier 85-job inventory; it is not a percentage of product readiness.
+The current [native history handoff repair](docs/native-pilot-operational-histories.md)
+addresses startup blockers without counting unfinished composers as complete.
 Protected deployment is not provisioned. This is not
 yet an interactive quickstart or running pilot.
 The [persistent workload sidecar](docs/native-workload-sidecar.md) supports ordinary

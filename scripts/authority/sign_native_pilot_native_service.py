@@ -40,7 +40,7 @@ def main():
         key_identity = originals._identity(os.fstat(args.authority_key_fd))
         raw = io.read_public(args.input_fd, authority.MAX_INPUT)
         result = authority.sign(args.operation, raw, io.signing_key(args.authority_key_fd))
-        payload = p.document(result, authority.MAX_OUTPUT)["payload"]
+        payload = authority.grant_original(args.operation, result)["payload"]
         wall, previous = time.time_ns(), authority.c9._live(payload["guest"])
 
         def check():

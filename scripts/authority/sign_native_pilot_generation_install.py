@@ -10,8 +10,8 @@ initial scopes, supplied empty recordOriginals and sequence-zero genesis-bound
 journal are mandatory. Historical/recovery authoring is not supported and no
 full-project acceptance checkpoint is closed by this producer.
 
-Use the original admitted host/time namespace. Stdout is at most 65536 bytes,
-the unchanged signed canonical original without LF. No retry after partial or
+Use the original admitted host/time namespace. Stdout is at most 65536 bytes
+for v1, or 4 MiB for the explicit runtime-bound v2, without LF. No retry after partial or
 lost output. An external supervisor must bound blocking filesystem/crypto work.
 """
 from __future__ import annotations
@@ -63,7 +63,7 @@ def main():
 
         check()
         signed, deadline = authority.sign(input_original=raw, signing_key=key)
-        payload = p.document(signed, authority.MAX_BYTES)["payload"]
+        payload = authority.grant_original(signed)["payload"]
         check()
         io.write_public(signed, deadline_boottime_ns=deadline)
         check()

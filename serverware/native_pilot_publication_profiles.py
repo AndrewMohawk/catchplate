@@ -32,8 +32,9 @@ PROFILES = {
     "endpoint-proof-scope": ("endpoint-input", "proof-scope", 16384),
     "endpoint-retrieval-manifest": ("endpoint-input", "retrieval-manifest", 32768),
     "endpoint-assignment": ("endpoint-input", "assignment", 4 * 1024 * 1024),
-    "native-generation-install-grant": ("generation-install", None, 65536),
-    **{"native-service-" + operation: ("native-service", operation, 65536)
+    "native-generation-install-grant": ("generation-install", None, 4 * 1024 * 1024),
+    **{"native-service-" + operation: ("native-service", operation,
+        4 * 1024 * 1024 if operation in _NATIVE_OPERATIONS[:6] + ("commitRequest",) else 65536)
        for operation in _NATIVE_OPERATIONS},
     **{"native-launch-" + role: ("native-launch", role, 32768)
        for role in cohort.ENDPOINT_ROLES + ("bridge",)},
@@ -241,9 +242,9 @@ def shape(purpose, raw):
         return
     if family == "native-service":
         from serverware import native_pilot_native_service_authority as authority
-        signed = _signed(raw, maximum, native=True)
+        signed = authority.grant_original(role, raw)
+        p.decoded(signed["signature"], size=64)
         value = signed["payload"]
-        authority.grant_shape(role, value)
         p.guest(value["guest"])
         for field in ("assignmentPayloadSha256", "keyAuthorizationSha256", "signingKeyId", "signingKeySpkiSha256"):
             p.digest(value[field])
@@ -254,10 +255,9 @@ def shape(purpose, raw):
         return
     if family == "generation-install":
         from serverware import native_pilot_generation_install_authority as installation
-        signed = _signed(raw, maximum, native=True)
-        value = p.fields(signed["payload"], installation.PAYLOAD_FIELDS)
-        p.require(value["apiVersion"] == "serverware.nativeGenerationCoordinatorAssignment/v1"
-            and value["purpose"] == "native-generation-installation")
+        signed = installation.grant_original(raw)
+        p.decoded(signed["signature"], size=64)
+        value = signed["payload"]
         p.guest(value["guest"])
         p.require(value["guest"]["serviceRole"] == "production-bridge")
         p.fields(value["services"], generation.ROLES)

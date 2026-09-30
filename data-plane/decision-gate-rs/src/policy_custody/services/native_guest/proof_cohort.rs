@@ -419,14 +419,14 @@ fn assigned_peers(service:&SelectedService,files:&FileAdmission)
     ->Result<Vec<(usize,super::super::super::super::ExpectedPeerCredentialV3)>,ShadowError> {
     match service {
         SelectedService::DispatchSpool(pin)|SelectedService::ActiveEffectBarrier(pin)|SelectedService::ActiveEffectCommit(pin)=>{
-            let original=pin.open(65536)?;let grant:admission::spool_signer::Configuration=exact(&original.read(65536).map_err(fail)?)?;
+            let original=pin.open(admission::spool_signer::MAX_CONFIGURATION)?;let grant:admission::spool_signer::Configuration=exact(&original.read(admission::spool_signer::MAX_CONFIGURATION).map_err(fail)?)?;
             let kind=match service{SelectedService::DispatchSpool(_)=>admission::spool_signer::Kind::DispatchBarrier,
                 SelectedService::ActiveEffectBarrier(_)=>admission::spool_signer::Kind::ActiveEffectBarrier,
                 _=>admission::spool_signer::Kind::ActiveEffectCommit};
             require(grant.kind()?==kind)?;grant.validate_shape()?;Ok(vec![(4,grant.expected_peer().clone())])
         }
         SelectedService::LedgerSpool(pin)|SelectedService::CompletionLedgerSpool(pin)|SelectedService::Ingress(pin)|SelectedService::TerminalSpool(pin)=>{
-            let original=pin.open(65536)?;let grant:admission::spool_signer::Configuration=exact(&original.read(65536).map_err(fail)?)?;
+            let original=pin.open(admission::spool_signer::MAX_CONFIGURATION)?;let grant:admission::spool_signer::Configuration=exact(&original.read(admission::spool_signer::MAX_CONFIGURATION).map_err(fail)?)?;
             let kind=match service{SelectedService::Ingress(_)=>admission::spool_signer::Kind::Ingress,
                 SelectedService::TerminalSpool(_)=>admission::spool_signer::Kind::Terminal,_=>admission::spool_signer::Kind::Ledger};
             require(grant.completion_selected()==matches!(service,SelectedService::CompletionLedgerSpool(_)|SelectedService::TerminalSpool(_)))?;
@@ -439,13 +439,13 @@ fn assigned_peers(service:&SelectedService,files:&FileAdmission)
             grant.validate_shape()?;Ok(vec![(4,grant.expected_peer().clone())])
         }
         SelectedService::CommitRequest(pin)=>{
-            let original=pin.open(65536)?;
-            let grant:admission::commit_request::Configuration=exact(&original.read(65536).map_err(fail)?)?;
+            let original=pin.open(admission::commit_request::MAX_CONFIGURATION)?;
+            let grant:admission::commit_request::Configuration=exact(&original.read(admission::commit_request::MAX_CONFIGURATION).map_err(fail)?)?;
             grant.validate_shape()?;Ok(vec![(4,grant.expected_peer().clone())])
         }
         SelectedService::Generation(pin)=>{
-            let original=pin.open(65536)?;
-            let grant:admission::generation_install::Configuration=exact(&original.read(65536).map_err(fail)?)?;
+            let original=pin.open(admission::generation_install::MAX_CONFIGURATION)?;
+            let grant:admission::generation_install::Configuration=exact(&original.read(admission::generation_install::MAX_CONFIGURATION).map_err(fail)?)?;
             grant.validate_shape()?;Ok(vec![(4,grant.expected_peer().clone())])
         }
         SelectedService::Retrieval(pin)=>{
@@ -495,10 +495,10 @@ pub(super) fn prepare_inspection(service:SelectedService,files:&FileAdmission,ac
                 SelectedService::ActiveEffectCommit(pin)=>(pin,admission::spool_signer::Kind::ActiveEffectCommit,retrieval_peer::EndpointKind::ActiveEffectCommit),
                 _=>return Err(ShadowError::BindingDrift),
             };
-            let original=pin.open(65536)?;let grant:admission::spool_signer::Configuration=exact(&original.read(65536).map_err(fail)?)?;
+            let original=pin.open(admission::spool_signer::MAX_CONFIGURATION)?;let grant:admission::spool_signer::Configuration=exact(&original.read(admission::spool_signer::MAX_CONFIGURATION).map_err(fail)?)?;
             require(grant.kind()?==kind)?;grant.validate_shape()?;
             require(activation.len()==1)?;let socket=activation.get(endpoint.listener_name()).ok_or(ShadowError::BindingDrift)?;
-            let (owner,remote)=retrieval_peer::Inspector::prepare_endpoint(original,grant.expected_peer().checked().map_err(fail)?,grant.guest_uid(),socket,endpoint)?;
+            let (owner,remote)=retrieval_peer::Inspector::prepare_history_endpoint(original,grant.expected_peer().checked().map_err(fail)?,grant.guest_uid(),socket,endpoint)?;
             Ok((Inspection::Server(owner),remote))
         }
         selected @ (SelectedService::LedgerSpool(_)|SelectedService::CompletionLedgerSpool(_)|SelectedService::Ingress(_)|SelectedService::TerminalSpool(_))=>{
@@ -509,7 +509,7 @@ pub(super) fn prepare_inspection(service:SelectedService,files:&FileAdmission,ac
                 SelectedService::TerminalSpool(pin)=>(pin,admission::spool_signer::Kind::Terminal,true),
                 _=>return Err(ShadowError::BindingDrift),
             };
-            let original=pin.open(65536)?;let grant:admission::spool_signer::Configuration=exact(&original.read(65536).map_err(fail)?)?;
+            let original=pin.open(admission::spool_signer::MAX_CONFIGURATION)?;let grant:admission::spool_signer::Configuration=exact(&original.read(admission::spool_signer::MAX_CONFIGURATION).map_err(fail)?)?;
             let kind=grant.kind()?;grant.validate_shape()?;
             require(kind==expected_kind && grant.completion_selected()==completion)?;
             let endpoint=match kind{admission::spool_signer::Kind::Ingress=>retrieval_peer::EndpointKind::IngressAdmission,
@@ -517,7 +517,7 @@ pub(super) fn prepare_inspection(service:SelectedService,files:&FileAdmission,ac
                 admission::spool_signer::Kind::Ledger=>retrieval_peer::EndpointKind::CommitRequest,
                 _=>return Err(ShadowError::BindingDrift)};
             require(activation.len()==1)?;let socket=activation.get(endpoint.listener_name()).ok_or(ShadowError::BindingDrift)?;
-            let (owner,remote)=retrieval_peer::Inspector::prepare_endpoint(original,grant.expected_peer().checked().map_err(fail)?,grant.guest_uid(),socket,endpoint)?;
+            let (owner,remote)=retrieval_peer::Inspector::prepare_history_endpoint(original,grant.expected_peer().checked().map_err(fail)?,grant.guest_uid(),socket,endpoint)?;
             Ok((Inspection::Server(owner),remote))
         }
         selected @ (SelectedService::LedgerRetrieval(_)|SelectedService::CompletionRetrieval(_)|SelectedService::EffectRetrieval(_))=>{
@@ -535,21 +535,21 @@ pub(super) fn prepare_inspection(service:SelectedService,files:&FileAdmission,ac
         }
         SelectedService::CommitRequest(pin)=>{
             require(activation.len()==1)?;
-            let original=pin.open(65536)?;
-            let grant:admission::commit_request::Configuration=exact(&original.read(65536).map_err(fail)?)?;
+            let original=pin.open(admission::commit_request::MAX_CONFIGURATION)?;
+            let grant:admission::commit_request::Configuration=exact(&original.read(admission::commit_request::MAX_CONFIGURATION).map_err(fail)?)?;
             grant.validate_shape()?;
             let socket=activation.get("commit-request-listener").ok_or(ShadowError::BindingDrift)?;
-            let (owner,remote)=retrieval_peer::Inspector::prepare_endpoint(original,
+            let (owner,remote)=retrieval_peer::Inspector::prepare_history_endpoint(original,
                 grant.expected_peer().checked().map_err(fail)?,grant.guest_uid(),socket,retrieval_peer::EndpointKind::CommitRequest)?;
             Ok((Inspection::Server(owner),remote))
         }
         SelectedService::Generation(pin)=>{
             require(activation.len()==2 && activation.contains_key("generation-install-journal"))?;
-            let original=pin.open(65536)?;
-            let grant:admission::generation_install::Configuration=exact(&original.read(65536).map_err(fail)?)?;
+            let original=pin.open(admission::generation_install::MAX_CONFIGURATION)?;
+            let grant:admission::generation_install::Configuration=exact(&original.read(admission::generation_install::MAX_CONFIGURATION).map_err(fail)?)?;
             grant.validate_shape()?;
             let socket=activation.get("shadow-generation-install-listener").ok_or(ShadowError::BindingDrift)?;
-            let (owner,remote)=retrieval_peer::Inspector::prepare_endpoint(original,
+            let (owner,remote)=retrieval_peer::Inspector::prepare_history_endpoint(original,
                 grant.expected_peer().checked().map_err(fail)?,grant.guest_uid(),socket,retrieval_peer::EndpointKind::GenerationInstallEnvelope)?;
             Ok((Inspection::Server(owner),remote))
         }

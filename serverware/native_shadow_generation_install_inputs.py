@@ -201,16 +201,18 @@ class GenerationInstallInputs:
         p.require(p.canonical(payload["activation"]) == p.canonical(self.activation()))
         guest = delivery._delivery_guest(payload, signed_raw)
         p.require((guest["uid"], guest["gid"]) == (self._uid, self._gid))
-        envelope = p.fields(p.document(grant_raw, 65536), ("payload", "signature"))
+        from serverware import native_pilot_generation_install_authority as grant_profile
+        envelope = grant_profile.grant_original(grant_raw)
         grant = p.fields(envelope["payload"], _PAYLOAD_FIELDS)
-        p.require(grant["apiVersion"] == "serverware.nativeGenerationCoordinatorAssignment/v1"
-            and grant["purpose"] == "native-generation-installation"
-            and p.canonical(grant["guest"]) == p.canonical(guest) and guest["serviceRole"] == "production-bridge")
+        successor = grant["apiVersion"] == "serverware.nativeGenerationCoordinatorAssignment/v2"
+        p.require(p.canonical(grant["guest"]) == p.canonical(guest) and guest["serviceRole"] == "production-bridge")
         p.digest(grant["assignmentPayloadSha256"])
         services = p.fields(grant["services"], _SERVICES)
         for member in services.values():
-            p.fields(member, ("grantOriginal", "historyOriginal", "rootKeyId", "rootKeySpkiSha256"))
-            for name, maximum in (("grantOriginal", 65536), ("historyOriginal", 1024 * 1024)):
+            p.fields(member, ("grantOriginal", "historyOriginal", "rootKeyId", "rootKeySpkiSha256")
+                + (("runtimeOriginal",) if successor else ()))
+            for name, maximum in (("grantOriginal", 65536), ("historyOriginal", 1024 * 1024)) + (
+                    (("runtimeOriginal", 4 * 1024 * 1024),) if successor else ()):
                 p.require(type(member[name]) is str and member[name].isascii() and 0 < len(member[name]) <= maximum)
             p.digest(member["rootKeyId"])
             p.digest(member["rootKeySpkiSha256"])

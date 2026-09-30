@@ -14,6 +14,12 @@ replaced by caller-provided genesis parameters. Independent approval of that
 original's provenance remains mandatory; JSON parsing does not establish it.
 Explicit Input/v2 is retrieval-only and additionally retains the approved
 fresh-ledger manifest. Legacy Input/v1 keeps its existing grant versions.
+Input/v3 is the seven retained-history signing endpoints only. Its actual
+ordinary C9/runtime/history/generation bundles produce signed ordinaryServices;
+CommitRequest additionally verifies an independently approved genuine fleet
+startup receipt and its pinned generation trust, never an invented evidence hash.
+Retrieval Input/v4 keeps the fresh-ledger output wire, but requires all six new
+history-bearing grants and permits their bounded 32-MiB aggregate input.
 """
 from __future__ import annotations
 
@@ -33,13 +39,24 @@ from serverware import native_shadow_retrieval_artifacts as retrieval
 from serverware import native_shadow_spool_artifacts as spool
 from serverware import native_shadow_trusted_time_inputs as trusted_time
 from serverware import custody_spool_inputs as spool_values
+from serverware import custody_commitment_inputs as ordinary_commitment
+from serverware import custody_generation_grants as generation
+from serverware import native_pilot_service_authority as ordinary
+from serverware import native_pilot_ordinary_initial_profile as initial
 
 p = delivery.p
-MAX_INPUT = 4 * 1024 * 1024
-MAX_OUTPUT = 65536
+MAX_LEGACY_INPUT = 4 * 1024 * 1024
+MAX_INPUT = 32 * 1024 * 1024
+MAX_LEGACY_OUTPUT = 65536
+MAX_OUTPUT = 4 * 1024 * 1024
 OPERATIONS = ("ingress", "ledger", "terminal", "dispatchBarrier", "activeEffectBarrier",
     "activeEffectCommit", "retrieval", "commitRequest", "persistence", "trustedTime")
 SIGNERS = OPERATIONS[:6]
+HISTORY_OPERATIONS = ("commitRequest",) + SIGNERS
+HISTORY_INPUT_API = "serverware.nativePilotNativeServiceAuthorityInput/v3"
+HISTORY_INPUT_FIELDS = ("ordinaryLaunchOriginal", "services")
+EVIDENCE_INPUT_FIELDS = ("runtimeEvidence", "assignmentOriginal")
+HISTORY_ROW_FIELDS = ("generationGrantOriginal", "runtimeOriginal", "historyOriginal", "rootKeyId", "rootKeySpkiSha256")
 INPUT_FIELDS = ("apiVersion", "operation", "configurationOriginal", "configurationSha256",
     "assignmentPayloadOriginal", "cohortConfigurationOriginal", "precreationOriginal", "observationOriginal",
     "coldConfigurationOriginal", "deliveryOriginal", "runtimeOriginal", "peerOriginal", "peerSha256",
@@ -65,6 +82,9 @@ PROFILES = {
     "persistence": ("serverware.nativeShadowPersistenceServiceAssignment/v1", "native-shadow-receipt-persistence", persistence.GRANT_DOMAIN),
     "trustedTime": ("serverware.nativeShadowTrustedTimeServiceAssignment/v1", "native-shadow-trusted-time-response", trusted_time.GRANT_DOMAIN),
 }
+HISTORY_PROFILES = {name: (api.rsplit("/v", 1)[0] + "/v" + str(int(api.rsplit("/v", 1)[1]) + 1),
+    purpose, domain.rsplit("/v", 1)[0] + "/v" + str(int(domain.rsplit("/v", 1)[1]) + 1))
+    for name, (api, purpose, domain) in PROFILES.items() if name in HISTORY_OPERATIONS}
 _COMMON_PAYLOAD = tuple(name for name in commitment.HMAC_FIELDS if name != "requestCommitment")
 PAYLOAD_FIELDS = {
     **{name: _COMMON_PAYLOAD + ("scope", "proofScopeOriginal", "originVerifier", "expectedPeer", "commitRequest") for name in SIGNERS},
@@ -74,6 +94,7 @@ PAYLOAD_FIELDS = {
     "trustedTime": _COMMON_PAYLOAD + ("clockBootstrapSha256", "expectedPeer"),
 }
 FRESH_INPUT_API = "serverware.nativePilotNativeServiceAuthorityInput/v2"
+HISTORY_RETRIEVAL_INPUT_API = "serverware.nativePilotNativeServiceAuthorityInput/v4"
 FRESH_RETRIEVAL_PROFILE = ("serverware.nativeLedgerSpoolRetrievalGrant/v4",
     "native-ledger-spool-retrieval", "serverware.nativeLedgerSpoolRetrievalGrant.signature/v4")
 _ENDPOINT = {"ingress": "ingressAdmission", "ledger": "commitRequest", "terminal": "terminalAppend",
@@ -89,10 +110,17 @@ def input_shape(operation, input_original):
     p.require(operation in OPERATIONS)
     value = p.document(input_original, MAX_INPUT)
     p.require(type(value) is dict)
-    fresh = value.get("apiVersion") == FRESH_INPUT_API
+    history_retrieval = value.get("apiVersion") == HISTORY_RETRIEVAL_INPUT_API
+    fresh = history_retrieval or value.get("apiVersion") == FRESH_INPUT_API
+    history = value.get("apiVersion") == HISTORY_INPUT_API
+    p.require(history or history_retrieval or len(input_original) <= MAX_LEGACY_INPUT)
+    p.require(not history or operation in HISTORY_OPERATIONS)
     p.require(not fresh or operation == "retrieval")
-    p.fields(value, INPUT_FIELDS + EXTRA_FIELDS[operation] + (("retrievalManifestOriginal",) if fresh else ()))
-    p.require(value["apiVersion"] == (FRESH_INPUT_API if fresh else "serverware.nativePilotNativeServiceAuthorityInput/v1")
+    p.fields(value, INPUT_FIELDS + EXTRA_FIELDS[operation] + (("retrievalManifestOriginal",) if fresh else ())
+        + (HISTORY_INPUT_FIELDS if history else ())
+        + (EVIDENCE_INPUT_FIELDS if history and operation == "commitRequest" else ()))
+    p.require(value["apiVersion"] == (HISTORY_INPUT_API if history else HISTORY_RETRIEVAL_INPUT_API if history_retrieval
+        else FRESH_INPUT_API if fresh else "serverware.nativePilotNativeServiceAuthorityInput/v1")
         and value["operation"] == operation)
     if fresh:
         manifest_raw, manifest = _original(value["retrievalManifestOriginal"], retrieval.MAX_MANIFEST)
@@ -106,9 +134,18 @@ def grant_shape(operation, payload):
     """Closed fields and signature domain; never a signature/admission verdict."""
     p.require(operation in OPERATIONS and type(payload) is dict)
     fresh = operation == "retrieval" and payload.get("apiVersion") == FRESH_RETRIEVAL_PROFILE[0]
-    p.fields(payload, PAYLOAD_FIELDS[operation] + (("initialization",) if fresh else ()))
-    api, purpose, domain = FRESH_RETRIEVAL_PROFILE if fresh else PROFILES[operation]
+    history = operation in HISTORY_PROFILES and payload.get("apiVersion") == HISTORY_PROFILES[operation][0]
+    p.fields(payload, PAYLOAD_FIELDS[operation] + (("initialization",) if fresh else ())
+        + (("ordinaryServices",) if history else ()))
+    api, purpose, domain = HISTORY_PROFILES[operation] if history else FRESH_RETRIEVAL_PROFILE if fresh else PROFILES[operation]
     p.require(payload["apiVersion"] == api and payload["purpose"] == purpose)
+    if history:
+        for row in p.fields(payload["ordinaryServices"], generation.ROLES).values():
+            p.fields(row, HISTORY_ROW_FIELDS)
+            for name, limit in (("generationGrantOriginal", 65536), ("runtimeOriginal", generation.MAX_BYTES),
+                                ("historyOriginal", 1024 * 1024)):
+                ordinary._original(row[name], limit)
+            p.digest(row["rootKeyId"]); p.digest(row["rootKeySpkiSha256"])
     if fresh:
         proof = retrieval.scope_original(p.decoded(payload["proofScopeOriginalBase64url"], maximum=16384))
         store = p.fields(payload["store"], ("genesisSha256", "sequence", "headSha256"))
@@ -122,7 +159,30 @@ def grant_shape(operation, payload):
     return domain
 
 
-def _endpoint(value, operation):
+def grant_original(operation, raw):
+    """Closed version-specific bytes/fields only; callers verify authority."""
+    signed = p.fields(p.document(raw, MAX_OUTPUT), ("payload", "signature"))
+    grant_shape(operation, signed["payload"])
+    history = operation in HISTORY_PROFILES and signed["payload"]["apiVersion"] == HISTORY_PROFILES[operation][0]
+    p.require(history or len(raw) <= MAX_LEGACY_OUTPUT)
+    p.decoded(signed["signature"], size=64)
+    return signed
+
+
+def require_ordinary_member(payload, role, *, runtime_raw, history_raw, generation_raw):
+    """Join a successor's signed public member to actual retained originals."""
+    if "ordinaryServices" not in payload:
+        return
+    row = p.fields(p.fields(payload["ordinaryServices"], generation.ROLES)[role], HISTORY_ROW_FIELDS)
+    p.require(row["runtimeOriginal"] == runtime_raw.decode("ascii")
+        and row["historyOriginal"] == history_raw.decode("ascii")
+        and row["generationGrantOriginal"] == generation_raw.decode("ascii"))
+    header = generation.document(runtime_raw, generation.MAX_BYTES)["runtime"]
+    p.require(row["rootKeyId"] == header["authorityHistoryRootKeyId"]
+        and row["rootKeySpkiSha256"] == header["authorityHistoryRootKeySpkiSha256"])
+
+
+def _endpoint(value, operation, *, boot=None, now_boottime_ns=None):
     """Verify existing C9/window originals, not the observations' provenance."""
     cold_raw, _ = _original(value["coldConfigurationOriginal"], 65536)
     cold = delivery.configuration(cold_raw, p.sha(cold_raw))
@@ -130,7 +190,12 @@ def _endpoint(value, operation):
     window_raw, signed = _original(value["precreationOriginal"], 32768)
     _, observed = _original(value["observationOriginal"], 32768)
     role = _ENDPOINT[operation]
-    window = c9._endpoint_owner(role, cold, cold_raw, config_raw, window_raw, signed, observed)
+    if boot is None:
+        p.require(now_boottime_ns is None)
+        window = c9._endpoint_owner(role, cold, cold_raw, config_raw, window_raw, signed, observed)
+    else:
+        window = c9.endpoint_owner(role, cold, cold_raw, config_raw, window_raw, signed, observed,
+            boot=boot, now=now_boottime_ns)
     _same(cold["authority"], p.document(config_raw, 32768)["authority"])
     delivery_raw, signed = _original(value["deliveryOriginal"], 65536)
     p.fields(signed, ("apiVersion", "payload", "signatureBase64url"))
@@ -166,8 +231,9 @@ def _peer(value, observed, guest):
     return raw, peer
 
 
-def _verified_grant(raw, operation, keys, admitted, checkpoint, now, *, fresh_ledger=False):
-    signed = p.fields(p.document(raw, MAX_OUTPUT), ("payload", "signature"))
+def _verified_grant(raw, operation, keys, admitted, checkpoint, now, *, fresh_ledger=False,
+                    boot=None, now_boottime_ns=None):
+    signed = grant_original(operation, raw)
     payload = signed["payload"]
     domain = grant_shape(operation, payload)
     p.require(type(fresh_ledger) is bool and (not fresh_ledger or operation == "retrieval")
@@ -182,16 +248,26 @@ def _verified_grant(raw, operation, keys, admitted, checkpoint, now, *, fresh_le
         _same(payload[target], checkpoint[source])
     p.freshness(payload["issuedAtUnixNanos"], payload["expiresAtUnixNanos"], now)
     p.guest(payload["guest"])
-    c9._live(payload["guest"])
+    if boot is None:
+        p.require(now_boottime_ns is None)
+        c9._live(payload["guest"])
+    else:
+        guest = payload["guest"]
+        p.require(tuple(guest[name] for name in ("bootIdBase64url", "timeNamespaceDevice", "timeNamespaceInode")) == boot)
+        p.require(p.ns(guest["issuedAtBoottimeNs"]) <= now_boottime_ns
+            < p.ns(guest["startupDeadlineBoottimeNs"]) < p.ns(guest["lifetimeDeadlineBoottimeNs"]))
     return payload
 
 
-def _companion(value, keys, admitted, checkpoint, peer, scope, now):
+def _companion(value, keys, admitted, checkpoint, peer, scope, now, *, boot=None, now_boottime_ns=None):
     raw, _ = _original(value["companionOriginal"], MAX_OUTPUT)
     pin = value["companionPin"]
     delivery._pin(pin)
     p.require(pin["sha256"] == p.sha(raw))
-    payload = _verified_grant(raw, "commitRequest", keys, admitted, checkpoint, now)
+    payload = _verified_grant(raw, "commitRequest", keys, admitted, checkpoint, now,
+        boot=boot, now_boottime_ns=now_boottime_ns)
+    p.require((value["apiVersion"] == HISTORY_INPUT_API)
+        == (payload["apiVersion"] == HISTORY_PROFILES["commitRequest"][0]))
     for name in ("guest", "keyAuthorizationSha256"):
         _same(payload[name], admitted[name])
     _same(payload["expectedPeer"], peer)
@@ -202,6 +278,113 @@ def _companion(value, keys, admitted, checkpoint, peer, scope, now):
     p.require(companion_scope["issuedAtBoottimeNanos"] <= scope["issuedAtBoottimeNanos"]
         < scope["expiresAtBoottimeNanos"] <= companion_scope["expiresAtBoottimeNanos"])
     return pin, payload["expiresAtUnixNanos"]
+
+
+def ordinary_services(value, scope, peer, guest, *, assignment_id, boot, now_boottime_ns, now_unix_ns):
+    """Verify five actual C9/runtime/history/generation chains, not root DTOs."""
+    launch_raw = ordinary._original(value["ordinaryLaunchOriginal"], 65536)
+    launch, startup, lifetime = ordinary._launch(launch_raw, boot, now_boottime_ns)
+    contexts = p.fields(value["services"], generation.ROLES)
+    rows, common = {}, None
+    uids, gids = {guest["uid"], peer["uid"]}, {guest["gid"], peer["gid"]}
+    epoch_limit = (1 << 63) - 1
+    for role in generation.ROLES:
+        item = ordinary._service(contexts[role], role, launch, boot, startup, lifetime, now_boottime_ns, granted=True)
+        p.require(len(item["history_raw"]) <= 1024 * 1024)
+        grant, header = item["generation"], item["header"]
+        ordinary_commitment._scope_join(scope, grant["scope"])
+        p.require(grant["scope"]["previousConfigurationBindingSha256"] is None
+            and grant["scope"]["assignmentId"] == assignment_id)
+        if common is None:
+            common = grant["scope"]
+        else:
+            _same(common, grant["scope"])
+        p.require(grant["issuedAtBoottimeNanos"] <= scope["issuedAtBoottimeNanos"]
+            <= now_boottime_ns < scope["expiresAtBoottimeNanos"] <= grant["expiresAtBoottimeNanos"])
+        p.freshness(common["installationIssuedAtUnixNanos"], common["installationExpiresAtUnixNanos"], now_unix_ns)
+        p.require(common["installationIssuedAtUnixNanos"] <= value["issuedAtUnixNanos"]
+            < value["expiresAtUnixNanos"] <= common["installationExpiresAtUnixNanos"])
+        epoch_limit = min(epoch_limit, common["installationExpiresAtUnixNanos"])
+        _same(header["expectedPeer"], peer)
+        p.require(item["guest"]["uid"] not in uids and item["guest"]["gid"] not in gids)
+        uids.add(item["guest"]["uid"]); gids.add(item["guest"]["gid"])
+        root = initial.runtime_manifest(item["history_raw"], runtime=header, guest=item["guest"])["rootAuthority"]
+        rows[role] = {"generationGrantOriginal": item["grant_raw"].decode("ascii"),
+            "runtimeOriginal": item["runtime_raw"].decode("ascii"), "historyOriginal": item["history_raw"].decode("ascii"),
+            "rootKeyId": root["keyId"], "rootKeySpkiSha256": root["keySpkiSha256"]}
+    return rows, startup, epoch_limit
+
+
+def prepare_service_input(operation, input_original, *, boot, now_boottime_ns, now_unix_ns):
+    """Pure purpose-fixed payload for the seven signing endpoints.
+
+    Both legacy and explicit retained-history successors use this same recipe.
+    Clocks are supplied by the actual live issuer or a separately retained owner.
+    """
+    p.require(operation in HISTORY_OPERATIONS)
+    p.integer(now_boottime_ns, maximum=p.MAX_U64); p.integer(now_unix_ns)
+    value, fresh = input_shape(operation, input_original)
+    p.require(not fresh)
+    guest, window, observed = _endpoint(value, operation, boot=boot, now_boottime_ns=now_boottime_ns)
+    config_raw, config = _original(value["configurationOriginal"], p.MAX_CONFIG)
+    p.require(p.sha(config_raw) == p.digest(value["configurationSha256"]))
+    admitted, keys = admission.authorization(config, now_unix_ns)
+    _same(admitted["guest"], guest)
+    p.require(config["authorization"]["payload"]["localRoles"] == [_LOCAL_ROLE[operation]])
+    assignment_raw, assignment = _original(value["assignmentPayloadOriginal"], p.MAX_CONFIG)
+    p.require(p.sha(assignment_raw) == admitted["assignmentPayloadSha256"]
+        and assignment["assignmentRevision"] == admitted["assignmentRevision"])
+    _, peer = _peer(value, observed, guest)
+    issued, expires = value["issuedAtUnixNanos"], value["expiresAtUnixNanos"]
+    payload = commitment._common(config, admitted, keys, issued, expires, now_unix_ns)
+    history = value["apiVersion"] == HISTORY_INPUT_API
+    api, purpose, domain = HISTORY_PROFILES[operation] if history else PROFILES[operation]
+    payload.update(apiVersion=api, purpose=purpose, expectedPeer=peer)
+    if operation == "commitRequest":
+        scope_raw, _ = _original(value["commitmentScopeOriginal"], 32768)
+        scope = commitment.scope_original(scope_raw)
+        p.require(scope["assignmentPayloadSha256"] == admitted["assignmentPayloadSha256"]
+            and scope["assignmentRevision"] == admitted["assignmentRevision"]
+            and scope["requestCommitmentKeyId"] == assignment["observationWindow"]["requestCommitmentKeyId"]
+            and scope["requestCommitmentKeyEpoch"] == assignment["observationWindow"]["requestCommitmentKeyEpoch"]
+            and p.ns(guest["issuedAtBoottimeNs"]) <= scope["issuedAtBoottimeNanos"]
+            and scope["expiresAtBoottimeNanos"] <= p.ns(guest["lifetimeDeadlineBoottimeNs"]))
+        payload["scope"] = scope
+        if history:
+            from serverware import native_pilot_runtime_evidence as evidence
+            signed_assignment_raw, signed_assignment = _original(value["assignmentOriginal"], p.MAX_CONFIG)
+            _same(signed_assignment["payload"], assignment)
+            runtime = evidence.runtime(value["runtimeEvidence"], assignment_original=signed_assignment_raw,
+                issued_at_unix_ns=issued, expires_at_unix_ns=expires, now_unix_ns=now_unix_ns)
+            _same(scope["runtime"], runtime)
+    else:
+        scope_raw, _ = _original(value["spoolScopeOriginal"], 16384)
+        proof_raw, _ = _original(value["proofScopeOriginal"], 16384)
+        scope = spool._scope(scope_raw, proof_raw, admitted, guest, assignment_payload_original=assignment_raw)
+        _, origin = _original(value["originVerifierOriginal"], 4096)
+        spool.key_live(origin, now_unix_ns)
+        p.require(origin["keyId"] not in {key["keyId"] for key in keys} and expires <= origin["notAfterUnixNanos"])
+        companion = None
+        if operation == "ledger":
+            companion, until = _companion(value, keys, admitted, config["trustCheckpoint"], peer, scope, now_unix_ns,
+                boot=boot, now_boottime_ns=now_boottime_ns)
+            p.require(expires <= until)
+        payload.update(scope=scope, proofScopeOriginal=proof_raw.decode("ascii"), originVerifier=origin, commitRequest=companion)
+    deadline, epoch_limit = p.ns(window["startupDeadlineBoottimeNs"]), expires
+    if history:
+        rows, startup, until = ordinary_services(value, scope, peer, guest,
+            assignment_id=admitted["assignmentId"], boot=boot,
+            now_boottime_ns=now_boottime_ns, now_unix_ns=now_unix_ns)
+        payload["ordinaryServices"] = rows
+        if operation == "ledger":
+            companion_raw, _ = _original(value["companionOriginal"], MAX_OUTPUT)
+            _same(grant_original("commitRequest", companion_raw)["payload"]["ordinaryServices"], rows)
+        deadline, epoch_limit = min(deadline, startup), min(epoch_limit, until)
+    p.require(now_boottime_ns < deadline and now_unix_ns < epoch_limit)
+    p.require(grant_shape(operation, payload) == domain)
+    p.require(len(p.canonical(payload)) <= (MAX_OUTPUT if history else MAX_LEGACY_OUTPUT))
+    return {"payload": payload, "supervisor": keys[-1], "window": window,
+        "deadline": deadline, "epochLimit": epoch_limit, "domain": domain}
 
 
 def _retrieval_inputs(value, guest, keys, admitted, checkpoint, scope_raw, proof_raw, peer, now):
@@ -221,10 +404,17 @@ def _retrieval_inputs(value, guest, keys, admitted, checkpoint, scope_raw, proof
     # predicted C9 bytes or accept a separate caller-selected store admission.
     scope = p.document(scope_raw, 16384)
     raw_grants = p.fields(value["nativeGrantOriginals"], SIGNERS)
-    roles, expiries = {}, []
+    roles, expiries, history_bundle = {}, [], None
     for operation in SIGNERS:
         raw, _ = _original(raw_grants[operation], MAX_OUTPUT)
         grant = _verified_grant(raw, operation, keys, admitted, checkpoint, now)
+        expected_api = (HISTORY_PROFILES if value["apiVersion"] == HISTORY_RETRIEVAL_INPUT_API else PROFILES)[operation][0]
+        p.require(grant["apiVersion"] == expected_api)
+        if value["apiVersion"] == HISTORY_RETRIEVAL_INPUT_API:
+            if history_bundle is None:
+                history_bundle = grant["ordinaryServices"]
+            else:
+                _same(history_bundle, grant["ordinaryServices"])
         _same(grant["scope"], scope)
         p.require(grant["proofScopeOriginal"] == proof_raw.decode("ascii"))
         _same(grant["expectedPeer"], peer)
@@ -260,29 +450,17 @@ def sign(operation: str, input_original: bytes, signing_key: Ed25519PrivateKey) 
     p.freshness(issued, expires, now)
     p.require(config["authorization"]["payload"]["issuedAtUnixNanos"] <= issued)
 
-    if operation in SIGNERS:
-        scope_raw, _ = _original(value["spoolScopeOriginal"], 16384)
-        proof_raw, _ = _original(value["proofScopeOriginal"], 16384)
-        _, origin = _original(value["originVerifierOriginal"], 4096)
-        actual_scope = spool._scope(scope_raw, proof_raw, admitted, guest, assignment_payload_original=assignment_raw)
-        p.require(expires <= p.integer(origin["notAfterUnixNanos"]))
-        if operation == "ledger":
-            pin, companion_expiry = _companion(value, keys, admitted, checkpoint, peer, actual_scope, now)
-            p.require(expires <= companion_expiry)
-            raw = spool.sign_completion_ledger_service(configuration_original=config_raw,
-                configuration_sha256=value["configurationSha256"], assignment_payload_original=assignment_raw,
-                scope_original=scope_raw, proof_scope_original=proof_raw, origin_verifier=origin,
-                peer_original=peer_raw, companion_pin=pin, issued_at=issued, expires_at=expires,
-                now=now, signing_key=signing_key)
-        else:
-            producer = {"ingress": spool.sign_ingress_service, "terminal": spool.sign_terminal_service,
-                "dispatchBarrier": spool.sign_dispatch_barrier_service,
-                "activeEffectBarrier": spool.sign_active_effect_barrier_service,
-                "activeEffectCommit": spool.sign_active_effect_commit_service}[operation]
-            raw = producer(configuration_original=config_raw, configuration_sha256=value["configurationSha256"],
-                assignment_payload_original=assignment_raw, scope_original=scope_raw, proof_scope_original=proof_raw,
-                origin_verifier=origin, peer_original=peer_raw, issued_at=issued, expires_at=expires,
-                now=now, signing_key=signing_key)
+    prepared = None
+    if operation in HISTORY_OPERATIONS:
+        prepared = prepare_service_input(operation, input_original, boot=originals._boot(),
+            now_boottime_ns=before, now_unix_ns=now)
+        p.require(prepared["supervisor"] == keys[-1])
+        latest = time.time_ns()
+        p.require(now <= latest < prepared["epochLimit"]
+            and c9._live(window, before) < prepared["deadline"])
+        signature = signing_key.sign(p.preimage(prepared["domain"], prepared["payload"]))
+        raw = p.canonical({"payload": prepared["payload"], "signature": p.encoded(signature)})
+        grant_original(operation, raw)
     elif operation == "retrieval":
         scope_raw, _ = _original(value["spoolScopeOriginal"], 16384)
         proof_raw, _ = _original(value["proofScopeOriginal"], 16384)
@@ -295,12 +473,6 @@ def sign(operation: str, input_original: bytes, signing_key: Ed25519PrivateKey) 
             ingress_key=role_keys["ingress"], ledger_key=role_keys["ledger"], terminal_key=role_keys["terminal"],
             effects={name: role_keys[name] for name in spool_values.EFFECT_KEYS}, store_admission=store,
             issued_at=issued, expires_at=expires, now=now, signing_key=signing_key)
-    elif operation == "commitRequest":
-        scope_raw, _ = _original(value["commitmentScopeOriginal"], 32768)
-        raw = commitment.sign_native_service(configuration_original=config_raw,
-            configuration_sha256=value["configurationSha256"], assignment_payload_original=assignment_raw,
-            scope_original_bytes=scope_raw, scope_sha256=p.sha(scope_raw), peer_original=peer_raw,
-            peer_sha256=value["peerSha256"], issued_at=issued, expires_at=expires, now=now, signing_key=signing_key)
     elif operation == "persistence":
         proof_raw, _ = _original(value["proofScopeOriginal"], 16384)
         genesis_raw, _ = _original(value["genesisOriginal"], 16384)
@@ -326,6 +498,13 @@ def sign(operation: str, input_original: bytes, signing_key: Ed25519PrivateKey) 
     c9._live(window, before)
     admission.authorization(config, after)
     signed = _verified_grant(raw, operation, keys, admitted, checkpoint, after, fresh_ledger=fresh_ledger)
+    if prepared is not None:
+        p.require(after < prepared["epochLimit"] and c9._live(window, before) < prepared["deadline"])
+        _same(signed, prepared["payload"])
     _same(signed["guest"], guest)
     p.require(signed["issuedAtUnixNanos"] == issued and signed["expiresAtUnixNanos"] == expires)
+    final_wall = time.time_ns()
+    p.require(after <= final_wall)
+    p.freshness(issued, expires, final_wall)
+    p.require(c9._live(window, before) < (prepared["deadline"] if prepared is not None else p.ns(window["startupDeadlineBoottimeNs"])))
     return raw

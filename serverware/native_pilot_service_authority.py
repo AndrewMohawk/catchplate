@@ -190,14 +190,15 @@ def _head(value, services, native, now, epoch):
             and selected["grantSha256"] == p.sha(native[name])
             and selected["keySpkiSha256"] == p.sha(bytes.fromhex("302a300506032b6570032100") + public))
         keys.append(public)
-        signed = p.fields(g.document(native[name], 65536), ("payload", "signature"))
+        signed = spool._native_original(name, native[name], expected_api=api, effects=True,
+            proof_scope_original=value["proofScopeOriginal"])
         payload = signed["payload"]
         p.decoded(signed["signature"], size=64)
-        if name == "retrieval":
-            spool._require_retrieval_profile(payload, expected_api=api, effects=True,
-                proof_scope_original=value["proofScopeOriginal"])
-        else:
-            p.require(payload["apiVersion"] == api)
+        if "ordinaryServices" in payload:
+            from serverware import native_pilot_native_service_authority as native_authority
+            for member_role, member in services.items():
+                native_authority.require_ordinary_member(payload, member_role, runtime_raw=member["runtime_raw"],
+                    history_raw=member["history_raw"], generation_raw=member["grant_raw"])
         p.require(payload["assignmentPayloadSha256"] == scope["assignmentPayloadSha256"]
             and payload["expectedPeer"] == item["header"]["expectedPeer"]
             and payload["spoolScope" if name == "retrieval" else "scope"] == scope)
@@ -292,11 +293,15 @@ def sign(*, operation, role, input_original, signing_key):
                 history_raw=item["history_raw"], delivery_raw=item["delivery_raw"], signing_key=signing_key, now=now)
             deadline = min(deadline, g.document(payload_raw, 65536)["expiresAtBoottimeNanos"])
         elif operation == "dispatch":
+            from serverware import native_pilot_native_service_authority as native_authority
             payload = p.fields(g.document(payload_raw, 65536), dispatch.SERVICE_FIELDS)
             p.require(payload["guest"] == item["guest"] and payload["serviceRole"] == role)
             _scope(payload["scope"], item, now)
-            native_raw = _original(value["nativeGrantOriginal"], 65536)
-            p.require(g.document(native_raw, 65536)["payload"]["expectedPeer"] == item["header"]["expectedPeer"])
+            native_raw = _original(value["nativeGrantOriginal"], native_authority.MAX_OUTPUT)
+            native_payload = native_authority.grant_original("commitRequest", native_raw)["payload"]
+            p.require(native_payload["expectedPeer"] == item["header"]["expectedPeer"])
+            native_authority.require_ordinary_member(native_payload, role, runtime_raw=item["runtime_raw"],
+                history_raw=item["history_raw"], generation_raw=item["grant_raw"])
             signed = artifacts.sign_effects_transition_grant(payload_original=payload_raw, native_grant_original=native_raw,
                 runtime_original=item["runtime_raw"], history_original=item["history_raw"], delivery_original=item["delivery_raw"],
                 signing_key=signing_key, now=now,
@@ -304,7 +309,9 @@ def sign(*, operation, role, input_original, signing_key):
                 native_configuration_sha256=p.digest(value["nativeConfigurationSha256"]), native_now=time.time_ns())
             deadline = min(deadline, payload["scope"]["expiresAtBoottimeNanos"])
         else:
-            native = {name: _original(raw, 65536) for name, raw in p.fields(value["nativeOriginals"], spool.EFFECT_NATIVE).items()}
+            from serverware import native_pilot_native_service_authority as native_authority
+            native = {name: _original(raw, native_authority.MAX_OUTPUT)
+                for name, raw in p.fields(value["nativeOriginals"], spool.EFFECT_NATIVE).items()}
             payload = _spool_payload(operation, payload_raw, item)
             p.require(_public(signing_key.public_key()) == _public(item["root"]))
             if operation == "head":

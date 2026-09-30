@@ -168,6 +168,8 @@ def _sign_service_transition_grant(*, payload_original, native_grant_original, r
                                   history_original, delivery_original, signing_key, now,
                                   native_configuration_original, native_configuration_sha256, native_now, spool, effects=False):
     """Independent history-root signature; never the LedgerAppend/HMAC key."""
+    from serverware import native_pilot_native_service_authority as native_authority
+    from serverware import native_pilot_ordinary_initial_profile as initial
     payload = p.fields(g.document(payload_original, 65536), SERVICE_FIELDS)
     guest = p.guest(payload["guest"])
     # p.guest validates in place and intentionally returns no authority owner.
@@ -177,19 +179,29 @@ def _sign_service_transition_grant(*, payload_original, native_grant_original, r
         and payload["apiVersion"] == "serverware.custodyCommitRequestServiceGrant/v1"
         and payload["purpose"] == "commit-request-service-transition")
     runtime = g.document(runtime_original, g.MAX_BYTES)["runtime"]
-    history = p.fields(g.document(history_original, g.MAX_BYTES), g.HISTORY)
+    history = initial.runtime_manifest(history_original, runtime=runtime, guest=guest)
     c9 = g.document(delivery_original, 65536)["payload"]
     scope = scope_original(g.canonical(payload["scope"]))
-    native = p.fields(p.document(native_grant_original, 65536), ("payload", "signature"))
+    native = native_authority.grant_original("commitRequest", native_grant_original)
     p.require(p.sha(native_configuration_original) == p.digest(native_configuration_sha256))
     native_configuration = p.document(native_configuration_original, p.MAX_CONFIG)
     admitted, keys = admission.authorization(native_configuration, native_now)
-    np = p.fields(native["payload"], NATIVE_FIELDS)
+    np = native["payload"]
     expected = _common(native_configuration, admitted, keys, np["issuedAtUnixNanos"], np["expiresAtUnixNanos"], native_now)
-    expected.update(apiVersion="serverware.nativeShadowCommitRequestServiceAssignment/v1",
+    expected.update(apiVersion=np["apiVersion"],
         purpose="native-shadow-ledger-commit-request", scope=scope, expectedPeer=retrieval._peer(p.canonical(np["expectedPeer"])))
+    if "ordinaryServices" in np:
+        expected["ordinaryServices"] = np["ordinaryServices"]
+        member = np["ordinaryServices"][role]
+        grant_raw = member["generationGrantOriginal"].encode("ascii")
+        native_authority.require_ordinary_member(np, role, runtime_raw=runtime_original,
+            history_raw=history_original, generation_raw=grant_raw)
+        g._admit_grant(signed_raw=grant_raw, guest=guest, runtime_raw=runtime_original,
+            history_raw=history_original, delivery_raw=delivery_original, now=now,
+            commitment=True, spool=spool, effects=effects)
     p.require(np == expected and native_configuration["authorization"]["payload"]["localRoles"] == ["custody-ledger-append"])
-    p.public_key(keys[-1]).verify(p.decoded(native["signature"], size=64), p.preimage(NATIVE_DOMAIN, np))
+    p.public_key(keys[-1]).verify(p.decoded(native["signature"], size=64),
+        p.preimage(native_authority.grant_shape("commitRequest", np), np))
     ledger = keys[p.ROLES.index("custody-ledger-append")]
     p.require(payload["nativeLedgerKeyId"] == ledger["keyId"]
         and payload["nativeLedgerKeySpkiSha256"] == ledger["keySpkiSha256"]

@@ -508,6 +508,12 @@ impl RemoteGrant {
     }
     pub(super) fn digest(&self)->&Sha256Digest{&self.sha256}
     pub(super) fn history(&self)->&RuntimeAuthorityHistory{&self.history}
+    /// Public data from this already signature-checked grant, not a new owner.
+    pub(super) fn history_scope_original(&self)->Result<(Vec<u8>,u64,u64),ServiceError>{
+        Ok((encode_canonical_frame(&self.grant.payload.scope)?,self.grant.payload.issued_at_boottime_nanos,
+            self.grant.payload.expires_at_boottime_nanos))
+    }
+    pub(super) fn into_history(self)->RuntimeAuthorityHistory{self.history}
     pub(super) fn guest(&self)->&guest::GuestClosureBinding{&self.grant.payload.guest}
     pub(super) fn scope(&self,request:&Request)->Result<(),ServiceError>{self.grant.payload.scope.matches(request)}
     pub(super) fn verify_exchange(&self,request:&Request,exchange:&super::generation_service_client::Exchange,

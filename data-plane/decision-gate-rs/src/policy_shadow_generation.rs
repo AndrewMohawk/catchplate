@@ -911,7 +911,7 @@ impl EnvelopePayload for StartupRuntimeAttestationReceiptPayload {
             || self.record.membership_revision == 0
             || self.record.member_ordinal == 0
             || !bounded_ascii_token(&self.record.instance_id, 256)
-            || !bounded_ascii_token(&self.record.spiffe_id, 2048)
+            || super::policy_shadow::SpiffeId::parse(self.record.spiffe_id.clone()).is_err()
             || !matches!(
                 self.record.tee_platform.as_str(),
                 "aws-nitro-enclave"

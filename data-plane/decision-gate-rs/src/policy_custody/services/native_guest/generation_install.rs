@@ -27,10 +27,11 @@ use crate::policy_shadow::policy_custody::protocol::domain_separated_signature_p
 use services::generation_recovery as recovery;
 const DOMAIN:&str="serverware.nativeGenerationCoordinatorAssignment.signature/v1";
 // Same independently inspected complete-original cap as the fixed proof peers.
-const MAX_CONFIGURATION:usize=65536;
+pub(in crate::policy_shadow::policy_custody::services) const MAX_CONFIGURATION:usize=super::ordinary_histories::MAX_CONFIGURATION;
 #[derive(Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
-struct Member {grant_original:String,history_original:String,root_key_id:Sha256Digest,root_key_spki_sha256:Sha256Digest}
+struct Member {grant_original:String,history_original:String,root_key_id:Sha256Digest,root_key_spki_sha256:Sha256Digest,
+    #[serde(default,skip_serializing_if="Option::is_none")] runtime_original:Option<String>}
 #[derive(Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 struct Payload {
@@ -44,16 +45,26 @@ struct Payload {
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 pub(crate) struct Configuration {payload:Payload,signature:CanonicalEd25519Signature}
 impl Configuration {
+    fn journal_limits(&self)->Result<store::Limits,ShadowError>{self.domain()?;Ok(if self.payload.api_version=="serverware.nativeGenerationCoordinatorAssignment/v2"{
+        store::Limits::EmbeddedHistories
+    }else{store::Limits::Legacy})}
+    fn domain(&self)->Result<&'static str,ShadowError>{match self.payload.api_version.as_str(){
+        "serverware.nativeGenerationCoordinatorAssignment/v1"=>Ok(DOMAIN),
+        "serverware.nativeGenerationCoordinatorAssignment/v2"=>Ok("serverware.nativeGenerationCoordinatorAssignment.signature/v2"),
+        _=>Err(ShadowError::BindingDrift),
+    }}
     pub(in crate::policy_shadow::policy_custody::services) fn validate_shape(&self)->Result<(),ShadowError>{
-        let p=&self.payload;
-        require(p.api_version=="serverware.nativeGenerationCoordinatorAssignment/v1" && p.purpose=="native-generation-installation"
+        self.domain()?;let p=&self.payload;let successor=p.api_version=="serverware.nativeGenerationCoordinatorAssignment/v2";
+        require(p.purpose=="native-generation-installation"
             && p.guest.service_role=="production-bridge" && p.expected_peer.uid!=0 && p.expected_peer.gid!=0
             && p.expected_peer.uid!=p.guest.uid && p.services.keys().copied().collect::<BTreeSet<_>>()==services::generation_service_client::roles()
-            && canonical_json_bytes(self)?.len()<=MAX_CONFIGURATION)?;
+            && canonical_json_bytes(self)?.len()<=if successor{MAX_CONFIGURATION}else{65536})?;
         p.expected_peer.checked().map_err(fail)?;
         for member in p.services.values(){require(member.grant_original.is_ascii() && !member.grant_original.is_empty()
             && member.grant_original.len()<=65536 && member.history_original.is_ascii() && !member.history_original.is_empty()
-            && member.history_original.len()<=1024*1024)?;}
+            && member.history_original.len()<=1024*1024 && member.runtime_original.is_some()==successor)?;
+            if let Some(raw)=&member.runtime_original{require(raw.is_ascii() && !raw.is_empty() && raw.len()<=MAX_CONFIGURATION)?;}
+        }
         Ok(())
     }
     pub(in crate::policy_shadow::policy_custody::services) fn expected_peer(&self)->&services::ExpectedPeerCredentialV3{&self.payload.expected_peer}
@@ -74,7 +85,7 @@ impl Configuration {
         let public=trust.resolve_ed25519_key(&checkpoint,authority_role_signature_domain(AuthorityRole::CustodySupervisorCapability),
             &supervisor.key_id,&supervisor.key_spki_sha256)?;
         require(ed25519_public_key_material_sha256(&public)==supervisor.key_material_sha256)?;
-        public.verify_strict(&signature_preimage(DOMAIN,&canonical_json_bytes(p)?),&Signature::from_bytes(&self.signature.decode()?))
+        public.verify_strict(&signature_preimage(self.domain()?,&canonical_json_bytes(p)?),&Signature::from_bytes(&self.signature.decode()?))
             .map_err(|_|ShadowError::SignatureInvalid)?;
         let local=keys.keys.get(&AuthorityRole::CustodyResultEnvelope).ok_or(ShadowError::SignerBindingMismatch)?;
         let assigned=keys.assignment.payload().authority_key_independence.binding(AuthorityRole::CustodyResultEnvelope,
@@ -85,9 +96,26 @@ impl Configuration {
     fn members(&self)->Result<BTreeMap<services::TrustedHostServiceRoleV3,RemoteGrant>,ShadowError>{
         let mut result=BTreeMap::new();let mut uids=BTreeSet::from([self.payload.guest.uid,self.payload.expected_peer.uid]);
         for (role,member) in &self.payload.services {
-            let manifest:AuthorityHistoryManifestV3=guest::exact(member.history_original.as_bytes())?;
-            let retained=services::RuntimeAuthorityHistory::from_manifest(manifest,&member.root_key_id,&member.root_key_spki_sha256).map_err(fail)?;
+            let mut runtime_header=None;
+            let retained=if let Some(raw)=&member.runtime_original{
+                let runtime:serde_json::Value=guest::exact(raw.as_bytes())?;
+                let header:services::RuntimeConfigHeaderV3=guest::exact(&canonical_json_bytes(
+                    runtime.get("runtime").ok_or(ShadowError::BindingDrift)?)?)?;
+                header.validate().map_err(fail)?;
+                require(header.authority_history_root_key_id==member.root_key_id
+                    && header.authority_history_root_key_spki_sha256==member.root_key_spki_sha256
+                    && canonical_json_bytes(&header.expected_peer)?==canonical_json_bytes(&self.payload.expected_peer)?)?;
+                let history=header.history_from_original(member.history_original.as_bytes(),*role).map_err(fail)?;
+                runtime_header=Some(header);history
+            }else{
+                let manifest:AuthorityHistoryManifestV3=guest::exact(member.history_original.as_bytes())?;
+                services::RuntimeAuthorityHistory::from_manifest(manifest,&member.root_key_id,&member.root_key_spki_sha256).map_err(fail)?
+            };
             let admitted=RemoteGrant::admit(member.grant_original.as_bytes(),retained,*role,&self.payload.guest).map_err(fail)?;
+            if let Some(header)=&runtime_header{
+                services::initial_history::require_remote_guest(member.history_original.as_bytes(),header,*role,&admitted).map_err(fail)?;
+            }
+            if let Some(raw)=&member.runtime_original{require(admitted.guest().runtime_configuration_sha256==Sha256Digest::compute(raw.as_bytes()))?;}
             require(uids.insert(admitted.guest().uid))?;result.insert(*role,admitted);
         }Ok(result)
     }
@@ -102,7 +130,7 @@ impl Prepared {
             && delivery.activation.contains_key("generation-install-journal"))?;
         let original=pin.open(MAX_CONFIGURATION)?;let configuration:Configuration=guest::exact(&original.read(MAX_CONFIGURATION).map_err(fail)?)?;
         configuration.validate_shape()?;
-        store::Journal::preflight_original(&canonical_json_bytes(&configuration)?)?;
+        store::Journal::preflight_original(&canonical_json_bytes(&configuration)?,configuration.journal_limits()?)?;
         require(configuration.payload.guest==GuestClosureAssociation{owner:Arc::clone(&delivery.owner)}.binding())?;
         let listener=delivery.activation.remove("shadow-generation-install-listener").ok_or(ShadowError::BindingDrift)?;
         let directory=delivery.activation.remove("generation-install-journal").ok_or(ShadowError::BindingDrift)?;
@@ -113,7 +141,7 @@ impl Prepared {
         keys.association.check_startup().map_err(fail)?;require(Arc::ptr_eq(&keys.association.owner,&delivery.owner))?;
         self.configuration.verify(keys,trust,time)?;let members=self.configuration.members()?;
         let journal=store::Journal::open(self.directory,&self.configuration.payload.journal,&keys.association.binding(),
-            keys.assignment.payload_sha256(),&Sha256Digest::compute(&canonical_json_bytes(&self.configuration.payload.services)?))?;
+            keys.assignment.payload_sha256(),&Sha256Digest::compute(&canonical_json_bytes(&self.configuration.payload.services)?),self.configuration.journal_limits()?)?;
         let expected=self.configuration.expected_peer().checked().map_err(fail)?;let check=||keys.check(trust,time);
         let mut channel=peer::Client::bind_endpoint(self.inspection,self.listener,expected,delivery,&check,peer::EndpointKind::GenerationInstallEnvelope)?;
         channel.inspect(peer::Phase::Connection,None,None,keys.association.startup(),&check)?;
@@ -442,7 +470,8 @@ impl Service {
         let originals:Vec<String>=self.journal.records().iter().map(|r|r.original.clone()).collect();
         for original in originals {
             let value:serde_json::Value=guest::exact(original.as_bytes())?;
-            if value.get("payload").and_then(|v|v.get("apiVersion")).and_then(|v|v.as_str())==Some("serverware.nativeGenerationCoordinatorAssignment/v1") {
+            if matches!(value.get("payload").and_then(|v|v.get("apiVersion")).and_then(|v|v.as_str()),
+                Some("serverware.nativeGenerationCoordinatorAssignment/v1"|"serverware.nativeGenerationCoordinatorAssignment/v2")) {
                 require(self.history_authority.is_none() && self.pending.is_none() && self.prepared.is_none())?;
                 let authority:Configuration=guest::exact(original.as_bytes())?;authority.verify(keys,trust,time)?;
                 require(canonical_json_bytes(&authority.payload.services)?==canonical_json_bytes(&self.configuration.payload.services)?

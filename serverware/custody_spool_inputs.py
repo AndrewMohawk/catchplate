@@ -64,6 +64,25 @@ def _require_retrieval_profile(payload, *, expected_api, effects, proof_scope_or
         and store["headSha256"] == store["genesisSha256"])
 
 
+def _native_original(name, raw, *, expected_api, effects, proof_scope_original):
+    """Keep legacy profiles exact; admit only the explicit effects successor."""
+    from serverware import native_pilot_native_service_authority as authority
+    candidate = p.fields(g.document(raw, authority.MAX_OUTPUT), ("payload", "signature"))
+    payload = candidate["payload"]
+    successor = name in authority.HISTORY_PROFILES and payload.get("apiVersion") == authority.HISTORY_PROFILES[name][0]
+    if successor:
+        p.require(effects is True and expected_api == EFFECT_NATIVE[name][1])
+        return authority.grant_original(name, raw)
+    candidate = p.fields(g.document(raw, authority.MAX_LEGACY_OUTPUT), ("payload", "signature"))
+    if name == "retrieval":
+        _require_retrieval_profile(candidate["payload"], expected_api=expected_api,
+            effects=effects, proof_scope_original=proof_scope_original)
+    else:
+        p.require(candidate["payload"]["apiVersion"] == expected_api
+            and "ordinaryServices" not in candidate["payload"])
+    return candidate
+
+
 def sign_delivery(**values):
     p.require(values["role"] in ROLES)
     return g._sign_delivery(**values, commitment=True, spool=True, effects=False)
@@ -213,12 +232,13 @@ class RoleInputs:
                 p.require(public["role"] == role and public["grantSha256"] == p.sha(native_originals[name])
                     and p.sha(bytes.fromhex("302a300506032b6570032100") + key) == public["keySpkiSha256"])
                 public_keys.append(key)
-                native = p.fields(g.document(native_originals[name], 65536), ("payload", "signature"))
-                if name == "retrieval":
-                    _require_retrieval_profile(native["payload"], expected_api=api, effects=effects,
-                        proof_scope_original=value["proofScopeOriginal"])
-                else:
-                    p.require(native["payload"]["apiVersion"] == api)
+                native = _native_original(name, native_originals[name], expected_api=api, effects=effects,
+                    proof_scope_original=value["proofScopeOriginal"])
+                if "ordinaryServices" in native["payload"]:
+                    from serverware import native_pilot_native_service_authority as authority
+                    for member_role, member in self._owner._roles.items():
+                        authority.require_ordinary_member(native["payload"], member_role, runtime_raw=member["runtime_raw"],
+                            history_raw=member["history_raw"], generation_raw=member["grant_raw"])
                 p.require(native["payload"]["assignmentPayloadSha256"] == scope["assignmentPayloadSha256"]
                     and native["payload"]["expectedPeer"] == header["expectedPeer"])
                 p.decoded(native["signature"], size=64)
@@ -324,10 +344,16 @@ def _require_release(launcher, cohort, transfers, *, inputs):
         bridge = transfers["bridge"]
         p.require(type(bridge) is RetainedActivationFds and bridge._cohort is cohort and bridge._role == "bridge")
         bridge.check()
-    ledger = g.document(transfers["commitRequest"]._grant_bytes, 65536)["payload"]
+    from serverware import native_pilot_native_service_authority as authority
+    profiles = EFFECT_NATIVE if effects else COMPLETION_NATIVE if terminal else NATIVE
+    ledger = _native_original("ledger", transfers["commitRequest"]._grant_bytes,
+        expected_api=profiles["ledger"][1], effects=effects,
+        proof_scope_original=owner._spools[ROLES[0]]._payload["proofScopeOriginal"])["payload"]
     pin = ledger["commitRequest"]; g.c9._pin(pin)
-    companion = o.Original(pin["path"], 65536, sha=pin["sha256"]); owner._originals.append(companion)
-    p.require(companion.read() == owner._commitments[ROLES[0]]._native == owner._commitments[ROLES[1]]._native)
+    companion = o.Original(pin["path"], authority.MAX_OUTPUT, sha=pin["sha256"]); owner._originals.append(companion)
+    companion_raw = companion.read()
+    authority.grant_original("commitRequest", companion_raw)
+    p.require(companion_raw == owner._commitments[ROLES[0]]._native == owner._commitments[ROLES[1]]._native)
     scopes = [g.document(owner._roles[role]["grant_raw"], 65536)["payload"]["scope"] for role in g.ROLES]
     p.require(all(scope == scopes[0] for scope in scopes)); commitment._same_cohort(owner, scopes[0])
     expected_commitment = {"apiVersion": "serverware.nativeCommitRequestServices/v1",

@@ -1337,7 +1337,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	scripts/test_native_pilot_ordinary_generations.py \
 	scripts/test_native_pilot_generation_scope.py \
 	scripts/test_native_pilot_native_deliveries.py \
-	scripts/test_native_pilot_key_authorizations.py \
+	scripts/test_native_pilot_key_authorizations.py scripts/test_native_pilot_runtime_evidence.py scripts/test_native_pilot_history_grants.py \
 	scripts/authority/sign_native_pilot_key_authorization.py \
 	scripts/authority/sign_native_pilot_delivery.py \
 	scripts/authority/sign_native_pilot_service.py \
@@ -1659,7 +1659,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/native_pilot_supervisor_native_deliveries.py \
 	serverware/native_pilot_native_delivery_profile.py \
 	serverware/native_pilot_key_authority.py \
-	serverware/native_pilot_key_profile.py \
+	serverware/native_pilot_key_profile.py serverware/native_pilot_runtime_evidence.py \
 	serverware/native_pilot_supervisor_key_authorizations.py \
 	serverware/native_pilot_supervisor_precreation.py \
 	serverware/native_pilot_supervisor_endpoint_policy.py \
@@ -4081,7 +4081,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				scripts/test_native_pilot_ordinary_generations.py \
 				scripts/test_native_pilot_generation_scope.py \
 				scripts/test_native_pilot_native_deliveries.py \
-				scripts/test_native_pilot_key_authorizations.py \
+				scripts/test_native_pilot_key_authorizations.py scripts/test_native_pilot_runtime_evidence.py scripts/test_native_pilot_history_grants.py \
 				scripts/authority/sign_native_pilot_key_authorization.py \
 				scripts/authority/sign_native_pilot_delivery.py \
 				scripts/authority/sign_native_pilot_service.py \
@@ -4397,7 +4397,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/native_pilot_supervisor_native_deliveries.py \
 				serverware/native_pilot_native_delivery_profile.py \
 				serverware/native_pilot_key_authority.py \
-				serverware/native_pilot_key_profile.py \
+				serverware/native_pilot_key_profile.py serverware/native_pilot_runtime_evidence.py \
 				serverware/native_pilot_supervisor_key_authorizations.py \
 				serverware/native_pilot_supervisor_precreation.py \
 				serverware/native_pilot_supervisor_endpoint_policy.py \
@@ -4811,7 +4811,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/proof_cohort_inputs.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/proof_cohort_cleanup.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/process.rs \
-				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/admission.rs \
+				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/admission.rs data-plane/decision-gate-rs/src/policy_custody/services/native_guest/ordinary_histories.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/retrieval.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/retrieval_peer.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/retrieval_client.rs \
@@ -5230,7 +5230,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-shadow-driver-outgoing.v1.schema.json \
 				schemas/native-shadow-bridge-admission.v1.schema.json \
 				schemas/custody-service-generation-admission.v1.schema.json \
-				schemas/native-generation-coordinator.v1.schema.json \
+				schemas/native-generation-coordinator.v1.schema.json schemas/native-ordinary-history-grants.v1.schema.json \
 				schemas/native-shadow-commit-request.v1.schema.json \
 				schemas/native-shadow-commitment-keys.v1.schema.json \
 				schemas/custody-five-service-launch.v1.schema.json \

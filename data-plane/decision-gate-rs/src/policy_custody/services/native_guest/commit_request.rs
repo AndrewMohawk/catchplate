@@ -14,6 +14,7 @@ use crate::policy_shadow::policy_custody::protocol::domain_separated_signature_p
 use guest::retrieval_peer as peer;
 use std::os::fd::OwnedFd;
 const DOMAIN:&str="serverware.nativeShadowCommitRequestServiceAssignment.signature/v1";
+pub(in crate::policy_shadow::policy_custody::services) const MAX_CONFIGURATION:usize=super::ordinary_histories::MAX_CONFIGURATION;
 #[derive(Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 struct Payload {
@@ -22,15 +23,23 @@ struct Payload {
     expected_peer:services::ExpectedPeerCredentialV3,
     trust_checkpoint_id:Sha256Digest,revocation_generation:u64,revocation_root_sha256:Sha256Digest,
     issued_at_unix_nanos:i64,expires_at_unix_nanos:i64,signing_key_id:Sha256Digest,signing_key_spki_sha256:Sha256Digest,
+    #[serde(default,skip_serializing_if="Option::is_none")]
+    ordinary_services:Option<super::ordinary_histories::Bundle>,
 }
 #[derive(Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 pub(crate) struct Configuration {payload:Payload,signature:CanonicalEd25519Signature}
 impl Configuration {
+    fn domain(&self)->Result<&'static str,ShadowError>{match(self.payload.api_version.as_str(),self.payload.ordinary_services.is_some()){
+        ("serverware.nativeShadowCommitRequestServiceAssignment/v1",false)=>Ok(DOMAIN),
+        ("serverware.nativeShadowCommitRequestServiceAssignment/v2",true)=>Ok("serverware.nativeShadowCommitRequestServiceAssignment.signature/v2"),
+        _=>Err(ShadowError::BindingDrift),
+    }}
     pub(in crate::policy_shadow::policy_custody::services) fn validate_shape(&self)->Result<(),ShadowError>{
-        let p=&self.payload;
-        require(p.api_version=="serverware.nativeShadowCommitRequestServiceAssignment/v1"
-            && p.purpose=="native-shadow-ledger-commit-request" && p.guest.service_role=="production-bridge"
+        self.domain()?;let p=&self.payload;
+        require(canonical_json_bytes(self)?.len()<=if p.ordinary_services.is_some(){MAX_CONFIGURATION}else{65536})?;
+        if let Some(bundle)=&p.ordinary_services{super::ordinary_histories::shape(bundle)?;}
+        require(p.purpose=="native-shadow-ledger-commit-request" && p.guest.service_role=="production-bridge"
             && p.expected_peer.uid>0 && p.expected_peer.gid>0 && p.expected_peer.uid!=p.guest.uid
             && p.scope.issued_at_boottime_nanos>=guest::decimal(&p.guest.issued_at_boottime_ns)?
             && p.scope.expires_at_boottime_nanos<=guest::decimal(&p.guest.lifetime_deadline_boottime_ns)?)?;
@@ -58,9 +67,21 @@ impl Configuration {
         let key=trust.resolve_ed25519_key(&checkpoint,authority_role_signature_domain(AuthorityRole::CustodySupervisorCapability),
             &signer.key_id,&signer.key_spki_sha256)?;
         require(ed25519_public_key_material_sha256(&key)==signer.key_material_sha256)?;
-        key.verify_strict(&signature_preimage(DOMAIN,&canonical_json_bytes(p)?),&Signature::from_bytes(&self.signature.decode()?))
+        key.verify_strict(&signature_preimage(self.domain()?,&canonical_json_bytes(p)?),&Signature::from_bytes(&self.signature.decode()?))
             .map_err(|_|ShadowError::SignatureInvalid)?;
         require(trust.current_checkpoint()?==checkpoint)
+    }
+    // The caller authenticates the complete outer original before admitting
+    // any embedded trust roots. Legacy configurations retain their old owner.
+    fn histories(&self,keys:&AdmittedKeys,delivery:&PreparedGuestServiceDelivery)->Result<ProductionServiceHistoricalKeyringsV4,ShadowError>{
+        let p=&self.payload;let s=&p.scope;
+        if let Some(bundle)=&p.ordinary_services{return super::ordinary_histories::admit(bundle,keys,&p.expected_peer,
+            &s.production_configuration_binding_sha256,&s.kernel_driver_identity_sha256,&s.retained_descriptor_set_sha256,
+            &s.driver_generation_receipt_sha256,s.issued_at_boottime_nanos,s.expires_at_boottime_nanos,
+            p.issued_at_unix_nanos,p.expires_at_unix_nanos);}
+        let loaded=delivery.owner.load::<ProductionRpcRuntimeConfigV4>().map_err(fail)?;
+        loaded.value.validate().map_err(fail)?;
+        services::production::load_production_histories(&loaded.value,&loaded.credentials).map_err(fail)
     }
 }
 pub(crate) struct Prepared {original:services::guest_original::Original,configuration:Configuration,
@@ -70,7 +91,7 @@ impl Prepared {
         inspection:OwnedFd)->Result<Self,ShadowError>{
         delivery.closure_association().map_err(fail)?.check_preparation().map_err(fail)?;
         require(delivery.activation.len()==1 && delivery.activation.contains_key("commit-request-listener"))?;
-        let original=pin.open(65536)?;let configuration:Configuration=guest::exact(&original.read(65536).map_err(fail)?)?;
+        let original=pin.open(MAX_CONFIGURATION)?;let configuration:Configuration=guest::exact(&original.read(MAX_CONFIGURATION).map_err(fail)?)?;
         configuration.validate_shape()?;
         require(configuration.payload.guest==GuestClosureAssociation{owner:Arc::clone(&delivery.owner)}.binding())?;
         let listener=delivery.activation.remove("commit-request-listener").ok_or(ShadowError::BindingDrift)?;
@@ -79,11 +100,7 @@ impl Prepared {
     pub(in crate::policy_shadow::policy_custody::services) fn bind(self,keys:&AdmittedKeys,delivery:&PreparedGuestServiceDelivery,
         trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime)->Result<Service,ShadowError>{
         require(Arc::ptr_eq(&keys.association.owner,&delivery.owner))?;self.configuration.verify(keys,trust,time)?;
-        // Histories are loaded by the genuine final-role C9 owner, never by a
-        // pre-drop load pretending that a Prepared owner already serves.
-        let loaded=delivery.owner.load::<ProductionRpcRuntimeConfigV4>().map_err(fail)?;
-        loaded.value.validate().map_err(fail)?;
-        let histories=services::production::load_production_histories(&loaded.value,&loaded.credentials).map_err(fail)?;
+        let histories=self.configuration.histories(keys,delivery)?;
         let expected=self.configuration.expected_peer().checked().map_err(fail)?;
         let check=||keys.check(trust,time);
         let mut channel=peer::Client::bind_endpoint(self.inspection,self.listener,expected,delivery,&check,peer::EndpointKind::CommitRequest)?;
@@ -102,16 +119,14 @@ pub(super) struct Work {original:services::guest_original::Original,configuratio
 impl Work {
     pub(super) fn from_pin(pin:&guest::Pin,keys:&AdmittedKeys,delivery:&PreparedGuestServiceDelivery,
         expected:&services::ExpectedPeerCredentialV3,trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime)->Result<Self,ShadowError>{
-        let original=pin.open(65536)?;let configuration:Configuration=guest::exact(&original.read(65536).map_err(fail)?)?;
+        let original=pin.open(MAX_CONFIGURATION)?;let configuration:Configuration=guest::exact(&original.read(MAX_CONFIGURATION).map_err(fail)?)?;
         configuration.verify(keys,trust,time)?;
         require(canonical_json_bytes(configuration.expected_peer())?==canonical_json_bytes(expected)?)?;
-        let loaded=delivery.owner.load::<ProductionRpcRuntimeConfigV4>().map_err(fail)?;
-        loaded.value.validate().map_err(fail)?;
-        let histories=services::production::load_production_histories(&loaded.value,&loaded.credentials).map_err(fail)?;
+        let histories=configuration.histories(keys,delivery)?;
         Ok(Self{original,configuration,histories,prepared:BTreeMap::new(),finished:BTreeSet::new()})
     }
     pub(super) fn check(&self,keys:&AdmittedKeys,trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime)->Result<(),ShadowError>{
-        require(self.original.read(65536).map_err(fail)?.as_slice()==canonical_json_bytes(&self.configuration)?.as_slice())?;
+        require(self.original.read(MAX_CONFIGURATION).map_err(fail)?.as_slice()==canonical_json_bytes(&self.configuration)?.as_slice())?;
         self.configuration.verify(keys,trust,time)
     }
     pub(super) fn handle(&mut self,wire:&Request,keys:&AdmittedKeys,trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime)->Result<ResultBody,ShadowError>{

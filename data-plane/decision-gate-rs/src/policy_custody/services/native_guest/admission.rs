@@ -19,6 +19,8 @@ pub(crate) mod generation_install;
 pub(crate) mod activation;
 #[path="commit_request.rs"]
 pub(crate) mod commit_request;
+#[path="ordinary_histories.rs"]
+pub(crate) mod ordinary_histories;
 #[path="spool_signer.rs"]
 pub(crate) mod spool_signer;
 #[path="spool_endpoint.rs"]

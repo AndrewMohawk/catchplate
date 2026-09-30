@@ -537,7 +537,21 @@ class ParkedProofCohort:
             if name != "configurationSha256") and payload["configurationSha256"] == nested["deliveryConfiguration"]["sha256"]
             and all(payload[name] == self._cold[role][name] for name in ("serviceRole", "uid", "gid")))
         delivery._pin(launch[field])
-        grant = self._open(launch[field]["path"], 65536, launch[field]["sha256"])
+        history_operations = {"commitRequest": "ledger" if self.spool_selected() else "commitRequest",
+            "ingressAdmission": "ingress", "terminalAppend": "terminal", "dispatchBarrier": "dispatchBarrier",
+            "activeEffectBarrier": "activeEffectBarrier", "activeEffectCommit": "activeEffectCommit"}
+        maximum = 4 * 1024 * 1024 if role in history_operations or role == "generationInstall" else 65536
+        grant = self._open(launch[field]["path"], maximum, launch[field]["sha256"])
+        if len(grant.raw) > 65536:
+            # Earlier cohort profiles retain their existing small-original
+            # grammar. Only closed successor grants may use the larger bound;
+            # parsing here is still not native signature/history admission.
+            if role == "generationInstall":
+                from serverware import native_pilot_generation_install_authority as grant_profile
+                grant_profile.grant_original(grant.raw)
+            else:
+                from serverware import native_pilot_native_service_authority as grant_profile
+                grant_profile.grant_original(history_operations[role], grant.raw)
         entries = payload["activation"]
         p.require(type(entries) is list and 1 <= len(entries) <= 64)
         for index, entry in enumerate(entries, 6):

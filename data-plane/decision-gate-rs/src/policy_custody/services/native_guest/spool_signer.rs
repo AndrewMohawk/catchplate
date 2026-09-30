@@ -11,6 +11,7 @@ use crate::policy_shadow::policy_custody::production_dispatch::{ClosedProduction
 use crate::policy_shadow::policy_custody::authority_history::HistoricalServiceRoleV3;
 #[path="retrieval_scope.rs"] mod scope;
 #[path="active_effect_signer.rs"] mod active;
+pub(in crate::policy_shadow::policy_custody::services) const MAX_CONFIGURATION:usize=super::ordinary_histories::MAX_CONFIGURATION;
 #[derive(Debug,Clone,Copy,PartialEq,Eq)]
 pub(in crate::policy_shadow::policy_custody::services) enum Kind {Ingress,Ledger,Terminal,DispatchBarrier,ActiveEffectBarrier,ActiveEffectCommit}
 impl Kind {
@@ -30,15 +31,24 @@ struct Payload {
     expected_peer:services::ExpectedPeerCredentialV3,commit_request:Option<guest::Pin>,
     trust_checkpoint_id:Sha256Digest,revocation_generation:u64,revocation_root_sha256:Sha256Digest,
     issued_at_unix_nanos:i64,expires_at_unix_nanos:i64,signing_key_id:Sha256Digest,signing_key_spki_sha256:Sha256Digest,
+    #[serde(default,skip_serializing_if="Option::is_none")]
+    ordinary_services:Option<super::ordinary_histories::Bundle>,
 }
 #[derive(Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 pub(crate) struct Configuration {payload:Payload,signature:CanonicalEd25519Signature}
 impl Configuration {
     pub(in crate::policy_shadow::policy_custody::services) fn completion_selected(&self)->bool {
-        matches!(self.payload.api_version.as_str(),"serverware.nativeShadowLedgerSpoolServiceAssignment/v2"|"serverware.nativeShadowTerminalSpoolServiceAssignment/v1")
+        matches!(self.payload.api_version.as_str(),"serverware.nativeShadowLedgerSpoolServiceAssignment/v2"|"serverware.nativeShadowLedgerSpoolServiceAssignment/v3"
+            |"serverware.nativeShadowTerminalSpoolServiceAssignment/v1"|"serverware.nativeShadowTerminalSpoolServiceAssignment/v2")
     }
     fn domain(&self)->Result<&'static str,ShadowError>{Ok(match self.kind()? {
+        Kind::Ingress if self.payload.ordinary_services.is_some()=>"serverware.nativeShadowIngressServiceAssignment.signature/v2",
+        Kind::Ledger if self.payload.ordinary_services.is_some()=>"serverware.nativeShadowLedgerSpoolServiceAssignment.signature/v3",
+        Kind::Terminal if self.payload.ordinary_services.is_some()=>"serverware.nativeShadowTerminalSpoolServiceAssignment.signature/v2",
+        Kind::DispatchBarrier if self.payload.ordinary_services.is_some()=>"serverware.nativeShadowDispatchBarrierServiceAssignment.signature/v2",
+        Kind::ActiveEffectBarrier if self.payload.ordinary_services.is_some()=>"serverware.nativeShadowActiveEffectBarrierServiceAssignment.signature/v2",
+        Kind::ActiveEffectCommit if self.payload.ordinary_services.is_some()=>"serverware.nativeShadowActiveEffectCommitServiceAssignment.signature/v2",
         Kind::Ingress=>"serverware.nativeShadowIngressServiceAssignment.signature/v1",
         Kind::Ledger if self.completion_selected()=>"serverware.nativeShadowLedgerSpoolServiceAssignment.signature/v2",
         Kind::Ledger=>"serverware.nativeShadowLedgerSpoolServiceAssignment.signature/v1",
@@ -48,6 +58,15 @@ impl Configuration {
         Kind::ActiveEffectCommit=>"serverware.nativeShadowActiveEffectCommitServiceAssignment.signature/v1",
     })}
     pub(in crate::policy_shadow::policy_custody::services) fn kind(&self)->Result<Kind,ShadowError>{
+        if self.payload.ordinary_services.is_some(){return match(self.payload.api_version.as_str(),self.payload.purpose.as_str(),self.payload.commit_request.is_some()){
+            ("serverware.nativeShadowIngressServiceAssignment/v2","native-first-ingress",false)=>Ok(Kind::Ingress),
+            ("serverware.nativeShadowLedgerSpoolServiceAssignment/v3","native-ledger-spool-and-sampling-with-unavailability",true)=>Ok(Kind::Ledger),
+            ("serverware.nativeShadowTerminalSpoolServiceAssignment/v2","native-terminal-slot-append",false)=>Ok(Kind::Terminal),
+            ("serverware.nativeShadowDispatchBarrierServiceAssignment/v2","native-dispatch-barrier",false)=>Ok(Kind::DispatchBarrier),
+            ("serverware.nativeShadowActiveEffectBarrierServiceAssignment/v2","native-active-effect-barrier",false)=>Ok(Kind::ActiveEffectBarrier),
+            ("serverware.nativeShadowActiveEffectCommitServiceAssignment/v2","native-active-effect-commit",false)=>Ok(Kind::ActiveEffectCommit),
+            _=>Err(ShadowError::BindingDrift),
+        };}
         match (self.payload.api_version.as_str(),self.payload.purpose.as_str(),self.payload.commit_request.is_some()) {
             ("serverware.nativeShadowIngressServiceAssignment/v1","native-first-ingress",false)=>Ok(Kind::Ingress),
             ("serverware.nativeShadowLedgerSpoolServiceAssignment/v1","native-ledger-spool-and-sampling",true)=>Ok(Kind::Ledger),
@@ -63,6 +82,8 @@ impl Configuration {
     pub(in crate::policy_shadow::policy_custody::services) fn guest_uid(&self)->u32{self.payload.guest.uid}
     pub(in crate::policy_shadow::policy_custody::services) fn validate_shape(&self)->Result<(),ShadowError>{
         self.kind()?;let p=&self.payload;p.expected_peer.checked().map_err(fail)?;
+        require(canonical_json_bytes(self)?.len()<=if p.ordinary_services.is_some(){MAX_CONFIGURATION}else{65536})?;
+        if let Some(bundle)=&p.ordinary_services{super::ordinary_histories::shape(bundle)?;}
         require(p.guest.service_role=="production-bridge" && p.expected_peer.uid>0 && p.expected_peer.uid!=p.guest.uid
             && p.proof_scope_original.is_ascii() && !p.proof_scope_original.is_empty() && p.proof_scope_original.len()<=16384
             && Sha256Digest::compute(p.proof_scope_original.as_bytes())==p.scope.proof_scope_sha256
@@ -106,7 +127,7 @@ impl Prepared {
         Self::open_selected(pin,kind,delivery,true)
     }
     fn open_selected(pin:&guest::Pin,kind:Kind,delivery:&PreparedGuestServiceDelivery,completion:bool)->Result<Self,ShadowError>{
-        let original=pin.open(65536)?;let configuration:Configuration=guest::exact(&original.read(65536).map_err(fail)?)?;
+        let original=pin.open(MAX_CONFIGURATION)?;let configuration:Configuration=guest::exact(&original.read(MAX_CONFIGURATION).map_err(fail)?)?;
         configuration.validate_shape()?;require(configuration.kind()?==kind && configuration.completion_selected()==completion
             && configuration.payload.guest==GuestClosureAssociation{owner:Arc::clone(&delivery.owner)}.binding())?;
         Ok(Self{original,configuration,kind})
@@ -124,10 +145,17 @@ impl Work {
     fn from_prepared(prepared:Prepared,keys:&AdmittedKeys,delivery:&PreparedGuestServiceDelivery,
         trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime)->Result<Self,ShadowError>{
         let Prepared{original,configuration,kind}=prepared;
-        require(configuration.kind()?==kind && original.read(65536).map_err(fail)?.as_slice()==canonical_json_bytes(&configuration)?.as_slice())?;
+        require(configuration.kind()?==kind && original.read(MAX_CONFIGURATION).map_err(fail)?.as_slice()==canonical_json_bytes(&configuration)?.as_slice())?;
         configuration.verify(keys,trust,time)?;
-        let loaded=delivery.owner.load::<ProductionRpcRuntimeConfigV4>().map_err(fail)?;loaded.value.validate().map_err(fail)?;
-        let histories=services::production::load_production_histories(&loaded.value,&loaded.credentials).map_err(fail)?;
+        let p=&configuration.payload;let s=&p.scope;
+        let histories=if let Some(bundle)=&p.ordinary_services{
+            super::ordinary_histories::admit(bundle,keys,&p.expected_peer,&s.production_configuration_binding_sha256,
+                &s.kernel_driver_identity_sha256,&s.retained_descriptor_set_sha256,&s.driver_generation_receipt_sha256,
+                s.issued_at_boottime_nanos,s.expires_at_boottime_nanos,p.issued_at_unix_nanos,p.expires_at_unix_nanos)?
+        }else{
+            let loaded=delivery.owner.load::<ProductionRpcRuntimeConfigV4>().map_err(fail)?;loaded.value.validate().map_err(fail)?;
+            services::production::load_production_histories(&loaded.value,&loaded.credentials).map_err(fail)?
+        };
         let commitment=configuration.payload.commit_request.as_ref().map(|pin|super::commit_request::Work::from_pin(
             pin,keys,delivery,configuration.expected_peer(),trust,time)).transpose()?;
         Ok(Self{original,configuration,histories,origin:None,flight:None,used:BTreeSet::new(),sampled:BTreeSet::new(),commitment,effect_flight:None})
@@ -135,7 +163,7 @@ impl Work {
     pub(super) fn expected_peer(&self)->&services::ExpectedPeerCredentialV3{self.configuration.expected_peer()}
     pub(super) fn kind(&self)->Result<Kind,ShadowError>{self.configuration.kind()}
     pub(super) fn check(&self,keys:&AdmittedKeys,trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime)->Result<(),ShadowError>{
-        require(self.original.read(65536).map_err(fail)?.as_slice()==canonical_json_bytes(&self.configuration)?.as_slice())?;
+        require(self.original.read(MAX_CONFIGURATION).map_err(fail)?.as_slice()==canonical_json_bytes(&self.configuration)?.as_slice())?;
         self.configuration.verify(keys,trust,time)?;
         if let Some(value)=&self.commitment{value.check(keys,trust,time)?;}Ok(())
     }

@@ -28,6 +28,11 @@ This contract avoids passing bridge-only dynamic configuration fields to an
 endpoint that does not consume them. Set roots remain separate commitments, not
 substitutes for a leaf or runtime hash.
 
+The separate [fresh-ledger startup profile](native-pilot-fresh-ledger-startup.md)
+explicitly joins an empty initial retrieval directory to scope/v2 and a signed
+native grant/v4. It does not change this marker or reinterpret an empty directory
+as a receipt archive; legacy nonempty retrieval manifests remain supported.
+
 This is source wiring, not runtime acceptance. No new compilation, launch,
 service request or cleanup evidence accompanies this batch. Supervisor coverage
 remains 3/60 and full-run startup still refuses; endpoint commissioning composers

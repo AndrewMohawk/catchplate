@@ -43,6 +43,27 @@ EFFECT_NATIVE = {**COMPLETION_NATIVE,
     "activeEffectCommit": ("custody-active-effect-commit", "serverware.nativeShadowActiveEffectCommitServiceAssignment/v1")}
 
 
+def _require_retrieval_profile(payload, *, expected_api, effects, proof_scope_original):
+    """Join the selected profile without replacing signed grant-hash bindings."""
+    if payload.get("apiVersion") != "serverware.nativeLedgerSpoolRetrievalGrant/v4":
+        p.require(payload["apiVersion"] == expected_api and "initialization" not in payload)
+        return
+    from serverware import native_shadow_retrieval_artifacts as retrieval
+    p.require(effects is True and expected_api == EFFECT_NATIVE["retrieval"][1]
+        and payload["purpose"] == "native-ledger-spool-retrieval"
+        and payload["initialization"] == "fresh-ledger"
+        and type(proof_scope_original) is str and proof_scope_original.isascii()
+        and 0 < len(proof_scope_original) <= 16384)
+    proof_raw = proof_scope_original.encode("ascii")
+    proof = retrieval.scope_original(proof_raw)
+    p.require(proof.get("api_version") == retrieval.SCOPE_SET_API
+        and p.decoded(payload["proofScopeOriginalBase64url"], maximum=16384) == proof_raw)
+    store = p.fields(payload["store"], ("genesisSha256", "sequence", "headSha256"))
+    p.digest(store["genesisSha256"])
+    p.require(type(store["sequence"]) is int and store["sequence"] == 0
+        and store["headSha256"] == store["genesisSha256"])
+
+
 def sign_delivery(**values):
     p.require(values["role"] in ROLES)
     return g._sign_delivery(**values, commitment=True, spool=True, effects=False)
@@ -192,7 +213,12 @@ class RoleInputs:
                     and p.sha(bytes.fromhex("302a300506032b6570032100") + key) == public["keySpkiSha256"])
                 public_keys.append(key)
                 native = p.fields(g.document(native_originals[name], 65536), ("payload", "signature"))
-                p.require(native["payload"]["apiVersion"] == api and native["payload"]["assignmentPayloadSha256"] == scope["assignmentPayloadSha256"]
+                if name == "retrieval":
+                    _require_retrieval_profile(native["payload"], expected_api=api, effects=effects,
+                        proof_scope_original=value["proofScopeOriginal"])
+                else:
+                    p.require(native["payload"]["apiVersion"] == api)
+                p.require(native["payload"]["assignmentPayloadSha256"] == scope["assignmentPayloadSha256"]
                     and native["payload"]["expectedPeer"] == header["expectedPeer"])
                 p.decoded(native["signature"], size=64)
                 p.require(native["payload"]["spoolScope" if name == "retrieval" else "scope"] == scope)

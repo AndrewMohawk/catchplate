@@ -11,6 +11,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 from serverware import authority_policy_canary as profile
+from serverware.policy_shadow_assignment_fields import LEGACY_FIELDS, NATIVE_FIELDS
 
 SCHEMA = "serverware.nativeCustodyOpening/v1"
 EARLY_SCHEMA = "serverware.nativeCustodyOpening/v2"
@@ -44,9 +45,8 @@ def material(domain, value):
 
 def assignment_fields(value, *, version=1):
     """Exact explicit-version shapes; legacy callers never infer v2 admission."""
-    from serverware import db
-    old = db._POLICY_SHADOW_DIRECT_PAYLOAD_FIELDS["canary_assignment"]
-    native = old | {"custodyAuthority", "authorityKeyIndependence"}
+    old = frozenset(LEGACY_FIELDS)
+    native = frozenset(NATIVE_FIELDS)
     profile.require(type(version) is int and version in (1, 2))
     shapes = (old, native) if version == 1 else (native | {"nativeClosureSet"},)
     profile.require(type(value) is dict and set(value) in shapes,

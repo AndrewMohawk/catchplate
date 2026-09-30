@@ -31,6 +31,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from cryptography.hazmat.primitives.asymmetric import ec
 
 from serverware import authority_contract, authority_primary_contract, grants
+from serverware.policy_shadow_assignment_fields import LEGACY_FIELDS as _POLICY_SHADOW_ASSIGNMENT_LEGACY_FIELDS
 from serverware import release_authorization_profiles as release_profiles
 from serverware import credential_lease_profiles as lease_profiles
 from serverware.audit_outbox_contract import MAX_PENDING
@@ -1307,24 +1308,7 @@ _POLICY_SHADOW_DIRECT_PAYLOAD_FIELDS = {
             "expiresAtUnixNanos",
         }
     ),
-    "canary_assignment": frozenset(
-        {
-            "assignmentId",
-            "canaryId",
-            "assignmentRevision",
-            "generationEpoch",
-            "minimumGenerationTombstoneEpoch",
-            "policyIdentity",
-            "expectedLoadedSnapshots",
-            "responseValidationObligations",
-            "responseValidationObligationsRootSha256",
-            "fleet",
-            "observationWindow",
-            "readinessThresholds",
-            "issuedAtUnixNanos",
-            "expiresAtUnixNanos",
-        }
-    ),
+    "canary_assignment": frozenset(_POLICY_SHADOW_ASSIGNMENT_LEGACY_FIELDS),
     "load_receipt": frozenset(
         {
             "receiptId",

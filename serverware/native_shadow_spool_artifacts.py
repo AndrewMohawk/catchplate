@@ -145,7 +145,9 @@ def sign_active_effect_commit_service(**values):
 
 def _sign_retrieval_service(*, configuration_original, configuration_sha256, assignment_payload_original, scope_original,
                            proof_scope_original, peer_original, ingress_key, ledger_key, store_admission,
-                           issued_at, expires_at, now, signing_key, terminal_key=None, completion=False, effects=None):
+                           issued_at, expires_at, now, signing_key, terminal_key=None, completion=False, effects=None,
+                           fresh_ledger=False):
+    p.require(type(fresh_ledger) is bool and (not fresh_ledger or completion and effects is not None))
     config, admitted, keys = _input(configuration_original, configuration_sha256, assignment_payload_original,
         "custody-retrieval-response", now, signing_key)
     scope = _scope(scope_original, proof_scope_original, admitted, admitted["guest"],
@@ -166,9 +168,12 @@ def _sign_retrieval_service(*, configuration_original, configuration_sha256, ass
     p.digest(store["genesisSha256"]); p.digest(store["headSha256"])
     p.integer(store["sequence"], minimum=0, maximum=128)
     p.require(store["sequence"] != 0 or store["headSha256"] == store["genesisSha256"])
+    if fresh_ledger:
+        p.require(retrieval.scope_original(proof_scope_original).get("api_version") == retrieval.SCOPE_SET_API
+            and store["sequence"] == 0 and store["headSha256"] == store["genesisSha256"])
     peer = retrieval._peer(peer_original); p.require(peer["uid"] != admitted["guest"]["uid"])
     value = old._common(config, admitted, keys, issued_at, expires_at, now)
-    version = "3" if effects is not None else "2" if completion else "1"
+    version = "4" if fresh_ledger else "3" if effects is not None else "2" if completion else "1"
     value.update(apiVersion="serverware.nativeLedgerSpoolRetrievalGrant/v" + version, purpose="native-ledger-spool-retrieval",
         proofScopeOriginalBase64url=p.encoded(proof_scope_original), expectedPeer=peer, spoolScope=scope,
         ingress=ingress_key, ledger=ledger_key, store=store)
@@ -176,21 +181,33 @@ def _sign_retrieval_service(*, configuration_original, configuration_sha256, ass
         value["terminal"] = terminal_key
     if effects is not None:
         value["effects"] = dict(effects)
+    if fresh_ledger:
+        value["initialization"] = retrieval.FRESH_INITIALIZATION
     return old._signed(value, "serverware.nativeLedgerSpoolRetrievalGrant.signature/v" + version, signing_key)
 
 
 def sign_retrieval_service(**values):
-    return _sign_retrieval_service(**values, terminal_key=None, completion=False, effects=None)
+    return _sign_retrieval_service(**values, terminal_key=None, completion=False, effects=None, fresh_ledger=False)
 
 
 def sign_completion_retrieval_service(**values):
-    return _sign_retrieval_service(**values, completion=True, effects=None)
+    return _sign_retrieval_service(**values, completion=True, effects=None, fresh_ledger=False)
 
 
 def sign_effects_retrieval_service(**values):
     """Fixed v3 retrieval scope; terminal and all three effect RoleKeys required."""
     p.require("effects" in values and values["effects"] is not None)
-    return _sign_retrieval_service(**values, completion=True)
+    return _sign_retrieval_service(**values, completion=True, fresh_ledger=False)
+
+
+def sign_fresh_ledger_retrieval_service(**values):
+    """Explicit v4 startup permission; only real fresh-ledger admissions qualify.
+
+    This does not fabricate a journal, receipt, immutable object or key. The
+    native receiver independently checks its actual store and empty directory.
+    """
+    p.require("effects" in values and values["effects"] is not None)
+    return _sign_retrieval_service(**values, completion=True, fresh_ledger=True)
 
 
 def _sign_and_seal_service_grant(*, owner, role, approved_payload_original, native_originals, history_root_authority, completion, effects=False):

@@ -159,9 +159,8 @@ def shape(purpose, raw):
     if family == "native-service":
         from serverware import native_pilot_native_service_authority as authority
         signed = _signed(raw, maximum, native=True)
-        value = p.fields(signed["payload"], authority.PAYLOAD_FIELDS[role])
-        api, purpose_name, _ = authority.PROFILES[role]
-        p.require(value["apiVersion"] == api and value["purpose"] == purpose_name)
+        value = signed["payload"]
+        authority.grant_shape(role, value)
         p.guest(value["guest"])
         for field in ("assignmentPayloadSha256", "keyAuthorizationSha256", "signingKeyId", "signingKeySpkiSha256"):
             p.digest(value[field])

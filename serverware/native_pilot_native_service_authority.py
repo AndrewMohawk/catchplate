@@ -12,6 +12,8 @@ the complete real endpointDeliveryResult original from the conductor's prior
 endpoint-deliveries intake. Its spoolJournal is consumed, never calculated or
 replaced by caller-provided genesis parameters. Independent approval of that
 original's provenance remains mandatory; JSON parsing does not establish it.
+Explicit Input/v2 is retrieval-only and additionally retains the approved
+fresh-ledger manifest. Legacy Input/v1 keeps its existing grant versions.
 """
 from __future__ import annotations
 
@@ -71,12 +73,53 @@ PAYLOAD_FIELDS = {
     "persistence": _COMMON_PAYLOAD + ("permissions", "proofScopeOriginalBase64url", "journal", "expectedPeer"),
     "trustedTime": _COMMON_PAYLOAD + ("clockBootstrapSha256", "expectedPeer"),
 }
+FRESH_INPUT_API = "serverware.nativePilotNativeServiceAuthorityInput/v2"
+FRESH_RETRIEVAL_PROFILE = ("serverware.nativeLedgerSpoolRetrievalGrant/v4",
+    "native-ledger-spool-retrieval", "serverware.nativeLedgerSpoolRetrievalGrant.signature/v4")
 _ENDPOINT = {"ingress": "ingressAdmission", "ledger": "commitRequest", "terminal": "terminalAppend",
     **{name: name for name in OPERATIONS[3:]}}
 _LOCAL_ROLE = {name: spool_values.EFFECT_NATIVE[name][0] for name in SIGNERS + ("retrieval",)}
 _LOCAL_ROLE.update(commitRequest="custody-ledger-append", persistence="custody-store-response", trustedTime="custody-trusted-time-response")
 _original = originals._original
 _same = originals._same
+
+
+def input_shape(operation, input_original):
+    """Select the explicit approved-input profile, without signing or I/O."""
+    p.require(operation in OPERATIONS)
+    value = p.document(input_original, MAX_INPUT)
+    p.require(type(value) is dict)
+    fresh = value.get("apiVersion") == FRESH_INPUT_API
+    p.require(not fresh or operation == "retrieval")
+    p.fields(value, INPUT_FIELDS + EXTRA_FIELDS[operation] + (("retrievalManifestOriginal",) if fresh else ()))
+    p.require(value["apiVersion"] == (FRESH_INPUT_API if fresh else "serverware.nativePilotNativeServiceAuthorityInput/v1")
+        and value["operation"] == operation)
+    if fresh:
+        manifest_raw, manifest = _original(value["retrievalManifestOriginal"], retrieval.MAX_MANIFEST)
+        p.require(retrieval.manifest_initialization(manifest_raw, p.sha(manifest_raw)) == retrieval.FRESH_INITIALIZATION)
+        proof_raw, _ = _original(value["proofScopeOriginal"], 16384)
+        p.require(p.decoded(manifest["proofScopeOriginalBase64url"], maximum=16384) == proof_raw)
+    return value, fresh
+
+
+def grant_shape(operation, payload):
+    """Closed fields and signature domain; never a signature/admission verdict."""
+    p.require(operation in OPERATIONS and type(payload) is dict)
+    fresh = operation == "retrieval" and payload.get("apiVersion") == FRESH_RETRIEVAL_PROFILE[0]
+    p.fields(payload, PAYLOAD_FIELDS[operation] + (("initialization",) if fresh else ()))
+    api, purpose, domain = FRESH_RETRIEVAL_PROFILE if fresh else PROFILES[operation]
+    p.require(payload["apiVersion"] == api and payload["purpose"] == purpose)
+    if fresh:
+        proof = retrieval.scope_original(p.decoded(payload["proofScopeOriginalBase64url"], maximum=16384))
+        store = p.fields(payload["store"], ("genesisSha256", "sequence", "headSha256"))
+        p.digest(store["genesisSha256"])
+        p.require(payload["initialization"] == retrieval.FRESH_INITIALIZATION
+            and proof.get("api_version") == retrieval.SCOPE_SET_API
+            and type(store["sequence"]) is int and store["sequence"] == 0
+            and store["headSha256"] == store["genesisSha256"])
+        p.fields(payload["effects"], spool_values.EFFECT_KEYS)
+        p.require(type(payload["terminal"]) is dict)
+    return domain
 
 
 def _endpoint(value, operation):
@@ -123,13 +166,14 @@ def _peer(value, observed, guest):
     return raw, peer
 
 
-def _verified_grant(raw, operation, keys, admitted, checkpoint, now):
+def _verified_grant(raw, operation, keys, admitted, checkpoint, now, *, fresh_ledger=False):
     signed = p.fields(p.document(raw, MAX_OUTPUT), ("payload", "signature"))
-    payload = p.fields(signed["payload"], PAYLOAD_FIELDS[operation])
-    api, purpose, domain = PROFILES[operation]
+    payload = signed["payload"]
+    domain = grant_shape(operation, payload)
+    p.require(type(fresh_ledger) is bool and (not fresh_ledger or operation == "retrieval")
+        and (payload["apiVersion"] == FRESH_RETRIEVAL_PROFILE[0]) == fresh_ledger)
     supervisor = keys[-1]
-    p.require(payload["apiVersion"] == api and payload["purpose"] == purpose
-        and payload["signingKeyId"] == supervisor["keyId"]
+    p.require(payload["signingKeyId"] == supervisor["keyId"]
         and payload["signingKeySpkiSha256"] == supervisor["keySpkiSha256"]
         and payload["assignmentPayloadSha256"] == admitted["assignmentPayloadSha256"])
     p.public_key(supervisor).verify(p.decoded(signed["signature"], size=64), p.preimage(domain, payload))
@@ -196,9 +240,7 @@ def _retrieval_inputs(value, guest, keys, admitted, checkpoint, scope_raw, proof
 def sign(operation: str, input_original: bytes, signing_key: Ed25519PrivateKey) -> bytes:
     """Sign exactly one selected existing native service envelope."""
     p.require(operation in OPERATIONS and isinstance(signing_key, Ed25519PrivateKey))
-    value = p.fields(p.document(input_original, MAX_INPUT), INPUT_FIELDS + EXTRA_FIELDS[operation])
-    p.require(value["apiVersion"] == "serverware.nativePilotNativeServiceAuthorityInput/v1"
-        and value["operation"] == operation)
+    value, fresh_ledger = input_shape(operation, input_original)
     guest, window, observed = _endpoint(value, operation)
     before = c9._live(window)
     now = time.time_ns()
@@ -246,7 +288,8 @@ def sign(operation: str, input_original: bytes, signing_key: Ed25519PrivateKey) 
         proof_raw, _ = _original(value["proofScopeOriginal"], 16384)
         store, role_keys, grant_expiry = _retrieval_inputs(value, guest, keys, admitted, checkpoint, scope_raw, proof_raw, peer, now)
         p.require(expires <= grant_expiry)
-        raw = spool.sign_effects_retrieval_service(configuration_original=config_raw,
+        producer = spool.sign_fresh_ledger_retrieval_service if fresh_ledger else spool.sign_effects_retrieval_service
+        raw = producer(configuration_original=config_raw,
             configuration_sha256=value["configurationSha256"], assignment_payload_original=assignment_raw,
             scope_original=scope_raw, proof_scope_original=proof_raw, peer_original=peer_raw,
             ingress_key=role_keys["ingress"], ledger_key=role_keys["ledger"], terminal_key=role_keys["terminal"],
@@ -282,7 +325,7 @@ def sign(operation: str, input_original: bytes, signing_key: Ed25519PrivateKey) 
     p.require(now <= after)
     c9._live(window, before)
     admission.authorization(config, after)
-    signed = _verified_grant(raw, operation, keys, admitted, checkpoint, after)
+    signed = _verified_grant(raw, operation, keys, admitted, checkpoint, after, fresh_ledger=fresh_ledger)
     _same(signed["guest"], guest)
     p.require(signed["issuedAtUnixNanos"] == issued and signed["expiresAtUnixNanos"] == expires)
     return raw

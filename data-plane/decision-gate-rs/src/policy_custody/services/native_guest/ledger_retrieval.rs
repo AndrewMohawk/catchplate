@@ -29,6 +29,8 @@ struct Payload {
     terminal:Option<services::spool_head_values::RoleKey>,
     #[serde(default,skip_serializing_if="Option::is_none")]
     effects:Option<Effects>,
+    #[serde(default,skip_serializing_if="Option::is_none",deserialize_with="deserialize_optional_present")]
+    initialization:Option<String>,
 }
 #[derive(Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
@@ -39,9 +41,12 @@ struct Effects {dispatch_barrier:services::spool_head_values::RoleKey,active_eff
 pub(crate) struct Configuration {payload:Payload,signature:CanonicalEd25519Signature}
 impl Configuration {
     pub(in crate::policy_shadow::policy_custody::services) fn completion_selected(&self)->bool {
-        matches!(self.payload.api_version.as_str(),"serverware.nativeLedgerSpoolRetrievalGrant/v2"|"serverware.nativeLedgerSpoolRetrievalGrant/v3")
+        matches!(self.payload.api_version.as_str(),"serverware.nativeLedgerSpoolRetrievalGrant/v2"|"serverware.nativeLedgerSpoolRetrievalGrant/v3"|"serverware.nativeLedgerSpoolRetrievalGrant/v4")
     }
-    pub(in crate::policy_shadow::policy_custody::services) fn effects_selected(&self)->bool{self.payload.api_version=="serverware.nativeLedgerSpoolRetrievalGrant/v3"}
+    pub(in crate::policy_shadow::policy_custody::services) fn effects_selected(&self)->bool{
+        matches!(self.payload.api_version.as_str(),"serverware.nativeLedgerSpoolRetrievalGrant/v3"|"serverware.nativeLedgerSpoolRetrievalGrant/v4")
+    }
+    fn fresh_ledger_selected(&self)->bool{self.payload.api_version=="serverware.nativeLedgerSpoolRetrievalGrant/v4"}
     pub(in crate::policy_shadow::policy_custody::services) fn validate_shape(&self)->Result<(),ShadowError>{
         let p=&self.payload;
         require((self.completion_selected() || p.api_version=="serverware.nativeLedgerSpoolRetrievalGrant/v1")
@@ -50,6 +55,10 @@ impl Configuration {
             && p.expected_peer.uid!=p.guest.uid && p.proof_scope_original_base64url.len()<=21846
             && p.spool_scope.issued_at_boottime_nanos>=guest::decimal(&p.guest.issued_at_boottime_ns)?
             && p.spool_scope.expires_at_boottime_nanos<=guest::decimal(&p.guest.lifetime_deadline_boottime_ns)?)?;
+        if self.fresh_ledger_selected() {
+            require(p.initialization.as_deref()==Some("fresh-ledger") && p.store.sequence==0
+                && p.store.head_sha256==p.store.genesis_sha256)?;
+        }else{require(p.initialization.is_none())?;}
         p.expected_peer.checked().map_err(fail)?;Ok(())
     }
     pub(in crate::policy_shadow::policy_custody::services) fn expected_peer(&self)->&services::ExpectedPeerCredentialV3{&self.payload.expected_peer}
@@ -57,6 +66,7 @@ impl Configuration {
     fn verify(&self,keys:&AdmittedKeys,scope:&scope::Scope,scope_raw:&[u8],trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime)
         ->Result<BTreeMap<AuthorityRole,VerifyingKey>,ShadowError>{
         self.validate_shape()?;keys.check(trust,time)?;scope.check(keys)?;require(keys.result.is_some())?;
+        if self.fresh_ledger_selected(){scope.require_fresh_ledger()?;}
         let p=&self.payload;let a=keys.assignment.payload();let checkpoint=trust.current_checkpoint()?;
         require(p.guest==keys.association.binding() && p.assignment_payload_sha256==*keys.assignment.payload_sha256()
             && p.key_authorization_sha256==Sha256Digest::compute(&canonical_json_bytes(&keys.configuration.authorization)?)
@@ -76,7 +86,8 @@ impl Configuration {
         let key=trust.resolve_ed25519_key(&checkpoint,authority_role_signature_domain(AuthorityRole::CustodySupervisorCapability),
             &signer.key_id,&signer.key_spki_sha256)?;
         require(ed25519_public_key_material_sha256(&key)==signer.key_material_sha256)?;
-        key.verify_strict(&signature_preimage(if self.effects_selected(){"serverware.nativeLedgerSpoolRetrievalGrant.signature/v3"}
+        key.verify_strict(&signature_preimage(if self.fresh_ledger_selected(){"serverware.nativeLedgerSpoolRetrievalGrant.signature/v4"}
+            else if self.effects_selected(){"serverware.nativeLedgerSpoolRetrievalGrant.signature/v3"}
             else if self.completion_selected(){"serverware.nativeLedgerSpoolRetrievalGrant.signature/v2"}else{DOMAIN},
             &canonical_json_bytes(p)?),&Signature::from_bytes(&self.signature.decode()?))
             .map_err(|_|ShadowError::SignatureInvalid)?;
@@ -140,11 +151,14 @@ impl Prepared {
         let scope_raw=URL_SAFE_NO_PAD.decode(&configuration.payload.proof_scope_original_base64url).map_err(fail)?;
         require(!scope_raw.is_empty() && scope_raw.len()<=16384
             && URL_SAFE_NO_PAD.encode(&scope_raw)==configuration.payload.proof_scope_original_base64url)?;
-        let scope=guest::exact(&scope_raw)?;
+        let scope:scope::Scope=guest::exact(&scope_raw)?;
+        if configuration.fresh_ledger_selected(){scope.require_fresh_ledger()?;}
         let store=store::Store::open(delivery.activation.remove("ledger-spool-store").ok_or(ShadowError::BindingDrift)?,
             delivery.activation.remove("ledger-spool-lock").ok_or(ShadowError::BindingDrift)?,
             &configuration.payload.store,&configuration.payload.guest,&Sha256Digest::compute(&scope_raw))?;
-        let legacy=legacy::Store::open(delivery.activation.remove("retrieval-objects").ok_or(ShadowError::BindingDrift)?)?;
+        let objects=delivery.activation.remove("retrieval-objects").ok_or(ShadowError::BindingDrift)?;
+        let legacy=if configuration.fresh_ledger_selected(){legacy::Store::open_empty(objects)?}
+            else{legacy::Store::open(objects)?};
         let listener=delivery.activation.remove("retrieval-listener").ok_or(ShadowError::BindingDrift)?;
         Ok(Self{original,configuration,scope_raw,scope,store,legacy,listener,inspection})
     }
@@ -258,6 +272,10 @@ impl Service {
                             store::PreparedOriginal::Effect(p)=>require(p.core.payload(stored).map_err(fail)?==*canonical_receipt_payload)?,}
                         self.scope.require_payload(*signer_role,canonical_receipt_payload,signed_authority_payload)?;
                     }else{
+                        // Fresh-ledger admission authorizes only genuine cores
+                        // stored through this retained writer, never an immutable
+                        // object fallback or a genesis-as-operational receipt.
+                        require(!self.configuration.fresh_ledger_selected())?;
                         held_legacy=Some(self.legacy.read(&self.scope,&self.scope_raw,*signer_role,retrieval_id_sha256,
                             retrieval_proof_sha256,canonical_receipt_payload,signed_authority_payload)?);
                     }

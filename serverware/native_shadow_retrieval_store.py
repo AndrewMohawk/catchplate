@@ -3,6 +3,8 @@
 Only new content-addressed files in an explicitly selected empty root-owned
 directory are written. Failures preserve partial state; no repair, overwrite,
 cleanup, feature enabling, mount operation, key creation, or service start.
+Explicit fresh-ledger/v2 prepares only an actual empty protected directory:
+there are no object files to write or fs-verity measurements to claim.
 """
 from __future__ import annotations
 
@@ -147,6 +149,8 @@ def _create(directory, locator, original):
 def install(*, target_directory, manifest_original, manifest_sha256):
     """Install at most 16 MiB; return observations, never activation authority.
 
+    Fresh-ledger/v2 freezes the supplied empty root:root0700 directory as 0555
+    without inventing objects, genesis, receipts or fs-verity observations.
     The operator must supply an external process watchdog. Kernel fs-verity
     setup is synchronous; a Python elapsed-time check is not a hard deadline.
     """
@@ -154,6 +158,7 @@ def install(*, target_directory, manifest_original, manifest_sha256):
         and os.getresuid() == (0, 0, 0) and os.getresgid() == (0, 0, 0))
     # Validate the entire pinned inventory before the first filesystem effect.
     objects = a.manifest_objects(manifest_original, manifest_sha256)
+    initialization = a.manifest_initialization(manifest_original, manifest_sha256)
     expected_names = sorted(locator["filename"] for locator, _ in objects)
     with _directory(target_directory) as (directory, check):
         observations = []
@@ -171,10 +176,15 @@ def install(*, target_directory, manifest_original, manifest_sha256):
             p.require(_observe(directory, locator, original) == expected)
         check(0o555)
         p.require(_identity(os.fstat(directory)) == frozen and _names(directory) == expected_names)
-        return p.canonical({"apiVersion": "serverware.nativeShadowRetrievalStoreInstalled/v1",
+        result = {"apiVersion": "serverware.nativeShadowRetrievalStoreInstalled/v1",
             "manifestSha256": manifest_sha256, "releaseAuthority": False, "serviceReady": False,
             "directoryDevice": frozen[0], "directoryInode": frozen[1], "directoryMode": 0o555,
-            "objects": observations})
+            "objects": observations}
+        if initialization is not None:
+            p.require(initialization == a.FRESH_INITIALIZATION and objects == observations == [])
+            result["apiVersion"] = "serverware.nativeShadowRetrievalStoreInstalled/v2"
+            result["initialization"] = initialization
+        return p.canonical(result)
 
 
 def main():

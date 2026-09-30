@@ -379,7 +379,7 @@ def _public_joins(role, documents, guest, runtime_raw, grant, observed, config, 
     for field in ("keyId", "keySpkiSha256", "keyMaterialSha256"):
         p.require(verifier["payload"]["verifier" + field[0].upper() + field[1:]] == public_keys[-2][field])
     operation = LAUNCHES[role][2]
-    domain = generation.DOMAIN if operation is None else services.PROFILES[operation][2]
+    domain = generation.DOMAIN if operation is None else services.grant_shape(operation, grant["payload"])
     # Bridge consumes the endpoint's trusted-time grant, not a bridge-guest grant.
     if role == "bridge":
         retained = common.pop("keyAuthorizationSha256")
@@ -485,7 +485,12 @@ def install(bundle_original: bytes, *, expected_sha256: str) -> dict:
         publication._shape(grant_purpose, grant_raw)
         grant = p.document(grant_raw, 65536)
         operation = LAUNCHES[role][2]
-        _signed(grant, generation.PAYLOAD_FIELDS if operation is None else services.PAYLOAD_FIELDS[operation])
+        if operation is None:
+            _signed(grant, generation.PAYLOAD_FIELDS)
+        else:
+            # Publication has checked the envelope; select the exact domain
+            # from its closed versioned payload, then authenticate below.
+            services.grant_shape(operation, grant["payload"])
         companion = None
         if role == "commitRequest":
             pin = grant["payload"]["commitRequest"]

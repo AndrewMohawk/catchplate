@@ -1,8 +1,9 @@
 """Real remaining endpoint resources for the fixed single-driver native pilot.
 
 Public bytes/pins are independently supplied, not approvals created here. The
-retrieval directory must already have been populated by the existing fs-verity
-installer: inspect its actual files, never accept its observation JSON instead.
+retrieval directory must already have been prepared by the existing installer:
+inspect actual fs-verity files, or the explicitly selected empty fresh-ledger
+directory, never accept its observation JSON instead.
 The original cohort window (at most 30 seconds to startup) is never renewed.
 Synchronous filesystem work still needs the operator's external watchdog.
 
@@ -98,6 +99,8 @@ class PilotEndpointInputs:
             # signature verdict. Persistence intake binds its payload hash to
             # actual signed key authorization; Rust verifies full membership.
         value._objects = artifacts.manifest_objects(retrieval_manifest_original, retrieval_manifest_sha256)
+        value._retrieval_initialization = artifacts.manifest_initialization(
+            retrieval_manifest_original, retrieval_manifest_sha256)
         manifest = p.document(retrieval_manifest_original, artifacts.MAX_MANIFEST)
         p.require(p.decoded(manifest["proofScopeOriginalBase64url"], maximum=16384) == proof_scope_original)
         value._manifest_raw, value._manifest_sha = retrieval_manifest_original, retrieval_manifest_sha256
@@ -239,7 +242,10 @@ class PilotEndpointInputs:
                 and grant["purpose"] == "native-shadow-trusted-time-response"
                 and grant["clockBootstrapSha256"] == launch["keyAdmission"]["timeBootstrap"]["sha256"])
         elif role == "retrieval":
-            p.require(grant["apiVersion"] == "serverware.nativeLedgerSpoolRetrievalGrant/v3"
+            from serverware import native_pilot_native_service_authority as services
+            services.grant_shape("retrieval", grant)
+            fresh = self._retrieval_initialization == artifacts.FRESH_INITIALIZATION
+            p.require(grant["apiVersion"] == "serverware.nativeLedgerSpoolRetrievalGrant/v" + ("4" if fresh else "3")
                 and grant["purpose"] == "native-ledger-spool-retrieval"
                 and p.decoded(grant["proofScopeOriginalBase64url"], maximum=16384) == self._scope_raw
                 and p.canonical(grant["store"]) == p.canonical(self._spool_journal))

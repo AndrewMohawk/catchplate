@@ -20,6 +20,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from serverware import authority_policy_canary_native_opening as opening
 from serverware import native_pilot_closure_set as closure_set
 from serverware import native_shadow_nitro_profile as p
+from serverware.policy_shadow_assignment_fields import NATIVE_FIELDS
 
 DOMAINS = {1: "serverware.policyShadowAssignment/v1", 2: "serverware.policyShadowAssignment/v2"}
 MAX_BYTES = 4 * 1024 * 1024
@@ -27,10 +28,6 @@ MAX_INPUT = 8 * 1024 * 1024
 FIELDS = ("apiVersion", "kind", "canonicalProfile", "signatureDomain", "payload", "payloadSha256",
     "signatureAlgorithm", "signingKeyId", "signingKeySpkiSha256", "signature")
 INPUT_FIELDS = ("apiVersion", "trustOriginal", "trustSha256", "payloadOriginal", "closureSetOriginal")
-NATIVE_FIELDS = ("assignmentId", "canaryId", "assignmentRevision", "generationEpoch", "minimumGenerationTombstoneEpoch",
-    "policyIdentity", "expectedLoadedSnapshots", "responseValidationObligations", "responseValidationObligationsRootSha256",
-    "fleet", "custodyAuthority", "authorityKeyIndependence", "observationWindow", "readinessThresholds",
-    "issuedAtUnixNanos", "expiresAtUnixNanos")
 
 
 def version(envelope: dict) -> int:

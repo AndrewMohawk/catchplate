@@ -193,7 +193,12 @@ def _head(value, services, native, now, epoch):
         signed = p.fields(g.document(native[name], 65536), ("payload", "signature"))
         payload = signed["payload"]
         p.decoded(signed["signature"], size=64)
-        p.require(payload["apiVersion"] == api and payload["assignmentPayloadSha256"] == scope["assignmentPayloadSha256"]
+        if name == "retrieval":
+            spool._require_retrieval_profile(payload, expected_api=api, effects=True,
+                proof_scope_original=value["proofScopeOriginal"])
+        else:
+            p.require(payload["apiVersion"] == api)
+        p.require(payload["assignmentPayloadSha256"] == scope["assignmentPayloadSha256"]
             and payload["expectedPeer"] == item["header"]["expectedPeer"]
             and payload["spoolScope" if name == "retrieval" else "scope"] == scope)
         if name != "retrieval":

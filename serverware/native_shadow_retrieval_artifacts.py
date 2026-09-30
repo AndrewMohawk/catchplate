@@ -32,6 +32,9 @@ PEER_FIELDS = ("uid", "gid", "pid", "processIdentitySha256", "startTimeTicks", "
     "securityLabelSha256", "configurationGenerationSha256")
 OBJECT_FIELDS = ("apiVersion", "proofScopeSha256", "signerRole", "canonicalReceiptPayloadBase64url",
     "signedAuthorityPayloadBase64url")
+MANIFEST_FIELDS = ("apiVersion", "proofScopeOriginalBase64url", "objectOriginalsBase64url")
+FRESH_MANIFEST_API = "serverware.nativeShadowRetrievalStoreManifest/v2"
+FRESH_INITIALIZATION = "fresh-ledger"
 
 
 def scope_original(raw):
@@ -152,17 +155,53 @@ def manifest_original(scope_raw, originals):
     return raw
 
 
-def manifest_objects(raw, expected_sha256):
+def fresh_ledger_manifest_original(scope_raw):
+    """Select an explicitly empty initial ledger profile, not receipt evidence.
+
+    The native grant and actual ledger genesis must independently admit this
+    initialization. This public manifest creates neither of those authorities.
+    Legacy manifest_original deliberately continues to require real objects.
+    """
+    scope = scope_original(scope_raw)
+    p.require(scope.get("api_version") == SCOPE_SET_API)
+    raw = p.canonical({"apiVersion": FRESH_MANIFEST_API,
+        "proofScopeOriginalBase64url": p.encoded(scope_raw),
+        "initialization": FRESH_INITIALIZATION, "objectOriginalsBase64url": []})
+    p.require(len(raw) <= MAX_MANIFEST)
+    return raw
+
+
+def _manifest(raw, expected_sha256):
     p.require(type(raw) is bytes and 1 <= len(raw) <= MAX_MANIFEST)
     p.require(p.sha(raw) == p.digest(expected_sha256))
-    value = p.fields(p.document(raw, MAX_MANIFEST),
-        ("apiVersion", "proofScopeOriginalBase64url", "objectOriginalsBase64url"))
+    value = p.document(raw, MAX_MANIFEST)
+    p.require(type(value) is dict)
+    fresh = value.get("apiVersion") == FRESH_MANIFEST_API
+    p.fields(value, MANIFEST_FIELDS + (("initialization",) if fresh else ()))
     scope = p.decoded(value["proofScopeOriginalBase64url"], maximum=16384)
     items = value["objectOriginalsBase64url"]
+    if fresh:
+        p.require(value["initialization"] == FRESH_INITIALIZATION
+            and type(items) is list and items == []
+            and raw == fresh_ledger_manifest_original(scope))
+        return FRESH_INITIALIZATION, []
     p.require(type(items) is list and 1 <= len(items) <= MAX_OBJECTS)
     originals = [p.decoded(item, maximum=MAX_OBJECT) for item in items]
     p.require(raw == manifest_original(scope, originals))
-    return [(object_locator(scope, original), original) for original in originals]
+    return None, [(object_locator(scope, original), original) for original in originals]
+
+
+def manifest_objects(raw, expected_sha256):
+    """Validate the complete pin/profile; return only actual supplied objects."""
+    return _manifest(raw, expected_sha256)[1]
+
+
+def manifest_initialization(raw, expected_sha256):
+    """Fully validate a pinned manifest; return None or 'fresh-ledger'.
+
+    This is a source-selected data profile, not signature or service authority.
+    """
+    return _manifest(raw, expected_sha256)[0]
 
 
 def _peer(raw):

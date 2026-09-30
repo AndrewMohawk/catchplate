@@ -33,6 +33,11 @@ impl Scope {
         }
     }
     pub(super) fn binding(&self)->&Sha256Digest {&self.binding_sha256}
+    pub(super) fn require_fresh_ledger(&self)->Result<(),ShadowError> {
+        // Only the explicit closure-set proof scope can select a fresh writer;
+        // check(keys) still independently joins its actual assignment/owner.
+        require(self.native_set()?.is_some())
+    }
     pub(super) fn configuration_binding(&self)->&Sha256Digest {&self.production_configuration_binding_sha256}
     pub(super) fn authority_payload(&self,role:PolicyShadowCustodySignerRole,receipt:&[u8])->Result<Vec<u8>,ShadowError> {
         if let Some(set)=self.native_set()? {

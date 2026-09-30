@@ -1327,6 +1327,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	scripts/authority/sign_native_pilot_assignment.py \
 	scripts/authority/prepare_native_pilot_closure_set.py \
 	scripts/test_native_pilot_closure_set.py \
+	scripts/test_native_pilot_fresh_ledger.py \
 	scripts/authority/sign_native_pilot_delivery.py \
 	scripts/authority/sign_native_pilot_service.py \
 	scripts/authority/sign_native_pilot_generation_install.py \
@@ -1609,6 +1610,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/native_pilot_window_authority.py \
 	serverware/native_pilot_closure_authority.py \
 	serverware/native_pilot_assignment.py \
+	serverware/policy_shadow_assignment_fields.py \
 	serverware/native_pilot_closure_set.py \
 	serverware/native_pilot_measured_configuration.py \
 	serverware/native_pilot_delivery_authority.py \
@@ -4035,6 +4037,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				scripts/authority/sign_native_pilot_assignment.py \
 				scripts/authority/prepare_native_pilot_closure_set.py \
 				scripts/test_native_pilot_closure_set.py \
+				scripts/test_native_pilot_fresh_ledger.py \
 				scripts/authority/sign_native_pilot_delivery.py \
 				scripts/authority/sign_native_pilot_service.py \
 				scripts/authority/sign_native_pilot_generation_install.py \
@@ -4311,6 +4314,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/native_pilot_window_authority.py \
 				serverware/native_pilot_closure_authority.py \
 				serverware/native_pilot_assignment.py \
+				serverware/policy_shadow_assignment_fields.py \
 				serverware/native_pilot_closure_set.py \
 				serverware/native_pilot_measured_configuration.py \
 				serverware/native_pilot_delivery_authority.py \
@@ -5146,6 +5150,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/custody-effects-inputs.v1.schema.json \
 				schemas/native-ledger-completion.v1.schema.json \
 				schemas/native-active-effects.v1.schema.json \
+				schemas/native-ledger-fresh-retrieval.v1.schema.json \
 				schemas/native-shadow-driver-bootstrap.v1.schema.json \
 				schemas/native-shadow-driver-continuation.v1.schema.json \
 				schemas/native-shadow-driver-lifecycle.v1.schema.json \
@@ -5195,6 +5200,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-shadow-verifier-transport.v1.schema.json \
 				schemas/native-shadow-guest-admission.v1.schema.json \
 				schemas/native-shadow-retrieval-store.v1.schema.json \
+				schemas/native-shadow-retrieval-store-manifest.v2.schema.json \
 				schemas/native-shadow-retrieval-service.v1.schema.json \
 				schemas/native-shadow-retrieval-client.v1.schema.json \
 				schemas/native-shadow-retrieval-pair.v1.schema.json \

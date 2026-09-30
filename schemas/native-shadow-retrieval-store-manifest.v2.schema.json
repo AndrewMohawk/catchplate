@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.dev/schemas/native-shadow-retrieval-store-manifest.v2.schema.json",
+  "title": "Native fresh-ledger retrieval manifest and installation observation",
+  "description": "Closed manifest/v2 and Installed/v2 forms, following the existing combined v1 schema pattern. The manifest requires an exact canonical production proof scope/v2 and no objects. The installed result observes an actual empty root:root0555 directory, not fs-verity files, genesis, receipts, signature authority or service readiness. Runtime canonical decoding, independent pins and filesystem checks remain mandatory; neither form admits a native service.",
+  "oneOf": [{"$ref": "#/$defs/manifest"}, {"$ref": "#/$defs/installed"}],
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "positive": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807},
+    "manifest": {
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "proofScopeOriginalBase64url", "initialization", "objectOriginalsBase64url"],
+      "properties": {
+        "apiVersion": {"const": "serverware.nativeShadowRetrievalStoreManifest/v2"},
+        "proofScopeOriginalBase64url": {"type": "string", "minLength": 1, "maxLength": 21846, "pattern": "^[A-Za-z0-9_-]+$", "description": "Canonical unpadded base64url of exact serverware.policyShadowProductionCustodyProofScope/v2 original; decoded scope and its framed binding are validated by the consumer."},
+        "initialization": {"const": "fresh-ledger"},
+        "objectOriginalsBase64url": {"type": "array", "const": []}
+      }
+    },
+    "installed": {
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "manifestSha256", "releaseAuthority", "serviceReady", "directoryDevice", "directoryInode", "directoryMode", "objects", "initialization"],
+      "properties": {
+        "apiVersion": {"const": "serverware.nativeShadowRetrievalStoreInstalled/v2"},
+        "manifestSha256": {"$ref": "#/$defs/digest"},
+        "releaseAuthority": {"const": false},
+        "serviceReady": {"const": false},
+        "directoryDevice": {"$ref": "#/$defs/positive"},
+        "directoryInode": {"$ref": "#/$defs/positive"},
+        "directoryMode": {"const": 365},
+        "objects": {"type": "array", "const": []},
+        "initialization": {"const": "fresh-ledger"}
+      }
+    }
+  }
+}

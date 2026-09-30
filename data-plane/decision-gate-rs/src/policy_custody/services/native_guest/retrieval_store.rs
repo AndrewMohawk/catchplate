@@ -31,7 +31,7 @@ fn verity(file:&File)->Result<[u8;32],ShadowError> {
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 struct Object {api_version:String,proof_scope_sha256:Sha256Digest,signer_role:PolicyShadowCustodySignerRole,
     canonical_receipt_payload_base64url:String,signed_authority_payload_base64url:String}
-pub(super) struct Store {directory:File,identity:Identity}
+pub(super) struct Store {directory:File,identity:Identity,empty:bool}
 /// Only an actual exact read can construct this borrow; it retains the file
 /// and stat/fs-verity identity through signed response emission.
 pub(super) struct Read {file:File,identity:Identity,bytes:Vec<u8>,verity:[u8;32]}
@@ -45,17 +45,53 @@ impl Read {
 }
 impl Store {
     pub(super) fn open(fd:OwnedFd)->Result<Self,ShadowError> {
+        Self::open_selected(fd,false)
+    }
+    pub(super) fn open_empty(fd:OwnedFd)->Result<Self,ShadowError> {
+        Self::open_selected(fd,true)
+    }
+    fn open_selected(fd:OwnedFd,empty:bool)->Result<Self,ShadowError> {
         let directory=File::from(fd);let identity=Identity::of(&directory)?;
         require(identity.mode&libc::S_IFMT==libc::S_IFDIR && identity.uid==0 && identity.gid==0
             && identity.mode&0o7777==0o555)?;
-        let owner=Self{directory,identity};owner.check()?;Ok(owner)
+        let owner=Self{directory,identity,empty};owner.check()?;Ok(owner)
+    }
+    fn require_empty(&self)->Result<(),ShadowError> {
+        let flags=unsafe{libc::fcntl(self.directory.as_raw_fd(),libc::F_GETFL)};
+        require(flags>=0 && flags&(libc::O_ACCMODE|libc::O_PATH)==libc::O_RDONLY)?;
+        // A new description starts at offset zero without moving the retained
+        // activation FD. Bound the actual census to dot, dot-dot and EOF.
+        let raw=unsafe{libc::openat(self.directory.as_raw_fd(),b".\0".as_ptr().cast(),
+            libc::O_RDONLY|libc::O_DIRECTORY|libc::O_CLOEXEC|libc::O_NOFOLLOW|libc::O_NONBLOCK)};
+        require(raw>=0)?;let directory=unsafe{File::from_raw_fd(raw)};
+        require(Identity::of(&directory)?==self.identity)?;read_only(&directory)?;
+        use std::os::fd::IntoRawFd;
+        let raw=directory.into_raw_fd();let stream=unsafe{libc::fdopendir(raw)};
+        if stream.is_null(){unsafe{libc::close(raw);}return Err(ShadowError::BindingDrift);}
+        let result=(||{
+            let mut seen=0u8;
+            for _ in 0..3 {
+                unsafe{*libc::__errno_location()=0;}let entry=unsafe{libc::readdir(stream)};
+                if entry.is_null(){
+                    require(std::io::Error::last_os_error().raw_os_error()==Some(0) && seen==3)?;
+                    return Ok(());
+                }
+                let name=unsafe{std::ffi::CStr::from_ptr((*entry).d_name.as_ptr())}.to_bytes();
+                let bit=match name{b"."=>1,b".."=>2,_=>return Err(ShadowError::BindingDrift)};
+                require(seen&bit==0)?;seen|=bit;
+            }
+            Err(ShadowError::BindingDrift)
+        })();
+        let closed=unsafe{libc::closedir(stream)};result?;require(closed==0)
     }
     pub(super) fn check(&self)->Result<(),ShadowError> {
+        read_only(&self.directory)?;require(Identity::of(&self.directory)?==self.identity)?;
+        if self.empty{self.require_empty()?;}
         read_only(&self.directory)?;require(Identity::of(&self.directory)?==self.identity)
     }
     pub(super) fn read(&self,scope:&scope::Scope,scope_original:&[u8],role:PolicyShadowCustodySignerRole,
         id:&Sha256Digest,proof:&Sha256Digest,receipt:&[u8],authority:&[u8])->Result<Read,ShadowError> {
-        self.check()?;scope.require_payload(role,receipt,authority)?;
+        self.check()?;require(!self.empty)?;scope.require_payload(role,receipt,authority)?;
         require(!receipt.is_empty() && receipt.len()<=MAX_OBJECT && !authority.is_empty() && authority.len()<=16384)?;
         let name=format!("{}.json",id.as_str().strip_prefix("sha256:").ok_or(ShadowError::BindingDrift)?);
         require(name.len()==69 && name[..64].bytes().all(|c|c.is_ascii_digit() || (b'a'..=b'f').contains(&c)))?;

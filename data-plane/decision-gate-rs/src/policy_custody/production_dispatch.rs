@@ -849,6 +849,14 @@ struct ActivationPublicationTransactionWireV4 {
     consumption: ActivationConsumptionBindingWireV4,
 }
 
+/// Data-only extraction after the same exact closed transaction validation.
+pub(super) fn persistence_activation_transaction_sha256(artifact:&CanonicalProductionArtifactV4)->Result<Sha256Digest,&'static str>{
+    if artifact.kind!=ProductionArtifactKindV4::ActivationPublicationTransaction {return Err("wrong activation artifact");}
+    let bytes=artifact.exact_bytes()?;
+    let wire:ActivationPublicationTransactionWireV4=serde_json::from_slice(&bytes).map_err(|_|"invalid activation original")?;
+    wire.validate_exact(&bytes)?;Ok(wire.transaction_sha256)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(
     tag = "mode",

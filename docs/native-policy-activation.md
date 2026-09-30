@@ -115,14 +115,32 @@ at-most-30-second transport window and revalidates server authority; longer
 review never renews publication permission. Settlement has its own current
 operation and cannot repeat the earlier native contact.
 
+Before requesting approval, the portal obtains `/request-locator` for the exact
+reviewed `argumentsOriginal`. The server uses the same request commitment and
+deterministic approval-ID function as the protected transition. Its closed
+`nativePolicyActivationLocator/v1` result contains the actor, activation,
+readiness and approval IDs plus argument/request digests, with both action and
+retry flags false. It creates no approval, reservation or hardware challenge.
+The actual action still requires fresh hardware and all protected checks.
+
+Immediately before effect submission, the browser stores this nonsecret hint
+under the requester and readiness IDs, followed by its submitted-phase marker.
+If storage fails, no effect is sent. A lost HTTP reply populates the predicted
+approval ID; after a same-tab reload, enter the original readiness ID and use
+**Restore this requester's submitted approval ID**, then the separate read-only
+lookup. The hint is untrusted navigation data, not proof of commitment. Lookup
+requires the actual actor association; a missing row, cleared storage or missing
+hint never authorizes a replacement request. A successful request must return
+the same approval ID and request commitment as the pre-contact locator.
+
 The publication handoff stays in page memory for a separate receipt-inclusion
 step. Its signed operational evidence must be kept private; it is not a replay
-capability. Browser storage contains only nonsecret submitted-phase locators,
-never passkey assertions or authority originals. Read-only lookup does not clear
-those markers or seed a new publication. An interrupted request without a known
-approval ID still requires authenticated operator recovery; the page does not
-infer noncommit or manufacture a replacement approval. Receipt inclusion and
-finalization are explicit, audit-gated steps; no action runs automatically.
+capability. Browser storage never contains passkey assertions, argument originals
+or PREPARE evidence. Read-only lookup and locator restoration do not clear phase
+markers or seed a new publication. Recovering a lost native publication receipt
+still requires its actual retained signed original; this locator does not solve
+that separate effect-recovery path. Receipt inclusion and finalization are
+explicit, audit-gated steps; no action runs automatically.
 
 ## Frozen original contract
 

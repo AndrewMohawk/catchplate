@@ -16,6 +16,13 @@ pub(super) struct Scope {
     retrieval_response_authority:KeyData,binding_sha256:Sha256Digest,
 }
 impl Scope {
+    pub(super) fn binding(&self)->&Sha256Digest {&self.binding_sha256}
+    pub(super) fn configuration_binding(&self)->&Sha256Digest {&self.production_configuration_binding_sha256}
+    pub(super) fn authority_payload(&self,role:PolicyShadowCustodySignerRole,receipt:&[u8])->Result<Vec<u8>,ShadowError> {
+        canonical_json_bytes(&("serverware.policyShadowAssignmentBoundCustodyReceipt/v1",
+            &self.binding_sha256,&self.execution_closure_manifest_sha256,&self.structurally_verified_seccomp_policy_sha256,
+            role,Sha256Digest::compute(receipt)))
+    }
     pub(super) fn check(&self,keys:&AdmittedKeys)->Result<(),ShadowError> {
         let a=keys.assignment.payload();let k=&keys.configuration.authorization.payload;
         require(self.assignment_id==a.assignment_id && self.assignment_payload_sha256==*keys.assignment.payload_sha256()
@@ -48,4 +55,3 @@ impl Scope {
             role,Sha256Digest::compute(receipt)))?==authority)
     }
 }
-

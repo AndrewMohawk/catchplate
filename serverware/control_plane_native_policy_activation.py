@@ -30,7 +30,8 @@ from serverware.control_plane_approval_verification import _epoch_ns, _request_p
 
 PREFIX = "/api/policy/authority/native-activations"
 PHASES = frozenset({"request", "decide", "publish", "record-inclusion", "finalize"})
-PATHS = frozenset(PREFIX + "/" + name for name in PHASES | {"draft", "options", "lookup"})
+PATHS = frozenset(PREFIX + "/" + name for name in PHASES | {"draft", "options", "lookup", "request-locator"})
+LOCATOR = "serverware.nativePolicyActivationLocator/v1"
 MAX_REQUEST = profile.MAX_NATIVE
 MFA_FIELD = "nativePolicyActivationProfile"
 MANAGEMENT_PATH = "/v1/policy-shadow/native-activations"
@@ -265,6 +266,19 @@ def on_request(request, raw):
     name = request.url.path.removeprefix(PREFIX + "/")
     if name == "draft":
         return _draft(owner, value)
+    if name == "request-locator":
+        p.require(set(value) == {"apiVersion", "phase", "argumentsOriginal"} and value["phase"] == "request")
+        operation, arguments = owner.arguments("request", value["argumentsOriginal"])
+        digest = profile.request_digest(operation, arguments)
+        # The exact protected transition derives this same ID. This pure
+        # navigation result does not select a row, reserve capacity, issue a
+        # challenge, attest readiness or prove that any request committed.
+        approval = kernel.approval_id(operation, arguments, digest)
+        owner.check()
+        return {"apiVersion": LOCATOR, "actorId": owner.identity.user_id,
+            "activationId": arguments["request"]["activationId"], "readinessRequestId": arguments["request"]["readinessRequestId"],
+            "approvalId": approval, "argumentsSha256": p.sha256(value["argumentsOriginal"].encode("ascii")),
+            "requestDigest": digest, "okForAction": False, "automaticRetryAllowed": False}
     if name == "lookup":
         p.require(set(value) == {"apiVersion", "approvalId"} and str(uuid.UUID(value["approvalId"])) == value["approvalId"])
         approval = _row("control_plane_approvals", "id", value["approvalId"])

@@ -7,32 +7,61 @@ use services::common::AuthenticatedInheritedSeqpacket;
 use std::os::fd::{AsFd,AsRawFd,BorrowedFd,FromRawFd,OwnedFd};
 use std::io::Read;
 use std::mem::{size_of,size_of_val,zeroed};
-const API:&str="serverware.nativeShadowRetrievalInspection/v1";
 const MAX_IPC:usize=4096;
-const SOCKET_PATH:&str="/run/serverware-shadow-retrieval/listener.sock";
+/// Source-selected endpoint mechanics only. This is not a purpose grant.
+#[derive(Debug,Clone,Copy,PartialEq,Eq,PartialOrd,Ord,Serialize,Deserialize)]
+#[serde(rename_all="kebab-case")]
+pub(in crate::policy_shadow::policy_custody::services) enum EndpointKind {Retrieval,Persistence,TrustedTime,GenerationInstallEnvelope}
+impl EndpointKind {
+    pub(in crate::policy_shadow::policy_custody::services) fn socket_path(self)->&'static str {match self {
+        Self::Retrieval=>"/run/serverware-shadow-retrieval/listener.sock",
+        Self::Persistence=>"/run/serverware-shadow-persistence/listener.sock",
+        Self::TrustedTime=>"/run/serverware-shadow-trusted-time/listener.sock",
+        Self::GenerationInstallEnvelope=>"/run/serverware-shadow-generation-install/listener.sock"}}
+    pub(in crate::policy_shadow::policy_custody::services) fn directory_path(self)->&'static str {match self {
+        Self::Retrieval=>"/run/serverware-shadow-retrieval",Self::Persistence=>"/run/serverware-shadow-persistence",
+        Self::TrustedTime=>"/run/serverware-shadow-trusted-time",
+        Self::GenerationInstallEnvelope=>"/run/serverware-shadow-generation-install"}}
+    pub(in crate::policy_shadow::policy_custody::services) fn listener_name(self)->&'static str {match self {
+        Self::Retrieval=>"retrieval-listener",Self::Persistence=>"persistence-listener",Self::TrustedTime=>"trusted-time-listener",
+        Self::GenerationInstallEnvelope=>"shadow-generation-install-listener"}}
+    pub(in crate::policy_shadow::policy_custody::services) fn peer_directory_name(self)->&'static str {match self {
+        Self::Retrieval=>"retrieval-peer-directory",Self::Persistence=>"persistence-peer-directory",Self::TrustedTime=>"trusted-time-peer-directory",
+        Self::GenerationInstallEnvelope=>"shadow-generation-install-directory"}}
+    pub(in crate::policy_shadow::policy_custody::services) fn inspection_api(self)->&'static str {match self {
+        Self::Retrieval=>"serverware.nativeShadowRetrievalInspection/v1",
+        Self::Persistence=>"serverware.nativeShadowPersistenceInspection/v1",
+        Self::TrustedTime=>"serverware.nativeShadowTrustedTimeInspection/v1",
+        Self::GenerationInstallEnvelope=>"serverware.nativeShadowGenerationInstallPeerInspection/v1"}}
+    pub(in crate::policy_shadow::policy_custody::services) fn production_kind(self)->services::production::ProductionProofEndpointKindV4 {match self {
+        Self::Retrieval=>services::production::ProductionProofEndpointKindV4::Retrieval,
+        Self::Persistence=>services::production::ProductionProofEndpointKindV4::Persistence,
+        Self::TrustedTime=>services::production::ProductionProofEndpointKindV4::TrustedTime,
+        Self::GenerationInstallEnvelope=>services::production::ProductionProofEndpointKindV4::GenerationInstallEnvelope}}
+}
 use std::os::unix::fs::MetadataExt;
 #[derive(PartialEq,Eq)]
 struct PathIdentity {device:u64,inode:u64,mode:u32,uid:u32,gid:u32}
 #[derive(PartialEq,Eq)]
 struct PathOriginal {directories:Vec<PathIdentity>,socket:PathIdentity}
-fn path_identity(uid:u32,gid:u32)->Result<PathOriginal,ShadowError> {
+fn path_identity(uid:u32,gid:u32,endpoint:EndpointKind)->Result<PathOriginal,ShadowError> {
     let mut directories=Vec::new();
-    for path in ["/","/run","/run/serverware-shadow-retrieval"] {
+    for path in ["/","/run",endpoint.directory_path()] {
         let m=std::fs::symlink_metadata(path).map_err(fail)?;
         require(m.is_dir() && m.uid()==0 && m.gid()==0 && m.mode()&0o022==0)?;
-        if path=="/run/serverware-shadow-retrieval" {require(m.mode()&0o7777==0o711)?;}
+        if path==endpoint.directory_path() {require(m.mode()&0o7777==0o711)?;}
         directories.push(PathIdentity{device:m.dev(),inode:m.ino(),mode:m.mode(),uid:m.uid(),gid:m.gid()});
     }
-    let m=std::fs::symlink_metadata(SOCKET_PATH).map_err(fail)?;
+    let m=std::fs::symlink_metadata(endpoint.socket_path()).map_err(fail)?;
     require(m.mode()&libc::S_IFMT==libc::S_IFSOCK && m.mode()&0o7777==0o660 && m.uid()==uid && m.gid()==gid)?;
     Ok(PathOriginal{directories,socket:PathIdentity{device:m.dev(),inode:m.ino(),mode:m.mode(),uid:m.uid(),gid:m.gid()}})
 }
-fn local_path(fd:BorrowedFd<'_>)->Result<(),ShadowError> {
+fn local_path(fd:BorrowedFd<'_>,endpoint:EndpointKind)->Result<(),ShadowError> {
     let mut name:libc::sockaddr_un=unsafe{zeroed()};let mut length=size_of::<libc::sockaddr_un>() as _;
     require(unsafe{libc::getsockname(fd.as_raw_fd(),(&mut name as *mut libc::sockaddr_un).cast(),&mut length)}==0
         && name.sun_family==libc::AF_UNIX as _)?;
     let raw:Vec<_>=name.sun_path.iter().map(|c|*c as u8).collect();
-    let expected=SOCKET_PATH.as_bytes();
+    let expected=endpoint.socket_path().as_bytes();
     require(length as usize==size_of::<libc::sa_family_t>()+expected.len()+1
         && raw.get(..expected.len())==Some(expected) && raw[expected.len()]==0)
 }
@@ -153,6 +182,7 @@ struct Reply {api_version:String,request_sha256:Sha256Digest,process_identity_sh
 /// Only the actual accepted socket at the one retained listener is admitted;
 /// there is no caller-selected PID, path, or second measurement target.
 pub(in crate::policy_shadow::policy_custody::services) struct Inspector {
+    endpoint:EndpointKind,
     channel:OwnedFd,peer:Option<AuthenticatedInheritedSeqpacket>,listener:OwnedFd,path:PathOriginal,
     expected:services::common::ExpectedPeerCredentials,original:Original,sequence:u64,pending:Option<(Vec<u8>,u64,Packet)>,
 }
@@ -162,20 +192,25 @@ impl Inspector {
         let selection:super::super::native_keys::admission::retrieval::Configuration=exact(&original.read(65536).map_err(fail)?)?;
         selection.validate_shape()?;
         let socket=activation.get("retrieval-listener").ok_or(ShadowError::BindingDrift)?;
-        configure(socket.as_fd())?;local_path(socket.as_fd())?;
         let expected=selection.expected_peer().checked().map_err(fail)?;
-        let path=path_identity(selection.guest_uid(),expected.gid)?;
+        Self::prepare_endpoint(original,expected,selection.guest_uid(),socket,EndpointKind::Retrieval)
+    }
+    pub(in crate::policy_shadow::policy_custody::services) fn prepare_endpoint(original:Original,
+        expected:services::common::ExpectedPeerCredentials,guest_uid:u32,socket:&OwnedFd,endpoint:EndpointKind)
+        ->Result<(Self,OwnedFd),ShadowError> {
+        configure(socket.as_fd())?;local_path(socket.as_fd(),endpoint)?;
+        let path=path_identity(guest_uid,expected.gid,endpoint)?;
         let listener=duplicate(socket.as_fd())?;
         let mut fds=[-1;2];
         require(unsafe{libc::socketpair(libc::AF_UNIX,libc::SOCK_SEQPACKET|libc::SOCK_CLOEXEC,0,fds.as_mut_ptr())}==0)?;
         let (channel,remote)=unsafe{(OwnedFd::from_raw_fd(fds[0]),OwnedFd::from_raw_fd(fds[1]))};
         configure(channel.as_fd())?;configure(remote.as_fd())?;
-        Ok((Self{channel,peer:None,listener,path,expected,original,sequence:0,pending:None},remote))
+        Ok((Self{endpoint,channel,peer:None,listener,path,expected,original,sequence:0,pending:None},remote))
     }
     pub(in crate::policy_shadow::policy_custody::services) fn progress(&mut self,child:&super::parent::child::Child,lifetime:u64,uid:u32,gid:u32)->Result<(),ShadowError> {
         self.original.read(65536).map_err(fail)?;require(now()?<lifetime)?;
-        local_path(self.listener.as_fd())?;
-        require(path_identity(self.path.socket.uid,self.path.socket.gid)?==self.path)?;
+        local_path(self.listener.as_fd(),self.endpoint)?;
+        require(path_identity(self.path.socket.uid,self.path.socket.gid,self.endpoint)?==self.path)?;
         if let Some((bytes,deadline,packet))=&self.pending {
             child.require_inspection_sender(packet,uid,gid)?;
             self.peer.as_ref().ok_or(ShadowError::BindingDrift)?
@@ -188,17 +223,17 @@ impl Inspector {
         child.require_inspection_sender(&packet,uid,gid)?;
         let request:Request=exact(&packet.bytes)?;
         let deadline=decimal(&request.deadline_boottime_ns)?;
-        require(request.api_version==API && request.sequence==self.sequence.checked_add(1).ok_or(ShadowError::CounterOverflow)?
+        require(request.api_version==self.endpoint.inspection_api() && request.sequence==self.sequence.checked_add(1).ok_or(ShadowError::CounterOverflow)?
             && now()?<deadline && deadline<=lifetime
             && (request.phase==Phase::Connection)==request.frame_sha256.is_none()
             && (request.phase==Phase::Connection)==self.peer.is_none())?;
         if self.peer.is_none() {
-            let accepted=packet.rights.remove(0);local_path(accepted.as_fd())?;
+            let accepted=packet.rights.remove(0);local_path(accepted.as_fd(),self.endpoint)?;
             self.peer=Some(AuthenticatedInheritedSeqpacket::from_inherited(accepted,self.expected.clone()).map_err(fail)?);
         }
         let peer=self.peer.as_ref().ok_or(ShadowError::BindingDrift)?;
         peer.revalidate_packet_pidfd(packet.rights[0].as_fd()).map_err(fail)?;
-        let reply=Reply{api_version:API.into(),request_sha256:Sha256Digest::compute(&packet.bytes),
+        let reply=Reply{api_version:self.endpoint.inspection_api().into(),request_sha256:Sha256Digest::compute(&packet.bytes),
             process_identity_sha256:peer.peer_process_identity_sha256().clone()};
         let bytes=canonical_json_bytes(&reply)?;
         child.require_inspection_sender(&packet,uid,gid)?;
@@ -209,14 +244,19 @@ impl Inspector {
     }
 }
 pub(in crate::policy_shadow::policy_custody::services) struct Client {
+    endpoint:EndpointKind,
     channel:OwnedFd,parent_pidfd:OwnedFd,parent:libc::ucred,session:OwnedFd,peer_pidfd:OwnedFd,
     peer:libc::ucred,expected:services::common::ExpectedPeerCredentials,sequence:u64,
 }
 impl Client {
     pub(in crate::policy_shadow::policy_custody::services) fn bind(channel:OwnedFd,listener:OwnedFd,expected:services::common::ExpectedPeerCredentials,
         delivery:&PreparedGuestServiceDelivery,check:&impl Fn()->Result<(),ShadowError>)->Result<Self,ShadowError> {
+        Self::bind_endpoint(channel,listener,expected,delivery,check,EndpointKind::Retrieval)
+    }
+    pub(in crate::policy_shadow::policy_custody::services) fn bind_endpoint(channel:OwnedFd,listener:OwnedFd,expected:services::common::ExpectedPeerCredentials,
+        delivery:&PreparedGuestServiceDelivery,check:&impl Fn()->Result<(),ShadowError>,endpoint:EndpointKind)->Result<Self,ShadowError> {
         delivery.owner.check_startup().map_err(fail)?;
-        configure(channel.as_fd())?;configure(listener.as_fd())?;local_path(listener.as_fd())?;
+        configure(channel.as_fd())?;configure(listener.as_fd())?;local_path(listener.as_fd(),endpoint)?;
         let parent=credentials(channel.as_fd())?;let original=delivery.owner.parent.native_binding().map_err(fail)?;
         require(parent.pid==original.0 && parent.pid==unsafe{libc::getppid()} && parent.uid==0 && parent.gid==0)?;
         let parent_pidfd=peer_pidfd(channel.as_fd())?;same_process(parent_pidfd.as_fd(),original.0)?;
@@ -231,12 +271,12 @@ impl Client {
             require(matches!(std::io::Error::last_os_error().raw_os_error(),Some(libc::EAGAIN)|Some(libc::EINTR)))?;
             unsafe{libc::poll(std::ptr::null_mut(),0,1);}
         };
-        configure(session.as_fd())?;local_path(session.as_fd())?;
+        configure(session.as_fd())?;local_path(session.as_fd(),endpoint)?;
         let peer=credentials(session.as_fd())?;let peer_pidfd=peer_pidfd(session.as_fd())?;
         require(peer.pid==expected.pid && peer.uid==expected.uid && peer.gid==expected.gid
             && peer.uid!=0 && peer.uid!=unsafe{libc::geteuid()} && peer.pid!=unsafe{libc::getpid()})?;
         expected.validate_claim().map_err(fail)?;same_process(peer_pidfd.as_fd(),peer.pid)?;
-        let owner=Self{channel,parent_pidfd,parent,session,peer_pidfd,peer,expected,sequence:0};
+        let owner=Self{endpoint,channel,parent_pidfd,parent,session,peer_pidfd,peer,expected,sequence:0};
         owner.check()?;Ok(owner)
     }
     pub(in crate::policy_shadow::policy_custody::services) fn check(&self)->Result<(),ShadowError> {
@@ -249,7 +289,7 @@ impl Client {
         check:&impl Fn()->Result<(),ShadowError>)->Result<(),ShadowError> {
         check()?;self.check()?;require(now()?<deadline)?;
         self.sequence=self.sequence.checked_add(1).ok_or(ShadowError::CounterOverflow)?;
-        let request=Request{api_version:API.into(),sequence:self.sequence,phase,frame_sha256:frame.map(Sha256Digest::compute),
+        let request=Request{api_version:self.endpoint.inspection_api().into(),sequence:self.sequence,phase,frame_sha256:frame.map(Sha256Digest::compute),
             deadline_boottime_ns:deadline.to_string()};
         let bytes=canonical_json_bytes(&request)?;
         let pidfd=if let Some(packet)=packet {
@@ -266,7 +306,7 @@ impl Client {
             if let Some(reply)=receive(self.channel.as_fd(),MAX_IPC,0)? {
                 require(same_credentials(&reply.credentials,&self.parent))?;same_process(reply.pidfd.as_fd(),self.parent.pid)?;
                 let result:Reply=exact(&reply.bytes)?;
-                require(result.api_version==API && result.request_sha256==Sha256Digest::compute(&bytes)
+                require(result.api_version==self.endpoint.inspection_api() && result.request_sha256==Sha256Digest::compute(&bytes)
                     && result.process_identity_sha256==self.expected.process_identity_sha256)?;
                 check()?;self.check()?;require(now()?<deadline)?;return Ok(());
             }

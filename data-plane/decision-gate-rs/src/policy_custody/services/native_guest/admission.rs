@@ -5,6 +5,10 @@ use super::super::native_guest::process::{Context,ContextOwner};
 mod result;
 #[path="retrieval.rs"]
 pub(crate) mod retrieval;
+#[path="persistence.rs"]
+pub(crate) mod persistence;
+#[path="trusted_time.rs"]
+pub(crate) mod trusted_time;
 #[path="activation.rs"]
 pub(crate) mod activation;
 const DOMAIN:&str="serverware.nativeShadowKeyAdmissionAssignment.signature/v1";
@@ -91,6 +95,9 @@ impl PreparedNativeCustodyKeys {
     }
 }
 impl AdmittedKeys {
+    pub(in crate::policy_shadow::policy_custody::services) fn assignment_payload_sha256(&self)->&Sha256Digest {
+        self.assignment.payload_sha256()
+    }
     pub(super) fn check_transport(&self,transport:&verifier_transport::PreparedTransport,
         trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime)->Result<(),ShadowError> {
         self.check(trust,time)?;self.association.check_startup().map_err(fail)?;

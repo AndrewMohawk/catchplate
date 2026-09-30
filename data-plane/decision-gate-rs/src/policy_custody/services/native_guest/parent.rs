@@ -74,12 +74,13 @@ struct Running {
     child:child::Child,image:image::Image,files:FileAdmission,activation:BTreeMap<String,OwnedFd>,
     launch:Original,launch_bytes:Vec<u8>,_watchdog:Watchdog,inspector:Option<Inspection>,
 }
-enum Inspection {Server(retrieval_peer::Inspector),Client(retrieval_client::Inspector)}
+enum Inspection {Server(retrieval_peer::Inspector),Client(retrieval_client::Inspector),ProofClient(proof_client::Inspector)}
 impl Inspection {
     fn progress(&mut self,child:&child::Child,files:&FileAdmission)->Result<(),ShadowError> {
         match self {
             Self::Server(v)=>v.progress(child,files.lifetime(),files.payload.uid,files.payload.gid),
             Self::Client(v)=>v.progress(child,files),
+            Self::ProofClient(v)=>v.progress(child,files),
         }
     }
 }
@@ -108,6 +109,31 @@ impl Running {
             SelectedService::RetrievalBridge=>{
                 let (owner,channel)=retrieval_client::Inspector::prepare(&files,&activation)?;
                 (Some(Inspection::Client(owner)),Some(channel))
+            }
+            SelectedService::Persistence(pin)=>{
+                require(activation.len()==2 && activation.contains_key("persistence-listener")
+                    && activation.contains_key("persistence-journal"))?;
+                let original=pin.open(65536)?;
+                let configuration:admission::persistence::Configuration=exact(&original.read(65536).map_err(fail)?)?;
+                configuration.validate_shape()?;
+                let expected=configuration.expected_peer().checked().map_err(fail)?;
+                let (owner,channel)=retrieval_peer::Inspector::prepare_endpoint(original,expected,configuration.guest_uid(),
+                    activation.get("persistence-listener").ok_or(ShadowError::BindingDrift)?,retrieval_peer::EndpointKind::Persistence)?;
+                (Some(Inspection::Server(owner)),Some(channel))
+            }
+            SelectedService::TrustedTime(pin)=>{
+                require(activation.len()==1)?;
+                let original=pin.open(65536)?;
+                let config:admission::trusted_time::Configuration=exact(&original.read(65536).map_err(fail)?)?;
+                config.validate_shape()?;
+                let socket=activation.get("trusted-time-listener").ok_or(ShadowError::BindingDrift)?;
+                let (owner,channel)=retrieval_peer::Inspector::prepare_endpoint(original,
+                    config.expected_peer().checked().map_err(fail)?,config.guest_uid(),socket,retrieval_peer::EndpointKind::TrustedTime)?;
+                (Some(Inspection::Server(owner)),Some(channel))
+            }
+            SelectedService::ProofBridge(_)=>{
+                let (owner,channel)=proof_client::Inspector::prepare(&files,&activation)?;
+                (Some(Inspection::ProofClient(owner)),Some(channel))
             }
             SelectedService::None=>(None,None),
             SelectedService::Activation(_)=>{

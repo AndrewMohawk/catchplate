@@ -3,7 +3,7 @@
   "$id":"https://serverware.invalid/schemas/native-policy-activation.v1.schema.json",
   "title":"Native READY and independently approved protected activation",
   "$comment":"Data grammar only. No schema, PREPARE response, copied row or HTTP status is authority. The native effect requires the actual independently verified planner/executor/witness transition and persistent effect hold. Full canonical frames remain <=8 MiB; original strings are ASCII JSON without LF, not base64 except authorityConfigurationOriginal. No automatic retry or expiry unlock.",
-  "anyOf":[{"$ref":"#/$defs/authorityPolicy"},{"$ref":"#/$defs/intent"},{"$ref":"#/$defs/prepared"},{"$ref":"#/$defs/ready"},{"$ref":"#/$defs/effectHold"},{"$ref":"#/$defs/runtimeResponse"},{"$ref":"#/$defs/httpRequest"}],
+  "anyOf":[{"$ref":"#/$defs/authorityPolicy"},{"$ref":"#/$defs/intent"},{"$ref":"#/$defs/prepared"},{"$ref":"#/$defs/ready"},{"$ref":"#/$defs/effectHold"},{"$ref":"#/$defs/runtimeResponse"},{"$ref":"#/$defs/httpRequest"},{"$ref":"#/$defs/requestLocator"}],
   "$defs":{
     "digest":{"type":"string","pattern":"^sha256:[0-9a-f]{64}$"},
     "epoch":{"type":"integer","minimum":1,"maximum":9223372036854775807},
@@ -119,6 +119,16 @@
       "type":"object","additionalProperties":false,"required":["nativePolicyActivationProfile","assertion"],
       "properties":{"nativePolicyActivationProfile":{"const":"serverware.nativePolicyActivationHttp/v1"},"assertion":{"$ref":"control-plane-publication-approval.v1.schema.json#/$defs/assertion"}}
     },
+    "requestLocator":{
+      "type":"object","additionalProperties":false,
+      "required":["apiVersion","actorId","activationId","readinessRequestId","approvalId","argumentsSha256","requestDigest","okForAction","automaticRetryAllowed"],
+      "properties":{
+        "apiVersion":{"const":"serverware.nativePolicyActivationLocator/v1"},"actorId":{"type":"string","minLength":6,"maxLength":512,"pattern":"^oidc:[^\\u0000-\\u0020\\u007f]+$"},
+        "activationId":{"$ref":"#/$defs/uuid"},"readinessRequestId":{"$ref":"#/$defs/uuid"},"approvalId":{"$ref":"#/$defs/approvalId"},
+        "argumentsSha256":{"$ref":"#/$defs/digest"},"requestDigest":{"$ref":"#/$defs/digest"},"okForAction":{"const":false},"automaticRetryAllowed":{"const":false}
+      },
+      "description":"Non-authoritative exact-request navigation hint. The real protected transition derives this same deterministic approvalId from the requestDigest. No row is created, selected or reserved and no challenge or readiness permission is issued. Browser retention contains only IDs/digests, never arguments or assertions; authenticated lookup is still required and absence does not permit retry."
+    },
     "httpRequest":{
       "oneOf":[
         {"type":"object","additionalProperties":false,"required":["apiVersion","phase","readinessRequestId","generationPublicationEnvelopeSha256"],"properties":{
@@ -133,7 +143,7 @@
           "apiVersion":{"const":"serverware.nativePolicyActivationHttp/v1"},"phase":{"$ref":"#/$defs/phase"},"argumentsOriginal":{"$ref":"#/$defs/wholeOriginal"}}},
         {"type":"object","additionalProperties":false,"required":["apiVersion","phase","argumentsOriginal","mfa"],"properties":{
           "apiVersion":{"const":"serverware.nativePolicyActivationHttp/v1"},"phase":{"enum":["request","decide","publish"]},"argumentsOriginal":{"$ref":"#/$defs/wholeOriginal"},"mfa":{"$ref":"#/$defs/mfa"}}}
-      ],"description":"POST only, exact JSON Content-Type/Content-Length, no query. /draft is data only; /options creates the genuine phase-bound hardware challenge. /request, /decide and /publish require fresh actual hardware. /publish performs protected consume then exactly one native contact, not a replayable preparation export. Receipt record-inclusion and finalize are separate audit-gated protected operations. /lookup is nonactionable and never contacts native."
+      ],"description":"POST only, exact JSON Content-Type/Content-Length, no query. /draft is data only; /request-locator takes phase=request and exact argumentsOriginal to derive a non-authoritative deterministic approval locator without a write or challenge. /options creates the genuine phase-bound hardware challenge. /request, /decide and /publish require fresh actual hardware. /publish performs protected consume then exactly one native contact, not a replayable preparation export. Receipt record-inclusion and finalize are separate audit-gated protected operations. /lookup is nonactionable and never contacts native."
     }
   }
 }

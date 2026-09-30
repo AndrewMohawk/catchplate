@@ -33,6 +33,8 @@ NATIVE_POLICY_ACTIVATION_HTML = r"""
               <textarea id="native-activation-handoff" class="policy-result" spellcheck="false" autocomplete="off" oninput="nativeActivationInvalidate()"></textarea>
             </details>
             <button type="button" class="secondary" onclick="runUiAction('Inspect native activation', nativeActivationLookup)">Read approval/preparation/finalization only</button>
+            <button type="button" class="secondary" onclick="runUiAction('Restore native request locator', nativeActivationRestore)">Restore this requester's submitted approval ID</button>
+            <p class="hint">Enter the original readiness request ID to restore its nonsecret browser hint after reload. A predicted approval ID is not evidence of a committed request. Inspect it without submitting again.</p>
             <pre id="native-activation-observation">Not inspected. Missing records never prove noncommit or unlock retry.</pre>
           </details>
 """
@@ -40,6 +42,7 @@ NATIVE_POLICY_ACTIVATION_HTML = r"""
 NATIVE_POLICY_ACTIVATION_SCRIPT = r"""
     const nativeActivationPrefix = '/api/policy/authority/native-activations';
     const nativeActivationProfile = 'serverware.nativePolicyActivationHttp/v1';
+    const nativeActivationLocatorProfile = 'serverware.nativePolicyActivationLocator/v1';
     const nativeActivationLimit = 8 * 1024 * 1024;
     const nativeActivationPhases = ['request', 'decide', 'publish', 'record-inclusion', 'finalize'];
     let nativeActivationHeld = null, nativeActivationBusy = false;
@@ -88,7 +91,7 @@ NATIVE_POLICY_ACTIVATION_SCRIPT = r"""
       } finally { if (!done) { try { await reader.cancel(); } catch (_) {} } reader.releaseLock(); original = ''; }
     }
     async function nativeActivationPost(suffix, body, operation, beforeSend = null) {
-      nativeActivationNeed(['draft', 'options', 'lookup', ...nativeActivationPhases].includes(suffix));
+      nativeActivationNeed(['draft', 'options', 'lookup', 'request-locator', ...nativeActivationPhases].includes(suffix));
       const csrfResponse = await fetch('/api/csrf', {credentials: 'same-origin', mode: 'same-origin', redirect: 'error',
         cache: 'no-store', signal: operation.signal});
       const csrf = await nativeActivationRead(csrfResponse, operation);
@@ -108,6 +111,19 @@ NATIVE_POLICY_ACTIVATION_SCRIPT = r"""
       const locator = selection.phase === 'request' ? selection.readiness : selection.approval;
       nativeActivationNeed(nativeSetupId(locator));
       return 'serverware.native-activation.submitted:' + actor + ':' + selection.phase + ':' + locator;
+    }
+    function nativeActivationHintKey(actor, readiness) {
+      nativeActivationNeed(typeof actor === 'string' && actor.startsWith('oidc:') && nativeSetupId(readiness));
+      return 'serverware.native-activation.locator:' + actor + ':' + readiness;
+    }
+    function nativeActivationLocator(value, actor, readiness) {
+      nativeActivationNeed(oauthConsentClosed(value, ['apiVersion', 'actorId', 'activationId', 'readinessRequestId',
+        'approvalId', 'argumentsSha256', 'requestDigest', 'okForAction', 'automaticRetryAllowed'])
+        && value.apiVersion === nativeActivationLocatorProfile && value.actorId === actor && value.readinessRequestId === readiness
+        && nativeSetupId(value.activationId) && nativeSetupId(value.approvalId)
+        && /^sha256:[0-9a-f]{64}$/.test(value.argumentsSha256) && /^sha256:[0-9a-f]{64}$/.test(value.requestDigest)
+        && value.okForAction === false && value.automaticRetryAllowed === false);
+      return value;
     }
     async function nativeActivationReview() {
       nativeActivationInvalidate(); const operation = nativeActivationBegin();
@@ -137,6 +153,13 @@ NATIVE_POLICY_ACTIVATION_SCRIPT = r"""
         nativeActivationNeed(args.actor_id === operation.actor && nativeSetupId(intent.activationId)
           && (s.phase === 'request' ? intent.readinessRequestId === s.readiness
             && intent.generationPublicationEnvelopeSha256 === s.generation : args.approval_id === s.approval));
+        let locator = null;
+        if (s.phase === 'request') {
+          locator = nativeActivationLocator(await nativeActivationPost('request-locator', {apiVersion: nativeActivationProfile,
+            phase: 'request', argumentsOriginal: draft.argumentsOriginal}, operation), operation.actor, s.readiness);
+          nativeActivationNeed(locator.activationId === intent.activationId
+            && locator.argumentsSha256 === await workloadIssuanceHash(new TextEncoder().encode(draft.argumentsOriginal)));
+        }
         const epochExpiry = oauthConsentInteger(intent.expiresAtUnixNanos);
         // Settlement is a distinct current operation and may follow expiry of
         // publication permission; never renew or resend the original publish.
@@ -150,10 +173,11 @@ NATIVE_POLICY_ACTIVATION_SCRIPT = r"""
         // actual action gets a fresh <=30s transport window, rechecks current
         // server authority, and still cannot outlive original intent expiry.
         nativeActivationHeld = {actor: operation.actor, scope: operation.scope, selected: JSON.stringify(s), phase: s.phase,
-          original: draft.argumentsOriginal, marker, intent, until: performance.now() + reviewMs, expires: Date.now() + reviewMs,
+          original: draft.argumentsOriginal, marker, intent, locator, until: performance.now() + reviewMs, expires: Date.now() + reviewMs,
           epochExpiry: reviewExpiry};
         $('native-activation-review').textContent = 'Actor: ' + operation.actor + '\nAction: ' + s.phase
-          + '\nApproval: ' + (args.approval_id || 'new request') + '\nExact activation intent:\n' + oauthConsentCanonical(intent);
+          + '\nApproval: ' + (args.approval_id || locator.approvalId + ' (predicted locator only; not a committed request)')
+          + '\nExact activation intent:\n' + oauthConsentCanonical(intent);
         $('native-activation-original').value = draft.argumentsOriginal;
         $('native-activation-submit').disabled = false;
         $('native-activation-status').textContent = 'Review ready for this original window only. No action has been authorized or sent.';
@@ -181,6 +205,11 @@ NATIVE_POLICY_ACTIVATION_SCRIPT = r"""
         }
         operation.current(); nativeActivationNeed($('native-activation-confirm').checked);
         result = await nativeActivationPost(held.phase, body, operation, () => {
+          if (held.locator) {
+            // Nonsecret IDs and digests only, persisted before contact. Never
+            // retain the actual assertion, original arguments or PREPARE here.
+            sessionStorage.setItem(nativeActivationHintKey(operation.actor, operation.selection.readiness), oauthConsentCanonical(held.locator));
+          }
           sessionStorage.setItem(held.marker, 'submitted'); nativeActivationSpent.add(held.marker);
           $('native-activation-submit').disabled = true;
         });
@@ -190,6 +219,8 @@ NATIVE_POLICY_ACTIVATION_SCRIPT = r"""
           && result.result.operation === 'native-policy-activation.' + (held.phase === 'publish' ? 'consume' : held.phase)
           && nativeSetupId(result.result.approval?.id)
           && result.result.approval.request?.activationId === held.intent.activationId);
+        if (held.locator) nativeActivationNeed(result.result.approval.id === held.locator.approvalId
+          && result.result.requestDigest === held.locator.requestDigest);
         if (held.phase === 'publish') nativeActivationNeed(result.nativeRequest?.apiVersion === 'serverware.nativePolicyActivationRequest/v1'
           && result.nativeRequest.requestId === held.intent.activationId && typeof result.publicationOriginal === 'string'
           && result.publicationOriginal.length > 0);
@@ -202,6 +233,7 @@ NATIVE_POLICY_ACTIVATION_SCRIPT = r"""
         $('native-activation-status').textContent = held.phase + ' retained for approval ' + result.result.approval.id
           + '. Choose and review the next separate step. This is not completed Setup or a restarted native gate.';
       } catch (error) {
+        if (held.locator && nativeActivationSpent.has(held.marker)) $('native-activation-approval').value = held.locator.approvalId;
         $('native-activation-status').textContent = nativeActivationSpent.has(held.marker)
           ? 'Submission may have committed. Keep approval/readiness/activation locators and inspect; never repeat this effect.'
           : 'No completed action confirmed. No automatic retry was made; review current originals before another explicit action.';
@@ -220,6 +252,18 @@ NATIVE_POLICY_ACTIVATION_SCRIPT = r"""
           nativeActivationNeed(result[field] === null || typeof result[field] === 'string');
         $('native-activation-observation').textContent = oauthConsentCanonical(result);
         $('native-activation-status').textContent = 'Read-only protected observation. No native contact, approval, publication or retry was performed.';
+      } finally { operation.close(); }
+    }
+    function nativeActivationRestore() {
+      nativeActivationInvalidate(); const operation = nativeActivationBegin();
+      try {
+        const raw = sessionStorage.getItem(nativeActivationHintKey(operation.actor, operation.selection.readiness));
+        nativeActivationNeed(typeof raw === 'string' && raw.length <= 4096);
+        const locator = nativeActivationLocator(oauthConsentParse(raw, 4096).value, operation.actor, operation.selection.readiness);
+        operation.current();
+        $('native-activation-approval').value = locator.approvalId;
+        $('native-activation-observation').textContent = 'Untrusted local navigation hint only:\n' + oauthConsentCanonical(locator);
+        $('native-activation-status').textContent = 'Approval ID restored. Read its authenticated retained state; this hint never proves commitment or permits retry.';
       } finally { operation.close(); }
     }
 """

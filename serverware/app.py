@@ -11124,6 +11124,7 @@ async def controlled_setup_policy_candidate(request: Request, response: Response
 @app.post(control_plane_native_policy_activation.PREFIX + "/record-inclusion")
 @app.post(control_plane_native_policy_activation.PREFIX + "/finalize")
 @app.post(control_plane_native_policy_activation.PREFIX + "/lookup")
+@app.post(control_plane_native_policy_activation.PREFIX + "/request-locator")
 async def controlled_native_policy_activation(request: Request) -> dict[str, Any]:
     raw = await request.body()
     try:

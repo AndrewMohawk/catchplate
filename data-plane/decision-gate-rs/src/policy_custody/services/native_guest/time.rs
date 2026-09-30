@@ -66,7 +66,7 @@ fn drift(elapsed:u64,ppm:u32)->Result<i64,ShadowError> {
     i64::try_from(value.checked_add(999_999).ok_or(ShadowError::CounterOverflow)?/1_000_000).map_err(fail)
 }
 
-pub(super) struct Clock {
+pub(in crate::policy_shadow::policy_custody::services) struct Clock {
     original:Original,bootstrap:Bootstrap,association:GuestClosureAssociation,
     challenge:Challenge,challenge_original:Vec<u8>,evidence_original:Vec<u8>,anchor:Anchor,anchor_original:Vec<u8>,
     before:u64,last:AtomicU64,
@@ -165,7 +165,7 @@ impl Clock {
             owner.challenge.payload.expires_at_unix_nanos,&owner,30_000_000_000)?;
         Ok(owner)
     }
-    fn interval(&self)->Result<(i64,i64),ShadowError> {
+    fn sampled_interval(&self)->Result<(u64,i64,i64),ShadowError> {
         self.association.owner.check_originals().map_err(fail)?;
         require(canonical_json_bytes(&self.bootstrap)?.as_slice()==self.original.read(MAXIMUM).map_err(fail)?.as_slice()
             && canonical_json_bytes(&self.challenge)?==self.challenge_original
@@ -182,10 +182,32 @@ impl Clock {
         let latest=a.latest_unix_nanos.checked_add(elapsed).and_then(|v|v.checked_add(widening))
             .ok_or(ShadowError::CounterOverflow)?;
         require(earliest>0 && earliest<=latest && latest<a.expires_at_unix_nanos)?;
-        Ok((earliest,latest))
+        Ok((now,earliest,latest))
+    }
+    pub(in crate::policy_shadow::policy_custody::services) fn proof_sample(&self,
+        association:&GuestClosureAssociation,assignment:&Sha256Digest,operation:&Sha256Digest)
+        ->Result<super::trusted_time_sample::Sample,ShadowError> {
+        require(self.association.same_origin(association))?;
+        association.check().map_err(fail)?;
+        let (sampled,earliest,latest)=self.sampled_interval()?;
+        let binding=association.binding();
+        Ok(super::trusted_time_sample::Sample {
+            api_version:"serverware.nativeShadowTrustedTimeSample/v1".into(),purpose:"native-shadow-trusted-time-sample".into(),
+            assignment_payload_sha256:assignment.clone(),service_guest_sha256:Sha256Digest::compute(&canonical_json_bytes(&binding)?),
+            clock_anchor_sha256:Sha256Digest::compute(&self.anchor_original),
+            clock_bootstrap_sha256:Sha256Digest::compute(&canonical_json_bytes(&self.bootstrap)?),
+            boot_id_base64url:binding.boot_id_base64url,time_namespace_device:binding.time_namespace_device,
+            time_namespace_inode:binding.time_namespace_inode,sampled_at_boottime_ns:sampled.to_string(),
+            earliest_unix_nanos:earliest,latest_unix_nanos:latest,
+            maximum_clock_rate_error_ppm:self.anchor.payload.maximum_clock_rate_error_ppm,
+            anchor_expires_at_unix_nanos:self.anchor.payload.expires_at_unix_nanos,
+            lifetime_deadline_boottime_ns:association.lifetime().to_string(),operation_sha256:operation.clone(),
+        })
     }
 }
 impl TrustedTime for Clock {
-    fn now_unix_nanos(&self)->Result<i64,ShadowError> {Ok(self.interval()?.1)}
-    fn now_interval_unix_nanos(&self)->Result<(i64,i64),ShadowError> {self.interval()}
+    fn now_unix_nanos(&self)->Result<i64,ShadowError> {Ok(self.sampled_interval()?.2)}
+    fn now_interval_unix_nanos(&self)->Result<(i64,i64),ShadowError> {
+        let (_,earliest,latest)=self.sampled_interval()?;Ok((earliest,latest))
+    }
 }

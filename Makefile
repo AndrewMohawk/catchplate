@@ -1524,6 +1524,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/native_shadow_retrieval_store.py \
 	serverware/native_shadow_guest_delivery.py \
 	serverware/native_policy_activation_inputs.py \
+	serverware/native_shadow_trusted_time_inputs.py \
 	serverware/authority_native_activation_completion.py \
 	serverware/authority_native_activation_hold.py \
 	serverware/authority_native_activation_publication.py \
@@ -4091,6 +4092,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/native_shadow_retrieval_store.py \
 				serverware/native_shadow_guest_delivery.py \
 				serverware/native_policy_activation_inputs.py \
+				serverware/native_shadow_trusted_time_inputs.py \
 				serverware/authority_native_activation_completion.py \
 				serverware/authority_native_activation_hold.py \
 				serverware/authority_native_activation_publication.py \
@@ -4397,6 +4399,10 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/parent_process.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/authority.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/time.rs \
+				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/trusted_time.rs \
+				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/trusted_time_sample.rs \
+				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/proof_client.rs \
+				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/proof_client_peer.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/process.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/admission.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/retrieval.rs \
@@ -4407,6 +4413,9 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/parent_parked.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/retrieval_client_peer.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/retrieval_scope.rs \
+				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/persistence.rs \
+				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/persistence_receipts.rs \
+				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/persistence_store.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/retrieval_store.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/result.rs \
 				data-plane/decision-gate-rs/src/native_shadow_verifier_runtime_v1.rs \
@@ -4757,6 +4766,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-policy-canary-cumulative-checkpoint.v2.schema.json \
 				schemas/native-policy-canary-readiness.v1.schema.json \
 				schemas/native-policy-activation-custody.v1.schema.json \
+				schemas/native-shadow-trusted-time-service.v1.schema.json \
+				schemas/native-shadow-persistence-service.v1.schema.json \
 				schemas/native-policy-activation.v1.schema.json \
 				schemas/native-policy-observation-result.v1.schema.json \
 				schemas/native-pilot-inventory-publication.v1.schema.json \

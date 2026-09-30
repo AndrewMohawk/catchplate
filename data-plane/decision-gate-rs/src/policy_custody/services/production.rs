@@ -97,6 +97,10 @@ impl ProductionPrimitiveRejectionV4 {
 /// signed service transitions; unavailable artifacts must use a typed
 /// rejection rather than synthesized bytes.
 pub(super) trait ExistingFiveServiceProductionAuthoritiesV4: Send {
+    // Legacy profiles keep their existing independently owned clock contract.
+    // Only the explicit native proof bridge constructs this sampled owner.
+    fn trusted_time_for_operation(&self,_request:&ProductionRpcRequestV4)
+        ->Result<Option<native_guest::trusted_time_sample::VerifiedSample>,ProductionPrimitiveRejectionV4> {Ok(None)}
     fn recover_current_state(
         &mut self,
         request: &ClosedProductionDispatchRequestV4,
@@ -478,6 +482,7 @@ pub(super) enum ProductionAuthorityEndpointIdentityV4 {
     deny_unknown_fields
 )]
 pub(super) enum ProductionAuthorityEndpointRequestBodyV4 {
+    SampleTrustedTime {operation_sha256:super::super::super::Sha256Digest},
     Dispatch(ClosedProductionDispatchRequestV4),
     Generation(ClosedProductionGenerationRequestV4),
     RequestTermination {
@@ -488,6 +493,11 @@ pub(super) enum ProductionAuthorityEndpointRequestBodyV4 {
     },
     VerifyProof {
         request: ProductionRpcRequestV4,
+    },
+    /// Explicit effect: never selected by a VerifyProof request.
+    StoreDispatchOriginal {
+        request_original_base64url: String,
+        reply_original_base64url: String,
     },
 }
 
@@ -557,6 +567,8 @@ impl ProductionAuthorityEndpointRequestV4 {
     deny_unknown_fields
 )]
 pub(super) enum ProductionAuthorityEndpointResultV4 {
+    TrustedTimeInterval(native_guest::trusted_time_sample::Sample),
+    PersistenceCommitted { commit_original_sha256: super::super::super::Sha256Digest },
     Dispatch(ClosedProductionDispatchResponseV4),
     Generation(ClosedProductionGenerationResponseV4),
     TerminationRequested,
@@ -632,6 +644,7 @@ struct ProductionPinnedEndpointV4 {
 enum EndpointSession {
     Host(AuthenticatedInheritedSeqpacket),
     NativeRetrieval(retrieval_client::Session),
+    NativeProof(native_guest::proof_client::Session),
 }
 struct EndpointPacket {
     frame:Vec<u8>,
@@ -641,22 +654,32 @@ impl EndpointSession {
     fn revalidate_peer(&self)->Result<(),ServiceRunnerError> {match self {
         Self::Host(v)=>v.revalidate_peer().map_err(Into::into),
         Self::NativeRetrieval(v)=>v.check().map_err(|_|ServiceRunnerError::invalid("native retrieval owner changed")),
+        Self::NativeProof(v)=>v.check().map_err(|_|ServiceRunnerError::invalid("native proof owner changed")),
     }}
     fn progress_fd(&self)->std::os::fd::BorrowedFd<'_> {match self {
-        Self::Host(v)=>v.progress_fd(),Self::NativeRetrieval(v)=>v.progress_fd(),
+        Self::Host(v)=>v.progress_fd(),Self::NativeRetrieval(v)=>v.progress_fd(),Self::NativeProof(v)=>v.progress_fd(),
     }}
     fn send(&self,raw:&[u8],deadline:u64)->Result<bool,ServiceRunnerError> {match self {
         Self::Host(v)=>v.try_send(raw,&[],0).map_err(Into::into),
         Self::NativeRetrieval(v)=>v.send(raw,deadline).map_err(|_|ServiceRunnerError::invalid("native retrieval send inspection refused")),
+        Self::NativeProof(v)=>v.send(raw,deadline).map_err(|_|ServiceRunnerError::invalid("native proof send inspection refused")),
     }}
     fn receive(&self,deadline:u64)->Result<Option<EndpointPacket>,ServiceRunnerError> {match self {
         Self::Host(v)=>Ok(v.try_receive(0)?.map(|v|EndpointPacket{frame:v.frame,original:None})),
+        Self::NativeProof(v)=>Ok(v.receive(deadline)
+            .map_err(|_|ServiceRunnerError::invalid("native proof packet inspection refused"))?
+            .map(|v|EndpointPacket{frame:v.bytes.clone(),original:Some(v)})),
         Self::NativeRetrieval(v)=>Ok(v.receive(deadline)
             .map_err(|_|ServiceRunnerError::invalid("native retrieval packet inspection refused"))?
             .map(|v|EndpointPacket{frame:v.bytes.clone(),original:Some(v)})),
     }}
     fn after_reply(&self,packet:&EndpointPacket,deadline:u64)->Result<(),ServiceRunnerError> {match self {
         Self::Host(v)=>v.revalidate_peer().map_err(Into::into),
+        Self::NativeProof(v)=>{
+            let original=packet.original.as_ref().ok_or_else(||ServiceRunnerError::invalid("native proof packet original absent"))?;
+            if original.bytes!=packet.frame {return Err(ServiceRunnerError::invalid("native proof exact reply changed"));}
+            v.after_verify(original,deadline).map_err(|_|ServiceRunnerError::invalid("native proof final inspection refused"))
+        }
         Self::NativeRetrieval(v)=>{
             let original=packet.original.as_ref().ok_or_else(||ServiceRunnerError::invalid("native retrieval packet original absent"))?;
             if original.bytes!=packet.frame {return Err(ServiceRunnerError::invalid("native retrieval exact reply changed"));}
@@ -670,6 +693,7 @@ impl EndpointSession {
 /// dedicated production endpoints expose the closed v4 mutation surface; no
 /// request is reconstructed as an in-process authority call.
 pub(super) struct ConcreteFiveV3ProductionAuthoritiesV4 {
+    native_proof_owner:Option<Arc<native_guest::AdmittedGuest>>,
     sessions: BTreeMap<
         TrustedHostServiceRoleV3,
         AuthenticatedInheritedSeqpacket,
@@ -726,6 +750,7 @@ impl ConcreteFiveV3ProductionAuthoritiesV4 {
             endpoint.session.revalidate_peer()?;
         }
         Ok(Self {
+            native_proof_owner:None,
             sessions,
             _readiness: readiness,
             parent_signer_endpoints,
@@ -753,6 +778,21 @@ impl ConcreteFiveV3ProductionAuthoritiesV4 {
             })
     }
 
+    fn enable_native_proofs(&mut self,owner:Arc<native_guest::AdmittedGuest>)->Result<(),ServiceRunnerError> {
+        owner.check().map_err(|_|ServiceRunnerError::invalid("native proof owner refused"))?;
+        if self.native_proof_owner.is_some() || !owner.proof_bridge_selected()
+            || self.proof_endpoints.values().any(|v|!matches!(&v.session,EndpointSession::NativeProof(_))) {
+            return Err(ServiceRunnerError::invalid("native proof bridge lacks exact inspected endpoints"));
+        }
+        self.native_proof_owner=Some(owner);Ok(())
+    }
+    fn native_persistence_selected(&self)->Result<bool,ProductionPrimitiveRejectionV4> {
+        let Some(owner)=&self.native_proof_owner else {return Ok(false);};
+        owner.check().map_err(|_|native_time_refused())?;
+        self.proof_endpoint(ProductionProofEndpointKindV4::Persistence)?.session.revalidate_peer()
+            .map_err(|_|native_time_refused())?;Ok(true)
+    }
+
     fn proof_endpoint(
         &self,
         kind: ProductionProofEndpointKindV4,
@@ -774,6 +814,13 @@ impl ConcreteFiveV3ProductionAuthoritiesV4 {
         ProductionAuthorityEndpointResultV4,
         ProductionPrimitiveRejectionV4,
     > {
+        self.call_endpoint_original(endpoint,request,rejected_code).map(|reply|reply.result)
+    }
+
+    fn call_endpoint_original(
+        &self,endpoint:&ProductionPinnedEndpointV4,request:ProductionAuthorityEndpointRequestV4,
+        rejected_code:ProductionRpcRejectionCodeV4,
+    )->Result<ProductionAuthorityEndpointReplyV4,ProductionPrimitiveRejectionV4> {
         endpoint.session.revalidate_peer().map_err(|_| {
             ProductionPrimitiveRejectionV4::rejected(
                 ProductionRpcRejectionCodeV4::RecoveryNotReady,
@@ -963,7 +1010,7 @@ impl ConcreteFiveV3ProductionAuthoritiesV4 {
                 "production authority endpoint peer identity changed after reply",
             )
         })?;
-        Ok(reply.result)
+        Ok(reply)
     }
 
     fn require_all_services_current(
@@ -1004,11 +1051,31 @@ impl ConcreteFiveV3ProductionAuthoritiesV4 {
                 request.clone(),
             ),
         )?;
-        match self.call_endpoint(
+        let reply=self.call_endpoint_original(
             endpoint,
-            wire,
+            wire.clone(),
             ProductionRpcRejectionCodeV4::ArtifactPrimitiveUnavailable,
-        )? {
+        )?;
+        if self.native_persistence_selected()? && matches!(&reply.result,ProductionAuthorityEndpointResultV4::Dispatch(_)) {
+            // Same actual effect original and deadline. No later proof request
+            // can trigger this write, renew it, or manufacture the reply.
+            let endpoint=self.proof_endpoint(ProductionProofEndpointKindV4::Persistence)?;
+            let commit=ProductionAuthorityEndpointRequestV4::new(endpoint.identity,
+                request.binding().replay_id_sha256.clone(),request.binding().operation_deadline_boottime_nanos,
+                ProductionAuthorityEndpointRequestBodyV4::StoreDispatchOriginal {
+                    request_original_base64url:URL_SAFE_NO_PAD.encode(super::super::super::canonical_json_bytes(&wire).map_err(|_| {
+                        ProductionPrimitiveRejectionV4::rejected(ProductionRpcRejectionCodeV4::PersistenceProofRejected,"dispatch original encoding failed")})?),
+                    reply_original_base64url:URL_SAFE_NO_PAD.encode(super::super::super::canonical_json_bytes(&reply).map_err(|_| {
+                        ProductionPrimitiveRejectionV4::rejected(ProductionRpcRejectionCodeV4::PersistenceProofRejected,"dispatch reply encoding failed")})?),
+                })?;
+            match self.call_endpoint(endpoint,commit,ProductionRpcRejectionCodeV4::PersistenceProofRejected)? {
+                ProductionAuthorityEndpointResultV4::PersistenceCommitted{commit_original_sha256}
+                    if commit_original_sha256!=super::super::super::Sha256Digest::compute(&[])=>{},
+                _=>return Err(ProductionPrimitiveRejectionV4::rejected(ProductionRpcRejectionCodeV4::PersistenceProofRejected,
+                    "native persistence commit did not return a definite signed original")),
+            }
+        }
+        match reply.result {
             ProductionAuthorityEndpointResultV4::Dispatch(response) => {
                 Ok(response)
             }
@@ -1072,7 +1139,7 @@ impl ConcreteFiveV3ProductionAuthoritiesV4 {
     }
 }
 
-fn production_signer_role(
+pub(super) fn production_signer_role(
     request: &ClosedProductionDispatchRequestV4,
 ) -> Result<
     super::super::super::PolicyShadowCustodySignerRole,
@@ -1178,9 +1245,48 @@ macro_rules! dispatch_primitive {
     };
 }
 
+fn native_time_refused()->ProductionPrimitiveRejectionV4 {
+    ProductionPrimitiveRejectionV4::rejected(ProductionRpcRejectionCodeV4::RecoveryNotReady,
+        "native proof owner or original trusted time interval refused")
+}
+/// Source-private proof that this exact sample passed call_endpoint's
+/// signature, request/replay/deadline and actual final peer checks.
+pub(super) struct AuthenticatedTimeReply {
+    sample:native_guest::trusted_time_sample::Sample,
+    operation:super::super::super::Sha256Digest,deadline:u64,
+}
+impl AuthenticatedTimeReply {
+    pub(super) fn consume(self,operation:&super::super::super::Sha256Digest,deadline:u64)
+        ->Result<native_guest::trusted_time_sample::Sample,super::super::super::ShadowError> {
+        if &self.operation!=operation || self.deadline!=deadline {
+            return Err(super::super::super::ShadowError::BindingDrift);
+        }
+        Ok(self.sample)
+    }
+}
 impl ExistingFiveServiceProductionAuthoritiesV4
     for ConcreteFiveV3ProductionAuthoritiesV4
 {
+    fn trusted_time_for_operation(&self,request:&ProductionRpcRequestV4)
+        ->Result<Option<native_guest::trusted_time_sample::VerifiedSample>,ProductionPrimitiveRejectionV4> {
+        let Some(owner)=&self.native_proof_owner else {return Ok(None);};
+        owner.check().map_err(|_|native_time_refused())?;
+        let replay=super::super::super::hash_domain_frames(b"serverware.nativeShadowTrustedTimeOperation/v1",
+            &[request.replay_id_sha256.as_str().as_bytes(),request.request_sha256.as_str().as_bytes()]);
+        let query=ProductionAuthorityEndpointRequestV4::new(
+            ProductionAuthorityEndpointIdentityV4::Proof(ProductionProofEndpointKindV4::TrustedTime),replay,
+            request.deadline_boottime_nanos,ProductionAuthorityEndpointRequestBodyV4::SampleTrustedTime {
+                operation_sha256:request.request_sha256.clone()})?;
+        let result=self.call_endpoint(self.proof_endpoint(ProductionProofEndpointKindV4::TrustedTime)?,query,
+            ProductionRpcRejectionCodeV4::RecoveryNotReady)?;
+        let ProductionAuthorityEndpointResultV4::TrustedTimeInterval(sample)=result else {return Err(native_time_refused());};
+        // The raw sample crosses into a capability only after call_endpoint's
+        // exact signature and post-reply retained-peer checks above.
+        let original=AuthenticatedTimeReply{sample,operation:request.request_sha256.clone(),deadline:request.deadline_boottime_nanos};
+        let verified=owner.admit_time_sample(original,&request.request_sha256,request.deadline_boottime_nanos)
+            .map_err(|_|native_time_refused())?;
+        verified.check().map_err(|_|native_time_refused())?;Ok(Some(verified))
+    }
     dispatch_primitive!(recover_current_state);
     dispatch_primitive!(verify_checkpoint_successor);
     dispatch_primitive!(verify_current_checkpoint_head);
@@ -1608,6 +1714,8 @@ where
             ));
         }
 
+        let time_sample=self.authority.trusted_time_for_operation(&request)
+            .map_err(|_|ServiceRunnerError::invalid("original trusted time interval refused operation"))?;
         let response_body = match self.dispatch_to_authority(&request) {
             Ok(response) => response,
             Err(rejection) => ProductionRpcResponseBodyV4::Rejected(
@@ -1618,6 +1726,9 @@ where
                 ),
             ),
         };
+        if let Some(sample)=&time_sample {
+            sample.check().map_err(|_|ServiceRunnerError::invalid("original trusted time interval expired during operation"))?;
+        }
         let completed_at_boottime_nanos =
             require_live_deadline(request.deadline_boottime_nanos)?;
         let mut response = ProductionRpcResponseV4 {
@@ -2127,7 +2238,7 @@ pub(super) fn run_production_rpc_service_loaded(
     bootstrap: super::Bootstrap,
     activation: BTreeMap<String, OwnedFd>,
 ) -> Result<(), ServiceRunnerError> {
-    run_production_rpc_service_loaded_inner(loaded,bootstrap,activation,None)
+    run_production_rpc_service_loaded_inner(loaded,bootstrap,activation,None,None)
 }
 
 pub(super) fn run_production_rpc_service_inspected(
@@ -2137,13 +2248,23 @@ pub(super) fn run_production_rpc_service_inspected(
 )->Result<(),ServiceRunnerError> {
     owner.check().map_err(|_|ServiceRunnerError::invalid("native bridge admission refused"))?;
     let bootstrap=super::Bootstrap::NativeRetrieval(Arc::clone(&owner));
-    run_production_rpc_service_loaded_inner(loaded,bootstrap,activation,Some((prepared,owner)))
+    run_production_rpc_service_loaded_inner(loaded,bootstrap,activation,Some((prepared,owner)),None)
+}
+
+pub(super) fn run_production_rpc_service_native_proofs(
+    loaded:super::LoadedConfig<ProductionRpcRuntimeConfigV4>,activation:BTreeMap<String,OwnedFd>,
+    prepared:native_guest::proof_client::Prepared,owner:Arc<native_guest::AdmittedGuest>,
+)->Result<(),ServiceRunnerError> {
+    owner.check().map_err(|_|ServiceRunnerError::invalid("native proof bridge admission refused"))?;
+    let bootstrap=super::Bootstrap::NativeRetrieval(Arc::clone(&owner));
+    run_production_rpc_service_loaded_inner(loaded,bootstrap,activation,None,Some((prepared,owner)))
 }
 
 fn run_production_rpc_service_loaded_inner(
     loaded:super::LoadedConfig<ProductionRpcRuntimeConfigV4>,bootstrap:super::Bootstrap,
     mut activation:BTreeMap<String,OwnedFd>,
     mut inspected:Option<(retrieval_client::Prepared,Arc<native_guest::AdmittedGuest>)>,
+    mut inspected_proofs:Option<(native_guest::proof_client::Prepared,Arc<native_guest::AdmittedGuest>)>,
 )->Result<(),ServiceRunnerError> {
     bootstrap.check()?;
     loaded.value.validate()?;
@@ -2187,6 +2308,12 @@ fn run_production_rpc_service_loaded_inner(
         Some(prepared.attach(socket,configured,owner)
             .map_err(|_|ServiceRunnerError::invalid("native retrieval factory refused"))?)
     } else {None};
+
+    let native_proof_owner=inspected_proofs.as_ref().map(|(_,v)|Arc::clone(v));
+    let mut native_proofs=if let Some((prepared,owner))=inspected_proofs.take() {
+        prepared.attach(&mut activation,&loaded.value.proof_endpoints,owner)
+            .map_err(|_|ServiceRunnerError::invalid("native proof endpoint construction refused"))?
+    } else {BTreeMap::new()};
 
     let listener = super::take_activation_fd(
         &mut activation,
@@ -2312,7 +2439,11 @@ fn run_production_rpc_service_loaded_inner(
     let mut proof_endpoints = BTreeMap::new();
     for configured in &loaded.value.proof_endpoints {
         let identity=ProductionAuthorityEndpointIdentityV4::Proof(configured.endpoint_kind);
-        let endpoint = if configured.endpoint_kind==ProductionProofEndpointKindV4::Retrieval && native_retrieval.is_some() {
+        let endpoint = if let Some(session)=native_proofs.remove(&configured.endpoint_kind) {
+            load_pinned_endpoint_session(identity,EndpointSession::NativeProof(session),
+                &configured.authority_binding_credential,configured.authority_key_id.clone(),
+                configured.authority_key_spki_sha256.clone(),&loaded.credentials)?
+        } else if configured.endpoint_kind==ProductionProofEndpointKindV4::Retrieval && native_retrieval.is_some() {
             let session=EndpointSession::NativeRetrieval(native_retrieval.take().expect("owned native retrieval endpoint"));
             load_pinned_endpoint_session(identity,session,
                 &configured.authority_binding_credential,configured.authority_key_id.clone(),
@@ -2347,12 +2478,13 @@ fn run_production_rpc_service_loaded_inner(
         ));
     }
 
-    let authority = ConcreteFiveV3ProductionAuthoritiesV4::new(
+    let mut authority = ConcreteFiveV3ProductionAuthoritiesV4::new(
         service_sessions,
         readiness,
         parent_signer_endpoints,
         proof_endpoints,
     )?;
+    if let Some(owner)=native_proof_owner {authority.enable_native_proofs(owner)?;}
     let bridge = ProductionRpcServiceBridgeV4::recover(
         authority,
         histories,

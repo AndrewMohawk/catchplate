@@ -116,6 +116,15 @@ grants and GenerationInstall. Later launch prerequisites, remaining dispatch/
 spool decisions, executable packaging, provisioning and connected application
 allow/deny/cleanup acceptance still remain.
 
+The first remaining job, CommitRequest, also requires authentic runtime identity:
+its `scope.runtime.teeEvidenceSha256` is absent from the signed fleet membership
+and the current pair/measured handoff. Retain independently verified actual
+runtime-attestation evidence before composing this field; a chosen verifier
+setting or arbitrary policy digest is not a substitute. The later generation
+origin issuer consumes installed-generation/load/publication evidence and
+cannot supply this earlier prerequisite. This is a source-audit finding, not
+runtime verification.
+
 ## Focused verification
 
 Exact source **`dbf915d430f66bba53a491b135d6a1577d7aa6b2`** passed one focused

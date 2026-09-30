@@ -1,11 +1,13 @@
+> Publication note: deployment-specific addresses, identities and paths in this document are example placeholders, not a public service or release-verification evidence.
+
 # Ordinary-service runtime preparation and C9 delivery
 
 The `.374` source connects five ordinary C9 delivery composers after the 25
 [initial-history ceremony jobs](native-pilot-ordinary-initial-history.md#supervisor-connection).
 Coverage is **37 of 85** fixed jobs; the remaining **48** begin with ordinary
 generation grants. Complete-coverage refusal still occurs before process spawn.
-Production acceptance remains **0/6**. This describes source contracts, not a
-running pilot, a test result or independent production approval.
+Production acceptance remains **0/6**. These source contracts and focused
+controls do not establish a running pilot or independent production approval.
 
 ## Independently selected policy
 
@@ -103,3 +105,30 @@ the verified delivery, runtime and history originals. This read-only handoff
 neither composes nor approves a generation grant. Generation and later jobs,
 full supervisor coverage/entrypoint, protected provisioning and independent
 provider/hardware acceptance remain required.
+
+## Focused verification
+
+Exact source `91b978fe4d9c3d45935630d8acabb4805b105236` passed **42 focused
+Python 3.11.15 controls**, grammar checks for ten changed Python files, both
+Make source inventories and **44 relative documentation links**. The run used
+a cleared environment, network isolation, CPU 0 and `-I -S -B`; it started at
+`2026-09-30T22:30:55.173186236Z`, finished at
+`2026-09-30T22:30:57.337562271Z` and exited **0**.
+
+The first attempt at `f1c395a5` had **38 passes and 4 errors**: its synthetic
+fixture selected unsupported role `ingress-witness`. A fixture-only correction
+to `cleanup-watchdog` preceded the successful exact-source run. Both outcomes
+are retained; the first attempt is not reported as a pass.
+
+Durable evidence:
+`/home/catchplate/codex-offload/serverware/engineering-builds/91b978fe-ordinary-commissioning-y4hUqW/`,
+including `first-attempt/`. All 12 copied files were byte-compared; `SHA256SUMS`
+verifies the 11 listed originals/result artifacts. The successful source archive
+is 84,766,720 bytes with SHA256
+`367f945d44acd0d1f187a72cfc9d9028772c0f536eddd4cd30c97461ac51be6c`.
+
+No live installer, retained process owner, signing entrypoint or native service
+was executed. No DB, app or `authority_store` module was imported. Rust and
+schema sources were unchanged and not rebuilt; no paid or cloud action ran.
+These pure/synthetic checks leave coverage at **37/85**, **48 jobs missing**,
+source checkpoints **36/46** and production acceptance **0/6**.

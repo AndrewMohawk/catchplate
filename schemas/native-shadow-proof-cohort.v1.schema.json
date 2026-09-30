@@ -1,0 +1,102 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "$id":"https://serverware.invalid/schemas/native-shadow-proof-cohort.v1.schema.json",
+  "$ref":"#/$defs/configuration",
+  "$defs":{
+    "controlConfiguration":{
+      "type":"object","additionalProperties":false,
+      "required":["apiVersion","cohortExecutableSha256","configurationSha256","precreationSha256"],
+      "properties":{
+        "apiVersion":{"const":"serverware.nativeShadowProofCohortControl/v1"},
+        "cohortExecutableSha256":{"$ref":"#/$defs/sha"},
+        "configurationSha256":{"$ref":"#/$defs/sha"},"precreationSha256":{"$ref":"#/$defs/sha"}
+      },
+      "description":"Independent protected root0400 fixed operator selection at /etc/serverware/native-shadow-proof-cohort-control.json. Pins fixed cohort executable and already signed originals, grants no key or service authority."
+    },
+    "sha":{"$ref":"policy-custody-guest-delivery.v1.schema.json#/$defs/sha256"},
+    "pin":{"$ref":"policy-custody-guest-delivery.v1.schema.json#/$defs/pin"},
+    "ns":{"$ref":"policy-custody-guest-delivery.v1.schema.json#/$defs/ns"},
+    "u64":{"type":"integer","minimum":1,"maximum":18446744073709551615},
+    "invocation":{"type":"string","pattern":"^[0-9a-f]{32}$","not":{"const":"00000000000000000000000000000000"}},
+    "signature":{"type":"string","pattern":"^[A-Za-z0-9_-]{86}$"},
+    "configuration":{
+      "type":"object","additionalProperties":false,
+      "required":["apiVersion","authority","executableSha256","retrievalConfiguration","persistenceConfiguration","trustedTimeConfiguration","generationInstallConfiguration","bridgeConfiguration"],
+      "properties":{
+        "apiVersion":{"const":"serverware.nativeShadowProofCohortConfiguration/v1"},
+        "authority":{"$ref":"policy-custody-guest-delivery.v1.schema.json#/$defs/authority"},
+        "executableSha256":{"$ref":"#/$defs/sha"},
+        "retrievalConfiguration":{"$ref":"#/$defs/pin"},"persistenceConfiguration":{"$ref":"#/$defs/pin"},
+        "trustedTimeConfiguration":{"$ref":"#/$defs/pin"},"generationInstallConfiguration":{"$ref":"#/$defs/pin"},
+        "bridgeConfiguration":{"$ref":"#/$defs/pin"}
+      },
+      "description":"Protected fixed root0400 original. All five cold C9 configurations independently select production-bridge, distinct final UIDs/GIDs and this exact delivery key. Preparation only; no generation coordinator implied."
+    },
+    "window":{
+      "type":"object","additionalProperties":false,
+      "required":["configurationSha256","authorityKeyId","bootIdBase64url","timeNamespaceDevice","timeNamespaceInode","issuedAtBoottimeNs","startupDeadlineBoottimeNs","lifetimeDeadlineBoottimeNs","invocationId"],
+      "properties":{
+        "configurationSha256":{"$ref":"#/$defs/sha"},"authorityKeyId":{"$ref":"#/$defs/sha"},
+        "bootIdBase64url":{"type":"string","pattern":"^[A-Za-z0-9_-]{22}$"},
+        "timeNamespaceDevice":{"$ref":"#/$defs/u64"},"timeNamespaceInode":{"$ref":"#/$defs/u64"},
+        "issuedAtBoottimeNs":{"$ref":"#/$defs/ns"},"startupDeadlineBoottimeNs":{"$ref":"#/$defs/ns"},
+        "lifetimeDeadlineBoottimeNs":{"$ref":"#/$defs/ns"},"invocationId":{"$ref":"#/$defs/invocation"}
+      },
+      "description":"Actual boot/time namespace. issued <= now < startup <= lifetime; startup-issued <=30s. Subsequent C9 deliveries preserve every original interval and invocation."
+    },
+    "precreation":{
+      "type":"object","additionalProperties":false,"required":["apiVersion","payload","signatureBase64url"],
+      "properties":{
+        "apiVersion":{"const":"serverware.nativeShadowProofCohortPrecreation/v1"},
+        "payload":{"$ref":"#/$defs/window"},"signatureBase64url":{"$ref":"#/$defs/signature"}
+      },
+      "description":"Ed25519 over ASCII serverware.nativeShadowProofCohortPrecreation.signature/v1, NUL, full canonical payload. Independent existing C9 delivery key; not TEE/driver/service authority."
+    },
+    "executable":{
+      "type":"object","additionalProperties":false,"required":["device","inode","length","sha256"],
+      "properties":{"device":{"$ref":"#/$defs/u64"},"inode":{"$ref":"#/$defs/u64"},
+        "length":{"type":"integer","minimum":1,"maximum":67108864},"sha256":{"$ref":"#/$defs/sha"}}
+    },
+    "childOriginal":{
+      "type":"object","additionalProperties":false,"required":["processId","startTimeTicks","executable"],
+      "properties":{"processId":{"type":"integer","minimum":2,"maximum":2147483647},
+        "startTimeTicks":{"$ref":"#/$defs/u64"},"executable":{"$ref":"#/$defs/executable"}},
+      "description":"Actual parked clone PID/start and retained sealed executable inode. NOT final credentials, measured peer14, key admission or readiness."
+    },
+    "observations":{
+      "type":"object","additionalProperties":false,
+      "required":["apiVersion","configurationSha256","precreationSha256","invocationId","retrieval","persistence","trustedTime","generationInstall","bridge"],
+      "properties":{
+        "apiVersion":{"const":"serverware.nativeShadowProofCohortOriginals/v1"},
+        "configurationSha256":{"$ref":"#/$defs/sha"},"precreationSha256":{"$ref":"#/$defs/sha"},
+        "invocationId":{"$ref":"#/$defs/invocation"},"retrieval":{"$ref":"#/$defs/childOriginal"},
+        "persistence":{"$ref":"#/$defs/childOriginal"},"trustedTime":{"$ref":"#/$defs/childOriginal"},
+        "generationInstall":{"$ref":"#/$defs/childOriginal"},
+        "bridge":{"$ref":"#/$defs/childOriginal"}
+      }
+    },
+    "roleRelease":{
+      "type":"object","additionalProperties":false,"required":["launch","image"],
+      "properties":{"launch":{"$ref":"#/$defs/pin"},"image":{"$ref":"#/$defs/pin"}},
+      "description":"Protected root0400 originals. Each fixed purpose must have a genuine selected service owner; a launch tag alone does not permit release. The generation-install coordinator join remains required."
+    },
+    "releasePayload":{
+      "type":"object","additionalProperties":false,
+      "required":["apiVersion","configurationSha256","precreationSha256","observationSha256","invocationId","retrieval","persistence","trustedTime","generationInstall","bridge","signingKeyId"],
+      "properties":{
+        "apiVersion":{"const":"serverware.nativeShadowProofCohortRelease/v1"},
+        "configurationSha256":{"$ref":"#/$defs/sha"},"precreationSha256":{"$ref":"#/$defs/sha"},
+        "observationSha256":{"$ref":"#/$defs/sha"},"invocationId":{"$ref":"#/$defs/invocation"},
+        "retrieval":{"$ref":"#/$defs/roleRelease"},"persistence":{"$ref":"#/$defs/roleRelease"},
+        "trustedTime":{"$ref":"#/$defs/roleRelease"},"generationInstall":{"$ref":"#/$defs/roleRelease"},
+        "bridge":{"$ref":"#/$defs/roleRelease"},
+        "signingKeyId":{"$ref":"#/$defs/sha"}
+      }
+    },
+    "release":{
+      "type":"object","additionalProperties":false,"required":["payload","signatureBase64url"],
+      "properties":{"payload":{"$ref":"#/$defs/releasePayload"},"signatureBase64url":{"$ref":"#/$defs/signature"}},
+      "description":"Ed25519 over ASCII serverware.nativeShadowProofCohortRelease.signature/v1, NUL, canonical payload. One packet <=32768 bytes with original root-sender credentials/PIDFD and all five actual C9 activation inventories as SCM_RIGHTS in retrieval, persistence, trustedTime, generationInstall, bridge order, each in signed6..69 order. At most128 rights; no child is released before all five program/peer joins succeed."
+    }
+  }
+}

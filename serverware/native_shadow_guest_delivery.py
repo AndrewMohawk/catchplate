@@ -52,6 +52,15 @@ def sign_activation_delivery(*, configuration_raw, configuration_sha256, payload
         startup_deadline=startup_deadline, now=now, names=("activation-channel", "activation-journal"))
 
 
+def sign_persistence_delivery(*, configuration_raw, configuration_sha256, payload_raw, signing_key,
+                              activation, boot, startup_deadline, now):
+    """Explicit v2 persistence activation: transfer the already held lock too."""
+    return _sign_delivery(configuration_raw=configuration_raw, configuration_sha256=configuration_sha256,
+        payload_raw=payload_raw, signing_key=signing_key, activation=activation, boot=boot,
+        startup_deadline=startup_deadline, now=now,
+        names=("persistence-listener", "persistence-journal", "persistence-lock"))
+
+
 def _sign_delivery(*, configuration_raw, configuration_sha256, payload_raw, signing_key,
                    activation, boot, startup_deadline, now, names):
     """Sign exact approved bytes; observed activation arguments are data only.
@@ -60,7 +69,8 @@ def _sign_delivery(*, configuration_raw, configuration_sha256, payload_raw, sign
     admission independently verifies every original descriptor and credential.
     This function by itself does not assert that any runtime owner exists.
     """
-    p.require(names in (("retrieval-listener", "retrieval-objects"), ("activation-channel", "activation-journal")))
+    p.require(names in (("retrieval-listener", "retrieval-objects"), ("activation-channel", "activation-journal"),
+        ("persistence-listener", "persistence-journal", "persistence-lock")))
     cold = configuration(configuration_raw, configuration_sha256)
     payload = p.fields(p.document(payload_raw, MAX_DELIVERY), FIELDS)
     p.require(payload["configurationSha256"] == configuration_sha256
@@ -76,7 +86,7 @@ def _sign_delivery(*, configuration_raw, configuration_sha256, payload_raw, sign
     p.require(issued <= now < startup <= lifetime and startup == startup_deadline
         and startup - issued <= 30_000_000_000
         and (payload["bootIdBase64url"], payload["timeNamespaceDevice"], payload["timeNamespaceInode"]) == boot)
-    p.require(type(activation) is list and len(activation) == 2 and payload["activation"] == activation)
+    p.require(type(activation) is list and len(activation) == len(names) and payload["activation"] == activation)
     for index, (entry, name) in enumerate(zip(activation, names), 6):
         p.fields(entry, ("name", "fd", "device", "inode", "mode", "uid", "gid"))
         p.require(entry["name"] == name and entry["fd"] == index)

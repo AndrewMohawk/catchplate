@@ -8,11 +8,25 @@ mod image;
 pub(in crate::policy_shadow::policy_custody::services::guest::native_guest) mod child;
 #[path="retrieval_pair.rs"]
 mod pair;
+#[path="proof_cohort.rs"]
+mod proof_cohort;
 
 // Cleanup is a narrowing of the signed lifetime, never a fresh interval.
 const REAP_RESERVE_NS:u64=250_000_000;
 struct Watchdog(libc::timer_t);
 impl Watchdog {
+    fn arm_proof_cohort(admission:&proof_cohort::inputs::Admission)->Result<Self,ShadowError> {
+        admission.check_startup()?;
+        let mut event:libc::sigevent=unsafe{std::mem::zeroed()};
+        event.sigev_notify=libc::SIGEV_SIGNAL;event.sigev_signo=libc::SIGKILL;
+        let mut timer=std::ptr::null_mut();
+        require(unsafe{libc::timer_create(libc::CLOCK_BOOTTIME,&mut event,&mut timer)}==0)?;
+        let owner=Self(timer);let deadline=admission.lifetime();
+        let value=libc::itimerspec{it_interval:libc::timespec{tv_sec:0,tv_nsec:0},
+            it_value:libc::timespec{tv_sec:(deadline/1_000_000_000) as _,tv_nsec:(deadline%1_000_000_000) as _}};
+        require(unsafe{libc::timer_settime(timer,libc::TIMER_ABSTIME,&value,std::ptr::null_mut())}==0)?;
+        admission.check_startup()?;Ok(owner)
+    }
     fn arm_pair(admission:&pair::inputs::Admission)->Result<Self,ShadowError> {
         admission.check_startup()?;
         let mut event:libc::sigevent=unsafe{std::mem::zeroed()};
@@ -121,6 +135,17 @@ impl Running {
                     activation.get("persistence-listener").ok_or(ShadowError::BindingDrift)?,retrieval_peer::EndpointKind::Persistence)?;
                 (Some(Inspection::Server(owner)),Some(channel))
             }
+            SelectedService::PersistenceLocked(pin)=>{
+                require(activation.len()==3 && activation.contains_key("persistence-listener")
+                    && activation.contains_key("persistence-journal") && activation.contains_key("persistence-lock"))?;
+                let original=pin.open(65536)?;
+                let configuration:admission::persistence::Configuration=exact(&original.read(65536).map_err(fail)?)?;
+                configuration.validate_shape()?;
+                let expected=configuration.expected_peer().checked().map_err(fail)?;
+                let (owner,channel)=retrieval_peer::Inspector::prepare_endpoint(original,expected,configuration.guest_uid(),
+                    activation.get("persistence-listener").ok_or(ShadowError::BindingDrift)?,retrieval_peer::EndpointKind::Persistence)?;
+                (Some(Inspection::Server(owner)),Some(channel))
+            }
             SelectedService::TrustedTime(pin)=>{
                 require(activation.len()==1)?;
                 let original=pin.open(65536)?;
@@ -186,3 +211,4 @@ pub(super) fn run()->! {
     unsafe{libc::_exit(1)}
 }
 pub(super) fn run_pair()->! {pair::run()}
+pub(super) fn run_proof_cohort()->! {proof_cohort::run()}

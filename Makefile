@@ -1524,6 +1524,10 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/native_shadow_retrieval_artifacts.py \
 	serverware/native_shadow_retrieval_store.py \
 	serverware/native_shadow_guest_delivery.py \
+	serverware/native_shadow_persistence_artifacts.py \
+	serverware/native_shadow_persistence_inputs.py \
+	serverware/native_shadow_proof_cohort_assignment.py \
+	serverware/native_shadow_proof_cohort_control.py \
 	serverware/native_policy_activation_inputs.py \
 	serverware/native_policy_activation_recovery.py \
 	serverware/native_shadow_trusted_time_inputs.py \
@@ -4094,6 +4098,10 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/native_shadow_retrieval_artifacts.py \
 				serverware/native_shadow_retrieval_store.py \
 				serverware/native_shadow_guest_delivery.py \
+				serverware/native_shadow_persistence_artifacts.py \
+				serverware/native_shadow_persistence_inputs.py \
+				serverware/native_shadow_proof_cohort_assignment.py \
+				serverware/native_shadow_proof_cohort_control.py \
 				serverware/native_policy_activation_inputs.py \
 				serverware/native_policy_activation_recovery.py \
 				serverware/native_shadow_trusted_time_inputs.py \
@@ -4394,6 +4402,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/bin/serverware-native-shadow-verifier.rs \
 				data-plane/decision-gate-rs/src/bin/serverware-native-shadow-time-issuer.rs \
 				data-plane/decision-gate-rs/src/bin/serverware-native-shadow-guest-supervisor.rs \
+				data-plane/decision-gate-rs/src/bin/serverware-native-shadow-proof-cohort.rs \
 				data-plane/decision-gate-rs/src/bin/serverware-native-shadow-verifier-transport.rs \
 				data-plane/decision-gate-rs/src/bin/serverware-native-shadow-retrieval-pair.rs \
 				data-plane/decision-gate-rs/src/bin/serverware-policy-shadow-custody-guest.rs \
@@ -4409,6 +4418,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/trusted_time_sample.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/proof_client.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/proof_client_peer.rs \
+				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/proof_cohort.rs \
+				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/proof_cohort_inputs.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/process.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/admission.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/retrieval.rs \
@@ -4774,6 +4785,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-policy-activation-custody.v1.schema.json \
 				schemas/native-shadow-trusted-time-service.v1.schema.json \
 				schemas/native-shadow-persistence-service.v1.schema.json \
+				schemas/native-shadow-persistence-inputs.v1.schema.json \
+				schemas/native-shadow-proof-cohort.v1.schema.json \
 				schemas/custody-service-generation-admission.v1.schema.json \
 				schemas/native-policy-activation.v1.schema.json \
 				schemas/native-policy-activation-recovery.v1.schema.json \

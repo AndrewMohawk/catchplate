@@ -138,9 +138,18 @@ fn dispatch_original(request_encoded:&str,reply_encoded:&str,scope:&scope::Scope
     Ok((request,raw,receipt))
 }
 pub(crate) struct Prepared {original:services::guest_original::Original,configuration:Configuration,
-    scope_original:Vec<u8>,scope:scope::Scope,directory:OwnedFd,listener:OwnedFd,inspection:OwnedFd}
+    scope_original:Vec<u8>,scope:scope::Scope,directory:OwnedFd,listener:OwnedFd,inspection:OwnedFd,lock:Option<OwnedFd>}
 impl Prepared {
     pub(in crate::policy_shadow::policy_custody::services) fn open(pin:&guest::Pin,delivery:&mut PreparedGuestServiceDelivery,inspection:OwnedFd)->Result<Self,ShadowError>{
+        Self::open_inner(pin,delivery,inspection,None)
+    }
+    pub(in crate::policy_shadow::policy_custody::services) fn open_locked(pin:&guest::Pin,delivery:&mut PreparedGuestServiceDelivery,inspection:OwnedFd)->Result<Self,ShadowError>{
+        require(delivery.activation.len()==3 && delivery.activation.contains_key("persistence-listener")
+            && delivery.activation.contains_key("persistence-journal"))?;
+        let lock=delivery.activation.remove("persistence-lock").ok_or(ShadowError::BindingDrift)?;
+        Self::open_inner(pin,delivery,inspection,Some(lock))
+    }
+    fn open_inner(pin:&guest::Pin,delivery:&mut PreparedGuestServiceDelivery,inspection:OwnedFd,lock:Option<OwnedFd>)->Result<Self,ShadowError>{
         delivery.closure_association().map_err(fail)?.check_preparation().map_err(fail)?;
         require(delivery.activation.len()==2 && delivery.activation.contains_key("persistence-listener")
             && delivery.activation.contains_key("persistence-journal"))?;
@@ -153,12 +162,15 @@ impl Prepared {
         let scope=guest::exact(&scope_original)?;
         Ok(Self{original,configuration,scope_original,scope,
             directory:delivery.activation.remove("persistence-journal").ok_or(ShadowError::BindingDrift)?,
-            listener:delivery.activation.remove("persistence-listener").ok_or(ShadowError::BindingDrift)?,inspection})
+            listener:delivery.activation.remove("persistence-listener").ok_or(ShadowError::BindingDrift)?,inspection,lock})
     }
     pub(in crate::policy_shadow::policy_custody::services) fn bind(self,keys:&AdmittedKeys,delivery:&PreparedGuestServiceDelivery,
         trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime)->Result<Service,ShadowError>{
         require(Arc::ptr_eq(&keys.association.owner,&delivery.owner))?;self.configuration.verify(keys,&self.scope,trust,time)?;
-        let store=store::Store::open(self.directory,&self.configuration.payload.journal,&self.scope,&keys.association.binding())?;
+        let store=match self.lock {
+            Some(lock)=>store::Store::open_locked(self.directory,lock,&self.configuration.payload.journal,&self.scope,&keys.association.binding())?,
+            None=>store::Store::open(self.directory,&self.configuration.payload.journal,&self.scope,&keys.association.binding())?,
+        };
         let expected=self.configuration.expected_peer().checked().map_err(fail)?;let check=||keys.check(trust,time);
         let mut channel=peer::Client::bind_endpoint(self.inspection,self.listener,expected,delivery,&check,peer::EndpointKind::Persistence)?;
         channel.inspect(peer::Phase::Connection,None,None,keys.association.startup(),&check)?;

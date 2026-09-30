@@ -47,12 +47,32 @@ pub(super) struct Store {directory:OwnedFd,identity:Identity,lock:File,uid:u32,g
     originals:Vec<Commit>,sequence:u64,head:Sha256Digest,total:usize,poisoned:bool}
 impl Store {
     pub(super) fn open(directory:OwnedFd,admission:&Admission,scope:&scope::Scope,guest:&GuestClosureBinding)->Result<Self,ShadowError>{
+        Self::open_inner(directory,None,admission,scope,guest)
+    }
+    pub(super) fn open_locked(directory:OwnedFd,lock:OwnedFd,admission:&Admission,scope:&scope::Scope,guest:&GuestClosureBinding)->Result<Self,ShadowError>{
+        Self::open_inner(directory,Some(lock),admission,scope,guest)
+    }
+    fn open_inner(directory:OwnedFd,inherited:Option<OwnedFd>,admission:&Admission,scope:&scope::Scope,guest:&GuestClosureBinding)->Result<Self,ShadowError>{
         let uid=unsafe{libc::geteuid()};let gid=unsafe{libc::getegid()};let id=identity(directory.as_fd())?;
         require(uid!=0 && gid!=0 && id.uid==uid && id.gid==gid && id.mode&libc::S_IFMT==libc::S_IFDIR
             && id.mode&0o7777==0o700 && admission.head_sequence<=MAX_RECORDS
             && unsafe{libc::fcntl(directory.as_raw_fd(),libc::F_GETFL)}&libc::O_PATH==0)?;
         filesystem(directory.as_fd())?;
-        let lock=at(directory.as_fd(),"persistence.lock",libc::O_RDWR)?;let m=lock.metadata().map_err(fail)?;
+        let named=at(directory.as_fd(),"persistence.lock",libc::O_RDWR)?;
+        let lock=match inherited {
+            Some(fd)=>{
+                require(identity(fd.as_fd())?==identity(named.as_fd())?
+                    && unsafe{libc::fcntl(fd.as_raw_fd(),libc::F_GETFL)}&(libc::O_ACCMODE|libc::O_PATH)==libc::O_RDWR)?;
+                // A separate open must already conflict BEFORE we touch the
+                // inherited OFD. Then idempotent acquisition on that same OFD
+                // must succeed. Never unlock/reacquire across launch.
+                let result=unsafe{libc::flock(named.as_raw_fd(),libc::LOCK_EX|libc::LOCK_NB)};
+                require(result==-1 && std::io::Error::last_os_error().raw_os_error()==Some(libc::EWOULDBLOCK))?;
+                require(unsafe{libc::flock(fd.as_raw_fd(),libc::LOCK_EX|libc::LOCK_NB)}==0)?;
+                File::from(fd)
+            }
+            None=>named,
+        };let m=lock.metadata().map_err(fail)?;
         require(m.is_file() && m.nlink()==1 && m.uid()==uid && m.gid()==gid && m.mode()&0o7777==0o600 && m.len()==0
             && m.dev()==id.device && unsafe{libc::flock(lock.as_raw_fd(),libc::LOCK_EX|libc::LOCK_NB)}==0)?;
         let mut store=Self{directory,identity:id,lock,uid,gid,held:Vec::new(),originals:Vec::new(),sequence:0,

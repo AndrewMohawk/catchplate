@@ -57,7 +57,7 @@ struct PersistenceLaunch {api_version:String,key_admission:Launch,persistence:Pi
 #[derive(Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 struct TrustedTimeLaunch {api_version:String,key_admission:Launch,trusted_time:Pin}
-enum SelectedService {None,Retrieval(Pin),RetrievalBridge,Activation(Pin),Persistence(Pin),TrustedTime(Pin),ProofBridge(Pin)}
+enum SelectedService {None,Retrieval(Pin),RetrievalBridge,Activation(Pin),Persistence(Pin),PersistenceLocked(Pin),TrustedTime(Pin),ProofBridge(Pin)}
 #[derive(Serialize,Deserialize)]
 #[serde(untagged)]
 enum Selection {KeyAdmission(Launch),Retrieval(RetrievalLaunch),RetrievalBridge(RetrievalBridgeLaunch),Activation(ActivationLaunch),
@@ -79,8 +79,11 @@ fn selection(raw:&[u8])->Result<(Launch,SelectedService),ShadowError> {
             (value.key_admission,SelectedService::Activation(value.activation))
         }
         Selection::Persistence(value)=>{
-            require(value.api_version=="serverware.nativeShadowPersistenceGuestLaunch/v1")?;
-            (value.key_admission,SelectedService::Persistence(value.persistence))
+            match value.api_version.as_str() {
+                "serverware.nativeShadowPersistenceGuestLaunch/v1"=>(value.key_admission,SelectedService::Persistence(value.persistence)),
+                "serverware.nativeShadowPersistenceGuestLaunch/v2"=>(value.key_admission,SelectedService::PersistenceLocked(value.persistence)),
+                _=>return Err(ShadowError::BindingDrift),
+            }
         }
         Selection::TrustedTime(value)=>{
             if value.api_version=="serverware.nativeProofBridgeLaunch/v1" {
@@ -117,7 +120,7 @@ impl AdmittedGuest {
         let launch_bytes=launch.read(32768).map_err(fail)?.to_vec();
         let (selected,service_selection)=selection(&launch_bytes)?;
         require(inspection.is_some()==matches!(&service_selection,SelectedService::Retrieval(_)|SelectedService::RetrievalBridge
-            |SelectedService::Persistence(_)|SelectedService::TrustedTime(_)|SelectedService::ProofBridge(_)))?;
+            |SelectedService::Persistence(_)|SelectedService::PersistenceLocked(_)|SelectedService::TrustedTime(_)|SelectedService::ProofBridge(_)))?;
         let mut delivery=PreparedGuestServiceDelivery::admit(&selected.delivery_configuration.path,selected.delivery_configuration.sha256,
             &selected.delivery.path,selected.delivery.sha256).map_err(fail)?;
         require(inherited.iter().filter(|fd|**fd>=6).copied().eq(6..6+delivery.activation.len() as i32))?;
@@ -127,6 +130,7 @@ impl AdmittedGuest {
             (SelectedService::RetrievalBridge,Some(channel))=>(None,Some(retrieval_client::Prepared::open(&mut delivery,channel)?),None,None,None,None,None),
             (SelectedService::Activation(pin),None)=>(None,None,Some(admission::activation::Prepared::open(&pin,&mut delivery)?),None,None,None,None),
             (SelectedService::Persistence(pin),Some(channel))=>(None,None,None,Some(admission::persistence::Prepared::open(&pin,&mut delivery,channel)?),None,None,None),
+            (SelectedService::PersistenceLocked(pin),Some(channel))=>(None,None,None,Some(admission::persistence::Prepared::open_locked(&pin,&mut delivery,channel)?),None,None,None),
             (SelectedService::TrustedTime(pin),Some(channel))=>(None,None,None,None,Some(admission::trusted_time::Prepared::open(&pin,&mut delivery,channel)?),None,None),
             (SelectedService::ProofBridge(pin),Some(channel))=>{
                 let (prepared,grant)=proof_client::Prepared::open(&mut delivery,channel,&pin)?;
@@ -249,3 +253,4 @@ pub(crate) fn run()->! {
 }
 pub(crate) fn run_parent()->! {parent::run()}
 pub(crate) fn run_retrieval_pair()->! {parent::run_pair()}
+pub(crate) fn run_proof_cohort()->! {parent::run_proof_cohort()}

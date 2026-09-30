@@ -138,6 +138,7 @@ RUN --network=none cargo build --release --frozen \
         --bin serverware-native-shadow-worker \
         --bin serverware-policy-shadow-custody-guest \
         --bin serverware-native-shadow-guest-supervisor \
+        --bin serverware-native-shadow-proof-cohort \
         --bin serverware-native-shadow-verifier \
         --bin serverware-native-shadow-verifier-transport \
         --bin serverware-native-shadow-time-issuer \
@@ -183,6 +184,9 @@ RUN --network=none cargo build --release --frozen \
     && test "$(readelf -l /src/target/release/serverware-native-shadow-guest-supervisor | grep -c INTERP)" -eq 0 \
     && test "$(readelf -d /src/target/release/serverware-native-shadow-guest-supervisor | grep -c NEEDED)" -eq 0 \
     && test "$(stat -c %s /src/target/release/serverware-native-shadow-guest-supervisor)" -le 67108864 \
+    && test "$(readelf -l /src/target/release/serverware-native-shadow-proof-cohort | grep -c INTERP)" -eq 0 \
+    && test "$(readelf -d /src/target/release/serverware-native-shadow-proof-cohort | grep -c NEEDED)" -eq 0 \
+    && test "$(stat -c %s /src/target/release/serverware-native-shadow-proof-cohort)" -le 67108864 \
     && test "$(readelf -l /src/target/release/serverware-native-shadow-time-issuer | grep -c INTERP)" -eq 0 \
     && test "$(readelf -d /src/target/release/serverware-native-shadow-time-issuer | grep -c NEEDED)" -eq 0 \
     && test "$(stat -c %s /src/target/release/serverware-native-shadow-time-issuer)" -le 67108864
@@ -222,6 +226,9 @@ COPY --from=launcher-build /src/target/release/serverware-native-shadow-verifier
 
 FROM scratch AS native-shadow-guest-supervisor-artifact
 COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-native-shadow-guest-supervisor /serverware-native-shadow-guest-supervisor
+
+FROM scratch AS native-shadow-proof-cohort-artifact
+COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-native-shadow-proof-cohort /serverware-native-shadow-proof-cohort
 
 FROM scratch AS native-shadow-verifier-transport-artifact
 COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-native-shadow-verifier-transport /serverware-native-shadow-verifier-transport

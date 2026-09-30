@@ -12,6 +12,11 @@ pub(in crate::policy_shadow::policy_custody::services) use inspection::{Inspecto
 const KINDS:[EndpointKind;4]=[EndpointKind::Retrieval,EndpointKind::Persistence,
     EndpointKind::TrustedTime,EndpointKind::GenerationInstallEnvelope];
 struct Selection {entries:BTreeMap<EndpointKind,ProductionProofEndpointConfigV4>,runtime_sha256:Sha256Digest}
+pub(super) fn assigned_peers(files:&FileAdmission)->Result<BTreeMap<EndpointKind,services::ExpectedPeerCredentialV3>,ShadowError> {
+    files.check_preparation().map_err(fail)?;
+    Ok(Selection::original(&files.retrieval_client_runtime().map_err(fail)?)?.entries.into_iter()
+        .map(|(kind,endpoint)|(kind,endpoint.expected_peer)).collect())
+}
 impl Selection {
     fn original(raw:&[u8])->Result<Self,ShadowError> {
         let runtime:ProductionRpcRuntimeConfigV4=exact(raw)?;runtime.validate().map_err(fail)?;

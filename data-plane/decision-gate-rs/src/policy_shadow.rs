@@ -70,6 +70,10 @@ pub(crate) fn run_native_shadow_guest_supervisor()->! {
 pub(crate) fn run_native_shadow_retrieval_pair()->! {
     policy_custody::services::guest::native_guest::run_retrieval_pair()
 }
+#[cfg(target_os="linux")]
+pub(crate) fn run_native_shadow_proof_cohort()->! {
+    policy_custody::services::guest::native_guest::run_proof_cohort()
+}
 
 #[cfg(target_os = "linux")]
 pub(crate) use policy_custody::{

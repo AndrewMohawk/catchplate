@@ -37,6 +37,12 @@ impl Original {
     pub(super) fn retrieval_pair_precreation() -> Result<Self, Error> {
         Self::fixed_native("native-shadow-retrieval-pair-precreation.json",32768)
     }
+    pub(super) fn proof_cohort_configuration() -> Result<Self, Error> {
+        Self::fixed_native("native-shadow-proof-cohort.json",32768)
+    }
+    pub(super) fn proof_cohort_precreation() -> Result<Self, Error> {
+        Self::fixed_native("native-shadow-proof-cohort-precreation.json",32768)
+    }
     fn fixed_native(leaf:&str, maximum:u64) -> Result<Self, Error> {
         let mut file = File::open("/")?;
         for name in ["etc", "serverware", leaf] {

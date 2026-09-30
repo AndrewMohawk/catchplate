@@ -203,6 +203,17 @@ def native_activation_owner():
     return _owner, selected_policy, now
 
 
+def native_setup_runtime_owner():
+    """Same retained public configuration; distinct fixed capture purpose."""
+    from serverware import authority_setup_native_runtime_policy as runtime
+    profile.require(selected() and type(_owner) is _Cold)
+    now = _owner.check()
+    chosen = runtime.validate_policy(_owner.payload.get(runtime.FIELD), payload=_owner.payload, root_key=_owner.root)
+    profile.require(chosen is not None and policy.full_configuration_digest(_owner.payload) == _owner.configuration_digest
+        and all(runtime.p.OPERATIONS <= set(_owner.payload["roles"][role].get("enabledOperations", ())) for role in ("verifier", "planner")))
+    return _owner, chosen, now
+
+
 class _Peer:
     def __init__(self, transport):
         self.transport, self.tls = transport, transport.get_extra_info("ssl_object")

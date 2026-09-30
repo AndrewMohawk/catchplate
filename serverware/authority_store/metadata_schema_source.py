@@ -6,6 +6,25 @@ from serverware.authority_store.v9_schema_source import authority_v9_schema_sour
 
 def metadata_base_schema_source() -> str:
     return """
+            CREATE TABLE IF NOT EXISTS setup_native_runtime_attempts (
+                session_id TEXT PRIMARY KEY, revision BIGINT NOT NULL, phase TEXT NOT NULL, owner_id TEXT NOT NULL,
+                association_sha256 TEXT NOT NULL, scope_original TEXT NOT NULL, attempt_original TEXT NOT NULL,
+                attempt_sha256 TEXT NOT NULL UNIQUE, prepare_request_digest TEXT NOT NULL UNIQUE, prepare_audit_id TEXT NOT NULL UNIQUE,
+                capture_original_base64url TEXT, capture_sha256 TEXT UNIQUE, result_original TEXT, complete_request_digest TEXT UNIQUE,
+                configuration_digest TEXT NOT NULL, created_at TEXT NOT NULL, completed_at TEXT,
+                CHECK (length(session_id) = 36 AND length(owner_id) BETWEEN 1 AND 1024 AND length(prepare_audit_id) = 36),
+                CHECK (length(association_sha256) = 71 AND length(attempt_sha256) = 71 AND length(prepare_request_digest) = 71 AND length(configuration_digest) = 71),
+                CHECK (length(scope_original) BETWEEN 2 AND 32768 AND length(attempt_original) BETWEEN 2 AND 8192),
+                CHECK ((revision = 0 AND phase = 'capture_outcome_unknown' AND capture_original_base64url IS NULL AND capture_sha256 IS NULL
+                    AND result_original IS NULL AND complete_request_digest IS NULL AND completed_at IS NULL)
+                    OR (revision = 1 AND phase = 'runtime_evidence_recorded' AND capture_original_base64url IS NOT NULL AND capture_sha256 IS NOT NULL
+                    AND result_original IS NOT NULL AND complete_request_digest IS NOT NULL AND completed_at IS NOT NULL)),
+                CHECK (capture_original_base64url IS NULL OR length(capture_original_base64url) BETWEEN 1 AND 699051),
+                CHECK (capture_sha256 IS NULL OR length(capture_sha256) = 71),
+                CHECK (result_original IS NULL OR length(result_original) BETWEEN 2 AND 8192),
+                CHECK (complete_request_digest IS NULL OR length(complete_request_digest) = 71)
+            );
+
             CREATE TABLE IF NOT EXISTS setup_native_canary_associations (
                 session_id TEXT PRIMARY KEY, revision BIGINT NOT NULL, phase TEXT NOT NULL, owner_id TEXT NOT NULL,
                 setup_sha256 TEXT NOT NULL, continuation_sha256 TEXT NOT NULL, enrollment_sha256 TEXT NOT NULL,

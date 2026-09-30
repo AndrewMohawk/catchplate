@@ -6,6 +6,7 @@ from serverware.portal_setup_native_enrollment import (
 )
 from serverware.portal_setup_native_ca import SETUP_NATIVE_CA_HTML, SETUP_NATIVE_CA_SCRIPT
 from serverware.portal_setup_native_canary import SETUP_NATIVE_CANARY_HTML, SETUP_NATIVE_CANARY_SCRIPT
+from serverware.portal_setup_native_runtime import SETUP_NATIVE_RUNTIME_HTML, SETUP_NATIVE_RUNTIME_SCRIPT
 
 SETUP_NATIVE_POLICY_HTML = r"""
             <hr>
@@ -14,7 +15,7 @@ SETUP_NATIVE_POLICY_HTML = r"""
             <button type="button" class="secondary" onclick="runUiAction('Observe native loaded policy', setupNativePolicyObserve)">Owner: request native loaded-policy observation</button>
             <pre id="setup-native-policy-observation">No native loaded-policy observation.</pre>
             <p id="setup-native-policy-status" class="hint" role="status" aria-live="polite">A matching policy is not proxy readiness, credential availability, installed client trust, enrollment or completed Setup. No policy reload or enrollment action is performed here.</p>
-""" + SETUP_NATIVE_ENROLLMENT_HTML + SETUP_NATIVE_CA_HTML + SETUP_NATIVE_CANARY_HTML
+""" + SETUP_NATIVE_ENROLLMENT_HTML + SETUP_NATIVE_CA_HTML + SETUP_NATIVE_CANARY_HTML + SETUP_NATIVE_RUNTIME_HTML
 
 SETUP_NATIVE_POLICY_SCRIPT = r"""
     function setupNativeOriginal(text, maximum) {
@@ -64,4 +65,4 @@ SETUP_NATIVE_POLICY_SCRIPT = r"""
         throw error;
       } finally { operation.close(); }
     }
-""" + SETUP_NATIVE_ENROLLMENT_SCRIPT + SETUP_NATIVE_CA_SCRIPT + SETUP_NATIVE_CANARY_SCRIPT
+""" + SETUP_NATIVE_ENROLLMENT_SCRIPT + SETUP_NATIVE_CA_SCRIPT + SETUP_NATIVE_CANARY_SCRIPT + SETUP_NATIVE_RUNTIME_SCRIPT

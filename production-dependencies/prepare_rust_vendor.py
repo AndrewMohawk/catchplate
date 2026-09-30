@@ -4,6 +4,12 @@
 Only prepare_vendor() starts its fixed, bounded network-fetch container. The
 subsequent archive/checksum verification and deterministic packaging are host
 data operations, not Cargo compilation, tests or dependency build scripts.
+
+The pinned Cargo invocation owns package-file selection (including manifest
+include/exclude rules). Host verification checks every selected file against
+the locked crate and the exact vendor census, and records omitted archive
+files for dependency-owner review. This is local engineering preparation,
+not an independent proof of Cargo's selection or reviewed release authority.
 """
 from __future__ import annotations
 
@@ -339,15 +345,7 @@ def inventory(work: Path, locked: dict[str, dict[str, str]], deadline: float) ->
                 require(bool(relative) and 0 <= member.size <= MAX_FILE, "locked crate archive file shape/bound invalid")
                 expanded += member.size
                 require(expanded <= MAX_VENDOR, "locked crate expansion exceeds bound")
-                # Match cp_sources in the pinned Cargo rust-1.88.0 vendor.rs:
-                # registry sources are copied unchanged except this fixed
-                # metadata/backup filter (Cargo.toml.orig is commonly present).
-                omitted = relative in {".gitattributes", ".gitignore", ".git", ".cargo-ok"} or relative.endswith((".orig", ".rej"))
-                if omitted:
-                    require(relative not in expected, "Cargo vendor retained a source-fixed excluded file")
-                    continue
-                require(relative in expected and relative not in archive_files,
-                        "locked crate archive file differs from checksum map")
+                require(relative not in archive_files, "locked crate archive has duplicate files")
                 source = archive.extractfile(member)
                 require(source is not None, "locked crate file data absent")
                 digest = hashlib.sha256()
@@ -355,7 +353,15 @@ def inventory(work: Path, locked: dict[str, dict[str, str]], deadline: float) ->
                     while data := source.read(1024 * 1024):
                         live(deadline); digest.update(data)
                 archive_files[relative] = digest.hexdigest()
-        require(archive_files == expected, "vendor file map differs from independently locked crate archive")
+        # Cargo 1.88 ops/vendor.rs calls sources/path.rs::list_files before
+        # its own metadata filter. In particular, .cargo_vcs_info.json can
+        # be omitted by package.include/exclude or the default dotfile rule;
+        # it is not an unconditional fixed exclusion. Do not guess that
+        # selection here or accept modified/extra selected bytes. The exact
+        # omitted census remains visible in this unpublished candidate.
+        require(all(archive_files.get(name) == checksum for name, checksum in expected.items()),
+                "selected vendor file is absent from or differs from the locked crate archive")
+        omitted = sorted(set(archive_files) - set(expected))
         seen, crate_bytes = set(), 0
         for current, directories, names in os.walk(vendor / directory, followlinks=False):
             directories.sort(); names.sort()
@@ -376,6 +382,7 @@ def inventory(work: Path, locked: dict[str, dict[str, str]], deadline: float) ->
                 files.append(("vendor/" + directory + "/" + relative, measured, 0o755 if path.stat().st_mode & 0o111 else 0o644))
         require(seen == set(expected), "vendored crate missing checksum files")
         crates.append({**pin, "directory": directory, "files": len(expected), "bytes": crate_bytes,
+            "omitted_archive_files": omitted,
             "checksum_manifest_sha256": digest_file(checksum_path, 16 * MAX_INPUT, deadline)["sha256"]})
     return crates, sorted(files)
 

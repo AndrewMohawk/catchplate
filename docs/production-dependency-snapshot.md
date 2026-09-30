@@ -124,6 +124,14 @@ mount the repository's unrelated files. The ordinary archive verifier then
 checks the resulting candidate against the newly measured digest. These local
 integrity checks do not replace dependency-owner review or an actual build.
 
+The pinned Cargo producer owns package-file selection. Every selected file must
+match bytes in its hash-verified original crate archive, and the actual vendor
+files must exactly match that selected checksum map plus Cargo's generated
+checksum manifest. Archive files omitted by Cargo are recorded by exact name
+in the candidate inventory, not silently treated as missing or reimplemented
+through a second include/exclude matcher. This proves the selected bytes' local
+integrity; it is not independent evidence of complete or appropriate selection.
+
 The Rust refresh helper additionally requires 12 GiB free before starting. Its
 fixed downloader has one CPU, 5 GiB memory, 64 PIDs and separate 2 GiB tmpfs
 limits for Cargo's cache and vendor output. No host-writable directory is

@@ -446,19 +446,28 @@ SOURCE_DATE_EPOCH=0 python3 -B scripts/build_production_images.py \
   --development-dirty-tree --engineering-bounded-build \
   --dockerfile Dockerfile.production \
   --target native-pilot-conductor-artifact \
-  --output type=local,dest=/srv/catchplate-fast/tmp/EXISTING-JOB/new-conductor-export \
+  --output type=tar,dest=/srv/catchplate-fast/tmp/EXISTING-JOB/conductor-rootfs.tar \
   --network none --platform linux/amd64
 ```
 
 Use `native-pilot-authority-artifact` with a different fresh output for the
-authority bytes. The exact absolute destination must not exist, and its parent
-must already exist without symlink traversal. The builder creates it exclusively;
-partial output remains after failure. No automatic repair/retry is provided.
+authority bytes. The exact absolute destination must not exist, and its private
+task-owned parent must already exist without symlink traversal. The builder
+reserves the new tar file exclusively at `0600`; partial output remains after
+failure. No automatic repair/retry is provided.
+
+[Docker's tar exporter](https://docs.docker.com/build/exporters/local-tar/)
+bundles the same root filesystem instead of writing each child into a local
+directory. This avoids the observed unprivileged local-export failure inside
+the runtime's protected `0555` directories, without changing their final modes.
+The same engineering targets also accept `type=local,dest=...` with a fresh
+directory, but exporting this protected tree that way requires a suitably
+privileged build client. No automatic elevation or permission relaxation occurs.
 
 Both builds retain source-context/cache verification, network-disabled build
 steps and the same fixed per-step resources. Their output explicitly reports
 `identity_mode=development-dirty-tree`, `production_release_eligible=false` and
-`raw_artifact_export_only=true`. These raw trees are not strict inventories or
+`raw_artifact_export_only=true`. These raw archives/trees are not strict inventories or
 packages and must not be passed to runtime admission or installed as an approved
 pilot. The strict inventory/package tools still reject this engineering source
 identity. Canonical reviewed dependency pins remain unchanged.

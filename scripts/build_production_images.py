@@ -542,9 +542,12 @@ def source_build_arguments(
 
 
 def _engineering_artifact_destination(output: str) -> Path:
-    prefix = "type=local,dest="
-    if not output.startswith(prefix):
-        raise RuntimeError("engineering artifact export requires a local destination")
+    prefix = next(
+        (value for value in ("type=local,dest=", "type=tar,dest=") if output.startswith(value)),
+        None,
+    )
+    if prefix is None:
+        raise RuntimeError("engineering artifact export requires an explicit local or tar destination")
     raw = output[len(prefix):]
     destination = Path(raw)
     if (
@@ -582,7 +585,9 @@ def artifact_build_command(
         raise RuntimeError("production artifact builds require network=none")
     if platform != PRODUCTION_PLATFORM:
         raise RuntimeError(f"production artifact platform must be {PRODUCTION_PLATFORM}")
-    if not output.startswith("type=local,dest=") or output == "type=local,dest=":
+    if not engineering_bounded_build and (
+        not output.startswith("type=local,dest=") or output == "type=local,dest="
+    ):
         raise RuntimeError("production artifact output must be a non-empty local destination")
     pilot_resources: list[str] = []
     if engineering_bounded_build:
@@ -814,10 +819,23 @@ def main() -> None:
                 public_inputs_sha256=args.shadow_custody_inputs_sha256,
                 engineering_bounded_build=args.engineering_bounded_build,
             )
-            if engineering_destination is not None:
-                # Exclusive creation is decisive; retain partial exports on failure.
-                engineering_destination.mkdir(mode=0o700)
-            run_build(command)
+            artifact_fd: int | None = None
+            try:
+                if engineering_destination is not None:
+                    # Exclusive creation is decisive; retain partial exports on failure.
+                    if args.output.startswith("type=tar,dest="):
+                        artifact_fd = os.open(
+                            engineering_destination,
+                            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+                            0o600,
+                        )
+                        os.fchmod(artifact_fd, 0o600)
+                    else:
+                        engineering_destination.mkdir(mode=0o700)
+                run_build(command)
+            finally:
+                if artifact_fd is not None:
+                    os.close(artifact_fd)
         print(
             canonical_json(
                 {

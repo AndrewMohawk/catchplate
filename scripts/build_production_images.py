@@ -23,6 +23,13 @@ ROOT = Path(__file__).resolve().parent.parent
 BUILD_API_VERSION = "serverware.productionImagesBuild/v2"
 BUILD_KIND = "ProductionImagesBuild"
 PRODUCTION_PLATFORM = "linux/amd64"
+ENGINEERING_BOUNDED_BUILD_PROFILE = "engineering-bounded-8cpu-24g-per-step/v1"
+ENGINEERING_BUILD_RESOURCES = (
+    "memory=24g",
+    "memory-swap=24g",
+    "cpu-period=100000",
+    "cpu-quota=800000",
+)
 DEFAULT_IMAGES = (
     ("serverware-control", "Dockerfile.production", "serverware/control:production-local"),
     ("serverware-decision-gate", "data-plane/decision-gate-rs/Dockerfile.production", "serverware/decision-gate:production-local"),
@@ -410,9 +417,15 @@ def build_command(
     platform: str,
     metadata: dict[str, Any],
     context: Path,
+    engineering_bounded_build: bool = False,
 ) -> list[str]:
     if platform != PRODUCTION_PLATFORM:
         raise RuntimeError(f"production image platform must be {PRODUCTION_PLATFORM}")
+    if engineering_bounded_build and (
+        metadata["source_identity_mode"] != "development-dirty-tree"
+        or metadata["production_release_eligible"] is not False
+    ):
+        raise RuntimeError("engineering resource limits require non-production dirty-tree identity")
     command = [
         "docker",
         "build",
@@ -424,6 +437,9 @@ def build_command(
         "--platform",
         platform,
     ]
+    if engineering_bounded_build:
+        for resource in ENGINEERING_BUILD_RESOURCES:
+            command.extend(("--resource", resource))
     component = "control plane" if dockerfile == "Dockerfile.production" else "decision gate"
     image_title = f"Serverware {component} {metadata['image_title_suffix']}"
     command.extend(source_build_arguments(metadata, image_title=image_title))
@@ -605,7 +621,14 @@ def main() -> None:
         action="store_true",
         help="Build an explicitly non-production image from dirty/untracked filesystem bytes.",
     )
+    parser.add_argument(
+        "--engineering-bounded-build",
+        action="store_true",
+        help="Require dirty-tree image mode; request fixed Linux per-step 8-CPU/24-GiB BuildKit limits.",
+    )
     args = parser.parse_args()
+    if args.engineering_bounded_build and not args.development_dirty_tree:
+        parser.error("--engineering-bounded-build requires --development-dirty-tree")
 
     guest_inputs = (args.shadow_custody_inputs, args.shadow_custody_inputs_sha256)
     if args.target == NATIVE_PILOT_TARGET:
@@ -616,6 +639,8 @@ def main() -> None:
 
     artifact_values = (args.dockerfile, args.target, args.output, args.network)
     if any(value is not None for value in artifact_values):
+        if args.engineering_bounded_build:
+            parser.error("--engineering-bounded-build is forbidden in artifact mode")
         if not all(value is not None for value in artifact_values):
             parser.error("--dockerfile, --target, --output, and --network are required together")
         if any((args.control_tag, args.decision_gate_tag, args.out, args.development_dirty_tree)):
@@ -689,6 +714,19 @@ def main() -> None:
         ("serverware-decision-gate", "data-plane/decision-gate-rs/Dockerfile.production", decision_gate_tag),
     ]
     metadata = build_metadata(development_dirty_tree=args.development_dirty_tree)
+    resource_profile: dict[str, Any] = {}
+    if args.engineering_bounded_build:
+        resource_profile = {
+            "build_resource_profile": {
+                "name": ENGINEERING_BOUNDED_BUILD_PROFILE,
+                "resources": list(ENGINEERING_BUILD_RESOURCES),
+                "scope": "per-linux-run-step",
+                "required_buildkit_capability": "exec.meta.linux.resources",
+                "aggregate_limit": False,
+                "image_builds_sequential": True,
+            }
+        }
+        metadata.update(resource_profile)
     if args.dry_run:
         placeholder_context = Path("/private/serverware-build-context")
         commands = [
@@ -702,6 +740,7 @@ def main() -> None:
                     platform=args.platform,
                     metadata=metadata,
                     context=placeholder_context,
+                    engineering_bounded_build=args.engineering_bounded_build,
                 ),
             }
             for service, dockerfile, tag in image_specs
@@ -737,6 +776,7 @@ def main() -> None:
                     platform=args.platform,
                     metadata=metadata,
                     context=context,
+                    engineering_bounded_build=args.engineering_bounded_build,
                 ),
             }
             for service, dockerfile, tag in image_specs
@@ -772,6 +812,11 @@ def main() -> None:
         "no_shell": no_shell,
         "publish_requirement": "publish these verified linux/amd64 image IDs unchanged, then set SERVERWARE_PRODUCTION_IMAGES to immutable @sha256 digest refs before live readiness",
     }
+    if args.engineering_bounded_build:
+        result["publish_requirement"] = (
+            "engineering-only images are not release eligible; independent dependency review/publication "
+            "and a separate clean-source production build/admission remain required"
+        )
     output_path = Path(output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")

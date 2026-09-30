@@ -50,7 +50,8 @@ in this local build report do not establish that admission by themselves.
 
 ## Operator commands
 
-Use a clean committed checkout. Dirty/untracked source has no override. Check
+For the full pilot commands below, use a clean committed checkout;
+dirty/untracked source has no override. Check
 the build filesystem and available space first, for example `findmnt -T` and
 `df -h` against the NVMe workspace. Keep bulk output off root-backed `/tmp`.
 Each output directory must be new, absolute, and under an existing non-symlink
@@ -101,6 +102,55 @@ partial build outputs survive a failure; their existence is not completion.
 The local image tags are source-specific conveniences; record and admit the
 actual image IDs/digests before any deployment. This manifest is unsigned build
 data, not a reproducibility proof or an artifact-admission signature.
+
+## Separate engineering-only image build resource profile
+
+The existing two-image dirty-tree builder has an explicit fixed resource
+selection. It does not apply to the full pilot command or any artifact export:
+
+```sh
+python3 -B scripts/build_production_images.py \
+  --development-dirty-tree --engineering-bounded-build \
+  --out /srv/catchplate-fast/tmp/engineering-images-build.json
+```
+
+`--engineering-bounded-build` requires `--development-dirty-tree` and refuses
+artifact mode. It adds exactly these options to both existing `docker build`
+commands; it exposes no arbitrary builder arguments:
+
+```text
+--resource memory=24g --resource memory-swap=24g
+--resource cpu-period=100000 --resource cpu-quota=800000
+```
+
+This requests 24 GiB memory and an equal total memory-plus-swap ceiling, with
+eight CPU equivalents, **per Linux RUN step**. A BuildKit daemon supporting
+`exec.meta.linux.resources` is required. These are not whole-build limits:
+BuildKit may execute steps concurrently, while cache/export and daemon work
+remain outside this per-step profile. Shared steps requested concurrently with
+different limits can receive the more permissive limits. See the
+[official Docker resource documentation](https://docs.docker.com/reference/cli/docker/buildx/build/#resource).
+Unsupported resource flags/capabilities must stop the build; do not remove the
+limits as an automatic fallback or create an ad-hoc privileged builder.
+
+The two image commands remain sequential. This preparation profile was selected
+for the 96-CPU host with roughly 268 GiB available memory at planning time;
+those observations are not reservations. Recheck current load, available memory
+and NVMe/Docker capacity before running it. No global Docker configuration,
+privileged entitlement or alternative architecture is introduced.
+
+The result's existing `metadata` object records
+`build_resource_profile.name=engineering-bounded-8cpu-24g-per-step/v1`, the exact
+resource arguments, required capability and non-aggregate scope. Source identity
+remains `development-dirty-tree`, with no authenticated source commit and all
+production-release eligibility false. Default production and artifact commands
+remain unchanged. The existing dependency-cache verification and private
+source-context copying still apply: this flag neither installs candidate pins
+nor publishes or approves an unpublished dependency snapshot. Separately
+authorized engineering staging may use proposed bytes in an isolated checkout;
+independent review/publication, reviewed-pin commitment and the clean-source
+production build/admission remain separate requirements. A successful local
+build is not live readiness or production acceptance.
 
 ## Live preparation remains with the genuine owners
 

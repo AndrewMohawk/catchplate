@@ -301,6 +301,11 @@ struct InstalledProductionSupervisor {
     assignment_revision: u64,
     supervisor: Arc<ProductionPolicyShadowCustodyRpcSupervisor>,
 }
+struct InstalledNativeSupervisor {
+    source:Sha256Digest,owner:Arc<super::services::NativeCustodyLifecycleOwner>,factory:Arc<super::native_remote_factory::Factory>,
+    assignment:Sha256Digest,supervisor:Arc<ProductionPolicyShadowCustodyRpcSupervisor>,
+}
+static INSTALLED_NATIVE_SUPERVISOR:OnceLock<Mutex<Option<InstalledNativeSupervisor>>>=OnceLock::new();
 
 static INSTALLED_PRODUCTION_SUPERVISOR:
     OnceLock<Mutex<Option<InstalledProductionSupervisor>>> =
@@ -339,6 +344,12 @@ struct RpcJob {
 struct BoundedCanonicalRpcClient {
     queue: SyncSender<RpcJob>,
 }
+#[derive(Clone)]
+struct NativeRpcGuard {factory:Arc<super::native_remote_factory::Factory>,trust:Arc<dyn EnvelopeKeyTrust+Send+Sync>,time:Arc<dyn TrustedTime+Send+Sync>}
+impl NativeRpcGuard {
+    fn check(&self,deadline:u64)->Result<(),ShadowError>{self.factory.check(self.trust.as_ref(),self.time.as_ref())?;
+        self.factory.require_deadline(deadline)?;Ok(())}
+}
 
 impl BoundedCanonicalRpcClient {
     fn connect(
@@ -356,13 +367,18 @@ impl BoundedCanonicalRpcClient {
                 .map_err(|_| ShadowError::CustodyUnavailable)?,
             );
         }
+        Self::from_sessions(sessions,usize::from(config.rpc_queue_depth),None)
+    }
+    fn from_sessions(sessions:Vec<AuthenticatedInheritedSeqpacket>,queue_depth:usize,native:Option<NativeRpcGuard>)->Result<Arc<Self>,ShadowError>{
+        if sessions.is_empty() || sessions.len()>64 || queue_depth<sessions.len() || queue_depth>256 {
+            return Err(ShadowError::CustodyUnavailable);
+        }
         let (queue, receiver) =
-            mpsc::sync_channel::<RpcJob>(usize::from(
-                config.rpc_queue_depth,
-            ));
+            mpsc::sync_channel::<RpcJob>(queue_depth);
         let receiver = Arc::new(Mutex::new(receiver));
         for (ordinal, session) in sessions.into_iter().enumerate() {
             let receiver = Arc::clone(&receiver);
+            let native=native.clone();
             thread::Builder::new()
                 .name(format!("policy-custody-rpc-{ordinal}"))
                 .spawn(move || loop {
@@ -373,11 +389,12 @@ impl BoundedCanonicalRpcClient {
                     let Ok(job) = job else {
                         return;
                     };
-                    let result = rpc_exchange(
-                        &session,
-                        &job.exact_request,
-                        job.deadline_boottime_nanos,
-                    );
+                    let result=(||{
+                        if let Some(guard)=&native{guard.check(job.deadline_boottime_nanos)?;}
+                        let result=rpc_exchange(&session,&job.exact_request,job.deadline_boottime_nanos)?;
+                        if let Some(guard)=&native{guard.check(job.deadline_boottime_nanos)?;}
+                        Ok(result)
+                    })();
                     let _ = job.completion.send(result);
                 })
                 .map_err(|_| ShadowError::CustodyUnavailable)?;
@@ -773,10 +790,38 @@ impl IngressPublicationState {
     }
 }
 
+enum ProcessAuthority {
+    Host(ProductionProcessConfigV4),
+    Native(Arc<super::native_remote_factory::Factory>),
+}
+struct RetainedProcessSettings {
+    authority:ProcessAuthority,kernel_driver_identity:ProductionCustodyKernelDriverIdentity,
+    driver_generation_receipt_sha256:Sha256Digest,worker_executable_sha256:Sha256Digest,
+    maximum_rpc_nanos:u64,maximum_in_flight_calls:u16,
+}
+impl RetainedProcessSettings {
+    fn host(value:ProductionProcessConfigV4)->Self {
+        Self{kernel_driver_identity:value.kernel_driver_identity.clone(),driver_generation_receipt_sha256:value.driver_generation_receipt_sha256.clone(),
+            worker_executable_sha256:value.execution_closure_manifest.worker_executable_sha256().clone(),
+            maximum_rpc_nanos:value.maximum_rpc_nanos,maximum_in_flight_calls:value.maximum_in_flight_calls,authority:ProcessAuthority::Host(value)}
+    }
+    fn native(owner:Arc<super::native_remote_factory::Factory>)->Self {
+        Self{kernel_driver_identity:owner.driver.clone(),driver_generation_receipt_sha256:owner.prior_admission_sha256.clone(),
+            worker_executable_sha256:owner.configuration.worker_executable_sha256().clone(),
+            maximum_rpc_nanos:owner.settings.maximum_rpc_nanos,maximum_in_flight_calls:owner.settings.maximum_in_flight_calls,
+            authority:ProcessAuthority::Native(owner)}
+    }
+    fn validate(&self,trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime)->Result<(),ShadowError>{
+        match &self.authority {ProcessAuthority::Host(value)=>value.validate(),ProcessAuthority::Native(owner)=>owner.check(trust,time)}
+    }
+    fn deadline(&self,value:u64)->Result<u64,ShadowError>{match &self.authority{
+        ProcessAuthority::Host(_)=>Ok(value),ProcessAuthority::Native(owner)=>owner.require_deadline(value)}}
+}
+
 struct RpcProductionPolicyShadowCustodyProcess {
     active_configuration: RwLock<ProductionCustodyConfiguration>,
     manifest: ProductionCustodyDispatchManifest,
-    process_config: ProductionProcessConfigV4,
+    process_config: RetainedProcessSettings,
     rpc: Arc<BoundedCanonicalRpcClient>,
     key_trust: Arc<dyn EnvelopeKeyTrust + Send + Sync>,
     trusted_time: Arc<dyn TrustedTime + Send + Sync>,
@@ -790,10 +835,10 @@ struct RpcProductionPolicyShadowCustodyProcess {
 
 impl RpcProductionPolicyShadowCustodyProcess {
     fn deadline(&self) -> Result<u64, ShadowError> {
-        super::boottime::boottime_now_nanos()
+        self.process_config.deadline(super::boottime::boottime_now_nanos()
             .map_err(|_| ShadowError::CustodyUnavailable)?
             .checked_add(self.process_config.maximum_rpc_nanos)
-            .ok_or(ShadowError::CounterOverflow)
+            .ok_or(ShadowError::CounterOverflow)?)
     }
 
     fn call_body(
@@ -802,6 +847,8 @@ impl RpcProductionPolicyShadowCustodyProcess {
         replay_id_sha256: Sha256Digest,
         deadline_boottime_nanos: u64,
     ) -> Result<ProductionRpcResponseBodyV4, ShadowError> {
+        self.process_config.validate(self.key_trust.as_ref(),self.trusted_time.as_ref())?;
+        self.process_config.deadline(deadline_boottime_nanos)?;
         if self.generation_ambiguous.load(Ordering::Acquire)
             && !matches!(request, ProductionRpcRequestBodyV4::Generation(_))
         {
@@ -907,10 +954,10 @@ impl RpcProductionPolicyShadowCustodyProcess {
             .maximum_rpc_nanos
             .checked_mul(2)
             .ok_or(ShadowError::CounterOverflow)?;
-        super::boottime::boottime_now_nanos()
+        self.process_config.deadline(super::boottime::boottime_now_nanos()
             .map_err(|_| ShadowError::CustodyUnavailable)?
             .checked_add(window)
-            .ok_or(ShadowError::CounterOverflow)
+            .ok_or(ShadowError::CounterOverflow)?)
     }
 
     fn generation_transition_id(
@@ -1865,10 +1912,7 @@ impl RpcProductionPolicyShadowCustodyProcess {
             || termination.termination_fence_sha256
                 != *permit.termination_fence_sha256()
             || termination.worker_executable_sha256
-                != *self
-                    .process_config
-                    .execution_closure_manifest
-                    .worker_executable_sha256()
+                != self.process_config.worker_executable_sha256
             || termination.kernel_driver_identity_sha256
                 != *self
                     .process_config
@@ -2323,7 +2367,7 @@ impl ProductionPolicyShadowCustodyProcess
         &self,
         configuration: &ProductionCustodyConfiguration,
     ) -> Result<(), ShadowError> {
-        self.process_config.validate()?;
+        self.process_config.validate(self.key_trust.as_ref(),self.trusted_time.as_ref())?;
         let mut prepared = self
             .prepared_generations
             .lock()
@@ -2794,6 +2838,9 @@ pub(super) fn install_retained_generation(
     let mut installed = installed
         .lock()
         .map_err(|_| ShadowError::CustodyUnavailable)?;
+    if INSTALLED_NATIVE_SUPERVISOR.get_or_init(||Mutex::new(None)).lock().map_err(|_|ShadowError::CustodyUnavailable)?.is_some(){
+        return Err(ShadowError::CustodyUnavailable);
+    }
     if let Some(current) = installed.as_mut() {
         if current.source_config_sha256 != expected_config_sha256
             || current.process_config.api_version
@@ -2835,7 +2882,7 @@ pub(super) fn install_retained_generation(
     let process = Arc::new(RpcProductionPolicyShadowCustodyProcess {
         active_configuration: RwLock::new(configuration.clone()),
         manifest,
-        process_config: process_config.clone(),
+        process_config: RetainedProcessSettings::host(process_config.clone()),
         rpc: Arc::clone(&rpc),
         key_trust: Arc::clone(&key_trust),
         trusted_time: Arc::clone(&trusted_time),
@@ -2882,6 +2929,46 @@ pub(crate) fn install_policy_shadow_custody_generation_from_retained_file(
         key_trust,
         trusted_time,
     )
+}
+
+/// Explicit native receiver/v3 only. Sessions and originals come from the same
+/// actual root-admitted owner, never from a serialized bridge Arc or host DTO.
+pub(crate) fn install_native_custody_generation_from_retained_owner(
+    owner:Arc<super::services::NativeCustodyLifecycleOwner>,source:Sha256Digest,assignment:VerifiedAssignment,
+    key_trust:Arc<dyn EnvelopeKeyTrust+Send+Sync>,trusted_time:Arc<dyn TrustedTime+Send+Sync>)
+    ->Result<Arc<ProductionPolicyShadowCustodyRpcSupervisor>,ShadowError>{
+    owner.check(&source).map_err(|_|ShadowError::CustodyUnavailable)?;
+    let host=INSTALLED_PRODUCTION_SUPERVISOR.get_or_init(||Mutex::new(None)).lock().map_err(|_|ShadowError::CustodyUnavailable)?;
+    if host.is_some(){return Err(ShadowError::CustodyUnavailable);}
+    let mut installed=INSTALLED_NATIVE_SUPERVISOR.get_or_init(||Mutex::new(None)).lock().map_err(|_|ShadowError::CustodyUnavailable)?;
+    if let Some(current)=installed.as_ref(){
+        if current.source!=source || !Arc::ptr_eq(&current.owner,&owner) || &current.assignment!=assignment.payload_sha256(){
+            return Err(ShadowError::BindingDrift);
+        }
+        current.factory.check(key_trust.as_ref(),trusted_time.as_ref())?;return Ok(Arc::clone(&current.supervisor));
+    }
+    let factory=Arc::new(super::native_remote_factory::Factory::open(&owner,&source,assignment.clone(),key_trust.as_ref(),trusted_time.as_ref())?);
+    if factory.settings.dispatcher_protocol_set_sha256!=production_dispatch_protocol_set_sha256().map_err(|_|ShadowError::BindingDrift)?{
+        return Err(ShadowError::BindingDrift);
+    }
+    let sessions=factory.take_sessions()?;
+    if sessions.len()!=4{return Err(ShadowError::CustodyUnavailable);}
+    let rpc=BoundedCanonicalRpcClient::from_sessions(sessions,32,Some(NativeRpcGuard{factory:Arc::clone(&factory),
+        trust:Arc::clone(&key_trust),time:Arc::clone(&trusted_time)}))?;
+    let generation_ambiguous=Arc::new(AtomicBool::new(false));
+    let process=Arc::new(RpcProductionPolicyShadowCustodyProcess{
+        active_configuration:RwLock::new(factory.configuration.clone()),manifest:factory.manifest.clone(),
+        process_config:RetainedProcessSettings::native(Arc::clone(&factory)),rpc:Arc::clone(&rpc),
+        key_trust:Arc::clone(&key_trust),trusted_time:Arc::clone(&trusted_time),
+        persistence_verifier:RpcPersistenceVerifier{rpc,maximum_rpc_nanos:factory.settings.maximum_rpc_nanos,
+            generation_ambiguous:Arc::clone(&generation_ambiguous)},
+        sealed_references:Mutex::new(BTreeMap::new()),prepared_generations:Mutex::new(Vec::new()),
+        ingress_publication:Mutex::new(IngressPublicationState::default()),generation_ambiguous});
+    // This invokes the same real generation recovery/prepare/commit authorities;
+    // constructed admission is not substituted for their actual signed result.
+    let supervisor=ProductionPolicyShadowCustodyRpcSupervisor::install(factory.configuration.clone(),process,key_trust,trusted_time)?;
+    *installed=Some(InstalledNativeSupervisor{source,owner,factory,assignment:assignment.payload_sha256().clone(),supervisor:Arc::clone(&supervisor)});
+    Ok(supervisor)
 }
 
 pub(crate) fn run_policy_shadow_custody_server_from_env(

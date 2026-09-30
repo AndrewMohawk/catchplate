@@ -121,4 +121,12 @@ impl Inspector {
         let (file,notice)=self.public.as_ref().ok_or(ShadowError::BindingDrift)?;
         Ok((notice.clone(),retrieval_peer::duplicate(file.as_fd())?))
     }
+    pub(super) fn constructed_public(&self)->Result<(Vec<u8>,Vec<u8>,OwnedFd),ShadowError>{
+        self.check()?;require(self.peers.len()==4)?;
+        for peer in &self.peers{peer.session.revalidate_peer().map_err(fail)?;}
+        let (file,notice)=self.public.as_ref().ok_or(ShadowError::BindingDrift)?;
+        let parsed:wire::AdmissionNotice=exact(notice)?;
+        let raw=wire::read_public(file,&parsed,self.source.uid,self.source.gid)?;
+        Ok((notice.clone(),raw,retrieval_peer::duplicate(file.as_fd())?))
+    }
 }

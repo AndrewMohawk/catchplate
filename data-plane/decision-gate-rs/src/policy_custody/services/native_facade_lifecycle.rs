@@ -8,6 +8,7 @@ use std::os::fd::{AsFd,AsRawFd,FromRawFd,OwnedFd};
 use std::os::unix::fs::MetadataExt;
 use std::sync::{Arc,Mutex};
 #[path="native_facade_receiver.rs"] pub(super) mod facade;
+#[path="native_constructed_driver.rs"] pub(super) mod constructed;
 
 const API:&str="serverware.nativeShadowCustodyLifecycleReceiver/v1";
 fn refused<T>(_:T)->String{"native custody lifecycle ownership is unavailable".into()}
@@ -45,7 +46,8 @@ impl Channel {
     fn exchange_rights(&mut self,operation:&str,deadline:u64,socket:Option<std::os::fd::BorrowedFd<'_>>)
         ->Result<(Vec<u8>,Vec<OwnedFd>),String>{
         self.live(deadline)?;
-        require(socket.is_none() || self.configuration.api_version=="serverware.nativeShadowCustodyLifecycleReceiver/v2")?;
+        require(socket.is_none() || matches!(self.configuration.api_version.as_str(),
+            "serverware.nativeShadowCustodyLifecycleReceiver/v2"|"serverware.nativeShadowCustodyLifecycleReceiver/v3"))?;
         let sequence=self.sequence.checked_add(1).ok_or_else(||refused(()))?;
         let request=wire::Request{api_version:wire::API.into(),operation:operation.into(),sequence,
             configuration_sha256:self.configuration.driver_configuration_sha256.clone(),
@@ -102,11 +104,11 @@ impl Prepared {
         require(raw.len()==m.len() as usize && Sha256Digest::compute(&raw)==*expected)?;
         let selected:serde_json::Value=serde_json::from_slice(&raw).map_err(refused)?;
         if !matches!(selected.get("apiVersion").and_then(serde_json::Value::as_str),
-            Some(API)|Some("serverware.nativeShadowCustodyLifecycleReceiver/v2")){return Ok(None);}
+            Some(API)|Some("serverware.nativeShadowCustodyLifecycleReceiver/v2")|Some("serverware.nativeShadowCustodyLifecycleReceiver/v3")){return Ok(None);}
         let configuration:Configuration=exact(&raw)?;
         let startup=ns(&configuration.startup_deadline_boottime_ns)?;
         let original_lifetime=ns(&configuration.lifetime_deadline_boottime_ns)?;
-        require(matches!(configuration.api_version.as_str(),API|"serverware.nativeShadowCustodyLifecycleReceiver/v2")
+        require(matches!(configuration.api_version.as_str(),API|"serverware.nativeShadowCustodyLifecycleReceiver/v2"|"serverware.nativeShadowCustodyLifecycleReceiver/v3")
             && now()?<startup && startup<=root.deadline()
             && configuration.cleanup_reserve_nanos>=1_000_000 && configuration.cleanup_reserve_nanos<=5_000_000_000)?;
         let lifetime=original_lifetime.checked_sub(configuration.cleanup_reserve_nanos).ok_or_else(||refused(()))?;
@@ -145,7 +147,8 @@ impl Prepared {
             && bound.uid==native_serving_privileges::UID && bound.gid==native_serving_privileges::GID
             && ns(&bound.observed_at_boottime_ns)?<=now()?)?;
         serving.check()?;
-        let selected=self.channel.configuration.api_version=="serverware.nativeShadowCustodyLifecycleReceiver/v2";
+        let selected=matches!(self.channel.configuration.api_version.as_str(),
+            "serverware.nativeShadowCustodyLifecycleReceiver/v2"|"serverware.nativeShadowCustodyLifecycleReceiver/v3");
         let owner=Arc::new(Owner{channel:Mutex::new(self.channel),serving,source_sha256:self.source_sha256,
             bound_original:raw,facade:Mutex::new(None)});
         if selected {

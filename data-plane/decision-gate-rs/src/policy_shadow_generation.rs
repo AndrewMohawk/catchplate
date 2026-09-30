@@ -29,7 +29,8 @@ use super::policy_shadow::{
     WINDOW_CLOSURE_DOMAIN,
 };
 #[cfg(target_os = "linux")]
-use super::policy_shadow::install_policy_shadow_custody_generation_from_retained_file;
+use super::policy_shadow::{install_policy_shadow_custody_generation_from_retained_file,
+    install_native_custody_generation_from_retained_owner};
 use super::{
     bind_next_active_runtime_identity, bind_shadow_active_runtime_identity,
     current_snapshot, is_sha256_digest, load_shadow_snapshot_pair,
@@ -4042,7 +4043,10 @@ impl PolicyShadowGenerationControl {
                     let trusted_time_authority: Arc<
                         dyn TrustedTime + Send + Sync,
                     > = trusted_time.clone();
-                    let installed =
+                    let installed = if let Some(owner)=&self.native_custody_lifecycle {
+                        install_native_custody_generation_from_retained_owner(Arc::clone(owner),
+                            self.custody_config.content_sha256().clone(),assignment.clone(),key_trust,trusted_time_authority)
+                    }else{
                         install_policy_shadow_custody_generation_from_retained_file(
                             self.custody_config
                                 .retained_file()
@@ -4051,7 +4055,7 @@ impl PolicyShadowGenerationControl {
                             assignment.clone(),
                             key_trust,
                             trusted_time_authority,
-                        )
+                        )}
                         .map_err(|error| {
                             GenerationInstallError::unavailable(
                                 error.to_string(),

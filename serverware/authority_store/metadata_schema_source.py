@@ -6,6 +6,25 @@ from serverware.authority_store.v9_schema_source import authority_v9_schema_sour
 
 def metadata_base_schema_source() -> str:
     return """
+            CREATE TABLE IF NOT EXISTS setup_native_final_attempts (
+                session_id TEXT PRIMARY KEY, revision BIGINT NOT NULL, phase TEXT NOT NULL,
+                owner_id TEXT NOT NULL, reviewer_id TEXT, reviewer_credential_id TEXT, review_trust_original TEXT,
+                hardware_original TEXT NOT NULL, challenge_original TEXT NOT NULL, challenge_sha256 TEXT NOT NULL UNIQUE,
+                receipt_original TEXT, prepare_request_digest TEXT NOT NULL UNIQUE, prepare_audit_id TEXT NOT NULL UNIQUE,
+                complete_request_digest TEXT UNIQUE, complete_audit_id TEXT UNIQUE, settle_request_digest TEXT UNIQUE,
+                configuration_digest TEXT NOT NULL, created_at TEXT NOT NULL, completed_at TEXT, settled_at TEXT,
+                CHECK (length(session_id)=36 AND length(owner_id) BETWEEN 1 AND 1024 AND length(prepare_audit_id)=36),
+                CHECK (length(hardware_original) BETWEEN 2 AND 4194304 AND length(challenge_original) BETWEEN 2 AND 8192),
+                CHECK (length(challenge_sha256)=71 AND length(prepare_request_digest)=71 AND length(configuration_digest)=71),
+                CHECK (receipt_original IS NULL OR length(receipt_original) BETWEEN 2 AND 16384),
+                CHECK (review_trust_original IS NULL OR length(review_trust_original) BETWEEN 2 AND 4096),
+                CHECK ((revision=0 AND phase='final_outcome_unknown' AND reviewer_id IS NULL AND reviewer_credential_id IS NULL
+                    AND review_trust_original IS NULL AND receipt_original IS NULL AND complete_request_digest IS NULL AND complete_audit_id IS NULL AND completed_at IS NULL)
+                    OR (revision IN (1,2) AND reviewer_id IS NOT NULL AND reviewer_id<>owner_id AND length(reviewer_credential_id)=36
+                    AND review_trust_original IS NOT NULL AND receipt_original IS NOT NULL AND length(complete_request_digest)=71 AND length(complete_audit_id)=36 AND completed_at IS NOT NULL)),
+                CHECK ((revision=0 OR revision=1 AND phase='native_completion_pending_audit') AND settle_request_digest IS NULL AND settled_at IS NULL
+                    OR revision=2 AND phase='native_scoped_complete' AND length(settle_request_digest)=71 AND settled_at IS NOT NULL)
+            );
             CREATE TABLE IF NOT EXISTS setup_native_hardware_attempts (
                 session_id TEXT PRIMARY KEY, revision BIGINT NOT NULL, phase TEXT NOT NULL, owner_id TEXT NOT NULL,
                 inputs_original TEXT NOT NULL, attempt_original TEXT NOT NULL, attempt_sha256 TEXT NOT NULL UNIQUE,

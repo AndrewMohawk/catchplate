@@ -1558,6 +1558,14 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/native_shadow_proof_cohort_control.py \
 	serverware/native_shadow_proof_cohort_cleanup.py \
 	serverware/native_shadow_driver_bootstrap.py \
+	serverware/native_shadow_constructed_driver.py \
+	serverware/authority_setup_native_final.py \
+	serverware/authority_setup_native_final_policy.py \
+	serverware/authority_transition_setup_native_final.py \
+	serverware/control_plane_setup_native_final.py \
+	serverware/native_setup_final_authority.py \
+	serverware/portal_setup_native_final.py \
+	scripts/issue_native_setup_final.py \
 	serverware/native_shadow_driver_inputs.py \
 	serverware/native_shadow_driver_outgoing.py \
 	serverware/native_policy_activation_inputs.py \
@@ -4183,6 +4191,14 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/native_shadow_proof_cohort_control.py \
 				serverware/native_shadow_proof_cohort_cleanup.py \
 				serverware/native_shadow_driver_bootstrap.py \
+				serverware/native_shadow_constructed_driver.py \
+				serverware/authority_setup_native_final.py \
+				serverware/authority_setup_native_final_policy.py \
+				serverware/authority_transition_setup_native_final.py \
+				serverware/control_plane_setup_native_final.py \
+				serverware/native_setup_final_authority.py \
+				serverware/portal_setup_native_final.py \
+				scripts/issue_native_setup_final.py \
 				serverware/native_shadow_driver_inputs.py \
 				serverware/native_shadow_driver_outgoing.py \
 				serverware/native_policy_activation_inputs.py \
@@ -4513,6 +4529,11 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/driver_bootstrap.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/driver_bootstrap_parent.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_facade_receiver.rs \
+				data-plane/decision-gate-rs/src/policy_custody/native_closure_remote.rs \
+				data-plane/decision-gate-rs/src/policy_custody/native_remote_factory.rs \
+				data-plane/decision-gate-rs/src/policy_custody/services/native_constructed_driver.rs \
+				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/admission_remote.rs \
+				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/driver_lifecycle_admission.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/driver_lifecycle_facade.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/driver_public_admission.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/driver_identity.rs \
@@ -4942,6 +4963,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-shadow-driver-continuation.v1.schema.json \
 				schemas/native-shadow-driver-lifecycle.v1.schema.json \
 				schemas/native-shadow-gate-facade.v1.schema.json \
+				schemas/native-shadow-receiving-factory.v1.schema.json \
+				schemas/setup-native-final.v1.schema.json \
 				schemas/setup-native-hardware.v1.schema.json \
 				schemas/native-shadow-driver-outgoing.v1.schema.json \
 				schemas/native-shadow-bridge-admission.v1.schema.json \

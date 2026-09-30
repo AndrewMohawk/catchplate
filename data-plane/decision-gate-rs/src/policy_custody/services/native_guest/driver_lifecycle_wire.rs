@@ -24,19 +24,111 @@ pub(in crate::policy_shadow::policy_custody::services) struct Gate {
 pub(in crate::policy_shadow::policy_custody::services::guest::native_guest) struct Configuration {
     pub(in crate::policy_shadow::policy_custody::services::guest::native_guest) api_version:String,
     pub(in crate::policy_shadow::policy_custody::services::guest::native_guest) gate:Gate,
-    pub(in crate::policy_shadow::policy_custody::services::guest::native_guest) cleanup_reserve_nanos:u64}
+    pub(in crate::policy_shadow::policy_custody::services::guest::native_guest) cleanup_reserve_nanos:u64,
+    #[serde(default,skip_serializing_if="Option::is_none")]
+    pub(in crate::policy_shadow::policy_custody::services::guest::native_guest) constructed_admission_authority:Option<ConstructedAuthority>}
 impl Configuration {
     pub(in crate::policy_shadow::policy_custody::services::guest::native_guest) fn facade_selected(&self)->bool{
-        self.api_version=="serverware.nativeShadowDriverLifecyclePolicy/v2"
+        matches!(self.api_version.as_str(),"serverware.nativeShadowDriverLifecyclePolicy/v2"|"serverware.nativeShadowDriverLifecyclePolicy/v3")
+    }
+    pub(in crate::policy_shadow::policy_custody::services::guest::native_guest) fn constructed_selected(&self)->bool{
+        self.api_version=="serverware.nativeShadowDriverLifecyclePolicy/v3"
     }
     pub(in crate::policy_shadow::policy_custody::services::guest::native_guest) fn validate(&self,startup:u64,lifetime:u64)->Result<(),ShadowError>{
-        require(matches!(self.api_version.as_str(),"serverware.nativeShadowDriverLifecyclePolicy/v1"|"serverware.nativeShadowDriverLifecyclePolicy/v2")
+        require(matches!(self.api_version.as_str(),"serverware.nativeShadowDriverLifecyclePolicy/v1"|"serverware.nativeShadowDriverLifecyclePolicy/v2"|"serverware.nativeShadowDriverLifecyclePolicy/v3")
+            && self.constructed_selected()==self.constructed_admission_authority.is_some()
             && self.gate.uid==serverware_decision_gate::native_serving_privileges::UID
             && self.gate.gid==serverware_decision_gate::native_serving_privileges::GID
             && self.gate.executable_sha256!=Sha256Digest::compute(&[])
             && self.cleanup_reserve_nanos>=1_000_000 && self.cleanup_reserve_nanos<=5_000_000_000
-            && startup<lifetime.checked_sub(self.cleanup_reserve_nanos).ok_or(ShadowError::BindingDrift)?)
+            && startup<lifetime.checked_sub(self.cleanup_reserve_nanos).ok_or(ShadowError::BindingDrift)?)?;
+        if let Some(authority)=&self.constructed_admission_authority{authority.key()?;}
+        Ok(())
     }
+}
+
+#[derive(Clone,Serialize,Deserialize)]
+#[serde(rename_all="camelCase",deny_unknown_fields)]
+pub(in crate::policy_shadow::policy_custody::services) struct ConstructedAuthority {
+    pub(in crate::policy_shadow::policy_custody::services) key_id:Sha256Digest,
+    pub(in crate::policy_shadow::policy_custody::services) key_spki_sha256:Sha256Digest,
+    pub(in crate::policy_shadow::policy_custody::services) key_material_sha256:Sha256Digest,
+    pub(in crate::policy_shadow::policy_custody::services) public_key_base64url:String,
+}
+impl ConstructedAuthority {
+    pub(in crate::policy_shadow::policy_custody::services) fn key(&self)->Result<ed25519_dalek::VerifyingKey,ShadowError>{
+        use base64::Engine;
+        let raw=base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(&self.public_key_base64url).map_err(fail)?;
+        require(raw.len()==32 && base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&raw)==self.public_key_base64url)?;
+        let bytes:[u8;32]=raw.try_into().map_err(fail)?;
+        let key=ed25519_dalek::VerifyingKey::from_bytes(&bytes).map_err(fail)?;
+        let mut spki=vec![0x30,0x2a,0x30,0x05,0x06,0x03,0x2b,0x65,0x70,0x03,0x21,0x00];spki.extend_from_slice(&bytes);
+        require(self.key_id!=Sha256Digest::compute(&[]) && self.key_spki_sha256==Sha256Digest::compute(&spki)
+            && self.key_material_sha256==ed25519_public_key_material_sha256(&key))?;Ok(key)
+    }
+}
+
+pub(in crate::policy_shadow::policy_custody::services) const CONSTRUCTED_DOMAIN:&str=
+    "serverware.nativeShadowConstructedDriverAdmission.signature/v1";
+#[derive(Clone,Serialize,Deserialize)]
+#[serde(rename_all="camelCase",deny_unknown_fields)]
+pub(in crate::policy_shadow::policy_custody::services) struct ConstructedPayload {
+    pub(in crate::policy_shadow::policy_custody::services) api_version:String,
+    pub(in crate::policy_shadow::policy_custody::services) purpose:String,
+    pub(in crate::policy_shadow::policy_custody::services) configuration_sha256:Sha256Digest,
+    pub(in crate::policy_shadow::policy_custody::services) window_sha256:Sha256Digest,
+    pub(in crate::policy_shadow::policy_custody::services) bootstrap_observation_sha256:Sha256Digest,
+    pub(in crate::policy_shadow::policy_custody::services) phase_scope_sha256:Sha256Digest,
+    pub(in crate::policy_shadow::policy_custody::services) census_sha256:Sha256Digest,
+    pub(in crate::policy_shadow::policy_custody::services) public_admission_sha256:Sha256Digest,
+    pub(in crate::policy_shadow::policy_custody::services) bootstrap_admission_sha256:Sha256Digest,
+    pub(in crate::policy_shadow::policy_custody::services) kernel_driver_identity_sha256:Sha256Digest,
+    pub(in crate::policy_shadow::policy_custody::services) production_configuration_binding_sha256:Sha256Digest,
+    pub(in crate::policy_shadow::policy_custody::services) assignment_id:Sha256Digest,
+    pub(in crate::policy_shadow::policy_custody::services) assignment_payload_sha256:Sha256Digest,
+    pub(in crate::policy_shadow::policy_custody::services) assignment_revision:u64,
+    pub(in crate::policy_shadow::policy_custody::services) trust_checkpoint_id:Sha256Digest,
+    pub(in crate::policy_shadow::policy_custody::services) revocation_generation:u64,
+    pub(in crate::policy_shadow::policy_custody::services) revocation_root_sha256:Sha256Digest,
+    pub(in crate::policy_shadow::policy_custody::services) issued_at_unix_nanos:i64,
+    pub(in crate::policy_shadow::policy_custody::services) expires_at_unix_nanos:i64,
+    pub(in crate::policy_shadow::policy_custody::services) startup_deadline_boottime_ns:String,
+    pub(in crate::policy_shadow::policy_custody::services) lifetime_deadline_boottime_ns:String,
+    pub(in crate::policy_shadow::policy_custody::services) signing_key_id:Sha256Digest,
+    pub(in crate::policy_shadow::policy_custody::services) signing_key_spki_sha256:Sha256Digest,
+}
+#[derive(Clone,Serialize,Deserialize)]
+#[serde(rename_all="camelCase",deny_unknown_fields)]
+pub(in crate::policy_shadow::policy_custody::services) struct ConstructedAdmission {
+    pub(in crate::policy_shadow::policy_custody::services) bootstrap_admission_original:String,
+    pub(in crate::policy_shadow::policy_custody::services) payload:ConstructedPayload,
+    pub(in crate::policy_shadow::policy_custody::services) signature:CanonicalEd25519Signature,
+}
+pub(in crate::policy_shadow::policy_custody::services) const BOOTSTRAP_ADMISSION_DOMAIN:&str=
+    "serverware.nativeShadowBootstrapDriverAdmission.signature/v1";
+#[derive(Clone,Serialize,Deserialize)]
+#[serde(rename_all="camelCase",deny_unknown_fields)]
+pub(in crate::policy_shadow::policy_custody::services) struct BootstrapAdmissionPayload {
+    pub(in crate::policy_shadow::policy_custody::services) api_version:String,
+    pub(in crate::policy_shadow::policy_custody::services) purpose:String,
+    pub(in crate::policy_shadow::policy_custody::services) configuration_sha256:Sha256Digest,
+    pub(in crate::policy_shadow::policy_custody::services) window_sha256:Sha256Digest,
+    pub(in crate::policy_shadow::policy_custody::services) bootstrap_observation_original:String,
+    pub(in crate::policy_shadow::policy_custody::services) parent:ProcessOriginal,
+    pub(in crate::policy_shadow::policy_custody::services) parent_executable_sha256:Sha256Digest,
+    pub(in crate::policy_shadow::policy_custody::services) pid_namespace_sha256:Sha256Digest,
+    pub(in crate::policy_shadow::policy_custody::services) issued_at_unix_nanos:i64,
+    pub(in crate::policy_shadow::policy_custody::services) expires_at_unix_nanos:i64,
+    pub(in crate::policy_shadow::policy_custody::services) startup_deadline_boottime_ns:String,
+    pub(in crate::policy_shadow::policy_custody::services) lifetime_deadline_boottime_ns:String,
+    pub(in crate::policy_shadow::policy_custody::services) signing_key_id:Sha256Digest,
+    pub(in crate::policy_shadow::policy_custody::services) signing_key_spki_sha256:Sha256Digest,
+}
+#[derive(Clone,Serialize,Deserialize)]
+#[serde(rename_all="camelCase",deny_unknown_fields)]
+pub(in crate::policy_shadow::policy_custody::services) struct BootstrapAdmission {
+    pub(in crate::policy_shadow::policy_custody::services) payload:BootstrapAdmissionPayload,
+    pub(in crate::policy_shadow::policy_custody::services) signature:CanonicalEd25519Signature,
 }
 
 /// Public originals are data, not a configuration owner or a ready verdict.

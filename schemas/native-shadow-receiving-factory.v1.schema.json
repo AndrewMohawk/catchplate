@@ -1,0 +1,464 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-shadow-receiving-factory.v1.schema.json",
+  "$ref": "#/$defs/receiver",
+  "description": "Explicit native receiving factory. Complete signed originals and retained same-parent/four-session ownership are mandatory; no host promotion, generation-success shortcut or reaper settlement.",
+  "$defs": {
+    "sha": {
+      "$ref": "native-shadow-driver-bootstrap.v1.schema.json#/$defs/sha"
+    },
+    "ns": {
+      "$ref": "native-shadow-driver-bootstrap.v1.schema.json#/$defs/ns"
+    },
+    "authority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "keyId",
+        "keySpkiSha256",
+        "keyMaterialSha256",
+        "publicKeyBase64url"
+      ],
+      "properties": {
+        "keyId": {
+          "$ref": "#/$defs/sha"
+        },
+        "keySpkiSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "keyMaterialSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "publicKeyBase64url": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{43}$"
+        }
+      }
+    },
+    "policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "gate",
+        "cleanupReserveNanos",
+        "constructedAdmissionAuthority"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeShadowDriverLifecyclePolicy/v3"
+        },
+        "gate": {
+          "$ref": "native-shadow-driver-lifecycle.v1.schema.json#/$defs/gate"
+        },
+        "cleanupReserveNanos": {
+          "type": "integer",
+          "minimum": 1000000,
+          "maximum": 5000000000
+        },
+        "constructedAdmissionAuthority": {
+          "$ref": "#/$defs/authority"
+        }
+      }
+    },
+    "bootstrapConfiguration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "bootstrapAuthority",
+        "phaseTwoAuthority",
+        "deliveryConfiguration",
+        "uid",
+        "gid",
+        "image",
+        "continuation",
+        "lifecycle"
+      ],
+      "properties": {
+        "apiVersion": {
+          "$ref": "native-shadow-gate-facade.v1.schema.json#/$defs/bootstrapConfiguration/properties/apiVersion"
+        },
+        "bootstrapAuthority": {
+          "$ref": "native-shadow-gate-facade.v1.schema.json#/$defs/bootstrapConfiguration/properties/bootstrapAuthority"
+        },
+        "phaseTwoAuthority": {
+          "$ref": "native-shadow-gate-facade.v1.schema.json#/$defs/bootstrapConfiguration/properties/phaseTwoAuthority"
+        },
+        "deliveryConfiguration": {
+          "$ref": "native-shadow-gate-facade.v1.schema.json#/$defs/bootstrapConfiguration/properties/deliveryConfiguration"
+        },
+        "uid": {
+          "$ref": "native-shadow-gate-facade.v1.schema.json#/$defs/bootstrapConfiguration/properties/uid"
+        },
+        "gid": {
+          "$ref": "native-shadow-gate-facade.v1.schema.json#/$defs/bootstrapConfiguration/properties/gid"
+        },
+        "image": {
+          "$ref": "native-shadow-gate-facade.v1.schema.json#/$defs/bootstrapConfiguration/properties/image"
+        },
+        "continuation": {
+          "$ref": "native-shadow-gate-facade.v1.schema.json#/$defs/bootstrapConfiguration/properties/continuation"
+        },
+        "lifecycle": {
+          "$ref": "#/$defs/policy"
+        }
+      }
+    },
+    "receiver": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "parentPeer",
+        "driverConfigurationSha256",
+        "driverWindowSha256",
+        "bootstrapObservationSha256",
+        "startupDeadlineBoottimeNs",
+        "lifetimeDeadlineBoottimeNs",
+        "cleanupReserveNanos"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeShadowCustodyLifecycleReceiver/v3"
+        },
+        "parentPeer": {
+          "$ref": "native-shadow-driver-lifecycle.v1.schema.json#/$defs/receiver/properties/parentPeer"
+        },
+        "driverConfigurationSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "driverWindowSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "bootstrapObservationSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "startupDeadlineBoottimeNs": {
+          "$ref": "#/$defs/ns"
+        },
+        "lifetimeDeadlineBoottimeNs": {
+          "$ref": "#/$defs/ns"
+        },
+        "cleanupReserveNanos": {
+          "type": "integer",
+          "minimum": 1000000,
+          "maximum": 5000000000
+        }
+      }
+    },
+    "bootstrapPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "purpose",
+        "configurationSha256",
+        "windowSha256",
+        "bootstrapObservationOriginal",
+        "parent",
+        "parentExecutableSha256",
+        "pidNamespaceSha256",
+        "issuedAtUnixNanos",
+        "expiresAtUnixNanos",
+        "startupDeadlineBoottimeNs",
+        "lifetimeDeadlineBoottimeNs",
+        "signingKeyId",
+        "signingKeySpkiSha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeShadowBootstrapDriverAdmission/v1"
+        },
+        "purpose": {
+          "const": "native-driver-bootstrap-admission"
+        },
+        "configurationSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "windowSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "bootstrapObservationOriginal": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 65536
+        },
+        "parent": {
+          "$ref": "native-shadow-driver-lifecycle.v1.schema.json#/$defs/process"
+        },
+        "parentExecutableSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "pidNamespaceSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "issuedAtUnixNanos": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9223372036854776000
+        },
+        "expiresAtUnixNanos": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9223372036854776000
+        },
+        "startupDeadlineBoottimeNs": {
+          "$ref": "#/$defs/ns"
+        },
+        "lifetimeDeadlineBoottimeNs": {
+          "$ref": "#/$defs/ns"
+        },
+        "signingKeyId": {
+          "$ref": "#/$defs/sha"
+        },
+        "signingKeySpkiSha256": {
+          "$ref": "#/$defs/sha"
+        }
+      }
+    },
+    "bootstrapAdmission": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "payload",
+        "signature"
+      ],
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/bootstrapPayload"
+        },
+        "signature": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{86}$"
+        }
+      },
+      "description": "Canonical ASCII <=8192 bytes. Signature domain serverware.nativeShadowBootstrapDriverAdmission.signature/v1 using existing signedEnvelope preimage. Actual phase-one driver and same live parent only; not installed generation. Epoch validity <=30 seconds and original BOOTTIME window unchanged."
+    },
+    "constructedPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "purpose",
+        "configurationSha256",
+        "windowSha256",
+        "bootstrapObservationSha256",
+        "phaseScopeSha256",
+        "censusSha256",
+        "publicAdmissionSha256",
+        "bootstrapAdmissionSha256",
+        "kernelDriverIdentitySha256",
+        "productionConfigurationBindingSha256",
+        "assignmentId",
+        "assignmentPayloadSha256",
+        "assignmentRevision",
+        "trustCheckpointId",
+        "revocationGeneration",
+        "revocationRootSha256",
+        "issuedAtUnixNanos",
+        "expiresAtUnixNanos",
+        "startupDeadlineBoottimeNs",
+        "lifetimeDeadlineBoottimeNs",
+        "signingKeyId",
+        "signingKeySpkiSha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeShadowConstructedDriverAdmission/v1"
+        },
+        "purpose": {
+          "const": "constructed-native-driver-admission"
+        },
+        "configurationSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "windowSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "bootstrapObservationSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "phaseScopeSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "censusSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "publicAdmissionSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "bootstrapAdmissionSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "kernelDriverIdentitySha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "productionConfigurationBindingSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "assignmentId": {
+          "$ref": "#/$defs/sha"
+        },
+        "assignmentPayloadSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "assignmentRevision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709552000
+        },
+        "trustCheckpointId": {
+          "$ref": "#/$defs/sha"
+        },
+        "revocationGeneration": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709552000
+        },
+        "revocationRootSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "issuedAtUnixNanos": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9223372036854776000
+        },
+        "expiresAtUnixNanos": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9223372036854776000
+        },
+        "startupDeadlineBoottimeNs": {
+          "$ref": "#/$defs/ns"
+        },
+        "lifetimeDeadlineBoottimeNs": {
+          "$ref": "#/$defs/ns"
+        },
+        "signingKeyId": {
+          "$ref": "#/$defs/sha"
+        },
+        "signingKeySpkiSha256": {
+          "$ref": "#/$defs/sha"
+        }
+      }
+    },
+    "constructedAdmission": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "bootstrapAdmissionOriginal",
+        "payload",
+        "signature"
+      ],
+      "properties": {
+        "bootstrapAdmissionOriginal": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        },
+        "payload": {
+          "$ref": "#/$defs/constructedPayload"
+        },
+        "signature": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{86}$"
+        }
+      },
+      "description": "Canonical ASCII <=16384 bytes. Signature domain serverware.nativeShadowConstructedDriverAdmission.signature/v1. Full early-original hash plus actual complete constructed census and public-admission hash; expiry cannot exceed the early original or actual key authorization. Never a physical settlement or READY receipt."
+    },
+    "control": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "operation",
+        "original"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeShadowConstructedDriverControl/v1"
+        },
+        "operation": {
+          "enum": [
+            "export",
+            "admit"
+          ]
+        },
+        "original": {
+          "type": [
+            "null",
+            "string"
+          ],
+          "maxLength": 16384
+        }
+      }
+    },
+    "export": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "censusOriginal",
+        "publicAdmissionNoticeOriginal"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeShadowConstructedDriverExport/v1"
+        },
+        "censusOriginal": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 49152
+        },
+        "publicAdmissionNoticeOriginal": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        }
+      },
+      "description": "One actual retained parent response, <=65536 wire bytes, carrying exactly one SCM_RIGHTS sealed public-admission FD <=8MiB. No caller supplied process or descriptor data."
+    },
+    "retained": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "admissionSha256",
+        "censusSha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeShadowConstructedDriverRetained/v1"
+        },
+        "admissionSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "censusSha256": {
+          "$ref": "#/$defs/sha"
+        }
+      }
+    },
+    "live": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "admissionSha256",
+        "censusSha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeShadowConstructedDriverLive/v1"
+        },
+        "admissionSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "censusSha256": {
+          "$ref": "#/$defs/sha"
+        }
+      },
+      "description": "Authenticated observation only: rechecks retained exact descriptor population and descendant census; no retry, renewal, generation or cleanup authority."
+    }
+  }
+}

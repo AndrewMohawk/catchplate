@@ -12,6 +12,7 @@ pub(super) mod production_dispatch;
 pub(super) mod protocol;
 pub(super) mod receipt_arena;
 pub(super) mod services;
+pub(super) mod native_remote_factory;
 pub(super) mod terminal_settlement;
 pub(super) mod watchdog_recovery;
 
@@ -44,6 +45,7 @@ pub(crate) type PolicyCoreModeledReceiptArena =
 mod facade;
 
 pub(crate) use facade::{
+    install_native_custody_generation_from_retained_owner,
     install_policy_shadow_custody_generation_from_retained_file,
     run_policy_shadow_custody_server_from_env,
     PolicyShadowCustodyProcessClient,

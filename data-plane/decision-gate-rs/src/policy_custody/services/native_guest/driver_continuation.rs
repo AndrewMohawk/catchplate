@@ -79,8 +79,12 @@ impl Retained {
         let raw=canonical_json_bytes(&serde_json::json!({"apiVersion":"serverware.nativeShadowDriverBridgeConstructed/v1",
             "observationSha256":Sha256Digest::compute(&canonical_json_bytes(&self.observation)?),
             "scopeSha256":Sha256Digest::compute(self.phase.scope())}))?;
-        require(retrieval_peer::send(self.prepared.channel.as_fd(),&raw,&[])?)?;
-        timer.take();drop(timer);self.check()
+        // The genuine constructor has completed. Retire its timer before the
+        // parent can capture the announced stable operational FD population.
+        // The original lifetime timer remains owned; failed notice contact
+        // still terminates this one-shot continuation, without retry.
+        timer.take();drop(timer);self.check()?;
+        require(retrieval_peer::send(self.prepared.channel.as_fd(),&raw,&[])?)?;self.check()
     }
     pub(in crate::policy_shadow) fn check(&self)->Result<(),ShadowError>{
         self.prepared.cold.check_lifetime()?;self.phase.check()?;self.identity.check()?;

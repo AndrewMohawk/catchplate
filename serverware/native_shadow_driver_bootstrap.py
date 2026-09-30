@@ -68,6 +68,11 @@ class DriverBootstrap:
         self._gate_attempted = False
         self._cleanup_attempted = False
         self._subtree_terminal_original = None
+        self._constructed_admission_attempted = False
+        self._constructed_public_fd = None
+        self._constructed_admission_original = None
+        self._bootstrap_admission_original = None
+        self._admission_namespace_fd = None
 
     def _open(self, path, maximum, digest=None, mode=0o400):
         original = mechanics._Original(path, maximum, digest, mode)
@@ -97,13 +102,21 @@ class DriverBootstrap:
                 p.require(continuation["apiVersion"] == expected)
                 if config["apiVersion"] == "serverware.nativeShadowDriverBootstrapConfiguration/v4":
                     fields += ("lifecycle",)
-                    policy = p.fields(config["lifecycle"], ("apiVersion", "gate", "cleanupReserveNanos"))
+                    policy_fields = ("apiVersion", "gate", "cleanupReserveNanos")
+                    if config["lifecycle"].get("apiVersion") == "serverware.nativeShadowDriverLifecyclePolicy/v3":
+                        policy_fields += ("constructedAdmissionAuthority",)
+                    policy = p.fields(config["lifecycle"], policy_fields)
                     gate = p.fields(policy["gate"], ("uid", "gid", "executableSha256"))
                     p.require(policy["apiVersion"] in ("serverware.nativeShadowDriverLifecyclePolicy/v1",
-                        "serverware.nativeShadowDriverLifecyclePolicy/v2")
+                        "serverware.nativeShadowDriverLifecyclePolicy/v2", "serverware.nativeShadowDriverLifecyclePolicy/v3")
                         and p.integer(gate["uid"]) == 65534 and p.integer(gate["gid"]) == 65534
                         and 1_000_000 <= p.integer(policy["cleanupReserveNanos"]) <= 5_000_000_000)
                     p.digest(gate["executableSha256"])
+                    if "constructedAdmissionAuthority" in policy:
+                        from serverware.native_shadow_constructed_driver import authority
+                        authority(policy["constructedAdmissionAuthority"])
+                        p.require(policy["constructedAdmissionAuthority"]["publicKeyBase64url"] not in
+                            (config["bootstrapAuthority"]["publicKeyBase64url"], config["phaseTwoAuthority"]["publicKeyBase64url"]))
             else:
                 p.require(config.get("apiVersion") == "serverware.nativeShadowDriverBootstrapConfiguration/v1")
             owner._config = p.fields(config, fields)
@@ -211,6 +224,10 @@ class DriverBootstrap:
         if self._driver_pidfd is not None:
             p.require(not mechanics._terminal(self._driver_pidfd) and mechanics._pidfd_pid(self._driver_pidfd) == self._driver_pid
                 and mechanics._process(self._driver_pid) == (self._child_pid, self._driver_start))
+        if self._admission_namespace_fd is not None:
+            held = os.fstat(self._admission_namespace_fd)
+            actual = os.stat("/proc/" + str(self._child_pid) + "/ns/pid")
+            p.require((held.st_dev, held.st_ino) == (actual.st_dev, actual.st_ino))
         if self._operational_inputs is not None:
             self._operational_inputs.check()
         if self._gate_binding is not None:
@@ -220,13 +237,20 @@ class DriverBootstrap:
                 and mechanics._process(gate["gateProcessId"])[1] == gate["gateStartTimeTicks"])
 
     def _receive(self, maximum):
+        raw, rights = self._receive_rights(maximum, 0)
+        p.require(not rights)
+        return raw
+
+    def _receive_rights(self, maximum, expected_rights):
+        p.require(expected_rights in (0, 1))
         while True:
             self.check()
             remaining = self._startup - mechanics._clock(); p.require(remaining > 0)
             if select.select([self._socket], [], [], min(remaining / 1_000_000_000, 0.05))[0]:
                 break
-        raw, ancillary, flags, _ = self._socket.recvmsg(maximum, socket.CMSG_SPACE(12) + socket.CMSG_SPACE(4), socket.MSG_CMSG_CLOEXEC)
-        credentials, pidfds = [], []
+        raw, ancillary, flags, _ = self._socket.recvmsg(maximum, socket.CMSG_SPACE(12) + socket.CMSG_SPACE(4) * 2, socket.MSG_CMSG_CLOEXEC)
+        credentials, pidfds, rights = [], [], []
+        success = False
         try:
             for level, kind, value in ancillary:
                 p.require(level == socket.SOL_SOCKET)
@@ -236,19 +260,41 @@ class DriverBootstrap:
                     p.require(len(value) == 4); pidfds.append(struct.unpack("i", value)[0])
                 elif kind == socket.SCM_RIGHTS:
                     received = array.array("i"); received.frombytes(value)
-                    for fd in received:
-                        os.close(fd)
-                    raise ValueError("driver bootstrap reply must not carry descriptors")
+                    rights.extend(received)
                 else:
                     raise ValueError("unknown driver bootstrap ancillary data")
             p.require(raw and not flags & (socket.MSG_TRUNC | socket.MSG_CTRUNC)
                 and credentials == [(self._child_pid, 0, 0)] and len(pidfds) == 1
+                and len(rights) == expected_rights
                 and mechanics._pidfd_pid(pidfds[0]) == self._child_pid and not mechanics._terminal(pidfds[0]))
             self.check()
-            return raw
+            success = True
+            return raw, rights
         finally:
             for fd in pidfds:
                 os.close(fd)
+            if not success:
+                for fd in rights:
+                    os.close(fd)
+
+    def admit_constructed_driver(self, *, signing_key_fd):
+        """One actual census export/sign/retain operation; not generation install.
+
+        The independently provisioned supervisor seed is supplied by FD. This
+        owner supplies all measurement fields from the authenticated parent.
+        """
+        from serverware.native_shadow_constructed_driver import admit
+        return admit(self, signing_key_fd=signing_key_fd)
+
+    def admit_bootstrap_driver(self, *, signing_key_fd):
+        """Before grant authoring: sign the actual phase-one driver, not future FDs."""
+        from serverware.native_shadow_constructed_driver import admit_bootstrap
+        return admit_bootstrap(self, signing_key_fd=signing_key_fd)
+
+    def generation_manifest(self, *, assignment_original, production):
+        """Unsigned exact recipe for independently supplied generation grants."""
+        from serverware.native_shadow_constructed_driver import generation_manifest
+        return generation_manifest(self, assignment_original=assignment_original, production=production)
 
     def observation_original(self):
         self.check()
@@ -365,6 +411,19 @@ class DriverBootstrap:
             p.document(raw, 65536); p.require(p.sha(raw) == p.digest(digest))
         self._bundle = _sealed("native-shadow-driver-public-originals", public_originals, 0o400)
         self._operational_inputs = inputs  # retained through unknown and actual child cleanup
+        if self._config.get("lifecycle", {}).get("apiVersion") == "serverware.nativeShadowDriverLifecyclePolicy/v3":
+            p.require(self._bootstrap_admission_original is not None)
+            assignment_fd = inputs._descriptors["assignment"]
+            assignment_length = os.fstat(assignment_fd).st_size
+            p.require(0 < assignment_length <= 4 * 1024 * 1024)
+            recipe = self.generation_manifest(assignment_original=os.pread(assignment_fd, assignment_length + 1, 0),
+                production=p.document(inputs._operation, 65536)["production"])
+            for original in bundle["generationOriginals"].values():
+                granted_scope = p.document(original.encode("ascii"), 65536)["payload"]["scope"]
+                for name in ("dispatchManifestSha256", "driverGenerationReceiptSha256", "kernelDriverIdentitySha256",
+                        "retainedDescriptorSetSha256", "operationCoverageRootSha256"):
+                    p.require(granted_scope[name] == recipe[name])
+        self._phase_scope_original = bytes(signed_scope_original)
         self.check(); fds = inputs._begin(self)
         self._attempted = True
         count = self._socket.sendmsg([signed_scope_original], [(socket.SOL_SOCKET, socket.SCM_RIGHTS,
@@ -491,7 +550,7 @@ class DriverBootstrap:
         outgoing = getattr(self, "_outgoing_resources", None)
         if outgoing is not None:
             outgoing._close_after_driver_exit(self)
-        for fd in (self._driver_pidfd, self._pidfd, self._exec, self._bundle, self._gate_pidfd):
+        for fd in (self._driver_pidfd, self._pidfd, self._exec, self._bundle, self._gate_pidfd, self._constructed_public_fd, self._admission_namespace_fd):
             if fd is not None:
                 os.close(fd)
         for original in reversed(self._originals):

@@ -76,6 +76,10 @@ fn full_bindings(assignment:&VerifiedAssignment)->Result<BTreeMap<AuthorityRole,
 }
 fn verify(configuration:&NativeCustodyKeyConfiguration,assignment:&VerifiedAssignment,association:&GuestClosureAssociation,
     checkpoint:&AtomicTrustCheckpoint,trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime)->Result<(),ShadowError> {
+    verify_guest(configuration,assignment,&association.binding(),checkpoint,trust,time)
+}
+fn verify_guest(configuration:&NativeCustodyKeyConfiguration,assignment:&VerifiedAssignment,guest:&GuestClosureBinding,
+    checkpoint:&AtomicTrustCheckpoint,trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime)->Result<(),ShadowError> {
     let p=&configuration.authorization.payload;let a=assignment.payload();
     let domain=match (configuration.api_version.as_str(),p.api_version.as_str(),p.profile.as_str()) {
         ("serverware.nativeShadowRoleKeys/v1","serverware.nativeShadowRoleKeyAssignment/v1",PROFILE)=>ASSIGNMENT_DOMAIN,
@@ -86,7 +90,7 @@ fn verify(configuration:&NativeCustodyKeyConfiguration,assignment:&VerifiedAssig
     require(p.purpose=="shadow-role-key-possession" && p.assignment_id==a.assignment_id
         && &p.assignment_payload_sha256==assignment.payload_sha256() && p.assignment_revision==a.assignment_revision
         && p.execution_closure_manifest_sha256==a.custody_authority.execution_closure_manifest_sha256
-        && p.guest==association.binding() && (1..=16).contains(&p.local_roles.len())
+        && &p.guest==guest && (1..=16).contains(&p.local_roles.len())
         && p.local_roles.windows(2).all(|pair|pair[0]<pair[1]))?;
     require(matches!(&a.custody_authority.attestation_mode,CustodyAttestationMode::Tee {platform:TeePlatform::AwsNitroEnclave,..}))?;
     for role in &p.local_roles {credential(*role)?;}
@@ -174,8 +178,8 @@ impl PreparedNativeCustodyKeys {
     }
 }
 struct LocalKey {key:SigningKey,binding:ProductionCustodyKeyBinding,public:[u8;32]}
-#[derive(Clone,Serialize)]
-#[serde(rename_all="camelCase")]
+#[derive(Clone,Serialize,Deserialize)]
+#[serde(rename_all="camelCase",deny_unknown_fields)]
 struct PublicKey {role:AuthorityRole,key_id:Sha256Digest,key_spki_sha256:Sha256Digest,key_material_sha256:Sha256Digest,public_key_base64url:String}
 #[derive(Serialize)]
 #[serde(rename_all="camelCase")]
@@ -185,8 +189,8 @@ struct Statement {
     execution_closure_manifest_sha256:Sha256Digest,structurally_verified_seccomp_policy_sha256:Sha256Digest,worker_executable_sha256:Sha256Digest,
     full_key_set_root_sha256:Sha256Digest,local_key_set_root_sha256:Sha256Digest,local_keys:Vec<PublicKey>,challenge_base64url:String,
 }
-#[derive(Serialize)]
-#[serde(rename_all="camelCase")]
+#[derive(Serialize,Deserialize)]
+#[serde(rename_all="camelCase",deny_unknown_fields)]
 struct Possession {role:AuthorityRole,key_id:Sha256Digest,signature:CanonicalEd25519Signature}
 /// Only this actual owner constructs evidence. Serialized content is public
 /// and unverified; it is not a transferable local-custody success capability.

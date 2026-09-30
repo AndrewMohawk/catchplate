@@ -1,0 +1,554 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/setup-native-final.v1.schema.json",
+  "title": "Scoped native Setup final-authority authorization and protected consumption",
+  "description": "Application validators additionally enforce exact canonical ASCII originals, full cryptographic verification, time ordering, key separation, genuine current protected rows/audits, reviewer separation and one-shot CAS. Scope is not measured-host or proxy-ready authority.",
+  "$defs": {
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "id": {
+      "type": "string",
+      "format": "uuid",
+      "minLength": 36,
+      "maxLength": 36
+    },
+    "epoch": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9223372036854775807
+    },
+    "original": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 4194304,
+      "pattern": "^[\\u0000-\\u007f]+$"
+    },
+    "authorityPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "credentialPolicy",
+        "maximumChallengeNanos"
+      ],
+      "properties": {
+        "schema": {
+          "const": "serverware.setupNativeFinalAuthorityPolicy/v1"
+        },
+        "credentialPolicy": {
+          "type": "object"
+        },
+        "maximumChallengeNanos": {
+          "type": "integer",
+          "minimum": 1000000000,
+          "maximum": 300000000000
+        }
+      }
+    },
+    "challenge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "challengeId",
+        "sessionId",
+        "ownerId",
+        "hardwareSha256",
+        "policyHash",
+        "configurationSha256",
+        "nonce",
+        "issuedAtEpochNs",
+        "expiresAtEpochNs",
+        "resultScope",
+        "hostAssociationTrust"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.setupNativeFinalChallenge/v1"
+        },
+        "challengeId": {
+          "$ref": "#/$defs/id"
+        },
+        "sessionId": {
+          "$ref": "#/$defs/id"
+        },
+        "ownerId": {
+          "type": "string",
+          "pattern": "^oidc:",
+          "maxLength": 1024
+        },
+        "hardwareSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "policyHash": {
+          "$ref": "#/$defs/digest"
+        },
+        "configurationSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "nonce": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{43}$"
+        },
+        "issuedAtEpochNs": {
+          "$ref": "#/$defs/epoch"
+        },
+        "expiresAtEpochNs": {
+          "$ref": "#/$defs/epoch"
+        },
+        "resultScope": {
+          "const": "enclave-hardware-and-proxy-only"
+        },
+        "hostAssociationTrust": {
+          "const": "trusted-host-local"
+        }
+      }
+    },
+    "receiptPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "purpose",
+        "resultScope",
+        "hostAssociationTrust",
+        "challengeSha256",
+        "hardwareSha256",
+        "sessionId",
+        "nonceSha256",
+        "policyHash",
+        "configurationSha256",
+        "authorityKeyId",
+        "authorityProvider",
+        "issuedAtEpochNs",
+        "expiresAtEpochNs",
+        "measuredHost",
+        "proxyReady"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.setupNativeFinalReceipt/v1"
+        },
+        "purpose": {
+          "const": "native-setup-final-authorization"
+        },
+        "resultScope": {
+          "const": "enclave-hardware-and-proxy-only"
+        },
+        "hostAssociationTrust": {
+          "const": "trusted-host-local"
+        },
+        "challengeSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "hardwareSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "sessionId": {
+          "$ref": "#/$defs/id"
+        },
+        "nonceSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "policyHash": {
+          "$ref": "#/$defs/digest"
+        },
+        "configurationSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "authorityKeyId": {
+          "$ref": "#/$defs/digest"
+        },
+        "authorityProvider": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "issuedAtEpochNs": {
+          "$ref": "#/$defs/epoch"
+        },
+        "expiresAtEpochNs": {
+          "$ref": "#/$defs/epoch"
+        },
+        "measuredHost": {
+          "const": false
+        },
+        "proxyReady": {
+          "const": false
+        }
+      }
+    },
+    "receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "payload",
+        "signature"
+      ],
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/receiptPayload"
+        },
+        "signature": {
+          "type": "string",
+          "pattern": "^ed25519:[A-Za-z0-9_-]{86}$"
+        }
+      }
+    },
+    "issuerRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "actor_id",
+        "control_plane_configuration_digest",
+        "credential_policy",
+        "maximum_final_nanos",
+        "hardware_original",
+        "challenge_original"
+      ],
+      "properties": {
+        "actor_id": {
+          "type": "string",
+          "pattern": "^oidc:",
+          "maxLength": 1024
+        },
+        "control_plane_configuration_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "credential_policy": {
+          "type": "object"
+        },
+        "maximum_final_nanos": {
+          "type": "integer",
+          "minimum": 1000000000,
+          "maximum": 300000000000
+        },
+        "hardware_original": {
+          "$ref": "#/$defs/original"
+        },
+        "challenge_original": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 8192,
+          "pattern": "^[\\u0000-\\u007f]+$"
+        }
+      }
+    },
+    "bundle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "challengeOriginal",
+        "issuerRequestOriginal",
+        "receiptOriginal"
+      ],
+      "properties": {
+        "challengeOriginal": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 8192,
+          "pattern": "^[\\u0000-\\u007f]+$"
+        },
+        "issuerRequestOriginal": {
+          "$ref": "#/$defs/original"
+        },
+        "receiptOriginal": {
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 2,
+              "maxLength": 16384,
+              "pattern": "^[\\u0000-\\u007f]+$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "public": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "revision",
+        "phase",
+        "owner_id",
+        "reviewer_id",
+        "challenge_sha256",
+        "prepare_request_digest",
+        "complete_request_digest",
+        "settle_request_digest"
+      ],
+      "properties": {
+        "revision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2
+        },
+        "phase": {
+          "enum": [
+            "final_outcome_unknown",
+            "native_completion_pending_audit",
+            "native_scoped_complete"
+          ]
+        },
+        "owner_id": {
+          "type": "string",
+          "pattern": "^oidc:",
+          "maxLength": 1024
+        },
+        "reviewer_id": {
+          "oneOf": [
+            {
+              "type": "string",
+              "pattern": "^oidc:",
+              "maxLength": 1024
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "challenge_sha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "prepare_request_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "complete_request_digest": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/digest"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "settle_request_digest": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/digest"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "readRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "sessionId"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.setupNativeFinalRequest/v1"
+        },
+        "sessionId": {
+          "$ref": "#/$defs/id"
+        }
+      }
+    },
+    "prepareRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "sessionId",
+        "assertion"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.setupNativeFinalRequest/v1"
+        },
+        "sessionId": {
+          "$ref": "#/$defs/id"
+        },
+        "assertion": {
+          "type": "object"
+        }
+      }
+    },
+    "completeRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "sessionId",
+        "receiptOriginal",
+        "assertion"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.setupNativeFinalRequest/v1"
+        },
+        "sessionId": {
+          "$ref": "#/$defs/id"
+        },
+        "receiptOriginal": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 16384,
+          "pattern": "^[\\u0000-\\u007f]+$"
+        },
+        "assertion": {
+          "type": "object"
+        }
+      }
+    },
+    "optionsRequest": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "apiVersion",
+            "sessionId",
+            "phase"
+          ],
+          "properties": {
+            "apiVersion": {
+              "const": "serverware.setupNativeFinalRequest/v1"
+            },
+            "sessionId": {
+              "$ref": "#/$defs/id"
+            },
+            "phase": {
+              "const": "prepare"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "apiVersion",
+            "sessionId",
+            "phase",
+            "receiptOriginal"
+          ],
+          "properties": {
+            "apiVersion": {
+              "const": "serverware.setupNativeFinalRequest/v1"
+            },
+            "sessionId": {
+              "$ref": "#/$defs/id"
+            },
+            "phase": {
+              "const": "complete"
+            },
+            "receiptOriginal": {
+              "type": "string",
+              "minLength": 2,
+              "maxLength": 16384,
+              "pattern": "^[\\u0000-\\u007f]+$"
+            }
+          }
+        }
+      ]
+    },
+    "httpRequest": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/readRequest"
+        },
+        {
+          "$ref": "#/$defs/prepareRequest"
+        },
+        {
+          "$ref": "#/$defs/completeRequest"
+        },
+        {
+          "$ref": "#/$defs/optionsRequest"
+        }
+      ]
+    },
+    "response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "status",
+        "okForAction",
+        "automaticRetryAllowed",
+        "measuredHost",
+        "proxyReady",
+        "resultScope",
+        "hostAssociationTrust"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.setupNativeFinalResponse/v1"
+        },
+        "status": {
+          "enum": [
+            "refused",
+            "final-outcome-unknown",
+            "observation",
+            "fresh-assertion-required",
+            "independent-final-authorization-required",
+            "native-completion-pending-audit",
+            "scoped-native-setup-complete"
+          ]
+        },
+        "okForAction": {
+          "const": false
+        },
+        "automaticRetryAllowed": {
+          "const": false
+        },
+        "measuredHost": {
+          "const": false
+        },
+        "proxyReady": {
+          "const": false
+        },
+        "resultScope": {
+          "const": "enclave-hardware-and-proxy-only"
+        },
+        "hostAssociationTrust": {
+          "const": "trusted-host-local"
+        },
+        "final": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/public"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "bundle": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/bundle"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "setupPhase": {
+          "type": "string"
+        },
+        "scopedNativeSetupComplete": {
+          "type": "boolean"
+        },
+        "completionAuditIncluded": {
+          "type": "boolean"
+        },
+        "options": {
+          "type": "object"
+        }
+      }
+    }
+  }
+}

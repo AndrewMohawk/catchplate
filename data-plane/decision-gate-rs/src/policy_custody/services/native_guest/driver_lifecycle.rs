@@ -8,6 +8,7 @@ use std::os::unix::fs::{MetadataExt,FileExt};
 #[path="driver_lifecycle_wire.rs"]
 pub(in crate::policy_shadow::policy_custody::services) mod wire;
 #[path="driver_lifecycle_census.rs"] mod census;
+#[path="driver_lifecycle_admission.rs"] mod admission;
 #[path="driver_lifecycle_facade.rs"]
 pub(in crate::policy_shadow::policy_custody::services) mod facade;
 use wire::{Configuration,Request,Reply,Observation};
@@ -30,6 +31,7 @@ pub(super) struct Owner {
     sequence:u64,descriptors:Option<census::Descriptors>,
     configuration_sha256:Sha256Digest,window_sha256:Sha256Digest,startup:u64,lifetime:u64,
     facade:Option<facade::Inspector>,
+    constructed_census:Option<Vec<u8>>,constructed_admission:Option<Vec<u8>>,constructed_exported:bool,
 }
 impl Owner {
     /// Before spawning any child, selected by exact independently provisioned
@@ -76,7 +78,8 @@ impl Owner {
             gate_notice:None,pending_bind:None,sequence:0,descriptors:None,
             configuration_sha256:Sha256Digest::compute(&cold.configuration.read(65536).map_err(fail)?),
             window_sha256:Sha256Digest::compute(&cold.window.read(32768).map_err(fail)?),
-            startup:cold.startup(),lifetime:cold.lifetime(),facade:None};
+            startup:cold.startup(),lifetime:cold.lifetime(),facade:None,
+            constructed_census:None,constructed_admission:None,constructed_exported:false};
         result.check()?;Ok(result)
     }
     pub(super) fn check(&self)->Result<(),ShadowError>{
@@ -211,6 +214,16 @@ impl Owner {
                 "bootstrapObservationSha256":Sha256Digest::compute(&canonical_json_bytes(observation)?),
                 "gateExecutableSha256":self.configuration.gate.executable_sha256,"binding":binding}))?);
             canonical_json_bytes(&binding)?
+        }else if self.configuration.constructed_selected() && matches!(request.operation.as_str(),"constructed-census"|"constructed-admission"|"constructed-live") {
+            require(packet.rights.is_empty() && packet.credentials.uid==gate.uid && packet.credentials.gid==gate.gid
+                && constructed && (request.operation=="constructed-live" || deadline<=self.startup))?;
+            self.check_constructed()?;
+            if request.operation=="constructed-live"{canonical_json_bytes(&serde_json::json!({
+                "apiVersion":"serverware.nativeShadowConstructedDriverLive/v1",
+                "admissionSha256":Sha256Digest::compute(self.constructed_admission.as_ref().ok_or(ShadowError::BindingDrift)?),
+                "censusSha256":Sha256Digest::compute(self.constructed_census.as_ref().ok_or(ShadowError::BindingDrift)?)}))?}
+            else if request.operation=="constructed-census"{self.constructed_census.clone().ok_or(ShadowError::BindingDrift)?}
+            else{self.constructed_admission.clone().ok_or(ShadowError::BindingDrift)?}
         }else if self.facade_selected() && request.operation.starts_with("facade-") {
             require(packet.credentials.uid==gate.uid && packet.credentials.gid==gate.gid && self.listening && scope.is_some())?;
             let facade=self.facade.as_mut().ok_or(ShadowError::BindingDrift)?;

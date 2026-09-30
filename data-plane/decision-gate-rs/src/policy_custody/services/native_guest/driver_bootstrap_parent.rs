@@ -165,6 +165,20 @@ impl Running {
             else{observation.require_child(&retained,&self.executable)?;}
             self.progress_lifecycle()?;
             require(self.child.bootstrap_receive(self.cold.uid(),self.cold.gid())?.is_none())?;
+            if self.lifecycle.as_ref().is_some_and(|owner|owner.constructed_selected()) {
+                if let Some(packet)=retrieval_peer::receive(self.control.as_fd(),65536,0)? {
+                    require(packet.credentials.pid==self.caller && packet.credentials.uid==0 && packet.credentials.gid==0)?;
+                    retrieval_peer::same_process(packet.pidfd.as_fd(),self.caller)?;
+                    let scope=self.phase_two.as_ref().ok_or(ShadowError::BindingDrift)?.scope();
+                    let (reply,right)=self.lifecycle.as_mut().ok_or(ShadowError::BindingDrift)?
+                        .constructed_control(&packet.bytes,&self.child,&observation,scope)?;
+                    let rights:Vec<_>=right.as_ref().map(|v|vec![v.as_fd()]).unwrap_or_default();
+                    require(retrieval_peer::send(self.control.as_fd(),&reply,&rights)?)?;
+                }
+                let mut wait=libc::pollfd{fd:self.control.as_raw_fd(),events:libc::POLLIN,revents:0};
+                require(unsafe{libc::poll(&mut wait,1,1)}>=0 && wait.revents&(libc::POLLHUP|libc::POLLERR|libc::POLLNVAL)==0)?;
+                continue;
+            }
             let mut wait=libc::pollfd{fd:self.control.as_raw_fd(),events:libc::POLLIN,revents:0};
             require(unsafe{libc::poll(&mut wait,1,1)}==0)?;
         }

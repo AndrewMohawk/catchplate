@@ -104,6 +104,7 @@ pub(crate) use policy_custody::{
     PreparedNativeCustodyLifecycle,NativeCustodyLifecycleOwner,
     PreparedGuestServiceDelivery,
     install_policy_shadow_custody_generation_from_retained_file,
+    install_native_custody_generation_from_retained_owner,
     run_bounded_cleanup_helper_from_env,
     run_cleanup_authorization_consumer_from_env,
     run_current_signature_authority_from_env,
@@ -7065,23 +7066,29 @@ enum RetainedProductionCustodyClosure {
     Legacy(ProductionCustodyExecutionClosureManifest),
     #[cfg(target_os = "linux")]
     Native(native_custody_closure::NativeCustodyClosureOwner),
+    #[cfg(target_os = "linux")]
+    RemoteNative(native_custody_closure::RemoteNativeCustodyClosure),
 }
 impl RetainedProductionCustodyClosure {
     fn validate(&self)->Result<(),ShadowError> {match self {
         Self::Legacy(v)=>v.validate(),
         #[cfg(target_os="linux")] Self::Native(v)=>v.check(),
+        #[cfg(target_os="linux")] Self::RemoteNative(v)=>v.check(),
     }}
     fn manifest_sha256(&self)->&Sha256Digest {match self {
         Self::Legacy(v)=>v.manifest_sha256(),
         #[cfg(target_os="linux")] Self::Native(v)=>v.manifest_sha256(),
+        #[cfg(target_os="linux")] Self::RemoteNative(v)=>v.manifest_sha256(),
     }}
     fn seccomp_policy_sha256(&self)->&Sha256Digest {match self {
         Self::Legacy(v)=>v.seccomp_policy_sha256(),
         #[cfg(target_os="linux")] Self::Native(v)=>v.seccomp_policy_sha256(),
+        #[cfg(target_os="linux")] Self::RemoteNative(v)=>v.seccomp_policy_sha256(),
     }}
     fn worker_executable_sha256(&self)->&Sha256Digest {match self {
         Self::Legacy(v)=>v.worker_executable_sha256(),
         #[cfg(target_os="linux")] Self::Native(v)=>v.worker_executable_sha256(),
+        #[cfg(target_os="linux")] Self::RemoteNative(v)=>v.worker_executable_sha256(),
     }}
 }
 
@@ -7634,6 +7641,8 @@ impl ProductionCustodyConfiguration {
             RetainedProductionCustodyClosure::Legacy(value)=>Ok(value),
             #[cfg(target_os="linux")]
             RetainedProductionCustodyClosure::Native(_)=>Err(ShadowError::CustodyUnavailable),
+            #[cfg(target_os="linux")]
+            RetainedProductionCustodyClosure::RemoteNative(_)=>Err(ShadowError::CustodyUnavailable),
         }
     }
 
@@ -7644,7 +7653,13 @@ impl ProductionCustodyConfiguration {
         match &self.execution_closure_manifest {
             RetainedProductionCustodyClosure::Native(value)=>Some(value),
             RetainedProductionCustodyClosure::Legacy(_)=>None,
+            RetainedProductionCustodyClosure::RemoteNative(_)=>None,
         }
+    }
+
+    #[cfg(target_os="linux")]
+    fn remote_native_execution_closure(&self)->Option<&native_custody_closure::RemoteNativeCustodyClosure>{
+        match &self.execution_closure_manifest {RetainedProductionCustodyClosure::RemoteNative(value)=>Some(value),_=>None}
     }
 
     pub(in crate::policy_shadow) fn execution_closure_manifest_sha256(
@@ -7791,6 +7806,8 @@ impl ProductionCustodyConfiguration {
         if let Some(closure)=self.native_execution_closure() {
             closure.verify_current(&self.retained_verified_assignment,checkpoint,key_trust)?;
         }
+        #[cfg(target_os="linux")]
+        if let Some(closure)=self.remote_native_execution_closure(){closure.verify_current(checkpoint,key_trust)?;}
         if !self
             .retained_verified_assignment
             .trust_checkpoint
@@ -7917,6 +7934,8 @@ impl ProductionCustodyConfiguration {
     ) -> Result<(), ShadowError> {
         #[cfg(target_os="linux")]
         if let Some(closure)=self.native_execution_closure() {closure.freshness(trusted_now_unix_nanos)?;}
+        #[cfg(target_os="linux")]
+        if let Some(closure)=self.remote_native_execution_closure(){closure.freshness(trusted_now_unix_nanos)?;}
         validate_freshness(
             self.retained_verified_assignment
                 .payload()
@@ -7942,6 +7961,8 @@ impl ProductionCustodyConfiguration {
     ) -> Result<Self, ShadowError> {
         #[cfg(target_os="linux")]
         if let Some(closure)=self.native_execution_closure() {closure.check()?;}
+        #[cfg(target_os="linux")]
+        if let Some(closure)=self.remote_native_execution_closure(){closure.check()?;}
         self.validate_attestation_binding_at_checkpoint(
             &attestation,
             &self.authority_trust_checkpoint,
@@ -8014,6 +8035,8 @@ impl ProductionCustodyConfiguration {
         let now = trusted_time.now_unix_nanos()?;
         #[cfg(target_os="linux")]
         if let Some(closure)=self.native_execution_closure() {closure.freshness(now)?;}
+        #[cfg(target_os="linux")]
+        if let Some(closure)=self.remote_native_execution_closure(){closure.freshness(now)?;}
         validate_freshness(
             self.retained_verified_assignment
                 .payload()
@@ -8068,6 +8091,8 @@ fn verify_custody_attestation_verifier_result(
         closure.verify_current(&configuration.retained_verified_assignment,&checkpoint,key_trust)?;
         closure.freshness(now)?;
     }
+    #[cfg(target_os="linux")]
+    if let Some(closure)=configuration.remote_native_execution_closure(){closure.verify_current(&checkpoint,key_trust)?;closure.freshness(now)?;}
     if checkpoint.checkpoint_id != *trust_checkpoint_id
         || checkpoint.revocation_generation != trust_revocation_generation
         || checkpoint.revocation_root_sha256
@@ -8112,6 +8137,8 @@ fn verify_custody_attestation_verifier_result(
     }
     #[cfg(target_os="linux")]
     if let Some(closure)=configuration.native_execution_closure() {closure.freshness(final_now)?;}
+    #[cfg(target_os="linux")]
+    if let Some(closure)=configuration.remote_native_execution_closure(){closure.freshness(final_now)?;}
     validate_freshness(
         verified_at_unix_nanos,
         expires_at_unix_nanos,

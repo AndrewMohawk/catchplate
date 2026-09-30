@@ -27,6 +27,7 @@ PRIMARY_KEY_COLUMNS: Mapping[str, tuple[str, ...]] = MappingProxyType({
     "setup_native_canary_associations": ("session_id",),
     "setup_native_runtime_attempts": ("session_id",),
     "setup_native_hardware_attempts": ("session_id",),
+    "setup_native_final_attempts": ("session_id",),
     "setup_policy_continuations": ("session_id",),
     "policy_native_canary_ready": ("canary_id",),
     "policy_native_canary_heads": ("canary_id",),

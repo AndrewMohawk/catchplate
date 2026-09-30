@@ -73,6 +73,10 @@ impl Cold {
             && ![64988,64989,64990,65534].contains(&config.uid) && ![64988,64989,64990,65534].contains(&config.gid)
             && config.bootstrap_authority.key_id!=config.phase_two_authority.key_id)?;
         config.image.seccomp_policy.validate()?;config.phase_two_authority.key()?;
+        if let Some(authority)=config.lifecycle.as_ref().and_then(|v|v.constructed_admission_authority.as_ref()) {
+            let key=authority.key()?;
+            require(key!=config.bootstrap_authority.key()? && key!=config.phase_two_authority.key()?)?;
+        }
         let delivery_configuration=config.delivery_configuration.open(65536)?;
         let delivery_cold:super::super::Configuration=exact(&delivery_configuration.read(65536).map_err(fail)?)?;
         require(delivery_cold.api_version=="serverware.policyCustodyGuestConfiguration/v1"

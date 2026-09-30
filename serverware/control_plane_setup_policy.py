@@ -28,9 +28,11 @@ NATIVE_CANARY_PATHS = frozenset(NATIVE_CANARY_PREFIX + "/" + phase for phase in 
 NATIVE_RUNTIME_PREFIX = "/api/setup/native-runtime"
 NATIVE_RUNTIME_PATHS = frozenset(NATIVE_RUNTIME_PREFIX + "/" + phase for phase in ("options", "prepare", "complete", "lookup"))
 NATIVE_HARDWARE_PREFIX = "/api/setup/native-hardware"
+NATIVE_FINAL_PREFIX = "/api/setup/native-final"
+NATIVE_FINAL_PATHS = frozenset(NATIVE_FINAL_PREFIX + "/" + phase for phase in ("options", "prepare", "complete", "settle", "lookup"))
 NATIVE_HARDWARE_PATHS = frozenset(NATIVE_HARDWARE_PREFIX + "/" + phase for phase in ("options", "prepare", "complete", "lookup"))
 PATHS = PATHS | {MATERIALIZE_PATH, INSTALLED_PATH, NATIVE_INSTALLED_PATH, NATIVE_ENROLLMENT_LOOKUP_PATH, NATIVE_CA_LOOKUP_PATH}
-PATHS = PATHS | NATIVE_CANARY_PATHS | NATIVE_RUNTIME_PATHS | NATIVE_HARDWARE_PATHS
+PATHS = PATHS | NATIVE_CANARY_PATHS | NATIVE_RUNTIME_PATHS | NATIVE_HARDWARE_PATHS | NATIVE_FINAL_PATHS
 MATERIALIZE_REQUEST_SCHEMA = "serverware.setupPolicyMaterializationRequest/v1"
 MATERIALIZE_DRAFT_SCHEMA = "serverware.setupPolicyMaterializationDraft/v1"
 INSTALLED_SCHEMA = "serverware.setupPolicyInstalledObservation/v1"
@@ -369,6 +371,9 @@ def on_request(request, raw):
     profile.require(type(raw) is bytes and 0 < len(raw) <= MAX_REQUEST
         and request.headers.get("content-length") == str(len(raw)))
     path = request.url.path
+    if path in NATIVE_FINAL_PATHS:
+        from serverware import control_plane_setup_native_final
+        return control_plane_setup_native_final.on_request(request, raw)
     if path in NATIVE_HARDWARE_PATHS:
         from serverware import control_plane_setup_native_hardware
         return control_plane_setup_native_hardware.on_request(request, raw)

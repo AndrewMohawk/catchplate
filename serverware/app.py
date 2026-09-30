@@ -673,6 +673,7 @@ async def bounded_control_plane_request_middleware(request: Request, call_next):
         **{path: 32768 for path in control_plane_setup_policy.NATIVE_CANARY_PATHS},
         **{path: 768 * 1024 for path in control_plane_setup_policy.NATIVE_RUNTIME_PATHS},
         **{path: 131072 for path in control_plane_setup_policy.NATIVE_HARDWARE_PATHS},
+        **{path: 32768 for path in control_plane_setup_policy.NATIVE_FINAL_PATHS},
         **{path: control_plane_policy_canary.MAX_REQUEST for path in control_plane_policy_canary.PATHS},
         control_plane_policy_canary_delivery.PATH: control_plane_policy_canary_delivery.MAX_REQUEST,
         **{path: activation_permission_contract.MAX_REQUEST_BYTES for path in activation_permission_routes.PATHS},
@@ -11125,6 +11126,11 @@ async def policy_authority_candidate_handoff(
 @app.post(control_plane_setup_policy.NATIVE_HARDWARE_PREFIX + "/prepare")
 @app.post(control_plane_setup_policy.NATIVE_HARDWARE_PREFIX + "/complete")
 @app.post(control_plane_setup_policy.NATIVE_HARDWARE_PREFIX + "/lookup")
+@app.post(control_plane_setup_policy.NATIVE_FINAL_PREFIX + "/options")
+@app.post(control_plane_setup_policy.NATIVE_FINAL_PREFIX + "/prepare")
+@app.post(control_plane_setup_policy.NATIVE_FINAL_PREFIX + "/complete")
+@app.post(control_plane_setup_policy.NATIVE_FINAL_PREFIX + "/settle")
+@app.post(control_plane_setup_policy.NATIVE_FINAL_PREFIX + "/lookup")
 async def controlled_setup_policy_candidate(request: Request, response: Response) -> dict[str, Any]:
     response.headers["Cache-Control"] = "no-store"
     response.headers["Pragma"] = "no-cache"
@@ -23438,6 +23444,7 @@ UI_HTML = r"""
       setupNativeCanaryClear();
       setupNativeRuntimeClear();
       setupHardwareClear();
+      setupFinalClear();
       adminPublicationInvalidate('Browser session state became unknown.');
       oauthActivationInvalidate('Browser session state became unknown.');
       oidcSessionStatusUnknown = true;
@@ -23470,6 +23477,7 @@ UI_HTML = r"""
         setupNativeCanaryClear();
         setupNativeRuntimeClear();
         setupHardwareClear();
+        setupFinalClear();
         adminPublicationInvalidate('Browser authentication changed.');
         oauthActivationInvalidate('Browser authentication changed.');
       }
@@ -23530,6 +23538,7 @@ UI_HTML = r"""
       setupNativeCanaryClear();
       setupNativeRuntimeClear();
       setupHardwareClear();
+      setupFinalClear();
       oauthActivationInvalidate('Sign-in started.');
       clearCustodyView('Sign-in is changing. Custody metadata cleared.');
       const returnTo = `${window.location.pathname}${window.location.search}`;
@@ -23743,6 +23752,7 @@ UI_HTML = r"""
       setupNativeCanaryClear();
       setupNativeRuntimeClear();
       setupHardwareClear();
+      setupFinalClear();
       adminPublicationInvalidate('Sign-out started.');
       oauthActivationInvalidate('Sign-out started.');
       clearCustodyView('Signing out. Custody metadata cleared.');
@@ -24739,6 +24749,12 @@ UI_HTML = r"""
 
       const summary = $('setup-summary');
       const checks = $('setup-checks');
+      if (setupSession?.phase === 'native_scoped_complete') {
+        setupStatusPill('setup-hardware-status', false, 'Measured host', 'Native enclave scope only');
+        summary.innerHTML = '<span class="pill good">Scoped native Setup complete</span><span class="muted">Enclave hardware/proxy evidence; trusted-host-local CA readback. Not measured-host proof, general production acceptance or proxy-ready permission. Inspect the native final record below.</span>';
+        checks.replaceChildren();
+        return;
+      }
       if (!verification) {
         summary.innerHTML = `<span class="pill ${setupSession ? 'warn' : 'bad'}">${esc(setupSession?.phase || 'No setup run')}</span><span class="muted">${setupSession ? `Revision ${setupSession.revision}; assigned to ${esc(setupSession.currentAssigneeId || setupSession.ownerId)}` : 'Create a durable setup run before connecting a credential.'}</span>`;
         checks.replaceChildren();
@@ -26667,6 +26683,7 @@ UI_HTML = r"""
       setupNativeCanaryClear();
       setupNativeRuntimeClear();
       setupHardwareClear();
+      setupFinalClear();
       adminPublicationInvalidate('Entered operator credentials changed.');
       oauthActivationInvalidate('Entered operator credentials changed.');
       publicRevocationInvalidate('Entered operator credentials changed.');

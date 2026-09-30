@@ -32,27 +32,8 @@ class Kernel:
         v=p.arguments(self.operation,arguments,typed=True); a=p.runtime.association(v["association_original"])
         sid,cid=a["session_id"],a["canary_id"]
         enrolled=p.original(v["enrollment_original"],p.enrollment.MAX_ROW_BYTES); i=p.enrollment.intent(enrolled["intent_original"])
+        query=source_queries(self.operation,v,request_digest)
         exact=lambda name,table,key:q._query(operation=self.operation,name=name,table=table,key=key)
-        query=[exact("slot",p.TABLE,{"session_id":sid}),exact("association",p.runtime.canary.TABLE,{"session_id":sid}),
-            exact("setup","setup_sessions",{"id":sid}),exact("continuation",p.enrollment.candidate.TABLE,{"session_id":sid}),
-            exact("enrollment",p.enrollment.TABLE,{"session_id":sid}),exact("installation",p.ca.TABLE,{"session_id":sid}),
-            exact("runtime",p.runtime.TABLE,{"session_id":sid}),exact("credential","credentials",{"id":i["credentialId"]}),
-            exact("generation","credential_generations",{"credential_id":i["credentialId"]}),
-            currentness.root_query(self.operation,i["credentialId"],i["credentialVersion"]),
-            exact("high","policy_high_water",{"scope":"active"}),exact("publication","policy_publications",{"policy_hash":a["policy_hash"]}),
-            exact("artifact","policy_candidate_artifacts",{"artifact_envelope_digest":core.SelectedRowFieldReference(
-                p.enrollment.candidate.TABLE,{"session_id":sid},"artifact_envelope_digest")}),
-            exact("association_audit","metadata_audit_outbox",{"id":q._audit_identity(p.runtime.canary.RECORD,a["request_digest"])}),
-            q._role_query(self.operation,"owner",v["actor_id"]),q._audit_query(self.operation,request_digest)]
-        for codec,name in ((p.runtime,"runtime_original"),(p.enrollment,"enrollment_original"),(p.ca,"installation_original")):
-            row=p.original(v[name],p.MAX_ROW_BYTES)
-            query.append(exact(name+"_audit","metadata_audit_outbox",{"id":q._audit_identity(codec.COMPLETE,row["complete_request_digest"])}))
-        for table in (p.runtime.canary.activation.PREPARATION_TABLE,p.runtime.canary.activation.READY_TABLE,p.runtime.canary.activation.HEAD_TABLE,
-                "policy_canary_heads","policy_canary_assignments"):
-            query.append(exact(table,table,{"canary_id":cid}))
-        query.append(core.BoundedQuery(query_id=core.query_program_id(self.operation,"finalizations",p.runtime.canary.activation.FINALIZATION_TABLE),
-            table=p.runtime.canary.activation.FINALIZATION_TABLE,predicates=(core.QueryPredicate("policy_hash","eq",a["policy_hash"]),),
-            order_by=(core.QueryOrder("canary_id"),),maximum_rows=2,proof_primitive="bounded-limit-plus-one",work_units=2))
         if evidence is not None:
             for name,table,field in (("request_key","webauthn_credentials","credentialRecordId"),("challenge","webauthn_challenges","challengeId")):
                 p.enrollment.setup.text(evidence.get(field),1024); query.append(exact(name,table,{"id":evidence[field]}))
@@ -62,27 +43,10 @@ class Kernel:
         return tuple(query)
 
     def transition(self,context):
-        v=p.arguments(self.operation,context.arguments,typed=True); a=p.runtime.association(v["association_original"])
-        sid,now=a["session_id"],q._database_epoch_ns(context.database_now)
+        v=p.arguments(self.operation,context.arguments,typed=True)
+        sid,now,scope,before,grant,i=current_sources(context,v)
+        a=p.runtime.association(v["association_original"])
         row=lambda table,key:prior._row(context,table,key)
-        p.require(p.runtime.canary.row_original(row(p.runtime.canary.TABLE,{"session_id":sid})).decode("ascii")==v["association_original"])
-        audit,_=prior._completed_audit(context,q._audit_identity(p.runtime.canary.RECORD,a["request_digest"]),p.runtime.canary.RECORD,a["request_digest"],session=sid)
-        p.require(audit["event_digest"]==a["audit_event_digest"])
-        for codec,name in ((p.runtime,"runtime_original"),(p.enrollment,"enrollment_original"),(p.ca,"installation_original")):
-            actual=row(codec.TABLE,{"session_id":sid})
-            p.require(codec.row_original(actual).decode("ascii")==v[name])
-            prior._completed_audit(context,q._audit_identity(codec.COMPLETE,actual["complete_request_digest"]),codec.COMPLETE,actual["complete_request_digest"],session=sid)
-        enrolled=row(p.enrollment.TABLE,{"session_id":sid}); i=p.enrollment.intent(enrolled["intent_original"])
-        issued._current(context,v,i)
-        view=prior._PublicationRows(context)
-        p.require(len(view.matching(p.runtime.canary.activation.FINALIZATION_TABLE,policy_hash=a["policy_hash"]))==1)
-        committed=prior.native.committed_policy(view,row("policy_high_water",{"scope":"active"}),row("policy_publications",{"policy_hash":a["policy_hash"]}))
-        p.require(committed is not None and committed["finalization_digest"]==a["finalization_sha256"])
-        runtime=row(p.runtime.TABLE,{"session_id":sid}); before=p.runtime.prepared(runtime["attempt_original"])
-        installation=row(p.ca.TABLE,{"session_id":sid})
-        grant=p.enrollment.setup.document(p.enrollment.original(installation["installation_original"],p.ca.installation.MAX_BYTES),p.ca.installation.MAX_BYTES)["payload"]
-        scope=p.original(v["scope_original"],32768)
-        p.require(runtime["scope_original"]==v["scope_original"] and before["issuedAtEpochNs"]<=now<before["expiresAtEpochNs"])
         selected=context.exact(p.TABLE,{"session_id":sid}); stamp=context.database_now.astimezone(timezone.utc).isoformat(); mutations=[]
         inputs=p.canonical({name:v[name] for name in p.INPUT_FIELDS}).decode("ascii")
         if self.operation==p.PREPARE:
@@ -122,6 +86,58 @@ class Kernel:
         p.require(not replay)
         return core.KernelTransition(mutations=tuple(mutations)+audits,result={"ok":True,"operation":self.operation,"requestDigest":context.request_digest,
             "auditEventDigest":digest,"idempotentReplay":False,"hardwareOriginal":raw.decode("ascii")},work_units=4096)
+
+
+def source_queries(operation,v,request_digest):
+    a=p.runtime.association(v["association_original"]); sid,cid=a["session_id"],a["canary_id"]
+    enrolled=p.original(v["enrollment_original"],p.enrollment.MAX_ROW_BYTES); i=p.enrollment.intent(enrolled["intent_original"])
+    exact=lambda name,table,key:q._query(operation=operation,name=name,table=table,key=key)
+    query=[exact("slot",p.TABLE,{"session_id":sid}),exact("association",p.runtime.canary.TABLE,{"session_id":sid}),
+        exact("setup","setup_sessions",{"id":sid}),exact("continuation",p.enrollment.candidate.TABLE,{"session_id":sid}),
+        exact("enrollment",p.enrollment.TABLE,{"session_id":sid}),exact("installation",p.ca.TABLE,{"session_id":sid}),
+        exact("runtime",p.runtime.TABLE,{"session_id":sid}),exact("credential","credentials",{"id":i["credentialId"]}),
+        exact("generation","credential_generations",{"credential_id":i["credentialId"]}),
+        currentness.root_query(operation,i["credentialId"],i["credentialVersion"]),
+        exact("high","policy_high_water",{"scope":"active"}),exact("publication","policy_publications",{"policy_hash":a["policy_hash"]}),
+        exact("artifact","policy_candidate_artifacts",{"artifact_envelope_digest":core.SelectedRowFieldReference(
+            p.enrollment.candidate.TABLE,{"session_id":sid},"artifact_envelope_digest")}),
+        exact("association_audit","metadata_audit_outbox",{"id":q._audit_identity(p.runtime.canary.RECORD,a["request_digest"])}),
+        q._role_query(operation,"owner",v["actor_id"]),q._audit_query(operation,request_digest)]
+    for codec,name in ((p.runtime,"runtime_original"),(p.enrollment,"enrollment_original"),(p.ca,"installation_original")):
+        row=p.original(v[name],p.MAX_ROW_BYTES)
+        query.append(exact(name+"_audit","metadata_audit_outbox",{"id":q._audit_identity(codec.COMPLETE,row["complete_request_digest"])}))
+    for table in (p.runtime.canary.activation.PREPARATION_TABLE,p.runtime.canary.activation.READY_TABLE,p.runtime.canary.activation.HEAD_TABLE,
+            "policy_canary_heads","policy_canary_assignments"):
+        query.append(exact(table,table,{"canary_id":cid}))
+    query.append(core.BoundedQuery(query_id=core.query_program_id(operation,"finalizations",p.runtime.canary.activation.FINALIZATION_TABLE),
+        table=p.runtime.canary.activation.FINALIZATION_TABLE,predicates=(core.QueryPredicate("policy_hash","eq",a["policy_hash"]),),
+        order_by=(core.QueryOrder("canary_id"),),maximum_rows=2,proof_primitive="bounded-limit-plus-one",work_units=2))
+    return query
+
+
+def current_sources(context,v):
+    a=p.runtime.association(v["association_original"])
+    sid,now=a["session_id"],q._database_epoch_ns(context.database_now)
+    row=lambda table,key:prior._row(context,table,key)
+    p.require(p.runtime.canary.row_original(row(p.runtime.canary.TABLE,{"session_id":sid})).decode("ascii")==v["association_original"])
+    audit,_=prior._completed_audit(context,q._audit_identity(p.runtime.canary.RECORD,a["request_digest"]),p.runtime.canary.RECORD,a["request_digest"],session=sid)
+    p.require(audit["event_digest"]==a["audit_event_digest"])
+    for codec,name in ((p.runtime,"runtime_original"),(p.enrollment,"enrollment_original"),(p.ca,"installation_original")):
+        actual=row(codec.TABLE,{"session_id":sid})
+        p.require(codec.row_original(actual).decode("ascii")==v[name])
+        prior._completed_audit(context,q._audit_identity(codec.COMPLETE,actual["complete_request_digest"]),codec.COMPLETE,actual["complete_request_digest"],session=sid)
+    enrolled=row(p.enrollment.TABLE,{"session_id":sid}); i=p.enrollment.intent(enrolled["intent_original"])
+    issued._current(context,v,i)
+    view=prior._PublicationRows(context)
+    p.require(len(view.matching(p.runtime.canary.activation.FINALIZATION_TABLE,policy_hash=a["policy_hash"]))==1)
+    committed=prior.native.committed_policy(view,row("policy_high_water",{"scope":"active"}),row("policy_publications",{"policy_hash":a["policy_hash"]}))
+    p.require(committed is not None and committed["finalization_digest"]==a["finalization_sha256"])
+    runtime=row(p.runtime.TABLE,{"session_id":sid}); before=p.runtime.prepared(runtime["attempt_original"])
+    installation=row(p.ca.TABLE,{"session_id":sid})
+    grant=p.enrollment.setup.document(p.enrollment.original(installation["installation_original"],p.ca.installation.MAX_BYTES),p.ca.installation.MAX_BYTES)["payload"]
+    scope=p.original(v["scope_original"],32768)
+    p.require(runtime["scope_original"]==v["scope_original"] and before["issuedAtEpochNs"]<=now<before["expiresAtEpochNs"])
+    return sid,now,scope,before,grant,i
 
 
 KERNELS=MappingProxyType({op:Kernel(op) for op in p.OPERATIONS})

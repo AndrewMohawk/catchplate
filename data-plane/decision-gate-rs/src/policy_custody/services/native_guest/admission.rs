@@ -4,6 +4,7 @@ use super::super::native_guest::process::{Context,ContextOwner};
 #[path="result.rs"]
 mod result;
 #[path="admission_combined.rs"] mod combined;
+#[path="admission_remote.rs"] pub(in crate::policy_shadow) mod remote;
 #[path="retrieval.rs"]
 pub(crate) mod retrieval;
 #[path="ledger_retrieval.rs"]

@@ -9,7 +9,8 @@ from serverware.native_shadow_nitro_originals import _File, _boot, _clock, _hard
 from serverware import authority_setup_native_hardware as p
 
 _TOKEN = object()
-_NAMES = {p.ROLES[0]:"setup-native-hardware-verifier.json", p.ROLES[1]:"setup-native-proxy-verifier.json"}
+_FINAL="final-authority"
+_NAMES = {p.ROLES[0]:"setup-native-hardware-verifier.json", p.ROLES[1]:"setup-native-proxy-verifier.json", _FINAL:"setup-native-final-authority.json"}
 
 
 class Originals:
@@ -19,7 +20,7 @@ class Originals:
 
     @classmethod
     def _open(cls,role):
-        p.require(cls is Originals and role in p.ROLES)
+        p.require(cls is Originals and role in _NAMES)
         self=cls(_TOKEN); self.role=role
         try:
             for fd in (3,4,5): os.fstat(fd); self.fds.append(fd)
@@ -53,7 +54,10 @@ class Originals:
             p.require(0<self.deadline-self.issued<=30_000_000_000)
             self.wall=0; self.request_raw=self.request.read()
             self.values=p.enrollment.setup.document(self.request_raw,p.MAX_BUNDLE)
-            p.require(set(self.values)==p.INPUT_FIELDS|{"attempt_original","evidence_original"})
+            if role==_FINAL:
+                from serverware import authority_setup_native_final as final
+                p.require(set(self.values)==final.FIELDS-{"receipt_original"})
+            else: p.require(set(self.values)==p.INPUT_FIELDS|{"attempt_original","evidence_original"})
             self.check(); return self
         except BaseException:
             self.close(); raise
@@ -113,3 +117,4 @@ class Originals:
 
 def hardware_originals(): return Originals._open(p.ROLES[0])
 def proxy_originals(): return Originals._open(p.ROLES[1])
+def final_originals(): return Originals._open(_FINAL)

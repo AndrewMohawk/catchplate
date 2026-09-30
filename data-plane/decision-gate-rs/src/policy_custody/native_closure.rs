@@ -10,6 +10,8 @@ use std::os::unix::fs::{FileExt,MetadataExt};
 const PROFILE:&str="sealed-memfd-squashfs-static-amd64-v1";
 const BOOTSTRAP_PROFILE:&str="measured-bootstrap-late-runtime-static-amd64-v1";
 #[path="native_closure_late.rs"] mod late;
+#[path="native_closure_remote.rs"] mod remote;
+pub(in crate::policy_shadow) use remote::RemoteNativeCustodyClosure;
 const DOMAIN:&str="serverware.nativeCustodyClosureAssignment.signature/v1";
 const MANIFEST_DOMAIN:&[u8]=b"serverware.nativeCustodyExecutionClosure/v1";
 const ALL_SEALS:i32=libc::F_SEAL_WRITE|libc::F_SEAL_GROW|libc::F_SEAL_SHRINK|libc::F_SEAL_SEAL;

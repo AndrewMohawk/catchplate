@@ -30,6 +30,7 @@ pub(super) mod generation_certification;
 pub(super) mod generation_recovery;
 mod native_facade_lifecycle;
 pub(crate) use native_facade_lifecycle::{Prepared as PreparedNativeCustodyLifecycle,Owner as NativeCustodyLifecycleOwner};
+pub(in crate::policy_shadow) use native_facade_lifecycle::constructed::ConstructedDriver;
 mod guest_original;
 use guest::Bootstrap;
 

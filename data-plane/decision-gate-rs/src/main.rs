@@ -2,6 +2,7 @@
 #![recursion_limit = "256"]
 
 mod policy_core;
+mod policy_route_authority;
 mod policy_shadow;
 mod policy_shadow_generation;
 mod native_canary_opening;
@@ -814,6 +815,7 @@ struct Snapshot {
     rollback_epoch: u64,
     trust_generation: u64,
     compiled_behavior_sha256: String,
+    compiled_route_authority: Option<Arc<policy_route_authority::Compiled>>,
     policy_signing_key_id: String,
     policy_verifying_key: VerifyingKey,
     response_verifying_key: Option<VerifyingKey>,
@@ -8320,7 +8322,9 @@ fn verify_policy_signature(raw: &Value, trust_root: &PolicyTrustRoot) -> Result<
         .try_into()
         .map_err(|_| "policy Ed25519 signature must be 64 bytes".to_string())?;
     let signature = Signature::from_bytes(&signature_array);
-    let payload = canonical_json(&signature_payload(raw));
+    let payload = if raw["apiVersion"] == policy_route_authority::BUNDLE {
+        policy_route_authority::canonical(&signature_payload(raw))?
+    } else { canonical_json(&signature_payload(raw)) };
     trust_root
         .verifying_key
         .verify_strict(payload.as_bytes(), &signature)
@@ -14155,6 +14159,8 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
 
 static POLICY_BUNDLE_SCHEMA_VALIDATOR: OnceLock<Result<jsonschema::Validator, String>> =
     OnceLock::new();
+static POLICY_BUNDLE_V2_SCHEMA_VALIDATOR: OnceLock<Result<jsonschema::Validator, String>> =
+    OnceLock::new();
 
 fn embedded_adapter_schema(reference: &str) -> Option<(&'static str, &'static str)> {
     match reference {
@@ -14283,9 +14289,21 @@ fn validate_json_schema(
 }
 
 fn validate_policy_schema(raw: &Value) -> Result<(), String> {
-    let bundle_validator = POLICY_BUNDLE_SCHEMA_VALIDATOR
+    let selected = if raw["apiVersion"] == policy_route_authority::BUNDLE {
+        &POLICY_BUNDLE_V2_SCHEMA_VALIDATOR
+    } else { &POLICY_BUNDLE_SCHEMA_VALIDATOR };
+    let bundle_validator = selected
         .get_or_init(|| {
-            let schema = closed_embedded_policy_schema()?;
+            let mut schema = closed_embedded_policy_schema()?;
+            if raw["apiVersion"] == policy_route_authority::BUNDLE {
+                let v2 = strict_json_value_from_str(include_str!("../../../schemas/policy-bundle.v2.schema.json"))
+                    .map_err(|error| format!("parse embedded policy v2 schema: {error}"))?;
+                schema["$id"] = v2["$id"].clone();
+                schema["properties"]["apiVersion"] = v2["properties"]["apiVersion"].clone();
+                schema["required"] = v2["required"].clone();
+                schema["properties"]["routes"]["maxItems"] = json!(128);
+                schema["properties"]["routeAuthority"] = v2["$defs"]["routeAuthority"].clone();
+            }
             jsonschema::draft202012::options()
                 .build(&schema)
                 .map_err(|error| format!("compile closed embedded policy schema: {error}"))
@@ -14755,8 +14773,8 @@ fn compile_signed_snapshot_with_expected_key(
     require_attested_policy_hash: bool,
     expected_signing_key_id: Option<&str>,
 ) -> Result<Snapshot, String> {
-    if raw.get("apiVersion").and_then(Value::as_str) != Some("serverware.policy/v1") {
-        return Err("apiVersion must be serverware.policy/v1".to_string());
+    if !matches!(raw.get("apiVersion").and_then(Value::as_str), Some("serverware.policy/v1" | "serverware.policy/v2")) {
+        return Err("apiVersion must select a supported signed policy profile".to_string());
     }
     if raw.get("kind").and_then(Value::as_str) != Some("PolicyBundle") {
         return Err("kind must be PolicyBundle".to_string());
@@ -14813,7 +14831,9 @@ fn compile_signed_snapshot_with_expected_key(
     }
     verify_policy_signature(&raw, &trust_root)?;
 
-    let hash = sha256_prefixed(canonical_json(&signature_payload(&raw)).as_bytes());
+    let hash = sha256_prefixed(if raw["apiVersion"] == policy_route_authority::BUNDLE {
+        policy_route_authority::canonical(&signature_payload(&raw))?
+    } else { canonical_json(&signature_payload(&raw)) }.as_bytes());
     if require_attested_policy_hash {
         if let Some(attested_hash) = trust_root.attested_policy_hash.as_ref() {
             if attested_hash != &hash {
@@ -15103,6 +15123,7 @@ fn compile_signed_snapshot_with_expected_key(
         rollback_epoch,
         trust_generation: 0,
         compiled_behavior_sha256,
+        compiled_route_authority: policy_route_authority::admit(&raw, &routes)?,
         policy_signing_key_id: signing_key_id,
         policy_verifying_key: trust_root.verifying_key,
         response_verifying_key: trust_root.response_verifying_key,
@@ -52909,6 +52930,7 @@ mod tests {
             trust_generation: 1,
             compiled_behavior_sha256:
                 format!("sha256:{:064x}", epoch.max(1)),
+            compiled_route_authority: None,
             policy_signing_key_id: "sha256:policy-key".to_string(),
             policy_verifying_key: SigningKey::from_bytes(&[7u8; 32]).verifying_key(),
             response_verifying_key: None,

@@ -16157,6 +16157,20 @@ pub(crate) struct ObservedAuthorityBinding {
     request_authority_class: RequestAuthorityClass,
 }
 
+impl ObservedAuthorityBinding {
+    pub(crate) fn from_compiled_route(principal_sha256: Sha256Digest, route_sha256: Sha256Digest,
+        operation: OperationClass, compiled_semantic_profile_sha256: Sha256Digest) -> Self {
+        Self { principal_sha256, route_sha256, operation, compiled_semantic_profile_sha256,
+            request_authority_class: request_authority_class(operation) }
+    }
+
+    pub(crate) fn principal_sha256(&self) -> &Sha256Digest { &self.principal_sha256 }
+    pub(crate) fn route_sha256(&self) -> &Sha256Digest { &self.route_sha256 }
+    pub(crate) fn operation(&self) -> OperationClass { self.operation }
+    pub(crate) fn compiled_semantic_profile_sha256(&self) -> &Sha256Digest { &self.compiled_semantic_profile_sha256 }
+    pub(crate) fn request_authority_class(&self) -> RequestAuthorityClass { self.request_authority_class }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct DerivedExpansionSet {

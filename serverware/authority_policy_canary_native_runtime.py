@@ -1,6 +1,7 @@
 """Actual terminal/evaluator custody originals. No legacy signer alias or readiness projection."""
 from serverware import authority_policy_canary as profile
 from serverware import authority_policy_canary_native_opening as opening
+from serverware import authority_policy_canary_native_observation_originals as originals
 
 SCHEMA = "serverware.nativeCustodyRuntimeObservation/v1"
 RESPONSE_SCHEMA = "serverware.nativeCustodyResponseObservation/v1"
@@ -30,8 +31,9 @@ def verify(value, *, kind, assignment, context, publication, opening_record, ter
     profile.require(type(raw) is list and 0 < len(raw) <= 16 * 1024 and all(type(v) is int and 0 <= v <= 255 for v in raw))
     raw = bytes(raw)
     event = profile.document(raw, 16 * 1024)
-    profile.require(profile.canonical(event) == raw and profile.sha256(raw) == receipt["event_sha256"]
-        and type(event) is dict and set(event) == EVENT_FIELDS and event["domain"] == "serverware.policyShadowRuntimeAccountingEvent/v1")
+    profile.require(profile.canonical(event) == raw and profile.sha256(raw) == receipt["event_sha256"])
+    originals.event_shape(event, EVENT_FIELDS)
+    originals.validate_event(event, receipt)
     association = {"ingressSequence": receipt["ingress_sequence"], "requestBindingSha256": receipt["request_binding_sha256"],
         "requestCommitmentSha256": receipt["request_commitment_sha256"], "phase": receipt["event_phase"]}
     profile.require(profile.canonical({key: event[key] for key in association}) == profile.canonical(association))

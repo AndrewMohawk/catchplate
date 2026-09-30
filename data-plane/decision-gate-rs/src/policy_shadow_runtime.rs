@@ -4,6 +4,36 @@ use base64::Engine as _;
 
 pub(crate) const PROFILE:&str="serverware.nativeCustodyRuntimeObservation/v1";
 pub(crate) const RESPONSE_PROFILE:&str="serverware.nativeCustodyResponseObservation/v1";
+/// Count actual signed event originals without stripping their v2 preimages.
+/// This is framing admission, not semantic readiness verification.
+pub(super) fn accounting_label(event: &Value) -> Result<&str, ShadowError> {
+    let label = event.get("event").and_then(Value::as_str).ok_or(ShadowError::BindingDrift)?;
+    match event.get("domain").and_then(Value::as_str) {
+        Some("serverware.policyShadowRuntimeAccountingEvent/v1") => Ok(label),
+        Some("serverware.policyShadowRuntimeAccountingEvent/v2") => {
+            const FIELDS: [&str; 20] = ["domain", "ingressSequence", "requestBindingSha256", "requestCommitmentSha256",
+                "event", "phase", "terminalDetailSha256", "activePlanSha256", "finalActiveDecisionSha256",
+                "activeEffectResultsSha256", "candidatePlanSha256", "activeDisposition", "candidateDisposition",
+                "responseFactsSha256", "activeResponseValidationSha256", "candidateResponseValidationSha256",
+                "decisionAtUnixNanos", "dispatchFinalRequestSha256", "dispatchEffectAuthoritySha256", "observationOriginal"];
+            let object = event.as_object().ok_or(ShadowError::BindingDrift)?;
+            if object.len() != FIELDS.len() || FIELDS.iter().any(|field| !object.contains_key(*field)) {
+                return Err(ShadowError::BindingDrift);
+            }
+            let (phase, profile) = match label {
+                "candidate-evaluated" => ("candidate", "serverware.nativeRequestObservationOriginal/v1"),
+                "response-evaluated" => ("response", "serverware.nativeResponseObservationOriginal/v1"),
+                _ => return Err(ShadowError::BindingDrift),
+            };
+            if event["phase"] != phase || event["observationOriginal"]["apiVersion"] != profile {
+                return Err(ShadowError::BindingDrift);
+            }
+            Ok(label)
+        }
+        _ => Err(ShadowError::BindingDrift),
+    }
+}
+
 pub(crate) struct Observation { record:Value, kind:&'static str }
 impl Observation {
     pub(crate) fn from_receipt(receipt:&VerifiedShadowSpillReceipt,opening:&Sha256Digest,terminal:Option<&Sha256Digest>,

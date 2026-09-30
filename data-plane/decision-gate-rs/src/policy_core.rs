@@ -65,6 +65,8 @@ mod native_response;
 pub(crate) use native_response::NativeResponseRetention;
 #[path="policy_core_effect_completion.rs"]
 mod effect_completion;
+#[path="policy_core_observation_originals.rs"]
+mod observation_originals;
 
 const SHADOW_QUEUE_ITEMS: usize = 1_024;
 const SHADOW_QUEUE_BYTES: usize = 128 * 1024 * 1024;
@@ -88,6 +90,7 @@ fn shadow_job_bytes_with_terminal_retention(payload_bytes: usize) -> usize {
         // bounded independently, not retained in each queued lifecycle.
         .saturating_add(SHADOW_NATIVE_OBSERVATION_RETENTION_BYTES)
         .saturating_add(SHADOW_INJECTION_COMPLETION_RETENTION_BYTES)
+        .saturating_add(observation_originals::RETENTION_BYTES)
 }
 const SHADOW_MAX_FACT_HEADERS: usize = 128;
 const SHADOW_MAX_FACT_HEADER_BYTES: usize = 64 * 1024;
@@ -224,6 +227,11 @@ pub(crate) struct PolicyPlanSnapshot {
 }
 
 impl PolicyPlanSnapshot {
+    pub(crate) fn observed_authority_binding(&self, evaluation: &PolicyEvaluation, principal_id: &str)
+        -> Result<policy_shadow::ObservedAuthorityBinding, String> {
+        evaluation.observed_authority_binding(self, principal_id)
+    }
+
     fn from_snapshot(snapshot: &Arc<Snapshot>, lane: PolicyLane) -> Result<Self, String> {
         if snapshot.rollback_epoch == 0 {
             return Err("policy rollback epoch must be at least one".to_string());
@@ -236,7 +244,9 @@ impl PolicyPlanSnapshot {
             rollback_epoch: snapshot.rollback_epoch,
             trust_generation: snapshot.trust_generation,
             compiled_behavior_sha256: snapshot.compiled_behavior_sha256.clone(),
+            compiled_route_authority: snapshot.compiled_route_authority.clone(),
             policy_signing_key_id: snapshot.policy_signing_key_id.clone(),
+            policy_verifying_key: snapshot.policy_verifying_key.clone(),
             response_verifying_key: None,
             response_signing_key_id: None,
             attested_response_context: None,
@@ -278,6 +288,9 @@ fn estimate_snapshot_bytes(snapshot: &Snapshot) -> Result<usize, String> {
         .len()
         .saturating_add(snapshot.policy_id.len())
         .saturating_add(snapshot.policy_signing_key_id.len());
+    if let Some(classifier) = &snapshot.compiled_route_authority {
+        total = total.saturating_add(classifier.estimated_bytes()?);
+    }
     for principal in &snapshot.principals {
         total = total
             .saturating_add(principal.id.len())
@@ -333,6 +346,8 @@ fn estimate_snapshot_bytes(snapshot: &Snapshot) -> Result<usize, String> {
 /// Immutable request material captured before any effectful authorization step.
 #[derive(Clone)]
 pub(crate) struct AdmittedRequestFacts {
+    capture_started: std::time::Instant,
+    capture_nanos: Option<u64>,
     ingress: ShadowIngressKind,
     captured_at_epoch_ms: u64,
     authenticated_principal_id: Option<String>,
@@ -356,6 +371,7 @@ impl AdmittedRequestFacts {
         captured_at_epoch_ms: u64,
         raw_body: Option<&[u8]>,
     ) -> Result<Self, String> {
+        let capture_started = std::time::Instant::now();
         if captured_at_epoch_ms == 0 {
             return Err("shadow capture time is invalid".to_string());
         }
@@ -431,7 +447,9 @@ impl AdmittedRequestFacts {
         {
             return Err("effect-derived facts cannot enter shadow capture".to_string());
         }
-        Ok(Self {
+        let mut facts = Self {
+            capture_started,
+            capture_nanos: None,
             ingress,
             captured_at_epoch_ms,
             authenticated_principal_id: authenticated_principal_id.map(str::to_string),
@@ -444,7 +462,9 @@ impl AdmittedRequestFacts {
             forwarded_body_length: request.forwarded_body_length,
             forwarded_body_utf8_valid: request.forwarded_body_utf8_valid,
             client_request_digest: request.client_request_digest.clone(),
-        })
+        };
+        facts.capture_nanos = observation_originals::elapsed(capture_started);
+        Ok(facts)
     }
 
     fn to_decision_request(&self) -> Result<DecisionRequest, String> {
@@ -656,6 +676,20 @@ pub(crate) struct PolicyEvaluation {
 }
 
 impl PolicyEvaluation {
+    /// Exact installed v2 classification; not independent analysis approval.
+    pub(crate) fn observed_authority_binding(&self, snapshot: &PolicyPlanSnapshot, principal_id: &str)
+        -> Result<policy_shadow::ObservedAuthorityBinding, String> {
+        if self.snapshot_hash != snapshot.snapshot.hash {
+            return Err("classification evaluation belongs to another installed snapshot".into());
+        }
+        let route_id = self.route_id.as_deref().ok_or("evaluation has no classified route")?;
+        let route = snapshot.snapshot.routes.iter().find(|route| route.id == route_id).ok_or("evaluated route missing")?;
+        let principal = snapshot.snapshot.principals.iter().find(|principal| principal.id == principal_id)
+            .ok_or("authenticated principal missing from evaluated snapshot")?;
+        snapshot.snapshot.compiled_route_authority.as_ref().ok_or("v1 has no approved complete classifier profile")?
+            .binding(principal, route, self.operation.as_ref().ok_or("evaluation has no actual adapter operation")?)
+    }
+
     fn active_plan(&self) -> Option<&ActivePolicyPlan> {
         match &self.plan {
             SeparatedPolicyPlan::Active(plan) => Some(plan),
@@ -1903,7 +1937,8 @@ impl ShadowAdmission {
             self.active_evaluation = None;
             return self;
         };
-        match evaluate_policy_plan_borrowed(
+        let evaluation_started = std::time::Instant::now();
+        let evaluated = evaluate_policy_plan_borrowed(
             projection,
             request,
             authenticated_principal_id,
@@ -1923,7 +1958,9 @@ impl ShadowAdmission {
                 decision_at_epoch_ms,
                 None,
             ),
-        ) {
+        );
+        let evaluation_nanos = observation_originals::elapsed(evaluation_started);
+        match evaluated {
             Ok(active) => {
                 let finalization_error: Option<(&'static [u8], bool)> = if let Some(handle) =
                     self.finalization.as_ref()
@@ -1940,6 +1977,7 @@ impl ShadowAdmission {
                             } else {
                                 state.decision_time_binding =
                                     Some(DecisionTimeBinding {
+                                        evaluation_nanos,
                                         decision_at_epoch_ms,
                                         active_plan_sha256:
                                             active.semantic_sha256.clone(),
@@ -2457,6 +2495,7 @@ impl ShadowRuntimeEvent {
 
 #[derive(Clone)]
 struct ShadowAccountingEvent {
+    observation_original: Option<Arc<Value>>,
     ingress_sequence: u64,
     request_binding_sha256: String,
     request_commitment_sha256: String,
@@ -2484,6 +2523,7 @@ impl ShadowAccountingEvent {
         event: ShadowRuntimeEvent,
     ) -> Self {
         Self {
+            observation_original: None,
             ingress_sequence,
             request_binding_sha256,
             request_commitment_sha256,
@@ -2531,6 +2571,10 @@ impl ShadowAccountingEvent {
         });
         if let Some(reason) = self.event.terminal_reason() {
             value["reason"] = json!(reason);
+        }
+        if let Some(original) = &self.observation_original {
+            value["domain"] = json!("serverware.policyShadowRuntimeAccountingEvent/v2");
+            value["observationOriginal"] = original.as_ref().clone();
         }
         value
     }
@@ -5578,6 +5622,8 @@ pub(crate) struct CommittedCredentialPrerequisite {
 
 #[derive(Clone)]
 struct FinalActiveDecision {
+    native_original: Option<Arc<Value>>,
+    active_evaluation_nanos: Option<u64>,
     decision_at_epoch_ms: u64,
     active_evaluation: PolicyEvaluation,
     effect_requirements: ActiveEffectRequirements,
@@ -5798,6 +5844,7 @@ impl MatchedActiveTerminalRecord {
 
 #[derive(Clone)]
 struct PendingActiveDecision {
+    active_evaluation_nanos: Option<u64>,
     decision_at_epoch_ms: u64,
     active_plan_sha256: String,
     active_evaluation: PolicyEvaluation,
@@ -5814,6 +5861,7 @@ struct PendingActiveDecision {
 
 #[derive(Clone)]
 struct DecisionTimeBinding {
+    evaluation_nanos: Option<u64>,
     decision_at_epoch_ms: u64,
     active_plan_sha256: String,
     effect_requirements: ActiveEffectRequirements,
@@ -5825,6 +5873,7 @@ struct LifecycleState {
     pending_active: Option<PendingActiveDecision>,
     final_active: Option<ActiveTerminalRecord>,
     candidate: Option<PolicyEvaluation>,
+    candidate_evaluation_nanos: Option<u64>,
     decision_time_binding: Option<DecisionTimeBinding>,
     response_finished: bool,
     credential_prerequisites: CredentialPrerequisiteEvidence,
@@ -6587,6 +6636,7 @@ impl ShadowRequestHandle {
             return Err("active effect result commitment set is empty".to_string());
         }
         Ok(PendingActiveDecision {
+            active_evaluation_nanos: decision_time_binding.evaluation_nanos,
             decision_at_epoch_ms,
             active_plan_sha256:
                 decision_time_binding.active_plan_sha256,
@@ -6644,6 +6694,7 @@ impl ShadowRequestHandle {
         active_response_validation_sha256: Option<String>,
         gmail_metadata_evidence_sha256: Option<String>,
         terminal_effect_commitments: Vec<String>,
+        terminal_evidence: &[ActiveEffectTerminalEvidence],
     ) -> Result<(), String> {
         if !self.inner.generation_is_current_for(snapshot) {
             self.record_failure(
@@ -6718,6 +6769,12 @@ impl ShadowRequestHandle {
             &pending.credential_prerequisites, &effect_results_value,
         )?;
         let effect_results_sha256 = digest_json_ensure_ascii(&effect_results_value);
+        let native_original = if self.inner.native_observation.as_ref().is_some_and(|owner| owner.details_selected()) {
+            Some(observation_originals::terminal(
+                &self.inner, &pending, &effect_results_value, terminal_evidence,
+                returned_http_status,
+            )?)
+        } else { None };
         let final_decision_sha256 = final_active_outcome_digest(
             &pending.active_plan_sha256,
             terminal_outcome,
@@ -6727,6 +6784,8 @@ impl ShadowRequestHandle {
             &terminal_response_sha256,
         );
         let final_active = FinalActiveDecision {
+            native_original,
+            active_evaluation_nanos: pending.active_evaluation_nanos,
             decision_at_epoch_ms: pending.decision_at_epoch_ms,
             active_evaluation: pending.active_evaluation,
             effect_requirements: pending.effect_requirements,
@@ -6954,6 +7013,7 @@ impl ShadowRequestHandle {
             None,
             None,
             terminal_effect_commitments,
+            &terminal_effects.terminal_evidence,
         )
     }
 
@@ -7136,6 +7196,7 @@ impl ShadowRequestHandle {
             active_response_validation_sha256,
             gmail_metadata_evidence_sha256,
             commitments,
+            &terminal_effects.terminal_evidence,
         )
     }
 
@@ -8736,7 +8797,7 @@ impl ShadowResponseAttempt {
         }
         let captured_at_epoch_ms = checked_epoch_ms(now_epoch_ms())
             .map_err(|_| "shadow response timestamp is outside the supported range".to_string())?;
-        let response_facts_sha256 = digest_json_ensure_ascii(&json!({
+        let response_facts = json!({
             "domain":"serverware.policyShadowExactResponseFacts/v1",
             "capturedAtEpochMs":captured_at_epoch_ms,
             "status":self.status,
@@ -8752,14 +8813,16 @@ impl ShadowResponseAttempt {
             "peerIdentitySha256":capture.peer_identity_sha256,
             "framing":capture.framing,
             "mode":"bounded-exact",
-        }));
-        let active_response_validation_sha256 = digest_json_ensure_ascii(&json!({
+        });
+        let response_facts_sha256 = digest_json_ensure_ascii(&response_facts);
+        let bound_active_validation = json!({
             "domain":"serverware.policyShadowBoundActiveResponseValidation/v1",
             "activePolicySnapshotSha256":self.hook.inner.generation.identity.active_snapshot_sha256.as_str(),
             "responseObligationRootSha256":self.hook.inner.generation.identity.response_obligation_root_sha256.as_str(),
             "responseFactsSha256":response_facts_sha256.as_str(),
             "activeValidationSha256":digest_json_ensure_ascii(active_validation),
-        }));
+        });
+        let active_response_validation_sha256 = digest_json_ensure_ascii(&bound_active_validation);
         let gmail_metadata_evidence_sha256 = capture
             .gmail_metadata_evidence
             .as_ref()
@@ -8817,7 +8880,15 @@ impl ShadowResponseAttempt {
             Some(active_response_validation_sha256.clone()),
             gmail_metadata_evidence_sha256,
             terminal_effect_commitments,
+            &terminal_effects.terminal_evidence,
         )?;
+        let response_original = if self.hook.inner.native_observation.as_ref().is_some_and(|owner| owner.details_selected()) {
+            Some(observation_originals::bounded(json!({
+                "responseFacts": response_facts,
+                "boundActiveValidation": bound_active_validation,
+                "activeValidation": active_validation,
+            }))?)
+        } else { None };
         let estimated_bytes = shadow_job_bytes_with_terminal_retention(capture
             .body
             .len()
@@ -8853,6 +8924,7 @@ impl ShadowResponseAttempt {
             captured_at_epoch_ms,
             response_facts_sha256,
             active_response_validation_sha256,
+            response_original,
             enqueue_gate: Arc::clone(&enqueue_gate),
             comparison_terminal_appended: false,
             _reservation: reservation,
@@ -9037,6 +9109,7 @@ struct ShadowRequestJob {
 }
 
 struct ShadowResponseJob {
+    response_original: Option<Arc<Value>>,
     lifecycle: Arc<ShadowRequestLifecycle>,
     status: u16,
     headers: HeaderMap,
@@ -11113,7 +11186,7 @@ fn evaluate_candidate_response(
     physical_headers_sha256: &str,
     gmail_metadata_evidence: Option<&ActiveGmailMetadataEvidence>,
     captured_at_epoch_ms: u64,
-) -> Result<String, String> {
+) -> Result<Value, String> {
     let status = StatusCode::from_u16(status)
         .map_err(|_| "candidate response status is invalid".to_string())?;
     let route_id = candidate
@@ -11223,7 +11296,7 @@ fn evaluate_candidate_response(
         })
         .ok_or("candidate response plan is unavailable")?;
     let response_policy = response_policy_for_route(route);
-    Ok(digest_json_ensure_ascii(&json!({
+    Ok(json!({
         "domain":"serverware.policyShadowCandidateResponseValidation/v1",
         "outcome":if validation.is_ok() {"accepted"} else {"rejected"},
         "routeIdSha256":sha256_prefixed(route.id.as_bytes()),
@@ -11246,7 +11319,7 @@ fn evaluate_candidate_response(
         "candidateReleasedContentType":response_behavior.as_ref().and_then(|behavior| behavior.released_content_type.as_deref()),
         "candidateReleaseMode":response_behavior.as_ref().map(|behavior| behavior.release_mode.as_str()),
         "rejectionSha256":rejection_sha256,
-    })))
+    }))
 }
 
 fn shadow_worker(receiver: Receiver<ShadowWork>, ledger: Arc<AccountingLedger>) {
@@ -11312,6 +11385,7 @@ fn shadow_worker(receiver: Receiver<ShadowWork>, ledger: Arc<AccountingLedger>) 
                     }
                     continue;
                 };
+                let candidate_started = std::time::Instant::now();
                 let evaluated = evaluate_policy_plan(
                     &lifecycle.generation.candidate,
                     &lifecycle.facts,
@@ -11322,6 +11396,7 @@ fn shadow_worker(receiver: Receiver<ShadowWork>, ledger: Arc<AccountingLedger>) 
                         final_active.resolved_credential_version,
                     ),
                 );
+                let candidate_nanos = observation_originals::elapsed(candidate_started);
                 let mut record = ShadowAccountingEvent::minimal(
                     lifecycle.ingress_sequence,
                     lifecycle.request_binding_sha256.clone(),
@@ -11405,6 +11480,19 @@ fn shadow_worker(receiver: Receiver<ShadowWork>, ledger: Arc<AccountingLedger>) 
                     }
                     Err(_) => {}
                 }
+                if lifecycle.native_observation.as_ref().is_some_and(|owner| owner.details_selected()) {
+                    if let Some(candidate) = accepted_candidate.as_ref() {
+                        match observation_originals::request(lifecycle, &final_active, candidate, candidate_nanos) {
+                            Ok(original) => record.observation_original = Some(original),
+                            Err(_) => {
+                                record.set_event(ShadowRuntimeEvent::Failure(
+                                    PolicyShadowTerminalReason::CandidateEvaluationError));
+                                accepted_candidate = None;
+                                ledger.mark_hard_unready();
+                            }
+                        }
+                    }
+                }
                 let durably_recorded = ledger.record_with_original(
                     lifecycle.generation.generation_id(),
                     record,
@@ -11426,6 +11514,7 @@ fn shadow_worker(receiver: Receiver<ShadowWork>, ledger: Arc<AccountingLedger>) 
                         (accepted_candidate, lifecycle.state.try_lock())
                     {
                         state.candidate = Some(candidate);
+                        state.candidate_evaluation_nanos = candidate_nanos;
                     }
                 } else {
                     ledger.mark_hard_unready();
@@ -11472,17 +11561,20 @@ fn shadow_worker(receiver: Receiver<ShadowWork>, ledger: Arc<AccountingLedger>) 
                     }
                     continue;
                 }
-                let (final_active, mut candidate) = lifecycle
+                let (final_active, mut candidate, mut candidate_nanos) = lifecycle
                     .state
                     .try_lock()
                     .ok()
                     .map(|state| (
                         state.final_active.as_ref().map(|record| record.decision.clone()),
                         state.candidate.clone(),
+                        state.candidate_evaluation_nanos,
                     ))
-                    .unwrap_or((None, None));
+                    .unwrap_or((None, None, None));
+                let active_nanos = final_active.as_ref().and_then(|active| active.active_evaluation_nanos);
                 if candidate.is_none() {
                     if let Some(active) = final_active.as_ref() {
+                        let candidate_started = std::time::Instant::now();
                         candidate = evaluate_policy_plan(
                             &lifecycle.generation.candidate,
                             &lifecycle.facts,
@@ -11494,6 +11586,7 @@ fn shadow_worker(receiver: Receiver<ShadowWork>, ledger: Arc<AccountingLedger>) 
                             ),
                         )
                         .ok();
+                        candidate_nanos = observation_originals::elapsed(candidate_started);
                     }
                 }
                 let mut record = ShadowAccountingEvent::minimal(
@@ -11524,7 +11617,8 @@ fn shadow_worker(receiver: Receiver<ShadowWork>, ledger: Arc<AccountingLedger>) 
                         Some(candidate.semantic_sha256.clone());
                     record.candidate_disposition =
                         Some(candidate.disposition_label().to_string());
-                    match evaluate_candidate_response(
+                    let response_started = std::time::Instant::now();
+                    let evaluated_response = evaluate_candidate_response(
                         &lifecycle.generation.candidate,
                         &candidate,
                         &lifecycle.generation.identity.response_obligation_root_sha256,
@@ -11534,12 +11628,23 @@ fn shadow_worker(receiver: Receiver<ShadowWork>, ledger: Arc<AccountingLedger>) 
                         &job.physical_headers_sha256,
                         job.gmail_metadata_evidence.as_ref(),
                         job.captured_at_epoch_ms,
-                    ) {
-                        Ok(commitment) => {
-                            record.set_event(
-                                ShadowRuntimeEvent::ResponseEvaluated,
-                            );
-                            record.candidate_response_validation_sha256 = Some(commitment);
+                    );
+                    let response_nanos = observation_originals::elapsed(response_started);
+                    match evaluated_response {
+                        Ok(original) => {
+                            record.candidate_response_validation_sha256 = Some(digest_json_ensure_ascii(&original));
+                            if lifecycle.native_observation.as_ref().is_some_and(|owner| owner.details_selected()) {
+                                match observation_originals::response(&job, original, active_nanos,
+                                    candidate_nanos, response_nanos) {
+                                    Ok(original) => {
+                                        record.observation_original = Some(original);
+                                        record.set_event(ShadowRuntimeEvent::ResponseEvaluated);
+                                    }
+                                    Err(_) => ledger.mark_hard_unready(),
+                                }
+                            } else {
+                                record.set_event(ShadowRuntimeEvent::ResponseEvaluated);
+                            }
                         }
                         Err(error) => {
                             record.candidate_response_validation_sha256 =
@@ -11603,6 +11708,8 @@ mod active_terminal_record_tests {
             &terminal_response_sha256,
         );
         FinalActiveDecision {
+            native_original: None,
+            active_evaluation_nanos: None,
             decision_at_epoch_ms: 1,
             active_evaluation: PolicyEvaluation {
                 snapshot_hash: sha256_prefixed(b"component policy"),
@@ -12137,7 +12244,8 @@ mod active_terminal_record_tests {
         assert!(std::mem::size_of::<Option<ActiveTerminalRecord>>()
             - std::mem::size_of::<Option<FinalActiveDecision>>() <= SHADOW_ACTIVE_TERMINAL_RETENTION_BYTES);
         let surcharge = SHADOW_ACTIVE_TERMINAL_RETENTION_BYTES + SHADOW_CREDENTIAL_PREREQUISITE_RETENTION_BYTES
-            + SHADOW_NATIVE_OBSERVATION_RETENTION_BYTES;
+            + SHADOW_NATIVE_OBSERVATION_RETENTION_BYTES + SHADOW_INJECTION_COMPLETION_RETENTION_BYTES
+            + observation_originals::RETENTION_BYTES;
         assert_eq!(shadow_job_bytes_with_terminal_retention(0), surcharge);
         assert_eq!(shadow_job_bytes_with_terminal_retention(SHADOW_MAX_JOB_BYTES - surcharge),
             SHADOW_MAX_JOB_BYTES);

@@ -3,13 +3,14 @@ from serverware import authority_policy_canary as profile
 from serverware import authority_policy_canary_native_opening as opening
 from serverware import authority_policy_canary_native_runtime as runtime
 from serverware import authority_transition_policy_canary_native_opening as predecessor
+from serverware import authority_policy_canary_native_observation_originals as observations
 
 
 def apply(state, value, kind):
     response = type(value) is dict and value.get("apiVersion") == runtime.RESPONSE_SCHEMA
     profile.require(type(value) is dict and set(value) == (runtime.RESPONSE_FIELDS if response else runtime.FIELDS)
         and value["apiVersion"] == (runtime.RESPONSE_SCHEMA if response else runtime.SCHEMA))
-    context, assignment, _load, publication = predecessor.retained(state, value)
+    context, assignment, load, publication = predecessor.retained(state, value)
     receipt = value["receipt"]
     profile.require(type(receipt) is dict and set(receipt) == opening.RECEIPT_FIELDS)
     prior_openings, prior_terminals, prior_candidates, prior_responses = [], [], [], []
@@ -43,6 +44,9 @@ def apply(state, value, kind):
     result = runtime.verify(value, kind=kind, assignment=assignment, context=context, publication=publication,
         opening_record=prior_openings[0], terminal_record=prior_terminals[0] if prior_terminals else None, now=state.now,
         request_record=prior_candidates[0] if prior_candidates else None)
+    if observations.decoded(receipt).get("domain") == observations.EVENT_V2:
+        actual = [item["receipt"] for item in prior_terminals + prior_candidates] + [receipt]
+        observations.validate_protected_originals(state, value, actual, publication, load)
     state.charge(512 + len(assignment["authorityKeyIndependence"]["bindings"]))
     key = receipt["signing_key_spki_sha256"]
     profile.require(not any(row["assignment_envelope_digest"] == context["assignment_envelope_digest"]

@@ -2,6 +2,7 @@
 from serverware import authority_policy_canary as profile
 from serverware import authority_policy_canary_native_opening as opening
 from serverware import authority_policy_canary_native_runtime as runtime
+from serverware import authority_policy_canary_native_observation_originals as observations
 
 SCHEMA = "serverware.nativeCumulativeCheckpoint/v1"
 MAX_RECORD = 768 * 1024
@@ -57,9 +58,9 @@ def event_original(receipt, generation, assignment):
         profile.require(profile.canonical(sample) == profile.canonical(expected)
             and sample["decision"] in {"included", "excluded-by-assignment"})
         return "admitted"
-    profile.require(type(event) is dict and set(event) == runtime.EVENT_FIELDS
-        and event["domain"] == "serverware.policyShadowRuntimeAccountingEvent/v1"
-        and event["event"] in EVENT_PHASES and event["phase"] in EVENT_PHASES[event["event"]])
+    observations.event_shape(event, runtime.EVENT_FIELDS)
+    observations.validate_event(event, receipt)
+    profile.require(event["event"] in EVENT_PHASES and event["phase"] in EVENT_PHASES[event["event"]])
     for field, name in (("ingressSequence", "ingress_sequence"), ("requestBindingSha256", "request_binding_sha256"),
             ("requestCommitmentSha256", "request_commitment_sha256"), ("phase", "event_phase")):
         profile.require(type(event[field]) is type(receipt[name]) and event[field] == receipt[name])

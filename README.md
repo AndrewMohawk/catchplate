@@ -22,13 +22,11 @@ Checkpoint: **2026-09-29 — pre-production, source-only.**
 
 [![Project checkpoints, one segment per task: 36 of 46 source-landed; 10 active and 0 todo. Evidence handoff 10/10; historical recovery 4/5; permissions and grants 10/10; finalization and sessions 8/8; workloads and native 3/6; providers and operations 1/7. H05, N04, N05, N06 and O01 through O06 are in progress. Production acceptance remains 0/6. Source only; unbuilt, unexecuted and unprovisioned.](docs/images/project-progress.svg)](docs/production-status.md#next-source-milestones)
 
-The current `.320` source batch connects [actual canary drain and finalization](docs/native-canary-finalization.md)
-to the [native readiness consumer](docs/native-policy-canary-readiness.md).
-[Native response accounting](docs/native-shadow-response-connection.md) now uses
-the real retained credential and injection completions.
-The [paired retrieval launcher](docs/native-shadow-retrieval-pair.md) creates real
-child identities before independent assignment. Detailed readiness evidence,
-remaining services and activation, enrollment and final Setup remain open.
+The current `.321` source batch connects [signed route classification](docs/compiled-route-authority.md)
+and [actual evaluation originals and timing](docs/native-observation-originals.md)
+to the native signed observation path and its receiving checks.
+Full readiness-result assembly, native approval/activation, remaining services,
+enrollment and final Setup remain open.
 These are code milestones, not a runnable or verified pilot release.
 Broad testing follows the connected pilot flow.
 

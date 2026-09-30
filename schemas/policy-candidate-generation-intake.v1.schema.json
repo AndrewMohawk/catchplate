@@ -19,7 +19,7 @@
         "artifactEnvelopeDigest": {"$ref": "#/$defs/digest"}, "assignmentEnvelopeDigest": {"$ref": "#/$defs/digest"},
         "loadReceiptEnvelopeDigest": {"$ref": "#/$defs/digest"}, "bootId": {"$ref": "#/$defs/digest"},
         "runtimeAttestationHandoffDigest": {"$ref": "#/$defs/digest"}, "predecessorPolicyHash": {"$ref": "#/$defs/digest"},
-        "candidatePolicyBundle": {"$ref": "policy-bundle.v1.schema.json"}},
+        "candidatePolicyBundle": {"oneOf": [{"$ref": "policy-bundle.v1.schema.json"}, {"$ref": "policy-bundle.v2.schema.json"}]}},
       "description": "Existing handoff DATA nested under a new explicit request, never conversion of legacy mutation permission."
     },
     "draftRequest": {

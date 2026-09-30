@@ -32,10 +32,7 @@ impl Accounting {
                 last_ingress=Some(serde_json::json!({"ingressSequence":receipt.ingress_sequence(),"openingReceiptSha256":receipt.signed_receipt_sha256()}));
                 "admitted"
             } else {
-                if event.get("domain").and_then(Value::as_str)!=Some("serverware.policyShadowRuntimeAccountingEvent/v1") {
-                    return Err(ShadowError::BindingDrift);
-                }
-                event.get("event").and_then(Value::as_str).ok_or(ShadowError::BindingDrift)?
+                native_runtime::accounting_label(&event)?
             };
             let counter=counters.get_mut(label).ok_or(ShadowError::BindingDrift)?;
             *counter=counter.checked_add(1).ok_or(ShadowError::CounterOverflow)?;

@@ -9,6 +9,7 @@ pub(super) struct Opening {
     gate:Weak<GateState>,generation:policy_shadow::Sha256Digest,ingress:u64,
     request_binding:policy_shadow::Sha256Digest,request_commitment:policy_shadow::Sha256Digest,
     opening:policy_shadow::Sha256Digest,phase:Mutex<Phase>,
+    details_selected:bool,
 }
 enum Phase {
     Open, Terminal(policy_shadow::Sha256Digest),
@@ -76,6 +77,7 @@ impl CheckpointAttempt {
     }
 }
 impl Opening {
+    pub(super) fn details_selected(&self)->bool {self.details_selected}
     pub(super) fn completed_lifecycle(&self,dispatch:bool)->Result<Value,String> {
         let phase=self.phase.try_lock().map_err(|_|"native lifecycle observation still active")?;
         let (terminal,request,response)=match (&*phase,dispatch) {
@@ -89,9 +91,15 @@ impl Opening {
     pub(super) fn new(gate:Weak<GateState>,admission:&policy_shadow::PersistedIngressAdmission)->Result<Self,String> {
         let state=gate.upgrade().ok_or("native runtime has no actual serving owner")?;
         if state.measured_canary_delivery.is_none(){return Err("runtime exporter lacks selected durable owner".into());}
+        let details_selected={
+            let owner=state.measured_canary_delivery.as_ref().ok_or("runtime delivery owner absent")?
+                .try_lock().map_err(|_|"runtime delivery owner busy")?;
+            owner.check(&state)?;
+            owner.authority.configuration().api_version=="serverware.nativeCanaryDurableDelivery/v3"
+        };
         Ok(Self{gate,generation:admission.generation_id().clone(),ingress:admission.ingress_sequence(),
             request_binding:admission.request_binding_sha256().clone(),request_commitment:admission.request_commitment_sha256().clone(),
-            opening:admission.opening_spill_receipt().signed_receipt_sha256().clone(),phase:Mutex::new(Phase::Open)})
+            opening:admission.opening_spill_receipt().signed_receipt_sha256().clone(),phase:Mutex::new(Phase::Open),details_selected})
     }
     pub(super) fn append(&self,receipt:&policy_shadow::VerifiedShadowSpillReceipt)->Result<(),String> {
         let state=self.gate.upgrade().ok_or("runtime original outlived actual serving owner")?;

@@ -893,7 +893,14 @@ def canonical_json(value: Any) -> str:
 
 
 def policy_hash(value: dict[str, Any]) -> str:
-    return "sha256:" + hashlib.sha256(canonical_json(signature_payload(value)).encode("utf-8")).hexdigest()
+    return "sha256:" + hashlib.sha256(policy_signature_bytes(value)).hexdigest()
+
+
+def policy_signature_bytes(value: dict[str, Any]) -> bytes:
+    if value.get("apiVersion") == "serverware.policy/v2":
+        from serverware.policy_route_authority import canonical
+        return canonical(signature_payload(value))
+    return canonical_json(signature_payload(value)).encode("utf-8")
 
 
 def signature_payload(value: dict[str, Any]) -> dict[str, Any]:
@@ -1943,6 +1950,9 @@ def policy_public_key_hash() -> str:
 
 def sign_policy_bundle(raw: dict[str, Any]) -> dict[str, Any]:
     _admit_policy_json_object(raw)
+    if raw.get("apiVersion") == "serverware.policy/v2":
+        from serverware.policy_route_authority import admit
+        admit(raw)
     private_key = _load_policy_private_key()
     signing_key_id = _public_key_id(private_key.public_key())
     trust = _load_policy_signing_trust()
@@ -1954,9 +1964,7 @@ def sign_policy_bundle(raw: dict[str, Any]) -> dict[str, Any]:
     signed.setdefault("metadata", {})
     signed["metadata"]["signingKeyId"] = signing_key_id
     signed["metadata"].pop("signature", None)
-    signature = private_key.sign(
-        canonical_json(signature_payload(signed)).encode("utf-8")
-    )
+    signature = private_key.sign(policy_signature_bytes(signed))
     signed["metadata"]["signature"] = "ed25519:" + _b64e(signature)
     return signed
 
@@ -1985,7 +1993,7 @@ def verify_policy_signature(
     try:
         trust.public_key.verify(
             signature,
-            canonical_json(signature_payload(raw)).encode("utf-8"),
+            policy_signature_bytes(raw),
         )
     except InvalidSignature as exc:
         raise PolicyBundleError("policy bundle signature verification failed") from exc
@@ -2242,7 +2250,9 @@ def validate_policy_schema(raw: dict[str, Any]) -> None:
         },
     )
 
-    bundle_schema = _load_schema(SCHEMA_DIR / "policy-bundle.v1.schema.json")
+    legacy_schema = _load_schema(SCHEMA_DIR / "policy-bundle.v1.schema.json")
+    bundle_schema = (_load_schema(SCHEMA_DIR / "policy-bundle.v2.schema.json")
+        if raw.get("apiVersion") == "serverware.policy/v2" else legacy_schema)
     adapter_schemas = [
         _load_schema(SCHEMA_DIR / "adapters" / f"{adapter}.schema.json")
         for adapter in sorted(SUPPORTED_ADAPTERS)
@@ -2252,7 +2262,7 @@ def validate_policy_schema(raw: dict[str, Any]) -> None:
             str(schema["$id"]),
             Resource.from_contents(schema),
         )
-        for schema in [bundle_schema, *adapter_schemas]
+        for schema in [legacy_schema, bundle_schema, *adapter_schemas]
     )
     try:
         ServerwareSchemaValidator(
@@ -3478,6 +3488,7 @@ class PolicySnapshot:
     principals: dict[str, PrincipalPolicy]
     credentials: dict[str, CredentialPolicy]
     routes: tuple[RoutePolicy, ...]
+    compiled_route_authority: Any = None
 
     def identify_principal(
         self, client_ip: str | None, headers: Any, mtls_evidence: Any = None
@@ -3586,6 +3597,7 @@ def _fresh_policy_snapshot(snapshot: PolicySnapshot) -> PolicySnapshot:
         principals=principals,
         credentials=credentials,
         routes=routes,
+        compiled_route_authority=snapshot.compiled_route_authority,
     )
 
 
@@ -6178,8 +6190,8 @@ def compile_policy_bundle(
         validate_policy_schema(raw)
     if verify_signature:
         verify_policy_signature(raw, signing_trust=signing_trust)
-    if raw.get("apiVersion") != "serverware.policy/v1":
-        raise PolicyBundleError("apiVersion must be serverware.policy/v1")
+    if raw.get("apiVersion") not in {"serverware.policy/v1", "serverware.policy/v2"}:
+        raise PolicyBundleError("apiVersion must select a supported signed policy profile")
     if raw.get("kind") != "PolicyBundle":
         raise PolicyBundleError("kind must be PolicyBundle")
 
@@ -6905,12 +6917,15 @@ def compile_policy_bundle(
         )
         for route in routes
     )
+    from serverware.policy_route_authority import admit as admit_route_authority
+    compiled_route_authority = admit_route_authority(raw)
     return PolicySnapshot(
         raw=_deep_freeze(raw),
         hash=policy_hash(raw),
         principals=frozen_principals,
         credentials=frozen_credentials,
         routes=frozen_routes,
+        compiled_route_authority=_deep_freeze(compiled_route_authority),
     )
 
 

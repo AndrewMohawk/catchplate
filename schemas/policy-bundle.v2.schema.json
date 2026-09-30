@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.local/schemas/policy-bundle.v2.schema.json",
+  "title": "Signed policy with complete compiled route authority mapping",
+  "description": "Explicit v2 uses policyTypedCanonical/v1 for its full signature/hash and classifier pins. Every JSON node is tagged; finite binary64 numbers commit exact IEEE bits. v1 is unchanged. A mapping is not independent compiler-analysis approval.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "metadata", "defaults", "principals", "credentials", "routes", "routeAuthority"],
+  "properties": {
+    "apiVersion": {"const": "serverware.policy/v2"},
+    "kind": {"const": "PolicyBundle"},
+    "metadata": {"$ref": "policy-bundle.v1.schema.json#/properties/metadata"},
+    "defaults": {"$ref": "policy-bundle.v1.schema.json#/properties/defaults"},
+    "principals": {"$ref": "policy-bundle.v1.schema.json#/properties/principals"},
+    "credentials": {"$ref": "policy-bundle.v1.schema.json#/properties/credentials"},
+    "routes": {"allOf": [{"$ref": "policy-bundle.v1.schema.json#/properties/routes"}], "maxItems": 128},
+    "routeAuthority": {"$ref": "#/$defs/routeAuthority"}
+  },
+  "$defs": {
+    "routeAuthority": {
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "genericOperations", "mappingSha256", "routeAuthorityRootSha256", "operationAuthorityRootSha256"],
+      "properties": {
+        "apiVersion": {"const": "serverware.compiledRouteAuthority/v1"},
+        "genericOperations": {
+          "type": "array", "maxItems": 128,
+          "description": "Strictly sorted by routeId then operationName, exactly one declaration per generic route operation; no built-in overrides.",
+          "items": {
+            "type": "object", "additionalProperties": false, "required": ["routeId", "operationName", "operation"],
+            "properties": {
+              "routeId": {"type": "string", "minLength": 1, "maxLength": 256},
+              "operationName": {"type": "string", "minLength": 1, "maxLength": 256},
+              "operation": {"enum": ["read", "search", "write", "publish", "delete", "administrative"]}
+            }
+          }
+        },
+        "mappingSha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "routeAuthorityRootSha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "operationAuthorityRootSha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+      }
+    }
+  }
+}

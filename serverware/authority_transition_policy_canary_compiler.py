@@ -51,4 +51,14 @@ def compiler_analysis(state, value):
     profile.require(payload["expectedLoadedSnapshots"] == db.loads(assignment["expected_snapshots_json"], None)
         and payload["responseValidationObligationsRootSha256"] == assignment["response_obligations_digest"])
     state.put("policy_compiler_authority_analyses", item)
+    # A complete v2 map is checked against real published load originals,
+    # even when the signed analysis has no expansion cells. Earlier analysis
+    # intake is not load proof; later detailed intake repeats this exact join.
+    from serverware import authority_transition_policy_canary_route_authority as routes
+    for publication in state.matching("policy_shadow_generation_publications", canary_id=item["canary_id"],
+            assignment_envelope_digest=item["assignment_envelope_digest"]):
+        management = db.loads(publication["management_request_json"], None)
+        if any(management[lane + "PolicyBundle"].get("apiVersion") == routes.classifier.BUNDLE for lane in ("active", "candidate")):
+            routes.retained_pair(state, {"canary_id": publication["canary_id"], "instance_id": publication["instance_id"],
+                "boot_id": publication["boot_id"], "publication_envelope_digest": publication["generation_publication_envelope_digest"]})
     return item

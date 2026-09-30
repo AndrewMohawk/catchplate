@@ -21,6 +21,7 @@ from typing import NamedTuple
 from scripts.authority import native_pilot_authority_io as io
 from serverware import custody_commitment_inputs as commitment
 from serverware import custody_generation_grants as generation
+from serverware import custody_generation_originals as generation_originals
 from serverware import custody_spool_inputs as spool
 from serverware import native_pilot_bridge_install as bridge_install
 from serverware import native_pilot_delivery_authority as delivery_authority
@@ -28,6 +29,8 @@ from serverware import native_pilot_driver_authority as driver_authority
 from serverware import native_pilot_generation_install_authority as generation_authority
 from serverware import native_pilot_launch_publication as launch_install
 from serverware import native_pilot_native_service_authority as native_authority
+from serverware import native_pilot_ordinary_initial_authority as initial_authority
+from serverware import native_pilot_ordinary_initial_profile as initial_profile
 from serverware import native_pilot_precreation_install as precreation_install
 from serverware import native_pilot_scope_authority as scope_authority
 from serverware import native_pilot_service_authority as service_authority
@@ -78,6 +81,16 @@ def _plain(name, family, maximum, role=None):
     return _Job(name, family, role, maximum, None, None)
 
 
+INITIAL_JOBS = tuple(_Job(
+    "ordinary-initial-" + operation + "-" + role, "ordinary-initial", role, initial_authority.MAX_INPUT,
+    "ordinary-initial-history-" + role if operation == "assemble" else None,
+    None if operation == "assemble" else "ordinary-initial-" + (
+        "checkpoint" if operation == "checkpoint" else operation.removesuffix("-anchor")) + "-" + role)
+    for role in generation.ROLES for operation in initial_authority.OPERATIONS)
+INITIAL_JOB_INFO = {job.name: (role, operation) for job, (role, operation) in zip(INITIAL_JOBS,
+    ((role, operation) for role in generation.ROLES for operation in initial_authority.OPERATIONS), strict=True)}
+
+
 # No user-controlled operation list. Dependencies intentionally precede later
 # approval requests; every later producer receives its complete approved bytes.
 JOBS = {
@@ -89,6 +102,7 @@ JOBS = {
     "endpoint-deliveries": tuple(_signed("native-delivery-" + role, "delivery", role,
         delivery_authority.MAX_INPUT, "native-delivery-" + role) for role in ENDPOINT_INPUT_ROLES),
     "service-originals": (
+        *INITIAL_JOBS,
         *(_signed("ordinary-delivery-" + role, "ordinary-delivery", role, service_authority.MAX_INPUT_BYTES,
                   "ordinary-delivery-" + role) for role in generation.ROLES),
         *(_signed("ordinary-generation-" + role, "ordinary-generation", role, service_authority.MAX_INPUT_BYTES,
@@ -147,6 +161,7 @@ class PhaseExecution:
         self._request = self._ticket = None
         self._failed = self._closed = self._keys_attempted = False
         self._outputs, self._pins, self._installations, self._observations = {}, {}, {}, {}
+        self._inputs = {}  # References to the same bounded, retained original bytes.
         self._previous = None
         self._material = self._endpoint_inputs = self._public_bundle_pin = self._scope_bundle = None
 
@@ -258,6 +273,7 @@ class PhaseExecution:
             _same(approval[field], ticket[field])
         p.require(p.digest(approval["inputSha256"]) == p.digest(reply["inputSha256"]))
         raw = self._retain(stem + ".input.json", approval["inputSha256"], job.maximum)
+        self._inputs[job.name] = raw
         value = p.document(raw, job.maximum)
         self._process._io_check(request.deadline_boottime_ns)
         self._bind(job, value)
@@ -282,6 +298,76 @@ class PhaseExecution:
 
     def _known(self, field, value, output):
         p.require(_raw(value[field], 131072) == self._outputs[output])
+
+    def _bind_initial(self, job, value):
+        role, operation = INITIAL_JOB_INFO[job.name]
+        extra = () if operation == "checkpoint" else ("initialCheckpointOriginal",)
+        if operation == "assemble":
+            extra += ("anchorSignatures",)
+        p.fields(value, initial_authority.COMMON_FIELDS + extra)
+        p.require(value["apiVersion"] == initial_authority.INPUT_API and value["operation"] == operation
+            and role == job.role)
+        _, state = initial_authority._original(value["initialStateOriginal"], initial_profile.MAX_STATE)
+        p.require(state["serviceRole"] == role)
+        observed = self._request.payload
+        _same(value["preparationOriginal"], observed["ordinaryPreparationOriginal"])
+        _same(value["resourcesOriginal"], observed["ordinaryInitialResourcesOriginal"])
+        installed = p.document(self._inputs["install-precreation"], precreation_install.MAX_INPUT)
+        p.require("install-precreation" in self._installations)
+        for field in ("driverConfigurationOriginal", "driverWindowOriginal"):
+            _same(value[field], installed[field])
+        _same(value["launchOriginal"], installed["ordinaryLaunchOriginal"])
+        _same(value["configurationOriginal"], installed["ordinaryColdOriginals"][role])
+        checkpoint_job = "ordinary-initial-checkpoint-" + role
+        if operation != "checkpoint":
+            approved = p.document(self._inputs[checkpoint_job], initial_authority.MAX_INPUT)
+            # Literal originals and all independently selected public keys are
+            # unchanged throughout this role's one ceremony; only operation
+            # and actual prerequisite outputs may differ.
+            for field in initial_authority.COMMON_FIELDS:
+                if field != "operation":
+                    _same(value[field], approved[field])
+            checkpoint, _ = initial_authority._original(value["initialCheckpointOriginal"],
+                initial_authority.MAX_CHECKPOINT)
+            p.require(checkpoint == self._outputs[checkpoint_job])
+        if operation == "assemble":
+            for signer, original in p.fields(value["anchorSignatures"], initial_authority.KEY_NAMES).items():
+                raw, _ = initial_authority._original(original, initial_authority.MAX_SIGNATURE)
+                p.require(raw == self._outputs["ordinary-initial-" + signer + "-anchor-" + role])
+
+    def _bind_initial_delivery(self, role, value):
+        output = "ordinary-initial-assemble-" + role
+        history_raw = self._outputs[output]
+        runtime_raw = service_authority._original(value["runtimeOriginal"], generation.MAX_BYTES)
+        header = service_authority._runtime(runtime_raw, role)
+        payload = generation.document(service_authority._original(value["payloadOriginal"], 65536), 65536)
+        p.require(type(payload["credentials"]) is list and 1 <= len(payload["credentials"]) <= 64)
+        selected = [item for item in payload["credentials"]
+            if item["name"] == header["authorityHistoryManifestCredential"]]
+        p.require(len(selected) == 1)
+        credential = p.fields(selected[0], ("name", "original", "length", "signing"))
+        p.require(self._pins[output]["sha256"] == p.sha(history_raw))
+        _same(credential["original"], {"path": initial_profile.INITIAL_CREDENTIAL_PATHS[role],
+            "sha256": self._pins[output]["sha256"]})
+        p.require(type(credential["length"]) is int and credential["length"] == len(history_raw)
+            and credential["signing"] is None)
+        installed = p.document(self._inputs["install-precreation"], precreation_install.MAX_INPUT)
+        cold_raw = service_authority._original(installed["ordinaryColdOriginals"][role], 65536)
+        cold = generation.configuration(cold_raw, p.sha(cold_raw), role)
+        # The root-published result is not a service-owned C9 credential. A
+        # separate fixed installer must supply this literal public copy; no
+        # copying, chown, adoption or relaxed generic owner check occurs here.
+        original = generation_originals.Original(credential["original"]["path"], len(history_raw),
+            uid=cold["uid"], gid=cold["gid"])
+        self._held.append(original)
+        original.sha = p.digest(credential["original"]["sha256"])
+        p.require(original.read() == history_raw)
+        # The independently approved runtime supplies the authority pin; never
+        # promote a key declared by the wrapper to its own trust anchor.
+        history = initial_profile.manifest(history_raw, role=role, root_pin={
+            "keyId": header["authorityHistoryRootKeyId"],
+            "keySpkiSha256": header["authorityHistoryRootKeySpkiSha256"]})
+        p.require(header["authorityHistoryManifestSha256"] == history["manifestSha256"])
 
     def _bind(self, job, value):
         """Join approved input originals to this actual request and prior outputs."""
@@ -312,13 +398,18 @@ class PhaseExecution:
             _same(value["role"], job.role)
             _same(value["observationOriginal"], self._observations["bootstrap-admission"]["bootstrapObservationOriginal"]
                 if job.role == "bridge" else observed["cohortObservationOriginal"])
+        elif job.family == "ordinary-initial":
+            self._bind_initial(job, value)
         elif job.family.startswith("ordinary-"):
             operation = job.family.removeprefix("ordinary-")
             _same(value["serviceRole"], job.role)
             if operation == "delivery":
                 _same(value["activation"], observed["ordinaryActivations"][job.role])
+                self._bind_initial_delivery(job.role, value)
             else:
                 for role, service in value["services"].items():
+                    p.require(service_authority._original(service["historyOriginal"], generation.MAX_BYTES)
+                        == self._outputs["ordinary-initial-assemble-" + role])
                     self._known("deliveryOriginal", service, "ordinary-delivery-" + role)
                     if operation != "generation":
                         self._known("generationGrantOriginal", service, "ordinary-generation-" + role)
@@ -407,6 +498,7 @@ class PhaseExecution:
 
     def _perform(self, job, raw, value, key):
         signed = None
+        deadline = self._request.deadline_boottime_ns
         if job.family == "driver":
             signed = driver_authority.sign(job.role, raw, key)
         elif job.family == "cohort":
@@ -417,6 +509,15 @@ class PhaseExecution:
             signed = native_authority.sign(job.role, raw, key)
         elif job.family == "generation-install":
             signed, _ = generation_authority.sign(input_original=raw, signing_key=key)
+        elif job.family == "ordinary-initial":
+            _, operation = INITIAL_JOB_INFO[job.name]
+            if operation == "assemble":
+                p.require(key is None)
+                signed, initial_deadline = initial_authority.assemble(input_original=raw)
+            else:
+                signed, initial_deadline = initial_authority.sign(operation, input_original=raw, signing_key=key)
+            deadline = min(deadline, initial_deadline)
+            self._process._io_check(deadline)
         elif job.family.startswith("ordinary-"):
             signed, _ = service_authority.sign(operation=job.family.removeprefix("ordinary-"), role=job.role,
                 input_original=raw, signing_key=key)
@@ -424,12 +525,15 @@ class PhaseExecution:
             signed = scope_authority.sign(raw, key)
         if signed is not None:
             self._outputs[job.name] = signed  # Retain even if publication fails.
+            self._bytes += len(signed)
+            p.require(self._bytes <= MAX_RETAINED_BYTES)
             result = {"original": signed.decode("ascii"), "sha256": p.sha(signed)}
             if job.purpose is not None:
-                self._process._io_check(self._request.deadline_boottime_ns)
+                self._process._io_check(deadline)
                 pin = self._publisher.publish(purpose=job.purpose, raw=signed, expected_sha256=p.sha(signed))
                 self._pins[job.name] = pin
                 result["pin"] = pin  # Measured output of this approved job, not a new approval.
+                self._process._io_check(deadline)
             return result
         if job.family == "precreation":
             result = precreation_install.install(raw, expected_sha256=p.sha(raw))

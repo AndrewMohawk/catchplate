@@ -19,6 +19,8 @@ p = g.p
 MAX_STATE = 65536
 STATE_API = "serverware.custodyOrdinaryInitialState/v1"
 WRAPPER_API = "serverware.custodyOrdinaryInitialHistory/v1"
+INITIAL_CREDENTIAL_PATHS = {role: "/etc/serverware/custody-" + role + "-initial-history.json"
+    for role in g.ROLES}
 STATE_FIELDS = ("apiVersion", "serviceRole", "preparationSha256", "resourcesSha256", "launchSha256",
     "endpointProcessIdentitySha256", "bootIdBase64url", "timeNamespaceDevice", "timeNamespaceInode",
     "issuedAtBoottimeNs", "startupDeadlineBoottimeNs", "lifetimeDeadlineBoottimeNs", "invocationId",

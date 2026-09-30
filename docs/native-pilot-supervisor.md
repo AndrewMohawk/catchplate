@@ -1,9 +1,10 @@
 # Native pilot commissioning supervisor
 
 This is a partial source implementation, not a runnable or deployed supervisor.
-The .370 source batch connects endpoint preparation and the first three native
-C9 delivery decisions to the retained measured-recipe owner.
-Seven of the existing 60 jobs have fixed policy/input composers. The automated
+The `.373` source connects the ordinary initial-history ceremony after endpoint
+preparation and the first three native C9 decisions. **32 of 85** jobs now have
+fixed policy/input composers; the added 25 jobs expose previously missing
+startup work rather than changing what counts as production completion. The automated
 owner refuses startup **before spawning** while any job is unimplemented. There
 is no CLI, generic template renderer, approval callback or implicit approval of
 future inputs. Independent production acceptance remains separate.
@@ -41,7 +42,7 @@ The original short startup window is never renewed to accommodate preparation.
 
 `native_pilot_supervisor_policy.SupervisorPolicy` retains a protected policy FD
 whose literal bytes match an independently supplied pin. Its closed grammar binds
-both runtime inventories, their source metadata, all 42 measured public-key
+both runtime inventories, their source metadata, all 57 measured public-key
 bindings, the four approved bootstrap originals and the explicit precreation
 fragment. Selecting these values and approving their digest remains a separate
 commissioning responsibility. Computing a digest locally does not approve it.
@@ -64,6 +65,15 @@ three exact role runtimes, their fixed public pins and nonempty credential
 metadata; it supplies no private bytes. V1/v2 remain unchanged. See
 [endpoint commissioning](native-pilot-supervisor-endpoints.md).
 
+Explicit policy/v4 adds `ordinaryInitialHistories` with purpose
+`initial-driver-bootstrap-precreation-endpoints-and-ordinary-initial-history`.
+It delegates checkpoint, root-anchor, checkpoint-anchor, service-anchor and
+keyless assembly for each ordinary role. The 15 new key selectors are pinned
+to approved raw public material; each role's two checkpoint calls reuse its
+checkpoint capability. Legacy v1–v3 preserve their 42-key field set and cannot
+bind the expanded coordinator; selecting v4 requires independent reapproval.
+See [initial-history policy and job binding](native-pilot-ordinary-initial-history.md#supervisor-connection).
+
 ## Implemented composition
 
 | Existing job | Independently selected inputs | Actual data admitted during the attempt |
@@ -75,6 +85,7 @@ metadata; it supplies no private bytes. V1/v2 remain unchanged. See
 | `native-delivery-retrieval` | Retrieval runtime and credential metadata | Actual activation FDs, original cohort window and assignment-bound runtime leaf |
 | `native-delivery-persistence` | Persistence runtime and credential metadata | Same joins plus the verified actual Retrieval delivery result |
 | `native-delivery-trustedTime` | TrustedTime runtime and credential metadata | Same joins plus both earlier verified delivery results |
+| Five `ordinary-initial-*` jobs per role | Three public authorities, protocol role, generations/deployment, revocation facts and original-lifetime validity rule | Actual preparation/empty directories, exact approved predecessor inputs, verified checkpoint and three anchor results; only the complete wrapper is published |
 
 The original boot, time namespace, invocation and startup/lifetime interval are
 preserved; no timestamp renewal, invented journal, placeholder signature or
@@ -86,7 +97,7 @@ actually approved for that job.
 `native_pilot_supervisor.CommissioningSupervisor` connects the owners/composers
 to the existing approval installer and reply protocol. `prepare(policy=...,
 process=..., measured_recipe=...)` requires the actual retained recipe/v2 for
-policy/v2 or v3; policy/v1 requires no recipe. It checks the independent recipe pin
+policy/v2, v3 or v4; policy/v1 requires no recipe. It checks the independent recipe pin
 before bootstrap preparation, then binds that owner to the same actual process
 before spawn. On the genuine pending `cohort-precreation` request, `step()` derives
 once from the verified prior bootstrap result. A downstream fixed composer can
@@ -121,7 +132,7 @@ the old contradictory pre-start scope/manifest requirements.
 The other 53 jobs, from the first ordinary delivery in `service-originals`
 through `shutdown`, still need fixed
 policy composition and applicable prior-result verification. Existing signers,
-installers and the 60-job executor do not supply those independent decisions.
+installers and the 85-job executor do not supply those independent decisions.
 The next batch is ordinary-service delivery and generation composition from
 genuine endpoint results, independently approved static authority inputs and
 actual resource observations. A cgroup-original digest is not a cgroup-path
@@ -131,7 +142,7 @@ and its exact leaf/runtime bytes; the marker alone supplies neither authorizatio
 nor service settings.
 
 Complete coverage, the executable supervisor entrypoint/package, connected
-runtime verification and protected deployment remain required. The first seven
+runtime verification and protected deployment remain required. These 32
 composers do not close an overall project checkpoint or establish pilot readiness.
 
 External dependencies remain: approved immutable dependency publication, genuine

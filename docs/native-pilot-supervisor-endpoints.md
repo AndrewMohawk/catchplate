@@ -1,7 +1,8 @@
 # Native pilot endpoint commissioning
 
 The `.370` source connects four additional fixed supervisor jobs. Coverage is
-7/60; startup still refuses before spawning while the other 53 are missing.
+7/60 at that checkpoint. The `.373` initial-history connection expands the graph
+to 32/85; startup still refuses before spawning while the other 53 are missing.
 This is not a launched pilot, production approval or verified hardware custody.
 
 ## Independently selected policy

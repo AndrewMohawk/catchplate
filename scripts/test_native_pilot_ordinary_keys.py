@@ -236,10 +236,10 @@ class OrdinaryKeyProfileTests(unittest.TestCase):
             with self.subTest(changed=changed), self.assertRaises(ValueError):
                 profile.validate_payload(changed, identity=identity_fixture(), window=window, now=now)
 
-    def test_seven_of_sixty_coverage_still_refuses_full_startup(self):
-        self.assertEqual(len(supervisor.SUPPORTED_JOBS), 7)
-        self.assertEqual(supervisor._ORDER[:7], supervisor.SUPPORTED_JOBS)
-        self.assertEqual(len(supervisor._ORDER), 60)
+    def test_thirty_two_of_eighty_five_coverage_still_refuses_full_startup(self):
+        self.assertEqual(len(supervisor.SUPPORTED_JOBS), 32)
+        self.assertEqual(supervisor._ORDER[:32], supervisor.SUPPORTED_JOBS)
+        self.assertEqual(len(supervisor._ORDER), 85)
         self.assertEqual(len(supervisor.missing_jobs()), 53)
         self.assertEqual(supervisor.missing_jobs()[0],
             ("service-originals", "ordinary-delivery-durable-recovery-store"))

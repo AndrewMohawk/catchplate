@@ -3,7 +3,7 @@
 `serverware.native_pilot_supervisor_policy.SupervisorPolicy` admits one complete
 independently selected policy and implements the first `driver-bootstrap`
 decision. The separate precreation composer implements the next two jobs. This
-is not a complete sixty-job decision service, a runnable pilot supervisor, or
+is not a complete decision service, a runnable pilot supervisor, or
 approval of unimplemented future jobs. The decision spine must refuse startup
 while fixed-job coverage remains incomplete.
 
@@ -36,7 +36,7 @@ boot/time namespace and nondecreasing original BOOTTIME bounds are retained and
 rechecked. There is one admission/binding/bootstrap attempt per process and no
 retry/reset path.
 
-## Closed policy
+## Legacy closed policy
 
 There are exactly eight top-level fields:
 
@@ -49,9 +49,9 @@ There are exactly eight top-level fields:
   approved pins for the two distinct existing runtime inventories.
 - `bootstrapOriginals`: exact `control`, `configuration`, `window`, and
   `deliveryConfiguration` literal canonical ASCII originals.
-- `keyBindings`: exactly the 42 source-owned `KEY_PURPOSES`, each mapped to
+- `keyBindings`: exactly the 42 legacy source-owned selectors, each mapped to
   SHA256 of the actual raw 32-byte Ed25519 public key. This is a capability
-  inventory, not approval of all 42 purposes or all sixty jobs.
+  inventory, not approval of all purposes or jobs.
 - `precreation`: the separate closed
   `serverware.nativePilotSupervisorPrecreationPolicy/v1` fragment.
 
@@ -114,3 +114,34 @@ terminal-and-reaped state. No caller-authored status object releases it.
 
 No signing, approval installation, process launch, build, hardware execution or
 complete-pilot verification was performed as part of authoring this source.
+
+## Current initial-history successor
+
+Policy/v4 has the eleven v3 fields plus `ordinaryInitialHistories`. Its purpose
+is `initial-driver-bootstrap-precreation-endpoints-and-ordinary-initial-history`.
+The expanded coordinator requires 57 exact key selectors; v1–v3 keep their old
+42-selector shape and therefore cannot bind it. No legacy policy is silently
+upgraded or given new signing authority.
+
+The new fragment is `serverware.nativePilotSupervisorOrdinaryInitialPolicy/v1`
+with exactly `apiVersion` and five-role `services`. Each role selects three
+separate public authorities, a protocol endpoint role, four positive generation
+counters, deployment digest, revocation generation/root and the closed validity
+rule `observed-initial-resources-through-original-lifetime`. It does not carry
+predicted process identities, initial-state bytes or future signatures. The
+composer derives those public inputs only from actual retained observations and
+verified results under the unchanged startup window.
+
+Only these four generation counters and the revocation high-water counter in
+each v4 role entry accept positive u64 values. All other integers, older policy
+versions and the original byte/depth/node limits keep their existing grammar.
+
+`ordinary_initial_policy(process=..., request=...)` accepts only the bound actual
+process and pending request, and only v4. The fixed composers verify every
+prior signature against its literal approved input. The next job observes the
+actual output; receiving an approval reply alone is not success. The complete
+wrapper is published to one fixed root-owned path per role. Downstream delivery
+requires an independently installed service-owned copy at its separate fixed
+slot, with the same retained bytes, digest and length; later grant inputs use
+the same wrapper. The copy installer remains required implementation. See
+[the full connection](native-pilot-ordinary-initial-history.md#supervisor-connection).

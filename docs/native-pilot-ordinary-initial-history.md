@@ -6,9 +6,11 @@ satisfy a nonzero-digest check. Independent authorities approve the complete
 inputs, issue checkpoint one, separately sign its retained anchor, and assemble
 an opt-in wrapper which the native service checks before state-writing gates.
 
-This is source implementation, not an executed ceremony or pilot result. The
-supervisor still implements **7/60** fixed jobs; **53** remain unsupported and
-its coverage guard refuses startup. Production acceptance remains **0/6**.
+The `.373` source connects the ceremony to the independent supervisor through
+explicit commissioning policy/v4. Coverage is **32/85** fixed jobs: the previous
+seven plus 25 ceremony jobs. The same **53 existing jobs** remain unsupported,
+so the coverage guard still refuses before spawn. This is source implementation,
+not an executed ceremony or pilot result; production acceptance remains **0/6**.
 
 ## Actual preparation and empty resources
 
@@ -170,16 +172,49 @@ commitments; neither is substituted for the other or recomputed to bless an
 unapproved original. The wrapper requires the actual signed guest credential
 owner, not an arbitrary raw-history file.
 
-## Remaining connection
+## Supervisor connection
 
-Supervisor policy, fixed jobs/key capabilities and output-publication wiring
-must still connect this ceremony to the five ordinary runtime, inspection-policy
-and delivery composers. Private service provisioning, later generation/native/
-bridge/release/lifetime jobs and actual application acceptance remain open.
-The authority implementation is not approval automation. No ceremony or live
-service execution has run; the focused source evidence is recorded below.
+`serverware.nativePilotSupervisorCommissioningPolicy/v4` adds the closed
+`ordinaryInitialHistories` policy to v3. Its five role entries independently
+select the three public authorities, endpoint role, generations, deployment and
+revocation facts. Actual preparation and empty-resource observations supply
+identity and original time bounds; neither observations nor prior job results
+grant approval. Older policy versions keep their exact scope and 42 selectors;
+they cannot bind the expanded coordinator's **57 key selectors**.
+
+At the start of `service-originals`, each role in the fixed five-role order runs
+`ordinary-initial-<operation>-<role>` for `checkpoint`, `root-anchor`,
+`checkpoint-anchor`, `service-anchor`, then `assemble`. Checkpoint and its anchor
+share that role's checkpoint selector; root and service anchors use their own
+selectors, and assembly uses no key. The composer checks the genuine pending
+process request and reauthenticates actual prior results against the exact
+approved input. The executor separately retains those inputs, requires unchanged
+context/payload across each role's ceremony, and joins each anchor to the actual
+checkpoint and assembly to all three actual detached records.
+
+Only assembly publishes, at the fixed root-owned slot
+`/etc/serverware/native-pilot-inputs/ordinary-initial-history-<role>.json`.
+Publication checks wrapper grammar and commitments, not independent authority.
+That root-owned file is not a service-owned C9 credential. Downstream delivery
+requires a separately installed public copy at
+`/etc/serverware/custody-<role>-initial-history.json`, owned by the actual cold
+service UID/GID with mode `0400`. The executor retains and reads that file,
+requiring the exact assembled bytes, digest and length and `signing: null`;
+generic credential owner checks remain unchanged. Its approved runtime must
+match the inner history digest and root pins. Later ordinary grant inputs carry
+the same literal wrapper. No new guest-delivery digest is predicted.
+
+The original startup window and byte limits are unchanged; partial failure
+retains owners and does not authorize a retry. The fixed service-owned history-copy,
+runtime and inspection-policy installer and ordinary delivery composition remain
+missing. Private provisioning, later generation/native/bridge/release/lifetime
+jobs and actual application acceptance remain open. The
+[supervisor coverage guard](native-pilot-supervisor.md) prevents an incomplete run.
 
 ## Focused verification
+
+The following is historical **`.372` verification**, not verification of the
+`.373` coordinator connection. No `.373` test result is claimed here.
 
 Native source `c2542acb` passed one cached Rust 1.88 offline/frozen/locked
 `cargo check --bin serverware-decision-gate -j1` in 52.67 seconds, with no network,

@@ -1,6 +1,6 @@
 """Fixed commissioning decisions joined to their real process and installer.
 
-Only the initial seven job composers exist. The complete-coverage check refuses
+The initial 32 of 85 job composers exist. The complete-coverage check refuses
 startup before spawning a child, not after a live attempt reaches a missing job.
 There is no executable entrypoint, configurable dispatcher, approval callback,
 signer, new deadline or source of deployment approval in this module.
@@ -13,10 +13,11 @@ from serverware import native_pilot_approval_install as installation
 from serverware import native_pilot_supervisor_precreation as precreation
 from serverware import native_pilot_supervisor_endpoint_inputs as endpoint_inputs
 from serverware import native_pilot_supervisor_endpoint_deliveries as endpoint_deliveries
+from serverware import native_pilot_supervisor_initial_history as initial_history
 from serverware import native_shadow_nitro_originals as originals
 from serverware import native_shadow_nitro_profile as p
 from serverware.native_pilot_operator_channel import STAGES
-from serverware.native_pilot_phase_execution import JOBS, MAX_APPROVAL
+from serverware.native_pilot_phase_execution import INITIAL_JOBS, JOBS, MAX_APPROVAL
 from serverware.native_pilot_supervisor_policy import SupervisorPolicy
 from serverware.native_pilot_supervisor_process import AuthorityCoordinatorProcess
 
@@ -26,7 +27,8 @@ SUPPORTED_JOBS = (("bootstrap-admission", "driver-bootstrap"),
     ("endpoint-inputs", "endpoint-inputs"),
     ("endpoint-deliveries", "native-delivery-retrieval"),
     ("endpoint-deliveries", "native-delivery-persistence"),
-    ("endpoint-deliveries", "native-delivery-trustedTime"))
+    ("endpoint-deliveries", "native-delivery-trustedTime"),
+    *(("service-originals", job.name) for job in INITIAL_JOBS))
 _ORDER = tuple((phase, job.name) for phase in STAGES for job in JOBS[phase])
 _TOKEN = object()
 _USED = False
@@ -125,9 +127,12 @@ class CommissioningSupervisor:
         elif slot == SUPPORTED_JOBS[3]:
             input_raw = endpoint_inputs.compose(self._policy, process=self._process, request=request)
             approval_raw = _approval(request.raw, input_raw)
-        else:
-            p.require(slot in SUPPORTED_JOBS[4:7])
+        elif slot in SUPPORTED_JOBS[4:7]:
             input_raw = endpoint_deliveries.compose(self._policy, process=self._process, request=request)
+            approval_raw = _approval(request.raw, input_raw)
+        else:
+            p.require(slot in SUPPORTED_JOBS[7:])
+            input_raw = initial_history.compose(self._policy, process=self._process, request=request)
             approval_raw = _approval(request.raw, input_raw)
         p.require(type(input_raw) is bytes and type(approval_raw) is bytes)
         p.document(approval_raw, MAX_APPROVAL)

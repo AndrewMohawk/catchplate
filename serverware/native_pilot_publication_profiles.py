@@ -51,6 +51,8 @@ PROFILES = {
        for role in cohort.ENDPOINT_ROLES + ("bridge",)},
     **{"ordinary-delivery-" + role: ("ordinary-delivery", role, 65536)
        for role in generation.ROLES},
+    **{"ordinary-initial-history-" + role: ("ordinary-initial-history", role, generation.MAX_BYTES)
+       for role in generation.ROLES},
     **{"ordinary-generation-" + role: ("generation", role, 65536)
        for role in generation.ROLES},
     **{"ordinary-dispatch-" + role: ("dispatch", role, 65536)
@@ -148,10 +150,72 @@ def _driver(family, raw, maximum):
         p.document(observed.encode("ascii"), 65536)
 
 
+def _initial_history(role, raw, maximum):
+    """Initial-only grammar and commitments, without a selected trust anchor.
+
+    Public keys/signature encodings are checked, not authorized here. Only the
+    separately approved producer and actual pinned receiver authenticate them;
+    a wrapper-provided root must never become this publisher's approval.
+    """
+    from serverware import native_pilot_ordinary_initial_authority as ceremony
+    from serverware import native_pilot_ordinary_initial_profile as initial
+    from serverware import native_pilot_ordinary_key_authority as authority
+    from serverware import native_pilot_ordinary_key_profile as key
+
+    value = p.fields(generation.document(raw, maximum), initial.WRAPPER_FIELDS)
+    p.require(value["apiVersion"] == initial.WRAPPER_API)
+    state = initial.validate_state(value["initialState"])
+    p.require(state["serviceRole"] == role)
+    history = p.fields(value["history"], generation.HISTORY)
+    expected_role = {"authorityKind": "isolated-service", "role": role}
+    p.require(history["apiVersion"] == authority.HISTORY_API
+        and history["authorityRole"] == expected_role)
+    for field in ("adjacentTransitions", "compactionAnchors", "replayTombstones"):
+        p.require(type(history[field]) is list and history[field] == [])
+    anchor = p.fields(history["firstRetainedEpoch"], authority.ANCHOR_FIELDS)
+    epoch = p.fields(anchor["retainedEpoch"], authority.EPOCH_FIELDS)
+    identity = key.validate_identity(epoch["endpointProcessIdentity"])
+    p.require(identity["identitySha256"] == state["endpointProcessIdentitySha256"]
+        and (role != generation.ROLES[0] or identity["endpointRole"] == "settlement-store"))
+    for item in state["directories"].values():
+        p.require((item["identity"]["uid"], item["identity"]["gid"])
+            == (identity["endpointUid"], identity["endpointGid"]))
+    authorities = {"root": history["rootAuthority"], "checkpoint": epoch["checkpointAuthority"],
+        "service": epoch["serviceSigningKey"]}
+    public = [authority._key(authorities[name]) for name in ceremony.KEY_NAMES]
+    p.require(len({item["keyId"] for item in authorities.values()}) == 3
+        and len({item["keySpkiSha256"] for item in authorities.values()}) == 3
+        and len({authority._raw_key(item) for item in public}) == 3)
+    checkpoint = key.validate_checkpoint(value["initialCheckpoint"])
+    payload = checkpoint["payload"]
+    ceremony._initial_payload(state, payload, authorities)
+    p.require(checkpoint["authorityKeyId"] == authorities["checkpoint"]["keyId"]
+        and checkpoint["authorityKeySpkiSha256"] == authorities["checkpoint"]["keySpkiSha256"]
+        and payload["endpointRole"] == identity["endpointRole"]
+        and payload["validFromBoottime"]["domain"] == payload["validUntilBoottime"]["domain"] == key._boot(state))
+    expected, anchor_raw, _ = ceremony._anchor(state, identity, authorities, checkpoint)
+    p.require(generation.canonical({name: anchor[name] for name in authority.ANCHOR_FIELDS[:7]})
+        == generation.canonical(expected))
+    for field in ceremony.ANCHOR_SIGNATURE_FIELDS:
+        p.decoded(anchor[field], size=64)
+    p.require(p.digest(anchor["retainedAnchorSha256"]) == p.framed(authority.ANCHOR_DIGEST_DOMAIN,
+        (anchor_raw, *(anchor[name].encode("ascii") for name in ceremony.ANCHOR_SIGNATURE_FIELDS))))
+    authority._retention(history["retention"], epoch)
+    retention = history["retention"]
+    p.require(retention["oldestReplayableRecordSequence"] == retention["currentRecordSequence"] == 0)
+    for field in ("maximumRetainedEpochs", "maximumCompactionAnchors", "maximumReplayTombstones"):
+        p.require(retention[field] == 1)
+    p.require(p.digest(history["manifestSha256"]) == p.framed(authority.HISTORY_DOMAIN,
+        (generation.canonical([history[name] for name in generation.HISTORY[:-1]]),)))
+
+
 def shape(purpose, raw):
     """Validate the selected public envelope, never authenticate its authority."""
     p.require(type(purpose) is str and purpose in PROFILES)
     family, role, maximum = PROFILES[purpose]
+    if family == "ordinary-initial-history":
+        _initial_history(role, raw, maximum)
+        return
     if family == "endpoint-input":
         from serverware import native_pilot_assignment as assignments
         from serverware import native_shadow_retrieval_artifacts as retrieval

@@ -326,6 +326,14 @@ def compose(policy, *, process, request) -> bytes:
         raise
 
 
+def _service_boundary(request):
+    from serverware.native_pilot_phase_execution import INITIAL_JOBS, JOBS
+    count = len(INITIAL_JOBS)
+    return (request.phase == "service-originals" and type(request.job_index) is int
+        and 1 <= request.job_index <= count + 1
+        and request.job == JOBS["service-originals"][request.job_index - 1].name)
+
+
 def require_endpoint_inputs(policy, *, process, request) -> dict:
     """Recheck actual prior publication/open report, not endpoint readiness."""
     owner = _LIVE
@@ -334,8 +342,7 @@ def require_endpoint_inputs(policy, *, process, request) -> dict:
         _actual(policy, process, request)
         delivery = (request.phase == "endpoint-deliveries" and request.job_index in (1, 2, 3)
             and request.job == "native-delivery-" + ENDPOINT_INPUT_ROLES[request.job_index - 1])
-        service = (request.phase == "service-originals" and request.job_index == 1
-            and request.job == "ordinary-delivery-durable-recovery-store")
+        service = _service_boundary(request)
         p.require(delivery or service)
         owner._check(request)
         p.require(process.approved_input_original("endpoint-inputs", "endpoint-inputs") == owner.input

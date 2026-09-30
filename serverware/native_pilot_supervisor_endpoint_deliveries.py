@@ -225,7 +225,7 @@ def compose(policy, *, process, request) -> bytes:
 
 
 def require_deliveries(policy, *, process, request) -> dict:
-    """Verify all three actual results at the next phase's first ordinary job.
+    """Verify all three actual results for initial ceremony / first C9 input.
 
     Returns exactly deliveryOriginals and endpointDeliveryResult as checked data
     from the same process's retained originals/request. It grants no service or
@@ -233,8 +233,8 @@ def require_deliveries(policy, *, process, request) -> dict:
     next request must have arrived; no future signature is assumed successful.
     """
     _owners(policy, process, request)
-    p.require(request.phase == "service-originals" and request.job_index == 1
-        and request.job == "ordinary-delivery-" + generation.ROLES[0])
+    from serverware.native_pilot_supervisor_endpoint_inputs import _service_boundary
+    p.require(_service_boundary(request))
     inputs, cold, window, recipe_originals = _context(policy, process, request)
     before = c9._live(window)
     originals, guests = {}, {}

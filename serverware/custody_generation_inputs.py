@@ -37,6 +37,8 @@ class GenerationInputs:
         self._business_owner = None
         self._commitment = launcher._commitment
         self._commitments = {}
+        self._spool = launcher._spool
+        self._spools = {}
 
     @classmethod
     def prepare(cls, launcher, *, business_descriptors):
@@ -100,6 +102,11 @@ class GenerationInputs:
                     selected = _RoleInputs.prepare(owner, role, parent, cold)
                     owner._commitments[role] = selected
                     descriptors.extend(selected.descriptors())
+                    if owner._spool:
+                        from serverware.custody_spool_inputs import RoleInputs
+                        selected = RoleInputs.prepare(owner, role, parent, cold)
+                        owner._spools[role] = selected
+                        descriptors.extend(selected.descriptors())
                 entries = [o.activation(name, target, fd) for target, (name, fd) in enumerate(descriptors, 6)]
                 for entry in entries:
                     ident = entry["device"], entry["inode"]
@@ -132,6 +139,8 @@ class GenerationInputs:
                 p.require(os.fstat(item["grant"]).st_size == 0 and fcntl.fcntl(item["grant"], fcntl.F_GET_SEALS) == 0)
             if role in self._commitments:
                 self._commitments[role].check()
+            if role in self._spools:
+                self._spools[role].check()
 
     def activation(self, role):
         self.check(); p.require(role in g.ROLES and not self._taken)
@@ -140,7 +149,7 @@ class GenerationInputs:
     def directory_identities(self, role):
         self.check(); p.require(role in g.ROLES and not self._taken)
         return {name: o.directory_identity(fd) for name, fd in self._roles[role]["descriptors"]
-            if name not in {"listener", "generation-grant", "dispatch-grant"}}
+            if name not in {"listener", "generation-grant", "dispatch-grant", "spool-head-grant", "spool-current-grant"}}
 
     def sign_delivery(self, role, *, approved_payload_original, delivery_authority):
         self.check(); p.require(role in g.ROLES and not self._taken)
@@ -149,7 +158,10 @@ class GenerationInputs:
         payload = g.document(approved_payload_original, 65536)
         p.require(payload["invocationId"] == self._launcher._invocation
             and p.ns(payload["issuedAtBoottimeNs"]) >= self._launcher._issued)
-        if role in self._commitments:
+        if role in self._spools:
+            from serverware.custody_spool_inputs import sign_delivery
+            sign = sign_delivery
+        elif role in self._commitments:
             from serverware.native_shadow_commitment_artifacts import sign_service_delivery
             sign = sign_service_delivery
         else:
@@ -164,7 +176,7 @@ class GenerationInputs:
         if self._business_owner is not None:
             self._business_owner._require_runtime_peer(header)
         selected = role in self._commitments
-        p.require(header["apiVersion"] == ("serverware.policyCustodyServiceRuntimeConfig/v6" if selected else "serverware.policyCustodyServiceRuntimeConfig/v5")
+        p.require(header["apiVersion"] == ("serverware.policyCustodyServiceRuntimeConfig/v7" if role in self._spools else "serverware.policyCustodyServiceRuntimeConfig/v6" if selected else "serverware.policyCustodyServiceRuntimeConfig/v5")
             and header["generationAdmission"] == {"grantFdName": "generation-grant"}
             and (header.get("dispatchAdmission") == {"grantFdName": "dispatch-grant"} if selected else header.get("dispatchAdmission") is None)
             and header["activationDirectoryIdentities"] == self.directory_identities(role))
@@ -213,7 +225,10 @@ class GenerationInputs:
         item["grant_attempt"] = True
         public = history_root_authority.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
         p.require(p.encoded(public) != item["cold"]["authority"]["publicKeyBase64url"])
-        if role in self._commitments:
+        if role in self._spools:
+            from serverware.custody_spool_inputs import sign_generation_grant
+            sign = sign_generation_grant
+        elif role in self._commitments:
             from serverware.native_shadow_commitment_artifacts import sign_service_generation_grant
             sign = sign_service_generation_grant
         else:
@@ -237,14 +252,24 @@ class GenerationInputs:
         p.require(self._commitment and role in self._commitments and not self._taken)
         selected = self._commitments[role]
         selected.seal(approved_grant_original, native_grant_original)
-        self._publish_launch(role)
+        if role not in self._spools:
+            self._publish_launch(role)
         self.check(); return selected.original()
+
+    def seal_spool_grant(self, role, *, approved_grant_original, native_originals):
+        self.check(); p.require(self._spool and role in self._spools and not self._taken)
+        self._commitments[role].original()
+        self._spools[role].seal(approved_grant_original, native_originals)
+        self._publish_launch(role)
+        self.check(); return self._spools[role].original()
 
     def _publish_launch(self, role):
         item = self._roles[role]
         p.require(item["launch"] is None and item["grant_raw"] is not None)
         if role in self._commitments:
             self._commitments[role].original()
+        if role in self._spools:
+            self._spools[role].original()
         launch_value = {"apiVersion": "serverware.custodyOrdinaryServiceGuestLaunch/v1",
             "deliveryConfiguration": {"path": item["configuration"].path, "sha256": item["configuration"].sha},
             "delivery": {"path": item["delivery"].path, "sha256": item["delivery"].sha}}
@@ -254,6 +279,9 @@ class GenerationInputs:
         if role in self._commitments:
             launch_value["apiVersion"] = ("serverware.custodyOrdinaryServiceGuestLaunch/v4"
                 if self._launcher._inspected else "serverware.custodyOrdinaryServiceGuestLaunch/v3")
+        if role in self._spools:
+            p.require(self._launcher._inspected)
+            launch_value["apiVersion"] = "serverware.custodyOrdinaryServiceGuestLaunch/v5"
         launch_raw = g.canonical(launch_value)
         launch = o.publish(f"/etc/serverware/custody-{role}-guest.json", launch_raw)
         self._originals.append(launch); item["launch"] = launch
@@ -275,6 +303,9 @@ class GenerationInputs:
         if self._commitment:
             from serverware.custody_commitment_inputs import _same_cohort
             _same_cohort(self, scopes[0])
+        if self._spool:
+            from serverware.custody_spool_inputs import _release_current
+            _release_current(self)
         self._taken = True
         return GenerationTransfer(_TOKEN, self)
 

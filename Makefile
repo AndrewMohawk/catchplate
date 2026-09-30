@@ -1580,6 +1580,15 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/native_shadow_time_originals.py \
 	serverware/native_shadow_time_issuer.py \
 	scripts/issue_native_shadow_guest_time.py \
+	serverware/custody_spool_inputs.py \
+	serverware/native_generation_origin_profile.py \
+	serverware/native_generation_origin_originals.py \
+	serverware/native_generation_origin_issuer.py \
+	serverware/native_generation_origin_relay.py \
+	serverware/native_shadow_spool_inputs.py \
+	serverware/native_shadow_spool_artifacts.py \
+	scripts/issue_native_generation_origin.py \
+	scripts/package_native_generation_origin_runtime.py \
 	scripts/verify_native_shadow_custody.py \
 	serverware/native_shadow_key_contract.py \
 	serverware/native_shadow_key_helper.py \
@@ -4187,6 +4196,15 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/native_shadow_time_originals.py \
 				serverware/native_shadow_time_issuer.py \
 				scripts/issue_native_shadow_guest_time.py \
+				serverware/custody_spool_inputs.py \
+				serverware/native_generation_origin_profile.py \
+				serverware/native_generation_origin_originals.py \
+				serverware/native_generation_origin_issuer.py \
+				serverware/native_generation_origin_relay.py \
+				serverware/native_shadow_spool_inputs.py \
+				serverware/native_shadow_spool_artifacts.py \
+				scripts/issue_native_generation_origin.py \
+				scripts/package_native_generation_origin_runtime.py \
 				scripts/verify_native_shadow_custody.py \
 				serverware/native_shadow_key_contract.py \
 				serverware/native_shadow_key_helper.py \
@@ -4487,6 +4505,22 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/policy_custody/services/dispatch_service.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/dispatch_service_client.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/commit_request.rs \
+				data-plane/decision-gate-rs/src/native_generation_origin.rs \
+				data-plane/decision-gate-rs/src/native_generation_origin_v1.rs \
+				data-plane/decision-gate-rs/src/bin/serverware-native-generation-origin-issuer.rs \
+				data-plane/decision-gate-rs/src/native_shadow_verifier_runtime_v1/origin_issuer.rs \
+				data-plane/decision-gate-rs/src/native_shadow_verifier_supervisor_v1/origin_issuer.rs \
+				data-plane/decision-gate-rs/src/policy_shadow_native_ingress.rs \
+				data-plane/decision-gate-rs/src/policy_custody/services/ledger_spool_values.rs \
+				data-plane/decision-gate-rs/src/policy_custody/services/spool_origin.rs \
+				data-plane/decision-gate-rs/src/policy_custody/services/spool_head_values.rs \
+				data-plane/decision-gate-rs/src/policy_custody/services/spool_head.rs \
+				data-plane/decision-gate-rs/src/policy_custody/services/spool_current.rs \
+				data-plane/decision-gate-rs/src/policy_custody/services/spool_head_client.rs \
+				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/ledger_store.rs \
+				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/ledger_retrieval.rs \
+				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/spool_signer.rs \
+				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/spool_endpoint.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/generation_certification.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/generation_recovery.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/generation_install.rs \
@@ -4874,6 +4908,11 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-shadow-proof-cohort.v1.schema.json \
 				schemas/native-shadow-proof-cohort.v2.schema.json \
 				schemas/native-shadow-proof-cohort.v3.schema.json \
+				schemas/native-generation-origin.v1.schema.json \
+				schemas/native-generation-origin-issuer-launch.v1.schema.json \
+				schemas/native-ledger-spool.v1.schema.json \
+				schemas/native-policy-canary-opening.v2.schema.json \
+				schemas/native-shadow-proof-cohort.v4.schema.json \
 				schemas/native-shadow-driver-bootstrap.v1.schema.json \
 				schemas/native-shadow-driver-continuation.v1.schema.json \
 				schemas/native-shadow-driver-lifecycle.v1.schema.json \

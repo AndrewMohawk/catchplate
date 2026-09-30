@@ -15,16 +15,17 @@ struct Launch {api_version:String,delivery_configuration:Pin,delivery:Pin}
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 struct InspectedLaunch {api_version:String,delivery_configuration:Pin,delivery:Pin,peer_inspection_credential:String}
 
-enum EntryProfile {Generation,InspectedGeneration,CommitRequest,InspectedCommitRequest}
+enum EntryProfile {Generation,InspectedGeneration,CommitRequest,InspectedCommitRequest,InspectedSpool}
 impl EntryProfile {
     fn selector(&self)->&'static str {match self {
         Self::Generation=>"--guest-c9-generation",
         Self::InspectedGeneration=>"--guest-c9-generation-inspected",
         Self::CommitRequest=>"--guest-c9-commitment",
         Self::InspectedCommitRequest=>"--guest-c9-commitment-inspected",
+        Self::InspectedSpool=>"--guest-c9-spool-inspected",
     }}
-    fn inspected(&self)->bool {matches!(self,Self::InspectedGeneration|Self::InspectedCommitRequest)}
-    fn commitment(&self)->bool {matches!(self,Self::CommitRequest|Self::InspectedCommitRequest)}
+    fn inspected(&self)->bool {matches!(self,Self::InspectedGeneration|Self::InspectedCommitRequest|Self::InspectedSpool)}
+    fn commitment(&self)->bool {matches!(self,Self::CommitRequest|Self::InspectedCommitRequest|Self::InspectedSpool)}
     fn launch(&self,raw:&[u8])->Result<(Pin,Pin),ServiceRunnerError> {match self {
         Self::Generation=>{
             let value:Launch=exact(raw)?;
@@ -45,6 +46,12 @@ impl EntryProfile {
         Self::InspectedCommitRequest=>{
             let value:InspectedLaunch=exact(raw)?;
             require(value.api_version=="serverware.custodyOrdinaryServiceGuestLaunch/v4"
+                && value.peer_inspection_credential==super::ordinary_inspection::CREDENTIAL)?;
+            Ok((value.delivery_configuration,value.delivery))
+        },
+        Self::InspectedSpool=>{
+            let value:InspectedLaunch=exact(raw)?;
+            require(value.api_version=="serverware.custodyOrdinaryServiceGuestLaunch/v5"
                 && value.peer_inspection_credential==super::ordinary_inspection::CREDENTIAL)?;
             Ok((value.delivery_configuration,value.delivery))
         },
@@ -133,7 +140,7 @@ fn entry(role:&str,profile:EntryProfile)->Result<(),ServiceRunnerError> {
     let runtime:serde_json::Value=exact(&delivery.owner.runtime.read(MAX_CONFIG_BYTES)?)?;
     let expected=if profile.commitment(){
         require(matches!(delivery.owner.payload.service_role,Role::DurableRecoveryStore|Role::CurrentSignatureAuthority))?;
-        super::super::dispatch_service::RUNTIME
+        if matches!(profile,EntryProfile::InspectedSpool){super::super::spool_head::RUNTIME}else{super::super::dispatch_service::RUNTIME}
     }else{generation_service::RUNTIME};
     require(runtime.get("runtime").and_then(|v|v.get("apiVersion")).and_then(|v|v.as_str())==Some(expected))?;
     let lifetime=Lifetime::arm(&delivery.owner)?;
@@ -176,3 +183,4 @@ pub(crate) fn run_commitment(role:&str,inspected:bool)->! {
     let _=entry(role,profile);
     unsafe{libc::_exit(1)}
 }
+pub(crate) fn run_spool(role:&str)->!{let _=entry(role,EntryProfile::InspectedSpool);unsafe{libc::_exit(1)}}

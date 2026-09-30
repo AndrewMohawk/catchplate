@@ -142,6 +142,7 @@ RUN --network=none cargo build --release --frozen \
         --bin serverware-native-shadow-verifier \
         --bin serverware-native-shadow-verifier-transport \
         --bin serverware-native-shadow-time-issuer \
+        --bin serverware-native-generation-origin-issuer \
         --bin serverware-native-parent-relay --bin serverware-native-parent-ingress \
     && test "$(readelf -l /src/target/release/serverware-production-launcher | grep -c INTERP)" -eq 0 \
     && test "$(readelf -d /src/target/release/serverware-production-launcher | grep -c NEEDED)" -eq 0 \
@@ -189,7 +190,10 @@ RUN --network=none cargo build --release --frozen \
     && test "$(stat -c %s /src/target/release/serverware-native-shadow-proof-cohort)" -le 67108864 \
     && test "$(readelf -l /src/target/release/serverware-native-shadow-time-issuer | grep -c INTERP)" -eq 0 \
     && test "$(readelf -d /src/target/release/serverware-native-shadow-time-issuer | grep -c NEEDED)" -eq 0 \
-    && test "$(stat -c %s /src/target/release/serverware-native-shadow-time-issuer)" -le 67108864
+    && test "$(stat -c %s /src/target/release/serverware-native-shadow-time-issuer)" -le 67108864 \
+    && test "$(readelf -l /src/target/release/serverware-native-generation-origin-issuer | grep -c INTERP)" -eq 0 \
+    && test "$(readelf -d /src/target/release/serverware-native-generation-origin-issuer | grep -c NEEDED)" -eq 0 \
+    && test "$(stat -c %s /src/target/release/serverware-native-generation-origin-issuer)" -le 67108864
 
 FROM scratch AS production-launcher-artifact
 COPY --from=launcher-build /src/target/release/serverware-production-launcher /serverware-production-launcher
@@ -235,6 +239,9 @@ COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverwa
 
 FROM scratch AS native-shadow-time-issuer-supervisor-artifact
 COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-native-shadow-time-issuer /serverware-native-shadow-time-issuer
+
+FROM scratch AS native-generation-origin-issuer-supervisor-artifact
+COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-native-generation-origin-issuer /serverware-native-generation-origin-issuer
 
 FROM python:3.11-slim-bookworm@sha256:0030323c9ce4d6dfab5f0812577cb0abd13c806f86b3a1f5b5d8f200ebb1421c AS native-python-runtime-build
 ARG SOURCE_DATE_EPOCH="0"
@@ -294,6 +301,14 @@ RUN --network=none python -I -B /source/scripts/package_native_shadow_time_runti
 
 FROM scratch AS native-shadow-time-issuer-runtime-artifact
 COPY --from=native-shadow-time-issuer-runtime /shadow-time-issuer-output /shadow-time-issuer-output
+
+# Separately deployed generation-origin authority. No key, grant, config or
+# issuer artifact enters the claimant image or the old time-issuer profile.
+FROM native-python-runtime-build AS native-generation-origin-issuer-runtime
+RUN --network=none python -I -B /source/scripts/package_native_generation_origin_runtime.py
+
+FROM scratch AS native-generation-origin-issuer-runtime-artifact
+COPY --from=native-generation-origin-issuer-runtime /generation-origin-issuer-output /generation-origin-issuer-output
 
 # Explicit static claimant image only. These public inputs must be independently
 # supplied and pinned; no keys, boot delivery, verifier policy or time authority.

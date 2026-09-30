@@ -23,7 +23,7 @@ def apply(state, value, kind):
         for event in batch["events"]:
             record = event["record"]
             marker = record.get("apiVersion")
-            if event["kind"] == "custody" and marker == opening.SCHEMA:
+            if event["kind"] == "custody" and marker in opening.SCHEMAS:
                 original, selected = record["opening_receipt"], prior_openings
             elif marker == runtime.SCHEMA and event["kind"] in {"active-decision", "shadow-observation"}:
                 original = record["receipt"]

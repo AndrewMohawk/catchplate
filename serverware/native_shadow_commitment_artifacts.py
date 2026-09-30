@@ -82,6 +82,13 @@ def sign_hmac_assignment(*, configuration_original, configuration_sha256, assign
 
 def sign_encrypted_delivery(*, configuration_original, configuration_sha256, assignment_payload_original,
                             hmac_authorization_original, transport_original, issued_at, expires_at, now, signing_key):
+    return _sign_encrypted_delivery(configuration_original=configuration_original, configuration_sha256=configuration_sha256,
+        assignment_payload_original=assignment_payload_original, hmac_authorization_original=hmac_authorization_original,
+        transport_original=transport_original, issued_at=issued_at, expires_at=expires_at, now=now, signing_key=signing_key, sampling=False)
+
+
+def _sign_encrypted_delivery(*, configuration_original, configuration_sha256, assignment_payload_original,
+                            hmac_authorization_original, transport_original, issued_at, expires_at, now, signing_key, sampling):
     config, admitted, keys, assignment = _inputs(configuration_original, configuration_sha256,
         assignment_payload_original, now, signing_key)
     hmac = p.fields(p.document(hmac_authorization_original, 65536), ("payload", "signature"))
@@ -91,10 +98,11 @@ def sign_encrypted_delivery(*, configuration_original, configuration_sha256, ass
     p.require(descriptor["keyId"] == assignment["observationWindow"]["requestCommitmentKeyId"]
         and descriptor["keyEpoch"] == assignment["observationWindow"]["requestCommitmentKeyEpoch"]
         and descriptor["keyId"] not in {key["keyId"] for key in keys})
-    expected.update(apiVersion="serverware.nativeShadowRequestCommitmentAssignment/v1",
-        purpose="native-shadow-request-commitment-hmac", requestCommitment=descriptor)
+    expected.update(apiVersion="serverware.nativeShadowRequestCommitmentAssignment/v2" if sampling else "serverware.nativeShadowRequestCommitmentAssignment/v1",
+        purpose="native-shadow-request-and-ingress-commitments" if sampling else "native-shadow-request-commitment-hmac", requestCommitment=descriptor)
     p.require(hp == expected)
-    p.public_key(keys[-1]).verify(p.decoded(hmac["signature"], size=64), p.preimage(HMAC_DOMAIN, hp))
+    domain = "serverware.nativeShadowRequestCommitmentAssignment.signature/v2" if sampling else HMAC_DOMAIN
+    p.public_key(keys[-1]).verify(p.decoded(hmac["signature"], size=64), p.preimage(domain, hp))
     transport = delivery.transport(p.document(transport_original, 16384))
     p.require(transport["apiVersion"] == "serverware.nativeShadowKeyKmsTransport/v2")
     payload = _common(config, admitted, keys, issued_at, expires_at, now)
@@ -150,6 +158,15 @@ def sign_native_service(*, configuration_original, configuration_sha256, assignm
 def sign_service_transition_grant(*, payload_original, native_grant_original, runtime_original,
                                   history_original, delivery_original, signing_key, now,
                                   native_configuration_original, native_configuration_sha256, native_now):
+    return _sign_service_transition_grant(payload_original=payload_original, native_grant_original=native_grant_original,
+        runtime_original=runtime_original, history_original=history_original, delivery_original=delivery_original,
+        signing_key=signing_key, now=now, native_configuration_original=native_configuration_original,
+        native_configuration_sha256=native_configuration_sha256, native_now=native_now, spool=False)
+
+
+def _sign_service_transition_grant(*, payload_original, native_grant_original, runtime_original,
+                                  history_original, delivery_original, signing_key, now,
+                                  native_configuration_original, native_configuration_sha256, native_now, spool):
     """Independent history-root signature; never the LedgerAppend/HMAC key."""
     payload = p.fields(g.document(payload_original, 65536), SERVICE_FIELDS)
     guest = p.guest(payload["guest"])
@@ -177,7 +194,7 @@ def sign_service_transition_grant(*, payload_original, native_grant_original, ru
     p.require(payload["nativeLedgerKeyId"] == ledger["keyId"]
         and payload["nativeLedgerKeySpkiSha256"] == ledger["keySpkiSha256"]
         and payload["nativeLedgerPublicKeyBase64url"] == ledger["publicKeyBase64url"])
-    p.require(runtime["apiVersion"] == "serverware.policyCustodyServiceRuntimeConfig/v6"
+    p.require(runtime["apiVersion"] == ("serverware.policyCustodyServiceRuntimeConfig/v7" if spool else "serverware.policyCustodyServiceRuntimeConfig/v6")
         and runtime["generationAdmission"] == {"grantFdName": "generation-grant"}
         and runtime["dispatchAdmission"] == {"grantFdName": "dispatch-grant"}
         and payload["nativeGrantSha256"] == p.sha(native_grant_original) and native["payload"]["scope"] == scope

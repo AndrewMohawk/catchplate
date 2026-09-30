@@ -2,6 +2,7 @@
 pub(crate) mod originals;
 mod mounts;
 mod time_issuer;
+mod origin_issuer;
 #[path = "native_verifier/json.rs"]
 mod json;
 use crate::native_response_profile_v1::canonical_ascii_bytes;
@@ -17,18 +18,23 @@ pub(crate) const INTERPRETER_PATH: &str = "/usr/local/bin/python3.11";
 pub(crate) const ENTRYPOINT_PATH: &str = "/opt/serverware/scripts/verify_native_shadow_custody.py";
 pub(crate) const TIME_IMAGE_PATH: &str = "/opt/serverware/native-shadow-time-issuer-runtime.squashfs";
 pub(crate) const TIME_ENTRYPOINT_PATH: &str = "/opt/serverware/scripts/issue_native_shadow_guest_time.py";
+pub(crate) const ORIGIN_IMAGE_PATH: &str = "/opt/serverware/native-generation-origin-issuer-runtime.squashfs";
+pub(crate) const ORIGIN_ENTRYPOINT_PATH: &str = "/opt/serverware/scripts/issue_native_generation_origin.py";
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Profile { Verifier, TimeIssuer }
+pub(crate) enum Profile { Verifier, TimeIssuer, OriginIssuer }
 impl Profile {
     fn configuration_path(self) -> &'static str {
         match self { Self::Verifier => "/etc/serverware/native-shadow-nitro-verifier.json",
-            Self::TimeIssuer => "/etc/serverware/native-shadow-guest-time-issuer.json" }
+            Self::TimeIssuer => "/etc/serverware/native-shadow-guest-time-issuer.json",
+            Self::OriginIssuer => "/etc/serverware/native-generation-origin-issuer.json" }
     }
     pub(crate) fn entrypoint(self) -> &'static str {
-        match self { Self::Verifier => ENTRYPOINT_PATH, Self::TimeIssuer => TIME_ENTRYPOINT_PATH }
+        match self { Self::Verifier => ENTRYPOINT_PATH, Self::TimeIssuer => TIME_ENTRYPOINT_PATH,
+            Self::OriginIssuer => ORIGIN_ENTRYPOINT_PATH }
     }
     fn image_purpose(self) -> Purpose {
-        match self { Self::Verifier => Purpose::ExternalShadowVerifier, Self::TimeIssuer => Purpose::ExternalShadowTimeIssuer }
+        match self { Self::Verifier => Purpose::ExternalShadowVerifier, Self::TimeIssuer => Purpose::ExternalShadowTimeIssuer,
+            Self::OriginIssuer => Purpose::ExternalGenerationOriginIssuer }
     }
 }
 fn ensure(value: bool, message: &str) -> Result<(), String> { if value { Ok(()) } else { Err(message.to_owned()) } }
@@ -121,6 +127,7 @@ pub(crate) struct RuntimeAdmission {
 }
 impl RuntimeAdmission {
     pub(crate) fn open_time_issuer() -> Result<Self, String> { time_issuer::open() }
+    pub(crate) fn open_origin_issuer() -> Result<Self, String> { origin_issuer::open() }
     pub(crate) fn open() -> Result<Self, String> {
         let origin = Origin::capture()?;
         let launch = Original::open("native-shadow-verifier-launch.json", 16384)?;
@@ -155,6 +162,12 @@ impl RuntimeAdmission {
     pub(crate) fn time_transport(&self) -> Result<(String, u16, String), String> {
         self.check()?;
         ensure(self.policy.profile == Profile::TimeIssuer, "time transport requires its actual issuer admission")?;
+        time_issuer::transport(&document(&self.configuration.bytes, 512 * 1024)?)
+    }
+    pub(crate) fn origin_transport(&self) -> Result<(String, u16, String), String> {
+        self.check()?;
+        ensure(self.policy.profile == Profile::OriginIssuer, "origin transport requires its actual issuer admission")?;
+        // Only the closed IP tuple grammar is shared, never time authority.
         time_issuer::transport(&document(&self.configuration.bytes, 512 * 1024)?)
     }
     /// Public consistency pins from the SAME retained originals, not a new

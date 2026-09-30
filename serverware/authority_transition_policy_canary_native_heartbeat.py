@@ -75,7 +75,7 @@ def apply(state, value):
         p.row_original(row)
         for event in p.batch(row["batch_original"])["events"]:
             record = event["record"]
-            if event["kind"] == "custody" and record.get("apiVersion") == opening.SCHEMA:
+            if event["kind"] == "custody" and record.get("apiVersion") in opening.SCHEMAS:
                 receipt = record["opening_receipt"]
                 if receipt["generation_id"] == s["generationId"] and receipt["event_ordinal"] <= s["eventOrdinal"]:
                     p.require(receipt["event_ordinal"] > s["baselineEventOrdinal"])

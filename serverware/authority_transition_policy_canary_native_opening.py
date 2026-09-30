@@ -34,7 +34,7 @@ def retained(state, value):
 
 
 def apply(state, value):
-    profile.require(type(value) is dict and set(value) == opening.FIELDS and value["apiVersion"] == opening.SCHEMA)
+    profile.require(type(value) is dict and set(value) == opening.FIELDS and value["apiVersion"] in opening.SCHEMAS)
     context, assignment_payload, load_payload, publication = retained(state, value)
     result = opening.verify(value, assignment=assignment_payload, load=load_payload, context=context, publication=publication, now=state.now)
     state.charge(512 + len(assignment_payload["authorityKeyIndependence"]["bindings"]))
@@ -52,7 +52,7 @@ def apply(state, value):
         state.charge(len(batch["events"]) + 1)
         for event in batch["events"]:
             record = event["record"]
-            if event["kind"] == "custody" and record.get("apiVersion") == opening.SCHEMA:
+            if event["kind"] == "custody" and record.get("apiVersion") in opening.SCHEMAS:
                 receipt = record["opening_receipt"]
                 if receipt["generation_id"] == result["generationId"]:
                     profile.require(record["assignment_envelope_digest"] == value["assignment_envelope_digest"]

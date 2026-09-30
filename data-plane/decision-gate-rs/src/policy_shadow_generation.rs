@@ -3080,6 +3080,51 @@ impl PolicyShadowGenerationControl {
         })
     }
 
+    pub(crate) fn with_native_generation_origin<T>(&self,state:&GateState,assignment:&str,generation:&str,
+        consume:impl FnOnce(String,u64)->Result<T,String>)->Result<T,String>{
+        if !self.is_production || self.native_workers.is_none(){return Err("origin requires native installed generation".into());}
+        let _installation=self.installation_lock.try_lock().map_err(|_|"origin installation busy")?;
+        let retained=self.retained_generation.try_lock().map_err(|_|"origin generation busy")?;
+        let retained=retained.as_ref().ok_or("origin has no installed generation")?;
+        let now=retained.trusted_time.now_unix_nanos().map_err(|e|e.to_string())?;
+        self.key_trust.authorize_at(now)?;
+        let scope=super::policy_shadow::native_heartbeat::scope(&retained.generation_identity,&retained.assignment,
+            &retained.load_receipt,&retained.runtime_identity,&retained.publication_receipt.internal_envelope_sha256,
+            self.key_trust.as_ref(),retained.trusted_time.as_ref()).map_err(|e|e.to_string())?;
+        if retained.assignment.payload_sha256().as_str()!=assignment || retained.generation_identity.generation_id().as_str()!=generation
+            || now<=0 || now>=scope["expiresAtUnixNanos"].as_i64().ok_or("origin assignment window absent")? {
+            return Err("origin generation, assignment or original lifetime differs".into());
+        }
+        let configuration=retained.custody.production_configuration_binding_sha256().ok_or("origin installed custody absent")?;
+        let baseline=state.policy_shadow.native_accounting_snapshot(retained.generation_identity.generation_id(),retained.trusted_time.as_ref())?;
+        // Only the genuine virgin installed generation is admitted by this
+        // initialization profile. A used generation needs its complete
+        // historical continuation, not an empty replacement spool.
+        if baseline.original_count()!=0 || baseline.last_ingress().is_some()
+            || baseline.event_ordinal()!=retained.generation_identity.authoritative_ledger_event_ordinal()
+            || baseline.head_sha256()!=retained.generation_identity.authoritative_ledger_head_sha256()
+            || baseline.event_ordinal()!=baseline.baseline_event_ordinal()
+            || baseline.head_sha256()!=baseline.baseline_head_sha256() {
+            return Err("origin requires the actual unused installed baseline".into());
+        }
+        let value=serde_json::json!({"apiVersion":"serverware.nativeInstalledGenerationOriginals/v1",
+            "installRequestSha256":retained.install_request_sha256,"generation":retained.generation_identity,
+            "assignment":retained.assignment.wire(),"loadReceipt":retained.load_receipt.wire(),
+            "runtimeAttestation":retained.startup_attestation,"runtimeAttestationVerification":retained.runtime_attestation_verification,
+            "runtimeIdentity":retained.runtime_identity,"publication":retained.publication_receipt,
+            "productionConfigurationBindingSha256":configuration,"trustCheckpoint":self.key_trust.current_checkpoint().map_err(|e|e.to_string())?,
+            "ledgerBaseline":{"eventOrdinal":baseline.event_ordinal(),"headSha256":baseline.head_sha256(),
+                "originalCount":baseline.original_count(),"lastIngress":baseline.last_ingress(),
+                "observedAtUnixNanos":baseline.observed_at_unix_nanos()}});
+        let raw=super::native_response_profile::canonical_ascii_bytes(&value)?;
+        if raw.is_empty() || raw.len()>serverware_decision_gate::native_generation_origin_v1::MAX_ORIGINALS{return Err("complete generation originals exceed bound".into());}
+        // Both actual owner guards remain held through the purpose-specific
+        // signature and fresh quote. This is provenance, not an initialization.
+        let result=consume(String::from_utf8(raw).map_err(|_|"origin original not ASCII")?,now as u64)?;
+        self.key_trust.authorize_at(retained.trusted_time.now_unix_nanos().map_err(|e|e.to_string())?)?;
+        Ok(result)
+    }
+
     pub(crate) fn native_opening(&self, admission:&super::policy_shadow::PersistedIngressAdmission)
         ->Result<super::policy_shadow::native_opening::Opening,String> {
         if !self.is_production || self.native_workers.is_none() {

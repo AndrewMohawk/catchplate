@@ -88,19 +88,33 @@ impl Prepared {
         let check=||keys.check(trust,time);
         let mut channel=peer::Client::bind_endpoint(self.inspection,self.listener,expected,delivery,&check,peer::EndpointKind::CommitRequest)?;
         channel.inspect(peer::Phase::Connection,None,None,keys.association.startup(),&check)?;
-        let value=Service{original:self.original,configuration:self.configuration,channel,histories,
+        let work=Work{original:self.original,configuration:self.configuration,histories,
             prepared:BTreeMap::new(),finished:BTreeSet::new()};
+        let value=Service{channel,work};
         value.check(keys,trust,time)?;Ok(value)
     }
 }
-pub(crate) struct Service {original:services::guest_original::Original,configuration:Configuration,channel:peer::Client,
+pub(crate) struct Service {channel:peer::Client,work:Work}
+/// The exact existing CommitRequest effect owner, shared only with the
+/// explicitly selected Ledger successor. It is not a generic signing hook.
+pub(super) struct Work {original:services::guest_original::Original,configuration:Configuration,
     histories:ProductionServiceHistoricalKeyringsV4,prepared:BTreeMap<Sha256Digest,fixed::Computation>,finished:BTreeSet<Sha256Digest>}
-impl Service {
-    fn check(&self,keys:&AdmittedKeys,trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime)->Result<(),ShadowError>{
-        require(self.original.read(65536).map_err(fail)?.as_slice()==canonical_json_bytes(&self.configuration)?.as_slice())?;
-        self.configuration.verify(keys,trust,time)?;self.channel.check()
+impl Work {
+    pub(super) fn from_pin(pin:&guest::Pin,keys:&AdmittedKeys,delivery:&PreparedGuestServiceDelivery,
+        expected:&services::ExpectedPeerCredentialV3,trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime)->Result<Self,ShadowError>{
+        let original=pin.open(65536)?;let configuration:Configuration=guest::exact(&original.read(65536).map_err(fail)?)?;
+        configuration.verify(keys,trust,time)?;
+        require(canonical_json_bytes(configuration.expected_peer())?==canonical_json_bytes(expected)?)?;
+        let loaded=delivery.owner.load::<ProductionRpcRuntimeConfigV4>().map_err(fail)?;
+        loaded.value.validate().map_err(fail)?;
+        let histories=services::production::load_production_histories(&loaded.value,&loaded.credentials).map_err(fail)?;
+        Ok(Self{original,configuration,histories,prepared:BTreeMap::new(),finished:BTreeSet::new()})
     }
-    fn handle(&mut self,wire:&Request,keys:&AdmittedKeys,trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime)->Result<ResultBody,ShadowError>{
+    pub(super) fn check(&self,keys:&AdmittedKeys,trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime)->Result<(),ShadowError>{
+        require(self.original.read(65536).map_err(fail)?.as_slice()==canonical_json_bytes(&self.configuration)?.as_slice())?;
+        self.configuration.verify(keys,trust,time)
+    }
+    pub(super) fn handle(&mut self,wire:&Request,keys:&AdmittedKeys,trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime)->Result<ResultBody,ShadowError>{
         self.check(keys,trust,time)?;
         let local=keys.keys.get(&AuthorityRole::CustodyLedgerAppend).ok_or(ShadowError::SignerBindingMismatch)?;
         let grant=Sha256Digest::compute(&canonical_json_bytes(&self.configuration)?);
@@ -132,6 +146,11 @@ impl Service {
             _=>Err(ShadowError::CustodyUnavailable),
         }
     }
+}
+impl Service {
+    fn check(&self,keys:&AdmittedKeys,trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime)->Result<(),ShadowError>{
+        self.work.check(keys,trust,time)?;self.channel.check()
+    }
     pub(in crate::policy_shadow::policy_custody::services) fn serve(mut self,keys:&AdmittedKeys,
         trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime,check:&impl Fn()->Result<(),ShadowError>)->Result<(),ShadowError>{
         loop {
@@ -143,7 +162,7 @@ impl Service {
                 && wire.request_sha256==wire.computed_request_sha256().map_err(fail)? && guest::now()?<wire.deadline_boottime_nanos
                 && wire.deadline_boottime_nanos<=keys.association.lifetime())?;
             self.channel.inspect(peer::Phase::BeforeDispatch,Some(&packet.bytes),Some(&packet),wire.deadline_boottime_nanos,check)?;
-            let result=self.handle(&wire,keys,trust,time)?;
+            let result=self.work.handle(&wire,keys,trust,time)?;
             let local=keys.keys.get(&AuthorityRole::CustodyLedgerAppend).ok_or(ShadowError::SignerBindingMismatch)?;
             let result_sha256=hash_domain_frames(b"serverware.policyCustodyProductionAuthorityEndpointResponse/v4",&[&canonical_json_bytes(&result)?]);
             let mut reply=Reply{api_version:PRODUCTION_AUTHORITY_ENDPOINT_PROTOCOL_VERSION.into(),endpoint:wire.endpoint,

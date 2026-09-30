@@ -6,6 +6,7 @@ mod inputs;
 mod transport;
 mod time_inputs;
 mod time_issuer;
+mod origin_issuer;
 mod watchdog;
 #[path = "native_verifier/json.rs"]
 mod json;
@@ -288,3 +289,5 @@ pub fn run() -> ! {
 pub fn run_transport() -> ! { transport::run() }
 /// Fixed external issuer only; no profile inference from socket/config bytes.
 pub fn run_time_issuer() -> ! { time_issuer::run() }
+/// Independent origin authority only; not installed in the claimant image.
+pub fn run_origin_issuer() -> ! { origin_issuer::run() }

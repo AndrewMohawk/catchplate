@@ -66,7 +66,8 @@ class Closure:
         roots = {"broker": ROOT, "role-keys": Path("/role-key-runtime"),
                  "shadow-keys": Path("/shadow-key-runtime"),
                  "shadow-verifier": Path("/shadow-verifier-runtime"),
-                 "shadow-time-issuer": Path("/shadow-time-issuer-runtime")}
+                 "shadow-time-issuer": Path("/shadow-time-issuer-runtime"),
+                 "generation-origin-issuer": Path("/generation-origin-issuer-runtime")}
         require(purpose in roots, "unknown fixed runtime closure purpose")
         self.purpose = purpose
         self.root = roots[purpose]
@@ -162,10 +163,16 @@ class Closure:
                 "mount targets belong only to the independent time issuer image")
         return self._external_mount_targets("native-shadow-guest-time-issuer.json")
 
+    def generation_origin_issuer_mount_targets(self) -> list[dict[str, str]]:
+        require(self.purpose == "generation-origin-issuer" and os.geteuid() == 0,
+                "mount targets belong only to the independent generation-origin issuer image")
+        return self._external_mount_targets("native-generation-origin-issuer.json")
+
     def _external_mount_targets(self, leaf: str) -> list[dict[str, str]]:
         require((self.purpose, leaf) in {
             ("shadow-verifier", "native-shadow-nitro-verifier.json"),
-            ("shadow-time-issuer", "native-shadow-guest-time-issuer.json")},
+            ("shadow-time-issuer", "native-shadow-guest-time-issuer.json"),
+            ("generation-origin-issuer", "native-generation-origin-issuer.json")},
             "external mount target is not source-fixed")
         proc = self.root / "proc"
         proc.mkdir(mode=0o555)
@@ -186,7 +193,7 @@ class Closure:
         # Build a cache for this root only: /usr/local/lib is not a default
         # glibc search directory. -X prevents ldconfig-created symlink aliases.
         configuration = self.root / "etc/ld.so.conf"
-        configuration.parent.mkdir(exist_ok=self.purpose in {"shadow-verifier", "shadow-time-issuer"})
+        configuration.parent.mkdir(exist_ok=self.purpose in {"shadow-verifier", "shadow-time-issuer", "generation-origin-issuer"})
         configuration.write_text("/usr/local/lib\n/lib/x86_64-linux-gnu\n/usr/lib/x86_64-linux-gnu\n", encoding="ascii")
         subprocess.run(["/sbin/ldconfig", "-i", "-X", "-r", str(self.root)], env=ENV, check=True, timeout=30)
         for path in (configuration, self.root / "etc/ld.so.cache"):

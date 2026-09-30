@@ -6,6 +6,8 @@ mod result;
 #[path="admission_combined.rs"] mod combined;
 #[path="retrieval.rs"]
 pub(crate) mod retrieval;
+#[path="ledger_retrieval.rs"]
+pub(crate) mod ledger_retrieval;
 #[path="persistence.rs"]
 pub(crate) mod persistence;
 #[path="trusted_time.rs"]
@@ -16,6 +18,10 @@ pub(crate) mod generation_install;
 pub(crate) mod activation;
 #[path="commit_request.rs"]
 pub(crate) mod commit_request;
+#[path="spool_signer.rs"]
+pub(crate) mod spool_signer;
+#[path="spool_endpoint.rs"]
+pub(crate) mod spool_endpoint;
 const DOMAIN:&str="serverware.nativeShadowKeyAdmissionAssignment.signature/v1";
 const POSSESSION:&str="serverware.nativeShadowKeyAdmissionPossession.signature/v1";
 #[derive(Serialize,Deserialize)]

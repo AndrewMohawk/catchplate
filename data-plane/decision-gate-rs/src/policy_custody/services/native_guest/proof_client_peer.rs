@@ -87,15 +87,19 @@ impl Inspector {
     }
     pub(in crate::policy_shadow::policy_custody::services) fn prepare_selected(files:&FileAdmission,
         activation:&BTreeMap<String,OwnedFd>,commitment:bool)->Result<(Self,OwnedFd),ShadowError> {
-        Self::prepare_inner(files,activation,commitment,false)
+        Self::prepare_inner(files,activation,commitment,false,false)
+    }
+    pub(in crate::policy_shadow::policy_custody::services) fn prepare_spool(files:&FileAdmission,
+        activation:&BTreeMap<String,OwnedFd>)->Result<(Self,OwnedFd),ShadowError>{
+        Self::prepare_inner(files,activation,true,true,false)
     }
     pub(in crate::policy_shadow::policy_custody::services) fn prepare_native_facade(files:&FileAdmission,
-        activation:&BTreeMap<String,OwnedFd>,commitment:bool)->Result<(Self,OwnedFd),ShadowError> {
-        Self::prepare_inner(files,activation,commitment,true)
+        activation:&BTreeMap<String,OwnedFd>,commitment:bool,spool:bool)->Result<(Self,OwnedFd),ShadowError> {
+        Self::prepare_inner(files,activation,commitment,spool,true)
     }
-    fn prepare_inner(files:&FileAdmission,activation:&BTreeMap<String,OwnedFd>,commitment:bool,native_facade:bool)
+    fn prepare_inner(files:&FileAdmission,activation:&BTreeMap<String,OwnedFd>,commitment:bool,spool:bool,native_facade:bool)
         ->Result<(Self,OwnedFd),ShadowError> {
-        let selected=Selection::original(&files.retrieval_client_runtime().map_err(fail)?,commitment)?;
+        let selected=Selection::original(&files.retrieval_client_runtime().map_err(fail)?,commitment,spool)?;
         let mut entries=BTreeMap::new();
         for (kind,endpoint) in &selected.entries {
             let expected=endpoint.expected_peer.checked().map_err(fail)?;

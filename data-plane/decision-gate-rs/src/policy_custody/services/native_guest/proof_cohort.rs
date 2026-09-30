@@ -186,7 +186,9 @@ struct Observations {api_version:&'static str,configuration_sha256:Sha256Digest,
     invocation_id:String,retrieval:ChildOriginal,persistence:ChildOriginal,trusted_time:ChildOriginal,
     generation_install:ChildOriginal,bridge:ChildOriginal,
     #[serde(skip_serializing_if="Option::is_none")]
-    commit_request:Option<ChildOriginal>}
+    commit_request:Option<ChildOriginal>,
+    #[serde(skip_serializing_if="Option::is_none")]
+    ingress_admission:Option<ChildOriginal>}
 struct Program {launch:Original,launch_bytes:Vec<u8>,image_original:Original,image:image::Image,
     files:FileAdmission,activation:BTreeMap<String,OwnedFd>,inspection:Inspection,remote:OwnedFd}
 struct Cohort {
@@ -238,10 +240,11 @@ impl Cohort {
             let identity=self.children[index].parked_identity()?;
             Ok(ChildOriginal{process_id:identity.0,start_time_ticks:identity.1,executable:self.executables[index].observation()?})
         };
-        let original=Observations{api_version:if self.admission.six(){"serverware.nativeShadowProofCohortOriginals/v2"}else{SOURCE_API},configuration_sha256:self.admission.configuration_sha256(),
+        let original=Observations{api_version:if self.admission.seven(){"serverware.nativeShadowProofCohortOriginals/v3"}else if self.admission.six(){"serverware.nativeShadowProofCohortOriginals/v2"}else{SOURCE_API},configuration_sha256:self.admission.configuration_sha256(),
             precreation_sha256:self.admission.precreation_sha256(),invocation_id:self.admission.invocation_id().into(),
             retrieval:child(0)?,persistence:child(1)?,trusted_time:child(2)?,generation_install:child(3)?,bridge:child(4)?,
-            commit_request:if self.admission.six(){Some(child(5)?)}else{None}};
+            commit_request:if self.admission.six(){Some(child(5)?)}else{None},
+            ingress_admission:if self.admission.seven(){Some(child(6)?)}else{None}};
         let bytes=canonical_json_bytes(&original)?;self.check_startup()?;Ok(bytes)
     }
     fn release(&mut self,bytes:&[u8],observed:&[u8],rights:Vec<OwnedFd>)->Result<(),ShadowError> {
@@ -255,7 +258,7 @@ impl Cohort {
             let files=admit_files(&selected.delivery_configuration.path,selected.delivery_configuration.sha256.clone(),
                 &selected.delivery.path,selected.delivery.sha256.clone()).map_err(fail)?;
             self.admission.join(index,&selected,&files)?;
-            require_role(index,&service,self.admission.six())?;
+            require_role(index,&service,self.admission.six(),self.admission.seven())?;
             let mut activation=BTreeMap::new();
             for (slot,entry) in files.payload.activation.iter().enumerate() {
                 require(entry.fd==6+slot as i32)?;
@@ -265,7 +268,9 @@ impl Cohort {
                     && (stat.st_dev,stat.st_ino,stat.st_mode,stat.st_uid,stat.st_gid)==(entry.device,entry.inode,entry.mode,entry.uid,entry.gid)
                     && ([libc::S_IFDIR,libc::S_IFSOCK].contains(&(stat.st_mode&libc::S_IFMT))
                         || (matches!(&service,SelectedService::PersistenceLocked(_)) && slot==2
-                            && entry.name=="persistence-lock" && stat.st_mode&libc::S_IFMT==libc::S_IFREG))
+                            && entry.name=="persistence-lock" && stat.st_mode&libc::S_IFMT==libc::S_IFREG)
+                        || (matches!(&service,SelectedService::LedgerRetrieval(_)) && slot==3
+                            && entry.name=="ledger-spool-lock" && stat.st_mode&libc::S_IFMT==libc::S_IFREG))
                     && all.insert((stat.st_dev,stat.st_ino))
                     && activation.insert(entry.name.clone(),fd).is_none())?;
             }
@@ -323,18 +328,30 @@ impl Cohort {
 }
 // The exact slot does not create a service. Unknown or not-yet-connected
 // selectors refuse before ANY child is released.
-fn require_role(index:usize,service:&SelectedService,six:bool)->Result<(),ShadowError> {
+fn require_role(index:usize,service:&SelectedService,six:bool,seven:bool)->Result<(),ShadowError> {
     require(match (index,service) {
-        (0,SelectedService::Retrieval(_))|(1,SelectedService::Persistence(_))|(1,SelectedService::PersistenceLocked(_))|
+        (0,SelectedService::Retrieval(_))=>!seven,
+        (0,SelectedService::LedgerRetrieval(_))=>seven,
+        (1,SelectedService::Persistence(_))|(1,SelectedService::PersistenceLocked(_))|
         (2,SelectedService::TrustedTime(_))|(3,SelectedService::Generation(_))=>true,
         (4,SelectedService::ProofBridge(_))=>!six,
-        (4,SelectedService::CommitmentBridge(_))|(5,SelectedService::CommitRequest(_))=>six,
+        (4,SelectedService::CommitmentBridge(_))|(5,SelectedService::CommitRequest(_))=>six&&!seven,
+        (4,SelectedService::SpoolBridge(_))|(5,SelectedService::LedgerSpool(_))|(6,SelectedService::Ingress(_))=>seven,
         _=>false,
     })
 }
 fn assigned_peers(service:&SelectedService,files:&FileAdmission)
     ->Result<Vec<(usize,super::super::super::super::ExpectedPeerCredentialV3)>,ShadowError> {
     match service {
+        SelectedService::LedgerSpool(pin)|SelectedService::Ingress(pin)=>{
+            let original=pin.open(65536)?;let grant:admission::spool_signer::Configuration=exact(&original.read(65536).map_err(fail)?)?;
+            let kind=if matches!(service,SelectedService::Ingress(_)){admission::spool_signer::Kind::Ingress}else{admission::spool_signer::Kind::Ledger};
+            require(grant.kind()?==kind)?;grant.validate_shape()?;Ok(vec![(4,grant.expected_peer().clone())])
+        }
+        SelectedService::LedgerRetrieval(pin)=>{
+            let original=pin.open(65536)?;let grant:admission::ledger_retrieval::Configuration=exact(&original.read(65536).map_err(fail)?)?;
+            grant.validate_shape()?;Ok(vec![(4,grant.expected_peer().clone())])
+        }
         SelectedService::CommitRequest(pin)=>{
             let original=pin.open(65536)?;
             let grant:admission::commit_request::Configuration=exact(&original.read(65536).map_err(fail)?)?;
@@ -360,9 +377,10 @@ fn assigned_peers(service:&SelectedService,files:&FileAdmission)
             let grant:admission::trusted_time::Configuration=exact(&original.read(65536).map_err(fail)?)?;
             grant.validate_shape()?;Ok(vec![(4,grant.expected_peer().clone())])
         }
-        SelectedService::ProofBridge(_)|SelectedService::CommitmentBridge(_)=>{
-            let commitment=matches!(service,SelectedService::CommitmentBridge(_));
-            let mut assigned=if commitment {proof_client::assigned_peers_selected(files,true)?}
+        SelectedService::ProofBridge(_)|SelectedService::CommitmentBridge(_)|SelectedService::SpoolBridge(_)=>{
+            let spool=matches!(service,SelectedService::SpoolBridge(_));
+            let commitment=matches!(service,SelectedService::CommitmentBridge(_)|SelectedService::SpoolBridge(_));
+            let mut assigned=if spool{proof_client::assigned_peers_spool(files)?}else if commitment {proof_client::assigned_peers_selected(files,true)?}
                 else {proof_client::assigned_peers(files)?};
             let mut peers=Vec::new();
             for (index,kind) in [retrieval_peer::EndpointKind::Retrieval,retrieval_peer::EndpointKind::Persistence,
@@ -370,14 +388,31 @@ fn assigned_peers(service:&SelectedService,files:&FileAdmission)
                 peers.push((index,assigned.remove(&kind).ok_or(ShadowError::BindingDrift)?));
             }
             if commitment {peers.push((5,assigned.remove(&retrieval_peer::EndpointKind::CommitRequest).ok_or(ShadowError::BindingDrift)?));}
+            if spool{peers.push((6,assigned.remove(&retrieval_peer::EndpointKind::IngressAdmission).ok_or(ShadowError::BindingDrift)?));}
             require(assigned.is_empty())?;Ok(peers)
         }
         _=>Err(ShadowError::CustodyUnavailable),
     }
 }
-fn prepare_inspection(service:SelectedService,files:&FileAdmission,activation:&BTreeMap<String,OwnedFd>)
+pub(super) fn prepare_inspection(service:SelectedService,files:&FileAdmission,activation:&BTreeMap<String,OwnedFd>)
     ->Result<(Inspection,OwnedFd),ShadowError> {
     match service {
+        SelectedService::LedgerSpool(pin)|SelectedService::Ingress(pin)=>{
+            let original=pin.open(65536)?;let grant:admission::spool_signer::Configuration=exact(&original.read(65536).map_err(fail)?)?;
+            let kind=grant.kind()?;grant.validate_shape()?;
+            let endpoint=if kind==admission::spool_signer::Kind::Ingress{retrieval_peer::EndpointKind::IngressAdmission}else{retrieval_peer::EndpointKind::CommitRequest};
+            require(activation.len()==1)?;let socket=activation.get(endpoint.listener_name()).ok_or(ShadowError::BindingDrift)?;
+            let (owner,remote)=retrieval_peer::Inspector::prepare_endpoint(original,grant.expected_peer().checked().map_err(fail)?,grant.guest_uid(),socket,endpoint)?;
+            Ok((Inspection::Server(owner),remote))
+        }
+        SelectedService::LedgerRetrieval(pin)=>{
+            require(activation.len()==4 && activation.contains_key("ledger-spool-store") && activation.contains_key("ledger-spool-lock")
+                && activation.contains_key("retrieval-objects"))?;
+            let original=pin.open(65536)?;let grant:admission::ledger_retrieval::Configuration=exact(&original.read(65536).map_err(fail)?)?;
+            grant.validate_shape()?;let socket=activation.get("retrieval-listener").ok_or(ShadowError::BindingDrift)?;
+            let (owner,remote)=retrieval_peer::Inspector::prepare_endpoint(original,grant.expected_peer().checked().map_err(fail)?,grant.guest_uid(),socket,retrieval_peer::EndpointKind::Retrieval)?;
+            Ok((Inspection::Server(owner),remote))
+        }
         SelectedService::CommitRequest(pin)=>{
             require(activation.len()==1)?;
             let original=pin.open(65536)?;
@@ -439,6 +474,10 @@ fn prepare_inspection(service:SelectedService,files:&FileAdmission,activation:&B
         }
         SelectedService::CommitmentBridge(_)=>{
             let (owner,remote)=proof_client::Inspector::prepare_selected(files,activation,true)?;
+            Ok((Inspection::ProofClient(owner),remote))
+        }
+        SelectedService::SpoolBridge(_)=>{
+            let (owner,remote)=proof_client::Inspector::prepare_spool(files,activation)?;
             Ok((Inspection::ProofClient(owner),remote))
         }
         _=>Err(ShadowError::CustodyUnavailable),

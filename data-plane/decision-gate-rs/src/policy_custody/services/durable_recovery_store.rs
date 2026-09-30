@@ -1212,6 +1212,12 @@ impl super::dispatch_service::Owner for TrustedHostNoTeeDurableRecoveryStoreServ
         input.sign(&self.signer.signing_key)
     }
 }
+impl super::spool_head::Owner for TrustedHostNoTeeDurableRecoveryStoreServer {
+    fn sign_spool_allocation(&self,input:&super::spool_head::AllocationInput)
+        ->Result<super::spool_head_values::Allocation,ServiceError>{input.sign(&self.signer.signing_key)}
+    fn sign_spool_commit(&self,input:&super::spool_head::CommitInput)
+        ->Result<super::spool_head_values::Reply,ServiceError>{input.sign(&self.signer.signing_key)}
+}
 
 impl TrustedHostNoTeeDurableRecoveryStoreServer {
     pub(super) fn from_seed(

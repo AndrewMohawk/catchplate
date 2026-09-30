@@ -32,6 +32,9 @@ struct CommitmentConfiguration {api_version:String,authorization:Authorization,r
 pub(crate) enum NativeShadowEncryptedKeysConfiguration {Legacy(LegacyConfiguration),Commitment(CommitmentConfiguration)}
 impl NativeShadowEncryptedKeysConfiguration {
     pub(in crate::policy_shadow::policy_custody::services) fn has_commitment(&self)->bool {self.commitment().is_some()}
+    pub(in crate::policy_shadow::policy_custody::services) fn sampling_selected(&self)->bool {
+        self.commitment().is_some_and(|v|v.sampling_selected())
+    }
     fn authorization(&self)->&Authorization {match self {Self::Legacy(v)=>&v.authorization,Self::Commitment(v)=>&v.authorization}}
     fn commitment(&self)->Option<&commitment::Authorization> {match self {Self::Legacy(_)=>None,Self::Commitment(v)=>Some(&v.request_commitment)}}
     pub(super) fn verify(&self,key_configuration:&NativeCustodyKeyConfiguration,assignment:&VerifiedAssignment,

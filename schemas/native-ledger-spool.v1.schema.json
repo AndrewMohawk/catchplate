@@ -1,0 +1,687 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-ledger-spool.v1.schema.json",
+  "$ref": "#/$defs/bridgeSelection",
+  "description": "Explicit native first-ingress and acyclic LedgerAppend storage successor. Complete machine envelopes retain the existing 8 MiB limit; core and prepared originals each <=512 KiB. All semantic signatures, independent role/currentness checks, original lifetimes, actual FD ownership and fs-verity persistence are mandatory in source. No JSON validates installation or durable success.",
+  "$defs": {
+    "sha": {
+      "$ref": "native-shadow-role-keys.v1.schema.json#/$defs/sha256"
+    },
+    "signature": {
+      "$ref": "native-shadow-role-keys.v1.schema.json#/$defs/signature"
+    },
+    "epoch": {
+      "$ref": "native-shadow-commit-request.v1.schema.json#/$defs/epoch"
+    },
+    "u64": {
+      "$ref": "native-shadow-commit-request.v1.schema.json#/$defs/u64"
+    },
+    "pin": {
+      "$ref": "policy-custody-guest-delivery.v1.schema.json#/$defs/pin"
+    },
+    "guest": {
+      "$ref": "native-shadow-role-keys.v1.schema.json#/$defs/guest"
+    },
+    "key": {
+      "$ref": "native-shadow-guest-time-issuer.v1.schema.json#/$defs/key"
+    },
+    "peer": {
+      "$ref": "native-shadow-retrieval-service.v1.schema.json#/$defs/peer"
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "productionConfigurationBindingSha256",
+        "kernelDriverIdentitySha256",
+        "retainedDescriptorSetSha256",
+        "driverGenerationReceiptSha256",
+        "assignmentPayloadSha256",
+        "assignmentRevision",
+        "generationId",
+        "proofScopeSha256",
+        "retrievalNamespaceSha256",
+        "issuedAtBoottimeNanos",
+        "expiresAtBoottimeNanos"
+      ],
+      "properties": {
+        "productionConfigurationBindingSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "kernelDriverIdentitySha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "retainedDescriptorSetSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "driverGenerationReceiptSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "assignmentPayloadSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "assignmentRevision": {
+          "$ref": "#/$defs/epoch"
+        },
+        "generationId": {
+          "$ref": "#/$defs/sha"
+        },
+        "proofScopeSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "retrievalNamespaceSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "issuedAtBoottimeNanos": {
+          "$ref": "#/$defs/u64"
+        },
+        "expiresAtBoottimeNanos": {
+          "$ref": "#/$defs/u64"
+        }
+      }
+    },
+    "roleKey": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "role",
+        "keyId",
+        "keySpkiSha256",
+        "publicKeyBase64url",
+        "grantSha256"
+      ],
+      "properties": {
+        "role": {
+          "enum": [
+            "custody-ingress-admission",
+            "custody-ledger-append",
+            "custody-retrieval-response"
+          ]
+        },
+        "keyId": {
+          "$ref": "#/$defs/sha"
+        },
+        "keySpkiSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "publicKeyBase64url": {
+          "$ref": "native-shadow-role-keys.v1.schema.json#/$defs/bytes32"
+        },
+        "grantSha256": {
+          "$ref": "#/$defs/sha"
+        }
+      }
+    },
+    "storeAdmission": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "genesisSha256",
+        "sequence",
+        "headSha256"
+      ],
+      "properties": {
+        "genesisSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 128
+        },
+        "headSha256": {
+          "$ref": "#/$defs/sha"
+        }
+      }
+    },
+    "storeGenesis": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "guest",
+        "proofScopeSha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeLedgerSpoolStoreGenesis/v1"
+        },
+        "guest": {
+          "$ref": "#/$defs/guest"
+        },
+        "proofScopeSha256": {
+          "$ref": "#/$defs/sha"
+        }
+      }
+    },
+    "bridgeSelection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "headGrantOriginal",
+        "currentGrantOriginal",
+        "originFdName"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeSpoolServices/v1"
+        },
+        "headGrantOriginal": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 65536,
+          "pattern": "^[\\u0000-\\u007f]+$"
+        },
+        "currentGrantOriginal": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 131072,
+          "pattern": "^[\\u0000-\\u007f]+$"
+        },
+        "originFdName": {
+          "const": "generation-origin"
+        }
+      }
+    },
+    "signerPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "purpose",
+        "guest",
+        "assignmentPayloadSha256",
+        "keyAuthorizationSha256",
+        "trustCheckpointId",
+        "revocationGeneration",
+        "revocationRootSha256",
+        "issuedAtUnixNanos",
+        "expiresAtUnixNanos",
+        "signingKeyId",
+        "signingKeySpkiSha256",
+        "scope",
+        "proofScopeOriginal",
+        "originVerifier",
+        "expectedPeer",
+        "commitRequest"
+      ],
+      "properties": {
+        "apiVersion": {
+          "enum": [
+            "serverware.nativeShadowIngressServiceAssignment/v1",
+            "serverware.nativeShadowLedgerSpoolServiceAssignment/v1"
+          ]
+        },
+        "purpose": {
+          "enum": [
+            "native-first-ingress",
+            "native-ledger-spool-and-sampling"
+          ]
+        },
+        "guest": {
+          "$ref": "#/$defs/guest"
+        },
+        "assignmentPayloadSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "keyAuthorizationSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "trustCheckpointId": {
+          "$ref": "#/$defs/sha"
+        },
+        "revocationGeneration": {
+          "$ref": "#/$defs/epoch"
+        },
+        "revocationRootSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "issuedAtUnixNanos": {
+          "$ref": "#/$defs/epoch"
+        },
+        "expiresAtUnixNanos": {
+          "$ref": "#/$defs/epoch"
+        },
+        "signingKeyId": {
+          "$ref": "#/$defs/sha"
+        },
+        "signingKeySpkiSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "scope": {
+          "$ref": "#/$defs/scope"
+        },
+        "proofScopeOriginal": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 16384,
+          "pattern": "^[\\u0000-\\u007f]+$"
+        },
+        "originVerifier": {
+          "$ref": "#/$defs/key"
+        },
+        "expectedPeer": {
+          "$ref": "#/$defs/peer"
+        },
+        "commitRequest": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/pin"
+            }
+          ]
+        }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "apiVersion": {
+              "const": "serverware.nativeShadowIngressServiceAssignment/v1"
+            },
+            "purpose": {
+              "const": "native-first-ingress"
+            },
+            "commitRequest": {
+              "type": "null"
+            }
+          }
+        },
+        {
+          "properties": {
+            "apiVersion": {
+              "const": "serverware.nativeShadowLedgerSpoolServiceAssignment/v1"
+            },
+            "purpose": {
+              "const": "native-ledger-spool-and-sampling"
+            },
+            "commitRequest": {
+              "$ref": "#/$defs/pin"
+            }
+          }
+        }
+      ]
+    },
+    "signer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "payload",
+        "signature"
+      ],
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/signerPayload"
+        },
+        "signature": {
+          "$ref": "#/$defs/signature"
+        }
+      }
+    },
+    "retrievalPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "purpose",
+        "guest",
+        "assignmentPayloadSha256",
+        "keyAuthorizationSha256",
+        "trustCheckpointId",
+        "revocationGeneration",
+        "revocationRootSha256",
+        "issuedAtUnixNanos",
+        "expiresAtUnixNanos",
+        "signingKeyId",
+        "signingKeySpkiSha256",
+        "proofScopeOriginalBase64url",
+        "expectedPeer",
+        "spoolScope",
+        "ingress",
+        "ledger",
+        "store"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeLedgerSpoolRetrievalGrant/v1"
+        },
+        "purpose": {
+          "const": "native-ledger-spool-retrieval"
+        },
+        "guest": {
+          "$ref": "#/$defs/guest"
+        },
+        "assignmentPayloadSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "keyAuthorizationSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "trustCheckpointId": {
+          "$ref": "#/$defs/sha"
+        },
+        "revocationGeneration": {
+          "$ref": "#/$defs/epoch"
+        },
+        "revocationRootSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "issuedAtUnixNanos": {
+          "$ref": "#/$defs/epoch"
+        },
+        "expiresAtUnixNanos": {
+          "$ref": "#/$defs/epoch"
+        },
+        "signingKeyId": {
+          "$ref": "#/$defs/sha"
+        },
+        "signingKeySpkiSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "proofScopeOriginalBase64url": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 21846,
+          "pattern": "^[A-Za-z0-9_-]+$"
+        },
+        "expectedPeer": {
+          "$ref": "#/$defs/peer"
+        },
+        "spoolScope": {
+          "$ref": "#/$defs/scope"
+        },
+        "ingress": {
+          "$ref": "#/$defs/roleKey"
+        },
+        "ledger": {
+          "$ref": "#/$defs/roleKey"
+        },
+        "store": {
+          "$ref": "#/$defs/storeAdmission"
+        }
+      }
+    },
+    "retrieval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "payload",
+        "signature"
+      ],
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/retrievalPayload"
+        },
+        "signature": {
+          "$ref": "#/$defs/signature"
+        }
+      }
+    },
+    "headPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "purpose",
+        "guest",
+        "runtimeConfigurationSha256",
+        "authorityHistoryManifestSha256",
+        "scope",
+        "originVerifier",
+        "ingress",
+        "ledger",
+        "retrieval",
+        "proofScopeOriginal",
+        "initialTransitionHeadSha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeSpoolHeadGrant/v1"
+        },
+        "purpose": {
+          "const": "native-shared-spool-head"
+        },
+        "guest": {
+          "$ref": "#/$defs/guest"
+        },
+        "runtimeConfigurationSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "authorityHistoryManifestSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "scope": {
+          "$ref": "#/$defs/scope"
+        },
+        "originVerifier": {
+          "$ref": "#/$defs/key"
+        },
+        "ingress": {
+          "$ref": "#/$defs/roleKey"
+        },
+        "ledger": {
+          "$ref": "#/$defs/roleKey"
+        },
+        "retrieval": {
+          "$ref": "#/$defs/roleKey"
+        },
+        "proofScopeOriginal": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 16384,
+          "pattern": "^[\\u0000-\\u007f]+$"
+        },
+        "initialTransitionHeadSha256": {
+          "$ref": "#/$defs/sha"
+        }
+      }
+    },
+    "currentPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "purpose",
+        "guest",
+        "runtimeConfigurationSha256",
+        "authorityHistoryManifestSha256",
+        "headGrantOriginal",
+        "durableAuthorityEpoch",
+        "durablePublicKeyBase64url",
+        "initialTransitionHeadSha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeSpoolCurrentGrant/v1"
+        },
+        "purpose": {
+          "const": "native-spool-current-signature"
+        },
+        "guest": {
+          "$ref": "#/$defs/guest"
+        },
+        "runtimeConfigurationSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "authorityHistoryManifestSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "headGrantOriginal": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 65536,
+          "pattern": "^[\\u0000-\\u007f]+$"
+        },
+        "durableAuthorityEpoch": {
+          "$ref": "custody-service-generation-admission.v1.schema.json#/$defs/authorityEpoch"
+        },
+        "durablePublicKeyBase64url": {
+          "$ref": "native-shadow-role-keys.v1.schema.json#/$defs/bytes32"
+        },
+        "initialTransitionHeadSha256": {
+          "$ref": "#/$defs/sha"
+        }
+      }
+    },
+    "head": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "payload",
+        "signatureBase64url"
+      ],
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/headPayload"
+        },
+        "signatureBase64url": {
+          "$ref": "#/$defs/signature"
+        }
+      }
+    },
+    "current": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "payload",
+        "signatureBase64url"
+      ],
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/currentPayload"
+        },
+        "signatureBase64url": {
+          "$ref": "#/$defs/signature"
+        }
+      }
+    },
+    "ingressLaunch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "keyAdmission",
+        "ingress"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeShadowIngressGuestLaunch/v1"
+        },
+        "keyAdmission": {
+          "$ref": "native-shadow-guest-admission.v1.schema.json#/$defs/launch"
+        },
+        "ingress": {
+          "$ref": "#/$defs/pin"
+        }
+      }
+    },
+    "ledgerLaunch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "keyAdmission",
+        "commitRequest"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeShadowCommitRequestGuestLaunch/v2"
+        },
+        "keyAdmission": {
+          "$ref": "native-shadow-guest-admission.v1.schema.json#/$defs/launch"
+        },
+        "commitRequest": {
+          "$ref": "#/$defs/pin"
+        }
+      }
+    },
+    "retrievalLaunch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "keyAdmission",
+        "retrieval"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeShadowRetrievalGuestLaunch/v2"
+        },
+        "keyAdmission": {
+          "$ref": "native-shadow-guest-admission.v1.schema.json#/$defs/launch"
+        },
+        "retrieval": {
+          "$ref": "#/$defs/pin"
+        }
+      }
+    },
+    "samplingAssignment": {
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "purpose", "guest", "assignmentPayloadSha256", "keyAuthorizationSha256", "requestCommitment", "trustCheckpointId", "revocationGeneration", "revocationRootSha256", "issuedAtUnixNanos", "expiresAtUnixNanos", "signingKeyId", "signingKeySpkiSha256"],
+      "properties": {
+        "apiVersion": {"const": "serverware.nativeShadowRequestCommitmentAssignment/v2"},
+        "purpose": {"const": "native-shadow-request-and-ingress-commitments"},
+        "guest": {"$ref": "#/$defs/guest"},
+        "assignmentPayloadSha256": {"$ref": "#/$defs/sha"},
+        "keyAuthorizationSha256": {"$ref": "#/$defs/sha"},
+        "requestCommitment": {"$ref": "native-shadow-commitment-keys.v1.schema.json#/$defs/descriptor"},
+        "trustCheckpointId": {"$ref": "#/$defs/sha"},
+        "revocationGeneration": {"$ref": "#/$defs/u64"},
+        "revocationRootSha256": {"$ref": "#/$defs/sha"},
+        "issuedAtUnixNanos": {"$ref": "#/$defs/epoch"},
+        "expiresAtUnixNanos": {"$ref": "#/$defs/epoch"},
+        "signingKeyId": {"$ref": "#/$defs/sha"},
+        "signingKeySpkiSha256": {"$ref": "#/$defs/sha"}
+      }
+    },
+    "samplingAuthorization": {
+      "type": "object", "additionalProperties": false, "required": ["payload", "signature"],
+      "properties": {"payload": {"$ref": "#/$defs/samplingAssignment"}, "signature": {"$ref": "#/$defs/signature"}}
+    },
+    "ordinaryLaunch": {
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "deliveryConfiguration", "delivery", "peerInspectionCredential"],
+      "properties": {
+        "apiVersion": {"const": "serverware.custodyOrdinaryServiceGuestLaunch/v5"},
+        "deliveryConfiguration": {"$ref": "#/$defs/pin"}, "delivery": {"$ref": "#/$defs/pin"},
+        "peerInspectionCredential": {"const": "peer-inspection-policy"}
+      }
+    },
+    "fiveConfiguration": {
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "bootIdBase64url", "timeNamespaceDevice", "timeNamespaceInode", "startupDeadlineBoottimeNs", "lifetimeDeadlineBoottimeNs", "invocationId", "services"],
+      "properties": {
+        "apiVersion": {"const": "serverware.custodyFiveServiceLaunch/v5"},
+        "bootIdBase64url": {"$ref": "native-shadow-role-keys.v1.schema.json#/$defs/bytes32"},
+        "timeNamespaceDevice": {"$ref": "#/$defs/u64"}, "timeNamespaceInode": {"$ref": "#/$defs/u64"},
+        "startupDeadlineBoottimeNs": {"$ref": "policy-custody-guest-delivery.v1.schema.json#/$defs/ns"},
+        "lifetimeDeadlineBoottimeNs": {"$ref": "policy-custody-guest-delivery.v1.schema.json#/$defs/ns"},
+        "invocationId": {"type": "string", "pattern": "^[0-9a-f]{32}$", "not": {"const": "00000000000000000000000000000000"}},
+        "services": {"$ref": "custody-commitment-inputs.v1.schema.json#/$defs/services"}
+      },
+      "description": "Fixed /etc/serverware/custody-spool-five.json, read only by FiveServiceLaunch.start_spool. Only DurableRecoveryStore and CurrentSignatureAuthority select service runtime/v7; all five retain original real inspected sessions and lifetime."
+    },
+    "bridgeLaunch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "keyAdmission",
+        "trustedTime"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeProofBridgeLaunch/v3"
+        },
+        "keyAdmission": {
+          "$ref": "native-shadow-guest-admission.v1.schema.json#/$defs/launch"
+        },
+        "trustedTime": {
+          "$ref": "#/$defs/pin"
+        }
+      }
+    }
+  }
+}

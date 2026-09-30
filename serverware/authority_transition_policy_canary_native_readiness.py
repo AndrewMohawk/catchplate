@@ -90,7 +90,7 @@ def _member(state, checkpoint, compiler, committed):
     opening = []
     for receipt in originals:
         event = p.document(bytes(receipt["canonical_event_bytes"]), 16384)
-        if type(event) is list and len(event) == 4 and event[0] == "serverware.policyShadowIngressAdmissionEvent/v1":
+        if type(event) is list and len(event) == 4 and event[0] in {"serverware.policyShadowIngressAdmissionEvent/v1", "serverware.nativeShadowIngressAdmissionEvent/v1"}:
             opening.append(receipt)
     # The exact admitted-event marker is joined to the real receipt codec; no
     # event count supplied by a checkpoint can stand in for this list.

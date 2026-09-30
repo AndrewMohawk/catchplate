@@ -80,12 +80,16 @@ def sign_delivery(*, cold_raw, cold_sha, role, payload_raw, activation, boot, st
         activation=activation,boot=boot,startup=startup,lifetime=lifetime,now=now,signing_key=signing_key,commitment=False)
 
 
-def _sign_delivery(*, cold_raw, cold_sha, role, payload_raw, activation, boot, startup, lifetime, now, signing_key, commitment):
+def _sign_delivery(*, cold_raw, cold_sha, role, payload_raw, activation, boot, startup, lifetime, now, signing_key, commitment, spool=False):
     cold = configuration(cold_raw, cold_sha, role)
     p.require(type(commitment) is bool and (not commitment or role in (ROLES[0],ROLES[3])))
     names = BUSINESS[role] + ("generation-journal", "generation-grant")
     if commitment:
         names += ("dispatch-journal", "dispatch-grant")
+    p.require(type(spool) is bool and (not spool or commitment))
+    if spool:
+        prefix = "spool-head" if role == ROLES[0] else "spool-current"
+        names += (prefix + "-journal", prefix + "-grant")
     payload = p.fields(document(payload_raw, 65536), c9.FIELDS)
     p.require(payload["configurationSha256"] == cold_sha and payload["authorityKeyId"] == cold["authority"]["keyId"]
         and all(payload[field] == cold[field] for field in ("serviceRole", "uid", "gid"))
@@ -106,7 +110,8 @@ def _sign_delivery(*, cold_raw, cold_sha, role, payload_raw, activation, boot, s
         p.fields(credential, ("name", "original", "length", "signing"))
         name = credential["name"]
         p.require(type(name) is str and re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", name)
-            and name not in names and name != "generation-grant" and (not commitment or name != "dispatch-grant"))
+            and name not in names and name != "generation-grant" and (not commitment or name != "dispatch-grant")
+            and (not spool or name not in {"spool-head-grant", "spool-current-grant"}))
         names.add(name); c9._pin(credential["original"])
         total += p.integer(credential["length"], maximum=MAX_BYTES)
         if credential["signing"] is not None:
@@ -134,7 +139,7 @@ def sign_grant(*, payload_raw, guest, runtime_raw, history_raw, delivery_raw, si
         delivery_raw=delivery_raw,signing_key=signing_key,now=now,commitment=False)
 
 
-def _sign_grant(*, payload_raw, guest, runtime_raw, history_raw, delivery_raw, signing_key, now, commitment):
+def _sign_grant(*, payload_raw, guest, runtime_raw, history_raw, delivery_raw, signing_key, now, commitment, spool=False):
     payload = p.fields(document(payload_raw, 65536), GRANT)
     runtime = document(runtime_raw, MAX_BYTES)["runtime"]
     history = p.fields(document(history_raw, MAX_BYTES), HISTORY)
@@ -147,7 +152,8 @@ def _sign_grant(*, payload_raw, guest, runtime_raw, history_raw, delivery_raw, s
         and payload["purpose"] == "cold-service-generation-admission" and payload["serviceRole"] == role
         and payload["guest"] == guest and p.sha(delivery_raw) == guest["deliverySha256"]
         and p.sha(runtime_raw) == guest["runtimeConfigurationSha256"] == payload["runtimeConfigurationSha256"])
-    p.require(runtime["apiVersion"] == ("serverware.policyCustodyServiceRuntimeConfig/v6" if commitment else "serverware.policyCustodyServiceRuntimeConfig/v5")
+    p.require(type(spool) is bool and (not spool or commitment))
+    p.require(runtime["apiVersion"] == ("serverware.policyCustodyServiceRuntimeConfig/v7" if spool else "serverware.policyCustodyServiceRuntimeConfig/v6" if commitment else "serverware.policyCustodyServiceRuntimeConfig/v5")
         and runtime["generationAdmission"] == {"grantFdName": "generation-grant"}
         and (not commitment or runtime.get("dispatchAdmission") == {"grantFdName":"dispatch-grant"}))
     p.require(history["apiVersion"] == "serverware.policyCustodyAuthorityHistory/v3"

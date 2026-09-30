@@ -62,7 +62,7 @@ def _program(values, database_now, request_digest, snapshot):
         elif kind == "custody" and item.get("apiVersion") == heartbeat_profile.RECORD:
             profile.require(len(original["events"]) == 1, "native heartbeat owns one original batch")
             stored = native_heartbeat.apply(state, item)
-        elif kind == "custody" and item.get("apiVersion") == opening_profile.SCHEMA:
+        elif kind == "custody" and item.get("apiVersion") in opening_profile.SCHEMAS:
             profile.require(len(original["events"]) == 1, "native opening owns one indivisible original batch")
             native_finalization.require_unsealed(state, item, item["opening_receipt"]["generation_id"])
             stored = native_opening.apply(state, item)

@@ -114,6 +114,10 @@ impl Running {
         process::isolate_mounts()?;
         let image=image::Image::prepare(&selected.closure,&files)?;
         let (inspector,inspection)=match service_selection {
+            service @ (SelectedService::LedgerRetrieval(_)|SelectedService::LedgerSpool(_)|SelectedService::Ingress(_)|SelectedService::SpoolBridge(_))=>{
+                let (owner,channel)=proof_cohort::prepare_inspection(service,&files,&activation)?;
+                (Some(owner),Some(channel))
+            }
             SelectedService::Generation(pin)=>{
                 require(activation.len()==2 && activation.contains_key("shadow-generation-install-listener")
                     && activation.contains_key("generation-install-journal"))?;

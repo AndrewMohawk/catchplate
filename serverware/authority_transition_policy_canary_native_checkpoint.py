@@ -27,7 +27,7 @@ def apply(state, value):
             marker = record.get("apiVersion")
             if marker == checkpoint.SCHEMA and event["kind"] == "checkpoint":
                 original, is_checkpoint = record["receipt"], True
-            elif marker == opening.SCHEMA and event["kind"] == "custody":
+            elif marker in opening.SCHEMAS and event["kind"] == "custody":
                 original, is_checkpoint = record["opening_receipt"], False
             elif marker in {runtime.SCHEMA, runtime.RESPONSE_SCHEMA} and event["kind"] in {"active-decision", "shadow-observation"}:
                 original, is_checkpoint = record["receipt"], False

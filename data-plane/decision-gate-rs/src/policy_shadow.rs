@@ -36,6 +36,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 #[path = "policy_shadow_opening.rs"]
 pub(crate) mod native_opening;
+#[path = "policy_shadow_native_ingress.rs"]
+pub(crate) mod native_ingress;
 #[path = "policy_shadow_heartbeat.rs"]
 pub(crate) mod native_heartbeat;
 #[path="policy_shadow_runtime.rs"]
@@ -86,6 +88,8 @@ pub(crate) fn run_native_shadow_guest_supervisor()->! {
 pub(crate) fn run_commitment_custody_guest(role:&str,inspected:bool)->! {
     policy_custody::services::guest::ordinary::run_commitment(role,inspected)
 }
+#[cfg(target_os="linux")]
+pub(crate) fn run_spool_custody_guest(role:&str)->! {policy_custody::services::guest::ordinary::run_spool(role)}
 #[cfg(target_os="linux")]
 pub(crate) fn run_native_shadow_retrieval_pair()->! {
     policy_custody::services::guest::native_guest::run_retrieval_pair()
@@ -12066,6 +12070,7 @@ pub(crate) enum IngressCustodyAdmission {
 )]
 pub(in crate::policy_shadow) enum IngressCustodyAdmissionWire {
     Assigned(PersistedIngressAdmissionWire),
+    NativeAssigned(native_ingress::Wire),
     Unavailable(SignedUnavailableGenerationReceipt),
 }
 
@@ -12085,6 +12090,11 @@ impl IngressCustodyAdmissionWire {
         request_binding: &Sha256Digest,
     ) -> Result<(), ShadowError> {
         match self {
+            Self::NativeAssigned(wire)=>{
+                let generation=expected_generation.ok_or(ShadowError::GenerationIdentityMismatch)?;
+                let (first,last)=expected_sequence_bounds.ok_or(ShadowError::GenerationIdentityMismatch)?;
+                wire.require_binding(generation,request_binding,first,last)?;
+            },
             Self::Assigned(wire) => {
                 let generation = expected_generation
                     .ok_or(ShadowError::GenerationIdentityMismatch)?;
@@ -12135,6 +12145,13 @@ pub(in crate::policy_shadow) fn verify_production_ingress_custody_admission(
         expected_request_binding_sha256,
     )?;
     match wire {
+        IngressCustodyAdmissionWire::NativeAssigned(wire)=>{
+            #[cfg(target_os="linux")]
+            {return native_ingress::verify(wire,expected_generation.ok_or(ShadowError::GenerationIdentityMismatch)?,
+                expected_request_binding_sha256,configuration,key_trust,trusted_time,proof_verifier).map(IngressCustodyAdmission::Assigned);}
+            #[cfg(not(target_os="linux"))]
+            {let _=wire;return Err(ShadowError::CustodyUnavailable);}
+        },
         IngressCustodyAdmissionWire::Assigned(wire) => {
             let generation = expected_generation
                 .ok_or(ShadowError::GenerationIdentityMismatch)?;
@@ -13413,6 +13430,7 @@ fn verify_persisted_ingress_admission(
         maximum_age_nanos,
     )?;
     let sampling = CustodySamplingAuthorization {
+        native_sampling:None,
         generation_id: sampling_wire.generation_id,
         request_binding_sha256:
             sampling_wire.request_binding_sha256.clone(),
@@ -13479,6 +13497,7 @@ pub(in crate::policy_shadow) fn verify_production_persisted_ingress_admission(
             proof_verifier,
         )?;
     let sampling = CustodySamplingAuthorization {
+        native_sampling:None,
         generation_id: sampling_wire.generation_id,
         request_binding_sha256:
             sampling_wire.request_binding_sha256.clone(),
@@ -13504,6 +13523,7 @@ pub(in crate::policy_shadow) fn verify_production_persisted_ingress_admission(
 /// reduction from the exact request commitment.
 #[derive(Clone)]
 pub(crate) struct CustodySamplingAuthorization {
+    native_sampling:Option<native_ingress::Commitment>,
     generation_id: Sha256Digest,
     request_binding_sha256: Sha256Digest,
     ingress_sequence: u64,
@@ -13561,6 +13581,7 @@ impl CustodySamplingAuthorization {
             ),
             decision: request_commitment
                 .sampling_decision(sampling_basis_points)?,
+            native_sampling:None,
         })
     }
 

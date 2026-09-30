@@ -3,6 +3,7 @@ use super::*;
 use base64::Engine as _;
 
 pub(crate) const PROFILE: &str = "serverware.nativeCustodyOpening/v1";
+pub(crate) const EARLY_PROFILE:&str="serverware.nativeCustodyOpening/v2";
 
 /// No Deserialize or public field. Only the completed production admission,
 /// retained installed generation and current independently assigned key create
@@ -64,7 +65,10 @@ impl Opening {
         key.verify_strict(&signature_preimage(PolicyShadowCustodySignerRole::IngressAdmission.signature_domain(), &bound),
             &Signature::from_bytes(&receipt.signature.decode()?)).map_err(|_|ShadowError::SignatureInvalid)?;
         if trust.current_checkpoint()? != checkpoint { return Err(ShadowError::BindingDrift); }
-        let record = serde_json::json!({"apiVersion":PROFILE,"canary_id":a.canary_id,
+        let profile=if admission.sampling().native_sampling.is_some(){
+            native_ingress::decode_event(&receipt.canonical_event_bytes)?;EARLY_PROFILE
+        }else{PROFILE};
+        let record = serde_json::json!({"apiVersion":profile,"canary_id":a.canary_id,
             "instance_id":runtime.instance_id(),"boot_id":runtime.boot_id_sha256(),
             "assignment_envelope_digest":assignment.envelope_sha256(),"assignment_payload_digest":assignment.payload_sha256(),
             "load_receipt_envelope_digest":generation.load_receipt_sha256(),"publication_envelope_digest":publication,

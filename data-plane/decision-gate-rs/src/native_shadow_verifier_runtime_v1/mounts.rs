@@ -11,7 +11,8 @@ const FLAGS: libc::c_ulong = libc::MS_RDONLY | libc::MS_NOSUID | libc::MS_NODEV 
 struct OpenHow { flags: u64, mode: u64, resolve: u64 }
 fn fixed(root: &File, name: &'static str, directory: bool) -> Result<File, String> {
     ensure(matches!(name, "/proc" | "/etc/serverware/native-shadow-nitro-verifier.json"
-        | "/etc/serverware/native-shadow-guest-time-issuer.json"), "verifier mount target differs")?;
+        | "/etc/serverware/native-shadow-guest-time-issuer.json"
+        | "/etc/serverware/native-generation-origin-issuer.json"), "verifier mount target differs")?;
     let name = CString::new(name).unwrap();
     let how = OpenHow { flags: (libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW
         | if directory { libc::O_DIRECTORY } else { 0 }) as u64, mode: 0, resolve: 0x10 | 2 | 4 };
@@ -102,6 +103,7 @@ impl Mounts {
         let base: &[u8] = match profile {
             Profile::Verifier => b"serverware-native-shadow-verifier\0",
             Profile::TimeIssuer => b"serverware-native-shadow-time-issuer\0",
+            Profile::OriginIssuer => b"serverware-native-generation-origin-issuer\0",
         };
         let configuration_path = profile.configuration_path();
         within(issued, deadline)?;

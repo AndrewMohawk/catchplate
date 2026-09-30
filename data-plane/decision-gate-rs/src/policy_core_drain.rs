@@ -124,10 +124,12 @@ impl Snapshot {
         let mut included=std::collections::BTreeSet::new();let mut admissions=0u64;
         for original in snapshot.originals(){
             let event:Value=serde_json::from_slice(original.canonical_event_bytes()).map_err(|_|"final actual event")?;
-            if event.as_array().and_then(|items|items.first()).and_then(Value::as_str)
-                ==Some("serverware.policyShadowIngressAdmissionEvent/v1") {
+            if policy_shadow::native_ingress::is_opening_event(event.as_array().and_then(|items|items.first()).and_then(Value::as_str)) {
                 admissions=admissions.checked_add(1).ok_or("final admission count overflow")?;
-                if event[3]["decision"]=="included" {included.insert(original.ingress_sequence());}
+                if event[0]==policy_shadow::native_ingress::EVENT {
+                    let (_,sample)=policy_shadow::native_ingress::decode_event(original.canonical_event_bytes()).map_err(shadow_error)?;
+                    if sample.decision().map_err(shadow_error)?==policy_shadow::SamplingDecision::Included{included.insert(original.ingress_sequence());}
+                }else if event[3]["decision"]=="included" {included.insert(original.ingress_sequence());}
                 else if event[3]["decision"]!="excluded-by-assignment" {return Err("final unknown sampling outcome".into());}
             }
         }

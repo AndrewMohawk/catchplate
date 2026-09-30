@@ -20,8 +20,9 @@ pub(super) fn run(mut prepared:Prepared,identity:driver_identity::Owner,
     let launch=original(&mut rights,"launch",operation.launch_pin(),0,0,32768)?;
     let launch_bytes=launch.read(32768).map_err(fail)?.to_vec();
     let (selected,service)=selection(&launch_bytes)?;
-    let (time_pin,commitment_bridge)=match service {
-        SelectedService::ProofBridge(p)=>(p,false),SelectedService::CommitmentBridge(p)=>(p,true),
+    let (time_pin,commitment_bridge,spool_bridge)=match service {
+        SelectedService::ProofBridge(p)=>(p,false,false),SelectedService::CommitmentBridge(p)=>(p,true,false),
+        SelectedService::SpoolBridge(p)=>(p,true,true),
         _=>return Err(ShadowError::BindingDrift),
     };
     require(selected.delivery_configuration.sha256==prepared.cold.config.delivery_configuration.sha256
@@ -124,13 +125,14 @@ pub(super) fn run(mut prepared:Prepared,identity:driver_identity::Owner,
     // combined-purpose owner after both independent signatures were verified.
     let native_configuration=if full {keys.admitted_bridge_configuration(&trust,time.as_ref())?.clone()}
         else{native_configuration};
-    let (proof_client,time_grant)=proof_client::Prepared::open_late(&mut delivery,inspection,time_grant,commitment_bridge)?;
+    let (proof_client,time_grant)=proof_client::Prepared::open_late(&mut delivery,inspection,time_grant,commitment_bridge,spool_bridge)?;
     let bridge_activation=std::sync::Mutex::new(Some(std::mem::take(&mut delivery.activation)));
     let owner=AdmittedGuest{_delivery:delivery,lifetime,keys,trust,time,launch,launch_bytes,
         originals:vec![assignment_original,closure_original,keys_original,encrypted_original,admission_original],
         retrieval:None,activation:None,persistence:None,retrieval_client:None,bridge_selected:true,trusted_time:None,
         proof_client:Some(proof_client),generation:None,time_grant:Some(time_grant),proof_bridge:true,
-        commit_request:None,commitment_bridge,bridge_activation,native_configuration:Some(native_configuration)};
+        commit_request:None,commitment_bridge,spool_bridge,ledger_retrieval:None,spool_signer:None,
+        bridge_activation,native_configuration:Some(native_configuration)};
     owner.check()?;
     owner.time_grant.as_ref().ok_or(ShadowError::BindingDrift)?.check(&owner.keys,&owner.time_endpoint()?,&owner.trust,owner.time.as_ref())?;
     owner.hold()

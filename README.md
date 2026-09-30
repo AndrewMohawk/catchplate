@@ -22,12 +22,12 @@ Checkpoint: **2026-09-30 — pre-production, source-only.**
 
 [![Project checkpoints, one segment per task: 36 of 46 source-landed; 10 active and 0 todo. Evidence handoff 10/10; historical recovery 4/5; permissions and grants 10/10; finalization and sessions 8/8; workloads and native 3/6; providers and operations 1/7. H05, N04, N05, N06 and O01 through O06 are in progress. Production acceptance remains 0/6. Source only; unbuilt, unexecuted and unprovisioned.](docs/images/project-progress.svg)](docs/production-status.md#next-source-milestones)
 
-The current `.342` source batch connects [native request evidence to Setup](docs/setup-native-runtime-evidence.md):
-a hardware-approved preparation binds the existing capture client's nonce,
-then the protected backend verifies the original collector, native and
-control-plane signatures. Evidence is not final Setup or proxy readiness.
-The gate's native configuration factory and remaining request effects still
-need completion. Broad testing follows the connected pilot.
+The current `.343` source batch connects [first ingress and the native ledger](docs/native-ledger-spool.md):
+installed-generation evidence, durable event ordering, independent signing,
+real storage and persistence now have connected implementation paths.
+The native gate factory, remaining event families and final Setup still need
+completion. We are prioritizing those pilot paths, keeping implementation
+checks narrow and deferring broad testing to connected pre-pilot acceptance.
 
 The bar shows **committed source, not tested readiness or remaining effort**.
 Green means source-landed; amber means partial implementation. No current pilot

@@ -31,6 +31,10 @@ pub(super) fn is_command(raw:&[u8])->Result<bool,ServiceError> {
     Ok(matches!(value.get("apiVersion").and_then(|v|v.as_str()),Some(API|super::generation_certification::API)))
 }
 pub(super) fn frame_deadline(raw:&[u8])->Result<u64,ServiceError> {
+    if super::spool_current::is_command(raw)? {return decode_canonical_frame::<super::spool_current::Command>(raw)?.deadline();}
+    if super::spool_head_values::is_command(raw)? {
+        return decode_canonical_frame::<super::spool_head_values::Command>(raw)?.deadline();
+    }
     if super::dispatch_commitment::is_command(raw)? {
         let command:super::dispatch_commitment::Command=decode_canonical_frame(raw)?;
         return command.deadline();
@@ -50,6 +54,13 @@ pub(super) fn frame_deadline(raw:&[u8])->Result<u64,ServiceError> {
 }
 pub(super) fn check_response_deadline(raw:&[u8],deadline:u64)->Result<(),ServiceError> {
     let value:serde_json::Value=decode_canonical_frame(raw)?;
+    if matches!(value.get("phase").and_then(|v|v.as_str()),Some("native-spool-allocated"|"native-spool-committed")) {
+        return ensure(match decode_canonical_frame::<super::spool_head_values::Reply>(raw)? {
+            super::spool_head_values::Reply::Allocated(v)=>v.payload.original_deadline_boottime_nanos==deadline
+                && v.payload.allocated_at_boottime_nanos<deadline,
+            super::spool_head_values::Reply::Committed{transition,..}=>transition.completed_at_boottime_nanos<deadline,
+        });
+    }
     if value.get("apiVersion").and_then(|v|v.as_str())==Some(super::super::production_dispatch::PRODUCTION_DISPATCH_PROTOCOL_VERSION)
         && value.get("exactSignedEnvelopeBytes").is_some() {
         let response:super::super::production_dispatch::SignedProductionServiceTransitionV4=decode_canonical_frame(raw)?;

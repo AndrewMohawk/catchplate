@@ -279,6 +279,13 @@ impl super::dispatch_service::Owner for TrustedHostNoTeeCurrentSignatureAuthorit
         input.sign(&self.signer.signing_key)
     }
 }
+impl super::spool_current::Owner for TrustedHostNoTeeCurrentSignatureAuthorityServer {
+    fn sign_spool_current(&self,input:&super::spool_current::Input)
+        ->Result<super::super::production_dispatch::SignedProductionServiceTransitionV4,ServiceError>{
+        self.signer.pin.validate().map_err(|_|ServiceError::Invalid("native spool current signer changed"))?;
+        input.sign(&self.signer.signing_key)
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum CurrentAuthoritySubjectKey {

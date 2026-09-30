@@ -66,6 +66,15 @@ pub(super) fn extract(request:&Dispatch,result:&DispatchResult,scope:&scope::Sco
         (Dispatch::BeginIngress{request_binding_sha256,..},DispatchResult::Artifact(artifact))=>{
             let wire:IngressCustodyAdmissionWire=decode(artifact,ArtifactKind::IngressCustodyAdmission)?;
             match wire {
+                IngressCustodyAdmissionWire::NativeAssigned(wire)=>{
+                    require(wire.api_version=="serverware.nativeIngressCustodyAdmission/v1"
+                        && wire.sampling_commitment.context.request_binding_sha256==*request_binding_sha256
+                        && wire.opening_spill_receipt.request_binding_sha256==*request_binding_sha256
+                        && wire.opening_spill_receipt.event_phase==ShadowSpoolPhase::IngressOpen)?;
+                    let (generation,sampling)=crate::policy_shadow::native_ingress::decode_event(&wire.opening_spill_receipt.canonical_event_bytes)?;
+                    require(sampling==wire.sampling_commitment && wire.opening_spill_receipt.matches_event(&sampling.event(&generation)?))?;
+                    spill(wire.opening_spill_receipt,scope)?
+                },
                 IngressCustodyAdmissionWire::Assigned(wire)=>{
                     require(wire.sampling.request_binding_sha256==*request_binding_sha256
                         && wire.opening_spill_receipt.request_binding_sha256==*request_binding_sha256

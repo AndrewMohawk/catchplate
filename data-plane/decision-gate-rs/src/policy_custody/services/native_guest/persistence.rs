@@ -101,6 +101,7 @@ fn dispatch_original(request_encoded:&str,reply_encoded:&str,scope:&scope::Scope
     let dispatch=match &request.request {
         Body::Dispatch(dispatch)=>dispatch,
         Body::FinishCommitRequest{computation,..}=>&computation.request,
+        Body::FinishNativeSpool{completion,..}=>&completion.payload.claim.request,
         _=>return Err(ShadowError::BindingDrift),
     };
     dispatch.validate().map_err(fail)?;let binding=dispatch.binding();
@@ -133,6 +134,20 @@ fn dispatch_original(request_encoded:&str,reply_encoded:&str,scope:&scope::Scope
         require(URL_SAFE_NO_PAD.encode(&sig)==computation.signature_base64url)?;
         key.verify_strict(&computation.preimage().map_err(fail)?,&Signature::from_slice(&sig).map_err(fail)?)
             .map_err(|_|ShadowError::SignatureInvalid)?;
+    }
+    if let Body::FinishNativeSpool{completion,result,service_transitions}=&request.request {
+        let core=&completion.payload.prepared.core;
+        require(response.result==*result && response.service_transitions==*service_transitions
+            && completion.payload.claim.request==*dispatch && core.request==*dispatch
+            && core.signing_key_id==reply.authority_key_id && core.signing_key_spki_sha256==reply.authority_key_spki_sha256)?;
+        let artifact=match result {
+            crate::policy_shadow::policy_custody::production_dispatch::ClosedProductionDispatchResultV4::Artifact(value)=>value,
+            crate::policy_shadow::policy_custody::production_dispatch::ClosedProductionDispatchResultV4::SealedArtifact{exact_signed_artifact,..}=>&exact_signed_artifact.artifact,
+            _=>return Err(ShadowError::BindingDrift),
+        };
+        require(artifact==&completion.payload.artifact)?;
+        key.verify_strict(&signature_preimage(services::spool_head_values::COMPLETE_DOMAIN,&canonical_json_bytes(&completion.payload)?),
+            &Signature::from_bytes(&completion.signature.decode()?)).map_err(|_|ShadowError::SignatureInvalid)?;
     }
     let rebuilt=ClosedProductionDispatchResponseV4::from_parts(dispatch,response.result.clone(),response.service_transitions.clone()).map_err(fail)?;
     require(canonical_json_bytes(&rebuilt)?==canonical_json_bytes(response)? && !response.service_transitions.is_empty()

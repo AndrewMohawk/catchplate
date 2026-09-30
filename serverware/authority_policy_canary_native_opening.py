@@ -13,6 +13,9 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from serverware import authority_policy_canary as profile
 
 SCHEMA = "serverware.nativeCustodyOpening/v1"
+EARLY_SCHEMA = "serverware.nativeCustodyOpening/v2"
+EARLY_EVENT = "serverware.nativeShadowIngressAdmissionEvent/v1"
+SCHEMAS = frozenset({SCHEMA, EARLY_SCHEMA})
 MAX_RECORD = 64 * 1024
 FIELDS = frozenset({"apiVersion", "canary_id", "instance_id", "boot_id", "assignment_envelope_digest",
     "assignment_payload_digest", "load_receipt_envelope_digest", "publication_envelope_digest",
@@ -132,9 +135,33 @@ def _generation(assignment, load, context, publication):
     return result
 
 
+def early_sampling(event, receipt, generation):
+    """Verify the explicit early context. This is NOT ProtectedRequestFacts."""
+    profile.require(type(event) is list and len(event) == 4 and event[0] == EARLY_EVENT
+        and profile.canonical(event[1]) == profile.canonical(generation)
+        and event[2] == receipt["trusted_observed_at_unix_nanos"] and receipt["event_phase"] == "ingress-open")
+    sample = event[3]
+    profile.require(type(sample) is dict and set(sample) == {"context", "commitment"})
+    expected = {"apiVersion": "serverware.nativeIngressSamplingContext/v1",
+        "assignmentPayloadSha256": generation["assignmentPayloadSha256"], "assignmentRevision": generation["assignmentRevision"],
+        "runtimeBootIdSha256": generation["runtimeBootIdSha256"], "generationId": generation["generationId"],
+        "requestBindingSha256": receipt["request_binding_sha256"], "ingressSequence": receipt["ingress_sequence"],
+        "samplingBasisPoints": generation["samplingBasisPoints"], "keyId": generation["requestCommitmentKeyId"],
+        "keyEpoch": generation["requestCommitmentKeyEpoch"], "observedAtUnixNanos": event[2]}
+    profile.require(profile.canonical(sample["context"]) == profile.canonical(expected)
+        and profile.sha256(profile.canonical(sample)) == receipt["request_commitment_sha256"])
+    tag = sample["commitment"]
+    profile.require(type(tag) is str and tag.startswith("hmac-sha256:") and len(tag) == 76
+        and all(v in "0123456789abcdef" for v in tag[12:]))
+    basis = expected["samplingBasisPoints"]
+    profile.require(type(basis) is int and 1 <= basis <= 10000)
+    bucket = int.from_bytes(bytes.fromhex(tag[12:])[:8], "big") % 10000
+    return "included" if bucket < basis else "excluded-by-assignment"
+
+
 def verify(value, *, assignment, load, context, publication, now):
     from serverware import db
-    profile.require(type(value) is dict and set(value) == FIELDS and value["apiVersion"] == SCHEMA
+    profile.require(type(value) is dict and set(value) == FIELDS and value["apiVersion"] in SCHEMAS
         and len(profile.canonical(value)) <= MAX_RECORD)
     profile.require(assignment_fields(assignment) == db._POLICY_SHADOW_DIRECT_PAYLOAD_FIELDS["canary_assignment"]
         | {"custodyAuthority", "authorityKeyIndependence"}, "opening requires the actual custody-bearing assignment")
@@ -153,12 +180,20 @@ def verify(value, *, assignment, load, context, publication, now):
     profile.require(type(raw) is list and 0 < len(raw) <= 16 * 1024 and all(type(v) is int and 0 <= v <= 255 for v in raw))
     raw = bytes(raw)
     event = profile.document(raw, 16 * 1024)
+    early = value["apiVersion"] == EARLY_SCHEMA
     profile.require(profile.canonical(event) == raw and profile.sha256(raw) == receipt["event_sha256"]
-        and type(event) is list and len(event) == 4 and event[0] == "serverware.policyShadowIngressAdmissionEvent/v1"
+        and type(event) is list and len(event) == 4 and event[0] == (EARLY_EVENT if early else "serverware.policyShadowIngressAdmissionEvent/v1")
         and profile.canonical(event[1]) == profile.canonical(_generation(assignment, load, context, publication))
         and event[2] == receipt["trusted_observed_at_unix_nanos"])
     sample = event[3]
     window = assignment["observationWindow"]
+    if early:
+        decision = early_sampling(event, receipt, _generation(assignment, load, context, publication))
+        # Only the old validation projection below is shared. The signed event
+        # and record remain exact v2 originals and are never rewritten as v1.
+        sample = {"generationId": receipt["generation_id"], "requestBindingSha256": receipt["request_binding_sha256"],
+            "ingressSequence": receipt["ingress_sequence"], "samplingBasisPoints": window["samplingBasisPoints"],
+            "requestCommitmentSha256": receipt["request_commitment_sha256"], "decision": decision}
     profile.require(type(sample) is dict and set(sample) == {"generationId", "requestBindingSha256", "ingressSequence",
         "samplingBasisPoints", "requestCommitmentSha256", "decision"})
     expected_sample = {"generationId": receipt["generation_id"], "requestBindingSha256": receipt["request_binding_sha256"],
@@ -173,7 +208,7 @@ def verify(value, *, assignment, load, context, publication, now):
         and now < min(assignment["expiresAtUnixNanos"], window["endsAtUnixNanos"]))
     message = verify_receipt_signature(value, receipt, assignment=assignment, context=context,
         publication=publication, role="ingress-admission")
-    return {"apiVersion": SCHEMA, "generationId": receipt["generation_id"], "ingressSequence": receipt["ingress_sequence"],
+    return {"apiVersion": value["apiVersion"], "generationId": receipt["generation_id"], "ingressSequence": receipt["ingress_sequence"],
         "openingReceiptSha256": receipt["signed_receipt_sha256"], "signatureMessageSha256": profile.sha256(message),
         "recordSha256": profile.sha256(profile.canonical(value)), "coverage": "opening-only"}
 

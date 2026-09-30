@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-policy-canary-opening.v2.schema.json",
+  "$ref": "#/$defs/record",
+  "$comment": "Native early sampling only. Receipt canonical_event_bytes encodes exact array [serverware.nativeShadowIngressAdmissionEvent/v1, actual generation, observed epoch, sampling]. Complete actual IngressAdmission signature, protected assignment/currentness and storage verification are mandatory. This does not claim later ProtectedRequestFacts commitment or readiness. Old opening/v1 remains strict.",
+  "$defs": {
+    "sha": {"$ref": "native-policy-canary-opening.v1.schema.json#/$defs/sha256"},
+    "positive": {"$ref": "native-policy-canary-opening.v1.schema.json#/$defs/positive"},
+    "context": {
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "assignmentPayloadSha256", "assignmentRevision", "runtimeBootIdSha256", "generationId", "requestBindingSha256", "ingressSequence", "samplingBasisPoints", "keyId", "keyEpoch", "observedAtUnixNanos"],
+      "properties": {
+        "apiVersion": {"const": "serverware.nativeIngressSamplingContext/v1"},
+        "assignmentPayloadSha256": {"$ref": "#/$defs/sha"}, "assignmentRevision": {"$ref": "#/$defs/positive"},
+        "runtimeBootIdSha256": {"$ref": "#/$defs/sha"}, "generationId": {"$ref": "#/$defs/sha"},
+        "requestBindingSha256": {"$ref": "#/$defs/sha"}, "ingressSequence": {"$ref": "#/$defs/positive"},
+        "samplingBasisPoints": {"type": "integer", "minimum": 1, "maximum": 10000},
+        "keyId": {"$ref": "#/$defs/sha"}, "keyEpoch": {"$ref": "#/$defs/positive"},
+        "observedAtUnixNanos": {"$ref": "#/$defs/positive"}
+      }
+    },
+    "sampling": {
+      "type": "object", "additionalProperties": false, "required": ["context", "commitment"],
+      "properties": {"context": {"$ref": "#/$defs/context"}, "commitment": {"type": "string", "pattern": "^hmac-sha256:[0-9a-f]{64}$"}}
+    },
+    "record": {
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "canary_id", "instance_id", "boot_id", "assignment_envelope_digest", "assignment_payload_digest", "load_receipt_envelope_digest", "publication_envelope_digest", "opening_receipt", "signing_public_key_base64url"],
+      "properties": {
+        "apiVersion": {"const": "serverware.nativeCustodyOpening/v2"}, "canary_id": {"$ref": "#/$defs/sha"},
+        "instance_id": {"type": "string", "minLength": 1, "maxLength": 256}, "boot_id": {"$ref": "#/$defs/sha"},
+        "assignment_envelope_digest": {"$ref": "#/$defs/sha"}, "assignment_payload_digest": {"$ref": "#/$defs/sha"},
+        "load_receipt_envelope_digest": {"$ref": "#/$defs/sha"}, "publication_envelope_digest": {"$ref": "#/$defs/sha"},
+        "opening_receipt": {"$ref": "native-policy-canary-opening.v1.schema.json#/$defs/receipt"},
+        "signing_public_key_base64url": {"type": "string", "pattern": "^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$"}
+      }
+    }
+  }
+}

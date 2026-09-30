@@ -1,0 +1,490 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-generation-origin.v1.schema.json",
+  "$ref": "#/$defs/configuration",
+  "description": "Independent cold-authorized provenance only, not effect permission. Request <=4096, retained originals <=768 KiB, complete evidence <=1 MiB and complete issuer frame <=2 MiB, canonical ASCII without LF. Original operation <=30s; authorization <=300s. Tags SWNGOC1/NUL, SWNGOE1/NUL, SWNGOR1/NUL then u32be length; one challenge/evidence/origin and response EOF. Native source statement uses own role-4 domain and NSM quote; issuer signatures use existing signedEnvelope/ascii-integer framing under distinct domains. No new epoch correlation, fabricated generation/head or Fleet load envelope.",
+  "$defs": {
+    "sha": {
+      "$ref": "native-shadow-role-keys.v1.schema.json#/$defs/sha256"
+    },
+    "signature": {
+      "$ref": "native-shadow-role-keys.v1.schema.json#/$defs/signature"
+    },
+    "bytes32": {
+      "$ref": "native-shadow-role-keys.v1.schema.json#/$defs/bytes32"
+    },
+    "epoch": {
+      "$ref": "native-shadow-commit-request.v1.schema.json#/$defs/epoch"
+    },
+    "key": {
+      "$ref": "native-shadow-guest-time-issuer.v1.schema.json#/$defs/key"
+    },
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "challenge",
+        "contextSha256",
+        "policyHash",
+        "assignmentPayloadSha256",
+        "generationId",
+        "issuedAtEpochNs",
+        "expiresAtEpochNs"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeGenerationOriginRequest/v1"
+        },
+        "challenge": {
+          "$ref": "#/$defs/bytes32"
+        },
+        "contextSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "policyHash": {
+          "$ref": "#/$defs/sha"
+        },
+        "assignmentPayloadSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "generationId": {
+          "$ref": "#/$defs/sha"
+        },
+        "issuedAtEpochNs": {
+          "$ref": "#/$defs/epoch"
+        },
+        "expiresAtEpochNs": {
+          "$ref": "#/$defs/epoch"
+        }
+      }
+    },
+    "statement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "request",
+        "originals",
+        "policyOriginalSha256",
+        "bootId",
+        "keyId",
+        "controlPlaneResponseSigningKeyId",
+        "dataPlaneBinarySha256",
+        "observedAtEpochNs"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeGenerationOriginStatement/v1"
+        },
+        "request": {
+          "$ref": "#/$defs/request"
+        },
+        "originals": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 786432,
+          "pattern": "^[\\u0000-\\u007f]+$"
+        },
+        "policyOriginalSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "bootId": {
+          "$ref": "#/$defs/bytes32"
+        },
+        "keyId": {
+          "$ref": "#/$defs/sha"
+        },
+        "controlPlaneResponseSigningKeyId": {
+          "$ref": "#/$defs/sha"
+        },
+        "dataPlaneBinarySha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "observedAtEpochNs": {
+          "$ref": "#/$defs/epoch"
+        }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "statement",
+        "signature",
+        "nativeKeyEvidence"
+      ],
+      "properties": {
+        "statement": {
+          "$ref": "#/$defs/statement"
+        },
+        "signature": {
+          "type": "string",
+          "pattern": "^ed25519:[A-Za-z0-9_-]{86}$"
+        },
+        "nativeKeyEvidence": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "apiVersion",
+            "attestationDocumentB64",
+            "responseProofPublicKey"
+          ],
+          "properties": {
+            "apiVersion": {
+              "const": "serverware.nativeResponseProofKeyEvidence/v1"
+            },
+            "attestationDocumentB64": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 16384,
+              "pattern": "^[A-Za-z0-9_-]+$"
+            },
+            "responseProofPublicKey": {
+              "$ref": "#/$defs/bytes32"
+            }
+          }
+        }
+      }
+    },
+    "holder": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "bootId",
+        "keyId",
+        "controlPlaneResponseSigningKeyId",
+        "releaseRecordSha256",
+        "policyHash",
+        "configurationSha256",
+        "caCertificateSha256",
+        "caPublicKeySpkiSha256",
+        "expectedBinaryDigest"
+      ],
+      "properties": {
+        "bootId": {
+          "$ref": "#/$defs/bytes32"
+        },
+        "keyId": {
+          "$ref": "#/$defs/sha"
+        },
+        "controlPlaneResponseSigningKeyId": {
+          "$ref": "#/$defs/sha"
+        },
+        "releaseRecordSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "policyHash": {
+          "$ref": "#/$defs/sha"
+        },
+        "configurationSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "caCertificateSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "caPublicKeySpkiSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "expectedBinaryDigest": {
+          "$ref": "#/$defs/sha"
+        }
+      }
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "holder",
+        "assignmentPayloadSha256",
+        "generationId",
+        "productionConfigurationBindingSha256",
+        "policyOriginalSha256",
+        "initializationScopeSha256"
+      ],
+      "properties": {
+        "holder": {
+          "$ref": "#/$defs/holder"
+        },
+        "assignmentPayloadSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "generationId": {
+          "$ref": "#/$defs/sha"
+        },
+        "productionConfigurationBindingSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "policyOriginalSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "initializationScopeSha256": {
+          "$ref": "#/$defs/sha"
+        }
+      }
+    },
+    "authorizationPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "purpose",
+        "configurationSha256",
+        "issuedAtUnixNanos",
+        "expiresAtUnixNanos",
+        "signingKeyId"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeGenerationOriginIssuerAuthorization/v1"
+        },
+        "purpose": {
+          "const": "native-generation-origin-verification"
+        },
+        "configurationSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "issuedAtUnixNanos": {
+          "$ref": "#/$defs/epoch"
+        },
+        "expiresAtUnixNanos": {
+          "$ref": "#/$defs/epoch"
+        },
+        "signingKeyId": {
+          "$ref": "#/$defs/sha"
+        }
+      }
+    },
+    "authorization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "payload",
+        "signature"
+      ],
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/authorizationPayload"
+        },
+        "signature": {
+          "$ref": "#/$defs/signature"
+        }
+      }
+    },
+    "configuration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "uid",
+        "gid",
+        "operation",
+        "issuerAuthorityKey",
+        "originKey",
+        "target",
+        "nitro",
+        "collateralRevocation",
+        "transport",
+        "authorization"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeGenerationOriginIssuerConfiguration/v1"
+        },
+        "uid": {
+          "$ref": "native-shadow-nitro-verifier.v1.schema.json#/$defs/uid"
+        },
+        "gid": {
+          "$ref": "native-shadow-nitro-verifier.v1.schema.json#/$defs/uid"
+        },
+        "operation": {
+          "$ref": "native-shadow-nitro-verifier.v1.schema.json#/$defs/operation"
+        },
+        "issuerAuthorityKey": {
+          "$ref": "#/$defs/key"
+        },
+        "originKey": {
+          "$ref": "#/$defs/key"
+        },
+        "target": {
+          "$ref": "#/$defs/target"
+        },
+        "nitro": {
+          "$ref": "native-shadow-nitro-verifier.v1.schema.json#/$defs/nitro"
+        },
+        "collateralRevocation": {
+          "$ref": "native-shadow-nitro-verifier.v1.schema.json#/$defs/revocation"
+        },
+        "transport": {
+          "$ref": "native-shadow-guest-time-issuer.v1.schema.json#/$defs/transport"
+        },
+        "authorization": {
+          "$ref": "#/$defs/authorization"
+        }
+      }
+    },
+    "challengePayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "request",
+        "expiresAtUnixNanos",
+        "signingKeyId"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeGenerationOriginChallenge/v1"
+        },
+        "request": {
+          "$ref": "#/$defs/request"
+        },
+        "expiresAtUnixNanos": {
+          "$ref": "#/$defs/epoch"
+        },
+        "signingKeyId": {
+          "$ref": "#/$defs/sha"
+        }
+      }
+    },
+    "challenge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "payload",
+        "signature"
+      ],
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/challengePayload"
+        },
+        "signature": {
+          "$ref": "#/$defs/signature"
+        }
+      }
+    },
+    "originPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "purpose",
+        "request",
+        "evidenceOriginal",
+        "issuedAtUnixNanos",
+        "expiresAtUnixNanos",
+        "signingKeyId",
+        "signingKeySpkiSha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeGenerationOrigin/v1"
+        },
+        "purpose": {
+          "const": "native-installed-generation-origin"
+        },
+        "request": {
+          "$ref": "#/$defs/request"
+        },
+        "evidenceOriginal": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1048576,
+          "pattern": "^[\\u0000-\\u007f]+$"
+        },
+        "issuedAtUnixNanos": {
+          "$ref": "#/$defs/epoch"
+        },
+        "expiresAtUnixNanos": {
+          "$ref": "#/$defs/epoch"
+        },
+        "signingKeyId": {
+          "$ref": "#/$defs/sha"
+        },
+        "signingKeySpkiSha256": {
+          "$ref": "#/$defs/sha"
+        }
+      }
+    },
+    "origin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "payload",
+        "signature"
+      ],
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/originPayload"
+        },
+        "signature": {
+          "$ref": "#/$defs/signature"
+        }
+      }
+    },
+    "relay": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "issuerIp",
+        "issuerPort",
+        "managementUrl",
+        "managementToken"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeGenerationOriginRelay/v1"
+        },
+        "issuerIp": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 45
+        },
+        "issuerPort": {
+          "type": "integer",
+          "minimum": 1024,
+          "maximum": 65535
+        },
+        "managementUrl": {
+          "enum": [
+            "http://decision-gate-rs:9091/v1/native-generation-origin",
+            "http://localhost:9091/v1/native-generation-origin",
+            "http://127.0.0.1:9091/v1/native-generation-origin",
+            "http://[::1]:9091/v1/native-generation-origin"
+          ]
+        },
+        "managementToken": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096,
+          "pattern": "^[\\u0021-\\u007e]+$"
+        }
+      }
+    },
+    "handoff": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "okForAction",
+        "automaticRetryAllowed",
+        "originSha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeGenerationOriginHandoff/v1"
+        },
+        "okForAction": {
+          "const": false
+        },
+        "automaticRetryAllowed": {
+          "const": false
+        },
+        "originSha256": {
+          "$ref": "#/$defs/sha"
+        }
+      }
+    }
+  }
+}

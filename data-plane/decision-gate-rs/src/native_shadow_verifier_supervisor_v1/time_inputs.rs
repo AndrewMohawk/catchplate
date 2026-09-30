@@ -78,6 +78,15 @@ impl Inputs {
             && self.peer.1 > 0, "issuer actual transport tuple differs from cold policy")?;
         self.assigned = true; self.check_connected()
     }
+    pub(super) fn bind_origin(&mut self, admission: &RuntimeAdmission) -> Result<(), String> {
+        admission.check()?;
+        ensure(!self.assigned && admission.profile() == Profile::OriginIssuer, "origin issuer input binding not one-use")?;
+        self.seed.assigned(admission.uid(), admission.gid())?;
+        let (local, port, peer) = admission.origin_transport()?;
+        ensure(self.local.0.to_string() == local && self.local.1 == port && self.peer.0.to_string() == peer
+            && self.peer.1 > 0, "origin issuer actual transport tuple differs from cold policy")?;
+        self.assigned = true; self.check_connected()
+    }
     fn originals(&self) -> Result<(), String> {
         self.seed.check()?; let fd = self.socket.as_raw_fd();
         ensure(identity(fd)? == self.identity && option::<u64>(fd, 57)? == self.cookie

@@ -69,19 +69,25 @@ struct GenerationLaunch {api_version:String,key_admission:Launch,generation:Pin}
 #[derive(Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 struct CommitRequestLaunch {api_version:String,key_admission:Launch,commit_request:Pin}
-enum SelectedService {None,Retrieval(Pin),RetrievalBridge,Activation(Pin),Persistence(Pin),PersistenceLocked(Pin),
-    TrustedTime(Pin),ProofBridge(Pin),Generation(Pin),CommitmentBridge(Pin),CommitRequest(Pin)}
+#[derive(Serialize,Deserialize)]
+#[serde(rename_all="camelCase",deny_unknown_fields)]
+struct IngressLaunch {api_version:String,key_admission:Launch,ingress:Pin}
+enum SelectedService {None,Retrieval(Pin),LedgerRetrieval(Pin),RetrievalBridge,Activation(Pin),Persistence(Pin),PersistenceLocked(Pin),
+    TrustedTime(Pin),ProofBridge(Pin),Generation(Pin),CommitmentBridge(Pin),SpoolBridge(Pin),CommitRequest(Pin),LedgerSpool(Pin),Ingress(Pin)}
 #[derive(Serialize,Deserialize)]
 #[serde(untagged)]
 enum Selection {KeyAdmission(Launch),Retrieval(RetrievalLaunch),RetrievalBridge(RetrievalBridgeLaunch),Activation(ActivationLaunch),
-    Persistence(PersistenceLaunch),TrustedTime(TrustedTimeLaunch),Generation(GenerationLaunch),CommitRequest(CommitRequestLaunch)}
+    Persistence(PersistenceLaunch),TrustedTime(TrustedTimeLaunch),Generation(GenerationLaunch),CommitRequest(CommitRequestLaunch),Ingress(IngressLaunch)}
 fn selection(raw:&[u8])->Result<(Launch,SelectedService),ShadowError> {
     let value:Selection=exact(raw)?;
     let (launch,service)=match value {
         Selection::KeyAdmission(value)=>(value,SelectedService::None),
         Selection::Retrieval(value)=>{
-            require(value.api_version=="serverware.nativeShadowRetrievalGuestLaunch/v1")?;
-            (value.key_admission,SelectedService::Retrieval(value.retrieval))
+            match value.api_version.as_str(){
+                "serverware.nativeShadowRetrievalGuestLaunch/v1"=>(value.key_admission,SelectedService::Retrieval(value.retrieval)),
+                "serverware.nativeShadowRetrievalGuestLaunch/v2"=>(value.key_admission,SelectedService::LedgerRetrieval(value.retrieval)),
+                _=>return Err(ShadowError::BindingDrift),
+            }
         }
         Selection::RetrievalBridge(value)=>{
             require(value.api_version=="serverware.nativeShadowRetrievalBridgeLaunch/v1")?;
@@ -103,6 +109,8 @@ fn selection(raw:&[u8])->Result<(Launch,SelectedService),ShadowError> {
                 (value.key_admission,SelectedService::ProofBridge(value.trusted_time))
             } else if value.api_version=="serverware.nativeProofBridgeLaunch/v2" {
                 (value.key_admission,SelectedService::CommitmentBridge(value.trusted_time))
+            } else if value.api_version=="serverware.nativeProofBridgeLaunch/v3" {
+                (value.key_admission,SelectedService::SpoolBridge(value.trusted_time))
             } else {
                 require(value.api_version=="serverware.nativeShadowTrustedTimeGuestLaunch/v1")?;
                 (value.key_admission,SelectedService::TrustedTime(value.trusted_time))
@@ -113,8 +121,15 @@ fn selection(raw:&[u8])->Result<(Launch,SelectedService),ShadowError> {
             (value.key_admission,SelectedService::Generation(value.generation))
         }
         Selection::CommitRequest(value)=>{
-            require(value.api_version=="serverware.nativeShadowCommitRequestGuestLaunch/v1")?;
-            (value.key_admission,SelectedService::CommitRequest(value.commit_request))
+            match value.api_version.as_str(){
+                "serverware.nativeShadowCommitRequestGuestLaunch/v1"=>(value.key_admission,SelectedService::CommitRequest(value.commit_request)),
+                "serverware.nativeShadowCommitRequestGuestLaunch/v2"=>(value.key_admission,SelectedService::LedgerSpool(value.commit_request)),
+                _=>return Err(ShadowError::BindingDrift),
+            }
+        }
+        Selection::Ingress(value)=>{
+            require(value.api_version=="serverware.nativeShadowIngressGuestLaunch/v1")?;
+            (value.key_admission,SelectedService::Ingress(value.ingress))
         }
     };
     require(launch.api_version=="serverware.nativeShadowGuestLaunch/v1")?;
@@ -124,6 +139,8 @@ pub(in crate::policy_shadow::policy_custody::services) struct AdmittedGuest {
     _delivery:PreparedGuestServiceDelivery,lifetime:process::Lifetime,keys:admission::AdmittedKeys,
     trust:authority::Trust,time:Arc<authority::Clock>,launch:Original,launch_bytes:Vec<u8>,originals:Vec<Original>,
     retrieval:Option<admission::retrieval::Service>,
+    ledger_retrieval:Option<admission::ledger_retrieval::Service>,
+    spool_signer:Option<admission::spool_endpoint::Service>,
     activation:Option<admission::activation::Service>,
     persistence:Option<admission::persistence::Service>,
     retrieval_client:Option<retrieval_client::Prepared>,bridge_selected:bool,
@@ -131,6 +148,7 @@ pub(in crate::policy_shadow::policy_custody::services) struct AdmittedGuest {
     generation:Option<admission::generation_install::Service>,
     time_grant:Option<admission::trusted_time::ClientGrant>,proof_bridge:bool,
     commit_request:Option<admission::commit_request::Service>,commitment_bridge:bool,
+    spool_bridge:bool,
     bridge_activation:std::sync::Mutex<Option<BTreeMap<String,std::os::fd::OwnedFd>>>,
     // Old context-only admission leaves this unactivated. Explicit driver v3
     // populates it only from the genuine combined-purpose key owner.
@@ -157,15 +175,37 @@ impl AdmittedGuest {
         let launch=Original::native_launch().map_err(fail)?;
         let launch_bytes=launch.read(32768).map_err(fail)?.to_vec();
         let (selected,service_selection)=selection(&launch_bytes)?;
-        let commitment_selected=matches!(&service_selection,SelectedService::CommitRequest(_));
-        let commitment_bridge=matches!(&service_selection,SelectedService::CommitmentBridge(_));
-        require(inspection.is_some()==matches!(&service_selection,SelectedService::Retrieval(_)|SelectedService::RetrievalBridge
+        let commitment_selected=matches!(&service_selection,SelectedService::CommitRequest(_)|SelectedService::LedgerSpool(_));
+        let sampling_selected=matches!(&service_selection,SelectedService::LedgerSpool(_));
+        let commitment_bridge=matches!(&service_selection,SelectedService::CommitmentBridge(_)|SelectedService::SpoolBridge(_));
+        let spool_bridge=matches!(&service_selection,SelectedService::SpoolBridge(_));
+        require(inspection.is_some()==matches!(&service_selection,SelectedService::Retrieval(_)|SelectedService::LedgerRetrieval(_)|SelectedService::RetrievalBridge
             |SelectedService::Persistence(_)|SelectedService::PersistenceLocked(_)|SelectedService::TrustedTime(_)|SelectedService::ProofBridge(_)
-            |SelectedService::Generation(_)|SelectedService::CommitRequest(_)|SelectedService::CommitmentBridge(_)))?;
-        let mut delivery=PreparedGuestServiceDelivery::admit(&selected.delivery_configuration.path,selected.delivery_configuration.sha256,
-            &selected.delivery.path,selected.delivery.sha256).map_err(fail)?;
+            |SelectedService::Generation(_)|SelectedService::CommitRequest(_)|SelectedService::CommitmentBridge(_)
+            |SelectedService::LedgerSpool(_)|SelectedService::Ingress(_)|SelectedService::SpoolBridge(_)))?;
+        let native_lock=match &service_selection {
+            SelectedService::PersistenceLocked(_)=>Some(super::NativeLock::Persistence),
+            SelectedService::LedgerRetrieval(_)=>Some(super::NativeLock::Ledger),
+            _=>None,
+        };
+        let mut delivery=PreparedGuestServiceDelivery::admit_selected(&selected.delivery_configuration.path,selected.delivery_configuration.sha256,
+            &selected.delivery.path,selected.delivery.sha256,native_lock).map_err(fail)?;
         require(inherited.iter().filter(|fd|**fd>=6).copied().eq(6..6+delivery.activation.len() as i32))?;
         let lifetime=process::Lifetime::arm(&delivery)?;
+        let (spool_signer,service_selection,inspection)=match (service_selection,inspection){
+            (SelectedService::LedgerSpool(pin),Some(channel))=>(Some(admission::spool_endpoint::Prepared::open(
+                &pin,admission::spool_signer::Kind::Ledger,&mut delivery,channel)?),SelectedService::None,None),
+            (SelectedService::Ingress(pin),Some(channel))=>(Some(admission::spool_endpoint::Prepared::open(
+                &pin,admission::spool_signer::Kind::Ingress,&mut delivery,channel)?),SelectedService::None,None),
+            (selected,inspection)=>(None,selected,inspection),
+        };
+        // The successor takes its complete four-resource inventory before any
+        // other purpose consumes a descriptor. It is not old v1 plus a flag.
+        let (ledger_retrieval,service_selection,inspection)=match (service_selection,inspection){
+            (SelectedService::LedgerRetrieval(pin),Some(channel))=>(
+                Some(admission::ledger_retrieval::Prepared::open(&pin,&mut delivery,channel)?),SelectedService::None,None),
+            (selected,inspection)=>(None,selected,inspection),
+        };
         let (retrieval,retrieval_client,activation,persistence,trusted_time,proof_client,time_grant,generation,commit_request)=match (service_selection,inspection) {
             (SelectedService::Retrieval(pin),Some(channel))=>(Some(admission::retrieval::Prepared::open(&pin,&mut delivery,channel)?),None,None,None,None,None,None,None,None),
             (SelectedService::RetrievalBridge,Some(channel))=>(None,Some(retrieval_client::Prepared::open(&mut delivery,channel)?),None,None,None,None,None,None,None),
@@ -180,6 +220,10 @@ impl AdmittedGuest {
             }
             (SelectedService::CommitmentBridge(pin),Some(channel))=>{
                 let (prepared,grant)=proof_client::Prepared::open_selected(&mut delivery,channel,&pin,true)?;
+                (None,None,None,None,None,Some(prepared),Some(grant),None,None)
+            }
+            (SelectedService::SpoolBridge(pin),Some(channel))=>{
+                let (prepared,grant)=proof_client::Prepared::open_spool(&mut delivery,channel,&pin)?;
                 (None,None,None,None,None,Some(prepared),Some(grant),None,None)
             }
             (SelectedService::CommitRequest(pin),Some(channel))=>(None,None,None,None,None,None,None,None,
@@ -198,6 +242,7 @@ impl AdmittedGuest {
         let encrypted_original=selected.encrypted_keys.open(65536)?;
         let encrypted_configuration:NativeShadowEncryptedKeysConfiguration=exact(&encrypted_original.read(65536).map_err(fail)?)?;
         require(encrypted_configuration.has_commitment()==commitment_selected)?;
+        require(encrypted_configuration.sampling_selected()==sampling_selected)?;
         let admission_original=selected.admission.open(65536)?;
         let admission_configuration:admission::Authorization=exact(&admission_original.read(65536).map_err(fail)?)?;
         process::isolate_mounts()?;
@@ -211,6 +256,8 @@ impl AdmittedGuest {
         let mut keys=keys.bind_admission(admission_configuration,context,&closure,&trust,time.as_ref())?;
         keys.admit_external(&trust,time.as_ref())?;
         let retrieval=retrieval.map(|value|value.bind(&keys,&delivery,&trust,time.as_ref())).transpose()?;
+        let ledger_retrieval=ledger_retrieval.map(|value|value.bind(&keys,&delivery,&trust,time.as_ref())).transpose()?;
+        let spool_signer=spool_signer.map(|value|value.bind(&keys,&delivery,&trust,time.as_ref())).transpose()?;
         let activation=activation.map(|value|value.bind(&keys,&delivery,&trust,time.as_ref())).transpose()?;
         let persistence=persistence.map(|value|value.bind(&keys,&delivery,&trust,time.as_ref())).transpose()?;
         let trusted_time=trusted_time.map(|value|value.bind(&keys,&delivery,&trust,time.as_ref())).transpose()?;
@@ -225,7 +272,7 @@ impl AdmittedGuest {
         let owner=Self{_delivery:delivery,lifetime,keys,trust,time,launch,launch_bytes,
             originals:vec![assignment_original,closure_original,keys_original,encrypted_original,admission_original],
             retrieval,activation,persistence,retrieval_client,bridge_selected,bridge_activation,trusted_time,proof_client,time_grant,proof_bridge,generation,
-            commit_request,commitment_bridge,native_configuration:None};
+            commit_request,commitment_bridge,spool_bridge,ledger_retrieval,spool_signer,native_configuration:None};
         owner.check()?;
         if owner.proof_bridge {
             owner.time_grant.as_ref().ok_or(ShadowError::BindingDrift)?.check(&owner.keys,
@@ -245,6 +292,12 @@ impl AdmittedGuest {
         Ok(())
     }
     fn hold(mut self)->Result<(),ShadowError> {
+        if let Some(service)=self.spool_signer.take(){
+            return service.serve(&self.keys,&self.trust,self.time.as_ref(),&||self.check());
+        }
+        if let Some(service)=self.ledger_retrieval.take(){
+            return service.serve(&self.keys,&self.trust,self.time.as_ref(),&||self.check());
+        }
         if let Some(service)=self.generation.take(){
             return service.serve(&self.keys,&self.trust,self.time.as_ref(),&||self.check());
         }
@@ -276,6 +329,7 @@ impl AdmittedGuest {
         }
     }
     pub(in crate::policy_shadow::policy_custody::services) fn commitment_bridge_selected(&self)->bool {self.commitment_bridge}
+    pub(in crate::policy_shadow::policy_custody::services) fn spool_bridge_selected(&self)->bool {self.spool_bridge}
     pub(in crate::policy_shadow::policy_custody::services) fn guest_binding(&self)->GuestClosureBinding {self.keys.association.binding()}
     pub(in crate::policy_shadow::policy_custody::services) fn delivery(&self)->&Arc<super::Delivery> {
         &self._delivery.owner

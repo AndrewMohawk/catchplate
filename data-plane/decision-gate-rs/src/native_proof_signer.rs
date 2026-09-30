@@ -89,6 +89,18 @@ impl CustodySignerTransport {
         Ok(evidence)
     }
 
+    pub(super) fn generation_origin_evidence(&self,identity:&mut EnclaveRuntimeIdentityV1,
+        prepared:&native_generation_origin::Prepared,deadline:u64)->Result<Value,String>{
+        let Self::Native(owner)=self else{return Err("generation origin refuses host custody".into());};
+        self.verify_live()?;
+        owner.active.fetch_update(Ordering::AcqRel,Ordering::Acquire,
+            |active|(active<CUSTODY_MAX_CONCURRENT_CONNECTIONS).then_some(active+1))
+            .map_err(|_|"native generation origin concurrency bound")?;
+        let _permit=NativeOperationPermit(&owner.active);
+        let value=owner.runtime.sign_native_generation_origin(identity,prepared.statement(),deadline).map_err(|e|e.to_string())?;
+        self.verify_live()?;Ok(value)
+    }
+
     pub(super) fn loaded_policy_evidence(&self,identity:&mut EnclaveRuntimeIdentityV1,
         prepared:&native_loaded_policy::Prepared,deadline:u64)->Result<Value,String> {
         let Self::Native(owner)=self else {return Err("loaded observation refuses UDS custody".into());};

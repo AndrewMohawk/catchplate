@@ -19,6 +19,12 @@ pub(super) mod guest;
 pub(super) mod generation_service;
 pub(super) mod generation_service_client;
 pub(super) mod dispatch_commitment;
+pub(super) mod ledger_spool_values;
+pub(super) mod spool_origin;
+pub(super) mod spool_head_values;
+pub(super) mod spool_head;
+pub(super) mod spool_current;
+pub(super) mod spool_head_client;
 pub(super) mod dispatch_service;
 pub(super) mod generation_certification;
 pub(super) mod generation_recovery;
@@ -297,14 +303,19 @@ struct RuntimeConfigHeaderV3 {
     generation_admission:Option<generation_service::Selection>,
     #[serde(default,skip_serializing_if="Option::is_none")]
     dispatch_admission:Option<dispatch_service::Selection>,
+    #[serde(default,skip_serializing_if="Option::is_none")]
+    spool_head:Option<spool_head::Selection>,
+    #[serde(default,skip_serializing_if="Option::is_none")]
+    spool_current:Option<spool_current::Selection>,
 }
 
 impl RuntimeConfigHeaderV3 {
     fn validate(&self) -> Result<(), ServiceRunnerError> {
         self.expected_peer.checked()?;
-        if !matches!((self.api_version.as_str(),self.generation_admission.as_ref(),self.dispatch_admission.as_ref()),
-                (SERVICE_RUNTIME_CONFIG_VERSION,None,None)|(generation_service::RUNTIME,Some(_),None)
-                |(dispatch_service::RUNTIME,Some(_),Some(_)))
+        if !matches!((self.api_version.as_str(),self.generation_admission.as_ref(),self.dispatch_admission.as_ref(),self.spool_head.as_ref(),self.spool_current.as_ref()),
+                (SERVICE_RUNTIME_CONFIG_VERSION,None,None,None,None)|(generation_service::RUNTIME,Some(_),None,None,None)
+                |(dispatch_service::RUNTIME,Some(_),Some(_),None,None)
+                |(spool_head::RUNTIME,Some(_),Some(_),Some(_),None)|(spool_head::RUNTIME,Some(_),Some(_),None,Some(_)))
             || self.startup_timeout_millis == 0
             || self.startup_timeout_millis
                 > MAX_STARTUP_TIMEOUT_MILLIS
@@ -341,7 +352,7 @@ impl RuntimeConfigHeaderV3 {
                 .as_os_str()
                 .as_bytes()
                 .contains(&0)
-            || self.activation_directory_identities.len() > 2+usize::from(self.generation_admission.is_some())+usize::from(self.dispatch_admission.is_some())
+            || self.activation_directory_identities.len() > 2+usize::from(self.generation_admission.is_some())+usize::from(self.dispatch_admission.is_some())+usize::from(self.spool_head.is_some())+usize::from(self.spool_current.is_some())
         {
             return Err(ServiceRunnerError::invalid(
                 "service runtime config header is incomplete or invalid",
@@ -361,6 +372,16 @@ impl RuntimeConfigHeaderV3 {
                 return Err(ServiceRunnerError::invalid("CommitRequest grant descriptor name changed"));
             }
             self.activation_directory_identity(dispatch_service::DIRECTORY)?;
+        }
+        if let Some(selection)=&self.spool_head {
+            if selection.grant_fd_name!=spool_head::GRANT_FD {
+                return Err(ServiceRunnerError::invalid("spool head grant descriptor name changed"));
+            }
+            self.activation_directory_identity(spool_head::DIRECTORY)?;
+        }
+        if let Some(selection)=&self.spool_current {
+            if selection.grant_fd_name!=spool_current::GRANT_FD {return Err(ServiceRunnerError::invalid("spool current grant descriptor name changed"));}
+            self.activation_directory_identity(spool_current::DIRECTORY)?;
         }
         for (name, identity) in
             &self.activation_directory_identities
@@ -400,9 +421,10 @@ impl RuntimeConfigHeaderV3 {
             &self.authority_history_manifest_credential,
             MAX_CONFIG_BYTES,
         )?;
-        let exact_original_pinned_by_guest = self.api_version==generation_service::RUNTIME
+        let guest_runtime=matches!(self.api_version.as_str(),generation_service::RUNTIME|dispatch_service::RUNTIME|spool_head::RUNTIME);
+        let exact_original_pinned_by_guest = guest_runtime
             && matches!(credentials,CredentialDirectory::Guest(_));
-        if (self.api_version==generation_service::RUNTIME && !exact_original_pinned_by_guest)
+        if (guest_runtime && !exact_original_pinned_by_guest)
             || (!exact_original_pinned_by_guest && Sha256Digest::compute(&bytes)
                 != self.authority_history_manifest_sha256) {
             return Err(ServiceRunnerError::invalid(
@@ -1089,6 +1111,7 @@ fn run_durable_recovery_store_loaded(
         TrustedHostServiceRoleV3::DurableRecoveryStore)?;
     let mut dispatch=dispatch_service::Gate::open(&loaded,&loaded.value.runtime,&bootstrap,&mut activation,
         TrustedHostServiceRoleV3::DurableRecoveryStore)?;
+    let mut spool=spool_head::Gate::open(&loaded,&loaded.value.runtime,&bootstrap,&mut activation)?;
     let _authority_history =
         loaded.value.runtime.load_authority_history(
             &loaded.credentials,
@@ -1259,6 +1282,9 @@ fn run_durable_recovery_store_loaded(
                 if let Some(reply)=gate.handle(&request,&server)? {return Ok(reply);}
             }
             if let Some(gate)=&mut dispatch {
+                if let Some(reply)=gate.handle(&request,&server)? {return Ok(reply);}
+            }
+            if let Some(gate)=&mut spool {
                 if let Some(reply)=gate.handle(&request,&server)? {return Ok(reply);}
             }
             server.handle_exact_request_frame(&request)
@@ -1742,6 +1768,7 @@ fn run_current_signature_authority_loaded(
         TrustedHostServiceRoleV3::CurrentSignatureAuthority)?;
     let mut dispatch=dispatch_service::Gate::open(&loaded,&loaded.value.runtime,&bootstrap,&mut activation,
         TrustedHostServiceRoleV3::CurrentSignatureAuthority)?;
+    let mut spool=spool_current::Gate::open(&loaded,&loaded.value.runtime,&bootstrap,&mut activation)?;
     let _authority_history =
         loaded.value.runtime.load_authority_history(
             &loaded.credentials,
@@ -1885,6 +1912,14 @@ fn run_current_signature_authority_loaded(
             }
         }
         if let Some(gate)=&mut dispatch {
+            if let Some(reply)=gate.handle(&packet.frame,&server)? {
+                let deadline=generation_service::frame_deadline(&packet.frame)?;
+                bootstrap.require_deadline(deadline)?;authenticated.revalidate_peer()?;
+                send_packet_until(connection.as_raw_fd(),&reply,&[],Some(deadline))?;
+                authenticated.revalidate_peer()?;continue;
+            }
+        }
+        if let Some(gate)=&mut spool {
             if let Some(reply)=gate.handle(&packet.frame,&server)? {
                 let deadline=generation_service::frame_deadline(&packet.frame)?;
                 bootstrap.require_deadline(deadline)?;authenticated.revalidate_peer()?;
@@ -3041,6 +3076,8 @@ fn require_exact_directory_identity_names(
     let unique=required_names.len()==required.len();
     if runtime.generation_admission.is_some() {required_names.insert(generation_service::DIRECTORY);}
     if runtime.dispatch_admission.is_some() {required_names.insert(dispatch_service::DIRECTORY);}
+    if runtime.spool_head.is_some() {required_names.insert(spool_head::DIRECTORY);}
+    if runtime.spool_current.is_some() {required_names.insert(spool_current::DIRECTORY);}
     if !unique
         || runtime
             .activation_directory_identities

@@ -64,6 +64,11 @@ pub(super) struct PreparedChild {
     filter: Vec<libc::sock_filter>, self_pid_instruction: usize,
 }
 impl PreparedChild {
+    pub(super) fn prepare_origin(runtime: &RuntimeBorrow<'_>, seed: BorrowedFd<'_>, transport: BorrowedFd<'_>,
+        output: BorrowedFd<'_>, gate: BorrowedFd<'_>) -> Result<Self, String> {
+        require(runtime.profile() == Profile::OriginIssuer, "origin issuer child requires its actual fixed runtime")?;
+        Self::prepare_for(runtime, seed, transport, output, gate)
+    }
     pub(super) fn prepare_time(runtime: &RuntimeBorrow<'_>, seed: BorrowedFd<'_>, transport: BorrowedFd<'_>,
         output: BorrowedFd<'_>, gate: BorrowedFd<'_>) -> Result<Self, String> {
         require(runtime.profile() == Profile::TimeIssuer, "issuer child requires its actual fixed runtime")?;
@@ -119,7 +124,7 @@ impl PreparedChild {
         // metadata checks only keep exactly those separately sealed originals.
         let sealed: &[(usize, i64)] = match runtime.profile() {
             Profile::Verifier => &[(SEED,32),(EVIDENCE,128 * 1024)],
-            Profile::TimeIssuer => &[(SEED,32)],
+            Profile::TimeIssuer | Profile::OriginIssuer => &[(SEED,32)],
         };
         for &(index, maximum) in sealed {
             let original = originals[index];
@@ -134,7 +139,7 @@ impl PreparedChild {
         }
         require(originals[SEED].size == 32 && (originals[SEED].device, originals[SEED].inode)
             != (originals[EVIDENCE].device, originals[EVIDENCE].inode), "verifier child seed/evidence alias or bound")?;
-        if runtime.profile() == Profile::TimeIssuer {
+        if matches!(runtime.profile(), Profile::TimeIssuer | Profile::OriginIssuer) {
             let original = originals[EVIDENCE];
             require(original.mode & libc::S_IFMT == libc::S_IFSOCK && original.uid == 0 && original.gid == 0
                 && original.flags & libc::O_ACCMODE == libc::O_RDWR && original.flags & libc::O_NONBLOCK != 0
@@ -298,7 +303,7 @@ fn filter(executable: RawFd, profile: Profile) -> Result<(Vec<libc::sock_filter>
     // its inherited originals non-inheritable, never clear CLOEXEC.
     let mut fcntl=vec![s(0x20,0,0,24),s(0x15,0,4,libc::F_SETFD as u32)];
     fcntl.extend(equals(32,libc::FD_CLOEXEC as u32));fcntl.push(s(0x06,0,0,ALLOW));
-    if profile == Profile::TimeIssuer {
+    if matches!(profile, Profile::TimeIssuer | Profile::OriginIssuer) {
         // CPython may use F_SETFL for setblocking(False). Only the inherited
         // channel and exactly its already-admitted flags may be selected.
         let mut set = equals(16,5); set.extend(equals(20,0));
@@ -309,13 +314,13 @@ fn filter(executable: RawFd, profile: Profile) -> Result<(Vec<libc::sock_filter>
     fcntl.extend(one_of(24,&[libc::F_GETFD as u32,libc::F_GETFL as u32,libc::F_GET_SEALS as u32,libc::F_GETPIPE_SZ as u32]));
     branch(&mut out,libc::SYS_fcntl,fcntl)?;
     let mut ioctl = Vec::new();
-    if profile == Profile::TimeIssuer {
+    if matches!(profile, Profile::TimeIssuer | Profile::OriginIssuer) {
         let mut io = equals(16,5);io.extend(equals(20,0));io.push(s(0x06,0,0,ALLOW));
         ioctl.extend([s(0x20,0,0,24),s(0x15,0,io.len() as u8,libc::FIONBIO as u32)]);ioctl.extend(io);
     }
     ioctl.extend(one_of(24,&[libc::TCGETS as u32,libc::FIONREAD as u32,libc::FIOCLEX as u32]));
     branch(&mut out,libc::SYS_ioctl,ioctl)?;
-    if profile == Profile::TimeIssuer {
+    if matches!(profile, Profile::TimeIssuer | Profile::OriginIssuer) {
         for syscall in [libc::SYS_getsockname,libc::SYS_getpeername] {
             let mut body=equals(16,5);body.extend(equals(20,0));body.push(s(0x06,0,0,ALLOW));
             branch(&mut out,syscall,body)?;

@@ -21,13 +21,18 @@ pub(super) fn assigned_peers(files:&FileAdmission)->Result<BTreeMap<EndpointKind
 pub(super) fn assigned_peers_selected(files:&FileAdmission,commitment:bool)
     ->Result<BTreeMap<EndpointKind,services::ExpectedPeerCredentialV3>,ShadowError> {
     files.check_preparation().map_err(fail)?;
-    Ok(Selection::original(&files.retrieval_client_runtime().map_err(fail)?,commitment)?.entries.into_iter()
+    Ok(Selection::original(&files.retrieval_client_runtime().map_err(fail)?,commitment,false)?.entries.into_iter()
+        .map(|(kind,endpoint)|(kind,endpoint.expected_peer)).collect())
+}
+pub(super) fn assigned_peers_spool(files:&FileAdmission)->Result<BTreeMap<EndpointKind,services::ExpectedPeerCredentialV3>,ShadowError>{
+    files.check_preparation().map_err(fail)?;
+    Ok(Selection::original(&files.retrieval_client_runtime().map_err(fail)?,true,true)?.entries.into_iter()
         .map(|(kind,endpoint)|(kind,endpoint.expected_peer)).collect())
 }
 impl Selection {
-    fn original(raw:&[u8],commitment:bool)->Result<Self,ShadowError> {
+    fn original(raw:&[u8],commitment:bool,spool:bool)->Result<Self,ShadowError> {
         let runtime:ProductionRpcRuntimeConfigV4=exact(raw)?;runtime.validate().map_err(fail)?;
-        require(runtime.commit_request.is_some()==commitment)?;
+        require(runtime.commit_request.is_some()==commitment && runtime.spool.is_some()==spool && (!spool || commitment))?;
         let mut entries=BTreeMap::new();
         for kind in KINDS {
             let mut matching=runtime.proof_endpoints.iter().filter(|v|Some(v.endpoint_kind)==kind.production_kind());
@@ -48,6 +53,14 @@ impl Selection {
             entries.insert(kind,Entry{activation_fd_name:endpoint.activation_fd_name.clone(),expected_peer:endpoint.expected_peer.clone(),
                 exact:canonical_json_bytes(endpoint)?});
         }
+        if spool {
+            let kind=EndpointKind::IngressAdmission;
+            let mut found=runtime.parent_signer_endpoints.iter().filter(|v|v.signer_role==PolicyShadowCustodySignerRole::IngressAdmission);
+            let endpoint=found.next().ok_or(ShadowError::BindingDrift)?;
+            require(found.next().is_none() && endpoint.expected_socket_path==std::path::Path::new(kind.socket_path()))?;
+            endpoint.expected_peer.checked().map_err(fail)?;
+            entries.insert(kind,Entry{activation_fd_name:endpoint.activation_fd_name.clone(),expected_peer:endpoint.expected_peer.clone(),exact:canonical_json_bytes(endpoint)?});
+        }
         Ok(Self{entries,runtime_sha256:Sha256Digest::compute(raw)})
     }
 }
@@ -64,16 +77,21 @@ impl Prepared {
     pub(super) fn open_selected(delivery:&mut PreparedGuestServiceDelivery,channel:OwnedFd,time_grant:&Pin,commitment:bool)
         ->Result<(Self,admission::trusted_time::ClientGrant),ShadowError> {
         let grant=admission::trusted_time::ClientGrant::open(time_grant)?;
-        Ok((Self::prepare_owned(delivery,channel,commitment)?,grant))
+        Ok((Self::prepare_owned(delivery,channel,commitment,false)?,grant))
     }
-    pub(super) fn open_late(delivery:&mut PreparedGuestServiceDelivery,channel:OwnedFd,time_grant:Original,commitment:bool)
+    pub(super) fn open_spool(delivery:&mut PreparedGuestServiceDelivery,channel:OwnedFd,time_grant:&Pin)
+        ->Result<(Self,admission::trusted_time::ClientGrant),ShadowError>{
+        let grant=admission::trusted_time::ClientGrant::open(time_grant)?;
+        Ok((Self::prepare_owned(delivery,channel,true,true)?,grant))
+    }
+    pub(super) fn open_late(delivery:&mut PreparedGuestServiceDelivery,channel:OwnedFd,time_grant:Original,commitment:bool,spool:bool)
         ->Result<(Self,admission::trusted_time::ClientGrant),ShadowError>{
         require(delivery.owner.native_continuation.is_some())?;
         let grant=admission::trusted_time::ClientGrant::from_retained(time_grant)?;
-        Ok((Self::prepare_owned(delivery,channel,commitment)?,grant))
+        Ok((Self::prepare_owned(delivery,channel,commitment,spool)?,grant))
     }
-    fn prepare_owned(delivery:&mut PreparedGuestServiceDelivery,channel:OwnedFd,commitment:bool)->Result<Self,ShadowError>{
-        let selection=Selection::original(&delivery.retrieval_client_runtime().map_err(fail)?,commitment)?;
+    fn prepare_owned(delivery:&mut PreparedGuestServiceDelivery,channel:OwnedFd,commitment:bool,spool:bool)->Result<Self,ShadowError>{
+        let selection=Selection::original(&delivery.retrieval_client_runtime().map_err(fail)?,commitment,spool)?;
         let mut directories=BTreeMap::new();
         for (kind,endpoint) in &selection.entries {
             require(endpoint.expected_peer.uid!=delivery.role_uid() && endpoint.expected_peer.uid!=0 && endpoint.expected_peer.gid!=0)?;
@@ -99,7 +117,7 @@ impl Prepared {
     }
     pub(in crate::policy_shadow::policy_custody::services) fn attach(mut self,
         activation:&mut BTreeMap<String,OwnedFd>,runtime:&ProductionRpcRuntimeConfigV4,owner:Arc<AdmittedGuest>)
-        ->Result<(BTreeMap<ProductionProofEndpointKindV4,Session>,Option<Session>,Option<FacadeAcceptor>),ShadowError> {
+        ->Result<(BTreeMap<ProductionProofEndpointKindV4,Session>,BTreeMap<PolicyShadowCustodySignerRole,Session>,Option<FacadeAcceptor>),ShadowError> {
         owner.check()?;owner.delivery().check_startup().map_err(fail)?;
         require(owner.delivery().payload.runtime_config.sha256==self.selection.runtime_sha256)?;
         let channel=inspection::Channel::bind(self.channel,&owner)?;
@@ -107,11 +125,12 @@ impl Prepared {
         let facade=if self.native_facade {
             Some(FacadeAcceptor::new(Arc::clone(&channel),Arc::clone(&owner),runtime,&native_names,self.outgoing_directories)?)
         } else {None};
-        let mut sessions=BTreeMap::new();let mut signer=None;
+        let mut sessions=BTreeMap::new();let mut signers=BTreeMap::new();
         for (kind,expected) in self.selection.entries {
             let actual=if let Some(proof)=kind.production_kind() {
                 canonical_json_bytes(runtime.proof_endpoints.iter().find(|v|v.endpoint_kind==proof).ok_or(ShadowError::BindingDrift)?)?
-            } else {canonical_json_bytes(runtime.parent_signer_endpoints.iter().find(|v|v.signer_role==PolicyShadowCustodySignerRole::LedgerAppend)
+            } else {let role=if kind==EndpointKind::CommitRequest{PolicyShadowCustodySignerRole::LedgerAppend}else{PolicyShadowCustodySignerRole::IngressAdmission};
+                canonical_json_bytes(runtime.parent_signer_endpoints.iter().find(|v|v.signer_role==role)
                 .ok_or(ShadowError::BindingDrift)?)?};
             require(actual==expected.exact)?;
             let socket=activation.remove(&expected.activation_fd_name).ok_or(ShadowError::BindingDrift)?;
@@ -119,9 +138,12 @@ impl Prepared {
             let session=Session::connect(Arc::clone(&channel),directory,socket,
                 expected.expected_peer.checked().map_err(fail)?,Arc::clone(&owner),kind)?;
             session.check()?;
-            if let Some(proof)=kind.production_kind(){sessions.insert(proof,session);}else{require(signer.is_none())?;signer=Some(session);}
+            if let Some(proof)=kind.production_kind(){sessions.insert(proof,session);}else{
+                let role=if kind==EndpointKind::CommitRequest{PolicyShadowCustodySignerRole::LedgerAppend}else{PolicyShadowCustodySignerRole::IngressAdmission};
+                require(signers.insert(role,session).is_none())?;
+            }
         }
-        require(self.directories.is_empty())?;Ok((sessions,signer,facade))
+        require(self.directories.is_empty())?;Ok((sessions,signers,facade))
     }
 }
 pub(super) fn run(owner:Arc<AdmittedGuest>,prepared:Prepared)->Result<(),ShadowError> {

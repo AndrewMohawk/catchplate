@@ -237,7 +237,10 @@ fn admit_files(configuration_path:&Path,expected_configuration_sha256:Sha256Dige
         delivery_sha256:expected_delivery_sha256,startup,lifetime};
     owner.check_preparation()?;Ok(owner)
 }
-fn take_activation(entries:&[Activation],dispatch_selected:bool)->Result<(BTreeMap<String,OwnedFd>,BTreeSet<(u64,u64)>),ServiceRunnerError> {
+#[derive(Clone,Copy)]
+pub(super) enum NativeLock {Persistence,Ledger}
+fn take_activation(entries:&[Activation],dispatch_selected:bool,spool_selected:bool,native_lock:Option<NativeLock>)
+    ->Result<(BTreeMap<String,OwnedFd>,BTreeSet<(u64,u64)>),ServiceRunnerError> {
     let mut activation=BTreeMap::new();
     let mut fd_identities=BTreeSet::new();
     for (index,entry) in entries.iter().enumerate() {
@@ -247,18 +250,29 @@ fn take_activation(entries:&[Activation],dispatch_selected:bool)->Result<(BTreeM
         let fd=unsafe { OwnedFd::from_raw_fd(entry.fd) };
         let stat=descriptor_stat(fd.as_fd())?;
         let public_grant=(entry.name==super::generation_service::GRANT_FD
-            || (dispatch_selected && entry.name==super::dispatch_service::GRANT_FD))
+            || (dispatch_selected && entry.name==super::dispatch_service::GRANT_FD)
+            || (spool_selected && matches!(entry.name.as_str(),"spool-head-grant"|"spool-current-grant")))
             && stat.st_mode & libc::S_IFMT==libc::S_IFREG;
+        let held_lock=stat.st_mode&libc::S_IFMT==libc::S_IFREG && match native_lock {
+            Some(NativeLock::Persistence)=>entry.name=="persistence-lock" && index==2,
+            Some(NativeLock::Ledger)=>entry.name=="ledger-spool-lock" && index==3,
+            None=>false,
+        };
         if public_grant {
             let seals=unsafe{libc::fcntl(fd.as_raw_fd(),libc::F_GET_SEALS)};
             let full=libc::F_SEAL_SEAL|libc::F_SEAL_GROW|libc::F_SEAL_SHRINK|libc::F_SEAL_WRITE;
-            if seals<0 || seals&full!=full || stat.st_size<=0 || stat.st_size>65536 {
+            let maximum=if spool_selected && entry.name=="spool-current-grant"{131072}else{65536};
+            if seals<0 || seals&full!=full || stat.st_size<=0 || stat.st_size>maximum {
                 return Err(fail("service grant is not one bounded fully sealed original"));
             }
         }
+        if held_lock && (stat.st_size!=0 || stat.st_nlink!=1 || stat.st_mode&0o7777!=0o600
+            || unsafe{libc::fcntl(fd.as_raw_fd(),libc::F_GETFL)}&libc::O_ACCMODE!=libc::O_RDWR) {
+            return Err(fail("native retained lock original is invalid"));
+        }
         if (stat.st_dev,stat.st_ino,stat.st_mode,stat.st_uid,stat.st_gid)
             !=(entry.device,entry.inode,entry.mode,entry.uid,entry.gid)
-            || (!public_grant && ![libc::S_IFDIR,libc::S_IFSOCK].contains(&(stat.st_mode & libc::S_IFMT)))
+            || (!public_grant && !held_lock && ![libc::S_IFDIR,libc::S_IFSOCK].contains(&(stat.st_mode & libc::S_IFMT)))
             || !fd_identities.insert((stat.st_dev,stat.st_ino)) {
             return Err(fail("guest activation original substituted or aliased"));
         }
@@ -271,16 +285,22 @@ impl PreparedGuestServiceDelivery {
     /// FD3 is its actual private parent channel; signed activation slots are 6..69.
     pub(crate) fn admit(configuration_path:&Path, expected_configuration_sha256:Sha256Digest,
         delivery_path:&Path, expected_delivery_sha256:Sha256Digest)->Result<Self,ServiceRunnerError> {
+        Self::admit_selected(configuration_path,expected_configuration_sha256,delivery_path,expected_delivery_sha256,None)
+    }
+    pub(super) fn admit_selected(configuration_path:&Path, expected_configuration_sha256:Sha256Digest,
+        delivery_path:&Path, expected_delivery_sha256:Sha256Digest,native_lock:Option<NativeLock>)->Result<Self,ServiceRunnerError> {
         let FileAdmission {process,configuration,envelope,runtime,mut credentials,payload:p,
             delivery_sha256:expected_delivery_sha256,startup,lifetime}=admit_files(configuration_path,
                 expected_configuration_sha256,delivery_path,expected_delivery_sha256)?;
         // Only the independently pinned ordinary two-service successor admits
         // the additional public grant FD. Native proof runtime/v6 is different.
         let runtime_value:serde_json::Value=decode_canonical_frame(&runtime.read(MAX_CONFIG_BYTES)?)?;
-        let dispatch_selected=matches!(p.service_role,Role::DurableRecoveryStore|Role::CurrentSignatureAuthority)
-            && runtime_value.get("runtime").and_then(|v|v.get("apiVersion")).and_then(|v|v.as_str())
-                ==Some(super::dispatch_service::RUNTIME);
-        let (activation,fd_identities)=take_activation(&p.activation,dispatch_selected)?;
+        let ordinary=matches!(p.service_role,Role::DurableRecoveryStore|Role::CurrentSignatureAuthority);
+        let version=runtime_value.get("runtime").and_then(|v|v.get("apiVersion")).and_then(|v|v.as_str());
+        let spool_selected=ordinary && version==Some(super::spool_head::RUNTIME);
+        let dispatch_selected=ordinary && (version==Some(super::dispatch_service::RUNTIME) || spool_selected);
+        if native_lock.is_some() && p.service_role!=Role::ProductionBridge {return Err(fail("native lock requires native guest role"));}
+        let (activation,fd_identities)=take_activation(&p.activation,dispatch_selected,spool_selected,native_lock)?;
         let parent=Parent::inherited()?;
         if fd_identities.contains(&parent.identity()) { return Err(fail("activation aliases private parent channel")); }
         let mut p=p;

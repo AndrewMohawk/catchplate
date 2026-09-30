@@ -52,6 +52,9 @@ def event_original(receipt, generation, assignment):
     event = profile.document(raw, 16 * 1024)
     profile.require(profile.canonical(event) == raw and profile.sha256(raw) == receipt["event_sha256"])
     if type(event) is list:
+        if len(event) == 4 and event[0] == opening.EARLY_EVENT:
+            opening.early_sampling(event, receipt, generation)
+            return "admitted"
         profile.require(len(event) == 4 and event[0] == "serverware.policyShadowIngressAdmissionEvent/v1"
             and profile.canonical(event[1]) == profile.canonical(generation)
             and event[2] == receipt["trusted_observed_at_unix_nanos"] and receipt["event_phase"] == "ingress-open")

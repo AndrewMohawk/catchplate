@@ -25,8 +25,7 @@ impl Accounting {
             }
             let event:Value=serde_json::from_slice(receipt.canonical_event_bytes()).map_err(|_|ShadowError::BindingDrift)?;
             if canonical_json_bytes(&event)?!=receipt.canonical_event_bytes() {return Err(ShadowError::BindingDrift);}
-            let label=if event.as_array().and_then(|values|values.first()).and_then(Value::as_str)
-                ==Some("serverware.policyShadowIngressAdmissionEvent/v1") {
+            let label=if native_ingress::is_opening_event(event.as_array().and_then(|values|values.first()).and_then(Value::as_str)) {
                 if previous_ingress.is_some_and(|previous:u64|previous.checked_add(1)!=Some(receipt.ingress_sequence())) {return Err(ShadowError::BindingDrift);}
                 previous_ingress=Some(receipt.ingress_sequence());
                 last_ingress=Some(serde_json::json!({"ingressSequence":receipt.ingress_sequence(),"openingReceiptSha256":receipt.signed_receipt_sha256()}));

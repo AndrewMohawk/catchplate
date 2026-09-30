@@ -5,6 +5,7 @@ mod policy_shadow;
 #[cfg(target_os = "linux")]
 fn main() {
     match std::env::args().nth(1).as_deref() {
+        Some("--guest-c9-spool-inspected")=>policy_shadow::run_spool_custody_guest("durable-recovery-store"),
         Some("--guest-c9-commitment")=>policy_shadow::run_commitment_custody_guest("durable-recovery-store",false),
         Some("--guest-c9-commitment-inspected")=>policy_shadow::run_commitment_custody_guest("durable-recovery-store",true),
         _=>{},

@@ -105,7 +105,7 @@ class _RoleInputs:
             and value["purpose"] == "commit-request-service-transition" and value["serviceRole"] == self._role
             and value["guest"] == item["guest"]
             and value["runtimeConfigurationSha256"] == item["runtime"].sha
-            and runtime["apiVersion"] == "serverware.policyCustodyServiceRuntimeConfig/v6"
+            and runtime["apiVersion"] == ("serverware.policyCustodyServiceRuntimeConfig/v7" if self._owner._spool else "serverware.policyCustodyServiceRuntimeConfig/v6")
             and runtime["generationAdmission"] == {"grantFdName": "generation-grant"}
             and runtime["dispatchAdmission"] == {"grantFdName": "dispatch-grant"})
         semantic = p.framed(b"serverware.policyCustodyAuthorityHistoryManifest/v3",

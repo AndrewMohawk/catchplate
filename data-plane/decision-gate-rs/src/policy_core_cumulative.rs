@@ -81,8 +81,7 @@ impl History {
         for receipt in &originals {
             if observed<receipt.trusted_observed_at_unix_nanos() {return Err("native snapshot predates retained receipt".into());}
             let event:Value=serde_json::from_slice(receipt.canonical_event_bytes()).map_err(|_|"native original event")?;
-            if event.as_array().and_then(|value|value.first()).and_then(Value::as_str)
-                ==Some("serverware.policyShadowIngressAdmissionEvent/v1") {
+            if policy_shadow::native_ingress::is_opening_event(event.as_array().and_then(|value|value.first()).and_then(Value::as_str)) {
                 let current=(receipt.ingress_sequence(),receipt.signed_receipt_sha256().clone());
                 if last_ingress.as_ref().is_some_and(|(sequence,_)|*sequence>=current.0) {
                     return Err("native admission originals are not ordered".into());

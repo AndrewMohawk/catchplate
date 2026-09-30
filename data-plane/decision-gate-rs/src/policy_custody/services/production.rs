@@ -308,6 +308,8 @@ pub(super) struct ProductionRpcRuntimeConfigV4 {
     generation_admission:Option<super::generation_service_client::Selection>,
     #[serde(default,skip_serializing_if="Option::is_none")]
     pub(super) commit_request:Option<super::dispatch_service::client::Selection>,
+    #[serde(default,skip_serializing_if="Option::is_none")]
+    pub(super) spool:Option<super::spool_head_client::Selection>,
 }
 
 impl ProductionRpcRuntimeConfigV4 {
@@ -348,9 +350,10 @@ impl ProductionRpcRuntimeConfigV4 {
             .iter()
             .map(|history| history.service_role)
             .collect::<BTreeSet<_>>();
-        if !matches!((self.api_version.as_str(),self.generation_admission.as_ref(),self.commit_request.as_ref()),
-            (PRODUCTION_RPC_RUNTIME_CONFIG_VERSION,None,None)|(super::generation_service_client::RUNTIME,Some(_),None)
-            |(super::dispatch_service::client::BRIDGE_RUNTIME,Some(_),Some(_)))
+        if !matches!((self.api_version.as_str(),self.generation_admission.as_ref(),self.commit_request.as_ref(),self.spool.as_ref()),
+            (PRODUCTION_RPC_RUNTIME_CONFIG_VERSION,None,None,None)|(super::generation_service_client::RUNTIME,Some(_),None,None)
+            |(super::dispatch_service::client::BRIDGE_RUNTIME,Some(_),Some(_),None)
+            |(super::spool_head_client::RUNTIME,Some(_),Some(_),Some(_)))
             || self.startup_timeout_millis == 0
             || self.startup_timeout_millis > 30_000
             || !self.listener_socket_path.is_absolute()
@@ -384,6 +387,7 @@ impl ProductionRpcRuntimeConfigV4 {
         if let Some(selection)=&self.generation_admission {selection.validate()?;}
         self.journal_directory_identity.validate()?;
         if let Some(selection)=&self.commit_request {selection.validate()?;}
+        if let Some(selection)=&self.spool {selection.validate()?;}
         let mut names = BTreeSet::from([
             PRODUCTION_RPC_LISTENER_FD_NAME.to_owned(),
             PRODUCTION_RPC_JOURNAL_FD_NAME.to_owned(),
@@ -514,6 +518,16 @@ pub(super) enum ProductionAuthorityEndpointRequestBodyV4 {
     PrepareCommitRequest {request:ClosedProductionDispatchRequestV4},
     FinishCommitRequest {computation:super::dispatch_commitment::Computation,
         service_transitions:Vec<super::super::production_dispatch::SignedProductionServiceTransitionV4>},
+    /// Only the independently admitted acyclic retrieval successor accepts
+    /// this effect. A legacy retrieval proof can never trigger a write.
+    StoreLedgerCore {prepared:super::ledger_spool_values::Prepared},
+    PrepareNativeIngress {request:ClosedProductionDispatchRequestV4,origin_original:Option<String>,head_grant_original:String},
+    SampleNativeIngress {claim:super::spool_head_values::Claim,allocation:super::spool_head_values::Allocation,head_grant_original:String},
+    PrepareNativeSpool {claim:super::spool_head_values::Claim,allocation:super::spool_head_values::Allocation,
+        sampling:Option<super::spool_head_values::Sampling>,head_grant_original:String},
+    CompleteNativeSpool {prepared:super::ledger_spool_values::Prepared,stored:super::ledger_spool_values::Stored},
+    FinishNativeSpool {completion:super::spool_head_values::Completion,result:super::super::production_dispatch::ClosedProductionDispatchResultV4,
+        service_transitions:Vec<super::super::production_dispatch::SignedProductionServiceTransitionV4>},
     Generation(ClosedProductionGenerationRequestV4),
     /// Explicit selected successor: actual five local effects/observations.
     /// The coordinator must verify them and perform its own durable effect;
@@ -609,6 +623,11 @@ pub(super) enum ProductionAuthorityEndpointResultV4 {
     PersistenceCommitted { commit_original_sha256: super::super::super::Sha256Digest },
     Dispatch(ClosedProductionDispatchResponseV4),
     CommitRequestPrepared(super::dispatch_commitment::Computation),
+    LedgerCoreStored(super::ledger_spool_values::Stored),
+    NativeIngressPrepared(super::spool_head_values::Ingress),
+    NativeIngressSampling(super::spool_head_values::Sampling),
+    NativeSpoolPrepared(super::ledger_spool_values::Prepared),
+    NativeSpoolCompletion(super::spool_head_values::Completion),
     Generation(ClosedProductionGenerationResponseV4),
     GenerationProposal(super::generation_certification::Proposal),
     TerminationRequested,
@@ -744,6 +763,7 @@ pub(super) struct ConcreteFiveV3ProductionAuthoritiesV4 {
         BTreeMap<ProductionProofEndpointKindV4, ProductionPinnedEndpointV4>,
     generation_admission:Option<std::sync::Mutex<super::generation_service_client::Client>>,
     commit_request:Option<std::sync::Mutex<super::dispatch_service::client::Client>>,
+    spool:Option<std::sync::Mutex<super::spool_head_client::Client>>,
 }
 
 impl ConcreteFiveV3ProductionAuthoritiesV4 {
@@ -799,6 +819,7 @@ impl ConcreteFiveV3ProductionAuthoritiesV4 {
             proof_endpoints,
             generation_admission:None,
             commit_request:None,
+            spool:None,
         })
     }
 
@@ -1097,6 +1118,24 @@ impl ConcreteFiveV3ProductionAuthoritiesV4 {
             self.commit_request.as_ref().map(|v|v.try_lock()).transpose().map_err(|_|ProductionPrimitiveRejectionV4::rejected(
                 ProductionRpcRejectionCodeV4::ArtifactPrimitiveUnavailable,"CommitRequest owner is busy"))?
         } else {None};
+        let mut spool=if matches!(request,ClosedProductionDispatchRequestV4::BeginIngress{..}
+            |ClosedProductionDispatchRequestV4::ReserveSpoolAppend{..}|ClosedProductionDispatchRequestV4::AppendSpoolEvent{..}) {
+            self.spool.as_ref().map(|v|v.try_lock()).transpose().map_err(|_|ProductionPrimitiveRejectionV4::rejected(
+                ProductionRpcRejectionCodeV4::ArtifactPrimitiveUnavailable,"native spool owner is busy"))?
+        }else{None};
+        let (wire,reply)=if let Some(owner)=spool.as_mut(){
+            owner.run(&self.sessions,request,|identity,body|{
+                let target=match identity {
+                    ProductionAuthorityEndpointIdentityV4::ParentSigner(role)=>self.parent_signer_endpoint(role),
+                    ProductionAuthorityEndpointIdentityV4::Proof(kind)=>self.proof_endpoint(kind),
+                }.map_err(|_|super::ledger_spool_values::invalid())?;
+                let wire=ProductionAuthorityEndpointRequestV4::new(identity,request.binding().replay_id_sha256.clone(),
+                    request.binding().operation_deadline_boottime_nanos,body).map_err(|_|super::ledger_spool_values::invalid())?;
+                let reply=self.call_endpoint_original(target,wire.clone(),ProductionRpcRejectionCodeV4::ArtifactPrimitiveUnavailable)
+                    .map_err(|_|super::ledger_spool_values::invalid())?;Ok((wire,reply))
+            }).map_err(|_|ProductionPrimitiveRejectionV4::rejected(ProductionRpcRejectionCodeV4::ArtifactPrimitiveUnavailable,
+                "native spool effect incomplete or uncertain"))?
+        }else{
         let body=if let Some(owner)=commitment.as_mut() {
             owner.begin(request).map_err(|_|ProductionPrimitiveRejectionV4::rejected(
                 ProductionRpcRejectionCodeV4::ArtifactPrimitiveUnavailable,"CommitRequest contact owner unavailable"))?;
@@ -1125,6 +1164,8 @@ impl ConcreteFiveV3ProductionAuthoritiesV4 {
             wire.clone(),
             ProductionRpcRejectionCodeV4::ArtifactPrimitiveUnavailable,
         )?;
+        (wire,reply)
+        };
         if self.native_persistence_selected()? && matches!(&reply.result,ProductionAuthorityEndpointResultV4::Dispatch(_)) {
             // Same actual effect original and deadline. No later proof request
             // can trigger this write, renew it, or manufacture the reply.
@@ -1146,6 +1187,8 @@ impl ConcreteFiveV3ProductionAuthoritiesV4 {
         }
         match reply.result {
             ProductionAuthorityEndpointResultV4::Dispatch(response) => {
+                if let Some(owner)=spool.as_mut(){owner.completed(request,&response).map_err(|_|ProductionPrimitiveRejectionV4::rejected(
+                    ProductionRpcRejectionCodeV4::ArtifactPrimitiveUnavailable,"native spool completion differs"))?;}
                 if let Some(owner)=commitment.as_mut() {owner.completed(&response).map_err(|_|ProductionPrimitiveRejectionV4::rejected(
                     ProductionRpcRejectionCodeV4::ArtifactPrimitiveUnavailable,"CommitRequest completion differs"))?;}
                 Ok(response)
@@ -2418,7 +2461,9 @@ fn run_production_rpc_service_loaded_inner(
             .iter()
             .map(|endpoint| endpoint.activation_fd_name.as_str()),
     );
+    if loaded.value.spool.is_some(){required_names.push(super::spool_head_client::ORIGIN_FD);}
     super::require_exact_activation_names(&activation, &required_names)?;
+    let origin_channel=if loaded.value.spool.is_some(){Some(super::take_activation_fd(&mut activation,super::spool_head_client::ORIGIN_FD)?)}else{None};
 
     // Connect only this selected socket as the actual final-role process,
     // before dependent handshakes consume the original startup interval.
@@ -2433,11 +2478,12 @@ fn run_production_rpc_service_loaded_inner(
     } else {None};
 
     let native_proof_owner=inspected_proofs.as_ref().map(|(_,v)|Arc::clone(v));
-    let (mut native_proofs,mut native_commitment,mut native_facade)=if let Some((prepared,owner))=inspected_proofs.take() {
+    let (mut native_proofs,mut native_signers,mut native_facade)=if let Some((prepared,owner))=inspected_proofs.take() {
         prepared.attach(&mut activation,&loaded.value,owner)
             .map_err(|_|ServiceRunnerError::invalid("native proof endpoint construction refused"))?
-    } else {(BTreeMap::new(),None,None)};
-    if loaded.value.commit_request.is_some()!=native_commitment.is_some() {
+    } else {(BTreeMap::new(),BTreeMap::new(),None)};
+    if loaded.value.commit_request.is_some()!=native_signers.contains_key(&super::super::super::PolicyShadowCustodySignerRole::LedgerAppend)
+        || loaded.value.spool.is_some()!=native_signers.contains_key(&super::super::super::PolicyShadowCustodySignerRole::IngressAdmission) {
         return Err(ServiceRunnerError::invalid("CommitRequest requires its actual inspected native endpoint owner"));
     }
 
@@ -2550,8 +2596,8 @@ fn run_production_rpc_service_loaded_inner(
     )?;
     let mut parent_signer_endpoints = Vec::with_capacity(10);
     for configured in &loaded.value.parent_signer_endpoints {
-        if configured.signer_role==super::super::super::PolicyShadowCustodySignerRole::LedgerAppend {
-            if let Some(session)=native_commitment.take() {
+        if matches!(configured.signer_role,super::super::super::PolicyShadowCustodySignerRole::LedgerAppend|super::super::super::PolicyShadowCustodySignerRole::IngressAdmission) {
+            if let Some(session)=native_signers.remove(&configured.signer_role) {
                 parent_signer_endpoints.push(load_pinned_endpoint_session(
                     ProductionAuthorityEndpointIdentityV4::ParentSigner(configured.signer_role),EndpointSession::NativeProof(session),
                     &configured.authority_binding_credential,configured.authority_key_id.clone(),configured.authority_key_spki_sha256.clone(),
@@ -2637,6 +2683,12 @@ fn run_production_rpc_service_loaded_inner(
         proof_endpoints,
     )?;
     if let Some(owner)=native_proof_owner {
+        if let Some(selection)=loaded.value.spool.clone(){
+            authority.spool=Some(std::sync::Mutex::new(super::spool_head_client::Client::new(selection,
+                load_production_histories(&loaded.value,&loaded.credentials)?,Arc::clone(&owner),
+                origin_channel.ok_or_else(||ServiceRunnerError::invalid("native generation origin channel absent"))?,
+                &loaded.value.expected_service_configuration_sha256)?));
+        }
         if let Some(selection)=loaded.value.commit_request.clone() {
             if !owner.commitment_bridge_selected() {return Err(ServiceRunnerError::invalid("CommitRequest bridge purpose differs"));}
             authority.commit_request=Some(std::sync::Mutex::new(super::dispatch_service::client::Client::new(selection,

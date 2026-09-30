@@ -30,6 +30,16 @@ pub(super) fn accept(raw:&[u8],owner:&mut AdmittedKeys,trust:&dyn EnvelopeKeyTru
 }
 
 impl AdmittedKeys {
+    /// Public originals only, from the actual single-key/single-quote owner.
+    /// No seed, encrypted delivery or caller-produced verifier result escapes.
+    pub(in crate::policy_shadow::policy_custody::services) fn public_bridge_originals(&self,
+        trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime)->Result<(String,String,String,String),ShadowError>{
+        self.admitted_bridge_configuration(trust,time)?;
+        let text=|raw:Vec<u8>|->Result<String,ShadowError>{require(raw.is_ascii())?;String::from_utf8(raw).map_err(fail)};
+        Ok((text(canonical_json_bytes(&self.configuration)?)?,text(canonical_json_bytes(&self.authorization)?)?,
+            text(canonical_json_bytes(self.evidence.as_ref().ok_or(ShadowError::BindingDrift)?)?)?,
+            text(self.combined_original.as_ref().ok_or(ShadowError::BindingDrift)?.clone())?))
+    }
     pub(in crate::policy_shadow::policy_custody::services) fn admitted_bridge_configuration(&self,
         trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime)->Result<&ProductionCustodyConfiguration,ShadowError>{
         self.check(trust,time)?;require(self.result.is_some() && self.combined_original.is_some())?;

@@ -7,6 +7,7 @@ use std::io::{Read,Seek,SeekFrom};
 use std::os::fd::{AsFd,AsRawFd,FromRawFd,OwnedFd};
 use std::os::unix::fs::MetadataExt;
 use std::sync::{Arc,Mutex};
+#[path="native_facade_receiver.rs"] pub(super) mod facade;
 
 const API:&str="serverware.nativeShadowCustodyLifecycleReceiver/v1";
 fn refused<T>(_:T)->String{"native custody lifecycle ownership is unavailable".into()}
@@ -39,7 +40,12 @@ impl Channel {
         require(actual.pid==self.parent.pid && actual.uid==0 && actual.gid==0)
     }
     fn exchange(&mut self,operation:&str,deadline:u64)->Result<Vec<u8>,String>{
+        let (raw,rights)=self.exchange_rights(operation,deadline,None)?;require(rights.is_empty())?;Ok(raw)
+    }
+    fn exchange_rights(&mut self,operation:&str,deadline:u64,socket:Option<std::os::fd::BorrowedFd<'_>>)
+        ->Result<(Vec<u8>,Vec<OwnedFd>),String>{
         self.live(deadline)?;
+        require(socket.is_none() || self.configuration.api_version=="serverware.nativeShadowCustodyLifecycleReceiver/v2")?;
         let sequence=self.sequence.checked_add(1).ok_or_else(||refused(()))?;
         let request=wire::Request{api_version:wire::API.into(),operation:operation.into(),sequence,
             configuration_sha256:self.configuration.driver_configuration_sha256.clone(),
@@ -48,19 +54,21 @@ impl Channel {
         require(raw.len()<=4096)?;
         // A partial attempt or missing authenticated reply cannot be retried.
         self.failed=true;
-        require(packet::send(self.socket.as_fd(),&raw,&[]).map_err(refused)?)?;
+        let rights:Vec<_>=socket.into_iter().collect();
+        require(packet::send(self.socket.as_fd(),&raw,&rights).map_err(refused)?)?;
+        let count=usize::from(operation=="facade-originals");
         loop {
             self.process.check().map_err(refused)?;
             packet::same_process(self.parent_pidfd.as_fd(),self.parent.pid).map_err(refused)?;
             require(now()?<deadline)?;
-            if let Some(original)=packet::receive(self.socket.as_fd(),wire::MAX_FRAME,0).map_err(refused)? {
+            if let Some(original)=packet::receive(self.socket.as_fd(),wire::MAX_FRAME,count).map_err(refused)? {
                 require(original.credentials.pid==self.parent.pid && original.credentials.uid==0 && original.credentials.gid==0)?;
                 packet::same_process(original.pidfd.as_fd(),self.parent.pid).map_err(refused)?;
                 let reply:wire::Reply=exact(&original.bytes)?;
                 require(reply.api_version==wire::API && reply.sequence==sequence
                     && reply.request_sha256==Sha256Digest::compute(&raw) && !reply.original.is_empty()
                     && reply.original.is_ascii() && reply.original.len()<=wire::MAX_FRAME && now()?<deadline)?;
-                self.sequence=sequence;self.failed=false;self.live(deadline)?;return Ok(reply.original.into_bytes());
+                self.sequence=sequence;self.failed=false;self.live(deadline)?;return Ok((reply.original.into_bytes(),original.rights));
             }
             let mut wait=libc::pollfd{fd:self.socket.as_raw_fd(),events:libc::POLLIN,revents:0};
             let n=unsafe{libc::poll(&mut wait,1,1)};
@@ -71,7 +79,7 @@ impl Channel {
 }
 pub(crate) struct Prepared {channel:Channel,source_sha256:Sha256Digest}
 pub(crate) struct Owner {channel:Mutex<Channel>,serving:Arc<native_serving_privileges::Owner>,source_sha256:Sha256Digest,
-    bound_original:Vec<u8>}
+    bound_original:Vec<u8>,facade:Mutex<Option<facade::Retained>>}
 
 fn connect()->Result<OwnedFd,String>{
     let raw=unsafe{libc::socket(libc::AF_UNIX,libc::SOCK_SEQPACKET|libc::SOCK_CLOEXEC|libc::SOCK_NONBLOCK,0)};
@@ -93,11 +101,13 @@ impl Prepared {
         let mut raw=Vec::with_capacity(m.len() as usize);file.take(8*1024*1024+1).read_to_end(&mut raw).map_err(refused)?;
         require(raw.len()==m.len() as usize && Sha256Digest::compute(&raw)==*expected)?;
         let selected:serde_json::Value=serde_json::from_slice(&raw).map_err(refused)?;
-        if selected.get("apiVersion").and_then(serde_json::Value::as_str)!=Some(API){return Ok(None);}
+        if !matches!(selected.get("apiVersion").and_then(serde_json::Value::as_str),
+            Some(API)|Some("serverware.nativeShadowCustodyLifecycleReceiver/v2")){return Ok(None);}
         let configuration:Configuration=exact(&raw)?;
         let startup=ns(&configuration.startup_deadline_boottime_ns)?;
         let original_lifetime=ns(&configuration.lifetime_deadline_boottime_ns)?;
-        require(configuration.api_version==API && now()?<startup && startup<=root.deadline()
+        require(matches!(configuration.api_version.as_str(),API|"serverware.nativeShadowCustodyLifecycleReceiver/v2")
+            && now()?<startup && startup<=root.deadline()
             && configuration.cleanup_reserve_nanos>=1_000_000 && configuration.cleanup_reserve_nanos<=5_000_000_000)?;
         let lifetime=original_lifetime.checked_sub(configuration.cleanup_reserve_nanos).ok_or_else(||refused(()))?;
         require(startup<lifetime && lifetime<=root.deadline())?;
@@ -134,7 +144,16 @@ impl Prepared {
             && bound.gate_process_id==actual.0 && bound.gate_start_time_ticks==actual.1
             && bound.uid==native_serving_privileges::UID && bound.gid==native_serving_privileges::GID
             && ns(&bound.observed_at_boottime_ns)?<=now()?)?;
-        serving.check()?;Ok(Arc::new(Owner{channel:Mutex::new(self.channel),serving,source_sha256:self.source_sha256,bound_original:raw}))
+        serving.check()?;
+        let selected=self.channel.configuration.api_version=="serverware.nativeShadowCustodyLifecycleReceiver/v2";
+        let owner=Arc::new(Owner{channel:Mutex::new(self.channel),serving,source_sha256:self.source_sha256,
+            bound_original:raw,facade:Mutex::new(None)});
+        if selected {
+            let connected=facade::connect(&owner);
+            match connected {Ok(value)=>*owner.facade.try_lock().map_err(refused)?=Some(value),
+                Err(error)=>{if let Ok(mut channel)=owner.channel.try_lock(){channel.failed=true;}return Err(error);}}
+        }
+        owner.check(&owner.source_sha256)?;Ok(owner)
     }
 }
 

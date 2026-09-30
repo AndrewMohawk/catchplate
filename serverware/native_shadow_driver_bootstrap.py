@@ -99,7 +99,8 @@ class DriverBootstrap:
                     fields += ("lifecycle",)
                     policy = p.fields(config["lifecycle"], ("apiVersion", "gate", "cleanupReserveNanos"))
                     gate = p.fields(policy["gate"], ("uid", "gid", "executableSha256"))
-                    p.require(policy["apiVersion"] == "serverware.nativeShadowDriverLifecyclePolicy/v1"
+                    p.require(policy["apiVersion"] in ("serverware.nativeShadowDriverLifecyclePolicy/v1",
+                        "serverware.nativeShadowDriverLifecyclePolicy/v2")
                         and p.integer(gate["uid"]) == 65534 and p.integer(gate["gid"]) == 65534
                         and 1_000_000 <= p.integer(policy["cleanupReserveNanos"]) <= 5_000_000_000)
                     p.digest(gate["executableSha256"])

@@ -119,6 +119,14 @@ pub(super) fn same_credentials(a:&libc::ucred,b:&libc::ucred)->bool {a.pid==b.pi
 pub(in crate::policy_shadow::policy_custody::services) struct Packet {pub(in crate::policy_shadow::policy_custody::services) bytes:Vec<u8>,pub(in crate::policy_shadow::policy_custody::services) credentials:libc::ucred,
     pub(in crate::policy_shadow::policy_custody::services) pidfd:OwnedFd,pub(in crate::policy_shadow::policy_custody::services) rights:Vec<OwnedFd>}
 pub(in crate::policy_shadow::policy_custody::services) fn receive(fd:BorrowedFd<'_>,maximum:usize,rights_count:usize)->Result<Option<Packet>,ShadowError> {
+    receive_rights(fd,maximum,rights_count,rights_count)
+}
+/// Fixed lifecycle successor only. Its caller must select zero or one actual
+/// descriptor from the closed operation before acting on the packet.
+pub(in crate::policy_shadow::policy_custody::services) fn receive_lifecycle(fd:BorrowedFd<'_>,maximum:usize)->Result<Option<Packet>,ShadowError> {
+    receive_rights(fd,maximum,0,1)
+}
+fn receive_rights(fd:BorrowedFd<'_>,maximum:usize,minimum_rights:usize,maximum_rights:usize)->Result<Option<Packet>,ShadowError> {
     let mut bytes=vec![0;maximum];let mut control=[0usize;32];
     let mut iov=libc::iovec{iov_base:bytes.as_mut_ptr().cast(),iov_len:bytes.len()};
     let mut header:libc::msghdr=unsafe{zeroed()};header.msg_iov=&mut iov;header.msg_iovlen=1;
@@ -152,7 +160,7 @@ pub(in crate::policy_shadow::policy_custody::services) fn receive(fd:BorrowedFd<
         } else {valid=false;}
         item=unsafe{libc::CMSG_NXTHDR(&header,item)};
     }
-    require(valid && rights.len()==rights_count)?;
+    require(valid && rights.len()>=minimum_rights && rights.len()<=maximum_rights)?;
     bytes.truncate(count as usize);
     Ok(Some(Packet{bytes,credentials:cred.ok_or(ShadowError::BindingDrift)?,
         pidfd:process.ok_or(ShadowError::BindingDrift)?,rights}))

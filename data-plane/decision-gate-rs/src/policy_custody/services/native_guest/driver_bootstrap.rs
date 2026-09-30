@@ -303,6 +303,7 @@ impl PhaseTwo {
     }
     pub(super) fn descriptor(&self)->BorrowedFd<'_>{self.bundle.as_fd()}
     pub(super) fn scope(&self)->&[u8]{&self.scope}
+    pub(super) fn public_bundle_original(&self)->Result<Vec<u8>,ShadowError>{self.check()?;read_file(&self.bundle,MAX_BUNDLE)}
     pub(super) fn runtime_original(&self)->Result<Vec<u8>,ShadowError>{
         self.check()?;let originals:Originals=exact(&read_file(&self.bundle,MAX_BUNDLE)?)?;
         Ok(originals.runtime_original.into_bytes())

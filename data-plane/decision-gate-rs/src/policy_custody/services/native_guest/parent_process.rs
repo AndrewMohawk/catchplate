@@ -142,9 +142,17 @@ impl Child {
     }
     pub(in crate::policy_shadow::policy_custody::services::guest::native_guest) fn bootstrap_receive(
         &self,uid:u32,gid:u32)->Result<Option<retrieval_peer::Packet>,ShadowError> {
+        self.bootstrap_receive_selected(uid,gid,false)
+    }
+    pub(in crate::policy_shadow::policy_custody::services::guest::native_guest) fn bootstrap_receive_public(
+        &self,uid:u32,gid:u32)->Result<Option<retrieval_peer::Packet>,ShadowError> {
+        self.bootstrap_receive_selected(uid,gid,true)
+    }
+    fn bootstrap_receive_selected(&self,uid:u32,gid:u32,public:bool)->Result<Option<retrieval_peer::Packet>,ShadowError> {
         require(!self.pair_mode && self.start.is_some() && now()?<self.deadline
             && self.terminal(false)?.is_none() && Some(self.identity()?)==self.start)?;
-        let packet=retrieval_peer::receive(self.channel.as_fd(),65536,0)?;
+        let packet=if public{retrieval_peer::receive_lifecycle(self.channel.as_fd(),65536)?}
+            else{retrieval_peer::receive(self.channel.as_fd(),65536,0)?};
         if let Some(packet)=&packet {
             require(packet.credentials.pid==self.pid && packet.credentials.uid==uid && packet.credentials.gid==gid)?;
             retrieval_peer::same_process(packet.pidfd.as_fd(),self.pid)?;

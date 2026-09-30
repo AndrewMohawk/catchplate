@@ -8,6 +8,8 @@ use std::os::unix::fs::{MetadataExt,FileExt};
 #[path="driver_lifecycle_wire.rs"]
 pub(in crate::policy_shadow::policy_custody::services) mod wire;
 #[path="driver_lifecycle_census.rs"] mod census;
+#[path="driver_lifecycle_facade.rs"]
+pub(in crate::policy_shadow::policy_custody::services) mod facade;
 use wire::{Configuration,Request,Reply,Observation};
 use super::parent::child::Child;
 
@@ -27,6 +29,7 @@ pub(super) struct Owner {
     prepared:Option<Sha256Digest>,bound:bool,listening:bool,gate_notice:Option<Vec<u8>>,pending_bind:Option<(Vec<u8>,u64)>,
     sequence:u64,descriptors:Option<census::Descriptors>,
     configuration_sha256:Sha256Digest,window_sha256:Sha256Digest,startup:u64,lifetime:u64,
+    facade:Option<facade::Inspector>,
 }
 impl Owner {
     /// Before spawning any child, selected by exact independently provisioned
@@ -73,7 +76,7 @@ impl Owner {
             gate_notice:None,pending_bind:None,sequence:0,descriptors:None,
             configuration_sha256:Sha256Digest::compute(&cold.configuration.read(65536).map_err(fail)?),
             window_sha256:Sha256Digest::compute(&cold.window.read(32768).map_err(fail)?),
-            startup:cold.startup(),lifetime:cold.lifetime()};
+            startup:cold.startup(),lifetime:cold.lifetime(),facade:None};
         result.check()?;Ok(result)
     }
     pub(super) fn check(&self)->Result<(),ShadowError>{
@@ -96,6 +99,18 @@ impl Owner {
     }
     pub(super) fn retirement_boundary(&self)->Result<u64,ShadowError>{
         self.lifetime.checked_sub(self.configuration.cleanup_reserve_nanos).ok_or(ShadowError::BindingDrift)
+    }
+    pub(super) fn facade_selected(&self)->bool{self.configuration.facade_selected()}
+    pub(super) fn bind_facade(&mut self,child:&Child,observation:&driver_identity::Observation,
+        phase:&driver_bootstrap::PhaseTwo,inputs:&driver_continuation::ParentInputs,executable:&File)->Result<(),ShadowError>{
+        self.check()?;if !self.facade_selected(){return Ok(());}
+        require(self.facade.is_none())?;
+        self.facade=Some(facade::Inspector::open(child,observation,phase,inputs,executable,self.startup,self.retirement_boundary()?)?);Ok(())
+    }
+    pub(super) fn public_admission(&mut self,packet:retrieval_peer::Packet,observation:&driver_identity::Observation,
+        phase:&driver_bootstrap::PhaseTwo)->Result<(),ShadowError>{
+        self.check()?;require(self.facade_selected() && now()?<self.startup)?;
+        self.facade.as_mut().ok_or(ShadowError::BindingDrift)?.admit_public(packet,observation,phase)
     }
     pub(super) fn take_gate_notice(&mut self)->Result<Option<Vec<u8>>,ShadowError>{
         self.check()?;Ok(self.gate_notice.take())
@@ -158,7 +173,9 @@ impl Owner {
             self.gate_pidfd=Some(retrieval_peer::peer_pidfd(fd.as_fd())?);self.channel=Some(fd);
         }
         let channel=self.channel.as_ref().ok_or(ShadowError::BindingDrift)?;
-        let Some(packet)=retrieval_peer::receive(channel.as_fd(),4096,0)? else{return Ok(());};
+        let received=if self.facade_selected(){retrieval_peer::receive_lifecycle(channel.as_fd(),4096)?}
+            else{retrieval_peer::receive(channel.as_fd(),4096,0)?};
+        let Some(packet)=received else{return Ok(());};
         let gate=&self.configuration.gate;
         let (pid,start,executable,id)=self.gate_original.as_ref().ok_or(ShadowError::BindingDrift)?;
         require(packet.credentials.pid==*pid && census::process(*pid)?.1==*start)?;
@@ -170,7 +187,9 @@ impl Owner {
         require(request.api_version==wire::API && request.sequence==self.sequence.checked_add(1).ok_or(ShadowError::CounterOverflow)?
             && request.configuration_sha256==self.configuration_sha256 && request.window_sha256==self.window_sha256
             && now()?<deadline && deadline<=self.retirement_boundary()?)?;
+        let mut reply_right=None;
         let original=if self.prepared.is_none() {
+            require(packet.rights.is_empty())?;
             require(request.operation=="prepare" && request.sequence==1 && packet.credentials.uid==0 && packet.credentials.gid==0
                 && deadline<=self.startup)?;
             let raw=canonical_json_bytes(&wire::PreparedOriginal{api_version:"serverware.nativeShadowDriverLifecyclePrepared/v1".into(),
@@ -179,6 +198,7 @@ impl Owner {
                 pid_namespace_sha256:self.pid_namespace_sha256.clone(),lifetime_deadline_boottime_ns:self.lifetime.to_string()})?;
             self.prepared=Some(Sha256Digest::compute(&raw));raw
         }else if !self.bound {
+            require(packet.rights.is_empty())?;
             require(request.operation=="bind" && request.sequence==2 && packet.credentials.uid==gate.uid
                 && packet.credentials.gid==gate.gid && deadline<=self.startup)?;
             self.bound=true;
@@ -191,7 +211,22 @@ impl Owner {
                 "bootstrapObservationSha256":Sha256Digest::compute(&canonical_json_bytes(observation)?),
                 "gateExecutableSha256":self.configuration.gate.executable_sha256,"binding":binding}))?);
             canonical_json_bytes(&binding)?
+        }else if self.facade_selected() && request.operation.starts_with("facade-") {
+            require(packet.credentials.uid==gate.uid && packet.credentials.gid==gate.gid && self.listening && scope.is_some())?;
+            let facade=self.facade.as_mut().ok_or(ShadowError::BindingDrift)?;
+            match request.operation.as_str(){
+                "facade-description"=>{require(packet.rights.is_empty() && deadline<=self.startup)?;facade.description()?},
+                "facade-originals"=>{require(packet.rights.is_empty() && deadline<=self.startup)?;
+                    let (original,fd)=facade.public()?;reply_right=Some(fd);original},
+                "facade-inspect-0"|"facade-inspect-1"|"facade-inspect-2"|"facade-inspect-3"=>{
+                    require(packet.rights.len()==1)?;
+                    let ordinal=usize::from(request.operation.as_bytes()[15]-b'0');
+                    facade.inspect(ordinal,packet.rights[0].as_fd(),deadline)?
+                },
+                _=>return Err(ShadowError::BindingDrift),
+            }
         }else{
+            require(packet.rights.is_empty())?;
             require(request.operation=="observe" && packet.credentials.uid==gate.uid && packet.credentials.gid==gate.gid
                 && constructed && scope.is_some())?;
             let (pid,start,pidfd)=child.lifecycle_identity()?;
@@ -226,7 +261,8 @@ impl Owner {
             self.pending_bind=Some((reply,deadline));return self.check();
         }
         // One attempt: a lost reply poisons the parent, never creates renewal.
-        require(retrieval_peer::send(channel.as_fd(),&reply,&[])?)?;self.check()
+        let rights:Vec<_>=reply_right.as_ref().map(|fd|vec![fd.as_fd()]).unwrap_or_default();
+        require(retrieval_peer::send(channel.as_fd(),&reply,&rights)?)?;self.check()
     }
     pub(super) fn terminate(&mut self,child:&mut Child)->Result<Vec<u8>,ShadowError>{
         self.check()?;

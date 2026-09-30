@@ -129,6 +129,7 @@ pub(super) fn verify_parent(cold:&Cold,phase:&PhaseTwo,rights:&[OwnedFd])->Resul
 pub(in crate::policy_shadow::policy_custody::services::guest::native_guest) struct ParentInputs {
     files:guest::FileAdmission,inspector:proof_client::Inspector,
     lifecycle_listener:Option<OwnedFd>,
+    public_pins:BTreeMap<String,Sha256Digest>,
     pub(in crate::policy_shadow::policy_custody::services::guest::native_guest) channel:OwnedFd,
 }
 impl ParentInputs {
@@ -152,7 +153,16 @@ impl ParentInputs {
         } else {proof_client::Inspector::prepare_selected(&files,&activation,commitment)?};
         let lifecycle_listener=if cold.lifecycle().is_some(){Some(retrieval_peer::duplicate(
             activation.get("production-listener").ok_or(ShadowError::BindingDrift)?.as_fd())?)}else{None};
-        Ok(Self{files,inspector,channel,lifecycle_listener})
+        let public_pins=BTreeMap::from([("closure".into(),launch.closure.sha256.clone()),
+            ("assignment".into(),launch.assignment.sha256.clone()),("keys".into(),launch.keys.sha256.clone()),
+            ("admission".into(),launch.admission.sha256.clone())]);
+        Ok(Self{files,inspector,channel,lifecycle_listener,public_pins})
+    }
+    pub(in crate::policy_shadow::policy_custody::services::guest::native_guest) fn facade_originals(&self)
+        ->Result<(OwnedFd,Vec<u8>,BTreeMap<String,Sha256Digest>),ShadowError>{
+        self.files.check().map_err(fail)?;
+        Ok((retrieval_peer::duplicate(self.lifecycle_listener.as_ref().ok_or(ShadowError::BindingDrift)?.as_fd())?,
+            self.files.retrieval_client_runtime().map_err(fail)?,self.public_pins.clone()))
     }
     pub(in crate::policy_shadow::policy_custody::services::guest::native_guest) fn require_facade_listening(
         &self,device:u64,inode:u64)->Result<(),ShadowError>{

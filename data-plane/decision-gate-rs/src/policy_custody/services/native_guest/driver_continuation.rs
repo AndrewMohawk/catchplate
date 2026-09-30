@@ -6,6 +6,7 @@ use serverware_decision_gate::enclave_runtime_identity_v1::{PreparedShadowNsmV1,
 use serverware_decision_gate::native_secret_broker_v1::shadow_key_delivery::{Configuration as Transport,PreparedShadowKeyHelper};
 #[path="driver_continuation_inputs.rs"] mod inputs;
 #[path="driver_continuation_run.rs"] mod running;
+#[path="driver_public_admission.rs"] mod public_admission;
 pub(super) use inputs::{Operation,DescriptorOriginal};
 pub(in crate::policy_shadow::policy_custody::services::guest::native_guest) use inputs::{receive_operational,send_operational,ParentInputs};
 
@@ -47,6 +48,7 @@ impl Resources {
 pub(in crate::policy_shadow) struct Retained {
     prepared:Prepared,identity:driver_identity::Owner,observation:driver_identity::Observation,
     phase:PhaseTwo,guest:GuestClosureBinding,operation:Operation,
+    public_admission:std::sync::Mutex<Option<File>>,
 }
 impl Retained {
     pub(in crate::policy_shadow::policy_custody::services) fn bridge_admission_selected(&self)->bool{

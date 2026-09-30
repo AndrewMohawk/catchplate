@@ -67,8 +67,19 @@ impl Running {
     fn receive_child(&mut self)->Result<retrieval_peer::Packet,ShadowError> {
         loop {
             self.check()?;
-            if let Some(packet)=self.child.bootstrap_receive(self.cold.uid(),self.cold.gid())? {
+            let public=self.lifecycle.as_ref().is_some_and(|v|v.facade_selected());
+            let received=if public{self.child.bootstrap_receive_public(self.cold.uid(),self.cold.gid())?}
+                else{self.child.bootstrap_receive(self.cold.uid(),self.cold.gid())?};
+            if let Some(packet)=received {
                 let selected:serde_json::Value=serde_json::from_slice(&packet.bytes).map_err(fail)?;
+                if public && selected.get("apiVersion").and_then(serde_json::Value::as_str)
+                    ==Some("serverware.nativeShadowDriverPublicAdmissionNotice/v1") {
+                    self.lifecycle.as_mut().ok_or(ShadowError::BindingDrift)?.public_admission(packet,
+                        self.observation.as_ref().ok_or(ShadowError::BindingDrift)?,
+                        self.phase_two.as_ref().ok_or(ShadowError::BindingDrift)?)?;
+                    self.progress_lifecycle()?;continue;
+                }
+                require(packet.rights.is_empty())?;
                 if self.lifecycle.is_some() && selected.get("apiVersion").and_then(serde_json::Value::as_str)
                     ==Some("serverware.nativeShadowDriverFacadeListening/v1") {
                     let notice:driver_lifecycle::wire::Listening=exact(&packet.bytes)?;
@@ -113,6 +124,9 @@ impl Running {
         self.held_rights=rights.collect();
         if self.cold.operational(){
             self.operational=Some(driver_continuation::ParentInputs::open(&self.cold,&phase,&self.held_rights)?);
+            if let Some(owner)=&mut self.lifecycle{
+                owner.bind_facade(&self.child,&observation,&phase,self.operational.as_ref().ok_or(ShadowError::BindingDrift)?,&self.executable)?;
+            }
         }else{require(self.held_rights.is_empty())?;}
         // Irreversible one attempt. No resend on EAGAIN, EINTR or lost ACK.
         self.phase_two=Some(phase);

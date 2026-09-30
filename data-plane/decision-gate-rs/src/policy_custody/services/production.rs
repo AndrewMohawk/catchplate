@@ -313,6 +313,10 @@ pub(super) struct ProductionRpcRuntimeConfigV4 {
 }
 
 impl ProductionRpcRuntimeConfigV4 {
+    pub(super) fn native_driver_selection(&self)->Result<(super::super::super::Sha256Digest,super::super::super::Sha256Digest),ServiceRunnerError>{
+        self.validate()?;Ok((self.expected_driver_process_identity_sha256.clone(),
+            self.expected_driver_configuration_generation_sha256.clone()))
+    }
     pub(super) fn native_facade_selection(&self)->Result<(PathBuf,ExpectedPeerCredentials),ServiceRunnerError> {
         self.validate()?;
         Ok((self.listener_socket_path.clone(),self.expected_facade_peer.checked()?))

@@ -50,7 +50,8 @@ pub(super) fn run(mut prepared:Prepared,identity:driver_identity::Owner,
         lifetime_deadline_boottime_ns:p.lifetime_deadline_boottime_ns.clone(),invocation_id:p.invocation_id.clone()};
     let parent=guest::Parent::from_retained(retrieval_peer::duplicate(prepared.channel.as_fd())?).map_err(fail)?;
     let startup=prepared.cold.startup;let lifetime=prepared.cold.lifetime;
-    let retained=Arc::new(Retained{prepared,identity,observation,phase,guest:binding,operation});
+    let retained=Arc::new(Retained{prepared,identity,observation,phase,guest:binding,operation,
+        public_admission:std::sync::Mutex::new(None)});
     retained.check_startup()?;
     let mut total=0u64;let mut credentials=BTreeMap::new();
     for entry in std::mem::take(&mut p.credentials){
@@ -125,6 +126,7 @@ pub(super) fn run(mut prepared:Prepared,identity:driver_identity::Owner,
     // combined-purpose owner after both independent signatures were verified.
     let native_configuration=if full {keys.admitted_bridge_configuration(&trust,time.as_ref())?.clone()}
         else{native_configuration};
+    retained.publish_public_admission(&keys,&closure_original,&assignment_original,&trust,time.as_ref())?;
     let (proof_client,time_grant)=proof_client::Prepared::open_late(&mut delivery,inspection,time_grant,commitment_bridge,spool_bridge)?;
     let bridge_activation=std::sync::Mutex::new(Some(std::mem::take(&mut delivery.activation)));
     let owner=AdmittedGuest{_delivery:delivery,lifetime,keys,trust,time,launch,launch_bytes,

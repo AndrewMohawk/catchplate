@@ -4494,6 +4494,9 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/parent.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/driver_bootstrap.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/driver_bootstrap_parent.rs \
+				data-plane/decision-gate-rs/src/policy_custody/services/native_facade_receiver.rs \
+				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/driver_lifecycle_facade.rs \
+				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/driver_public_admission.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/driver_identity.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/parent_image.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/parent_process.rs \
@@ -4916,6 +4919,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-shadow-driver-bootstrap.v1.schema.json \
 				schemas/native-shadow-driver-continuation.v1.schema.json \
 				schemas/native-shadow-driver-lifecycle.v1.schema.json \
+				schemas/native-shadow-gate-facade.v1.schema.json \
 				schemas/native-shadow-driver-outgoing.v1.schema.json \
 				schemas/native-shadow-bridge-admission.v1.schema.json \
 				schemas/custody-service-generation-admission.v1.schema.json \

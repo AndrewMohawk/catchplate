@@ -134,8 +134,9 @@ Checkpoint: **2026-09-30 — pre-production, pilot assembly.**
 The [startup coordinator](docs/native-pilot-coordinator.md), separately approved
 input installation and runtime packaging are connected in source. Signing keys
 stay outside the conductor. The [independent approval supervisor](docs/native-pilot-supervisor.md)
-has 42 of 85 job composers, including initial history and ordinary-service
-delivery and generation grants; it refuses launch until the remaining 43 are implemented.
+has 49 of 85 job composers, including initial history, ordinary-service
+delivery/generation grants and all ten native deliveries; it refuses launch until
+the remaining 36 are implemented.
 Protected deployment is not provisioned. This is not
 yet an interactive quickstart or running pilot.
 The [persistent workload sidecar](docs/native-workload-sidecar.md) supports ordinary

@@ -1336,6 +1336,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	scripts/test_native_pilot_ordinary_commissioning.py \
 	scripts/test_native_pilot_ordinary_generations.py \
 	scripts/test_native_pilot_generation_scope.py \
+	scripts/test_native_pilot_native_deliveries.py \
 	scripts/authority/sign_native_pilot_delivery.py \
 	scripts/authority/sign_native_pilot_service.py \
 	scripts/authority/sign_native_pilot_ordinary_key.py \
@@ -1653,6 +1654,8 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/native_pilot_supervisor_initial_history.py \
 	serverware/native_pilot_supervisor_ordinary_deliveries.py \
 	serverware/native_pilot_supervisor_ordinary_generations.py \
+	serverware/native_pilot_supervisor_native_deliveries.py \
+	serverware/native_pilot_native_delivery_profile.py \
 	serverware/native_pilot_supervisor_precreation.py \
 	serverware/native_pilot_supervisor_endpoint_policy.py \
 	serverware/native_pilot_supervisor_endpoint_inputs.py \
@@ -4072,6 +4075,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				scripts/test_native_pilot_ordinary_commissioning.py \
 				scripts/test_native_pilot_ordinary_generations.py \
 				scripts/test_native_pilot_generation_scope.py \
+				scripts/test_native_pilot_native_deliveries.py \
 				scripts/authority/sign_native_pilot_delivery.py \
 				scripts/authority/sign_native_pilot_service.py \
 				scripts/authority/sign_native_pilot_ordinary_key.py \
@@ -4383,6 +4387,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/native_pilot_supervisor_initial_history.py \
 				serverware/native_pilot_supervisor_ordinary_deliveries.py \
 				serverware/native_pilot_supervisor_ordinary_generations.py \
+				serverware/native_pilot_supervisor_native_deliveries.py \
+				serverware/native_pilot_native_delivery_profile.py \
 				serverware/native_pilot_supervisor_precreation.py \
 				serverware/native_pilot_supervisor_endpoint_policy.py \
 				serverware/native_pilot_supervisor_endpoint_inputs.py \

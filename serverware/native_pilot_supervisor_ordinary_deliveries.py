@@ -313,9 +313,8 @@ def _verified_deliveries(policy, *, process, request, first):
     offset = request.job_index - FIRST_INDEX - len(ROLES)
     generation_job = (0 <= offset < len(ROLES)
         and request.job == "ordinary-generation-" + ROLES[offset])
-    next_job = offset == len(ROLES) and request.job == "native-delivery-generationInstall"
     p.require((offset == 0 and generation_job if first else
-        owner.generation_boundary_open and (generation_job or next_job))
+        owner.generation_boundary_open and (generation_job or installation.native_completed_boundary(request)))
         and JOBS["service-originals"][request.job_index - 1].name == request.job)
     owner.inflight = request
     try:

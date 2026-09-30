@@ -4,8 +4,8 @@
 independently selected policy and implements the first `driver-bootstrap`
 decision. The separate precreation composer implements the next two jobs. This
 is not a complete decision service, a runnable pilot supervisor, or
-approval of unimplemented future jobs. Current v6 source composes 42 of 85 jobs;
-the decision spine refuses startup while the remaining 43 are unimplemented.
+approval of unimplemented future jobs. Current v7 source composes 49 of 85 jobs;
+the decision spine refuses startup while the remaining 36 are unimplemented.
 Production acceptance remains 0/6.
 
 ## External approval boundary
@@ -138,7 +138,7 @@ each v4 role entry accept positive u64 values. All other integers, older policy
 versions and the original byte/depth/node limits keep their existing grammar.
 
 `ordinary_initial_policy(process=..., request=...)` accepts only the bound actual
-process and pending request under v4 or its explicit v5/v6 successors. The fixed
+process and pending request under v4 or its explicit v5/v6/v7 successors. The fixed
 composers verify every prior signature against its literal approved input. The next job observes the
 actual output; receiving an approval reply alone is not success. The complete
 wrapper is published to one fixed root-owned path per role. Downstream delivery
@@ -168,7 +168,7 @@ Reserved names and all fifteen source-owned public paths cannot be supplied as
 static credentials. No private credential is generated or opened by this policy.
 
 `ordinary_delivery_policy(process=..., request=...)` returns a checked copy only
-for v5/v6 and the actual pending owner. The composer joins its recipes to the five
+for v5/v6/v7 and the actual pending owner. The composer joins its recipes to the five
 verified initial wrappers and actual peer/preparation/directory observations.
 The retained installer writes only its fifteen fixed public files from that
 composer's actual prepared originals; it is not a general root writer. Five
@@ -196,8 +196,27 @@ approved role history-root key. The total 57 selectors and outer 4 MiB bound
 remain unchanged; the literal field does not widen legacy outer integer rules.
 
 `ordinary_generation_policy(process=..., request=...)` is available only to
-explicit v6 with the actual pending owner. Jobs 31–35 form existing complete
+explicit v6/v7 with the actual pending owner. Jobs 31–35 form existing complete
 generation inputs, verify each preceding root-signed result and retain exact
 originals. The next job's handoff is read-only. Native callers use the same
 original installation interval without renewal; no running-service acceptance
 is inferred. See [generation inputs and native time binding](native-pilot-ordinary-generations.md).
+
+## Remaining-native-delivery successor: v7
+
+Policy/v7 retains v6's fourteen fields and adds exactly
+`nativeDeliveriesOriginal`, with purpose
+`initial-driver-bootstrap-precreation-endpoints-ordinary-generations-and-native-deliveries`.
+The literal canonical ASCII object has exactly seven role entries, each with
+`runtimeOriginal`, `runtimeConfig` and nonempty `credentials`. Role markers,
+fixed public paths, complete byte pins and cold-authority key bindings are
+checked during policy admission. No private credential is opened or created.
+
+The existing 57 selectors and 4 MiB outer bound remain unchanged. The original
+three-role `endpointDeliveries` contract remains separate; no old policy is
+widened. `native_delivery_policy(process=..., request=...)` returns a checked
+copy only under v7 with the actual pending owner. Jobs 36–42 use the same
+independently authenticated measured recipe and signed role-specific closure
+leaves, genuine cohort observations and unchanged windows. Job 43 only obtains
+a verified read-only handoff, not authority for its native-service grant.
+See [native delivery composition](native-pilot-native-deliveries.md).

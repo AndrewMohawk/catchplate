@@ -12,6 +12,7 @@ import time
 
 from serverware import custody_generation_grants as generation
 from serverware import native_pilot_ordinary_generation_profile as profile
+from serverware import native_pilot_ordinary_install as installation
 from serverware import native_pilot_precreation_install as precreation
 from serverware import native_pilot_publication as publication
 from serverware import native_pilot_service_authority as authority
@@ -60,6 +61,7 @@ class _Attempt:
         self.next, self.retained_bytes = 0, 0
         self.inflight = None
         self.failed = self.closed = self.close_attempted = False
+        self.native_boundary_open = False
         self.deliveries, self.delivery_inputs = {}, {}
         self.inputs, self.grants, self.results = {}, {}, {}
         self.fragment = self.initial_policy = self.measured = self.recipe_originals = None
@@ -244,12 +246,22 @@ def compose(policy, *, process, request) -> bytes:
 
 def require_generations(policy, *, process, request) -> dict:
     """Verified five grants at job36; no native-delivery approval is implied."""
+    return _verified_generations(policy, process=process, request=request, first=True)
+
+
+def recheck_generations(policy, *, process, request) -> dict:
+    """Recheck the opened boundary for exact native jobs36--42 and handoff43."""
+    return _verified_generations(policy, process=process, request=request, first=False)
+
+
+def _verified_generations(policy, *, process, request, first):
     _owners(policy, process, request)
     owner = _LIVE
     p.require(owner is not None and owner.policy is policy and owner.process is process
         and not owner.failed and not owner.closed and owner.inflight is None and owner.next == len(ROLES)
-        and request.phase == "service-originals" and request.job_index == FIRST_INDEX + len(ROLES)
-        and request.job == NEXT_JOB and JOBS["service-originals"][request.job_index - 1].name == NEXT_JOB)
+        and installation.native_completed_boundary(request)
+        and (request.job_index == FIRST_INDEX + len(ROLES) and request.job == NEXT_JOB
+             if first else owner.native_boundary_open))
     owner.inflight = request
     try:
         _current(owner, request)
@@ -257,6 +269,7 @@ def require_generations(policy, *, process, request) -> dict:
         _current(owner, request)
         p.require(tuple(owner.grants) == ROLES)
         result = {role: {**owner.deliveries[role], "generationGrantOriginal": owner.grants[role]} for role in ROLES}
+        owner.native_boundary_open = True
         owner.inflight = None
         return result
     except BaseException:

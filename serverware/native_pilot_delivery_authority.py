@@ -79,6 +79,14 @@ def _live(window, previous=0):
 
 
 def _endpoint_owner(role, cold, cold_raw, config_raw, window_raw, signed, observed):
+    now = _live(p.fields(signed, ("apiVersion", "payload", "signatureBase64url"))["payload"])
+    return endpoint_owner(role, cold, cold_raw, config_raw, window_raw, signed, observed,
+        boot=originals._boot(), now=now)
+
+
+def endpoint_owner(role, cold, cold_raw, config_raw, window_raw, signed, observed, *, boot, now):
+    """Pure original/signature checks; actual callers retain provenance and time."""
+    p.require(role in ENDPOINTS)
     config = cohort.configuration(config_raw)
     p.require(cohort.endpoint_driver_selected(config) and tuple(ENDPOINTS) == cohort.ENDPOINT_ROLES)
     _same(config["authority"], cold["authority"])
@@ -91,8 +99,7 @@ def _endpoint_owner(role, cold, cold_raw, config_raw, window_raw, signed, observ
     public = driver._key(config["authority"])
     public.verify(p.decoded(signed["signatureBase64url"], size=64),
         cohort.PRECREATE_DOMAIN + p.canonical(window))
-    now = _live(window)
-    cohort._window(window, config, p.sha(config_raw), originals._boot(), now)
+    cohort._window(window, config, p.sha(config_raw), boot, now)
     p.fields(observed, cohort.originals_fields(config))
     p.require(observed["apiVersion"] == "serverware.nativeShadowProofCohortOriginals/v6"
         and observed["configurationSha256"] == p.sha(config_raw)

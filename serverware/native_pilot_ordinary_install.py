@@ -23,6 +23,7 @@ from serverware import native_pilot_precreation_install as precreation
 from serverware import native_pilot_supervisor_initial_history as histories
 from serverware import native_shadow_nitro_originals as originals
 from serverware.native_pilot_phase_execution import INITIAL_JOBS, JOBS
+from serverware.native_shadow_proof_cohort_assignment import ENDPOINT_ROLES
 
 p = g.p
 MAX_RUNTIME = MAX_HISTORY = g.MAX_BYTES
@@ -34,6 +35,20 @@ _FLAGS = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK
 _TOKEN = object()
 _USED = False
 _LIVE = None
+_NATIVE_FIRST_INDEX = len(INITIAL_JOBS) + 2 * len(g.ROLES) + 1
+_NATIVE_COMPLETED_JOBS = tuple("native-delivery-" + role for role in ENDPOINT_ROLES
+    if role not in ("retrieval", "persistence", "trustedTime")) + ("native-service-commitRequest",)
+
+
+def native_completed_boundary(request):
+    """Fixed read-only continuation predicate; never an owner or approval."""
+    if request.phase != "service-originals" or type(request.job_index) is not int:
+        return False
+    index = request.job_index - _NATIVE_FIRST_INDEX
+    return (0 <= index < len(_NATIVE_COMPLETED_JOBS)
+        and request.job == _NATIVE_COMPLETED_JOBS[index]
+        and tuple(job.name for job in JOBS["service-originals"][_NATIVE_FIRST_INDEX - 1:
+            _NATIVE_FIRST_INDEX - 1 + len(_NATIVE_COMPLETED_JOBS)]) == _NATIVE_COMPLETED_JOBS)
 
 
 def plan(*, runtime_originals, history_originals, cold_originals, launch_original):
@@ -126,8 +141,7 @@ class _Installation:
         generation_offset = offset - len(g.ROLES)
         generation_job = (0 <= generation_offset < len(g.ROLES)
             and request.job == "ordinary-generation-" + g.ROLES[generation_offset])
-        next_job = generation_offset == len(g.ROLES) and request.job == "native-delivery-generationInstall"
-        completed_boundary = self.complete and (generation_job or next_job)
+        completed_boundary = self.complete and (generation_job or native_completed_boundary(request))
         p.require(request.phase == "service-originals" and (delivery or completed_boundary)
             and JOBS[request.phase][request.job_index - 1].name == request.job
             and request.deadline_boottime_ns == self.deadline

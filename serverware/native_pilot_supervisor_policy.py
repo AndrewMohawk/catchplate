@@ -18,6 +18,8 @@ delivery decisions. It does not authorize subsequent generation or release.
 Explicit v6 additionally delegates five ordinary generation grants within one
 independently selected installation interval; later native/release jobs remain
 outside its scope.
+Explicit v7 additionally delegates the remaining seven native C9 deliveries;
+it does not authorize subsequent native grants, launches or release jobs.
 
 Only the actual AuthorityCoordinatorProcess and its current opaque JobRequest
 can enter bootstrap(). No signing, publication, process launch, arbitrary
@@ -62,7 +64,11 @@ DELIVERY_FIELDS = INITIAL_FIELDS + ("ordinaryDeliveriesOriginal",)
 GENERATION_POLICY_API = "serverware.nativePilotSupervisorCommissioningPolicy/v6"
 GENERATION_PURPOSE = "initial-driver-bootstrap-precreation-endpoints-and-ordinary-generations"
 GENERATION_FIELDS = DELIVERY_FIELDS + ("ordinaryGenerationsOriginal",)
-DELIVERY_POLICY_APIS = (DELIVERY_POLICY_API, GENERATION_POLICY_API)
+NATIVE_DELIVERY_POLICY_API = "serverware.nativePilotSupervisorCommissioningPolicy/v7"
+NATIVE_DELIVERY_PURPOSE = "initial-driver-bootstrap-precreation-endpoints-ordinary-generations-and-native-deliveries"
+NATIVE_DELIVERY_FIELDS = GENERATION_FIELDS + ("nativeDeliveriesOriginal",)
+GENERATION_POLICY_APIS = (GENERATION_POLICY_API, NATIVE_DELIVERY_POLICY_API)
+DELIVERY_POLICY_APIS = (DELIVERY_POLICY_API,) + GENERATION_POLICY_APIS
 INITIAL_POLICY_APIS = (INITIAL_POLICY_API,) + DELIVERY_POLICY_APIS
 ENDPOINT_POLICY_APIS = (ENDPOINT_POLICY_API,) + INITIAL_POLICY_APIS
 MEASURED_POLICY_APIS = (MEASURED_POLICY_API,) + ENDPOINT_POLICY_APIS
@@ -136,6 +142,7 @@ class SupervisorPolicy:
         self._recipe = None
         self._ordinary_deliveries = None
         self._ordinary_generations = None
+        self._native_deliveries = None
         self._recipe_attempted = self._measured_attempted = False
 
     @classmethod
@@ -156,14 +163,15 @@ class SupervisorPolicy:
             value = _policy_document(owner._raw)
             p.require(type(value) is dict and value.get("apiVersion") in
                 (POLICY_API,) + MEASURED_POLICY_APIS)
-            ordinary_generation = value["apiVersion"] == GENERATION_POLICY_API
+            native_delivery = value["apiVersion"] == NATIVE_DELIVERY_POLICY_API
+            ordinary_generation = value["apiVersion"] in GENERATION_POLICY_APIS
             ordinary_delivery = value["apiVersion"] in DELIVERY_POLICY_APIS
             initial = value["apiVersion"] in INITIAL_POLICY_APIS
             endpoint = value["apiVersion"] in ENDPOINT_POLICY_APIS
             measured = value["apiVersion"] in MEASURED_POLICY_APIS
-            p.fields(value, GENERATION_FIELDS if ordinary_generation else DELIVERY_FIELDS if ordinary_delivery else INITIAL_FIELDS if initial else
+            p.fields(value, NATIVE_DELIVERY_FIELDS if native_delivery else GENERATION_FIELDS if ordinary_generation else DELIVERY_FIELDS if ordinary_delivery else INITIAL_FIELDS if initial else
                 ENDPOINT_FIELDS if endpoint else MEASURED_FIELDS if measured else FIELDS)
-            p.require(value["purpose"] == (GENERATION_PURPOSE if ordinary_generation else DELIVERY_PURPOSE if ordinary_delivery else INITIAL_PURPOSE if initial else
+            p.require(value["purpose"] == (NATIVE_DELIVERY_PURPOSE if native_delivery else GENERATION_PURPOSE if ordinary_generation else DELIVERY_PURPOSE if ordinary_delivery else INITIAL_PURPOSE if initial else
                 ENDPOINT_PURPOSE if endpoint else MEASURED_PURPOSE if measured else PURPOSE))
             if measured:
                 p.digest(value["measuredRecipeSha256"])
@@ -226,6 +234,17 @@ class SupervisorPolicy:
                     root = ordinary_initial["services"][role]["authorities"]["root"]
                     p.require(keys["ordinary-generation-" + role]
                         == p.sha(p.decoded(root["publicKeySpkiBase64"], size=44)[-32:]))
+            if native_delivery:
+                from serverware import native_pilot_native_delivery_profile as native
+                policy_text = value["nativeDeliveriesOriginal"]
+                p.require(type(policy_text) is str and policy_text.isascii())
+                native_deliveries = native.validate_policy(
+                    p.document(policy_text.encode("ascii"), MAX_POLICY),
+                    native_cold_originals=precreation["nativeColdOriginals"])
+                for role in native.ROLES:
+                    cold_raw = precreation["nativeColdOriginals"][role].encode("ascii")
+                    native_cold = delivery.configuration(cold_raw, p.sha(cold_raw))
+                    p.require(keys["native-delivery-" + role] == native_cold["authority"]["keyId"])
             owner._value = copy.deepcopy(value)
             owner._value["precreation"] = precreation
             if endpoint:
@@ -237,6 +256,8 @@ class SupervisorPolicy:
                 owner._ordinary_deliveries = ordinary_deliveries
             if ordinary_generation:
                 owner._ordinary_generations = ordinary_generations
+            if native_delivery:
+                owner._native_deliveries = native_deliveries
             owner._bootstrap, owner._control, owner._config, owner._window = raw, control, config, window
             owner._bindings = {"apiVersion": "serverware.nativePilotSupervisorBindings/v1",
                 "conductorInventorySha256": value["conductorInventorySha256"],
@@ -273,7 +294,7 @@ class SupervisorPolicy:
     def retain_measured_recipe(self, recipe):
         """Retain only the source-selected real recipe before process setup.
 
-        Legacy policy forbids a recipe. v2-v6 require the already independently
+        Legacy policy forbids a recipe. v2-v7 require the already independently
         approved original pin, not future process-dependent configuration data.
         """
         from serverware.native_pilot_measured_configuration import MeasuredConfigurationRecipe
@@ -383,11 +404,18 @@ class SupervisorPolicy:
         return copy.deepcopy(self._ordinary_deliveries)
 
     def ordinary_generation_policy(self, *, process, request) -> dict:
-        """Only v6 delegates the five fixed ordinary generation decisions."""
+        """Only v6+ delegate the five fixed ordinary generation decisions."""
         self.check(process)
         process.check_request(request)
-        p.require(self._value["apiVersion"] == GENERATION_POLICY_API)
+        p.require(self._value["apiVersion"] in GENERATION_POLICY_APIS)
         return copy.deepcopy(self._ordinary_generations)
+
+    def native_delivery_policy(self, *, process, request) -> dict:
+        """Only v7 delegates the remaining seven fixed native C9 decisions."""
+        self.check(process)
+        process.check_request(request)
+        p.require(self._value["apiVersion"] == NATIVE_DELIVERY_POLICY_API)
+        return copy.deepcopy(self._native_deliveries)
 
     def precreation(self):
         self.check()
@@ -470,7 +498,10 @@ class SupervisorPolicy:
             from serverware.native_pilot_supervisor_process import AuthorityCoordinatorProcess
             p.require(type(self._process) is AuthorityCoordinatorProcess and self._process._closed
                 and self._process._result["status"] in ("not-started", "stopped-cleanup-complete", "failed-cleanup-complete"))
-            if self._value["apiVersion"] == GENERATION_POLICY_API:
+            if self._value["apiVersion"] == NATIVE_DELIVERY_POLICY_API:
+                from serverware import native_pilot_supervisor_native_deliveries as native_deliveries
+                native_deliveries.close(self._process)
+            if self._value["apiVersion"] in GENERATION_POLICY_APIS:
                 from serverware import native_pilot_supervisor_ordinary_generations as ordinary_generations
                 ordinary_generations.close(self._process)
             if self._value["apiVersion"] in DELIVERY_POLICY_APIS:

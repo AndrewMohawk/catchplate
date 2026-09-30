@@ -4,8 +4,10 @@
 
 The `.375` source connects five ordinary generation decisions after the five
 [authenticated deliveries](native-pilot-ordinary-deliveries.md). The supervisor
-now composes **42 of 85** fixed jobs; **43 remain**, beginning with
-`native-delivery-generationInstall`. Startup still refuses before spawn.
+at that checkpoint composed **42 of 85** fixed jobs; **43 remained**, beginning
+with `native-delivery-generationInstall`. The subsequent
+[native-delivery connection](native-pilot-native-deliveries.md) reaches **49/85**;
+startup still refuses before spawn.
 Source checkpoints remain **36/46**, production acceptance **0/6**. Source
 connection does not prove a running pilot or independent deployment approval.
 

@@ -1,8 +1,8 @@
 # Native pilot commissioning supervisor
 
 This is a partial source implementation, not a runnable or deployed supervisor.
-The `.375` source connects five ordinary generation grants after C9 delivery,
-initial history, endpoint preparation and first native C9 decisions. **42 of 85**
+The `.376` source connects the remaining seven native C9 deliveries after
+ordinary generation grants, initial history and endpoint preparation. **49 of 85**
 jobs now have fixed policy/input composers. Source coverage is not production
 acceptance, which remains **0/6**. The automated
 owner refuses startup **before spawning** while any job is unimplemented. There
@@ -87,6 +87,13 @@ approved installation UNIX interval, not predicted scope hashes. Its five
 generation selectors must match the initial-history roots. Legacy policies gain
 no new authority. See [ordinary generation grants](native-pilot-ordinary-generations.md).
 
+Explicit policy/v7 adds `nativeDeliveriesOriginal`: exactly seven native runtime
+markers, fixed pins and existing credential metadata. The current signed
+assignment/closure-set must bind each runtime; the actual cohort supplies the
+original window and activation observations. It retains the same 57 key
+selectors and gives v6 no additional authority. See
+[remaining native deliveries](native-pilot-native-deliveries.md).
+
 ## Implemented composition
 
 | Existing job | Independently selected inputs | Actual data admitted during the attempt |
@@ -101,6 +108,7 @@ no new authority. See [ordinary generation grants](native-pilot-ordinary-generat
 | Five `ordinary-initial-*` jobs per role | Three public authorities, protocol role, generations/deployment, revocation facts and original-lifetime validity rule | Actual preparation/empty directories, exact approved predecessor inputs, verified checkpoint and three anchor results; only the complete wrapper is published |
 | Five `ordinary-delivery-*` jobs | Closed runtime recipes, existing credential metadata and each cold C9 authority | All five verified wrappers, actual peer/preparation/directories, retained fixed public installation and prior signed delivery results |
 | Five `ordinary-generation-*` jobs | Original installation interval and existing independent history-root keys | Verified delivery/runtime/history handoff, authenticated assignment/trust, actual bootstrap/driver recipe and complete prior signed grant results |
+| Seven remaining `native-delivery-*` jobs | Exact role runtimes, fixed pins and existing credential metadata | All five verified ordinary grants, signed assignment/closure-set runtime leaves, original signed cohort window, actual activations and complete prior C9 results |
 
 The original boot, time namespace, invocation and startup/lifetime interval are
 preserved; no timestamp renewal, invented journal, placeholder signature or
@@ -112,7 +120,7 @@ actually approved for that job.
 `native_pilot_supervisor.CommissioningSupervisor` connects the owners/composers
 to the existing approval installer and reply protocol. `prepare(policy=...,
 process=..., measured_recipe=...)` requires the actual retained recipe/v2 for
-policy/v2–v6; policy/v1 requires no recipe. It checks the independent recipe pin
+policy/v2–v7; policy/v1 requires no recipe. It checks the independent recipe pin
 before bootstrap preparation, then binds that owner to the same actual process
 before spawn. On the genuine pending `cohort-precreation` request, `step()` derives
 once from the verified prior bootstrap result. A downstream fixed composer can
@@ -144,14 +152,15 @@ post-observation derivation, [role runtimes](native-pilot-endpoint-runtime.md) a
 [fresh-ledger profile](native-pilot-fresh-ledger-startup.md). They do not restore
 the old contradictory pre-start scope/manifest requirements.
 
-The other 43 jobs, from `native-delivery-generationInstall` in `service-originals`
+The other 36 jobs, from `native-service-commitRequest` in `service-originals`
 through `shutdown`, still need fixed
 policy composition and applicable prior-result verification. Existing signers,
 installers and the 85-job executor do not supply those independent decisions.
 The first-generation boundary revalidates the five actual deliveries; explicit
-v6 decisions then compose the five grants. The next native-delivery boundary
-revalidates all five grants and retained runtime/history originals but does not
-approve a native delivery.
+v6 decisions then compose the five grants. Explicit v7 selects seven subsequent
+native deliveries; every continuation revalidates the opened ordinary-grant
+handoff and all earlier native delivery signatures. Job 43's handoff only reads
+the seven verified outputs; it does not approve the next native service grant.
 Further composition still needs independently approved authority inputs and
 actual resource observations. A cgroup-original digest is not a cgroup-path
 digest; neither can be substituted for the other.
@@ -160,7 +169,7 @@ and its exact leaf/runtime bytes; the marker alone supplies neither authorizatio
 nor service settings.
 
 Complete coverage, the executable supervisor entrypoint/package, connected
-runtime verification and protected deployment remain required. These 42
+runtime verification and protected deployment remain required. These 49
 composers do not close an overall project checkpoint or establish pilot readiness.
 
 External dependencies remain: approved immutable dependency publication, genuine

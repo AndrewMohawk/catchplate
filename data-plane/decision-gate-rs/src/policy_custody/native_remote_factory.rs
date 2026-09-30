@@ -5,6 +5,8 @@ use crate::policy_shadow::policy_custody;
 use super::services::{ConstructedDriver,NativeCustodyLifecycleOwner};
 use native_custody_closure::RemoteNativeCustodyClosure;
 use base64::Engine;
+use super::production_dispatch::{ProductionGenerationInstallContextWireV4,
+    ProductionGenerationInstallEnvelopeRoleV4};
 
 fn ensure(value:bool)->Result<(),ShadowError>{if value{Ok(())}else{Err(ShadowError::BindingDrift)}}
 fn exact<T:serde::de::DeserializeOwned+Serialize>(raw:&[u8])->Result<T,ShadowError>{
@@ -61,6 +63,66 @@ pub(in crate::policy_shadow) struct Settings {
     pub(in crate::policy_shadow) maximum_async_durability_nanos:u64,
     expected_configuration_binding_sha256:Sha256Digest,
 }
+/// Exact common scope from the retained, pinned ordinary grant originals.
+/// These bytes do not create a service/root-key owner: the native bridge and
+/// each ordinary service retain their existing complete grant admission.
+#[derive(Clone,PartialEq,Eq,Serialize,Deserialize)]
+#[serde(rename_all="camelCase",deny_unknown_fields)]
+struct GenerationScope {
+    previous_configuration_binding_sha256:Option<Sha256Digest>,
+    successor_configuration_binding_sha256:Sha256Digest,
+    dispatch_manifest_sha256:Sha256Digest,kernel_driver_identity_sha256:Sha256Digest,
+    retained_descriptor_set_sha256:Sha256Digest,driver_generation_receipt_sha256:Sha256Digest,
+    assignment_id:Sha256Digest,assignment_payload_sha256:Sha256Digest,assignment_revision:u64,
+    operation_coverage_root_sha256:Sha256Digest,five_service_protocol_set_sha256:Sha256Digest,
+    envelope_authority_key_id:Sha256Digest,envelope_authority_key_spki_sha256:Sha256Digest,
+    trusted_time_checkpoint_sha256:Sha256Digest,trusted_time_revocation_generation:u64,
+    trusted_time_revocation_root_sha256:Sha256Digest,
+    installation_issued_at_unix_nanos:i64,installation_expires_at_unix_nanos:i64,
+}
+impl GenerationScope {
+    fn context(&self,configuration:&ProductionCustodyConfiguration,manifest:&ProductionCustodyDispatchManifest,
+        driver:&ProductionCustodyKernelDriverIdentity,receipt:&Sha256Digest,
+        trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime)->Result<ProductionGenerationInstallContextWireV4,ShadowError>{
+        let authority=configuration.authority_binding(AuthorityRole::CustodyResultEnvelope)?;
+        let checkpoint=trust.current_checkpoint()?;
+        ensure(&checkpoint==configuration.authority_trust_checkpoint()
+            && self.successor_configuration_binding_sha256==*configuration.production_configuration_binding_sha256()
+            && self.dispatch_manifest_sha256==*manifest.manifest_sha256()
+            && self.kernel_driver_identity_sha256==*driver.identity_sha256()
+            && self.retained_descriptor_set_sha256==driver.retained_descriptor_manifest_sha256
+            && self.driver_generation_receipt_sha256==*receipt
+            && self.assignment_id==*configuration.assignment_id()
+            && self.assignment_payload_sha256==*configuration.assignment_payload_sha256()
+            && self.assignment_revision==configuration.assignment_revision()
+            && self.operation_coverage_root_sha256==*configuration.operation_coverage_root_sha256()
+            && self.five_service_protocol_set_sha256==*configuration.dispatcher_protocol_set_sha256()
+            && self.envelope_authority_key_id==*authority.key_id()
+            && self.envelope_authority_key_spki_sha256==*authority.key_spki_sha256()
+            && self.trusted_time_checkpoint_sha256==checkpoint.checkpoint_id
+            && self.trusted_time_revocation_generation==checkpoint.revocation_generation
+            && self.trusted_time_revocation_root_sha256==checkpoint.revocation_root_sha256
+            && self.installation_issued_at_unix_nanos>0
+            && self.installation_expires_at_unix_nanos.checked_sub(self.installation_issued_at_unix_nanos)
+                .is_some_and(|duration|duration>0 && duration<=configuration.maximum_authority_evidence_age_nanos()))?;
+        validate_trusted_freshness(self.installation_issued_at_unix_nanos,self.installation_expires_at_unix_nanos,
+            time,configuration.maximum_authority_evidence_age_nanos())?;
+        ensure(trust.current_checkpoint()?==checkpoint)?;
+        Ok(ProductionGenerationInstallContextWireV4 {
+            assignment_id:self.assignment_id.clone(),assignment_payload_sha256:self.assignment_payload_sha256.clone(),
+            assignment_revision:self.assignment_revision,operation_coverage_root_sha256:self.operation_coverage_root_sha256.clone(),
+            five_service_protocol_set_sha256:self.five_service_protocol_set_sha256.clone(),
+            envelope_authority_role:ProductionGenerationInstallEnvelopeRoleV4::CustodyResultEnvelope,
+            envelope_authority_key_id:self.envelope_authority_key_id.clone(),
+            envelope_authority_key_spki_sha256:self.envelope_authority_key_spki_sha256.clone(),
+            trusted_time_checkpoint_sha256:self.trusted_time_checkpoint_sha256.clone(),
+            trusted_time_revocation_generation:self.trusted_time_revocation_generation,
+            trusted_time_revocation_root_sha256:self.trusted_time_revocation_root_sha256.clone(),
+            issued_at_unix_nanos:self.installation_issued_at_unix_nanos,
+            expires_at_unix_nanos:self.installation_expires_at_unix_nanos,
+        })
+    }
+}
 pub(in crate::policy_shadow) struct Factory {
     pub(in crate::policy_shadow) configuration:ProductionCustodyConfiguration,
     pub(in crate::policy_shadow) manifest:ProductionCustodyDispatchManifest,
@@ -68,6 +130,7 @@ pub(in crate::policy_shadow) struct Factory {
     pub(in crate::policy_shadow) prior_admission_sha256:Sha256Digest,
     pub(in crate::policy_shadow) settings:Settings,
     retained:Arc<ConstructedDriver>,
+    installation_scope:GenerationScope,
     operation_boundary:u64,
 }
 impl Factory {
@@ -129,25 +192,47 @@ impl Factory {
         let pins=runtime.get("generationAdmission").and_then(|v|v.get("grants")).and_then(serde_json::Value::as_object).ok_or(ShadowError::BindingDrift)?;
         let grants=bundle.get("generationOriginals").and_then(serde_json::Value::as_object).ok_or(ShadowError::BindingDrift)?;
         ensure(pins.len()==5 && grants.len()==5 && pins.keys().eq(grants.keys()))?;
+        let roles=["durable-recovery-store","cleanup-authorization-consumer","recovery-target-provider",
+            "current-signature-authority","bounded-cleanup-helper"];
+        ensure(roles.iter().all(|role|grants.contains_key(*role)))?;
+        let mut installation_scope:Option<GenerationScope>=None;
         for (role,raw) in grants {
             let raw=raw.as_str().ok_or(ShadowError::BindingDrift)?.as_bytes();
+            ensure(!raw.is_empty() && raw.len()<=65536 && raw.is_ascii())?;
             ensure(pins.get(role)==Some(&serde_json::to_value(Sha256Digest::compute(raw)).map_err(|_|ShadowError::BindingDrift)?))?;
-            let grant:serde_json::Value=exact(raw)?;let scope=grant.get("payload").and_then(|v|v.get("scope")).ok_or(ShadowError::BindingDrift)?;
-            ensure(digest(scope,"successorConfigurationBindingSha256")?==*configuration.production_configuration_binding_sha256()
-                && digest(scope,"dispatchManifestSha256")?==*manifest.manifest_sha256()
-                && digest(scope,"kernelDriverIdentitySha256")?==*driver.identity_sha256()
-                && digest(scope,"retainedDescriptorSetSha256")?==driver.retained_descriptor_manifest_sha256
-                && digest(scope,"driverGenerationReceiptSha256")?==*retained.bootstrap_admission_sha256())?;
+            let grant:serde_json::Value=exact(raw)?;
+            let payload=grant.get("payload").ok_or(ShadowError::BindingDrift)?;
+            ensure(payload.get("apiVersion").and_then(serde_json::Value::as_str)==Some("serverware.custodyServiceGenerationGrant/v1")
+                && payload.get("purpose").and_then(serde_json::Value::as_str)==Some("cold-service-generation-admission")
+                && payload.get("serviceRole").and_then(serde_json::Value::as_str)==Some(role.as_str()))?;
+            let scope:GenerationScope=exact(&canonical_json_bytes(payload.get("scope").ok_or(ShadowError::BindingDrift)?)?)?;
+            if let Some(expected)=&installation_scope {ensure(expected==&scope)?;}
+            else {installation_scope=Some(scope);}
         }
+        let installation_scope=installation_scope.ok_or(ShadowError::BindingDrift)?;
+        ensure(assignment.payload().issued_at_unix_nanos()<=installation_scope.installation_issued_at_unix_nanos
+            && installation_scope.installation_expires_at_unix_nanos<=assignment.payload().expires_at_unix_nanos())?;
         retained.check(trust,time)?;
+        installation_scope.context(&configuration,&manifest,&driver,retained.bootstrap_admission_sha256(),trust,time)?;
         let lifetime=guest.lifetime_deadline_boottime_ns.parse::<u64>().map_err(|_|ShadowError::BindingDrift)?;
         let operation_boundary=lifetime.checked_sub(settings.cleanup_reserve_nanos).ok_or(ShadowError::BindingDrift)?;
-        Ok(Self{configuration,manifest,driver,prior_admission_sha256:retained.bootstrap_admission_sha256().clone(),settings,retained,operation_boundary})
+        Ok(Self{configuration,manifest,driver,prior_admission_sha256:retained.bootstrap_admission_sha256().clone(),
+            settings,retained,installation_scope,operation_boundary})
     }
     pub(in crate::policy_shadow) fn check(&self,trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime)->Result<(),ShadowError>{
         self.retained.check(trust,time)?;
         self.configuration.revalidate_active_attestation(trust,time)?;
         Ok(())
+    }
+    pub(in crate::policy_shadow) fn generation_install_context(&self,previous:Option<&ProductionCustodyConfiguration>,
+        successor:&ProductionCustodyConfiguration,trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime)
+        ->Result<ProductionGenerationInstallContextWireV4,ShadowError>{
+        self.check(trust,time)?;
+        successor.revalidate_active_attestation(trust,time)?;
+        ensure(previous.map(|value|value.production_configuration_binding_sha256())
+            ==self.installation_scope.previous_configuration_binding_sha256.as_ref())?;
+        self.check(trust,time)?;
+        self.installation_scope.context(successor,&self.manifest,&self.driver,&self.prior_admission_sha256,trust,time)
     }
     pub(super) fn take_sessions(&self)->Result<Vec<policy_custody::services::common::AuthenticatedInheritedSeqpacket>,ShadowError>{
         self.retained.take_sessions()

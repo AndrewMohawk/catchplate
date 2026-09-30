@@ -123,8 +123,11 @@ class _Installation:
         offset = request.job_index - len(INITIAL_JOBS) - 1
         delivery = (0 <= offset < len(g.ROLES)
             and request.job == "ordinary-delivery-" + g.ROLES[offset])
-        completed_boundary = (self.complete and offset == len(g.ROLES)
-            and request.job == "ordinary-generation-" + g.ROLES[0])
+        generation_offset = offset - len(g.ROLES)
+        generation_job = (0 <= generation_offset < len(g.ROLES)
+            and request.job == "ordinary-generation-" + g.ROLES[generation_offset])
+        next_job = generation_offset == len(g.ROLES) and request.job == "native-delivery-generationInstall"
+        completed_boundary = self.complete and (generation_job or next_job)
         p.require(request.phase == "service-originals" and (delivery or completed_boundary)
             and JOBS[request.phase][request.job_index - 1].name == request.job
             and request.deadline_boottime_ns == self.deadline

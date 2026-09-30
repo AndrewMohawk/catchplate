@@ -21,6 +21,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey,
 
 from serverware import custody_generation_grants as g
 from serverware import native_pilot_delivery_authority as c9
+from serverware import native_pilot_ordinary_initial_profile as initial
 from serverware import native_pilot_service_authority as ordinary
 from serverware import native_shadow_guest_delivery as delivery
 from serverware import native_shadow_key_admission_profile as admission
@@ -174,7 +175,8 @@ def sign(*, input_original: bytes, signing_key):
         p.require(member["grantOriginal"] == item["grant_raw"].decode("ascii")
             and member["historyOriginal"] == item["history_raw"].decode("ascii")
             and len(item["history_raw"]) <= 1024 * 1024)
-        root = g.document(item["history_raw"], g.MAX_BYTES)["rootAuthority"]
+        root = initial.runtime_manifest(item["history_raw"], runtime=item["header"],
+            guest=item["guest"])["rootAuthority"]
         p.require(member["rootKeyId"] == root["keyId"] and member["rootKeySpkiSha256"] == root["keySpkiSha256"])
         _same(item["header"]["expectedPeer"], peer)
         p.require(item["guest"]["uid"] not in uids and item["guest"]["gid"] not in gids)

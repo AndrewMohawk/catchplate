@@ -1,6 +1,6 @@
 """Five C9 inputs from actual retained initial histories and public resources.
 
-Only a v5 policy and the real pending coordinator request enter composition.
+Only an admitted delivery policy and the real pending request enter composition.
 The first job derives five runtimes once and retains their fixed installer;
 later jobs recheck those originals and every prior approved result. No signing,
 secret read, process-identity prediction, new window or live-admission claim is
@@ -102,6 +102,7 @@ class _Attempt:
         self.next = 0
         self.inflight = self.peer = self.installer = None
         self.failed = self.closed = self.close_attempted = False
+        self.generation_boundary_open = False
         self.inputs, self.initial, self.histories, self.runtimes = {}, {}, {}, {}
         self.deliveries, self.delivery_results = {}, {}
         self.retained_bytes = 0
@@ -295,12 +296,26 @@ def compose(policy, *, process, request) -> bytes:
 
 def require_deliveries(policy, *, process, request) -> dict:
     """Five verified originals at actual job31, not a future generation grant."""
+    return _verified_deliveries(policy, process=process, request=request, first=True)
+
+
+def recheck_deliveries(policy, *, process, request) -> dict:
+    """Recheck the opened boundary during fixed generations and their handoff."""
+    return _verified_deliveries(policy, process=process, request=request, first=False)
+
+
+def _verified_deliveries(policy, *, process, request, first):
     _owners(policy, process, request)
     owner = _LIVE
     p.require(owner is not None and owner.policy is policy and owner.process is process
         and owner.next == len(ROLES) and owner.inflight is None and not owner.failed and not owner.closed
-        and request.phase == "service-originals" and request.job_index == FIRST_INDEX + len(ROLES)
-        and request.job == "ordinary-generation-" + ROLES[0]
+        and request.phase == "service-originals" and type(request.job_index) is int)
+    offset = request.job_index - FIRST_INDEX - len(ROLES)
+    generation_job = (0 <= offset < len(ROLES)
+        and request.job == "ordinary-generation-" + ROLES[offset])
+    next_job = offset == len(ROLES) and request.job == "native-delivery-generationInstall"
+    p.require((offset == 0 and generation_job if first else
+        owner.generation_boundary_open and (generation_job or next_job))
         and JOBS["service-originals"][request.job_index - 1].name == request.job)
     owner.inflight = request
     try:
@@ -310,6 +325,7 @@ def require_deliveries(policy, *, process, request) -> dict:
         p.require(tuple(owner.deliveries) == ROLES)
         result = {role: {"deliveryOriginal": owner.deliveries[role], "runtimeOriginal": owner.runtimes[role],
             "historyOriginal": owner.histories[role]} for role in ROLES}
+        owner.generation_boundary_open = True
         owner.inflight = None
         return result
     except BaseException:

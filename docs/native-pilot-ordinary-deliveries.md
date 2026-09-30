@@ -2,10 +2,12 @@
 
 # Ordinary-service runtime preparation and C9 delivery
 
-The `.374` source connects five ordinary C9 delivery composers after the 25
+The preceding `.374` source connects five ordinary C9 delivery composers after the 25
 [initial-history ceremony jobs](native-pilot-ordinary-initial-history.md#supervisor-connection).
-Coverage is **37 of 85** fixed jobs; the remaining **48** begin with ordinary
-generation grants. Complete-coverage refusal still occurs before process spawn.
+Coverage at that checkpoint was **37 of 85** fixed jobs. The `.375`
+[generation connection](native-pilot-ordinary-generations.md) adds five more,
+bringing current coverage to **42/85**, with **43 missing**. Complete-coverage
+refusal still occurs before process spawn.
 Production acceptance remains **0/6**. These source contracts and focused
 controls do not establish a running pilot or independent production approval.
 

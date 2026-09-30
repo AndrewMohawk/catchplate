@@ -908,8 +908,15 @@ impl RpcProductionPolicyShadowCustodyProcess {
 
     fn generation_install_context(
         &self,
+        previous: Option<&ProductionCustodyConfiguration>,
         successor: &ProductionCustodyConfiguration,
     ) -> Result<ProductionGenerationInstallContextWireV4, ShadowError> {
+        if let ProcessAuthority::Native(owner) = &self.process_config.authority {
+            // Native grants already authorize one exact installation interval.
+            // Never renew it by sampling a different now/max-age pair here.
+            return owner.generation_install_context(previous, successor,
+                self.key_trust.as_ref(), self.trusted_time.as_ref());
+        }
         let authority = successor
             .authority_binding(AuthorityRole::CustodyResultEnvelope)?;
         let checkpoint = successor.authority_trust_checkpoint();
@@ -1082,7 +1089,7 @@ impl RpcProductionPolicyShadowCustodyProcess {
         ShadowError,
     > {
         let install_context =
-            self.generation_install_context(successor)?;
+            self.generation_install_context(previous, successor)?;
         let transition_id_sha256 = self.generation_transition_id(
             previous,
             successor,
@@ -1199,7 +1206,7 @@ impl RpcProductionPolicyShadowCustodyProcess {
         ShadowError,
     > {
         let install_context =
-            self.generation_install_context(successor)?;
+            self.generation_install_context(previous, successor)?;
         let transition_id_sha256 = self.generation_transition_id(
             previous,
             successor,

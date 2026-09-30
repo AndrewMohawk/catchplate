@@ -75,7 +75,7 @@ def policy(value):
     require(type(value) is dict and set(value) == POLICY_FIELDS)
     require(type(value["rpId"]) is str and 1 <= len(value["rpId"].encode("utf-8")) <= 253
         and type(value["origins"]) is list and 1 <= len(value["origins"]) <= 16
-        and all(type(item) is str and 1 <= len(item.encode("utf-8")) <= 2048 for item in value["origins"])
+        and all(type(item) is str and 1 <= len(item.encode("utf-8")) <= 2048 for item in value["origins"]))
     classes = value["allowedAuthenticatorClasses"]
     require(type(classes) is list and classes == sorted(set(classes)) and classes
         and set(classes) <= {"hardware", "yubikey"}

@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.local/schemas/setup-native-runtime-collector.v1.schema.json",
+  "title": "Operator routing inputs for the existing native Setup collector",
+  "description": "Local configuration only, not a signed evidence profile, new grant or permission. Its exact bytes and proof-client binary digest must be supplied independently of the response. Actual native, collector and Setup owners retain their original checks.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "proofClient", "nativeVerifier", "nativeTrustRoots", "nativeIngress", "proxy", "proxyServerName", "proxyCa", "proxyClientCertificate", "proxyClientKey", "innerCa", "collectorKey", "controlPlaneResponseKey", "maximumContactSeconds"],
+  "properties": {
+    "apiVersion": {"const": "serverware.setupNativeRuntimeCollector/v1"},
+    "proofClient": {"$ref": "#/$defs/artifact"},
+    "nativeVerifier": {"$ref": "#/$defs/artifact"},
+    "nativeTrustRoots": {"$ref": "#/$defs/artifact"},
+    "nativeIngress": {"$ref": "#/$defs/artifact"},
+    "proxy": {"type": "string", "minLength": 3, "maxLength": 128, "description": "Canonical unicast IP literal and nonzero port; IPv6 bracketed. No DNS resolution, alternate address or reconnect."},
+    "proxyServerName": {"type": "string", "minLength": 1, "maxLength": 253},
+    "proxyCa": {"$ref": "#/$defs/path"},
+    "proxyClientCertificate": {"$ref": "#/$defs/path"},
+    "proxyClientKey": {"$ref": "#/$defs/path"},
+    "innerCa": {"$ref": "#/$defs/path"},
+    "collectorKey": {"$ref": "#/$defs/path"},
+    "controlPlaneResponseKey": {"$ref": "#/$defs/path"},
+    "maximumContactSeconds": {"type": "integer", "minimum": 1, "maximum": 120}
+  },
+  "$defs": {
+    "path": {"type": "string", "minLength": 2, "maxLength": 4096, "pattern": "^/", "description": "Canonical absolute non-symlink path. Runtime ownership and mode checks remain mandatory; private key bytes never belong in this document."},
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$", "not": {"const": "sha256:0000000000000000000000000000000000000000000000000000000000000000"}},
+    "artifact": {
+      "type": "object", "additionalProperties": false, "required": ["path", "sha256"],
+      "properties": {"path": {"$ref": "#/$defs/path"}, "sha256": {"$ref": "#/$defs/digest"}}
+    },
+    "bundle": {
+      "type": "object", "additionalProperties": false, "required": ["attemptOriginal", "scopeOriginal", "expectationsOriginal"],
+      "description": "Exact existing Setup response bundle. Each original string is preserved, not reconstructed from parsed values. This download is not fresh contact permission.",
+      "properties": {
+        "attemptOriginal": {"type": "string", "maxLength": 8192},
+        "scopeOriginal": {"type": "string", "maxLength": 32768},
+        "expectationsOriginal": {"type": "string", "maxLength": 16384}
+      }
+    }
+  }
+}

@@ -67,7 +67,10 @@ class Closure:
                  "shadow-keys": Path("/shadow-key-runtime"),
                  "shadow-verifier": Path("/shadow-verifier-runtime"),
                  "shadow-time-issuer": Path("/shadow-time-issuer-runtime"),
-                 "generation-origin-issuer": Path("/generation-origin-issuer-runtime")}
+                 "generation-origin-issuer": Path("/generation-origin-issuer-runtime"),
+                 "setup-native-hardware-verifier": Path("/setup-native-hardware-verifier-runtime"),
+                 "setup-native-proxy-verifier": Path("/setup-native-proxy-verifier-runtime"),
+                 "setup-native-final-authority": Path("/setup-native-final-authority-runtime")}
         require(purpose in roots, "unknown fixed runtime closure purpose")
         self.purpose = purpose
         self.root = roots[purpose]
@@ -168,11 +171,21 @@ class Closure:
                 "mount targets belong only to the independent generation-origin issuer image")
         return self._external_mount_targets("native-generation-origin-issuer.json")
 
+    def setup_issuer_mount_targets(self) -> list[dict[str, str]]:
+        names = {"setup-native-hardware-verifier": "setup-native-hardware-verifier.json",
+                 "setup-native-proxy-verifier": "setup-native-proxy-verifier.json",
+                 "setup-native-final-authority": "setup-native-final-authority.json"}
+        require(self.purpose in names and os.geteuid() == 0, "not a fixed independent Setup image")
+        return self._external_mount_targets(names[self.purpose])
+
     def _external_mount_targets(self, leaf: str) -> list[dict[str, str]]:
         require((self.purpose, leaf) in {
             ("shadow-verifier", "native-shadow-nitro-verifier.json"),
             ("shadow-time-issuer", "native-shadow-guest-time-issuer.json"),
-            ("generation-origin-issuer", "native-generation-origin-issuer.json")},
+            ("generation-origin-issuer", "native-generation-origin-issuer.json"),
+            ("setup-native-hardware-verifier", "setup-native-hardware-verifier.json"),
+            ("setup-native-proxy-verifier", "setup-native-proxy-verifier.json"),
+            ("setup-native-final-authority", "setup-native-final-authority.json")},
             "external mount target is not source-fixed")
         proc = self.root / "proc"
         proc.mkdir(mode=0o555)
@@ -193,7 +206,8 @@ class Closure:
         # Build a cache for this root only: /usr/local/lib is not a default
         # glibc search directory. -X prevents ldconfig-created symlink aliases.
         configuration = self.root / "etc/ld.so.conf"
-        configuration.parent.mkdir(exist_ok=self.purpose in {"shadow-verifier", "shadow-time-issuer", "generation-origin-issuer"})
+        configuration.parent.mkdir(exist_ok=self.purpose in {"shadow-verifier", "shadow-time-issuer", "generation-origin-issuer",
+            "setup-native-hardware-verifier", "setup-native-proxy-verifier", "setup-native-final-authority"})
         configuration.write_text("/usr/local/lib\n/lib/x86_64-linux-gnu\n/usr/lib/x86_64-linux-gnu\n", encoding="ascii")
         subprocess.run(["/sbin/ldconfig", "-i", "-X", "-r", str(self.root)], env=ENV, check=True, timeout=30)
         for path in (configuration, self.root / "etc/ld.so.cache"):

@@ -64,6 +64,11 @@ pub(super) struct PreparedChild {
     filter: Vec<libc::sock_filter>, self_pid_instruction: usize,
 }
 impl PreparedChild {
+    pub(super) fn prepare_setup(runtime: &RuntimeBorrow<'_>, seed: BorrowedFd<'_>, request: BorrowedFd<'_>,
+        output: BorrowedFd<'_>, gate: BorrowedFd<'_>) -> Result<Self, String> {
+        require(matches!(runtime.profile(), Profile::Setup(_)), "Setup child requires its fixed runtime")?;
+        Self::prepare_for(runtime, seed, request, output, gate)
+    }
     pub(super) fn prepare_origin(runtime: &RuntimeBorrow<'_>, seed: BorrowedFd<'_>, transport: BorrowedFd<'_>,
         output: BorrowedFd<'_>, gate: BorrowedFd<'_>) -> Result<Self, String> {
         require(runtime.profile() == Profile::OriginIssuer, "origin issuer child requires its actual fixed runtime")?;
@@ -124,6 +129,7 @@ impl PreparedChild {
         // metadata checks only keep exactly those separately sealed originals.
         let sealed: &[(usize, i64)] = match runtime.profile() {
             Profile::Verifier => &[(SEED,32),(EVIDENCE,128 * 1024)],
+            Profile::Setup(_) => &[(SEED,32),(EVIDENCE,4 * 1024 * 1024)],
             Profile::TimeIssuer | Profile::OriginIssuer => &[(SEED,32)],
         };
         for &(index, maximum) in sealed {

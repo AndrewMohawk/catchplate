@@ -295,6 +295,18 @@ def prefetch_module(root: Path, dependency_directory: Path) -> Any:
     return module
 
 
+def prepare_rust_vendor(candidate: Path, expected_commit: str) -> dict[str, Any]:
+    """Use the separate fixed Cargo producer only when explicitly requested."""
+    spec = importlib.util.spec_from_file_location(
+        "snapshot_rust_vendor", ROOT / "production-dependencies/prepare_rust_vendor.py"
+    )
+    if spec is None or spec.loader is None:
+        raise ValueError("could not load the Rust dependency producer")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.prepare_vendor(candidate, expected_commit)
+
+
 def git_bytes(*arguments: str) -> bytes:
     return subprocess.run(["git", "-C", str(ROOT), *arguments], check=True,
                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30).stdout
@@ -306,7 +318,8 @@ def capture_source(expected_commit: str) -> tuple[dict[str, str], dict[str, byte
     commit = git_bytes("rev-parse", "HEAD^{commit}").decode("ascii").strip()
     if commit != expected_commit or git_bytes("status", "--porcelain", "--untracked-files=all"):
         raise ValueError("dependency preparation requires the exact clean recorded commit")
-    paths = [*SOURCE_INPUTS, "Dockerfile.production", "production-dependencies/prepare_snapshot.py",
+    paths = [*SOURCE_INPUTS, "Dockerfile.production", "data-plane/decision-gate-rs/Dockerfile.production",
+             "production-dependencies/prepare_snapshot.py", "production-dependencies/prepare_rust_vendor.py",
              "production-dependencies/prefetch.py", *("production-dependencies/" + name for name in MANIFEST_NAMES)]
     captured = {}
     for relative in paths:
@@ -392,7 +405,8 @@ def validate_output(output: Path) -> Path:
     return output
 
 
-def prepare(*, expected_commit: str, existing_cache: Path, snapshot_id: str, output: Path) -> dict[str, Any]:
+def prepare(*, expected_commit: str, existing_cache: Path, snapshot_id: str, output: Path,
+            refresh_rust: bool = False) -> dict[str, Any]:
     if os.geteuid() == 0:
         raise ValueError("run dependency preparation as an unprivileged operator account")
     source, captured = capture_source(expected_commit)
@@ -401,9 +415,11 @@ def prepare(*, expected_commit: str, existing_cache: Path, snapshot_id: str, out
     originals = verifier.manifests()
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", snapshot_id) or snapshot_id == originals[0]["metadata"]["snapshotId"]:
         raise ValueError("candidate must use a valid new snapshot ID")
-    for relative in SOURCE_INPUTS[1:]:
-        if hashlib.sha256(captured[relative]).hexdigest() != originals[1]["entries"][relative]:
-            raise ValueError("Cargo inputs changed; this producer can carry forward only unchanged reviewed Rust dependencies")
+    cargo_inputs = {relative: hashlib.sha256(captured[relative]).hexdigest()
+                    for relative in SOURCE_INPUTS[1:]}
+    if not refresh_rust and any(digest != originals[1]["entries"][relative]
+                                for relative, digest in cargo_inputs.items()):
+        raise ValueError("Cargo inputs changed; use --refresh-rust to prepare a new unpublished vendor candidate")
     output = validate_output(output)
     image = json.loads(subprocess.run(
         ["docker", "image", "inspect", PYTHON_IMAGE], check=True, timeout=30,
@@ -419,6 +435,7 @@ def prepare(*, expected_commit: str, existing_cache: Path, snapshot_id: str, out
         "published": False, "reviewed_pins_installed": False, "production_release_authority": False,
         "scope": "local-engineering-preparation-only", "source": source,
         "carried_forward_source_directory": str(existing_cache.resolve()),
+        "rust_vendor_mode": "refresh-locked" if refresh_rust else "unchanged-reviewed-carry-forward",
         "snapshot_id": snapshot_id, "builder": {"reference": PYTHON_IMAGE, "image_id": image_id}}
     try:
         for relative in SOURCE_INPUTS:
@@ -437,9 +454,21 @@ def prepare(*, expected_commit: str, existing_cache: Path, snapshot_id: str, out
             for relative, digest in original["entries"].items():
                 if relative not in verifier.CACHE_INPUTS:
                     continue
+                if refresh_rust and relative == verifier.CARGO_ARCHIVE:
+                    continue
                 path = cache / Path(relative).name
                 carried[relative] = copy_verified(existing_cache / path.name, path, expected=digest)
                 verifier._verify_regular_input(path, relative, digest)
+        rust = None
+        if refresh_rust:
+            rust = prepare_rust_vendor(output, expected_commit)
+            if rust.get("inputs") != cargo_inputs:
+                raise ValueError("Rust vendor producer did not retain the exact captured Cargo inputs")
+            cargo_archive = cache / Path(verifier.CARGO_ARCHIVE).name
+            cargo_measured = copy_verified(cargo_archive, None, expected=rust["archive"]["sha256"])
+            if cargo_measured != rust["archive"]:
+                raise ValueError("Rust vendor archive size differs from the producer result")
+            verifier._verify_regular_input(cargo_archive, verifier.CARGO_ARCHIVE, cargo_measured["sha256"])
         download = run_container("download", output)
         if download.get("deterministic_packaging") is not True:
             raise ValueError("download phase did not prove deterministic packaging")
@@ -456,6 +485,9 @@ def prepare(*, expected_commit: str, existing_cache: Path, snapshot_id: str, out
             if "requirements.lock" in entries:
                 entries["requirements.lock"] = hashlib.sha256(captured["requirements.lock"]).hexdigest()
                 entries[verifier.PYTHON_ARCHIVE] = measured["sha256"]
+            if rust is not None and verifier.CARGO_ARCHIVE in entries:
+                entries.update(cargo_inputs)
+                entries[verifier.CARGO_ARCHIVE] = cargo_measured["sha256"]
             (snapshot / name).write_bytes(proposed_manifest(original, snapshot_id=snapshot_id,
                                                           entries=entries, verifier=verifier))
         prefetch_module(output, snapshot).verify()
@@ -463,6 +495,7 @@ def prepare(*, expected_commit: str, existing_cache: Path, snapshot_id: str, out
         if capture_source(expected_commit) != (source, captured):
             raise ValueError("recorded source changed during dependency preparation")
         report.update({"ok": True, "download": download, "offline_validation": offline,
+            "rust_preparation": rust,
             "carried_forward": carried,
             "inputs": {name: hashlib.sha256(value).hexdigest() for name, value in captured.items()},
             "proposed_manifests": {name: copy_verified(snapshot / name, None, maximum=MAX_INPUT)
@@ -488,10 +521,12 @@ def main() -> None:
     parser.add_argument("--existing-cache", required=True, type=Path)
     parser.add_argument("--snapshot-id", required=True)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--refresh-rust", action="store_true",
+                        help="prepare a new locked Rust vendor candidate instead of carrying forward the reviewed archive")
     args = parser.parse_args()
     try:
         report = prepare(expected_commit=args.expected_commit, existing_cache=args.existing_cache,
-                         snapshot_id=args.snapshot_id, output=args.output)
+                         snapshot_id=args.snapshot_id, output=args.output, refresh_rust=args.refresh_rust)
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
         parser.exit(1, f"dependency candidate preparation failed: {error}\n")
     print(canonical_json({"ok": report["ok"], "published": False,

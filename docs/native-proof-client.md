@@ -9,6 +9,14 @@ an action or activate native serving.
 
 ## Independently configured verifier and session
 
+For the protected Setup empty-body GET, use the [fixed operator caller](native-pilot-request-collection.md)
+to consume the exact portal bundle and retain/export its capture with a local
+durable no-rerun fence. It invokes this existing native path, not another proof
+format. Its optional `--expected-collector-key-id` is checked against the actual
+admitted collector key before contact; `--native-capture-max-bytes` (1–524288)
+checks the full signed output bytes before publication. Both flags require
+explicit native verification and do not widen an old profile or grant a request.
+
 The [client source](../data-plane/decision-gate-rs/src/bin/serverware-proof-client.rs)
 requires these six options together:
 

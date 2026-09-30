@@ -67,6 +67,19 @@ impl PendingSeed {
 }
 impl Inputs {
     pub(super) fn take() -> Result<Self, String> {
+        Self::take_bounded(128 * 1024)
+    }
+    pub(super) fn take_setup() -> Result<Self, String> {
+        Self::take_bounded(4 * 1024 * 1024)
+    }
+    pub(super) fn from_setup(seed: OwnedFd, request: OwnedFd) -> Result<Self, String> {
+        let seed = Sealed::exact_seed(seed)?;
+        let evidence = Sealed::admit(request, 4 * 1024 * 1024)?;
+        ensure((seed.identity.device,seed.identity.inode) != (evidence.identity.device,evidence.identity.inode),
+            "Setup seed/request originals alias")?;
+        Ok(Self { seed, evidence, binding: None })
+    }
+    fn take_bounded(maximum: i64) -> Result<Self, String> {
         // Reserve BOTH real slots before opening any owned object. Missing
         // input can never be replaced by an incidental later open.
         ensure(unsafe { libc::fcntl(4, libc::F_GETFD) } >= 0
@@ -75,7 +88,7 @@ impl Inputs {
         let seed = unsafe { OwnedFd::from_raw_fd(4) };
         let evidence = unsafe { OwnedFd::from_raw_fd(5) };
         let seed = Sealed::admit(seed, 32)?;
-        let evidence = Sealed::admit(evidence, 128 * 1024)?;
+        let evidence = Sealed::admit(evidence, maximum)?;
         ensure(seed.identity.size == 32
             && (seed.identity.device,seed.identity.inode) != (evidence.identity.device,evidence.identity.inode),
             "verifier seed/evidence are not exact distinct originals")?;

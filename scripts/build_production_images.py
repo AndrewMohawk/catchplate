@@ -58,6 +58,26 @@ PRODUCTION_ARTIFACT_TARGETS = {
         "data-plane/decision-gate-rs/Dockerfile.production",
         "native-broker-runtime-artifact",
     ),
+    ("data-plane/decision-gate-rs/Dockerfile.production", "native-pilot-artifacts"),
+    # Separately installed independent authorities; never part of the claimant
+    # bundle. Their fixed Docker stages own their respective runtime closures.
+    ("data-plane/decision-gate-rs/Dockerfile.production", "native-setup-hardware-artifact"),
+    ("data-plane/decision-gate-rs/Dockerfile.production", "native-setup-proxy-artifact"),
+    ("data-plane/decision-gate-rs/Dockerfile.production", "native-setup-final-artifact"),
+    ("data-plane/decision-gate-rs/Dockerfile.production", "native-shadow-verifier-supervisor-artifact"),
+    ("data-plane/decision-gate-rs/Dockerfile.production", "native-shadow-verifier-transport-artifact"),
+    ("data-plane/decision-gate-rs/Dockerfile.production", "native-shadow-verifier-runtime-artifact"),
+    ("data-plane/decision-gate-rs/Dockerfile.production", "native-shadow-time-issuer-supervisor-artifact"),
+    ("data-plane/decision-gate-rs/Dockerfile.production", "native-shadow-time-issuer-runtime-artifact"),
+    ("data-plane/decision-gate-rs/Dockerfile.production", "native-generation-origin-issuer-supervisor-artifact"),
+    ("data-plane/decision-gate-rs/Dockerfile.production", "native-generation-origin-issuer-runtime-artifact"),
+}
+NATIVE_PILOT_TARGET = "native-pilot-artifacts"
+PUBLIC_GUEST_FILES = {
+    "seccomp.bpf": ("seccompSha256", 32768),
+    "runtime.json": ("runtimeConfigurationSha256", 4 * 1024 * 1024),
+    "build-recipe.json": ("buildRecipeSha256", 4 * 1024 * 1024),
+    "provenance.json": ("provenanceStatementSha256", 4 * 1024 * 1024),
 }
 
 
@@ -259,14 +279,16 @@ def build_metadata(*, development_dirty_tree: bool = False) -> dict[str, Any]:
     }
 
 
-def _copy_context_file(source: Path, destination: Path, expected_sha256: str | None) -> None:
+def _copy_context_file(source: Path, destination: Path, expected_sha256: str | None,
+                       *, maximum_bytes: int | None = None) -> None:
     try:
-        source_descriptor = os.open(source, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        source_descriptor = os.open(source, os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0))
     except OSError as exc:
         raise RuntimeError(f"could not open private build-context input {source}: {exc}") from exc
     try:
         before = os.fstat(source_descriptor)
-        if not stat.S_ISREG(before.st_mode):
+        if not stat.S_ISREG(before.st_mode) or (maximum_bytes is not None
+                and not 0 < before.st_size <= maximum_bytes):
             raise RuntimeError(f"private build-context input is not a regular file: {source}")
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination_descriptor = os.open(
@@ -283,6 +305,8 @@ def _copy_context_file(source: Path, destination: Path, expected_sha256: str | N
                         chunk = source_handle.read(1024 * 1024)
                         if not chunk:
                             break
+                        if maximum_bytes is not None and copied + len(chunk) > maximum_bytes:
+                            raise RuntimeError("bounded public build original grew during copy")
                         destination_handle.write(chunk)
                         digest.update(chunk)
                         copied += len(chunk)
@@ -305,6 +329,34 @@ def _copy_context_file(source: Path, destination: Path, expected_sha256: str | N
             )
     finally:
         os.close(source_descriptor)
+
+
+def copy_native_pilot_public_inputs(directory: Path, expected_sha256: str,
+                                   metadata: dict[str, Any], context: Path) -> None:
+    """Copy only the independently pinned public guest closure, never secrets.
+
+    The fixed existing image packager independently rechecks every byte/pin.
+    This producer does not sign or author the public policy/provenance inputs.
+    """
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", expected_sha256) or expected_sha256 == "sha256:" + "0" * 64:
+        raise RuntimeError("an independently supplied public guest input SHA-256 is required")
+    if not directory.is_absolute() or directory.resolve() != directory:
+        raise RuntimeError("public guest input directory must be absolute and contain no symlink ancestors")
+    destination = context / "production-shadow-custody"
+    _copy_context_file(directory / "inputs.json", destination / "inputs.json", expected_sha256, maximum_bytes=16384)
+    raw = (destination / "inputs.json").read_bytes()
+    document = json.loads(raw)
+    fields = {"apiVersion", "sourceManifestSha256", *(item[0] for item in PUBLIC_GUEST_FILES.values())}
+    if (type(document) is not dict or set(document) != fields
+            or document.get("apiVersion") != "serverware.nativeShadowCustodyImageInputs/v1"
+            or canonical_json(document).encode("ascii") != raw
+            or document["sourceManifestSha256"] != metadata["source_manifest_digest"]):
+        raise RuntimeError("public guest manifest must be canonical and pin this exact admitted source")
+    for filename, (field, maximum) in PUBLIC_GUEST_FILES.items():
+        pin = document[field]
+        if type(pin) is not str or not re.fullmatch(r"sha256:[0-9a-f]{64}", pin) or pin == "sha256:" + "0" * 64:
+            raise RuntimeError("invalid independently pinned public guest original")
+        _copy_context_file(directory / filename, destination / filename, pin, maximum_bytes=maximum)
 
 
 def _tracked_file_digests(metadata: dict[str, Any]) -> dict[str, str]:
@@ -333,7 +385,8 @@ def private_build_context(metadata: dict[str, Any]):
         metadata["source_file_modes_path"]: metadata["source_file_modes_digest"],
     }
     tracked_digests = _tracked_file_digests(metadata)
-    with tempfile.TemporaryDirectory(prefix="serverware-private-build-context.") as temporary:
+    with tempfile.TemporaryDirectory(prefix="serverware-private-build-context.",
+                                    dir=os.environ.get("TMPDIR") or "/srv/catchplate-fast/tmp") as temporary:
         context = Path(temporary)
         for relative in (*PRIVATE_CONTEXT_FILES, *contract_paths):
             relative_path = Path(relative)
@@ -420,6 +473,7 @@ def artifact_build_command(
     platform: str,
     metadata: dict[str, Any],
     context: Path,
+    public_inputs_sha256: str | None = None,
 ) -> list[str]:
     if (dockerfile, target) not in PRODUCTION_ARTIFACT_TARGETS:
         raise RuntimeError("unsupported production artifact Dockerfile/target pair")
@@ -429,6 +483,14 @@ def artifact_build_command(
         raise RuntimeError(f"production artifact platform must be {PRODUCTION_PLATFORM}")
     if not output.startswith("type=local,dest=") or output == "type=local,dest=":
         raise RuntimeError("production artifact output must be a non-empty local destination")
+    if target == NATIVE_PILOT_TARGET:
+        if not isinstance(public_inputs_sha256, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", public_inputs_sha256):
+            raise RuntimeError("native pilot artifact requires its independent public guest input pin")
+        extra = ["--build-arg", "SHADOW_CUSTODY_INPUTS_SHA256=" + public_inputs_sha256]
+    else:
+        if public_inputs_sha256 is not None:
+            raise RuntimeError("public guest inputs are forbidden for this artifact target")
+        extra = []
     return [
         "docker",
         "buildx",
@@ -443,6 +505,7 @@ def artifact_build_command(
         "-f",
         str(context / dockerfile),
         *source_build_arguments(metadata),
+        *extra,
         str(context),
     ]
 
@@ -534,6 +597,8 @@ def main() -> None:
     parser.add_argument("--target")
     parser.add_argument("--output")
     parser.add_argument("--network", choices=("none",))
+    parser.add_argument("--shadow-custody-inputs", type=Path)
+    parser.add_argument("--shadow-custody-inputs-sha256")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument(
         "--development-dirty-tree",
@@ -541,6 +606,13 @@ def main() -> None:
         help="Build an explicitly non-production image from dirty/untracked filesystem bytes.",
     )
     args = parser.parse_args()
+
+    guest_inputs = (args.shadow_custody_inputs, args.shadow_custody_inputs_sha256)
+    if args.target == NATIVE_PILOT_TARGET:
+        if not all(guest_inputs):
+            parser.error("native-pilot-artifacts requires --shadow-custody-inputs and --shadow-custody-inputs-sha256")
+    elif any(guest_inputs):
+        parser.error("public guest inputs require the explicit native-pilot-artifacts target")
 
     artifact_values = (args.dockerfile, args.target, args.output, args.network)
     if any(value is not None for value in artifact_values):
@@ -563,6 +635,7 @@ def main() -> None:
                             platform=args.platform,
                             metadata=metadata,
                             context=placeholder_context,
+                            public_inputs_sha256=args.shadow_custody_inputs_sha256,
                         ),
                         "metadata": metadata,
                     }
@@ -571,6 +644,8 @@ def main() -> None:
             return
         verify_dependency_cache()
         with private_build_context(metadata) as context:
+            if args.target == NATIVE_PILOT_TARGET:
+                copy_native_pilot_public_inputs(args.shadow_custody_inputs, args.shadow_custody_inputs_sha256, metadata, context)
             command = artifact_build_command(
                 args.dockerfile,
                 args.target,
@@ -579,6 +654,7 @@ def main() -> None:
                 platform=args.platform,
                 metadata=metadata,
                 context=context,
+                public_inputs_sha256=args.shadow_custody_inputs_sha256,
             )
             run(command)
         print(

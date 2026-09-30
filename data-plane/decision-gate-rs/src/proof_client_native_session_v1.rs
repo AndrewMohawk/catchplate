@@ -70,6 +70,7 @@ pub(super) struct NativeCaptureSessionV1 {
     ingress: Option<super::proof_client_native_ingress_v1::NativeIngressAdmission>,
     pub(super) control_plane_key: VerifyingKey,
     collector_key: SigningKey,
+    capture_max_bytes: Option<usize>,
     roots: RootCertStore,
     expected_peer: String,
     inputs: Vec<InputSnapshot>,
@@ -214,6 +215,9 @@ impl NativeCaptureSessionV1 {
         let collector_key = SigningKey::from_pkcs8_pem(
             std::str::from_utf8(&collector_bytes).map_err(|_| "native collector key is not UTF-8")?)
             .map_err(|err| format!("parse native collector key: {err}"))?;
+        if args.expected_collector_key_id.as_ref().is_some_and(|expected| public_key_material(&collector_key).1 != *expected) {
+            return Err("actual collector signer differs from independently supplied key pin".into());
+        }
         let mut inputs = vec![ca_input, cp_input, collector_input, proxy_ca_input,
             proxy_certificate_input, proxy_key_input];
         if let Some(path) = args.request_body.as_deref() {
@@ -222,6 +226,7 @@ impl NativeCaptureSessionV1 {
         }
         let session = Self {
             verifier, ingress, control_plane_key, collector_key, roots, inputs, deadline,
+            capture_max_bytes: args.native_capture_max_bytes,
             owner_pid, outer_endpoint, outer_name, outer_config: Arc::new(outer_config),
             expected_peer: args.expected_server_instance_id.clone()
                 .ok_or("native capture requires expected SPIFFE identity")?,
@@ -340,6 +345,9 @@ impl NativeCaptureSessionV1 {
         let mut payload = serde_json::to_vec_pretty(&artifact)
             .map_err(|err| format!("serialize native capture: {err}"))?;
         payload.push(b'\n');
+        if self.capture_max_bytes.is_some_and(|maximum| payload.len() > maximum) {
+            return Err("actual native capture original exceeds the selected output byte cap; contact cannot be retried".into());
+        }
         self.recheck()?;
         let capture = &artifact["external_capture"];
         let summary = json!({

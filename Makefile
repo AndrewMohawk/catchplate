@@ -1309,6 +1309,14 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	scripts/package_native_shadow_verifier_runtime.py \
 	scripts/package_native_shadow_time_runtime.py \
 	scripts/package_native_shadow_custody_runtime.py \
+	scripts/package_native_setup_issuers_runtime.py \
+	scripts/build_native_pilot_artifacts.py \
+	ops/native-setup-issuers/serverware-setup-native-final.conf \
+	ops/native-setup-issuers/serverware-setup-native-final.service \
+	ops/native-setup-issuers/serverware-setup-native-hardware.conf \
+	ops/native-setup-issuers/serverware-setup-native-hardware.service \
+	ops/native-setup-issuers/serverware-setup-native-proxy.conf \
+	ops/native-setup-issuers/serverware-setup-native-proxy.service \
 	scripts/prepare_native_role_keys.py \
 	scripts/seal_native_service_tokens.py \
 	scripts/sign_native_guest_credential_delivery.py \
@@ -1468,6 +1476,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/portal_setup_native_ca.py \
 	serverware/portal_setup_native_canary.py \
 	serverware/portal_setup_native_runtime.py \
+	serverware/native_setup_runtime_collector.py \
 	serverware/authority_policy_candidate_evidence.py \
 	serverware/authority_policy_canary_native_opening.py \
 	serverware/authority_policy_canary_native_runtime.py \
@@ -3943,6 +3952,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				scripts/package_native_shadow_verifier_runtime.py \
 				scripts/package_native_shadow_time_runtime.py \
 				scripts/package_native_shadow_custody_runtime.py \
+				scripts/package_native_setup_issuers_runtime.py \
+				scripts/build_native_pilot_artifacts.py \
 				scripts/prepare_native_role_keys.py \
 				scripts/seal_native_service_tokens.py \
 				scripts/sign_native_guest_credential_delivery.py \
@@ -4102,6 +4113,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/portal_setup_native_ca.py \
 				serverware/portal_setup_native_canary.py \
 				serverware/portal_setup_native_runtime.py \
+				serverware/native_setup_runtime_collector.py \
 				serverware/authority_policy_candidate_evidence.py \
 				serverware/authority_policy_canary_native_opening.py \
 				serverware/authority_policy_canary_native_runtime.py \
@@ -4556,6 +4568,12 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/native_setup_hardware.rs \
 				data-plane/decision-gate-rs/src/native_setup_hardware_v1.rs \
 				data-plane/decision-gate-rs/src/bin/serverware-native-generation-origin-issuer.rs \
+				data-plane/decision-gate-rs/src/bin/serverware-native-setup-hardware.rs \
+				data-plane/decision-gate-rs/src/bin/serverware-native-setup-proxy.rs \
+				data-plane/decision-gate-rs/src/bin/serverware-native-setup-final.rs \
+				data-plane/decision-gate-rs/src/bin/serverware-setup-native-hardware.rs \
+				data-plane/decision-gate-rs/src/bin/serverware-setup-native-proxy.rs \
+				data-plane/decision-gate-rs/src/bin/serverware-setup-native-final.rs \
 				data-plane/decision-gate-rs/src/native_shadow_verifier_runtime_v1/origin_issuer.rs \
 				data-plane/decision-gate-rs/src/native_shadow_verifier_supervisor_v1/origin_issuer.rs \
 				data-plane/decision-gate-rs/src/policy_shadow_native_ingress.rs \
@@ -4604,9 +4622,12 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/native_shadow_verifier_runtime_v1/mounts.rs \
 				data-plane/decision-gate-rs/src/native_shadow_verifier_runtime_v1/time_issuer.rs \
 				data-plane/decision-gate-rs/src/native_shadow_verifier_runtime_v1/originals.rs \
+				data-plane/decision-gate-rs/src/native_shadow_verifier_runtime_v1/setup_issuer.rs \
 				data-plane/decision-gate-rs/src/native_shadow_verifier_supervisor_v1.rs \
 				data-plane/decision-gate-rs/src/native_shadow_verifier_supervisor_v1/child.rs \
 				data-plane/decision-gate-rs/src/native_shadow_verifier_supervisor_v1/inputs.rs \
+				data-plane/decision-gate-rs/src/native_shadow_verifier_supervisor_v1/setup_installed.rs \
+				data-plane/decision-gate-rs/src/native_shadow_verifier_supervisor_v1/setup_issuer.rs \
 				data-plane/decision-gate-rs/src/native_shadow_verifier_supervisor_v1/time_inputs.rs \
 				data-plane/decision-gate-rs/src/native_shadow_verifier_supervisor_v1/time_issuer.rs \
 				data-plane/decision-gate-rs/src/native_shadow_verifier_supervisor_v1/exchange.rs \
@@ -4786,6 +4807,12 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/coder-test-runner.sh \
 				ops/systemd/serverware-launch-authority-relay.service \
 				ops/systemd/serverware-launch-authority-relay.socket \
+				ops/native-setup-issuers/serverware-setup-native-hardware.conf \
+				ops/native-setup-issuers/serverware-setup-native-hardware.service \
+				ops/native-setup-issuers/serverware-setup-native-proxy.conf \
+				ops/native-setup-issuers/serverware-setup-native-proxy.service \
+				ops/native-setup-issuers/serverware-setup-native-final.conf \
+				ops/native-setup-issuers/serverware-setup-native-final.service \
 				schemas/production-launch-manifest.v3.schema.json \
 				schemas/native-ingress-client.v3.schema.json \
 				schemas/native-ingress-session-evidence.v2.schema.json \
@@ -4998,6 +5025,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/setup-native-ca-installation.v1.schema.json \
 				schemas/setup-native-canary.v1.schema.json \
 				schemas/setup-native-runtime.v1.schema.json \
+				schemas/setup-native-runtime-collector.v1.schema.json \
 				schemas/native-oauth-measured-setup.v1.schema.json \
 				schemas/native-oauth-measured-reconnect.v1.schema.json \
 				schemas/native-oauth-retired-scope-succession.v1.schema.json \
@@ -5046,6 +5074,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/release-completion-result-signing-request.v1.schema.json \
 				schemas/release-completion-result-signing-response.v1.schema.json \
 				production-dependencies/prefetch.py \
+				production-dependencies/prepare_snapshot.py \
+				production-dependencies/prepare_rust_vendor.py \
 				production-dependencies/native-broker-linux-amd64.sha256 \
 				scripts/discard_headers_parity.v1.json \
 				scripts/oci_lane_entrypoint.py \
@@ -9148,6 +9178,23 @@ verify-production-agent-enrollment-evidence:
 
 build-production-images: verify-production-dependency-cache
 	python3 scripts/build_production_images.py --platform "$(PRODUCTION_PLATFORM)" --out "$(PRODUCTION_IMAGES_BUILD_FILE)"
+
+# Build/preparation only: fixed native effects profiles, no signing or launch.
+.PHONY: prepare-native-pilot-build build-native-pilot-artifacts
+NATIVE_PILOT_OUTPUT ?=
+NATIVE_PILOT_PREPARATION ?=
+NATIVE_PILOT_PUBLIC_INPUTS ?=
+NATIVE_PILOT_PUBLIC_INPUTS_SHA256 ?=
+
+prepare-native-pilot-build:
+	@test -n "$(NATIVE_PILOT_OUTPUT)" || { echo "NATIVE_PILOT_OUTPUT must name a new absolute directory on the build filesystem" >&2; exit 2; }
+	python3 scripts/build_native_pilot_artifacts.py prepare --out "$(NATIVE_PILOT_OUTPUT)"
+
+build-native-pilot-artifacts:
+	@test -n "$(NATIVE_PILOT_OUTPUT)" && test -n "$(NATIVE_PILOT_PREPARATION)" && test -n "$(NATIVE_PILOT_PUBLIC_INPUTS)" && test -n "$(NATIVE_PILOT_PUBLIC_INPUTS_SHA256)" || { echo "all four NATIVE_PILOT_* paths/pins are required; prepare first and obtain independent public guest inputs" >&2; exit 2; }
+	python3 scripts/build_native_pilot_artifacts.py build --out "$(NATIVE_PILOT_OUTPUT)" \
+		--preparation "$(NATIVE_PILOT_PREPARATION)" --public-inputs "$(NATIVE_PILOT_PUBLIC_INPUTS)" \
+		--public-inputs-sha256 "$(NATIVE_PILOT_PUBLIC_INPUTS_SHA256)"
 
 publish-production-images:
 	@if [ -z "$(PRODUCTION_IMAGE_REGISTRY_PREFIX)" ]; then echo "PRODUCTION_IMAGE_REGISTRY_PREFIX is required, for example registry.prod.serverware.dev/serverware" >&2; exit 2; fi

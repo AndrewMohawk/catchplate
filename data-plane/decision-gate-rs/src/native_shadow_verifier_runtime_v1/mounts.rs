@@ -12,7 +12,10 @@ struct OpenHow { flags: u64, mode: u64, resolve: u64 }
 fn fixed(root: &File, name: &'static str, directory: bool) -> Result<File, String> {
     ensure(matches!(name, "/proc" | "/etc/serverware/native-shadow-nitro-verifier.json"
         | "/etc/serverware/native-shadow-guest-time-issuer.json"
-        | "/etc/serverware/native-generation-origin-issuer.json"), "verifier mount target differs")?;
+        | "/etc/serverware/native-generation-origin-issuer.json"
+        | "/etc/serverware/setup-native-hardware-verifier.json"
+        | "/etc/serverware/setup-native-proxy-verifier.json"
+        | "/etc/serverware/setup-native-final-authority.json"), "verifier mount target differs")?;
     let name = CString::new(name).unwrap();
     let how = OpenHow { flags: (libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW
         | if directory { libc::O_DIRECTORY } else { 0 }) as u64, mode: 0, resolve: 0x10 | 2 | 4 };
@@ -104,6 +107,9 @@ impl Mounts {
             Profile::Verifier => b"serverware-native-shadow-verifier\0",
             Profile::TimeIssuer => b"serverware-native-shadow-time-issuer\0",
             Profile::OriginIssuer => b"serverware-native-generation-origin-issuer\0",
+            Profile::Setup(super::setup_issuer::Role::Hardware) => b"serverware-setup-native-hardware-verifier\0",
+            Profile::Setup(super::setup_issuer::Role::Proxy) => b"serverware-setup-native-proxy-verifier\0",
+            Profile::Setup(super::setup_issuer::Role::Final) => b"serverware-setup-native-final-authority\0",
         };
         let configuration_path = profile.configuration_path();
         within(issued, deadline)?;

@@ -116,6 +116,8 @@ struct Args {
     body_out: Option<PathBuf>,
     request_body: Option<PathBuf>,
     collector_key: PathBuf,
+    expected_collector_key_id: Option<String>,
+    native_capture_max_bytes: Option<usize>,
     verifier_key: Option<PathBuf>,
     native_verifier: Option<NativeVerifierConfigV1>,
     policy_aware: Option<PolicyAwareExpectations>,
@@ -405,6 +407,8 @@ where
     let mut body_out = None;
     let mut request_body = None;
     let mut collector_key = None;
+    let mut expected_collector_key_id = None;
+    let mut native_capture_max_bytes = None;
     let mut verifier_key = None;
     let mut native_options = BTreeMap::new();
     let mut policy_options = BTreeMap::new();
@@ -460,6 +464,22 @@ where
             "--body-out" => body_out = Some(PathBuf::from(value)),
             "--request-body" => request_body = Some(PathBuf::from(value)),
             "--collector-key" => collector_key = Some(PathBuf::from(value)),
+            "--expected-collector-key-id" => {
+                if expected_collector_key_id.is_some() || value.len() != 71
+                    || !value.starts_with("sha256:")
+                    || !value[7..].bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                    || value[7..].bytes().all(|byte| byte == b'0') {
+                    return Err("--expected-collector-key-id requires one nonzero lowercase SHA-256 pin".into());
+                }
+                expected_collector_key_id = Some(value);
+            }
+            "--native-capture-max-bytes" => {
+                let maximum = value.parse::<usize>().map_err(|_| "native capture byte cap must be an integer")?;
+                if native_capture_max_bytes.is_some() || !(1..=512 * 1024).contains(&maximum) {
+                    return Err("--native-capture-max-bytes requires one value in 1..524288".into());
+                }
+                native_capture_max_bytes = Some(maximum);
+            }
             "--verifier-key" => verifier_key = Some(PathBuf::from(value)),
             "--native-verifier" | "--native-verifier-sha256"
             | "--native-expectations" | "--native-expectations-sha256"
@@ -726,6 +746,9 @@ where
             opened_at.checked_add(Duration::from_secs(timeout_seconds)).ok_or("policy-aware deadline overflow")?,
             &expected_principal_id, expected_server_instance_id.as_deref(), &control_plane_key_id)?)
     };
+    if (expected_collector_key_id.is_some() || native_capture_max_bytes.is_some()) && native_verifier.is_none() {
+        return Err("collector pin and native capture cap require explicit native verification".into());
+    }
     Ok(Args {
         stream,
         observation,
@@ -742,6 +765,8 @@ where
         body_out,
         request_body,
         collector_key: collector_key.ok_or("--collector-key is required")?,
+        expected_collector_key_id,
+        native_capture_max_bytes,
         verifier_key,
         native_verifier,
         policy_aware,

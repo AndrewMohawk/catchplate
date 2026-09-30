@@ -70,11 +70,13 @@ finite receiver profile over an existing producer, not full pilot acceptance.
    `runtime_evidence_recorded` and emits its actual audit outbox event.
 
 The new nonce reservation is one-use **evidence consumption**, not authority for
-an upstream action. The existing buffered client does not maintain a durable
-per-Setup no-second-contact journal; an operator can rerun it. This slice does
-not claim exactly one network request, measured collector custody, final client
-delivery, or a generic proxy-ready outcome. An independently pinned local
-attempt owner/caller is required before claiming enforced no-repeat contact.
+an upstream action. The [fixed operator caller](native-pilot-request-collection.md)
+now routes this exact bundle to the real buffered client with a durable local
+per-Setup dispatch fence, original-expiry clipping and exact capture export.
+The old client can still be invoked directly; the fence trusts its host/operator
+and filesystem, not hostile rollback or other hosts. Neither path claims global
+exactly-once requests, measured collector custody, final client delivery, or a
+generic proxy-ready outcome.
 Normal request authorization remains with the real native dispatch owners.
 
 Seconds-valued capture/statement times are treated conservatively as intervals;
@@ -107,7 +109,7 @@ Every response keeps `okForAction`, `automaticRetryAllowed`,
 `nativeHostVerified`, `enrollmentComplete` and `proxyReady` false. Legacy Setup
 phases and receipt issuers are untouched. Next required source includes actual
 native host/hardware completion and independent final Setup receipt authority,
-enforced client contact ownership if claimed, denied-request coverage and the
+global client contact ownership if claimed, denied-request coverage and the
 remaining native effect-service joins. Independent deployment artifacts/keys and
 first connected build plus allowed/denied credential-controlled runtime evidence
 remain separate, unperformed acceptance work.

@@ -55,11 +55,23 @@ pub(crate) struct Original {
     pub(super) file: File, identity: Identity, pub(crate) bytes: Vec<u8>,
 }
 impl Original {
+    pub(super) fn retain(&self) -> Result<Self, String> {
+        self.check()?;
+        let copy = |file: &File| file.try_clone().map_err(|_| "verifier original duplication failed".to_owned());
+        let owner = Self { root:copy(&self.root)?, root_identity:self.root_identity,
+            ancestors:self.ancestors.iter().map(|a| Ok(Ancestor { file:copy(&a.file)?, identity:a.identity, name:a.name.clone() }))
+                .collect::<Result<Vec<_>,String>>()?,
+            leaf:self.leaf.clone(),file:copy(&self.file)?,identity:self.identity,bytes:self.bytes.clone() };
+        owner.check()?; self.check()?; Ok(owner)
+    }
     pub(crate) fn open(name: &'static str, maximum: usize) -> Result<Self, String> {
         ensure(matches!(name, "native-shadow-verifier-launch.json" | "native-shadow-nitro-verifier.json"
             | "native-shadow-verifier-transport.json" | "native-shadow-time-issuer-launch.json"
             | "native-shadow-guest-time-issuer.json" | "native-generation-origin-issuer-launch.json"
-            | "native-generation-origin-issuer.json"),
+            | "native-generation-origin-issuer.json"
+            | "setup-native-hardware-verifier-launch.json" | "setup-native-hardware-verifier.json"
+            | "setup-native-proxy-verifier-launch.json" | "setup-native-proxy-verifier.json"
+            | "setup-native-final-authority-launch.json" | "setup-native-final-authority.json"),
             "verifier original name is not a fixed purpose")?;
         let root = owned(unsafe { libc::open(b"/\0".as_ptr().cast(), libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC) })?;
         protected_directory(root.as_raw_fd())?;
@@ -164,6 +176,14 @@ pub(crate) struct Origin {
     pub(super) boot: String,
 }
 impl Origin {
+    pub(super) fn retain(&self) -> Result<Self, String> {
+        self.check()?;
+        let copy = |file: &File| file.try_clone().map_err(|_| "verifier origin duplication failed".to_owned());
+        let owner=Self { pid:self.pid,start:self.start,pidfd:copy(&self.pidfd)?,pidfd_identity:self.pidfd_identity,
+            time:copy(&self.time)?,time_identity:self.time_identity,pid_namespace:copy(&self.pid_namespace)?,
+            pid_identity:self.pid_identity,boot:self.boot.clone() };
+        owner.check()?; self.check()?; Ok(owner)
+    }
     pub(crate) fn capture() -> Result<Self, String> {
         root_identity()?;
         let pid = unsafe { libc::getpid() };

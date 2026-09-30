@@ -14,7 +14,9 @@ SETUP_NATIVE_RUNTIME_HTML = r"""
                 <button id="setup-native-runtime-download-attempt" type="button" class="secondary" disabled onclick="runUiAction('Download exact runtime attempt', () => setupNativeRuntimeDownload('attempt'))">Attempt original</button>
                 <button id="setup-native-runtime-download-scope" type="button" class="secondary" disabled onclick="runUiAction('Download exact runtime scope', () => setupNativeRuntimeDownload('scope'))">Scope original</button>
                 <button id="setup-native-runtime-download-expectations" type="button" class="secondary" disabled onclick="runUiAction('Download exact native expectations', () => setupNativeRuntimeDownload('expectations'))">Native expectations original</button>
+                <button id="setup-native-runtime-download-bundle" type="button" class="secondary" disabled onclick="runUiAction('Download collector bundle', () => setupNativeRuntimeDownload('bundle'))">Collector bundle + exact digest</button>
               </div>
+              <p class="hint">Operator command: <code>python3 -B -m serverware.native_setup_runtime_collector collect --help</code>. Use the bundle and digest below with independently provisioned collector inputs and one persistent private state directory. The command invokes the real proof client once and retains its original capture; it does not create keys, grant a request, renew this attempt, or upload automatically.</p>
               <label for="setup-native-runtime-capture">Exact nativeResponseCapture/v2 buffered capture file (at most 512 KiB, original whitespace preserved)</label>
               <input id="setup-native-runtime-capture" type="file" accept="application/json,.json" autocomplete="off">
               <button type="button" class="secondary" onclick="runUiAction('Review native runtime capture', setupNativeRuntimeReview)">Review original capture binding</button>
@@ -36,7 +38,7 @@ SETUP_NATIVE_RUNTIME_SCRIPT = r"""
     }
     function setupRuntimeMessage(value) { $('setup-native-runtime-status').textContent = value; }
     function setupRuntimeDownloads(enabled) {
-      ['attempt', 'scope', 'expectations'].forEach(name => { $('setup-native-runtime-download-' + name).disabled = !enabled; });
+      ['attempt', 'scope', 'expectations', 'bundle'].forEach(name => { $('setup-native-runtime-download-' + name).disabled = !enabled; });
     }
     function setupNativeRuntimeClear() {
       setupRuntimeEpoch++; setupRuntimeOperation?.abort(); setupRuntimeBundle = null;
@@ -333,17 +335,22 @@ SETUP_NATIVE_RUNTIME_SCRIPT = r"""
         setupRuntimeMessage('Lookup unavailable or changed. Keep the original attempt; do not infer failure or repeat the collector.'); throw error;
       } finally { operation.close(); }
     }
-    function setupNativeRuntimeDownload(kind) {
+    async function setupNativeRuntimeDownload(kind) {
       const held = setupRuntimeBundle;
       setupRuntimeNeed(!setupEnrollmentBusy && held && setupEnrollmentAuth('requester') === held.actor
         && sessionActivationAuthScope() === held.authScope && $('setup-policy-session').value.trim() === held.session);
       const selected = {attempt: ['setup-native-runtime-attempt.json', held.attemptOriginal],
-        scope: ['setup-native-runtime-scope.json', held.scopeOriginal], expectations: ['setup-native-runtime-expectations.json', held.expectationsOriginal]}[kind];
+        scope: ['setup-native-runtime-scope.json', held.scopeOriginal], expectations: ['setup-native-runtime-expectations.json', held.expectationsOriginal],
+        bundle: ['setup-native-runtime-collector-bundle.json', oauthConsentCanonical({attemptOriginal: held.attemptOriginal,
+          scopeOriginal: held.scopeOriginal, expectationsOriginal: held.expectationsOriginal})]}[kind];
       setupRuntimeNeed(selected);
-      const url = URL.createObjectURL(new Blob([new TextEncoder().encode(selected[1])], {type: 'application/json'}));
+      const bytes = new TextEncoder().encode(selected[1]), digest = await workloadIssuanceHash(bytes);
+      setupRuntimeNeed(!setupEnrollmentBusy && setupRuntimeBundle === held && setupEnrollmentAuth('requester') === held.actor
+        && sessionActivationAuthScope() === held.authScope && $('setup-policy-session').value.trim() === held.session);
+      const url = URL.createObjectURL(new Blob([bytes], {type: 'application/json'}));
       const link = document.createElement('a'); link.href = url; link.download = selected[0];
       try { link.click(); } finally { setTimeout(() => URL.revokeObjectURL(url), 1000); }
-      setupRuntimeMessage('Exact ' + kind + ' download requested for the approved operator workflow. No request has been sent by this page; historical recovery grants neither fresh contact nor retry permission.');
+      setupRuntimeMessage('Exact ' + kind + ' SHA-256: ' + digest + '. No request has been sent by this page; historical recovery grants neither fresh contact nor retry permission.');
     }
     $('setup-policy-session').addEventListener('input', setupNativeRuntimeClear);
     $('setup-native-runtime-capture').addEventListener('change', () => {

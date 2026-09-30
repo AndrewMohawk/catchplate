@@ -1,0 +1,23 @@
+[Unit]
+Description=Independent Serverware native Setup final-authority one-shot
+ConditionPathExists=/etc/serverware/setup-native-final-authority-launch.json
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0077
+ExecStart=/usr/local/libexec/serverware-setup-native-final
+Restart=no
+TimeoutStartSec=35s
+KillMode=control-group
+KillSignal=SIGKILL
+SendSIGKILL=yes
+LimitCORE=0
+StandardInput=null
+StandardOutput=null
+StandardError=null
+
+# No Install section: every attempt is independently authorized and manually
+# started after its ORIGINAL <=30s boot-bound configuration is provisioned.
+# Never enable/restart this unit on failure or treat inactive as issuance proof.

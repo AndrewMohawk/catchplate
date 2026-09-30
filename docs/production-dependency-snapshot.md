@@ -2,15 +2,20 @@
 
 # Preparing an unpublished dependency snapshot
 
-`production-dependencies/prepare_snapshot.py` creates a real candidate wheelhouse
-from the exact committed `requirements.lock`, checks offline installation, and
-carries forward only the unchanged, digest-verified Rust and broker-tool artifacts. It never
+`production-dependencies/prepare_snapshot.py` prepares an unpublished candidate
+from the exact committed Python and Rust locks. It creates the Python wheelhouse
+and checks offline installation. With `--refresh-rust`, it also creates a new
+locked Cargo vendor archive; without that flag, Rust inputs must be unchanged
+and the existing reviewed archive is carried forward. Broker packaging tools
+and musl inputs always retain their reviewed hashes. The producer never
 publishes a snapshot, changes the checkout's reviewed manifests, or grants release
 authority. Its result is local engineering evidence awaiting dependency-owner
 review.
 
 The current lock pins `cryptography==50.0.0`; the Python manifest still refers
-to the old lock and archive. The v2 snapshot identity now reserves the additional
+to the old lock and archive. The committed Cargo inputs also differ from the
+reviewed Rust manifest, so the current source requires `--refresh-rust` and a
+new reviewed vendor archive before an offline build. The v2 snapshot identity reserves the additional
 broker packaging inputs; it is not evidence that a v2 snapshot exists. Updating
 the identity or manifest without producing and reviewing new wheel bytes does
 not resolve the handoff requirement.
@@ -20,28 +25,33 @@ not resolve the handoff requirement.
 Freeze a clean commit containing the producer and its reviewed changes first.
 The producer records and rechecks the full commit/tree identity, source input
 bytes, and its own code. Its pinned Python image must match the production
-`python-deps` Dockerfile stage and must already be available as Linux/amd64. Run
+`python-deps` Dockerfile stage and must already be available as Linux/amd64.
+Rust refresh additionally requires the exact pinned Rust build image from the
+data-plane Dockerfile to be present locally. Neither producer pulls images. Run
 as an unprivileged operator on an approved preparation host with Docker access.
 This tool does not provision the restricted Coder controller or give a workload
 a host Docker socket.
 
 Use a new candidate directory on NVMe outside the checkout. The tool requires
 4 GiB free and refuses existing outputs, checkout descendants, and root-backed
-`/tmp`. Its two fixed containers each have one CPU, 2 GiB memory, 128 PIDs, a
+`/tmp`. Its two fixed Python containers each have one CPU, 2 GiB memory, 128 PIDs, a
 read-only root, no capabilities, no new privileges, and a 1400-second deadline.
 Bulky downloads, unpacking, and installation use a bounded 1536 MiB container
 tmpfs; only archives, logs, and reports persist on the selected filesystem.
 
-The existing cache can supply the three reviewed Rust inputs:
+The existing cache supplies the reviewed musl and broker-tool inputs. When Rust
+refresh is omitted, it must also supply the unchanged reviewed vendor archive:
 
 ```text
 /home/catchplate/codex-offload/serverware/current/production-dependencies/cache
 ```
 
 The directory's location and filenames do not prove integrity. The producer
-checks copied bytes against the current committed Rust manifest before starting
-network work, verifies the Cargo archive structure, and rejects changed Cargo
-inputs. It never reads or reuses that directory's Python wheelhouse. That input
+checks copied bytes against the current committed manifests before starting
+network work. By default it verifies the old Cargo archive and rejects changed
+Cargo inputs; `--refresh-rust` skips that archive entirely and obtains the exact
+locked crates in a separate bounded preparation container. It never reads or
+reuses that directory's Python wheelhouse. That input
 directory must also supply the exact `squashfs-tools_4.5.1-1_amd64.deb` and
 `liblzo2-2_2.10-2_amd64.deb` bytes named by the new broker manifest. The
 dependency owner acquires those from Debian before candidate preparation;
@@ -66,16 +76,20 @@ git rev-parse 'HEAD^{tree}'
 
 docker pull --platform linux/amd64 \
   python:3.11-slim-bookworm@sha256:0030323c9ce4d6dfab5f0812577cb0abd13c806f86b3a1f5b5d8f200ebb1421c
+docker pull --platform linux/amd64 \
+  rust:1.88-slim-bookworm@sha256:38bc5a86d998772d4aec2348656ed21438d20fcdce2795b56ca434cf21430d89
 
 snapshot_workdir="$(mktemp -d /srv/catchplate-fast/tmp/serverware-dependency-candidate.XXXXXX)"
 python3 -B production-dependencies/prepare_snapshot.py \
   --expected-commit '<full-frozen-commit-id>' \
   --existing-cache /home/catchplate/codex-offload/serverware/current/production-dependencies/cache \
   --snapshot-id serverware-production-dependencies-linux-amd64-v3 \
+  --refresh-rust \
   --output "$snapshot_workdir/candidate"
 ```
 
-Only the download container has networking. Its fixed pip command uses the public
+Only the dependency-download phases have networking. The Python download
+container's fixed pip command uses the public
 PyPI index, exact hashes, binary wheels, no cache, and no inherited pip settings.
 The producer rejects unpinned requirements, URLs, index overrides, missing or
 extra wheel packages, unexpected versions, and wheel bytes absent from the lock.
@@ -95,6 +109,25 @@ uses that same directory for pip installation, inventory checks, and imports.
 Verification splits the 1536 MiB tmpfs budget into 1024 MiB for `/tmp` and 512 MiB
 for `/installed`; download keeps the full 1536 MiB on `/tmp`. Both containers
 retain the 2 GiB memory limit, disabled extra swap, and one-CPU/PID/time bounds.
+
+Rust refresh uses `cargo vendor --locked --versioned-dirs` from the captured
+Cargo inputs. The [Cargo vendor command](https://doc.rust-lang.org/cargo/commands/cargo-vendor.html)
+supports this locked, versioned directory output without compiling the project.
+The producer accepts only the locked crates.io package set, checks the package
+checksums and vendored file hashes, and packages the verified files with fixed
+ordering and normalized archive metadata. It does not run project builds,
+dependency build scripts, or tests, and does not read host Cargo credentials or
+mount the repository's unrelated files. The ordinary archive verifier then
+checks the resulting candidate against the newly measured digest. These local
+integrity checks do not replace dependency-owner review or an actual build.
+
+The Rust refresh helper additionally requires 12 GiB free before starting. Its
+fixed downloader has one CPU, 5 GiB memory, 64 PIDs and separate 2 GiB tmpfs
+limits for Cargo's cache and vendor output. No host-writable directory is
+mounted into it. A capped 4 GiB transfer is verified and unpacked offline; the
+verified vendor tree is limited to 2 GiB and the final archive to 1 GiB, under
+the existing 250,000-member ceiling and an original 1500-second allowance.
+These are preparation limits, not extra permissions for project execution.
 
 ## Candidate output and review
 
@@ -119,12 +152,15 @@ candidate/
       liblzo2-2_2.10-2_amd64.deb
 ```
 
-All three proposed manifests identify the same new snapshot. Rust and broker-tool hashes remain the
-reviewed values; the Python descriptor binds the captured lock and newly created
-archive. Before reporting success, the normal dependency verifier checks the
+All three proposed manifests identify the same new snapshot. Musl and broker-tool
+hashes remain the reviewed values; the Python descriptor binds the captured lock
+and newly created archive. With Rust refresh, the Rust descriptor binds the
+captured Cargo inputs and the newly measured vendor archive; without it, all
+Rust hashes remain unchanged. Before reporting success, the normal dependency verifier checks the
 complete staged snapshot. The report records builder image identity, source
 commit/tree, captured input hashes, wheel inventory, offline validation, carried
-artifact hashes, and all proposed manifest hashes. `published`,
+artifact hashes, Rust preparation mode and inventory when refreshed, and all
+proposed manifest hashes. `published`,
 `reviewed_pins_installed`, and `production_release_authority` remain `false` even
 on success.
 

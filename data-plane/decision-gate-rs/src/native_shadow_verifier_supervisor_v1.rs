@@ -7,6 +7,8 @@ mod transport;
 mod time_inputs;
 mod time_issuer;
 mod origin_issuer;
+mod setup_issuer;
+mod setup_installed;
 mod watchdog;
 #[path = "native_verifier/json.rs"]
 mod json;
@@ -220,7 +222,11 @@ fn execute(admission: RuntimeAdmission, inputs: &inputs::Inputs, watch: &Watchdo
     -> Result<Vec<u8>, String> {
     // The same protected admission survives across watchdog arming. No copied
     // deadline/configuration can create a fresh image/root operation.
-    let purpose=admission.result_purpose()?;
+    let profile = admission.profile();
+    let purpose = match profile {
+        crate::native_shadow_verifier_runtime_v1::Profile::Setup(_) => None,
+        _ => Some(admission.result_purpose()?),
+    };
     let mut runtime = admission.prepare()?;
     watch.check()?; runtime.check()?; inputs.check()?;
     let (result_read,result_write) = pipe()?;
@@ -228,8 +234,13 @@ fn execute(admission: RuntimeAdmission, inputs: &inputs::Inputs, watch: &Watchdo
     nonblocking(result_read.as_raw_fd())?; nonblocking(gate_write.as_raw_fd())?;
     let child = {
         let inheritance = runtime.inheritance()?;
-        child::PreparedChild::prepare(&inheritance,inputs.seed(),inputs.evidence(),
-            result_write.as_fd(),gate_read.as_fd())?
+        if matches!(profile, crate::native_shadow_verifier_runtime_v1::Profile::Setup(_)) {
+            child::PreparedChild::prepare_setup(&inheritance,inputs.seed(),inputs.evidence(),
+                result_write.as_fd(),gate_read.as_fd())?
+        } else {
+            child::PreparedChild::prepare(&inheritance,inputs.seed(),inputs.evidence(),
+                result_write.as_fd(),gate_read.as_fd())?
+        }
     };
     // Every failure after inheritance ends this one-shot supervisor process.
     // No caller-supplied no-child cancellation authorizes mount reuse.
@@ -247,7 +258,10 @@ fn execute(admission: RuntimeAdmission, inputs: &inputs::Inputs, watch: &Watchdo
         release_gate(gate_write.as_raw_fd(),watch)?;
         drop(gate_write);
         let raw = collect(&owner,inputs,result_read.as_raw_fd(),watch)?;
-        result_shape(&raw,purpose)?;
+        match profile {
+            crate::native_shadow_verifier_runtime_v1::Profile::Setup(role) => setup_issuer::shape(&raw,role)?,
+            _ => result_shape(&raw,purpose.ok_or("verifier result purpose absent")?)?,
+        }
         owner.check_after_exit()?; inputs.check()?; watch.check()?;
         Ok::<_,String>(raw)
     })();
@@ -291,3 +305,9 @@ pub fn run_transport() -> ! { transport::run() }
 pub fn run_time_issuer() -> ! { time_issuer::run() }
 /// Independent origin authority only; not installed in the claimant image.
 pub fn run_origin_issuer() -> ! { origin_issuer::run() }
+pub fn run_setup_hardware() -> ! { setup_issuer::run(crate::native_shadow_verifier_runtime_v1::setup_issuer::Role::Hardware) }
+pub fn run_setup_proxy() -> ! { setup_issuer::run(crate::native_shadow_verifier_runtime_v1::setup_issuer::Role::Proxy) }
+pub fn run_setup_final() -> ! { setup_issuer::run(crate::native_shadow_verifier_runtime_v1::setup_issuer::Role::Final) }
+pub fn run_installed_setup_hardware() -> ! { setup_installed::run(crate::native_shadow_verifier_runtime_v1::setup_issuer::Role::Hardware) }
+pub fn run_installed_setup_proxy() -> ! { setup_installed::run(crate::native_shadow_verifier_runtime_v1::setup_issuer::Role::Proxy) }
+pub fn run_installed_setup_final() -> ! { setup_installed::run(crate::native_shadow_verifier_runtime_v1::setup_issuer::Role::Final) }

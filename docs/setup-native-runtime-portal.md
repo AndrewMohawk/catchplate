@@ -14,6 +14,8 @@ The native Setup page adds one explicit workflow after native-canary association
 2. A fresh passkey precedes the one `prepare` call. A nonsecret marker is retained
    in sessionStorage before its dispatch. The exact returned attempt/scope/native
    expectations strings are byte-preserved and available as separate downloads.
+   The collector-bundle download preserves the same three original strings and
+   displays its exact SHA-256 for the [fixed one-shot operator command](native-pilot-request-collection.md).
    Review the target before any independently authorized operator proxy action.
 3. The operator imports the actual buffered `nativeResponseCapture/v2` file,
    at most 512 KiB. The browser rejects duplicate keys and unsupported outer
@@ -36,9 +38,10 @@ protected server-side attempt is the one-use CAS and survives browser loss.
 The page never contacts the proxy, creates a collector key, signs a receipt,
 executes an installer or treats downloaded expectations as new trust authority.
 One-use evidence consumption is not enforced single upstream contact. The
-existing proof client can be rerun, so a separately pinned local contact owner
-remains required before claiming a no-repeat network guarantee. Historical
-downloads are not permission to repeat an uncertain request.
+existing proof client can be rerun directly. The fixed command now provides a
+host-local durable per-Setup fence; it is not global replay custody or protection
+against an operator bypassing/resetting it. Historical downloads are not
+permission to repeat an uncertain request.
 
 Every accepted response preserves `okForAction`, `automaticRetryAllowed`,
 `nativeHostVerified`, `enrollmentComplete` and `proxyReady` as false. The exact

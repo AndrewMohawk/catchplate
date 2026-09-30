@@ -98,6 +98,12 @@ impl Workspace {
             (b"serverware-native-shadow-time-issuer\0", "/run/serverware-native-shadow-time-issuer")
         } else if matches!(purpose, Purpose::ExternalGenerationOriginIssuer) {
             (b"serverware-native-generation-origin-issuer\0", "/run/serverware-native-generation-origin-issuer")
+        } else if matches!(purpose, Purpose::ExternalSetupHardware) {
+            (b"serverware-setup-native-hardware-verifier\0", "/run/serverware-setup-native-hardware-verifier")
+        } else if matches!(purpose, Purpose::ExternalSetupProxy) {
+            (b"serverware-setup-native-proxy-verifier\0", "/run/serverware-setup-native-proxy-verifier")
+        } else if matches!(purpose, Purpose::ExternalSetupFinal) {
+            (b"serverware-setup-native-final-authority\0", "/run/serverware-setup-native-final-authority")
         } else { (b"serverware-native-broker\0", "/run/serverware-native-broker") };
         let result = unsafe { libc::mkdirat(run.as_raw_fd(), name.as_ptr().cast(), 0o700) };
         ensure(result == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EEXIST),
@@ -141,7 +147,8 @@ impl Drop for Workspace {
 
 // Closed source purposes share only immutable image custody, never a child,
 // key, serving phase or caller-selected executable/helper path.
-pub(crate) enum Purpose { Broker, RoleKeyProvisioner, ShadowCustody, ShadowKeyDelivery, ExternalShadowVerifier, ExternalShadowTimeIssuer, ExternalGenerationOriginIssuer }
+pub(crate) enum Purpose { Broker, RoleKeyProvisioner, ShadowCustody, ShadowKeyDelivery, ExternalShadowVerifier, ExternalShadowTimeIssuer, ExternalGenerationOriginIssuer,
+    ExternalSetupHardware, ExternalSetupProxy, ExternalSetupFinal }
 impl Purpose {
     fn paths(&self) -> (&'static str, &'static str, &'static str) {
         match self {
@@ -161,6 +168,12 @@ impl Purpose {
             Self::ExternalGenerationOriginIssuer => (crate::native_shadow_verifier_runtime_v1::ORIGIN_IMAGE_PATH,
                 crate::native_shadow_verifier_runtime_v1::INTERPRETER_PATH,
                 crate::native_shadow_verifier_runtime_v1::ORIGIN_ENTRYPOINT_PATH),
+            Self::ExternalSetupHardware => ("/opt/serverware/setup-native-hardware-verifier-runtime.squashfs",
+                INTERPRETER_PATH, "/opt/serverware/scripts/verify_native_setup_hardware.py"),
+            Self::ExternalSetupProxy => ("/opt/serverware/setup-native-proxy-verifier-runtime.squashfs",
+                INTERPRETER_PATH, "/opt/serverware/scripts/verify_native_setup_proxy.py"),
+            Self::ExternalSetupFinal => ("/opt/serverware/setup-native-final-authority-runtime.squashfs",
+                INTERPRETER_PATH, "/opt/serverware/scripts/issue_native_setup_final.py"),
         }
     }
 }

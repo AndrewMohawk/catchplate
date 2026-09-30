@@ -143,6 +143,8 @@ RUN --network=none cargo build --release --frozen \
         --bin serverware-native-shadow-verifier-transport \
         --bin serverware-native-shadow-time-issuer \
         --bin serverware-native-generation-origin-issuer \
+        --bin serverware-native-setup-hardware --bin serverware-native-setup-proxy --bin serverware-native-setup-final \
+        --bin serverware-setup-native-hardware --bin serverware-setup-native-proxy --bin serverware-setup-native-final \
         --bin serverware-native-parent-relay --bin serverware-native-parent-ingress \
     && test "$(readelf -l /src/target/release/serverware-production-launcher | grep -c INTERP)" -eq 0 \
     && test "$(readelf -d /src/target/release/serverware-production-launcher | grep -c NEEDED)" -eq 0 \
@@ -193,7 +195,13 @@ RUN --network=none cargo build --release --frozen \
     && test "$(stat -c %s /src/target/release/serverware-native-shadow-time-issuer)" -le 67108864 \
     && test "$(readelf -l /src/target/release/serverware-native-generation-origin-issuer | grep -c INTERP)" -eq 0 \
     && test "$(readelf -d /src/target/release/serverware-native-generation-origin-issuer | grep -c NEEDED)" -eq 0 \
-    && test "$(stat -c %s /src/target/release/serverware-native-generation-origin-issuer)" -le 67108864
+    && test "$(stat -c %s /src/target/release/serverware-native-generation-origin-issuer)" -le 67108864 \
+    && for binary in serverware-native-setup-hardware serverware-native-setup-proxy serverware-native-setup-final \
+        serverware-setup-native-hardware serverware-setup-native-proxy serverware-setup-native-final; do \
+        test "$(readelf -l /src/target/release/$binary | grep -c INTERP)" -eq 0 || exit 1; \
+        test "$(readelf -d /src/target/release/$binary | grep -c NEEDED)" -eq 0 || exit 1; \
+        test "$(stat -c %s /src/target/release/$binary)" -le 67108864 || exit 1; \
+    done
 
 FROM scratch AS production-launcher-artifact
 COPY --from=launcher-build /src/target/release/serverware-production-launcher /serverware-production-launcher
@@ -310,6 +318,35 @@ RUN --network=none python -I -B /source/scripts/package_native_generation_origin
 FROM scratch AS native-generation-origin-issuer-runtime-artifact
 COPY --from=native-generation-origin-issuer-runtime /generation-origin-issuer-output /generation-origin-issuer-output
 
+# Separate independently operated Setup authorities. Source-fixed entrypoints,
+# offline locked closure; never COPY these artifacts into a claimant target.
+FROM native-python-runtime-build AS native-setup-issuers-runtime
+RUN --network=none python -I -B /source/scripts/package_native_setup_issuers_runtime.py
+
+FROM scratch AS native-setup-hardware-artifact
+COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-native-setup-hardware /usr/local/libexec/serverware-native-setup-hardware
+COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-setup-native-hardware /usr/local/libexec/serverware-setup-native-hardware
+COPY --from=native-setup-issuers-runtime /setup-issuers-output/setup-native-hardware-verifier/setup-native-hardware-verifier-runtime.squashfs /opt/serverware/setup-native-hardware-verifier-runtime.squashfs
+COPY --from=native-setup-issuers-runtime /setup-issuers-output/setup-native-hardware-verifier/setup-native-hardware-verifier-runtime.json /usr/share/serverware/setup-native-hardware-verifier-runtime.json
+COPY --from=build --chown=0:0 --chmod=0444 /source/ops/native-setup-issuers/serverware-setup-native-hardware.service /usr/lib/systemd/system/serverware-setup-native-hardware.service
+COPY --from=build --chown=0:0 --chmod=0444 /source/ops/native-setup-issuers/serverware-setup-native-hardware.conf /usr/lib/tmpfiles.d/serverware-setup-native-hardware.conf
+
+FROM scratch AS native-setup-proxy-artifact
+COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-native-setup-proxy /usr/local/libexec/serverware-native-setup-proxy
+COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-setup-native-proxy /usr/local/libexec/serverware-setup-native-proxy
+COPY --from=native-setup-issuers-runtime /setup-issuers-output/setup-native-proxy-verifier/setup-native-proxy-verifier-runtime.squashfs /opt/serverware/setup-native-proxy-verifier-runtime.squashfs
+COPY --from=native-setup-issuers-runtime /setup-issuers-output/setup-native-proxy-verifier/setup-native-proxy-verifier-runtime.json /usr/share/serverware/setup-native-proxy-verifier-runtime.json
+COPY --from=build --chown=0:0 --chmod=0444 /source/ops/native-setup-issuers/serverware-setup-native-proxy.service /usr/lib/systemd/system/serverware-setup-native-proxy.service
+COPY --from=build --chown=0:0 --chmod=0444 /source/ops/native-setup-issuers/serverware-setup-native-proxy.conf /usr/lib/tmpfiles.d/serverware-setup-native-proxy.conf
+
+FROM scratch AS native-setup-final-artifact
+COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-native-setup-final /usr/local/libexec/serverware-native-setup-final
+COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-setup-native-final /usr/local/libexec/serverware-setup-native-final
+COPY --from=native-setup-issuers-runtime /setup-issuers-output/setup-native-final-authority/setup-native-final-authority-runtime.squashfs /opt/serverware/setup-native-final-authority-runtime.squashfs
+COPY --from=native-setup-issuers-runtime /setup-issuers-output/setup-native-final-authority/setup-native-final-authority-runtime.json /usr/share/serverware/setup-native-final-authority-runtime.json
+COPY --from=build --chown=0:0 --chmod=0444 /source/ops/native-setup-issuers/serverware-setup-native-final.service /usr/lib/systemd/system/serverware-setup-native-final.service
+COPY --from=build --chown=0:0 --chmod=0444 /source/ops/native-setup-issuers/serverware-setup-native-final.conf /usr/lib/tmpfiles.d/serverware-setup-native-final.conf
+
 # Explicit static claimant image only. These public inputs must be independently
 # supplied and pinned; no keys, boot delivery, verifier policy or time authority.
 # The ordinary native-enclave target below does not select this profile.
@@ -385,6 +422,18 @@ COPY --from=build --chown=65532:65532 --chmod=0755 /runtime-layout/serverware-cu
 USER nonroot:nonroot
 EXPOSE 9090
 ENTRYPOINT ["/usr/local/bin/serverware-decision-gate"]
+
+# Fixed pilot export only: actual guest/cohort executables and the existing
+# six-file public claimant image. No issuer, key, C9 grant or live config is
+# copied here. The ordinary five service binaries remain in the separately
+# built production gate image with their real shared-library closure.
+FROM scratch AS native-pilot-artifacts
+COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-policy-shadow-custody-guest /native-install/usr/local/bin/serverware-policy-shadow-custody-guest
+COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-native-shadow-proof-cohort /native-install/opt/serverware/serverware-native-shadow-proof-cohort
+COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-native-shadow-guest-supervisor /native-install/opt/serverware/serverware-native-shadow-guest-supervisor
+COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-native-shadow-worker /native-install/usr/local/bin/serverware-native-shadow-worker
+COPY --from=native-shadow-custody-runtime --chown=0:0 --chmod=0444 /shadow-custody-output/native-shadow-custody-runtime.squashfs /native-install/opt/serverware/native-shadow-custody-runtime.squashfs
+COPY --from=native-shadow-custody-runtime --chown=0:0 --chmod=0444 /shadow-custody-output/native-shadow-custody-runtime.json /native-install/usr/share/serverware/native-shadow-custody-runtime.json
 
 FROM production-decision-gate AS native-enclave
 COPY --from=native-broker-runtime --chown=0:0 --chmod=0444 /broker-output/native-broker-runtime.squashfs /opt/serverware/native-broker-runtime.squashfs

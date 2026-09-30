@@ -11,7 +11,7 @@ from serverware import authority_oauth_retirement_succession_catalog as retireme
 from serverware.authority_query_read_work import _ValidationWork
 
 
-SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.348"
+SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.349"
 SCHEMA_VERSION = 9
 CONTRACT_SCHEMA = "serverware.policyAuthorityOperationContract/v3"
 BUSINESS_INTENT_SCHEMA = "serverware.policyAuthorityBusinessIntent/v2"

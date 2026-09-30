@@ -3,6 +3,7 @@ pub(crate) mod originals;
 mod mounts;
 mod time_issuer;
 mod origin_issuer;
+pub(crate) mod setup_issuer;
 #[path = "native_verifier/json.rs"]
 mod json;
 use crate::native_response_profile_v1::canonical_ascii_bytes;
@@ -21,20 +22,22 @@ pub(crate) const TIME_ENTRYPOINT_PATH: &str = "/opt/serverware/scripts/issue_nat
 pub(crate) const ORIGIN_IMAGE_PATH: &str = "/opt/serverware/native-generation-origin-issuer-runtime.squashfs";
 pub(crate) const ORIGIN_ENTRYPOINT_PATH: &str = "/opt/serverware/scripts/issue_native_generation_origin.py";
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Profile { Verifier, TimeIssuer, OriginIssuer }
+pub(crate) enum Profile { Verifier, TimeIssuer, OriginIssuer, Setup(setup_issuer::Role) }
 impl Profile {
     fn configuration_path(self) -> &'static str {
         match self { Self::Verifier => "/etc/serverware/native-shadow-nitro-verifier.json",
             Self::TimeIssuer => "/etc/serverware/native-shadow-guest-time-issuer.json",
-            Self::OriginIssuer => "/etc/serverware/native-generation-origin-issuer.json" }
+            Self::OriginIssuer => "/etc/serverware/native-generation-origin-issuer.json",
+            Self::Setup(role) => role.configuration_path() }
     }
     pub(crate) fn entrypoint(self) -> &'static str {
         match self { Self::Verifier => ENTRYPOINT_PATH, Self::TimeIssuer => TIME_ENTRYPOINT_PATH,
-            Self::OriginIssuer => ORIGIN_ENTRYPOINT_PATH }
+            Self::OriginIssuer => ORIGIN_ENTRYPOINT_PATH, Self::Setup(role) => role.entrypoint() }
     }
     fn image_purpose(self) -> Purpose {
         match self { Self::Verifier => Purpose::ExternalShadowVerifier, Self::TimeIssuer => Purpose::ExternalShadowTimeIssuer,
-            Self::OriginIssuer => Purpose::ExternalGenerationOriginIssuer }
+            Self::OriginIssuer => Purpose::ExternalGenerationOriginIssuer,
+            Self::Setup(role) => role.image_purpose() }
     }
 }
 fn ensure(value: bool, message: &str) -> Result<(), String> { if value { Ok(()) } else { Err(message.to_owned()) } }
@@ -126,6 +129,7 @@ pub(crate) struct RuntimeAdmission {
     image_config: ImageConfiguration,
 }
 impl RuntimeAdmission {
+    pub(crate) fn open_setup(role: setup_issuer::Role) -> Result<Self, String> { setup_issuer::open(role) }
     pub(crate) fn open_time_issuer() -> Result<Self, String> { time_issuer::open() }
     pub(crate) fn open_origin_issuer() -> Result<Self, String> { origin_issuer::open() }
     pub(crate) fn open() -> Result<Self, String> {

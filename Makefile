@@ -1316,6 +1316,10 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	scripts/native_pilot_runtime_artifacts.py \
 	scripts/package_native_pilot_runtime.py \
 	scripts/native_pilot_runtime_entrypoint.py \
+	scripts/authority/native_pilot_authority_io.py \
+	scripts/authority/sign_native_pilot_cohort.py \
+	scripts/authority/sign_native_pilot_scope.py \
+	scripts/install_native_pilot_public_original.py \
 	scripts/export_native_shadow_bootstrap_runtime.py \
 	scripts/install_workload_sidecar_unit.py \
 	ops/native-setup-issuers/serverware-setup-native-final.conf \
@@ -1580,6 +1584,8 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/native_pilot_operator.py \
 	serverware/native_pilot_operator_channel.py \
 	serverware/native_pilot_public_inputs.py \
+	serverware/native_pilot_publication.py \
+	serverware/native_pilot_scope_authority.py \
 	serverware/native_pilot_service_inputs.py \
 	scripts/run_native_pilot.py \
 	serverware/native_shadow_proof_cohort_cleanup.py \
@@ -3975,6 +3981,10 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				scripts/native_pilot_runtime_artifacts.py \
 				scripts/package_native_pilot_runtime.py \
 				scripts/native_pilot_runtime_entrypoint.py \
+				scripts/authority/native_pilot_authority_io.py \
+				scripts/authority/sign_native_pilot_cohort.py \
+				scripts/authority/sign_native_pilot_scope.py \
+				scripts/install_native_pilot_public_original.py \
 				scripts/export_native_shadow_bootstrap_runtime.py \
 				scripts/install_workload_sidecar_unit.py \
 				scripts/prepare_native_role_keys.py \
@@ -4233,6 +4243,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/native_pilot_operator.py \
 				serverware/native_pilot_operator_channel.py \
 				serverware/native_pilot_public_inputs.py \
+				serverware/native_pilot_publication.py \
+				serverware/native_pilot_scope_authority.py \
 				serverware/native_pilot_service_inputs.py \
 				scripts/run_native_pilot.py \
 				serverware/native_shadow_proof_cohort_cleanup.py \

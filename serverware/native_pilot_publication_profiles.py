@@ -19,6 +19,9 @@ PROFILES = {
     "cohort-configuration": ("cohort-config", None, 32768),
     "cohort-control": ("cohort-control", None, 4096),
     "ordinary-launch": ("ordinary-launch", None, 65536),
+    "bridge-runtime": ("bridge-runtime", None, 65536),
+    "bridge-outgoing": ("bridge-outgoing", None, 8192),
+    "native-generation-install-grant": ("generation-install", None, 65536),
     **{"native-cold-" + role: ("native-cold", role, 65536)
        for role in cohort.ENDPOINT_ROLES},
     **{"ordinary-cold-" + role: ("ordinary-cold", role, 65536)
@@ -42,6 +45,7 @@ DESTINATIONS.update({
     "cohort-configuration": "/etc/serverware/native-shadow-proof-cohort.json",
     "cohort-control": "/etc/serverware/native-shadow-proof-cohort-control.json",
     "ordinary-launch": "/etc/serverware/custody-effects-five.json",
+    "bridge-outgoing": "/etc/serverware/native-shadow-driver-outgoing.json",
 })
 
 
@@ -126,6 +130,24 @@ def shape(purpose, raw):
     """Validate the selected public envelope, never authenticate its authority."""
     p.require(type(purpose) is str and purpose in PROFILES)
     family, role, maximum = PROFILES[purpose]
+    if family in ("bridge-runtime", "bridge-outgoing"):
+        from serverware import native_pilot_bridge_install as bridge_install
+        bridge_install.shape(purpose, raw)
+        return
+    if family == "generation-install":
+        from serverware import native_pilot_generation_install_authority as installation
+        signed = _signed(raw, maximum, native=True)
+        value = p.fields(signed["payload"], installation.PAYLOAD_FIELDS)
+        p.require(value["apiVersion"] == "serverware.nativeGenerationCoordinatorAssignment/v1"
+            and value["purpose"] == "native-generation-installation")
+        p.guest(value["guest"])
+        p.require(value["guest"]["serviceRole"] == "production-bridge")
+        p.fields(value["services"], generation.ROLES)
+        p.fields(value["keyHistory"], ("currentKeyEpoch", "predecessors"))
+        p.fields(value["journal"], ("genesisSha256", "sequence", "headSha256"))
+        for field in ("assignmentPayloadSha256", "keyAuthorizationSha256", "signingKeyId", "signingKeySpkiSha256"):
+            p.digest(value[field])
+        return
     if family in ("native-cold", "ordinary-cold", "cohort-config", "cohort-control", "ordinary-launch"):
         _configuration(family, role, raw, maximum)
         return

@@ -1322,8 +1322,11 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	scripts/authority/sign_native_pilot_driver.py \
 	scripts/authority/sign_native_pilot_delivery.py \
 	scripts/authority/sign_native_pilot_service.py \
+	scripts/authority/sign_native_pilot_generation_install.py \
 	scripts/install_native_pilot_public_original.py \
 	scripts/install_native_pilot_precreation.py \
+	scripts/install_native_pilot_bridge.py \
+	scripts/run_native_pilot_coordinator.py \
 	scripts/export_native_shadow_bootstrap_runtime.py \
 	scripts/install_workload_sidecar_unit.py \
 	ops/native-setup-issuers/serverware-setup-native-final.conf \
@@ -1595,6 +1598,10 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/native_pilot_service_authority.py \
 	serverware/native_pilot_publication_profiles.py \
 	serverware/native_pilot_precreation_install.py \
+	serverware/native_pilot_bridge_install.py \
+	serverware/native_pilot_generation_install_authority.py \
+	serverware/native_pilot_coordinator_process.py \
+	serverware/native_pilot_coordinator_channel.py \
 	serverware/native_pilot_service_inputs.py \
 	scripts/run_native_pilot.py \
 	serverware/native_shadow_proof_cohort_cleanup.py \
@@ -3996,8 +4003,11 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				scripts/authority/sign_native_pilot_driver.py \
 				scripts/authority/sign_native_pilot_delivery.py \
 				scripts/authority/sign_native_pilot_service.py \
+				scripts/authority/sign_native_pilot_generation_install.py \
 				scripts/install_native_pilot_public_original.py \
 				scripts/install_native_pilot_precreation.py \
+				scripts/install_native_pilot_bridge.py \
+				scripts/run_native_pilot_coordinator.py \
 				scripts/export_native_shadow_bootstrap_runtime.py \
 				scripts/install_workload_sidecar_unit.py \
 				scripts/prepare_native_role_keys.py \
@@ -4263,6 +4273,10 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/native_pilot_service_authority.py \
 				serverware/native_pilot_publication_profiles.py \
 				serverware/native_pilot_precreation_install.py \
+				serverware/native_pilot_bridge_install.py \
+				serverware/native_pilot_generation_install_authority.py \
+				serverware/native_pilot_coordinator_process.py \
+				serverware/native_pilot_coordinator_channel.py \
 				serverware/native_pilot_service_inputs.py \
 				scripts/run_native_pilot.py \
 				serverware/native_shadow_proof_cohort_cleanup.py \

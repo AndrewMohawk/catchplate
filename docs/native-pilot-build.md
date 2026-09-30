@@ -486,9 +486,9 @@ and `release`. Those retain the real `DriverBootstrap`, endpoint-only
 spool, endpoint-listener, bridge-resource and operational-input owners. It does
 not reconstruct private owners from JSON or load independent signing keys.
 
-The coordinator must implement ten one-shot phases in exactly this order:
+The coordinator must implement eleven one-shot phases in exactly this order:
 `bootstrap-admission`, `endpoint-precreation`, `endpoint-inputs`,
-`service-originals`, `bridge-runtime`, `bridge-delivery`, `release`,
+`endpoint-deliveries`, `service-originals`, `bridge-runtime`, `bridge-delivery`, `release`,
 `constructed-admission`, `generation-origin`, `shutdown`. Requests use
 `serverware.nativePilotOperatorRequest/v1` with `sequence`, `phase`, public
 `payload` and decimal-string `deadlineBoottimeNs`; replies use
@@ -498,7 +498,7 @@ The coordinator must implement ten one-shot phases in exactly this order:
 and 128 MiB total in both directions. The retained owners still validate every
 supplied original; pipe framing is not authorization.
 
-The first eight exchanges use the minimum actual original startup deadline.
+The first nine exchanges use the minimum actual original startup deadline.
 The final two use the minimum actual lifetime minus the maximum original
 driver/production cleanup reserve; the generation-origin relay is clipped to
 that same bound. There are no renewed human pauses, heartbeats or retries.
@@ -510,9 +510,14 @@ claims that testing passed. Final bounded status goes to stderr, while stdout
 remains solely the phase protocol. Cleanup uncertainty retains the actual owner
 graph rather than retrying or claiming retirement.
 
+The separate [coordinator process owner](native-pilot-coordinator.md) verifies
+the installed runtime inventory, launches the fixed conductor and relays its
+exact requests to an independently operated supervisor. It owns the actual
+process/pipes; it does not make approval decisions or provide signing keys.
+
 The seccomp operator and native guest targets remain distinct from the separate
-[conductor runtime package](#conductor-runtime-package). None implements its
-independent authority coordinator. Protected installation, independently
+[conductor runtime package](#conductor-runtime-package). None implements the
+remaining independent authority automation. Protected installation, independently
 provisioned services and connected pilot acceptance remain open prerequisites,
 not local build outputs.
 

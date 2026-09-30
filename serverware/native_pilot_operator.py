@@ -1,6 +1,6 @@
 """Fixed live pilot conductor; every signature comes from an independent owner.
 
-Ten machine exchanges join the existing real resource/launch owners. Public
+Eleven machine exchanges join the existing real resource/launch owners. Public
 observations are not capabilities. No authority key, arbitrary command, user
 callback, supplied numeric descriptor or readiness override is accepted here.
 This module does not implement the independently operated authority coordinator.
@@ -11,13 +11,14 @@ import os
 
 from serverware import custody_generation_grants as generation
 from serverware import custody_generation_originals as originals
+from serverware import native_shadow_guest_delivery as delivery
 from serverware import native_shadow_nitro_profile as p
 from serverware import native_shadow_retrieval_artifacts as retrieval
 from serverware.native_pilot_endpoint_inputs import PilotEndpointInputs
 from serverware.native_pilot_launch import NativePilotLaunch, PilotStartError
 from serverware.native_pilot_operator_channel import Channel, STAGES
 from serverware.native_pilot_public_inputs import PublicInputs
-from serverware.native_pilot_service_inputs import SPOOL_LISTENER_ROLES, admit_services
+from serverware.native_pilot_service_inputs import ENDPOINT_INPUT_ROLES, SPOOL_LISTENER_ROLES, admit_services
 
 _TOKEN = object()
 _LIVE = None
@@ -155,6 +156,18 @@ class Operator:
         observations = self._resource_observations()
         observations["nativeActivations"].update(endpoints.activations())
         observations["driverGenerationRecipe"] = recipe
+        endpoint_reply = self._exchange("endpoint-deliveries", observations, ("endpointDeliveries",))
+        endpoint_pins = p.fields(endpoint_reply["endpointDeliveries"], ENDPOINT_INPUT_ROLES)
+        endpoint_result = endpoints.admit_deliveries(originals={role: self._public.read(
+            endpoint_pins[role], maximum=delivery.MAX_DELIVERY) for role in ENDPOINT_INPUT_ROLES})
+        # The real retained owner has now fsynced/read back its empty store.
+        # Only this actual result is presented for later Retrieval/v3 signing;
+        # no predicted genesis, second intake, or renewed startup is supplied.
+        observations = self._resource_observations()
+        observations["nativeActivations"].update(endpoints.activations())
+        observations["driverGenerationRecipe"] = recipe
+        observations["endpointDeliveries"] = endpoint_pins
+        observations["endpointDeliveryResult"] = endpoint_result
         from serverware.native_pilot_service_inputs import FIELDS
         service_inputs = self._exchange("service-originals", observations, FIELDS)
         self._transfers = admit_services(pilot, endpoints=endpoints, originals=self._public, inputs=service_inputs)

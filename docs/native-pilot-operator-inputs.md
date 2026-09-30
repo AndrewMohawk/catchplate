@@ -8,16 +8,17 @@ arbitrary configuration paths, executable arguments, callbacks and commands
 are not supported. An external root-owned automation process must establish
 the pipes and coordinate the independently operated input authorities within
 the original deadlines. This CLI does not supply that authority automation.
-The same-process assembly does not yet provide an external independent
-authority coordinator.
+The separate [coordinator process owner](native-pilot-coordinator.md) establishes
+the actual child and relays these exact exchanges to an independent supervisor.
+It does not implement that supervisor's approval/signing/provisioning decisions.
 
 The separate [authority commands and protected installers](native-pilot-authority-commands.md)
 provide cohort precreation/release, driver admission/scope, native/bridge C9 and
-ordinary-service grant production, plus fixed precreation-file installation.
+ordinary-service grant production, plus fixed precreation and bridge-runtime installation.
 They require independently approved complete originals and keys, not raw
 unapproved requests from this channel. Remaining native service-grant/launch
-inputs, bridge runtime installation and the coordinator's actual process/pipe
-and authority-automation joins remain open.
+inputs and independent authority automation remain open. The installer does not
+create the bridge's separately provisioned service-owned credentials.
 
 The separate [runtime package](native-pilot-build.md#conductor-runtime-package)
 provides an isolated Python entrypoint and portable filesystem bytes. Building
@@ -61,7 +62,8 @@ The exact stage order is:
 | `bootstrap-admission` | `{"bootstrapAdmission": Pin}` | Independent approval binds the already measured live driver; no predicted process identity. |
 | `endpoint-precreation` | `{}` | Sent after independent protected precreation files have been installed. Existing owners still authenticate those originals. |
 | `endpoint-inputs` | The seven-field object below | Public endpoint inputs bind actual retained resources. |
-| `service-originals` | The ten-field object below | Independently approved originals; no private signing key enters the conductor. |
+| `endpoint-deliveries` | `{"endpointDeliveries": Endpoint3}` | Admit the three actual deliveries and initialize the real empty spool before requesting dependent grants. |
+| `service-originals` | The nine-field object below | Independently approved originals; no private signing key enters the conductor. |
 | `bridge-runtime` | `{}` | Sent after independent protected runtime files have been installed; not a bypass of their existing owner checks. |
 | `bridge-delivery` | `{"launch": Pin}` | Fixed bridge delivery inputs bind its real retained descriptors. |
 | `release` | `{"endpointRelease": Pin, "phaseTwoScope": Pin, "phaseTwoPublic": Pin}` | Drives the existing one-attempt retained-owner release; sending is not an acceptance or readiness receipt. |
@@ -114,6 +116,14 @@ Its four integer fields are `maximumRpcNanos` (250,000,000–1,000,000,000),
 These values must come from the existing independently selected configuration;
 the conductor does not choose or approve defaults.
 
+The `endpoint-deliveries` request includes the actual prepared activations and
+generation recipe. Its reply supplies only the three delivery pins. The retained
+endpoint owner admits them exactly once and creates, fsyncs and reads back its
+real empty spool store. The following `service-originals` request includes those
+`endpointDeliveries` pins and the actual `endpointDeliveryResult`, with `guests`
+and `spoolJournal`. This lets the independent Retrieval grant producer bind the
+existing store, rather than predict a result that does not yet exist.
+
 The exact `service-originals` reply object is:
 
 ```text
@@ -124,7 +134,6 @@ The exact `service-originals` reply object is:
   "dispatchNativeGrant": Pin,
   "spoolGrants": Spool3,
   "nativeSpoolGrants": NativeSpool7,
-  "endpointDeliveries": Endpoint3,
   "endpointLaunches": Endpoint10,
   "persistence": {"configuration": Pin, "genesis": Pin, "journal": Pin},
   "generationJournal": {"genesis": Pin, "records": [Pin, ...]}
@@ -134,8 +143,9 @@ The exact `service-originals` reply object is:
 `generationJournal.records` is a JSON array of zero through eight supplied
 record pins in original sequence order, not a reconstructed history. Actual
 receivers enforce their individual byte bounds and exact admitted journal/head
-bindings. The service helper admits all five ordinary deliveries then grants,
-the three actual endpoint deliveries, both dispatch grants, and spool grants
+bindings. The service helper requires the earlier real endpoint-delivery intake
+to be complete. It admits all five ordinary deliveries then grants,
+both dispatch grants, and spool grants
 in Head → Cleanup → Current order before assembling the ten real transfers.
 The `dispatchNativeGrant` is the CommitRequest companion original, not the
 outer LedgerSpool grant selected by `nativeSpoolGrants.ledger`. The mandatory

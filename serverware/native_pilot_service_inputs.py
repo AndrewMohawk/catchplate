@@ -18,7 +18,7 @@ from serverware.native_shadow_generation_install_inputs import MAX_RECORD, MAX_R
 
 FIELDS = (
     "ordinaryDeliveries", "ordinaryGrants", "dispatchGrants", "dispatchNativeGrant",
-    "spoolGrants", "nativeSpoolGrants", "endpointDeliveries", "endpointLaunches",
+    "spoolGrants", "nativeSpoolGrants", "endpointLaunches",
     "persistence", "generationJournal",
 )
 ENDPOINT_INPUT_ROLES = ("retrieval", "persistence", "trustedTime")
@@ -60,6 +60,13 @@ def admit_services(pilot, *, endpoints, originals: PublicInputs, inputs: dict):
         and endpoints._cohort is pilot.cohort)
     pilot._preparing()
     endpoints.check()
+    # The previous endpoint-deliveries phase has already consumed its one
+    # intake and physically initialized the actual spool. Never re-admit here
+    # or accept a caller's observation in place of that retained owner state.
+    p.require(endpoints._delivery_attempted and not endpoints._retain_attempted)
+    p.fields(endpoints._deliveries, ENDPOINT_INPUT_ROLES)
+    p.fields(endpoints._guests, ENDPOINT_INPUT_ROLES)
+    p.fields(endpoints._spool_journal, ("genesisSha256", "sequence", "headSha256"))
     originals.check()
     cohort = pilot.cohort
     p.require(cohort.endpoint_driver_selected() and cohort.effects_selected()
@@ -72,7 +79,6 @@ def admit_services(pilot, *, endpoints, originals: PublicInputs, inputs: dict):
     _pin(inputs["dispatchNativeGrant"])
     _pins(inputs["spoolGrants"], spool.EFFECT_ROLES)
     _pins(inputs["nativeSpoolGrants"], spool.EFFECT_NATIVE)
-    _pins(inputs["endpointDeliveries"], ENDPOINT_INPUT_ROLES)
     _pins(inputs["endpointLaunches"], cohort._roles)
     _pins(inputs["persistence"], ("configuration", "genesis", "journal"))
     journal = p.fields(inputs["generationJournal"], ("genesis", "records"))
@@ -88,13 +94,6 @@ def admit_services(pilot, *, endpoints, originals: PublicInputs, inputs: dict):
     for role in generation.ROLES:
         ordinary.admit_grant(role, signed_grant_original=originals.read(
             inputs["ordinaryGrants"][role], maximum=MAX_SIGNED_ORIGINAL))
-
-    # The composite admits these actual C9 originals and initializes the real
-    # empty spool-store binding itself. Its returned observation is not used
-    # to reconstruct resources or synthesize another grant/genesis.
-    endpoints.admit_deliveries(originals={role: originals.read(
-        inputs["endpointDeliveries"][role], maximum=delivery.MAX_DELIVERY)
-        for role in ENDPOINT_INPUT_ROLES})
 
     dispatch_native = originals.read(inputs["dispatchNativeGrant"], maximum=MAX_SIGNED_ORIGINAL)
     for role in commitment.ROLES:

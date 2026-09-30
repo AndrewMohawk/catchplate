@@ -45,6 +45,10 @@ def main():
     signal.signal(signal.SIGTERM, _stop)
     signal.signal(signal.SIGINT, _stop)
     try:
+        # The fixed coordinator blocks these across spawn/owner acquisition.
+        # Install both handlers before unblocking, and claim no live resources
+        # until pending termination has had a chance to run the normal cleanup.
+        signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGTERM, signal.SIGINT})
         from serverware.native_pilot_operator import Operator
         owner = Operator.claim()
         owner.run()

@@ -19,7 +19,7 @@ import time
 from serverware import native_shadow_nitro_profile as p
 
 STAGES = (
-    "bootstrap-admission", "endpoint-precreation", "endpoint-inputs", "service-originals",
+    "bootstrap-admission", "endpoint-precreation", "endpoint-inputs", "endpoint-deliveries", "service-originals",
     "bridge-runtime", "bridge-delivery", "release", "constructed-admission", "generation-origin", "shutdown",
 )
 MAX_FRAME = 32 * 1024 * 1024  # Complete canonical original plus its single LF.
@@ -50,7 +50,7 @@ def _clock():
 
 def _identity(fd):
     info = os.fstat(fd)
-    _require(stat.S_ISFIFO(info.st_mode), "channel-owner")
+    _require(stat.S_ISFIFO(info.st_mode) and info.st_uid == info.st_gid == 0, "channel-owner")
     return info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid, info.st_nlink
 
 

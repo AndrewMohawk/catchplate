@@ -1,14 +1,14 @@
 # Native pilot authority commands
 
 These are purpose-specific commands for an independently operated authority,
-not a completed coordinator or a pilot quickstart. They produce the existing
+not independent approval automation or a pilot quickstart. They produce the existing
 cohort precreation/release, driver admission/continuation, native and ordinary
 delivery, and ordinary service grants from explicitly approved input. Restricted
 installers publish literal public originals and the fixed endpoint-precreation
 configuration bundle at the paths consumed by the existing pilot owners.
 
 The commands do not generate keys, approve their own inputs, start the pilot,
-install service configurations or replace any independent signer. A protected
+provision private service credentials or replace any independent signer. A protected
 input FD means stable file ownership, not independent approval. The authority
 operator must approve the complete input before supplying that FD and its
 matching key. Do not connect untrusted conductor JSON directly to a signing
@@ -115,11 +115,15 @@ fixed inventory, never a caller-supplied path or extensible role list.
 | `ordinary-dispatch-<role>` | DRS and CurrentSignatureAuthority only | 65,536 |
 | `ordinary-head`, `ordinary-cleanup`, `ordinary-current` | DRS, Cleanup, Current respectively | 65,536 / 131,072 / 131,072 |
 | `native-cold-<role>`, `ordinary-cold-<role>` | Ten endpoint and five ordinary cold configurations | 65,536 |
+| `bridge-runtime` | Approved bridge runtime/v9 public original | 65,536 |
+| `native-generation-install-grant` | Existing native coordinator assignment envelope | 65,536 |
 
 The precreation installer also uses `cohort-configuration`, `ordinary-launch`
 and `cohort-control` at their fixed `/etc/serverware/` loader paths. Their limits
 are respectively 32,768, 65,536 and 4,096 bytes. The original three purposes keep
-their 32,768-byte ceilings; aggregate publication stays bounded to 128 originals
+their 32,768-byte ceilings. `bridge-outgoing` uses the fixed
+`/etc/serverware/native-shadow-driver-outgoing.json` loader path with an
+8,192-byte bound. Aggregate publication stays bounded to 128 originals
 and 32 MiB. Native C9 files are delivery originals, **not** endpoint/bridge launch
 envelopes; independently approved launch files must still reference them.
 
@@ -225,12 +229,102 @@ startup deadline without extending either window. Successful installation only
 reports file pins. It neither starts a service, acknowledges conductor progress,
 nor proves a pilot request or cleanup succeeded.
 
+## Protected bridge runtime installation
+
+```text
+python3 -I -B scripts/install_native_pilot_bridge.py --input-fd 3 --input-sha256 sha256:INDEPENDENTLY_APPROVED_BUNDLE_DIGEST
+```
+
+This command mutates only the two public files needed before actual bridge
+outgoing-resource allocation. The approved canonical no-LF input is
+`serverware.nativePilotBridgeRuntimeBundle/v1`, at most 512 KiB, with exactly:
+
+```text
+apiVersion                 driverControlSha256
+driverObservationOriginal  runtimeOriginal
+outgoingOriginal
+```
+
+The three originals are literal ASCII strings. Observation/runtime are bounded
+to 65,536 bytes each; outgoing configuration to 8,192. The control pin is
+independently approved, not calculated to bless an untrusted conductor request.
+The installer opens and retains the existing protected fixed driver control,
+configuration and signed window, plus their pinned bridge cold configuration.
+It checks supplied observation associations and the unchanged original boot/time
+window, then uses the existing runtime/v9, bridge-launch/v5 outgoing selector
+with that actual cold UID. It does not authenticate kernel provenance from JSON.
+
+After complete preflight, publication is exclusively:
+
+1. `/etc/serverware/native-pilot-inputs/bridge-runtime.json`
+2. `/etc/serverware/native-shadow-driver-outgoing.json`
+
+The outgoing original must pin the exact first file and retained driver
+configuration/window/observation/invocation. Existing `PublicPublisher` creates
+root:root `0400` originals with fsync/readback; all held inputs are rechecked
+around publication. Partial files remain on failure; no overwrite or retry is
+provided. Successful output contains installed pins under
+`serverware.nativePilotBridgeRuntimeInstallation/v1`, not a ready verdict or an
+automatic `bridge-runtime` protocol acknowledgment. Stdout remains clipped to
+the original startup deadline and the shared bounded pipe-write contract.
+
+Only after the supervisor validates successful installation may it acknowledge
+that phase and allow the conductor's real `prepare_bridge_connections()` call.
+The later C9 delivery binds the actual allocated descriptors. Runtime history
+and authority-key credential names are not credential contents: separate private
+provisioning, later complete C9/launch originals and actual native admission are
+still mandatory. This installer neither receives nor writes service secrets,
+keys, invented histories, C9 deliveries or launch files.
+
+## Initial generation-install authority
+
+```text
+python3 -I -B scripts/authority/sign_native_pilot_generation_install.py --input-fd 3 --authority-key-fd 4
+```
+
+The independently approved no-LF wrapper uses
+`serverware.nativePilotGenerationInstallAuthorityInput/v1` and exactly:
+
+```text
+apiVersion                    payloadOriginal
+nativeConfigurationOriginal   nativeConfigurationSha256
+assignmentPayloadOriginal     cohortConfigurationOriginal
+precreationOriginal           observationOriginal
+coordinatorConfigurationOriginal
+coordinatorDeliveryOriginal   coordinatorRuntimeOriginal
+ordinaryLaunchOriginal        services
+genesisOriginal               recordOriginals
+```
+
+`services` is the fixed ordinary-five map. Each member has the existing service
+authority bundle fields (`configurationOriginal`, `configurationSha256`,
+`deliveryOriginal`, `runtimeOriginal`, `historyOriginal`) plus
+`generationGrantOriginal`. Originals are literal canonical ASCII strings.
+The native configuration and all original approvals/keys must come from the
+independent authority, not be selected to bless an untrusted pipe request.
+
+This is explicitly an **initial-install-only issuer**. It requires the supplied
+`keyHistory` to contain epoch one and no predecessors, all five authenticated
+service scopes to have no previous configuration, an explicitly empty
+`recordOriginals` array, and a supplied journal with sequence zero and head equal
+to its supplied genesis hash. It creates none of those facts. Historical key
+transitions and restored journal signing require their own verified producer
+path and remain open; the existing Rust historical verifier is not weakened.
+
+The output is the existing `nativeGenerationCoordinatorAssignment/v1` payload
+and `signature` envelope, bounded to 65,536 bytes. It retains the existing
+signature domain and original host/window/output deadline. The fixed public
+publication purpose is `native-generation-install-grant`, beneath
+`/etc/serverware/native-pilot-inputs/`; publication is not signature admission,
+actual generation installation or pilot readiness.
+
 ## What remains
 
-These commands close specific producer/publication gaps, not the ten-phase
-coordinator. Still required: independently operated approval/observation and
-supervision, remaining native service-grant issuance and launch/runtime inputs,
-approved bridge runtime/configuration installation, coordinator process/pipe
-ownership and ordering, artifact assembly and protected installation, services
+These commands close specific producer/publication gaps. The implemented
+[process coordinator and eleven-phase relay](native-pilot-coordinator.md) owns
+the real conductor process and transport, but does not automate independent
+approval, signing or installation. Still required are that authority's actual
+approval/observation and supervision, all required service-grant and launch
+originals, artifact assembly and protected installation, service/private-input
 and workload provisioning, then the connected ordinary application allow/deny
 and cleanup run. No command in this guide was executed when authored.

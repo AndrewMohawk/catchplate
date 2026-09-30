@@ -496,6 +496,7 @@ pub(super) enum ProductionAuthorityEndpointRequestBodyV4 {
         request:ClosedProductionGenerationRequestV4,
         services:super::generation_service_client::Replies,
     },
+    GenerationConclude(Box<super::generation_certification::Conclude>),
     RequestTermination {
         request: ProductionRpcRequestV4,
     },
@@ -582,6 +583,7 @@ pub(super) enum ProductionAuthorityEndpointResultV4 {
     PersistenceCommitted { commit_original_sha256: super::super::super::Sha256Digest },
     Dispatch(ClosedProductionDispatchResponseV4),
     Generation(ClosedProductionGenerationResponseV4),
+    GenerationProposal(super::generation_certification::Proposal),
     TerminationRequested,
     Settlement(CanonicalProductionArtifactV4),
     Verified,
@@ -607,7 +609,7 @@ struct ProductionShadowSpoolRoutingV4 {
     phase: ProductionShadowSpoolPhaseV4,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct ProductionAuthorityEndpointReplyV4 {
     pub(super) api_version: String,
@@ -1118,6 +1120,15 @@ impl ConcreteFiveV3ProductionAuthoritiesV4 {
         ClosedProductionGenerationResponseV4,
         ProductionPrimitiveRejectionV4,
     > {
+        self.call_generation_endpoint_inner(request).map_err(|rejection| {
+            if self.generation_admission.is_some() && rejection.code==ProductionRpcRejectionCodeV4::RecoveryNotReady {
+                ProductionPrimitiveRejectionV4::rejected(ProductionRpcRejectionCodeV4::GenerationConflict,
+                    "native generation transport or authority is unavailable; absence was not proved")
+            }else{rejection}
+        })
+    }
+    fn call_generation_endpoint_inner(&self,request:&ClosedProductionGenerationRequestV4)
+        ->Result<ClosedProductionGenerationResponseV4,ProductionPrimitiveRejectionV4>{
         self.require_all_services_current()?;
         request.request_sha256().map_err(|_| {
             ProductionPrimitiveRejectionV4::rejected(
@@ -1131,6 +1142,10 @@ impl ConcreteFiveV3ProductionAuthoritiesV4 {
         let mut admission=self.generation_admission.as_ref().map(|v|v.try_lock())
             .transpose().map_err(|_|ProductionPrimitiveRejectionV4::rejected(
                 ProductionRpcRejectionCodeV4::GenerationConflict,"generation admission is busy"))?;
+        if admission.is_some() && (self.native_proof_owner.is_none() || !matches!(&endpoint.session,EndpointSession::NativeProof(_))) {
+            return Err(ProductionPrimitiveRejectionV4::rejected(ProductionRpcRejectionCodeV4::GenerationConflict,
+                "selected generation coordinator lacks the actual inspected native owner"));
+        }
         let body=if let Some(owner)=admission.as_mut() {
             let services=owner.exchange(&self.sessions,request).map_err(|_|ProductionPrimitiveRejectionV4::rejected(
                 ProductionRpcRejectionCodeV4::GenerationConflict,"service admission is incomplete or outcome unknown"))?;
@@ -1142,12 +1157,28 @@ impl ConcreteFiveV3ProductionAuthoritiesV4 {
             request.deadline_boottime_nanos(),
             body,
         )?;
-        match self.call_endpoint(
-            endpoint,
-            wire,
-            ProductionRpcRejectionCodeV4::GenerationConflict,
-        )? {
+        let original=self.call_endpoint_original(endpoint,wire.clone(),ProductionRpcRejectionCodeV4::GenerationConflict)?;
+        let result=if let Some(owner)=admission.as_mut() {
+            if matches!(&original.result,ProductionAuthorityEndpointResultV4::GenerationProposal(_)) {
+                let spki=endpoint.authority_key.to_public_key_der().map_err(|_|ProductionPrimitiveRejectionV4::rejected(
+                    ProductionRpcRejectionCodeV4::GenerationConflict,"coordinator public key encoding refused"))?;
+                let certification=super::generation_certification::Certify{api_version:super::generation_certification::API.into(),
+                    request:wire,reply:original,authority_public_key:super::super::authority_history::AuthorityPublicKeyV3{
+                        key_id:endpoint.authority_key_id.clone(),key_spki_sha256:endpoint.authority_key_spki_sha256.clone(),
+                        public_key_spki_base64:URL_SAFE_NO_PAD.encode(spki.as_bytes())}};
+                let conclusion=owner.certify(&self.sessions,certification).map_err(|_|ProductionPrimitiveRejectionV4::rejected(
+                    ProductionRpcRejectionCodeV4::GenerationConflict,"five actual result certifications are incomplete"))?;
+                let wire=ProductionAuthorityEndpointRequestV4::new(endpoint.identity,request.replay_id_sha256().clone(),
+                    request.deadline_boottime_nanos(),ProductionAuthorityEndpointRequestBodyV4::GenerationConclude(Box::new(conclusion)))?;
+                self.call_endpoint(endpoint,wire,ProductionRpcRejectionCodeV4::GenerationConflict)?
+            } else {original.result}
+        } else {original.result};
+        match result {
             ProductionAuthorityEndpointResultV4::Generation(response) => {
+                if admission.is_none() && response.api_version==super::generation_recovery::RESPONSE_API {
+                    return Err(ProductionPrimitiveRejectionV4::rejected(ProductionRpcRejectionCodeV4::GenerationConflict,
+                        "native recovery requires the explicit five-service native profile"));
+                }
                 if let Some(owner)=admission.as_mut() {
                     owner.completed(request,&response).map_err(|_|ProductionPrimitiveRejectionV4::rejected(
                         ProductionRpcRejectionCodeV4::GenerationConflict,"coordinator did not prove actual complete installation"))?;

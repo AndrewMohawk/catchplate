@@ -1,0 +1,1037 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-generation-coordinator.v1.schema.json",
+  "$ref": "#/$defs/configuration",
+  "$comment": "Source-selected coordinator and second-round certification. Existing scalar/epoch/request definitions are reused without permissions aliases. Opaque artifact bytes are independently decoded into exact existing phase structs; schema shape alone grants no effect. Whole service frame remains 4MiB; journal and complete grant limits are tighter.",
+  "$defs": {
+    "sha": {
+      "$ref": "custody-service-generation-admission.v1.schema.json#/$defs/sha256"
+    },
+    "u64": {
+      "$ref": "custody-service-generation-admission.v1.schema.json#/$defs/u64"
+    },
+    "epoch": {
+      "$ref": "custody-service-generation-admission.v1.schema.json#/$defs/epochNs"
+    },
+    "signature": {
+      "$ref": "custody-service-generation-admission.v1.schema.json#/$defs/signature"
+    },
+    "guest": {
+      "$ref": "custody-service-generation-admission.v1.schema.json#/$defs/guest"
+    },
+    "zeroU64": {
+      "oneOf": [
+        {
+          "const": 0
+        },
+        {
+          "$ref": "custody-service-generation-admission.v1.schema.json#/$defs/u64"
+        }
+      ]
+    },
+    "request": {
+      "$ref": "custody-service-generation-admission.v1.schema.json#/$defs/request"
+    },
+    "replies": {
+      "$ref": "custody-service-generation-admission.v1.schema.json#/$defs/replies"
+    },
+    "launch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "keyAdmission",
+        "generation"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeShadowGenerationGuestLaunch/v1"
+        },
+        "keyAdmission": {
+          "$ref": "native-shadow-guest-admission.v1.schema.json#/$defs/launch"
+        },
+        "generation": {
+          "$ref": "policy-custody-guest-delivery.v1.schema.json#/$defs/pin"
+        }
+      }
+    },
+    "member": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "grantOriginal",
+        "historyOriginal",
+        "rootKeyId",
+        "rootKeySpkiSha256"
+      ],
+      "properties": {
+        "grantOriginal": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 65536,
+          "pattern": "^[\\x00-\\x7f]+$"
+        },
+        "historyOriginal": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1048576,
+          "pattern": "^[\\x00-\\x7f]+$"
+        },
+        "rootKeyId": {
+          "$ref": "#/$defs/sha"
+        },
+        "rootKeySpkiSha256": {
+          "$ref": "#/$defs/sha"
+        }
+      }
+    },
+    "retainedKey": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "role",
+        "keyId",
+        "keySpkiSha256",
+        "keyMaterialSha256"
+      ],
+      "properties": {
+        "role": {
+          "enum": [
+            "custody-ingress-admission",
+            "custody-unavailable-ingress",
+            "custody-dispatch-barrier",
+            "custody-terminal-append",
+            "custody-ledger-append",
+            "custody-spool-compaction",
+            "custody-active-effect-barrier",
+            "custody-active-effect-commit",
+            "custody-publication-reconciliation",
+            "custody-activation-publication",
+            "custody-result-envelope",
+            "custody-store-response",
+            "custody-signer-response",
+            "custody-retrieval-response",
+            "custody-trusted-time-response",
+            "custody-provider-response",
+            "custody-attestation-verifier",
+            "custody-supervisor-capability"
+          ]
+        },
+        "keyId": {
+          "$ref": "#/$defs/sha"
+        },
+        "keySpkiSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "keyMaterialSha256": {
+          "$ref": "#/$defs/sha"
+        }
+      }
+    },
+    "historyEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "installationOriginal",
+        "keys"
+      ],
+      "properties": {
+        "installationOriginal": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1048576,
+          "pattern": "^[\\x00-\\x7f]+$"
+        },
+        "keys": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "custody-ingress-admission",
+            "custody-unavailable-ingress",
+            "custody-dispatch-barrier",
+            "custody-terminal-append",
+            "custody-ledger-append",
+            "custody-spool-compaction",
+            "custody-active-effect-barrier",
+            "custody-active-effect-commit",
+            "custody-publication-reconciliation",
+            "custody-activation-publication",
+            "custody-result-envelope",
+            "custody-store-response",
+            "custody-signer-response",
+            "custody-retrieval-response",
+            "custody-trusted-time-response",
+            "custody-provider-response",
+            "custody-attestation-verifier",
+            "custody-supervisor-capability"
+          ],
+          "properties": {
+            "custody-ingress-admission": {
+              "$ref": "#/$defs/retainedKey"
+            },
+            "custody-unavailable-ingress": {
+              "$ref": "#/$defs/retainedKey"
+            },
+            "custody-dispatch-barrier": {
+              "$ref": "#/$defs/retainedKey"
+            },
+            "custody-terminal-append": {
+              "$ref": "#/$defs/retainedKey"
+            },
+            "custody-ledger-append": {
+              "$ref": "#/$defs/retainedKey"
+            },
+            "custody-spool-compaction": {
+              "$ref": "#/$defs/retainedKey"
+            },
+            "custody-active-effect-barrier": {
+              "$ref": "#/$defs/retainedKey"
+            },
+            "custody-active-effect-commit": {
+              "$ref": "#/$defs/retainedKey"
+            },
+            "custody-publication-reconciliation": {
+              "$ref": "#/$defs/retainedKey"
+            },
+            "custody-activation-publication": {
+              "$ref": "#/$defs/retainedKey"
+            },
+            "custody-result-envelope": {
+              "$ref": "#/$defs/retainedKey"
+            },
+            "custody-store-response": {
+              "$ref": "#/$defs/retainedKey"
+            },
+            "custody-signer-response": {
+              "$ref": "#/$defs/retainedKey"
+            },
+            "custody-retrieval-response": {
+              "$ref": "#/$defs/retainedKey"
+            },
+            "custody-trusted-time-response": {
+              "$ref": "#/$defs/retainedKey"
+            },
+            "custody-provider-response": {
+              "$ref": "#/$defs/retainedKey"
+            },
+            "custody-attestation-verifier": {
+              "$ref": "#/$defs/retainedKey"
+            },
+            "custody-supervisor-capability": {
+              "$ref": "#/$defs/retainedKey"
+            }
+          }
+        }
+      }
+    },
+    "keyHistory": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "currentKeyEpoch",
+        "predecessors"
+      ],
+      "properties": {
+        "currentKeyEpoch": {
+          "$ref": "#/$defs/u64"
+        },
+        "predecessors": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "$ref": "#/$defs/historyEntry"
+          }
+        }
+      }
+    },
+    "journal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "genesisSha256",
+        "sequence",
+        "headSha256"
+      ],
+      "properties": {
+        "genesisSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 8
+        },
+        "headSha256": {
+          "$ref": "#/$defs/sha"
+        }
+      }
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "purpose",
+        "guest",
+        "assignmentPayloadSha256",
+        "keyAuthorizationSha256",
+        "services",
+        "keyHistory",
+        "journal",
+        "expectedPeer",
+        "trustCheckpointId",
+        "revocationGeneration",
+        "revocationRootSha256",
+        "issuedAtUnixNanos",
+        "expiresAtUnixNanos",
+        "signingKeyId",
+        "signingKeySpkiSha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeGenerationCoordinatorAssignment/v1"
+        },
+        "purpose": {
+          "const": "native-generation-installation"
+        },
+        "guest": {
+          "$ref": "#/$defs/guest"
+        },
+        "assignmentPayloadSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "keyAuthorizationSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "services": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "durable-recovery-store",
+            "cleanup-authorization-consumer",
+            "recovery-target-provider",
+            "current-signature-authority",
+            "bounded-cleanup-helper"
+          ],
+          "properties": {
+            "durable-recovery-store": {
+              "$ref": "#/$defs/member"
+            },
+            "cleanup-authorization-consumer": {
+              "$ref": "#/$defs/member"
+            },
+            "recovery-target-provider": {
+              "$ref": "#/$defs/member"
+            },
+            "current-signature-authority": {
+              "$ref": "#/$defs/member"
+            },
+            "bounded-cleanup-helper": {
+              "$ref": "#/$defs/member"
+            }
+          }
+        },
+        "keyHistory": {
+          "$ref": "#/$defs/keyHistory"
+        },
+        "journal": {
+          "$ref": "#/$defs/journal"
+        },
+        "expectedPeer": {
+          "$ref": "native-shadow-retrieval-service.v1.schema.json#/$defs/peer"
+        },
+        "trustCheckpointId": {
+          "$ref": "#/$defs/sha"
+        },
+        "revocationGeneration": {
+          "$ref": "#/$defs/u64"
+        },
+        "revocationRootSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "issuedAtUnixNanos": {
+          "$ref": "#/$defs/epoch"
+        },
+        "expiresAtUnixNanos": {
+          "$ref": "#/$defs/epoch"
+        },
+        "signingKeyId": {
+          "$ref": "#/$defs/sha"
+        },
+        "signingKeySpkiSha256": {
+          "$ref": "#/$defs/sha"
+        }
+      }
+    },
+    "configuration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "payload",
+        "signature"
+      ],
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/payload"
+        },
+        "signature": {
+          "$ref": "#/$defs/signature"
+        }
+      },
+      "description": "Complete canonical signed envelope <=65536 bytes, including all five members and complete historical keys. The independently assigned supervisor signs nativeGenerationCoordinatorAssignment.signature/v1 with the existing signed-envelope framing. No key epoch, predecessor, peer or lifetime is inferred from file protection."
+    },
+    "genesis": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "guest",
+        "assignmentPayloadSha256",
+        "servicesSha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeGenerationCoordinatorGenesis/v1"
+        },
+        "guest": {
+          "$ref": "#/$defs/guest"
+        },
+        "assignmentPayloadSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "servicesSha256": {
+          "$ref": "#/$defs/sha"
+        }
+      }
+    },
+    "journalRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "sequence",
+        "previousHeadSha256",
+        "original"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeGenerationCoordinatorRecord/v1"
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8
+        },
+        "previousHeadSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "original": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 523264,
+          "pattern": "^[\\x00-\\x7f]+$"
+        }
+      },
+      "description": "Actual immutable O_EXCL/fdatasync-equivalent file fsync + directory fsync/readback, full record <=512KiB and total<=4MiB. Missing/partial/extra records fail closed."
+    },
+    "publicKey": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "keyId",
+        "keySpkiSha256",
+        "publicKeySpkiBase64"
+      ],
+      "properties": {
+        "keyId": {
+          "$ref": "#/$defs/sha"
+        },
+        "keySpkiSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "publicKeySpkiBase64": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096,
+          "pattern": "^[A-Za-z0-9_-]+$"
+        }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "kind",
+        "canonicalBytesBase64",
+        "canonicalBytesLength",
+        "canonicalBytesSha256",
+        "artifactSha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.policyCustodyProductionDispatch/v4"
+        },
+        "kind": {
+          "enum": [
+            "generation-transition-preparation",
+            "generation-install-attestation",
+            "generation-abort-settlement",
+            "native-generation-recovery"
+          ]
+        },
+        "canonicalBytesBase64": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 11184811,
+          "pattern": "^[A-Za-z0-9_-]+$"
+        },
+        "canonicalBytesLength": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8388608
+        },
+        "canonicalBytesSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "artifactSha256": {
+          "$ref": "#/$defs/sha"
+        }
+      }
+    },
+    "bytes": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 8388608,
+      "items": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 255
+      }
+    },
+    "transition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "serviceRole",
+        "authorityEpoch",
+        "transition",
+        "transitionIdSha256",
+        "requestSha256",
+        "replayIdSha256",
+        "predecessorHeadSha256",
+        "resultingHeadSha256",
+        "resultSha256",
+        "completedAtBoottimeNanos",
+        "exactCanonicalPayloadBytes",
+        "signatureBase64",
+        "exactSignedEnvelopeBytes",
+        "receiptSha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.policyCustodyProductionGeneration/v4"
+        },
+        "serviceRole": {
+          "$ref": "custody-service-generation-admission.v1.schema.json#/$defs/role"
+        },
+        "authorityEpoch": {
+          "$ref": "custody-service-generation-admission.v1.schema.json#/$defs/authorityEpoch"
+        },
+        "transition": {
+          "enum": [
+            "prepare",
+            "commit",
+            "abort"
+          ]
+        },
+        "transitionIdSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "requestSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "replayIdSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "predecessorHeadSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "resultingHeadSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "resultSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "completedAtBoottimeNanos": {
+          "$ref": "#/$defs/u64"
+        },
+        "exactCanonicalPayloadBytes": {
+          "$ref": "#/$defs/bytes"
+        },
+        "signatureBase64": {
+          "$ref": "#/$defs/signature"
+        },
+        "exactSignedEnvelopeBytes": {
+          "$ref": "#/$defs/bytes"
+        },
+        "receiptSha256": {
+          "$ref": "#/$defs/sha"
+        }
+      }
+    },
+    "completion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "requestSha256",
+        "replayIdSha256",
+        "result",
+        "serviceTransitions",
+        "responseSha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "enum": [
+            "serverware.policyCustodyProductionGeneration/v4",
+            "serverware.policyCustodyProductionGeneration/v5"
+          ]
+        },
+        "requestSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "replayIdSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "result": {
+          "$ref": "#/$defs/artifact"
+        },
+        "serviceTransitions": {
+          "type": "array",
+          "maxItems": 5,
+          "items": {
+            "$ref": "#/$defs/transition"
+          }
+        },
+        "responseSha256": {
+          "$ref": "#/$defs/sha"
+        }
+      },
+      "allOf": [
+        {"if":{"properties":{"apiVersion":{"const":"serverware.policyCustodyProductionGeneration/v4"}}},
+         "then":{"properties":{"serviceTransitions":{"minItems":5,"maxItems":5},"result":{"properties":{"kind":{"enum":["generation-transition-preparation","generation-install-attestation","generation-abort-settlement"]}}}}},
+         "else":{"properties":{"serviceTransitions":{"maxItems":0},"result":{"properties":{"kind":{"const":"native-generation-recovery"}}}}}}
+      ],
+      "description": "v4 remains five real phase certificates. v5 is only explicit native recovery, zero fabricated transitions; exact five signed observations plus native signature and retained completed originals are verified in Rust."
+    },
+    "phaseCompletion": {
+      "allOf": [{"$ref":"#/$defs/completion"},{"properties":{"apiVersion":{"const":"serverware.policyCustodyProductionGeneration/v4"}}}]
+    },
+    "proposal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "request",
+        "services",
+        "preparedAtBoottimeNanos",
+        "result",
+        "durableIntentSha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeGenerationCoordinatorProposal/v1"
+        },
+        "request": {
+          "$ref": "#/$defs/request"
+        },
+        "services": {
+          "$ref": "#/$defs/replies"
+        },
+        "preparedAtBoottimeNanos": {
+          "$ref": "#/$defs/u64"
+        },
+        "result": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/artifact"
+            }
+          ]
+        },
+        "durableIntentSha256": {
+          "$ref": "#/$defs/sha"
+        }
+      }
+    },
+    "endpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "endpointKind",
+        "endpointRole"
+      ],
+      "properties": {
+        "endpointKind": {
+          "const": "proof"
+        },
+        "endpointRole": {
+          "const": "generation-install-envelope"
+        }
+      }
+    },
+    "admissionBody": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "requestKind",
+        "body"
+      ],
+      "properties": {
+        "requestKind": {
+          "const": "generation-admission"
+        },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "request",
+            "services"
+          ],
+          "properties": {
+            "request": {
+              "$ref": "#/$defs/request"
+            },
+            "services": {
+              "$ref": "#/$defs/replies"
+            }
+          }
+        }
+      }
+    },
+    "endpointRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "endpoint",
+        "replayIdSha256",
+        "deadlineBoottimeNanos",
+        "request",
+        "requestSha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.policyCustodyProductionAuthorityEndpoint/v4"
+        },
+        "endpoint": {
+          "$ref": "#/$defs/endpoint"
+        },
+        "replayIdSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "deadlineBoottimeNanos": {
+          "$ref": "#/$defs/u64"
+        },
+        "request": {
+          "$ref": "#/$defs/admissionBody"
+        },
+        "requestSha256": {
+          "$ref": "#/$defs/sha"
+        }
+      }
+    },
+    "endpointReply": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "endpoint",
+        "requestSha256",
+        "replayIdSha256",
+        "completedAtBoottimeNanos",
+        "authorityKeyId",
+        "authorityKeySpkiSha256",
+        "result",
+        "resultSha256",
+        "signatureBase64"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.policyCustodyProductionAuthorityEndpoint/v4"
+        },
+        "endpoint": {
+          "$ref": "#/$defs/endpoint"
+        },
+        "requestSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "replayIdSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "completedAtBoottimeNanos": {
+          "$ref": "#/$defs/u64"
+        },
+        "authorityKeyId": {
+          "$ref": "#/$defs/sha"
+        },
+        "authorityKeySpkiSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "result": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "resultKind",
+            "body"
+          ],
+          "properties": {
+            "resultKind": {
+              "const": "generation-proposal"
+            },
+            "body": {
+              "$ref": "#/$defs/proposal"
+            }
+          }
+        },
+        "resultSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "signatureBase64": {
+          "$ref": "#/$defs/signature"
+        }
+      }
+    },
+    "certification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "request",
+        "reply",
+        "authorityPublicKey"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.custodyServiceGenerationCertification/v1"
+        },
+        "request": {
+          "$ref": "#/$defs/endpointRequest"
+        },
+        "reply": {
+          "$ref": "#/$defs/endpointReply"
+        },
+        "authorityPublicKey": {
+          "$ref": "#/$defs/publicKey"
+        }
+      }
+    },
+    "certified": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "certificationCommandSha256",
+        "localEffectSha256",
+        "transition"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.custodyServiceGenerationCertified/v1"
+        },
+        "certificationCommandSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "localEffectSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "transition": {
+          "$ref": "#/$defs/transition"
+        }
+      }
+    },
+    "conclusion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "certification",
+        "certificates"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeGenerationCoordinatorConclusion/v1"
+        },
+        "certification": {
+          "$ref": "#/$defs/certification"
+        },
+        "certificates": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "durable-recovery-store",
+            "cleanup-authorization-consumer",
+            "recovery-target-provider",
+            "current-signature-authority",
+            "bounded-cleanup-helper"
+          ],
+          "properties": {
+            "durable-recovery-store": {
+              "$ref": "#/$defs/certified"
+            },
+            "cleanup-authorization-consumer": {
+              "$ref": "#/$defs/certified"
+            },
+            "recovery-target-provider": {
+              "$ref": "#/$defs/certified"
+            },
+            "current-signature-authority": {
+              "$ref": "#/$defs/certified"
+            },
+            "bounded-cleanup-helper": {
+              "$ref": "#/$defs/certified"
+            }
+          }
+        }
+      }
+    },
+    "completed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "conclusion",
+        "response"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeGenerationCoordinatorCompleted/v1"
+        },
+        "conclusion": {
+          "$ref": "#/$defs/conclusion"
+        },
+        "response": {
+          "$ref": "#/$defs/completion"
+        }
+      }
+    },
+    "installed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "prepareRequest",
+        "preparation",
+        "commitRequest",
+        "installation"
+      ],
+      "properties": {
+        "prepareRequest": {
+          "$ref": "#/$defs/request"
+        },
+        "preparation": {
+          "$ref": "#/$defs/phaseCompletion"
+        },
+        "commitRequest": {
+          "$ref": "#/$defs/request"
+        },
+        "installation": {
+          "$ref": "#/$defs/phaseCompletion"
+        }
+      }
+    },
+    "recoveryPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "purpose",
+        "request",
+        "services",
+        "coordinatorAssignmentSha256",
+        "journalHeadSha256",
+        "journalSequence",
+        "installed",
+        "observedAtBoottimeNanos"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeGenerationRecovery/v1"
+        },
+        "purpose": {
+          "const": "native-generation-recovery-observation"
+        },
+        "request": {
+          "$ref": "#/$defs/request"
+        },
+        "services": {
+          "$ref": "#/$defs/replies"
+        },
+        "coordinatorAssignmentSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "journalHeadSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "journalSequence": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 8
+        },
+        "installed": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/installed"
+            }
+          ]
+        },
+        "observedAtBoottimeNanos": {
+          "$ref": "#/$defs/u64"
+        }
+      }
+    },
+    "recovery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "payload",
+        "authorityPublicKey",
+        "signatureBase64url"
+      ],
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/recoveryPayload"
+        },
+        "authorityPublicKey": {
+          "$ref": "#/$defs/publicKey"
+        },
+        "signatureBase64url": {
+          "$ref": "#/$defs/signature"
+        }
+      },
+      "description": "Never-installed requires sequence=0 and all five observations genuinely empty; installed requires exact six-record completed coordinator state and all five exact committed effects. Incomplete or aborted states refuse; observation never replays a contact."
+    },
+    "certifiedResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "resultKind",
+        "body"
+      ],
+      "properties": {
+        "resultKind": {
+          "const": "certified"
+        },
+        "body": {
+          "$ref": "#/$defs/certified"
+        }
+      }
+    }
+  }
+}

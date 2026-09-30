@@ -18,6 +18,8 @@ pub(super) mod wire;
 pub(super) mod guest;
 pub(super) mod generation_service;
 pub(super) mod generation_service_client;
+pub(super) mod generation_certification;
+pub(super) mod generation_recovery;
 mod guest_original;
 use guest::Bootstrap;
 
@@ -158,7 +160,7 @@ const DURABILITY_WORK_CANCELLED: u8 = 2;
 const DURABILITY_WORK_COMPLETED: u8 = 3;
 const DURABILITY_WORK_LATE: u8 = 4;
 
-type RuntimeAuthorityHistory = BoundedAuthorityHistoryV3<
+pub(super) type RuntimeAuthorityHistory = BoundedAuthorityHistoryV3<
     MAX_AUTHORITY_HISTORY_EPOCHS,
     MAX_AUTHORITY_COMPACTION_ANCHORS,
     MAX_AUTHORITY_REPLAY_TOMBSTONES,

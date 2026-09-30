@@ -9083,7 +9083,7 @@ impl ProductionCustodyGenerationTransitionPreparation {
             || self
                 .commit_deadline_boottime_nanos
                 .checked_sub(self.prepared_at_boottime_nanos)
-                != Some(successor.maximum_rpc_nanos)
+                .is_none_or(|remaining| remaining > successor.maximum_rpc_nanos)
         {
             return Err(ShadowError::BindingDrift);
         }

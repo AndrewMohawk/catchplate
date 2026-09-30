@@ -1094,15 +1094,30 @@ impl RpcProductionPolicyShadowCustodyProcess {
             ProductionRpcResponseBodyV4::Generation(response) => response,
             _ => return Err(ShadowError::CustodyUnavailable),
         };
-        let recovered = Self::decode_artifact::<
-            ProductionGenerationRecoveredResultWireV4,
-        >(
-            &response.result,
-            ProductionArtifactKindV4::GenerationInstallAttestation,
-        )?;
-        recovered
-            .validate_for_request(&request)
-            .map_err(|_| ShadowError::CustodyUnavailable)?;
+        let recovered = if response.api_version==super::services::generation_recovery::RESPONSE_API {
+            // The actual selected bridge has independently verified both the
+            // native signature and all five current service observations. This
+            // exact variant does not turn a rejection into an empty state.
+            let evidence=Self::decode_artifact::<super::services::generation_recovery::Evidence>(
+                &response.result,ProductionArtifactKindV4::NativeGenerationRecovery)?;
+            if evidence.payload.request!=request || response.request_sha256!=request.request_sha256().map_err(|_|ShadowError::CustodyUnavailable)?
+                || response.replay_id_sha256!=*request.replay_id_sha256() || !response.service_transitions.is_empty() {
+                return Err(ShadowError::CustodyUnavailable);
+            }
+            let Some(installed)=evidence.payload.installed else{return Ok(None);};
+            super::services::generation_recovery::same_scope(&request,&installed.prepare_request).map_err(|_|ShadowError::CustodyUnavailable)?;
+            let preparation=Self::decode_artifact::<ProductionGenerationPreparationResultWireV4>(&installed.preparation.result,
+                ProductionArtifactKindV4::GenerationTransitionPreparation)?;
+            preparation.validate_for_request(&installed.prepare_request).map_err(|_|ShadowError::CustodyUnavailable)?;
+            let installation=Self::decode_artifact::<ExactSignedProductionGenerationInstallEnvelopeWireV4>(&installed.installation.result,
+                ProductionArtifactKindV4::GenerationInstallAttestation)?;
+            installation.validate_for_request(&installed.commit_request).map_err(|_|ShadowError::CustodyUnavailable)?;
+            ProductionGenerationRecoveredResultWireV4{preparation,installation}
+        } else {
+            let recovered=Self::decode_artifact::<ProductionGenerationRecoveredResultWireV4>(&response.result,
+                ProductionArtifactKindV4::GenerationInstallAttestation)?;
+            recovered.validate_for_request(&request).map_err(|_|ShadowError::CustodyUnavailable)?;recovered
+        };
         let preparation = Self::preparation_from_wire(
             recovered.preparation,
         )?;

@@ -287,17 +287,22 @@ impl Cohort {
     }
 }
 // The exact slot does not create a service. Unknown or not-yet-connected
-// generation selectors refuse before ANY child is released.
+// selectors refuse before ANY child is released.
 fn require_role(index:usize,service:&SelectedService)->Result<(),ShadowError> {
     require(match (index,service) {
         (0,SelectedService::Retrieval(_))|(1,SelectedService::Persistence(_))|(1,SelectedService::PersistenceLocked(_))|
-        (2,SelectedService::TrustedTime(_))|(4,SelectedService::ProofBridge(_))=>true,
+        (2,SelectedService::TrustedTime(_))|(3,SelectedService::Generation(_))|(4,SelectedService::ProofBridge(_))=>true,
         _=>false,
     })
 }
 fn assigned_peers(service:&SelectedService,files:&FileAdmission)
     ->Result<Vec<(usize,super::super::super::super::ExpectedPeerCredentialV3)>,ShadowError> {
     match service {
+        SelectedService::Generation(pin)=>{
+            let original=pin.open(65536)?;
+            let grant:admission::generation_install::Configuration=exact(&original.read(65536).map_err(fail)?)?;
+            grant.validate_shape()?;Ok(vec![(4,grant.expected_peer().clone())])
+        }
         SelectedService::Retrieval(pin)=>{
             let original=pin.open(65536)?;
             let grant:admission::retrieval::Configuration=exact(&original.read(65536).map_err(fail)?)?;
@@ -328,6 +333,16 @@ fn assigned_peers(service:&SelectedService,files:&FileAdmission)
 fn prepare_inspection(service:SelectedService,files:&FileAdmission,activation:&BTreeMap<String,OwnedFd>)
     ->Result<(Inspection,OwnedFd),ShadowError> {
     match service {
+        SelectedService::Generation(pin)=>{
+            require(activation.len()==2 && activation.contains_key("generation-install-journal"))?;
+            let original=pin.open(65536)?;
+            let grant:admission::generation_install::Configuration=exact(&original.read(65536).map_err(fail)?)?;
+            grant.validate_shape()?;
+            let socket=activation.get("shadow-generation-install-listener").ok_or(ShadowError::BindingDrift)?;
+            let (owner,remote)=retrieval_peer::Inspector::prepare_endpoint(original,
+                grant.expected_peer().checked().map_err(fail)?,grant.guest_uid(),socket,retrieval_peer::EndpointKind::GenerationInstallEnvelope)?;
+            Ok((Inspection::Server(owner),remote))
+        }
         SelectedService::Retrieval(pin)=>{
             let (owner,remote)=retrieval_peer::Inspector::prepare(&pin,activation)?;
             Ok((Inspection::Server(owner),remote))

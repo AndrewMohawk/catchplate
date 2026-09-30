@@ -4424,6 +4424,11 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/time.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/generation_service.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/generation_service_client.rs \
+				data-plane/decision-gate-rs/src/policy_custody/services/generation_certification.rs \
+				data-plane/decision-gate-rs/src/policy_custody/services/generation_recovery.rs \
+				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/generation_install.rs \
+				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/generation_store.rs \
+				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/generation_history.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/trusted_time.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/trusted_time_sample.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/proof_client.rs \
@@ -4799,6 +4804,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-shadow-persistence-inputs.v1.schema.json \
 				schemas/native-shadow-proof-cohort.v1.schema.json \
 				schemas/custody-service-generation-admission.v1.schema.json \
+				schemas/native-generation-coordinator.v1.schema.json \
 				schemas/custody-five-service-launch.v1.schema.json \
 				schemas/custody-five-service-business-inputs.v1.schema.json \
 				schemas/native-policy-activation.v1.schema.json \

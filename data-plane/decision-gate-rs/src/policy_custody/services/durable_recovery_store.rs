@@ -1197,6 +1197,11 @@ impl super::generation_service::Owner for TrustedHostNoTeeDurableRecoveryStoreSe
     fn sign_generation_effect(&self,effect:super::generation_service::Effect)->Result<super::generation_service::Receipt,ServiceError> {
         super::generation_service::sign(effect,&self.signer.signing_key)
     }
+    fn sign_generation_transition(&self,epoch:super::super::authority_history::AuthorityEpochRefV3,
+        request:&super::super::production_dispatch::ClosedProductionGenerationRequestV4,head:Sha256Digest,result:Sha256Digest,now:u64)
+        ->Result<super::super::production_dispatch::SignedProductionGenerationServiceTransitionV4,ServiceError>{
+        super::generation_service::sign_transition(epoch,request,head,result,now,&self.signer.signing_key)
+    }
     fn sign_generation_observation(&self,payload:super::generation_service::ObservationPayload)->Result<super::generation_service::Observation,ServiceError> {
         super::generation_service::sign_observation(payload,&self.signer.signing_key)
     }

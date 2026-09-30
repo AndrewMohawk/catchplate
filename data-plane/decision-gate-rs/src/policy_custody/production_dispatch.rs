@@ -7,8 +7,9 @@
 //! There is no generic command, path, argument, or executable field.
 
 use super::authority_history::{
-    AuthorityEpochRefV3, HistoricalServiceRoleV3,
+    AuthorityEpochRefV3, HistoricalServiceRoleV3,HistoricalAuthorityRoleV3,
 };
+use super::services::RuntimeAuthorityHistory;
 use super::protocol::PolicyCustodyOperation;
 use super::terminal_settlement::FiveServiceHistoricalKeyringsV4;
 use super::super::{
@@ -112,6 +113,7 @@ pub(super) enum ProductionArtifactKindV4 {
     GenerationTransitionPreparation,
     GenerationInstallAttestation,
     GenerationAbortSettlement,
+    NativeGenerationRecovery,
     TerminalCleanupAttestation,
 }
 
@@ -2223,6 +2225,19 @@ impl SignedProductionGenerationServiceTransitionV4 {
         result_sha256: &Sha256Digest,
         keyrings: &FiveServiceHistoricalKeyringsV4<'_>,
     ) -> Result<(), &'static str> {
+        self.validate_service(request,request_sha256,result_sha256,keyrings.history(self.service_role))
+    }
+
+    pub(super) fn validate_service(
+        &self,
+        request:&ClosedProductionGenerationRequestV4,
+        request_sha256:&Sha256Digest,
+        result_sha256:&Sha256Digest,
+        history:&RuntimeAuthorityHistory,
+    )->Result<(),&'static str> {
+        if history.authority_role()!=HistoricalAuthorityRoleV3::IsolatedService(self.service_role) {
+            return Err("generation certificate history role differs");
+        }
         for digest in [
             &self.transition_id_sha256,
             &self.request_sha256,
@@ -2267,9 +2282,7 @@ impl SignedProductionGenerationServiceTransitionV4 {
                 "generation service transition payload bytes are not exact canonical bytes",
             );
         }
-        keyrings
-            .history(self.service_role)
-            .verify_service_signature(
+        history.verify_service_signature(
                 &self.authority_epoch,
                 GENERATION_SERVICE_TRANSITION_DOMAIN,
                 &payload,
@@ -3268,6 +3281,18 @@ impl ProductionRpcResponseV4 {
 }
 
 impl ClosedProductionGenerationResponseV4 {
+    pub(super) fn from_native_recovery(request:&ClosedProductionGenerationRequestV4,
+        evidence:&super::services::generation_recovery::Evidence)->Result<Self,&'static str>{
+        if request.transition()!=ProductionGenerationTransitionV4::Recover {return Err("native recovery requires recover");}
+        let mut value=Self::from_parts(request,CanonicalProductionArtifactV4::from_serializable(
+            ProductionArtifactKindV4::NativeGenerationRecovery,evidence)?,Vec::new())?;
+        value.api_version=super::services::generation_recovery::RESPONSE_API.into();
+        value.response_sha256=value.digest()?;Ok(value)
+    }
+    fn digest(&self)->Result<Sha256Digest,&'static str>{
+        Ok(hash_domain_frames(GENERATION_RESPONSE_DOMAIN,&[&canonical_json_bytes(&(&self.api_version,&self.request_sha256,
+            &self.replay_id_sha256,&self.result,&self.service_transitions)).map_err(|_|"generation response is not canonical")?]))
+    }
     pub(super) fn from_parts(
         request: &ClosedProductionGenerationRequestV4,
         result: CanonicalProductionArtifactV4,
@@ -3303,6 +3328,16 @@ impl ClosedProductionGenerationResponseV4 {
         request: &ClosedProductionGenerationRequestV4,
         keyrings: &FiveServiceHistoricalKeyringsV4<'_>,
     ) -> Result<(), &'static str> {
+        if self.api_version==super::services::generation_recovery::RESPONSE_API {
+            if request.transition()!=ProductionGenerationTransitionV4::Recover
+                || self.request_sha256!=request.request_sha256()? || self.replay_id_sha256!=*request.replay_id_sha256()
+                || self.result.kind!=ProductionArtifactKindV4::NativeGenerationRecovery
+                || !self.service_transitions.is_empty() || self.response_sha256!=self.digest()? {
+                return Err("native recovery wrapper differs from its actual recover request");
+            }
+            let evidence:super::services::generation_recovery::Evidence=decode_exact_artifact_wire(&self.result)?;
+            return evidence.validate(request,keyrings);
+        }
         require_digest(&self.request_sha256)?;
         require_digest(&self.replay_id_sha256)?;
         require_digest(&self.response_sha256)?;

@@ -8,6 +8,8 @@ use super::super::production_dispatch::{ClosedProductionGenerationRequestV4 as R
     ProductionGenerationTransitionV4 as Transition};
 use ed25519_dalek::Signer as _;
 use std::os::unix::fs::FileExt;
+use super::generation_certification::{Certify,Certified};
+use super::super::production_dispatch::SignedProductionGenerationServiceTransitionV4 as Certificate;
 
 pub(super) const RUNTIME: &str = "serverware.policyCustodyServiceRuntimeConfig/v5";
 pub(super) const API: &str = "serverware.custodyServiceGenerationCommand/v1";
@@ -26,7 +28,7 @@ fn sha<T:Serialize>(value:&T)->Result<Sha256Digest,ServiceError> {
 }
 pub(super) fn is_command(raw:&[u8])->Result<bool,ServiceError> {
     let value:serde_json::Value=decode_canonical_frame(raw)?;
-    Ok(value.get("apiVersion").and_then(|v|v.as_str())==Some(API))
+    Ok(matches!(value.get("apiVersion").and_then(|v|v.as_str()),Some(API|super::generation_certification::API)))
 }
 pub(super) fn frame_deadline(raw:&[u8])->Result<u64,ServiceError> {
     let value:serde_json::Value=decode_canonical_frame(raw)?;
@@ -34,6 +36,9 @@ pub(super) fn frame_deadline(raw:&[u8])->Result<u64,ServiceError> {
         let command:Command=decode_canonical_frame(raw)?;
         command.request.request_sha256().map_err(|_|invalid())?;
         Ok(command.request.deadline_boottime_nanos())
+    } else if value.get("apiVersion").and_then(|v|v.as_str())==Some(super::generation_certification::API) {
+        let command:Certify=decode_canonical_frame(raw)?;
+        Ok(command.deadline())
     } else {
         let frame:ServiceRequestFrameV3=decode_canonical_frame(raw)?;
         Ok(frame.binding.deadline.absolute_boottime_nanos())
@@ -46,6 +51,7 @@ pub(super) fn check_response_deadline(raw:&[u8],deadline:u64)->Result<(),Service
         ensure(match response {
             Response::Effect(v)=>v.payload.deadline_boottime_nanos<=deadline,
             Response::Observation(v)=>v.payload.deadline_boottime_nanos==deadline,
+            Response::Certified(v)=>v.transition.completed_at_boottime_nanos<deadline,
         })
     } else {
         let frame:ServiceResponseFrameV3=decode_canonical_frame(raw)?;
@@ -155,7 +161,7 @@ pub(super) struct ObservationPayload {
 pub(super) struct Observation {pub(super) payload:ObservationPayload,pub(super) signature_base64url:String}
 #[derive(Debug,Clone,PartialEq,Eq,Serialize,Deserialize)]
 #[serde(tag="resultKind",content="body",rename_all="kebab-case",deny_unknown_fields)]
-pub(super) enum Response {Effect(Receipt),Observation(Observation)}
+pub(super) enum Response {Effect(Receipt),Observation(Observation),Certified(Certified)}
 
 /// Only implemented by the five actual serving types. No DTO implements this
 /// interface and no signing seed leaves its existing authority owner.
@@ -163,6 +169,13 @@ pub(super) trait Owner {
     fn generation_state(&self,deadline:u64)->Result<Sha256Digest,ServiceError>;
     fn sign_generation_effect(&self,effect:Effect)->Result<Receipt,ServiceError>;
     fn sign_generation_observation(&self,payload:ObservationPayload)->Result<Observation,ServiceError>;
+    fn sign_generation_transition(&self,epoch:AuthorityEpochRefV3,request:&Request,head:Sha256Digest,
+        result:Sha256Digest,now:u64)->Result<Certificate,ServiceError>;
+}
+pub(super) fn sign_transition(epoch:AuthorityEpochRefV3,request:&Request,head:Sha256Digest,result:Sha256Digest,
+    now:u64,key:&SigningKey)->Result<Certificate,ServiceError>{
+    let super::super::authority_history::HistoricalAuthorityRoleV3::IsolatedService(role)=epoch.authority_role else{return Err(invalid());};
+    Certificate::sign(role,epoch,request,head,result,now,key).map_err(|_|invalid())
 }
 pub(super) fn sign_observation(payload:ObservationPayload,key:&SigningKey)->Result<Observation,ServiceError> {
     ensure(payload.api_version=="serverware.custodyServiceGenerationObservation/v1"
@@ -184,7 +197,8 @@ pub(super) fn sign(effect:Effect,key:&SigningKey)->Result<Receipt,ServiceError> 
 struct Append {key:Sha256Digest,request:Vec<u8>,response:Vec<u8>}
 pub(super) struct Gate {
     grant:Grant,grant_raw:Vec<u8>,grant_file:std::fs::File,history:RuntimeAuthorityHistory,bootstrap:Bootstrap,
-    worker:BoundedServiceWorker<Append,Vec<u8>>,records:Vec<(Command,Receipt)>,poisoned:bool,
+    worker:BoundedServiceWorker<Append,(Vec<u8>,Sha256Digest)>,records:Vec<(Command,Receipt)>,
+    certifications:Vec<(Certify,Certified)>,head:Option<Sha256Digest>,poisoned:bool,
 }
 impl Gate {
     pub(super) fn open<T>(loaded:&LoadedConfig<T>,runtime:&RuntimeConfigHeaderV3,bootstrap:&Bootstrap,
@@ -220,22 +234,33 @@ impl Gate {
         let mut journal=DurableAppendJournal::from_directory_without_orphan_repair(directory,role,65536)?;
         // Complete chain only. No orphan repair grants permission to open.
         let chain=journal.verified_complete_chain(MAX_RECORDS,MAX_BYTES)?;
-        let mut records=Vec::new();
+        let mut records=Vec::new();let mut certifications=Vec::new();
         for record in chain.records {
+            let kind:serde_json::Value=decode_canonical_frame(&record.exact_request_bytes)?;
+            if kind.get("apiVersion").and_then(|v|v.as_str())==Some(super::generation_certification::API) {
+                ensure(records.len()==certifications.len()+1)?;
+                let command:Certify=decode_canonical_frame(&record.exact_request_bytes)?;
+                let certified:Certified=decode_canonical_frame(&record.exact_response_bytes)?;
+                ensure(record.idempotency_sha256==sha(&command)?
+                    && record.previous_head_sha256.as_ref()==Some(&certified.transition.predecessor_head_sha256))?;
+                certifications.push((command,certified));continue;
+            }
+            ensure(records.len()==certifications.len())?;
             let command:Command=decode_canonical_frame(&record.exact_request_bytes)?;
             let receipt:Receipt=decode_canonical_frame(&record.exact_response_bytes)?;
             ensure(record.idempotency_sha256==sha(&command)?)?;
             records.push((command,receipt));
         }
+        let head=journal.current_head_sha256().cloned();
         let worker=BoundedServiceWorker::start("custody-generation-durability",runtime.maximum_durability_worker_nanos,
             move |input:Append,fence:&BoundedDurabilityFence| {
                 fence.require_open()?;
                 let result=journal.append_exact_exchange(input.key,&input.request,&input.response)?;
                 fence.require_open()?;
                 ensure(result.exact_response_bytes()==input.response.as_slice())?;
-                Ok(input.response)
+                Ok((input.response,journal.current_head_sha256().cloned().ok_or_else(invalid)?))
             })?;
-        let owner=Self{grant,grant_raw,grant_file,history,bootstrap:bootstrap.clone(),worker,records,poisoned:false};
+        let owner=Self{grant,grant_raw,grant_file,history,bootstrap:bootstrap.clone(),worker,records,certifications,head,poisoned:false};
         owner.check()?;owner.validate_history()?;Ok(Some(owner))
     }
     fn check(&self)->Result<(),ServiceError> {
@@ -258,7 +283,46 @@ impl Gate {
                     && command.request.transition_id_sha256()==self.records[0].0.request.transition_id_sha256()
                     && command.request.deadline_boottime_nanos()<=self.records[0].0.request.deadline_boottime_nanos()})?;
         }
+        ensure(self.certifications.len()<=self.records.len())?;
+        for (command,certified) in &self.certifications {self.verify_certification(command,certified)?;}
         Ok(())
+    }
+    fn verify_certification(&self,command:&Certify,certified:&Certified)->Result<(),ServiceError>{
+        let scope=&self.grant.payload.scope;
+        let proposal=command.verify(&scope.envelope_authority_key_id,&scope.envelope_authority_key_spki_sha256)?;
+        let (local,receipt)=command.local(self.grant.payload.service_role)?;
+        ensure(self.records.iter().any(|(a,b)|a==local && b==receipt)
+            && certified.api_version=="serverware.custodyServiceGenerationCertified/v1"
+            && certified.certification_command_sha256==sha(command)? && certified.local_effect_sha256==sha(receipt)?
+            && certified.transition.authority_epoch==self.history.current_epoch().map_err(|_|invalid())?.epoch_reference())?;
+        certified.transition.validate_service(&proposal.request,&proposal.request.request_sha256().map_err(|_|invalid())?,
+            &proposal.result_binding()?,&self.history).map_err(|_|invalid())
+    }
+    fn certify(&mut self,raw:&[u8],owner:&impl Owner)->Result<Vec<u8>,ServiceError>{
+        let command:Certify=decode_canonical_frame(raw)?;let scope=&self.grant.payload.scope;
+        let proposal=command.verify(&scope.envelope_authority_key_id,&scope.envelope_authority_key_spki_sha256)?;
+        let deadline=command.deadline();self.bootstrap.require_deadline(deadline).map_err(|_|invalid())?;
+        ensure(boottime_now_nanos().map_err(|_|invalid())?<deadline && deadline<=self.grant.payload.expires_at_boottime_nanos)?;
+        let command_sha256=sha(&command)?;
+        if let Some((_,certified))=self.certifications.iter().find(|(_,prior)|prior.certification_command_sha256==command_sha256) {
+            self.verify_certification(&command,certified)?;
+            return encode_canonical_frame(&Response::Certified(certified.clone()));
+        }
+        ensure(self.records.len()==self.certifications.len()+1 && self.records.len()<=2)?;
+        let (local,receipt)=command.local(self.grant.payload.service_role)?;
+        ensure(self.records.last()==Some(&(local.clone(),receipt.clone()))
+            && owner.generation_state(deadline)?==receipt.payload.owner_state_sha256)?;
+        let transition=owner.sign_generation_transition(self.history.current_epoch().map_err(|_|invalid())?.epoch_reference(),
+            &proposal.request,self.head.clone().ok_or_else(invalid)?,proposal.result_binding()?,boottime_now_nanos().map_err(|_|invalid())?)?;
+        let certified=Certified{api_version:"serverware.custodyServiceGenerationCertified/v1".into(),
+            certification_command_sha256:sha(&command)?,local_effect_sha256:sha(receipt)?,transition};
+        self.verify_certification(&command,&certified)?;let bytes=encode_canonical_frame(&certified)?;
+        self.poisoned=true;
+        let (persisted,head)=self.worker.execute(Append{key:sha(&command)?,request:raw.to_vec(),response:bytes.clone()},deadline)
+            .map_err(|_|invalid())?;
+        ensure(persisted==bytes && owner.generation_state(deadline)?==receipt.payload.owner_state_sha256)?;
+        self.head=Some(head);self.certifications.push((command,certified.clone()));self.poisoned=false;self.check()?;
+        Ok(encode_canonical_frame(&Response::Certified(certified))?)
     }
     pub(super) fn verify_receipt(&self,command:&Command,receipt:&Receipt)->Result<(),ServiceError> {
         let p=&receipt.payload;
@@ -282,13 +346,17 @@ impl Gate {
             &receipt.signature_base64url).map_err(|_|invalid())
     }
     pub(super) fn ordinary(&self)->Result<(),ServiceError> {
-        self.check()?;ensure(self.records.last().is_some_and(|(_,v)|v.payload.phase==Phase::Committed))
+        self.check()?;ensure(self.records.last().is_some_and(|(_,v)|v.payload.phase==Phase::Committed)
+            && self.certifications.last().is_some_and(|(_,v)|v.transition.transition==Transition::Commit))
     }
     /// None denotes an ordinary frame, whose admission is checked before its
     /// existing handler. Exact replay is observation only; never reapply it.
     pub(super) fn handle(&mut self,raw:&[u8],owner:&impl Owner)->Result<Option<Vec<u8>>,ServiceError> {
         self.check()?;
         let value:serde_json::Value=decode_canonical_frame(raw)?;
+        if value.get("apiVersion").and_then(|v|v.as_str())==Some(super::generation_certification::API) {
+            return self.certify(raw,owner).map(Some);
+        }
         if value.get("apiVersion").and_then(|v|v.as_str())!=Some(API) {self.ordinary()?;return Ok(None);}
         let command:Command=decode_canonical_frame(raw)?;
         command.request.request_sha256().map_err(|_|invalid())?;
@@ -327,7 +395,7 @@ impl Gate {
                 self.grant.payload.scope.matches(&command.request)?;Phase::Prepared
             }
             Transition::Commit|Transition::Abort=>{
-                ensure(self.records.len()==1)?;
+                ensure(self.records.len()==1 && self.certifications.len()==1)?;
                 let (prepared,receipt)=&self.records[0];
                 ensure(command.prepared_effect_sha256==Some(sha(receipt)?)
                     && command.request.transition_id_sha256()==prepared.request.transition_id_sha256()
@@ -348,10 +416,10 @@ impl Gate {
         let receipt=owner.sign_generation_effect(effect)?;self.verify_receipt(&command,&receipt)?;
         let exact=encode_canonical_frame(&receipt)?;
         self.poisoned=true;
-        let persisted=self.worker.execute(Append{key:sha(&command)?,request:raw.to_vec(),response:exact.clone()},deadline)
+        let (persisted,head)=self.worker.execute(Append{key:sha(&command)?,request:raw.to_vec(),response:exact.clone()},deadline)
             .map_err(|_|invalid())?;
         ensure(persisted==exact && owner.generation_state(deadline)?==receipt.payload.owner_state_sha256)?;
-        self.records.push((command,receipt.clone()));self.poisoned=false;self.check()?;self.validate_history()?;
+        self.head=Some(head);self.records.push((command,receipt.clone()));self.poisoned=false;self.check()?;self.validate_history()?;
         Ok(Some(encode_canonical_frame(&Response::Effect(receipt))?))
     }
 }
@@ -363,4 +431,93 @@ fn read_grant(file:&std::fs::File)->Result<Vec<u8>,ServiceError>{
     let mut raw=vec![0;metadata.len() as usize];let mut offset=0;
     while offset<raw.len(){let n=file.read_at(&mut raw[offset..],offset as u64)?;ensure(n>0)?;offset+=n;}
     Ok(raw)
+}
+
+/// Independently verified public member original for the native coordinator.
+/// It has no local signing, admission, journal or process-owner capability.
+pub(super) struct RemoteGrant {grant:Grant,sha256:Sha256Digest,history:RuntimeAuthorityHistory}
+impl RemoteGrant {
+    pub(super) fn admit(raw:&[u8],history:RuntimeAuthorityHistory,role:TrustedHostServiceRoleV3,
+        coordinator:&guest::GuestClosureBinding)->Result<Self,ServiceError>{
+        ensure(!raw.is_empty() && raw.len()<=65536)?;
+        let grant:Grant=decode_canonical_frame(raw)?;let p=&grant.payload;
+        ensure(p.api_version=="serverware.custodyServiceGenerationGrant/v1" && p.purpose=="cold-service-generation-admission"
+            && p.service_role==role && history.authority_role()==super::super::authority_history::HistoricalAuthorityRoleV3::IsolatedService(historical_service_role(role))
+            && p.guest.service_role==match role {
+                TrustedHostServiceRoleV3::DurableRecoveryStore=>"durable-recovery-store",
+                TrustedHostServiceRoleV3::CleanupAuthorizationConsumer=>"cleanup-authorization-consumer",
+                TrustedHostServiceRoleV3::RecoveryTargetProvider=>"recovery-target-provider",
+                TrustedHostServiceRoleV3::CurrentSignatureAuthority=>"current-signature-authority",
+                TrustedHostServiceRoleV3::BoundedCleanupHelper=>"bounded-cleanup-helper"}
+            && p.runtime_configuration_sha256==p.guest.runtime_configuration_sha256
+            && p.authority_history_manifest_sha256==*history.manifest_sha256()
+            && p.guest.uid!=0 && p.guest.gid!=0 && p.guest.uid!=coordinator.uid
+            && p.guest.boot_id_base64url==coordinator.boot_id_base64url
+            && p.guest.time_namespace_device==coordinator.time_namespace_device && p.guest.time_namespace_inode==coordinator.time_namespace_inode
+            && p.issued_at_boottime_nanos>=p.guest.issued_at_boottime_ns.parse::<u64>().map_err(|_|invalid())?
+            && p.issued_at_boottime_nanos<p.expires_at_boottime_nanos
+            && p.expires_at_boottime_nanos<=p.guest.lifetime_deadline_boottime_ns.parse::<u64>().map_err(|_|invalid())?)?;
+        let signature=URL_SAFE_NO_PAD.decode(&grant.signature_base64url).map_err(|_|invalid())?;
+        ensure(signature.len()==64 && URL_SAFE_NO_PAD.encode(&signature)==grant.signature_base64url)?;
+        let preimage=super::super::protocol::domain_separated_signature_preimage(GRANT_DOMAIN,&encode_canonical_frame(p)?)?;
+        history.root_authority_key().verify_strict(&preimage,&Signature::from_slice(&signature).map_err(|_|invalid())?)
+            .map_err(|_|invalid())?;
+        Ok(Self{grant,sha256:Sha256Digest::compute(raw),history})
+    }
+    pub(super) fn digest(&self)->&Sha256Digest{&self.sha256}
+    pub(super) fn history(&self)->&RuntimeAuthorityHistory{&self.history}
+    pub(super) fn guest(&self)->&guest::GuestClosureBinding{&self.grant.payload.guest}
+    pub(super) fn scope(&self,request:&Request)->Result<(),ServiceError>{self.grant.payload.scope.matches(request)}
+    pub(super) fn verify_exchange(&self,request:&Request,exchange:&super::generation_service_client::Exchange,
+        prepared:Option<&Receipt>)->Result<(),ServiceError>{
+        ensure(boottime_now_nanos().map_err(|_|invalid())?<request.deadline_boottime_nanos())?;
+        self.verify_retained_exchange(request,exchange,prepared)
+    }
+    /// Signature/original validation for an already durable coordinator row.
+    /// This returns no new local admission and never refreshes a deadline.
+    pub(super) fn verify_retained_exchange(&self,request:&Request,exchange:&super::generation_service_client::Exchange,
+        prepared:Option<&Receipt>)->Result<(),ServiceError>{
+        let p=&self.grant.payload;let deadline=request.deadline_boottime_nanos();
+        ensure(exchange.command.api_version==API && exchange.command.request==*request
+            && boottime_now_nanos().map_err(|_|invalid())?>=p.issued_at_boottime_nanos
+            && deadline<=p.expires_at_boottime_nanos)?;
+        match &exchange.response {
+            Response::Effect(receipt)=>{
+                let effect=&receipt.payload;
+                ensure(effect.api_version=="serverware.custodyServiceGenerationEffect/v1" && effect.purpose=="cold-service-generation-admission"
+                    && effect.service_role==p.service_role && effect.authority_epoch==self.history.current_epoch().map_err(|_|invalid())?.epoch_reference()
+                    && effect.grant_sha256==self.sha256 && effect.command_sha256==sha(&exchange.command)?
+                    && effect.request_sha256==request.request_sha256().map_err(|_|invalid())?
+                    && &effect.transition_id_sha256==request.transition_id_sha256()
+                    && effect.successor_configuration_binding_sha256==p.scope.successor_configuration_binding_sha256
+                    && effect.prepared_effect_sha256==exchange.command.prepared_effect_sha256
+                    && effect.deadline_boottime_nanos==deadline && effect.observed_at_boottime_nanos>=p.issued_at_boottime_nanos
+                    && effect.observed_at_boottime_nanos<deadline)?;
+                match request.transition(){
+                    Transition::Prepare=>{self.scope(request)?;ensure(prepared.is_none() && effect.phase==Phase::Prepared && effect.prepared_effect_sha256.is_none())?;}
+                    Transition::Commit|Transition::Abort=>{
+                        let before=prepared.ok_or_else(invalid)?;
+                        ensure(effect.prepared_effect_sha256==Some(sha(before)?) && before.payload.transition_id_sha256==effect.transition_id_sha256
+                            && before.payload.owner_state_sha256==effect.owner_state_sha256 && deadline<=before.payload.deadline_boottime_nanos
+                            && matches!((request.transition(),effect.phase),(Transition::Commit,Phase::Committed)|(Transition::Abort,Phase::Aborted)))?;
+                    }
+                    _=>return Err(invalid()),
+                }
+                self.history.verify_service_signature(&effect.authority_epoch,EFFECT_DOMAIN,&encode_canonical_frame(effect)?,
+                    &receipt.signature_base64url).map_err(|_|invalid())
+            }
+            Response::Observation(observation)=>{
+                self.scope(request)?;let o=&observation.payload;
+                ensure(request.transition()==Transition::Recover && exchange.command.prepared_effect_sha256.is_none()
+                    && o.api_version=="serverware.custodyServiceGenerationObservation/v1" && o.purpose=="cold-service-generation-observation"
+                    && o.service_role==p.service_role && o.authority_epoch==self.history.current_epoch().map_err(|_|invalid())?.epoch_reference()
+                    && o.grant_sha256==self.sha256 && o.command_sha256==sha(&exchange.command)?
+                    && o.observed_at_boottime_nanos>=p.issued_at_boottime_nanos && o.observed_at_boottime_nanos<deadline
+                    && o.deadline_boottime_nanos==deadline && (o.decision.is_none() || o.prepared.is_some()))?;
+                self.history.verify_service_signature(&o.authority_epoch,OBSERVATION_DOMAIN,&encode_canonical_frame(o)?,
+                    &observation.signature_base64url).map_err(|_|invalid())
+            }
+            Response::Certified(_)=>Err(invalid()),
+        }
+    }
 }

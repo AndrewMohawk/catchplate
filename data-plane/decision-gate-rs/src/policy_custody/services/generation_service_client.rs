@@ -11,7 +11,7 @@ pub(super) const RUNTIME:&str="serverware.policyCustodyProductionRpcRuntime/v5";
 fn invalid()->ServiceError {ServiceError::Invalid("five-service generation admission is unavailable")}
 fn ensure(ok:bool)->Result<(),ServiceError>{if ok{Ok(())}else{Err(invalid())}}
 fn sha<T:Serialize>(v:&T)->Result<Sha256Digest,ServiceError>{Ok(Sha256Digest::compute(&encode_canonical_frame(v)?))}
-fn roles()->BTreeSet<TrustedHostServiceRoleV3>{BTreeSet::from([
+pub(super) fn roles()->BTreeSet<TrustedHostServiceRoleV3>{BTreeSet::from([
     TrustedHostServiceRoleV3::DurableRecoveryStore,TrustedHostServiceRoleV3::CleanupAuthorizationConsumer,
     TrustedHostServiceRoleV3::RecoveryTargetProvider,TrustedHostServiceRoleV3::CurrentSignatureAuthority,
     TrustedHostServiceRoleV3::BoundedCleanupHelper])}
@@ -36,6 +36,7 @@ pub(super) struct Client {
     selection:Selection,histories:ProductionServiceHistoricalKeyringsV4,bootstrap:Bootstrap,
     prepared:BTreeMap<TrustedHostServiceRoleV3,Receipt>,attempted:BTreeSet<Sha256Digest>,
     in_flight:Option<Sha256Digest>,poisoned:bool,committed:bool,
+    pending:Option<Replies>,certified:BTreeSet<Sha256Digest>,
 }
 impl Client {
     /// Called only in the real bridge loader, after all five actual configured
@@ -46,7 +47,7 @@ impl Client {
         if matches!(&bootstrap,Bootstrap::Host){return Err(ServiceRunnerError::invalid("generation v5 requires original guest lifetime"));}
         bootstrap.check()?;
         Ok(Self{selection,histories,bootstrap,prepared:BTreeMap::new(),attempted:BTreeSet::new(),
-            in_flight:None,poisoned:false,committed:false})
+            in_flight:None,poisoned:false,committed:false,pending:None,certified:BTreeSet::new()})
     }
     pub(super) fn require_committed(&self)->Result<(),ServiceError>{
         self.bootstrap.check().map_err(|_|invalid())?;
@@ -109,6 +110,7 @@ impl Client {
             ensure(packet.rights.is_empty())?;
             let response:Response=decode_canonical_frame(&packet.frame)?;
             match &response {
+                Response::Certified(_)=>return Err(invalid()),
                 Response::Effect(receipt)=>self.receipt(role,&command,receipt)?,
                 Response::Observation(observation)=>{
                     let p=&observation.payload;let histories=self.histories.borrowed();
@@ -139,14 +141,61 @@ impl Client {
         }
         // Remain poisoned/in-flight until the real coordinator's full existing
         // five-service installation response has independently verified.
+        self.pending=Some(replies.clone());
         Ok(replies)
+    }
+    pub(super) fn certify(&mut self,sessions:&BTreeMap<TrustedHostServiceRoleV3,AuthenticatedInheritedSeqpacket>,
+        certification:super::generation_certification::Certify)->Result<super::generation_certification::Conclude,ServiceError>{
+        let proposal=certification.verify(&certification.authority_public_key.key_id,
+            &certification.authority_public_key.key_spki_sha256)?;
+        let request=&proposal.request;let request_sha256=request.request_sha256().map_err(|_|invalid())?;
+        ensure(self.poisoned && self.in_flight.as_ref()==Some(&request_sha256)
+            && self.pending.as_ref()==Some(&proposal.services) && self.certified.len()<2
+            && self.certified.insert(request_sha256.clone()) && sessions.keys().copied().collect::<BTreeSet<_>>()==roles())?;
+        let raw=encode_canonical_frame(&certification)?;let command_sha256=Sha256Digest::compute(&raw);
+        let deadline=certification.deadline();self.bootstrap.require_deadline(deadline).map_err(|_|invalid())?;
+        let mut certificates=BTreeMap::new();
+        for role in roles(){
+            self.bootstrap.check().map_err(|_|invalid())?;
+            let session=&sessions[&role];session.revalidate_peer()?;
+            loop {
+                ensure(boottime_now_nanos().map_err(|_|invalid())?<deadline)?;
+                if session.try_send(&raw,&[],0)?{break;}
+                wait_for_fd(session.progress_fd().as_raw_fd(),libc::POLLOUT,Some(deadline)).map_err(|_|invalid())?;
+            }
+            let packet=loop {
+                ensure(boottime_now_nanos().map_err(|_|invalid())?<deadline)?;
+                if let Some(packet)=session.try_receive(0)?{break packet;}
+                wait_for_fd(session.progress_fd().as_raw_fd(),libc::POLLIN,Some(deadline)).map_err(|_|invalid())?;
+            };
+            ensure(packet.rights.is_empty())?;
+            let Response::Certified(certificate)=decode_canonical_frame(&packet.frame)? else{return Err(invalid());};
+            let (_,effect)=certification.local(role)?;
+            ensure(certificate.api_version=="serverware.custodyServiceGenerationCertified/v1"
+                && certificate.certification_command_sha256==command_sha256 && certificate.local_effect_sha256==sha(effect)?
+                && certificate.transition.service_role==historical_service_role(role))?;
+            let histories=self.histories.borrowed();
+            certificate.transition.validate_service(request,&request_sha256,&proposal.result_binding()?,
+                histories.history(historical_service_role(role))).map_err(|_|invalid())?;
+            session.revalidate_peer()?;self.bootstrap.check().map_err(|_|invalid())?;
+            ensure(boottime_now_nanos().map_err(|_|invalid())?<deadline)?;
+            certificates.insert(role,certificate);
+        }
+        Ok(super::generation_certification::Conclude{api_version:"serverware.nativeGenerationCoordinatorConclusion/v1".into(),
+            certification,certificates})
     }
     pub(super) fn completed(&mut self,request:&Request,response:&ClosedProductionGenerationResponseV4)->Result<(),ServiceError>{
         ensure(self.in_flight.as_ref()==Some(&request.request_sha256().map_err(|_|invalid())?))?;
         response.validate(request,&self.histories.borrowed()).map_err(|_|invalid())?;
         self.bootstrap.check().map_err(|_|invalid())?;
         ensure(boottime_now_nanos().map_err(|_|invalid())?<request.deadline_boottime_nanos())?;
-        self.committed=request.transition()==Transition::Commit;
-        self.in_flight=None;self.poisoned=false;Ok(())
+        let recovered=if request.transition()==Transition::Recover {
+            ensure(response.api_version==super::generation_recovery::RESPONSE_API)?;
+            let evidence:super::generation_recovery::Evidence=decode_canonical_frame(&response.result.exact_bytes().map_err(|_|invalid())?)?;
+            ensure(self.pending.as_ref()==Some(&evidence.payload.services))?;
+            evidence.payload.installed.is_some()
+        }else{false};
+        self.committed=request.transition()==Transition::Commit || recovered;
+        self.pending=None;self.in_flight=None;self.poisoned=false;Ok(())
     }
 }

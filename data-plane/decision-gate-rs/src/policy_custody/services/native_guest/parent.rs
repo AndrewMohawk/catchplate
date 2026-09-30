@@ -114,6 +114,17 @@ impl Running {
         process::isolate_mounts()?;
         let image=image::Image::prepare(&selected.closure,&files)?;
         let (inspector,inspection)=match service_selection {
+            SelectedService::Generation(pin)=>{
+                require(activation.len()==2 && activation.contains_key("shadow-generation-install-listener")
+                    && activation.contains_key("generation-install-journal"))?;
+                let original=pin.open(65536)?;
+                let configuration:admission::generation_install::Configuration=exact(&original.read(65536).map_err(fail)?)?;
+                configuration.validate_shape()?;
+                let (owner,channel)=retrieval_peer::Inspector::prepare_endpoint(original,
+                    configuration.expected_peer().checked().map_err(fail)?,configuration.guest_uid(),
+                    activation.get("shadow-generation-install-listener").ok_or(ShadowError::BindingDrift)?,retrieval_peer::EndpointKind::GenerationInstallEnvelope)?;
+                (Some(Inspection::Server(owner)),Some(channel))
+            }
             SelectedService::Retrieval(pin)=>{
                 require(activation.len()==2 && activation.contains_key("retrieval-listener")
                     && activation.contains_key("retrieval-objects"))?;

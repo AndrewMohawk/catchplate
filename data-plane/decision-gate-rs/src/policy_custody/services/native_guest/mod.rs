@@ -57,11 +57,14 @@ struct PersistenceLaunch {api_version:String,key_admission:Launch,persistence:Pi
 #[derive(Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 struct TrustedTimeLaunch {api_version:String,key_admission:Launch,trusted_time:Pin}
-enum SelectedService {None,Retrieval(Pin),RetrievalBridge,Activation(Pin),Persistence(Pin),PersistenceLocked(Pin),TrustedTime(Pin),ProofBridge(Pin)}
+#[derive(Serialize,Deserialize)]
+#[serde(rename_all="camelCase",deny_unknown_fields)]
+struct GenerationLaunch {api_version:String,key_admission:Launch,generation:Pin}
+enum SelectedService {None,Retrieval(Pin),RetrievalBridge,Activation(Pin),Persistence(Pin),PersistenceLocked(Pin),TrustedTime(Pin),ProofBridge(Pin),Generation(Pin)}
 #[derive(Serialize,Deserialize)]
 #[serde(untagged)]
 enum Selection {KeyAdmission(Launch),Retrieval(RetrievalLaunch),RetrievalBridge(RetrievalBridgeLaunch),Activation(ActivationLaunch),
-    Persistence(PersistenceLaunch),TrustedTime(TrustedTimeLaunch)}
+    Persistence(PersistenceLaunch),TrustedTime(TrustedTimeLaunch),Generation(GenerationLaunch)}
 fn selection(raw:&[u8])->Result<(Launch,SelectedService),ShadowError> {
     let value:Selection=exact(raw)?;
     let (launch,service)=match value {
@@ -93,6 +96,10 @@ fn selection(raw:&[u8])->Result<(Launch,SelectedService),ShadowError> {
                 (value.key_admission,SelectedService::TrustedTime(value.trusted_time))
             }
         }
+        Selection::Generation(value)=>{
+            require(value.api_version=="serverware.nativeShadowGenerationGuestLaunch/v1")?;
+            (value.key_admission,SelectedService::Generation(value.generation))
+        }
     };
     require(launch.api_version=="serverware.nativeShadowGuestLaunch/v1")?;
     Ok((launch,service))
@@ -105,6 +112,7 @@ pub(in crate::policy_shadow::policy_custody::services) struct AdmittedGuest {
     persistence:Option<admission::persistence::Service>,
     retrieval_client:Option<retrieval_client::Prepared>,bridge_selected:bool,
     trusted_time:Option<admission::trusted_time::Service>,proof_client:Option<proof_client::Prepared>,
+    generation:Option<admission::generation_install::Service>,
     time_grant:Option<admission::trusted_time::ClientGrant>,proof_bridge:bool,
     bridge_activation:std::sync::Mutex<Option<BTreeMap<String,std::os::fd::OwnedFd>>>,
 }
@@ -120,23 +128,24 @@ impl AdmittedGuest {
         let launch_bytes=launch.read(32768).map_err(fail)?.to_vec();
         let (selected,service_selection)=selection(&launch_bytes)?;
         require(inspection.is_some()==matches!(&service_selection,SelectedService::Retrieval(_)|SelectedService::RetrievalBridge
-            |SelectedService::Persistence(_)|SelectedService::PersistenceLocked(_)|SelectedService::TrustedTime(_)|SelectedService::ProofBridge(_)))?;
+            |SelectedService::Persistence(_)|SelectedService::PersistenceLocked(_)|SelectedService::TrustedTime(_)|SelectedService::ProofBridge(_)|SelectedService::Generation(_)))?;
         let mut delivery=PreparedGuestServiceDelivery::admit(&selected.delivery_configuration.path,selected.delivery_configuration.sha256,
             &selected.delivery.path,selected.delivery.sha256).map_err(fail)?;
         require(inherited.iter().filter(|fd|**fd>=6).copied().eq(6..6+delivery.activation.len() as i32))?;
         let lifetime=process::Lifetime::arm(&delivery)?;
-        let (retrieval,retrieval_client,activation,persistence,trusted_time,proof_client,time_grant)=match (service_selection,inspection) {
-            (SelectedService::Retrieval(pin),Some(channel))=>(Some(admission::retrieval::Prepared::open(&pin,&mut delivery,channel)?),None,None,None,None,None,None),
-            (SelectedService::RetrievalBridge,Some(channel))=>(None,Some(retrieval_client::Prepared::open(&mut delivery,channel)?),None,None,None,None,None),
-            (SelectedService::Activation(pin),None)=>(None,None,Some(admission::activation::Prepared::open(&pin,&mut delivery)?),None,None,None,None),
-            (SelectedService::Persistence(pin),Some(channel))=>(None,None,None,Some(admission::persistence::Prepared::open(&pin,&mut delivery,channel)?),None,None,None),
-            (SelectedService::PersistenceLocked(pin),Some(channel))=>(None,None,None,Some(admission::persistence::Prepared::open_locked(&pin,&mut delivery,channel)?),None,None,None),
-            (SelectedService::TrustedTime(pin),Some(channel))=>(None,None,None,None,Some(admission::trusted_time::Prepared::open(&pin,&mut delivery,channel)?),None,None),
+        let (retrieval,retrieval_client,activation,persistence,trusted_time,proof_client,time_grant,generation)=match (service_selection,inspection) {
+            (SelectedService::Retrieval(pin),Some(channel))=>(Some(admission::retrieval::Prepared::open(&pin,&mut delivery,channel)?),None,None,None,None,None,None,None),
+            (SelectedService::RetrievalBridge,Some(channel))=>(None,Some(retrieval_client::Prepared::open(&mut delivery,channel)?),None,None,None,None,None,None),
+            (SelectedService::Activation(pin),None)=>(None,None,Some(admission::activation::Prepared::open(&pin,&mut delivery)?),None,None,None,None,None),
+            (SelectedService::Persistence(pin),Some(channel))=>(None,None,None,Some(admission::persistence::Prepared::open(&pin,&mut delivery,channel)?),None,None,None,None),
+            (SelectedService::PersistenceLocked(pin),Some(channel))=>(None,None,None,Some(admission::persistence::Prepared::open_locked(&pin,&mut delivery,channel)?),None,None,None,None),
+            (SelectedService::TrustedTime(pin),Some(channel))=>(None,None,None,None,Some(admission::trusted_time::Prepared::open(&pin,&mut delivery,channel)?),None,None,None),
+            (SelectedService::Generation(pin),Some(channel))=>(None,None,None,None,None,None,None,Some(admission::generation_install::Prepared::open(&pin,&mut delivery,channel)?)),
             (SelectedService::ProofBridge(pin),Some(channel))=>{
                 let (prepared,grant)=proof_client::Prepared::open(&mut delivery,channel,&pin)?;
-                (None,None,None,None,None,Some(prepared),Some(grant))
+                (None,None,None,None,None,Some(prepared),Some(grant),None)
             }
-            (SelectedService::None,None)=>(None,None,None,None,None,None,None),
+            (SelectedService::None,None)=>(None,None,None,None,None,None,None,None),
             _=>return Err(ShadowError::BindingDrift),
         };
         let closure_original=selected.closure.open(1024*1024)?;
@@ -165,6 +174,7 @@ impl AdmittedGuest {
         let activation=activation.map(|value|value.bind(&keys,&delivery,&trust,time.as_ref())).transpose()?;
         let persistence=persistence.map(|value|value.bind(&keys,&delivery,&trust,time.as_ref())).transpose()?;
         let trusted_time=trusted_time.map(|value|value.bind(&keys,&delivery,&trust,time.as_ref())).transpose()?;
+        let generation=generation.map(|value|value.bind(&keys,&delivery,&trust,time.as_ref())).transpose()?;
         let proof_bridge=proof_client.is_some();
         let bridge_selected=retrieval_client.is_some() || proof_bridge;
         let bridge_activation=std::sync::Mutex::new(if bridge_selected {
@@ -173,7 +183,7 @@ impl AdmittedGuest {
         if !bridge_selected {lifetime.admitted()?;}
         let owner=Self{_delivery:delivery,lifetime,keys,trust,time,launch,launch_bytes,
             originals:vec![assignment_original,closure_original,keys_original,encrypted_original,admission_original],
-            retrieval,activation,persistence,retrieval_client,bridge_selected,bridge_activation,trusted_time,proof_client,time_grant,proof_bridge};
+            retrieval,activation,persistence,retrieval_client,bridge_selected,bridge_activation,trusted_time,proof_client,time_grant,proof_bridge,generation};
         owner.check()?;
         if owner.proof_bridge {
             owner.time_grant.as_ref().ok_or(ShadowError::BindingDrift)?.check(&owner.keys,
@@ -188,6 +198,9 @@ impl AdmittedGuest {
         self.keys.check(&self.trust,self.time.as_ref())
     }
     fn hold(mut self)->Result<(),ShadowError> {
+        if let Some(service)=self.generation.take(){
+            return service.serve(&self.keys,&self.trust,self.time.as_ref(),&||self.check());
+        }
         if let Some(prepared)=self.proof_client.take() {return proof_client::run(Arc::new(self),prepared);}
         if let Some(service)=self.activation.take(){
             return service.serve(&self.keys,&self.trust,self.time.as_ref(),&||self.check());

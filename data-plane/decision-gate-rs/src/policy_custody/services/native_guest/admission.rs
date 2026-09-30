@@ -9,6 +9,8 @@ pub(crate) mod retrieval;
 pub(crate) mod persistence;
 #[path="trusted_time.rs"]
 pub(crate) mod trusted_time;
+#[path="generation_install.rs"]
+pub(crate) mod generation_install;
 #[path="activation.rs"]
 pub(crate) mod activation;
 const DOMAIN:&str="serverware.nativeShadowKeyAdmissionAssignment.signature/v1";

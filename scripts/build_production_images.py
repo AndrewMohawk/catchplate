@@ -71,6 +71,7 @@ PRODUCTION_ARTIFACT_TARGETS = {
     ("data-plane/decision-gate-rs/Dockerfile.production", "native-pilot-operator-artifact"),
     # Fixed Python conductor rootfs, separate from seccomp and native guests.
     ("Dockerfile.production", "native-pilot-conductor-artifact"),
+    ("Dockerfile.production", "native-pilot-authority-artifact"),
     # Separately installed in the admitted application network namespace.
     ("data-plane/decision-gate-rs/Dockerfile.production", "native-workload-sidecar-artifact"),
     # Separately installed independent authorities; never part of the claimant
@@ -89,6 +90,11 @@ PRODUCTION_ARTIFACT_TARGETS = {
 NATIVE_PILOT_TARGET = "native-pilot-artifacts"
 NATIVE_PILOT_OPERATOR_TARGET = "native-pilot-operator-artifact"
 NATIVE_PILOT_CONDUCTOR_TARGET = "native-pilot-conductor-artifact"
+NATIVE_PILOT_AUTHORITY_TARGET = "native-pilot-authority-artifact"
+ENGINEERING_RAW_ARTIFACT_TARGETS = {
+    ("Dockerfile.production", NATIVE_PILOT_CONDUCTOR_TARGET),
+    ("Dockerfile.production", NATIVE_PILOT_AUTHORITY_TARGET),
+}
 PUBLIC_GUEST_FILES = {
     "seccomp.bpf": ("seccompSha256", 32768),
     "runtime.json": ("runtimeConfigurationSha256", 4 * 1024 * 1024),
@@ -535,6 +541,28 @@ def source_build_arguments(
     return arguments
 
 
+def _engineering_artifact_destination(output: str) -> Path:
+    prefix = "type=local,dest="
+    if not output.startswith(prefix):
+        raise RuntimeError("engineering artifact export requires a local destination")
+    raw = output[len(prefix):]
+    destination = Path(raw)
+    if (
+        not destination.is_absolute()
+        or destination == Path("/")
+        or str(destination) != raw
+        or any(part in {".", ".."} for part in destination.parts)
+        or "," in raw
+        or any(ord(character) < 32 or ord(character) == 127 for character in raw)
+    ):
+        raise RuntimeError("engineering artifact destination must be an exact absolute local path")
+    if destination.parent.resolve(strict=True) != destination.parent or not destination.parent.is_dir():
+        raise RuntimeError("engineering artifact destination requires an existing non-symlink parent")
+    if destination.exists() or destination.is_symlink():
+        raise RuntimeError("engineering artifact destination must not already exist")
+    return destination
+
+
 def artifact_build_command(
     dockerfile: str,
     target: str,
@@ -546,6 +574,7 @@ def artifact_build_command(
     context: Path,
     public_inputs_sha256: str | None = None,
     native_pilot_bounded_build: bool = False,
+    engineering_bounded_build: bool = False,
 ) -> list[str]:
     if (dockerfile, target) not in PRODUCTION_ARTIFACT_TARGETS:
         raise RuntimeError("unsupported production artifact Dockerfile/target pair")
@@ -556,8 +585,21 @@ def artifact_build_command(
     if not output.startswith("type=local,dest=") or output == "type=local,dest=":
         raise RuntimeError("production artifact output must be a non-empty local destination")
     pilot_resources: list[str] = []
+    if engineering_bounded_build:
+        if (
+            (dockerfile, target) not in ENGINEERING_RAW_ARTIFACT_TARGETS
+            or native_pilot_bounded_build
+            or metadata["source_identity_mode"] != "development-dirty-tree"
+            or metadata["production_release_eligible"] is not False
+        ):
+            raise RuntimeError("engineering artifact export requires a fixed Python runtime target and non-production dirty-tree identity")
+        _engineering_artifact_destination(output)
+        pilot_resources = [
+            argument for resource in ENGINEERING_BUILD_RESOURCES
+            for argument in ("--resource", resource)
+        ]
     if native_pilot_bounded_build:
-        if target not in {NATIVE_PILOT_TARGET, NATIVE_PILOT_OPERATOR_TARGET, NATIVE_PILOT_CONDUCTOR_TARGET}:
+        if target not in {NATIVE_PILOT_TARGET, NATIVE_PILOT_OPERATOR_TARGET, NATIVE_PILOT_CONDUCTOR_TARGET, NATIVE_PILOT_AUTHORITY_TARGET}:
             raise RuntimeError("native pilot resource limits require a fixed pilot artifact target")
         pilot_resources = _native_pilot_resource_arguments(metadata)
     if target == NATIVE_PILOT_TARGET:
@@ -681,12 +723,12 @@ def main() -> None:
     parser.add_argument(
         "--development-dirty-tree",
         action="store_true",
-        help="Build an explicitly non-production image from dirty/untracked filesystem bytes.",
+        help="Build explicitly non-production images or selected raw Python runtime artifacts from filesystem bytes.",
     )
     parser.add_argument(
         "--engineering-bounded-build",
         action="store_true",
-        help="Require dirty-tree image mode; request fixed Linux per-step 8-CPU/24-GiB BuildKit limits.",
+        help="Require dirty-tree image or selected raw Python artifact mode; request fixed Linux per-step 8-CPU/24-GiB BuildKit limits.",
     )
     args = parser.parse_args()
     if args.engineering_bounded_build and not args.development_dirty_tree:
@@ -701,13 +743,39 @@ def main() -> None:
 
     artifact_values = (args.dockerfile, args.target, args.output, args.network)
     if any(value is not None for value in artifact_values):
-        if args.engineering_bounded_build:
-            parser.error("--engineering-bounded-build is forbidden in artifact mode")
         if not all(value is not None for value in artifact_values):
             parser.error("--dockerfile, --target, --output, and --network are required together")
-        if any((args.control_tag, args.decision_gate_tag, args.out, args.development_dirty_tree)):
-            parser.error("production artifact mode cannot be combined with image build options")
-        metadata = build_metadata()
+        if any((args.control_tag, args.decision_gate_tag, args.out)):
+            parser.error("artifact mode cannot be combined with image build options")
+        if args.development_dirty_tree and not args.engineering_bounded_build:
+            parser.error("engineering raw artifact export requires --engineering-bounded-build")
+        engineering_destination: Path | None = None
+        if args.engineering_bounded_build:
+            if (args.dockerfile, args.target) not in ENGINEERING_RAW_ARTIFACT_TARGETS:
+                parser.error("engineering raw artifact export supports only the fixed conductor and authority Python runtime targets")
+            engineering_destination = _engineering_artifact_destination(args.output)
+        metadata = build_metadata(development_dirty_tree=args.development_dirty_tree)
+        engineering_result: dict[str, Any] = {}
+        if args.engineering_bounded_build:
+            metadata["build_resource_profile"] = {
+                "name": ENGINEERING_BOUNDED_BUILD_PROFILE,
+                "resources": list(ENGINEERING_BUILD_RESOURCES),
+                "scope": "per-linux-run-step",
+                "required_buildkit_capability": "exec.meta.linux.resources",
+                "aggregate_limit": False,
+                "image_builds_sequential": True,
+            }
+            engineering_result = {
+                "identity_mode": metadata["source_identity_mode"],
+                "production_release_eligible": False,
+                "raw_artifact_export_only": True,
+                "metadata": metadata,
+                "publish_requirement": (
+                    "engineering-only raw exports are not release eligible or admission inventories; "
+                    "independent dependency review/publication and a separate clean-source production "
+                    "build, inventory, package, and admission remain required"
+                ),
+            }
         placeholder_context = Path("/private/serverware-build-context")
         if args.dry_run:
             print(
@@ -723,8 +791,10 @@ def main() -> None:
                             metadata=metadata,
                             context=placeholder_context,
                             public_inputs_sha256=args.shadow_custody_inputs_sha256,
+                            engineering_bounded_build=args.engineering_bounded_build,
                         ),
                         "metadata": metadata,
+                        **engineering_result,
                     }
                 )
             )
@@ -742,7 +812,11 @@ def main() -> None:
                 metadata=metadata,
                 context=context,
                 public_inputs_sha256=args.shadow_custody_inputs_sha256,
+                engineering_bounded_build=args.engineering_bounded_build,
             )
+            if engineering_destination is not None:
+                # Exclusive creation is decisive; retain partial exports on failure.
+                engineering_destination.mkdir(mode=0o700)
             run_build(command)
         print(
             canonical_json(
@@ -752,6 +826,7 @@ def main() -> None:
                     "target": args.target,
                     "output": args.output,
                     "source_tree_digest": metadata["source_tree_digest"],
+                    **engineering_result,
                 }
             )
         )

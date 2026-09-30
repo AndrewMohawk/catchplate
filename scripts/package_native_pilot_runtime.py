@@ -183,10 +183,21 @@ def package(root: Path, inventory: dict, output: Path) -> dict:
     adopted, overwritten, removed, installed, mounted or executed. A successful
     package.json is written only after the tar and final inventory agree.
     """
+    return _package(root, inventory, output, authority=False)
+
+
+def package_authority(root: Path, inventory: dict, output: Path) -> dict:
+    """Package only the fixed authority inventory; never project it to conductor approval."""
+    return _package(root, inventory, output, authority=True)
+
+
+def _package(root: Path, inventory: dict, output: Path, *, authority: bool) -> dict:
+    inventory_api = runtime.AUTHORITY_API_VERSION if authority else runtime.API_VERSION
+    observe = runtime.authority_inventory if authority else runtime.inventory
     require(type(inventory) is dict
-            and inventory.get("apiVersion") == "serverware.nativePilotConductorRuntime/v1"
+            and inventory.get("apiVersion") == inventory_api
             and type(inventory.get("source")) is dict,
-            "expected the fixed conductor runtime inventory")
+            "expected the selected fixed runtime inventory")
     raw_epoch = inventory["source"].get("source_date_epoch")
     require(type(raw_epoch) is str and re.fullmatch(r"0|[1-9][0-9]{0,11}", raw_epoch) is not None
             and int(raw_epoch) <= 253402300799,
@@ -195,7 +206,7 @@ def package(root: Path, inventory: dict, output: Path) -> dict:
     require(root.is_absolute() and output.is_absolute() and output != root
             and root not in output.parents and output not in root.parents,
             "package output must be a new directory outside the exported root")
-    require(runtime.inventory(root, inventory["source"]) == inventory,
+    require(observe(root, inventory["source"]) == inventory,
             "runtime export differs from the supplied source-bound inventory")
     inventory_original = canonical(inventory)
     require(len(inventory_original) <= MAX_METADATA_BYTES, "runtime inventory exceeds metadata bound")
@@ -225,7 +236,7 @@ def package(root: Path, inventory: dict, output: Path) -> dict:
                     and identity(root.lstat()) == root_identity
                     and identity(os.stat(output.name, dir_fd=parent_fd, follow_symlinks=False))
                     == identity(os.fstat(output_fd))
-                    and runtime.inventory(root, inventory["source"]) == inventory,
+                    and observe(root, inventory["source"]) == inventory,
                     "runtime export changed before package completion")
             report = {
                 "apiVersion": "serverware.nativePilotConductorPackage/v1",
@@ -239,6 +250,9 @@ def package(root: Path, inventory: dict, output: Path) -> dict:
                 "executionAccepted": False,
                 "boundary": "Unsigned transferable rootfs bytes only. Independently authenticate the exact package hash before any later privileged installation. No installer, mounted execution root, native services, protected configurations, credentials, independent authority coordinator or acceptance evidence is supplied by this package.",
             }
+            if authority:
+                report.update(apiVersion="serverware.nativePilotAuthorityPackage/v1",
+                    boundary="Unsigned transferable authority-coordinator rootfs bytes only. Independent package approval, protected installation, the separate approved conductor inventory, all purpose-key capabilities and per-job approvals remain required. No provisioning, signing, execution or pilot acceptance occurred.")
             raw = canonical(report)
             require(len(raw) <= MAX_METADATA_BYTES, "runtime package metadata exceeds its bound")
             descriptor = os.open("package.json", os.O_WRONLY | os.O_CREAT | os.O_EXCL

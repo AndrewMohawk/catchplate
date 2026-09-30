@@ -123,9 +123,10 @@ FDs, retains private CLOEXEC duplicates, and starts the conductor with
 `close_fds=True`. No key or key FD enters its request/reply protocol or the
 conductor. These software-key controls are not measured/non-exportable custody.
 
-This coordinator, its authority scripts and dependencies need their own
-independently protected execution environment. They are **not** included in the
-conductor runtime's two-script package. Native artifacts, private service
+The [separate authority runtime package](native-pilot-build.md#authority-coordinator-runtime-package)
+supplies these scripts and dependencies, but still needs an independently
+protected installation. They are **not** included in the conductor runtime's
+two-script package. Native artifacts, private service
 credentials, protected directories and the independently operated supervisor
 still must be provisioned; this command generates none of them.
 

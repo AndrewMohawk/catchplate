@@ -111,13 +111,61 @@ the operator. Its local archive hash is a measurement, not independent approval,
 a dynamic-loader closure proof, a successful pilot or production release evidence.
 This source batch has not built or executed the new target.
 
+## Authority coordinator runtime package
+
+The separate `native-pilot-authority-artifact` target reuses the exact pinned
+conductor rootfs, Python/vendor closure and source manifest. It adds only the
+fixed authority bootstrap, authority coordinator, runtime-inventory helper and
+`scripts.authority.native_pilot_authority_io` under `/authority/app/scripts`.
+It does not add files to the conductor's exact `/app/scripts` directory or
+change the conductor command, inventory schema or approval requirements.
+
+From the same strict clean-source/cache prerequisites, request a new output:
+
+```sh
+make build-native-pilot-authority-runtime \
+  NATIVE_PILOT_OUTPUT=/srv/catchplate-fast/tmp/pilot-authority-runtime
+```
+
+This uses the same private build context, offline RUN steps and fixed per-RUN
+8-CPU/24-GiB/no-swap profile, not an aggregate resource limit. It requires no
+guest inputs or keys. The output contains `attempt.json`, `artifacts/`,
+`package/runtime-rootfs.tar`, `package/package.json` and
+`authority-runtime.json`. The separate `serverware.nativePilotAuthorityRuntime/v1`
+inventory binds the complete conductor sources plus the four exact authority
+script originals, retaining the existing bounded file/link/hash checks. Its
+`serverware.nativePilotAuthorityPackage/v1` archive is unsigned and uses the
+same sorted records, normalized root ownership, source epoch and exact readback.
+
+The installed authority command has this fixed prefix:
+
+```text
+/runtime/python/bin/python3 -I -B /authority/app/scripts/native_pilot_authority_runtime_entrypoint.py --run-native-pilot
+```
+
+Its only additional arguments, in order, are `--runtime-inventory-fd FD`,
+`--runtime-inventory-sha256 SHA256`, then repeated `--authority-key PURPOSE=FD`
+for the exact source-selected `KEY_PURPOSES`. The coordinator itself validates
+all purpose names and genuine protected descriptors. The inventory FD must
+still hold the independently approved **conductor** inventory for the same
+installed source; the authority inventory is not accepted in its place and
+is never projected into conductor approval. The bootstrap admits no alternate
+script, module, executable or import path.
+
+Packaging does not provision that inventory, the sealed key FDs, independent
+supervisor approval channel, protected job originals, native executables or
+resource environment. No key, signature, approval, installation or live pilot
+is produced. This package has not been built or executed in this source batch;
+the actual process/signing workflow remains separately authorized operator work.
+
 ## Operator commands
 
 The separate [authority commands](native-pilot-authority-commands.md) produce
 cohort, driver, delivery and ordinary-service originals from explicitly approved
 input and already provisioned keys. Their fixed public/precreation installers
-are not part of artifact building. They do not complete the external coordinator,
-provision services, approve the builder or enter the conductor runtime package.
+are not part of artifact building. Their calls are connected by the authority
+coordinator; independent supervisor approval and provisioning remain separate.
+They do not approve the builder or enter the conductor runtime package.
 
 For the full pilot commands below, use a clean committed checkout;
 dirty/untracked source has no override. Check
@@ -311,8 +359,8 @@ commit before obtaining admission of source-bound public inputs.
 ## Separate engineering-only image build resource profile
 
 The existing two-image dirty-tree builder has a separate explicit fixed resource
-selection. This engineering flag is unavailable to the full pilot command and
-artifact exports; their fixed pilot selection is described above:
+selection. The full pilot command and strict artifact packages still require
+their clean-source profile. A separate raw-export exception is described below:
 
 ```sh
 python3 -B scripts/build_production_images.py \
@@ -320,8 +368,8 @@ python3 -B scripts/build_production_images.py \
   --out /srv/catchplate-fast/tmp/engineering-images-build.json
 ```
 
-`--engineering-bounded-build` requires `--development-dirty-tree` and refuses
-artifact mode. It adds exactly these options to both existing `docker build`
+`--engineering-bounded-build` requires `--development-dirty-tree`. It adds
+exactly these options to both existing `docker build`
 commands; it exposes no arbitrary builder arguments:
 
 ```text
@@ -384,6 +432,36 @@ authorized engineering staging may use proposed bytes in an isolated checkout;
 independent review/publication, reviewed-pin commitment and the clean-source
 production build/admission remain separate requirements. A successful local
 build is not live readiness or production acceptance.
+
+### Engineering-only raw Python runtime exports
+
+Exactly two top-level `Dockerfile.production` targets also support the paired
+engineering flags: `native-pilot-conductor-artifact` and
+`native-pilot-authority-artifact`. No native guest, operator-tool or other
+artifact target is added to this exception. From an isolated engineering
+checkout with explicitly staged candidate dependency inputs:
+
+```sh
+SOURCE_DATE_EPOCH=0 python3 -B scripts/build_production_images.py \
+  --development-dirty-tree --engineering-bounded-build \
+  --dockerfile Dockerfile.production \
+  --target native-pilot-conductor-artifact \
+  --output type=local,dest=/srv/catchplate-fast/tmp/EXISTING-JOB/new-conductor-export \
+  --network none --platform linux/amd64
+```
+
+Use `native-pilot-authority-artifact` with a different fresh output for the
+authority bytes. The exact absolute destination must not exist, and its parent
+must already exist without symlink traversal. The builder creates it exclusively;
+partial output remains after failure. No automatic repair/retry is provided.
+
+Both builds retain source-context/cache verification, network-disabled build
+steps and the same fixed per-step resources. Their output explicitly reports
+`identity_mode=development-dirty-tree`, `production_release_eligible=false` and
+`raw_artifact_export_only=true`. These raw trees are not strict inventories or
+packages and must not be passed to runtime admission or installed as an approved
+pilot. The strict inventory/package tools still reject this engineering source
+identity. Canonical reviewed dependency pins remain unchanged.
 
 ## Live preparation remains with the genuine owners
 

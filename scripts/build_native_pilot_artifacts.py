@@ -295,6 +295,34 @@ def assemble_conductor_runtime(metadata, output):
     })
 
 
+def assemble_authority_runtime(metadata, output):
+    """Package the fixed authority coordinator without approving or invoking it."""
+    profile = build.native_pilot_build_resource_profile(metadata)
+    source = {key: metadata[key] for key in ("revision", "source_tree_digest", "source_manifest_digest",
+                                           "source_archive_digest", "source_date_epoch")}
+    target = build.NATIVE_PILOT_AUTHORITY_TARGET
+    write_original(output / "attempt.json", {
+        "apiVersion": "serverware.nativePilotAuthorityBuildAttempt/v1", "source": source,
+        "target": target, "buildResourceProfile": profile,
+        "releaseAuthority": False, "liveReady": False, "launchPrepared": False,
+    })
+    build.verify_dependency_cache()
+    root = output / "artifacts"
+    with build.private_build_context(metadata) as context:
+        build.run_build(build.artifact_build_command("Dockerfile.production", target,
+            "type=local,dest=" + str(root), network="none", platform=build.PRODUCTION_PLATFORM,
+            metadata=metadata, context=context, native_pilot_bounded_build=True))
+    runtime = conductor_runtime.authority_inventory(root, metadata)
+    package = conductor_package.package_authority(root, runtime, output / "package")
+    write_original(output / "authority-runtime.json", {
+        "apiVersion": "serverware.nativePilotAuthorityArtifacts/v1", "artifactBuildComplete": True,
+        "source": source, "target": target, "buildResourceProfile": profile,
+        "runtimeInventorySha256": package["inventorySha256"], "package": package,
+        "releaseAuthority": False, "liveReady": False, "launchPrepared": False, "executionAccepted": False,
+        "boundary": "Unsigned local authority-coordinator rootfs and portable package only. The independent supervisor, separately approved conductor inventory, purpose keys, protected inputs and per-job approvals remain required. No signing, provisioning, pilot, service or authority was executed.",
+    })
+
+
 def assemble(args, metadata, plan, output):
     raw = read_original(args.preparation, 128 * 1024)
     if raw != build.canonical_json(plan).encode("ascii"):
@@ -347,6 +375,8 @@ def main():
     operator_tools.add_argument("--out", type=Path, required=True)
     conductor = sub.add_parser("conductor-runtime", help="build and package the fixed Python conductor rootfs; no guest inputs, installation or launch")
     conductor.add_argument("--out", type=Path, required=True)
+    authority = sub.add_parser("authority-runtime", help="build and package the separate fixed authority coordinator; no approvals, keys, signing, installation or launch")
+    authority.add_argument("--out", type=Path, required=True)
     public_inputs = sub.add_parser("public-inputs", help="copy operator public originals and measure an unapproved manifest; never build or sign")
     public_inputs.add_argument("--out", type=Path, required=True)
     public_inputs.add_argument("--preparation", type=Path, required=True)
@@ -361,11 +391,13 @@ def main():
     compile_command.add_argument("--public-inputs-sha256", required=True)
     args = parser.parse_args()
     metadata = build.build_metadata()  # strict clean committed source, no dirty-tree escape
-    if args.command in ("operator-tools", "conductor-runtime"):
+    if args.command in ("operator-tools", "conductor-runtime", "authority-runtime"):
         if args.command == "operator-tools":
             assemble_operator_tools(metadata, new_output(args.out))
-        else:
+        elif args.command == "conductor-runtime":
             assemble_conductor_runtime(metadata, new_output(args.out))
+        else:
+            assemble_authority_runtime(metadata, new_output(args.out))
         print(build.canonical_json({"apiVersion": "serverware.nativePilotBuildCommand/v1", "command": args.command,
             "output": str(args.out), "artifactBuildComplete": True,
             "releaseAuthority": False, "liveReady": False, "launchPrepared": False}))

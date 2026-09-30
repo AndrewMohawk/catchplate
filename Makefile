@@ -1316,6 +1316,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	scripts/native_pilot_runtime_artifacts.py \
 	scripts/package_native_pilot_runtime.py \
 	scripts/native_pilot_runtime_entrypoint.py \
+	scripts/native_pilot_authority_runtime_entrypoint.py \
 	scripts/authority/native_pilot_authority_io.py \
 	scripts/authority/sign_native_pilot_cohort.py \
 	scripts/authority/sign_native_pilot_scope.py \
@@ -4004,6 +4005,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				scripts/native_pilot_runtime_artifacts.py \
 				scripts/package_native_pilot_runtime.py \
 				scripts/native_pilot_runtime_entrypoint.py \
+				scripts/native_pilot_authority_runtime_entrypoint.py \
 				scripts/authority/native_pilot_authority_io.py \
 				scripts/authority/sign_native_pilot_cohort.py \
 				scripts/authority/sign_native_pilot_scope.py \
@@ -9289,7 +9291,7 @@ build-production-images: verify-production-dependency-cache
 	python3 scripts/build_production_images.py --platform "$(PRODUCTION_PLATFORM)" --out "$(PRODUCTION_IMAGES_BUILD_FILE)"
 
 # Build/preparation only: fixed native effects profiles, no signing or launch.
-.PHONY: prepare-native-pilot-build build-native-pilot-operator-tools build-native-pilot-conductor-runtime build-native-pilot-artifacts
+.PHONY: prepare-native-pilot-build build-native-pilot-operator-tools build-native-pilot-conductor-runtime build-native-pilot-authority-runtime build-native-pilot-artifacts
 NATIVE_PILOT_OUTPUT ?=
 NATIVE_PILOT_PREPARATION ?=
 NATIVE_PILOT_PUBLIC_INPUTS ?=
@@ -9306,6 +9308,10 @@ build-native-pilot-operator-tools:
 build-native-pilot-conductor-runtime:
 	@test -n "$(NATIVE_PILOT_OUTPUT)" || { echo "NATIVE_PILOT_OUTPUT must name a new absolute directory on the build filesystem" >&2; exit 2; }
 	python3 -B scripts/build_native_pilot_artifacts.py conductor-runtime --out "$(NATIVE_PILOT_OUTPUT)"
+
+build-native-pilot-authority-runtime:
+	@test -n "$(NATIVE_PILOT_OUTPUT)" || { echo "NATIVE_PILOT_OUTPUT must name a new absolute directory on the build filesystem" >&2; exit 2; }
+	python3 -B scripts/build_native_pilot_artifacts.py authority-runtime --out "$(NATIVE_PILOT_OUTPUT)"
 
 build-native-pilot-artifacts:
 	@test -n "$(NATIVE_PILOT_OUTPUT)" && test -n "$(NATIVE_PILOT_PREPARATION)" && test -n "$(NATIVE_PILOT_PUBLIC_INPUTS)" && test -n "$(NATIVE_PILOT_PUBLIC_INPUTS_SHA256)" || { echo "all four NATIVE_PILOT_* paths/pins are required; prepare first and obtain independent public guest inputs" >&2; exit 2; }

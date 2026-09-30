@@ -176,6 +176,26 @@ Supervisor policy, fixed jobs/key capabilities and output-publication wiring
 must still connect this ceremony to the five ordinary runtime, inspection-policy
 and delivery composers. Private service provisioning, later generation/native/
 bridge/release/lifetime jobs and actual application acceptance remain open.
-The authority implementation is not approval automation. No tests, ceremony or
-service execution have been run for this source batch at the time of this guide;
-see [production status](production-status.md) for separately recorded evidence.
+The authority implementation is not approval automation. No ceremony or live
+service execution has run; the focused source evidence is recorded below.
+
+## Focused verification
+
+Native source `c2542acb` passed one cached Rust 1.88 offline/frozen/locked
+`cargo check --bin serverware-decision-gate -j1` in 52.67 seconds, with no network,
+one CPU, an 8 GiB memory bound and a 20-minute outer limit. It reported 312
+library and 2,438 binary warnings; this is compilation, not native runtime proof.
+
+Test commit `977d1f38` changes only the new test and its two Make inventory
+entries; runtime/native/schema/authority source is identical to `c2542acb`.
+Its single isolated Python 3.11.15 run passed 27 controls: seven existing endpoint,
+eight existing key-wire, four existing history and eight new initial-state
+controls. Eleven changed Python files passed grammar/both inventory checks and
+15 relative documentation links resolved. No DB/app/authority-store imports,
+protected owner, issuer entrypoint, CLI, installation, live signing, service or
+cloud operation ran. Cryptographic fixtures use synthetic in-memory test keys.
+
+Exact source archives, commands, logs and checksums are retained under
+`codex-offload/serverware/engineering-builds/c2542acb-initial-history-wdWcbZ`
+in the operator home. See [production status](production-status.md); no acceptance
+gate or additional supervisor composer is claimed by these checks.

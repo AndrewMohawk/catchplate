@@ -213,8 +213,18 @@ jobs and actual application acceptance remain open. The
 
 ## Focused verification
 
-The following is historical **`.372` verification**, not verification of the
-`.373` coordinator connection. No `.373` test result is claimed here.
+Exact `.373` source `21eef81b` passed one network-isolated Python 3.11.15 run:
+35 focused controls, eleven changed-file grammar/both Make inventory checks,
+and 40 relative documentation links. The eight new controls cover job/key
+selection, closed policy and v4-only u64 counters, exact prior results,
+independent synthetic signatures, publication shape/pins and approval
+serialization. They do not execute protected owners, signers, installers or
+services. The original native source is unchanged and was not rebuilt.
+Commands, exact source archive and logs are retained at
+`codex-offload/serverware/engineering-builds/21eef81b-initial-commissioning-QZ3L75`.
+The service-owned copy installer and connected pilot acceptance remain open.
+
+The following is historical **`.372` verification**.
 
 Native source `c2542acb` passed one cached Rust 1.88 offline/frozen/locked
 `cargo check --bin serverware-decision-gate -j1` in 52.67 seconds, with no network,

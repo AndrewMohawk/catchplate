@@ -126,6 +126,7 @@ class Closure:
         wheel $ORIGIN layouts are preserved under the fixed site-packages root.
         """
         inspected: set[Path] = set()
+        pinned_roots = {"lib", "lib64", "usr", "deps"}
         while self.elf_sources:
             source = self.elf_sources.pop(0)
             if source in inspected:
@@ -145,15 +146,31 @@ class Closure:
                 match = re.fullmatch(r"(?:[A-Za-z0-9_.+-]+ => )?(/[A-Za-z0-9_./+-]+) \(0x[0-9a-f]+\)", line)
                 require(match is not None, "loader trace contains unresolved or unexpected dependencies")
                 library = Path(match.group(1))
-                require(".." not in library.parts and library.parts[1] in {"lib", "lib64", "usr", "deps"},
-                        "loader selected a path outside the pinned build roots")
-                if library.is_relative_to("/deps"):
-                    target = SITE / library.relative_to("/deps")
+                diagnostic = f"source={str(source)[:512]!r} selected={str(library)[:512]!r}"
+                normalized = Path(os.path.normpath(str(library)))
+                require(library.anchor == "/" and len(library.parts) > 2
+                        and library.parts[1] in pinned_roots
+                        and normalized.anchor == "/" and len(normalized.parts) > 2
+                        and normalized.parts[1] == library.parts[1],
+                        f"loader selected a path outside the pinned build roots: {diagnostic}")
+                try:
+                    resolved = library.resolve(strict=True)
+                    normalized_original = normalized.resolve(strict=True)
+                except (OSError, RuntimeError) as error:
+                    raise ValueError(f"loader selected an unavailable original: {diagnostic}") from error
+                require(resolved.anchor == "/" and len(resolved.parts) > 2
+                        and resolved.parts[1] in pinned_roots and resolved == normalized_original,
+                        f"loader path normalization changes or escapes its original: {diagnostic}")
+                if normalized.is_relative_to("/deps"):
+                    target = SITE / normalized.relative_to("/deps")
                 else:
-                    target = library
+                    target = normalized
+                # Normalize $ORIGIN/../ spellings only when both spellings
+                # resolve to the same pinned original. Keep the runtime path:
+                # resolving it instead would erase PT_INTERP's /lib64 alias.
                 # /lib and /usr/lib aliases in the builder become real files,
                 # not symlinks, in the private chroot.
-                self.add(library, target, executable=str(target).endswith("/ld-linux-x86-64.so.2"))
+                self.add(resolved, target, executable=str(target).endswith("/ld-linux-x86-64.so.2"))
 
     def shadow_verifier_mount_targets(self) -> list[dict[str, str]]:
         """Only this offline image's fixed empty, non-authority mount targets."""

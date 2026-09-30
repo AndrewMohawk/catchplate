@@ -211,30 +211,28 @@ build is not live readiness or production acceptance.
 
 ## Live preparation remains with the genuine owners
 
-Engineering attempt 7 on 2026-09-30 used source `269ad88f` and the unchanged,
+Engineering attempt 8 on 2026-09-30 used source `33586f89` and the unchanged,
 unpublished `v3-candidate-cba01916` dependencies in an isolated dirty-tree
 checkout. It built the nonrelease Linux/amd64 control image
-`sha256:3081c142885e57060cbe2f5a6c13c8fe3fed0c9e1d62c41fbc67898192620ec4`.
-The main glibc Cargo build completed successfully in 9m03s, and the actual custody
+`sha256:c8a3e0a239346239ce312017614d3f8940d3bb2941f2bf1d914a870d3b486cf3`.
+The main glibc Cargo build completed successfully in 9m06s, and the actual custody
 ledger initializer ran. The runner reduced 30,170 compiler warnings to eight
-bounded summaries and a count without clipping. This attempt predates the
-runner's `--keep-going` change.
+bounded summaries and a count without clipping. This attempt used the runner's
+`--keep-going` option but predates the shared source-preparation stage.
 
-Assembly then stopped with exit 127 (`tar: not found`) immediately after the
-verified Debian packages were extracted onto the pinned Python image's root.
-The base contains tar and a merged-`/usr` layout; the liblzo archive contains a
-real `lib` directory. A loader-path collision is the supported diagnosis, not
-an independently reproduced failure. The next build stages both verified
-packages separately and installs only `mksquashfs`, the real liblzo library and
-its SONAME link under `/usr`, preserving the base's directory symlinks. No
-package hashes, base pins, offline constraints or dependency checks change.
-One disposable, network-disabled probe of that corrected installation in the
-exact pinned base passed: both package hashes matched, tar and mksquashfs
-launched, shared libraries resolved and `/lib` links remained unchanged. This
-checked only the packaging blocker, not project behavior or full image assembly.
-The static Alpine launcher Cargo build was not reached in attempt 7.
+The corrected staged Debian installation and all 31 offline Python wheel
+installations passed. The broker runtime packager then refused a shared-library
+path with `loader selected a path outside the pinned build roots`. Fixing that
+path handling is the next assembly step. A read-only check of the exact pinned
+Python base confirmed its loader spells libpython as
+`/usr/local/bin/../lib/libpython3.11.so.1.0`, resolving inside `/usr/local/lib`.
+The fix normalizes that spelling only when original and normalized paths
+resolve to the same admitted file; allowed roots and runtime loader paths remain
+enforced. The
+Alpine diagnostic runner compiled, but static launcher Cargo compilation was
+not reached before the packaging failure.
 Retained evidence is under
-`codex-offload/serverware/engineering-builds/269ad88f-pfw5lv`.
+`codex-offload/serverware/engineering-builds/33586f89-fe7loz`.
 There is no gate image, complete two-image report, project test result,
 service deployment or pilot acceptance from this attempt. Canonical reviewed
 dependency pins and the nonrelease boundary remain unchanged.
@@ -242,6 +240,11 @@ dependency pins and the nonrelease boundary remain unchanged.
 Earlier attempts stopped at 18 library errors, then 95 distinct diagnostics
 across 53 files, then 32 distinct diagnostics across 19 files, then five errors,
 then one filesystem-comparison type error in attempt 6.
+Attempt 7 completed the main Rust build, then stopped at `tar: not found` after
+direct Debian-package extraction. The base contains tar and a merged-`/usr`
+layout; the liblzo archive contains a real `lib` directory. Staging the verified
+packages and installing only their fixed build-tool files under `/usr` resolved
+that blocker in attempt 8, without changing dependency hashes or base pins.
 Attempt 5 stopped before Rust when BuildKit could not materialize a pinned base;
 all five exact base-image references were subsequently found missing and restored
 without changing their digests. Their removal cause is unproven; separate

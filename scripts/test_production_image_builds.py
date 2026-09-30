@@ -21,6 +21,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 import build_production_images
 import generate_release_provenance
+import package_native_broker_runtime
 import serverware_source_tree
 import verify_codebase_attestation
 import verify_reproducible_builds
@@ -943,6 +944,62 @@ def assert_static_launcher_artifact_embedded() -> None:
     missing = [line for line in required if line not in dockerfile]
     if missing:
         raise AssertionError(f"production decision-gate image does not preserve the static launcher artifact contract: {missing}")
+
+
+def assert_native_runtime_loader_paths() -> None:
+    """Mock loader observations only; never run ldd or write a runtime root."""
+    package = package_native_broker_runtime
+    interpreter = "/lib64/ld-linux-x86-64.so.2"
+    cases = (
+        ("/usr/local/bin/../lib/libpython3.11.so.1.0", {
+            "/usr/local/bin/../lib/libpython3.11.so.1.0": "/usr/local/lib/libpython3.11.so.1.0",
+            "/usr/local/lib/libpython3.11.so.1.0": "/usr/local/lib/libpython3.11.so.1.0",
+        }, (Path("/usr/local/lib/libpython3.11.so.1.0"), Path("/usr/local/lib/libpython3.11.so.1.0"), False)),
+        ("/deps/package/../package.libs/libfoo.so", {
+            "/deps/package/../package.libs/libfoo.so": "/deps/package.libs/libfoo.so",
+            "/deps/package.libs/libfoo.so": "/deps/package.libs/libfoo.so",
+        }, (Path("/deps/package.libs/libfoo.so"), package.SITE / "package.libs/libfoo.so", False)),
+        (interpreter, {interpreter: "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2"},
+         (Path("/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2"), Path(interpreter), True)),
+        ("/usr/../../etc/libfoo.so", {}, None),
+        ("/deps/../usr/lib/libfoo.so", {}, None),
+        ("/usr/linked/../libfoo.so", {
+            "/usr/linked/../libfoo.so": "/usr/elsewhere/libfoo.so",
+            "/usr/libfoo.so": "/usr/libfoo.so",
+        }, None),
+        ("/deps/package/libfoo.so", {"/deps/package/libfoo.so": "/outside/libfoo.so"}, None),
+    )
+    for spelling, resolutions, expected in cases:
+        closure = package.Closure(0)
+        source = Path("/source/closure-probe.so")
+        closure.elf_sources = [source]
+
+        def resolve(path: Path, strict: bool = False) -> Path:
+            if strict is not True or str(path) not in resolutions:
+                raise AssertionError(f"unexpected loader path resolution: {path}, strict={strict}")
+            return Path(resolutions[str(path)])
+
+        observation = subprocess.CompletedProcess(
+            ["/usr/bin/ldd", str(source)], 0, f"{spelling} (0x1)\n", ""
+        )
+        with mock.patch.object(package.subprocess, "run", return_value=observation) as loader, \
+                mock.patch.object(Path, "resolve", autospec=True, side_effect=resolve), \
+                mock.patch.object(closure, "add") as add:
+            try:
+                closure.libraries()
+            except ValueError:
+                if expected is not None:
+                    raise
+                add.assert_not_called()
+            else:
+                if expected is None:
+                    raise AssertionError(f"native runtime admitted an escaped or reinterpreted loader path: {spelling}")
+                original, target, executable = expected
+                add.assert_called_once_with(original, target, executable=executable)
+            loader.assert_called_once_with(
+                ["/usr/bin/ldd", str(source)], env=package.ENV, check=True,
+                capture_output=True, text=True, timeout=30,
+            )
 
 
 def assert_launcher_digest_measurement_contract() -> None:
@@ -2055,6 +2112,7 @@ def main() -> None:
     assert_custody_ledger_image_seed()
     assert_gate_response_context_publish_wait()
     assert_static_launcher_artifact_embedded()
+    assert_native_runtime_loader_paths()
     assert_launcher_digest_measurement_contract()
     assert_release_python_dependency_inventory()
     assert_malformed_python_locks_fail_closed()

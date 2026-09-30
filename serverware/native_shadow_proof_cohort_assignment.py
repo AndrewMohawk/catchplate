@@ -27,6 +27,18 @@ ORIGINAL_FIELDS = ("apiVersion", "configurationSha256", "precreationSha256", "in
 MAX_BYTES = 32768
 
 
+def configuration(raw):
+    """Closed source selection; v1 never admits cleanup fields or messages."""
+    value = p.document(raw, MAX_BYTES)
+    if value.get("apiVersion") == "serverware.nativeShadowProofCohortConfiguration/v1":
+        return p.fields(value, CONFIG_FIELDS)
+    p.fields(value, CONFIG_FIELDS + ("cleanup",))
+    p.require(value["apiVersion"] == "serverware.nativeShadowProofCohortConfiguration/v2")
+    from serverware import native_shadow_proof_cohort_cleanup as cleanup
+    cleanup.configuration(value)
+    return value
+
+
 def _invocation(value):
     p.require(type(value) is str and re.fullmatch(r"[0-9a-f]{32}", value) and value != "0" * 32)
 
@@ -40,9 +52,8 @@ def _key(signing_key, authority):
 
 
 def _configuration(raw, expected_sha256, originals, signing_key):
-    config = p.fields(p.document(raw, MAX_BYTES), CONFIG_FIELDS)
-    p.require(config["apiVersion"] == "serverware.nativeShadowProofCohortConfiguration/v1"
-              and p.sha(raw) == p.digest(expected_sha256))
+    config = configuration(raw)
+    p.require(p.sha(raw) == p.digest(expected_sha256))
     p.digest(config["executableSha256"])
     _key(signing_key, config["authority"])
     cold = []

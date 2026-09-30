@@ -21,6 +21,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from serverware import native_shadow_guest_delivery as delivery
 from serverware import native_shadow_nitro_originals as originals
 from serverware import native_shadow_proof_cohort_assignment as profile
+from serverware import native_shadow_proof_cohort_cleanup as cleanup_profile
 
 p = delivery.p
 _TOKEN = object()
@@ -173,6 +174,9 @@ class ParkedProofCohort:
         self._socket = self._pidfd = self._exec = self._child_pid = None
         self._observed = None
         self._attempted = self._closed = False
+        self._release_sent = self._cleanup_attempted = self._cleanup_sent = self._parent_reaped = False
+        self._release_original = self._cleanup_authorization = self._cleanup_result = None
+        self._cleanup_deadline = None
 
     def _open(self, path, bound, digest=None, mode=0o400):
         p.require(len(self._originals) < 96)
@@ -195,8 +199,7 @@ class ParkedProofCohort:
             p.require(control["apiVersion"] == "serverware.nativeShadowProofCohortControl/v1")
             owner._config_original = owner._open(CONFIGURATION, profile.MAX_BYTES, control["configurationSha256"])
             owner._precreate_original = owner._open(PRECREATION, profile.MAX_BYTES, control["precreationSha256"])
-            owner._config = p.fields(p.document(owner._config_original.raw, profile.MAX_BYTES), profile.CONFIG_FIELDS)
-            p.require(owner._config["apiVersion"] == "serverware.nativeShadowProofCohortConfiguration/v1")
+            owner._config = profile.configuration(owner._config_original.raw)
             authority = p.fields(owner._config["authority"], ("publicKeyBase64url", "keyId"))
             public = p.decoded(authority["publicKeyBase64url"], size=32)
             p.require(public != bytes(32) and authority["keyId"] == p.sha(public))
@@ -499,7 +502,117 @@ class ParkedProofCohort:
         count = self._socket.sendmsg([release_original], [(socket.SOL_SOCKET, socket.SCM_RIGHTS, encoded)],
             socket.MSG_DONTWAIT | socket.MSG_NOSIGNAL)
         p.require(count == len(release_original))
+        self._release_original = bytes(release_original)
+        self._release_sent = True
         # No subsequent preparation check, resend or claim about child gates.
+
+    def request_termination(self, *, authorization_original):
+        """One separately authorized whole-cohort cancellation, never Settle/v4.
+
+        The returned value is no acknowledgement. A send failure is unknown;
+        neither this method nor settle/recover resends the effect command.
+        """
+        self._origin(); self._child_live()
+        p.require(self._release_sent and not self._cleanup_attempted
+                  and self._config["apiVersion"] == "serverware.nativeShadowProofCohortConfiguration/v2")
+        command = cleanup_profile.authorization(authorization_original, self._config_original.raw,
+            self._precreate_original.raw, self._observation_bytes, self._release_original, self._boot, _clock())
+        for fd, pid, start in self._parked:
+            p.require(not _terminal(fd) and _pidfd_pid(fd) == pid and _process(pid) == (self._child_pid, start))
+        self._cleanup_authorization = bytes(authorization_original)
+        self._cleanup_deadline = p.ns(command["deadlineBoottimeNs"])
+        self._cleanup_attempted = True
+        self._cleanup_check()
+        count = self._socket.sendmsg([self._cleanup_authorization], [], socket.MSG_DONTWAIT | socket.MSG_NOSIGNAL)
+        p.require(count == len(self._cleanup_authorization))
+        self._cleanup_sent = True
+
+    def _cleanup_check(self):
+        self._origin()
+        p.require(self._cleanup_attempted and self._cleanup_authorization is not None
+                  and self._cleanup_deadline is not None and _clock() < self._cleanup_deadline)
+        p.require(originals._identity(os.fstat(self._exec)) == self._exec_identity
+                  and fcntl.fcntl(self._exec, fcntl.F_GET_SEALS) & 15 == 15)
+
+    def _admit_cleanup(self, raw):
+        self._cleanup_check()
+        value, terminal = cleanup_profile.result(raw, self._cleanup_authorization,
+            cleanup_profile.configuration(self._config), self._observed)
+        for role, (fd, pid, start) in zip(_ROLES, self._parked, strict=True):
+            child = terminal["children"][role]
+            info = os.fstat(fd)
+            p.require(_terminal(fd) and (pid, start) == (child["processId"], child["startTimeTicks"])
+                      and (info.st_dev, info.st_ino) == (child["pidfdDevice"], child["pidfdInode"]))
+        # A valid packet/journal is still insufficient. The same retained
+        # parent must itself finish with status zero and actually be reaped.
+        while not _terminal(self._pidfd):
+            self._cleanup_check()
+            select.select([self._pidfd], [], [], 0.01)
+        self._cleanup_check()
+        observed = os.waitid(os.P_PIDFD, self._pidfd, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+        p.require(observed is not None and observed.si_pid == self._child_pid
+                  and observed.si_code == os.CLD_EXITED and observed.si_status == 0)
+        reaped = os.waitid(os.P_PIDFD, self._pidfd, os.WEXITED | os.WNOHANG)
+        p.require(reaped is not None and (reaped.si_pid, reaped.si_code, reaped.si_status)
+                  == (observed.si_pid, observed.si_code, observed.si_status))
+        self._parent_reaped = True
+        self._cleanup_check()
+        # Retain the exact original; this is local lifecycle observation, not
+        # an operation result, native attestation, retry permit or readiness.
+        self._cleanup_result = bytes(raw)
+        self.close()
+        p.require(_clock() < self._cleanup_deadline)
+        return self._cleanup_result
+
+    def settle_cohort(self):
+        """Receive once from the retained parent, then verify real terminal/reap."""
+        self._cleanup_check()
+        p.require(self._cleanup_sent and not self._parent_reaped)
+        while True:
+            self._cleanup_check()
+            try:
+                raw, ancillary, flags, _ = self._socket.recvmsg(profile.MAX_BYTES,
+                    socket.CMSG_SPACE(12) + socket.CMSG_SPACE(4), socket.MSG_CMSG_CLOEXEC)
+            except BlockingIOError:
+                select.select([self._socket], [], [], 0.01)
+                continue
+            received = []
+            try:
+                credentials = None
+                for level, kind, data in ancillary:
+                    if level == socket.SOL_SOCKET and kind in (socket.SCM_RIGHTS, 4):
+                        p.require(len(data) % 4 == 0)
+                        values = array.array("i"); values.frombytes(data); received.extend(values)
+                        p.require(kind == 4 and len(values) == 1)
+                    elif level == socket.SOL_SOCKET and kind == socket.SCM_CREDENTIALS:
+                        p.require(credentials is None and len(data) == 12)
+                        credentials = struct.unpack("=iii", data)
+                    else:
+                        raise ValueError("unexpected cleanup ancillary message")
+                p.require(raw and flags & (socket.MSG_TRUNC | socket.MSG_CTRUNC) == 0
+                    and credentials == (self._child_pid, 0, 0) and len(received) == 1)
+                actual, retained = os.fstat(received[0]), os.fstat(self._pidfd)
+                p.require((actual.st_dev, actual.st_ino) == (retained.st_dev, retained.st_ino))
+                return self._admit_cleanup(raw)
+            finally:
+                for fd in received:
+                    os.close(fd)
+
+    def recover_cohort_cleanup(self):
+        """Explicit observation-only recovery; no command, signal or new window.
+
+        Requires this same live caller's original handles and the actual
+        successful parent exit. Missing/partial journal or unknown reap fails.
+        """
+        self._cleanup_check()
+        p.require(not self._parent_reaped and _terminal(self._pidfd))
+        raw = cleanup_profile.recover(self._config, self._cleanup_authorization)
+        return self._admit_cleanup(raw)
+
+    def cleanup_original(self):
+        """Read the already observed original. This grants no action authority."""
+        p.require(self._closed and self._parent_reaped and self._cleanup_result is not None)
+        return self._cleanup_result
 
     def close(self):
         """Cancel and retain until terminal evidence; cleanup never renews permission."""
@@ -509,13 +622,15 @@ class ParkedProofCohort:
         if self._socket is not None:
             self._socket.close()  # Rust observes EOF and signals/reaps its children.
             self._socket = None
-        if self._child_pid is not None:
+        if self._child_pid is not None and not self._parent_reaped:
             p.require(os.getpid() == self._pid and originals._start() == self._start)
             if self._pidfd is None:
                 # Still our unreaped child, not an adopted numeric process.
                 p.require(_process(self._child_pid)[0] == self._pid)
                 self._pidfd = os.pidfd_open(self._child_pid, 0)
             cleanup_end = _clock() + 250_000_000
+            if self._config["apiVersion"] == "serverware.nativeShadowProofCohortConfiguration/v2":
+                cleanup_end = min(cleanup_end, self._cleanup_deadline or self._lifetime, self._lifetime)
             while not _terminal(self._pidfd) and _clock() < cleanup_end:
                 select.select([self._pidfd], [], [], 0.01)
             if not _terminal(self._pidfd):
@@ -524,6 +639,8 @@ class ParkedProofCohort:
                         signal.pidfd_send_signal(fd, signal.SIGKILL)
                 signal.pidfd_send_signal(self._pidfd, signal.SIGKILL)
             cleanup_end = _clock() + 250_000_000
+            if self._config["apiVersion"] == "serverware.nativeShadowProofCohortConfiguration/v2":
+                cleanup_end = min(cleanup_end, self._cleanup_deadline or self._lifetime, self._lifetime)
             while (not _terminal(self._pidfd) or any(not _terminal(fd) for fd, _, _ in self._parked)) and _clock() < cleanup_end:
                 select.select([], [], [], 0.01)
             p.require(_terminal(self._pidfd) and all(_terminal(fd) for fd, _, _ in self._parked))

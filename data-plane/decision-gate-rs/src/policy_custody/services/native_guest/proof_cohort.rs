@@ -7,6 +7,8 @@ use std::os::unix::fs::MetadataExt;
 use std::mem::{size_of,size_of_val,zeroed};
 #[path="proof_cohort_inputs.rs"]
 pub(super) mod inputs;
+#[path="proof_cohort_cleanup.rs"]
+mod cleanup;
 const MAX_WIRE:usize=32768;
 const LAUNCH_PATH:&str="/etc/serverware/native-shadow-guest-launch.json";
 const IMAGE_PATH:&str="/opt/serverware/native-shadow-custody-runtime.squashfs";
@@ -52,6 +54,21 @@ impl Control {
         // The one release packet was already consumed. EOF, another packet
         // or any error other than an empty queue cancels the actual cohort.
         require(count<0 && std::io::Error::last_os_error().raw_os_error()==Some(libc::EAGAIN))
+    }
+    fn cleanup_request(&self)->Result<Option<Vec<u8>>,ShadowError>{
+        self.check()?;
+        let Some(packet)=retrieval_peer::receive(self.socket.as_fd(),MAX_WIRE,0)? else{return Ok(None);};
+        require(retrieval_peer::same_credentials(&packet.credentials,&self.peer))?;
+        retrieval_peer::same_process(packet.pidfd.as_fd(),self.peer.pid)?;
+        self.check()?;Ok(Some(packet.bytes))
+    }
+    fn terminal_response(&self,raw:&[u8],cohort:&Cohort,journal:&cleanup::Owner,deadline:u64)->Result<(),ShadowError>{
+        require(!raw.is_empty() && raw.len()<=MAX_WIRE)?;
+        loop {
+            self.check_released()?;cohort.check_resources()?;journal.check()?;require(now()?<deadline)?;
+            if retrieval_peer::send(self.socket.as_fd(),raw,&[])?{return Ok(());}
+            wait(self.socket.as_fd(),libc::POLLOUT)?;
+        }
     }
     fn send(&self,bytes:&[u8],cohort:&Cohort)->Result<(),ShadowError> {
         require(!bytes.is_empty() && bytes.len()<=MAX_WIRE)?;
@@ -175,15 +192,17 @@ struct Cohort {
     // fields until actual same-PIDFD terminal evidence and all five reaps.
     children:Vec<child::Child>,programs:Vec<Program>,executables:Vec<inputs::Executable>,
     launch_target:Target,image_target:Target,admission:inputs::Admission,_watchdog:Watchdog,
+    cleanup:Option<cleanup::Owner>,
 }
 impl Cohort {
     fn prepare()->Result<Self,ShadowError> {
         let admission=inputs::Admission::open()?;let watchdog=Watchdog::arm_proof_cohort(&admission)?;
+        let cleanup=admission.cleanup()?;
         let launch_target=Target::open(LAUNCH_PATH)?;let image_target=Target::open(IMAGE_PATH)?;
         let mut executables=Vec::with_capacity(5);
         for _ in 0..5 {executables.push(inputs::Executable::create(&admission)?);}
         process::isolate_mounts()?;
-        let mut owner=Self{children:Vec::new(),programs:Vec::new(),executables,launch_target,image_target,admission,_watchdog:watchdog};
+        let mut owner=Self{children:Vec::new(),programs:Vec::new(),executables,launch_target,image_target,admission,_watchdog:watchdog,cleanup};
         for executable in &owner.executables {
             owner.admission.check_startup()?;
             owner.children.push(child::Child::precreate(executable.fd(),owner.launch_target.file.as_fd(),
@@ -196,8 +215,14 @@ impl Cohort {
         require(now()?.checked_add(REAP_RESERVE_NS).is_some_and(|v|v<self.admission.lifetime()))
     }
     fn check(&self)->Result<(),ShadowError> {
+        self.check_resources()?;
+        for child in &self.children {require(child.check()?)?;}
+        Ok(())
+    }
+    fn check_resources(&self)->Result<(),ShadowError> {
         self.admission.check()?;self.launch_target.check()?;self.image_target.check()?;
-        for (child,executable) in self.children.iter().zip(&self.executables) {require(child.check()?)?;executable.check()?;}
+        for executable in &self.executables {executable.check()?;}
+        if let Some(owner)=&self.cleanup {owner.check()?;}
         for program in &self.programs {
             program.files.check().map_err(fail)?;program.image.check(&program.files)?;
             program.image_original.check().map_err(fail)?;
@@ -273,10 +298,17 @@ impl Cohort {
         }
         Ok(())
     }
-    fn hold(&mut self,control:&Control)->Result<(),ShadowError> {
+    fn hold(&mut self,control:&Control,observed:&[u8],release:&[u8])->Result<bool,ShadowError> {
         loop {
-            if now()?>=self.admission.lifetime()-REAP_RESERVE_NS {return Ok(());}
-            control.check_released()?;
+            if now()?>=self.admission.lifetime()-REAP_RESERVE_NS {return Ok(false);}
+            if self.cleanup.is_some() {
+                if let Some(raw)=control.cleanup_request()? {
+                    let owner=self.cleanup.take().ok_or(ShadowError::BindingDrift)?;
+                    let (owner,response,deadline)=owner.perform(&raw,self,observed,release,control)?;
+                    control.terminal_response(&response,self,&owner,deadline)?;
+                    self.cleanup=Some(owner);return Ok(true);
+                }
+            } else {control.check_released()?;}
             self.check()?;
             for (program,child) in self.programs.iter_mut().zip(&self.children) {
                 program.inspection.progress(child,&program.files)?;
@@ -407,8 +439,8 @@ pub(super) fn run()->! {
         let observations=cohort.observations()?;control.send(&observations,&cohort)?;
         let (release,rights)=control.receive(&cohort)?;
         cohort.release(&release,&observations,rights)?;
-        cohort.hold(&control)
+        cohort.hold(&control,&observations,&release)
     })();
-    let _:Result<(),ShadowError>=result;
-    unsafe{libc::_exit(1)}
+    let status=if matches!(result,Ok(true)){0}else{1};
+    unsafe{libc::_exit(status)}
 }

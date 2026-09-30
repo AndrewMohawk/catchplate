@@ -19,7 +19,9 @@ struct Authority {public_key_base64url:String,key_id:Sha256Digest}
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 struct Configuration {api_version:String,authority:Authority,executable_sha256:Sha256Digest,
     retrieval_configuration:Pin,persistence_configuration:Pin,trusted_time_configuration:Pin,
-    generation_install_configuration:Pin,bridge_configuration:Pin}
+    generation_install_configuration:Pin,bridge_configuration:Pin,
+    #[serde(default,skip_serializing_if="Option::is_none")]
+    cleanup:Option<cleanup::Configuration>}
 #[derive(Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 struct Window {configuration_sha256:Sha256Digest,authority_key_id:Sha256Digest,boot_id_base64url:String,
@@ -61,7 +63,12 @@ impl Admission {
         let configuration=Original::proof_cohort_configuration().map_err(fail)?;
         let configuration_bytes=configuration.read(32768).map_err(fail)?.to_vec();
         let config:Configuration=exact(&configuration_bytes)?;
-        require(config.api_version=="serverware.nativeShadowProofCohortConfiguration/v1")?;
+        require(match (config.api_version.as_str(),&config.cleanup) {
+            ("serverware.nativeShadowProofCohortConfiguration/v1",None)=>true,
+            ("serverware.nativeShadowProofCohortConfiguration/v2",Some(value))=>{
+                value.validate(&config.authority.public_key_base64url)?;true},
+            _=>false,
+        })?;
         let raw=public(&config.authority.public_key_base64url)?;
         require(Sha256Digest::compute(&raw)==config.authority.key_id)?;
         let key=VerifyingKey::from_bytes(&raw).map_err(fail)?;
@@ -112,6 +119,12 @@ impl Admission {
     }
     pub(in crate::policy_shadow::policy_custody::services::guest::native_guest::parent) fn check_startup(&self)->Result<(),ShadowError> {self.check()?;require(now()?<self.startup)}
     pub(in crate::policy_shadow::policy_custody::services::guest::native_guest::parent) fn lifetime(&self)->u64 {self.lifetime}
+    pub(in crate::policy_shadow::policy_custody::services::guest::native_guest::parent) fn issued(&self)->u64 {self.issued}
+    pub(in crate::policy_shadow::policy_custody::services::guest::native_guest::parent) fn cleanup(&self)->Result<Option<cleanup::Owner>,ShadowError>{
+        self.check_startup()?;
+        self.config.cleanup.as_ref().map(|value|cleanup::Owner::open(value,
+            value.validate(&self.config.authority.public_key_base64url)?)).transpose()
+    }
     pub(in crate::policy_shadow::policy_custody::services::guest::native_guest::parent) fn startup(&self)->u64 {self.startup}
     pub(in crate::policy_shadow::policy_custody::services::guest::native_guest::parent) fn role_identity(&self,index:usize)->Result<(u32,u32),ShadowError> {
         self.check_startup()?;self.identities.get(index).copied().ok_or(ShadowError::BindingDrift)

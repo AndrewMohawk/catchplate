@@ -60,6 +60,14 @@ pub(in crate::policy_shadow::policy_custody::services::guest::native_guest) stru
     channel:OwnedFd,pidfd:OwnedFd,gate:Option<OwnedFd>,pid:i32,parent:i32,start:Option<u64>,
     deadline:u64,reaped:bool,pair_mode:bool,
 }
+/// Source-owned same-PIDFD observation. No deserializer or public constructor:
+/// only the original clone parent can produce it after consuming waitid.
+#[derive(Serialize)]
+#[serde(rename_all="camelCase")]
+pub(super) struct TerminalObservation {
+    process_id:i32,start_time_ticks:u64,pidfd_device:u64,pidfd_inode:u64,
+    terminal_code:i32,terminal_status:i32,observed_at_boottime_ns:String,reaped_at_boottime_ns:String,
+}
 impl Child {
     pub(super) fn spawn(executable:BorrowedFd<'_>,activation:&[BorrowedFd<'_>],inspection:Option<BorrowedFd<'_>>,
         deadline:u64)->Result<Self,ShadowError> {
@@ -148,6 +156,27 @@ impl Child {
                 require(self.terminal(true)?==Some(expected))?;self.reaped=true;return Ok(());
             }
             require(now()?<self.deadline)?;
+            let mut wait=libc::pollfd{fd:self.pidfd.as_raw_fd(),events:libc::POLLIN,revents:0};
+            let result=unsafe{libc::poll(&mut wait,1,1)};
+            require(result>=0 || std::io::Error::last_os_error().raw_os_error()==Some(libc::EINTR))?;
+        }
+    }
+    pub(super) fn reap_observed(&mut self,deadline:u64)->Result<TerminalObservation,ShadowError> {
+        require(!self.reaped && self.gate.is_none() && self.start.is_some()
+            && unsafe{libc::getpid()}==self.parent && now()?<deadline && deadline<=self.deadline)?;
+        loop {
+            require(now()?<deadline)?;
+            if let Some(expected)=self.terminal(false)? {
+                require(Some(self.identity()?)==self.start)?;
+                let mut held:libc::stat=unsafe{zeroed()};
+                require(unsafe{libc::fstat(self.pidfd.as_raw_fd(),&mut held)}==0 && held.st_ino>0)?;
+                let observed=now()?;require(observed<deadline)?;
+                require(self.terminal(true)?==Some(expected))?;self.reaped=true;
+                let reaped=now()?;require(observed<=reaped && reaped<deadline)?;
+                return Ok(TerminalObservation{process_id:self.pid,start_time_ticks:self.start.ok_or(ShadowError::BindingDrift)?,
+                    pidfd_device:held.st_dev,pidfd_inode:held.st_ino,terminal_code:expected.0,terminal_status:expected.1,
+                    observed_at_boottime_ns:observed.to_string(),reaped_at_boottime_ns:reaped.to_string()});
+            }
             let mut wait=libc::pollfd{fd:self.pidfd.as_raw_fd(),events:libc::POLLIN,revents:0};
             let result=unsafe{libc::poll(&mut wait,1,1)};
             require(result>=0 || std::io::Error::last_os_error().raw_os_error()==Some(libc::EINTR))?;

@@ -1533,6 +1533,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/native_shadow_persistence_inputs.py \
 	serverware/native_shadow_proof_cohort_assignment.py \
 	serverware/native_shadow_proof_cohort_control.py \
+	serverware/native_shadow_proof_cohort_cleanup.py \
 	serverware/native_policy_activation_inputs.py \
 	serverware/native_policy_activation_recovery.py \
 	serverware/native_shadow_trusted_time_inputs.py \
@@ -4112,6 +4113,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/native_shadow_persistence_inputs.py \
 				serverware/native_shadow_proof_cohort_assignment.py \
 				serverware/native_shadow_proof_cohort_control.py \
+				serverware/native_shadow_proof_cohort_cleanup.py \
 				serverware/native_policy_activation_inputs.py \
 				serverware/native_policy_activation_recovery.py \
 				serverware/native_shadow_trusted_time_inputs.py \
@@ -4435,6 +4437,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/proof_client_peer.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/proof_cohort.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/proof_cohort_inputs.rs \
+				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/proof_cohort_cleanup.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/process.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/admission.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/retrieval.rs \
@@ -4806,6 +4809,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-shadow-persistence-service.v1.schema.json \
 				schemas/native-shadow-persistence-inputs.v1.schema.json \
 				schemas/native-shadow-proof-cohort.v1.schema.json \
+				schemas/native-shadow-proof-cohort.v2.schema.json \
 				schemas/custody-service-generation-admission.v1.schema.json \
 				schemas/native-generation-coordinator.v1.schema.json \
 				schemas/custody-five-service-launch.v1.schema.json \

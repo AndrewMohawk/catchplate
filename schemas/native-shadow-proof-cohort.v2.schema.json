@@ -1,0 +1,390 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-shadow-proof-cohort.v2.schema.json",
+  "$ref": "#/$defs/configuration",
+  "$defs": {
+    "configuration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "authority",
+        "executableSha256",
+        "retrievalConfiguration",
+        "persistenceConfiguration",
+        "trustedTimeConfiguration",
+        "generationInstallConfiguration",
+        "bridgeConfiguration",
+        "cleanup"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeShadowProofCohortConfiguration/v2"
+        },
+        "authority": {
+          "$ref": "policy-custody-guest-delivery.v1.schema.json#/$defs/authority"
+        },
+        "executableSha256": {
+          "$ref": "native-shadow-proof-cohort.v1.schema.json#/$defs/sha"
+        },
+        "retrievalConfiguration": {
+          "$ref": "native-shadow-proof-cohort.v1.schema.json#/$defs/pin"
+        },
+        "persistenceConfiguration": {
+          "$ref": "native-shadow-proof-cohort.v1.schema.json#/$defs/pin"
+        },
+        "trustedTimeConfiguration": {
+          "$ref": "native-shadow-proof-cohort.v1.schema.json#/$defs/pin"
+        },
+        "generationInstallConfiguration": {
+          "$ref": "native-shadow-proof-cohort.v1.schema.json#/$defs/pin"
+        },
+        "bridgeConfiguration": {
+          "$ref": "native-shadow-proof-cohort.v1.schema.json#/$defs/pin"
+        },
+        "cleanup": {
+          "$ref": "#/$defs/cleanupConfiguration"
+        }
+      },
+      "description": "Explicit successor only. Old v1 rejects cleanup. Same five children, no sixth LedgerAppend child. Whole config <=32768 bytes."
+    },
+    "cleanupConfiguration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "authority",
+        "scopeId",
+        "journal",
+        "genesisSha256"
+      ],
+      "properties": {
+        "authority": {
+          "$ref": "policy-custody-guest-delivery.v1.schema.json#/$defs/authority"
+        },
+        "scopeId": {
+          "$ref": "native-shadow-proof-cohort.v1.schema.json#/$defs/sha"
+        },
+        "journal": {
+          "$ref": "#/$defs/journalIdentity"
+        },
+        "genesisSha256": {
+          "$ref": "native-shadow-proof-cohort.v1.schema.json#/$defs/sha"
+        }
+      },
+      "description": "Separately protected public cleanup key, different material from C9 delivery key. Fixed durable root directory, existing lock and genesis; no key/filesystem provisioning occurs."
+    },
+    "journalIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "device",
+        "inode",
+        "mode",
+        "uid",
+        "gid"
+      ],
+      "properties": {
+        "device": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709552000
+        },
+        "inode": {
+          "$ref": "native-shadow-proof-cohort.v1.schema.json#/$defs/u64"
+        },
+        "mode": {
+          "const": 16832
+        },
+        "uid": {
+          "const": 0
+        },
+        "gid": {
+          "const": 0
+        }
+      }
+    },
+    "genesis": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "scopeId",
+        "authorityKeyId"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeShadowProofCohortCleanupGenesis/v1"
+        },
+        "scopeId": {
+          "$ref": "native-shadow-proof-cohort.v1.schema.json#/$defs/sha"
+        },
+        "authorityKeyId": {
+          "$ref": "native-shadow-proof-cohort.v1.schema.json#/$defs/sha"
+        }
+      }
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "purpose",
+        "configurationSha256",
+        "precreationSha256",
+        "observationSha256",
+        "releaseSha256",
+        "invocationId",
+        "operationIdSha256",
+        "requestedAtBoottimeNs",
+        "deadlineBoottimeNs",
+        "signingKeyId"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeShadowProofCohortCleanup/v1"
+        },
+        "purpose": {
+          "const": "terminate-owned-proof-cohort"
+        },
+        "configurationSha256": {
+          "$ref": "native-shadow-proof-cohort.v1.schema.json#/$defs/sha"
+        },
+        "precreationSha256": {
+          "$ref": "native-shadow-proof-cohort.v1.schema.json#/$defs/sha"
+        },
+        "observationSha256": {
+          "$ref": "native-shadow-proof-cohort.v1.schema.json#/$defs/sha"
+        },
+        "releaseSha256": {
+          "$ref": "native-shadow-proof-cohort.v1.schema.json#/$defs/sha"
+        },
+        "invocationId": {
+          "$ref": "native-shadow-proof-cohort.v1.schema.json#/$defs/invocation"
+        },
+        "operationIdSha256": {
+          "$ref": "native-shadow-proof-cohort.v1.schema.json#/$defs/sha"
+        },
+        "requestedAtBoottimeNs": {
+          "$ref": "native-shadow-proof-cohort.v1.schema.json#/$defs/ns"
+        },
+        "deadlineBoottimeNs": {
+          "$ref": "native-shadow-proof-cohort.v1.schema.json#/$defs/ns"
+        },
+        "signingKeyId": {
+          "$ref": "native-shadow-proof-cohort.v1.schema.json#/$defs/sha"
+        }
+      }
+    },
+    "authorization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "payload",
+        "signatureBase64url"
+      ],
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/payload"
+        },
+        "signatureBase64url": {
+          "$ref": "native-shadow-proof-cohort.v1.schema.json#/$defs/signature"
+        }
+      },
+      "description": "Ed25519 over ASCII serverware.nativeShadowProofCohortCleanup.signature/v1, NUL, complete canonical ASCII payload. Actual retained original boot/window/scope required. Original requested time <= now < deadline <= lifetime-250ms and deadline-requested <=30s; no renewal. Whole authorization <=32768 bytes."
+    },
+    "childTerminal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "processId",
+        "startTimeTicks",
+        "pidfdDevice",
+        "pidfdInode",
+        "terminalCode",
+        "terminalStatus",
+        "observedAtBoottimeNs",
+        "reapedAtBoottimeNs"
+      ],
+      "properties": {
+        "processId": {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 2147483647
+        },
+        "startTimeTicks": {
+          "$ref": "native-shadow-proof-cohort.v1.schema.json#/$defs/u64"
+        },
+        "pidfdDevice": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709552000
+        },
+        "pidfdInode": {
+          "$ref": "native-shadow-proof-cohort.v1.schema.json#/$defs/u64"
+        },
+        "terminalCode": {
+          "enum": [
+            1,
+            2,
+            3
+          ]
+        },
+        "terminalStatus": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 255
+        },
+        "observedAtBoottimeNs": {
+          "$ref": "native-shadow-proof-cohort.v1.schema.json#/$defs/ns"
+        },
+        "reapedAtBoottimeNs": {
+          "$ref": "native-shadow-proof-cohort.v1.schema.json#/$defs/ns"
+        }
+      }
+    },
+    "terminal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "authorizationSha256",
+        "configurationSha256",
+        "precreationSha256",
+        "observationSha256",
+        "releaseSha256",
+        "invocationId",
+        "completedAtBoottimeNs",
+        "children"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeShadowProofCohortTerminal/v1"
+        },
+        "authorizationSha256": {
+          "$ref": "native-shadow-proof-cohort.v1.schema.json#/$defs/sha"
+        },
+        "configurationSha256": {
+          "$ref": "native-shadow-proof-cohort.v1.schema.json#/$defs/sha"
+        },
+        "precreationSha256": {
+          "$ref": "native-shadow-proof-cohort.v1.schema.json#/$defs/sha"
+        },
+        "observationSha256": {
+          "$ref": "native-shadow-proof-cohort.v1.schema.json#/$defs/sha"
+        },
+        "releaseSha256": {
+          "$ref": "native-shadow-proof-cohort.v1.schema.json#/$defs/sha"
+        },
+        "invocationId": {
+          "$ref": "native-shadow-proof-cohort.v1.schema.json#/$defs/invocation"
+        },
+        "completedAtBoottimeNs": {
+          "$ref": "native-shadow-proof-cohort.v1.schema.json#/$defs/ns"
+        },
+        "children": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "retrieval",
+            "persistence",
+            "trustedTime",
+            "generationInstall",
+            "bridge"
+          ],
+          "properties": {
+            "retrieval": {
+              "$ref": "#/$defs/childTerminal"
+            },
+            "persistence": {
+              "$ref": "#/$defs/childTerminal"
+            },
+            "trustedTime": {
+              "$ref": "#/$defs/childTerminal"
+            },
+            "generationInstall": {
+              "$ref": "#/$defs/childTerminal"
+            },
+            "bridge": {
+              "$ref": "#/$defs/childTerminal"
+            }
+          }
+        }
+      }
+    },
+    "record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "sequence",
+        "previousHeadSha256",
+        "original"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeShadowProofCohortCleanupRecord/v1"
+        },
+        "sequence": {
+          "enum": [
+            1,
+            2
+          ]
+        },
+        "previousHeadSha256": {
+          "$ref": "native-shadow-proof-cohort.v1.schema.json#/$defs/sha"
+        },
+        "original": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32256,
+          "pattern": "^[\\u0000-\\u007f]+$"
+        }
+      },
+      "description": "Only intent.json then terminal.json; canonical record <=65536 bytes. Intent predecessor=exact genesis SHA, terminal predecessor=exact intent record SHA. O_EXCL + file/dir fsync + retained original readback. Partial records forbid restart/repair."
+    },
+    "result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "authorizationSha256",
+        "intentRecordSha256",
+        "terminalOriginal",
+        "terminalRecordSha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeShadowProofCohortCleanupResult/v1"
+        },
+        "authorizationSha256": {
+          "$ref": "native-shadow-proof-cohort.v1.schema.json#/$defs/sha"
+        },
+        "intentRecordSha256": {
+          "$ref": "native-shadow-proof-cohort.v1.schema.json#/$defs/sha"
+        },
+        "terminalOriginal": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32768,
+          "pattern": "^[\\u0000-\\u007f]+$"
+        },
+        "terminalRecordSha256": {
+          "$ref": "native-shadow-proof-cohort.v1.schema.json#/$defs/sha"
+        }
+      },
+      "description": "Whole seqpacket <=32768. terminalOriginal is exact canonical terminal ASCII, not independently signed evidence. Actual pinned parent/SCM credentials/PIDFD, exact live caller, every retained child terminal, and parent status0+waitid reap are required. Data-only lifecycle observation: not per-operation Settle, native TEE evidence, readiness or permission."
+    },
+    "controlConfiguration": {
+      "$ref": "native-shadow-proof-cohort.v1.schema.json#/$defs/controlConfiguration"
+    },
+    "precreation": {
+      "$ref": "native-shadow-proof-cohort.v1.schema.json#/$defs/precreation"
+    },
+    "release": {
+      "$ref": "native-shadow-proof-cohort.v1.schema.json#/$defs/release"
+    },
+    "observations": {
+      "$ref": "native-shadow-proof-cohort.v1.schema.json#/$defs/observations"
+    }
+  }
+}

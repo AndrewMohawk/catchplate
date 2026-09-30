@@ -63,6 +63,14 @@ pub(crate) fn run_native_shadow_guest()->! {
     policy_custody::services::guest::native_guest::run()
 }
 #[cfg(target_os="linux")]
+pub(crate) fn run_native_shadow_driver_bootstrap()->! {
+    policy_custody::services::guest::native_guest::run_driver_bootstrap()
+}
+#[cfg(target_os="linux")]
+pub(crate) fn run_native_shadow_driver_bootstrap_parent()->! {
+    policy_custody::services::guest::native_guest::run_driver_bootstrap_parent()
+}
+#[cfg(target_os="linux")]
 pub(crate) fn run_ordinary_custody_guest(role:&str)->! {
     policy_custody::services::guest::ordinary::run(role)
 }

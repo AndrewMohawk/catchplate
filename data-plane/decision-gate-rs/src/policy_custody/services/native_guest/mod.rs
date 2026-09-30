@@ -14,6 +14,9 @@ mod authority;
 pub(in crate::policy_shadow::policy_custody::services) mod time;
 pub(in crate::policy_shadow::policy_custody::services) mod trusted_time_sample;
 mod parent;
+mod driver_bootstrap;
+mod driver_identity;
+mod driver_bootstrap_parent;
 pub(in crate::policy_shadow::policy_custody::services) mod retrieval_peer;
 pub(in crate::policy_shadow::policy_custody::services) mod retrieval_client;
 pub(in crate::policy_shadow::policy_custody::services) mod proof_client;
@@ -293,5 +296,7 @@ pub(crate) fn run()->! {
     unsafe{libc::_exit(1)}
 }
 pub(crate) fn run_parent()->! {parent::run()}
+pub(crate) fn run_driver_bootstrap()->! {driver_bootstrap::run()}
+pub(crate) fn run_driver_bootstrap_parent()->! {driver_bootstrap_parent::run()}
 pub(crate) fn run_retrieval_pair()->! {parent::run_pair()}
 pub(crate) fn run_proof_cohort()->! {parent::run_proof_cohort()}

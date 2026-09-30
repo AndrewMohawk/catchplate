@@ -31,6 +31,12 @@ impl Original {
     pub(super) fn native_launch() -> Result<Self, Error> {
         Self::fixed_native("native-shadow-guest-launch.json",32768)
     }
+    pub(super) fn driver_bootstrap_configuration() -> Result<Self, Error> {
+        Self::fixed_native("native-shadow-driver-bootstrap.json",65536)
+    }
+    pub(super) fn driver_bootstrap_window() -> Result<Self, Error> {
+        Self::fixed_native("native-shadow-driver-bootstrap-window.json",32768)
+    }
     pub(super) fn ordinary_service_launch(role:&str)->Result<Self,Error> {
         let leaf=match role {
             "durable-recovery-store"=>"custody-durable-recovery-store-guest.json",
@@ -183,6 +189,7 @@ impl Process {
         Ok(())
     }
     pub(super) fn domain(&self) -> BoottimeDomain { self.domain }
+    pub(super) fn descriptor(&self) -> BorrowedFd<'_> { self.pidfd.as_fd() }
     pub(super) fn native_binding(&self) -> Result<(i32,u64,u64), Error> {
         self.check()?;
         let stat = super::descriptor_stat(self.pidfd.as_fd())?;

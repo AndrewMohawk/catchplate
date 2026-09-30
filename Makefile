@@ -1535,6 +1535,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/native_shadow_proof_cohort_assignment.py \
 	serverware/native_shadow_proof_cohort_control.py \
 	serverware/native_shadow_proof_cohort_cleanup.py \
+	serverware/native_shadow_driver_bootstrap.py \
 	serverware/native_policy_activation_inputs.py \
 	serverware/native_policy_activation_recovery.py \
 	serverware/native_shadow_trusted_time_inputs.py \
@@ -4117,6 +4118,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/native_shadow_proof_cohort_assignment.py \
 				serverware/native_shadow_proof_cohort_control.py \
 				serverware/native_shadow_proof_cohort_cleanup.py \
+				serverware/native_shadow_driver_bootstrap.py \
 				serverware/native_policy_activation_inputs.py \
 				serverware/native_policy_activation_recovery.py \
 				serverware/native_shadow_trusted_time_inputs.py \
@@ -4424,6 +4426,9 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/bin/serverware-policy-shadow-custody-guest.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/mod.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/parent.rs \
+				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/driver_bootstrap.rs \
+				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/driver_bootstrap_parent.rs \
+				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/driver_identity.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/parent_image.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/parent_process.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/authority.rs \
@@ -4820,6 +4825,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-shadow-proof-cohort.v1.schema.json \
 				schemas/native-shadow-proof-cohort.v2.schema.json \
 				schemas/native-shadow-proof-cohort.v3.schema.json \
+				schemas/native-shadow-driver-bootstrap.v1.schema.json \
 				schemas/custody-service-generation-admission.v1.schema.json \
 				schemas/native-generation-coordinator.v1.schema.json \
 				schemas/native-shadow-commit-request.v1.schema.json \

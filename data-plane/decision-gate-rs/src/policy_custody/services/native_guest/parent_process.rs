@@ -21,7 +21,7 @@ struct CloneArgs {flags:u64,pidfd:u64,child_tid:u64,parent_tid:u64,exit_signal:u
 #[repr(C)]
 struct Action {handler:usize,flags:usize,restorer:usize,mask:u64}
 struct PreparedChild {parent:i32,channel:OwnedFd,gate:OwnedFd,executable:OwnedFd,null:OwnedFd,
-    activation:Vec<OwnedFd>,inspection:Option<OwnedFd>}
+    activation:Vec<OwnedFd>,inspection:Option<OwnedFd>,driver_bootstrap:bool}
 impl PreparedChild {
     unsafe fn enter(&self)->! {
         let mut good=unsafe{libc::prctl(libc::PR_SET_PDEATHSIG,libc::SIGKILL)}==0
@@ -47,7 +47,8 @@ impl PreparedChild {
         good &= unsafe{libc::read(self.gate.as_raw_fd(),(&mut byte as *mut u8).cast(),1)}==1 && byte==0xa5;
         good &= unsafe{libc::getppid()}==self.parent;
         if good {
-            let argv=[c"serverware-policy-shadow-custody-guest".as_ptr(),std::ptr::null()];
+            let argv=[c"serverware-policy-shadow-custody-guest".as_ptr(),
+                if self.driver_bootstrap {c"--driver-bootstrap".as_ptr()} else {std::ptr::null()},std::ptr::null()];
             let env:[*const libc::c_char;1]=[std::ptr::null()];
             unsafe{libc::syscall(libc::SYS_execveat,self.executable.as_raw_fd(),c"".as_ptr(),
                 argv.as_ptr(),env.as_ptr(),libc::AT_EMPTY_PATH);}
@@ -71,6 +72,15 @@ pub(super) struct TerminalObservation {
 impl Child {
     pub(super) fn spawn(executable:BorrowedFd<'_>,activation:&[BorrowedFd<'_>],inspection:Option<BorrowedFd<'_>>,
         deadline:u64)->Result<Self,ShadowError> {
+        Self::spawn_selected(executable,activation,inspection,deadline,false)
+    }
+    pub(in crate::policy_shadow::policy_custody::services::guest::native_guest) fn spawn_driver_bootstrap(
+        executable:BorrowedFd<'_>,configuration:BorrowedFd<'_>,window:BorrowedFd<'_>,deadline:u64)->Result<Self,ShadowError> {
+        let mut child=Self::spawn_selected(executable,&[configuration,window],None,deadline,true)?;
+        child.bootstrap_configure()?;child.release()?;Ok(child)
+    }
+    fn spawn_selected(executable:BorrowedFd<'_>,activation:&[BorrowedFd<'_>],inspection:Option<BorrowedFd<'_>>,
+        deadline:u64,driver_bootstrap:bool)->Result<Self,ShadowError> {
         require(cfg!(target_arch="x86_64") && !activation.is_empty() && activation.len()<=64 && now()?<deadline)?;
         let mut disposition:libc::sigaction=unsafe{zeroed()};
         require(unsafe{libc::sigaction(libc::SIGCHLD,std::ptr::null(),&mut disposition)}==0
@@ -87,7 +97,7 @@ impl Child {
         let prepared=PreparedChild{parent,channel:duplicate(remote.as_fd())?,gate:duplicate(read.as_fd())?,
             executable:duplicate(executable)?,null:duplicate(null.as_fd())?,
             activation:activation.iter().map(|fd|duplicate(*fd)).collect::<Result<_,_>>()?,
-            inspection:inspection.map(duplicate).transpose()?};
+            inspection:inspection.map(duplicate).transpose()?,driver_bootstrap};
         let mut pidfd=-1i32;
         let args=CloneArgs{flags:libc::CLONE_PIDFD as u64,pidfd:(&mut pidfd as *mut i32) as u64,
             exit_signal:libc::SIGCHLD as u64,..CloneArgs::default()};
@@ -129,6 +139,26 @@ impl Child {
         require(self.identity()?==start && self.terminal(false)?.is_none())?;
         let gate=self.gate.take().ok_or(ShadowError::BindingDrift)?;let byte=0xa5u8;
         require(unsafe{libc::write(gate.as_raw_fd(),(&byte as *const u8).cast(),1)}==1)
+    }
+    pub(in crate::policy_shadow::policy_custody::services::guest::native_guest) fn bootstrap_receive(
+        &self,uid:u32,gid:u32)->Result<Option<retrieval_peer::Packet>,ShadowError> {
+        require(!self.pair_mode && self.start.is_some() && now()?<self.deadline
+            && self.terminal(false)?.is_none() && Some(self.identity()?)==self.start)?;
+        let packet=retrieval_peer::receive(self.channel.as_fd(),65536,0)?;
+        if let Some(packet)=&packet {
+            require(packet.credentials.pid==self.pid && packet.credentials.uid==uid && packet.credentials.gid==gid)?;
+            retrieval_peer::same_process(packet.pidfd.as_fd(),self.pid)?;
+        }
+        Ok(packet)
+    }
+    pub(in crate::policy_shadow::policy_custody::services::guest::native_guest) fn bootstrap_send(
+        &self,bytes:&[u8],rights:&[BorrowedFd<'_>])->Result<(),ShadowError> {
+        require(!self.pair_mode && self.start.is_some() && now()?<self.deadline
+            && self.terminal(false)?.is_none() && Some(self.identity()?)==self.start)?;
+        require(retrieval_peer::send(self.channel.as_fd(),bytes,rights)?)
+    }
+    pub(in crate::policy_shadow::policy_custody::services::guest::native_guest) fn bootstrap_configure(&self)->Result<(),ShadowError> {
+        retrieval_peer::configure(self.channel.as_fd())
     }
     pub(super) fn check(&self)->Result<bool,ShadowError> {
         require(now()?<self.deadline && self.start.is_some())?;

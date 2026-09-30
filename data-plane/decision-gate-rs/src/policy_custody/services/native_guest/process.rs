@@ -40,9 +40,9 @@ pub(super) fn initial_confinement()->Result<BTreeSet<i32>,ShadowError> {
 // The kernel timer ID is an opaque handle, not a Rust memory pointer. Retain
 // its actual creating process so owned admission may be checked by threads
 // without manufacturing a timer from a caller-supplied scalar.
-struct Timer {handle:usize,pid:i32,deadline:u64}
+pub(super) struct Timer {handle:usize,pid:i32,deadline:u64}
 impl Timer {
-    fn arm(deadline:u64)->Result<Self,ShadowError> {
+    pub(super) fn arm(deadline:u64)->Result<Self,ShadowError> {
         let mut event:libc::sigevent=unsafe{std::mem::zeroed()};
         event.sigev_notify=libc::SIGEV_SIGNAL;event.sigev_signo=libc::SIGKILL;
         let mut timer=std::ptr::null_mut();
@@ -53,7 +53,7 @@ impl Timer {
         require(unsafe{libc::timer_settime(timer,libc::TIMER_ABSTIME,&value,std::ptr::null_mut())}==0)?;
         Ok(owner)
     }
-    fn check(&self)->Result<(),ShadowError> {
+    pub(super) fn check(&self)->Result<(),ShadowError> {
         require(unsafe{libc::getpid()}==self.pid)?;
         let before=now()?;let mut value:libc::itimerspec=unsafe{std::mem::zeroed()};
         require(unsafe{libc::timer_gettime(self.handle as libc::timer_t,&mut value)}==0)?;
@@ -125,6 +125,20 @@ pub(super) fn enter(closure:&PreparedNativeCustodyClosure,delivery:&PreparedGues
     let association=delivery.closure_association().map_err(fail)?;
     association.check_preparation().map_err(fail)?;
     let root=closure.root()?;
+    enter_root(root,delivery.role_uid(),delivery.role_gid(),lifetime.parent,
+        || association.check_preparation().map_err(fail))?;
+    association.check_startup().map_err(fail)?;lifetime.check()
+}
+
+/// Only the independently admitted bootstrap owner can select this entry.
+/// It shares the irreversible root/drop mechanics, never the old C9 authority.
+pub(super) fn enter_bootstrap(owner:&super::driver_bootstrap::Prepared)->Result<(),ShadowError> {
+    owner.check_root()?;
+    enter_root(owner.root(),owner.uid(),owner.gid(),owner.parent_pid(),||owner.check_root())?;
+    owner.check_final()
+}
+fn enter_root(root:std::os::fd::BorrowedFd<'_>,uid:u32,gid:u32,parent:i32,
+    check:impl Fn()->Result<(),ShadowError>)->Result<(),ShadowError> {
     // Clone only the genuine local procfs. The target must be an independently
     // pinned immutable-image directory, not a source/caller path or host relay.
     let raw=unsafe{libc::openat(root.as_raw_fd(),b"proc\0".as_ptr().cast(),
@@ -145,7 +159,7 @@ pub(super) fn enter(closure:&PreparedNativeCustodyClosure,delivery:&PreparedGues
         libc::AT_EMPTY_PATH,&attr,std::mem::size_of::<Attributes>())}==0
         && unsafe{libc::syscall(libc::SYS_move_mount,tree.as_raw_fd(),b"\0".as_ptr().cast::<libc::c_char>(),
             root.as_raw_fd(),b"proc\0".as_ptr().cast::<libc::c_char>(),4u32)}==0)?;
-    association.check_preparation().map_err(fail)?;
+    check()?;
     require(unsafe{libc::fchdir(root.as_raw_fd())}==0 && unsafe{libc::chroot(b".\0".as_ptr().cast())}==0
         && unsafe{libc::chdir(b"/\0".as_ptr().cast())}==0)?;
     let limits=libc::rlimit{rlim_cur:0,rlim_max:0};
@@ -162,8 +176,8 @@ pub(super) fn enter(closure:&PreparedNativeCustodyClosure,delivery:&PreparedGues
         if present==1 {require(unsafe{libc::prctl(libc::PR_CAPBSET_DROP,capability,0,0,0)}==0)?;}
     }
     require(unsafe{libc::setgroups(0,std::ptr::null())}==0
-        && unsafe{libc::setresgid(delivery.role_gid(),delivery.role_gid(),delivery.role_gid())}==0
-        && unsafe{libc::setresuid(delivery.role_uid(),delivery.role_uid(),delivery.role_uid())}==0)?;
+        && unsafe{libc::setresgid(gid,gid,gid)}==0
+        && unsafe{libc::setresuid(uid,uid,uid)}==0)?;
     #[repr(C)]struct Header{version:u32,pid:i32}
     #[repr(C)]struct Data{effective:u32,permitted:u32,inheritable:u32}
     let header=Header{version:0x2008_0522,pid:0};
@@ -171,8 +185,7 @@ pub(super) fn enter(closure:&PreparedNativeCustodyClosure,delivery:&PreparedGues
     require(unsafe{libc::syscall(libc::SYS_capset,&header,data.as_ptr())}==0
         && unsafe{libc::prctl(libc::PR_SET_DUMPABLE,0)}==0
         && unsafe{libc::prctl(libc::PR_SET_PDEATHSIG,libc::SIGKILL)}==0
-        && unsafe{libc::getppid()}==lifetime.parent)?;
-    association.check_startup().map_err(fail)?;lifetime.check()
+        && unsafe{libc::getppid()}==parent)
 }
 
 #[derive(Clone,Serialize,Deserialize,PartialEq,Eq)]

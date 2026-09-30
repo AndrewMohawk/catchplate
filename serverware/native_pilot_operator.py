@@ -169,6 +169,10 @@ class Operator:
         observations["driverGenerationRecipe"] = recipe
         observations["endpointDeliveries"] = endpoint_pins
         observations["endpointDeliveryResult"] = endpoint_result
+        # Actual retained PIDFD/target-executable measurements. The ordinary
+        # children are still parked before exec; this is not a running-service
+        # identity or independently signed current-key authorization.
+        observations["ordinaryPreparationOriginal"] = _text(pilot.ordinary_services.preparation_original())
         from serverware.native_pilot_service_inputs import FIELDS
         service_inputs = self._exchange("service-originals", observations, FIELDS)
         self._transfers = admit_services(pilot, endpoints=endpoints, originals=self._public, inputs=service_inputs)

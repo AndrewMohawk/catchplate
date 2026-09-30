@@ -241,7 +241,9 @@ def require_deliveries(policy, *, process, request) -> dict:
     for role in ROLES:
         originals[role], guests[role] = _result(process, role, inputs[role], cold[role])
     current = p.fields(_phase(process, "service-originals")["payload"],
-        _RESOURCE_FIELDS + ("driverGenerationRecipe", "endpointDeliveries", "endpointDeliveryResult"))
+        _RESOURCE_FIELDS + ("driverGenerationRecipe", "endpointDeliveries", "endpointDeliveryResult",
+            "ordinaryPreparationOriginal"))
+    _ordinary_preparation(process, current, now=before)
     previous = _phase(process, "endpoint-deliveries")["payload"]
     for field in _RESOURCE_FIELDS + ("driverGenerationRecipe",):
         c9._same(current[field], previous[field])
@@ -258,3 +260,35 @@ def require_deliveries(policy, *, process, request) -> dict:
         and p.digest(journal["headSha256"]) == journal["genesisSha256"])
     _recheck(policy, process, request, window, before, recipe_originals)
     return {"deliveryOriginals": originals, "endpointDeliveryResult": copy.deepcopy(observed)}
+
+
+def _ordinary_preparation(process, current, *, now):
+    """Join the explicit parked-pre-exec observation, never a live identity."""
+    from serverware import native_pilot_ordinary_key_profile as ordinary
+
+    raw, _ = scope._original(current["ordinaryPreparationOriginal"], ordinary.MAX_PREPARATION)
+    measured = ordinary.preparation(raw)
+    installed_raw = process.approved_input_original("endpoint-precreation", "install-precreation")
+    p.require(p.sha(installed_raw) == process.approved_input_sha256("endpoint-precreation", "install-precreation"))
+    installed = p.document(installed_raw, precreation.MAX_INPUT)
+    launch_raw, launch = scope._original(installed["ordinaryLaunchOriginal"], 65536)
+    p.require(measured["configurationSha256"] == p.sha(launch_raw))
+    for name in ("bootIdBase64url", "timeNamespaceDevice", "timeNamespaceInode",
+                 "startupDeadlineBoottimeNs", "lifetimeDeadlineBoottimeNs", "invocationId"):
+        c9._same(measured[name], launch[name])
+    p.require(p.ns(measured["issuedAtBoottimeNs"]) <= now
+        < p.ns(measured["startupDeadlineBoottimeNs"]))
+    parked = p.fields(current["ordinaryParked"], generation.ROLES)
+    for role in generation.ROLES:
+        row = measured["services"][role]
+        cold_raw, _ = scope._original(installed["ordinaryColdOriginals"][role], 65536)
+        cold = generation.configuration(cold_raw, p.sha(cold_raw), role)
+        p.require(row["configurationSha256"] == p.sha(cold_raw)
+            == launch["services"][role]["deliveryConfiguration"]["sha256"]
+            and row["plannedUid"] == cold["uid"] and row["plannedGid"] == cold["gid"])
+        actual = p.fields(parked[role], ("processId", "startTimeTicks", "pidfdInode", "executable"))
+        p.require(row["processId"] == actual["processId"] and row["startTimeTicks"] == actual["startTimeTicks"]
+            and row["pidfdStat"]["inode"] == actual["pidfdInode"])
+        c9._same({name: row["targetExecutable"][name] for name in ("device", "inode", "length", "sha256")},
+            actual["executable"])
+        p.require(row["targetExecutable"]["sha256"] == launch["services"][role]["executableSha256"])

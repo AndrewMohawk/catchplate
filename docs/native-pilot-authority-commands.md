@@ -16,6 +16,13 @@ command without that authority's own approval and observation checks.
 
 ## Authority-side execution
 
+The [ordinary current-key issuer](native-pilot-ordinary-key-authorization.md)
+produces an existing v3 checkpoint under an authenticated supplied fresh retained
+epoch. Its `--input-fd` and `--authority-key-fd` select independently approved
+originals and the distinct checkpoint key. The initial checkpoint/three-party
+retained-anchor ceremony and fixed coordinator jobs remain separate missing
+work; this command is not a cold-history bootstrap or a running-service proof.
+
 The [driver-window issuer](native-pilot-window-authority.md) handles the existing
 pre-start Window/v1 under the bootstrap authority. The
 [bootstrap installer](native-pilot-bootstrap-installation.md) verifies that

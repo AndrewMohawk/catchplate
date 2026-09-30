@@ -131,6 +131,8 @@ class FiveServiceLaunch:
         self._business_resources = None
         self._thread = self._transfer = None
         self._listening = threading.Event(); self._bridge_attempted = False
+        self._preparation_attempted = False
+        self._preparation = None
 
     @classmethod
     def start(cls):
@@ -277,6 +279,11 @@ class FiveServiceLaunch:
             result[role] = dict(processId=item["pid"], startTimeTicks=item["start"], pidfdInode=pidfd.st_ino,
                 executable=dict(device=info.st_dev, inode=info.st_ino, length=info.st_size, sha256=executable.sha))
         return result
+
+    def preparation_original(self):
+        """Actual parked/pre-exec target measurements, never final-role proof."""
+        from serverware.custody_generation_measurements import preparation_original
+        return preparation_original(self)
 
     def release(self, transfer):
         from serverware.custody_generation_inputs import GenerationTransfer
@@ -460,6 +467,8 @@ class FiveServiceLaunch:
         else:
             self._terminate()
         p.require(all(item["reaped"] for item in self._children.values()))
+        if self._preparation is not None:
+            self._preparation.close()
         self._closed = True
         for item in self._children.values():
             item["channel"].close(); os.close(item["pidfd"])

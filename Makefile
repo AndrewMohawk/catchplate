@@ -1329,8 +1329,11 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	scripts/test_native_pilot_closure_set.py \
 	scripts/test_native_pilot_fresh_ledger.py \
 	scripts/test_native_pilot_endpoint_commissioning.py \
+	scripts/test_native_pilot_ordinary_keys.py \
+	scripts/test_native_pilot_ordinary_key_history.py \
 	scripts/authority/sign_native_pilot_delivery.py \
 	scripts/authority/sign_native_pilot_service.py \
+	scripts/authority/sign_native_pilot_ordinary_key.py \
 	scripts/authority/sign_native_pilot_generation_install.py \
 	scripts/authority/sign_native_pilot_native_service.py \
 	scripts/install_native_pilot_public_original.py \
@@ -1616,6 +1619,9 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/native_pilot_measured_configuration.py \
 	serverware/native_pilot_delivery_authority.py \
 	serverware/native_pilot_service_authority.py \
+	serverware/native_pilot_ordinary_key_profile.py \
+	serverware/native_pilot_ordinary_key_authority.py \
+	serverware/custody_generation_measurements.py \
 	serverware/native_pilot_publication_profiles.py \
 	serverware/native_pilot_precreation_install.py \
 	serverware/native_pilot_bridge_install.py \
@@ -4043,8 +4049,11 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				scripts/test_native_pilot_closure_set.py \
 				scripts/test_native_pilot_fresh_ledger.py \
 				scripts/test_native_pilot_endpoint_commissioning.py \
+				scripts/test_native_pilot_ordinary_keys.py \
+				scripts/test_native_pilot_ordinary_key_history.py \
 				scripts/authority/sign_native_pilot_delivery.py \
 				scripts/authority/sign_native_pilot_service.py \
+				scripts/authority/sign_native_pilot_ordinary_key.py \
 				scripts/authority/sign_native_pilot_generation_install.py \
 				scripts/authority/sign_native_pilot_native_service.py \
 				scripts/install_native_pilot_public_original.py \
@@ -4324,6 +4333,9 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/native_pilot_measured_configuration.py \
 				serverware/native_pilot_delivery_authority.py \
 				serverware/native_pilot_service_authority.py \
+				serverware/native_pilot_ordinary_key_profile.py \
+				serverware/native_pilot_ordinary_key_authority.py \
+				serverware/custody_generation_measurements.py \
 				serverware/native_pilot_publication_profiles.py \
 				serverware/native_pilot_precreation_install.py \
 				serverware/native_pilot_bridge_install.py \

@@ -1,6 +1,6 @@
 """Fixed commissioning decisions joined to their real process and installer.
 
-Only the initial three job composers exist. The complete-coverage check refuses
+Only the initial seven job composers exist. The complete-coverage check refuses
 startup before spawning a child, not after a live attempt reaches a missing job.
 There is no executable entrypoint, configurable dispatcher, approval callback,
 signer, new deadline or source of deployment approval in this module.
@@ -11,6 +11,8 @@ import os
 
 from serverware import native_pilot_approval_install as installation
 from serverware import native_pilot_supervisor_precreation as precreation
+from serverware import native_pilot_supervisor_endpoint_inputs as endpoint_inputs
+from serverware import native_pilot_supervisor_endpoint_deliveries as endpoint_deliveries
 from serverware import native_shadow_nitro_originals as originals
 from serverware import native_shadow_nitro_profile as p
 from serverware.native_pilot_operator_channel import STAGES
@@ -20,7 +22,11 @@ from serverware.native_pilot_supervisor_process import AuthorityCoordinatorProce
 
 SUPPORTED_JOBS = (("bootstrap-admission", "driver-bootstrap"),
     ("endpoint-precreation", "cohort-precreation"),
-    ("endpoint-precreation", "install-precreation"))
+    ("endpoint-precreation", "install-precreation"),
+    ("endpoint-inputs", "endpoint-inputs"),
+    ("endpoint-deliveries", "native-delivery-retrieval"),
+    ("endpoint-deliveries", "native-delivery-persistence"),
+    ("endpoint-deliveries", "native-delivery-trustedTime"))
 _ORDER = tuple((phase, job.name) for phase in STAGES for job in JOBS[phase])
 _TOKEN = object()
 _USED = False
@@ -109,12 +115,19 @@ class CommissioningSupervisor:
             and request.sequence == self._index + 1)
         if slot == SUPPORTED_JOBS[0]:
             input_raw, approval_raw = self._policy.bootstrap(self._process, request)
-        else:
+        elif slot in SUPPORTED_JOBS[1:3]:
             if slot == SUPPORTED_JOBS[1]:
                 # v2's real retained owner derives once from the actual prior
                 # bootstrap signature/request. Legacy policy returns None.
                 self._policy.derive_measured(process=self._process, request=request)
             input_raw = precreation.compose(self._policy, process=self._process, request=request)
+            approval_raw = _approval(request.raw, input_raw)
+        elif slot == SUPPORTED_JOBS[3]:
+            input_raw = endpoint_inputs.compose(self._policy, process=self._process, request=request)
+            approval_raw = _approval(request.raw, input_raw)
+        else:
+            p.require(slot in SUPPORTED_JOBS[4:7])
+            input_raw = endpoint_deliveries.compose(self._policy, process=self._process, request=request)
             approval_raw = _approval(request.raw, input_raw)
         p.require(type(input_raw) is bytes and type(approval_raw) is bytes)
         p.document(approval_raw, MAX_APPROVAL)

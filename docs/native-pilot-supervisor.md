@@ -1,9 +1,9 @@
 # Native pilot commissioning supervisor
 
 This is a partial source implementation, not a runnable or deployed supervisor.
-The .368 source batch connects the retained measured-recipe owner; it supplies
-no new build or runtime evidence and does not increase job coverage.
-Three of the existing 60 jobs have fixed policy/input composers. The automated
+The .370 source batch connects endpoint preparation and the first three native
+C9 delivery decisions to the retained measured-recipe owner.
+Seven of the existing 60 jobs have fixed policy/input composers. The automated
 owner refuses startup **before spawning** while any job is unimplemented. There
 is no CLI, generic template renderer, approval callback or implicit approval of
 future inputs. Independent production acceptance remains separate.
@@ -54,6 +54,16 @@ Legacy policy/v1 retains its exact eight fields and purpose
 the complete independently approved [recipe/v2](native-pilot-measured-configuration.md),
 not a predicted configuration hash or a future driver identity.
 
+Explicit policy/v3 retains those nine fields and adds `endpointPreparation` and
+`endpointDeliveries`, with purpose
+`initial-driver-bootstrap-precreation-and-endpoint-commissioning`. The preparation
+fragment selects only fresh-ledger initialization, an existing empty protected
+directory and three independent peer expectations. It contains no future process,
+configuration hash, proof scope or receipt. The delivery fragment supplies the
+three exact role runtimes, their fixed public pins and nonempty credential
+metadata; it supplies no private bytes. V1/v2 remain unchanged. See
+[endpoint commissioning](native-pilot-supervisor-endpoints.md).
+
 ## Implemented composition
 
 | Existing job | Independently selected inputs | Actual data admitted during the attempt |
@@ -61,6 +71,10 @@ not a predicted configuration hash or a future driver identity.
 | `driver-bootstrap` | Driver control/configuration/window and cold delivery configuration | Genuine prepared admission payload and bootstrap observation from the owned coordinator |
 | [`cohort-precreation`](native-pilot-supervisor-precreation.md) | C9 authority, endpoint executable, cleanup authority/scope/journal/genesis, ten native and five ordinary cold configurations, ordinary executable hashes | Verified prior bootstrap signature, gate association and measured original hashes |
 | `install-precreation` | Same retained policy, including cohort executable | Verified actual cohort signature and the exact derived v7 cohort/v6 ordinary launch originals |
+| `endpoint-inputs` | Recipe/v2, explicit fresh-ledger directory and peer expectations | Actual measured configuration/scope, original assignment, verified prior jobs and actual empty-directory preparation |
+| `native-delivery-retrieval` | Retrieval runtime and credential metadata | Actual activation FDs, original cohort window and assignment-bound runtime leaf |
+| `native-delivery-persistence` | Persistence runtime and credential metadata | Same joins plus the verified actual Retrieval delivery result |
+| `native-delivery-trustedTime` | TrustedTime runtime and credential metadata | Same joins plus both earlier verified delivery results |
 
 The original boot, time namespace, invocation and startup/lifetime interval are
 preserved; no timestamp renewal, invented journal, placeholder signature or
@@ -72,7 +86,7 @@ actually approved for that job.
 `native_pilot_supervisor.CommissioningSupervisor` connects the owners/composers
 to the existing approval installer and reply protocol. `prepare(policy=...,
 process=..., measured_recipe=...)` requires the actual retained recipe/v2 for
-policy/v2; policy/v1 requires no recipe. It checks the independent recipe pin
+policy/v2 or v3; policy/v1 requires no recipe. It checks the independent recipe pin
 before bootstrap preparation, then binds that owner to the same actual process
 before spawn. On the genuine pending `cohort-precreation` request, `step()` derives
 once from the verified prior bootstrap result. A downstream fixed composer can
@@ -97,31 +111,27 @@ retained bytes and a reply hash are not proof of successful execution.
 
 ## Remaining work
 
-The first endpoint extension is **held, not admitted**. Source review found
-[two concrete commissioning contradictions](native-pilot-endpoint-commissioning-design.md):
-pre-start inputs depend on a future measured driver identity, and a shared
-assignment hash cannot simultaneously identify the endpoint and bridge closure
-manifests. The separate draft is not restored. The explicit
+The original endpoint draft remains a historical design artifact, not a source
+of approvals. The new composers use the explicit
 [assignment/closure-set contracts](native-pilot-assignment-closure-set.md), retained
-post-observation derivation and [endpoint runtime marker](native-pilot-endpoint-runtime.md)
-now provide source prerequisites; they do not connect the draft endpoint
-composers or approve their inputs. Coverage remains three jobs.
+post-observation derivation, [role runtimes](native-pilot-endpoint-runtime.md) and
+[fresh-ledger profile](native-pilot-fresh-ledger-startup.md). They do not restore
+the old contradictory pre-start scope/manifest requirements.
 
-The other 57 jobs, from `endpoint-inputs` through `shutdown`, still need fixed
+The other 53 jobs, from the first ordinary delivery in `service-originals`
+through `shutdown`, still need fixed
 policy composition and applicable prior-result verification. Existing signers,
 installers and the 60-job executor do not supply those independent decisions.
-The next bounded batch is `endpoint-inputs` and the first three native delivery
-jobs. It needs fixed publication for the run-specific peer/proof-scope/retrieval
-manifest, an independently provisioned nonempty fs-verity object store, the
-signed assignment/verification trust and the three role runtimes. The real
-activation arrays then supply dynamic delivery bindings. A cgroup-original
-digest is not a cgroup-path digest; neither can be substituted for the other.
+The next batch is ordinary-service delivery and generation composition from
+genuine endpoint results, independently approved static authority inputs and
+actual resource observations. A cgroup-original digest is not a cgroup-path
+digest; neither can be substituted for the other.
 Each later launch still needs independently authorized closure-set membership
 and its exact leaf/runtime bytes; the marker alone supplies neither authorization
 nor service settings.
 
 Complete coverage, the executable supervisor entrypoint/package, connected
-runtime verification and protected deployment remain required. The first three
+runtime verification and protected deployment remain required. The first seven
 composers do not close an overall project checkpoint or establish pilot readiness.
 
 External dependencies remain: approved immutable dependency publication, genuine

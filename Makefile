@@ -1328,6 +1328,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	scripts/authority/prepare_native_pilot_closure_set.py \
 	scripts/test_native_pilot_closure_set.py \
 	scripts/test_native_pilot_fresh_ledger.py \
+	scripts/test_native_pilot_endpoint_commissioning.py \
 	scripts/authority/sign_native_pilot_delivery.py \
 	scripts/authority/sign_native_pilot_service.py \
 	scripts/authority/sign_native_pilot_generation_install.py \
@@ -1631,6 +1632,9 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/native_pilot_supervisor_process.py \
 	serverware/native_pilot_supervisor_policy.py \
 	serverware/native_pilot_supervisor_precreation.py \
+	serverware/native_pilot_supervisor_endpoint_policy.py \
+	serverware/native_pilot_supervisor_endpoint_inputs.py \
+	serverware/native_pilot_supervisor_endpoint_deliveries.py \
 	serverware/native_pilot_service_inputs.py \
 	scripts/run_native_pilot.py \
 	serverware/native_shadow_proof_cohort_cleanup.py \
@@ -4038,6 +4042,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				scripts/authority/prepare_native_pilot_closure_set.py \
 				scripts/test_native_pilot_closure_set.py \
 				scripts/test_native_pilot_fresh_ledger.py \
+				scripts/test_native_pilot_endpoint_commissioning.py \
 				scripts/authority/sign_native_pilot_delivery.py \
 				scripts/authority/sign_native_pilot_service.py \
 				scripts/authority/sign_native_pilot_generation_install.py \
@@ -4335,6 +4340,9 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/native_pilot_supervisor_process.py \
 				serverware/native_pilot_supervisor_policy.py \
 				serverware/native_pilot_supervisor_precreation.py \
+				serverware/native_pilot_supervisor_endpoint_policy.py \
+				serverware/native_pilot_supervisor_endpoint_inputs.py \
+				serverware/native_pilot_supervisor_endpoint_deliveries.py \
 				serverware/native_pilot_service_inputs.py \
 				scripts/run_native_pilot.py \
 				serverware/native_shadow_proof_cohort_cleanup.py \

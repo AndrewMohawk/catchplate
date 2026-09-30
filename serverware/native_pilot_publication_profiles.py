@@ -28,6 +28,10 @@ PROFILES = {
     "ordinary-launch": ("ordinary-launch", None, 65536),
     "bridge-runtime": ("bridge-runtime", None, 65536),
     "bridge-outgoing": ("bridge-outgoing", None, 8192),
+    "endpoint-peer": ("endpoint-input", "peer", 4096),
+    "endpoint-proof-scope": ("endpoint-input", "proof-scope", 16384),
+    "endpoint-retrieval-manifest": ("endpoint-input", "retrieval-manifest", 32768),
+    "endpoint-assignment": ("endpoint-input", "assignment", 4 * 1024 * 1024),
     "native-generation-install-grant": ("generation-install", None, 65536),
     **{"native-service-" + operation: ("native-service", operation, 65536)
        for operation in _NATIVE_OPERATIONS},
@@ -148,6 +152,21 @@ def shape(purpose, raw):
     """Validate the selected public envelope, never authenticate its authority."""
     p.require(type(purpose) is str and purpose in PROFILES)
     family, role, maximum = PROFILES[purpose]
+    if family == "endpoint-input":
+        from serverware import native_pilot_assignment as assignments
+        from serverware import native_shadow_retrieval_artifacts as retrieval
+        p.require(type(raw) is bytes and 0 < len(raw) <= maximum)
+        if role == "peer":
+            retrieval._peer(raw)
+        elif role == "proof-scope":
+            p.require(retrieval.scope_original(raw).get("api_version") == retrieval.SCOPE_SET_API)
+        elif role == "retrieval-manifest":
+            p.require(retrieval.manifest_initialization(raw, p.sha(raw)) == retrieval.FRESH_INITIALIZATION)
+        else:
+            p.require(role == "assignment")
+            value = assignments.shape(p.document(raw, maximum))
+            p.require(assignments.version(value) == 2)
+        return
     if family == "driver-bootstrap-input":
         from serverware import native_pilot_bootstrap_install as bootstrap_install
         bootstrap_install.shape(purpose, raw)

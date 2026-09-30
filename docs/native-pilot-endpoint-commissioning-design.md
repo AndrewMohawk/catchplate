@@ -1,4 +1,11 @@
-# Endpoint commissioning: two unresolved admission joins
+# Endpoint commissioning: historical admission contradictions
+
+This document records the `.365` draft's contradictions and why it was held.
+Subsequent explicit assignment/closure-set, measured-recipe and fresh-ledger
+contracts address those source-level joins. The `.370`
+[endpoint composers](native-pilot-supervisor-endpoints.md) use those contracts,
+not the old future-value policy. Current coverage is 7/60; runtime acceptance and
+full commissioning remain open. The descriptions below are historical findings.
 
 The endpoint-input and first-three-delivery composers are held, unadmitted
 source, preserved outside the canonical checkout. They do not extend supervisor coverage from three to seven

@@ -71,8 +71,9 @@ inferred from an empty directory or a new observation.
 ## Evidence boundary
 
 These are source contracts, not a launched pilot or verified first request.
-The endpoint launch composers are not complete; supervisor coverage remains
-3/60 and full-run startup still refuses. Genuine assignments, protected originals,
+The `.370` [endpoint composers](native-pilot-supervisor-endpoints.md) connect this
+profile to preparation and the first three C9 decisions. Supervisor coverage is
+7/60 and full-run startup still refuses. Genuine assignments, protected originals,
 service authorization, actual storage and subsequent connected acceptance remain
 required. No preexisting custody evidence, readiness, deployment, or new runtime
 success is claimed by this profile.

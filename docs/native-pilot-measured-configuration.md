@@ -4,8 +4,9 @@
 version-selected native production configuration hash from independently approved static
 originals and a real process-owned bootstrap observation. The .368 source batch
 connects this retained owner to the partial commissioning supervisor. It is not
-a complete supervisor or authority issuer; coverage remains 3/60, with no new
-build or runtime evidence.
+a complete supervisor or authority issuer. The `.370`
+[endpoint composers](native-pilot-supervisor-endpoints.md) extend coverage to
+7/60, still without full commissioning or runtime acceptance.
 
 The legacy protected recipe has exactly ten fields. Explicit recipe/v2 has
 those same fields plus the required `closureSetOriginal`:

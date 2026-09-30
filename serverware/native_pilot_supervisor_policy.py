@@ -6,6 +6,9 @@ that approval provenance. This owner delegates only the initial bootstrap and
 the separate two fixed precreation decisions, not all sixty authority jobs.
 Explicit policy v2 additionally pins a retained measured recipe/v2 and allows
 its one actual post-bootstrap derivation; it does not approve endpoint jobs.
+Explicit v3 additionally delegates the fixed fresh-ledger endpoint preparation
+and first three C9 deliveries from that same retained recipe and actual owner.
+It does not delegate the remaining service, bridge, release or lifetime jobs.
 
 Only the actual AuthorityCoordinatorProcess and its current opaque JobRequest
 can enter bootstrap(). No signing, publication, process launch, arbitrary
@@ -36,6 +39,9 @@ FIELDS = ("apiVersion", "purpose", "source", "conductorInventorySha256", "author
 MEASURED_POLICY_API = "serverware.nativePilotSupervisorCommissioningPolicy/v2"
 MEASURED_PURPOSE = "initial-driver-bootstrap-precreation-and-measured-configuration"
 MEASURED_FIELDS = FIELDS + ("measuredRecipeSha256",)
+ENDPOINT_POLICY_API = "serverware.nativePilotSupervisorCommissioningPolicy/v3"
+ENDPOINT_PURPOSE = "initial-driver-bootstrap-precreation-and-endpoint-commissioning"
+ENDPOINT_FIELDS = MEASURED_FIELDS + ("endpointPreparation", "endpointDeliveries")
 BOOTSTRAP_FIELDS = ("control", "configuration", "window", "deliveryConfiguration")
 _TOKEN = object()
 _USED = False
@@ -95,10 +101,12 @@ class SupervisorPolicy:
             owner._digest = p.digest(policy_sha256)
             p.require(p.sha(owner._raw) == owner._digest)
             value = p.document(owner._raw, MAX_POLICY)
-            p.require(type(value) is dict and value.get("apiVersion") in (POLICY_API, MEASURED_POLICY_API))
-            measured = value["apiVersion"] == MEASURED_POLICY_API
-            p.fields(value, MEASURED_FIELDS if measured else FIELDS)
-            p.require(value["purpose"] == (MEASURED_PURPOSE if measured else PURPOSE))
+            p.require(type(value) is dict and value.get("apiVersion") in
+                (POLICY_API, MEASURED_POLICY_API, ENDPOINT_POLICY_API))
+            endpoint = value["apiVersion"] == ENDPOINT_POLICY_API
+            measured = value["apiVersion"] in (MEASURED_POLICY_API, ENDPOINT_POLICY_API)
+            p.fields(value, ENDPOINT_FIELDS if endpoint else MEASURED_FIELDS if measured else FIELDS)
+            p.require(value["purpose"] == (ENDPOINT_PURPOSE if endpoint else MEASURED_PURPOSE if measured else PURPOSE))
             if measured:
                 p.digest(value["measuredRecipeSha256"])
             p.fields(value["source"], artifact.SOURCE_FIELDS)
@@ -118,8 +126,22 @@ class SupervisorPolicy:
             precreation = validate_policy(value["precreation"], bootstrap_configuration=config)
             _same(precreation["authority"], cold["authority"])
             p.require(keys["cohort-precreation"] == keys["cohort-release"] == precreation["authority"]["keyId"])
+            if endpoint:
+                from serverware import native_pilot_supervisor_endpoint_policy as preparation
+                from serverware import native_pilot_supervisor_endpoint_deliveries as deliveries
+                from serverware import native_shadow_guest_delivery as delivery
+                endpoint_preparation = preparation.validate_policy(value["endpointPreparation"])
+                endpoint_deliveries = deliveries.validate_policy(value["endpointDeliveries"],
+                    native_cold_originals=precreation["nativeColdOriginals"])
+                for role in ("retrieval", "persistence", "trustedTime"):
+                    cold_raw, _ = scope._original(precreation["nativeColdOriginals"][role], 65536)
+                    endpoint_cold = delivery.configuration(cold_raw, p.sha(cold_raw))
+                    p.require(keys["native-delivery-" + role] == endpoint_cold["authority"]["keyId"])
             owner._value = copy.deepcopy(value)
             owner._value["precreation"] = precreation
+            if endpoint:
+                owner._value["endpointPreparation"] = endpoint_preparation
+                owner._value["endpointDeliveries"] = endpoint_deliveries
             owner._bootstrap, owner._control, owner._config, owner._window = raw, control, config, window
             owner._bindings = {"apiVersion": "serverware.nativePilotSupervisorBindings/v1",
                 "conductorInventorySha256": value["conductorInventorySha256"],
@@ -156,7 +178,7 @@ class SupervisorPolicy:
     def retain_measured_recipe(self, recipe):
         """Retain only the source-selected real recipe before process setup.
 
-        Legacy policy forbids a recipe. v2 requires the already independently
+        Legacy policy forbids a recipe. v2/v3 require the already independently
         approved original pin, not future process-dependent configuration data.
         """
         from serverware.native_pilot_measured_configuration import MeasuredConfigurationRecipe
@@ -187,7 +209,7 @@ class SupervisorPolicy:
             retained = p.fields(process.bootstrap_originals(), BOOTSTRAP_FIELDS)
             p.require(all(type(retained[name]) is bytes and retained[name] == raw
                 for name, raw in self._bootstrap.items()))
-            if self._value["apiVersion"] == MEASURED_POLICY_API:
+            if self._value["apiVersion"] in (MEASURED_POLICY_API, ENDPOINT_POLICY_API):
                 p.require(self._recipe_attempted and self._recipe is not None)
                 self._recipe.require_original(self._value["measuredRecipeSha256"])
                 self._recipe.bind(process)
@@ -221,9 +243,32 @@ class SupervisorPolicy:
         The actual pending request and original startup allowance are required.
         """
         self.check(process)
-        p.require(self._value["apiVersion"] == MEASURED_POLICY_API
+        p.require(self._value["apiVersion"] in (MEASURED_POLICY_API, ENDPOINT_POLICY_API)
             and self._recipe is not None and self._measured_attempted)
         value = self._recipe.result(process=process, request=request)
+        self.check(process)
+        process.check_request(request)
+        return value
+
+    def endpoint_policy(self) -> dict:
+        """Return the admitted static v3 preparation fragment, not live facts."""
+        self.check()
+        p.require(self._value["apiVersion"] == ENDPOINT_POLICY_API)
+        return copy.deepcopy(self._value["endpointPreparation"])
+
+    def endpoint_deliveries(self) -> dict:
+        """Return the three independently selected C9 public input fragments."""
+        self.check()
+        p.require(self._value["apiVersion"] == ENDPOINT_POLICY_API)
+        return copy.deepcopy(self._value["endpointDeliveries"])
+
+    def endpoint_recipe_originals(self, *, process, request) -> dict:
+        """Read only the same retained recipe's authenticated public originals."""
+        self.check(process)
+        p.require(self._value["apiVersion"] == ENDPOINT_POLICY_API
+            and self._recipe is not None and self._measured_attempted)
+        self._recipe.require_original(self._value["measuredRecipeSha256"])
+        value = self._recipe.public_originals(process=process, request=request)
         self.check(process)
         process.check_request(request)
         return value
@@ -309,6 +354,11 @@ class SupervisorPolicy:
             from serverware.native_pilot_supervisor_process import AuthorityCoordinatorProcess
             p.require(type(self._process) is AuthorityCoordinatorProcess and self._process._closed
                 and self._process._result["status"] in ("not-started", "stopped-cleanup-complete", "failed-cleanup-complete"))
+            if self._value["apiVersion"] == ENDPOINT_POLICY_API:
+                from serverware import native_pilot_supervisor_endpoint_inputs as endpoint_inputs
+                # Close partial publication/directory owners only after genuine
+                # process cleanup. Failure retains this policy and its recipe.
+                endpoint_inputs.close(self._process)
         if self._recipe is not None:
             self._recipe.close()
         os.close(self._fd)

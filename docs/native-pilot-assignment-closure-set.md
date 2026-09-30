@@ -2,8 +2,9 @@
 
 The `.367` source connects explicit versioned assignment, guest-membership and
 shared-proof contracts. It does not enable the held commissioning jobs or prove a
-running pilot. Counts remain **36/46 source checkpoints**, **0/6 production gates**
-and **3/60 supervisor jobs**. Exact commit `d5d0746b` passed isolated offline
+running pilot. That checkpoint had **36/46 source checkpoints**, **0/6 production gates**
+and **3/60 supervisor jobs**; the later [endpoint composers](native-pilot-supervisor-endpoints.md)
+extend job coverage to 7/60 without changing production acceptance. Exact commit `d5d0746b` passed isolated offline
 Rust 1.88 Cargo checking; this is not linking, runtime or production evidence.
 
 ## Separate common roots from actual guest leaves

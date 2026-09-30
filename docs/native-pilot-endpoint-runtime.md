@@ -35,5 +35,5 @@ as a receipt archive; legacy nonempty retrieval manifests remain supported.
 
 This is source wiring, not runtime acceptance. No new compilation, launch,
 service request or cleanup evidence accompanies this batch. Supervisor coverage
-remains 3/60 and full-run startup still refuses; endpoint commissioning composers
+is now 7/60 and full-run startup still refuses; the remaining commissioning composers
 and genuine provisioned objects/originals must still be connected and verified.

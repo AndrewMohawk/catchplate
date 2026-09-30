@@ -304,6 +304,20 @@ class MeasuredConfigurationRecipe:
         process.check_request(request)
         return value
 
+    def public_originals(self, *, process, request) -> dict:
+        """Return four literal v2 originals under the existing result guards.
+
+        The same retained recipe, actual pending request, original startup
+        window, assignment signature and trust currentness are rechecked. This
+        neither changes the six-field result nor admits a caller-provided DTO.
+        """
+        self.result(process=process, request=request)
+        value = {name: self._value[name] for name in
+            ("assignmentOriginal", "trustOriginal", "trustSha256", "closureSetOriginal")}
+        self.check()
+        process.check_request(request)
+        return value
+
     def _derive(self, envelope, keys, key_root, manifest, observed):
         assignment = envelope["payload"]
         authority = assignment["custodyAuthority"]

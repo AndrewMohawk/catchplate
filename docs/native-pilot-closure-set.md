@@ -3,8 +3,9 @@
 `serverware.native_pilot_closure_set` is an unsigned fixed-role producer and
 validator. It describes supplied static manifests; it does not approve them,
 verify an assignment signature, sign or install anything, reconstruct a live
-guest, or enable the held endpoint commissioning policy. Supervisor coverage
-remains three jobs until the actual successor admission pipeline is connected.
+guest, or enable a commissioning policy by itself. The later explicit assignment
+and [endpoint composers](native-pilot-supervisor-endpoints.md) connect this data
+to admission and extend supervisor coverage to seven jobs, not runtime acceptance.
 
 ## Exact public original
 

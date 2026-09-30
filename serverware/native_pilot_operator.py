@@ -161,7 +161,8 @@ class Operator:
         endpoint_result = endpoints.admit_deliveries(originals={role: self._public.read(
             endpoint_pins[role], maximum=delivery.MAX_DELIVERY) for role in ENDPOINT_INPUT_ROLES})
         # The real retained owner has now fsynced/read back its empty store.
-        # Only this actual result is presented for later Retrieval/v3 signing;
+        # Only this actual result is presented for later Retrieval/v3 or the
+        # explicitly selected fresh-ledger/v4 signing;
         # no predicted genesis, second intake, or renewed startup is supplied.
         observations = self._resource_observations()
         observations["nativeActivations"].update(endpoints.activations())

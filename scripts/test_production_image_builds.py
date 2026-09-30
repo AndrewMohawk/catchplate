@@ -1002,6 +1002,77 @@ def assert_native_runtime_loader_paths() -> None:
             )
 
 
+def assert_native_runtime_stdlib_build_directory() -> None:
+    """Exercise the fixed stdlib exclusion without reading or copying files."""
+    package = package_native_broker_runtime
+    source = Path("/source/python3.11")
+    target = Path("/usr/local/lib/python3.11")
+    config = "config-3.11-x86_64-linux-gnu"
+
+    def walk(root: Path, *, followlinks: bool):
+        if root != source or followlinks:
+            raise AssertionError("runtime tree changed its fixed, non-following walk")
+        subdirs = [config, "lib-dynload", "package"]
+        yield str(source), subdirs, ["sysconfig.py", "_sysconfigdata__linux_x86_64-linux-gnu.py"]
+        for name in subdirs:
+            nested = [config] if name == "package" else []
+            files = ["python.o"] if name == config else ["_ssl.so"] if name == "lib-dynload" else ["__init__.py"]
+            yield str(source / name), nested, files
+            for child in nested:
+                yield str(source / name / child), [], ["nested.dat"]
+
+    for stdlib in (True, False):
+        closure = package.Closure(0)
+        with mock.patch.object(Path, "is_dir", return_value=True), \
+                mock.patch.object(Path, "is_symlink", return_value=False), \
+                mock.patch.object(package.os, "walk", side_effect=walk), \
+                mock.patch.object(closure, "add") as add:
+            closure.tree(source, target, stdlib=stdlib)
+        names = ["_sysconfigdata__linux_x86_64-linux-gnu.py", "sysconfig.py"]
+        if not stdlib:
+            names.append(config + "/python.o")
+        names.extend(["lib-dynload/_ssl.so", "package/__init__.py", "package/" + config + "/nested.dat"])
+        if add.call_args_list != [mock.call(source / name, target / name) for name in names]:
+            raise AssertionError("runtime tree changed the top-level-only stdlib config exclusion")
+
+
+def assert_native_runtime_elf_types() -> None:
+    """Minimal ELF header fixtures; no loader, compiler or filesystem effects."""
+    package = package_native_broker_runtime
+    source = Path("/source/runtime-elf")
+    target = Path("/usr/local/lib/runtime-elf")
+    for elf_type in (2, 3, 1, 4, 0):
+        header = bytearray(64)
+        header[:7] = b"\x7fELF\x02\x01\x01"
+        header[16:18] = elf_type.to_bytes(2, "little")
+        header[18:20] = b"\x3e\x00"
+        header[20:24] = b"\x01\x00\x00\x00"
+        closure = package.Closure(0)
+        with mock.patch.object(package, "original", return_value=bytes(header)), \
+                mock.patch.object(Path, "mkdir") as mkdir, \
+                mock.patch.object(Path, "open", mock.mock_open()) as opened, \
+                mock.patch.object(Path, "chmod") as chmod, \
+                mock.patch.object(package.os, "utime") as utime:
+            if elf_type in (2, 3):
+                closure.add(source, target)
+                if closure.elf_sources != [source] or set(closure.files) != {str(target)} or closure.total != len(header):
+                    raise AssertionError("runtime ELF was not retained for loader closure inspection")
+                opened().write.assert_called_once_with(bytes(header))
+            else:
+                try:
+                    closure.add(source, target)
+                except ValueError:
+                    pass
+                else:
+                    raise AssertionError(f"runtime closure accepted non-runtime ELF type {elf_type}")
+                mkdir.assert_not_called()
+                opened.assert_not_called()
+                chmod.assert_not_called()
+                utime.assert_not_called()
+                if closure.files or closure.elf_sources or closure.total:
+                    raise AssertionError("rejected ELF mutated runtime closure state")
+
+
 def assert_launcher_digest_measurement_contract() -> None:
     gate_digest = sha256_prefixed(b"decision-gate")
     launcher_digest = sha256_prefixed(b"static-launcher")
@@ -2113,6 +2184,8 @@ def main() -> None:
     assert_gate_response_context_publish_wait()
     assert_static_launcher_artifact_embedded()
     assert_native_runtime_loader_paths()
+    assert_native_runtime_stdlib_build_directory()
+    assert_native_runtime_elf_types()
     assert_launcher_digest_measurement_contract()
     assert_release_python_dependency_inventory()
     assert_malformed_python_locks_fail_closed()

@@ -84,6 +84,13 @@ class Closure:
         require(SAFE_PATH.fullmatch(name) is not None and ".." not in target.parts,
                 "runtime path is outside the fixed closure spelling")
         data = original(source)
+        is_elf = data.startswith(b"\x7fELF")
+        if is_elf:
+            require(len(data) >= 64 and data[4:7] == b"\x02\x01\x01" and data[18:20] == b"\x3e\x00",
+                    "runtime ELF must be Linux little-endian x86-64")
+            require(data[16:18] in {b"\x02\x00", b"\x03\x00"},
+                    "runtime ELF must be ET_EXEC or ET_DYN: "
+                    f"source={str(source)[:512]!r} target={name[:512]!r}")
         entry = {"sha256": sha(data), "size": len(data), "mode": "0555" if executable else "0444"}
         if name in self.files:
             require(self.files[name] == entry, "two runtime inputs disagree about one output path")
@@ -97,9 +104,7 @@ class Closure:
         destination.chmod(0o555 if executable else 0o444)
         os.utime(destination, (self.epoch, self.epoch))
         self.files[name] = entry
-        if data.startswith(b"\x7fELF"):
-            require(len(data) >= 64 and data[4:7] == b"\x02\x01\x01" and data[18:20] == b"\x3e\x00",
-                    "runtime ELF must be Linux little-endian x86-64")
+        if is_elf:
             self.elf_sources.append(source)
 
     def tree(self, source: Path, target: Path, *, stdlib: bool = False) -> None:
@@ -108,6 +113,10 @@ class Closure:
             base = Path(directory)
             subdirs[:] = sorted(name for name in subdirs if name != "__pycache__"
                                 and (not stdlib or name not in SKIP))
+            if stdlib and base == source:
+                # This pinned Python's link-time Makefile/Setup/python.o tree
+                # is not runtime code. Keep sibling _sysconfigdata and lib-dynload.
+                subdirs[:] = [name for name in subdirs if name != "config-3.11-x86_64-linux-gnu"]
             for name in subdirs:
                 require(not (base / name).is_symlink(), "runtime directory symlink refused")
             for name in sorted(names):

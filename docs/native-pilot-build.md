@@ -211,31 +211,37 @@ build is not live readiness or production acceptance.
 
 ## Live preparation remains with the genuine owners
 
-Engineering attempt 8 on 2026-09-30 used source `33586f89` and the unchanged,
+Engineering attempt 9 on 2026-09-30 used source `f76325d2` and the unchanged,
 unpublished `v3-candidate-cba01916` dependencies in an isolated dirty-tree
 checkout. It built the nonrelease Linux/amd64 control image
-`sha256:c8a3e0a239346239ce312017614d3f8940d3bb2941f2bf1d914a870d3b486cf3`.
-The main glibc Cargo build completed successfully in 9m06s, and the actual custody
-ledger initializer ran. The runner reduced 30,170 compiler warnings to eight
-bounded summaries and a count without clipping. This attempt used the runner's
-`--keep-going` option but predates the shared source-preparation stage.
-
-The corrected staged Debian installation and all 31 offline Python wheel
-installations passed. The broker runtime packager then refused a shared-library
-path with `loader selected a path outside the pinned build roots`. Fixing that
-path handling is the next assembly step. A read-only check of the exact pinned
-Python base confirmed its loader spells libpython as
-`/usr/local/bin/../lib/libpython3.11.so.1.0`, resolving inside `/usr/local/lib`.
-The fix normalizes that spelling only when original and normalized paths
-resolve to the same admitted file; allowed roots and runtime loader paths remain
-enforced. The
-Alpine diagnostic runner compiled, but static launcher Cargo compilation was
-not reached before the packaging failure.
+`sha256:dc09784034751b7545754f54fb51377d909eadac59c136dfd1d5878c719705c0`.
+The shared preparation stage allowed packaging to proceed independently of the
+main Rust compile. The corrected loader-path handling advanced, then packaging
+stopped because `ldd` was invoked on Python's build-only
+`config-3.11-x86_64-linux-gnu/python.o` object. This surfaced about ten seconds
+into glibc dependency compilation, which was canceled rather than completed.
+Neither Rust stage has a successful result from this attempt. The fixed
+resource arguments were recorded; no live cgroup-limit sample was obtained
+before the short-lived workers exited.
+The next build excludes only that exact top-level stdlib build directory and
+admits only executable/shared-object ELF types before writing runtime output.
+The actual runtime modules remain included; unresolved loader errors still fail
+the build.
 Retained evidence is under
-`codex-offload/serverware/engineering-builds/33586f89-fe7loz`.
+`codex-offload/serverware/engineering-builds/f76325d2-lqsaw9`.
 There is no gate image, complete two-image report, project test result,
 service deployment or pilot acceptance from this attempt. Canonical reviewed
 dependency pins and the nonrelease boundary remain unchanged.
+
+Attempt 8 (`33586f89`) completed the main glibc build in 9m06s, initialized the
+actual custody ledger, and installed all 31 offline Python wheels. Its runner
+used `--keep-going` and reduced 30,170 warnings to eight summaries without
+clipping. The next failure was the pinned loader's legitimate
+`/usr/local/bin/../lib/libpython3.11.so.1.0` spelling. The integrated fix requires
+original and normalized paths to resolve to the same allowed file, preserving
+runtime interpreter paths. Attempt 8 evidence remains under
+`codex-offload/serverware/engineering-builds/33586f89-fe7loz`; that compile result
+does not claim the later source snapshot has built successfully.
 
 Earlier attempts stopped at 18 library errors, then 95 distinct diagnostics
 across 53 files, then 32 distinct diagnostics across 19 files, then five errors,

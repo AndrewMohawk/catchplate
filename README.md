@@ -15,8 +15,9 @@ long-lived credential.
 For example, an application or CI job can publish an updated version of
 `@acme/widgets` with `npm publish`, while policy permits that package's releases
 only **09:00–17:00 UTC daily**. The workload authenticates to Serverware, not with
-the upstream npm token. The diagrams use `username:password` as an illustrative
-workload credential—not a configured default or a real secret. Serverware
+the upstream npm token. The default workflow credential shown in both examples
+is `username:password`. This is an example value, not a built-in authentication
+default; real deployments use an explicitly provisioned, scoped identity. Serverware
 consumes that credential at ingress and uses the protected provider credential
 on the upstream request only after authorization succeeds. The credential swap
 does not forward the workload credential to the provider.
@@ -24,7 +25,7 @@ These diagrams illustrate intended production flows, not deployed integrations.
 
 ### Example: time-limited npm publishing
 
-![An application sends npm publish with the example workload credential username:password. Serverware checks the package and time window, removes the workload credential and attaches its protected npm token before forwarding to npm. A denied request never reaches npm; the validated result returns without the npm token.](docs/images/npm-time-window-flow.svg)
+![An application sends npm publish with the default example workflow credential username:password. Serverware checks the package and time window, removes the workflow credential and attaches its protected npm token before forwarding to npm. A denied request never reaches npm; the validated result returns without the npm token.](docs/images/npm-time-window-flow.svg)
 
 <details>
 <summary>Equivalent Mermaid sequence (editable)</summary>
@@ -37,6 +38,7 @@ sequenceDiagram
         participant STORE as Protected credential store
     end
     participant NPM as npm registry
+    Note over APP: Default example workflow credential: username:password
     APP->>SW: Publish @acme/widgets via npm + username:password
     SW->>SW: Authenticate and consume workload credential; never forward it
     SW->>SW: Check package and 09:00–17:00 UTC
@@ -70,7 +72,7 @@ blocks it. Approval is bound to the AWS account, region, repository and image
 digest—not blanket permission to push arbitrary images. The pipeline never
 receives the upstream AWS/ECR credential.
 
-![A pipeline attempts an ECR image update using username:password. Serverware holds the action and then challenges the developer, who approves with a YubiKey. Only after verifying fresh approval for that exact action does Serverware replace the workload credential with its protected AWS/ECR credential and resume publication. Denial or timeout blocks the update.](docs/images/ecr-yubikey-flow.svg)
+![A pipeline attempts an ECR image update using the default example workflow credential username:password. Serverware holds the action and then challenges the developer, who approves with a YubiKey. Only after verifying fresh approval for that exact action does Serverware replace the workflow credential with its protected AWS/ECR credential and resume publication. Denial or timeout blocks the update.](docs/images/ecr-yubikey-flow.svg)
 
 <details>
 <summary>Equivalent Mermaid sequence (editable)</summary>
@@ -85,6 +87,7 @@ sequenceDiagram
     participant DEV as Developer / approval UI
     participant KEY as YubiKey
     participant ECR as Amazon ECR
+    Note over CI: Default example workflow credential: username:password
     CI->>SW: Attempt TEE image publication + username:password
     SW->>SW: Authenticate and consume workload credential; never forward it
     SW->>SW: Check policy; bind exact publication intent

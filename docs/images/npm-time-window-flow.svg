@@ -12,9 +12,9 @@
     <text x="82" y="207" fill="#273952" font-family="monospace" font-size="23">npm publish</text>
     <text x="82" y="246" fill="#536176" font-size="21">No npm token in the application</text>
     <rect x="475" y="147" width="351" height="111" rx="12" fill="#edf2ff" stroke="#c6d2f4" stroke-width="1.5"/>
-    <text x="496" y="178" fill="#304b9a" font-size="23" font-weight="700">Workload credential</text>
+    <text x="496" y="178" fill="#304b9a" font-size="23" font-weight="700">Workflow credential</text>
     <text x="496" y="214" fill="#243c7c" font-family="monospace" font-size="24">username:password</text>
-    <text x="496" y="244" fill="#536176" font-size="21">Illustrative placeholder</text>
+    <text x="496" y="244" fill="#536176" font-size="21">Default example value</text>
 
     <!-- Every secret-bearing replacement step stays within this boundary. -->
     <rect x="68" y="336" width="780" height="622" rx="22" fill="#eef2ff" stroke="#4338ca" stroke-width="2.5"/>
@@ -81,6 +81,6 @@
     <path d="M34 207L48 215L34 223Z" fill="#57657b"/>
 
     <text x="52" y="1151" fill="#536176" font-size="21">Intended flow—not a deployed-pilot claim. Credentials shown conceptually.</text>
-    <text x="52" y="1182" fill="#536176" font-size="21">username:password is illustrative, not a production default.</text>
+    <text x="52" y="1182" fill="#536176" font-size="21">username:password is the example default, not a production credential.</text>
   </g>
 </svg>

@@ -196,26 +196,30 @@ build is not live readiness or production acceptance.
 
 ## Live preparation remains with the genuine owners
 
-Engineering attempt 4 on 2026-09-30 used source `b350fbfa` and the unchanged,
+Engineering attempt 6 on 2026-09-30 used source `abdca80f` and the unchanged,
 unpublished `v3-candidate-cba01916` dependencies in an isolated dirty-tree
 checkout. It built the nonrelease Linux/amd64 control image
-`sha256:ae82192fd81bb680e23fed47db9e54aea098f1823918a41e6034829ff6e62240`.
-The shared library compiled, but Cargo exited 101 with five reported `E0282`
-filesystem-comparison errors in `serverware-coder-docker-proxy`. Their source
-fixes are integrated for the next consolidated build. The warning-heavy output
-hit BuildKit's 2-MiB cap before the terminal tail delivered those diagnostics;
-retained output is not a recovery of discarded intermediate logs. The bounded
-warning runner described above is integrated for the next build, not yet an
-observed successful compilation.
+`sha256:4b5cfa3ddcc36768e272f148716689ca60657b3e9278c7c91964b487883e8fb9`.
+The shared library compiled, but Cargo exited 101 with one `E0282`
+filesystem-comparison error in `serverware-coder-body-supervisor-v12`. Its source
+fix is integrated for the next consolidated build. The new runner preserved the
+full diagnostic and Cargo's exit code while reducing 13,024 compiler warnings to
+eight bounded summaries and a count. No log clipping occurred in this attempt;
+the runner has executed, but the complete proxy image has not yet built.
 Retained evidence is under
-`codex-offload/serverware/engineering-builds/b350fbfa-2j1vja`.
+`codex-offload/serverware/engineering-builds/abdca80f-eziorc`.
 There is no gate image, complete two-image report, project test result,
 service deployment or pilot acceptance from this attempt. Canonical reviewed
 dependency pins and the nonrelease boundary remain unchanged.
 
 Earlier attempts stopped at 18 library errors, then 95 distinct diagnostics
-across 53 files, then 32 distinct diagnostics across 19 files. Attempt 4's actual
-RUN-worker limits were
+across 53 files, then 32 distinct diagnostics across 19 files, then five errors.
+Attempt 5 stopped before Rust when BuildKit could not materialize a pinned base;
+all five exact base-image references were subsequently found missing and restored
+without changing their digests. Their removal cause is unproven; separate
+failure and recovery evidence is retained under
+`codex-offload/serverware/engineering-builds/abdca80f-ouzbia`.
+Attempt 6's actual RUN-worker limits were
 `cpu.max=800000 100000`, `memory.max=25769803776` and `memory.swap.max=0`;
 these observations are not aggregate limits across concurrent workers.
 

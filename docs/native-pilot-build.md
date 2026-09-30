@@ -140,8 +140,13 @@ The first actual staging check of the earlier `c972f02b` conductor TAR stopped
 before destination creation on inherited `/var/local` mode `02775`. The pilot
 image now stages that unused directory explicitly as root-owned `0755`; the
 authority target inherits the correction, and the default control-plane image
-is unchanged. Existing set-id rejection is retained. This source correction
-still requires a corrected export and staging run.
+is unchanged. Corrected `04cf155a` raw exports built, but staging then refused
+one dangling base link: `usr/share/zoneinfo/localtime` points to absent
+`/etc/localtime`. A bounded pass over all 408 links found no other resolution
+failures. The pilot layout now supplies that target as a fixed link to the
+genuine 114-byte `usr/share/zoneinfo/Etc/UTC` file already in the pinned image,
+not host timezone data. Set-id and logical-root link checks remain unchanged.
+Successful staging of this latest correction is still pending.
 
 The inventory bounds tree depth, path length, entry count, per-file bytes and
 aggregate bytes. It hashes stable regular files, refuses special files and

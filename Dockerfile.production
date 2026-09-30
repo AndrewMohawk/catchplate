@@ -285,7 +285,8 @@ FROM verified-production-source AS native-pilot-conductor-files
 ARG SOURCE_DATE_EPOCH="0"
 RUN --network=none set -eu; \
     install -d -m 0555 /conductor/app/scripts /conductor/usr/share/serverware; \
-    install -d -m 0755 /conductor-base/var/local; \
+    install -d -m 0755 /conductor-base/var/local /conductor-base/etc; \
+    ln -s /usr/share/zoneinfo/Etc/UTC /conductor-base/etc/localtime; \
     cp -R /source/serverware /conductor/app/serverware; \
     install -m 0444 /source/scripts/run_native_pilot.py /conductor/app/scripts/run_native_pilot.py; \
     install -m 0444 /source/scripts/native_pilot_runtime_entrypoint.py /conductor/app/scripts/native_pilot_runtime_entrypoint.py; \
@@ -294,7 +295,7 @@ RUN --network=none set -eu; \
     find /conductor -type d -exec chmod 0555 {} +; \
     find /conductor -type f -exec chmod 0444 {} +; \
     find /conductor -exec touch -h -d "@${SOURCE_DATE_EPOCH}" {} +; \
-    touch -h -d "@${SOURCE_DATE_EPOCH}" /conductor-base /conductor-base/var /conductor-base/var/local
+    touch -h -d "@${SOURCE_DATE_EPOCH}" /conductor-base /conductor-base/var /conductor-base/var/local /conductor-base/etc /conductor-base/etc/localtime
 
 FROM gcr.io/distroless/python3-debian12:nonroot@sha256:7d1042ce588ab97019fe95c24ffca7bc5a82ccdac572511d5e09bda4435c89c5 AS native-pilot-conductor-rootfs
 
@@ -307,6 +308,8 @@ COPY --from=native-pilot-conductor-files --chown=0:0 /conductor/app /app
 COPY --from=native-pilot-conductor-files --chown=0:0 /conductor/usr/share/serverware /usr/share/serverware
 # The pilot has no use for the base's setgid /var/local. Preserve the strict
 # no-set-id inventory by replacing that exact empty directory with root0755.
+# Resolve the base's zoneinfo/localtime link through its genuine pinned UTC
+# file, never through host timezone data or an empty placeholder.
 COPY --from=native-pilot-conductor-files --chown=0:0 /conductor-base/ /
 
 FROM scratch AS native-pilot-conductor-artifact

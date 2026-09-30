@@ -17,7 +17,7 @@ unsafe fn proc_object(fd: RawFd, directory: bool) -> bool {
         || libc::syscall(libc::SYS_fstat, fd, &mut stat as *mut libc::stat) != 0 {
         return false;
     }
-    fs.f_type == PROC_SUPER_MAGIC && stat.st_uid == 0 && stat.st_gid == 0
+    fs.f_type as u64 == PROC_SUPER_MAGIC as u64 && stat.st_uid == 0 && stat.st_gid == 0
         && stat.st_mode & 0o022 == 0
         && stat.st_mode & libc::S_IFMT == if directory { libc::S_IFDIR } else { libc::S_IFREG }
 }

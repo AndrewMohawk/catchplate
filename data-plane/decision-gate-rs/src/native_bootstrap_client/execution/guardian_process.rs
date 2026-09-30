@@ -1,6 +1,8 @@
 //! Fixed post-clone guardian. No allocation, path selected by a caller, exec,
 //! descriptor transfer, task creation or admission renewal occurs in this loop.
 
+use crate::linux_statx::{self, Statx, BASIC_STATS, SYNC_AS_STAT};
+use std::ffi::CStr;
 use std::mem::zeroed;
 use std::os::fd::RawFd;
 
@@ -40,14 +42,14 @@ pub(super) fn now() -> Option<u64> {
 }
 
 pub(super) fn identity(fd: RawFd, name: Option<&[u8]>) -> Option<Identity> {
-    let mut value: libc::statx = unsafe { zeroed() };
+    let mut value: Statx = unsafe { zeroed() };
     let (path, flags) = match name {
-        Some(name) => (name.as_ptr(), libc::AT_SYMLINK_NOFOLLOW | libc::AT_NO_AUTOMOUNT),
-        None => (b"\0".as_ptr(), libc::AT_EMPTY_PATH),
+        Some(name) => (CStr::from_bytes_with_nul(name).ok()?, libc::AT_SYMLINK_NOFOLLOW | libc::AT_NO_AUTOMOUNT),
+        None => (c"", libc::AT_EMPTY_PATH),
     };
-    if unsafe { libc::statx(fd, path.cast(), flags | libc::AT_STATX_SYNC_AS_STAT,
-        libc::STATX_BASIC_STATS | STATX_MNT_ID, &mut value) } != 0
-        || value.stx_mask & libc::STATX_BASIC_STATS != libc::STATX_BASIC_STATS
+    if linux_statx::statx(fd, path, flags | SYNC_AS_STAT,
+        BASIC_STATS | STATX_MNT_ID, &mut value) != 0
+        || value.stx_mask & BASIC_STATS != BASIC_STATS
         || value.stx_mask & STATX_MNT_ID == 0 || value.stx_ino == 0
         || value.stx_uid != 0 || value.stx_gid != 0 || value.stx_mode & 0o022 != 0
     { return None; }

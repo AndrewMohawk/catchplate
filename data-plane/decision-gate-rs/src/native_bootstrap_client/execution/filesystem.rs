@@ -6,6 +6,7 @@
 
 use super::{elf, manifest::{self, Manifest, MAX_EXECUTABLE, MAX_IMAGE, MAX_MANIFEST}};
 use super::super::{originals::{ArtifactV1, HeldOriginal}, OriginalClock};
+use crate::linux_statx::{self, Statx, BASIC_STATS, SYNC_AS_STAT};
 use serverware_decision_gate::erofs_loop_v1::{self, ErofsLoopExpectationV1};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use sha2::{Digest, Sha256};
@@ -59,10 +60,10 @@ struct Fingerprint {
 fn inspect(file: &File, clock: &OriginalClock) -> Result<(Metadata, Fingerprint), String> {
     let metadata = checked(clock, || file.metadata())?;
     let statx = checked(clock, || {
-        let mut value: libc::statx = unsafe { zeroed() };
-        if unsafe { libc::statx(file.as_raw_fd(), b"\0".as_ptr().cast(),
-            libc::AT_EMPTY_PATH | libc::AT_STATX_SYNC_AS_STAT,
-            libc::STATX_BASIC_STATS | STATX_MNT_ID, &mut value) } != 0 {
+        let mut value: Statx = unsafe { zeroed() };
+        if linux_statx::statx(file.as_raw_fd(), c"",
+            libc::AT_EMPTY_PATH | SYNC_AS_STAT,
+            BASIC_STATS | STATX_MNT_ID, &mut value) != 0 {
             return Err(io::Error::last_os_error());
         }
         Ok(value)

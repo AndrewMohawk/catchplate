@@ -150,7 +150,7 @@ impl Namespace {
     fn from_pidfd(pidfd: BorrowedFd<'_>, command: libc::c_ulong, kind: i32) -> Result<Self, String> {
         // Linux v6.12 PIDFD_GET_{IPC,MNT,NET,PID,UTS}_NAMESPACE ioctls. No
         // caller namespace path, numeric-PID reopen, setns or fallback exists.
-        let raw = unsafe { libc::ioctl(pidfd.as_raw_fd(), command) };
+        let raw = unsafe { libc::ioctl(pidfd.as_raw_fd(), command as _) };
         require(raw >= 0, "native child exact pidfd namespace ioctl unavailable")?;
         let fd = unsafe { OwnedFd::from_raw_fd(raw) };
         let result = Self { identity: identity(fd.as_fd())?, fd, kind, command };
@@ -160,8 +160,8 @@ impl Namespace {
     fn check_descriptor(&self) -> Result<(), String> {
         let mut fs: libc::statfs = unsafe { zeroed() };
         require(identity(self.fd.as_fd())? == self.identity
-            && unsafe { libc::fstatfs(self.fd.as_raw_fd(), &mut fs) } == 0 && fs.f_type == NSFS_MAGIC
-            && unsafe { libc::ioctl(self.fd.as_raw_fd(), NS_GET_NSTYPE) } == self.kind,
+            && unsafe { libc::fstatfs(self.fd.as_raw_fd(), &mut fs) } == 0 && fs.f_type as u64 == NSFS_MAGIC as u64
+            && unsafe { libc::ioctl(self.fd.as_raw_fd(), NS_GET_NSTYPE as _) } == self.kind,
             "native child held namespace identity/type changed")
     }
     fn check(&self, leader: &Leader) -> Result<(), String> {

@@ -449,7 +449,7 @@ impl Destination {
         self.guard.check()?;
         let parent = self.directories.last().unwrap().file.as_raw_fd();
         let flags = if self.replace_existing { libc::RENAME_EXCHANGE } else { libc::RENAME_NOREPLACE };
-        ensure(unsafe { libc::renameat2(self.recovery.file.as_raw_fd(), pending_name.as_ptr(),
+        ensure(unsafe { libc::syscall(libc::SYS_renameat2, self.recovery.file.as_raw_fd(), pending_name.as_ptr(),
             parent, self.leaf.as_ptr(), flags) } == 0,
             "native install atomic publication failed; outcome is not retry authority")?;
         self.guard.check()?;

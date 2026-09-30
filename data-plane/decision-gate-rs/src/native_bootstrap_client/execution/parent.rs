@@ -3,6 +3,7 @@
 
 use super::start_authority::Containment;
 use super::super::{ensure, OriginalClock};
+use crate::linux_statx::{self, Statx, BASIC_STATS};
 use serverware_decision_gate::cgroup_control_v1;
 use std::ffi::CString;
 use std::fs::File;
@@ -17,13 +18,13 @@ struct Identity { device: u64, inode: u64, mode: u32, uid: u32, gid: u32, mount:
 
 fn identity(fd: BorrowedFd<'_>) -> Result<Identity, String> {
     let mut stat: libc::stat = unsafe { std::mem::zeroed() };
-    let mut extended: libc::statx = unsafe { std::mem::zeroed() };
+    let mut extended: Statx = unsafe { std::mem::zeroed() };
     ensure(unsafe { libc::fstat(fd.as_raw_fd(), &mut stat) } == 0
-        && unsafe { libc::statx(fd.as_raw_fd(), b"\0".as_ptr().cast(),
-            libc::AT_EMPTY_PATH, libc::STATX_BASIC_STATS | MOUNT_ID, &mut extended) } == 0,
+        && linux_statx::statx(fd.as_raw_fd(), c"",
+            libc::AT_EMPTY_PATH, BASIC_STATS | MOUNT_ID, &mut extended) == 0,
         "native start directory identity unavailable")?;
-    ensure(extended.stx_mask & (libc::STATX_BASIC_STATS | MOUNT_ID)
-            == (libc::STATX_BASIC_STATS | MOUNT_ID)
+    ensure(extended.stx_mask & (BASIC_STATS | MOUNT_ID)
+            == (BASIC_STATS | MOUNT_ID)
         && extended.stx_ino == stat.st_ino
         && libc::makedev(extended.stx_dev_major, extended.stx_dev_minor) == stat.st_dev
         && u32::from(extended.stx_mode) == stat.st_mode

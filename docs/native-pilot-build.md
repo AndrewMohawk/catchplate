@@ -266,20 +266,23 @@ build is not live readiness or production acceptance.
 
 ## Live preparation remains with the genuine owners
 
-Engineering attempt 12 on 2026-09-30 used source `0b80631f` and the unchanged,
+Engineering attempt 13 on 2026-09-30 used source `de80246e` and the unchanged,
 unpublished `v3-candidate-cba01916` dependencies in an isolated dirty-tree
 checkout. All three fixed Python runtime packages completed: broker, role-key
-provisioner and shadow-key delivery. The static Alpine/musl compilation exposed
-112 compiler diagnostics across 11 files, mapped to the current correction
-batch; the concurrent glibc compilation was canceled, not completed. Retained
+provisioner and shadow-key delivery. The static Alpine/musl compilation advanced
+past the previous shared-library errors into the binaries, then failed with
+216 unique source-location/error rows across 24 files (538 emitted diagnostics
+because files recur across binaries). Static Cargo exited 101; the concurrent
+glibc compilation was canceled, not completed. Retained
 `build.log` and `errors-by-source.tsv` are under
-`codex-offload/serverware/engineering-builds/0b80631f-wdnr7n`.
+`codex-offload/serverware/engineering-builds/de80246e-h5r8bz`.
 
-The correction batch shares the fixed kernel `statx` ABI across both libc
-targets, preserving required mount-ID and descriptor-association checks without
-emulation. Native ancillary lengths and ioctl requests now use their target ABI
-types. These are compiler/packaging repairs, not relaxed runtime admission or
-new dependency versions; their next verification is the combined image build.
+The current source correction batch addresses all 216 mapped rows, including
+the binary shared-module declarations and remaining native ABI conversions.
+It shares the fixed kernel `statx` ABI across both libc targets while preserving
+mount-ID and descriptor-association checks without emulation. These are
+compiler repairs, not a compiler-pass result, relaxed runtime admission or new
+dependency versions; their next verification is the combined image build.
 
 The last completed main glibc build remains attempt 8, source `33586f89`, with
 evidence under `codex-offload/serverware/engineering-builds/33586f89-fe7loz`.

@@ -21,6 +21,7 @@ use super::super::super::{
 };
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
+use crate::policy_shadow::linux_statx;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
@@ -1935,21 +1936,18 @@ fn process_cgroup_identity(
             "peer cgroup descriptor identity is invalid",
         ));
     }
-    let mut statx: libc::statx = unsafe { zeroed() };
-    if unsafe {
-        libc::statx(
-            cgroup.as_raw_fd(),
-            CStr::from_bytes_with_nul(b"\0")
-                .map_err(|_| {
-                    ServiceError::Invalid("empty statx path is invalid")
-                })?
-                .as_ptr(),
-            libc::AT_EMPTY_PATH | libc::AT_SYMLINK_NOFOLLOW,
-            libc::STATX_BASIC_STATS | 0x00001000,
-            &mut statx,
-        )
-    } != 0
-        || statx.stx_mask & 0x00001000 == 0
+    let mut statx: linux_statx::Statx = unsafe { zeroed() };
+    if linux_statx::statx(
+        cgroup.as_raw_fd(),
+        CStr::from_bytes_with_nul(b"\0")
+            .map_err(|_| {
+                ServiceError::Invalid("empty statx path is invalid")
+            })?,
+        libc::AT_EMPTY_PATH | libc::AT_SYMLINK_NOFOLLOW,
+        linux_statx::BASIC_STATS | linux_statx::MNT_ID,
+        &mut statx,
+    ) != 0
+        || statx.stx_mask & linux_statx::MNT_ID == 0
         || statx.stx_mnt_id == 0
         || statx.stx_ino != stat.st_ino as u64
     {
@@ -2793,7 +2791,9 @@ fn try_send_seqpacket_with_rights(
             ));
         }
         message.msg_control = ancillary.0.as_mut_ptr().cast();
-        message.msg_controllen = control_length;
+        message.msg_controllen = control_length.try_into().map_err(|_| {
+            ServiceError::Invalid("outbound ancillary length exceeds ABI")
+        })?;
         let header = unsafe { libc::CMSG_FIRSTHDR(&message) };
         if header.is_null() {
             return Err(ServiceError::Invalid(
@@ -2803,8 +2803,9 @@ fn try_send_seqpacket_with_rights(
         unsafe {
             (*header).cmsg_level = libc::SOL_SOCKET;
             (*header).cmsg_type = libc::SCM_RIGHTS;
-            (*header).cmsg_len =
-                libc::CMSG_LEN(rights_bytes_u32) as usize;
+            (*header).cmsg_len = libc::CMSG_LEN(rights_bytes_u32).try_into().map_err(|_| {
+                ServiceError::Invalid("outbound ancillary header length exceeds ABI")
+            })?;
             ptr::copy_nonoverlapping(
                 rights.as_ptr().cast::<u8>(),
                 libc::CMSG_DATA(header),
@@ -2853,7 +2854,9 @@ fn try_receive_seqpacket_with_rights(
     message.msg_iov = &mut vector;
     message.msg_iovlen = 1;
     message.msg_control = ancillary.0.as_mut_ptr().cast();
-    message.msg_controllen = ancillary.0.len();
+    message.msg_controllen = ancillary.0.len().try_into().map_err(|_| {
+        ServiceError::Invalid("service ancillary capacity exceeds ABI")
+    })?;
     let received = loop {
         let result = unsafe {
             libc::recvmsg(
@@ -2916,7 +2919,7 @@ fn received_rights(
     let mut validation_error: Option<&'static str> = None;
     let control_start = message.msg_control as usize;
     let control_end = control_start
-        .checked_add(message.msg_controllen)
+        .checked_add(message.msg_controllen as usize)
         .ok_or(ServiceError::Invalid(
             "service ancillary buffer range overflowed",
         ))?;
@@ -2937,7 +2940,7 @@ fn received_rights(
                 && (*header).cmsg_type == libc::SCM_CREDENTIALS
         };
         if is_rights {
-            let header_length = unsafe { (*header).cmsg_len };
+            let header_length = unsafe { (*header).cmsg_len } as usize;
             let rights_bytes =
                 header_length.checked_sub(minimum);
             let data_start =
@@ -2978,7 +2981,7 @@ fn received_rights(
                 );
             }
         } else if is_credentials {
-            let header_length = unsafe { (*header).cmsg_len };
+            let header_length = unsafe { (*header).cmsg_len } as usize;
             let expected_length = unsafe {
                 libc::CMSG_LEN(size_of::<libc::ucred>() as u32)
             } as usize;

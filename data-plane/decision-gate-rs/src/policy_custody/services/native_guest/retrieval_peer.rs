@@ -159,7 +159,7 @@ fn receive_rights(fd:BorrowedFd<'_>,maximum:usize,minimum_rights:usize,maximum_r
     let mut bytes=vec![0;maximum];let mut control=[0usize;32];
     let mut iov=libc::iovec{iov_base:bytes.as_mut_ptr().cast(),iov_len:bytes.len()};
     let mut header:libc::msghdr=unsafe{zeroed()};header.msg_iov=&mut iov;header.msg_iovlen=1;
-    header.msg_control=control.as_mut_ptr().cast();header.msg_controllen=size_of_val(&control);
+    header.msg_control=control.as_mut_ptr().cast();header.msg_controllen=size_of_val(&control).try_into().map_err(fail)?;
     let count=unsafe{libc::recvmsg(fd.as_raw_fd(),&mut header,libc::MSG_DONTWAIT|libc::MSG_CMSG_CLOEXEC)};
     if count<0 {
         let error=std::io::Error::last_os_error();
@@ -171,8 +171,9 @@ fn receive_rights(fd:BorrowedFd<'_>,maximum:usize,minimum_rights:usize,maximum_r
     let mut item=unsafe{libc::CMSG_FIRSTHDR(&header)};
     while !item.is_null() {
         let c=unsafe{&*item};let base=unsafe{libc::CMSG_LEN(0)} as usize;
-        if c.cmsg_len<base {valid=false;break;}
-        let length=c.cmsg_len-base;let data=unsafe{libc::CMSG_DATA(item)};
+        let Ok(cmsg_len)=usize::try_from(c.cmsg_len) else{valid=false;break;};
+        if cmsg_len<base {valid=false;break;}
+        let length=cmsg_len-base;let data=unsafe{libc::CMSG_DATA(item)};
         if c.cmsg_level==libc::SOL_SOCKET && (c.cmsg_type==libc::SCM_RIGHTS || c.cmsg_type==4) {
             valid &= length%size_of::<i32>()==0;
             for index in 0..length/size_of::<i32>() {
@@ -201,10 +202,11 @@ pub(in crate::policy_shadow::policy_custody::services) fn send(fd:BorrowedFd<'_>
     let mut control=[0usize;8];
     if !rights.is_empty() {
         header.msg_control=control.as_mut_ptr().cast();
-        header.msg_controllen=unsafe{libc::CMSG_SPACE((size_of::<i32>()*rights.len()) as u32)} as usize;
+        let rights_bytes=u32::try_from(size_of::<i32>().checked_mul(rights.len()).ok_or(ShadowError::BindingDrift)?).map_err(fail)?;
+        header.msg_controllen=unsafe{libc::CMSG_SPACE(rights_bytes)}.try_into().map_err(fail)?;
         let item=unsafe{libc::CMSG_FIRSTHDR(&header)};
         unsafe{(*item).cmsg_level=libc::SOL_SOCKET;(*item).cmsg_type=libc::SCM_RIGHTS;
-            (*item).cmsg_len=libc::CMSG_LEN((size_of::<i32>()*rights.len()) as u32) as usize;
+            (*item).cmsg_len=libc::CMSG_LEN(rights_bytes).try_into().map_err(fail)?;
             for (index,right) in rights.iter().enumerate() {
                 std::ptr::write_unaligned(libc::CMSG_DATA(item).cast::<i32>().add(index),right.as_raw_fd());
             }}

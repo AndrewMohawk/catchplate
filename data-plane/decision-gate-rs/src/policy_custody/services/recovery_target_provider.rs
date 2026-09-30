@@ -12,6 +12,7 @@ compile_error!(
     "the TrustedHostNoTee recovery-target authority requires Linux pidfd, statx, kcmp, cgroup-v2, AF_UNIX SOCK_SEQPACKET, and SCM_RIGHTS semantics"
 );
 
+use crate::policy_shadow::linux_statx;
 use super::common::{
     decode_canonical_frame, AuthenticatedInheritedSeqpacket,
     DurableAppendJournal, ExpectedPeerCredentials,
@@ -2361,25 +2362,22 @@ fn observe_retained_descriptor(
     descriptor: BorrowedFd<'_>,
 ) -> Result<WatchdogRetainedFdIdentityV3, ServiceError> {
     let mut stat: libc::stat = unsafe { zeroed() };
-    let mut statx: libc::statx = unsafe { zeroed() };
-    const STATX_MNT_ID_MASK: libc::c_uint = 0x0000_1000;
+    let mut statx: linux_statx::Statx = unsafe { zeroed() };
     if unsafe {
         libc::fstat(descriptor.as_raw_fd(), &mut stat)
     } != 0
-        || unsafe {
-            libc::statx(
-                descriptor.as_raw_fd(),
-                b"\0".as_ptr().cast(),
-                libc::AT_EMPTY_PATH
-                    | libc::AT_STATX_SYNC_AS_STAT,
-                libc::STATX_BASIC_STATS
-                    | STATX_MNT_ID_MASK,
-                &mut statx,
-            )
-        } != 0
-        || statx.stx_mask & libc::STATX_BASIC_STATS
-            != libc::STATX_BASIC_STATS
-        || statx.stx_mask & STATX_MNT_ID_MASK == 0
+        || linux_statx::statx(
+            descriptor.as_raw_fd(),
+            c"",
+            libc::AT_EMPTY_PATH
+                | linux_statx::SYNC_AS_STAT,
+            linux_statx::BASIC_STATS
+                | linux_statx::MNT_ID,
+            &mut statx,
+        ) != 0
+        || statx.stx_mask & linux_statx::BASIC_STATS
+            != linux_statx::BASIC_STATS
+        || statx.stx_mask & linux_statx::MNT_ID == 0
         || stat.st_size < 0
         || statx.stx_ino != stat.st_ino
         || statx.stx_size != stat.st_size as u64

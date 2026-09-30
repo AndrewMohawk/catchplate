@@ -36,7 +36,7 @@ fn measure(file:&File)->Result<Sha256Digest,ShadowError>{
     #[repr(C)] struct Digest {algorithm:u16,size:u16,bytes:[u8;32]}
     let mut d=Digest{algorithm:0,size:32,bytes:[0;32]};
     require(unsafe{libc::fcntl(file.as_raw_fd(),libc::F_GETFL)}&libc::O_ACCMODE==libc::O_RDONLY
-        && unsafe{libc::ioctl(file.as_raw_fd(),0xc004_6686u64 as libc::c_ulong,&mut d)}==0
+        && unsafe{libc::ioctl(file.as_raw_fd(),0xc004_6686u32 as libc::Ioctl,&mut d)}==0
         && d.algorithm==1 && d.size==32 && d.bytes!=[0;32])?;
     Sha256Digest::parse(&format!("sha256:{}",d.bytes.iter().map(|b|format!("{b:02x}")).collect::<String>()))
 }
@@ -45,7 +45,7 @@ fn enable(file:&File)->Result<(),ShadowError>{
     #[repr(C)] struct Enable {version:u32,algorithm:u32,block_size:u32,salt_size:u32,salt_ptr:u64,
         signature_size:u32,reserved1:u32,signature_ptr:u64,reserved2:[u64;11]}
     let arg=Enable{version:1,algorithm:1,block_size:4096,salt_size:0,salt_ptr:0,signature_size:0,reserved1:0,signature_ptr:0,reserved2:[0;11]};
-    require(unsafe{libc::ioctl(file.as_raw_fd(),0x4080_6685u64 as libc::c_ulong,&arg)}==0)?;
+    require(unsafe{libc::ioctl(file.as_raw_fd(),0x4080_6685u32 as libc::Ioctl,&arg)}==0)?;
     file.sync_all().map_err(fail)?;measure(file)?;Ok(())
 }
 fn read(file:&File,uid:u32,gid:u32)->Result<Vec<u8>,ShadowError>{

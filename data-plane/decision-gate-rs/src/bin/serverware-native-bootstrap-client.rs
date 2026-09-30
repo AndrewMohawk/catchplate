@@ -5,6 +5,10 @@
 mod authority_source_revision_v1;
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[path = "../linux_statx.rs"]
+mod linux_statx;
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[path = "../native_bootstrap_client/mod.rs"]
 mod native_bootstrap_client;
 

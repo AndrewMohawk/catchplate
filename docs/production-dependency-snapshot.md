@@ -61,6 +61,8 @@ not introduce a new package or dependency source. The stage split allows
 independent compilation/packaging after source verification; the producer's
 matching builder check retains the exact pinned Rust base and fixed inheritance
 into `build`. It does not change how candidate bytes were originally produced.
+The separate `native-pilot-operator-artifact` target only exports the already
+built glibc seccomp tool; it adds no dependency, fetch, or default-runtime member.
 The hashes of
 `requirements.lock`, `Cargo.toml`, `Cargo.lock`, and all six cache artifacts,
 the pinned base images, and the dependency-verification steps must remain

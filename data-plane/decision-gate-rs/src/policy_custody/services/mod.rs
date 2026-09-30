@@ -35,6 +35,7 @@ pub(crate) use native_facade_lifecycle::{Prepared as PreparedNativeCustodyLifecy
 pub(in crate::policy_shadow) use native_facade_lifecycle::constructed::ConstructedDriver;
 mod guest_original;
 use guest::Bootstrap;
+use crate::policy_shadow::linux_statx;
 
 use self::bounded_cleanup_helper::{
     CleanupHelperServerProgress, CleanupHelperSigningAuthorityV3,
@@ -3199,24 +3200,20 @@ fn validate_directory_capability(
     expected: &ActivationDirectoryIdentityV3,
 ) -> Result<(), ServiceRunnerError> {
     expected.validate()?;
-    const STATX_MNT_ID_MASK: libc::c_uint = 0x0000_1000;
-    let mut observed: libc::statx = unsafe { zeroed() };
-    let empty_path = b"\0";
-    if unsafe {
-        libc::statx(
-            descriptor.as_raw_fd(),
-            empty_path.as_ptr().cast(),
-            libc::AT_EMPTY_PATH | libc::AT_NO_AUTOMOUNT,
-            libc::STATX_BASIC_STATS | STATX_MNT_ID_MASK,
-            &mut observed,
-        )
-    } != 0
+    let mut observed: linux_statx::Statx = unsafe { zeroed() };
+    if linux_statx::statx(
+        descriptor.as_raw_fd(),
+        c"",
+        libc::AT_EMPTY_PATH | libc::AT_NO_AUTOMOUNT,
+        linux_statx::BASIC_STATS | linux_statx::MNT_ID,
+        &mut observed,
+    ) != 0
     {
         return Err(io::Error::last_os_error().into());
     }
-    if observed.stx_mask & libc::STATX_BASIC_STATS
-            != libc::STATX_BASIC_STATS
-        || observed.stx_mask & STATX_MNT_ID_MASK == 0
+    if observed.stx_mask & linux_statx::BASIC_STATS
+            != linux_statx::BASIC_STATS
+        || observed.stx_mask & linux_statx::MNT_ID == 0
         || observed.stx_nlink == 0
         || u32::from(observed.stx_mode)
             & libc::S_IFMT
@@ -3379,7 +3376,9 @@ fn try_receive_packet(
     message.msg_iov = &mut vector;
     message.msg_iovlen = 1;
     message.msg_control = ancillary.0.as_mut_ptr().cast();
-    message.msg_controllen = ancillary.0.len();
+    message.msg_controllen = ancillary.0.len().try_into().map_err(|_| {
+        ServiceRunnerError::invalid("service ancillary capacity exceeds ABI")
+    })?;
     let received = loop {
         let result = unsafe {
             libc::recvmsg(
@@ -3432,7 +3431,7 @@ fn received_rights(
 ) -> Result<Vec<OwnedFd>, ServiceRunnerError> {
     let control_start = message.msg_control as usize;
     let control_end = control_start
-        .checked_add(message.msg_controllen)
+        .checked_add(message.msg_controllen as usize)
         .ok_or_else(|| {
             ServiceRunnerError::invalid(
                 "ancillary buffer range overflowed",
@@ -3459,7 +3458,7 @@ fn received_rights(
                 && (*header).cmsg_type == libc::SCM_CREDENTIALS
         };
         if is_rights {
-            let header_length = unsafe { (*header).cmsg_len };
+            let header_length = unsafe { (*header).cmsg_len } as usize;
             let byte_length =
                 header_length.checked_sub(minimum);
             let data_start =
@@ -3490,7 +3489,7 @@ fn received_rights(
                 invalid = true;
             }
         } else if is_credentials {
-            let header_length = unsafe { (*header).cmsg_len };
+            let header_length = unsafe { (*header).cmsg_len } as usize;
             let expected_length = unsafe {
                 libc::CMSG_LEN(size_of::<libc::ucred>() as u32)
             } as usize;
@@ -3626,7 +3625,9 @@ fn try_send_packet(
             ));
         }
         message.msg_control = ancillary.0.as_mut_ptr().cast();
-        message.msg_controllen = control_length;
+        message.msg_controllen = control_length.try_into().map_err(|_| {
+            ServiceRunnerError::invalid("outbound ancillary length exceeds ABI")
+        })?;
         let header = unsafe { libc::CMSG_FIRSTHDR(&message) };
         if header.is_null() {
             return Err(ServiceRunnerError::invalid(
@@ -3636,8 +3637,9 @@ fn try_send_packet(
         unsafe {
             (*header).cmsg_level = libc::SOL_SOCKET;
             (*header).cmsg_type = libc::SCM_RIGHTS;
-            (*header).cmsg_len =
-                libc::CMSG_LEN(byte_length_u32) as usize;
+            (*header).cmsg_len = libc::CMSG_LEN(byte_length_u32).try_into().map_err(|_| {
+                ServiceRunnerError::invalid("outbound ancillary header length exceeds ABI")
+            })?;
             ptr::copy_nonoverlapping(
                 raw_rights.as_ptr().cast::<u8>(),
                 libc::CMSG_DATA(header),

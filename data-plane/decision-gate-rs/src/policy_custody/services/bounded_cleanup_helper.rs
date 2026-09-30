@@ -56,6 +56,7 @@ use super::super::super::{
 };
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
+use crate::policy_shadow::linux_statx;
 use ed25519_dalek::pkcs8::EncodePublicKey;
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use serde::{Deserialize, Serialize};
@@ -4298,7 +4299,9 @@ fn try_receive_seqpacket_any_rights(
     message.msg_iov = &mut vector;
     message.msg_iovlen = 1;
     message.msg_control = ancillary.0.as_mut_ptr().cast();
-    message.msg_controllen = ancillary.0.len();
+    message.msg_controllen = ancillary.0.len().try_into().map_err(|_| {
+        ServiceError::Invalid("cleanup helper ancillary capacity exceeds ABI")
+    })?;
     let received = loop {
         let result = unsafe {
             libc::recvmsg(
@@ -4359,7 +4362,7 @@ fn received_rights(
     while !header.is_null() {
         let level = unsafe { (*header).cmsg_level };
         let kind = unsafe { (*header).cmsg_type };
-        let length = unsafe { (*header).cmsg_len };
+        let length = unsafe { (*header).cmsg_len } as usize;
         if level != libc::SOL_SOCKET || length < minimum {
             return Err(ServiceError::Invalid(
                 "cleanup helper request has malformed ancillary data",
@@ -4442,21 +4445,18 @@ fn observe_retained_descriptor(
     descriptor: BorrowedFd<'_>,
 ) -> Result<WatchdogRetainedFdIdentityV3, ServiceError> {
     let mut stat: libc::stat = unsafe { zeroed() };
-    let mut statx: libc::statx = unsafe { zeroed() };
-    const STATX_MNT_ID_MASK: libc::c_uint = 0x0000_1000;
+    let mut statx: linux_statx::Statx = unsafe { zeroed() };
     if unsafe { libc::fstat(descriptor.as_raw_fd(), &mut stat) } != 0
-        || unsafe {
-            libc::statx(
-                descriptor.as_raw_fd(),
-                b"\0".as_ptr().cast(),
-                libc::AT_EMPTY_PATH | libc::AT_STATX_SYNC_AS_STAT,
-                libc::STATX_BASIC_STATS | STATX_MNT_ID_MASK,
-                &mut statx,
-            )
-        } != 0
-        || statx.stx_mask & libc::STATX_BASIC_STATS
-            != libc::STATX_BASIC_STATS
-        || statx.stx_mask & STATX_MNT_ID_MASK == 0
+        || linux_statx::statx(
+            descriptor.as_raw_fd(),
+            c"",
+            libc::AT_EMPTY_PATH | linux_statx::SYNC_AS_STAT,
+            linux_statx::BASIC_STATS | linux_statx::MNT_ID,
+            &mut statx,
+        ) != 0
+        || statx.stx_mask & linux_statx::BASIC_STATS
+            != linux_statx::BASIC_STATS
+        || statx.stx_mask & linux_statx::MNT_ID == 0
         || stat.st_size < 0
         || statx.stx_ino != stat.st_ino
         || statx.stx_size != stat.st_size as u64

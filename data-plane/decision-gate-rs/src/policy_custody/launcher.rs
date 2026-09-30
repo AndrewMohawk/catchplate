@@ -27,6 +27,7 @@ use super::protocol::{
     POLICY_CUSTODY_WATCHDOG_REGISTRATION_VERSION,
 };
 use super::super::{canonical_json_bytes, Sha256Digest};
+use crate::policy_shadow::linux_statx;
 use serverware_decision_gate::erofs_loop_v1::{
     self, DescriptorObservationV1, ErofsLoopErrorV1,
     ErofsLoopExpectationV1, ErofsLoopObservationV1,
@@ -114,7 +115,7 @@ const PF_W: u32 = 2;
 const DT_NULL: i64 = 0;
 const DT_NEEDED: i64 = 1;
 const ST_RDONLY_FLAG: libc::c_ulong = 1;
-const BLKROGET: libc::c_ulong = 0x125e;
+const BLKROGET: libc::Ioctl = 0x125e;
 const DM_IOCTL_TYPE: u64 = 0xfd;
 const DM_TABLE_STATUS_COMMAND: u64 = 12;
 const DM_STATUS_TABLE_FLAG: u32 = 1 << 4;
@@ -3189,11 +3190,12 @@ fn query_dm_verity_table(
         (*header).flags = DM_STATUS_TABLE_FLAG;
         (*header).dev = device;
     }
-    let request = ioctl_read_write(
+    let request = u32::try_from(ioctl_read_write(
         DM_IOCTL_TYPE,
         DM_TABLE_STATUS_COMMAND,
         size_of::<DmIoctl>() as u64,
-    );
+    )).map_err(|_| LauncherError::Invalid("device-mapper request exceeds ioctl ABI"))?
+        as libc::Ioctl;
     if unsafe { libc::ioctl(dm_control_fd, request, header) } != 0 {
         return Err(io::Error::last_os_error().into());
     }
@@ -3335,21 +3337,18 @@ fn directory_identity(fd: RawFd) -> Result<DescriptorIdentity, LauncherError> {
 
 fn descriptor_identity(fd: RawFd) -> Result<DescriptorIdentity, LauncherError> {
     let mut stat: libc::stat = unsafe { zeroed() };
-    let mut statx: libc::statx = unsafe { zeroed() };
-    const STATX_MNT_ID_MASK: libc::c_uint = 0x0000_1000;
+    let mut statx: linux_statx::Statx = unsafe { zeroed() };
     if unsafe { libc::fstat(fd, &mut stat) } != 0
-        || unsafe {
-            libc::statx(
-                fd,
-                b"\0".as_ptr() as *const libc::c_char,
-                libc::AT_EMPTY_PATH | libc::AT_STATX_SYNC_AS_STAT,
-                libc::STATX_BASIC_STATS | STATX_MNT_ID_MASK,
-                &mut statx,
-            )
-        } != 0
-        || statx.stx_mask & libc::STATX_BASIC_STATS
-            != libc::STATX_BASIC_STATS
-        || statx.stx_mask & STATX_MNT_ID_MASK == 0
+        || linux_statx::statx(
+            fd,
+            c"",
+            libc::AT_EMPTY_PATH | linux_statx::SYNC_AS_STAT,
+            linux_statx::BASIC_STATS | linux_statx::MNT_ID,
+            &mut statx,
+        ) != 0
+        || statx.stx_mask & linux_statx::BASIC_STATS
+            != linux_statx::BASIC_STATS
+        || statx.stx_mask & linux_statx::MNT_ID == 0
         || statx.stx_ino != stat.st_ino
         || statx.stx_size != stat.st_size as u64
         || u32::from(statx.stx_mode) != stat.st_mode
@@ -4251,9 +4250,14 @@ fn send_seqpacket_once(
     message.msg_iov = &mut io_vector;
     message.msg_iovlen = 1;
     if !rights.is_empty() {
-        let rights_bytes = rights.len() * size_of::<RawFd>();
+        let invalid_length = || io::Error::new(io::ErrorKind::InvalidInput,
+            "SCM_RIGHTS length exceeds its native ABI");
+        let rights_bytes = rights.len().checked_mul(size_of::<RawFd>())
+            .ok_or_else(invalid_length)?;
+        let rights_bytes_u32 = libc::c_uint::try_from(rights_bytes)
+            .map_err(|_| invalid_length())?;
         let control_length =
-            unsafe { libc::CMSG_SPACE(rights_bytes as libc::c_uint) }
+            unsafe { libc::CMSG_SPACE(rights_bytes_u32) }
                 as usize;
         if control_length > control.0.len() {
             return Err(io::Error::new(
@@ -4263,7 +4267,8 @@ fn send_seqpacket_once(
         }
         message.msg_control =
             control.0.as_mut_ptr() as *mut libc::c_void;
-        message.msg_controllen = control_length;
+        message.msg_controllen = control_length.try_into()
+            .map_err(|_| invalid_length())?;
         let header = unsafe { libc::CMSG_FIRSTHDR(&message) };
         if header.is_null() {
             return Err(io::Error::new(
@@ -4275,7 +4280,8 @@ fn send_seqpacket_once(
             (*header).cmsg_level = libc::SOL_SOCKET;
             (*header).cmsg_type = libc::SCM_RIGHTS;
             (*header).cmsg_len =
-                libc::CMSG_LEN(rights_bytes as libc::c_uint) as usize;
+                libc::CMSG_LEN(rights_bytes_u32).try_into()
+                    .map_err(|_| invalid_length())?;
             ptr::copy_nonoverlapping(
                 rights.as_ptr() as *const u8,
                 libc::CMSG_DATA(header),

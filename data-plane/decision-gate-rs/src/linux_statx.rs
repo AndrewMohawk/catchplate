@@ -18,7 +18,7 @@ pub(crate) struct Statx {
     pub(crate) stx_mask: u32,
     _blksize: u32,
     _attributes: u64,
-    _nlink: u32,
+    pub(crate) stx_nlink: u32,
     pub(crate) stx_uid: u32,
     pub(crate) stx_gid: u32,
     pub(crate) stx_mode: u16,
@@ -39,6 +39,7 @@ pub(crate) struct Statx {
 const _: () = {
     assert!(size_of::<Statx>() == 256 && align_of::<Statx>() == 8);
     assert!(offset_of!(Statx, stx_mask) == 0x00);
+    assert!(offset_of!(Statx, stx_nlink) == 0x10);
     assert!(offset_of!(Statx, stx_uid) == 0x14);
     assert!(offset_of!(Statx, stx_gid) == 0x18);
     assert!(offset_of!(Statx, stx_mode) == 0x1c);

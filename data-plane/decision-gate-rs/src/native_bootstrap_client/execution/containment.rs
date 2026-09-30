@@ -7,9 +7,10 @@
 //! of admission expiry. Empty-leaf observations are not leader-reap receipts.
 
 use super::{start::StartOwner, start_reservation::StartPermit};
+use crate::linux_statx::{self, Statx, BASIC_STATS, SYNC_AS_STAT};
 use serverware_decision_gate::cgroup_control_v1::{self, DirectoryObservationV1, EventsV1};
 use std::cell::Cell;
-use std::ffi::CString;
+use std::ffi::{CStr, CString};
 use std::mem::zeroed;
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd};
 use std::sync::Arc;
@@ -65,8 +66,8 @@ fn directory(fd: BorrowedFd<'_>) -> Result<DirectoryObservationV1, String> {
 #[derive(PartialEq, Eq)]
 struct FileIdentity { device: u64, inode: u64, mount: u64, mode: u32, uid: u32, gid: u32 }
 
-fn statx_identity(value: &libc::statx) -> Result<FileIdentity, String> {
-    require(value.stx_mask & libc::STATX_BASIC_STATS == libc::STATX_BASIC_STATS
+fn statx_identity(value: &Statx) -> Result<FileIdentity, String> {
+    require(value.stx_mask & BASIC_STATS == BASIC_STATS
         && value.stx_mask & STATX_MNT_ID != 0 && value.stx_ino != 0
         && u32::from(value.stx_mode) & libc::S_IFMT == libc::S_IFREG
         && value.stx_nlink == 1 && value.stx_uid == 0 && value.stx_gid == 0
@@ -79,11 +80,11 @@ fn statx_identity(value: &libc::statx) -> Result<FileIdentity, String> {
 
 fn file_identity(fd: BorrowedFd<'_>) -> Result<FileIdentity, String> {
     let mut stat: libc::stat = unsafe { zeroed() };
-    let mut value: libc::statx = unsafe { zeroed() };
+    let mut value: Statx = unsafe { zeroed() };
     require(unsafe { libc::fstat(fd.as_raw_fd(), &mut stat) } == 0
-        && unsafe { libc::statx(fd.as_raw_fd(), b"\0".as_ptr().cast(),
-            libc::AT_EMPTY_PATH | libc::AT_STATX_SYNC_AS_STAT,
-            libc::STATX_BASIC_STATS | STATX_MNT_ID, &mut value) } == 0,
+        && linux_statx::statx(fd.as_raw_fd(), c"",
+            libc::AT_EMPTY_PATH | SYNC_AS_STAT,
+            BASIC_STATS | STATX_MNT_ID, &mut value) == 0,
         "native containment control identity cannot be read")?;
     let identity = statx_identity(&value)?;
     require(stat.st_dev == identity.device && stat.st_ino == identity.inode
@@ -96,12 +97,12 @@ fn file_identity(fd: BorrowedFd<'_>) -> Result<FileIdentity, String> {
 #[derive(Clone, Copy)]
 enum Kind { Type, Subtree, Stat, Procs, Memory, Swap, Pids, Cpu, Kill }
 impl Kind {
-    fn name(self) -> &'static [u8] {
+    fn name(self) -> &'static CStr {
         match self {
-            Self::Type => b"cgroup.type\0", Self::Subtree => b"cgroup.subtree_control\0",
-            Self::Stat => b"cgroup.stat\0", Self::Procs => b"cgroup.procs\0", Self::Memory => b"memory.max\0",
-            Self::Swap => b"memory.swap.max\0", Self::Pids => b"pids.max\0",
-            Self::Cpu => b"cpu.max\0", Self::Kill => b"cgroup.kill\0",
+            Self::Type => c"cgroup.type", Self::Subtree => c"cgroup.subtree_control",
+            Self::Stat => c"cgroup.stat", Self::Procs => c"cgroup.procs", Self::Memory => c"memory.max",
+            Self::Swap => c"memory.swap.max", Self::Pids => c"pids.max",
+            Self::Cpu => c"cpu.max", Self::Kill => c"cgroup.kill",
         }
     }
     fn access(self) -> libc::c_int {
@@ -129,10 +130,10 @@ impl Control {
 
     fn check(&self, leaf: BorrowedFd<'_>, identity: &DirectoryObservationV1) -> Result<(), String> {
         descriptor_flags(self.file.as_fd(), Some(self.kind.access()))?;
-        let mut named: libc::statx = unsafe { zeroed() };
-        require(unsafe { libc::statx(leaf.as_raw_fd(), self.kind.name().as_ptr().cast(),
-            libc::AT_SYMLINK_NOFOLLOW | libc::AT_NO_AUTOMOUNT | libc::AT_STATX_SYNC_AS_STAT,
-            libc::STATX_BASIC_STATS | STATX_MNT_ID, &mut named) } == 0,
+        let mut named: Statx = unsafe { zeroed() };
+        require(linux_statx::statx(leaf.as_raw_fd(), self.kind.name(),
+            libc::AT_SYMLINK_NOFOLLOW | libc::AT_NO_AUTOMOUNT | SYNC_AS_STAT,
+            BASIC_STATS | STATX_MNT_ID, &mut named) == 0,
             "native containment named control cannot be rechecked")?;
         require(file_identity(self.file.as_fd())? == self.identity
             && statx_identity(&named)? == self.identity

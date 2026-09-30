@@ -77,12 +77,12 @@ unsafe fn application_listener(gate: RawFd, port: u16) -> bool {
         || libc::syscall(libc::SYS_listen,listener,1)!=0 { return false; }
     let mut control=[0usize;3];
     let header=control.as_mut_ptr().cast::<libc::cmsghdr>();
-    (*header).cmsg_len=std::mem::size_of::<libc::cmsghdr>()+std::mem::size_of::<RawFd>();
+    (*header).cmsg_len=(std::mem::size_of::<libc::cmsghdr>()+std::mem::size_of::<RawFd>()) as _;
     (*header).cmsg_level=libc::SOL_SOCKET;(*header).cmsg_type=libc::SCM_RIGHTS;
     *control.as_mut_ptr().cast::<u8>().add(std::mem::size_of::<libc::cmsghdr>()).cast::<RawFd>()=listener;
     let mut iov=libc::iovec{iov_base:super::child_network::LISTENER.as_ptr().cast_mut().cast(),iov_len:8};
     let mut message:libc::msghdr=std::mem::zeroed();message.msg_iov=&mut iov;message.msg_iovlen=1;
-    message.msg_control=control.as_mut_ptr().cast();message.msg_controllen=std::mem::size_of_val(&control);
+    message.msg_control=control.as_mut_ptr().cast();message.msg_controllen=std::mem::size_of_val(&control) as _;
     let sent=libc::syscall(libc::SYS_sendmsg,gate,&message as *const libc::msghdr,libc::MSG_NOSIGNAL);
     sent==8 && libc::syscall(libc::SYS_close,listener)==0
 }
@@ -99,15 +99,19 @@ unsafe fn network_originals(gate: RawFd) -> bool {
         std::mem::size_of::<libc::sockaddr_nl>()) != 0
         || libc::syscall(libc::SYS_bind, route, &address as *const libc::sockaddr_nl,
             std::mem::size_of::<libc::sockaddr_nl>()) != 0 { return false; }
-    let mut rights = Rights { header: libc::cmsghdr {
-        cmsg_len: std::mem::size_of::<Rights>(), cmsg_level: libc::SOL_SOCKET, cmsg_type: libc::SCM_RIGHTS,
-    }, descriptors: [filter, route] };
+    // Zero the native header, including musl's ABI padding, before setting its
+    // fixed bounded fields. This remains allocation-free after clone.
+    let mut rights: Rights = std::mem::zeroed();
+    rights.header.cmsg_len = std::mem::size_of::<Rights>() as _;
+    rights.header.cmsg_level = libc::SOL_SOCKET;
+    rights.header.cmsg_type = libc::SCM_RIGHTS;
+    rights.descriptors = [filter, route];
     let mut iov = libc::iovec { iov_base: super::child_network::SOCKETS.as_ptr().cast_mut().cast(), iov_len: 8 };
     let mut message: libc::msghdr = std::mem::zeroed();
     message.msg_iov = &mut iov;
     message.msg_iovlen = 1;
     message.msg_control = (&mut rights as *mut Rights).cast();
-    message.msg_controllen = std::mem::size_of::<Rights>();
+    message.msg_controllen = std::mem::size_of::<Rights>() as _;
     let sent = libc::syscall(libc::SYS_sendmsg, gate, &message as *const libc::msghdr, libc::MSG_NOSIGNAL);
     let closed_filter = libc::syscall(libc::SYS_close, filter);
     let closed_route = libc::syscall(libc::SYS_close, route);

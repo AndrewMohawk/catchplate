@@ -47,7 +47,8 @@ impl Prepared {
         let mut bytes=[0u8;2];let mut control=[0usize;80];let mut rights=[-1i32;67];
         let mut iov=libc::iovec{iov_base:bytes.as_mut_ptr().cast(),iov_len:bytes.len()};
         let mut message:libc::msghdr=unsafe{zeroed()};message.msg_iov=&mut iov;message.msg_iovlen=1;
-        message.msg_control=control.as_mut_ptr().cast();message.msg_controllen=size_of_val(&control);
+        message.msg_control=control.as_mut_ptr().cast();
+        message.msg_controllen=match size_of_val(&control).try_into(){Ok(value)=>value,Err(_)=>{good=false;0}};
         let count=if good {unsafe{libc::recvmsg(self.gate.as_raw_fd(),&mut message,libc::MSG_CMSG_CLOEXEC)}}else{-1};
         good &= count==2 && bytes[0]==0xa5 && (1..=64).contains(&bytes[1])
             && message.msg_flags&(libc::MSG_TRUNC|libc::MSG_CTRUNC)==0;
@@ -55,9 +56,10 @@ impl Prepared {
         let mut item=unsafe{libc::CMSG_FIRSTHDR(&message)};
         while !item.is_null() && good {
             let c=unsafe{&*item};let base=unsafe{libc::CMSG_LEN(0)} as usize;
-            good &= c.cmsg_level==libc::SOL_SOCKET && c.cmsg_len>=base;
+            let Ok(cmsg_len)=usize::try_from(c.cmsg_len) else{good=false;break;};
+            good &= c.cmsg_level==libc::SOL_SOCKET && cmsg_len>=base;
             if !good {break;}
-            let length=c.cmsg_len-base;let data=unsafe{libc::CMSG_DATA(item)};
+            let length=cmsg_len-base;let data=unsafe{libc::CMSG_DATA(item)};
             if c.cmsg_type==libc::SCM_CREDENTIALS && !credentials && length==size_of::<libc::ucred>() {
                 let cred=unsafe{std::ptr::read_unaligned(data.cast::<libc::ucred>())};
                 credentials=cred.pid==self.parent && cred.uid==0 && cred.gid==0;good &= credentials;
@@ -157,10 +159,11 @@ pub(super) fn release(child:&mut Child,launch:BorrowedFd<'_>,image:BorrowedFd<'_
     let mut control=[0usize;48];let mut iov=libc::iovec{iov_base:bytes.as_ptr() as *mut _,iov_len:2};
     let mut message:libc::msghdr=unsafe{zeroed()};message.msg_iov=&mut iov;message.msg_iovlen=1;
     message.msg_control=control.as_mut_ptr().cast();
-    message.msg_controllen=unsafe{libc::CMSG_SPACE((fds.len()*size_of::<i32>()) as u32)} as usize;
+    let rights_bytes=u32::try_from(fds.len().checked_mul(size_of::<i32>()).ok_or(ShadowError::BindingDrift)?).map_err(fail)?;
+    message.msg_controllen=unsafe{libc::CMSG_SPACE(rights_bytes)}.try_into().map_err(fail)?;
     let item=unsafe{libc::CMSG_FIRSTHDR(&message)};
     unsafe{(*item).cmsg_level=libc::SOL_SOCKET;(*item).cmsg_type=libc::SCM_RIGHTS;
-        (*item).cmsg_len=libc::CMSG_LEN((fds.len()*size_of::<i32>()) as u32) as usize;
+        (*item).cmsg_len=libc::CMSG_LEN(rights_bytes).try_into().map_err(fail)?;
         std::ptr::copy_nonoverlapping(fds.as_ptr(),libc::CMSG_DATA(item).cast::<i32>(),fds.len());}
     child.parked_identity()?;
     let gate=child.gate.take().ok_or(ShadowError::BindingDrift)?;

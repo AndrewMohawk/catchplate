@@ -5,6 +5,7 @@
 //! retained cgroup descriptors, absolute `CLOCK_BOOTTIME` authority, typed
 //! protocol records, and independently signed evidence.
 
+use crate::policy_shadow::linux_statx;
 use super::boottime::{
     boottime_now_nanos, create_nonblocking_eventfd, poll_until,
     try_read_eventfd_nonblocking, try_write_eventfd_nonblocking,
@@ -5198,21 +5199,18 @@ fn observed_retained_watchdog_fd(
     descriptor: BorrowedFd<'_>,
 ) -> Result<WatchdogRetainedFdIdentityV3, RecoveryError> {
     let mut stat: libc::stat = unsafe { zeroed() };
-    let mut statx: libc::statx = unsafe { zeroed() };
-    const STATX_MNT_ID_MASK: libc::c_uint = 0x0000_1000;
+    let mut statx: linux_statx::Statx = unsafe { zeroed() };
     if unsafe { libc::fstat(descriptor.as_raw_fd(), &mut stat) } != 0
-        || unsafe {
-            libc::statx(
-                descriptor.as_raw_fd(),
-                b"\0".as_ptr().cast(),
-                libc::AT_EMPTY_PATH | libc::AT_STATX_SYNC_AS_STAT,
-                libc::STATX_BASIC_STATS | STATX_MNT_ID_MASK,
-                &mut statx,
-            )
-        } != 0
-        || statx.stx_mask & libc::STATX_BASIC_STATS
-            != libc::STATX_BASIC_STATS
-        || statx.stx_mask & STATX_MNT_ID_MASK == 0
+        || linux_statx::statx(
+            descriptor.as_raw_fd(),
+            c"",
+            libc::AT_EMPTY_PATH | linux_statx::SYNC_AS_STAT,
+            linux_statx::BASIC_STATS | linux_statx::MNT_ID,
+            &mut statx,
+        ) != 0
+        || statx.stx_mask & linux_statx::BASIC_STATS
+            != linux_statx::BASIC_STATS
+        || statx.stx_mask & linux_statx::MNT_ID == 0
         || stat.st_size < 0
         || statx.stx_ino != stat.st_ino
         || statx.stx_size != stat.st_size as u64
@@ -5348,7 +5346,9 @@ fn try_send_seqpacket_with_rights_nonblocking(
             ));
         }
         message.msg_control = control.0.as_mut_ptr().cast();
-        message.msg_controllen = control_length;
+        message.msg_controllen = control_length.try_into().map_err(|_| {
+            RecoveryError::Invalid("SCM_RIGHTS control length exceeds native ABI")
+        })?;
         let header = unsafe { libc::CMSG_FIRSTHDR(&message) };
         if header.is_null() {
             return Err(RecoveryError::Invalid(
@@ -5359,7 +5359,9 @@ fn try_send_seqpacket_with_rights_nonblocking(
             (*header).cmsg_level = libc::SOL_SOCKET;
             (*header).cmsg_type = libc::SCM_RIGHTS;
             (*header).cmsg_len =
-                libc::CMSG_LEN(rights_bytes_u32) as usize;
+                libc::CMSG_LEN(rights_bytes_u32).try_into().map_err(|_| {
+                    RecoveryError::Invalid("SCM_RIGHTS header length exceeds native ABI")
+                })?;
             ptr::copy_nonoverlapping(
                 rights.as_ptr().cast::<u8>(),
                 libc::CMSG_DATA(header),

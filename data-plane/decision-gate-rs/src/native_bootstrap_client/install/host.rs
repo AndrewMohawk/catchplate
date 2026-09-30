@@ -82,7 +82,7 @@ fn filesystem(file: &File, expected: libc::c_long, clock: &OriginalClock)
             Err(io::Error::last_os_error())
         } else { Ok(value.f_type) }
     })?;
-    require(found == expected)
+    require(found as u64 == expected as u64)
 }
 
 struct Directory {
@@ -207,7 +207,7 @@ fn namespace(file: &File, expected: Identity, clock: &OriginalClock) -> Result<(
     require(identity(&metadata(file, clock)?) == expected)?;
     filesystem(file, NSFS_MAGIC, clock)?;
     let kind = observed(clock, || {
-        let value = unsafe { libc::ioctl(file.as_raw_fd(), NS_GET_NSTYPE) };
+        let value = unsafe { libc::ioctl(file.as_raw_fd(), NS_GET_NSTYPE as _) };
         if value < 0 { Err(io::Error::last_os_error()) } else { Ok(value) }
     })?;
     require(kind == NETWORK_NAMESPACE)

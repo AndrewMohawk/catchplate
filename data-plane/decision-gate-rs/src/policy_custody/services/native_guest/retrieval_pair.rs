@@ -58,7 +58,7 @@ impl Control {
             let mut bytes=vec![0;MAX_WIRE];let mut control=[0usize;96];
             let mut iov=libc::iovec{iov_base:bytes.as_mut_ptr().cast(),iov_len:bytes.len()};
             let mut message:libc::msghdr=unsafe{zeroed()};message.msg_iov=&mut iov;message.msg_iovlen=1;
-            message.msg_control=control.as_mut_ptr().cast();message.msg_controllen=size_of_val(&control);
+            message.msg_control=control.as_mut_ptr().cast();message.msg_controllen=size_of_val(&control).try_into().map_err(fail)?;
             let count=unsafe{libc::recvmsg(self.socket.as_raw_fd(),&mut message,libc::MSG_DONTWAIT|libc::MSG_CMSG_CLOEXEC)};
             if count<0 {
                 let error=std::io::Error::last_os_error();
@@ -70,8 +70,9 @@ impl Control {
             let mut item=unsafe{libc::CMSG_FIRSTHDR(&message)};
             while !item.is_null() {
                 let c=unsafe{&*item};let base=unsafe{libc::CMSG_LEN(0)} as usize;
-                if c.cmsg_len<base {good=false;break;}
-                let length=c.cmsg_len-base;let data=unsafe{libc::CMSG_DATA(item)};
+                let Ok(cmsg_len)=usize::try_from(c.cmsg_len) else{good=false;break;};
+                if cmsg_len<base {good=false;break;}
+                let length=cmsg_len-base;let data=unsafe{libc::CMSG_DATA(item)};
                 if c.cmsg_level==libc::SOL_SOCKET && (c.cmsg_type==libc::SCM_RIGHTS||c.cmsg_type==4) {
                     good &= length%size_of::<i32>()==0;
                     if c.cmsg_type==libc::SCM_RIGHTS {good &= !rights_seen;rights_seen=true;}

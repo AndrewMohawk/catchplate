@@ -23,7 +23,7 @@ fn verity(file:&File)->Result<[u8;32],ShadowError> {
     #[repr(C)] struct Digest {algorithm:u16,size:u16,value:[u8;32]}
     let mut digest=Digest{algorithm:0,size:32,value:[0;32]};
     read_only(file)?;
-    require(unsafe{libc::ioctl(file.as_raw_fd(),0xc004_6686u64 as libc::c_ulong,&mut digest)}==0
+    require(unsafe{libc::ioctl(file.as_raw_fd(),0xc004_6686u32 as libc::Ioctl,&mut digest)}==0
         && digest.algorithm==1 && digest.size==32 && digest.value!=[0;32])?;
     Ok(digest.value)
 }

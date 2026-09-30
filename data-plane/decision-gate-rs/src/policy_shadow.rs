@@ -38,6 +38,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 #[path = "policy_shadow_seccomp_export.rs"]
 pub(crate) mod seccomp_export;
 
+#[cfg(target_os = "linux")]
+#[path = "linux_statx.rs"]
+pub(crate) mod linux_statx;
+
 #[path = "policy_shadow_opening.rs"]
 pub(crate) mod native_opening;
 #[path = "policy_shadow_native_ingress.rs"]

@@ -29,7 +29,7 @@ fn namespace(fd: BorrowedFd<'_>) -> Result<(u64, u64), String> {
     require(unsafe { libc::fstat(fd.as_raw_fd(), &mut stat) } == 0
         && unsafe { libc::fstatfs(fd.as_raw_fd(), &mut fs) } == 0
         && fs.f_type == 0x6e73_6673 && stat.st_uid == 0 && stat.st_gid == 0
-        && unsafe { libc::ioctl(fd.as_raw_fd(), NS_GET_NSTYPE) } == libc::CLONE_NEWNET)?;
+        && unsafe { libc::ioctl(fd.as_raw_fd(), NS_GET_NSTYPE as _) } == libc::CLONE_NEWNET)?;
     Ok((stat.st_dev, stat.st_ino))
 }
 
@@ -69,7 +69,7 @@ impl Socket {
     }
     fn check(&self, actual_namespace: BorrowedFd<'_>) -> Result<(), String> {
         self.check_socket()?;
-        let raw = unsafe { libc::ioctl(self.file.as_raw_fd(), SIOCGSKNS) };
+        let raw = unsafe { libc::ioctl(self.file.as_raw_fd(), SIOCGSKNS as _) };
         require(raw >= 0)?;
         let held = unsafe { File::from_raw_fd(raw) };
         require(namespace(held.as_fd())? == namespace(actual_namespace)?)?;
@@ -127,7 +127,7 @@ impl Listener {
         require(unsafe{libc::getsockname(self.file.as_raw_fd(),(&mut address as *mut libc::sockaddr_in).cast(),&mut length)}==0
             && length as usize==size_of::<libc::sockaddr_in>() && address.sin_family==libc::AF_INET as u16
             && address.sin_addr.s_addr.to_ne_bytes()==[127,0,0,1] && u16::from_be(address.sin_port)==port)?;
-        let raw=unsafe{libc::ioctl(self.file.as_raw_fd(),SIOCGSKNS)};require(raw>=0)?;
+        let raw=unsafe{libc::ioctl(self.file.as_raw_fd(),SIOCGSKNS as _)};require(raw>=0)?;
         let held=unsafe{File::from_raw_fd(raw)};require(namespace(held.as_fd())?==namespace(ns)?)
     }
     pub(super) fn duplicate(&self,ns:BorrowedFd<'_>,port:u16)->Result<std::net::TcpListener,String> {
@@ -146,7 +146,8 @@ pub(super) fn receive(gate: BorrowedFd<'_>) -> Result<Message, String> {
     header.msg_iov = &mut iov;
     header.msg_iovlen = 1;
     header.msg_control = control.as_mut_ptr().cast();
-    header.msg_controllen = size_of_val(&control);
+    // This fixed 64-byte buffer fits both libc ancillary-length field types.
+    header.msg_controllen = size_of_val(&control) as _;
     let count = unsafe { libc::recvmsg(gate.as_raw_fd(), &mut header,
         libc::MSG_CMSG_CLOEXEC | libc::MSG_DONTWAIT) };
     let mut descriptors = Vec::new();
@@ -156,12 +157,13 @@ pub(super) fn receive(gate: BorrowedFd<'_>) -> Result<Message, String> {
     while !current.is_null() {
         let h = unsafe { &*current };
         let base = unsafe { libc::CMSG_LEN(0) } as usize;
+        let header_length = h.cmsg_len as usize;
         if h.cmsg_level != libc::SOL_SOCKET || h.cmsg_type != libc::SCM_RIGHTS
-            || h.cmsg_len < base || (h.cmsg_len - base) % size_of::<i32>() != 0 {
+            || header_length < base || (header_length - base) % size_of::<i32>() != 0 {
             valid_control = false;
             break;
         }
-        let length = (h.cmsg_len - base) / size_of::<i32>();
+        let length = (header_length - base) / size_of::<i32>();
         for index in 0..length {
             let raw = unsafe { *(libc::CMSG_DATA(current).cast::<i32>().add(index)) };
             require(raw >= 0)?;
@@ -175,11 +177,11 @@ pub(super) fn receive(gate: BorrowedFd<'_>) -> Result<Message, String> {
         return Ok(Message::Ready);
     }
     if &bytes[..8] == LISTENER {
-        require(descriptors.len()==1 && header.msg_controllen==unsafe{libc::CMSG_SPACE(4)} as usize)?;
+        require(descriptors.len()==1 && header.msg_controllen as usize==unsafe{libc::CMSG_SPACE(4)} as usize)?;
         return Ok(Message::Listener(Listener::open(descriptors.pop().ok_or("child listener absent")?)?));
     }
     require(&bytes[..8] == SOCKETS && descriptors.len() == 2
-        && header.msg_controllen == unsafe { libc::CMSG_SPACE(8) } as usize)?;
+        && header.msg_controllen as usize == unsafe { libc::CMSG_SPACE(8) } as usize)?;
     let route = descriptors.pop().ok_or("native child route original absent")?;
     let filter = descriptors.pop().ok_or("native child filter original absent")?;
     Ok(Message::Originals(Sockets { filter: Socket::open(filter, libc::NETLINK_NETFILTER)?,

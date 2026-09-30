@@ -84,11 +84,25 @@ struct ActiveEffectBarrierLaunch {api_version:String,key_admission:Launch,active
 #[derive(Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 struct ActiveEffectCommitLaunch {api_version:String,key_admission:Launch,active_effect_commit:Pin}
+// Nonsecret identity marker for source-selected endpoints, not RPC settings or
+// service permission. The actual runtime original stays bound by signed C9 and
+// the selected execution-closure manifest; grants still authorize operations.
+#[derive(Serialize,Deserialize)]
+#[serde(rename_all="camelCase",deny_unknown_fields)]
+struct EndpointRuntime {api_version:String,role:String}
 enum SelectedService {None,Retrieval(Pin),LedgerRetrieval(Pin),RetrievalBridge,Activation(Pin),Persistence(Pin),PersistenceLocked(Pin),
     TrustedTime(Pin),ProofBridge(Pin),Generation(Pin),CommitmentBridge(Pin),SpoolBridge(Pin),CommitRequest(Pin),LedgerSpool(Pin),Ingress(Pin),
     TerminalSpool(Pin),CompletionLedgerSpool(Pin),CompletionRetrieval(Pin),TerminalBridge(Pin),
     DispatchSpool(Pin),ActiveEffectBarrier(Pin),ActiveEffectCommit(Pin),EffectRetrieval(Pin),ActiveEffectBridge(Pin)}
 impl SelectedService {
+    fn endpoint_runtime_role(&self)->Option<&'static str>{
+        self.closure_set_role().filter(|role|*role!="bridge")
+    }
+    fn check_endpoint_runtime(&self,raw:&[u8])->Result<(),ShadowError>{
+        let role=self.endpoint_runtime_role().ok_or(ShadowError::BindingDrift)?;
+        let value:EndpointRuntime=exact(raw)?;
+        require(value.api_version=="serverware.nativePilotEndpointRuntime/v1" && value.role==role)
+    }
     fn closure_set_role(&self)->Option<&'static str>{
         use NativeVerifierTransportRole as Role;
         self.verifier_role().map(|role|match role {
@@ -257,6 +271,9 @@ impl AdmittedGuest {
             &selected.delivery.path,selected.delivery.sha256,native_lock).map_err(fail)?;
         require(inherited.iter().filter(|fd|**fd>=6).copied().eq(6..6+delivery.activation.len() as i32))?;
         let lifetime=process::Lifetime::arm(&delivery)?;
+        if service_selection.endpoint_runtime_role().is_some(){
+            service_selection.check_endpoint_runtime(&delivery.retrieval_client_runtime().map_err(fail)?)?;
+        }
         let (spool_signer,service_selection,inspection)=match (service_selection,inspection){
             (SelectedService::DispatchSpool(pin),Some(channel))=>(Some(admission::spool_endpoint::Prepared::open(
                 &pin,admission::spool_signer::Kind::DispatchBarrier,&mut delivery,channel)?),SelectedService::None,None),

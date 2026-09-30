@@ -29,7 +29,7 @@ def reference(*, records, request_sha256):
         journal = rows.stored(records["sourceOriginal"])
         contract.journal_original(journal)
         key = "pending_id" if records["profile"] == "pending" else "exchange_id" if records["profile"] == "capture" else "work_id"
-        p.require(attempt[key] == journal["id"] and attempt["id"] == contract.attempt_id(journal["id"], attempt["token_purpose"])
+        p.require(attempt[key] == journal["id"] and attempt["id"] == contract.attempt_id(journal["id"], attempt["token_purpose"]))
         p.require(attempt["transport_original"] is not None and attempt["transport_sha256"] == p.sha256(attempt["transport_original"].encode("ascii"))
             and contract.transport(attempt["transport_original"].encode("ascii"), request_sha256) == "accepted")
     p.require(attempt["status"] == "accepted" and attempt["contact_request_sha256"] == request_sha256)

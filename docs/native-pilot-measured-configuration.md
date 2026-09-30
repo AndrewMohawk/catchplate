@@ -2,8 +2,10 @@
 
 `native_pilot_measured_configuration.MeasuredConfigurationRecipe` derives the
 version-selected native production configuration hash from independently approved static
-originals and a real process-owned bootstrap observation. It is a callable
-prerequisite, not a connected full commissioning supervisor or authority issuer.
+originals and a real process-owned bootstrap observation. The .368 source batch
+connects this retained owner to the partial commissioning supervisor. It is not
+a complete supervisor or authority issuer; coverage remains 3/60, with no new
+build or runtime evidence.
 
 The legacy protected recipe has exactly ten fields. Explicit recipe/v2 has
 those same fields plus the required `closureSetOriginal`:
@@ -42,6 +44,25 @@ the actual prior approved input and returned bootstrap signature, then validates
 the original observation, window, assignment, trust, key set and bridge manifest.
 Malformed input or failure cannot be retried on a replacement owner or a renewed
 deadline.
+
+## Supervisor-owned derivation
+
+Explicit commissioning policy/v2 independently pins the complete recipe/v2 in
+`measuredRecipeSha256`. `CommissioningSupervisor.prepare(policy=..., process=...,
+measured_recipe=...)` retains and checks that actual owner before bootstrap
+preparation, then binds it to the same process before spawn. Policy/v1 rejects
+a supplied recipe and preserves its existing behavior.
+
+At the actual pending `endpoint-precreation` / `cohort-precreation` job, the
+supervisor calls `policy.derive_measured(process=..., request=...)` exactly once.
+`policy.measured_configuration(process=..., request=...)` subsequently returns a
+deep copy of the retained six-field result described below. Access requires the
+same actual process and pending startup request, an unchanged retained precreation
+request, and the original startup allowance; it never recomputes the result or
+renews a deadline. The accessor does not authorize an endpoint job. Full-run
+startup still refuses before spawn while the remaining 57 composers are missing.
+
+## Binding and result
 
 Legacy derivation preserves all 24 existing `ConfigurationBinding` fields and
 the `serverware.policyShadowProductionCustodyConfiguration/v1` framed hash.
@@ -89,8 +110,9 @@ create retrieval receipts, raise the supervisor's supported job count, or make a
 full pilot runnable by themselves. Generic legacy assignment DB admission is not
 expanded by this native-only successor.
 
-`close()` releases its retained public descriptor only after the bound process
-reports genuine completed cleanup. Unknown cleanup retains it. Source grammar
-and host import checks do not exercise this protected owner; no runtime,
-signing, installation or build was executed. An external watchdog must still
-bound filesystem stalls.
+The policy retains the recipe through cleanup. `close()` releases its public
+descriptor only after the bound process reports genuine completed cleanup;
+unknown cleanup retains it. Cleanup does not depend on the startup window still
+being live. This .368 owner connection has source review only, not protected-owner
+execution, signing, installation or build evidence. An external watchdog must
+still bound filesystem stalls.

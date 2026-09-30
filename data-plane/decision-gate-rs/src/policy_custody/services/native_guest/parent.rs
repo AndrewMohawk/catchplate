@@ -110,6 +110,9 @@ impl Running {
             && now()?.checked_add(REAP_RESERVE_NS).ok_or(ShadowError::BindingDrift)?<files.lifetime())?;
         // Arm the ORIGINAL absolute deadline before image, loop or mount work.
         let watchdog=Watchdog::arm(&files)?;
+        if service_selection.endpoint_runtime_role().is_some(){
+            service_selection.check_endpoint_runtime(&files.retrieval_client_runtime().map_err(fail)?)?;
+        }
         let native_lock=match &service_selection {
             SelectedService::PersistenceLocked(_)=>Some(super::super::NativeLock::Persistence),
             SelectedService::LedgerRetrieval(_)|SelectedService::CompletionRetrieval(_)|SelectedService::EffectRetrieval(_)=>Some(super::super::NativeLock::Ledger),

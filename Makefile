@@ -5185,6 +5185,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-custody-closure.v1.schema.json \
 				schemas/native-custody-closure.v2.schema.json \
 				schemas/native-custody-closure.v3.schema.json \
+				schemas/native-pilot-endpoint-runtime.v1.schema.json \
 				schemas/policy-shadow-assignment.v2.schema.json \
 				schemas/native-custody-execution-closure-set.v1.schema.json \
 				schemas/native-pilot-closure-set-preparation.v1.schema.json \

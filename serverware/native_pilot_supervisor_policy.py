@@ -4,6 +4,8 @@ The protected complete policy and its digest are independently provisioned.
 Neither a supplied digest, file mode, valid request nor this parser establishes
 that approval provenance. This owner delegates only the initial bootstrap and
 the separate two fixed precreation decisions, not all sixty authority jobs.
+Explicit policy v2 additionally pins a retained measured recipe/v2 and allows
+its one actual post-bootstrap derivation; it does not approve endpoint jobs.
 
 Only the actual AuthorityCoordinatorProcess and its current opaque JobRequest
 can enter bootstrap(). No signing, publication, process launch, arbitrary
@@ -31,6 +33,9 @@ POLICY_API = "serverware.nativePilotSupervisorCommissioningPolicy/v1"
 PURPOSE = "initial-driver-bootstrap-and-endpoint-precreation"
 FIELDS = ("apiVersion", "purpose", "source", "conductorInventorySha256", "authorityInventorySha256",
     "bootstrapOriginals", "keyBindings", "precreation")
+MEASURED_POLICY_API = "serverware.nativePilotSupervisorCommissioningPolicy/v2"
+MEASURED_PURPOSE = "initial-driver-bootstrap-precreation-and-measured-configuration"
+MEASURED_FIELDS = FIELDS + ("measuredRecipeSha256",)
 BOOTSTRAP_FIELDS = ("control", "configuration", "window", "deliveryConfiguration")
 _TOKEN = object()
 _USED = False
@@ -71,6 +76,8 @@ class SupervisorPolicy:
         self._last = originals._clock()
         self._failed = self._closed = self._bind_attempted = self._bootstrap_attempted = False
         self._bootstrap_input = None
+        self._recipe = None
+        self._recipe_attempted = self._measured_attempted = False
 
     @classmethod
     def open(cls, *, policy_fd: int, policy_sha256: str):
@@ -87,8 +94,13 @@ class SupervisorPolicy:
             owner._raw = io.read_public(owner._fd, MAX_POLICY)
             owner._digest = p.digest(policy_sha256)
             p.require(p.sha(owner._raw) == owner._digest)
-            value = p.fields(p.document(owner._raw, MAX_POLICY), FIELDS)
-            p.require(value["apiVersion"] == POLICY_API and value["purpose"] == PURPOSE)
+            value = p.document(owner._raw, MAX_POLICY)
+            p.require(type(value) is dict and value.get("apiVersion") in (POLICY_API, MEASURED_POLICY_API))
+            measured = value["apiVersion"] == MEASURED_POLICY_API
+            p.fields(value, MEASURED_FIELDS if measured else FIELDS)
+            p.require(value["purpose"] == (MEASURED_PURPOSE if measured else PURPOSE))
+            if measured:
+                p.digest(value["measuredRecipeSha256"])
             p.fields(value["source"], artifact.SOURCE_FIELDS)
             source = artifact._source(value["source"])
             for field in ("conductorInventorySha256", "authorityInventorySha256"):
@@ -141,6 +153,28 @@ class SupervisorPolicy:
                 window_authority.validate_window(self._window, self._bootstrap["configuration"], self._config,
                     boot=self._boot, now=now)
 
+    def retain_measured_recipe(self, recipe):
+        """Retain only the source-selected real recipe before process setup.
+
+        Legacy policy forbids a recipe. v2 requires the already independently
+        approved original pin, not future process-dependent configuration data.
+        """
+        from serverware.native_pilot_measured_configuration import MeasuredConfigurationRecipe
+        self.check()
+        p.require(not self._recipe_attempted and not self._bind_attempted and self._process is None)
+        self._recipe_attempted = True
+        try:
+            if self._value["apiVersion"] == POLICY_API:
+                p.require(recipe is None)
+                return
+            p.require(type(recipe) is MeasuredConfigurationRecipe)
+            self._recipe = recipe  # Keep even a failed admission until close.
+            recipe.require_original(self._value["measuredRecipeSha256"])
+            self.check()
+        except BaseException:
+            self._failed = True
+            raise
+
     def bind(self, process):
         from serverware.native_pilot_supervisor_process import AuthorityCoordinatorProcess
         self.check()
@@ -153,10 +187,46 @@ class SupervisorPolicy:
             retained = p.fields(process.bootstrap_originals(), BOOTSTRAP_FIELDS)
             p.require(all(type(retained[name]) is bytes and retained[name] == raw
                 for name, raw in self._bootstrap.items()))
+            if self._value["apiVersion"] == MEASURED_POLICY_API:
+                p.require(self._recipe_attempted and self._recipe is not None)
+                self._recipe.require_original(self._value["measuredRecipeSha256"])
+                self._recipe.bind(process)
             self.check(process)
         except BaseException:
             self._failed = True
             raise
+
+    def derive_measured(self, *, process, request):
+        """Derive once at the genuine pending cohort-precreation request only."""
+        self.check(process)
+        if self._value["apiVersion"] == POLICY_API:
+            return None
+        p.require(not self._measured_attempted and self._recipe is not None)
+        self._measured_attempted = True
+        try:
+            process.check_request(request)
+            self._recipe.require_original(self._value["measuredRecipeSha256"])
+            value = self._recipe.derive(process=process, request=request)
+            self.check(process)
+            process.check_request(request)
+            return value
+        except BaseException:
+            self._failed = True
+            raise
+
+    def measured_configuration(self, *, process, request) -> dict:
+        """Checked retained result for a fixed downstream startup composer.
+
+        This returns derived public data, not permission to approve a new job.
+        The actual pending request and original startup allowance are required.
+        """
+        self.check(process)
+        p.require(self._value["apiVersion"] == MEASURED_POLICY_API
+            and self._recipe is not None and self._measured_attempted)
+        value = self._recipe.result(process=process, request=request)
+        self.check(process)
+        process.check_request(request)
+        return value
 
     def precreation(self):
         self.check()
@@ -239,6 +309,8 @@ class SupervisorPolicy:
             from serverware.native_pilot_supervisor_process import AuthorityCoordinatorProcess
             p.require(type(self._process) is AuthorityCoordinatorProcess and self._process._closed
                 and self._process._result["status"] in ("not-started", "stopped-cleanup-complete", "failed-cleanup-complete"))
+        if self._recipe is not None:
+            self._recipe.close()
         os.close(self._fd)
         self._closed = True
         _LIVE = None

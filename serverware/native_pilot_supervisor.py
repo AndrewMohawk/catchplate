@@ -60,7 +60,7 @@ class CommissioningSupervisor:
         self._started = self._closed = self._failed = False
 
     @classmethod
-    def prepare(cls, *, policy, process):
+    def prepare(cls, *, policy, process, measured_recipe=None):
         global _USED, _LIVE
         p.require(cls is CommissioningSupervisor and not _USED
             and type(policy) is SupervisorPolicy and type(process) is AuthorityCoordinatorProcess)
@@ -68,6 +68,7 @@ class CommissioningSupervisor:
         owner = cls(_TOKEN, policy, process)
         _LIVE = owner  # Retain both originals/owners even if binding refuses.
         try:
+            policy.retain_measured_recipe(measured_recipe)
             process.prepare_bootstrap()
             policy.bind(process)
             owner._check()
@@ -109,6 +110,10 @@ class CommissioningSupervisor:
         if slot == SUPPORTED_JOBS[0]:
             input_raw, approval_raw = self._policy.bootstrap(self._process, request)
         else:
+            if slot == SUPPORTED_JOBS[1]:
+                # v2's real retained owner derives once from the actual prior
+                # bootstrap signature/request. Legacy policy returns None.
+                self._policy.derive_measured(process=self._process, request=request)
             input_raw = precreation.compose(self._policy, process=self._process, request=request)
             approval_raw = _approval(request.raw, input_raw)
         p.require(type(input_raw) is bytes and type(approval_raw) is bytes)

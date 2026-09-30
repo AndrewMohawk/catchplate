@@ -318,6 +318,9 @@ impl Cohort {
             let endpoint=self.admission.endpoint_only();
             let logical=if endpoint{external_driver::logical_index(index)?}else{index};
             require_role(logical,&service,endpoint||self.admission.six(),endpoint||self.admission.seven(),endpoint||self.admission.eight(),endpoint||self.admission.eleven())?;
+            if service.endpoint_runtime_role().is_some(){
+                service.check_endpoint_runtime(&files.retrieval_client_runtime().map_err(fail)?)?;
+            }
             let mut activation=BTreeMap::new();
             for (slot,entry) in files.payload.activation.iter().enumerate() {
                 require(entry.fd==6+slot as i32)?;

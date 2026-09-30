@@ -137,8 +137,15 @@ def shape(purpose: str, raw: bytes) -> dict:
         p.require(value[field]["path"] == publication.DESTINATIONS[_grant_purpose(role)])
         return value
     if purpose.startswith("native-runtime-"):
-        # Exact existing serde version/optional-field combinations. The actual
-        # native endpoint, not this installer, validates operational semantics.
+        role = purpose[len("native-runtime-"):]
+        if role != "bridge":
+            # Endpoints have source-fixed behavior and separate service grants;
+            # bridge RPC settings are not their runtime configuration.
+            p.fields(value, ("apiVersion", "role"))
+            p.require(value["apiVersion"] == "serverware.nativePilotEndpointRuntime/v1"
+                and value["role"] == role)
+            return value
+        # The bridge still requires its complete operational RPC configuration.
         extra = {4: (), 5: ("generationAdmission",), 6: ("generationAdmission", "commitRequest"),
             7: ("generationAdmission", "commitRequest", "spool"),
             8: ("generationAdmission", "commitRequest", "spool"),

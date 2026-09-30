@@ -78,7 +78,7 @@ def direct_result(item, ingress, active):
             and candidate.get("dispatchCommitmentSha256") == item["candidate_dispatch_commitment_digest"]
             and final.get("finalOutcome") == active["final_active_outcome"] and type(final.get("upstreamDispatchAuthorized")) is bool
             and int(final["upstreamDispatchAuthorized"]) == active["upstream_dispatch_authorized"]
-            and expansion["cellsRootSha256"] == db._policy_shadow_merkle_root([(index, cell["cellSha256"]) for index, cell in enumerate(cells, 1)])
+            and expansion["cellsRootSha256"] == db._policy_shadow_merkle_root([(index, cell["cellSha256"]) for index, cell in enumerate(cells, 1)]))
         for source, target, value in (("authorityBinding", "authority_binding", result["authorityBinding"]),
                 ("derivedExpansion", "expansion_cells", cells), ("pilotMembership", "pilot_membership", result["pilotMembership"]),
                 ("responseObligation", "response_obligation", result["responseObligation"]),

@@ -35,6 +35,8 @@ FIELDS = ("apiVersion", "source", "conductorInventorySha256", "authorityInventor
     "bootstrapOriginals", "assignmentOriginal", "trustOriginal", "trustSha256",
     "closureManifestOriginal", "production")
 SET_FIELDS = FIELDS + ("closureSetOriginal",)
+RESULT_PHASES = ("endpoint-precreation", "endpoint-inputs", "endpoint-deliveries", "service-originals",
+    "bridge-runtime", "bridge-delivery", "release", "constructed-admission")
 PRODUCTION_FIELDS = scope.PRODUCTION_FIELDS[:-1]
 OPERATIONS = (
     "recover-current-state", "verify-checkpoint-successor", "verify-current-checkpoint-head", "verify-observation-evidence",
@@ -135,6 +137,7 @@ class MeasuredConfigurationRecipe:
         self._fd = self._identity = self._raw = self._sha = self._value = None
         self._bootstrap = self._control = self._config = self._window = self._source = None
         self._process = self._result = None
+        self._derived_sequence = self._derived_phase_sha256 = None
         self._last, self._wall = originals._clock(), time.time_ns()
         self._failed = self._closed = self._bind_attempted = self._derive_attempted = False
 
@@ -215,6 +218,16 @@ class MeasuredConfigurationRecipe:
             self._failed = True
             raise
 
+    def require_original(self, expected_sha256: str):
+        """Check the actual v2 original against a separately admitted policy pin.
+
+        The calling policy owns approval of this digest. This method neither
+        selects that policy nor infers approval from a self-computed hash.
+        """
+        self.check()
+        p.require(self._value["apiVersion"] == "serverware.nativePilotMeasuredConfigurationRecipe/v2"
+            and self._sha == p.digest(expected_sha256))
+
     def derive(self, *, process, request) -> dict:
         """Return the selected hash/proof-scope after the real bootstrap result."""
         from serverware.native_pilot_supervisor_process import AuthorityCoordinatorProcess, JobRequest
@@ -264,10 +277,32 @@ class MeasuredConfigurationRecipe:
             process.check_request(request)
             p.freshness(signed["payload"]["issuedAtUnixNanos"], signed["payload"]["expiresAtUnixNanos"], time.time_ns(), 30_000_000_000)
             self._result = result
+            self._derived_sequence = request.sequence
+            self._derived_phase_sha256 = p.sha(p.canonical(current))
             return copy.deepcopy(result)
         except BaseException:
             self._failed = True
             raise
+
+    def result(self, *, process, request) -> dict:
+        """Read the once-derived v2 data for the same actual pending startup job.
+
+        No result is recreated, and no new window is opened. This accessor is
+        deliberately unavailable for lifetime/cleanup phases after startup.
+        """
+        from serverware.native_pilot_supervisor_process import AuthorityCoordinatorProcess, JobRequest
+        self.check()
+        p.require(type(process) is AuthorityCoordinatorProcess and process is self._process
+            and type(request) is JobRequest and self._result is not None
+            and self._value["apiVersion"] == "serverware.nativePilotMeasuredConfigurationRecipe/v2"
+            and request.phase in RESULT_PHASES and request.sequence >= self._derived_sequence
+            and request.deadline_boottime_ns <= p.ns(self._window["startupDeadlineBoottimeNs"]))
+        process.check_request(request)
+        p.require(p.sha(p.canonical(_phase(process, "endpoint-precreation"))) == self._derived_phase_sha256)
+        value = copy.deepcopy(self._result)
+        self.check()
+        process.check_request(request)
+        return value
 
     def _derive(self, envelope, keys, key_root, manifest, observed):
         assignment = envelope["payload"]
@@ -324,6 +359,8 @@ class MeasuredConfigurationRecipe:
     def close(self):
         """Release only this public descriptor after the actual bound owner retires."""
         global _LIVE
+        if self._closed:
+            return
         p.require(_LIVE is self and not self._closed
             and (self._pid, self._start, self._boot) == (os.getpid(), originals._start(), originals._boot()))
         if self._process is not None:

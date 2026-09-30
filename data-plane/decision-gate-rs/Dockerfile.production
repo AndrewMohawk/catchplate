@@ -151,7 +151,7 @@ RUN --network=none rustc --edition=2021 /source/scripts/cargo_build_diagnostics.
 RUN --network=none /usr/local/bin/serverware-cargo-build --release --frozen \
         --bin serverware-production-launcher --bin serverware-native-response-verifier \
         --bin serverware-native-ingress-verifier --bin serverware-native-ingress-client \
-        --bin serverware-native-bootstrap-client \
+        --bin serverware-native-bootstrap-client --bin serverware-workload-sidecar \
         --bin serverware-response-v2-guest-inspector \
         --bin serverware-response-v2-guest-role \
         --bin serverware-native-shadow-worker \
@@ -179,6 +179,9 @@ RUN --network=none /usr/local/bin/serverware-cargo-build --release --frozen \
     && test "$(readelf -l /src/target/release/serverware-native-bootstrap-client | grep -c INTERP)" -eq 0 \
     && test "$(readelf -d /src/target/release/serverware-native-bootstrap-client | grep -c NEEDED)" -eq 0 \
     && test "$(stat -c %s /src/target/release/serverware-native-bootstrap-client)" -le 67108864 \
+    && test "$(readelf -l /src/target/release/serverware-workload-sidecar | grep -c INTERP)" -eq 0 \
+    && test "$(readelf -d /src/target/release/serverware-workload-sidecar | grep -c NEEDED)" -eq 0 \
+    && test "$(stat -c %s /src/target/release/serverware-workload-sidecar)" -le 67108864 \
     && test "$(readelf -l /src/target/release/serverware-native-parent-relay | grep -c INTERP)" -eq 0 \
     && test "$(readelf -d /src/target/release/serverware-native-parent-relay | grep -c NEEDED)" -eq 0 \
     && test "$(stat -c %s /src/target/release/serverware-native-parent-relay)" -le 67108864 \
@@ -236,6 +239,12 @@ COPY --from=launcher-build /src/target/release/serverware-native-ingress-client 
 
 FROM scratch AS native-bootstrap-client-artifact
 COPY --from=launcher-build /src/target/release/serverware-native-bootstrap-client /serverware-native-bootstrap-client
+
+# Workload-side installation, separate from the measured claimant closure.
+FROM scratch AS native-workload-sidecar-artifact
+COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-workload-sidecar /usr/local/libexec/serverware-workload-sidecar
+COPY --from=source-preparation --chown=0:0 --chmod=0444 /source/scripts/install_workload_sidecar_unit.py /usr/share/serverware/install_workload_sidecar_unit.py
+COPY --from=source-preparation --chown=0:0 --chmod=0444 /source/schemas/native-workload-sidecar.v1.schema.json /usr/share/serverware/native-workload-sidecar.v1.schema.json
 
 FROM scratch AS native-parent-relay-artifact
 COPY --from=launcher-build /src/target/release/serverware-native-parent-relay /serverware-native-parent-relay

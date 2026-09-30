@@ -203,7 +203,7 @@ fn client_trust_originals(ingress: &Value, expected: &[u8; 32])
     Ok(originals)
 }
 
-fn client_chain(original: &[u8]) -> Result<Vec<Vec<u8>>, String> {
+pub(super) fn client_chain(original: &[u8]) -> Result<Vec<Vec<u8>>, String> {
     ensure(!original.is_empty() && original.len() <= 64 * 1024,
         "native workload client chain exceeds its original bound")?;
     let mut remaining = std::str::from_utf8(original)

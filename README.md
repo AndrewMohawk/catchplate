@@ -18,21 +18,19 @@ Checkpoint: **2026-09-30 — pre-production, pilot assembly.**
 
 **36/46 source checkpoints landed · 10 active · 0 todo.**
 
-**Production acceptance: 0/6 verified.** Both baseline engineering images built at `253730f0`. The latest launch-path build completed the control image but hit a gate compilation error; its missing import is fixed, with the consolidated rebuild pending. Pilot assembly, provisioning and connected verification remain. No production deployment.
+**Production acceptance: 0/6 verified.** Both service images built successfully from `172f6b4e` using the unpublished dependency candidate in an isolated non-release checkout. Pilot assembly, provisioning and connected verification remain. No production deployment.
 
 [![Project checkpoints, one segment per task: 36 of 46 source-landed; 10 active and 0 todo. Evidence handoff 10/10; historical recovery 4/5; permissions and grants 10/10; finalization and sessions 8/8; workloads and native 3/6; providers and operations 1/7. H05, N04, N05, N06 and O01 through O06 are in progress. Production acceptance remains 0/6. Engineering assembly is not an accepted pilot or production deployment.](docs/images/project-progress.svg)](docs/production-status.md#next-source-milestones)
 
-The current `.351` source batch connects [native workload trust authorization](docs/native-workload-trust-authorization.md)
-and [retained policy-publication recovery](docs/setup-policy-continuation.md#warm-retained-publication-recovery).
-It builds on the [single-bridge launch](docs/native-pilot-launch.md), [pilot artifact assembly](docs/native-pilot-build.md),
-[one-request collection and Setup import](docs/native-pilot-request-collection.md),
-and [independent Setup issuer packages](docs/native-setup-independent-issuer-installation.md).
-The [dependency candidate](docs/production-dependency-snapshot.md#current-candidate-evidence)
-is built: 245 Rust crates and 31 Python wheels, not yet independently reviewed or
-published. Both service images built successfully from `.351` source `172f6b4e`
-using those bytes in an isolated non-release checkout; canonical reviewed pins
-are unchanged. This is not a deployed pilot. Next are assembled artifacts
-and provisioned inputs, then one connected pilot acceptance run. Broad testing
+The current `.352` source batch adds the [persistent workload sidecar](docs/native-workload-sidecar.md)
+for ordinary HTTPS libraries that cannot authenticate directly to the proxy with
+mTLS. It connects local workload-token authentication to fresh attested native
+sessions; upstream provider credentials still stay out of the application.
+The earlier [native trust authorization](docs/native-workload-trust-authorization.md),
+[policy recovery](docs/setup-policy-continuation.md#warm-retained-publication-recovery)
+and [pilot assembly](docs/native-pilot-build.md) paths are source-connected.
+The sidecar is not yet compiled or deployed. Next are assembled artifacts and
+provisioned inputs, then one connected pilot acceptance run. Broad testing
 remains deferred until that build is connected.
 
 The bar shows **committed source, not tested readiness or remaining effort**.
@@ -127,6 +125,13 @@ Clients use proxy-capable HTTP libraries and normal upstream URLs, configured
 with Serverware proxy authentication and its verified CA for HTTPS interception.
 SDK-specific configuration may still be needed. Workload egress controls must
 prevent bypassing the proxy where enforcement is required.
+
+For libraries without HTTPS-proxy mTLS support, the [workload sidecar](docs/native-workload-sidecar.md)
+accepts authenticated CONNECT requests only on loopback inside an explicitly
+selected workload network namespace. It owns the native mTLS connection; the
+application retains its scoped local token and verified interception CA, not
+the upstream provider credential. Namespace provisioning and egress restrictions
+are separate deployment requirements.
 
 ## Three separate authentication relationships
 

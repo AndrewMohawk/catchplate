@@ -271,6 +271,8 @@ def assert_python_runtime_docker_contract() -> None:
 
 def assert_production_artifact_build_contract() -> None:
     metadata = build_metadata_fixture()
+    if ("data-plane/decision-gate-rs/Dockerfile.production", "native-workload-sidecar-artifact") not in build_production_images.PRODUCTION_ARTIFACT_TARGETS:
+        raise AssertionError("the fixed workload-sidecar install artifact is unavailable")
     command = build_production_images.artifact_build_command(
         "data-plane/decision-gate-rs/Dockerfile.production",
         "production-launcher-artifact",

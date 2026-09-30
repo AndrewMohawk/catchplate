@@ -64,6 +64,14 @@ client identity. Python applications can explicitly call the API below. This is
 not a drop-in `requests`, Node or provider-SDK adapter: an SDK without separate
 proxy TLS settings still needs a supported integration. Do not bypass the proxy.
 
+The [persistent native workload sidecar](native-workload-sidecar.md) is the
+separate source implementation for ordinary HTTPS libraries without outer-proxy
+mTLS support. It accepts local authenticated CONNECT in an explicitly admitted
+workload network namespace and owns each actual native mTLS connection. The
+application still needs its scoped local token and independently installed
+inner interception CA. This sidecar is not yet compiled or deployed; it does
+not silently change the Python client's existing identity or retry behavior.
+
 ## Explicit Python workload client
 
 The source [WorkloadProxyClient](../serverware_agent_trust/workload_client.py)

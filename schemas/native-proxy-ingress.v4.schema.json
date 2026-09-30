@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-proxy-ingress.v4.schema.json",
+  "title": "Serverware native retained-service principal preflight configuration v4",
+  "description": "Closed service-only cold original, at most 16384 bytes. The standalone workload sidecar admits genuine fresh startup once and retains immutable leaf, CA, source and original certificate/PKI/service bounds. Every new outer TLS connection requires a fresh existing PrincipalSession proof and exact same initial identity. This does not renew startup, grant hot replacement, claim live revocation or authorize a provider request. Legacy NativeIngressAdmission v1-v3 rejects v4 and retains its original freshness semantics.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "startupEvidence", "startupExpectations", "sessionScope", "trustRoots", "workloadIssuer", "expectedPrincipal", "expectedIdentityPolicySha256"],
+  "properties": {
+    "apiVersion": {"const": "serverware.nativeProxyIngress/v4"},
+    "startupEvidence": {"$ref": "native-ingress-client.v2.schema.json#/$defs/artifact", "description": "Held nativeIngressPublicEvidence/v1 original, at most 65536 bytes. Genuine initial startup verification uses the unchanged 1..300 second freshness limit, before private-key use."},
+    "startupExpectations": {"$ref": "native-ingress-client.v2.schema.json#/$defs/artifact", "description": "Independent nativeIngressAttestationExpectations/v1 original, at most 16384 bytes, including complete startup scope and nonce."},
+    "sessionScope": {"$ref": "native-ingress-client.v2.schema.json#/$defs/artifact", "description": "Nonce-free nativeIngressSessionScope/v1 original, at most 16384 bytes; static scope matches startup. Each connection owns a new live challenge, not a reset or reused admission."},
+    "trustRoots": {"$ref": "native-ingress-client.v2.schema.json#/$defs/artifact", "description": "Independent native Nitro PKI trust-root original, at most 1048576 bytes. Native profile requires the existing no-CRL boundary; this service makes no live revocation or witness claim."},
+    "workloadIssuer": {"$ref": "native-ingress-client.v3.schema.json#/$defs/artifact", "description": "Canonical single-certificate PEM, at most 65536 bytes, DER at most 16384. Initial verification authenticates membership in native framed-DER trust inventory; every connection proves the same initial leaf/CA against the actual selected target chain. Installation diagnostics are not evidence."},
+    "expectedPrincipal": {"type": "string", "minLength": 1, "maxLength": 1024, "description": "Independent expected policy principal, exact match to the retained sidecar principal. Runtime rejects surrounding whitespace and controls and enforces byte length; no caller identity headers substitute."},
+    "expectedIdentityPolicySha256": {"type": "string", "pattern": "^sha256:(?!0{64})[0-9a-f]{64}(?![\\s\\S])", "description": "Independent exact current identity-policy commitment, not a route grant, bearer credential or inferred readiness result."}
+  }
+}

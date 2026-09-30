@@ -18,6 +18,7 @@ mod ingress_config;
 mod ingress_session;
 mod principal_session;
 mod ingress_client;
+mod ingress_service;
 mod enrollment;
 mod enrollment_bootstrap;
 // Reuse the assignment parser/signature/lifetime implementation without
@@ -35,6 +36,7 @@ mod bootstrap_setup;
 mod bootstrap_packet;
 
 pub(crate) use ingress_client::IngressClientBootstrap;
+pub(crate) use ingress_service::{IngressServiceOriginals, IngressServiceSource};
 pub(crate) use principal_session::PrincipalSession;
 
 use base64::{engine::general_purpose, Engine as _};

@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-workload-sidecar.v1.schema.json",
+  "title": "Serverware native workload local CONNECT sidecar v1",
+  "description": "Closed independently supplied cold configuration. Runtime verifies held originals, the existing workload network namespace, caller UID/GID, boot, absolute lifetime and fresh upstream native proofs. Shape alone establishes neither namespace isolation, egress enforcement, enrollment, deployment nor production readiness. No hot replacement or automatic renewal is authorized.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "profile", "workloadId", "listenPort", "localTokenSha256", "allowedDestinations", "namespace", "issuedAtEpochNs", "expiresAtEpochNs", "maximumConnections", "maximumConnectionSeconds", "headerTimeoutMilliseconds", "maximumTunnelBytes", "upstream"],
+  "properties": {
+    "apiVersion": {"const": "serverware.nativeWorkloadSidecar/v1"},
+    "profile": {"const": "native-attested-local-connect-v1"},
+    "workloadId": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*(?![\\s\\S])"},
+    "listenPort": {"type": "integer", "minimum": 1024, "maximum": 65535},
+    "localTokenSha256": {"$ref": "#/$defs/digest", "description": "SHA256 of the exact 43 ASCII bytes of the independently delivered canonical unpadded base64url local token, not of its decoded 32 bytes. Token is nonzero; neither token nor upstream private key appears here."},
+    "allowedDestinations": {
+      "type": "array", "minItems": 1, "maxItems": 64, "uniqueItems": true,
+      "items": {"type": "string", "minLength": 3, "maxLength": 259, "pattern": "^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?:[1-9][0-9]{0,4}(?![\\s\\S])"},
+      "description": "Runtime additionally requires canonical lower-case DNS (not an IP literal), nonempty labels of at most 63 bytes without edge hyphens, host at most 253 bytes and canonical port 1..65535. No wildcard, suffix rule or caller-selected upstream exists."
+    },
+    "namespace": {
+      "type": "object", "additionalProperties": false,
+      "required": ["device", "inode", "bootId", "uid", "gid"],
+      "properties": {
+        "device": {"type": "integer", "minimum": 1, "maximum": 18446744073709551615},
+        "inode": {"type": "integer", "minimum": 1, "maximum": 18446744073709551615},
+        "bootId": {"type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?![\\s\\S])"},
+        "uid": {"type": "integer", "minimum": 1, "maximum": 4294967295},
+        "gid": {"type": "integer", "minimum": 1, "maximum": 4294967295}
+      },
+      "description": "Actual preexisting network namespace identity and unprivileged process identity, not a namespace creation request. Runtime retains and rechecks the real namespace descriptor; no host-namespace fallback."
+    },
+    "issuedAtEpochNs": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807},
+    "expiresAtEpochNs": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807, "description": "Runtime requires issued < expiry, original interval at most 24 hours, and live original expiry fitting the actual upstream certificate/CA/source limits; an overlong scope is refused, never extended."},
+    "maximumConnections": {"type": "integer", "minimum": 1, "maximum": 16},
+    "maximumConnectionSeconds": {"type": "integer", "minimum": 1, "maximum": 120},
+    "headerTimeoutMilliseconds": {"type": "integer", "minimum": 1, "maximum": 5000},
+    "maximumTunnelBytes": {"type": "integer", "minimum": 4096, "maximum": 1073741824, "description": "Independent plaintext byte ceiling in each relay direction; reaching either cap closes the connection without an additional read or provider-success inference."},
+    "upstream": {
+      "type": "object", "additionalProperties": false,
+      "required": ["proxyEndpoint", "principalId", "ingressConfiguration", "targetCertificate", "targetPrivateKey"],
+      "properties": {
+        "proxyEndpoint": {"type": "string", "minLength": 3, "maxLength": 64, "pattern": "^(?:[0-9.]+|\\[[0-9a-f:.]+\\]):[1-9][0-9]{0,4}(?![\\s\\S])", "description": "Runtime parses canonical literal SocketAddr and excludes loopback, unspecified, multicast and broadcast, including forbidden mapped IPv4. This pattern is not an IP parser. No DNS endpoint lookup or direct-provider fallback."},
+        "principalId": {"type": "string", "minLength": 1, "maxLength": 1024, "pattern": "^[ -~]+(?![\\s\\S])", "description": "Exact independently configured native workload principal; runtime rejects surrounding whitespace and requires equality with ingress expectedPrincipal."},
+        "ingressConfiguration": {"$ref": "#/$defs/artifact", "description": "Exact native-proxy-ingress.v4 service-only original; legacy v1-v3 do not select this lifetime owner."},
+        "targetCertificate": {"$ref": "#/$defs/artifact", "description": "Already provisioned native workload client leaf/chain; service never requests issuance."},
+        "targetPrivateKey": {"$ref": "#/$defs/artifact", "description": "Separately provisioned protected existing private-key file; service never generates, exports or renews it."}
+      }
+    }
+  },
+  "$defs": {
+    "digest": {"type": "string", "minLength": 71, "maxLength": 71, "pattern": "^sha256:(?!0{64})[0-9a-f]{64}(?![\\s\\S])"},
+    "artifact": {
+      "type": "object", "additionalProperties": false, "required": ["path", "sha256"],
+      "properties": {
+        "path": {"type": "string", "minLength": 2, "maxLength": 4096, "pattern": "^/[^\\u0000]+(?![\\s\\S])", "description": "Runtime requires an exact canonical absolute path with protected no-follow acquisition and retained original bytes; shape does not prove provenance."},
+        "sha256": {"$ref": "#/$defs/digest"}
+      }
+    }
+  }
+}

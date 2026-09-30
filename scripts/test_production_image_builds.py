@@ -968,6 +968,13 @@ def assert_static_launcher_artifact_embedded() -> None:
         "FROM scratch AS production-launcher-artifact",
         "COPY --from=launcher-build /src/target/release/serverware-production-launcher /serverware-production-launcher",
         "COPY --from=launcher-build /src/target/release/serverware-production-launcher /usr/local/libexec/serverware-production-launcher",
+        "--bin serverware-native-bootstrap-client --bin serverware-workload-sidecar",
+        'test "$(readelf -l /src/target/release/serverware-workload-sidecar | grep -c INTERP)" -eq 0',
+        'test "$(readelf -d /src/target/release/serverware-workload-sidecar | grep -c NEEDED)" -eq 0',
+        'test "$(stat -c %s /src/target/release/serverware-workload-sidecar)" -le 67108864',
+        "FROM scratch AS native-workload-sidecar-artifact",
+        "COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-workload-sidecar /usr/local/libexec/serverware-workload-sidecar",
+        "COPY --from=source-preparation --chown=0:0 --chmod=0444 /source/scripts/install_workload_sidecar_unit.py /usr/share/serverware/install_workload_sidecar_unit.py",
     )
     missing = [line for line in required if line not in dockerfile]
     if missing:

@@ -1314,6 +1314,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	scripts/package_native_setup_issuers_runtime.py \
 	scripts/build_native_pilot_artifacts.py \
 	scripts/export_native_shadow_bootstrap_runtime.py \
+	scripts/install_workload_sidecar_unit.py \
 	ops/native-setup-issuers/serverware-setup-native-final.conf \
 	ops/native-setup-issuers/serverware-setup-native-final.service \
 	ops/native-setup-issuers/serverware-setup-native-hardware.conf \
@@ -3963,6 +3964,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				scripts/package_native_setup_issuers_runtime.py \
 				scripts/build_native_pilot_artifacts.py \
 				scripts/export_native_shadow_bootstrap_runtime.py \
+				scripts/install_workload_sidecar_unit.py \
 				scripts/prepare_native_role_keys.py \
 				scripts/seal_native_service_tokens.py \
 				scripts/sign_native_guest_credential_delivery.py \
@@ -4821,6 +4823,14 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/native_bootstrap_client/egress/workload.rs \
 				data-plane/decision-gate-rs/src/native_bootstrap_client/egress/reservation.rs \
 				data-plane/decision-gate-rs/src/bin/serverware-native-bootstrap-client.rs \
+				data-plane/decision-gate-rs/src/bin/serverware-workload-sidecar.rs \
+				data-plane/decision-gate-rs/src/workload_sidecar/mod.rs \
+				data-plane/decision-gate-rs/src/workload_sidecar/config.rs \
+				data-plane/decision-gate-rs/src/workload_sidecar/lifetime.rs \
+				data-plane/decision-gate-rs/src/workload_sidecar/local_connect.rs \
+				data-plane/decision-gate-rs/src/workload_sidecar/server.rs \
+				data-plane/decision-gate-rs/src/workload_sidecar/upstream.rs \
+				data-plane/decision-gate-rs/src/native_verifier/ingress_service.rs \
 				data-plane/decision-gate-rs/src/bin/serverware-native-enclave-entrypoint.rs \
 				data-plane/decision-gate-rs/coder-test-runner.sh \
 				ops/systemd/serverware-launch-authority-relay.service \
@@ -4871,6 +4881,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-credential-recipient-expectations.v2.schema.json \
 				schemas/native-proxy-ingress.v2.schema.json \
 				schemas/native-proxy-ingress.v3.schema.json \
+				schemas/native-proxy-ingress.v4.schema.json \
+				schemas/native-workload-sidecar.v1.schema.json \
 				schemas/native-enrollment-assignment.v1.schema.json \
 				schemas/native-enrollment-evidence.v1.schema.json \
 				schemas/native-enrollment-bootstrap-evidence.v1.schema.json \

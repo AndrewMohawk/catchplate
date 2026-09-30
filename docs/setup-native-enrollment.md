@@ -94,9 +94,11 @@ The connected candidate-binding predecessor reads the actual protected
 The independently signed authority policy, actual native issuer bootstrap/grant,
 current protected policy, active credential, native packet and target private-key
 owner must already exist. Provisioning and runtime acceptance are not performed
-by this source change. A real authenticated host CA-installation readback
-producer is still required: `nativeCaInstallationReceipt/v1` remains a local
-diagnostic, and the local `--admit-native-workload-certificate` path is not a
-remote installation receipt. Actual native canary/runtime/hardware progression
+by this source change. The separate [authenticated host CA readback flow](setup-native-ca-installation.md)
+now connects a purpose-signed observation from the actual installer.
+`nativeCaInstallationReceipt/v1` remains a local diagnostic, and the local
+`--admit-native-workload-certificate` path is not a remote installation receipt.
+Trusted-host-local readback does not establish measured host assurance.
+Actual native canary/runtime/hardware progression
 and the independent final Setup receipt authority remain separate unfinished
 integrations. No build, parser, test, browser, signing or runtime action was run.

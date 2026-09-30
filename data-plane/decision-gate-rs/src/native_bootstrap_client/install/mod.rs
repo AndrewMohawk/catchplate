@@ -9,8 +9,10 @@ mod destination;
 mod host;
 mod reservation;
 mod execution;
+mod observation;
 
 pub(super) use execution::{bind_for_execution, InstalledCa, PreparedInstallation};
+pub(super) use observation::{Inputs as ObservationInputs, Prepared as Observation};
 
 use super::{config, ensure, native_verifier, originals::{ArtifactV1, HeldOriginal},
     transport::Connection, OriginalClock};
@@ -152,7 +154,8 @@ pub(super) fn prepare(inputs: Inputs, clock: &OriginalClock,
 
 pub(super) fn execute(pending: Pending, mut proof: native_verifier::BootstrapInstallationOriginals,
     connection: Connection, clock: Arc<OriginalClock>, originals: Vec<HeldOriginal>,
-    client_private: HeldOriginal, configuration_raw: &[u8], mut capture: serde_json::Value)
+    client_private: HeldOriginal, configuration_raw: &[u8], mut capture: serde_json::Value,
+    mut observation: Option<Observation>)
     -> Result<(), String> {
     clock.check()?;
     connection.check()?;
@@ -160,11 +163,13 @@ pub(super) fn execute(pending: Pending, mut proof: native_verifier::BootstrapIns
     // Reserve output space before an irreversible claim. This internal capture
     // is output-only and is never consulted for authority or installation facts.
     let capture_bytes = serde_json::to_vec(&capture).map_err(|_| "encode native installation capture")?;
-    ensure(capture_bytes.len() < super::MAX_CAPTURE_BYTES - 8192,
+    let output_reserve = 8192 + if observation.is_some() { 32768 } else { 0 };
+    ensure(capture_bytes.len() < super::MAX_CAPTURE_BYTES - output_reserve,
         "native installation capture exceeds its reserved output bound")?;
     let installation_output = capture.get_mut("installation")
         .ok_or("native installation capture output field is absent")?;
     let grant = pending.authorization;
+    if let Some(owner) = observation.as_mut() { owner.bind(&mut proof, &grant)?; }
     let setup = proof.setup();
     ensure(proof.setup_sha256() == grant.setup_sha256
         && proof.delegation_sha256() == grant.delegation_sha256
@@ -238,7 +243,7 @@ pub(super) fn execute(pending: Pending, mut proof: native_verifier::BootstrapIns
                 "native installation final CA readback differs")?;
             reservation.check()?;
             guard.check()?;
-            reservation.complete()?;
+            reservation = reservation.complete_retained()?;
             "installed"
         }
         reservation::ClaimState::AlreadyComplete => {
@@ -254,13 +259,17 @@ pub(super) fn execute(pending: Pending, mut proof: native_verifier::BootstrapIns
         "resultScope":"local-authorized-native-ca-installation-only", "okForAction":false,
         "status":status, "authorizationSha256":digest_text(&grant.original_sha256),
         "operationSha256":digest_text(&association_sha256), "reservationSha256":digest_text(&reservation_id),
-        "setupSha256":digest_text(&grant.setup_sha256), "capabilityId":grant.ca_install.capability_id,
+        "setupSha256":digest_text(&grant.setup_sha256), "capabilityId":&grant.ca_install.capability_id,
         "runtimeCaCertificateSha256":digest_text(&grant.runtime_ca_certificate_sha256),
         "destinationPath":destination_spec.destination});
     let receipt = serde_json::to_vec(&result).map_err(|_| "encode native installation local receipt")?;
     ensure(receipt.len() < 8192 && !receipt.contains(&b'\n') && !receipt.contains(&b'\r'),
         "native installation local receipt exceeds its bound")?;
     *installation_output = result;
+    if let Some(owner) = observation.as_mut() {
+        let original = owner.finish(&grant, &guard, &mut destination, &reservation, &association_sha256, &reservation_id)?;
+        capture["setupInstallationObservationOriginal"] = serde_json::Value::String(original);
+    }
     let mut output = serde_json::to_vec(&capture).map_err(|_| "encode native installation capture")?;
     ensure(output.len() < super::MAX_CAPTURE_BYTES
         && !output.contains(&b'\n') && !output.contains(&b'\r'),
@@ -270,12 +279,14 @@ pub(super) fn execute(pending: Pending, mut proof: native_verifier::BootstrapIns
     let stdout = std::io::stdout();
     let mut stdout = stdout.lock();
     for chunk in output.chunks(16 * 1024) {
+        if let Some(owner) = observation.as_mut() { owner.check()?; }
         destination.check()?;
         guard.check()?;
         stdout.write_all(chunk).map_err(|_| "write native installation capture")?;
         guard.check()?;
     }
     stdout.flush().map_err(|_| "flush native installation capture")?;
+    if let Some(owner) = observation.as_mut() { owner.check()?; }
     destination.check()?;
     guard.check()
 }

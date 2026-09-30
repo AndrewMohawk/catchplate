@@ -226,6 +226,11 @@ pub(super) fn run() -> Result<(), String> {
         Some(inputs) => Some(install::prepare(inputs, &clock, &mut held)?),
         None => None,
     };
+    let setup_installation_observation = match config.setup_installation_observation {
+        Some(inputs) => Some(install::Observation::open(inputs, Arc::clone(&clock),
+            held.first().ok_or("host observation configuration is absent")?)?),
+        None => None,
+    };
     let mut attachment = match config.attachment {
         Some(inputs) => Some(egress::attachment::prepare(inputs, &clock, &mut held)?),
         None => None,
@@ -435,9 +440,11 @@ pub(super) fn run() -> Result<(), String> {
             sent.setup_original(), sent.target_request_original())?;
         // This is output data only. The installation continuation retains the
         // genuine proof and original connection; the diagnostic grants nothing.
-        let capture = json!({
-            "apiVersion":"serverware.nativeBootstrapClientCapture/v2",
-            "resultScope":"local-fixed-endpoint-bootstrap-and-host-installation",
+        let mut capture = json!({
+            "apiVersion":if setup_installation_observation.is_some() { "serverware.nativeBootstrapClientCapture/v10" }
+                else { "serverware.nativeBootstrapClientCapture/v2" },
+            "resultScope":if setup_installation_observation.is_some() { "local-authenticated-setup-ca-readback" }
+                else { "local-fixed-endpoint-bootstrap-and-host-installation" },
             "okForAction":false,
             "configurationSha256":super::sha256_prefixed(&configuration_raw),
             "requestSha256":super::sha256_prefixed(&request_raw),
@@ -447,9 +454,10 @@ pub(super) fn run() -> Result<(), String> {
             "verification":json::parse(proof.diagnostic(), 4095)?,
             "installation":null,
         });
+        if setup_installation_observation.is_some() { capture["setupInstallationObservationOriginal"] = serde_json::Value::Null; }
         recheck(&mut held, &mut private_original, &clock)?;
         return install::execute(pending, proof, connection, clock, held, private_original,
-            &configuration_raw, capture);
+            &configuration_raw, capture, setup_installation_observation);
     }
     let verified = connection.verify_bootstrap(&evidence, &delegation_root, &delegation_pin,
         &setup_root, &setup_pin, &caller_issuer_der, &config.expected_caller_principal,

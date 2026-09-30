@@ -28,12 +28,17 @@ POST_PATH = "/api/agents/workload-identity/issue"
 OPTIONS_PATH = POST_PATH + "/options"
 PATHS = frozenset({POST_PATH, OPTIONS_PATH})
 from serverware import control_plane_setup_native_enrollment as native_setup
-PATHS = PATHS | native_setup.PATHS
+from serverware import control_plane_setup_native_ca as native_ca
+SETUP_PATHS = native_setup.PATHS | native_ca.PATHS
+PATHS = PATHS | SETUP_PATHS
 REQUEST_SCHEMA = "serverware.workloadIdentityIssuanceRequest/v1"
 RESPONSE_SCHEMA = "serverware.workloadIdentityIssuanceResponse/v1"
 MAX_REQUEST_BYTES = 12 * 1024 * 1024
 _SCOPE_KEY = "serverware.workload-identity-issuance.original-request"
 _CONSTRUCTION = object()
+def setup_error(path, *args, **kwargs):
+    return (native_ca.error if path in native_ca.PATHS else native_setup.error)(*args, **kwargs)
+
 _HEADERS = {"Cache-Control": "no-store", "Pragma": "no-cache",
     "X-Content-Type-Options": "nosniff"}
 _LIMITS = JsonLimits(max_bytes=MAX_REQUEST_BYTES, max_depth=8, max_object_keys=16,
@@ -218,7 +223,7 @@ class _Frame:
     def stage(self, response):
         self.context.current()
         self.context.work.charge(input_bytes=2 * len(response.body))
-        maximum = native_setup.MAX_RESPONSE if self.path in native_setup.PATHS else 128 * 1024
+        maximum = native_setup.MAX_RESPONSE if self.path in SETUP_PATHS else 128 * 1024
         if self.response is not None or len(response.body) > maximum:
             _fail()
         self.response = (response.status_code, response.body)
@@ -255,7 +260,8 @@ def _open_frame(request, size):
 
 
 async def _frame_request(request):
-    refusal = native_setup.error if request.scope.get("path") in native_setup.PATHS else error
+    refusal = (native_ca.error if request.scope.get("path") in native_ca.PATHS else
+        native_setup.error if request.scope.get("path") in native_setup.PATHS else error)
     if request.scope.get("path") not in PATHS or request.method != "POST":
         return refusal(405)
     lengths = request.headers.getlist("content-length")
@@ -267,7 +273,7 @@ async def _frame_request(request):
     if request.headers.getlist("content-type") != ["application/json"]:
         return refusal(415)
     size = int(lengths[0])
-    maximum = native_setup.MAX_HTTP if request.scope.get("path") in native_setup.PATHS else MAX_REQUEST_BYTES
+    maximum = native_setup.MAX_HTTP if request.scope.get("path") in SETUP_PATHS else MAX_REQUEST_BYTES
     if not 2 <= size <= maximum:
         return refusal(413)
     body = bytearray()
@@ -445,9 +451,23 @@ def setup_enrollment(request: Request):
     return response
 
 
+@router.post(native_ca.PREFIX + "/options")
+@router.post(native_ca.PREFIX + "/prepare")
+@router.post(native_ca.PREFIX + "/complete")
+def setup_ca_installation(request: Request):
+    frame = request.scope.get(_SCOPE_KEY)
+    if type(frame) is not _Frame:
+        return native_ca.error(400)
+    response = native_ca.run(frame, request)
+    if frame.response is None:
+        return frame.stage(response)
+    return response
+
+
 async def _send_response(scope, receive, send, response, *, before_dispatch=False, downstream_failed=False):
     frame = scope.get(_SCOPE_KEY)
-    refusal = native_setup.error if scope.get("path") in native_setup.PATHS else error
+    refusal = (native_ca.error if scope.get("path") in native_ca.PATHS else
+        native_setup.error if scope.get("path") in native_setup.PATHS else error)
     if (before_dispatch or downstream_failed or type(frame) is not _Frame
             or frame.response is None):
         # Never propagate generic exception text or an unstaged success. Failure

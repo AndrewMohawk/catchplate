@@ -80,6 +80,7 @@ SETUP_NATIVE_ENROLLMENT_SCRIPT = r"""
       const controller = new AbortController(), until = performance.now() + 30000, expires = Date.now() + 30000;
       const timer = setTimeout(() => controller.abort(), 30000);
       const operation = {actor, scope, session, role, signal: controller.signal,
+        abort() { controller.abort(); },
         current() { setupEnrollmentNeed(!controller.signal.aborted && epoch === setupEnrollmentEpoch
           && performance.now() < until && Date.now() < expires && setupEnrollmentAuth(role) === actor
           && sessionActivationAuthScope() === scope && $('setup-policy-session').value.trim() === session); },

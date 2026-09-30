@@ -370,6 +370,16 @@ impl Destination {
         }
     }
 
+    pub(super) fn observation_identity(&mut self) -> Result<serde_json::Value, String> {
+        self.installed_certificate_der_sha256()?.ok_or("native install actual destination is absent")?;
+        let original = self.current.as_ref().ok_or("native install current destination is absent")?;
+        let s = &original.stamp;
+        let result = serde_json::json!({"device":s.0,"inode":s.1,"mode":s.2 & 0o7777,"uid":s.3,"gid":s.4,
+            "size":s.6,"mtimeSeconds":s.7,"mtimeNanos":s.8,"ctimeSeconds":s.9,"ctimeNanos":s.10});
+        self.check()?;
+        Ok(result)
+    }
+
     fn publish_recovery(&self, name: &CStr, raw: &[u8], uid: u32, gid: u32, mode: u32)
         -> Result<Certificate, String> {
         self.guard.check()?;

@@ -6,6 +6,25 @@ from serverware.authority_store.v9_schema_source import authority_v9_schema_sour
 
 def metadata_base_schema_source() -> str:
     return """
+            CREATE TABLE IF NOT EXISTS setup_native_ca_installations (
+                session_id TEXT PRIMARY KEY, revision BIGINT NOT NULL, phase TEXT NOT NULL, owner_id TEXT NOT NULL,
+                enrollment_sha256 TEXT NOT NULL, installation_original TEXT NOT NULL, host_key_id TEXT NOT NULL,
+                prepared_original TEXT NOT NULL, prepared_sha256 TEXT NOT NULL UNIQUE, prepare_request_digest TEXT NOT NULL UNIQUE,
+                observation_original TEXT, observation_sha256 TEXT UNIQUE, complete_request_digest TEXT UNIQUE,
+                configuration_digest TEXT NOT NULL, created_at TEXT NOT NULL, completed_at TEXT,
+                CHECK (length(session_id) = 36 AND length(owner_id) BETWEEN 1 AND 1024),
+                CHECK (length(enrollment_sha256) = 71 AND length(host_key_id) = 71 AND length(prepared_sha256) = 71
+                    AND length(prepare_request_digest) = 71 AND length(configuration_digest) = 71),
+                CHECK (length(installation_original) BETWEEN 1 AND 43691 AND length(prepared_original) BETWEEN 2 AND 8192),
+                CHECK ((revision = 0 AND phase = 'installation_unknown' AND observation_original IS NULL AND observation_sha256 IS NULL
+                    AND complete_request_digest IS NULL AND completed_at IS NULL)
+                    OR (revision = 1 AND phase = 'ca_readback_authenticated' AND observation_original IS NOT NULL AND observation_sha256 IS NOT NULL
+                    AND complete_request_digest IS NOT NULL AND completed_at IS NOT NULL)),
+                CHECK (observation_original IS NULL OR length(observation_original) BETWEEN 2 AND 32768),
+                CHECK (observation_sha256 IS NULL OR length(observation_sha256) = 71),
+                CHECK (complete_request_digest IS NULL OR length(complete_request_digest) = 71)
+            );
+
             CREATE TABLE IF NOT EXISTS setup_native_enrollments (
                 session_id TEXT PRIMARY KEY, revision BIGINT NOT NULL, phase TEXT NOT NULL, owner_id TEXT NOT NULL,
                 intent_original TEXT NOT NULL, intent_sha256 TEXT NOT NULL UNIQUE, approval_id TEXT NOT NULL UNIQUE,

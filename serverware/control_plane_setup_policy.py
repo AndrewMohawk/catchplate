@@ -22,7 +22,8 @@ MATERIALIZE_PATH = PREFIX + "/materialize-draft"
 INSTALLED_PATH = PREFIX + "/installed"
 NATIVE_INSTALLED_PATH = PREFIX + "/native-installed"
 NATIVE_ENROLLMENT_LOOKUP_PATH = "/api/setup/native-enrollment/lookup"
-PATHS = PATHS | {MATERIALIZE_PATH, INSTALLED_PATH, NATIVE_INSTALLED_PATH, NATIVE_ENROLLMENT_LOOKUP_PATH}
+NATIVE_CA_LOOKUP_PATH = "/api/setup/native-ca/lookup"
+PATHS = PATHS | {MATERIALIZE_PATH, INSTALLED_PATH, NATIVE_INSTALLED_PATH, NATIVE_ENROLLMENT_LOOKUP_PATH, NATIVE_CA_LOOKUP_PATH}
 MATERIALIZE_REQUEST_SCHEMA = "serverware.setupPolicyMaterializationRequest/v1"
 MATERIALIZE_DRAFT_SCHEMA = "serverware.setupPolicyMaterializationDraft/v1"
 INSTALLED_SCHEMA = "serverware.setupPolicyInstalledObservation/v1"
@@ -361,6 +362,12 @@ def on_request(request, raw):
     profile.require(type(raw) is bytes and 0 < len(raw) <= MAX_REQUEST
         and request.headers.get("content-length") == str(len(raw)))
     path = request.url.path
+    if path == NATIVE_CA_LOOKUP_PATH:
+        from serverware import control_plane_setup_native_ca
+        try:
+            return control_plane_setup_native_ca.lookup(request, raw)
+        except Exception:
+            return control_plane_setup_native_ca.error(409)
     if path == NATIVE_ENROLLMENT_LOOKUP_PATH:
         from serverware import control_plane_setup_native_enrollment
         try:

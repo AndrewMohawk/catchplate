@@ -324,6 +324,14 @@ impl Reservation {
         Ok(())
     }
 
+    pub(super) fn require_completed(&self) -> Result<(), String> {
+        self.check()?;
+        ensure(self.state == State::Completed, "native install observation requires actual durable completion")?;
+        self.exact(Stage::Claim)?;
+        self.exact(Stage::Complete)?;
+        self.check()
+    }
+
     pub(super) fn claim(&mut self) -> Result<ClaimState, String> {
         self.check()?;
         ensure(self.state == State::Reserved, "native install reservation was already used")?;

@@ -61,14 +61,9 @@ def sign_persistence_delivery(*, configuration_raw, configuration_sha256, payloa
         names=("persistence-listener", "persistence-journal", "persistence-lock"))
 
 
-def _sign_delivery(*, configuration_raw, configuration_sha256, payload_raw, signing_key,
-                   activation, boot, startup_deadline, now, names):
-    """Sign exact approved bytes; observed activation arguments are data only.
-
-    The actual retained activation owner supplies these observations. Native
-    admission independently verifies every original descriptor and credential.
-    This function by itself does not assert that any runtime owner exists.
-    """
+def _validate_delivery_payload(*, configuration_raw, configuration_sha256, payload_raw,
+                               activation, boot, startup_deadline, now, names):
+    """Shared public checks; only retained callers supply actual resource facts."""
     p.require(names in (("retrieval-listener", "retrieval-objects"), ("activation-channel", "activation-journal"),
         ("persistence-listener", "persistence-journal", "persistence-lock")))
     cold = configuration(configuration_raw, configuration_sha256)
@@ -112,7 +107,51 @@ def _sign_delivery(*, configuration_raw, configuration_sha256, payload_raw, sign
                 and assigned["publicKeyBase64url"] != cold["authority"]["publicKeyBase64url"]
                 and assigned["keyId"] != cold["authority"]["keyId"])
             Ed25519PublicKey.from_public_bytes(public)
-    p.require(total <= 16 * 1024 * 1024 and isinstance(signing_key, Ed25519PrivateKey))
+    p.require(total <= 16 * 1024 * 1024)
+    return cold, payload
+
+
+def _delivery_guest(payload, raw):
+    guest = {name: payload[name] for name in p.GUEST_FIELDS if name not in
+        {"deliverySha256", "runtimeConfigurationSha256"}}
+    guest.update(deliverySha256=p.sha(raw), runtimeConfigurationSha256=payload["runtimeConfig"]["sha256"])
+    p.guest(guest)
+    return guest
+
+
+def verify_persistence_delivery(*, configuration_raw, configuration_sha256, signed_delivery_original,
+                                activation, boot, startup_deadline, now):
+    """Verify an independent original for the fixed held-lock v2 inventory.
+
+    Never re-sign or re-encode the returned original. This public validator is
+    not a resource owner; PersistenceInputs must bracket it with its live checks.
+    """
+    signed = p.fields(p.document(signed_delivery_original, MAX_DELIVERY),
+        ("apiVersion", "payload", "signatureBase64url"))
+    p.require(signed["apiVersion"] == "serverware.policyCustodyGuestDelivery/v1")
+    payload_raw = p.canonical(signed["payload"])
+    cold, payload = _validate_delivery_payload(configuration_raw=configuration_raw,
+        configuration_sha256=configuration_sha256, payload_raw=payload_raw,
+        activation=activation, boot=boot, startup_deadline=startup_deadline, now=now,
+        names=("persistence-listener", "persistence-journal", "persistence-lock"))
+    public = Ed25519PublicKey.from_public_bytes(p.decoded(cold["authority"]["publicKeyBase64url"], size=32))
+    public.verify(p.decoded(signed["signatureBase64url"], size=64), DOMAIN + payload_raw)
+    _delivery_guest(payload, signed_delivery_original)
+    return signed_delivery_original
+
+
+def _sign_delivery(*, configuration_raw, configuration_sha256, payload_raw, signing_key,
+                   activation, boot, startup_deadline, now, names):
+    """Sign exact approved bytes; observed activation arguments are data only.
+
+    The actual retained activation owner supplies these observations. Native
+    admission independently verifies every original descriptor and credential.
+    This function by itself does not assert that any runtime owner exists.
+    """
+    cold, payload = _validate_delivery_payload(configuration_raw=configuration_raw,
+        configuration_sha256=configuration_sha256, payload_raw=payload_raw,
+        activation=activation, boot=boot, startup_deadline=startup_deadline, now=now, names=names)
+    p.require(isinstance(signing_key, Ed25519PrivateKey))
     actual = signing_key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
     p.require(p.encoded(actual) == cold["authority"]["publicKeyBase64url"])
     signature = signing_key.sign(DOMAIN + payload_raw)
@@ -120,8 +159,5 @@ def _sign_delivery(*, configuration_raw, configuration_sha256, payload_raw, sign
     result = p.canonical({"apiVersion": "serverware.policyCustodyGuestDelivery/v1",
         "payload": payload, "signatureBase64url": p.encoded(signature)})
     p.require(len(result) <= MAX_DELIVERY)
-    guest = {name: payload[name] for name in p.GUEST_FIELDS if name not in
-        {"deliverySha256", "runtimeConfigurationSha256"}}
-    guest.update(deliverySha256=p.sha(result), runtimeConfigurationSha256=payload["runtimeConfig"]["sha256"])
-    p.guest(guest)
+    _delivery_guest(payload, result)
     return result

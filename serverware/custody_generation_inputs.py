@@ -152,13 +152,27 @@ class GenerationInputs:
         return {name: o.directory_identity(fd) for name, fd in self._roles[role]["descriptors"]
             if name not in {"listener", "generation-grant", "dispatch-grant", "spool-head-grant", "spool-current-grant", "active-effect-cleanup-grant"}}
 
-    def sign_delivery(self, role, *, approved_payload_original, delivery_authority):
+    def _claim_delivery(self, role):
         self.check(); p.require(role in g.ROLES and not self._taken)
         item = self._roles[role]
         p.require(not item["delivery_attempt"]); item["delivery_attempt"] = True
-        payload = g.document(approved_payload_original, 65536)
+        return item
+
+    def _delivery_scope(self, payload):
         p.require(payload["invocationId"] == self._launcher._invocation
             and p.ns(payload["issuedAtBoottimeNs"]) >= self._launcher._issued)
+
+    def _profile(self, role):
+        # Only actual allocated resources select a successor. Supplied wire
+        # profiles cannot add dispatch/spool/effects to an older live owner.
+        spool = role in self._spools
+        return dict(commitment=role in self._commitments, spool=spool,
+                    effects=self._effects and spool)
+
+    def sign_delivery(self, role, *, approved_payload_original, delivery_authority):
+        item = self._claim_delivery(role)
+        payload = g.document(approved_payload_original, 65536)
+        self._delivery_scope(payload)
         if role in self._spools:
             from serverware.custody_spool_inputs import sign_delivery, sign_effects_delivery
             sign = sign_effects_delivery if self._effects else sign_delivery
@@ -170,6 +184,28 @@ class GenerationInputs:
         signed, guest = sign(cold_raw=item["configuration"].read(), cold_sha=item["configuration"].sha,
             role=role, payload_raw=approved_payload_original, activation=item["activation"], boot=self._launcher._boot,
             startup=self._launcher._startup, lifetime=self._launcher._lifetime, now=o.clock(), signing_key=delivery_authority)
+        return self._retain_delivery(role, payload, signed, guest)
+
+    def admit_delivery(self, role, *, signed_delivery_original):
+        """Consume one independently signed C9 original on these actual FDs.
+
+        No authority private key, caller-supplied observation, retry, or new
+        scope is accepted. Failed admission consumes the same signing fence.
+        """
+        item = self._claim_delivery(role)
+        signed, guest = g._admit_delivery(signed_raw=signed_delivery_original,
+            cold_raw=item["configuration"].read(), cold_sha=item["configuration"].sha,
+            role=role, activation=item["activation"], boot=self._launcher._boot,
+            startup=self._launcher._startup, lifetime=self._launcher._lifetime,
+            now=o.clock(), **self._profile(role))
+        payload = g.document(signed, 65536)["payload"]
+        self._delivery_scope(payload)
+        return self._retain_delivery(role, payload, signed, guest)
+
+    def _retain_delivery(self, role, payload, signed, guest):
+        self.check()
+        item = self._roles[role]
+        p.require(item["delivery_attempt"] and item["delivery"] is None and not self._taken)
         runtime_pin = payload["runtimeConfig"]
         runtime = o.Original(runtime_pin["path"], g.MAX_BYTES, sha=runtime_pin["sha256"])
         self._originals.append(runtime)
@@ -220,11 +256,15 @@ class GenerationInputs:
             runtime_raw=runtime_raw, history_raw=history_raw)
         self.check(); return signed
 
-    def seal_grant(self, role, *, approved_grant_payload_original, history_root_authority):
+    def _claim_grant(self, role):
         self.check(); p.require(role in g.ROLES and not self._taken)
         item = self._roles[role]
         p.require(item["delivery"] is not None and not item["grant_attempt"])
         item["grant_attempt"] = True
+        return item
+
+    def seal_grant(self, role, *, approved_grant_payload_original, history_root_authority):
+        item = self._claim_grant(role)
         public = history_root_authority.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
         p.require(p.encoded(public) != item["cold"]["authority"]["publicKeyBase64url"])
         if role in self._spools:
@@ -238,6 +278,22 @@ class GenerationInputs:
         raw = sign(payload_raw=approved_grant_payload_original, guest=item["guest"],
             runtime_raw=item["runtime_raw"], history_raw=item["history_raw"], delivery_raw=item["delivery_raw"],
             signing_key=history_root_authority, now=o.clock())
+        return self._seal_grant_original(role, raw)
+
+    def admit_grant(self, role, *, signed_grant_original):
+        """Verify then seal the original independent history-root signature."""
+        item = self._claim_grant(role)
+        raw, public = g._admit_grant(signed_raw=signed_grant_original, guest=item["guest"],
+            runtime_raw=item["runtime_raw"], history_raw=item["history_raw"],
+            delivery_raw=item["delivery_raw"], now=o.clock(), **self._profile(role))
+        encoded = p.encoded(public.public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw))
+        p.require(encoded != item["cold"]["authority"]["publicKeyBase64url"])
+        return self._seal_grant_original(role, raw)
+
+    def _seal_grant_original(self, role, raw):
+        self.check()
+        item = self._roles[role]
+        p.require(item["grant_attempt"] and item["grant_raw"] is None and not self._taken)
         offset = 0
         while offset < len(raw):
             count = os.pwrite(item["grant"], raw[offset:], offset); p.require(count > 0); offset += count

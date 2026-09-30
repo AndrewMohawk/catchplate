@@ -5,6 +5,12 @@ launch owners. It is a privileged, same-process operator API, not a JSON
 configuration loader, a credential source or a readiness command. This source
 connection still requires the consolidated build and connected pilot acceptance.
 
+The [signed-input receiving APIs](native-pilot-signed-inputs.md) now let its real
+ordinary/native resource and driver owners admit independent signatures without
+loading authority private keys into the launcher. A complete executable
+conductor and the remaining fixed resource factories are still required; this
+class alone is not an operator launch command.
+
 The selected topology is one measured `DriverBootstrap` bridge, ten native
 endpoint children and five ordinary custody services. Configuration/v7 selects
 the endpoint-only cohort; the existing fixed-eleven configuration/v6 is unchanged.

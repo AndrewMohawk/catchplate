@@ -9213,7 +9213,7 @@ build-production-images: verify-production-dependency-cache
 	python3 scripts/build_production_images.py --platform "$(PRODUCTION_PLATFORM)" --out "$(PRODUCTION_IMAGES_BUILD_FILE)"
 
 # Build/preparation only: fixed native effects profiles, no signing or launch.
-.PHONY: prepare-native-pilot-build build-native-pilot-artifacts
+.PHONY: prepare-native-pilot-build build-native-pilot-operator-tools build-native-pilot-artifacts
 NATIVE_PILOT_OUTPUT ?=
 NATIVE_PILOT_PREPARATION ?=
 NATIVE_PILOT_PUBLIC_INPUTS ?=
@@ -9222,6 +9222,10 @@ NATIVE_PILOT_PUBLIC_INPUTS_SHA256 ?=
 prepare-native-pilot-build:
 	@test -n "$(NATIVE_PILOT_OUTPUT)" || { echo "NATIVE_PILOT_OUTPUT must name a new absolute directory on the build filesystem" >&2; exit 2; }
 	python3 scripts/build_native_pilot_artifacts.py prepare --out "$(NATIVE_PILOT_OUTPUT)"
+
+build-native-pilot-operator-tools:
+	@test -n "$(NATIVE_PILOT_OUTPUT)" || { echo "NATIVE_PILOT_OUTPUT must name a new absolute directory on the build filesystem" >&2; exit 2; }
+	python3 -B scripts/build_native_pilot_artifacts.py operator-tools --out "$(NATIVE_PILOT_OUTPUT)"
 
 build-native-pilot-artifacts:
 	@test -n "$(NATIVE_PILOT_OUTPUT)" && test -n "$(NATIVE_PILOT_PREPARATION)" && test -n "$(NATIVE_PILOT_PUBLIC_INPUTS)" && test -n "$(NATIVE_PILOT_PUBLIC_INPUTS_SHA256)" || { echo "all four NATIVE_PILOT_* paths/pins are required; prepare first and obtain independent public guest inputs" >&2; exit 2; }

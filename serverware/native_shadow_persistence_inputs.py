@@ -241,6 +241,25 @@ class PersistenceInputs:
         p.require(self._signed is not None)
         return p.canonical(self._guest)  # Public facts for independent genesis/admission approval, not permission.
 
+    def admit_delivery(self, *, signed_delivery_original):
+        """Retain independently signed C9 bytes against this actual FD owner.
+
+        Shares the signing path's one-attempt fence. Failure never resets it or
+        replaces the already created listener, journal, lock or startup window.
+        """
+        self.check()
+        p.require(not self._delivery_attempted and not self._taken)
+        self._delivery_attempted = True
+        signed = delivery.verify_persistence_delivery(configuration_raw=self._configuration_raw,
+            configuration_sha256=self._configuration_sha, signed_delivery_original=signed_delivery_original,
+            activation=self.activation(), boot=self._boot, startup_deadline=self._deadline, now=_clock())
+        payload = p.document(signed, delivery.MAX_DELIVERY)["payload"]
+        p.require(p.ns(payload["lifetimeDeadlineBoottimeNs"]) == self._cohort.lifetime_deadline_boottime_ns())
+        self._guest = delivery._delivery_guest(payload, signed)
+        self.check()
+        self._signed = signed
+        return signed
+
     def install_genesis(self, *, genesis_original, genesis_sha256, journal_original, journal_sha256):
         self.check()
         p.require(self._signed is not None and not self._genesis_attempted and not self._taken)
@@ -311,6 +330,32 @@ class PersistenceInputs:
             for fd in owned:
                 os.close(fd)
             raise
+
+    def admit_service_grant(self, *, signed_grant_original, configuration_original, configuration_sha256):
+        """Verify independent operational authority against retained genesis.
+
+        No private authority key or supplied current time is accepted. The
+        existing transfer path still requires both exact original digests.
+        """
+        self.check()
+        p.require(self._genesis is not None and not self._grant_attempted and not self._taken)
+        self._grant_attempted = True
+        cold = delivery.configuration(self._configuration_raw, self._configuration_sha)
+        observed = time.time_ns()
+        raw, supervisor = artifacts.verify_service_grant(signed_grant_original=signed_grant_original,
+            configuration_original=configuration_original, configuration_sha256=configuration_sha256,
+            scope_original=self._scope_raw, scope_sha256=self._scope_sha,
+            peer_original=self._peer_raw, peer_sha256=self._peer_sha, guest=self._guest,
+            journal_original=self._journal_raw, journal_sha256=self._journal_sha, now=observed)
+        p.require(supervisor["publicKeyBase64url"] != cold["authority"]["publicKeyBase64url"]
+            and supervisor["keyId"] != cold["authority"]["keyId"])
+        self.check()
+        now = time.time_ns()
+        p.require(now >= observed)
+        payload = p.document(raw, 65536)["payload"]
+        p.freshness(payload["issuedAtUnixNanos"], payload["expiresAtUnixNanos"], now)
+        self._grant = raw
+        return raw
 
     def close(self):
         if self._closed:

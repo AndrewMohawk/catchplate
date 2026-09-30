@@ -80,7 +80,7 @@ def sign_delivery(*, cold_raw, cold_sha, role, payload_raw, activation, boot, st
         activation=activation,boot=boot,startup=startup,lifetime=lifetime,now=now,signing_key=signing_key,commitment=False)
 
 
-def _sign_delivery(*, cold_raw, cold_sha, role, payload_raw, activation, boot, startup, lifetime, now, signing_key, commitment, spool=False, effects=False):
+def _delivery_values(*, cold_raw, cold_sha, role, payload_raw, activation, boot, startup, lifetime, now, commitment, spool=False, effects=False):
     cold = configuration(cold_raw, cold_sha, role)
     p.require(type(commitment) is bool and (not commitment or role in (ROLES[0],ROLES[3])))
     names = BUSINESS[role] + ("generation-journal", "generation-grant")
@@ -96,7 +96,7 @@ def _sign_delivery(*, cold_raw, cold_sha, role, payload_raw, activation, boot, s
     payload = p.fields(document(payload_raw, 65536), c9.FIELDS)
     p.require(payload["configurationSha256"] == cold_sha and payload["authorityKeyId"] == cold["authority"]["keyId"]
         and all(payload[field] == cold[field] for field in ("serviceRole", "uid", "gid"))
-        and payload["activation"] == activation
+        and canonical(payload["activation"]) == canonical(activation)
         and tuple(item["name"] for item in activation) == names)
     for index, entry in enumerate(activation, 6):
         p.fields(entry, ("name", "fd", "device", "inode", "mode", "uid", "gid"))
@@ -124,7 +124,22 @@ def _sign_delivery(*, cold_raw, cold_sha, role, payload_raw, activation, boot, s
             p.require(credential["length"] == 32 and raw != bytes(32)
                 and key["publicKeyBase64url"] != cold["authority"]["publicKeyBase64url"]
                 and key["keyId"] != cold["authority"]["keyId"])
-    p.require(total <= 16 * 1024 * 1024 and isinstance(signing_key, Ed25519PrivateKey))
+    p.require(total <= 16 * 1024 * 1024)
+    return cold, payload
+
+
+def _delivery_guest(raw, payload):
+    guest = {field: payload[field] for field in p.GUEST_FIELDS if field not in {"deliverySha256", "runtimeConfigurationSha256"}}
+    guest.update(deliverySha256=p.sha(raw), runtimeConfigurationSha256=payload["runtimeConfig"]["sha256"])
+    p.guest(guest)
+    return guest
+
+
+def _sign_delivery(*, cold_raw, cold_sha, role, payload_raw, activation, boot, startup, lifetime, now, signing_key, commitment, spool=False, effects=False):
+    cold, payload = _delivery_values(cold_raw=cold_raw, cold_sha=cold_sha, role=role,
+        payload_raw=payload_raw, activation=activation, boot=boot, startup=startup,
+        lifetime=lifetime, now=now, commitment=commitment, spool=spool, effects=effects)
+    p.require(isinstance(signing_key, Ed25519PrivateKey))
     public = signing_key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
     p.require(p.encoded(public) == cold["authority"]["publicKeyBase64url"])
     signature = signing_key.sign(c9.DOMAIN + payload_raw)
@@ -132,10 +147,25 @@ def _sign_delivery(*, cold_raw, cold_sha, role, payload_raw, activation, boot, s
     result = canonical({"apiVersion": "serverware.policyCustodyGuestDelivery/v1", "payload": payload,
         "signatureBase64url": p.encoded(signature)})
     p.require(len(result) <= 65536)
-    guest = {field: payload[field] for field in p.GUEST_FIELDS if field not in {"deliverySha256", "runtimeConfigurationSha256"}}
-    guest.update(deliverySha256=p.sha(result), runtimeConfigurationSha256=payload["runtimeConfig"]["sha256"])
-    p.guest(guest)
-    return result, guest
+    return result, _delivery_guest(result, payload)
+
+
+def _admit_delivery(*, signed_raw, cold_raw, cold_sha, role, activation, boot,
+                    startup, lifetime, now, commitment, spool=False, effects=False):
+    """Verify an exact external signature against retained cold/resource scope.
+
+    Profile flags are chosen by the real resource owner, never the envelope.
+    No signer, regenerated signature or serialized guest is accepted as proof.
+    """
+    envelope = p.fields(document(signed_raw, 65536), ("apiVersion", "payload", "signatureBase64url"))
+    p.require(envelope["apiVersion"] == "serverware.policyCustodyGuestDelivery/v1")
+    payload_raw = canonical(envelope["payload"])
+    cold, payload = _delivery_values(cold_raw=cold_raw, cold_sha=cold_sha, role=role,
+        payload_raw=payload_raw, activation=activation, boot=boot, startup=startup,
+        lifetime=lifetime, now=now, commitment=commitment, spool=spool, effects=effects)
+    public = Ed25519PublicKey.from_public_bytes(p.decoded(cold["authority"]["publicKeyBase64url"], size=32))
+    public.verify(p.decoded(envelope["signatureBase64url"], size=64), c9.DOMAIN + payload_raw)
+    return signed_raw, _delivery_guest(signed_raw, payload)
 
 
 def sign_grant(*, payload_raw, guest, runtime_raw, history_raw, delivery_raw, signing_key, now):
@@ -143,7 +173,7 @@ def sign_grant(*, payload_raw, guest, runtime_raw, history_raw, delivery_raw, si
         delivery_raw=delivery_raw,signing_key=signing_key,now=now,commitment=False)
 
 
-def _sign_grant(*, payload_raw, guest, runtime_raw, history_raw, delivery_raw, signing_key, now, commitment, spool=False, effects=False):
+def _grant_values(*, payload_raw, guest, runtime_raw, history_raw, delivery_raw, now, commitment, spool=False, effects=False):
     payload = p.fields(document(payload_raw, 65536), GRANT)
     runtime = document(runtime_raw, MAX_BYTES)["runtime"]
     history = p.fields(document(history_raw, MAX_BYTES), HISTORY)
@@ -154,7 +184,7 @@ def _sign_grant(*, payload_raw, guest, runtime_raw, history_raw, delivery_raw, s
     p.require(type(commitment) is bool and (not commitment or role in (ROLES[0],ROLES[3])))
     p.require(role in ROLES and payload["apiVersion"] == "serverware.custodyServiceGenerationGrant/v1"
         and payload["purpose"] == "cold-service-generation-admission" and payload["serviceRole"] == role
-        and payload["guest"] == guest and p.sha(delivery_raw) == guest["deliverySha256"]
+        and canonical(payload["guest"]) == canonical(guest) and p.sha(delivery_raw) == guest["deliverySha256"]
         and p.sha(runtime_raw) == guest["runtimeConfigurationSha256"] == payload["runtimeConfigurationSha256"])
     p.require(type(spool) is bool and type(effects) is bool
         and (not effects or spool and role in (ROLES[0], ROLES[1], ROLES[3])
@@ -180,11 +210,14 @@ def _sign_grant(*, payload_raw, guest, runtime_raw, history_raw, delivery_raw, s
     p.require(len(selected) == 1 and selected[0]["original"]["sha256"] == p.sha(history_raw)
         and selected[0]["length"] == len(history_raw) and selected[0]["signing"] is None)
     root = p.fields(history["rootAuthority"], ("keyId", "keySpkiSha256", "publicKeySpkiBase64"))
-    p.require(isinstance(signing_key, Ed25519PrivateKey))
-    spki = signing_key.public_key().public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
-    p.require(p.encoded(spki) == root["publicKeySpkiBase64"] and p.sha(spki) == root["keySpkiSha256"]
+    spki = p.decoded(root["publicKeySpkiBase64"], size=44)
+    public = serialization.load_der_public_key(spki)
+    p.require(isinstance(public, Ed25519PublicKey)
+        and public.public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw) != bytes(32)
+        and public.public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo) == spki
+        and p.sha(spki) == root["keySpkiSha256"]
         == runtime["authorityHistoryRootKeySpkiSha256"] and p.digest(root["keyId"]) == runtime["authorityHistoryRootKeyId"])
-    p.require(p.encoded(signing_key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw))
+    p.require(p.encoded(public.public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw))
         not in [entry["signing"]["publicKeyBase64url"] for entry in delivery["credentials"] if entry["signing"] is not None])
     for field in SCOPE:
         value = scope[field]
@@ -199,9 +232,39 @@ def _sign_grant(*, payload_raw, guest, runtime_raw, history_raw, delivery_raw, s
     issued = p.integer(payload["issuedAtBoottimeNanos"], maximum=(1 << 64) - 1)
     expires = p.integer(payload["expiresAtBoottimeNanos"], maximum=(1 << 64) - 1)
     p.require(p.ns(guest["issuedAtBoottimeNs"]) <= issued <= now < expires <= p.ns(guest["lifetimeDeadlineBoottimeNs"]))
-    message = b"serverware-signature-v1\0" + len(DOMAIN).to_bytes(8, "big") + DOMAIN + len(payload_raw).to_bytes(8, "big") + payload_raw
+    return payload, public
+
+
+def _grant_message(payload_raw):
+    return b"serverware-signature-v1\0" + len(DOMAIN).to_bytes(8, "big") + DOMAIN + len(payload_raw).to_bytes(8, "big") + payload_raw
+
+
+def _sign_grant(*, payload_raw, guest, runtime_raw, history_raw, delivery_raw, signing_key, now, commitment, spool=False, effects=False):
+    payload, public = _grant_values(payload_raw=payload_raw, guest=guest, runtime_raw=runtime_raw,
+        history_raw=history_raw, delivery_raw=delivery_raw, now=now,
+        commitment=commitment, spool=spool, effects=effects)
+    p.require(isinstance(signing_key, Ed25519PrivateKey)
+        and signing_key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+        == public.public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw))
+    message = _grant_message(payload_raw)
     signature = signing_key.sign(message)
     signing_key.public_key().verify(signature, message)
     raw = canonical({"payload": payload, "signatureBase64url": p.encoded(signature)})
     p.require(len(raw) <= 65536)
     return raw
+
+
+def _admit_grant(*, signed_raw, guest, runtime_raw, history_raw, delivery_raw,
+                 now, commitment, spool=False, effects=False):
+    """Authenticate an external original with the already retained history root.
+
+    This is the same bounded preparation check as the signing producer. Full
+    history/current-state admission remains with the actual final-role service.
+    """
+    envelope = p.fields(document(signed_raw, 65536), ("payload", "signatureBase64url"))
+    payload_raw = canonical(envelope["payload"])
+    _, public = _grant_values(payload_raw=payload_raw, guest=guest, runtime_raw=runtime_raw,
+        history_raw=history_raw, delivery_raw=delivery_raw, now=now,
+        commitment=commitment, spool=spool, effects=effects)
+    public.verify(p.decoded(envelope["signatureBase64url"], size=64), _grant_message(payload_raw))
+    return signed_raw, public

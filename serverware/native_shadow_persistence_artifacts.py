@@ -33,14 +33,10 @@ def fresh_originals(*, genesis_original, genesis_sha256, journal_original, journ
     return journal
 
 
-def sign_service_grant(*, configuration_original, configuration_sha256, scope_original, scope_sha256,
-                       peer_original, peer_sha256, guest, journal_original, journal_sha256,
-                       permissions, issued_at, expires_at, now, signing_key):
-    """The existing independent supervisor explicitly authorizes Store/Verify.
-
-    The grant is not inferred from key possession, from the C9 delivery signer,
-    from Retrieval permission, or from a local journal's existence.
-    """
+def _service_grant_payload(*, configuration_original, configuration_sha256, scope_original, scope_sha256,
+                          peer_original, peer_sha256, guest, journal_original, journal_sha256,
+                          permissions, issued_at, expires_at, now):
+    """One fixed public validation recipe shared by signing and receiving."""
     p.require(type(configuration_original) is bytes and 1 <= len(configuration_original) <= p.MAX_CONFIG
         and type(scope_original) is bytes and 1 <= len(scope_original) <= 16384
         and type(peer_original) is bytes and 1 <= len(peer_original) <= 4096
@@ -74,9 +70,6 @@ def sign_service_grant(*, configuration_original, configuration_sha256, scope_or
     p.require(expires_at <= min(configuration[name]["payload"]["expiresAtUnixNanos"]
         for name in ("authorization", "admissionAuthorization")))
     supervisor = keys[p.ROLES.index("custody-supervisor-capability")]
-    p.require(isinstance(signing_key, Ed25519PrivateKey))
-    public = signing_key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
-    p.require(p.encoded(public) == supervisor["publicKeyBase64url"])
     checkpoint = configuration["trustCheckpoint"]
     payload = {"apiVersion": "serverware.nativeShadowPersistenceServiceAssignment/v1",
         "purpose": "native-shadow-receipt-persistence", "permissions": list(permissions), "guest": guest,
@@ -87,6 +80,45 @@ def sign_service_grant(*, configuration_original, configuration_sha256, scope_or
         "revocationRootSha256": checkpoint["revocationRootSha256"], "issuedAtUnixNanos": issued_at,
         "expiresAtUnixNanos": expires_at, "signingKeyId": supervisor["keyId"],
         "signingKeySpkiSha256": supervisor["keySpkiSha256"]}
+    return payload, supervisor
+
+
+def verify_service_grant(*, signed_grant_original, configuration_original, configuration_sha256,
+                         scope_original, scope_sha256, peer_original, peer_sha256, guest,
+                         journal_original, journal_sha256, now):
+    """Admit exact independent Store/Verify bytes, not a local success claim."""
+    signed = p.fields(p.document(signed_grant_original, 65536), ("payload", "signature"))
+    supplied = signed["payload"]
+    p.require(type(supplied) is dict)
+    payload, supervisor = _service_grant_payload(configuration_original=configuration_original,
+        configuration_sha256=configuration_sha256, scope_original=scope_original, scope_sha256=scope_sha256,
+        peer_original=peer_original, peer_sha256=peer_sha256, guest=guest,
+        journal_original=journal_original, journal_sha256=journal_sha256,
+        permissions=supplied["permissions"], issued_at=supplied["issuedAtUnixNanos"],
+        expires_at=supplied["expiresAtUnixNanos"], now=now)
+    # Canonical bytes also preserve JSON integer/bool distinctions; ordinary
+    # Python mapping equality alone would equate 1 and true in nested originals.
+    p.require(p.canonical(supplied) == p.canonical(payload))
+    p.public_key(supervisor).verify(p.decoded(signed["signature"], size=64), p.preimage(GRANT_DOMAIN, payload))
+    return signed_grant_original, supervisor
+
+
+def sign_service_grant(*, configuration_original, configuration_sha256, scope_original, scope_sha256,
+                       peer_original, peer_sha256, guest, journal_original, journal_sha256,
+                       permissions, issued_at, expires_at, now, signing_key):
+    """The existing independent supervisor explicitly authorizes Store/Verify.
+
+    The grant is not inferred from key possession, from the C9 delivery signer,
+    from Retrieval permission, or from a local journal's existence.
+    """
+    payload, supervisor = _service_grant_payload(configuration_original=configuration_original,
+        configuration_sha256=configuration_sha256, scope_original=scope_original, scope_sha256=scope_sha256,
+        peer_original=peer_original, peer_sha256=peer_sha256, guest=guest,
+        journal_original=journal_original, journal_sha256=journal_sha256,
+        permissions=permissions, issued_at=issued_at, expires_at=expires_at, now=now)
+    p.require(isinstance(signing_key, Ed25519PrivateKey))
+    public = signing_key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+    p.require(p.encoded(public) == supervisor["publicKeyBase64url"])
     message = p.preimage(GRANT_DOMAIN, payload)
     signature = signing_key.sign(message)
     p.public_key(supervisor).verify(signature, message)

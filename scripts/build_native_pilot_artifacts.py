@@ -45,6 +45,8 @@ NATIVE_FILES = {
     "opt/serverware/native-shadow-custody-runtime.squashfs": (0o444, 256 * 1024 * 1024),
     "usr/share/serverware/native-shadow-custody-runtime.json": (0o444, 4 * 1024 * 1024),
 }
+OPERATOR_FILE = "usr/local/bin/serverware-export-custody-seccomp"
+OPERATOR_MAX_BYTES = 64 * 1024 * 1024
 
 
 def preparation(metadata):
@@ -189,6 +191,70 @@ def native_inventory(output):
     return entries, manifest
 
 
+def operator_inventory(output):
+    root = output / "artifacts"
+    # Only the fixed export tree is admitted. Each enumeration stops at the
+    # first extra entry; this is not a recursive artifact-directory scan.
+    directories = {
+        "": {"usr"}, "usr": {"local"}, "usr/local": {"bin"},
+        "usr/local/bin": {"serverware-export-custody-seccomp"},
+    }
+    for relative, expected in directories.items():
+        directory = root / relative
+        info = directory.lstat()
+        if not stat.S_ISDIR(info.st_mode) or directory.resolve() != directory:
+            raise RuntimeError("operator artifact directory must be an actual non-symlink directory")
+        names = set()
+        with os.scandir(directory) as entries:
+            for entry in entries:
+                if entry.name not in expected or entry.name in names:
+                    raise RuntimeError("operator export contains an unexpected artifact")
+                names.add(entry.name)
+        if names != expected:
+            raise RuntimeError("operator export is missing its fixed artifact")
+    path = root / OPERATOR_FILE
+    before = path.lstat()
+    if not stat.S_ISREG(before.st_mode) or stat.S_IMODE(before.st_mode) != 0o555 or before.st_nlink != 1:
+        raise RuntimeError("operator executable type, mode or link count differs from the fixed target")
+    raw = read_original(path, OPERATOR_MAX_BYTES)
+    after = path.lstat()
+    fields = ("st_dev", "st_ino", "st_mode", "st_nlink", "st_size", "st_mtime_ns", "st_ctime_ns")
+    if any(getattr(before, key) != getattr(after, key) for key in fields):
+        raise RuntimeError("operator executable changed during inventory")
+    if (len(raw) < 64 or raw[:7] != b"\x7fELF\x02\x01\x01"
+            or int.from_bytes(raw[16:18], "little") not in (2, 3)
+            or int.from_bytes(raw[18:20], "little") != 62):
+        raise RuntimeError("operator executable is not the fixed Linux/amd64 ELF artifact")
+    return {OPERATOR_FILE: {"sha256": "sha256:" + hashlib.sha256(raw).hexdigest(),
+                            "bytes": len(raw), "mode": "0555"}}
+
+
+def assemble_operator_tools(metadata, output):
+    # This is a prerequisite of public-input preparation, so it takes no guest
+    # inputs and never constructs a policy or chooses its independent author.
+    profile = build.native_pilot_build_resource_profile(metadata)
+    source = {key: metadata[key] for key in ("revision", "source_tree_digest", "source_manifest_digest",
+                                           "source_archive_digest", "source_date_epoch")}
+    write_original(output / "attempt.json", {
+        "apiVersion": "serverware.nativePilotOperatorToolsAttempt/v1", "source": source,
+        "target": build.NATIVE_PILOT_OPERATOR_TARGET, "buildResourceProfile": profile,
+        "releaseAuthority": False, "liveReady": False, "launchPrepared": False,
+    })
+    build.verify_dependency_cache()
+    with build.private_build_context(metadata) as context:
+        build.run_build(build.artifact_build_command(DOCKERFILE, build.NATIVE_PILOT_OPERATOR_TARGET,
+            "type=local,dest=" + str(output / "artifacts"), network="none", platform=build.PRODUCTION_PLATFORM,
+            metadata=metadata, context=context, native_pilot_bounded_build=True))
+    artifacts = operator_inventory(output)
+    write_original(output / "operator-tools.json", {
+        "apiVersion": "serverware.nativePilotOperatorTools/v1", "artifactBuildComplete": True,
+        "source": source, "target": build.NATIVE_PILOT_OPERATOR_TARGET,
+        "buildResourceProfile": profile, "artifacts": artifacts,
+        "releaseAuthority": False, "liveReady": False, "launchPrepared": False, "executionAccepted": False,
+        "boundary": "Unsigned local operator executable only, not a standalone runtime closure. Requires a compatible Linux/amd64 host and independently selected seccomp policy. No exporter, filter, guest or service was executed; no policy, provenance, signature or input-manifest approval was produced.",
+    })
+
+
 def assemble(args, metadata, plan, output):
     raw = read_original(args.preparation, 128 * 1024)
     if raw != build.canonical_json(plan).encode("ascii"):
@@ -237,6 +303,8 @@ def main():
     sub = parser.add_subparsers(dest="command", required=True)
     prepare = sub.add_parser("prepare", help="emit source-bound public input requirements; no Docker or service execution")
     prepare.add_argument("--out", type=Path, required=True)
+    operator_tools = sub.add_parser("operator-tools", help="build only the fixed offline seccomp exporter with strict source and per-RUN resource bounds; no guest inputs or execution")
+    operator_tools.add_argument("--out", type=Path, required=True)
     public_inputs = sub.add_parser("public-inputs", help="copy operator public originals and measure an unapproved manifest; never build or sign")
     public_inputs.add_argument("--out", type=Path, required=True)
     public_inputs.add_argument("--preparation", type=Path, required=True)
@@ -251,6 +319,12 @@ def main():
     compile_command.add_argument("--public-inputs-sha256", required=True)
     args = parser.parse_args()
     metadata = build.build_metadata()  # strict clean committed source, no dirty-tree escape
+    if args.command == "operator-tools":
+        assemble_operator_tools(metadata, new_output(args.out))
+        print(build.canonical_json({"apiVersion": "serverware.nativePilotBuildCommand/v1", "command": args.command,
+            "output": str(args.out), "artifactBuildComplete": True,
+            "releaseAuthority": False, "liveReady": False, "launchPrepared": False}))
+        return
     plan = preparation(metadata)
     if args.command == "public-inputs":
         measured = package_public_inputs(args, metadata, plan)

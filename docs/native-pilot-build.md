@@ -104,10 +104,11 @@ its measured digest still needs the same independent input-manifest admission.
 The seccomp input comes from an independently selected policy, not a generated
 permissive default. The separate offline exporter checks the existing policy
 type, recompiles its rules, verifies every claimed policy/stream/semantics hash,
-and writes only the matching raw BPF bytes:
+and writes only the matching raw BPF bytes. After building the operator tool as
+described below, invoke its actual exported path:
 
 ```sh
-serverware-export-custody-seccomp \
+/srv/catchplate-fast/tmp/pilot-operator-tools/artifacts/usr/local/bin/serverware-export-custody-seccomp \
   --policy /srv/operator-guest-originals/seccomp-policy.json \
   --output /srv/operator-guest-originals/seccomp.bpf
 ```
@@ -123,19 +124,33 @@ Build/export this operator executable separately from a clean source snapshot
 and the reviewed dependency cache:
 
 ```sh
-python3 -B scripts/build_production_images.py \
-  --dockerfile data-plane/decision-gate-rs/Dockerfile.production \
-  --target native-pilot-operator-artifact --network none \
-  --output type=local,dest=/srv/catchplate-fast/tmp/pilot-operator-tools
+make build-native-pilot-operator-tools \
+  NATIVE_PILOT_OUTPUT=/srv/catchplate-fast/tmp/pilot-operator-tools
 ```
 
-The export contains `usr/local/bin/serverware-export-custody-seccomp`, produced
-by the existing pinned Debian/glibc build. Run it on a compatible Linux/amd64
-operator host; this single executable export is not a complete runtime closure.
-It is excluded from the default gate and measured guest images. This build does
-not need public guest inputs, so producing `seccomp.bpf` does not depend on first
-building the image that embeds it. Build-recipe and provenance originals still
-come from the independent build owner; neither exporter manufactures them.
+This invokes `scripts/build_native_pilot_artifacts.py operator-tools --out` with
+the explicit new output directory. It uses strict clean-source metadata, the
+unchanged verified dependency cache and a private source context. The target is
+fixed to `native-pilot-operator-artifact`, with no guest inputs or caller-selected
+target, policy, dependency pins or resource overrides. The existing
+`native-pilot-bounded-8cpu-24g-per-step/v1` profile caps each Linux RUN step at
+8 CPUs and 24 GiB with no swap; these are not aggregate limits across concurrent
+stages. An unsupported resource capability fails without an unbounded fallback.
+
+The sole executable is exported to
+`pilot-operator-tools/artifacts/usr/local/bin/serverware-export-custody-seccomp`
+under the selected output parent. `attempt.json` records the source and resource
+profile; `operator-tools.json` is written only after the exact export inventory,
+ELF header, mode, size and actual file hash checks succeed. These are unsigned
+build observations, not readiness, execution or independent admission evidence.
+This command has not been run as part of this source change.
+
+The exporter is produced by the existing pinned Debian/glibc build. Run it on a
+compatible Linux/amd64 operator host; this single executable export is not a
+complete runtime closure. It is excluded from the default gate and measured
+guest images. Producing `seccomp.bpf` does not depend on first building the image
+that embeds it. Build-recipe and provenance originals still come from the
+independent build owner; neither exporter manufactures them.
 
 To package operator-owned originals against that exact clean-source preparation:
 

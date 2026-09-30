@@ -155,6 +155,18 @@ class TrustedTimeActivation:
                 os.close(fd)
             raise
 
+    def admit_delivery(self, *, signed_delivery_original):
+        """Consume an independent C9 signature with the same one-use fence."""
+        self.check()
+        p.require(not self._sign_attempted and not self._taken)
+        self._sign_attempted = True
+        signed = verify_delivery(configuration_raw=self._configuration_raw,
+            configuration_sha256=self._configuration_sha256, signed_delivery_original=signed_delivery_original,
+            activation=self.activation(), boot=self._boot, startup_deadline=self._deadline, now=_clock())
+        self.check()
+        self._signed = signed
+        return signed
+
     def close(self):
         if self._closed:
             return
@@ -174,14 +186,9 @@ class TrustedTimeActivation:
         self.close()
 
 
-def _sign_delivery(*, configuration_raw, configuration_sha256, payload_raw, signing_key,
-                            activation, boot, startup_deadline, now):
-    """Sign exact approved bytes; observed activation arguments are data only.
-
-    The actual retained activation owner supplies these observations. Native
-    admission independently verifies every original descriptor and credential.
-    This function by itself does not assert that any runtime owner exists.
-    """
+def _validate_delivery_payload(*, configuration_raw, configuration_sha256, payload_raw,
+                               activation, boot, startup_deadline, now):
+    """Same strict public payload recipe for the signer and retained receiver."""
     cold = delivery.configuration(configuration_raw, configuration_sha256)
     payload = p.fields(p.document(payload_raw, delivery.MAX_DELIVERY), delivery.FIELDS)
     p.require(payload["configurationSha256"] == configuration_sha256
@@ -223,7 +230,38 @@ def _sign_delivery(*, configuration_raw, configuration_sha256, payload_raw, sign
                 and assigned["publicKeyBase64url"] != cold["authority"]["publicKeyBase64url"]
                 and assigned["keyId"] != cold["authority"]["keyId"])
             Ed25519PublicKey.from_public_bytes(public)
-    p.require(total <= 16 * 1024 * 1024 and isinstance(signing_key, Ed25519PrivateKey))
+    p.require(total <= 16 * 1024 * 1024)
+    return cold, payload
+
+
+def verify_delivery(*, configuration_raw, configuration_sha256, signed_delivery_original,
+                    activation, boot, startup_deadline, now):
+    """Verify fixed TrustedTime C9 scope; return the literal original unchanged."""
+    signed = p.fields(p.document(signed_delivery_original, delivery.MAX_DELIVERY),
+        ("apiVersion", "payload", "signatureBase64url"))
+    p.require(signed["apiVersion"] == "serverware.policyCustodyGuestDelivery/v1")
+    payload_raw = p.canonical(signed["payload"])
+    cold, payload = _validate_delivery_payload(configuration_raw=configuration_raw,
+        configuration_sha256=configuration_sha256, payload_raw=payload_raw,
+        activation=activation, boot=boot, startup_deadline=startup_deadline, now=now)
+    public = Ed25519PublicKey.from_public_bytes(p.decoded(cold["authority"]["publicKeyBase64url"], size=32))
+    public.verify(p.decoded(signed["signatureBase64url"], size=64), delivery.DOMAIN + payload_raw)
+    delivery._delivery_guest(payload, signed_delivery_original)
+    return signed_delivery_original
+
+
+def _sign_delivery(*, configuration_raw, configuration_sha256, payload_raw, signing_key,
+                   activation, boot, startup_deadline, now):
+    """Sign exact approved bytes; observed activation arguments are data only.
+
+    The actual retained activation owner supplies these observations. Native
+    admission independently verifies every original descriptor and credential.
+    This function by itself does not assert that any runtime owner exists.
+    """
+    cold, payload = _validate_delivery_payload(configuration_raw=configuration_raw,
+        configuration_sha256=configuration_sha256, payload_raw=payload_raw,
+        activation=activation, boot=boot, startup_deadline=startup_deadline, now=now)
+    p.require(isinstance(signing_key, Ed25519PrivateKey))
     actual = signing_key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
     p.require(p.encoded(actual) == cold["authority"]["publicKeyBase64url"])
     signature = signing_key.sign(delivery.DOMAIN + payload_raw)

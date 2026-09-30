@@ -2654,7 +2654,10 @@ fn run_production_rpc_service_loaded_inner(
     let mut parent_signer_endpoints = Vec::with_capacity(10);
     for configured in &loaded.value.parent_signer_endpoints {
         if matches!(configured.signer_role,super::super::super::PolicyShadowCustodySignerRole::LedgerAppend
-            |super::super::super::PolicyShadowCustodySignerRole::IngressAdmission|super::super::super::PolicyShadowCustodySignerRole::TerminalAppend) {
+            |super::super::super::PolicyShadowCustodySignerRole::IngressAdmission|super::super::super::PolicyShadowCustodySignerRole::TerminalAppend
+            |super::super::super::PolicyShadowCustodySignerRole::DispatchBarrier
+            |super::super::super::PolicyShadowCustodySignerRole::ActiveEffectBarrier
+            |super::super::super::PolicyShadowCustodySignerRole::ActiveEffectCommit) {
             if let Some(session)=native_signers.remove(&configured.signer_role) {
                 parent_signer_endpoints.push(load_pinned_endpoint_session(
                     ProductionAuthorityEndpointIdentityV4::ParentSigner(configured.signer_role),EndpointSession::NativeProof(session),

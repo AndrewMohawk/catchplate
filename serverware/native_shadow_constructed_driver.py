@@ -45,15 +45,23 @@ def _signing_key(fd, expected):
     return private, public
 
 
-def admit_bootstrap(owner, *, signing_key_fd):
+def prepare_bootstrap(owner):
+    """Return an unsigned payload from this live attempt, never authority.
+
+    The payload issuance time is recorded once while the original launcher
+    window is already running. Neither is renewed while an independent signer
+    considers these exact bytes. No signing key enters this path.
+    """
     from serverware.native_shadow_driver_bootstrap import DriverBootstrap
     p.require(type(owner) is DriverBootstrap)
     owner.check()
     policy = owner._config.get("lifecycle", {})
     p.require(policy.get("apiVersion") == "serverware.nativeShadowDriverLifecyclePolicy/v3"
-        and not owner._attempted and owner._bootstrap_admission_original is None)
+        and not owner._attempted and not owner._bootstrap_admission_prepare_attempted
+        and owner._bootstrap_admission_original is None)
     expected = policy["constructedAdmissionAuthority"]
-    private, public = _signing_key(signing_key_fd, expected)
+    authority(expected)
+    owner._bootstrap_admission_prepare_attempted = True
     # Same genuine already-running clone parent; no future PID prediction.
     namespace = os.open("/proc/" + str(owner._child_pid) + "/ns/pid", os.O_RDONLY | os.O_CLOEXEC)
     owner._admission_namespace_fd = namespace
@@ -71,14 +79,60 @@ def admit_bootstrap(owner, *, signing_key_fd):
         "lifetimeDeadlineBoottimeNs": owner._window["lifetimeDeadlineBoottimeNs"],
         "signingKeyId": expected["keyId"], "signingKeySpkiSha256": expected["keySpkiSha256"]}
     owner.check()
-    message = p.preimage(BOOTSTRAP_DOMAIN, payload)
-    signature = private.sign(message)
-    public.verify(signature, message)
-    raw = p.canonical({"payload": payload, "signature": p.encoded(signature)})
+    raw = p.canonical(payload)
     p.require(len(raw) <= 8192)
-    owner._bootstrap_admission_original = raw
+    _live_payload(owner, payload)
+    owner._bootstrap_admission_payload = raw
     owner.check()
     return bytes(raw)
+
+
+def _signed_original(raw, maximum, payload_raw, public, domain, extra=None):
+    p.require(type(raw) is bytes)
+    value = p.fields(p.document(raw, maximum), ("payload", "signature") if extra is None
+        else ("bootstrapAdmissionOriginal", "payload", "signature"))
+    p.require(p.canonical(value["payload"]) == payload_raw)
+    if extra is not None:
+        p.require(value["bootstrapAdmissionOriginal"] == extra.decode("ascii"))
+    public.verify(p.decoded(value["signature"], size=64), p.preimage(domain, value["payload"]))
+    return value["payload"]
+
+
+def _live_payload(owner, payload):
+    from serverware.native_shadow_driver_bootstrap import mechanics
+    owner.check()
+    p.require(mechanics._clock() < owner._startup)
+    p.freshness(payload["issuedAtUnixNanos"], payload["expiresAtUnixNanos"], time.time_ns())
+
+
+def accept_bootstrap(owner, original):
+    """Consume one externally signed original against the retained attempt."""
+    from serverware.native_shadow_driver_bootstrap import DriverBootstrap
+    p.require(type(owner) is DriverBootstrap)
+    owner.check()
+    p.require(not owner._attempted and owner._bootstrap_admission_payload is not None
+        and not owner._bootstrap_admission_accept_attempted and owner._bootstrap_admission_original is None)
+    # Malformed/refused originals consume this acceptance, too. The namespace
+    # descriptor stays with the actual launcher until definite cleanup.
+    owner._bootstrap_admission_accept_attempted = True
+    expected = owner._config["lifecycle"]["constructedAdmissionAuthority"]
+    payload = _signed_original(original, 8192, owner._bootstrap_admission_payload,
+        authority(expected), BOOTSTRAP_DOMAIN)
+    _live_payload(owner, payload)
+    owner._bootstrap_admission_original = original
+    _live_payload(owner, payload)
+    return bytes(original)
+
+
+def admit_bootstrap(owner, *, signing_key_fd):
+    """Legacy local signer, sharing the same one-shot preparation/intake."""
+    from serverware.native_shadow_driver_bootstrap import DriverBootstrap
+    p.require(type(owner) is DriverBootstrap)
+    owner.check()
+    private, _ = _signing_key(signing_key_fd, owner._config["lifecycle"]["constructedAdmissionAuthority"])
+    payload = p.document(prepare_bootstrap(owner), 8192)
+    signature = private.sign(p.preimage(BOOTSTRAP_DOMAIN, payload))
+    return accept_bootstrap(owner, p.canonical({"payload": payload, "signature": p.encoded(signature)}))
 
 
 def generation_manifest(owner, *, assignment_original, production):
@@ -193,15 +247,20 @@ def _census(owner, raw):
     return value
 
 
-def admit(owner, *, signing_key_fd):
-    from serverware.native_shadow_driver_bootstrap import DriverBootstrap, SEALS, mechanics
+def prepare(owner):
+    """Export genuine census/public originals once for independent signing.
+
+    Returned bytes are evidence and an unsigned existing payload, not a
+    transferable constructed-driver owner or a successful admission.
+    """
+    from serverware.native_shadow_driver_bootstrap import DriverBootstrap, mechanics
     p.require(type(owner) is DriverBootstrap)
     owner.check()
     policy = owner._config.get("lifecycle", {})
     p.require(policy.get("apiVersion") == "serverware.nativeShadowDriverLifecyclePolicy/v3"
         and owner._constructed and not owner._constructed_admission_attempted and mechanics._clock() < owner._startup)
     expected = policy["constructedAdmissionAuthority"]
-    private_key, public_key = _signing_key(signing_key_fd, expected)
+    public_key = authority(expected)
     p.require(owner._bootstrap_admission_original is not None)
     # From this first contact onward, every ambiguous outcome remains consumed.
     owner._constructed_admission_attempted = True
@@ -246,17 +305,51 @@ def admit(owner, *, signing_key_fd):
         "startupDeadlineBoottimeNs": owner._window["startupDeadlineBoottimeNs"],
         "lifetimeDeadlineBoottimeNs": owner._window["lifetimeDeadlineBoottimeNs"],
         "signingKeyId": expected["keyId"], "signingKeySpkiSha256": expected["keySpkiSha256"]}
-    message = p.preimage(DOMAIN, payload)
-    signature = private_key.sign(message)
-    public_key.verify(signature, message)
-    original = p.canonical({"bootstrapAdmissionOriginal": owner._bootstrap_admission_original.decode("ascii"),
-        "payload": payload, "signature": p.encoded(signature)})
-    p.require(len(original) <= 16384 and mechanics._clock() < owner._startup)
+    payload_raw = p.canonical(payload)
+    p.require(len(payload_raw) <= 16384 and mechanics._clock() < owner._startup)
     _read_public(owner, owner._constructed_public_fd, notice)
+    _live_payload(owner, payload)
+    owner._constructed_admission_request = (payload_raw, census_raw, public_raw, notice)
+    return {"payloadOriginal": bytes(payload_raw), "censusOriginal": bytes(census_raw),
+        "publicAdmissionOriginal": bytes(public_raw),
+        "bootstrapAdmissionOriginal": bytes(owner._bootstrap_admission_original)}
+
+
+def accept(owner, original):
+    """Retain/forward one signed original only for the live exported attempt."""
+    from serverware.native_shadow_driver_bootstrap import DriverBootstrap
+    p.require(type(owner) is DriverBootstrap)
+    owner.check()
+    p.require(owner._constructed and owner._constructed_admission_request is not None
+        and not owner._constructed_admission_accept_attempted and owner._constructed_admission_original is None)
+    owner._constructed_admission_accept_attempted = True
+    payload_raw, census_raw, public_raw, notice = owner._constructed_admission_request
+    expected = owner._config["lifecycle"]["constructedAdmissionAuthority"]
+    payload = _signed_original(original, 16384, payload_raw, authority(expected), DOMAIN,
+        owner._bootstrap_admission_original)
+    _live_payload(owner, payload)
+    _census(owner, census_raw)
+    retained_raw, _ = _read_public(owner, owner._constructed_public_fd, notice)
+    p.require(retained_raw == public_raw)
+    _live_payload(owner, payload)
     owner._constructed_admission_original = original  # retain before contact
     _send(owner, "admit", original.decode("ascii"))
     retained = p.fields(p.document(owner._receive(4096), 4096), ("apiVersion", "admissionSha256", "censusSha256"))
     p.require(retained == {"apiVersion": "serverware.nativeShadowConstructedDriverRetained/v1",
         "admissionSha256": p.sha(original), "censusSha256": p.sha(census_raw)})
-    owner.check()
+    _live_payload(owner, payload)
     return bytes(original)
+
+
+def admit(owner, *, signing_key_fd):
+    """Legacy local signer, sharing the same genuine export/intake owners."""
+    from serverware.native_shadow_driver_bootstrap import DriverBootstrap
+    p.require(type(owner) is DriverBootstrap)
+    owner.check()
+    private, _ = _signing_key(signing_key_fd, owner._config["lifecycle"]["constructedAdmissionAuthority"])
+    request = prepare(owner)
+    payload = p.document(request["payloadOriginal"], 16384)
+    signature = private.sign(p.preimage(DOMAIN, payload))
+    original = p.canonical({"bootstrapAdmissionOriginal": request["bootstrapAdmissionOriginal"].decode("ascii"),
+        "payload": payload, "signature": p.encoded(signature)})
+    return accept(owner, original)

@@ -73,6 +73,11 @@ class DriverBootstrap:
         self._constructed_admission_original = None
         self._bootstrap_admission_original = None
         self._admission_namespace_fd = None
+        self._bootstrap_admission_prepare_attempted = False
+        self._bootstrap_admission_accept_attempted = False
+        self._bootstrap_admission_payload = None
+        self._constructed_admission_request = None
+        self._constructed_admission_accept_attempted = False
 
     def _open(self, path, maximum, digest=None, mode=0o400):
         original = mechanics._Original(path, maximum, digest, mode)
@@ -286,10 +291,34 @@ class DriverBootstrap:
         from serverware.native_shadow_constructed_driver import admit
         return admit(self, signing_key_fd=signing_key_fd)
 
+    def prepare_constructed_driver_admission(self):
+        """One authenticated census/export; returns data for independent signing.
+
+        The returned bytes cannot reconstruct this owner. Acceptance must use
+        this same live object under its original startup/authority deadlines.
+        """
+        from serverware.native_shadow_constructed_driver import prepare
+        return prepare(self)
+
+    def accept_constructed_driver_admission(self, original):
+        """Consume one externally signed original for the actual held export."""
+        from serverware.native_shadow_constructed_driver import accept
+        return accept(self, original)
+
     def admit_bootstrap_driver(self, *, signing_key_fd):
         """Before grant authoring: sign the actual phase-one driver, not future FDs."""
         from serverware.native_shadow_constructed_driver import admit_bootstrap
         return admit_bootstrap(self, signing_key_fd=signing_key_fd)
+
+    def prepare_bootstrap_driver_admission(self):
+        """Unsigned exact payload from the already measured phase-one driver."""
+        from serverware.native_shadow_constructed_driver import prepare_bootstrap
+        return prepare_bootstrap(self)
+
+    def accept_bootstrap_driver_admission(self, original):
+        """Consume one independently signed original, without an authority seed."""
+        from serverware.native_shadow_constructed_driver import accept_bootstrap
+        return accept_bootstrap(self, original)
 
     def generation_manifest(self, *, assignment_original, production):
         """Unsigned exact recipe for independently supplied generation grants."""

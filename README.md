@@ -22,16 +22,13 @@ Checkpoint: **2026-09-30 — pre-production, pilot assembly.**
 
 [![Project checkpoints, one segment per task: 36 of 46 source-landed; 10 active and 0 todo. Evidence handoff 10/10; historical recovery 4/5; permissions and grants 10/10; finalization and sessions 8/8; workloads and native 3/6; providers and operations 1/7. H05, N04, N05, N06 and O01 through O06 are in progress. Production acceptance remains 0/6. Engineering assembly is not an accepted pilot or production deployment.](docs/images/project-progress.svg)](docs/production-status.md#next-source-milestones)
 
-The current `.352` source batch adds the [persistent workload sidecar](docs/native-workload-sidecar.md)
-for ordinary HTTPS libraries that cannot authenticate directly to the proxy with
-mTLS. It connects local workload-token authentication to fresh attested native
-sessions; upstream provider credentials still stay out of the application.
-The earlier [native trust authorization](docs/native-workload-trust-authorization.md),
-[policy recovery](docs/setup-policy-continuation.md#warm-retained-publication-recovery)
-and [pilot assembly](docs/native-pilot-build.md) paths are source-connected.
-The sidecar is not yet compiled or deployed. Next are assembled artifacts and
-provisioned inputs, then one connected pilot acceptance run. Broad testing
-remains deferred until that build is connected.
+The current `.353` source batch connects [independently signed launch inputs](docs/native-pilot-signed-inputs.md),
+fixes native effect-session startup and adds a bounded operator-tool build command.
+The [persistent workload sidecar](docs/native-workload-sidecar.md) supports ordinary
+HTTPS libraries without direct proxy mTLS; provider credentials stay out of the
+application. These latest changes are not yet compiled or deployed. Remaining
+pilot work includes resource factories, the operator launcher, artifact assembly
+and provisioned inputs. Broad testing follows the connected pilot build.
 
 The bar shows **committed source, not tested readiness or remaining effort**.
 Green means source-landed; amber means partial implementation. No current pilot

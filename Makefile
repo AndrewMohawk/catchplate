@@ -1573,6 +1573,12 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/native_shadow_proof_cohort_control.py \
 	serverware/native_shadow_endpoint_driver.py \
 	serverware/native_pilot_launch.py \
+	serverware/native_pilot_endpoint_inputs.py \
+	serverware/native_pilot_operator.py \
+	serverware/native_pilot_operator_channel.py \
+	serverware/native_pilot_public_inputs.py \
+	serverware/native_pilot_service_inputs.py \
+	scripts/run_native_pilot.py \
 	serverware/native_shadow_proof_cohort_cleanup.py \
 	serverware/native_shadow_driver_bootstrap.py \
 	serverware/native_shadow_constructed_driver.py \
@@ -4217,6 +4223,12 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/native_shadow_proof_cohort_control.py \
 				serverware/native_shadow_endpoint_driver.py \
 				serverware/native_pilot_launch.py \
+				serverware/native_pilot_endpoint_inputs.py \
+				serverware/native_pilot_operator.py \
+				serverware/native_pilot_operator_channel.py \
+				serverware/native_pilot_public_inputs.py \
+				serverware/native_pilot_service_inputs.py \
+				scripts/run_native_pilot.py \
 				serverware/native_shadow_proof_cohort_cleanup.py \
 				serverware/native_shadow_driver_bootstrap.py \
 				serverware/native_shadow_constructed_driver.py \

@@ -8,6 +8,8 @@ use std::os::fd::{AsRawFd,BorrowedFd};
 use std::os::unix::fs::{FileExt,MetadataExt};
 
 const PROFILE:&str="sealed-memfd-squashfs-static-amd64-v1";
+const BOOTSTRAP_PROFILE:&str="measured-bootstrap-late-runtime-static-amd64-v1";
+#[path="native_closure_late.rs"] mod late;
 const DOMAIN:&str="serverware.nativeCustodyClosureAssignment.signature/v1";
 const MANIFEST_DOMAIN:&[u8]=b"serverware.nativeCustodyExecutionClosure/v1";
 const ALL_SEALS:i32=libc::F_SEAL_WRITE|libc::F_SEAL_GROW|libc::F_SEAL_SHRINK|libc::F_SEAL_SEAL;
@@ -23,10 +25,15 @@ pub(in crate::policy_shadow) struct Manifest {
 }
 impl Manifest {
     fn validate(&self)->Result<(),ShadowError> {
-        require(cfg!(target_arch="x86_64") && self.api_version=="serverware.nativeCustodyExecutionClosure/v1" && self.profile==PROFILE
+        let domain=match (self.api_version.as_str(),self.profile.as_str()) {
+            ("serverware.nativeCustodyExecutionClosure/v1",PROFILE)=>MANIFEST_DOMAIN,
+            ("serverware.nativeCustodyExecutionClosure/v2",BOOTSTRAP_PROFILE)=>b"serverware.nativeCustodyExecutionClosure/v2".as_slice(),
+            _=>return Err(ShadowError::BindingDrift),
+        };
+        require(cfg!(target_arch="x86_64")
             && self.seccomp_policy.architecture==ProductionCustodySeccompArchitecture::X86_64)?;
         self.build_provenance.validate()?;self.seccomp_policy.validate()?;
-        require(self.manifest_sha256==hash_domain_frames(MANIFEST_DOMAIN,&[&canonical_json_bytes(&(
+        require(self.manifest_sha256==hash_domain_frames(domain,&[&canonical_json_bytes(&(
             &self.api_version,&self.profile,&self.image_sha256,&self.worker_executable_sha256,
             &self.seccomp_policy,&self.runtime_configuration_sha256,&self.build_provenance))?]))
     }
@@ -48,8 +55,13 @@ struct Assignment {payload:AssignmentPayload,signature:CanonicalEd25519Signature
 pub(in crate::policy_shadow) struct Configuration {api_version:String,manifest:Manifest,authorization:Assignment}
 
 impl Configuration {
+    fn require_legacy(&self)->Result<(),ShadowError>{
+        require(self.api_version=="serverware.nativeCustodyClosure/v1"
+            && self.manifest.api_version=="serverware.nativeCustodyExecutionClosure/v1"
+            && self.manifest.profile==PROFILE)?;self.manifest.validate()
+    }
     pub(in crate::policy_shadow) fn require_pair_image(&self,image:&Sha256Digest,executable:&Sha256Digest)->Result<(),ShadowError> {
-        require(self.api_version=="serverware.nativeCustodyClosure/v1")?;self.manifest.validate()?;
+        self.require_legacy()?;
         require(&self.manifest.image_sha256==image && &self.manifest.worker_executable_sha256==executable)
     }
     /// Root parent cold-original selection only. The child independently
@@ -58,7 +70,7 @@ impl Configuration {
     pub(in crate::policy_shadow) fn prepare_parent_image(&self,
         delivery:&policy_custody::services::guest::FileAdmission)->Result<ShadowImage,ShadowError> {
         delivery.check_preparation().map_err(unavailable)?;
-        require(self.api_version=="serverware.nativeCustodyClosure/v1")?;self.manifest.validate()?;
+        self.require_legacy()?;
         let m=&self.manifest;let b=&m.build_provenance;
         require(&m.runtime_configuration_sha256==delivery.runtime_sha256())?;
         let image=ShadowImage::open(m.image_sha256.as_str(),m.worker_executable_sha256.as_str(),[
@@ -73,11 +85,19 @@ impl Configuration {
 fn verify_assignment(wire:&Assignment,manifest:&Manifest,guest:&GuestClosureBinding,
     assignment:&VerifiedAssignment,checkpoint:&AtomicTrustCheckpoint,trust:&dyn EnvelopeKeyTrust)->Result<(),ShadowError> {
     let p=&wire.payload;let original=assignment.payload();
-    require(p.api_version=="serverware.nativeCustodyClosureAssignment/v1" && p.purpose=="shadow-custody-execution-closure"
-        && p.profile==PROFILE && p.assignment_id==original.assignment_id
+    let domain=if manifest.profile==BOOTSTRAP_PROFILE {
+        require(p.api_version=="serverware.nativeCustodyClosureAssignment/v2"
+            && p.purpose=="shadow-custody-bootstrap-late-runtime" && p.profile==BOOTSTRAP_PROFILE)?;
+        "serverware.nativeCustodyClosureAssignment.signature/v2"
+    } else {
+        require(p.api_version=="serverware.nativeCustodyClosureAssignment/v1"
+            && p.purpose=="shadow-custody-execution-closure" && p.profile==PROFILE
+            && guest.runtime_configuration_sha256==manifest.runtime_configuration_sha256)?;
+        DOMAIN
+    };
+    require(p.assignment_id==original.assignment_id
         && p.assignment_payload_sha256==*assignment.payload_sha256() && p.assignment_revision==original.assignment_revision
-        && p.manifest_sha256==manifest.manifest_sha256 && &p.guest==guest
-        && guest.runtime_configuration_sha256==manifest.runtime_configuration_sha256)?;
+        && p.manifest_sha256==manifest.manifest_sha256 && &p.guest==guest)?;
     require(matches!(&original.custody_authority.attestation_mode,
         CustodyAttestationMode::Tee {platform:TeePlatform::AwsNitroEnclave,..})
         && original.custody_authority.execution_closure_manifest_sha256==manifest.manifest_sha256
@@ -92,7 +112,7 @@ fn verify_assignment(wire:&Assignment,manifest:&Manifest,guest:&GuestClosureBind
     let key=trust.resolve_ed25519_key(checkpoint,authority_role_signature_domain(AuthorityRole::CustodySupervisorCapability),
         &binding.key_id,&binding.key_spki_sha256)?;
     require(ed25519_public_key_material_sha256(&key)==binding.key_material_sha256)?;
-    key.verify_strict(&signature_preimage(DOMAIN,&canonical_json_bytes(p)?),&Signature::from_bytes(&wire.signature.decode()?))
+    key.verify_strict(&signature_preimage(domain,&canonical_json_bytes(p)?),&Signature::from_bytes(&wire.signature.decode()?))
         .map_err(|_|ShadowError::SignatureInvalid)?;
     require(trust.current_checkpoint()?==*checkpoint)
 }
@@ -160,8 +180,7 @@ impl PrekeyExecutable {
         ->Result<Self,ShadowError> {
         let association=delivery.closure_association().map_err(unavailable)?;
         association.check_preparation().map_err(unavailable)?;
-        require(configuration.api_version=="serverware.nativeCustodyClosure/v1")?;
-        configuration.manifest.validate()?;
+        configuration.require_legacy()?;
         require(configuration.manifest.runtime_configuration_sha256==association.binding().runtime_configuration_sha256)?;
         let executable=File::open("/proc/self/exe").map_err(unavailable)?;
         let identity=executable_identity(&executable)?;
@@ -171,7 +190,7 @@ impl PrekeyExecutable {
         let owner=Self{executable,identity,association};owner.check()?;Ok(owner)
     }
     pub(in crate::policy_shadow) fn check(&self)->Result<(),ShadowError> {
-        self.association.check_preparation().map_err(unavailable)?;
+        self.association.check_native_preparation().map_err(unavailable)?;
         require(executable_identity(&self.executable)?==self.identity && status_number("Threads:")?==1)?;
         check_current_executable(&self.identity)
     }
@@ -180,7 +199,7 @@ impl PrekeyExecutable {
 /// Constructed only in the same root process as admitted guest delivery.
 /// It may be borrowed for the root's real chroot setup but cannot cross exec.
 pub(in crate::policy_shadow) struct PreparedNativeCustodyClosure {
-    configuration:Configuration,association:GuestClosureAssociation,image:ShadowImage,
+    configuration:Configuration,association:GuestClosureAssociation,image:Arc<ShadowImage>,
     executable:File,executable_identity:ExecutableIdentity,checkpoint:AtomicTrustCheckpoint,
 }
 impl PreparedNativeCustodyClosure {
@@ -191,7 +210,7 @@ impl PreparedNativeCustodyClosure {
     pub(in crate::policy_shadow) fn open(configuration:Configuration,assignment:&VerifiedAssignment,
         trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime,delivery:&PreparedGuestServiceDelivery)->Result<Self,ShadowError> {
         let association=delivery.closure_association().map_err(unavailable)?;association.check_preparation().map_err(unavailable)?;
-        require(configuration.api_version=="serverware.nativeCustodyClosure/v1")?;configuration.manifest.validate()?;
+        configuration.require_legacy()?;
         revalidate_verified_freshness(assignment,trust,time,MAX_ENVELOPE_AGE_NANOS)?;
         let checkpoint=trust.current_checkpoint()?;let p=&configuration.authorization.payload;
         require(p.trust_checkpoint_id==checkpoint.checkpoint_id && p.revocation_generation==checkpoint.revocation_generation
@@ -214,7 +233,7 @@ impl PreparedNativeCustodyClosure {
         // Same full bytes, not merely a matching path or mutable executable.
         require(read(image.executable(),128*1024*1024)?==bytes)?;
         check_current_executable(&executable_identity)?;association.check_preparation().map_err(unavailable)?;
-        Ok(Self {configuration,association,image,executable,executable_identity,checkpoint})
+        Ok(Self {configuration,association,image:Arc::new(image),executable,executable_identity,checkpoint})
     }
     pub(in crate::policy_shadow) fn root(&self)->Result<BorrowedFd<'_>,ShadowError> {
         self.association.check_preparation().map_err(unavailable)?;self.image.check(self.association.startup()).map_err(unavailable)?;

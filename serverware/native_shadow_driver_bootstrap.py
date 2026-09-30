@@ -62,6 +62,8 @@ class DriverBootstrap:
         self._socket = self._pidfd = self._driver_pidfd = self._exec = self._bundle = None
         self._child_pid = None
         self._closed = self._attempted = False
+        self._constructed = False
+        self._operational_inputs = None
 
     def _open(self, path, maximum, digest=None, mode=0o400):
         original = mechanics._Original(path, maximum, digest, mode)
@@ -80,10 +82,16 @@ class DriverBootstrap:
                 ("apiVersion", "supervisorExecutableSha256", "configurationSha256", "windowSha256"))
             p.require(control["apiVersion"] == "serverware.nativeShadowDriverBootstrapControl/v1")
             config_raw = owner._open(CONFIGURATION, 65536, control["configurationSha256"]).raw
-            owner._config = p.fields(p.document(config_raw, 65536), ("apiVersion", "bootstrapAuthority",
-                "phaseTwoAuthority", "deliveryConfiguration", "uid", "gid", "image"))
-            p.require(owner._config["apiVersion"] == "serverware.nativeShadowDriverBootstrapConfiguration/v1"
-                and owner._config["bootstrapAuthority"] != owner._config["phaseTwoAuthority"])
+            config = p.document(config_raw, 65536)
+            fields = ("apiVersion", "bootstrapAuthority", "phaseTwoAuthority", "deliveryConfiguration", "uid", "gid", "image")
+            if config.get("apiVersion") == "serverware.nativeShadowDriverBootstrapConfiguration/v2":
+                fields += ("continuation",)
+                continuation = p.fields(config["continuation"], ("apiVersion", "keyTransport"))
+                p.require(continuation["apiVersion"] == "serverware.nativeShadowDriverContinuationPreparation/v1")
+            else:
+                p.require(config.get("apiVersion") == "serverware.nativeShadowDriverBootstrapConfiguration/v1")
+            owner._config = p.fields(config, fields)
+            p.require(owner._config["bootstrapAuthority"] != owner._config["phaseTwoAuthority"])
             window_raw = owner._open(WINDOW, 32768, control["windowSha256"]).raw
             signed = p.fields(p.document(window_raw, 32768), ("apiVersion", "payload", "signatureBase64url"))
             p.require(signed["apiVersion"] == "serverware.nativeShadowDriverBootstrapWindow/v1")
@@ -175,7 +183,7 @@ class DriverBootstrap:
 
     def check(self):
         self._origin()
-        p.require(mechanics._clock() < self._startup and not mechanics._terminal(self._pidfd)
+        p.require(mechanics._clock() < (self._lifetime if self._constructed else self._startup) and not mechanics._terminal(self._pidfd)
             and mechanics._pidfd_pid(self._pidfd) == self._child_pid
             and mechanics._process(self._child_pid) == (self._pid, self._child_start)
             and originals._identity(os.fstat(self._exec)) == self._exec_identity
@@ -185,6 +193,8 @@ class DriverBootstrap:
         if self._driver_pidfd is not None:
             p.require(not mechanics._terminal(self._driver_pidfd) and mechanics._pidfd_pid(self._driver_pidfd) == self._driver_pid
                 and mechanics._process(self._driver_pid) == (self._child_pid, self._driver_start))
+        if self._operational_inputs is not None:
+            self._operational_inputs.check()
 
     def _receive(self, maximum):
         while True:
@@ -223,7 +233,8 @@ class DriverBootstrap:
 
     def retain_scope(self, *, signed_scope_original, public_originals):
         """One signed-public-original handoff, not permission to operate/retry."""
-        self.check(); p.require(not self._attempted and type(signed_scope_original) is bytes and type(public_originals) is bytes)
+        self.check(); p.require(self._config["apiVersion"] == "serverware.nativeShadowDriverBootstrapConfiguration/v1"
+            and not self._attempted and type(signed_scope_original) is bytes and type(public_originals) is bytes)
         signed = p.fields(p.document(signed_scope_original, 32768), ("payload", "signatureBase64url"))
         scope = p.fields(signed["payload"], ("apiVersion", "configurationSha256", "windowSha256", "observationSha256",
             "kernelDriverIdentitySha256", "invocationId", "startupDeadlineBoottimeNs", "lifetimeDeadlineBoottimeNs",
@@ -255,6 +266,59 @@ class DriverBootstrap:
             "observationSha256": p.sha(self._observation_raw), "scopeSha256": p.sha(signed_scope_original)})
         return copy.deepcopy(reply)  # observation only; no constructed or ready
 
+    def continue_scope(self, *, inputs, signed_scope_original, public_originals):
+        """One actual retained-input handoff through native admission/bridge construction.
+
+        A returned construction observation is not full-configuration TEE
+        activation, READY, generation installation, or a retry capability.
+        """
+        from serverware.native_shadow_driver_inputs import OperationalInputs
+        self.check()
+        p.require(type(inputs) is OperationalInputs and inputs._driver is self
+            and self._config["apiVersion"] == "serverware.nativeShadowDriverBootstrapConfiguration/v2"
+            and not self._attempted and type(signed_scope_original) is bytes and type(public_originals) is bytes)
+        inputs.check()
+        signed = p.fields(p.document(signed_scope_original, 32768), ("payload", "signatureBase64url"))
+        scope = p.fields(signed["payload"], ("apiVersion", "configurationSha256", "windowSha256", "observationSha256",
+            "kernelDriverIdentitySha256", "invocationId", "startupDeadlineBoottimeNs", "lifetimeDeadlineBoottimeNs",
+            "originals", "publicBundleSha256", "signingKeyId", "operation"))
+        self._phase_key.verify(p.decoded(signed["signatureBase64url"], size=64),
+            b"serverware.nativeShadowDriverScope.signature/v2\0" + p.canonical(scope))
+        p.require(scope["apiVersion"] == "serverware.nativeShadowDriverScope/v2"
+            and scope["configurationSha256"] == self._config_sha and scope["windowSha256"] == self._window_sha
+            and scope["observationSha256"] == p.sha(self._observation_raw)
+            and scope["kernelDriverIdentitySha256"] == self._observation["driver"]["identitySha256"]
+            and scope["invocationId"] == self._window["invocationId"]
+            and scope["startupDeadlineBoottimeNs"] == self._window["startupDeadlineBoottimeNs"]
+            and scope["lifetimeDeadlineBoottimeNs"] == self._window["lifetimeDeadlineBoottimeNs"]
+            and scope["signingKeyId"] == self._config["phaseTwoAuthority"]["keyId"]
+            and scope["publicBundleSha256"] == p.sha(public_originals)
+            and p.canonical(scope["operation"]) == inputs._operation)
+        bundle = p.fields(p.document(public_originals, 1024 * 1024), ("runtimeOriginal", "deliveryOriginal", "generationOriginals"))
+        pins = p.fields(scope["originals"], ("runtimeSha256", "deliverySha256", "generationGrants"))
+        p.fields(bundle["generationOriginals"], ROLES); p.fields(pins["generationGrants"], ROLES)
+        p.require(bundle["runtimeOriginal"].encode("ascii") == inputs._runtime_raw
+            and bundle["deliveryOriginal"].encode("ascii") == inputs._delivery_raw)
+        for text, digest in [(bundle["runtimeOriginal"], pins["runtimeSha256"]), (bundle["deliveryOriginal"], pins["deliverySha256"]),
+                *((bundle["generationOriginals"][role], pins["generationGrants"][role]) for role in ROLES)]:
+            p.require(type(text) is str and text.isascii()); raw = text.encode("ascii")
+            p.document(raw, 65536); p.require(p.sha(raw) == p.digest(digest))
+        self._bundle = _sealed("native-shadow-driver-public-originals", public_originals, 0o400)
+        self._operational_inputs = inputs  # retained through unknown and actual child cleanup
+        self.check(); fds = inputs._begin(self)
+        self._attempted = True
+        count = self._socket.sendmsg([signed_scope_original], [(socket.SOL_SOCKET, socket.SCM_RIGHTS,
+            array.array("i", [self._bundle, *fds]))], socket.MSG_DONTWAIT | socket.MSG_NOSIGNAL)
+        p.require(count == len(signed_scope_original))
+        expected = {"apiVersion": "serverware.nativeShadowDriverPhaseTwoRetained/v1",
+            "observationSha256": p.sha(self._observation_raw), "scopeSha256": p.sha(signed_scope_original)}
+        p.require(p.document(self._receive(4096), 4096) == expected)
+        expected["apiVersion"] = "serverware.nativeShadowDriverBridgeConstructed/v1"
+        p.require(p.document(self._receive(4096), 4096) == expected)
+        self._constructed = True
+        self.check()
+        return copy.deepcopy(expected)
+
     def close(self):
         global _LIVE
         if self._closed:
@@ -277,6 +341,9 @@ class DriverBootstrap:
             p.require(terminal is not None and terminal.si_pid == self._child_pid)
             reaped = os.waitid(os.P_PIDFD, self._pidfd, os.WEXITED)
             p.require((reaped.si_pid, reaped.si_code, reaped.si_status) == (terminal.si_pid, terminal.si_code, terminal.si_status))
+        prepared_inputs = getattr(self, "_prepared_inputs", None)
+        if prepared_inputs is not None:
+            prepared_inputs._close_after_exit(self)
         for fd in (self._driver_pidfd, self._pidfd, self._exec, self._bundle):
             if fd is not None:
                 os.close(fd)

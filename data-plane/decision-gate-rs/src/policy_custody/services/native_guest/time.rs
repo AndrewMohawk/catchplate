@@ -77,6 +77,19 @@ impl Clock {
     pub(super) fn acquire(original:Original,association:GuestClosureAssociation,key:&VerifyingKey,
         key_id:&Sha256Digest,prekey:&PrekeyExecutable)->Result<Self,ShadowError> {
         association.check_preparation().map_err(fail)?;
+        let nsm=ShadowTimeNsmV1::open(association.startup()).map_err(fail)?;
+        Self::acquire_owned(original,association,key,key_id,prekey,nsm)
+    }
+    pub(super) fn acquire_late(original:Original,association:GuestClosureAssociation,key:&VerifyingKey,
+        key_id:&Sha256Digest,prekey:&PrekeyExecutable,prepared:serverware_decision_gate::enclave_runtime_identity_v1::PreparedShadowTimeNsmV1)
+        ->Result<Self,ShadowError> {
+        association.check_native_preparation().map_err(fail)?;
+        require(association.owner.native_continuation.is_some())?;
+        Self::acquire_owned(original,association,key,key_id,prekey,prepared.consume().map_err(fail)?)
+    }
+    fn acquire_owned(original:Original,association:GuestClosureAssociation,key:&VerifyingKey,
+        key_id:&Sha256Digest,prekey:&PrekeyExecutable,mut nsm:ShadowTimeNsmV1)->Result<Self,ShadowError> {
+        association.check_native_preparation().map_err(fail)?;
         prekey.check()?;
         let bootstrap:Bootstrap=exact(&original.read(MAXIMUM).map_err(fail)?)?;
         let maximum_bracket=decimal(&bootstrap.maximum_bracket_nanos)?;
@@ -86,10 +99,9 @@ impl Clock {
             && maximum_bracket<=1_000_000_000 && (0..=1_000_000_000).contains(&bootstrap.timestamp_error_nanos)
             && bootstrap.maximum_clock_rate_error_ppm<=10_000)?;
         let deadline=association.startup();
-        let mut nsm=ShadowTimeNsmV1::open(deadline).map_err(fail)?;
         let mut stream=VsockStreamV1::connect_parent(bootstrap.parent_port,deadline).map_err(fail)?;
         let received=(|| {
-            association.check_preparation().map_err(fail)?;stream.verify_connected_original(deadline).map_err(fail)?;
+            association.check_native_preparation().map_err(fail)?;stream.verify_connected_original(deadline).map_err(fail)?;
             let challenge_original=receive(&mut stream,b"SWNGTC1\0")?;
             let challenge:Challenge=exact(&challenge_original)?;let p=&challenge.payload;
             require(p.api_version=="serverware.nativeShadowGuestTimeChallenge/v1"
@@ -106,14 +118,14 @@ impl Clock {
             // sign only this one measured bracket and is dropped immediately.
             let mut seed=Zeroizing::new([0u8;32]);let mut offset=0;
             while offset<seed.len() {
-                association.check_preparation().map_err(fail)?;
+                association.check_native_preparation().map_err(fail)?;
                 let count=unsafe{libc::getrandom(seed[offset..].as_mut_ptr().cast(),seed.len()-offset,0)};
                 if count<0 && std::io::Error::last_os_error().raw_os_error()==Some(libc::EINTR) {continue;}
                 require(count>0 && count as usize<=seed.len()-offset)?;offset+=count as usize;
             }
             let signing=SigningKey::from_bytes(&seed);
             let public=signing.verifying_key().to_bytes();drop(seed);
-            association.check_preparation().map_err(fail)?;prekey.check()?;
+            association.check_native_preparation().map_err(fail)?;prekey.check()?;
             let before=now()?;
             let statement=Statement{api_version:"serverware.nativeShadowGuestTimeStatement/v1",
                 purpose:"native-shadow-guest-time-sample",guest:association.binding(),
@@ -123,7 +135,7 @@ impl Clock {
                 nonce.try_into().map_err(fail)?).map_err(fail)?;
             let after=now()?;
             require(after>before && after-before<=maximum_bracket)?;
-            association.check_preparation().map_err(fail)?;prekey.check()?;
+            association.check_native_preparation().map_err(fail)?;prekey.check()?;
             let quote_sha256=Sha256Digest::compute(&document);
             let sample=Sample{statement:&statement,after_boottime_ns:after.to_string(),quote_sha256:quote_sha256.clone()};
             let signed=signing.sign(&signature_preimage(SAMPLE_DOMAIN,&canonical_json_bytes(&sample)?));drop(signing);
@@ -152,7 +164,7 @@ impl Clock {
                 && a.latest_unix_nanos.checked_sub(a.earliest_unix_nanos)==Some(maximum_width)
                 && a.expires_at_unix_nanos>a.latest_unix_nanos
                 && a.expires_at_unix_nanos.checked_sub(a.earliest_unix_nanos).is_some_and(|v|v<=300_000_000_000))?;
-            association.check_preparation().map_err(fail)?;prekey.check()?;
+            association.check_native_preparation().map_err(fail)?;prekey.check()?;
             Ok((challenge,challenge_original,evidence_original,anchor,anchor_original,before))
         })();
         let closed=stream.shutdown().map_err(fail);

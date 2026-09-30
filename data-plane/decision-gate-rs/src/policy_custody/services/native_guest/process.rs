@@ -70,7 +70,8 @@ impl Drop for Timer {fn drop(&mut self){if unsafe{libc::getpid()}==self.pid {
     unsafe{libc::timer_delete(self.handle as libc::timer_t);}
 }}}
 pub(super) struct Lifetime {
-    association:GuestClosureAssociation,startup:std::sync::Mutex<Option<Timer>>,_lifetime:Timer,parent:i32,
+    association:GuestClosureAssociation,startup:std::sync::Mutex<Option<Timer>>,_lifetime:Option<Timer>,parent:i32,
+    late:Option<Arc<driver_continuation::Retained>>,
 }
 impl Lifetime {
     pub(super) fn arm(delivery:&PreparedGuestServiceDelivery)->Result<Self,ShadowError> {
@@ -83,10 +84,17 @@ impl Lifetime {
         let startup=Some(Timer::arm(association.startup())?);
         let lifetime=Timer::arm(association.lifetime())?;
         association.check_preparation().map_err(fail)?;
-        Ok(Self{association,startup:std::sync::Mutex::new(startup),_lifetime:lifetime,parent})
+        Ok(Self{association,startup:std::sync::Mutex::new(startup),_lifetime:Some(lifetime),parent,late:None})
+    }
+    pub(super) fn adopt_late(delivery:&PreparedGuestServiceDelivery)->Result<Self,ShadowError>{
+        let association=delivery.native_closure_association().map_err(fail)?;
+        let late=Arc::clone(association.owner.native_continuation.as_ref().ok_or(ShadowError::BindingDrift)?);
+        late.check_startup()?;let parent=association.owner.parent.native_binding().map_err(fail)?.0;
+        Ok(Self{association,startup:std::sync::Mutex::new(None),_lifetime:None,parent,late:Some(late)})
     }
     pub(super) fn admitted(&self)->Result<(),ShadowError> {
         self.association.check_startup().map_err(fail)?;
+        if let Some(owner)=&self.late {owner.constructed()?;return self.check();}
         // Disarm only the completed startup bound. The original absolute
         // lifetime timer was armed before setup and is never replaced.
         self.startup.lock().map_err(fail)?.take().ok_or(ShadowError::CustodyUnavailable)?;
@@ -101,7 +109,8 @@ impl Lifetime {
     pub(super) fn check_threaded_bridge(&self)->Result<(),ShadowError> {
         self.association.check().map_err(fail)?;
         require(unsafe{libc::getppid()}==self.parent)?;
-        self._lifetime.check()?;
+        if let Some(timer)=&self._lifetime {timer.check()?;}
+        if let Some(owner)=&self.late {owner.check()?;}
         if let Some(timer)=self.startup.lock().map_err(fail)?.as_ref(){timer.check()?;}
         // PDEATHSIG is thread-local. It remains required on the actual
         // initial thread; workers retain the same process-wide SIGKILL timer

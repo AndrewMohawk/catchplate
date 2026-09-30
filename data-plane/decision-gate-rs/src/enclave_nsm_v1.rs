@@ -220,19 +220,34 @@ impl DeviceOriginals {
 /// Separate pre-key time-sampling purpose. The actual guest caller holds its
 /// C9 preparation, creates the one-use ephemeral key and signs the measured
 /// bracket. This fixed mechanism returns UNVERIFIED COSE, not a trusted clock.
-pub struct ShadowTimeNsmV1 { originals:DeviceOriginals,process:Process,startup:u64,attempted:bool }
+pub struct ShadowTimeNsmV1 { originals:DeviceOriginals,process:Process,startup:u64,attempted:bool,retained:bool }
+/// Source-owned root preparation for the explicitly measured two-phase guest.
+/// Consumption cannot reopen the NSM device or change the original deadline.
+pub struct PreparedShadowTimeNsmV1 {owner:ShadowTimeNsmV1}
+impl PreparedShadowTimeNsmV1 {
+    pub fn open(startup:u64)->Result<Self,String>{Ok(Self{owner:ShadowTimeNsmV1::open(startup)?})}
+    pub fn consume(self)->Result<ShadowTimeNsmV1,String>{
+        live(self.owner.startup)?;let current=Process::current();
+        if current.pid!=self.owner.process.pid || current.uid==0 || current.gid==0
+            || current.uid!=current.euid || current.gid!=current.egid {
+            return Err("late time NSM final process differs".into());
+        }
+        self.owner.originals.verify_retained(self.owner.startup)?;
+        Ok(ShadowTimeNsmV1{process:current,retained:true,..self.owner})
+    }
+}
 impl ShadowTimeNsmV1 {
     pub fn open(startup:u64)->Result<Self,String> {
         let process=Process::current();
         if process.uid!=0 || process.euid!=0 || process.gid!=0 || process.egid!=0 {
             return Err("shadow time NSM requires original root preparation".into());
         }
-        let owner=Self {originals:DeviceOriginals::open(startup)?,process,startup,attempted:false};
+        let owner=Self {originals:DeviceOriginals::open(startup)?,process,startup,attempted:false,retained:false};
         owner.check()?;Ok(owner)
     }
     fn check(&self)->Result<(),String> {
         if Process::current()!=self.process {return Err("shadow time process changed".into());}
-        self.originals.verify(self.startup)
+        if self.retained {self.originals.verify_retained(self.startup)} else {self.originals.verify(self.startup)}
     }
     pub fn quote(&mut self,statement_sha256:[u8;32],ephemeral_public:[u8;32],nonce:[u8;32])
         ->Result<Vec<u8>,String> {

@@ -25,6 +25,20 @@ impl Identity {
 
 pub(super) struct Original { file: File, identity: Identity, sha256: Sha256Digest }
 impl Original {
+    /// Only the fixed driver continuation calls this after authenticating the
+    /// same root parent and its signed, exact descriptor inventory. The parent
+    /// has independently opened the protected path; bytes do not prove a path.
+    pub(super) fn from_parent_file(file:File,uid:u32,gid:u32,maximum:usize,
+        sha256:Sha256Digest)->Result<Self,Error> {
+        let m=file.metadata()?;
+        let flags=unsafe{libc::fcntl(file.as_raw_fd(),libc::F_GETFL)};
+        if !m.is_file() || m.uid()!=uid || m.gid()!=gid || m.mode()&0o7777!=0o400
+            || m.nlink()!=1 || m.len()==0 || m.len()>maximum as u64 || flags<0
+            || flags&(libc::O_ACCMODE|libc::O_PATH|libc::O_APPEND)!=libc::O_RDONLY {
+            return Err(fail("late original is not the retained protected read-only file"));
+        }
+        let owner=Self{file,identity:Identity::of(&m),sha256};owner.check()?;Ok(owner)
+    }
     /// The one fixed native entry's independently installed cold original.
     /// A hash derived here is consistency only; protected provisioning is the
     /// trust boundary. There is no unpinned caller-selected path constructor.
@@ -201,29 +215,33 @@ impl Parent {
     pub(super) fn inherited() -> Result<Self, Error> {
         let socket = unsafe { OwnedFd::from_raw_fd(3) };
         super::set_cloexec(3)?;
+        Self::from_retained(socket)
+    }
+    pub(super) fn from_retained(socket:OwnedFd)->Result<Self,Error> {
+        let fd=socket.as_raw_fd();super::set_cloexec(fd)?;
         let stat = super::descriptor_stat(socket.as_fd())?;
         let mut kind: i32 = 0;
         let mut size = std::mem::size_of_val(&kind) as libc::socklen_t;
-        if unsafe { libc::getsockopt(3,libc::SOL_SOCKET,libc::SO_TYPE,(&mut kind as *mut i32).cast(),&mut size) } != 0
+        if unsafe { libc::getsockopt(fd,libc::SOL_SOCKET,libc::SO_TYPE,(&mut kind as *mut i32).cast(),&mut size) } != 0
             || size as usize != std::mem::size_of_val(&kind)
             || kind != libc::SOCK_SEQPACKET || stat.st_mode & libc::S_IFMT != libc::S_IFSOCK {
             return Err(fail("guest parent channel is not seqpacket"));
         }
         let mut domain:i32 = 0;
         size = std::mem::size_of_val(&domain) as libc::socklen_t;
-        if unsafe { libc::getsockopt(3,libc::SOL_SOCKET,libc::SO_DOMAIN,(&mut domain as *mut i32).cast(),&mut size) } != 0
+        if unsafe { libc::getsockopt(fd,libc::SOL_SOCKET,libc::SO_DOMAIN,(&mut domain as *mut i32).cast(),&mut size) } != 0
             || size as usize != std::mem::size_of_val(&domain)
             || domain != libc::AF_UNIX { return Err(fail("guest parent channel is not local")); }
         let mut cred:libc::ucred = unsafe { std::mem::zeroed() };
         size = std::mem::size_of_val(&cred) as libc::socklen_t;
-        if unsafe { libc::getsockopt(3,libc::SOL_SOCKET,libc::SO_PEERCRED,(&mut cred as *mut libc::ucred).cast(),&mut size) } != 0
+        if unsafe { libc::getsockopt(fd,libc::SOL_SOCKET,libc::SO_PEERCRED,(&mut cred as *mut libc::ucred).cast(),&mut size) } != 0
             || size as usize != std::mem::size_of_val(&cred)
             || cred.pid != unsafe { libc::getppid() } || cred.pid <= 1 || cred.uid != 0 || cred.gid != 0 {
             return Err(fail("guest parent channel does not identify the actual root preparation parent"));
         }
         let mut raw:i32 = -1;
         size = std::mem::size_of_val(&raw) as libc::socklen_t;
-        if unsafe { libc::getsockopt(3,libc::SOL_SOCKET,77,(&mut raw as *mut i32).cast(),&mut size) } != 0 || raw < 0 {
+        if unsafe { libc::getsockopt(fd,libc::SOL_SOCKET,77,(&mut raw as *mut i32).cast(),&mut size) } != 0 || raw < 0 {
             return Err(fail("guest parent SO_PEERPIDFD unavailable"));
         }
         let pidfd = unsafe { OwnedFd::from_raw_fd(raw) };

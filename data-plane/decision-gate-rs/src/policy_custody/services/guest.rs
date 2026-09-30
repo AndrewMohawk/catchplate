@@ -92,6 +92,15 @@ pub(crate) struct GuestClosureBinding {
 /// No Deserialize, raw-FD constructor, numeric-PID rebinding or ready bit.
 pub(crate) struct GuestClosureAssociation { owner:Arc<Delivery> }
 impl GuestClosureAssociation {
+    /// A closed source-owned successor, never a caller boolean. Legacy C9
+    /// owners still require root; late owners retain the measured bootstrap,
+    /// independent phase-two signature, original files and unchanged timers.
+    pub(crate) fn check_native_preparation(&self)->Result<(),ServiceRunnerError> {
+        if let Some(owner)=&self.owner.native_continuation {
+            owner.check_startup().map_err(|_|fail("late native preparation changed"))?;
+            self.check_startup()
+        } else {self.check_preparation()}
+    }
     pub(crate) fn same_origin(&self,other:&Self)->bool {Arc::ptr_eq(&self.owner,&other.owner)}
     pub(crate) fn check_preparation(&self)->Result<(),ServiceRunnerError> {
         self.owner.check_originals()?;
@@ -124,6 +133,7 @@ pub(super) struct Delivery {
     process:Process, parent:Parent, payload:Payload, delivery_sha256:Sha256Digest,
     startup:u64, lifetime:u64, ready:AtomicBool,
     ordinary_lifetime:std::sync::Mutex<Option<ordinary::Lifetime>>,
+    native_continuation:Option<Arc<native_guest::driver_continuation::Retained>>,
 }
 /// Same-process root file admission shared by the fixed parent and child.
 /// Not a final-role owner, admission result, or authority reconstructed from data.
@@ -281,7 +291,7 @@ impl PreparedGuestServiceDelivery {
         }).collect();
         let owner=Arc::new(Delivery { configuration,envelope,runtime,credentials,process,parent,payload:p,
             delivery_sha256:expected_delivery_sha256,startup,lifetime,ready:AtomicBool::new(false),
-            ordinary_lifetime:std::sync::Mutex::new(None) });
+            ordinary_lifetime:std::sync::Mutex::new(None),native_continuation:None });
         owner.check_originals()?;
         Ok(Self { owner,activation })
     }
@@ -289,7 +299,7 @@ impl PreparedGuestServiceDelivery {
     pub(crate) fn role_gid(&self)->u32 { self.owner.payload.gid }
     pub(crate) fn startup_deadline_boottime_ns(&self)->u64 { self.owner.startup }
     pub(in crate::policy_shadow::policy_custody::services) fn retrieval_client_runtime(&self)->Result<Vec<u8>,ServiceRunnerError> {
-        self.closure_association()?.check_preparation()?;
+        self.native_closure_association()?.check_native_preparation()?;
         if self.owner.payload.service_role!=Role::ProductionBridge {return Err(fail("retrieval client requires signed production bridge role"));}
         Ok(self.owner.runtime.read(MAX_CONFIG_BYTES)?.to_vec())
     }
@@ -300,6 +310,11 @@ impl PreparedGuestServiceDelivery {
         // until the original delivery's actual final-role load.
         self.owner.runtime.read(MAX_CONFIG_BYTES)?;
         Ok(association)
+    }
+    pub(crate) fn native_closure_association(&self)->Result<GuestClosureAssociation,ServiceRunnerError> {
+        let association=GuestClosureAssociation{owner:Arc::clone(&self.owner)};
+        association.check_native_preparation()?;
+        self.owner.runtime.read(MAX_CONFIG_BYTES)?;Ok(association)
     }
     pub(crate) fn run_after_drop(self)->Result<(),ServiceRunnerError> {
         self.owner.check()?;
@@ -323,6 +338,9 @@ impl PreparedGuestServiceDelivery {
 impl Delivery {
     fn check_originals(&self)->Result<(),ServiceRunnerError> {
         self.process.check()?; self.parent.check()?;
+        if let Some(owner)=&self.native_continuation {
+            owner.check().map_err(|_|fail("native phase-two owner changed"))?;
+        }
         self.configuration.check()?; self.envelope.check()?; self.runtime.check()?;
         for (_,original) in self.credentials.values() { original.check()?; }
         Ok(())

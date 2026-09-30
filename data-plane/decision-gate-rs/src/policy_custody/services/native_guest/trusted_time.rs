@@ -71,6 +71,9 @@ pub(in crate::policy_shadow::policy_custody::services) struct ClientGrant {
 impl ClientGrant {
     pub(in crate::policy_shadow::policy_custody::services) fn open(pin:&guest::Pin)->Result<Self,ShadowError> {
         let original=pin.open(65536)?;
+        Self::from_retained(original)
+    }
+    pub(in crate::policy_shadow::policy_custody::services) fn from_retained(original:services::guest_original::Original)->Result<Self,ShadowError>{
         let configuration:Configuration=guest::exact(&original.read(65536).map_err(fail)?)?;
         configuration.validate_shape()?;Ok(Self{original,configuration})
     }

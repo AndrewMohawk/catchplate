@@ -1,9 +1,15 @@
 # Actual driver bootstrap and retained phase-two handoff
 
-This source slice breaks the **measurement ordering** cycle. It does not yet
+This v1 source slice breaks the **measurement ordering** cycle. It does not
 construct an operational native bridge or complete a generation install.
 The old guest/supervisor, five/six-proof cohorts, ordinary generation/commitment
 launchers and runtime profiles are unchanged. Nothing was built or executed.
+
+The explicit [v2 operational continuation](native-shadow-driver-continuation.md)
+now connects the same retained measurement to native context/key admission and
+the inspected bridge constructor. It preserves the v1 retention-only behavior.
+Full-purpose configuration activation, complete operational settlement/reaper
+ownership and connected-pilot verification remain required.
 
 ## Actual caller and owner
 
@@ -83,22 +89,18 @@ next connection is implemented, the retained child is killed at that unchanged
 startup deadline. Cancellation retains originals until actual child death and
 supervisor reap; this is not a signed per-operation five-service settlement.
 
-## Immediate required connection, not provisioning-only work
+## V1 boundary and its explicit successor
 
-The next source slice must split `AdmittedGuest::start`'s genuine pre-drop
-preparation from post-drop continuation. It must consume the retained bootstrap
-identity, image/root/filter/process lifetime and exact phase-two originals;
-independently admit **all** generation signatures, real authority histories,
-current assignment/revocation and operational runtime; bind actual phase-two
-C9 credential/activation descriptors; then connect the native key/closure
-admission and actual proof/business clients without a second exec, root regain,
-timer renewal or copied owner. The current raw `PhaseTwo` retention owner is not
-that permission. The bootstrap filter must genuinely permit the bounded
-continuation, and any additional filter must be actually installed and retained.
+The v2 successor separates pre-drop resource preparation from continuation in
+the same final process. It retains the measured identity/image/filter, adopts
+the real C9 files and activation descriptors, verifies the current assignment
+and closure, admits one native key owner, and constructs the inspected bridge.
+Its native configuration comes from the real
+`from_native_closure_with_settlement_authority` constructor, not a deserialized
+legacy software closure. The raw v1 `PhaseTwo` owner grants none of this.
 
-The native configuration facade must then use the real
-`from_native_closure_with_settlement_authority` owner instead of deserializing a
-legacy `ProductionProcessConfigV4`/software closure. A genuine stable-reaper and
-complete operation descriptor/generation owner are still required; neither can
-be synthesized from this four-descriptor measurement. Actual packaging, signed
-deployment inputs and final connected-pilot execution remain unperformed.
+That configuration remains unactivated until a genuine full-purpose verifier
+result is connected. Complete operational descriptors, generation/settlement
+ownership and a genuine stable reaper remain required; none can be synthesized
+from this four-descriptor measurement. Packaging, signed deployment inputs and
+connected-pilot execution are still unperformed.

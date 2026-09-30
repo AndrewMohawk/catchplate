@@ -41,6 +41,19 @@ impl Trust {
         ->Result<(Self,Arc<Clock>),ShadowError> {
         let association=delivery.closure_association().map_err(fail)?;
         association.check_preparation().map_err(fail)?;
+        Self::open_owned(trust,bootstrap,association,prekey,None)
+    }
+    pub(super) fn open_late(trust:Original,bootstrap:Original,delivery:&PreparedGuestServiceDelivery,
+        prekey:&PrekeyExecutable,nsm:serverware_decision_gate::enclave_runtime_identity_v1::PreparedShadowTimeNsmV1)
+        ->Result<(Self,Arc<Clock>),ShadowError> {
+        let association=delivery.native_closure_association().map_err(fail)?;
+        require(association.owner.native_continuation.is_some())?;
+        Self::open_owned(trust,bootstrap,association,prekey,Some(nsm))
+    }
+    fn open_owned(trust:Original,bootstrap:Original,association:GuestClosureAssociation,prekey:&PrekeyExecutable,
+        nsm:Option<serverware_decision_gate::enclave_runtime_identity_v1::PreparedShadowTimeNsmV1>)
+        ->Result<(Self,Arc<Clock>),ShadowError> {
+        association.check_native_preparation().map_err(fail)?;
         let configuration:Configuration=exact(&trust.read(1024*1024).map_err(fail)?)?;
         require(configuration.api_version=="serverware.nativeShadowGuestTrust/v1"
             && !configuration.role_keys.is_empty() && configuration.role_keys.len()<=128
@@ -57,7 +70,10 @@ impl Trust {
         let checkpoint=AtomicTrustCheckpoint::new(configuration.checkpoint.checkpoint_id.clone(),
             configuration.checkpoint.as_of_unix_nanos,configuration.checkpoint.revocation_generation,
             configuration.checkpoint.revocation_root_sha256.clone())?;
-        let clock=Arc::new(Clock::acquire(bootstrap,association,&time_key,&configuration.time_key.key_id,prekey)?);
+        let clock=Arc::new(match nsm {
+            Some(nsm)=>Clock::acquire_late(bootstrap,association,&time_key,&configuration.time_key.key_id,prekey,nsm)?,
+            None=>Clock::acquire(bootstrap,association,&time_key,&configuration.time_key.key_id,prekey)?,
+        });
         let owner=Self { original:trust,configuration,checkpoint,clock:Arc::clone(&clock),assignment,roles };
         owner.check()?;
         Ok((owner,clock))

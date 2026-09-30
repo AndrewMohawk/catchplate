@@ -1541,6 +1541,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/native_shadow_proof_cohort_control.py \
 	serverware/native_shadow_proof_cohort_cleanup.py \
 	serverware/native_shadow_driver_bootstrap.py \
+	serverware/native_shadow_driver_inputs.py \
 	serverware/native_policy_activation_inputs.py \
 	serverware/native_policy_activation_recovery.py \
 	serverware/native_shadow_trusted_time_inputs.py \
@@ -4129,6 +4130,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/native_shadow_proof_cohort_control.py \
 				serverware/native_shadow_proof_cohort_cleanup.py \
 				serverware/native_shadow_driver_bootstrap.py \
+				serverware/native_shadow_driver_inputs.py \
 				serverware/native_policy_activation_inputs.py \
 				serverware/native_policy_activation_recovery.py \
 				serverware/native_shadow_trusted_time_inputs.py \
@@ -4836,6 +4838,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-shadow-proof-cohort.v2.schema.json \
 				schemas/native-shadow-proof-cohort.v3.schema.json \
 				schemas/native-shadow-driver-bootstrap.v1.schema.json \
+				schemas/native-shadow-driver-continuation.v1.schema.json \
 				schemas/custody-service-generation-admission.v1.schema.json \
 				schemas/native-generation-coordinator.v1.schema.json \
 				schemas/native-shadow-commit-request.v1.schema.json \
@@ -4859,6 +4862,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-shadow-workers.v1.schema.json \
 				schemas/policy-custody-guest-delivery.v1.schema.json \
 				schemas/native-custody-closure.v1.schema.json \
+				schemas/native-custody-closure.v2.schema.json \
 				schemas/native-shadow-role-keys.v1.schema.json \
 				schemas/native-shadow-nitro-verifier.v1.schema.json \
 				schemas/native-shadow-verifier-launch.v1.schema.json \

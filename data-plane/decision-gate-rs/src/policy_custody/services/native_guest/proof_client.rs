@@ -60,6 +60,16 @@ impl Prepared {
     }
     pub(super) fn open_selected(delivery:&mut PreparedGuestServiceDelivery,channel:OwnedFd,time_grant:&Pin,commitment:bool)
         ->Result<(Self,admission::trusted_time::ClientGrant),ShadowError> {
+        let grant=admission::trusted_time::ClientGrant::open(time_grant)?;
+        Ok((Self::prepare_owned(delivery,channel,commitment)?,grant))
+    }
+    pub(super) fn open_late(delivery:&mut PreparedGuestServiceDelivery,channel:OwnedFd,time_grant:Original,commitment:bool)
+        ->Result<(Self,admission::trusted_time::ClientGrant),ShadowError>{
+        require(delivery.owner.native_continuation.is_some())?;
+        let grant=admission::trusted_time::ClientGrant::from_retained(time_grant)?;
+        Ok((Self::prepare_owned(delivery,channel,commitment)?,grant))
+    }
+    fn prepare_owned(delivery:&mut PreparedGuestServiceDelivery,channel:OwnedFd,commitment:bool)->Result<Self,ShadowError>{
         let selection=Selection::original(&delivery.retrieval_client_runtime().map_err(fail)?,commitment)?;
         let mut directories=BTreeMap::new();
         for (kind,endpoint) in &selection.entries {
@@ -70,8 +80,7 @@ impl Prepared {
             directories.insert(*kind,inspection::Directory::open(fd,endpoint.expected_peer.uid,delivery.role_gid(),*kind)?);
         }
         retrieval_peer::configure(channel.as_fd())?;
-        let grant=admission::trusted_time::ClientGrant::open(time_grant)?;
-        Ok((Self{selection,channel,directories},grant))
+        Ok(Self{selection,channel,directories})
     }
     pub(in crate::policy_shadow::policy_custody::services) fn attach(mut self,
         activation:&mut BTreeMap<String,OwnedFd>,runtime:&ProductionRpcRuntimeConfigV4,owner:Arc<AdmittedGuest>)

@@ -115,6 +115,7 @@ pub(super) struct Owner {
     before:Vec<Descriptor>,observation:Option<Observation>,
 }
 impl Owner {
+    pub(super) fn executable(&self)->Result<File,ShadowError>{self.check()?;self.executable.try_clone().map_err(fail)}
     pub(super) fn prepare(executable_sha256:&Sha256Digest,root:BorrowedFd<'_>)->Result<Self,ShadowError> {
         require(unsafe{libc::getuid()}==0 && unsafe{libc::geteuid()}==0)?;
         let process=Process::capture().map_err(fail)?;

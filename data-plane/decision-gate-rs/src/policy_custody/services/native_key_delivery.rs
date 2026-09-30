@@ -83,6 +83,27 @@ impl NativeShadowEncryptedKeysConfiguration {
 }
 pub(super) struct Prepared {configuration:NativeShadowEncryptedKeysConfiguration,helper:PreparedShadowKeyHelper}
 impl PreparedNativeCustodyKeys {
+    pub(in crate::policy_shadow::policy_custody::services) fn open_encrypted_late(
+        configuration:NativeCustodyKeyConfiguration,encrypted:NativeShadowEncryptedKeysConfiguration,
+        assignment:&VerifiedAssignment,trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime,
+        delivery:&PreparedGuestServiceDelivery,prepared:super::super::native_guest::driver_continuation::Resources)
+        ->Result<Self,ShadowError> {
+        let association=delivery.native_closure_association().map_err(fail)?;
+        let owner=association.owner.native_continuation.as_ref().ok_or(ShadowError::BindingDrift)?;
+        owner.check_startup()?;let checkpoint=trust.current_checkpoint()?;
+        let k=&configuration.authorization.payload;let p=&encrypted.authorization().payload;
+        require(configuration.api_version=="serverware.nativeShadowRoleKeys/v2"
+            && k.trust_checkpoint_id==checkpoint.checkpoint_id && k.revocation_generation==checkpoint.revocation_generation
+            && k.revocation_root_sha256==checkpoint.revocation_root_sha256
+            && p.trust_checkpoint_id==checkpoint.checkpoint_id && p.revocation_generation==checkpoint.revocation_generation
+            && p.revocation_root_sha256==checkpoint.revocation_root_sha256)?;
+        verify(&configuration,assignment,&association,&checkpoint,trust,time)?;
+        encrypted.verify(&configuration,assignment,&association,&checkpoint,trust,time)?;
+        let (nsm,helper)=prepared.consume(&encrypted.authorization().payload.transport,owner)?;
+        association.check_native_preparation().map_err(fail)?;
+        Ok(Self{configuration,assignment:assignment.clone(),association,nsm,checkpoint,
+            encrypted:Some(Prepared{configuration:encrypted,helper}),verifier_transport:None})
+    }
     pub(crate) fn open_encrypted(configuration:NativeCustodyKeyConfiguration,encrypted:NativeShadowEncryptedKeysConfiguration,
         assignment:&VerifiedAssignment,trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime,
         delivery:&PreparedGuestServiceDelivery)->Result<Self,ShadowError> {

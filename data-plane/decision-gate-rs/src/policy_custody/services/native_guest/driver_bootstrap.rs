@@ -7,6 +7,8 @@ use std::os::fd::{AsFd,AsRawFd,BorrowedFd,FromRawFd,OwnedFd};
 use std::os::unix::fs::{FileExt,MetadataExt};
 const WINDOW_DOMAIN:&[u8]=b"serverware.nativeShadowDriverBootstrapWindow.signature/v1\0";
 const SCOPE_DOMAIN:&[u8]=b"serverware.nativeShadowDriverScope.signature/v1\0";
+#[path="driver_continuation.rs"]
+pub(in crate::policy_shadow) mod continuation;
 pub(super) const MAX_BUNDLE:usize=1024*1024;
 pub(super) const SEALS:i32=libc::F_SEAL_WRITE|libc::F_SEAL_GROW|libc::F_SEAL_SHRINK|libc::F_SEAL_SEAL;
 
@@ -36,7 +38,9 @@ struct ImagePins {image_sha256:Sha256Digest,executable_sha256:Sha256Digest,
 #[derive(Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 struct Configuration {api_version:String,bootstrap_authority:Authority,phase_two_authority:Authority,
-    delivery_configuration:Pin,uid:u32,gid:u32,image:ImagePins}
+    delivery_configuration:Pin,uid:u32,gid:u32,image:ImagePins,
+    #[serde(default,skip_serializing_if="Option::is_none")]
+    continuation:Option<continuation::ColdInputs>}
 #[derive(Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 struct Window {configuration_sha256:Sha256Digest,signing_key_id:Sha256Digest,boot_id_base64url:String,
@@ -58,7 +62,9 @@ impl Cold {
         let configuration=Original::driver_bootstrap_configuration().map_err(fail)?;
         let configuration_bytes=configuration.read(65536).map_err(fail)?.to_vec();
         let config:Configuration=exact(&configuration_bytes)?;
-        require(config.api_version=="serverware.nativeShadowDriverBootstrapConfiguration/v1"
+        require(matches!((config.api_version.as_str(),config.continuation.is_some()),
+            ("serverware.nativeShadowDriverBootstrapConfiguration/v1",false)
+            |("serverware.nativeShadowDriverBootstrapConfiguration/v2",true))
             && config.uid>0 && config.gid>0 && config.uid!=u32::MAX && config.gid!=u32::MAX
             && ![64988,64989,64990,65534].contains(&config.uid) && ![64988,64989,64990,65534].contains(&config.gid)
             && config.bootstrap_authority.key_id!=config.phase_two_authority.key_id)?;
@@ -86,12 +92,16 @@ impl Cold {
             delivery_cold,startup,lifetime})
     }
     pub(super) fn check(&self)->Result<(),ShadowError> {
-        self.process.check().map_err(fail)?;require(now()?<self.startup && now()?<self.lifetime
+        self.check_lifetime()?;require(now()?<self.startup)
+    }
+    pub(super) fn check_lifetime(&self)->Result<(),ShadowError> {
+        self.process.check().map_err(fail)?;require(now()?<self.lifetime
             && self.configuration.read(65536).map_err(fail)?.as_slice()==self.configuration_bytes.as_slice()
             && self.window.read(32768).map_err(fail)?.as_slice()==self.window_bytes.as_slice())?;
         self.delivery_configuration.read(65536).map_err(fail)?;Ok(())
     }
     pub(super) fn startup(&self)->u64 {self.startup}
+    pub(super) fn operational(&self)->bool {self.config.continuation.is_some()}
     pub(super) fn lifetime(&self)->u64 {self.lifetime}
     pub(super) fn uid(&self)->u32 {self.config.uid}
     pub(super) fn gid(&self)->u32 {self.config.gid}
@@ -133,8 +143,9 @@ pub(super) fn filters()->Result<u64,ShadowError> {
     require(values.len()==1)?;values[0].trim().parse::<u64>().map_err(fail)
 }
 pub(super) struct Prepared {
-    cold:Cold,image:ShadowImage,channel:OwnedFd,parent_pidfd:OwnedFd,parent:i32,parent_start:u64,
-    startup_timer:process::Timer,lifetime_timer:process::Timer,
+    cold:Cold,image:Arc<ShadowImage>,channel:OwnedFd,parent_pidfd:OwnedFd,parent:i32,parent_start:u64,
+    startup_timer:std::sync::Mutex<Option<process::Timer>>,lifetime_timer:process::Timer,
+    continuation:Option<continuation::Resources>,
 }
 fn process_start(pid:i32)->Result<u64,ShadowError> {
     let bytes=driver_identity::bounded(&format!("/proc/{pid}/stat"),16384)?;
@@ -159,12 +170,14 @@ impl Prepared {
         }
         let startup_timer=process::Timer::arm(cold.startup)?;let lifetime_timer=process::Timer::arm(cold.lifetime)?;
         require(unsafe{libc::prctl(libc::PR_SET_PDEATHSIG,libc::SIGKILL)}==0 && unsafe{libc::getppid()}==parent)?;
-        process::isolate_mounts()?;let image=cold.image()?;
-        let owner=Self{cold,image,channel,parent_pidfd,parent,parent_start,startup_timer,lifetime_timer};
+        let continuation=cold.config.continuation.as_ref().map(|v|continuation::Resources::open(v,&cold)).transpose()?;
+        process::isolate_mounts()?;let image=Arc::new(cold.image()?);
+        let owner=Self{cold,image,channel,parent_pidfd,parent,parent_start,
+            startup_timer:std::sync::Mutex::new(Some(startup_timer)),lifetime_timer,continuation};
         owner.check_root()?;Ok(owner)
     }
     fn check(&self)->Result<(),ShadowError> {
-        self.cold.check()?;self.startup_timer.check()?;self.lifetime_timer.check()?;
+        self.cold.check()?;self.startup_timer.lock().map_err(fail)?.as_ref().ok_or(ShadowError::BindingDrift)?.check()?;self.lifetime_timer.check()?;
         retrieval_peer::same_process(self.parent_pidfd.as_fd(),self.parent)?;
         require(unsafe{libc::getppid()}==self.parent && process_start(self.parent)?==self.parent_start)
     }
@@ -202,7 +215,9 @@ pub(super) struct OriginalPins {runtime_sha256:Sha256Digest,delivery_sha256:Sha2
 struct Scope {api_version:String,configuration_sha256:Sha256Digest,window_sha256:Sha256Digest,
     observation_sha256:Sha256Digest,kernel_driver_identity_sha256:Sha256Digest,invocation_id:String,
     startup_deadline_boottime_ns:String,lifetime_deadline_boottime_ns:String,
-    originals:OriginalPins,public_bundle_sha256:Sha256Digest,signing_key_id:Sha256Digest}
+    originals:OriginalPins,public_bundle_sha256:Sha256Digest,signing_key_id:Sha256Digest,
+    #[serde(default,skip_serializing_if="Option::is_none")]
+    operation:Option<continuation::Operation>}
 #[derive(Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 struct SignedScope{payload:Scope,signature_base64url:String}
@@ -216,9 +231,13 @@ impl PhaseTwo {
     pub(super) fn retain(cold:&Cold,observation:&driver_identity::Observation,scope:&[u8],fd:OwnedFd)->Result<Self,ShadowError> {
         cold.check_observation(observation)?;require(scope.len()<=32768)?;
         let signed:SignedScope=exact(scope)?;let s=&signed.payload;
-        verify(&cold.config.phase_two_authority.key()?,SCOPE_DOMAIN,s,&signed.signature_base64url)?;
-        require(s.api_version=="serverware.nativeShadowDriverScope/v1"
-            && s.configuration_sha256==observation.configuration_sha256 && s.window_sha256==observation.window_sha256
+        let domain=match (cold.config.continuation.is_some(),s.api_version.as_str(),s.operation.is_some()) {
+            (false,"serverware.nativeShadowDriverScope/v1",false)=>SCOPE_DOMAIN,
+            (true,"serverware.nativeShadowDriverScope/v2",true)=>b"serverware.nativeShadowDriverScope.signature/v2\0".as_slice(),
+            _=>return Err(ShadowError::BindingDrift),
+        };
+        verify(&cold.config.phase_two_authority.key()?,domain,s,&signed.signature_base64url)?;
+        require(s.configuration_sha256==observation.configuration_sha256 && s.window_sha256==observation.window_sha256
             && s.observation_sha256==Sha256Digest::compute(&canonical_json_bytes(observation)?)
             && s.kernel_driver_identity_sha256==*observation.driver.identity_sha256()
             && s.invocation_id==cold.signed.payload.invocation_id && s.signing_key_id==cold.config.phase_two_authority.key_id
@@ -283,7 +302,9 @@ fn run_inner()->Result<(),ShadowError> {
     require(retrieval_peer::send(prepared.channel.as_fd(),&canonical_json_bytes(&observation)?,&[])?)?;
     let packet=loop {
         prepared.check_final()?;identity.check()?;
-        if let Some(packet)=retrieval_peer::receive(prepared.channel.as_fd(),32768,1)? {break packet;}
+        let packet=if prepared.cold.operational(){continuation::receive_operational(prepared.channel.as_fd(),32768)?}
+            else{retrieval_peer::receive(prepared.channel.as_fd(),32768,1)?};
+        if let Some(packet)=packet {break packet;}
         let mut p=libc::pollfd{fd:prepared.channel.as_raw_fd(),events:libc::POLLIN,revents:0};
         require(unsafe{libc::poll(&mut p,1,1)}>=0)?;
     };
@@ -291,6 +312,9 @@ fn run_inner()->Result<(),ShadowError> {
     retrieval_peer::same_process(packet.pidfd.as_fd(),prepared.parent)?;
     let mut rights=packet.rights.into_iter();let phase_two=PhaseTwo::retain(&prepared.cold,&observation,&packet.bytes,
         rights.next().ok_or(ShadowError::BindingDrift)?)?;
+    if prepared.cold.config.continuation.is_some() {
+        return continuation::continue_owned(prepared,identity,observation,phase_two,rights.collect());
+    }
     let notice=canonical_json_bytes(&serde_json::json!({"apiVersion":"serverware.nativeShadowDriverPhaseTwoRetained/v1",
         "observationSha256":Sha256Digest::compute(&canonical_json_bytes(&observation)?),
         "scopeSha256":Sha256Digest::compute(phase_two.scope())}))?;

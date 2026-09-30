@@ -157,6 +157,12 @@ impl Child {
             && self.terminal(false)?.is_none() && Some(self.identity()?)==self.start)?;
         require(retrieval_peer::send(self.channel.as_fd(),bytes,rights)?)
     }
+    pub(in crate::policy_shadow::policy_custody::services::guest::native_guest) fn bootstrap_send_operational(
+        &self,bytes:&[u8],rights:&[BorrowedFd<'_>])->Result<(),ShadowError>{
+        require(!self.pair_mode && self.start.is_some() && now()?<self.deadline
+            && self.terminal(false)?.is_none() && Some(self.identity()?)==self.start)?;
+        super::super::driver_continuation::send_operational(self.channel.as_fd(),bytes,rights)
+    }
     pub(in crate::policy_shadow::policy_custody::services::guest::native_guest) fn bootstrap_configure(&self)->Result<(),ShadowError> {
         retrieval_peer::configure(self.channel.as_fd())
     }

@@ -11,7 +11,8 @@ struct Running {
     // Drop order is material: genuine same-child exit/reap before originals.
     child:Child,executable:File,image:serverware_decision_gate::native_secret_broker_v1::shadow_image::ShadowImage,
     cold:Cold,control:OwnedFd,caller_pidfd:OwnedFd,caller:i32,
-    startup:process::Timer,lifetime:process::Timer,phase_two:Option<PhaseTwo>,
+    startup:Option<process::Timer>,lifetime:process::Timer,phase_two:Option<PhaseTwo>,
+    operational:Option<driver_continuation::ParentInputs>,held_rights:Vec<OwnedFd>,
 }
 impl Running {
     fn start()->Result<Self,ShadowError> {
@@ -38,20 +39,22 @@ impl Running {
             && unsafe{libc::fcntl(executable.as_raw_fd(),libc::F_ADD_SEALS,SEALS)}==0)?;
         let mut copied=vec![0;bytes.len()];executable.read_exact_at(&mut copied,0).map_err(fail)?;require(copied==bytes)?;
         let child=Child::spawn_driver_bootstrap(executable.as_fd(),cold.configuration.descriptor(),cold.window.descriptor(),cold.lifetime())?;
-        Ok(Self{child,executable,image,cold,control,caller_pidfd,caller,startup,lifetime,phase_two:None})
+        Ok(Self{child,executable,image,cold,control,caller_pidfd,caller,startup:Some(startup),lifetime,phase_two:None,
+            operational:None,held_rights:Vec::new()})
     }
     fn check(&self)->Result<(),ShadowError> {
-        self.cold.check()?;self.startup.check()?;self.lifetime.check()?;
+        self.cold.check_lifetime()?;if let Some(timer)=&self.startup{self.cold.check()?;timer.check()?;}self.lifetime.check()?;
         self.image.check(self.cold.lifetime()).map_err(fail)?;
         retrieval_peer::same_process(self.caller_pidfd.as_fd(),self.caller)?;
         require(unsafe{libc::getppid()}==self.caller && unsafe{libc::geteuid()}==0
             && unsafe{libc::fcntl(self.executable.as_raw_fd(),libc::F_GET_SEALS)}==SEALS)?;
         if let Some(v)=&self.phase_two {v.check()?;}Ok(())
     }
-    fn receive_child(&self)->Result<retrieval_peer::Packet,ShadowError> {
+    fn receive_child(&mut self)->Result<retrieval_peer::Packet,ShadowError> {
         loop {
             self.check()?;
             if let Some(packet)=self.child.bootstrap_receive(self.cold.uid(),self.cold.gid())? {return Ok(packet);}
+            if let Some(owner)=&mut self.operational{owner.progress(&self.child)?;}
             let mut wait=libc::pollfd{fd:self.caller_pidfd.as_raw_fd(),events:libc::POLLIN,revents:0};
             require(unsafe{libc::poll(&mut wait,1,1)}==0)?;
         }
@@ -64,7 +67,9 @@ impl Running {
         require(retrieval_peer::send(self.control.as_fd(),&packet.bytes,&[])?)?;
         let release=loop {
             self.check()?;
-            if let Some(packet)=retrieval_peer::receive(self.control.as_fd(),32768,1)? {break packet;}
+            let packet=if self.cold.operational(){driver_continuation::receive_operational(self.control.as_fd(),32768)?}
+                else{retrieval_peer::receive(self.control.as_fd(),32768,1)?};
+            if let Some(packet)=packet {break packet;}
             let mut wait=libc::pollfd{fd:self.control.as_raw_fd(),events:libc::POLLIN,revents:0};
             require(unsafe{libc::poll(&mut wait,1,1)}>=0)?;
         };
@@ -73,10 +78,17 @@ impl Running {
         observation.require_child(&packet,&self.executable)?;
         let mut rights=release.rights.into_iter();let phase=PhaseTwo::retain(&self.cold,&observation,&release.bytes,
             rights.next().ok_or(ShadowError::BindingDrift)?)?;
+        self.held_rights=rights.collect();
+        if self.cold.operational(){
+            self.operational=Some(driver_continuation::ParentInputs::open(&self.cold,&phase,&self.held_rights)?);
+        }else{require(self.held_rights.is_empty())?;}
         // Irreversible one attempt. No resend on EAGAIN, EINTR or lost ACK.
         self.phase_two=Some(phase);
         let phase=self.phase_two.as_ref().ok_or(ShadowError::BindingDrift)?;
-        self.child.bootstrap_send(phase.scope(),&[phase.descriptor()])?;
+        if let Some(owner)=&self.operational{
+            let mut rights=vec![phase.descriptor()];rights.extend(self.held_rights.iter().map(AsFd::as_fd));
+            rights.push(owner.channel.as_fd());self.child.bootstrap_send_operational(phase.scope(),&rights)?;
+        }else{self.child.bootstrap_send(phase.scope(),&[phase.descriptor()])?;}
         let retained=self.receive_child()?;
         #[derive(Serialize,Deserialize)]
         #[serde(rename_all="camelCase",deny_unknown_fields)]
@@ -87,10 +99,23 @@ impl Running {
             && notice.scope_sha256==Sha256Digest::compute(self.phase_two.as_ref().ok_or(ShadowError::BindingDrift)?.scope()))?;
         observation.require_child(&retained,&self.executable)?;
         require(retrieval_peer::send(self.control.as_fd(),&retained.bytes,&[])?)?;
-        // No operating service yet. Keep the actual child/descriptors under
-        // original startup/lifetime; any message or disconnect tears it down.
+        if self.operational.is_some(){
+            let completed=self.receive_child()?;let notice:Notice=exact(&completed.bytes)?;
+            require(notice.api_version=="serverware.nativeShadowDriverBridgeConstructed/v1"
+                && notice.observation_sha256==Sha256Digest::compute(&packet.bytes)
+                && notice.scope_sha256==Sha256Digest::compute(self.phase_two.as_ref().ok_or(ShadowError::BindingDrift)?.scope()))?;
+            // The actual child has completed its real inspected bridge
+            // constructor. This is not attestation/readiness/fleet activation.
+            require(retrieval_peer::send(self.control.as_fd(),&completed.bytes,&[])?)?;
+            self.startup.take();
+        }
+        // Legacy v1 retains only; v2 services the actual inspected bridge.
+        // Both retain the original lifetime and fail on any extra control
+        // message or disconnect. Only definite construction disarmed startup.
         loop {
-            self.check()?;observation.require_child(&retained,&self.executable)?;
+            self.check()?;
+            if let Some(owner)=&mut self.operational{owner.progress(&self.child)?;}
+            else{observation.require_child(&retained,&self.executable)?;}
             require(self.child.bootstrap_receive(self.cold.uid(),self.cold.gid())?.is_none())?;
             let mut wait=libc::pollfd{fd:self.control.as_raw_fd(),events:libc::POLLIN,revents:0};
             require(unsafe{libc::poll(&mut wait,1,1)}==0)?;

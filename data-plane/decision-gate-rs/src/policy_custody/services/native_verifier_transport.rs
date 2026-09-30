@@ -18,6 +18,11 @@ const MAX_RESULT: usize = 32 * 1024;
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all="camelCase", deny_unknown_fields)]
 pub(crate) struct NativeVerifierTransportPin { path: String, sha256: Sha256Digest }
+impl NativeVerifierTransportPin {
+    pub(in crate::policy_shadow::policy_custody::services) fn retained_pin(&self)->Result<(&str,&Sha256Digest),ShadowError>{
+        require(self.path==CONFIGURATION_PATH)?;Ok((&self.path,&self.sha256))
+    }
+}
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all="camelCase", deny_unknown_fields)]
@@ -131,6 +136,19 @@ impl PreparedTransport {
     }
 }
 impl PreparedNativeCustodyKeys {
+    pub(in crate::policy_shadow::policy_custody::services) fn prepare_late_verifier(&mut self,
+        original:Original,trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime)->Result<(),ShadowError>{
+        self.association.check_native_preparation().map_err(fail)?;
+        require(self.association.owner.native_continuation.is_some() && self.verifier_transport.is_none())?;
+        let checkpoint=trust.current_checkpoint()?;require(self.checkpoint.permits_successor(&checkpoint))?;
+        super::verify(&self.configuration,&self.assignment,&self.association,&checkpoint,trust,time)?;
+        let bytes=original.read(32768).map_err(fail)?;
+        let configuration:Configuration=serde_json::from_slice(bytes.as_slice()).map_err(fail)?;
+        require(canonical_json_bytes(&configuration)?.as_slice()==bytes.as_slice())?;
+        let source=PreparedTransport{original,configuration};
+        source.check(&self.configuration,&self.assignment,&self.association,trust,time)?;
+        self.verifier_transport=Some(source);Ok(())
+    }
     /// Actual same-process root preparation only. The separately assigned pin
     /// selects one protected public original; its signature admits the purpose.
     pub(crate) fn prepare_external_verifier(&mut self, pin: NativeVerifierTransportPin,

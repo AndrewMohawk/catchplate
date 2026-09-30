@@ -15,6 +15,7 @@ pub(in crate::policy_shadow::policy_custody::services) mod time;
 pub(in crate::policy_shadow::policy_custody::services) mod trusted_time_sample;
 mod parent;
 mod driver_bootstrap;
+pub(in crate::policy_shadow) use driver_bootstrap::continuation as driver_continuation;
 mod driver_identity;
 mod driver_bootstrap_parent;
 pub(in crate::policy_shadow::policy_custody::services) mod retrieval_peer;
@@ -129,6 +130,9 @@ pub(in crate::policy_shadow::policy_custody::services) struct AdmittedGuest {
     time_grant:Option<admission::trusted_time::ClientGrant>,proof_bridge:bool,
     commit_request:Option<admission::commit_request::Service>,commitment_bridge:bool,
     bridge_activation:std::sync::Mutex<Option<BTreeMap<String,std::os::fd::OwnedFd>>>,
+    // Context-key admission does not activate this full configuration. Its
+    // native closure/driver identity nevertheless come from actual owners.
+    native_configuration:Option<ProductionCustodyConfiguration>,
 }
 impl AdmittedGuest {
     fn start()->Result<Self,ShadowError> {
@@ -209,7 +213,7 @@ impl AdmittedGuest {
         let owner=Self{_delivery:delivery,lifetime,keys,trust,time,launch,launch_bytes,
             originals:vec![assignment_original,closure_original,keys_original,encrypted_original,admission_original],
             retrieval,activation,persistence,retrieval_client,bridge_selected,bridge_activation,trusted_time,proof_client,time_grant,proof_bridge,generation,
-            commit_request,commitment_bridge};
+            commit_request,commitment_bridge,native_configuration:None};
         owner.check()?;
         if owner.proof_bridge {
             owner.time_grant.as_ref().ok_or(ShadowError::BindingDrift)?.check(&owner.keys,
@@ -221,7 +225,12 @@ impl AdmittedGuest {
         if self.bridge_selected {self.lifetime.check_threaded_bridge()?;} else {self.lifetime.check()?;}
         require(self.launch.read(32768).map_err(fail)?.as_slice()==self.launch_bytes.as_slice())?;
         for original in &self.originals {original.read(4*1024*1024).map_err(fail)?;}
-        self.keys.check(&self.trust,self.time.as_ref())
+        self.keys.check(&self.trust,self.time.as_ref())?;
+        if let Some(configuration)=&self.native_configuration {
+            configuration.validate_retained_assignment_binding()?;
+            configuration.revalidate_retained_assignment_at_checkpoint(&self.trust.current_checkpoint()?,&self.trust)?;
+        }
+        Ok(())
     }
     fn hold(mut self)->Result<(),ShadowError> {
         if let Some(service)=self.generation.take(){

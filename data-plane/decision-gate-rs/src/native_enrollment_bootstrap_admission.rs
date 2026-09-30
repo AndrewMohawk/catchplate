@@ -338,7 +338,7 @@ impl PreparedNativeBootstrapPacket<'_> {
                 let remaining = self.admission.clock.remaining()?;
                 let quote_deadline = opening.checked_add(remaining)
                     .ok_or("native bootstrap quotation deadline overflow")?;
-                let session = super::native_ingress_attestation::bootstrap_original(identity,
+                let session = super::native_ingress_attestation::bootstrap_original(state, identity,
                     ingress, &tls.conn, self.admission.challenge,
                     self.admission.lifetime.deadline(), quote_deadline)?;
                 self.admission.clock.check(self.setup.deadline())?;

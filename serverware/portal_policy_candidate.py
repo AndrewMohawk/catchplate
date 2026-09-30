@@ -10,6 +10,8 @@ POLICY_CANDIDATE_HTML = r"""
             <label for="controlled-candidate-request">Retained request ID</label>
             <input id="controlled-candidate-request" maxlength="36" autocomplete="off">
             <button type="button" class="secondary" onclick="runUiAction('Inspect controlled generation', controlledCandidateLookup)">Read exact retained state only</button>
+            <button type="button" class="secondary" onclick="runUiAction('Recover retained publication', controlledCandidateRecover)">Read native receipt + persist once</button>
+            <p class="hint">Recovery never publishes again. It requires the exact receipt still retained in the same native process and the original claim's remaining 30-second window. Expired claims or unavailable receipts stay unresolved; this is not crash recovery.</p>
             <p id="controlled-candidate-status" class="hint" role="status">No controlled generation submitted.</p>
           </details>
 """
@@ -20,6 +22,7 @@ POLICY_CANDIDATE_SCRIPT = r"""
     const controlledCandidateOptions = 'serverware.policyCandidateIntakeOptions/v1';
     let controlledCandidateBusy = false;
     const controlledCandidateSpent = new Set();
+    const controlledCandidateRecoverySpent = new Set();
     function controlledCandidateNeed(value) { if (!value) throw new Error('Controlled candidate original or current authority changed; no retry.'); }
     function controlledCandidateBegin() {
       controlledCandidateNeed(!controlledCandidateBusy && !adminToken() && state.authStatus?.authMethod === 'oidc-session'
@@ -47,7 +50,7 @@ POLICY_CANDIDATE_SCRIPT = r"""
       } finally { if (!done) { try { await reader.cancel(); } catch (_) {} } reader.releaseLock(); text = ''; }
     }
     async function controlledCandidatePost(suffix, body, operation, sent = null) {
-      controlledCandidateNeed(['/draft', '/options', '/publish', '/lookup'].includes(suffix));
+      controlledCandidateNeed(['/draft', '/options', '/publish', '/lookup', '/recover'].includes(suffix));
       const csrfResponse = await fetch('/api/csrf', {credentials: 'same-origin', mode: 'same-origin', redirect: 'error', cache: 'no-store', signal: operation.signal});
       const csrf = await controlledCandidateRead(csrfResponse, operation);
       controlledCandidateNeed(csrfResponse.ok && csrf.ok === true && csrf.header === 'X-Serverware-CSRF-Token'
@@ -116,6 +119,34 @@ POLICY_CANDIDATE_SCRIPT = r"""
         $('controlled-candidate-status').textContent = result.publicationOriginal !== null ? 'Stored publication found. Read-only observation; no contact repeated.'
           : result.claimOriginal !== null ? 'Claim retained without a known stored publication. Contact remains uncertain and cannot be retried.'
           : 'No claim observed. Absence is not permission to repeat an uncertain submission.';
+      } finally { operation.close(); }
+    }
+    async function controlledCandidateRecover() {
+      const operation = controlledCandidateBegin();
+      let marker = null;
+      try {
+        const requestId = $('controlled-candidate-request').value;
+        controlledCandidateNeed(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(requestId));
+        marker = 'serverware.policyCandidateRecovery/v1:' + state.authStatus.userId + ':' + requestId;
+        controlledCandidateNeed(!controlledCandidateRecoverySpent.has(marker) && sessionStorage.getItem(marker) === null);
+        const result = await controlledCandidatePost('/recover', {apiVersion: controlledCandidateSchema, requestId}, operation, () => {
+          // Public attempt identity only; never clear uncertainty or store a receipt/assertion.
+          sessionStorage.setItem(marker, 'attempted'); controlledCandidateRecoverySpent.add(marker);
+        });
+        const publication = result.publication;
+        controlledCandidateNeed(oauthConsentClosed(result, ['apiVersion', 'automaticRetryAllowed', 'requestId', 'publication'])
+          && result.apiVersion === 'serverware.policyCandidateGenerationResult/v1' && result.automaticRetryAllowed === false
+          && result.requestId === requestId && oauthConsentClosed(publication, ['ok', 'apiVersion', 'requestId', 'replayId',
+            'managementHandoffId', 'canaryId', 'candidateId', 'instanceId', 'bootIdSha256', 'requestPayloadSha256', 'generationId',
+            'publicationEnvelopeSha256', 'publicationPayloadSha256', 'verificationReceiptSha256', 'attestationChainSha256',
+            'signingKeySpkiSha256', 'recovered']) && publication.ok === true && publication.recovered === true
+          && publication.apiVersion === 'serverware.policyAuthorityCandidateHandoffResult/v2' && publication.requestId === requestId);
+        $('controlled-candidate-status').textContent = 'Exact retained publication found and its controlled outcome confirmed. No native publication repeated. This is not activation, canary completion or Setup completion.';
+      } catch (error) {
+        $('controlled-candidate-status').textContent = marker && controlledCandidateRecoverySpent.has(marker)
+          ? 'Recovery outcome may be unknown. Use read-only inspection only; do not publish again or repeat this recovery action. An expired claim or absent retained receipt remains unresolved.'
+          : 'Recovery unavailable or already attempted. Read-only inspection remains available; no publication was repeated.';
+        throw error;
       } finally { operation.close(); }
     }
 """

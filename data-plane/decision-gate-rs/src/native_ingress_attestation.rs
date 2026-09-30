@@ -85,6 +85,7 @@ pub(super) fn handle(state: &GateState, head: &RequestHead,
             &[("Cache-Control".to_owned(), "no-store".to_owned())])
     };
     if custody_deadline_remaining(operation_deadline, "native ingress response").is_err()
+        || require_workload_ingress_trust(state, proxy_ingress).is_err()
         || state.native_runtime_lifetime.as_ref().is_some_and(|owner| owner.check().is_err())
         || trusted_mtls.is_some_and(|evidence| !evidence.is_live_at(now_epoch_ms()))
     {
@@ -105,6 +106,15 @@ pub(super) fn handle(state: &GateState, head: &RequestHead,
         }
         if owner.check(stream).is_err() || stream.flush().is_err()
             || owner.check(stream).is_err() { return Outcome::Closed; }
+    } else if state.proxy_ingress_attestation.native_workload_identity_trust.is_some() {
+        for chunk in response.chunks(4096) {
+            if require_workload_ingress_trust(state, proxy_ingress).is_err()
+                || stream.write_all(chunk).is_err()
+                || require_workload_ingress_trust(state, proxy_ingress).is_err() { return Outcome::Closed; }
+        }
+        if stream.flush().is_err() || require_workload_ingress_trust(state, proxy_ingress).is_err() {
+            return Outcome::Closed;
+        }
     } else {
         // The helper adds no body LF. The successful original already carries its
         // sole LF, counted in Content-Length.
@@ -114,6 +124,7 @@ pub(super) fn handle(state: &GateState, head: &RequestHead,
     }
     if let Some(deadline) = continuation_deadline {
         if custody_deadline_remaining(operation_deadline, "native ingress continuation").is_err()
+            || require_workload_ingress_trust(state, proxy_ingress).is_err()
             || !state.native_runtime_lifetime.as_ref().is_some_and(|owner| owner.check().is_ok())
             || !trusted_mtls.is_some_and(|evidence| evidence.is_live_at(now_epoch_ms()))
         {
@@ -210,6 +221,7 @@ fn original<'a>(state: &'a GateState, head: &'a RequestHead, stream: &DirectProx
     proxy_ingress: &'a ProxyIngressConfig, operation_deadline: Instant, profile: EvidenceProfile)
     -> Result<(Vec<u8>, Option<native_target_principal_preflight::PrincipalPreflight<'a>>), Failure>
 {
+    require_workload_ingress_trust(state, proxy_ingress).map_err(|_| Failure::Unavailable)?;
     if management_listener || !state.is_production
         || !trusted_mtls.is_some_and(|evidence| evidence.verified_by_trusted_ingress
             && evidence.is_live_at(now_epoch_ms()))
@@ -288,6 +300,7 @@ fn original<'a>(state: &'a GateState, head: &'a RequestHead, stream: &DirectProx
             .map_err(|_| Failure::Unavailable)?;
         let quote = identity.quote_retained_ingress(ingress, nonce, deadline)
             .map_err(|_| Failure::Unavailable)?;
+        require_workload_ingress_trust(state, proxy_ingress).map_err(|_| Failure::Unavailable)?;
         custody_deadline_remaining(operation_deadline, "native ingress quotation")
             .map_err(|_| Failure::Unavailable)?;
         let original = if profile != EvidenceProfile::LegacyV1 {
@@ -312,6 +325,7 @@ fn original<'a>(state: &'a GateState, head: &'a RequestHead, stream: &DirectProx
     ingress.verify_live(deadline).map_err(|_| Failure::Unavailable)?;
     lifetime.check().map_err(|_| Failure::Unavailable)?;
     if let Some(owner) = principal.as_mut() { owner.check(stream).map_err(|_| Failure::Unavailable)?; }
+    require_workload_ingress_trust(state, proxy_ingress).map_err(|_| Failure::Unavailable)?;
     Ok((original, principal))
 }
 
@@ -320,11 +334,14 @@ fn original<'a>(state: &'a GateState, head: &'a RequestHead, stream: &DirectProx
 /// only after its durable bootstrap claim/signature readback, while retaining
 /// the original policy, runtime and TLS guards. No synthetic HTTP head or
 /// caller-provided exporter is accepted.
-pub(super) fn bootstrap_original(identity: &mut EnclaveRuntimeIdentityV1,
+pub(super) fn bootstrap_original(state: &GateState, identity: &mut EnclaveRuntimeIdentityV1,
     ingress: &QuotedMutualTlsIngressV1, connection: &ServerConnection,
     challenge: [u8; 32], runtime_deadline: u64, operation_deadline: Instant)
     -> Result<Vec<u8>, String> {
     let unavailable = || "native bootstrap ingress quotation is unavailable".to_owned();
+    if let Some(trust) = &state.proxy_ingress_attestation.native_workload_identity_trust {
+        trust.check_quote(state, ingress)?;
+    }
     if challenge == [0; 32] || connection.is_handshaking()
         || connection.protocol_version() != Some(rustls::ProtocolVersion::TLSv1_3)
         || connection.peer_certificates().is_none_or(|chain| chain.is_empty())
@@ -342,6 +359,9 @@ pub(super) fn bootstrap_original(identity: &mut EnclaveRuntimeIdentityV1,
     // identity. The inherited request deadline brackets the device operation;
     // a blocked device still requires the existing external watchdog.
     let quote = identity.quote_retained_ingress(ingress, nonce, runtime_deadline)?;
+    if let Some(trust) = &state.proxy_ingress_attestation.native_workload_identity_trust {
+        trust.check_quote(state, ingress)?;
+    }
     custody_deadline_remaining(operation_deadline, "native bootstrap ingress quotation")?;
     let public_identity = encode_native_ingress_quote_public_evidence_v2(
         identity, ingress, &quote, runtime_deadline)?;

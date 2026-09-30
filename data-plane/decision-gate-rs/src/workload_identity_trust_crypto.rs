@@ -178,6 +178,15 @@ pub(super) fn issuer(
     original: &[u8], issued_ns: u64, expires_ns: u64, now_ns: u64,
 ) -> Result<(Vec<u8>, Vec<u8>), String> {
     let der = pem_original(original, "CERTIFICATE", MAX_CERTIFICATE_BYTES)?;
+    issuer_der(&der, issued_ns, expires_ns, now_ns)
+}
+
+/// Native roots are original DER, not PEM-bundle identities. The standard
+/// wrapper above retains its exact original PEM admission and size ceiling.
+pub(super) fn issuer_der(
+    der: &[u8], issued_ns: u64, expires_ns: u64, now_ns: u64,
+) -> Result<(Vec<u8>, Vec<u8>), String> {
+    if der.is_empty() || der.len() > MAX_CERTIFICATE_BYTES { return Err(invalid()); }
     let certificate = crate::parse_exact_x509_certificate(&der, "workload trust issuer")?;
     if issued_ns == 0 || expires_ns <= issued_ns || now_ns < issued_ns || now_ns >= expires_ns {
         return Err(invalid());
@@ -222,7 +231,7 @@ pub(super) fn issuer(
     // No self-issued/self-signature requirement: the independently admitted
     // authorizer designates this exact CA as a direct trust anchor. Client
     // signature/path verification remains the genuine rustls/webpki operation.
-    Ok((der, spki))
+    Ok((der.to_vec(), spki))
 }
 
 fn metadata(value: &Metadata) -> (u64, u64, u32, u32, u32, u64, u64, i64, i64, i64, i64) {

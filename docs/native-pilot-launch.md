@@ -10,6 +10,15 @@ endpoint children and five ordinary custody services. Configuration/v7 selects
 the endpoint-only cohort; the existing fixed-eleven configuration/v6 is unchanged.
 There is no second bridge process whose identity must be mistaken for the first.
 
+The gate selects native startup/v22 and its separately pinned, independently
+signed [workload trust authorization](native-workload-trust-authorization.md).
+The pilot wrapper neither issues that grant nor substitutes for the actual
+startup/TLS admission. The full configuration and launch originals remain its
+scope; their original deadlines are not extended by any staged caller.
+The fixed native-enclave image entrypoint takes `--workload-trust-v22`; the
+direct gate selector is `--native-workload-trust-startup-v22`. Both pass the same
+configuration, launch and separate trust-original paths and independent pins.
+
 ## Real phases, unchanged deadlines
 
 | Phase | Actual caller | Required independent input |

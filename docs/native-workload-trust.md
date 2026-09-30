@@ -108,24 +108,65 @@ lifetime renewal. Startup evidence must still be fresh under its pinned
 long-running renewal protocol. The [session guide](native-ingress-session.md)
 describes the retained transport, quote and continuation deadlines.
 
+## Independently authorized cold native startup
+
+The explicit `--native-workload-trust-startup-v22` mode selects
+[`nativeStartupConfiguration/v22`](../schemas/native-startup-configuration.v22.schema.json).
+Its unchanged v21 fields are joined to an independently provisioned
+`workloadTrustAuthorizer` containing canonical public-key PEM and its exact-byte
+SHA-256 pin. The key must differ from every client CA, the policy and control-plane
+response keys, enrollment/setup authorizers, and actual generated proof/TLS keys.
+No private key or signed authorization is embedded in that configuration.
+
+Pass the separate original using `--workload-trust-authorization PATH` and
+`--workload-trust-authorization-sha256 SHA256`. These flags are required only by
+v22 and refused by older modes. The actual original is bounded to 128 KiB,
+canonical ASCII without LF, read through the existing retained no-follow input
+owner, and independently signature-verified. The
+[producer guide](native-workload-trust-authorization.md) describes the separate
+authorizer operation; local file hashes do not approve keys or deployment.
+
+The [native grant](../schemas/native-workload-identity-trust-authorization.v1.schema.json)
+binds the exact configuration and launch originals, release record, deployment
+and instance, signed policy hash/sequence/rollback epoch, original BOOTTIME
+deadline, ordered root certificate/SPKI inventory, framed DER commitment and
+complete normalized mTLS principal inventory. Each of the 1–32 actual CA roots
+must satisfy the restricted CA/key profile and the same authorization interval.
+The interval is at most 24 hours, lies inside every issuer and the native
+CA/ingress validity intervals, and is never renewed. The grant is absent from
+both originals it hashes, so this does not create a self-referential config pin.
+
+Admission completes against the actual generated TLS owner and genuinely loaded
+signed snapshot before binding the external listener. The serving owner retains
+those exact objects and original process/lifetime; handshakes, request/dispatch
+freshness, publication windows, policy refresh and fresh session quotation check
+it. A changed policy or root set requires new independent authorization and a
+restart, not a hot reload. Existing role-3 session formats stay unchanged: they
+already bind the actual config/release/policy and exact ordered roots to the
+client challenge and that same TLS connection. A session proof remains distinct
+from the native grant and never becomes a generic trust-install permission.
+
 ## Scope still open
 
 The [standard single-issuer trust publisher](workload-identity-trust-distribution.md)
 and this native path have different hash contracts. A canonical PEM artifact
 digest, native ordered framed-DER digest and `.233` diagnostic projection are
-not interchangeable. This change does not import the standard signed trust
-authorization into native startup or claim trust rotation/retirement support.
+not interchangeable. The native grant never imports or weakens the standard
+signed trust authorization; native trust rotation/retirement remains unsupported.
 
-Production enrollment still needs genuine production original acquisition,
-authorized enrollment-signer and same-runtime/policy association, and an explicit
-packet/SDK integration. The legacy Python enrollment route's development-only
-attestation helper is not repaired by flattening these verified native fields
-into its packet. Ordinary workload/sidecar transport, issuer lifecycle, latest
+Native acquisition, retained enrollment-signer/runtime-policy association and
+exact capture-to-issuer/SDK submission are source-connected. They have not been
+credited as an accepted deployment or production enrollment. The legacy Python
+enrollment route's development-only attestation helper stays separate; native
+fields are not flattened into its packet. Ordinary workload/sidecar deployment,
+issuer lifecycle, latest
 revocation/witness state and independent release admission remain separate.
 
 Before the consolidated verification freeze, cover unchanged v1/v2 behavior,
 v3 intermediate and direct chains, wrong issuer/path/key, reordered or changed
 roots, paired-version rejection, duplicate selectors, output limits, stale
 startup, expired identity/deadline, actual-session mismatch, selected-chain
-capture and refusal before CONNECT. These are
+capture and refusal before CONNECT; include v22 wrong authorizer, changed launch,
+ordered multi-root inventory, changed policy, original deadline and restart-only
+refusals. These are
 required future checks, not reported test results. Production remains **0/6**.

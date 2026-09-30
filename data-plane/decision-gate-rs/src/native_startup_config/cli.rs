@@ -4,10 +4,10 @@ use super::originals::ArtifactV1;
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-pub(super) enum Mode { Legacy, EnclaveV5, EncryptedV6, MeasuredRefreshV7, GuestInspectorV8, MeasuredIssuanceV9, GuestCohortV10, MeasuredCleanupV11, GuestRoleKeysV12, MeasuredPendingRetirementV13, GateCgroupV14, MeasuredSetupV15, MeasuredCaptureRetirementV16, MeasuredReconnectV17, MeasuredSuccessionV18, MeasuredCanaryDeliveryV19, NativeHeartbeatV20, NativeReadinessV21 }
+pub(super) enum Mode { Legacy, EnclaveV5, EncryptedV6, MeasuredRefreshV7, GuestInspectorV8, MeasuredIssuanceV9, GuestCohortV10, MeasuredCleanupV11, GuestRoleKeysV12, MeasuredPendingRetirementV13, GateCgroupV14, MeasuredSetupV15, MeasuredCaptureRetirementV16, MeasuredReconnectV17, MeasuredSuccessionV18, MeasuredCanaryDeliveryV19, NativeHeartbeatV20, NativeReadinessV21, WorkloadTrustV22 }
 
 pub(super) fn arguments(mut arguments: impl Iterator<Item = OsString>)
-    -> Result<Option<(ArtifactV1, ArtifactV1, bool, Mode)>, String>
+    -> Result<Option<(ArtifactV1, ArtifactV1, bool, Mode, Option<ArtifactV1>)>, String>
 {
     let Some(argument) = arguments.next() else { return Ok(None); };
     let mode = if argument == "--native-startup" { Mode::Legacy }
@@ -28,12 +28,15 @@ pub(super) fn arguments(mut arguments: impl Iterator<Item = OsString>)
         else if argument == "--native-measured-canary-delivery-startup-v19" { Mode::MeasuredCanaryDeliveryV19 }
         else if argument == "--native-canary-heartbeat-startup-v20" { Mode::NativeHeartbeatV20 }
         else if argument == "--native-canary-readiness-startup-v21" { Mode::NativeReadinessV21 }
+        else if argument == "--native-workload-trust-startup-v22" { Mode::WorkloadTrustV22 }
         else { return Err("decision gate accepts no arguments or an explicit native startup mode".to_owned()); };
     let mut configuration = None;
     let mut configuration_pin = None;
     let mut launch = None;
     let mut launch_pin = None;
     let mut public_identity_stdout = false;
+    let mut trust_authorization = None;
+    let mut trust_pin = None;
     while let Some(flag) = arguments.next() {
         let flag = flag.to_str().ok_or("native startup flag must be UTF-8")?;
         if flag == "--public-identity-stdout" {
@@ -45,6 +48,11 @@ pub(super) fn arguments(mut arguments: impl Iterator<Item = OsString>)
         }
         let value = arguments.next().ok_or("native startup flag requires a value")?;
         match flag {
+            "--workload-trust-authorization" if matches!(&mode, Mode::WorkloadTrustV22)
+                && trust_authorization.is_none() => trust_authorization = Some(PathBuf::from(value)),
+            "--workload-trust-authorization-sha256" if matches!(&mode, Mode::WorkloadTrustV22)
+                && trust_pin.is_none() => trust_pin = Some(value.into_string()
+                    .map_err(|_| "native workload trust pin must be UTF-8")?),
             "--configuration" if configuration.is_none() => configuration = Some(PathBuf::from(value)),
             "--configuration-sha256" if configuration_pin.is_none() => {
                 configuration_pin = Some(value.into_string().map_err(|_| "native configuration pin must be UTF-8")?);
@@ -56,11 +64,17 @@ pub(super) fn arguments(mut arguments: impl Iterator<Item = OsString>)
             _ => return Err("native startup received an unknown or repeated flag".to_owned()),
         }
     }
+    let trust = if matches!(&mode, Mode::WorkloadTrustV22) {
+        Some(ArtifactV1 {
+            path: trust_authorization.ok_or("native v22 requires --workload-trust-authorization")?,
+            sha256: trust_pin.ok_or("native v22 requires --workload-trust-authorization-sha256")?,
+        })
+    } else { None };
     Ok(Some((ArtifactV1 {
         path: configuration.ok_or("native startup requires --configuration")?,
         sha256: configuration_pin.ok_or("native startup requires --configuration-sha256")?,
     }, ArtifactV1 {
         path: launch.ok_or("native startup requires --launch")?,
         sha256: launch_pin.ok_or("native startup requires --launch-sha256")?,
-    }, public_identity_stdout, mode)))
+    }, public_identity_stdout, mode, trust)))
 }

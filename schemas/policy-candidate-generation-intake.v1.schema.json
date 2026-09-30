@@ -5,6 +5,7 @@
   "description": "Data shapes are not authority. Source enforces canonical ASCII originals, UTF-8 byte limits, exact current protected predecessors, hardware assertion, signed purpose admission and nonrenewing deadlines. The original argument JSON remains a string, not JavaScript Number-coerced data. Publication and internal verification rows retain the existing source-owned closed projections.",
   "anyOf": [{"$ref": "#/$defs/draftRequest"}, {"$ref": "#/$defs/draftResponse"}, {"$ref": "#/$defs/optionsRequest"},
     {"$ref": "#/$defs/optionsResponse"}, {"$ref": "#/$defs/publishRequest"}, {"$ref": "#/$defs/publishResponse"}, {"$ref": "#/$defs/lookupRequest"},
+    {"$ref": "#/$defs/recoveryResponse"}, {"$ref": "#/$defs/nativeLookupRequest"},
     {"$ref": "#/$defs/observation"}, {"$ref": "#/$defs/authorityPolicy"}],
   "$defs": {
     "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
@@ -63,12 +64,33 @@
       "type": "object", "additionalProperties": false, "required": ["apiVersion", "requestId"],
       "properties": {"apiVersion": {"const": "serverware.policyCandidateIntakeRequest/v1"}, "requestId": {"$ref": "#/$defs/requestId"}}
     },
+    "recoveryRequest": {
+      "$ref": "#/$defs/lookupRequest",
+      "description": "Explicit /recover action only, authenticated as the original publisher. Native readback and controlled CAS keep the original claim deadline; /lookup remains historical-only. No new publication or claim is allowed."
+    },
+    "nativeLookupId": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9._:@+-]+$"},
+    "nativeLookupRequest": {
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "requestId", "replayId", "managementHandoffId", "requestSha256"],
+      "properties": {"apiVersion": {"const": "serverware.policyShadowGenerationLookup/v1"}, "requestId": {"$ref": "#/$defs/nativeLookupId"},
+        "replayId": {"$ref": "#/$defs/nativeLookupId"}, "managementHandoffId": {"$ref": "#/$defs/nativeLookupId"}, "requestSha256": {"$ref": "#/$defs/digest"}},
+      "description": "Canonical ASCII, at most 4096 bytes, authenticated management POST /v1/policy-shadow/generations/lookup. Success200 is the exact original signed publication envelope, not a new receipt. Absence/currentness/expiry refusal never establishes noncommit."
+    },
     "publishResponse": {
       "type": "object", "additionalProperties": false, "required": ["apiVersion", "automaticRetryAllowed", "requestId", "publication"],
       "properties": {"apiVersion": {"const": "serverware.policyCandidateGenerationResult/v1"}, "automaticRetryAllowed": {"const": false},
         "requestId": {"$ref": "#/$defs/requestId"}, "publication": {"$ref": "#/$defs/publication"}}
     },
     "publication": {
+      "allOf": [{"$ref": "#/$defs/publicationFields"}, {"properties": {"recovered": {"const": false}}}]
+    },
+    "recoveryResponse": {
+      "type": "object", "additionalProperties": false, "required": ["apiVersion", "automaticRetryAllowed", "requestId", "publication"],
+      "properties": {"apiVersion": {"const": "serverware.policyCandidateGenerationResult/v1"}, "automaticRetryAllowed": {"const": false},
+        "requestId": {"$ref": "#/$defs/requestId"}, "publication": {"allOf": [{"$ref": "#/$defs/publicationFields"},
+          {"properties": {"recovered": {"const": true}}}]}}
+    },
+    "publicationFields": {
       "type": "object", "additionalProperties": false,
       "required": ["ok", "apiVersion", "requestId", "replayId", "managementHandoffId", "canaryId", "candidateId", "instanceId", "bootIdSha256", "requestPayloadSha256", "generationId", "publicationEnvelopeSha256", "publicationPayloadSha256", "verificationReceiptSha256", "attestationChainSha256", "signingKeySpkiSha256", "recovered"],
       "properties": {"ok": {"const": true}, "apiVersion": {"const": "serverware.policyAuthorityCandidateHandoffResult/v2"},
@@ -78,7 +100,7 @@
         "requestPayloadSha256": {"$ref": "#/$defs/digest"}, "generationId": {"$ref": "#/$defs/digest"},
         "publicationEnvelopeSha256": {"$ref": "#/$defs/digest"}, "publicationPayloadSha256": {"$ref": "#/$defs/digest"},
         "verificationReceiptSha256": {"$ref": "#/$defs/digest"}, "attestationChainSha256": {"$ref": "#/$defs/digest"},
-        "signingKeySpkiSha256": {"$ref": "#/$defs/digest"}, "recovered": {"const": false}}
+        "signingKeySpkiSha256": {"$ref": "#/$defs/digest"}, "recovered": {"type": "boolean"}}
     },
     "observation": {
       "type": "object", "additionalProperties": false, "required": ["apiVersion", "okForAction", "automaticRetryAllowed", "claimOriginal", "publicationOriginal"],

@@ -1238,6 +1238,8 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/native_network_attachment_authorization.py \
 	serverware/native_workload_start_authorization.py \
 	serverware/workload_identity_trust_authorization.py \
+	serverware/native_workload_identity_trust_authorization.py \
+	scripts/authority/authorize_native_workload_identity_trust.py \
 	serverware/native_enrollment_assignment.py \
 	serverware/native_enrollment_bootstrap_delegation.py \
 	serverware/native_enrollment_bootstrap_setup.py \
@@ -1514,6 +1516,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_transition_policy_candidate_publication.py \
 	serverware/authority_transition_policy_candidate_trust.py \
 	serverware/control_plane_policy_candidate.py \
+	serverware/control_plane_policy_candidate_recovery.py \
 	serverware/authority_policy_canary.py \
 	serverware/authority_policy_canary_delivery.py \
 	serverware/authority_policy_canary_delivery_policy.py \
@@ -3884,6 +3887,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/native_network_attachment_authorization.py \
 				serverware/native_workload_start_authorization.py \
 				serverware/workload_identity_trust_authorization.py \
+				serverware/native_workload_identity_trust_authorization.py \
+				scripts/authority/authorize_native_workload_identity_trust.py \
 				serverware/native_enrollment_assignment.py \
 				serverware/native_enrollment_bootstrap_delegation.py \
 				serverware/native_enrollment_bootstrap_setup.py \
@@ -4154,6 +4159,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_transition_policy_candidate_publication.py \
 				serverware/authority_transition_policy_candidate_trust.py \
 				serverware/control_plane_policy_candidate.py \
+				serverware/control_plane_policy_candidate_recovery.py \
 				serverware/authority_policy_canary.py \
 				serverware/authority_policy_canary_delivery.py \
 				serverware/authority_policy_canary_delivery_policy.py \
@@ -4500,6 +4506,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/native_startup_config/canary_delivery.rs \
 				data-plane/decision-gate-rs/src/native_startup_config/canary_heartbeat.rs \
 				data-plane/decision-gate-rs/src/native_startup_config/canary_readiness.rs \
+				data-plane/decision-gate-rs/src/native_startup_config/workload_trust.rs \
 				data-plane/decision-gate-rs/src/response_v2/client_transport.rs \
 				data-plane/decision-gate-rs/src/response_v2/custody/guest_listener.rs \
 				data-plane/decision-gate-rs/src/response_v2/custody/guest_public_artifacts.rs \
@@ -4728,6 +4735,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/erofs_loop_v1.rs \
 				data-plane/decision-gate-rs/src/cgroup_control_v1.rs \
 				data-plane/decision-gate-rs/src/workload_identity_trust.rs \
+				data-plane/decision-gate-rs/src/native_workload_identity_trust.rs \
 				data-plane/decision-gate-rs/src/workload_identity_trust_crypto.rs \
 				data-plane/decision-gate-rs/src/native_enrollment_assignment_v1.rs \
 				data-plane/decision-gate-rs/src/enclave_enrollment_key_v1.rs \
@@ -4972,6 +4980,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-startup-configuration.v19.schema.json \
 				schemas/native-startup-configuration.v20.schema.json \
 				schemas/native-startup-configuration.v21.schema.json \
+				schemas/native-startup-configuration.v22.schema.json \
+				schemas/native-workload-identity-trust-authorization.v1.schema.json \
 				schemas/native-oauth-succession-runtime.v1.schema.json \
 				schemas/native-oauth-capture-retirement.v1.schema.json \
 				schemas/oauth-measured-capture-retirement-authority.v1.schema.json \

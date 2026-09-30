@@ -56,6 +56,7 @@ mod native_enrollment_bootstrap_http;
 mod native_enrollment_policy_requirements;
 mod workload_identity_trust;
 mod workload_identity_trust_crypto;
+mod native_workload_identity_trust;
 
 use response_v2::*;
 use gate_state_init::{GateStateInputs, GateStateRuntime};
@@ -1032,6 +1033,7 @@ struct ProxyIngressAttestation {
     server_certificate_chain_sha256: Option<String>,
     client_trust_bundle_sha256: Option<String>,
     workload_identity_trust: Option<Arc<workload_identity_trust::AdmittedTrust>>,
+    native_workload_identity_trust: Option<Arc<native_workload_identity_trust::Admitted>>,
 }
 
 impl ProxyIngressAttestation {
@@ -15303,7 +15305,9 @@ fn current_snapshot(state: &GateState) -> Arc<Snapshot> {
 }
 
 fn policy_trust_is_fresh(state: &GateState) -> bool {
-    state.proxy_ingress_attestation.workload_identity_trust.as_ref()
+    state.proxy_ingress_attestation.native_workload_identity_trust.as_ref()
+        .map_or(true, |trust| trust.is_current(state))
+        && state.proxy_ingress_attestation.workload_identity_trust.as_ref()
         .map_or(true, |trust| trust.is_live()) && (!matches!(
         state.policy_trust_root_source,
         PolicyTrustRootSource::AttestedControlPlane { .. }
@@ -15316,6 +15320,10 @@ fn policy_trust_is_fresh(state: &GateState) -> bool {
 }
 
 fn policy_trust_supports_publication_window(state: &GateState, window: Duration) -> bool {
+    if state.proxy_ingress_attestation.native_workload_identity_trust.as_ref()
+        .is_some_and(|trust| !trust.is_current(state) || !trust.supports_window(window)) {
+        return false;
+    }
     if state.proxy_ingress_attestation.workload_identity_trust.as_ref()
         .is_some_and(|trust| !trust.supports_window(window)) {
         return false;
@@ -15457,6 +15465,9 @@ fn clear_local_grants_if_signed_policy_changed(
 }
 
 fn refresh_policy_snapshot(state: &GateState, force: bool) -> Result<bool, String> {
+    if let Some(trust) = &state.proxy_ingress_attestation.native_workload_identity_trust {
+        trust.require_live()?;
+    }
     if let Some(trust) = &state.proxy_ingress_attestation.workload_identity_trust {
         trust.require_live()?;
     }
@@ -15502,6 +15513,9 @@ fn refresh_policy_snapshot(state: &GateState, force: bool) -> Result<bool, Strin
     };
     match loaded {
         Ok(mut snapshot) => {
+            if let Some(trust) = &state.proxy_ingress_attestation.native_workload_identity_trust {
+                trust.check_snapshot(&snapshot)?;
+            }
             if let Some(trust) = &state.proxy_ingress_attestation.workload_identity_trust {
                 if let Err(err) = trust.check_snapshot(&snapshot) {
                     state.policy_reload_failed.fetch_add(1, Ordering::Relaxed);
@@ -15587,6 +15601,9 @@ fn refresh_policy_snapshot(state: &GateState, force: bool) -> Result<bool, Strin
                 return Err(err);
             }
             let high_water_update = (|| -> Result<(), String> {
+                if let Some(trust) = &state.proxy_ingress_attestation.native_workload_identity_trust {
+                    trust.check_snapshot(&snapshot)?;
+                }
                 if let Some(trust) = &state.proxy_ingress_attestation.workload_identity_trust {
                     trust.check_snapshot(&snapshot)?;
                 }
@@ -15623,6 +15640,9 @@ fn refresh_policy_snapshot(state: &GateState, force: bool) -> Result<bool, Strin
                 trust.check_snapshot(&snapshot)?;
             }
             let next = Arc::new(snapshot);
+            if let Some(trust) = &state.proxy_ingress_attestation.native_workload_identity_trust {
+                trust.check_snapshot(&next)?;
+            }
             *state
                 .policy_trust_last_success
                 .lock()
@@ -49459,7 +49479,15 @@ fn require_workload_ingress_trust(
             _ => Err("workload ingress lost its exact retained trust admission".to_owned()),
         },
         _ => Err("workload trust cannot use development raw ingress".to_owned()),
+    }?;
+    if let Some(trust) = &state.proxy_ingress_attestation.native_workload_identity_trust {
+        if retained.is_some() { return Err("native and standard workload trust cannot be combined".into()); }
+        let ProxyIngressConfig::MutualTls(config) = ingress else {
+            return Err("native workload trust requires its actual TLS owner".into());
+        };
+        trust.check_ingress(state, config)?;
     }
+    Ok(())
 }
 
 // Borrow only the actual handshake socket. The TLS configuration and its
@@ -49673,6 +49701,8 @@ fn handle_gate_connection(
     let policy_shadow_install_post =
         head.method == "POST"
             && head.target == POLICY_SHADOW_INSTALL_PATH;
+    let policy_shadow_lookup_post = head.method == "POST"
+        && head.target == policy_shadow_generation::LOOKUP_PATH;
     let policy_shadow_activation_post =
         head.method == "POST"
             && (head.target == POLICY_SHADOW_ACTIVATION_PATH
@@ -49683,6 +49713,7 @@ fn handle_gate_connection(
             || head.target == serverware_decision_gate::native_generation_origin_v1::PATH
             || head.target == serverware_decision_gate::native_setup_hardware_v1::PATH
             || policy_shadow_install_post
+            || policy_shadow_lookup_post
             || policy_shadow_activation_post);
     let proxy_request = head.method == "CONNECT" || absolute_form_target(&head.target);
 
@@ -49713,7 +49744,7 @@ fn handle_gate_connection(
         if head.method=="POST" && head.target==serverware_decision_gate::native_generation_origin_v1::PATH {
             native_generation_origin::handle(&state,head,&mut stream);return;
         }
-        if policy_shadow_install_post || policy_shadow_activation_post {
+        if policy_shadow_install_post || policy_shadow_lookup_post || policy_shadow_activation_post {
             let (
                 required_content_type,
                 maximum_body_bytes,
@@ -49721,7 +49752,16 @@ fn handle_gate_connection(
                 length_error,
                 empty_error,
                 body_too_large_error,
-            ) = if policy_shadow_activation_post {
+            ) = if policy_shadow_lookup_post {
+                (
+                    POLICY_SHADOW_INSTALL_CONTENT_TYPE,
+                    policy_shadow_generation::MAX_LOOKUP_BODY_BYTES,
+                    "policy_shadow_lookup_content_type_required",
+                    "policy_shadow_lookup_content_length_required",
+                    "policy_shadow_lookup_body_required",
+                    "policy_shadow_lookup_body_too_large",
+                )
+            } else if policy_shadow_activation_post {
                 (
                     POLICY_SHADOW_ACTIVATION_CONTENT_TYPE,
                     if head.target==policy_shadow_generation::activation::PATH {policy_shadow_generation::activation::MAX_BODY_BYTES}
@@ -50009,6 +50049,19 @@ fn handle_gate_connection(
                 "400 Bad Request",
                 json!({"error":"invalid_grant_request"}),
             ),
+        }
+    } else if request.method == "POST"
+        && request.target == policy_shadow_generation::LOOKUP_PATH
+    {
+        let result = state.policy_shadow_generation_control.as_ref()
+            .ok_or_else(|| policy_shadow_generation::GenerationInstallError::unavailable(
+                "native retained publication control is not configured",
+            ))
+            .and_then(|control| control.lookup_publication(&state, &request.body));
+        request.body.zeroize();
+        match result {
+            Ok(receipt) => http_canonical_json_response("200 OK", receipt.canonical_envelope()),
+            Err(error) => http_response(error.status(), json!({"error":error.code()})),
         }
     } else if request.method == "POST"
         && request.target == POLICY_SHADOW_INSTALL_PATH
@@ -50620,6 +50673,7 @@ fn materialize_native_proxy_ingress(
         server_certificate_chain_sha256: Some(format!("sha256:{}", hex::encode(chain_digest.finalize()))),
         client_trust_bundle_sha256: Some(format!("sha256:{}", hex::encode(tls.client_trust_sha256()))),
         workload_identity_trust: None,
+        native_workload_identity_trust: None,
     };
     let config = ProxyIngressConfig::MutualTls(Arc::new(ProxyIngressTlsConfig {
         server_config: tls.server_config(),
@@ -50696,6 +50750,7 @@ fn load_proxy_ingress_config(
                 server_certificate_chain_sha256: None,
                 client_trust_bundle_sha256: None,
                 workload_identity_trust: None,
+                native_workload_identity_trust: None,
             },
         ));
     }
@@ -50773,6 +50828,7 @@ fn load_proxy_ingress_config(
         server_certificate_chain_sha256: Some(sha256_prefixed(&certificate_bytes)),
         client_trust_bundle_sha256: Some(sha256_prefixed(&client_ca_bytes)),
         workload_identity_trust: None,
+        native_workload_identity_trust: None,
     };
     Ok((
         ProxyIngressConfig::MutualTls(Arc::new(ProxyIngressTlsConfig {
@@ -53290,6 +53346,7 @@ mod tests {
                 server_certificate_chain_sha256: None,
                 client_trust_bundle_sha256: None,
                 workload_identity_trust: None,
+                native_workload_identity_trust: None,
             },
             mitm_authority: None,
             leaf_configs: Mutex::new(HashMap::new()),

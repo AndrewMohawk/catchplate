@@ -99,6 +99,9 @@ fn run_owned(listener: VsockListenerV1, prepared: NativeTlsGateV1,
     if state.proxy_ingress_attestation.value() != attestation.value() {
         return Err("native runtime ingress metadata differs from its held TLS configuration".to_owned());
     }
+    // This check joins v22's cold authorization to the actual generated TLS
+    // owner now retained in the serving config; no local summary is authority.
+    require_workload_ingress_trust(&state, &config)?;
     native_service_remaining(&state)?.ok_or("native runtime lost its service transport")?;
     lifetime.check()?;
     state.response_proof_signer.probe_custody_once();

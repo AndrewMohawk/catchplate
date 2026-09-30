@@ -61,9 +61,13 @@ fn main() -> Result<(), String> {
         Some("--measured-canary-delivery-v19") => { arguments.remove(0); "--native-measured-canary-delivery-startup-v19" },
         Some("--canary-heartbeat-v20") => { arguments.remove(0); "--native-canary-heartbeat-startup-v20" },
         Some("--canary-readiness-v21") => { arguments.remove(0); "--native-canary-readiness-startup-v21" },
+        Some("--workload-trust-v22") => { arguments.remove(0); "--native-workload-trust-startup-v22" },
         _ => "--native-encrypted-startup",
     };
-    if arguments.is_empty() || arguments.len() > 9 {
+    // Only v22 adds the separately pinned trust original (two flag/value
+    // pairs). Older modes retain their exact nine-argument ceiling.
+    let maximum_arguments = if mode == "--native-workload-trust-startup-v22" { 13 } else { 9 };
+    if arguments.is_empty() || arguments.len() > maximum_arguments {
         return Err("native enclave startup requires configuration and launch artifacts with independent pins".into());
     }
     let fd = unsafe {

@@ -62,6 +62,9 @@ pub(crate) use native::PreparedNativeShadowControl;
 pub(crate) const INSTALL_PATH: &str = "/v1/policy-shadow/generations";
 pub(crate) const INSTALL_CONTENT_TYPE: &str = "application/json";
 pub(crate) const MAX_INSTALL_BODY_BYTES: u64 = 8 * 1024 * 1024;
+pub(crate) const LOOKUP_PATH: &str =
+    "/v1/policy-shadow/generations/lookup";
+pub(crate) const MAX_LOOKUP_BODY_BYTES: u64 = 4096;
 pub(crate) const ACTIVATION_PATH: &str =
     "/v1/policy-shadow/generations/activate";
 pub(crate) const ACTIVATION_CONTENT_TYPE: &str = "application/json";
@@ -1582,6 +1585,16 @@ struct PublicationRequestBinding {
     replay_id: String,
     management_handoff_id: String,
     management_handoff_sha256: Sha256Digest,
+    request_sha256: Sha256Digest,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PublicationLookupRequest {
+    api_version: String,
+    request_id: String,
+    replay_id: String,
+    management_handoff_id: String,
     request_sha256: Sha256Digest,
 }
 
@@ -3324,6 +3337,85 @@ impl PolicyShadowGenerationControl {
                 &configuration,self.key_trust.as_ref(),retained.trusted_time.as_ref()),
             _=>return Err("response observation lacks its terminal".into()),
         }.map_err(|error|error.to_string())
+    }
+
+    // Warm readback only: no install, publication worker, signature, or custody
+    // transition is invoked. A commit acknowledgement lost before this owner
+    // retained the verified original cannot be recovered through this method.
+    pub(crate) fn lookup_publication(
+        &self,
+        state: &GateState,
+        body: &[u8],
+    ) -> Result<GenerationPublicationReceipt, GenerationInstallError> {
+        if !self.is_production || self.native_workers.is_none() {
+            return Err(GenerationInstallError::unavailable(
+                "native retained publication owner is unavailable",
+            ));
+        }
+        if body.is_empty() || body.len() as u64 > MAX_LOOKUP_BODY_BYTES {
+            return Err(GenerationInstallError::invalid(
+                "publication lookup is outside its fixed bound",
+            ));
+        }
+        let request: PublicationLookupRequest = strict_json_from_slice(body)
+            .map_err(|_| GenerationInstallError::invalid("publication lookup is not strict JSON"))?;
+        if request.api_version != "serverware.policyShadowGenerationLookup/v1"
+            || !bounded_ascii_token(&request.request_id, MAX_REPLAY_IDENTIFIER_BYTES)
+            || !bounded_ascii_token(&request.replay_id, MAX_REPLAY_IDENTIFIER_BYTES)
+            || !bounded_ascii_token(&request.management_handoff_id, MAX_REPLAY_IDENTIFIER_BYTES)
+            || canonical_json_bytes(&request)
+                .map_err(|error| GenerationInstallError::invalid(error.to_string()))? != body
+        {
+            return Err(GenerationInstallError::invalid("publication lookup original is invalid"));
+        }
+        let _installation = self.installation_lock.try_lock().map_err(|_| {
+            GenerationInstallError::conflict("generation installation is busy")
+        })?;
+        let retained = self.retained_generation.try_lock().map_err(|_| {
+            GenerationInstallError::conflict("retained generation is busy")
+        })?.as_ref().cloned().ok_or_else(|| {
+            GenerationInstallError::conflict("publication outcome is not retained; outcome remains unknown")
+        })?;
+        let original = &retained.publication_receipt;
+        let payload = original.internal_envelope.untrusted_payload();
+        if retained.install_request_sha256 != request.request_sha256
+            || payload.request.request_sha256 != request.request_sha256
+            || payload.request.request_id != request.request_id
+            || payload.request.replay_id != request.replay_id
+            || payload.request.management_handoff_id != request.management_handoff_id
+        {
+            return Err(GenerationInstallError::conflict("exact publication request is not retained"));
+        }
+        let now = retained.trusted_time.now_unix_nanos()
+            .map_err(|error| GenerationInstallError::conflict(error.to_string()))?;
+        self.key_trust.authorize_at(now).map_err(GenerationInstallError::conflict)?;
+        let active = current_snapshot(state);
+        if !policy_trust_is_fresh(state)
+            || state.policy_shadow.recover_exact_publication(&retained.generation_identity, &active)
+                .map_err(GenerationInstallError::conflict)?.is_none()
+        {
+            return Err(GenerationInstallError::conflict("retained publication is not currently published"));
+        }
+        let verified = self.verify_completed_publication(
+            original.internal_envelope.clone(), original.envelope.clone(),
+            &payload.request, &payload.generation, &payload.runtime, &payload.trust,
+            retained.trusted_time.as_ref(),
+        )?;
+        let completed = retained.trusted_time.now_unix_nanos()
+            .map_err(|error| GenerationInstallError::conflict(error.to_string()))?;
+        self.key_trust.authorize_at(completed).map_err(GenerationInstallError::conflict)?;
+        let current = current_snapshot(state);
+        if completed < now || completed >= payload.expires_at_unix_nanos
+            || !policy_trust_is_fresh(state)
+            || !same_exact_snapshot_identity(&current, &active)
+            || state.policy_shadow.recover_exact_publication(&retained.generation_identity, &current)
+                .map_err(GenerationInstallError::conflict)?.is_none()
+            || verified.canonical_envelope != original.canonical_envelope
+            || verified.internal_envelope_sha256 != original.internal_envelope_sha256
+        {
+            return Err(GenerationInstallError::conflict("publication changed during readback"));
+        }
+        Ok(verified)
     }
 
     pub(crate) fn install(

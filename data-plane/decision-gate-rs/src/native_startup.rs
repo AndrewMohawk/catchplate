@@ -37,6 +37,7 @@ pub(super) struct NativeStartupParametersV1 {
     pub(super) control_plane_response_key: VerifyingKey,
     pub(super) control_plane_response_key_id: String,
     pub(super) enrollment_authorizer: Option<native_enrollment_authorizer::NativeEnrollmentAuthorizer>,
+    pub(super) workload_trust: Option<native_workload_identity_trust::Pending>,
     pub(super) attempt_ledger_directory: PathBuf,
     pub(super) relay_assignments: Vec<NativeRelayAssignmentV1>,
     pub(super) listener_port: u32,
@@ -342,6 +343,17 @@ fn run_owned(
             return Err("native enrollment authorizer was already attached".to_owned());
         }
         state.native_enrollment_authorizer = Some(Arc::new(authorizer));
+        startup.check()?;
+    }
+    if let Some(pending) = parameters.workload_trust.take() {
+        let trust = pending.admit(&prepared.state, &prepared.ingress, Arc::clone(startup))?;
+        let state = Arc::get_mut(&mut prepared.state)
+            .ok_or("native workload trust state shared before cold attachment")?;
+        if state.proxy_ingress_attestation.native_workload_identity_trust.is_some()
+            || state.proxy_ingress_attestation.workload_identity_trust.is_some() {
+            return Err("native workload trust cannot replace another admission".into());
+        }
+        state.proxy_ingress_attestation.native_workload_identity_trust = Some(trust);
         startup.check()?;
     }
     // This opt-in writes public originals only. Publication is not independent

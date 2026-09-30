@@ -19,7 +19,9 @@ steps. No dependency fetch is invoked. The build host/operator must provision
 the exact base images and builder/cache beforehand; `--network=none` is not a
 claim that an independently configured BuildKit daemon cannot access a registry.
 
-The fixed selection is the ten-endpoint cohort configuration/v7 paired with
+The fixed selection includes native startup configuration/v22 with its separately
+pinned [native workload trust grant](native-workload-trust-authorization.md),
+and the ten-endpoint cohort configuration/v7 paired with
 the one actual measured driver bootstrap configuration/v4,
 bridge launch/v5, production RPC runtime/v9, spool services/v3, and ordinary
 five-service launch/v6. Only DRS, CurrentSignatureAuthority and Cleanup select

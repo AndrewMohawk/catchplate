@@ -1,0 +1,125 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-startup-configuration.v22.schema.json",
+  "title": "Explicit independently authorized native workload trust startup",
+  "description": "Exact v21 successor with a separately admitted native trust authorizer. The signed native trust grant is a separately pinned retained launch original, not embedded in this configuration or the original launch; it binds both complete originals without a self-reference. Existing native root, policy, byte and lifetime bounds remain unchanged. Schema shape is not independent admission or runtime readiness.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion",
+    "gate",
+    "native",
+    "shadow",
+    "responseObservationV2",
+    "policy",
+    "enrollmentAuthorizer",
+    "enrollmentSetupAuthorizer",
+    "enrollmentProxyEndpoint",
+    "credentialCurrentness",
+    "secretBroker",
+    "measuredAudit",
+    "encryptedServiceTokens",
+    "measuredRefresh",
+    "guestInspector",
+    "measuredSuccession",
+    "guestCohort",
+    "measuredCleanup",
+    "guestRoleKeyProvisioner",
+    "measuredPendingRetirement",
+    "gateCgroup",
+    "measuredCaptureRetirement",
+    "measuredCanaryDelivery",
+    "workloadTrustAuthorizer"
+  ],
+  "properties": {
+    "apiVersion": {
+      "const": "serverware.nativeStartupConfiguration/v22"
+    },
+    "gate": {
+      "$ref": "native-startup-configuration.v21.schema.json#/properties/gate"
+    },
+    "native": {
+      "$ref": "native-startup-configuration.v21.schema.json#/properties/native"
+    },
+    "shadow": {
+      "$ref": "native-startup-configuration.v21.schema.json#/properties/shadow"
+    },
+    "responseObservationV2": {
+      "$ref": "native-startup-configuration.v21.schema.json#/properties/responseObservationV2"
+    },
+    "policy": {
+      "$ref": "native-startup-configuration.v21.schema.json#/properties/policy"
+    },
+    "enrollmentAuthorizer": {
+      "$ref": "native-startup-configuration.v21.schema.json#/properties/enrollmentAuthorizer"
+    },
+    "enrollmentSetupAuthorizer": {
+      "$ref": "native-startup-configuration.v21.schema.json#/properties/enrollmentSetupAuthorizer"
+    },
+    "enrollmentProxyEndpoint": {
+      "$ref": "native-startup-configuration.v21.schema.json#/properties/enrollmentProxyEndpoint"
+    },
+    "credentialCurrentness": {
+      "$ref": "native-startup-configuration.v21.schema.json#/properties/credentialCurrentness"
+    },
+    "secretBroker": {
+      "$ref": "native-startup-configuration.v21.schema.json#/properties/secretBroker"
+    },
+    "measuredAudit": {
+      "$ref": "native-startup-configuration.v21.schema.json#/properties/measuredAudit"
+    },
+    "encryptedServiceTokens": {
+      "$ref": "native-startup-configuration.v21.schema.json#/properties/encryptedServiceTokens"
+    },
+    "measuredRefresh": {
+      "$ref": "native-startup-configuration.v21.schema.json#/properties/measuredRefresh"
+    },
+    "guestInspector": {
+      "$ref": "native-startup-configuration.v21.schema.json#/properties/guestInspector"
+    },
+    "measuredSuccession": {
+      "$ref": "native-startup-configuration.v21.schema.json#/properties/measuredSuccession"
+    },
+    "guestCohort": {
+      "$ref": "native-startup-configuration.v21.schema.json#/properties/guestCohort"
+    },
+    "measuredCleanup": {
+      "$ref": "native-startup-configuration.v21.schema.json#/properties/measuredCleanup"
+    },
+    "guestRoleKeyProvisioner": {
+      "$ref": "native-startup-configuration.v21.schema.json#/properties/guestRoleKeyProvisioner"
+    },
+    "measuredPendingRetirement": {
+      "$ref": "native-startup-configuration.v21.schema.json#/properties/measuredPendingRetirement"
+    },
+    "gateCgroup": {
+      "$ref": "native-startup-configuration.v21.schema.json#/properties/gateCgroup"
+    },
+    "measuredCaptureRetirement": {
+      "$ref": "native-startup-configuration.v21.schema.json#/properties/measuredCaptureRetirement"
+    },
+    "measuredCanaryDelivery": {
+      "$ref": "native-startup-configuration.v21.schema.json#/properties/measuredCanaryDelivery"
+    },
+    "workloadTrustAuthorizer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "publicKeyPem",
+        "publicKeyPemSha256"
+      ],
+      "properties": {
+        "publicKeyPem": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 16384,
+          "description": "Canonical Ed25519 SubjectPublicKeyInfo PEM, admitted from this independently pinned original configuration. The grant cannot choose its own verification key."
+        },
+        "publicKeyPemSha256": {
+          "$ref": "native-workload-identity-trust-authorization.v1.schema.json#/$defs/digest",
+          "description": "SHA-256 of the exact original canonical publicKeyPem bytes, not a replacement for independent configuration admission."
+        }
+      }
+    }
+  }
+}

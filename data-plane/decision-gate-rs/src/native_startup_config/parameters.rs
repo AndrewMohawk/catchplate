@@ -144,6 +144,7 @@ impl NativeSettingsV1 {
             control_plane_response_key: response_key,
             control_plane_response_key_id: response_key_id,
             enrollment_authorizer,
+            workload_trust: None,
             attempt_ledger_directory: self.attempt_ledger_directory,
             relay_assignments: self.relay_assignments.into_iter().map(|relay|
                 NativeRelayAssignmentV1 { host: relay.host, endpoint: relay.endpoint,

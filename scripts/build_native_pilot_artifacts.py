@@ -19,6 +19,10 @@ import build_production_images as build
 
 DOCKERFILE = "data-plane/decision-gate-rs/Dockerfile.production"
 PROFILES = {
+    "nativeStartup": "serverware.nativeStartupConfiguration/v22",
+    "nativeStartupSelector": "--native-workload-trust-startup-v22",
+    "nativeEnclaveSelector": "--workload-trust-v22",
+    "nativeWorkloadTrust": "serverware.nativeWorkloadIdentityTrustAuthorization/v1",
     "cohort": "serverware.nativeShadowProofCohortConfiguration/v7",
     "cohortRoles": ["retrieval", "persistence", "trustedTime", "generationInstall",
                     "commitRequest", "ingressAdmission", "terminalAppend", "dispatchBarrier",
@@ -62,7 +66,7 @@ def preparation(metadata):
             "Protected endpoint cohort control/configuration-v7 and original precreation window; ten distinct actual child assignments plus the independently pinned retained DriverBootstrap bridge",
             "Protected custody-effects-five.json v6, five C9 configurations, service credentials and signed authority histories",
             "Driver bootstrap/configuration/window, actual post-drop measurement, independently signed phase-two scope and constructed admission",
-            "Actual gate native startup/lifecycle/receiving configuration, signed policy, assignment, compiler and canary inventory",
+            "Actual gate native startup-v22/lifecycle/receiving configuration, separately pinned independent native workload-trust grant, signed policy, assignment, compiler and canary inventory",
             "Exact head-v3/current-v3/cleanup-v1 grants, generation grants, encrypted independently assigned native keys and KMS context pins",
             "Independent trust/revocation/checkpoint/time/verifier/generation-origin authorities and their original transport/key custody",
             "Actual listeners, persistent fs-verity-capable stores, held locks, cgroups, IMA/LSM identities, UID separation and PIDFD support",

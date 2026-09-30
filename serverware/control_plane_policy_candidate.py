@@ -1,7 +1,8 @@
 """Purpose-fixed candidate generation ceremony and one retained native contact.
 
 The new HTTP label never invokes legacy claim/stage/audit DML. Exact known
-publication lookup is read-only; an uncertain claim/contact is never retried.
+publication lookup is read-only; explicit retained-receipt recovery never retries
+an uncertain native publication or renews its original claim.
 """
 import os
 import threading
@@ -16,7 +17,7 @@ from serverware import control_plane_publication_authorization as publication
 from serverware.control_plane_approval_verification import _request_pin, _epoch_ns
 
 PREFIX = "/api/policy/authority/candidates/controlled-generation"
-PATHS = frozenset(PREFIX + suffix for suffix in ("/draft", "/options", "/publish", "/lookup"))
+PATHS = frozenset(PREFIX + suffix for suffix in ("/draft", "/options", "/publish", "/lookup", "/recover"))
 MAX_REQUEST = profile.MAX_ARGUMENT_BYTES + 32768
 MFA_FIELD = "policyCandidateProfile"
 
@@ -206,6 +207,9 @@ def on_request(request, raw):
     path = request.url.path
     if path == PREFIX + "/draft":
         return _draft(owner, value)
+    if path == PREFIX + "/recover":
+        from serverware.control_plane_policy_candidate_recovery import recover
+        return recover(owner, value)
     if path == PREFIX + "/lookup":
         profile.require(set(value) == {"apiVersion", "requestId"} and value["apiVersion"] == profile.HTTP_SCHEMA)
         row = _claim(value["requestId"])

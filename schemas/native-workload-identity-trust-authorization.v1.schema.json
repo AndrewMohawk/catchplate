@@ -1,0 +1,283 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-workload-identity-trust-authorization.v1.schema.json",
+  "title": "Independent complete native workload trust startup authorization",
+  "description": "Canonical ensure_ascii sorted compact JSON without LF, maximum 131072 bytes. Ed25519 signs UTF-8 payload schema, NUL and exact canonical payload. Separate opt-in native v22 startup joins independently pinned configuration/launch originals, actual ordered DER roots, current signed policy and retained generated TLS/Snapshot owner. Existing native session quotations remain subject to these live checks. Shape validation alone proves neither signature, independent approval, currentness nor pilot readiness. No issuance, hot reload, rotation, rollback witness or retry authority is created.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "payload",
+    "signature"
+  ],
+  "properties": {
+    "schema": {
+      "const": "serverware.signedNativeWorkloadIdentityTrustAuthorization/v1"
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "sourceRevision",
+        "purpose",
+        "profile",
+        "authorizerSpkiSha256",
+        "deploymentId",
+        "instanceId",
+        "configurationSha256",
+        "launchSha256",
+        "releaseRecordSha256",
+        "policyHash",
+        "policySequence",
+        "rollbackEpoch",
+        "deadlineBoottimeNs",
+        "clientTrustProfile",
+        "clientTrustBundleSha256",
+        "issuers",
+        "principals",
+        "issuedAtEpochNs",
+        "expiresAtEpochNs"
+      ],
+      "properties": {
+        "schema": {
+          "const": "serverware.nativeWorkloadIdentityTrustAuthorization/v1"
+        },
+        "sourceRevision": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^serverware\\.policyCandidateAuthoritySource/[0-9]{4}-[0-9]{2}-[0-9]{2}\\.[0-9]+(?![\\s\\S])",
+          "description": "Must equal the actual shared source-owned authority contract revision, not a value selected by the request."
+        },
+        "purpose": {
+          "const": "native-workload-identity-ingress-trust"
+        },
+        "profile": {
+          "const": "immutable-native-framed-der-startup-v1"
+        },
+        "authorizerSpkiSha256": {
+          "$ref": "#/$defs/digest",
+          "description": "DER SubjectPublicKeyInfo hash of the Ed25519 key independently admitted in the complete cold configuration; never a key selected from this grant."
+        },
+        "deploymentId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}(?![\\s\\S])"
+        },
+        "instanceId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024,
+          "pattern": "^[ -~]+(?![\\s\\S])",
+          "description": "Exact actual canonical GateState instance identity, including the native startup SPIFFE identity requirements."
+        },
+        "configurationSha256": {
+          "$ref": "#/$defs/digest",
+          "description": "Hash of the complete original v22 cold configuration, not a projection or embedded grant hash."
+        },
+        "launchSha256": {
+          "$ref": "#/$defs/digest",
+          "description": "Hash of the complete original native launch. The grant remains separately pinned so neither original hashes itself."
+        },
+        "releaseRecordSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "policyHash": {
+          "$ref": "#/$defs/digest"
+        },
+        "policySequence": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9223372036854775807
+        },
+        "rollbackEpoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9223372036854775807
+        },
+        "deadlineBoottimeNs": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9223372036854775807,
+          "description": "Exactly the existing original native launch deadline. No restart, renewal or lifetime extension."
+        },
+        "clientTrustProfile": {
+          "const": "native-framed-der-v1"
+        },
+        "clientTrustBundleSha256": {
+          "$ref": "#/$defs/digest",
+          "description": "Existing native SHA-256 domain-and-length-framed ordered DER root commitment; not a PEM file hash or standard trust grant."
+        },
+        "issuers": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/issuer"
+          },
+          "description": "Exact actual native root order. Runtime rejects repeated certificate DER and derives both fields from every retained CA original; all original CA/key-purpose/validity checks and 64KiB-per-root/1MiB aggregate limits remain."
+        },
+        "principals": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": {
+            "$ref": "#/$defs/principal"
+          },
+          "description": "Complete current normalized policy inventory, sorted uniquely by principalId. Its existing canonical wrapper is at most 64 KiB. Every selected issuer SPKI must belong to the admitted ordered native root inventory."
+        },
+        "issuedAtEpochNs": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9223372036854775807
+        },
+        "expiresAtEpochNs": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9223372036854775807,
+          "description": "Strictly after issuedAtEpochNs, at most 86400000000000 ns later and wholly inside every actual root/ingress/CA validity interval. Processing and native serving retain their original shorter bounds."
+        }
+      }
+    },
+    "signature": {
+      "type": "string",
+      "minLength": 94,
+      "maxLength": 94,
+      "pattern": "^ed25519:[A-Za-z0-9_-]{85}[AQgw](?![\\s\\S])"
+    }
+  },
+  "$defs": {
+    "digest": {
+      "type": "string",
+      "minLength": 71,
+      "maxLength": 71,
+      "pattern": "^sha256:[0-9a-f]{64}(?![\\s\\S])"
+    },
+    "issuer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "certificateDerSha256",
+        "spkiSha256"
+      ],
+      "properties": {
+        "certificateDerSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "spkiSha256": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "principal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "principalId",
+        "mtls"
+      ],
+      "properties": {
+        "principalId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "pattern": "^[ -~]+(?![\\s\\S])"
+        },
+        "mtls": {
+          "$ref": "#/$defs/mtls"
+        }
+      }
+    },
+    "mtls": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "verifiedByTrustedIngress",
+        "issuerSpkiSha256"
+      ],
+      "properties": {
+        "verifiedByTrustedIngress": {
+          "const": true
+        },
+        "issuerSpkiSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "certificateSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "spkiSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "sanSpiffeIds": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048,
+            "pattern": "^[ -~]+(?![\\s\\S])"
+          },
+          "description": "Sorted, unique original policy selectors; runtime additionally enforces the existing exact DNS/URI/SPIFFE grammar without normalization."
+        },
+        "sanDnsNames": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 253,
+            "pattern": "^[ -~]+(?![\\s\\S])"
+          },
+          "description": "Sorted, unique original policy selectors; runtime additionally enforces the existing exact DNS/URI/SPIFFE grammar without normalization."
+        },
+        "sanUris": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048,
+            "pattern": "^[ -~]+(?![\\s\\S])"
+          },
+          "description": "Sorted, unique original policy selectors; runtime additionally enforces the existing exact DNS/URI/SPIFFE grammar without normalization."
+        }
+      },
+      "anyOf": [
+        {
+          "required": [
+            "certificateSha256"
+          ]
+        },
+        {
+          "required": [
+            "spkiSha256"
+          ]
+        },
+        {
+          "required": [
+            "sanSpiffeIds"
+          ]
+        },
+        {
+          "required": [
+            "sanDnsNames"
+          ]
+        },
+        {
+          "required": [
+            "sanUris"
+          ]
+        }
+      ],
+      "description": "Exact existing normalized selectors. Optional members are absent, never null; at least one leaf/SAN selector remains mandatory."
+    }
+  }
+}

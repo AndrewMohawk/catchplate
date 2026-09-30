@@ -8998,6 +8998,7 @@ def _policy_shadow_generation_url(
     if path not in {
         _POLICY_SHADOW_GENERATION_PATH,
         _POLICY_SHADOW_GENERATION_ACTIVATION_PATH,
+        "/v1/policy-shadow/generations/lookup",
         "/v1/native-loaded-policy",
         control_plane_native_policy_activation.MANAGEMENT_PATH,
     }:
@@ -11166,6 +11167,7 @@ async def controlled_native_policy_activation(request: Request) -> dict[str, Any
 @app.post(control_plane_policy_candidate.PREFIX + "/options")
 @app.post(control_plane_policy_candidate.PREFIX + "/publish")
 @app.post(control_plane_policy_candidate.PREFIX + "/lookup")
+@app.post(control_plane_policy_candidate.PREFIX + "/recover")
 async def controlled_policy_candidate_generation(request: Request) -> dict[str, Any]:
     raw = await request.body()
     try:

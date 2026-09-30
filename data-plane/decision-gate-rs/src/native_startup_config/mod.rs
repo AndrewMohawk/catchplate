@@ -11,6 +11,7 @@ mod succession;
 mod canary_delivery;
 mod canary_heartbeat;
 mod canary_readiness;
+mod workload_trust;
 mod gate;
 mod originals;
 mod parameters;
@@ -425,6 +426,7 @@ fn configuration(raw: &[u8], mode: cli::Mode) -> Result<ConfigurationParts, Stri
         cli::Mode::MeasuredCanaryDeliveryV19 => version == Some("serverware.nativeStartupConfiguration/v19"),
         cli::Mode::NativeHeartbeatV20 => version == Some("serverware.nativeStartupConfiguration/v20"),
         cli::Mode::NativeReadinessV21 => version == Some("serverware.nativeStartupConfiguration/v21"),
+        cli::Mode::WorkloadTrustV22 => false, // decoded only by the explicit successor owner
     }, "native startup mode does not admit this configuration version")?;
     match value.get("apiVersion").and_then(Value::as_str) {
         Some("serverware.nativeStartupConfiguration/v20") => canary_heartbeat::configuration(value),
@@ -831,13 +833,23 @@ fn decode<T: DeserializeOwned>(raw: &[u8], maximum: usize) -> Result<T, String> 
         .map_err(|_| "native configuration does not match its closed JSON contract".to_owned())
 }
 
-fn run(configuration: ArtifactV1, launch: ArtifactV1, public_identity_stdout: bool, mode: cli::Mode) -> Result<(), String> {
+fn run(configuration: ArtifactV1, launch: ArtifactV1, public_identity_stdout: bool, mode: cli::Mode,
+    trust_artifact: Option<ArtifactV1>) -> Result<(), String> {
     let configuration_pin = configuration.sha256.clone();
+    let launch_pin = launch.sha256.clone();
     let (mut configuration_original, raw_configuration) =
         HeldOriginal::read(configuration, MAX_CONFIGURATION_BYTES)?;
     let raw_configuration = zeroize::Zeroizing::new(raw_configuration);
     configuration_original.require_private()?;
-    let configuration = self::configuration(&raw_configuration, mode)?;
+    let (configuration, trust_authorizer) = match mode {
+        cli::Mode::WorkloadTrustV22 => {
+            let (parts, key) = workload_trust::configuration(&raw_configuration)?;
+            (parts, Some(key))
+        },
+        mode => (self::configuration(&raw_configuration, mode)?, None),
+    };
+    ensure(trust_authorizer.is_some() == trust_artifact.is_some(), "native trust selection differs")?;
+    let deployment = configuration.credential_currentness.as_ref().map(|v| v.deployment_id.clone());
     // Only explicit gate-cgroup profiles retain the actual producer and bind
     // its owner before serving. A nested marker cannot supply that custody.
     ensure(!configuration.response_observation_v2.uses_native_staging()
@@ -864,8 +876,18 @@ fn run(configuration: ArtifactV1, launch: ArtifactV1, public_identity_stdout: bo
     let shadow = configuration.shadow.into_config()?;
     lifetime.check()?;
     let (mut policy_original, policy_bytes) = HeldOriginal::read(configuration.policy, MAX_POLICY_BYTES)?;
-    let parameters = configuration.native.into_parameters(launch, &configuration_pin,
+    let mut parameters = configuration.native.into_parameters(launch, &configuration_pin,
         &inputs.policy_high_water, control_plane_tls, policy_bytes, configuration.enrollment)?;
+    let mut trust_original = None;
+    if let (Some(authorizer), Some(artifact)) = (trust_authorizer, trust_artifact) {
+        let (held, raw) = HeldOriginal::read(artifact, native_workload_identity_trust::MAX_AUTHORIZATION)?;
+        parameters.workload_trust = Some(native_workload_identity_trust::Pending::prepare(
+            authorizer, raw, &configuration_pin, &raw_launch, &launch_pin,
+            deployment.as_deref().ok_or("native trust deployment is absent")?,
+            inputs.server_instance_id.as_deref().ok_or("native trust instance is absent")?,
+            &parameters, &inputs.policy_high_water)?);
+        trust_original = Some(held);
+    }
     // Parsing consumes exact retained originals. Recheck the three names and
     // held byte hashes immediately before handing off to actual startup; this
     // is local input integrity, not signed/current release admission.
@@ -873,6 +895,7 @@ fn run(configuration: ArtifactV1, launch: ArtifactV1, public_identity_stdout: bo
     configuration_original.require_private()?;
     launch_original.recheck()?;
     policy_original.recheck()?;
+    if let Some(original) = trust_original.as_mut() { original.recheck()?; }
     lifetime.check()?;
     drop(raw_configuration);
     // Owners remain in this frame through serving. Runtime policy uses the
@@ -885,7 +908,7 @@ fn run(configuration: ArtifactV1, launch: ArtifactV1, public_identity_stdout: bo
 pub(super) fn run_from_process_arguments() -> Result<Option<()>, String> {
     match cli::arguments(std::env::args_os().skip(1))? {
         None => Ok(None),
-        Some((configuration, launch, public_identity_stdout, mode)) =>
-            run(configuration, launch, public_identity_stdout, mode).map(Some),
+        Some((configuration, launch, public_identity_stdout, mode, trust)) =>
+            run(configuration, launch, public_identity_stdout, mode, trust).map(Some),
     }
 }

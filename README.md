@@ -18,7 +18,7 @@ Checkpoint: **2026-09-30 — pre-production, pilot assembly.**
 
 **36/46 source checkpoints landed · 10 active · 0 todo.**
 
-**Production acceptance: 0/6 verified.** Service images built from `172f6b4e`; both Python pilot runtime artifacts now also build from `9939bf1e`. These used the unpublished dependency candidate in isolated non-release checkouts. Provisioning and connected verification remain. No production deployment.
+**Production acceptance: 0/6 verified.** Service images built from `172f6b4e`; both Python pilot runtime artifacts now also build from `c972f02b`, with the corrected permissions confirmed by targeted artifact readback. These used the unpublished dependency candidate in isolated non-release checkouts. Provisioning and connected verification remain. No production deployment.
 
 [![Project checkpoints, one segment per task: 36 of 46 source-landed; 10 active and 0 todo. Evidence handoff 10/10; historical recovery 4/5; permissions and grants 10/10; finalization and sessions 8/8; workloads and native 3/6; providers and operations 1/7. H05, N04, N05, N06 and O01 through O06 are in progress. Production acceptance remains 0/6. Engineering assembly is not an accepted pilot or production deployment.](docs/images/project-progress.svg)](docs/production-status.md#next-source-milestones)
 

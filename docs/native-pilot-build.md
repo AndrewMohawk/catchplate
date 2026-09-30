@@ -474,12 +474,17 @@ packages and must not be passed to runtime admission or installed as an approved
 pilot. The strict inventory/package tools still reject this engineering source
 identity. Canonical reviewed dependency pins remain unchanged.
 
-Both engineering tar exports completed from frozen source `9939bf1e`, using the
+Both corrected engineering tar exports completed from frozen source `c972f02b`, using the
 unchanged `v3-candidate-cba01916` in an isolated checkout. The conductor and
 authority wrappers exited zero, both observed complete by
-`2026-09-30T17:31:39Z`; their reports retain all three non-release/raw-only flags
+`2026-09-30T17:37:44Z`; their reports retain all three non-release/raw-only flags
 above. The first local-export attempt at `7582114d` completed assembly but failed
 on the protected directory mode; that partial attempt remains separate evidence.
+The first tar pair at `9939bf1e` exposed an implicit COPY destination with mode
+`0755` instead of `0555`. Copying an explicit staged directory fixes that defect;
+targeted readback of the corrected pair confirms the authority directory modes,
+four exact authority scripts, unchanged two-script conductor layout and common
+engineering source manifest. This is not whole-runtime or pilot acceptance.
 No runtime extraction, installation, execution, signing or cloud operation ran.
 
 ## Live preparation remains with the genuine owners

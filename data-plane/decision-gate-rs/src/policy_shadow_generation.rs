@@ -54,6 +54,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 #[path = "policy_shadow_generation_native.rs"]
 mod native;
+#[path="policy_shadow_generation_activation.rs"]
+pub(crate) mod activation;
 pub(crate) use native::PreparedNativeShadowControl;
 
 pub(crate) const INSTALL_PATH: &str = "/v1/policy-shadow/generations";
@@ -2296,6 +2298,7 @@ impl RuntimeAttestationVerification for FleetRuntimeAttestation {
 /// and executable checks used by the environment-backed development entry.
 pub(crate) struct PolicyShadowGenerationConfig {
     pub(crate) native_workers: Option<serverware_decision_gate::native_shadow_workers::Configuration>,
+    pub(crate) native_activation:Option<activation::Configuration>,
     pub(crate) trust_manifest_path: PathBuf,
     pub(crate) trust_manifest_sha256: Sha256Digest,
     pub(crate) runtime_verifier: PinnedVerifierCommand,
@@ -2311,6 +2314,7 @@ pub(crate) struct PolicyShadowGenerationConfig {
 
 pub(crate) struct PolicyShadowGenerationControl {
     native_workers: Option<Arc<serverware_decision_gate::native_shadow_workers::Owner>>,
+    native_activation:Mutex<Option<activation::Owner>>,
     is_production: bool,
     trust_manifest_sha256: Sha256Digest,
     key_trust: Arc<PinnedEnvelopeKeyTrust>,
@@ -2375,6 +2379,7 @@ impl PolicyShadowGenerationControl {
 
         let config = PolicyShadowGenerationConfig {
             native_workers: None,
+            native_activation:None,
             trust_manifest_path: PathBuf::from(required_env(
                 TRUST_MANIFEST_PATH_ENV,
             )?),
@@ -2423,7 +2428,7 @@ impl PolicyShadowGenerationControl {
         policy_trust_is_attested: bool,
         config: PolicyShadowGenerationConfig,
     ) -> Result<Arc<Self>, String> {
-        if config.native_workers.is_some() {
+        if config.native_workers.is_some() || config.native_activation.is_some() {
             return Err("native shadow workers require the retained pre-drop preparation owner".into());
         }
         if is_production && !policy_trust_is_attested {
@@ -2434,6 +2439,7 @@ impl PolicyShadowGenerationControl {
         }
         let PolicyShadowGenerationConfig {
             native_workers: _,
+            native_activation:_,
             trust_manifest_path,
             trust_manifest_sha256,
             runtime_verifier,
@@ -2559,6 +2565,7 @@ impl PolicyShadowGenerationControl {
 
         Ok(Arc::new(Self {
             native_workers: None,
+            native_activation:Mutex::new(None),
             is_production,
             trust_manifest_sha256,
             key_trust,

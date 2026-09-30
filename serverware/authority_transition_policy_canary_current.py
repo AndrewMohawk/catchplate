@@ -15,6 +15,10 @@ def committed_policy(state):
         **{name: high[name] for name in ("scope", "policy_id", "sequence", "rollback_epoch", "policy_hash")})
     if publication is None:
         return None
+    from serverware import authority_transition_policy_native_activation_settlement as native
+    native_publication = native.committed_policy(state, high, publication)
+    if native_publication is not None:
+        return native_publication
     matches = []
     for preparation in state.matching("policy_activation_preparations", candidate_policy_hash=high["policy_hash"],
             candidate_policy_sequence=high["sequence"], candidate_rollback_epoch=high["rollback_epoch"]):

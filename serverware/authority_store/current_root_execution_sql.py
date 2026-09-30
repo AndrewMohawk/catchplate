@@ -37,6 +37,7 @@ not jsonb::text or the distinct UTF-8 tree serializer; original result bytes
 must compare exactly before their digest is computed.
 """
 from __future__ import annotations
+from serverware import authority_native_activation_hold
 
 import json
 
@@ -340,6 +341,7 @@ def current_root_execution_apply_body_sql(namespace: str) -> str:
             selected_rows_sql='crx_selected_rows', mutations_sql='crx_mutations', work_units_sql='crx_work_units')}
         {_live_sql()}
         -- Keep genuine semantic replay order, including capacity effects.
+        {authority_native_activation_hold.sql(namespace, operation_sql='crx_operation', mutations_sql='crx_mutations')}
         FOR mutation IN SELECT item.value FROM pg_catalog.jsonb_array_elements(crx_mutations)
             WITH ORDINALITY AS item(value, ordinal) ORDER BY item.ordinal
         LOOP

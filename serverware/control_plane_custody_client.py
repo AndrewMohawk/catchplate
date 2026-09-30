@@ -2036,6 +2036,25 @@ class ControlPlaneCustodyClient:
             raise CustodyClientError("canary delivery did not return exact request/response originals")
         return originals
 
+    def _request_native_activation(self, *, input_value, deadline_ns):
+        """One actual PREPARE exchange; source-original proof, never retry permission."""
+        from serverware import authority_policy_native_activation as activation
+        binding = _snapshot(self)
+        runtime = binding.runtime_client
+        if type(runtime) is not service.AuthorityRuntimeClient or type(deadline_ns) is not int:
+            raise CustodyClientError("native activation lacks the exact cold runtime owner")
+        _receipt_now(binding)
+        originals = service.AuthorityRuntimeClient.request_native_activation(runtime,
+            operation=activation.PREFIX + "consume", input_value=input_value, deadline_ns=deadline_ns)
+        _process(binding); _receipt_now(binding)
+        if _snapshot(self) is not binding:
+            raise CustodyClientError("native activation custody changed during PREPARE")
+        journal.CustodyJournal._require_ready(binding.journal)
+        transport._check_deadline(deadline_ns)
+        if type(originals) is not tuple or len(originals) != 2 or any(type(raw) is not bytes for raw in originals):
+            raise CustodyClientError("native activation did not retain its actual request/response originals")
+        return originals
+
     def _request_measured_cleanup(self, *, operation, input_value, deadline_ns):
         """Exact signed originals only for the fixed measured-cleanup family.
 

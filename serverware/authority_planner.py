@@ -32,6 +32,7 @@ from serverware import authority_setup_policy as setup_policy
 from serverware import authority_transition_setup_policy
 from serverware import authority_policy_canary
 from serverware import authority_policy_canary_tables
+from serverware import authority_policy_native_activation
 from serverware import authority_policy_canary_delivery
 from serverware import authority_policy_canary_delivery_policy
 from serverware import authority_complete_query
@@ -4265,7 +4266,7 @@ class MeasuredPlanner:
                             authority_transition_setup_policy.require_complete_populations(
                                 selected_rows=selected, before_roots=tuple(roots) + tuple(authorization_roots),
                                 work=query_work, deadline_ns=request["deadlineMonotonicNs"])
-                        if operation == authority_policy_canary.OP_INTAKE:
+                        if operation in ({authority_policy_canary.OP_INTAKE} | authority_policy_native_activation.OPERATIONS):
                             authority_policy_canary_tables.require_complete_populations(
                                 selected_rows=selected, before_roots=tuple(roots) + tuple(authorization_roots),
                                 work=query_work, deadline_ns=request["deadlineMonotonicNs"], operation=operation)

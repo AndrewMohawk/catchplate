@@ -6,6 +6,7 @@ use serverware_decision_gate::{native_shadow_workers as workers,
 pub(crate) struct PreparedNativeShadowControl {
     control: Arc<PolicyShadowGenerationControl>,
     worker: workers::Prepared,
+    activation:Option<activation::Prepared>,
 }
 
 impl PreparedNativeShadowControl {
@@ -13,6 +14,7 @@ impl PreparedNativeShadowControl {
         cohort: Arc<StartedGuestCohort>) -> Result<Self, String> {
         prepared.check()?;
         let selected = config.native_workers.take().ok_or("native shadow worker profile absent")?;
+        let activation=config.native_activation.take().map(|value|activation::Prepared::open(value,prepared)).transpose()?;
         let commands = [&config.runtime_verifier, &config.webauthn_verifier, &config.publication_handoff]
             .map(|command| workers::Executable {
                 path: command.executable.clone(), sha256: command.expected_sha256.clone(),
@@ -22,16 +24,18 @@ impl PreparedNativeShadowControl {
         let control = PolicyShadowGenerationControl::from_config(true, true, config)?;
         let worker = workers::Prepared::launch(selected, commands, prepared, cohort)?;
         prepared.check()?;
-        Ok(Self {control, worker})
+        Ok(Self {control, worker,activation})
     }
 
     pub(crate) fn bind(mut self, serving: Arc<Owner>)
         -> Result<(Arc<PolicyShadowGenerationControl>, Arc<workers::Owner>), String> {
-        let worker = self.worker.bind(serving)?;
+        let worker = self.worker.bind(Arc::clone(&serving))?;
+        let activation=self.activation.map(|value|value.bind(serving)).transpose()?;
         let control = Arc::get_mut(&mut self.control)
             .ok_or("native shadow control published before permanent serving bind")?;
         if control.native_workers.is_some() { return Err("native shadow worker already bound".into()); }
         control.native_workers = Some(Arc::clone(&worker));
+        *control.native_activation.get_mut().map_err(|_|"native activation startup mutex poisoned")?=activation;
         Ok((self.control, worker))
     }
 }

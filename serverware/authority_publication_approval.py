@@ -28,6 +28,9 @@ def action(value):
 
 
 def operation_profile(operation):
+    from serverware import authority_policy_native_activation
+    if operation in authority_policy_native_activation.OPERATIONS:
+        return authority_policy_native_activation
     if operation in OPERATIONS:
         from serverware import authority_publication_approval
         return authority_publication_approval
@@ -39,7 +42,8 @@ def operation_profile(operation):
 
 def assertion_operations():
     from serverware import authority_policy_file_approval
-    return ASSERTION_OPERATIONS | authority_policy_file_approval.ASSERTION_OPERATIONS
+    from serverware import authority_policy_native_activation
+    return ASSERTION_OPERATIONS | authority_policy_file_approval.ASSERTION_OPERATIONS | authority_policy_native_activation.ASSERTION_OPERATIONS
 
 
 def canonical(value):

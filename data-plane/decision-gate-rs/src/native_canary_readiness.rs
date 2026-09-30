@@ -48,5 +48,5 @@ pub(crate) fn submit(state:&GateState,final_checkpoint_original:&Value,deadline:
     if completion.observation().status()!="consumed"{return Err("native readiness outcome unresolved; no retry".into());}
     // Consumption means only that the kernel stored its derived result. It is
     // never a Fleet READY envelope, human approval, publication or promotion.
-    Ok(())
+    native_canary_delivery::retain_readiness(state,&record,completion)
 }

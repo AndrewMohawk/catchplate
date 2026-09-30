@@ -1,4 +1,4 @@
-"""Closed C9 retrieval-delivery authoring, not native admission or key creation."""
+"""Closed C9 retrieval/activation delivery authoring, not native admission or key creation."""
 from __future__ import annotations
 
 import re
@@ -40,12 +40,27 @@ def _pin(value):
 
 def sign_retrieval_delivery(*, configuration_raw, configuration_sha256, payload_raw, signing_key,
                             activation, boot, startup_deadline, now):
+    return _sign_delivery(configuration_raw=configuration_raw, configuration_sha256=configuration_sha256,
+        payload_raw=payload_raw, signing_key=signing_key, activation=activation, boot=boot,
+        startup_deadline=startup_deadline, now=now, names=("retrieval-listener", "retrieval-objects"))
+
+
+def sign_activation_delivery(*, configuration_raw, configuration_sha256, payload_raw, signing_key,
+                             activation, boot, startup_deadline, now):
+    return _sign_delivery(configuration_raw=configuration_raw, configuration_sha256=configuration_sha256,
+        payload_raw=payload_raw, signing_key=signing_key, activation=activation, boot=boot,
+        startup_deadline=startup_deadline, now=now, names=("activation-channel", "activation-journal"))
+
+
+def _sign_delivery(*, configuration_raw, configuration_sha256, payload_raw, signing_key,
+                   activation, boot, startup_deadline, now, names):
     """Sign exact approved bytes; observed activation arguments are data only.
 
     The actual retained activation owner supplies these observations. Native
     admission independently verifies every original descriptor and credential.
     This function by itself does not assert that any runtime owner exists.
     """
+    p.require(names in (("retrieval-listener", "retrieval-objects"), ("activation-channel", "activation-journal")))
     cold = configuration(configuration_raw, configuration_sha256)
     payload = p.fields(p.document(payload_raw, MAX_DELIVERY), FIELDS)
     p.require(payload["configurationSha256"] == configuration_sha256
@@ -62,7 +77,7 @@ def sign_retrieval_delivery(*, configuration_raw, configuration_sha256, payload_
         and startup - issued <= 30_000_000_000
         and (payload["bootIdBase64url"], payload["timeNamespaceDevice"], payload["timeNamespaceInode"]) == boot)
     p.require(type(activation) is list and len(activation) == 2 and payload["activation"] == activation)
-    for index, (entry, name) in enumerate(zip(activation, ("retrieval-listener", "retrieval-objects")), 6):
+    for index, (entry, name) in enumerate(zip(activation, names), 6):
         p.fields(entry, ("name", "fd", "device", "inode", "mode", "uid", "gid"))
         p.require(entry["name"] == name and entry["fd"] == index)
         p.integer(entry["device"], minimum=0); p.integer(entry["inode"])

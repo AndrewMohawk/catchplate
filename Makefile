@@ -1523,6 +1523,17 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/native_shadow_retrieval_artifacts.py \
 	serverware/native_shadow_retrieval_store.py \
 	serverware/native_shadow_guest_delivery.py \
+	serverware/native_policy_activation_inputs.py \
+	serverware/authority_native_activation_completion.py \
+	serverware/authority_native_activation_hold.py \
+	serverware/authority_native_activation_publication.py \
+	serverware/authority_native_activation_schema.py \
+	serverware/authority_policy_native_activation.py \
+	serverware/authority_transition_policy_native_activation.py \
+	serverware/authority_transition_policy_native_activation_settlement.py \
+	serverware/authority_transition_policy_native_activation_state.py \
+	serverware/control_plane_native_policy_activation.py \
+	serverware/portal_native_policy_activation.py \
 	serverware/native_shadow_retrieval_activation.py \
 	serverware/native_shadow_retrieval_pair_assignment.py \
 	scripts/install_native_shadow_retrieval_store.py \
@@ -4079,6 +4090,17 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/native_shadow_retrieval_artifacts.py \
 				serverware/native_shadow_retrieval_store.py \
 				serverware/native_shadow_guest_delivery.py \
+				serverware/native_policy_activation_inputs.py \
+				serverware/authority_native_activation_completion.py \
+				serverware/authority_native_activation_hold.py \
+				serverware/authority_native_activation_publication.py \
+				serverware/authority_native_activation_schema.py \
+				serverware/authority_policy_native_activation.py \
+				serverware/authority_transition_policy_native_activation.py \
+				serverware/authority_transition_policy_native_activation_settlement.py \
+				serverware/authority_transition_policy_native_activation_state.py \
+				serverware/control_plane_native_policy_activation.py \
+				serverware/portal_native_policy_activation.py \
 				serverware/native_shadow_retrieval_activation.py \
 				serverware/native_shadow_retrieval_pair_assignment.py \
 				scripts/install_native_shadow_retrieval_store.py \
@@ -4409,6 +4431,16 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/native_shadow_workers/wire.rs \
 				data-plane/decision-gate-rs/src/native_shadow_workers/worker.rs \
 				data-plane/decision-gate-rs/src/policy_shadow_generation_native.rs \
+				data-plane/decision-gate-rs/src/native_policy_activation_transport.rs \
+				data-plane/decision-gate-rs/src/policy_custody/native_activation/mod.rs \
+				data-plane/decision-gate-rs/src/policy_custody/native_activation/proof.rs \
+				data-plane/decision-gate-rs/src/policy_custody/native_activation/completion.rs \
+				data-plane/decision-gate-rs/src/policy_custody/native_activation/approval.rs \
+				data-plane/decision-gate-rs/src/policy_custody/native_activation/radix.rs \
+				data-plane/decision-gate-rs/src/policy_custody/native_activation/relations.rs \
+				data-plane/decision-gate-rs/src/policy_custody/native_activation/store.rs \
+				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/activation.rs \
+				data-plane/decision-gate-rs/src/policy_shadow_generation_activation.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/guest.rs \
 				data-plane/decision-gate-rs/src/policy_custody/native_closure.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_keys.rs \
@@ -4724,6 +4756,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-policy-canary-finalization.v1.schema.json \
 				schemas/native-policy-canary-cumulative-checkpoint.v2.schema.json \
 				schemas/native-policy-canary-readiness.v1.schema.json \
+				schemas/native-policy-activation-custody.v1.schema.json \
+				schemas/native-policy-activation.v1.schema.json \
 				schemas/native-policy-observation-result.v1.schema.json \
 				schemas/native-pilot-inventory-publication.v1.schema.json \
 				schemas/policy-bundle.v2.schema.json \

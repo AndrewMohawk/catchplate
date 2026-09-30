@@ -46,10 +46,13 @@ struct RetrievalLaunch {api_version:String,key_admission:Launch,retrieval:Pin}
 #[derive(Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 struct RetrievalBridgeLaunch {api_version:String,key_admission:Launch}
-enum SelectedService {None,Retrieval(Pin),RetrievalBridge}
+#[derive(Serialize,Deserialize)]
+#[serde(rename_all="camelCase",deny_unknown_fields)]
+struct ActivationLaunch {api_version:String,key_admission:Launch,activation:Pin}
+enum SelectedService {None,Retrieval(Pin),RetrievalBridge,Activation(Pin)}
 #[derive(Serialize,Deserialize)]
 #[serde(untagged)]
-enum Selection {KeyAdmission(Launch),Retrieval(RetrievalLaunch),RetrievalBridge(RetrievalBridgeLaunch)}
+enum Selection {KeyAdmission(Launch),Retrieval(RetrievalLaunch),RetrievalBridge(RetrievalBridgeLaunch),Activation(ActivationLaunch)}
 fn selection(raw:&[u8])->Result<(Launch,SelectedService),ShadowError> {
     let value:Selection=exact(raw)?;
     let (launch,service)=match value {
@@ -62,6 +65,10 @@ fn selection(raw:&[u8])->Result<(Launch,SelectedService),ShadowError> {
             require(value.api_version=="serverware.nativeShadowRetrievalBridgeLaunch/v1")?;
             (value.key_admission,SelectedService::RetrievalBridge)
         }
+        Selection::Activation(value)=>{
+            require(value.api_version=="serverware.nativeShadowActivationGuestLaunch/v1")?;
+            (value.key_admission,SelectedService::Activation(value.activation))
+        }
     };
     require(launch.api_version=="serverware.nativeShadowGuestLaunch/v1")?;
     Ok((launch,service))
@@ -70,6 +77,7 @@ pub(in crate::policy_shadow::policy_custody::services) struct AdmittedGuest {
     _delivery:PreparedGuestServiceDelivery,lifetime:process::Lifetime,keys:admission::AdmittedKeys,
     trust:authority::Trust,time:Arc<authority::Clock>,launch:Original,launch_bytes:Vec<u8>,originals:Vec<Original>,
     retrieval:Option<admission::retrieval::Service>,
+    activation:Option<admission::activation::Service>,
     retrieval_client:Option<retrieval_client::Prepared>,bridge_selected:bool,
     bridge_activation:std::sync::Mutex<Option<BTreeMap<String,std::os::fd::OwnedFd>>>,
 }
@@ -84,15 +92,16 @@ impl AdmittedGuest {
         let launch=Original::native_launch().map_err(fail)?;
         let launch_bytes=launch.read(32768).map_err(fail)?.to_vec();
         let (selected,service_selection)=selection(&launch_bytes)?;
-        require(inspection.is_some()!=matches!(&service_selection,SelectedService::None))?;
+        require(inspection.is_some()==matches!(&service_selection,SelectedService::Retrieval(_)|SelectedService::RetrievalBridge))?;
         let mut delivery=PreparedGuestServiceDelivery::admit(&selected.delivery_configuration.path,selected.delivery_configuration.sha256,
             &selected.delivery.path,selected.delivery.sha256).map_err(fail)?;
         require(inherited.iter().filter(|fd|**fd>=6).copied().eq(6..6+delivery.activation.len() as i32))?;
         let lifetime=process::Lifetime::arm(&delivery)?;
-        let (retrieval,retrieval_client)=match (service_selection,inspection) {
-            (SelectedService::Retrieval(pin),Some(channel))=>(Some(admission::retrieval::Prepared::open(&pin,&mut delivery,channel)?),None),
-            (SelectedService::RetrievalBridge,Some(channel))=>(None,Some(retrieval_client::Prepared::open(&mut delivery,channel)?)),
-            (SelectedService::None,None)=>(None,None),
+        let (retrieval,retrieval_client,activation)=match (service_selection,inspection) {
+            (SelectedService::Retrieval(pin),Some(channel))=>(Some(admission::retrieval::Prepared::open(&pin,&mut delivery,channel)?),None,None),
+            (SelectedService::RetrievalBridge,Some(channel))=>(None,Some(retrieval_client::Prepared::open(&mut delivery,channel)?),None),
+            (SelectedService::Activation(pin),None)=>(None,None,Some(admission::activation::Prepared::open(&pin,&mut delivery)?)),
+            (SelectedService::None,None)=>(None,None,None),
             _=>return Err(ShadowError::BindingDrift),
         };
         let closure_original=selected.closure.open(1024*1024)?;
@@ -118,6 +127,7 @@ impl AdmittedGuest {
         let mut keys=keys.bind_admission(admission_configuration,context,&closure,&trust,time.as_ref())?;
         keys.admit_external(&trust,time.as_ref())?;
         let retrieval=retrieval.map(|value|value.bind(&keys,&delivery,&trust,time.as_ref())).transpose()?;
+        let activation=activation.map(|value|value.bind(&keys,&delivery,&trust,time.as_ref())).transpose()?;
         let bridge_selected=retrieval_client.is_some();
         let bridge_activation=std::sync::Mutex::new(if bridge_selected {
             Some(std::mem::take(&mut delivery.activation))
@@ -125,7 +135,7 @@ impl AdmittedGuest {
         if !bridge_selected {lifetime.admitted()?;}
         let owner=Self{_delivery:delivery,lifetime,keys,trust,time,launch,launch_bytes,
             originals:vec![assignment_original,closure_original,keys_original,encrypted_original,admission_original],
-            retrieval,retrieval_client,bridge_selected,bridge_activation};
+            retrieval,activation,retrieval_client,bridge_selected,bridge_activation};
         owner.check()?;Ok(owner)
     }
     pub(in crate::policy_shadow::policy_custody::services) fn check(&self)->Result<(),ShadowError> {
@@ -135,6 +145,9 @@ impl AdmittedGuest {
         self.keys.check(&self.trust,self.time.as_ref())
     }
     fn hold(mut self)->Result<(),ShadowError> {
+        if let Some(service)=self.activation.take(){
+            return service.serve(&self.keys,&self.trust,self.time.as_ref(),&||self.check());
+        }
         if let Some(prepared)=self.retrieval_client.take() {
             return retrieval_client::run(Arc::new(self),prepared);
         }

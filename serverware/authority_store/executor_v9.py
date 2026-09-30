@@ -9,6 +9,7 @@ from typing import Any
 
 from serverware import authority_contract
 from serverware import authority_audit_capacity
+from serverware import authority_native_activation_hold
 from serverware import authority_transition_registry
 from serverware.authority_store import planner_connection
 from serverware.authority_store import authorization_records
@@ -1869,6 +1870,7 @@ def install_authority_v9_executor(
                 -- applying this verified, exact RBAC operation's mutation set.
                 PERFORM pg_catalog.set_config('serverware.policy_authority_rbac_operation_id', capability.operation_id, true);
             END IF;
+            {authority_native_activation_hold.sql(namespace, operation_sql='capability.operation', mutations_sql='planner.mutation_plan_json::pg_catalog.jsonb')}
             FOR mutation IN
                 SELECT planned.value
                 FROM pg_catalog.jsonb_array_elements(

@@ -36,7 +36,9 @@ pub(super) struct Owner {
     pending:BTreeMap<String,Pending>,heads:BTreeMap<String,String>,observations:BTreeMap<String,wire::Completion>,
     pub(super) initialized:bool,pid:u32,pub(super) heartbeat:native_canary_heartbeat::Chain,
     pub(super) finalization:native_canary_finalization::Chain,
+    readiness:BTreeMap<String,RetainedReadiness>,
 }
+struct RetainedReadiness{completion:wire::Completion,request_id:String,result_original:String,core_sha256:String}
 
 pub(super) fn prepare(config:Configuration,inputs:&gate_state_init::GateStateInputs,
     roots:&ControlPlaneClientConfig,relays:&Arc<NativeUpstreamRelaysV1>,identity:&mut EnclaveRuntimeIdentityV1,
@@ -47,7 +49,52 @@ pub(super) fn prepare(config:Configuration,inputs:&gate_state_init::GateStateInp
         return Err("canary durable delivery requires the same explicit native instance/encrypted cold profile".into());
     }
     let transport=native_canary_transport::prepare(roots,relays,&config.intake_url,&config.deployment_id,&config.instance_id,identity,deadline)?;
-    Ok(Owner{authority,transport,pending:BTreeMap::new(),heads:BTreeMap::new(),observations:BTreeMap::new(),initialized:false,pid:std::process::id(),heartbeat:native_canary_heartbeat::Chain::new(),finalization:native_canary_finalization::Chain::new()})
+    Ok(Owner{authority,transport,pending:BTreeMap::new(),heads:BTreeMap::new(),observations:BTreeMap::new(),initialized:false,pid:std::process::id(),heartbeat:native_canary_heartbeat::Chain::new(),finalization:native_canary_finalization::Chain::new(),readiness:BTreeMap::new()})
+}
+
+/// Only the actual exporter hands off its opaque consumed completion. HTTP
+/// callers cannot seed this slot with a result-shaped object or historical read.
+pub(super) fn retain_readiness(state:&GateState,record:&Value,completion:wire::Completion)->Result<(),String>{
+    let mut owner=state.measured_canary_delivery.as_ref().ok_or("native readiness owner absent")?
+        .try_lock().map_err(|_|"native readiness owner busy")?;
+    owner.check(state)?;
+    let canary=record["canary_id"].as_str().ok_or("native readiness canary")?;
+    if owner.readiness.contains_key(canary) || owner.readiness.len()>=32 || completion.observation().status()!="consumed"{
+        return Err("native readiness original is not a fresh consumed exporter result".into());
+    }
+    let row=completion.observation().intake();
+    let batch_raw=row["batch_original"].as_str().ok_or("native readiness original batch absent")?;
+    let batch=strict_json_value_from_slice(batch_raw.as_bytes()).map_err(|e|e.to_string())?;
+    let events=batch["events"].as_array().ok_or("native readiness events")?;
+    if events.len()!=1 || events[0]["kind"]!="readiness" || events[0]["record"]!=*record {
+        return Err("native readiness consumed a different original record".into());
+    }
+    let result_raw=row["result_original"].as_str().ok_or("native readiness result original absent")?;
+    let result=strict_json_value_from_slice(result_raw.as_bytes()).map_err(|e|e.to_string())?;
+    let results=result["results"].as_array().ok_or("native readiness result inventory")?;
+    if results.len()!=1 || results[0]["kind"]!="readiness"
+        || results[0]["recordSha256"]!=sha256_prefixed(&serverware_decision_gate::native_response_profile_v1::canonical_ascii_bytes(record)?){
+        return Err("native readiness result differs from source record".into());
+    }
+    let original=results[0]["storedOriginal"].as_str().ok_or("native readiness stored original")?.to_owned();
+    let stored=strict_json_value_from_slice(original.as_bytes()).map_err(|e|e.to_string())?;
+    if stored["apiVersion"]!="serverware.nativePolicyReadinessResult/v1" || stored["okForAction"]!=false
+        || stored["activationApprovalConsumed"]!=false || stored["automaticRetryAllowed"]!=false{
+        return Err("native readiness stored result has another purpose".into());
+    }
+    let core=stored["coreSha256"].as_str().ok_or("native readiness core")?.to_owned();
+    let request_id=batch["requestId"].as_str().ok_or("native readiness actual request ID")?.to_owned();
+    owner.readiness.insert(canary.to_owned(),RetainedReadiness{completion,request_id,result_original:original,core_sha256:core});Ok(())
+}
+pub(super) fn require_readiness(state:&GateState,prepared:&Value)->Result<(),String>{
+    let owner=state.measured_canary_delivery.as_ref().ok_or("native activation has no actual readiness owner")?
+        .try_lock().map_err(|_|"native readiness owner busy")?;owner.check(state)?;
+    let held=owner.readiness.get(prepared["canaryId"].as_str().ok_or("native activation canary")?).ok_or("native activation lacks source-retained readiness")?;
+    if held.completion.observation().status()!="consumed" || prepared["readinessRequestId"]!=held.request_id
+        || prepared["readinessOriginal"]!=held.result_original || prepared["readinessCoreSha256"]!=held.core_sha256
+        || prepared["readinessResultSha256"]!=sha256_prefixed(held.result_original.as_bytes()){
+        return Err("native activation substitutes retained original readiness".into());
+    }Ok(())
 }
 fn original_deadline(state:&GateState,deadline:u64)->Result<u64,String>{
     let remaining=native_service_remaining(state)?.ok_or("canary actual native lifetime absent")?;

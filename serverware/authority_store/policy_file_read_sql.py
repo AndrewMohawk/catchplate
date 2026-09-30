@@ -11,7 +11,9 @@ CONTRACT = "serverware.policyFileCurrentLock/v1"
 TABLES = tuple(sorted({"policy_high_water", "policy_publications", "policy_activation_preparations",
     "policy_activation_attempts", "policy_activation_finalizations", "policy_activation_publication_receipts",
     "policy_activation_approval_consumptions", "policy_activation_heads", "policy_canary_heads",
-    "policy_activation_prepared_transitions", "policy_authority_audit_inclusion_receipts", "policy_candidate_artifacts"}))
+    "policy_activation_prepared_transitions", "policy_authority_audit_inclusion_receipts", "policy_candidate_artifacts",
+    "policy_native_canary_ready", "policy_native_canary_heads", "policy_native_activation_preparations",
+    "policy_native_activation_finalizations", "metadata_audit_outbox", "control_plane_approvals"}))
 
 
 def privilege_check(*, namespace):
@@ -83,7 +85,53 @@ BEGIN
           LEFT JOIN {namespace}.policy_authority_audit_inclusion_receipts inclusion
             ON inclusion.transition_digest = prepared.transition_digest AND inclusion.outbox_id = prepared.outbox_id
             AND inclusion.outbox_event_digest = prepared.outbox_event_digest
-          WHERE prepared.preparation_digest = p.preparation_digest AND inclusion.transition_digest IS NULL);
+          WHERE prepared.preparation_digest = p.preparation_digest AND inclusion.transition_digest IS NULL)
+    UNION ALL
+    SELECT jsonb_build_object('policyId', h.policy_id, 'sequence', h.sequence,
+        'rollbackEpoch', h.rollback_epoch, 'policyHash', h.policy_hash,
+        'preparationDigest', p.prepared_sha256, 'finalizationDigest', f.finalization_digest,
+        'artifactEnvelopeSha256', a.artifact_envelope_digest), to_jsonb(a)
+      FROM {namespace}.policy_high_water h
+      JOIN {namespace}.policy_publications pub ON pub.scope = h.scope AND pub.policy_id = h.policy_id
+        AND pub.sequence = h.sequence AND pub.rollback_epoch = h.rollback_epoch
+        AND pub.policy_hash = h.policy_hash AND pub.status = 'committed'
+      JOIN {namespace}.policy_native_activation_finalizations f ON f.policy_id = h.policy_id AND f.policy_hash = h.policy_hash
+        AND f.policy_sequence = h.sequence AND f.rollback_epoch = h.rollback_epoch
+      JOIN {namespace}.policy_native_activation_preparations p ON p.canary_id = f.canary_id
+        AND p.activation_id = f.activation_id AND p.prepared_sha256 = f.prepared_sha256 AND p.publication_sha256 = f.publication_sha256
+      JOIN {namespace}.policy_native_canary_ready ready ON ready.canary_id = p.canary_id
+      JOIN {namespace}.policy_native_canary_heads head ON head.canary_id = p.canary_id
+        AND head.source_profile = 'native-policy-activation/v1' AND head.status = 'active'
+        AND head.head_revision = ready.ready_revision + 1 AND head.head_state_digest = f.finalization_digest
+        AND head.ready_state_digest = ready.ready_state_digest
+      JOIN {namespace}.policy_canary_heads predecessor ON predecessor.canary_id = p.canary_id AND predecessor.status = 'sealing'
+        AND predecessor.head_revision = head.predecessor_revision AND predecessor.head_state_digest = head.predecessor_state_digest
+      JOIN {namespace}.control_plane_approvals approval ON approval.id = p.approval_id
+        AND approval.action = 'policy.native.activate' AND approval.resource_id = 'native-policy-activation'
+        AND approval.status = 'consumed' AND approval.requester_id = p.requester_id AND approval.consumed_by = p.requester_id
+        AND approval.approved_by IS NOT NULL AND approval.approved_by <> approval.requester_id
+      JOIN {namespace}.policy_candidate_artifacts a ON a.artifact_envelope_digest = f.artifact_envelope_digest
+        AND a.policy_hash = h.policy_hash AND a.policy_id = h.policy_id AND a.policy_sequence = h.sequence
+        AND a.rollback_epoch = h.rollback_epoch AND a.scope = 'active'
+      WHERE h.scope = 'active'
+        AND p.prepared_sha256 = 'sha256:' || encode(sha256(convert_to(p.prepared_original, 'UTF8')), 'hex')
+        AND p.publication_sha256 = 'sha256:' || encode(sha256(convert_to(p.publication_original, 'UTF8')), 'hex')
+        AND f.finalization_digest = 'sha256:' || encode(sha256(convert_to(f.finalization_original, 'UTF8')), 'hex')
+        AND p.prepared_original::jsonb->>'readyOriginal' = ready.ready_original
+        AND p.prepared_original::jsonb->>'readinessOriginal' = ready.readiness_result_original
+        AND (p.prepared_original::jsonb->>'approvalOriginal')::jsonb = to_jsonb(approval)
+        AND p.publication_original::jsonb->'payload'->>'preparedSha256' = p.prepared_sha256
+        AND p.publication_original::jsonb->'payload'->>'requestSha256' = p.publication_request_sha256
+        AND p.publication_original::jsonb->'payload'->'publicationAfter'->>'policySha256' = h.policy_hash
+        AND (p.publication_original::jsonb->'payload'->'publicationAfter'->>'policySequence')::bigint = h.sequence
+        AND (p.publication_original::jsonb->'payload'->'publicationAfter'->>'rollbackEpoch')::bigint = h.rollback_epoch
+        AND pub.previous_policy_hash = p.prepared_original::jsonb->'publicationBefore'->>'policySha256'
+        AND jsonb_array_length(f.audit_originals_json::jsonb) = 4
+        AND (SELECT count(DISTINCT item->>'id') FROM jsonb_array_elements(f.audit_originals_json::jsonb) item) = 4
+        AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(f.audit_originals_json::jsonb) item
+          LEFT JOIN {namespace}.metadata_audit_outbox actual ON actual.id = item->>'id'
+          WHERE actual.id IS NULL OR actual.status <> 'audited' OR actual.audited_at IS NULL
+            OR actual.audit_event_hash IS NULL OR to_jsonb(actual) IS DISTINCT FROM item);
     IF current_value->>'policyHash' <> expected_policy
        OR current_value->>'artifactEnvelopeSha256' <> expected_artifact
        OR octet_length(artifact_value::text) > 16777216 THEN

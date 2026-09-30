@@ -1,0 +1,117 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "$id":"https://serverware.invalid/schemas/native-policy-activation-custody.v1.schema.json",
+  "$ref":"#/$defs/client",
+  "$defs":{
+    "sha":{"$ref":"native-shadow-role-keys.v1.schema.json#/$defs/sha256"},
+    "epoch":{"type":"integer","minimum":1,"maximum":9223372036854775807},
+    "pin":{"$ref":"policy-custody-guest-delivery.v1.schema.json#/$defs/pin"},
+    "signature":{"$ref":"native-shadow-role-keys.v1.schema.json#/$defs/signature"},
+    "original":{"type":"string","minLength":2,"maxLength":8388608,"pattern":"^[\\x00-\\x7f]+$","description":"Raw canonical ASCII original, not base64. Runtime enforces full canonical bytes and whole request <=8 MiB."},
+    "authority":{
+      "type":"object","additionalProperties":false,
+      "required":["apiVersion","rootPublicKeyBase64url","rootSpkiSha256","configurationOriginalBase64url","configurationSha256"],
+      "properties":{
+        "apiVersion":{"const":"serverware.nativePolicyActivationAuthority/v1"},
+        "rootPublicKeyBase64url":{"type":"string","pattern":"^[A-Za-z0-9_-]{43}$"},
+        "rootSpkiSha256":{"$ref":"#/$defs/sha"},"configurationSha256":{"$ref":"#/$defs/sha"},
+        "configurationOriginalBase64url":{"type":"string","minLength":1,"maxLength":4194304,"pattern":"^[A-Za-z0-9_-]+$"}
+      },
+      "description":"Separately protected root:root immutable original, <=8 MiB, with independently selected whole-file pin. Embedded complete canonical signed CP v6 configuration <=3 MiB. Pins alone do not verify a response."
+    },
+    "identity":{
+      "type":"object","additionalProperties":false,"required":["device","inode","mode","uid","gid"],
+      "properties":{"device":{"type":"integer","minimum":0,"maximum":18446744073709551615},"inode":{"type":"integer","minimum":1,"maximum":18446744073709551615},
+        "mode":{"type":"integer","minimum":0,"maximum":4294967295},"uid":{"type":"integer","minimum":0,"maximum":4294967295},"gid":{"type":"integer","minimum":0,"maximum":4294967295}}
+    },
+    "channel":{
+      "type":"object","additionalProperties":false,"required":["apiVersion","channel"],
+      "properties":{"apiVersion":{"const":"serverware.nativePolicyActivationChannel/v1"},"channel":{"$ref":"#/$defs/identity"}},
+      "description":"Actual connected AF_UNIX SEQPACKET at fixed gate FD70, captured under original native preparation and retained after drop. No peer-attestation or confidentiality claim."
+    },
+    "client":{
+      "type":"object","additionalProperties":false,"required":["apiVersion","authority","channel"],
+      "properties":{"apiVersion":{"const":"serverware.nativePolicyActivationClient/v1"},"authority":{"$ref":"#/$defs/pin"},"channel":{"$ref":"#/$defs/channel"}}
+    },
+    "shadowConfiguration":{
+      "type":"object","additionalProperties":false,
+      "required":["apiVersion","trustManifest","runtimeVerifier","webauthnVerifier","publicationHandoff","custodyConfig","startupActiveAuthorization","workers","nativeActivation"],
+      "properties":{
+        "apiVersion":{"const":"serverware.nativeShadowConfiguration/v3"},
+        "trustManifest":{"$ref":"native-shadow-workers.v1.schema.json#/$defs/artifact"},
+        "runtimeVerifier":{"$ref":"native-shadow-workers.v1.schema.json#/$defs/command"},
+        "webauthnVerifier":{"$ref":"native-shadow-workers.v1.schema.json#/$defs/command"},
+        "publicationHandoff":{"$ref":"native-shadow-workers.v1.schema.json#/$defs/command"},
+        "custodyConfig":{"$ref":"native-shadow-workers.v1.schema.json#/$defs/artifact"},
+        "startupActiveAuthorization":{"$ref":"native-shadow-workers.v1.schema.json#/$defs/artifact"},
+        "workers":{"$ref":"native-shadow-workers.v1.schema.json#/$defs/configuration"},"nativeActivation":{"$ref":"#/$defs/client"}
+      },
+      "description":"Explicit outer-v15-and-later alternative only. Old v1/v2 nested decoders and outer v1-v14 are unchanged."
+    },
+    "launch":{
+      "type":"object","additionalProperties":false,"required":["apiVersion","keyAdmission","activation"],
+      "properties":{"apiVersion":{"const":"serverware.nativeShadowActivationGuestLaunch/v1"},
+        "keyAdmission":{"$ref":"native-shadow-guest-admission.v1.schema.json#/$defs/launch"},"activation":{"$ref":"#/$defs/pin"}},
+      "description":"Fixed native guest parent/child; exactly C9 activation-channel and activation-journal slots, no FD4 inspector. This distinct signature-authenticated purpose does not weaken inspected retrieval profiles."
+    },
+    "serviceAssignment":{
+      "type":"object","additionalProperties":false,"required":["payload","signature"],
+      "properties":{"payload":{"$ref":"#/$defs/servicePayload"},"signature":{"$ref":"#/$defs/signature"}}
+    },
+    "servicePayload":{
+      "type":"object","additionalProperties":false,
+      "required":["apiVersion","purpose","guest","assignmentPayloadSha256","keyAuthorizationSha256","authority","initialStateSha256","generationId","generationPublicationEnvelopeSha256",
+        "trustCheckpointId","revocationGeneration","revocationRootSha256","issuedAtUnixNanos","expiresAtUnixNanos","signingKeyId","signingKeySpkiSha256"],
+      "properties":{
+        "apiVersion":{"const":"serverware.nativeShadowActivationServiceAssignment/v1"},"purpose":{"const":"native-policy-activation-publication"},
+        "guest":{"$ref":"native-custody-closure.v1.schema.json#/$defs/guest"},"assignmentPayloadSha256":{"$ref":"#/$defs/sha"},
+        "keyAuthorizationSha256":{"$ref":"#/$defs/sha"},"authority":{"$ref":"#/$defs/pin"},"initialStateSha256":{"$ref":"#/$defs/sha"},
+        "generationId":{"$ref":"#/$defs/sha"},"generationPublicationEnvelopeSha256":{"$ref":"#/$defs/sha"},
+        "trustCheckpointId":{"$ref":"#/$defs/sha"},"revocationGeneration":{"type":"integer","minimum":0,"maximum":18446744073709551615},
+        "revocationRootSha256":{"$ref":"#/$defs/sha"},"issuedAtUnixNanos":{"$ref":"#/$defs/epoch"},"expiresAtUnixNanos":{"$ref":"#/$defs/epoch"},
+        "signingKeyId":{"$ref":"#/$defs/sha"},"signingKeySpkiSha256":{"$ref":"#/$defs/sha"}
+      },
+      "description":"Independent actual CustodySupervisorCapability signature under serverware.nativeShadowActivationServiceAssignment.signature/v1 using signedEnvelope/canonicalJson framing. Guest role is production-bridge; actual local CustodyActivationPublication key must separately be admitted. Full original <=64 KiB."
+    },
+    "tuple":{
+      "type":"object","additionalProperties":false,"required":["revision","policySha256","policySequence","rollbackEpoch"],
+      "properties":{"revision":{"$ref":"#/$defs/epoch"},"policySha256":{"$ref":"#/$defs/sha"},"policySequence":{"$ref":"#/$defs/epoch"},"rollbackEpoch":{"type":"integer","minimum":0,"maximum":9223372036854775807}}
+    },
+    "state":{
+      "type":"object","additionalProperties":false,
+      "required":["apiVersion","assignmentPayloadSha256","generationId","generationPublicationEnvelopeSha256","publication","previousStateSha256","preparedOriginal"],
+      "properties":{"apiVersion":{"const":"serverware.nativePolicyActivationState/v1"},"assignmentPayloadSha256":{"$ref":"#/$defs/sha"},"generationId":{"$ref":"#/$defs/sha"},
+        "generationPublicationEnvelopeSha256":{"$ref":"#/$defs/sha"},"publication":{"$ref":"#/$defs/tuple"},
+        "previousStateSha256":{"oneOf":[{"type":"null"},{"$ref":"#/$defs/sha"}]},
+        "preparedOriginal":{"oneOf":[{"type":"null"},{"$ref":"#/$defs/original","maxLength":1048576}]}},
+      "description":"Initial separately pinned publication.json requires both last fields null; never generated from absence. Updated state retains exact prepared original and predecessor SHA. Whole <=2 MiB+16 KiB, including escaped embedded original. Journal is retained on local ext4/XFS/Btrfs, not volatile tmpfs or overlay; storage acceptance remains independent."
+    },
+    "request":{
+      "type":"object","additionalProperties":false,"required":["apiVersion","requestId","replayId","prepareRequestOriginal","prepareResponseOriginal"],
+      "properties":{"apiVersion":{"const":"serverware.nativePolicyActivationRequest/v1"},"requestId":{"type":"string","minLength":1,"maxLength":256},
+        "replayId":{"type":"string","minLength":1,"maxLength":256},"prepareRequestOriginal":{"$ref":"#/$defs/original"},"prepareResponseOriginal":{"$ref":"#/$defs/original"}}
+    },
+    "publication":{
+      "type":"object","additionalProperties":false,"required":["payload","signature"],
+      "properties":{"payload":{"$ref":"#/$defs/publicationPayload"},"signature":{"$ref":"#/$defs/signature"}},
+      "description":"Whole <=32 KiB, matching the CP original verifier. Signature domain serverware.nativePolicyActivationPublication.signature/v1 uses existing signedEnvelope/canonicalJson full-payload framing. Returned only after journal and receipt fsync/readback."
+    },
+    "publicationPayload":{
+      "type":"object","additionalProperties":false,
+      "required":["apiVersion","purpose","activationId","replayId","requestSha256","preparedSha256","assignmentPayloadSha256","generationId","generationPublicationEnvelopeSha256",
+        "publicationBefore","publicationAfter","trustCheckpoint","durableStateSha256","observedAtUnixNanos","expiresAtUnixNanos","signingKeyId","signingKeySpkiSha256"],
+      "properties":{
+        "apiVersion":{"const":"serverware.nativePolicyActivationPublication/v1"},"purpose":{"const":"native-policy-activation-publication"},
+        "activationId":{"type":"string","minLength":1,"maxLength":256},"replayId":{"type":"string","minLength":1,"maxLength":256},
+        "requestSha256":{"$ref":"#/$defs/sha"},"preparedSha256":{"$ref":"#/$defs/sha"},"assignmentPayloadSha256":{"$ref":"#/$defs/sha"},
+        "generationId":{"$ref":"#/$defs/sha"},"generationPublicationEnvelopeSha256":{"$ref":"#/$defs/sha"},
+        "publicationBefore":{"$ref":"#/$defs/tuple"},"publicationAfter":{"$ref":"#/$defs/tuple"},
+        "trustCheckpoint":{"type":"object","additionalProperties":false,"required":["checkpointId","asOfUnixNanos","revocationGeneration","revocationRootSha256"],
+          "properties":{"checkpointId":{"$ref":"#/$defs/sha"},"asOfUnixNanos":{"$ref":"#/$defs/epoch"},"revocationGeneration":{"type":"integer","minimum":0,"maximum":9223372036854775807},"revocationRootSha256":{"$ref":"#/$defs/sha"}}},
+        "durableStateSha256":{"$ref":"#/$defs/sha"},
+        "observedAtUnixNanos":{"type":"object","additionalProperties":false,"required":["earliest","latest"],"properties":{"earliest":{"$ref":"#/$defs/epoch"},"latest":{"$ref":"#/$defs/epoch"}}},
+        "expiresAtUnixNanos":{"$ref":"#/$defs/epoch"},"signingKeyId":{"$ref":"#/$defs/sha"},"signingKeySpkiSha256":{"$ref":"#/$defs/sha"}
+      }
+    }
+  }
+}

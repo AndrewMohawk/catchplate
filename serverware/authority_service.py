@@ -74,6 +74,8 @@ from serverware import authority_policy_canary_policy as policy_canary_policy
 from serverware import authority_policy_canary_heartbeat_policy as heartbeat_policy
 from serverware import authority_policy_canary_finalization_policy as finalization_policy
 from serverware import authority_policy_canary_native_readiness as native_readiness_policy
+from serverware import authority_policy_native_activation as native_activation
+from serverware import authority_native_activation_completion as native_activation_completion
 from serverware import authority_policy_canary_delivery as canary_delivery
 from serverware import authority_policy_canary_delivery_policy as canary_delivery_policy
 from serverware import authority_policy_canary_delivery_completion as canary_delivery_completion
@@ -1200,7 +1202,7 @@ class MeasuredConfiguration:
                 "authority configuration root signature is invalid"
             ) from exc
         if (
-            set(payload) - {evidence_policy.FIELD, transition_policy.FIELD, enrollment_policy.FIELD, oauth_activation_policy.FIELD, oauth_exchange_policy.FIELD, oauth_revocation_policy.FIELD, oauth_refresh_policy.FIELD, credential_currentness_policy.FIELD, oauth_refresh_cleanup_policy.FIELD, oauth_measured_refresh_policy.FIELD, oauth_measured_exchange_policy.FIELD, oauth_measured_setup_policy.FIELD, oauth_reconnect_policy.FIELD, oauth_measured_cleanup_policy.FIELD, oauth_pending_retirement_policy.FIELD, oauth_capture_retirement_policy.FIELD, policy_candidate_policy.FIELD, setup_policy_admission.FIELD, policy_canary_policy.FIELD, heartbeat_policy.FIELD, finalization_policy.FIELD, native_readiness_policy.FIELD, canary_delivery_policy.FIELD, oauth_succession_policy.FIELD}
+            set(payload) - {evidence_policy.FIELD, transition_policy.FIELD, enrollment_policy.FIELD, oauth_activation_policy.FIELD, oauth_exchange_policy.FIELD, oauth_revocation_policy.FIELD, oauth_refresh_policy.FIELD, credential_currentness_policy.FIELD, oauth_refresh_cleanup_policy.FIELD, oauth_measured_refresh_policy.FIELD, oauth_measured_exchange_policy.FIELD, oauth_measured_setup_policy.FIELD, oauth_reconnect_policy.FIELD, oauth_measured_cleanup_policy.FIELD, oauth_pending_retirement_policy.FIELD, oauth_capture_retirement_policy.FIELD, policy_candidate_policy.FIELD, setup_policy_admission.FIELD, policy_canary_policy.FIELD, heartbeat_policy.FIELD, finalization_policy.FIELD, native_readiness_policy.FIELD, native_activation.FIELD, canary_delivery_policy.FIELD, oauth_succession_policy.FIELD}
                 != required_payload_fields
             or payload.get("schema") != CONFIG_SCHEMA
             or payload.get("sourceRevision") != SOURCE_REVISION
@@ -1305,6 +1307,7 @@ class MeasuredConfiguration:
             heartbeat_policy.validate_policy(payload.get(heartbeat_policy.FIELD), payload=payload, root_key=root_key)
             finalization_policy.validate_policy(payload.get(finalization_policy.FIELD), payload=payload, root_key=root_key)
             native_readiness_policy.validate_policy(payload.get(native_readiness_policy.FIELD), payload=payload, root_key=root_key)
+            native_activation.validate_policy(payload.get(native_activation.FIELD), payload=payload, root_key=root_key)
             canary_delivery_policy.validate_policy(payload.get(canary_delivery_policy.FIELD), payload=payload, root_key=root_key)
         except (TypeError, ValueError) as exc:
             raise AuthorityServiceError("authority native canary intake policy is invalid") from exc
@@ -2201,7 +2204,19 @@ def _socket_request(
     measured_reconnect_response: bool = False,
     retired_scope_succession_response: bool = False,
     canary_delivery_response: bool = False,
+    native_activation_response: bool = False,
+    native_activation_result: bool = False,
 ) -> dict[str, Any] | tuple[bytes, bytes, dict[str, Any]]:
+    if native_activation_result and (value.get("operation") not in native_activation.OPERATIONS or deadline_ns is None
+            or measured_refresh_response or measured_exchange_response or measured_setup_response
+            or measured_pending_retirement_response or measured_capture_retirement_response or measured_reconnect_response
+            or retired_scope_succession_response or canary_delivery_response):
+        raise AuthorityServiceError("native activation result bound requires its fixed operation owner")
+    if native_activation_response and (measured_refresh_response or measured_exchange_response or measured_setup_response
+            or measured_pending_retirement_response or measured_capture_retirement_response or measured_reconnect_response
+            or retired_scope_succession_response or canary_delivery_response
+            or value.get("operation") != native_activation.PREFIX + "consume" or deadline_ns is None):
+        raise AuthorityServiceError("native activation proof export requires its exact consume owner")
     if canary_delivery_response and (measured_refresh_response or measured_exchange_response or measured_setup_response
             or measured_pending_retirement_response or measured_capture_retirement_response or measured_reconnect_response
             or retired_scope_succession_response or value.get("operation") not in canary_delivery.OPERATIONS or deadline_ns is None):
@@ -2245,18 +2260,18 @@ def _socket_request(
         if deadline_ns is None:
             _send_message(connection, value)
             return _recv_message(connection)
-        if canary_delivery_response:
+        if canary_delivery_response or native_activation_response:
             # This purpose retains the actual sent/received frames. Other
             # callers keep their original mapping-only transport contract.
             request_original = _canonical(dict(value))
-            if not 2 <= len(request_original) <= canary_delivery.MAX_ARGUMENT:
+            if not 2 <= len(request_original) <= (native_activation.MAX_NATIVE if native_activation_response else canary_delivery.MAX_ARGUMENT):
                 raise AuthorityServiceError("delivery runtime original exceeds its closed bound")
             writer_transport._send_exact_until(connection, len(request_original).to_bytes(8, "big"), deadline_ns=deadline_ns)
             writer_transport._send_exact_until(connection, request_original, deadline_ns=deadline_ns)
         else:
             _send_message_until(connection, value, deadline_ns=deadline_ns)
         size = int.from_bytes(writer_transport._recv_exact_until(connection, 8, deadline_ns=deadline_ns), "big")
-        maximum = (oauth_succession.MAX_RUNTIME_RESPONSE if retired_scope_succession_response else
+        maximum = (native_activation.MAX_NATIVE if native_activation_response or native_activation_result else oauth_succession.MAX_RUNTIME_RESPONSE if retired_scope_succession_response else
             6 * 1024 * 1024 if canary_delivery_response or measured_refresh_response or measured_exchange_response or measured_setup_response or measured_pending_retirement_response or measured_capture_retirement_response or measured_reconnect_response else 128 * 1024)
         if not 2 <= size <= maximum:
             raise AuthorityServiceError("publication authority response exceeds its fixed bound")
@@ -2265,7 +2280,7 @@ def _socket_request(
         if type(response) is not dict or _canonical(response) != raw:
             raise AuthorityServiceError("publication authority response is not canonical")
         writer_transport._check_deadline(deadline_ns)
-        if canary_delivery_response:
+        if canary_delivery_response or native_activation_response:
             return request_original, raw, response
         return response
     finally:
@@ -3145,10 +3160,11 @@ class AuthorityRuntimeClient:
 
     def _request_result(self, *, operation, input_value, deadline_ns, measured_originals):
         delivery = operation in canary_delivery.OPERATIONS
+        activation = operation == native_activation.PREFIX + "consume"
         measured = operation in oauth_measured_refresh.OPERATIONS | oauth_measured_exchange.OPERATIONS | oauth_measured_setup.OPERATIONS | oauth_reconnect.OPERATIONS | oauth_measured_cleanup.OPERATIONS | oauth_pending_retirement.OPERATIONS | oauth_capture_retirement.OPERATIONS | oauth_succession.OPERATIONS
-        if measured_originals and not (measured or delivery) or (measured or delivery) and type(deadline_ns) is not int:
+        if measured_originals and not (measured or delivery or activation) or (measured or delivery or activation) and type(deadline_ns) is not int:
             raise AuthorityServiceError("generic authority original export is unavailable")
-        response_schema = (canary_delivery.RESPONSE_SCHEMA if delivery else
+        response_schema = (native_activation.RESPONSE_SCHEMA if activation else canary_delivery.RESPONSE_SCHEMA if delivery else
             RETIRED_SCOPE_SUCCESSION_RESPONSE_SCHEMA if operation in oauth_succession.OPERATIONS else
             CAPTURE_RETIREMENT_RESPONSE_SCHEMA if operation in oauth_capture_retirement.OPERATIONS else
             PENDING_RETIREMENT_RESPONSE_SCHEMA if operation in oauth_pending_retirement.OPERATIONS else
@@ -3206,8 +3222,10 @@ class AuthorityRuntimeClient:
             measured_reconnect_response=operation in oauth_reconnect.OPERATIONS,
             retired_scope_succession_response=operation in oauth_succession.OPERATIONS,
             canary_delivery_response=delivery,
+            native_activation_response=activation,
+            native_activation_result=operation in native_activation.OPERATIONS,
         )
-        if delivery:
+        if delivery or activation:
             request_original, response_original, response = received
             if request_original != _canonical(request) or response_original != _canonical(response):
                 raise AuthorityServiceError("delivery actual transport originals changed")
@@ -3251,6 +3269,7 @@ class AuthorityRuntimeClient:
                 "signature",
             } | ({"authorityConfigurationOriginal"} if measured else set())
                 | ({"authorityConfigurationOriginal", "deliveryOriginals"} if delivery else set())
+                | ({"authorityConfigurationOriginal", "activationOriginals"} if activation else set())
             or response.get("schema") != response_schema
             or response.get("requestId") != request_id
             or response.get("operation") != operation
@@ -3317,8 +3336,10 @@ class AuthorityRuntimeClient:
                     or set(response["deliveryOriginals"]) != canary_delivery_completion.ORIGINAL_FIELDS):
                 raise AuthorityServiceError("delivery original configuration or completion inventory differs")
             writer_transport._check_deadline(deadline_ns)
+        if activation:
+            native_activation_completion.emitted(request_original, response_original)
         if measured_originals:
-            if delivery:
+            if delivery or activation:
                 return request_original, response_original
             return (_canonical(request), _canonical(response))
         return response["result"]
@@ -3326,6 +3347,11 @@ class AuthorityRuntimeClient:
     def request_canary_delivery(self, *, operation, input_value, deadline_ns):
         if operation not in canary_delivery.OPERATIONS or type(deadline_ns) is not int:
             raise AuthorityServiceError("delivery custody has no generic signed-original export")
+        return self._request_result(operation=operation, input_value=input_value, deadline_ns=deadline_ns, measured_originals=True)
+
+    def request_native_activation(self, *, operation, input_value, deadline_ns):
+        if operation != native_activation.PREFIX + "consume" or type(deadline_ns) is not int:
+            raise AuthorityServiceError("native publication originals have no generic export")
         return self._request_result(operation=operation, input_value=input_value, deadline_ns=deadline_ns, measured_originals=True)
 
 
@@ -6372,6 +6398,7 @@ class AuthorityProcess:
             runtime_input=runtime_input,
             deadline_monotonic_ns=request["deadlineMonotonicNs"],
             _delivery_request_original=_canonical(dict(request)) if operation in canary_delivery.OPERATIONS else None,
+            _native_activation_request_original=_canonical(dict(request)) if operation == native_activation.PREFIX + "consume" else None,
         )
         if (
             not isinstance(execution, dict)
@@ -6383,6 +6410,7 @@ class AuthorityProcess:
                 "witnessCommitDigest",
                 "fence",
             } | ({"deliveryOriginals"} if operation in canary_delivery.OPERATIONS else set())
+              | ({"activationOriginals"} if operation == native_activation.PREFIX + "consume" else set())
             or time.monotonic_ns() >= request["deadlineMonotonicNs"]
         ):
             raise AuthorityServiceError(
@@ -6423,6 +6451,14 @@ class AuthorityProcess:
                 ),
         }
         response_schema = RUNTIME_RESPONSE_SCHEMA
+        if operation == native_activation.PREFIX + "consume":
+            original = self.configuration.original_bytes
+            if type(original) is not bytes or _sha256(original) != self.configuration.file_digest or len(original) > MAX_CONFIG_BYTES:
+                raise AuthorityServiceError("native activation requires the actual admitted configuration original")
+            response_schema = native_activation.RESPONSE_SCHEMA
+            unsigned["schema"] = response_schema
+            unsigned["authorityConfigurationOriginal"] = _b64url_encode(original)
+            unsigned["activationOriginals"] = execution["activationOriginals"]
         if operation in canary_delivery.OPERATIONS:
             original = self.configuration.original_bytes
             if type(original) is not bytes or _sha256(original) != self.configuration.file_digest or len(original) > MAX_CONFIG_BYTES:
@@ -6460,6 +6496,8 @@ class AuthorityProcess:
         }
         if operation in canary_delivery.OPERATIONS:
             canary_delivery_completion.check_emitted_bounds(operation, _canonical(dict(request)), _canonical(response))
+        if operation == native_activation.PREFIX + "consume":
+            native_activation_completion.emitted(_canonical(dict(request)), _canonical(response))
         return response
 
     def _read_roots(self, operation: str) -> tuple[list[dict[str, Any]], str]:
@@ -8462,7 +8500,18 @@ class AuthorityProcess:
         deadline_monotonic_ns: int,
         _public_revocation=None,
         _delivery_request_original=None,
+        _native_activation_request_original=None,
     ) -> dict[str, Any]:
+        if operation == native_activation.PREFIX + "consume":
+            if type(_native_activation_request_original) is not bytes:
+                raise AuthorityServiceError("native PREPARE requires its actual retained runtime request")
+            opening = native_activation.canonical_original(_native_activation_request_original.decode("ascii"), native_activation.MAX_NATIVE)
+            if (opening.get("operation") != operation or opening.get("input") != runtime_input
+                    or opening.get("configurationDigest") != self.configuration.digest
+                    or opening.get("deadlineMonotonicNs") != deadline_monotonic_ns):
+                raise AuthorityServiceError("native PREPARE runtime opening changed")
+        elif _native_activation_request_original is not None:
+            raise AuthorityServiceError("native preparation owner cannot select another operation")
         from serverware import authority_public_revocation_approval as public_approval
         from serverware import authority_public_revocation_approval_owner as public_approval_owner
         if operation in public_approval.OPERATIONS:
@@ -8568,6 +8617,12 @@ class AuthorityProcess:
                 configuration_payload=self.configuration.payload, root_key=self.configuration.root_key, now_epoch_ns=time.time_ns())
             if setup_policy.request_digest(operation, original_values) != request_digest:
                 raise AuthorityServiceError("Setup candidate original commitment differs")
+        if operation in native_activation.OPERATIONS:
+            original_values = {name: value for name, value in arguments.items() if name != "authn_evidence"}
+            native_activation.verify_original(operation, original_values, configuration_payload=self.configuration.payload,
+                root_key=self.configuration.root_key, now_epoch_ns=time.time_ns())
+            if native_activation.request_digest(operation, original_values) != request_digest:
+                raise AuthorityServiceError("native activation original commitment differs")
         if operation in policy_candidate.OPERATIONS:
             original_values = {name: value for name, value in arguments.items() if name != "authn_evidence"}
             policy_candidate_policy.verify_original(operation, original_values,
@@ -8882,6 +8937,9 @@ class AuthorityProcess:
             canary_delivery_completion.preflight_bounds(operation, request_original=_delivery_request_original,
                 signed_plan=signed_plan, configuration_original=self.configuration.original_bytes,
                 consumption_original=_canonical(self.attestation_consumption_receipt))
+        if operation == native_activation.PREFIX + "consume":
+            native_activation_completion.preflight(_native_activation_request_original, signed_plan,
+                self.configuration.original_bytes, _canonical(self.attestation_consumption_receipt))
         rbac_attempt = rbac_currentness.reserve_plan(self, plan_payload, request_digest,
             capability_id, deadline_monotonic_ns, deadline_epoch_ns)
         witness_reservation_digest = _domain_digest(
@@ -9127,6 +9185,12 @@ class AuthorityProcess:
                 "executorCompletionOriginal": _canonical(executed).decode("ascii"),
                 "witnessRequestOriginal": witness_request_original.decode("ascii"),
                 "witnessResponseOriginal": witness_response_original.decode("ascii")}
+        if operation == native_activation.PREFIX + "consume":
+            result["activationOriginals"] = {"signedMeasuredPlanOriginal": _canonical(signed_plan).decode("ascii"),
+                "executorCompletionOriginal": _canonical(executed).decode("ascii"),
+                "witnessRequestOriginal": witness_request_original.decode("ascii"),
+                "witnessResponseOriginal": witness_response_original.decode("ascii"),
+                "nativeEffectHoldOriginal": native_activation_completion.planned_hold(signed_plan)}
         return result
 
     @staticmethod
@@ -9175,6 +9239,9 @@ class AuthorityProcess:
                 root_key=self.configuration.root_key, now_epoch_ns=time.time_ns())
         if planner_request["operation"] in setup_policy.OPERATIONS:
             setup_policy_admission.verify_original(planner_request["operation"], planner_request["typedRequest"]["arguments"],
+                configuration_payload=self.configuration.payload, root_key=self.configuration.root_key, now_epoch_ns=time.time_ns())
+        if planner_request["operation"] in native_activation.OPERATIONS:
+            native_activation.verify_original(planner_request["operation"], planner_request["typedRequest"]["arguments"],
                 configuration_payload=self.configuration.payload, root_key=self.configuration.root_key, now_epoch_ns=time.time_ns())
         if planner_request["operation"] in policy_candidate.OPERATIONS:
             policy_candidate_policy.verify_original(planner_request["operation"], planner_request["typedRequest"]["arguments"],

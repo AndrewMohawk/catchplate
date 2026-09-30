@@ -110,6 +110,11 @@ impl Running {
                 (Some(Inspection::Client(owner)),Some(channel))
             }
             SelectedService::None=>(None,None),
+            SelectedService::Activation(_)=>{
+                require(activation.len()==2 && activation.contains_key("activation-channel")
+                    && activation.contains_key("activation-journal"))?;
+                (None,None)
+            }
         };
         let ordered=files.payload.activation.iter().map(|entry| {
             activation.get(&entry.name).map(AsFd::as_fd).ok_or(ShadowError::BindingDrift)

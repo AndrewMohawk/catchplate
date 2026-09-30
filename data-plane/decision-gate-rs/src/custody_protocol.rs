@@ -65,6 +65,8 @@ pub mod native_canary_evidence_v1;
 pub mod native_canary_delivery_v1;
 pub mod native_canary_heartbeat_v1;
 pub mod native_canary_finalization_v1;
+#[cfg(target_os="linux")]
+pub mod native_policy_activation_transport;
 pub mod release_profile_v1;
 #[cfg(target_os = "linux")]
 pub mod erofs_loop_v1;

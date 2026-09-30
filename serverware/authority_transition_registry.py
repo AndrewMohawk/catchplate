@@ -11,6 +11,7 @@ from serverware import authority_transition_policy_candidate
 from serverware import authority_transition_setup_policy
 from serverware import authority_transition_policy_canary
 from serverware import authority_transition_policy_canary_delivery
+from serverware import authority_transition_policy_native_activation
 from serverware import authority_transition_quota
 from serverware import authority_transition_release
 from serverware import authority_transition_publication_approval
@@ -54,6 +55,7 @@ def _merge_kernels() -> dict[
         authority_transition_setup_policy.KERNELS,
         authority_transition_policy_canary.KERNELS,
         authority_transition_policy_canary_delivery.KERNELS,
+        authority_transition_policy_native_activation.KERNELS,
         authority_transition_quota.KERNELS,
         authority_transition_release.KERNELS,
         authority_transition_publication_approval.KERNELS,

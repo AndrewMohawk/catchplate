@@ -46,6 +46,9 @@ pub(crate) mod native_checkpoint;
 pub(crate) mod native_cumulative;
 #[path = "policy_shadow_final_cumulative.rs"]
 pub(crate) mod native_final_cumulative;
+#[cfg(target_os="linux")]
+#[path="policy_custody/native_activation/mod.rs"]
+pub(crate) mod native_activation;
 
 #[cfg(target_os = "linux")]
 #[path = "policy_custody/mod.rs"]

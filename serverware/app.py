@@ -81,7 +81,9 @@ from serverware.portal_oauth_setup import OAUTH_SETUP_HTML, OAUTH_SETUP_SCRIPT
 from serverware.portal_setup_policy import SETUP_POLICY_HTML, SETUP_POLICY_SCRIPT
 from serverware import control_plane_setup_policy
 from serverware.portal_policy_candidate import POLICY_CANDIDATE_HTML, POLICY_CANDIDATE_SCRIPT
+from serverware.portal_native_policy_activation import NATIVE_POLICY_ACTIVATION_HTML, NATIVE_POLICY_ACTIVATION_SCRIPT
 from serverware import control_plane_policy_candidate
+from serverware import control_plane_native_policy_activation
 from serverware import control_plane_policy_canary
 from serverware import control_plane_policy_canary_delivery
 from serverware.portal_oauth_reconnect import OAUTH_RECONNECT_HTML, OAUTH_RECONNECT_SCRIPT
@@ -630,6 +632,7 @@ async def bounded_control_plane_request_middleware(request: Request, call_next):
             "/api/policy/authority/candidates/package",
             "/api/policy/authority/candidates/handoff",
             *control_plane_policy_candidate.PATHS,
+            *control_plane_native_policy_activation.PATHS,
             *control_plane_setup_policy.PATHS,
             *control_plane_policy_canary.PATHS,
             control_plane_policy_canary_delivery.PATH,
@@ -661,6 +664,7 @@ async def bounded_control_plane_request_middleware(request: Request, call_next):
             )
     request_limit = {
         **{path: control_plane_policy_candidate.MAX_REQUEST for path in control_plane_policy_candidate.PATHS},
+        **{path: control_plane_native_policy_activation.MAX_REQUEST for path in control_plane_native_policy_activation.PATHS},
         **{path: control_plane_setup_policy.MAX_REQUEST for path in control_plane_setup_policy.PATHS},
         **{path: control_plane_policy_canary.MAX_REQUEST for path in control_plane_policy_canary.PATHS},
         control_plane_policy_canary_delivery.PATH: control_plane_policy_canary_delivery.MAX_REQUEST,
@@ -8987,6 +8991,7 @@ def _policy_shadow_generation_url(
         _POLICY_SHADOW_GENERATION_PATH,
         _POLICY_SHADOW_GENERATION_ACTIVATION_PATH,
         "/v1/native-loaded-policy",
+        control_plane_native_policy_activation.MANAGEMENT_PATH,
     }:
         raise HTTPException(
             status_code=503,
@@ -11109,6 +11114,24 @@ async def controlled_setup_policy_candidate(request: Request, response: Response
     except control_plane_setup_policy.ERRORS as exc:
         raise HTTPException(status_code=409,
             detail="Setup candidate association unavailable or outcome unknown; check completed activation audit and retained originals, then inspect without retry") from exc
+
+
+@app.post(control_plane_native_policy_activation.PREFIX + "/draft")
+@app.post(control_plane_native_policy_activation.PREFIX + "/options")
+@app.post(control_plane_native_policy_activation.PREFIX + "/request")
+@app.post(control_plane_native_policy_activation.PREFIX + "/decide")
+@app.post(control_plane_native_policy_activation.PREFIX + "/publish")
+@app.post(control_plane_native_policy_activation.PREFIX + "/record-inclusion")
+@app.post(control_plane_native_policy_activation.PREFIX + "/finalize")
+@app.post(control_plane_native_policy_activation.PREFIX + "/lookup")
+async def controlled_native_policy_activation(request: Request) -> dict[str, Any]:
+    raw = await request.body()
+    try:
+        return await _run_bounded_blocking(_POLICY_AUTHORITY_HANDOFF_SLOTS,
+            control_plane_native_policy_activation.on_request, request, raw)
+    except (ValueError, KeyError, TypeError, OSError, db.MetadataStoreError) as exc:
+        raise HTTPException(status_code=409,
+            detail="Native activation unavailable or outcome unknown; inspect originals without repeating the native contact") from exc
 
 
 @app.post(control_plane_policy_candidate.PREFIX + "/draft")
@@ -22957,6 +22980,7 @@ UI_HTML = r"""
           <label for="policy-authority-package">Signed staged authority and runtime handoff package</label>
           <textarea id="policy-authority-package" class="policy-result" spellcheck="false"></textarea>
           __SERVERWARE_POLICY_CANDIDATE_HTML__
+          __SERVERWARE_NATIVE_POLICY_ACTIVATION_HTML__
           <label for="policy-canary-status">Staged candidate lifecycle</label>
           <textarea id="policy-canary-status" class="output" readonly></textarea>
           <div class="toolbar" style="margin-top:10px">
@@ -26577,6 +26601,7 @@ UI_HTML = r"""
     __SERVERWARE_OAUTH_SETUP_SCRIPT__
     __SERVERWARE_SETUP_POLICY_SCRIPT__
     __SERVERWARE_POLICY_CANDIDATE_SCRIPT__
+    __SERVERWARE_NATIVE_POLICY_ACTIVATION_SCRIPT__
     __SERVERWARE_OAUTH_RECONNECT_SCRIPT__
     __SERVERWARE_OAUTH_SUCCESSION_SCRIPT__
     __SERVERWARE_OAUTH_ACTIVATION_SCRIPT__
@@ -26665,6 +26690,8 @@ for _portal_placeholder, _portal_fragment in (
     ("__SERVERWARE_SETUP_POLICY_SCRIPT__", SETUP_POLICY_SCRIPT),
     ("__SERVERWARE_POLICY_CANDIDATE_HTML__", POLICY_CANDIDATE_HTML),
     ("__SERVERWARE_POLICY_CANDIDATE_SCRIPT__", POLICY_CANDIDATE_SCRIPT),
+    ("__SERVERWARE_NATIVE_POLICY_ACTIVATION_HTML__", NATIVE_POLICY_ACTIVATION_HTML),
+    ("__SERVERWARE_NATIVE_POLICY_ACTIVATION_SCRIPT__", NATIVE_POLICY_ACTIVATION_SCRIPT),
     ("__SERVERWARE_OAUTH_RECONNECT_HTML__", OAUTH_RECONNECT_HTML),
     ("__SERVERWARE_OAUTH_RECONNECT_SCRIPT__", OAUTH_RECONNECT_SCRIPT),
     ("__SERVERWARE_OAUTH_SUCCESSION_HTML__", OAUTH_SUCCESSION_HTML),

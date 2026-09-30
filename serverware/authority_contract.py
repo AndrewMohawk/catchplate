@@ -11,7 +11,7 @@ from serverware import authority_oauth_retirement_succession_catalog as retireme
 from serverware.authority_query_read_work import _ValidationWork
 
 
-SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.322"
+SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.323"
 SCHEMA_VERSION = 9
 CONTRACT_SCHEMA = "serverware.policyAuthorityOperationContract/v3"
 BUSINESS_INTENT_SCHEMA = "serverware.policyAuthorityBusinessIntent/v2"
@@ -262,6 +262,8 @@ VERIFIER_READ_TABLES = frozenset({
     "policy_authority_consumed_envelopes",
 })
 _AUDIT_COUNTER_REPLACEMENT_OPERATIONS = frozenset({
+    "native-policy-activation.request", "native-policy-activation.decide", "native-policy-activation.consume",
+    "native-policy-activation.record-inclusion", "native-policy-activation.finalize",
     "setup.policy.bind-candidate",
     "policy.candidate.generation-claim", "policy.candidate.generation-publish",
     "policy.activation.prepare", "policy.activation.abort", "policy.genesis.prepare",
@@ -1467,6 +1469,7 @@ PHASE2_STORE_TABLES = tuple(sorted({
     *_PHASE3_ACTIVATION_EVIDENCE,
 }))
 V9_ADDITIONAL_PROTECTED_TABLES = tuple(sorted({
+    "policy_native_canary_ready", "policy_native_canary_heads", "policy_native_activation_preparations", "policy_native_activation_finalizations", "policy_native_activation_holds",
     "setup_policy_continuations",
     "policy_canary_delivery_slots", "policy_canary_delivery_heads", "policy_canary_delivery_parts",
     "policy_shadow_generation_claims",
@@ -1552,6 +1555,7 @@ _PHASE2_MAINTENANCE_OPAQUE_PROOF_SET = (
 
 
 POLICY_CANARY_INTAKE_TABLES = tuple(sorted({
+    "policy_native_canary_ready", "policy_native_canary_heads", "policy_native_activation_preparations", "policy_native_activation_finalizations", "policy_native_activation_holds",
     "policy_canary_delivery_slots", "policy_canary_delivery_heads",
     "policy_authority_trusted_keys", "policy_authority_trusted_key_heads", "policy_authority_trusted_key_revocations",
     "policy_authority_evidence_verifications", "policy_runtime_attestations", "policy_runtime_role_keys",
@@ -1584,6 +1588,23 @@ _CANARY_INTAKE_HEADS = frozenset({"policy_canary_heads", "policy_canary_custody_
 
 
 _OPERATIONS = {
+    **{
+        "native-policy-activation." + phase: _spec(
+            "serverware_policy_authority_native_policy_activation_" + phase.replace("-", "_"),
+            reads=POLICY_CANARY_INTAKE_TABLES + ("control_plane_approvals", "rbac_role_bindings", "metadata_audit_outbox",
+                "webauthn_trust_publication_high_water", "webauthn_trust_publications") + _PHASE2_AGGREGATE,
+            writes=("control_plane_approvals", "policy_native_canary_ready", "policy_native_canary_heads", "policy_native_activation_preparations",
+                "policy_native_activation_finalizations", "policy_native_activation_holds", "policy_canary_heads", "policy_high_water", "policy_publications",
+                "metadata_audit_outbox") + _PHASE2_AGGREGATE,
+            mutation_kinds={"policy_native_canary_ready": ("INSERT",), "policy_native_canary_heads": ("INSERT", "UPDATE"), "policy_native_activation_preparations": ("INSERT", "UPDATE"),
+                "policy_native_activation_finalizations": ("INSERT",), "policy_canary_heads": ("UPDATE",),
+                "policy_native_activation_holds": ("INSERT", "UPDATE"),
+                "policy_high_water": ("UPDATE",), "policy_publications": ("INSERT",)},
+            webauthn="bound-verified-assertion-receipt" if phase in {"request", "decide", "consume"} else "not-required",
+            proof_primitives=("primary-key-row", "bounded-limit-plus-one", "aggregate-high-water", "capacity-reservation"),
+            maximum_query_rows=256, maximum_mutations=16, maximum_work_units=8192,
+        ) for phase in ("request", "decide", "consume", "record-inclusion", "finalize")
+    },
     "setup.policy.bind-candidate": _spec(
         "serverware_policy_authority_setup_policy_bind_candidate",
         reads=("setup_policy_continuations", "setup_sessions", "setup_session_events", "oauth_setup_audit_links",

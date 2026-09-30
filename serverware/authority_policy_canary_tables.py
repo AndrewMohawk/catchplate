@@ -37,7 +37,8 @@ def snapshot(value, events):
 
 
 def require_complete_populations(*, selected_rows, before_roots, work, deadline_ns, operation):
-    profile.require(operation == profile.OP_INTAKE and type(deadline_ns) is int)
+    from serverware import authority_policy_native_activation
+    profile.require(operation in ({profile.OP_INTAKE} | authority_policy_native_activation.OPERATIONS) and type(deadline_ns) is int)
     work.prepare_copy(before_roots)
     roots = {entry["table"]: entry for entry in before_roots}
     for table in TABLES:

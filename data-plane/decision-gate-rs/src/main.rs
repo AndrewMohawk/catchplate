@@ -49673,7 +49673,8 @@ fn handle_gate_connection(
             && head.target == POLICY_SHADOW_INSTALL_PATH;
     let policy_shadow_activation_post =
         head.method == "POST"
-            && head.target == POLICY_SHADOW_ACTIVATION_PATH;
+            && (head.target == POLICY_SHADOW_ACTIVATION_PATH
+                || head.target==policy_shadow_generation::activation::PATH);
     let management_post = head.method == "POST"
         && (matches!(head.target.as_str(), "/v1/decide" | "/v1/grants")
             || head.target == serverware_decision_gate::native_loaded_policy_v1::PATH
@@ -49712,7 +49713,8 @@ fn handle_gate_connection(
             ) = if policy_shadow_activation_post {
                 (
                     POLICY_SHADOW_ACTIVATION_CONTENT_TYPE,
-                    MAX_POLICY_SHADOW_ACTIVATION_BODY_BYTES,
+                    if head.target==policy_shadow_generation::activation::PATH {policy_shadow_generation::activation::MAX_BODY_BYTES}
+                        else {MAX_POLICY_SHADOW_ACTIVATION_BODY_BYTES},
                     "policy_shadow_activation_content_type_required",
                     "policy_shadow_activation_content_length_required",
                     "policy_shadow_activation_body_required",
@@ -49946,7 +49948,9 @@ fn handle_gate_connection(
         );
         return;
     }
-    let body_limit = if policy_shadow_activation_post {
+    let body_limit = if head.target==policy_shadow_generation::activation::PATH {
+        policy_shadow_generation::activation::MAX_BODY_BYTES
+    } else if policy_shadow_activation_post {
         MAX_POLICY_SHADOW_ACTIVATION_BODY_BYTES
     } else if policy_shadow_install_post {
         MAX_POLICY_SHADOW_INSTALL_BODY_BYTES
@@ -50036,6 +50040,15 @@ fn handle_gate_connection(
                     json!({"error":error.code()}),
                 )
             }
+        }
+    } else if request.method=="POST" && request.target==policy_shadow_generation::activation::PATH {
+        let result=state.policy_shadow_generation_control.as_ref()
+            .ok_or_else(||policy_shadow_generation::GenerationInstallError::unavailable("native activation control absent"))
+            .and_then(|control|control.activate_native(&state,&request.body));
+        request.body.zeroize();
+        match result{
+            Ok(original)=>http_canonical_json_response("201 Created",&original),
+            Err(error)=>http_response(error.status(),json!({"error":error.code()})),
         }
     } else if request.method == "POST"
         && request.target == POLICY_SHADOW_ACTIVATION_PATH

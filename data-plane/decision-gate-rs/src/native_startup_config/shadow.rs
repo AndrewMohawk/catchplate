@@ -26,6 +26,7 @@ impl ShadowConfigV1 {
             &self.startup_active_authorization.path] { bounded_absolute_path(path)?; }
         Ok(PolicyShadowGenerationConfig {
             native_workers: None,
+            native_activation:None,
             trust_manifest_path: self.trust_manifest.path,
             trust_manifest_sha256: digest(self.trust_manifest.sha256)?,
             runtime_verifier: self.runtime_verifier.into_command()?,
@@ -78,6 +79,7 @@ impl ShadowConfigV2 {
 pub(super) enum ShadowConfigV15 {
     Legacy(ShadowConfigV1),
     Native(ShadowConfigV2),
+    NativeActivation(ShadowConfigV3),
 }
 
 impl From<ShadowConfigV1> for ShadowConfigV15 {
@@ -89,6 +91,28 @@ impl ShadowConfigV15 {
         match self {
             Self::Legacy(value) => value.into_config(),
             Self::Native(value) => value.into_config(),
+            Self::NativeActivation(value)=>value.into_config(),
         }
+    }
+}
+
+/// Explicit successor nested profile. Old bytes keep the closed V1/V2 arms;
+/// no inherited descriptor or optional untrusted field selects activation.
+#[derive(Deserialize)]
+#[serde(rename_all="camelCase",deny_unknown_fields)]
+pub(super) struct ShadowConfigV3{
+    api_version:String,trust_manifest:ArtifactV1,runtime_verifier:PinnedVerifierConfigV1,
+    webauthn_verifier:PinnedVerifierConfigV1,publication_handoff:PinnedVerifierConfigV1,
+    custody_config:ArtifactV1,startup_active_authorization:ArtifactV1,
+    workers:serverware_decision_gate::native_shadow_workers::Configuration,
+    native_activation:super::super::policy_shadow_generation::activation::Configuration,
+}
+impl ShadowConfigV3{
+    fn into_config(self)->Result<PolicyShadowGenerationConfig,String>{
+        if self.api_version!="serverware.nativeShadowConfiguration/v3"{return Err("native activation nested profile differs".into());}
+        let mut value=ShadowConfigV2{api_version:"serverware.nativeShadowConfiguration/v2".into(),trust_manifest:self.trust_manifest,
+            runtime_verifier:self.runtime_verifier,webauthn_verifier:self.webauthn_verifier,publication_handoff:self.publication_handoff,
+            custody_config:self.custody_config,startup_active_authorization:self.startup_active_authorization,workers:self.workers}.into_config()?;
+        value.native_activation=Some(self.native_activation);Ok(value)
     }
 }

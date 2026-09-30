@@ -121,6 +121,23 @@ def _member(state, checkpoint, compiler, committed):
 
 
 def apply(state, value):
+    return _derive(state, value)
+
+
+def revalidate_retained(state, *, request, original):
+    """Recompute an actual retained result without replacing its original clock.
+
+    The caller obtains both originals from one authenticated consumed intake
+    row. No supplied result or a successful prior status can confer permission.
+    """
+    p.require(type(original) is dict and original.get("apiVersion") == profile.RESULT
+        and original["recordSha256"] == p.sha256(p.canonical(request)))
+    computed = _derive(state, request, retained_core=original["core"])
+    p.require(computed == original, "retained native readiness differs from current complete authority")
+    return computed
+
+
+def _derive(state, value, *, retained_core=None):
     from serverware import db
     from serverware import authority_policy_canary_native_opening as opening
     value = profile.request(value)
@@ -137,6 +154,9 @@ def apply(state, value):
         if name not in {"created_transition_digest"}))
     signed_members = db._validate_policy_assignment_contract({**canary, **assignment_row})
     head = state.one("policy_canary_heads", canary_id=value["canary_id"])
+    if retained_core is not None:
+        from serverware import authority_transition_policy_native_activation_state as activation
+        head = activation.readiness_predecessor(state, retained_core)
     p.require(head["status"] == "sealing" and type(head["head_revision"]) is int and 0 < head["head_revision"] < 2**63 - 1)
     compiler = state.one("policy_compiler_authority_analyses", canary_id=value["canary_id"],
         assignment_envelope_digest=value["assignment_envelope_digest"], assignment_payload_digest=value["assignment_payload_digest"])
@@ -156,7 +176,7 @@ def apply(state, value):
             and member["attestation_receipt_envelope_digest"] == signed["attestation"]["envelopeDigest"])
     state.charge(64 + 32 * len(members))
     records = _committed_records(state, value["canary_id"])
-    p.require(not any(kind == "readiness" and record.get("apiVersion") == profile.REQUEST
+    p.require(retained_core is not None or not any(kind == "readiness" and record.get("apiVersion") == profile.REQUEST
         and stored.get("core", {}).get("predecessorCanaryStateSha256") == head["head_state_digest"]
         for kind, record, stored, _ in records), "native readiness already has a retained outcome; inspect, never retry")
     selected, summaries = [], []
@@ -186,6 +206,13 @@ def apply(state, value):
         and high["policy_id"] == canary["policy_id"], "native readiness predecessor is not the finalized current publication")
     expires = min(policy["expiresAtEpochNs"], assignment_row["expires_at_epoch_ns"], compiler["expires_at_epoch_ns"],
         state.now + policy["maximumReadinessAgeNanos"])
+    issued = state.now
+    if retained_core is not None:
+        issued = p.epoch(retained_core["issuedAtUnixNanos"])
+        original_expiry = p.epoch(retained_core["expiresAtUnixNanos"])
+        p.require(issued <= state.now < original_expiry <= expires
+            and original_expiry - issued <= policy["maximumReadinessAgeNanos"])
+        expires = original_expiry
     p.require(state.now < expires and all(0 <= state.now - item["accounting"]["observedAtUnixNanos"]
         <= window["maximumEvidenceAgeNanos"] for item in selected))
     core = {"apiVersion": profile.CORE, "canaryId": value["canary_id"],
@@ -198,8 +225,8 @@ def apply(state, value):
         "memberEvidenceRootSha256": db._policy_shadow_merkle_root([(member["member_ordinal"], p.sha256(p.canonical(member))) for member in summaries]),
         "aggregateCounters": aggregate, "readinessThresholds": assignment["readinessThresholds"], "calculatedRates": rates,
         "responseValidationObligationsRootSha256": assignment["responseValidationObligationsRootSha256"],
-        "trustCheckpoint": current.trust_checkpoint(state, state.now), "currentPublication": high,
-        "readinessPolicySha256": p.sha256(p.canonical(policy)), "issuedAtUnixNanos": state.now, "expiresAtUnixNanos": expires}
+        "trustCheckpoint": current.trust_checkpoint(state, issued), "currentPublication": high,
+        "readinessPolicySha256": p.sha256(p.canonical(policy)), "issuedAtUnixNanos": issued, "expiresAtUnixNanos": expires}
     result = {"apiVersion": profile.RESULT, "recordSha256": p.sha256(p.canonical(value)),
         "coverage": "complete-native-fleet-readiness-derived", "core": core, "coreSha256": p.sha256(p.canonical(core)),
         "okForAction": False, "activationApprovalConsumed": False, "automaticRetryAllowed": False}

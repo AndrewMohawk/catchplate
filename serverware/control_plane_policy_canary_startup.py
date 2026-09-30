@@ -188,6 +188,21 @@ def delivery_owner():
     return _owner
 
 
+def native_activation_owner():
+    """Borrow actual cold originals, never intake/delivery effect permission."""
+    from serverware import authority_policy_native_activation as activation
+    profile.require(selected() and type(_owner) is _Cold)
+    now = _owner.check()
+    selected_policy = activation.validate_policy(_owner.payload.get(activation.FIELD),
+        payload=_owner.payload, root_key=_owner.root)
+    profile.require(selected_policy is not None
+        and policy.full_configuration_digest(_owner.payload) == _owner.configuration_digest
+        and activation.OPERATIONS <= set(_owner.payload["roles"]["planner"].get("enabledOperations", ())))
+    # The original cold owner may expire sooner. Settlement has no fresh native
+    # authority and may consume a definite historical receipt after its window.
+    return _owner, selected_policy, now
+
+
 class _Peer:
     def __init__(self, transport):
         self.transport, self.tls = transport, transport.get_extra_info("ssl_object")

@@ -9513,4 +9513,5 @@ def metadata_base_schema_source() -> str:
 
 
 def metadata_schema_source() -> str:
-    return metadata_base_schema_source() + authority_v9_schema_source()
+    from serverware import authority_native_activation_schema
+    return metadata_base_schema_source() + authority_native_activation_schema.source() + authority_v9_schema_source()

@@ -266,32 +266,36 @@ build is not live readiness or production acceptance.
 
 ## Live preparation remains with the genuine owners
 
-Engineering attempt 13 on 2026-09-30 used source `de80246e` and the unchanged,
-unpublished `v3-candidate-cba01916` dependencies in an isolated dirty-tree
-checkout. All three fixed Python runtime packages completed: broker, role-key
-provisioner and shadow-key delivery. The static Alpine/musl compilation advanced
-past the previous shared-library errors into the binaries, then failed with
-216 unique source-location/error rows across 24 files (538 emitted diagnostics
-because files recur across binaries). Static Cargo exited 101; the concurrent
-glibc compilation was canceled, not completed. Retained
-`build.log` and `errors-by-source.tsv` are under
+Engineering attempt 14 built both images successfully from exact source
+`253730f074040392fbf0d50a1c4924b620a9c341`, using the unchanged, unpublished
+`v3-candidate-cba01916` dependencies in an isolated dirty-tree checkout. Job
+`TvtSws`, session `75570`, exited 0 at `2026-09-30T12:18:38.961286509Z`.
+The glibc compilation completed in 9m29s and the actual ledger initialization
+completed; static Alpine/musl compilation completed in 10m48s. All three fixed
+Python runtime packages completed: broker, role-key provisioner and shadow-key
+delivery.
+
+The resulting local engineering image IDs are:
+
+- Control: `sha256:7fbf263162b76400db42050c46bdf620f0131a98c92095bd8f9bd778360798df`
+- Gate: `sha256:0ffaa7a3d91faf6ddb50ffea443d7f424675ed6ad45bc663e047b83773c3aa52`
+
+Retained `build.log`, original `images-build.json` and concise
+`build-summary.json` are under
+`codex-offload/serverware/engineering-builds/253730f0-tvtsws`.
+The final `serverware.productionImagesBuild/v2` report records
+`identity_mode:development-dirty-tree`, `ok:true`, `no_shell.ok:true` and
+`production_release_eligible:false`. The existing stopped-container ELF and
+no-shell checks passed; they are not a project test suite or live pilot evidence.
+Prior attempt 13's failed diagnostics remain separately retained under
 `codex-offload/serverware/engineering-builds/de80246e-h5r8bz`.
 
-The current source correction batch addresses all 216 mapped rows, including
-the binary shared-module declarations and remaining native ABI conversions.
-It shares the fixed kernel `statx` ABI across both libc targets while preserving
-mount-ID and descriptor-association checks without emulation. These are
-compiler repairs, not a compiler-pass result, relaxed runtime admission or new
-dependency versions; their next verification is the combined image build.
-
-The last completed main glibc build remains attempt 8, source `33586f89`, with
-evidence under `codex-offload/serverware/engineering-builds/33586f89-fe7loz`.
-That earlier result does not establish a successful build of the current source.
-There is still no gate image, complete two-image report or testable native pilot.
-Build-first work continues without broad tests; project test results, service
-deployment and connected pilot acceptance remain outstanding. Canonical reviewed
-dependency pins, independent admission requirements and the nonrelease boundary
-are unchanged; production acceptance remains **0/6 verified**.
+These source-built images are not an assembled, deployed or testable native
+pilot. Remaining artifact assembly, independently admitted public inputs,
+provisioning and connected pilot acceptance are still required. Broad tests
+remain deferred. Canonical reviewed dependency pins, independent admission
+requirements and the nonrelease boundary are unchanged; production acceptance
+remains **0/6 verified**.
 
 The source-fixed prerequisite list points at the actual existing callers:
 `ParkedProofCohort.start`, `FiveServiceLaunch.start_effects`,

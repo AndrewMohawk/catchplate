@@ -1331,6 +1331,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	scripts/test_native_pilot_endpoint_commissioning.py \
 	scripts/test_native_pilot_ordinary_keys.py \
 	scripts/test_native_pilot_ordinary_key_history.py \
+	scripts/test_native_pilot_ordinary_initial.py \
 	scripts/authority/sign_native_pilot_delivery.py \
 	scripts/authority/sign_native_pilot_service.py \
 	scripts/authority/sign_native_pilot_ordinary_key.py \
@@ -4055,6 +4056,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				scripts/test_native_pilot_endpoint_commissioning.py \
 				scripts/test_native_pilot_ordinary_keys.py \
 				scripts/test_native_pilot_ordinary_key_history.py \
+				scripts/test_native_pilot_ordinary_initial.py \
 				scripts/authority/sign_native_pilot_delivery.py \
 				scripts/authority/sign_native_pilot_service.py \
 				scripts/authority/sign_native_pilot_ordinary_key.py \

@@ -91,6 +91,8 @@ pub(crate) fn run_commitment_custody_guest(role:&str,inspected:bool)->! {
 #[cfg(target_os="linux")]
 pub(crate) fn run_spool_custody_guest(role:&str)->! {policy_custody::services::guest::ordinary::run_spool(role)}
 #[cfg(target_os="linux")]
+pub(crate) fn run_effects_custody_guest(role:&str)->! {policy_custody::services::guest::ordinary::run_effects(role)}
+#[cfg(target_os="linux")]
 pub(crate) fn run_native_shadow_retrieval_pair()->! {
     policy_custody::services::guest::native_guest::run_retrieval_pair()
 }
@@ -5489,6 +5491,7 @@ pub(crate) struct ActiveEffectPreparation {
 }
 
 impl ActiveEffectPreparation {
+    pub(crate) fn validate_native(&self)->Result<(),ShadowError>{self.validate_deserialized_invariants()}
     pub(crate) fn new(
         generation_id: Sha256Digest,
         ingress_sequence: u64,
@@ -5576,6 +5579,9 @@ pub(crate) struct ActiveEffectBarrierReceiptWire {
 }
 
 impl ActiveEffectBarrierReceiptWire {
+    pub(crate) fn native_payload(&self)->Result<Vec<u8>,ShadowError>{self.validate_deserialized_invariants()?;self.canonical_payload()}
+    pub(crate) fn native_preparation(&self)->&ActiveEffectPreparation{&self.preparation}
+    pub(crate) fn native_digest(&self)->&Sha256Digest{&self.signed_receipt_sha256}
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn from_custody(
         preparation: ActiveEffectPreparation,
@@ -5788,6 +5794,7 @@ pub(crate) struct ActiveEffectCommitReceiptWire {
 }
 
 impl ActiveEffectCommitReceiptWire {
+    pub(crate) fn native_payload(&self)->Result<Vec<u8>,ShadowError>{self.validate_deserialized_invariants()?;self.canonical_payload()}
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn from_custody(
         effect_id_sha256: Sha256Digest,
@@ -7660,6 +7667,14 @@ impl ProductionCustodyConfiguration {
     #[cfg(target_os="linux")]
     fn remote_native_execution_closure(&self)->Option<&native_custody_closure::RemoteNativeCustodyClosure>{
         match &self.execution_closure_manifest {RetainedProductionCustodyClosure::RemoteNative(value)=>Some(value),_=>None}
+    }
+
+    /// Selects only an actual retained local OR independently admitted remote
+    /// native owner. This does not replace current attestation validation.
+    #[cfg(target_os="linux")]
+    pub(in crate::policy_shadow) fn retains_native_closure_owner(&self)->bool{
+        matches!(&self.execution_closure_manifest,RetainedProductionCustodyClosure::Native(_)
+            |RetainedProductionCustodyClosure::RemoteNative(_))
     }
 
     pub(in crate::policy_shadow) fn execution_closure_manifest_sha256(
@@ -10338,6 +10353,7 @@ fn finish_verified_custody_call(
 /// and close its late-mutation fence before returning success. The runtime
 /// remains hard-unready while no supervisor is installed.
 pub(crate) trait PolicyShadowCustodyRpcSupervisor: Send + Sync {
+    fn native_request_facts_selected(&self)->Result<bool,ShadowError>{Ok(false)}
     fn production_configuration_binding_sha256(
         &self,
     ) -> Option<Sha256Digest> {
@@ -10513,6 +10529,15 @@ pub(crate) trait PolicyShadowCustodyRpcSupervisor: Send + Sync {
 impl PolicyShadowCustodyRpcSupervisor
     for ProductionPolicyShadowCustodyRpcSupervisor
 {
+    fn native_request_facts_selected(&self)->Result<bool,ShadowError>{
+        let installed=self.installed_generation.try_read().map_err(|_|ShadowError::CustodyUnavailable)?;
+        installed.configuration.revalidate_active_attestation(self.key_trust.as_ref(),self.trusted_time.as_ref())?;
+        #[cfg(target_os="linux")]
+        if let RetainedProductionCustodyClosure::RemoteNative(owner)=&installed.configuration.execution_closure_manifest {
+            return owner.request_facts_selected();
+        }
+        Ok(false)
+    }
     fn production_configuration_binding_sha256(
         &self,
     ) -> Option<Sha256Digest> {
@@ -13267,6 +13292,10 @@ impl RequestCommitmentKey {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct RequestCommitment {
+    // Source-only provenance; old RequestCommitment wire stays exact ten.
+    // Only the native receiving process attaches a verified actual computation.
+    #[serde(skip)]
+    native_computation: Option<serde_json::Value>,
     algorithm: String,
     domain: String,
     key_id: Sha256Digest,
@@ -13292,6 +13321,7 @@ impl RequestCommitment {
         }
         Ok(Self {
             algorithm: "HMAC-SHA-256".to_string(),
+            native_computation: None,
             domain: REQUEST_COMMITMENT_DOMAIN_TEXT.to_string(),
             key_id,
             key_epoch,
@@ -13304,7 +13334,7 @@ impl RequestCommitment {
         })
     }
 
-    fn validate_binding(
+    pub(crate) fn validate_binding(
         &self,
         assignment: &VerifiedAssignment,
         runtime: &RuntimeIdentity,
@@ -13340,6 +13370,10 @@ impl RequestCommitment {
 
     pub(crate) fn key_id(&self) -> &Sha256Digest {
         &self.key_id
+    }
+
+    pub(crate) fn native_computation_original(&self)->Option<&serde_json::Value>{
+        self.native_computation.as_ref()
     }
 
     pub(crate) fn key_epoch(&self) -> u64 {
@@ -13575,6 +13609,7 @@ pub(crate) struct CustodySamplingAuthorization {
 }
 
 impl CustodySamplingAuthorization {
+    pub(crate) fn uses_native_early_sampling(&self)->bool{self.native_sampling.is_some()}
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn from_verified_request_commitment(
         generation: &ShadowGenerationIdentity,

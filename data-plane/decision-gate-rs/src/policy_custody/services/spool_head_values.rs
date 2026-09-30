@@ -163,7 +163,7 @@ impl Completion {
             && c.predecessor_head_sha256==a.predecessor_head_sha256 && c.event.ingress_sequence==a.ingress_sequence && c.lane==a.lane
             && p.completed_at_boottime_nanos>=p.stored.payload.stored_at_boottime_nanos
             && p.completed_at_boottime_nanos<b.operation_deadline_boottime_nanos)?;
-        require((c.api_version==fixed::COMPLETION_CORE_API)==a.completion.is_some()
+        require(c.completion_selected()==a.completion.is_some()
             && (c.phase==fixed::Phase::Unavailable)==a.completion.as_ref().is_some_and(|v|v.disposition==CapacityDisposition::ReservationUnavailable))?;
         p.artifact.exact_bytes().map_err(|_|invalid())?;
         key.material()?.verify_strict(&signature_preimage(COMPLETE_DOMAIN,&encode_canonical_frame(p)?),
@@ -172,13 +172,16 @@ impl Completion {
 }
 #[derive(Debug,Clone,PartialEq,Eq,Serialize,Deserialize)]
 #[serde(tag="phase",content="body",rename_all="kebab-case",deny_unknown_fields)]
-pub(super) enum Action {Claim(Claim),Commit(Completion)}
+pub(super) enum Action {Claim(Claim),Commit(Completion),
+    EffectClaim(Dispatch),EffectCommit{completion:super::active_effect_values::Completion,cleanup:super::active_effect_values::Cleanup}}
 #[derive(Debug,Clone,PartialEq,Eq,Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 pub(super) struct Command {pub(super) api_version:String,pub(super) action:Action}
 impl Command {
-    pub(super) fn request(&self)->&Dispatch{match &self.action{Action::Claim(v)=>&v.request,Action::Commit(v)=>&v.payload.claim.request}}
-    pub(super) fn deadline(&self)->Result<u64,ServiceError>{require(self.api_version==API)?;
+    pub(super) fn request(&self)->&Dispatch{match &self.action{Action::Claim(v)=>&v.request,Action::Commit(v)=>&v.payload.claim.request,
+        Action::EffectClaim(v)=>v,Action::EffectCommit{completion,..}=>&completion.prepared.core.request}}
+    pub(super) fn deadline(&self)->Result<u64,ServiceError>{
+        require(if matches!(self.action,Action::EffectClaim(_)|Action::EffectCommit{..}){self.api_version=="serverware.nativeSpoolHeadCommand/v2"}else{self.api_version==API})?;
         self.request().validate().map_err(|_|invalid())?;Ok(self.request().binding().operation_deadline_boottime_nanos)}
 }
 #[derive(Debug,Clone,PartialEq,Eq,Serialize,Deserialize)]
@@ -186,6 +189,8 @@ impl Command {
 pub(super) enum Reply {
     #[serde(rename="native-spool-allocated")] Allocated(Allocation),
     #[serde(rename="native-spool-committed")] Committed{result:ResultBody,transition:Transition},
+    EffectAllocated(super::active_effect_values::Allocation),
+    EffectCommitted{result:ResultBody,transition:Transition},
 }
 pub(super) fn is_command(raw:&[u8])->Result<bool,ServiceError>{let v:serde_json::Value=decode_canonical_frame(raw)?;
-    Ok(v.get("apiVersion").and_then(|v|v.as_str())==Some(API))}
+    Ok(matches!(v.get("apiVersion").and_then(|v|v.as_str()),Some(API|"serverware.nativeSpoolHeadCommand/v2")))}

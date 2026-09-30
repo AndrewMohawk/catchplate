@@ -8,6 +8,7 @@ use crate::policy_shadow::{ShadowSpoolEvent,ShadowSpoolPhase,ShadowSpoolDisposit
     CanonicalEd25519Signature,canonical_json_bytes,hash_domain_frames};
 pub(super) const CORE_API:&str="serverware.nativeLedgerSpoolCore/v1";
 pub(super) const COMPLETION_CORE_API:&str="serverware.nativeLedgerSpoolCore/v2";
+pub(super) const DISPATCH_CORE_API:&str="serverware.nativeLedgerSpoolCore/v3";
 pub(super) const PREPARED_DOMAIN:&str="serverware.nativeLedgerSpoolPreparation.signature/v1";
 pub(super) const STORED_DOMAIN:&str="serverware.nativeLedgerSpoolStorage.signature/v1";
 pub(super) const MAX_CORE:usize=512*1024;
@@ -36,7 +37,7 @@ impl Event {
             return Ok(event);
         }
         require(matches!(self.phase,ShadowSpoolPhase::Capture|ShadowSpoolPhase::Decision|ShadowSpoolPhase::Response
-            |ShadowSpoolPhase::Candidate|ShadowSpoolPhase::RangeClosure
+            |ShadowSpoolPhase::Candidate|ShadowSpoolPhase::RangeClosure|ShadowSpoolPhase::DispatchBarrier
             |ShadowSpoolPhase::PreDispatchTerminal|ShadowSpoolPhase::PostDispatchTerminal))?;
         ShadowSpoolEvent::new(self.generation_id.clone(),self.ingress_sequence,self.request_binding_sha256.clone(),
             self.request_commitment_sha256.clone(),self.phase,self.event_sha256.clone(),self.canonical_event_bytes.clone()).map_err(|_|invalid())
@@ -111,9 +112,11 @@ pub(super) struct Core {
     pub(super) signing_key_id:Sha256Digest,pub(super) signing_key_spki_sha256:Sha256Digest,
 }
 impl Core {
+    pub(super) fn completion_selected(&self)->bool{matches!(self.api_version.as_str(),COMPLETION_CORE_API|DISPATCH_CORE_API)}
     pub(super) fn role(&self)->PolicyShadowCustodySignerRole{match self.phase {
         Phase::Ingress=>PolicyShadowCustodySignerRole::IngressAdmission,
         Phase::Terminal=>PolicyShadowCustodySignerRole::TerminalAppend,
+        Phase::Append if self.event.phase==ShadowSpoolPhase::DispatchBarrier=>PolicyShadowCustodySignerRole::DispatchBarrier,
         _=>PolicyShadowCustodySignerRole::LedgerAppend,
     }}
     pub(super) fn disposition(&self)->ShadowSpoolDisposition {
@@ -133,7 +136,9 @@ impl Core {
                 require((self.phase==phase || (self.phase==Phase::Unavailable && phase==Phase::Reserve)) && self.event==event)?;},
         }
         require((self.api_version==CORE_API && !matches!(self.phase,Phase::Terminal|Phase::Unavailable)
-                || self.api_version==COMPLETION_CORE_API) && self.allocation_sha256!=Sha256Digest::compute(&[])
+                || self.completion_selected())
+            && (self.event.phase==ShadowSpoolPhase::DispatchBarrier)==(self.api_version==DISPATCH_CORE_API)
+            && self.allocation_sha256!=Sha256Digest::compute(&[])
             && self.observed_at_unix_nanos>0 && self.lane<64
             && self.event_ordinal==self.predecessor_event_ordinal.checked_add(1).ok_or_else(invalid)?
             && encode_canonical_frame(self)?.len()<=MAX_CORE)?;
@@ -179,7 +184,9 @@ pub(super) struct StoredPayload {
 pub(super) struct Stored {pub(super) payload:StoredPayload,pub(super) signature:CanonicalEd25519Signature}
 impl Stored {
     pub(super) fn preimage(&self)->Result<Vec<u8>,ServiceError>{
-        Ok(crate::policy_shadow::signature_preimage(STORED_DOMAIN,&encode_canonical_frame(&self.payload)?))
+        let domain=match self.payload.api_version.as_str(){"serverware.nativeLedgerSpoolStorage/v1"=>STORED_DOMAIN,
+            "serverware.nativeActiveEffectStorage/v1"=>"serverware.nativeActiveEffectStorage.signature/v1",_=>return Err(invalid())};
+        Ok(crate::policy_shadow::signature_preimage(domain,&encode_canonical_frame(&self.payload)?))
     }
     pub(super) fn verify(&self,prepared:&Prepared,scope:&[u8],namespace:&Sha256Digest,key:&VerifyingKey)->Result<(),ServiceError>{
         let core=&prepared.core;core.validate()?;let p=&self.payload;
@@ -213,7 +220,7 @@ pub(super) fn final_artifact(core:&Core,stored:&Stored,sign:impl FnOnce(&[u8])->
                 core.lane,core.event_ordinal,core.predecessor_event_ordinal,core.predecessor_head_sha256.clone(),core.event.event_sha256.clone(),
                 core.observed_at_unix_nanos,core.trusted_time_checkpoint_sha256.clone(),persistence,id.clone(),proof.clone(),
                 core.signing_key_id.clone(),core.signing_key_spki_sha256.clone(),signature,digest).map_err(|_|invalid())?;
-            if core.api_version==COMPLETION_CORE_API {
+            if core.completion_selected() {
                 Artifact::from_serializable(Kind::SpoolAppendReservationOutcome,&crate::policy_shadow::NativeSpoolReservationOutcomeWire{
                     api_version:"serverware.nativeSpoolReservationOutcome/v1".into(),
                     result:crate::policy_shadow::NativeSpoolReservationResultWire::Reserved(wire)}).map_err(|_|invalid())

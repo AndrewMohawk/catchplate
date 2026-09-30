@@ -2,6 +2,7 @@
 //! pinned append head is mandatory; orphan/unknown records are never repaired.
 use super::*;
 use crate::policy_shadow::policy_custody::services::ledger_spool_values as wire;
+use crate::policy_shadow::policy_custody::services::active_effect_values as effect;
 use std::fs::File;
 use std::io::Write;
 use std::os::fd::{AsRawFd,FromRawFd,OwnedFd};
@@ -54,8 +55,21 @@ fn read(file:&File,uid:u32,gid:u32)->Result<Vec<u8>,ShadowError>{
         ==(n.dev(),n.ino(),n.len(),n.mode(),n.uid(),n.gid(),n.mtime(),n.mtime_nsec(),n.ctime(),n.ctime_nsec()))?;Ok(bytes)
 }
 struct Held {name:String,file:File,identity:Identity,raw:Vec<u8>,verity:Option<Sha256Digest>}
+/// A closed two-family storage inventory, sharing one sequence, lock and the
+/// unchanged 128-object/32-MiB aggregate ceiling. Old originals keep their bytes.
+#[derive(Serialize,Deserialize)]
+#[serde(untagged)]
+pub(super) enum PreparedOriginal {Ledger(wire::Prepared),Effect(effect::Prepared)}
+impl PreparedOriginal {
+    fn core_bytes(&self)->Result<Vec<u8>,ShadowError>{match self {
+        Self::Ledger(v)=>{v.core.validate().map_err(fail)?;canonical_json_bytes(&v.core)},
+        Self::Effect(v)=>{v.core.validate().map_err(fail)?;canonical_json_bytes(&v.core)}}}
+    fn identity(&self)->Result<Sha256Digest,ShadowError>{match self{Self::Ledger(v)=>v.core.identity(),Self::Effect(v)=>v.core.identity()}.map_err(fail)}
+    fn request(&self)->&crate::policy_shadow::policy_custody::production_dispatch::ClosedProductionDispatchRequestV4 {
+        match self{Self::Ledger(v)=>&v.core.request,Self::Effect(v)=>&v.core.request}}
+}
 pub(super) struct Store {directory:File,identity:Identity,lock:File,held:Vec<Held>,
-    originals:Vec<(wire::Prepared,wire::Stored)>,sequence:u64,head:Sha256Digest,total:usize,poisoned:bool}
+    originals:Vec<(PreparedOriginal,wire::Stored)>,sequence:u64,head:Sha256Digest,total:usize,poisoned:bool}
 impl Store {
     pub(super) fn open(directory:OwnedFd,lock:OwnedFd,admission:&Admission,guest:&GuestClosureBinding,scope_sha:&Sha256Digest)->Result<Self,ShadowError>{
         let directory=File::from(directory);let id=identity(&directory)?;
@@ -71,13 +85,13 @@ impl Store {
         require(Sha256Digest::compute(&raw)==admission.genesis_sha256 && g.api_version=="serverware.nativeLedgerSpoolStoreGenesis/v1"
             && g.guest==*guest && g.proof_scope_sha256==*scope_sha)?;
         for sequence in 1..=admission.sequence {
-            let raw=value.retain(format!("prepared-{sequence:020}.json"),false)?;let prepared:wire::Prepared=exact(&raw)?;
-            let raw=value.retain(format!("core-{sequence:020}.json"),true)?;let core:wire::Core=exact(&raw)?;core.validate().map_err(fail)?;
-            require(prepared.core==core)?;
+            let raw=value.retain(format!("prepared-{sequence:020}.json"),false)?;let prepared:PreparedOriginal=exact(&raw)?;
+            let core=value.retain(format!("core-{sequence:020}.json"),true)?;
+            require(prepared.core_bytes()?==core)?;
             let raw=value.retain(format!("stored-{sequence:020}.json"),false)?;let stored:wire::Stored=exact(&raw)?;
             require(stored.payload.sequence==sequence && stored.payload.previous_head_sha256==value.head
-                && stored.payload.core_sha256==core.identity().map_err(fail)?
-                && stored.payload.object_sha256==wire::sha(&core).map_err(fail)?
+                && stored.payload.core_sha256==prepared.identity()?
+                && stored.payload.object_sha256==Sha256Digest::compute(&core)
                 && value.held[value.held.len()-2].verity.as_ref()==Some(&stored.payload.fsverity_sha256))?;
             let raw=value.retain(format!("head-{sequence:020}.json"),false)?;let head:Head=exact(&raw)?;
             require(head.api_version=="serverware.nativeLedgerSpoolStoreHead/v1" && head.sequence==sequence
@@ -117,7 +131,7 @@ impl Store {
             if name!="." && name!=".." {require(names.remove(name))?;}
         }require(names.is_empty())})();unsafe{libc::closedir(stream)};result
     }
-    pub(super) fn originals(&self)->&[(wire::Prepared,wire::Stored)]{&self.originals}
+    pub(super) fn originals(&self)->&[(PreparedOriginal,wire::Stored)]{&self.originals}
     fn create(&mut self,name:String,raw:&[u8],immutable:bool)->Result<(),ShadowError>{
         require(!raw.is_empty() && raw.len()<=wire::MAX_CORE)?;
         let mut file=at(&self.directory,&name,libc::O_WRONLY|libc::O_CREAT|libc::O_EXCL)?;
@@ -134,11 +148,19 @@ impl Store {
     }
     pub(super) fn put(&mut self,prepared:wire::Prepared,sign:impl FnOnce(u64,Sha256Digest,Sha256Digest)->Result<wire::Stored,ShadowError>,
         check:&impl Fn()->Result<(),ShadowError>)->Result<wire::Stored,ShadowError>{
-        self.check()?;check()?;let core=&prepared.core;core.validate().map_err(fail)?;
+        self.put_original(PreparedOriginal::Ledger(prepared),sign,check)
+    }
+    pub(super) fn put_effect(&mut self,prepared:effect::Prepared,sign:impl FnOnce(u64,Sha256Digest,Sha256Digest)->Result<wire::Stored,ShadowError>,
+        check:&impl Fn()->Result<(),ShadowError>)->Result<wire::Stored,ShadowError>{
+        self.put_original(PreparedOriginal::Effect(prepared),sign,check)
+    }
+    fn put_original(&mut self,prepared:PreparedOriginal,sign:impl FnOnce(u64,Sha256Digest,Sha256Digest)->Result<wire::Stored,ShadowError>,
+        check:&impl Fn()->Result<(),ShadowError>)->Result<wire::Stored,ShadowError>{
+        self.check()?;check()?;
         require(self.sequence<LIMIT && self.originals.iter().all(|(prior,_)|
-            prior.core.request.binding().operation_id_sha256!=core.request.binding().operation_id_sha256
-            && prior.core.request.binding().replay_id_sha256!=core.request.binding().replay_id_sha256))?;
-        let raw=canonical_json_bytes(&core)?;
+            prior.request().binding().operation_id_sha256!=prepared.request().binding().operation_id_sha256
+            && prior.request().binding().replay_id_sha256!=prepared.request().binding().replay_id_sha256))?;
+        let raw=prepared.core_bytes()?;
         let preparation=canonical_json_bytes(&prepared)?;
         require(!raw.is_empty() && raw.len()<=wire::MAX_CORE && !preparation.is_empty() && preparation.len()<=wire::MAX_CORE
             && self.total.checked_add(raw.len()+preparation.len()+32768).is_some_and(|n|n<=TOTAL))?;
@@ -148,7 +170,7 @@ impl Store {
         let verity=self.held.last().and_then(|v|v.verity.clone()).ok_or(ShadowError::BindingDrift)?;
         let stored=sign(sequence,self.head.clone(),verity)?;let exact=canonical_json_bytes(&stored)?;
         require(exact.len()<=16384 && stored.payload.sequence==sequence && stored.payload.previous_head_sha256==self.head
-            && stored.payload.core_sha256==core.identity().map_err(fail)?)?;
+            && stored.payload.core_sha256==prepared.identity()?)?;
         self.create(format!("stored-{sequence:020}.json"),&exact,false)?;check()?;
         let head=canonical_json_bytes(&Head{api_version:"serverware.nativeLedgerSpoolStoreHead/v1".into(),sequence,
             previous_head_sha256:self.head.clone(),stored_original_sha256:Sha256Digest::compute(&exact)})?;

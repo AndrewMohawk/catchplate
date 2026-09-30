@@ -11,6 +11,7 @@ use super::super::authority_history::AuthorityEpochRefV3;
 use crate::policy_shadow::{ShadowGenerationIdentity,AuthorityRole as Role,ShadowSpoolPhase,
     SignedShadowSpillReceipt,SpoolAppendReservationReceiptWire};
 use std::os::unix::fs::{FileExt,MetadataExt};
+use super::active_effect_values as effect;
 pub(super) const RUNTIME:&str="serverware.policyCustodyServiceRuntimeConfig/v7";
 pub(super) const GRANT_FD:&str="spool-head-grant";
 pub(super) const DIRECTORY:&str="spool-head-journal";
@@ -30,20 +31,49 @@ pub(super) struct Payload {
     pub(super) proof_scope_original:String,pub(super) initial_transition_head_sha256:Sha256Digest,
     #[serde(default,skip_serializing_if="Option::is_none")]
     pub(super) completion:Option<CompletionPolicy>,
+    #[serde(default,skip_serializing_if="Option::is_none")]
+    pub(super) effects:Option<EffectPolicy>,
 }
 #[derive(Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 pub(super) struct CompletionPolicy {pub(super) terminal:RoleKey,pub(super) regular_append_capacity:u64}
 #[derive(Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
+pub(super) struct EffectPolicy {
+    pub(super) dispatch_barrier:RoleKey,pub(super) active_effect_barrier:RoleKey,pub(super) active_effect_commit:RoleKey,
+    pub(super) cleanup_authority_epoch:AuthorityEpochRefV3,pub(super) cleanup_public_key_base64url:String,
+    pub(super) cleanup_initial_transition_head_sha256:Sha256Digest,
+}
+impl EffectPolicy {
+    pub(super) fn cleanup_key(&self)->Result<VerifyingKey,ServiceError>{
+        let raw=URL_SAFE_NO_PAD.decode(&self.cleanup_public_key_base64url).map_err(|_|invalid())?;
+        require(raw.len()==32 && URL_SAFE_NO_PAD.encode(&raw)==self.cleanup_public_key_base64url)?;
+        let key=VerifyingKey::from_bytes(&<[u8;32]>::try_from(raw.as_slice()).map_err(|_|invalid())?).map_err(|_|invalid())?;
+        require(self.cleanup_authority_epoch.authority_role==super::super::authority_history::HistoricalAuthorityRoleV3::IsolatedService(
+                HistoricalServiceRoleV3::CleanupAuthorizationConsumer)
+            && verifying_key_spki_sha256(&key)?==self.cleanup_authority_epoch.service_signing_key_spki_sha256
+            && self.cleanup_initial_transition_head_sha256!=Sha256Digest::compute(&[]))?;Ok(key)
+    }
+}
+#[derive(Serialize,Deserialize)]
+#[serde(rename_all="camelCase",deny_unknown_fields)]
 pub(super) struct Grant {pub(super) payload:Payload,pub(super) signature_base64url:String}
 impl Grant {
-    pub(super) fn completion_selected(&self)->bool{self.payload.api_version=="serverware.nativeSpoolHeadGrant/v2"}
+    pub(super) fn completion_selected(&self)->bool{matches!(self.payload.api_version.as_str(),"serverware.nativeSpoolHeadGrant/v2"|"serverware.nativeSpoolHeadGrant/v3")}
+    pub(super) fn effects_selected(&self)->bool{self.payload.api_version=="serverware.nativeSpoolHeadGrant/v3"}
     pub(super) fn key(&self,request:&Dispatch)->Result<&RoleKey,ServiceError>{
+        if matches!(request,Dispatch::ReserveSpoolAppend{..}|Dispatch::AppendSpoolEvent{..})
+            && fixed::Event::from_request(request)?.1.phase==ShadowSpoolPhase::DispatchBarrier {
+            require(self.effects_selected())?;
+        }
         match request {
             Dispatch::BeginIngress{..}=>Ok(&self.payload.ingress),
             Dispatch::AppendTerminal{..}=>Ok(&self.payload.completion.as_ref().ok_or_else(invalid)?.terminal),
+            Dispatch::AppendSpoolEvent{..} if fixed::Event::from_request(request)?.1.phase==ShadowSpoolPhase::DispatchBarrier=>
+                Ok(&self.payload.effects.as_ref().ok_or_else(invalid)?.dispatch_barrier),
             Dispatch::ReserveSpoolAppend{..}|Dispatch::AppendSpoolEvent{..}=>Ok(&self.payload.ledger),
+            Dispatch::AppendActiveEffectBarrier{..}=>Ok(&self.payload.effects.as_ref().ok_or_else(invalid)?.active_effect_barrier),
+            Dispatch::CommitActiveEffect{..}|Dispatch::ReconcileActiveEffect{..}=>Ok(&self.payload.effects.as_ref().ok_or_else(invalid)?.active_effect_commit),
             _=>Err(invalid()),
         }
     }
@@ -51,6 +81,7 @@ impl Grant {
         let p=&self.payload;
         let completion=self.completion_selected();
         require((completion || p.api_version=="serverware.nativeSpoolHeadGrant/v1") && completion==p.completion.is_some()
+            && self.effects_selected()==p.effects.is_some()
             && p.purpose=="native-shared-spool-head"
             && p.guest.service_role=="durable-recovery-store"
             && &p.authority_history_manifest_sha256==history.manifest_sha256()
@@ -67,13 +98,19 @@ impl Grant {
             require(value.terminal.role==Role::CustodyTerminalAppend && (1..=32).contains(&value.regular_append_capacity))?;
             keys.push(value.terminal.material()?);
         }
+        if let Some(value)=&p.effects {
+            require(value.dispatch_barrier.role==Role::CustodyDispatchBarrier
+                && value.active_effect_barrier.role==Role::CustodyActiveEffectBarrier
+                && value.active_effect_commit.role==Role::CustodyActiveEffectCommit)?;
+            keys.extend([value.dispatch_barrier.material()?,value.active_effect_barrier.material()?,value.active_effect_commit.material()?,value.cleanup_key()?]);
+        }
         let current=history.current_epoch().map_err(|_|invalid())?;
         require(keys.iter().enumerate().all(|(index,key)|keys[..index].iter().all(|prior|prior!=key)
             && key!=history.root_authority_key() && key!=current.service_signing_key()))?;
         let raw=URL_SAFE_NO_PAD.decode(&self.signature_base64url).map_err(|_|invalid())?;
         require(raw.len()==64 && URL_SAFE_NO_PAD.encode(&raw)==self.signature_base64url)?;
         history.root_authority_key().verify_strict(&super::super::protocol::domain_separated_signature_preimage(
-            if completion{b"serverware.nativeSpoolHeadGrant.signature/v2"}else{GRANT_DOMAIN},
+            if self.effects_selected(){b"serverware.nativeSpoolHeadGrant.signature/v3"}else if completion{b"serverware.nativeSpoolHeadGrant.signature/v2"}else{GRANT_DOMAIN},
             &encode_canonical_frame(p)?)?,&Signature::from_slice(&raw).map_err(|_|invalid())?).map_err(|_|invalid())
     }
 }
@@ -85,9 +122,10 @@ impl AllocationInput {pub(super) fn sign(&self,key:&SigningKey)->Result<Allocati
         &super::super::protocol::domain_separated_signature_preimage(wire::ALLOCATION_DOMAIN,&encode_canonical_frame(&self.payload)?)?).to_bytes())})
 }}
 pub(super) struct CommitInput {request:Dispatch,artifact:super::super::production_dispatch::CanonicalProductionArtifactV4,
-    epoch:AuthorityEpochRefV3,predecessor:Sha256Digest,checkpoint:Sha256Digest,nonce:Sha256Digest,completed:u64}
+    epoch:AuthorityEpochRefV3,predecessor:Sha256Digest,checkpoint:Sha256Digest,nonce:Sha256Digest,completed:u64,
+    fixed_result:Option<ResultBody>}
 impl CommitInput {pub(super) fn sign(&self,key:&SigningKey)->Result<Reply,ServiceError>{
-    let result=if matches!(self.request,Dispatch::ReserveSpoolAppend{..}) {
+    let result=if let Some(result)=&self.fixed_result{result.clone()}else if matches!(self.request,Dispatch::ReserveSpoolAppend{..}) {
         let (reference,exact_signed_artifact)=Material::sign_for_service(Kind::SpoolAppendReservationOutcome,
             HistoricalServiceRoleV3::DurableRecoveryStore,self.epoch.clone(),self.request.binding(),self.checkpoint.clone(),
             self.nonce.clone(),self.artifact.clone(),key).map_err(|_|invalid())?;
@@ -95,11 +133,18 @@ impl CommitInput {pub(super) fn sign(&self,key:&SigningKey)->Result<Reply,Servic
     }else{ResultBody::Artifact(self.artifact.clone())};
     let transition=Transition::sign(HistoricalServiceRoleV3::DurableRecoveryStore,self.epoch.clone(),self.request.binding(),
         self.predecessor.clone(),sha(&result)?,self.completed,key).map_err(|_|invalid())?;
-    Ok(Reply::Committed{result,transition})
+    Ok(if self.fixed_result.is_some(){Reply::EffectCommitted{result,transition}}else{Reply::Committed{result,transition}})
+}}
+pub(super) struct EffectAllocationInput {payload:effect::AllocationPayload}
+impl EffectAllocationInput {pub(super) fn sign(&self,key:&SigningKey)->Result<effect::Allocation,ServiceError>{
+    use ed25519_dalek::Signer;
+    Ok(effect::Allocation{payload:self.payload.clone(),signature_base64url:URL_SAFE_NO_PAD.encode(key.sign(
+        &super::super::protocol::domain_separated_signature_preimage(effect::ALLOCATION_DOMAIN,&encode_canonical_frame(&self.payload)?)?).to_bytes())})
 }}
 pub(super) trait Owner:generation_service::Owner {
     fn sign_spool_allocation(&self,input:&AllocationInput)->Result<Allocation,ServiceError>;
     fn sign_spool_commit(&self,input:&CommitInput)->Result<Reply,ServiceError>;
+    fn sign_effect_allocation(&self,input:&EffectAllocationInput)->Result<effect::Allocation,ServiceError>;
 }
 #[derive(Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
@@ -107,7 +152,9 @@ struct Record {command:Command,grant_sha256:Sha256Digest,owner_state_sha256:Sha2
 #[derive(Clone)]
 struct Pending {claim:Claim,allocation:Allocation,reservation:Option<ResultBody>}
 struct State {generation:ShadowGenerationIdentity,origin:Sha256Digest,ordinal:u64,head:Sha256Digest,next_ingress:u64,
-    openings:BTreeMap<u64,(Sha256Digest,Sha256Digest)>,pending:Option<Pending>,terminals:BTreeSet<u64>,regular_appends:u64}
+    openings:BTreeMap<u64,(Sha256Digest,Sha256Digest)>,pending:Option<Pending>,terminals:BTreeSet<u64>,regular_appends:u64,
+    effect_ordinal:u64,effect_head:Sha256Digest,effect_pending:Option<(Dispatch,effect::Allocation)>,
+    effect_barriers:BTreeMap<Sha256Digest,effect::Barrier>,effect_consumed:BTreeSet<Sha256Digest>,cleanup_head:Option<Sha256Digest>}
 struct Append {key:Sha256Digest,request:Vec<u8>,response:Vec<u8>}
 pub(super) struct Gate {
     grant:Grant,grant_raw:Vec<u8>,grant_file:std::fs::File,history:RuntimeAuthorityHistory,bootstrap:Bootstrap,
@@ -118,13 +165,13 @@ impl Gate {
     pub(super) fn open<T>(loaded:&LoadedConfig<T>,runtime:&RuntimeConfigHeaderV3,bootstrap:&Bootstrap,
         activation:&mut BTreeMap<String,OwnedFd>)->Result<Option<Self>,ServiceRunnerError>{
         let Some(selection)=&runtime.spool_head else{return Ok(None);};
-        require(runtime.api_version==RUNTIME && runtime.generation_admission.is_some() && runtime.dispatch_admission.is_some()
+        require(matches!(runtime.api_version.as_str(),RUNTIME|super::active_effect_cleanup::RUNTIME) && runtime.generation_admission.is_some() && runtime.dispatch_admission.is_some()
             && selection.grant_fd_name==GRANT_FD)?;
         bootstrap.check()?;let association=bootstrap.generation_association()?;
         let grant_file=std::fs::File::from(take_activation_fd(activation,GRANT_FD)?);
         let grant_raw=read_grant(&grant_file)?;let grant:Grant=decode_canonical_frame(&grant_raw)?;
         let history=runtime.load_authority_history(&loaded.credentials,TrustedHostServiceRoleV3::DurableRecoveryStore)?;
-        grant.verify(&history)?;
+        grant.verify(&history)?;require(grant.effects_selected()==(runtime.api_version==super::active_effect_cleanup::RUNTIME))?;
         require(grant.payload.guest==association.binding() && grant.payload.runtime_configuration_sha256==loaded.exact_sha256
             && grant_file.metadata()?.uid()==grant.payload.guest.uid && grant_file.metadata()?.gid()==grant.payload.guest.gid)?;
         let directory=take_activation_fd(activation,DIRECTORY)?;
@@ -171,12 +218,17 @@ impl Gate {
                 require(self.records.is_empty())?;
                 return Ok(Some(State{generation:g.clone(),origin:original.sha256().clone(),ordinal:g.authoritative_ledger_event_ordinal(),
                     head:g.authoritative_ledger_head_sha256().clone(),next_ingress:g.ingress_range_start_sequence(),openings:BTreeMap::new(),pending:None,
-                    terminals:BTreeSet::new(),regular_appends:0}));
+                    terminals:BTreeSet::new(),regular_appends:0,effect_ordinal:0,
+                    effect_head:crate::policy_shadow::hash_domain_frames(b"serverware.nativeActiveEffectHeadOrigin/v1",
+                        &[&encode_canonical_frame(&(g.generation_id(),original.sha256(),g.authoritative_ledger_head_sha256()))?]),
+                    effect_pending:None,effect_barriers:BTreeMap::new(),effect_consumed:BTreeSet::new(),
+                    cleanup_head:self.grant.payload.effects.as_ref().map(|v|v.cleanup_initial_transition_head_sha256.clone())}));
             }
         }else{require(self.state.is_some())?;}Ok(None)
     }
     fn allocation_payload(&self,claim:&Claim,owner_state:Sha256Digest,observed:u64)->Result<AllocationPayload,ServiceError>{
         let initial=self.origin(claim)?;let state=self.state.as_ref().or(initial.as_ref()).ok_or_else(invalid)?;
+        require(state.effect_pending.is_none())?;
         self.grant.key(&claim.request)?;
         require(self.records.iter().all(|(record,_)|record.command.request().binding().operation_id_sha256!=claim.request.binding().operation_id_sha256
             && record.command.request().binding().replay_id_sha256!=claim.request.binding().replay_id_sha256))?;
@@ -217,7 +269,8 @@ impl Gate {
         let pending=self.state.as_ref().and_then(|v|v.pending.as_ref()).ok_or_else(invalid)?;
         require(pending.reservation.is_none() && pending.claim==p.claim && pending.allocation==p.allocation)?;
         let key=self.grant.key(&p.claim.request)?;
-        require((p.prepared.core.api_version==fixed::COMPLETION_CORE_API)==self.grant.completion_selected())?;
+        require(p.prepared.core.completion_selected()==self.grant.completion_selected()
+            && (p.prepared.core.api_version!=fixed::DISPATCH_CORE_API || self.grant.effects_selected()))?;
         value.verify_signature(key)?;scope.prepared(&p.prepared,&key.grant_sha256,&key.material()?)?;
         p.stored.verify(&p.prepared,self.grant.payload.proof_scope_original.as_bytes(),&scope.retrieval_namespace_sha256,
             &self.grant.payload.retrieval.material()?)?;
@@ -308,8 +361,68 @@ impl Gate {
                     state.pending.as_mut().ok_or_else(invalid)?.reservation=Some(result.clone());
                 }
                 self.transition_head=transition.resulting_head_sha256.clone();
+            },
+            (Action::EffectClaim(request),Reply::EffectAllocated(allocation))=>{
+                let expected=self.effect_allocation(request,record.owner_state_sha256.clone(),allocation.payload.allocated_at_boottime_nanos)?;
+                require(expected==allocation.payload)?;
+                allocation.verify(request,&self.grant.payload.scope,&record.grant_sha256,&self.history)?;
+                self.state.as_mut().ok_or_else(invalid)?.effect_pending=Some((request.clone(),allocation.clone()));
+            },
+            (Action::EffectCommit{completion,cleanup},Reply::EffectCommitted{result,transition})=>{
+                self.effect_completion(completion,cleanup)?;require(result==&cleanup.result)?;
+                let request=&completion.prepared.core.request;
+                require(transition.service_role==HistoricalServiceRoleV3::DurableRecoveryStore && transition.predecessor_head_sha256==self.transition_head)?;
+                effect::verify_transition(transition,request,result,&self.history.current_epoch().map_err(|_|invalid())?.epoch_reference(),
+                    self.history.current_epoch().map_err(|_|invalid())?.service_signing_key())?;
+                let state=self.state.as_mut().ok_or_else(invalid)?;let a=&completion.prepared.core.allocation.payload;
+                if matches!(request,Dispatch::AppendActiveEffectBarrier{..}) {
+                    require(state.effect_barriers.insert(a.preparation.effect_id_sha256().clone(),effect::Barrier{request:request.clone(),result:result.clone()}).is_none())?;
+                    state.effect_ordinal=a.barrier_ordinal;state.effect_head=a.resulting_head_sha256.clone();
+                }else{require(state.effect_consumed.insert(a.preparation.effect_id_sha256().clone()))?;}
+                state.effect_pending=None;state.cleanup_head=Some(cleanup.transition.resulting_head_sha256.clone());
+                self.transition_head=transition.resulting_head_sha256.clone();
             },_=>return Err(invalid()),
         }Ok(())
+    }
+    fn effect_allocation(&self,request:&Dispatch,owner_state:Sha256Digest,observed:u64)->Result<effect::AllocationPayload,ServiceError>{
+        require(self.grant.effects_selected())?;self.grant.payload.scope.binding(request)?;
+        let state=self.state.as_ref().ok_or_else(invalid)?;
+        require(state.pending.is_none() && state.effect_pending.is_none()
+            && self.records.iter().all(|(r,_)|r.command.request().binding().operation_id_sha256!=request.binding().operation_id_sha256
+                && r.command.request().binding().replay_id_sha256!=request.binding().replay_id_sha256))?;
+        let (preparation,barrier)=match request {
+            Dispatch::AppendActiveEffectBarrier{preparation,..}=>{
+                let p:crate::policy_shadow::ActiveEffectPreparation=decode_canonical_frame(&preparation.exact_bytes().map_err(|_|invalid())?)?;
+                require(!state.effect_barriers.contains_key(p.effect_id_sha256()))?;(p,None)
+            },
+            Dispatch::CommitActiveEffect{effect_permit,..}=>{
+                let barrier=state.effect_barriers.values().find(|value|matches!(&value.result,
+                    ResultBody::SealedArtifact{reference,..} if reference==effect_permit)).ok_or_else(invalid)?.clone();
+                (barrier.wire()?.native_preparation().clone(),Some(barrier))
+            },
+            Dispatch::ReconcileActiveEffect{effect_id_sha256,..}=>{
+                let barrier=state.effect_barriers.get(effect_id_sha256).ok_or_else(invalid)?.clone();
+                (barrier.wire()?.native_preparation().clone(),Some(barrier))
+            },_=>return Err(invalid()),
+        };
+        let (generation,ingress)=preparation.reconciliation_identity();
+        require(generation==&self.grant.payload.scope.generation_id && state.openings.contains_key(&ingress)
+            && !state.terminals.contains(&ingress) && !state.effect_consumed.contains(preparation.effect_id_sha256()))?;
+        let ordinal=if barrier.is_none(){state.effect_ordinal.checked_add(1).ok_or_else(invalid)?}else{state.effect_ordinal};
+        let resulting=if barrier.is_none(){crate::policy_shadow::hash_domain_frames(b"serverware.nativeActiveEffectHead/v1",
+            &[&encode_canonical_frame(&(&state.origin,&preparation,ordinal,&state.effect_head))?])}else{state.effect_head.clone()};
+        Ok(effect::AllocationPayload{api_version:"serverware.nativeActiveEffectAllocation/v1".into(),
+            authority_epoch:self.history.current_epoch().map_err(|_|invalid())?.epoch_reference(),service_grant_sha256:Sha256Digest::compute(&self.grant_raw),
+            request_sha256:sha(request)?,owner_state_sha256:owner_state,origin_sha256:state.origin.clone(),preparation,barrier,
+            barrier_ordinal:ordinal,predecessor_head_sha256:state.effect_head.clone(),resulting_head_sha256:resulting,
+            allocated_at_boottime_nanos:observed,original_deadline_boottime_nanos:request.binding().operation_deadline_boottime_nanos})
+    }
+    fn effect_completion(&self,completion:&effect::Completion,cleanup:&effect::Cleanup)->Result<(),ServiceError>{
+        let state=self.state.as_ref().ok_or_else(invalid)?;let c=&completion.prepared.core;
+        require(state.effect_pending.as_ref()==Some(&(c.request.clone(),c.allocation.clone()))
+            && state.cleanup_head.as_ref()==Some(&cleanup.transition.predecessor_head_sha256))?;
+        c.allocation.verify(&c.request,&self.grant.payload.scope,&Sha256Digest::compute(&self.grant_raw),&self.history)?;
+        cleanup.verify(completion,&self.grant)
     }
     fn retain(&mut self,record:Record,reply:Reply)->Result<(),ServiceError>{
         let raw=encode_canonical_frame(&(&record,&reply))?;
@@ -336,7 +449,16 @@ impl Gate {
                 owner.sign_spool_commit(&CommitInput{request:value.payload.claim.request.clone(),artifact:value.payload.artifact.clone(),
                     epoch:self.history.current_epoch().map_err(|_|invalid())?.epoch_reference(),predecessor:self.transition_head.clone(),
                     checkpoint:value.payload.prepared.core.trusted_time_checkpoint_sha256.clone(),nonce:sha(&value.payload.allocation)?,
-                    completed:boottime_now_nanos().map_err(|_|invalid())?})?
+                    completed:boottime_now_nanos().map_err(|_|invalid())?,fixed_result:None})?
+            },
+            Action::EffectClaim(request)=>Reply::EffectAllocated(owner.sign_effect_allocation(&EffectAllocationInput{
+                payload:self.effect_allocation(request,owner_state.clone(),boottime_now_nanos().map_err(|_|invalid())?)?})?),
+            Action::EffectCommit{completion,cleanup}=>{
+                self.effect_completion(completion,cleanup)?;let c=&completion.prepared.core;
+                owner.sign_spool_commit(&CommitInput{request:c.request.clone(),artifact:completion.artifact.clone(),
+                    epoch:self.history.current_epoch().map_err(|_|invalid())?.epoch_reference(),predecessor:self.transition_head.clone(),
+                    checkpoint:c.trusted_time_checkpoint_sha256.clone(),nonce:sha(&c.allocation)?,completed:boottime_now_nanos().map_err(|_|invalid())?,
+                    fixed_result:Some(cleanup.result.clone())})?
             },
         };
         let record=Record{command,grant_sha256:Sha256Digest::compute(&self.grant_raw),owner_state_sha256:owner_state};

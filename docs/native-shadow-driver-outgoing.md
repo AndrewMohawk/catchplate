@@ -22,6 +22,7 @@ point, new signer, new permission, or authority-history alias is introduced.
 | v2 | v6, generationAdmission + commitRequest | LedgerAppend | 14 |
 | v3 | v7, preceding fields + spool | LedgerAppend, IngressAdmission | 13 |
 | v4 | v8, preceding fields + explicit completion spool/v2 | LedgerAppend, IngressAdmission, TerminalAppend | 12 |
+| v5 | v9, preceding fields + explicit effects spool/v3 | preceding three, DispatchBarrier, ActiveEffectBarrier, ActiveEffectCommit | 9 |
 
 All four actual native proof endpoints are excluded in every row. The producer
 requires exactly the existing five service roles, ten signer roles, and four
@@ -90,7 +91,10 @@ consume these actual resources through the same full-admission bridge. The v7
 spool profile additionally requires its genuine independently implemented
 IngressAdmission and LedgerAppend owners; the resource selector alone does not
 enable that path. The explicit v8 completion profile also requires the actual
-separate [TerminalAppend owner](native-shadow-terminal-cohort.md). Native proof socket
+separate [TerminalAppend owner](native-shadow-terminal-cohort.md). The explicit
+v9 effects profile retains a separate cleanup grant original and requires the
+three independently assigned [effect signers](native-shadow-effects-cohort.md).
+Native proof socket
 resources, production listener/journal, and generation-origin remain their actual
 separate owners; they are never fabricated here. The native remote facade/full
 configuration binding remains its separate required implementation.

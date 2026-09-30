@@ -17,6 +17,37 @@ fn original<'a>(value:&'a serde_json::Value,name:&str)->Result<&'a [u8],ShadowEr
 fn digest(value:&serde_json::Value,name:&str)->Result<Sha256Digest,ShadowError>{
     serde_json::from_value(value.get(name).ok_or(ShadowError::BindingDrift)?.clone()).map_err(|_|ShadowError::BindingDrift)
 }
+#[derive(Serialize,Deserialize)]
+#[serde(rename_all="camelCase",deny_unknown_fields)]
+struct EffectsSelection {
+    api_version:String,head_grant_original:String,current_grant_original:String,origin_fd_name:String,cleanup_grant_original:String,
+}
+fn require_runtime(runtime:&serde_json::Value)->Result<(),ShadowError>{
+    match runtime.get("apiVersion").and_then(serde_json::Value::as_str) {
+        Some("serverware.policyCustodyProductionRpcRuntime/v5"|"serverware.policyCustodyProductionRpcRuntime/v6"
+            |"serverware.policyCustodyProductionRpcRuntime/v7"|"serverware.policyCustodyProductionRpcRuntime/v8")=>Ok(()),
+        Some("serverware.policyCustodyProductionRpcRuntime/v9")=>{
+            // The actual measured bridge validates these independently signed
+            // ordinary history grants. The receiving factory additionally pins
+            // this exact successor, never a cleanup-less v3 projection.
+            let value:EffectsSelection=serde_json::from_value(runtime.get("spool").ok_or(ShadowError::BindingDrift)?.clone())
+                .map_err(|_|ShadowError::BindingDrift)?;
+            ensure(value.api_version=="serverware.nativeSpoolServices/v3" && value.origin_fd_name=="generation-origin")?;
+            for (raw,maximum,version) in [
+                (value.head_grant_original.as_str(),65536,"serverware.nativeSpoolHeadGrant/v3"),
+                (value.current_grant_original.as_str(),131072,"serverware.nativeSpoolCurrentGrant/v3"),
+                (value.cleanup_grant_original.as_str(),131072,"serverware.nativeActiveEffectCleanupGrant/v1")] {
+                ensure(raw.is_ascii() && !raw.is_empty() && raw.len()<=maximum)?;
+                let grant:serde_json::Value=exact(raw.as_bytes())?;
+                let object=grant.as_object().ok_or(ShadowError::BindingDrift)?;
+                ensure(object.len()==2 && object.contains_key("payload") && object.contains_key("signatureBase64url")
+                    && grant.get("payload").and_then(|v|v.get("apiVersion")).and_then(serde_json::Value::as_str)==Some(version))?;
+            }
+            Ok(())
+        },
+        _=>Err(ShadowError::BindingDrift),
+    }
+}
 #[derive(Clone,Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 pub(in crate::policy_shadow) struct Settings {
@@ -94,9 +125,7 @@ impl Factory {
         let runtime_raw=original(&bundle,"runtimeOriginal")?;
         ensure(Sha256Digest::compute(runtime_raw)==guest.runtime_configuration_sha256)?;
         let runtime:serde_json::Value=exact(runtime_raw)?;
-        ensure(matches!(runtime.get("apiVersion").and_then(serde_json::Value::as_str),
-            Some("serverware.policyCustodyProductionRpcRuntime/v5")|Some("serverware.policyCustodyProductionRpcRuntime/v6")
-                |Some("serverware.policyCustodyProductionRpcRuntime/v7")|Some("serverware.policyCustodyProductionRpcRuntime/v8")))?;
+        require_runtime(&runtime)?;
         let pins=runtime.get("generationAdmission").and_then(|v|v.get("grants")).and_then(serde_json::Value::as_object).ok_or(ShadowError::BindingDrift)?;
         let grants=bundle.get("generationOriginals").and_then(serde_json::Value::as_object).ok_or(ShadowError::BindingDrift)?;
         ensure(pins.len()==5 && grants.len()==5 && pins.keys().eq(grants.keys()))?;

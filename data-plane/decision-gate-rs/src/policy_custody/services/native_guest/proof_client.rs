@@ -21,24 +21,30 @@ pub(super) fn assigned_peers(files:&FileAdmission)->Result<BTreeMap<EndpointKind
 pub(super) fn assigned_peers_selected(files:&FileAdmission,commitment:bool)
     ->Result<BTreeMap<EndpointKind,services::ExpectedPeerCredentialV3>,ShadowError> {
     files.check_preparation().map_err(fail)?;
-    Ok(Selection::original(&files.retrieval_client_runtime().map_err(fail)?,commitment,false,false)?.entries.into_iter()
+    Ok(Selection::original(&files.retrieval_client_runtime().map_err(fail)?,commitment,false,false,false)?.entries.into_iter()
         .map(|(kind,endpoint)|(kind,endpoint.expected_peer)).collect())
 }
 pub(super) fn assigned_peers_spool(files:&FileAdmission)->Result<BTreeMap<EndpointKind,services::ExpectedPeerCredentialV3>,ShadowError>{
     files.check_preparation().map_err(fail)?;
-    Ok(Selection::original(&files.retrieval_client_runtime().map_err(fail)?,true,true,false)?.entries.into_iter()
+    Ok(Selection::original(&files.retrieval_client_runtime().map_err(fail)?,true,true,false,false)?.entries.into_iter()
         .map(|(kind,endpoint)|(kind,endpoint.expected_peer)).collect())
 }
 pub(super) fn assigned_peers_terminal(files:&FileAdmission)->Result<BTreeMap<EndpointKind,services::ExpectedPeerCredentialV3>,ShadowError>{
     files.check_preparation().map_err(fail)?;
-    Ok(Selection::original(&files.retrieval_client_runtime().map_err(fail)?,true,true,true)?.entries.into_iter()
+    Ok(Selection::original(&files.retrieval_client_runtime().map_err(fail)?,true,true,true,false)?.entries.into_iter()
+        .map(|(kind,endpoint)|(kind,endpoint.expected_peer)).collect())
+}
+pub(super) fn assigned_peers_effects(files:&FileAdmission)->Result<BTreeMap<EndpointKind,services::ExpectedPeerCredentialV3>,ShadowError>{
+    files.check_preparation().map_err(fail)?;
+    Ok(Selection::original(&files.retrieval_client_runtime().map_err(fail)?,true,true,true,true)?.entries.into_iter()
         .map(|(kind,endpoint)|(kind,endpoint.expected_peer)).collect())
 }
 impl Selection {
-    fn original(raw:&[u8],commitment:bool,spool:bool,terminal:bool)->Result<Self,ShadowError> {
+    fn original(raw:&[u8],commitment:bool,spool:bool,terminal:bool,effects:bool)->Result<Self,ShadowError> {
         let runtime:ProductionRpcRuntimeConfigV4=exact(raw)?;runtime.validate().map_err(fail)?;
         require(runtime.commit_request.is_some()==commitment && runtime.spool.is_some()==spool && (!spool || commitment)
-            && (!terminal || spool) && runtime.spool.as_ref().is_some_and(|v|v.completion_selected())==terminal)?;
+            && (!terminal || spool) && runtime.spool.as_ref().is_some_and(|v|v.completion_selected())==terminal
+            && (!effects || terminal) && runtime.spool.as_ref().is_some_and(|v|v.effects_selected())==effects)?;
         let mut entries=BTreeMap::new();
         for kind in KINDS {
             let mut matching=runtime.proof_endpoints.iter().filter(|v|Some(v.endpoint_kind)==kind.production_kind());
@@ -67,9 +73,11 @@ impl Selection {
             endpoint.expected_peer.checked().map_err(fail)?;
             entries.insert(kind,Entry{activation_fd_name:endpoint.activation_fd_name.clone(),expected_peer:endpoint.expected_peer.clone(),exact:canonical_json_bytes(endpoint)?});
         }
-        if terminal {
-            let kind=EndpointKind::TerminalAppend;
-            let mut found=runtime.parent_signer_endpoints.iter().filter(|v|v.signer_role==PolicyShadowCustodySignerRole::TerminalAppend);
+        for (selected,kind) in [(terminal,EndpointKind::TerminalAppend),(effects,EndpointKind::DispatchBarrier),
+            (effects,EndpointKind::ActiveEffectBarrier),(effects,EndpointKind::ActiveEffectCommit)] {
+            if !selected{continue;}
+            let role=kind.signer_role().ok_or(ShadowError::BindingDrift)?;
+            let mut found=runtime.parent_signer_endpoints.iter().filter(|v|v.signer_role==role);
             let endpoint=found.next().ok_or(ShadowError::BindingDrift)?;
             require(found.next().is_none() && endpoint.expected_socket_path==std::path::Path::new(kind.socket_path()))?;
             endpoint.expected_peer.checked().map_err(fail)?;
@@ -91,26 +99,31 @@ impl Prepared {
     pub(super) fn open_selected(delivery:&mut PreparedGuestServiceDelivery,channel:OwnedFd,time_grant:&Pin,commitment:bool)
         ->Result<(Self,admission::trusted_time::ClientGrant),ShadowError> {
         let grant=admission::trusted_time::ClientGrant::open(time_grant)?;
-        Ok((Self::prepare_owned(delivery,channel,commitment,false,false)?,grant))
+        Ok((Self::prepare_owned(delivery,channel,commitment,false,false,false)?,grant))
     }
     pub(super) fn open_spool(delivery:&mut PreparedGuestServiceDelivery,channel:OwnedFd,time_grant:&Pin)
         ->Result<(Self,admission::trusted_time::ClientGrant),ShadowError>{
         let grant=admission::trusted_time::ClientGrant::open(time_grant)?;
-        Ok((Self::prepare_owned(delivery,channel,true,true,false)?,grant))
+        Ok((Self::prepare_owned(delivery,channel,true,true,false,false)?,grant))
     }
     pub(super) fn open_terminal(delivery:&mut PreparedGuestServiceDelivery,channel:OwnedFd,time_grant:&Pin)
         ->Result<(Self,admission::trusted_time::ClientGrant),ShadowError>{
         let grant=admission::trusted_time::ClientGrant::open(time_grant)?;
-        Ok((Self::prepare_owned(delivery,channel,true,true,true)?,grant))
+        Ok((Self::prepare_owned(delivery,channel,true,true,true,false)?,grant))
     }
-    pub(super) fn open_late(delivery:&mut PreparedGuestServiceDelivery,channel:OwnedFd,time_grant:Original,commitment:bool,spool:bool,terminal:bool)
+    pub(super) fn open_effects(delivery:&mut PreparedGuestServiceDelivery,channel:OwnedFd,time_grant:&Pin)
+        ->Result<(Self,admission::trusted_time::ClientGrant),ShadowError>{
+        let grant=admission::trusted_time::ClientGrant::open(time_grant)?;
+        Ok((Self::prepare_owned(delivery,channel,true,true,true,true)?,grant))
+    }
+    pub(super) fn open_late(delivery:&mut PreparedGuestServiceDelivery,channel:OwnedFd,time_grant:Original,commitment:bool,spool:bool,terminal:bool,effects:bool)
         ->Result<(Self,admission::trusted_time::ClientGrant),ShadowError>{
         require(delivery.owner.native_continuation.is_some())?;
         let grant=admission::trusted_time::ClientGrant::from_retained(time_grant)?;
-        Ok((Self::prepare_owned(delivery,channel,commitment,spool,terminal)?,grant))
+        Ok((Self::prepare_owned(delivery,channel,commitment,spool,terminal,effects)?,grant))
     }
-    fn prepare_owned(delivery:&mut PreparedGuestServiceDelivery,channel:OwnedFd,commitment:bool,spool:bool,terminal:bool)->Result<Self,ShadowError>{
-        let selection=Selection::original(&delivery.retrieval_client_runtime().map_err(fail)?,commitment,spool,terminal)?;
+    fn prepare_owned(delivery:&mut PreparedGuestServiceDelivery,channel:OwnedFd,commitment:bool,spool:bool,terminal:bool,effects:bool)->Result<Self,ShadowError>{
+        let selection=Selection::original(&delivery.retrieval_client_runtime().map_err(fail)?,commitment,spool,terminal,effects)?;
         let mut directories=BTreeMap::new();
         for (kind,endpoint) in &selection.entries {
             require(endpoint.expected_peer.uid!=delivery.role_uid() && endpoint.expected_peer.uid!=0 && endpoint.expected_peer.gid!=0)?;

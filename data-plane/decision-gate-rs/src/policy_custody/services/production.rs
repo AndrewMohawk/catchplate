@@ -97,6 +97,8 @@ impl ProductionPrimitiveRejectionV4 {
 /// signed service transitions; unavailable artifacts must use a typed
 /// rejection rather than synthesized bytes.
 pub(super) trait ExistingFiveServiceProductionAuthoritiesV4: Send {
+    fn take_native_commitment_original(&mut self,_request:&ClosedProductionDispatchRequestV4,
+        _response:&ClosedProductionDispatchResponseV4)->Result<Option<serde_json::Value>,ProductionPrimitiveRejectionV4>{Ok(None)}
     // Legacy profiles keep their existing independently owned clock contract.
     // Only the explicit native proof bridge constructs this sampled owner.
     fn trusted_time_for_operation(&self,_request:&ProductionRpcRequestV4)
@@ -358,9 +360,11 @@ impl ProductionRpcRuntimeConfigV4 {
             (PRODUCTION_RPC_RUNTIME_CONFIG_VERSION,None,None,None)|(super::generation_service_client::RUNTIME,Some(_),None,None)
             |(super::dispatch_service::client::BRIDGE_RUNTIME,Some(_),Some(_),None)
             |(super::spool_head_client::RUNTIME,Some(_),Some(_),Some(_))
-            |(super::spool_head_client::COMPLETION_RUNTIME,Some(_),Some(_),Some(_)))
+            |(super::spool_head_client::COMPLETION_RUNTIME,Some(_),Some(_),Some(_))
+            |(super::spool_head_client::EFFECTS_RUNTIME,Some(_),Some(_),Some(_)))
             || self.spool.as_ref().is_some_and(|value|value.completion_selected())
-                != (self.api_version==super::spool_head_client::COMPLETION_RUNTIME)
+                != matches!(self.api_version.as_str(),super::spool_head_client::COMPLETION_RUNTIME|super::spool_head_client::EFFECTS_RUNTIME)
+            || self.spool.as_ref().is_some_and(|value|value.effects_selected())!=(self.api_version==super::spool_head_client::EFFECTS_RUNTIME)
             || self.startup_timeout_millis == 0
             || self.startup_timeout_millis > 30_000
             || !self.listener_socket_path.is_absolute()
@@ -528,6 +532,11 @@ pub(super) enum ProductionAuthorityEndpointRequestBodyV4 {
     /// Only the independently admitted acyclic retrieval successor accepts
     /// this effect. A legacy retrieval proof can never trigger a write.
     StoreLedgerCore {prepared:super::ledger_spool_values::Prepared},
+    StoreActiveEffectCore {prepared:super::active_effect_values::Prepared},
+    PrepareNativeActiveEffect {request:ClosedProductionDispatchRequestV4,allocation:super::active_effect_values::Allocation,head_grant_original:String},
+    CompleteNativeActiveEffect {prepared:super::active_effect_values::Prepared,stored:super::ledger_spool_values::Stored},
+    FinishNativeActiveEffect {completion:super::active_effect_values::Completion,result:super::super::production_dispatch::ClosedProductionDispatchResultV4,
+        service_transitions:Vec<super::super::production_dispatch::SignedProductionServiceTransitionV4>},
     PrepareNativeIngress {request:ClosedProductionDispatchRequestV4,origin_original:Option<String>,head_grant_original:String},
     SampleNativeIngress {claim:super::spool_head_values::Claim,allocation:super::spool_head_values::Allocation,head_grant_original:String},
     PrepareNativeSpool {claim:super::spool_head_values::Claim,allocation:super::spool_head_values::Allocation,
@@ -635,6 +644,9 @@ pub(super) enum ProductionAuthorityEndpointResultV4 {
     NativeIngressSampling(super::spool_head_values::Sampling),
     NativeSpoolPrepared(super::ledger_spool_values::Prepared),
     NativeSpoolCompletion(super::spool_head_values::Completion),
+    ActiveEffectCoreStored(super::ledger_spool_values::Stored),
+    NativeActiveEffectPrepared(super::active_effect_values::Prepared),
+    NativeActiveEffectCompletion(super::active_effect_values::Completion),
     Generation(ClosedProductionGenerationResponseV4),
     GenerationProposal(super::generation_certification::Proposal),
     TerminationRequested,
@@ -1127,7 +1139,8 @@ impl ConcreteFiveV3ProductionAuthoritiesV4 {
         } else {None};
         let mut spool=if matches!(request,ClosedProductionDispatchRequestV4::BeginIngress{..}
             |ClosedProductionDispatchRequestV4::ReserveSpoolAppend{..}|ClosedProductionDispatchRequestV4::AppendSpoolEvent{..}
-            |ClosedProductionDispatchRequestV4::AppendTerminal{..}) {
+            |ClosedProductionDispatchRequestV4::AppendTerminal{..}|ClosedProductionDispatchRequestV4::AppendActiveEffectBarrier{..}
+            |ClosedProductionDispatchRequestV4::CommitActiveEffect{..}|ClosedProductionDispatchRequestV4::ReconcileActiveEffect{..}) {
             self.spool.as_ref().map(|v|v.try_lock()).transpose().map_err(|_|ProductionPrimitiveRejectionV4::rejected(
                 ProductionRpcRejectionCodeV4::ArtifactPrimitiveUnavailable,"native spool owner is busy"))?
         }else{None};
@@ -1136,6 +1149,7 @@ impl ConcreteFiveV3ProductionAuthoritiesV4 {
             // Old v7 keeps its independently configured legacy terminal path.
             spool=None;
         }
+        if super::active_effect_values::selected(request) && spool.as_ref().is_some_and(|owner|!owner.effects_selected()){spool=None;}
         let (wire,reply)=if let Some(owner)=spool.as_mut(){
             owner.run(&self.sessions,request,|identity,body|{
                 let target=match identity {
@@ -1437,6 +1451,13 @@ impl AuthenticatedTimeReply {
 impl ExistingFiveServiceProductionAuthoritiesV4
     for ConcreteFiveV3ProductionAuthoritiesV4
 {
+    fn take_native_commitment_original(&mut self,request:&ClosedProductionDispatchRequestV4,
+        response:&ClosedProductionDispatchResponseV4)->Result<Option<serde_json::Value>,ProductionPrimitiveRejectionV4>{
+        let Some(owner)=&self.commit_request else{return Ok(None);};
+        owner.try_lock().map_err(|_|native_time_refused())?.take_completed(request,response)
+            .map_err(|_|ProductionPrimitiveRejectionV4::rejected(
+                ProductionRpcRejectionCodeV4::ArtifactPrimitiveUnavailable,"native computation original was not retained"))
+    }
     fn trusted_time_for_operation(&self,request:&ProductionRpcRequestV4)
         ->Result<Option<native_guest::trusted_time_sample::VerifiedSample>,ProductionPrimitiveRejectionV4> {
         let Some(owner)=&self.native_proof_owner else {return Ok(None);};
@@ -1791,6 +1812,7 @@ where
             if matches!(
                 response.response,
                 ProductionRpcResponseBodyV4::Dispatch(_)
+                    | ProductionRpcResponseBodyV4::NativeCommitRequest{..}
                     | ProductionRpcResponseBodyV4::Generation(_)
             ) {
                 replay.insert(
@@ -2031,6 +2053,11 @@ where
                     ClosedProductionDispatchRequestV4::ConsumeAndPublishActivation { .. } =>
                         self.authority.consume_and_publish_activation(dispatch),
                 }?;
+                if matches!(dispatch,ClosedProductionDispatchRequestV4::CommitRequest{..}) {
+                    if let Some(computation)=self.authority.take_native_commitment_original(dispatch,&response)? {
+                        return Ok(ProductionRpcResponseBodyV4::NativeCommitRequest{dispatch:response,computation});
+                    }
+                }
                 Ok(ProductionRpcResponseBodyV4::Dispatch(response))
             }
             ProductionRpcRequestBodyV4::Generation(generation) => {
@@ -2081,6 +2108,18 @@ fn validate_authority_response(
         ) => response
             .validate(request, histories)
             .map_err(ServiceRunnerError::invalid),
+        (
+            ProductionRpcRequestBodyV4::Dispatch(request @ ClosedProductionDispatchRequestV4::CommitRequest{..}),
+            ProductionRpcResponseBodyV4::NativeCommitRequest{dispatch,computation},
+        ) => {
+            dispatch.validate(request,histories).map_err(ServiceRunnerError::invalid)?;
+            let original:super::dispatch_commitment::Computation=
+                decode_canonical_frame(&encode_canonical_frame(computation)?)?;
+            if original.request!=*request || original.result!=dispatch.result || original.result_sha256!=dispatch.result_sha256 {
+                return Err(ServiceRunnerError::invalid("native computation differs from completed dispatch"));
+            }
+            Ok(())
+        },
         (
             ProductionRpcRequestBodyV4::Generation(request),
             ProductionRpcResponseBodyV4::Generation(response),
@@ -2498,7 +2537,10 @@ fn run_production_rpc_service_loaded_inner(
     if loaded.value.commit_request.is_some()!=native_signers.contains_key(&super::super::super::PolicyShadowCustodySignerRole::LedgerAppend)
         || loaded.value.spool.is_some()!=native_signers.contains_key(&super::super::super::PolicyShadowCustodySignerRole::IngressAdmission)
         || loaded.value.spool.as_ref().is_some_and(|value|value.completion_selected())
-            !=native_signers.contains_key(&super::super::super::PolicyShadowCustodySignerRole::TerminalAppend) {
+            !=native_signers.contains_key(&super::super::super::PolicyShadowCustodySignerRole::TerminalAppend)
+        || [super::super::super::PolicyShadowCustodySignerRole::DispatchBarrier,
+            super::super::super::PolicyShadowCustodySignerRole::ActiveEffectBarrier,super::super::super::PolicyShadowCustodySignerRole::ActiveEffectCommit]
+            .into_iter().any(|role|loaded.value.spool.as_ref().is_some_and(|v|v.effects_selected())!=native_signers.contains_key(&role)) {
         return Err(ServiceRunnerError::invalid("CommitRequest requires its actual inspected native endpoint owner"));
     }
 
@@ -2708,7 +2750,8 @@ fn run_production_rpc_service_loaded_inner(
         if let Some(selection)=loaded.value.commit_request.clone() {
             if !owner.commitment_bridge_selected() {return Err(ServiceRunnerError::invalid("CommitRequest bridge purpose differs"));}
             authority.commit_request=Some(std::sync::Mutex::new(super::dispatch_service::client::Client::new(selection,
-                load_production_histories(&loaded.value,&loaded.credentials)?,Arc::clone(&owner),&loaded.value.expected_service_configuration_sha256)?));
+                load_production_histories(&loaded.value,&loaded.credentials)?,Arc::clone(&owner),&loaded.value.expected_service_configuration_sha256,
+                loaded.value.api_version=="serverware.policyCustodyProductionRpcRuntime/v9")?));
         }
         authority.enable_native_proofs(owner)?;
     }

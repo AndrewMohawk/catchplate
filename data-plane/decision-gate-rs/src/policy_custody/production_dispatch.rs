@@ -302,7 +302,7 @@ impl SignedProductionArtifactMaterialV4 {
         })
     }
 
-    fn validate(
+    pub(super) fn validate(
         &self,
         reference: &SealedProductionArtifactReferenceV4,
         binding: &ProductionDispatchBindingV4,
@@ -3164,6 +3164,12 @@ impl ProductionRpcRejectionV4 {
 )]
 pub(super) enum ProductionRpcResponseBodyV4 {
     Dispatch(ClosedProductionDispatchResponseV4),
+    /// Exact completed dispatch PLUS its actual native HMAC computation.
+    /// Old Dispatch artifacts and signatures remain unchanged.
+    NativeCommitRequest {
+        dispatch:ClosedProductionDispatchResponseV4,
+        computation:serde_json::Value,
+    },
     Generation(ClosedProductionGenerationResponseV4),
     TerminationRequested,
     Settlement(CanonicalProductionArtifactV4),
@@ -3250,6 +3256,10 @@ impl ProductionRpcResponseV4 {
                 ProductionRpcResponseBodyV4::Dispatch(_)
                     | ProductionRpcResponseBodyV4::Rejected(_)
             )
+                | (
+                    ProductionRpcRequestBodyV4::Dispatch(ClosedProductionDispatchRequestV4::CommitRequest{..}),
+                    ProductionRpcResponseBodyV4::NativeCommitRequest{..}
+                )
                 | (
                     ProductionRpcRequestBodyV4::Generation(_),
                     ProductionRpcResponseBodyV4::Generation(_)

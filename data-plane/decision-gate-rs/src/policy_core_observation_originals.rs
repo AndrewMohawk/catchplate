@@ -107,7 +107,7 @@ pub(super) fn request(lifecycle: &ShadowRequestLifecycle, active: &FinalActiveDe
     -> Result<Arc<Value>, String>
 {
     let original = active.native_original.as_ref().ok_or("actual native terminal original missing")?;
-    bounded(json!({
+    let mut value=json!({
         "apiVersion": "serverware.nativeRequestObservationOriginal/v2",
         "pureActiveEvaluation": original["pureActiveEvaluation"],
         "candidateEvaluation": evaluation(&lifecycle.generation.candidate, candidate,
@@ -115,7 +115,19 @@ pub(super) fn request(lifecycle: &ShadowRequestLifecycle, active: &FinalActiveDe
         "finalActiveEnforcement": original["finalActiveEnforcement"],
         "factsCapturedAtUnixNanos": checked_epoch_ms_to_unix_nanos(lifecycle.facts.captured_at_epoch_ms)?,
         "latencySamples": samples(lifecycle, active.active_evaluation_nanos, candidate_nanos, None)?,
-    }))
+    });
+    if let Some(opening)=lifecycle.native_observation.as_ref().filter(|value|value.requires_protected_request()) {
+        let facts=super::native_request_facts::capture(lifecycle,candidate)?;
+        // Reject a plainly oversized original before the one HMAC effect.
+        bounded(value.clone())?;
+        let protected=opening.protected_request(&facts,
+            checked_epoch_ms_to_unix_nanos(lifecycle.facts.captured_at_epoch_ms)?)?
+            .ok_or("native early sampling requires a genuine later facts commitment")?;
+        value["apiVersion"]=json!("serverware.nativeRequestObservationOriginal/v3");
+        value["protectedRequest"]=protected;
+        value["latencySamples"]=samples(lifecycle,active.active_evaluation_nanos,candidate_nanos,None)?;
+    }
+    bounded(value)
 }
 
 pub(super) fn response(job: &ShadowResponseJob, candidate_validation: Value,

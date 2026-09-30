@@ -1,0 +1,168 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/custody-effects-inputs.v1.schema.json",
+  "$ref": "#/$defs/configuration",
+  "$comment": "Explicit effects successor over actual five-service resource ownership. Runtime8 is selected only for DRS, CleanupAuthorizationConsumer and CurrentSignatureAuthority. Cleanup has no dispatch/HMAC resource. Data shapes are not signing, currentness or effect permission.",
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "ns": {
+      "type": "string",
+      "pattern": "^[1-9][0-9]{0,19}$",
+      "description": "Canonical u64 BOOTTIME; receiver additionally bounds to u64 and checks same actual boot/time namespace."
+    },
+    "pin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 4096,
+          "pattern": "^/[^\\u0000]+$"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "service": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "executableSha256",
+        "deliveryConfiguration"
+      ],
+      "properties": {
+        "executableSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "deliveryConfiguration": {
+          "$ref": "#/$defs/pin"
+        }
+      }
+    },
+    "configuration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "bootIdBase64url",
+        "timeNamespaceDevice",
+        "timeNamespaceInode",
+        "startupDeadlineBoottimeNs",
+        "lifetimeDeadlineBoottimeNs",
+        "invocationId",
+        "services"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.custodyFiveServiceLaunch/v6"
+        },
+        "bootIdBase64url": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{22}$"
+        },
+        "timeNamespaceDevice": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9223372036854776000
+        },
+        "timeNamespaceInode": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9223372036854776000
+        },
+        "startupDeadlineBoottimeNs": {
+          "$ref": "#/$defs/ns"
+        },
+        "lifetimeDeadlineBoottimeNs": {
+          "$ref": "#/$defs/ns"
+        },
+        "invocationId": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{32}$",
+          "not": {
+            "const": "00000000000000000000000000000000"
+          }
+        },
+        "services": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "durable-recovery-store",
+            "cleanup-authorization-consumer",
+            "recovery-target-provider",
+            "current-signature-authority",
+            "bounded-cleanup-helper"
+          ],
+          "properties": {
+            "durable-recovery-store": {
+              "$ref": "#/$defs/service"
+            },
+            "cleanup-authorization-consumer": {
+              "$ref": "#/$defs/service"
+            },
+            "recovery-target-provider": {
+              "$ref": "#/$defs/service"
+            },
+            "current-signature-authority": {
+              "$ref": "#/$defs/service"
+            },
+            "bounded-cleanup-helper": {
+              "$ref": "#/$defs/service"
+            }
+          }
+        }
+      },
+      "description": "Fixed protected /etc/serverware/custody-effects-five.json, read only by FiveServiceLaunch.start_effects. Always independently inspected. Original actual boot/startup/lifetime/invocation; no renewed window."
+    },
+    "guestLaunch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "deliveryConfiguration",
+        "delivery",
+        "peerInspectionCredential"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.custodyOrdinaryServiceGuestLaunch/v6"
+        },
+        "deliveryConfiguration": {
+          "$ref": "#/$defs/pin"
+        },
+        "delivery": {
+          "$ref": "#/$defs/pin"
+        },
+        "peerInspectionCredential": {
+          "const": "peer-inspection-policy"
+        }
+      },
+      "description": "Exact fixed --guest-c9-effects-inspected launch for DRS/Cleanup/Current only. Other two five-service roles retain their original inspected generation-only selection."
+    },
+    "delivery": {
+      "$ref": "policy-custody-guest-delivery.v1.schema.json"
+    },
+    "grant": {
+      "$ref": "custody-service-generation-admission.v1.schema.json#/$defs/grant"
+    },
+    "bridgeGrantPins": {
+      "$ref": "custody-service-generation-admission.v1.schema.json#/$defs/bridgeSelection"
+    },
+    "business": {
+      "$ref": "custody-commitment-inputs.v1.schema.json#/$defs/business"
+    },
+    "dispatchGrant": {
+      "$ref": "native-shadow-commit-request.v1.schema.json#/$defs/serviceGrant",
+      "description": "DRS and Current only; separately authored runtime8 transition grants. Cleanup must not receive this grant."
+    }
+  }
+}

@@ -1,7 +1,10 @@
-"""Real fixed DRS/current journal and sealed-grant owners for spool/v7-v8.
+"""Real fixed DRS/current owners plus the explicit three-role effects successor.
 
 Only supplied independently signed grants are admitted. This module creates no
 key, head, native signature, generation, or successful effect observation.
+Effects adds only Cleanup's own grant/journal, not dispatch or HMAC resources.
+Allocate before C9; seal Head, Cleanup, Current after actual C9 originals exist;
+retain all owners through the existing one-shot eleven-child release/cleanup.
 """
 import fcntl
 import os
@@ -16,6 +19,7 @@ from serverware import custody_commitment_inputs as commitment
 
 p = g.p
 ROLES = commitment.ROLES
+EFFECT_ROLES = (g.ROLES[0], g.ROLES[1], g.ROLES[3])
 HEAD = ("apiVersion", "purpose", "guest", "runtimeConfigurationSha256", "authorityHistoryManifestSha256", "scope",
         "originVerifier", "ingress", "ledger", "retrieval", "proofScopeOriginal", "initialTransitionHeadSha256")
 CURRENT = ("apiVersion", "purpose", "guest", "runtimeConfigurationSha256", "authorityHistoryManifestSha256",
@@ -30,16 +34,51 @@ COMPLETION_NATIVE = {**NATIVE,
     "ledger": ("custody-ledger-append", "serverware.nativeShadowLedgerSpoolServiceAssignment/v2"),
     "retrieval": ("custody-retrieval-response", "serverware.nativeLedgerSpoolRetrievalGrant/v2"),
     "terminal": ("custody-terminal-append", "serverware.nativeShadowTerminalSpoolServiceAssignment/v1")}
+EFFECT_KEYS = ("dispatchBarrier", "activeEffectBarrier", "activeEffectCommit")
+EFFECTS = EFFECT_KEYS + ("cleanupAuthorityEpoch", "cleanupPublicKeyBase64url", "cleanupInitialTransitionHeadSha256")
+EFFECT_NATIVE = {**COMPLETION_NATIVE,
+    "retrieval": ("custody-retrieval-response", "serverware.nativeLedgerSpoolRetrievalGrant/v3"),
+    "dispatchBarrier": ("custody-dispatch-barrier", "serverware.nativeShadowDispatchBarrierServiceAssignment/v1"),
+    "activeEffectBarrier": ("custody-active-effect-barrier", "serverware.nativeShadowActiveEffectBarrierServiceAssignment/v1"),
+    "activeEffectCommit": ("custody-active-effect-commit", "serverware.nativeShadowActiveEffectCommitServiceAssignment/v1")}
 
 
 def sign_delivery(**values):
     p.require(values["role"] in ROLES)
-    return g._sign_delivery(**values, commitment=True, spool=True)
+    return g._sign_delivery(**values, commitment=True, spool=True, effects=False)
 
 
 def sign_generation_grant(**values):
     p.require(values["guest"]["serviceRole"] in ROLES)
-    return g._sign_grant(**values, commitment=True, spool=True)
+    return g._sign_grant(**values, commitment=True, spool=True, effects=False)
+
+
+def sign_effects_delivery(**values):
+    p.require(values["role"] in EFFECT_ROLES)
+    return g._sign_delivery(**values, commitment=values["role"] in ROLES, spool=True, effects=True)
+
+
+def sign_effects_generation_grant(**values):
+    role = values["guest"]["serviceRole"]
+    p.require(role in EFFECT_ROLES)
+    return g._sign_grant(**values, commitment=role in ROLES, spool=True, effects=True)
+
+
+def _signing_public(item, encoded):
+    """Consistency with retained signed C9; full history remains a receiver check."""
+    key = p.decoded(encoded, size=32)
+    p.require(key != bytes(32))
+    delivery = g.document(item["delivery_raw"], 65536)["payload"]
+    signing = [entry["signing"]["publicKeyBase64url"] for entry in delivery["credentials"] if entry["signing"] is not None]
+    p.require(encoded in signing)
+    return p.sha(bytes.fromhex("302a300506032b6570032100") + key)
+
+
+def _epoch_key(epoch, role, encoded, item):
+    # The complete epoch is pinned by the independent signed grant; no unsigned
+    # projection here is promoted into verified authority-history currentness.
+    p.require(epoch["authorityRole"] == {"authorityKind": "isolated-service", "role": role}
+        and epoch["serviceSigningKeySpkiSha256"] == _signing_public(item, encoded))
 
 
 def _root(item):
@@ -59,10 +98,11 @@ class RoleInputs:
     @classmethod
     def prepare(cls, owner, role, parent, cold):
         from serverware.custody_generation_inputs import GenerationInputs, _persistent
-        p.require(cls is RoleInputs and type(owner) is GenerationInputs and owner._spool and role in ROLES)
+        p.require(cls is RoleInputs and type(owner) is GenerationInputs and owner._spool
+            and role in (EFFECT_ROLES if owner._effects else ROLES))
         value = cls()
         value._owner, value._role, value._parent = owner, role, parent
-        value._prefix = "spool-head" if role == ROLES[0] else "spool-current"
+        value._prefix = "spool-head" if role == ROLES[0] else "active-effect-cleanup" if role == EFFECT_ROLES[1] else "spool-current"
         value._raw = value._native = value._payload = None
         value._attempted = False
         os.mkdir(value._prefix + "-journal", 0o700, dir_fd=parent)
@@ -104,24 +144,30 @@ class RoleInputs:
         p.require(item["grant_raw"] is not None and item["delivery_raw"] is not None)
         signed = p.fields(g.document(raw, 131072), ("payload", "signatureBase64url"))
         head = self._role == ROLES[0]
-        stem, purpose = ("Head", "native-shared-spool-head") if head else ("Current", "native-spool-current-signature")
-        completion = signed["payload"].get("apiVersion") == "serverware.nativeSpool" + stem + "Grant/v2"
-        fields = HEAD + (("completion",) if completion else ()) if head else CURRENT
+        effects = self._owner._effects
+        cleanup = effects and self._role == EFFECT_ROLES[1]
+        stem, purpose = (("Head", "native-shared-spool-head") if head else
+            ("Cleanup", "native-active-effect-cleanup") if cleanup else ("Current", "native-spool-current-signature"))
+        completion = effects or signed["payload"].get("apiVersion") == "serverware.nativeSpool" + stem + "Grant/v2"
+        fields = HEAD + (("completion",) if completion else ()) + (("effects",) if effects else ()) if head else CURRENT
         value = p.fields(signed["payload"], fields)
-        version = "2" if completion else "1"
+        version = "1" if cleanup else "3" if effects else "2" if completion else "1"
+        profile = "nativeActiveEffectCleanupGrant" if cleanup else "nativeSpool" + stem + "Grant"
         root, semantic = _root(item)
-        p.require(value["apiVersion"] == "serverware.nativeSpool" + stem + "Grant/v" + version and value["purpose"] == purpose
+        p.require(value["apiVersion"] == "serverware." + profile + "/v" + version and value["purpose"] == purpose
             and value["guest"] == item["guest"] and value["runtimeConfigurationSha256"] == item["runtime"].sha
             and value["authorityHistoryManifestSha256"] == semantic and p.digest(value["initialTransitionHeadSha256"]) != p.sha(b""))
         payload_raw = g.canonical(value)
-        domain = ("serverware.nativeSpool" + stem + "Grant.signature/v" + version).encode("ascii")
+        domain = ("serverware." + profile + ".signature/v" + version).encode("ascii")
         message = b"serverware-signature-v1\0" + len(domain).to_bytes(8, "big") + domain + len(payload_raw).to_bytes(8, "big") + payload_raw
         root.verify(p.decoded(signed["signatureBase64url"], size=64), message)
         header = g.document(item["runtime_raw"], g.MAX_BYTES)["runtime"]
-        own, other = ("spoolHead", "spoolCurrent") if head else ("spoolCurrent", "spoolHead")
-        p.require(header["apiVersion"] == "serverware.policyCustodyServiceRuntimeConfig/v7"
-            and header[own] == {"grantFdName": self._prefix + "-grant"} and other not in header)
-        native_roles = COMPLETION_NATIVE if completion else NATIVE
+        own = "spoolHead" if head else "spoolCleanup" if cleanup else "spoolCurrent"
+        p.require(header["apiVersion"] == ("serverware.policyCustodyServiceRuntimeConfig/v8" if effects else "serverware.policyCustodyServiceRuntimeConfig/v7")
+            and header[own] == {"grantFdName": self._prefix + "-grant"}
+            and all(other not in header for other in ("spoolHead", "spoolCurrent", "spoolCleanup") if other != own)
+            and (not cleanup or header.get("dispatchAdmission") is None))
+        native_roles = EFFECT_NATIVE if effects else COMPLETION_NATIVE if completion else NATIVE
         p.fields(native_originals, native_roles)
         if head:
             p.require(len(raw) <= 65536)
@@ -130,24 +176,51 @@ class RoleInputs:
             if completion:
                 selected = p.fields(value["completion"], ("terminal", "regularAppendCapacity"))
                 p.integer(selected["regularAppendCapacity"], minimum=1, maximum=32)
+            if effects:
+                selected = p.fields(value["effects"], EFFECTS)
+                cleanup_item = self._owner._roles[EFFECT_ROLES[1]]
+                p.require(cleanup_item["delivery_raw"] is not None)
+                _epoch_key(selected["cleanupAuthorityEpoch"], EFFECT_ROLES[1], selected["cleanupPublicKeyBase64url"], cleanup_item)
+                p.require(p.digest(selected["cleanupInitialTransitionHeadSha256"]) != p.sha(b""))
+            public_keys = []
             for name, (role, api) in native_roles.items():
-                public = p.fields(value["completion"]["terminal"] if name == "terminal" else value[name],
+                public = p.fields(value["completion"]["terminal"] if name == "terminal" else
+                    value["effects"][name] if name in EFFECT_KEYS else value[name],
                     ("role", "keyId", "keySpkiSha256", "publicKeyBase64url", "grantSha256"))
                 key = p.decoded(public["publicKeyBase64url"], size=32)
                 p.require(public["role"] == role and public["grantSha256"] == p.sha(native_originals[name])
                     and p.sha(bytes.fromhex("302a300506032b6570032100") + key) == public["keySpkiSha256"])
+                public_keys.append(key)
                 native = p.fields(g.document(native_originals[name], 65536), ("payload", "signature"))
                 p.require(native["payload"]["apiVersion"] == api and native["payload"]["assignmentPayloadSha256"] == scope["assignmentPayloadSha256"]
                     and native["payload"]["expectedPeer"] == header["expectedPeer"])
                 p.decoded(native["signature"], size=64)
                 p.require(native["payload"]["spoolScope" if name == "retrieval" else "scope"] == scope)
+                if name in EFFECT_KEYS:
+                    p.require(native["payload"]["commitRequest"] is None)
+            if effects:
+                cleanup_public = p.decoded(value["effects"]["cleanupPublicKeyBase64url"], size=32)
+                p.require(len(set(public_keys + [cleanup_public])) == len(public_keys) + 1
+                    and root.public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw) not in public_keys + [cleanup_public])
+                retrieved = g.document(native_originals["retrieval"], 65536)["payload"]
+                p.require(p.fields(retrieved["effects"], EFFECT_KEYS) == {name: value["effects"][name] for name in EFFECT_KEYS})
             p.require(type(value["proofScopeOriginal"]) is str and value["proofScopeOriginal"].isascii()
                 and len(value["proofScopeOriginal"]) <= 16384 and p.sha(value["proofScopeOriginal"].encode("ascii")) == scope["proofScopeSha256"])
         else:
             first = self._owner._spools[ROLES[0]]
             p.require(value["headGrantOriginal"] == first.original().decode("ascii") and native_originals == first._native)
-            p.require(first._payload["apiVersion"] == "serverware.nativeSpoolHeadGrant/v" + version)
+            p.require(first._payload["apiVersion"] == "serverware.nativeSpoolHeadGrant/v" + ("3" if effects else version))
             scope = first._payload["scope"]
+            if effects:
+                durable = self._owner._roles[ROLES[0]]
+                _epoch_key(value["durableAuthorityEpoch"], ROLES[0], value["durablePublicKeyBase64url"], durable)
+                if cleanup:
+                    p.require(value["initialTransitionHeadSha256"] == first._payload["effects"]["cleanupInitialTransitionHeadSha256"])
+                else:
+                    sealed_cleanup = self._owner._spools[EFFECT_ROLES[1]]
+                    sealed_cleanup.original()
+                    p.require(value["durableAuthorityEpoch"] == sealed_cleanup._payload["durableAuthorityEpoch"]
+                        and value["durablePublicKeyBase64url"] == sealed_cleanup._payload["durablePublicKeyBase64url"])
         p.require(p.ns(item["guest"]["issuedAtBoottimeNs"]) <= scope["issuedAtBoottimeNanos"] <= o.clock()
             < scope["expiresAtBoottimeNanos"] <= self._owner._launcher._lifetime and o.clock() < self._owner._launcher._startup)
         offset = 0
@@ -161,33 +234,45 @@ class RoleInputs:
 
 def _release_current(owner):
     from serverware.custody_generation_inputs import GenerationInputs
-    p.require(type(owner) is GenerationInputs and owner._spool and tuple(owner._spools) == ROLES)
+    p.require(type(owner) is GenerationInputs and owner._spool
+        and tuple(owner._spools) == (EFFECT_ROLES if owner._effects else ROLES))
     for value in owner._spools.values():
         value.original()
     first = owner._spools[ROLES[0]]
     p.require(owner._spools[ROLES[1]]._payload["headGrantOriginal"] == first.original().decode("ascii")
         and o.clock() < first._payload["scope"]["expiresAtBoottimeNanos"])
+    if owner._effects:
+        p.require(owner._spools[EFFECT_ROLES[1]]._payload["headGrantOriginal"] == first.original().decode("ascii")
+            and first._payload["apiVersion"] == "serverware.nativeSpoolHeadGrant/v3")
 
 
 def bridge_selection(owner):
     _release_current(owner)
-    version = "2" if owner._spools[ROLES[0]]._payload["apiVersion"] == "serverware.nativeSpoolHeadGrant/v2" else "1"
-    return {"apiVersion": "serverware.nativeSpoolServices/v" + version, "headGrantOriginal": owner._spools[ROLES[0]].original().decode("ascii"),
+    version = "3" if owner._effects else "2" if owner._spools[ROLES[0]]._payload["apiVersion"] == "serverware.nativeSpoolHeadGrant/v2" else "1"
+    result = {"apiVersion": "serverware.nativeSpoolServices/v" + version, "headGrantOriginal": owner._spools[ROLES[0]].original().decode("ascii"),
         "currentGrantOriginal": owner._spools[ROLES[1]].original().decode("ascii"), "originFdName": "generation-origin"}
+    if owner._effects:
+        result["cleanupGrantOriginal"] = owner._spools[EFFECT_ROLES[1]].original().decode("ascii")
+    return result
 
 
 def _require_native_release(launcher, cohort, transfers):
     from serverware.native_shadow_proof_cohort_control import ParkedProofCohort, RetainedActivationFds
     p.require(type(cohort) is ParkedProofCohort and cohort.spool_selected() and type(transfers) is dict)
     terminal = cohort.terminal_selected()
+    effects = cohort.effects_selected()
     roles = {"retrieval", "persistence", "trustedTime", "generationInstall", "bridge", "commitRequest", "ingressAdmission"}
-    p.require(set(transfers) == roles | ({"terminalAppend"} if terminal else set()))
+    p.require((not effects or terminal) and set(transfers) == (roles | ({"terminalAppend"} if terminal else set())
+        | (set(EFFECT_KEYS) if effects else set())))
     owner = launcher._input_owner; _release_current(owner)
-    p.require(owner._released and launcher._spool)
+    p.require(owner._released and launcher._spool and owner._effects == effects == launcher._effects)
     expected = bridge_selection(owner)
-    p.require(expected["apiVersion"] == ("serverware.nativeSpoolServices/v2" if terminal else "serverware.nativeSpoolServices/v1"))
+    p.require(expected["apiVersion"] == ("serverware.nativeSpoolServices/v3" if effects else "serverware.nativeSpoolServices/v2" if terminal else "serverware.nativeSpoolServices/v1"))
     native_roles = (("ingress", "ingressAdmission"), ("ledger", "commitRequest"), ("retrieval", "retrieval"))
-    for name, role in native_roles + ((("terminal", "terminalAppend"),) if terminal else ()):
+    selected_native = native_roles + ((("terminal", "terminalAppend"),) if terminal else ())
+    if effects:
+        selected_native += tuple((name, name) for name in EFFECT_KEYS)
+    for name, role in selected_native:
         value = transfers[role]
         p.require(type(value) is RetainedActivationFds and value._cohort is cohort and value._role == role)
         value.check(); p.require(value._grant_bytes == owner._spools[ROLES[0]]._native[name])
@@ -205,7 +290,7 @@ def _require_native_release(launcher, cohort, transfers):
     pin = g.document(bridge._delivery_bytes, 65536)["payload"]["runtimeConfig"]
     original = o.Original(pin["path"], g.MAX_BYTES, sha=pin["sha256"]); owner._originals.append(original)
     runtime = g.document(original.read(), g.MAX_BYTES)
-    p.require(runtime["apiVersion"] == ("serverware.policyCustodyProductionRpcRuntime/v8" if terminal else "serverware.policyCustodyProductionRpcRuntime/v7") and runtime["spool"] == expected
+    p.require(runtime["apiVersion"] == ("serverware.policyCustodyProductionRpcRuntime/v9" if effects else "serverware.policyCustodyProductionRpcRuntime/v8" if terminal else "serverware.policyCustodyProductionRpcRuntime/v7") and runtime["spool"] == expected
         and runtime["commitRequest"] == expected_commitment)
     from serverware.native_shadow_spool_inputs import SpoolInputs
     p.require(type(cohort._spool_resources) is SpoolInputs)

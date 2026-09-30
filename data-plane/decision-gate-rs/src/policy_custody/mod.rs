@@ -13,6 +13,8 @@ pub(super) mod protocol;
 pub(super) mod receipt_arena;
 pub(super) mod services;
 pub(super) mod native_remote_factory;
+#[path="native_request_commitment.rs"]
+pub(super) mod native_request_commitment;
 pub(super) mod terminal_settlement;
 pub(super) mod watchdog_recovery;
 

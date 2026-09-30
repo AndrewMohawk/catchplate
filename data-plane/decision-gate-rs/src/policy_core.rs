@@ -67,6 +67,8 @@ pub(crate) use native_response::NativeResponseRetention;
 mod effect_completion;
 #[path="policy_core_observation_originals.rs"]
 mod observation_originals;
+#[path="policy_core_native_request_facts.rs"]
+pub(crate) mod native_request_facts;
 #[path="policy_core_dispatch_observation.rs"]
 mod dispatch_observation;
 

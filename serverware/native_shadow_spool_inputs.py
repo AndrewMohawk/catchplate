@@ -1,4 +1,4 @@
-"""Fixed-seven/eight retained resources, not installed generation authority.
+"""Fixed-seven/eight/eleven retained resources, not installed authority.
 
 Creates the Ingress listener, the explicitly selected Terminal listener, an empty
 durable retrieval-core store, and the one signed-origin channel. Old retrieval objects/listeners and every
@@ -19,6 +19,11 @@ from serverware import native_shadow_nitro_profile as p
 _TOKEN = object()
 ROOT = "/var/lib/serverware/native-ledger-spool"
 SOCKET = "/run/serverware-shadow-ingress-admission/listener.sock"
+EFFECT_LISTENERS = {
+    "dispatchBarrier": "dispatch-barrier",
+    "activeEffectBarrier": "active-effect-barrier",
+    "activeEffectCommit": "active-effect-commit",
+}
 
 
 def _verity_fs(fd):
@@ -44,6 +49,7 @@ class SpoolInputs:
         self._fds, self._parents, self._sockets = [], [], []
         self._closed = self._seal_attempted = self._delivery_attempted = False
         self._genesis = self._scope = self._head = None
+        self._effect_listeners = {}
 
     _parent = existing.PersistenceInputs._parent
 
@@ -53,6 +59,8 @@ class SpoolInputs:
         p.require(cls is SpoolInputs and type(cohort) is ParkedProofCohort and cohort.spool_selected())
         value = cls(_TOKEN); value._cohort = cohort
         value._terminal_selected = cohort.terminal_selected()
+        value._effects_selected = cohort.effects_selected()
+        p.require(not value._effects_selected or value._terminal_selected)
         # Retained even if preparation fails: no new owner may adopt partial
         # resources, and parent cleanup is responsible for the real children.
         cohort._spool_resources = value
@@ -95,6 +103,20 @@ class SpoolInputs:
             os.chmod("listener.sock", 0o660, dir_fd=value._terminal_parent, follow_symlinks=False)
             value._terminal_id = o.identity(os.fstat(value._terminal_listener.fileno()))
             value._terminal_path_id = o.identity(os.stat("listener.sock", dir_fd=value._terminal_parent, follow_symlinks=False))
+        if value._effects_selected:
+            for role, slug in EFFECT_LISTENERS.items():
+                parent = value._parent(("run", "serverware-shadow-" + slug))
+                listener = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET | socket.SOCK_CLOEXEC | socket.SOCK_NONBLOCK)
+                value._sockets.append(listener)
+                listener.setsockopt(socket.SOL_SOCKET, socket.SO_PASSCRED, 1)
+                listener.setsockopt(socket.SOL_SOCKET, 76, 1)
+                listener.bind("/run/serverware-shadow-" + slug + "/listener.sock")
+                os.chown("listener.sock", cohort._cold[role]["uid"], cohort._cold["bridge"]["gid"],
+                    dir_fd=parent, follow_symlinks=False)
+                os.chmod("listener.sock", 0o660, dir_fd=parent, follow_symlinks=False)
+                value._effect_listeners[role] = (parent, listener,
+                    o.identity(os.fstat(listener.fileno())),
+                    o.identity(os.stat("listener.sock", dir_fd=parent, follow_symlinks=False)))
         value._local, value._remote = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET | socket.SOCK_CLOEXEC | socket.SOCK_NONBLOCK)
         value._sockets += [value._local, value._remote]
         for channel in (value._local, value._remote):
@@ -146,6 +168,12 @@ class SpoolInputs:
         if self._terminal_selected:
             p.require(o.identity(os.fstat(self._terminal_listener.fileno())) == self._terminal_id
                 and o.identity(os.stat("listener.sock", dir_fd=self._terminal_parent, follow_symlinks=False)) == self._terminal_path_id)
+        expected_effects = set(EFFECT_LISTENERS) if self._effects_selected else set()
+        p.require(set(self._effect_listeners) == expected_effects
+            == set(self._cohort._roles).intersection(EFFECT_LISTENERS))
+        for parent, listener, listener_id, path_id in self._effect_listeners.values():
+            p.require(o.identity(os.fstat(listener.fileno())) == listener_id
+                and o.identity(os.stat("listener.sock", dir_fd=parent, follow_symlinks=False)) == path_id)
         for fd, expected in self._channels:
             p.require(o.identity(os.fstat(fd)) == expected and not os.get_inheritable(fd))
         self._relay.check()
@@ -159,6 +187,10 @@ class SpoolInputs:
         if self._terminal_selected:
             selected["terminalAppend"] = (("terminal-append-listener", self._terminal_listener.fileno()),)
             selected["bridge"] += (("terminal-append-peer-directory", self._terminal_parent),)
+        for effect_role, (parent, listener, _, _) in self._effect_listeners.items():
+            slug = EFFECT_LISTENERS[effect_role]
+            selected[effect_role] = ((slug + "-listener", listener.fileno()),)
+            selected["bridge"] += ((slug + "-peer-directory", parent),)
         p.require(role in selected); return selected[role]
 
     def initialize_store(self, *, retrieval_delivery_original, proof_scope_original):
@@ -202,7 +234,8 @@ class SpoolInputs:
     def require_release(self, transfers, head_original):
         self.check(); p.require(self._genesis is not None and self._head is None)
         head = p.document(head_original, 65536)["payload"]
-        p.require(head["apiVersion"] == ("serverware.nativeSpoolHeadGrant/v2" if self._terminal_selected else "serverware.nativeSpoolHeadGrant/v1"))
+        head_version = 3 if self._effects_selected else 2 if self._terminal_selected else 1
+        p.require(head["apiVersion"] == f"serverware.nativeSpoolHeadGrant/v{head_version}")
         self._scope, self._head = head["scope"], bytes(head_original)
         retrieval = p.document(transfers["retrieval"]._grant_bytes, 65536)["payload"]
         p.require(transfers["retrieval"]._delivery_bytes == self._retrieval_delivery
@@ -214,6 +247,13 @@ class SpoolInputs:
             p.require(terminal["grantSha256"] == p.sha(transfers["terminalAppend"]._grant_bytes)
                 and retrieval["terminal"] == terminal)
             roles += ("terminalAppend",)
+        if self._effects_selected:
+            p.fields(retrieval["effects"], EFFECT_LISTENERS)
+            for role in EFFECT_LISTENERS:
+                key = head["effects"][role]
+                p.require(key["grantSha256"] == p.sha(transfers[role]._grant_bytes)
+                    and retrieval["effects"][role] == key)
+            roles += tuple(EFFECT_LISTENERS)
         for role in roles:
             transfer = transfers[role]; transfer.check()
             held = {entry["name"]: fd for entry, fd in zip(transfer._entries, transfer._fds, strict=True)}

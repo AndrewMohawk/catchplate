@@ -1657,7 +1657,7 @@ impl RpcProductionPolicyShadowCustodyProcess {
                 let value=Self::decode_artifact::<serde_json::Value>(artifact,
                     ProductionArtifactKindV4::SpoolAppendReservationOutcome)?;
                 let wire=if value.get("apiVersion").is_some() {
-                    if configuration.native_execution_closure().is_none(){return Err(ShadowError::CustodyUnavailable);}
+                    if !configuration.retains_native_closure_owner(){return Err(ShadowError::CustodyUnavailable);}
                     let original=Self::decode_artifact::<super::super::NativeSpoolReservationOutcomeWire>(
                         artifact,ProductionArtifactKindV4::SpoolAppendReservationOutcome)?;
                     if original.api_version!="serverware.nativeSpoolReservationOutcome/v1" {
@@ -2275,12 +2275,14 @@ impl RpcProductionPolicyShadowCustodyProcess {
             .binding()
             .operation_deadline_boottime_nanos;
         drop(configuration_guard);
-        let response = match self.call_body(
+        let (response,native_computation) = match self.call_body(
             ProductionRpcRequestBodyV4::Dispatch(closed.clone()),
             replay,
             deadline,
         )? {
-            ProductionRpcResponseBodyV4::Dispatch(response) => response,
+            ProductionRpcResponseBodyV4::Dispatch(response) => (response,None),
+            ProductionRpcResponseBodyV4::NativeCommitRequest{dispatch,computation}
+                if parent_operation==PolicyShadowCustodyOperation::CommitRequest => (dispatch,Some(computation)),
             _ => return Err(ShadowError::CustodyUnavailable),
         };
         if response.api_version != PRODUCTION_DISPATCH_PROTOCOL_VERSION
@@ -2299,12 +2301,26 @@ impl RpcProductionPolicyShadowCustodyProcess {
         {
             return Err(ShadowError::CustodyUnavailable);
         }
-        self.reconstruct_dispatch_response(
+        let native_original=if let Some(original)=native_computation {
+            let configuration=self.active_configuration.read().map_err(|_|ShadowError::CustodyUnavailable)?;
+            super::native_request_commitment::verify_computation(&original,&closed,&response,
+                &configuration,self.key_trust.as_ref(),self.trusted_time.as_ref())?;
+            Some(original)
+        }else{None};
+        let result=self.reconstruct_dispatch_response(
             parent_operation,
             response_context,
             response.result,
             &expected_configuration_binding_sha256,
-        )
+        )?;
+        match result {
+            ProductionCustodyDispatchResponse::RequestCommitted(mut commitment)=>{
+                commitment.native_computation=native_original;
+                Ok(ProductionCustodyDispatchResponse::RequestCommitted(commitment))
+            },
+            other if native_original.is_none()=>Ok(other),
+            _=>Err(ShadowError::CustodyUnavailable),
+        }
     }
 }
 

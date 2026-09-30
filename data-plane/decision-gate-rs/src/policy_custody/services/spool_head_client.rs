@@ -10,16 +10,23 @@ use super::production::{ProductionServiceHistoricalKeyringsV4,ProductionAuthorit
 use super::super::production_dispatch::{ClosedProductionDispatchRequestV4 as Dispatch,
     ClosedProductionDispatchResponseV4,SignedProductionServiceTransitionV4 as Transition};
 use crate::policy_shadow::PolicyShadowCustodySignerRole as Signer;
+#[path="active_effect_client.rs"] mod effect;
 pub(super) const RUNTIME:&str="serverware.policyCustodyProductionRpcRuntime/v7";
 pub(super) const COMPLETION_RUNTIME:&str="serverware.policyCustodyProductionRpcRuntime/v8";
+pub(super) const EFFECTS_RUNTIME:&str="serverware.policyCustodyProductionRpcRuntime/v9";
 pub(super) const ORIGIN_FD:&str="generation-origin";
 #[derive(Debug,Clone,Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
-pub(super) struct Selection {api_version:String,head_grant_original:String,current_grant_original:String,origin_fd_name:String}
+pub(super) struct Selection {api_version:String,head_grant_original:String,current_grant_original:String,origin_fd_name:String,
+    #[serde(default,skip_serializing_if="Option::is_none")] cleanup_grant_original:Option<String>}
 impl Selection {
-    pub(super) fn completion_selected(&self)->bool{self.api_version=="serverware.nativeSpoolServices/v2"}
+    pub(super) fn completion_selected(&self)->bool{matches!(self.api_version.as_str(),"serverware.nativeSpoolServices/v2"|"serverware.nativeSpoolServices/v3")}
+    pub(super) fn effects_selected(&self)->bool{self.api_version=="serverware.nativeSpoolServices/v3"}
     pub(super) fn validate(&self)->Result<(),ServiceError>{
-        require(matches!(self.api_version.as_str(),"serverware.nativeSpoolServices/v1"|"serverware.nativeSpoolServices/v2") && self.origin_fd_name==ORIGIN_FD
+        require(matches!(self.api_version.as_str(),"serverware.nativeSpoolServices/v1"|"serverware.nativeSpoolServices/v2"|"serverware.nativeSpoolServices/v3")
+            && self.effects_selected()==self.cleanup_grant_original.is_some()
+            && self.cleanup_grant_original.as_ref().is_none_or(|v|v.is_ascii() && !v.is_empty() && v.len()<=131072)
+            && self.origin_fd_name==ORIGIN_FD
             && self.head_grant_original.is_ascii() && !self.head_grant_original.is_empty() && self.head_grant_original.len()<=65536
             && self.current_grant_original.is_ascii() && !self.current_grant_original.is_empty() && self.current_grant_original.len()<=131072)
     }
@@ -32,6 +39,7 @@ pub(super) struct Client {
 }
 impl Client {
     pub(super) fn completion_selected(&self)->bool{self.selection.completion_selected()}
+    pub(super) fn effects_selected(&self)->bool{self.selection.effects_selected()}
     pub(super) fn new(selection:Selection,histories:ProductionServiceHistoricalKeyringsV4,
         owner:Arc<guest::native_guest::AdmittedGuest>,origin_channel:OwnedFd,
         configurations:&BTreeMap<TrustedHostServiceRoleV3,Sha256Digest>)->Result<Self,ServiceRunnerError>{
@@ -40,7 +48,7 @@ impl Client {
         let current:spool_current::Grant=decode_canonical_frame(selection.current_grant_original.as_bytes())?;
         let h=histories.borrowed();head.verify(h.history(HistoricalServiceRoleV3::DurableRecoveryStore))?;
         current.verify(h.history(HistoricalServiceRoleV3::CurrentSignatureAuthority))?;
-        require(head.completion_selected()==selection.completion_selected())?;
+        require(head.completion_selected()==selection.completion_selected() && head.effects_selected()==selection.effects_selected())?;
         require(current.payload.head_grant_original==selection.head_grant_original
             && configurations.get(&TrustedHostServiceRoleV3::DurableRecoveryStore)==Some(&head.payload.runtime_configuration_sha256)
             && configurations.get(&TrustedHostServiceRoleV3::CurrentSignatureAuthority)==Some(&current.payload.runtime_configuration_sha256)
@@ -56,8 +64,17 @@ impl Client {
         let mut kind=0i32;let mut length=std::mem::size_of::<i32>() as libc::socklen_t;
         require(unsafe{libc::getsockopt(origin_channel.as_raw_fd(),libc::SOL_SOCKET,libc::SO_TYPE,
             (&mut kind as *mut i32).cast(),&mut length)}==0 && kind==libc::SOCK_SEQPACKET)?;
-        let service_heads=BTreeMap::from([(TrustedHostServiceRoleV3::DurableRecoveryStore,head.payload.initial_transition_head_sha256.clone()),
+        let mut service_heads=BTreeMap::from([(TrustedHostServiceRoleV3::DurableRecoveryStore,head.payload.initial_transition_head_sha256.clone()),
             (TrustedHostServiceRoleV3::CurrentSignatureAuthority,current.payload.initial_transition_head_sha256.clone())]);
+        if let Some(raw)=&selection.cleanup_grant_original {
+            let grant:super::active_effect_cleanup::Grant=decode_canonical_frame(raw.as_bytes())?;
+            grant.verify(h.history(HistoricalServiceRoleV3::CleanupAuthorizationConsumer))?;
+            require(grant.payload.head_grant_original==selection.head_grant_original
+                && configurations.get(&TrustedHostServiceRoleV3::CleanupAuthorizationConsumer)==Some(&grant.payload.runtime_configuration_sha256)
+                && grant.payload.durable_authority_epoch==current.payload.durable_authority_epoch
+                && grant.payload.durable_public_key_base64url==current.payload.durable_public_key_base64url)?;
+            service_heads.insert(TrustedHostServiceRoleV3::CleanupAuthorizationConsumer,grant.payload.initial_transition_head_sha256);
+        }
         Ok(Self{selection,head,current,histories,owner,origin_channel,origin:None,service_heads,journal_sequence:0,used:BTreeSet::new(),poisoned:false})
     }
     fn check(&self,deadline:u64)->Result<(),ServiceError>{
@@ -85,6 +102,7 @@ impl Client {
     }
     pub(super) fn run(&mut self,sessions:&BTreeMap<TrustedHostServiceRoleV3,AuthenticatedInheritedSeqpacket>,request:&Dispatch,
         mut native:impl FnMut(Endpoint,Body)->Result<(Request,Response),ServiceError>)->Result<(Request,Response),ServiceError>{
+        if super::active_effect_values::selected(request){return self.run_effect(sessions,request,native);}
         let b=request.binding();let deadline=b.operation_deadline_boottime_nanos;
         self.check(deadline)?;self.head.payload.scope.binding(request)?;
         require(!self.poisoned && self.used.len()<128 && self.used.insert(b.operation_id_sha256.clone()))?;
@@ -93,7 +111,10 @@ impl Client {
         let terminal=matches!(request,Dispatch::AppendTerminal{..});
         require(ingress || matches!(request,Dispatch::ReserveSpoolAppend{..}|Dispatch::AppendSpoolEvent{..})
             || terminal && self.selection.completion_selected())?;
-        let signer=if ingress{Signer::IngressAdmission}else if terminal{Signer::TerminalAppend}else{Signer::LedgerAppend};
+        let dispatch=matches!(request,Dispatch::AppendSpoolEvent{..})
+            && super::ledger_spool_values::Event::from_request(request)?.1.phase==crate::policy_shadow::ShadowSpoolPhase::DispatchBarrier;
+        require(!dispatch || self.selection.effects_selected())?;
+        let signer=if ingress{Signer::IngressAdmission}else if terminal{Signer::TerminalAppend}else if dispatch{Signer::DispatchBarrier}else{Signer::LedgerAppend};
         let endpoint=Endpoint::ParentSigner(signer);
         let origin_original=if ingress && self.origin.is_none(){
             let packet=receive_packet(self.origin_channel.as_raw_fd(),Some(deadline)).map_err(|_|invalid())?;
@@ -134,7 +155,8 @@ impl Client {
         let key=self.head.key(request)?;
         self.head.payload.scope.prepared(&prepared,&key.grant_sha256,&key.material()?)?;
         require(prepared.core.request==*request && prepared.core.allocation_sha256==sha(&allocation)?
-            && (prepared.core.api_version==super::ledger_spool_values::COMPLETION_CORE_API)==self.selection.completion_selected())?;
+            && prepared.core.completion_selected()==self.selection.completion_selected()
+            && (prepared.core.api_version!=super::ledger_spool_values::DISPATCH_CORE_API || self.selection.effects_selected()))?;
         let (_,reply)=native(Endpoint::Proof(Proof::Retrieval),Body::StoreLedgerCore{prepared:prepared.clone()})?;
         let ResultBody::LedgerCoreStored(stored)=reply.result else{return Err(invalid());};
         stored.verify(&prepared,self.head.payload.proof_scope_original.as_bytes(),&self.head.payload.scope.retrieval_namespace_sha256,&self.head.payload.retrieval.material()?)?;
@@ -148,7 +170,7 @@ impl Client {
         let Reply::Committed{result,transition}=&durable else{return Err(invalid());};
         self.transition(TrustedHostServiceRoleV3::DurableRecoveryStore,transition,request,result)?;
         self.journal_sequence=self.journal_sequence.checked_add(1).ok_or_else(invalid)?;
-        let command=spool_current::Command{api_version:spool_current::API.into(),completion:completion.clone(),durable:durable.clone()};
+        let command=spool_current::Command::Ledger(spool_current::LedgerCommand{api_version:spool_current::API.into(),completion:completion.clone(),durable:durable.clone()});
         let raw=self.exchange(sessions,TrustedHostServiceRoleV3::CurrentSignatureAuthority,&encode_canonical_frame(&command)?,deadline)?;
         let current:Transition=decode_canonical_frame(&raw)?;
         self.transition(TrustedHostServiceRoleV3::CurrentSignatureAuthority,&current,request,result)?;

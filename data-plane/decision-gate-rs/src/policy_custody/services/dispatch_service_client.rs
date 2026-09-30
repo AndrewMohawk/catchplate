@@ -21,11 +21,11 @@ pub(in crate::policy_shadow::policy_custody::services) struct Client {
     grants:BTreeMap<TrustedHostServiceRoleV3,Grant>,heads:BTreeMap<TrustedHostServiceRoleV3,Sha256Digest>,
     histories:ProductionServiceHistoricalKeyringsV4,owner:Arc<guest::native_guest::AdmittedGuest>,
     attempted:BTreeSet<Sha256Digest>,started:Option<super::super::super::production_dispatch::ClosedProductionDispatchRequestV4>,
-    pending:Option<fixed::Computation>,poisoned:bool,
+    pending:Option<fixed::Computation>,completed_original:Option<fixed::Computation>,retain_original:bool,poisoned:bool,
 }
 impl Client {
     pub(in crate::policy_shadow::policy_custody::services) fn new(selection:Selection,histories:ProductionServiceHistoricalKeyringsV4,
-        owner:Arc<guest::native_guest::AdmittedGuest>,expected_configurations:&BTreeMap<TrustedHostServiceRoleV3,Sha256Digest>)
+        owner:Arc<guest::native_guest::AdmittedGuest>,expected_configurations:&BTreeMap<TrustedHostServiceRoleV3,Sha256Digest>,retain_original:bool)
         ->Result<Self,ServiceRunnerError>{
         selection.validate()?;owner.check().map_err(|_|invalid())?;require(owner.commitment_bridge_selected())?;
         let original=owner.guest_binding();let mut grants=BTreeMap::new();let mut heads=BTreeMap::new();let mut first=None;
@@ -50,12 +50,12 @@ impl Client {
             if let Some(expected)=&first {require(expected==&common)?;}else{first=Some(common);}
             heads.insert(role,p.initial_head_sha256.clone());grants.insert(role,grant);
         }
-        Ok(Self{grants,heads,histories,owner,attempted:BTreeSet::new(),started:None,pending:None,poisoned:false})
+        Ok(Self{grants,heads,histories,owner,attempted:BTreeSet::new(),started:None,pending:None,completed_original:None,retain_original,poisoned:false})
     }
     pub(in crate::policy_shadow::policy_custody::services) fn begin(&mut self,
         request:&super::super::super::production_dispatch::ClosedProductionDispatchRequestV4)->Result<(),ServiceError>{
         self.owner.check().map_err(|_|invalid())?;
-        require(!self.poisoned && self.started.is_none() && self.pending.is_none() && self.attempted.len()<256)?;
+        require(!self.poisoned && self.started.is_none() && self.pending.is_none() && self.completed_original.is_none() && self.attempted.len()<256)?;
         for grant in self.grants.values(){grant.payload.scope.request(request)?;}
         require(boottime_now_nanos().map_err(|_|invalid())?<request.binding().operation_deadline_boottime_nanos
             && self.attempted.insert(request.binding().operation_id_sha256.clone()))?;
@@ -109,6 +109,26 @@ impl Client {
         response.validate(&computation.request,&self.histories.borrowed()).map_err(|_|invalid())?;
         require(response.result==computation.result && self.poisoned && boottime_now_nanos().map_err(|_|invalid())?
             <computation.request.binding().operation_deadline_boottime_nanos)?;
-        self.owner.check().map_err(|_|invalid())?;self.pending=None;self.started=None;self.poisoned=false;Ok(())
+        self.owner.check().map_err(|_|invalid())?;
+        require(self.completed_original.is_none())?;
+        let original=self.pending.take();
+        if self.retain_original{self.completed_original=original;}
+        self.started=None;self.poisoned=false;Ok(())
+    }
+    /// Transfer only the actual already verified computation from this definite
+    /// two-service completion. It cannot be recreated by lookup or retry.
+    pub(in crate::policy_shadow::policy_custody::services) fn take_completed(
+        &mut self,request:&super::super::super::production_dispatch::ClosedProductionDispatchRequestV4,
+        response:&ClosedProductionDispatchResponseV4)->Result<Option<serde_json::Value>,ServiceError>{
+        self.owner.check().map_err(|_|invalid())?;
+        if !self.retain_original{return Ok(None);}
+        require(!self.poisoned)?;
+        self.poisoned=true;
+        let original=self.completed_original.take().ok_or_else(invalid)?;
+        require(original.request==*request && original.result==response.result
+            && original.result_sha256==response.result_sha256)?;
+        response.validate(request,&self.histories.borrowed()).map_err(|_|invalid())?;
+        let original=serde_json::to_value(original).map_err(|_|invalid())?;
+        self.poisoned=false;Ok(Some(original))
     }
 }

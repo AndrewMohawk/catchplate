@@ -9,7 +9,7 @@ pub(super) struct Opening {
     gate:Weak<GateState>,generation:policy_shadow::Sha256Digest,ingress:u64,
     request_binding:policy_shadow::Sha256Digest,request_commitment:policy_shadow::Sha256Digest,
     opening:policy_shadow::Sha256Digest,phase:Mutex<Phase>,
-    details_selected:bool,
+    details_selected:bool,native_early_sampling:bool,facts_attempted:std::sync::atomic::AtomicBool,
 }
 enum Phase {
     Open, Terminal(policy_shadow::Sha256Digest),
@@ -78,6 +78,25 @@ impl CheckpointAttempt {
 }
 impl Opening {
     pub(super) fn details_selected(&self)->bool {self.details_selected}
+    pub(super) fn protected_request(&self,facts:&policy_shadow::ProtectedRequestFacts,observed:i64)->Result<Option<Value>,String>{
+        if !self.native_early_sampling{return Ok(None);}
+        let state=self.gate.upgrade().ok_or("facts original lost its actual serving owner")?;
+        let result=(||{
+            let phase=self.phase.try_lock().map_err(|_|"facts lifecycle busy")?;
+            if !self.details_selected || !matches!(&*phase,Phase::Terminal(_))
+                || self.facts_attempted.swap(true,std::sync::atomic::Ordering::AcqRel) {
+                return Err("facts commitment requires its sole actual post-terminal attempt".into());
+            }
+            let commitment=state.policy_shadow_generation_control.as_ref().ok_or("facts generation owner absent")?
+                .commit_native_request_facts(&self.generation,self.ingress,observed,facts)?;
+            Ok(Some(json!({"apiVersion":"serverware.nativeProtectedRequestCommitment/v1",
+                "openingReceiptSha256":self.opening,"samplingCommitmentSha256":self.request_commitment,
+                "computationOriginal":commitment.native_computation_original().ok_or("actual computation absent")?})))
+        })();
+        if result.is_err(){state.policy_shadow.fail_native_observation();}
+        result
+    }
+    pub(super) fn requires_protected_request(&self)->bool{self.details_selected && self.native_early_sampling}
     pub(super) fn completed_lifecycle(&self,dispatch:bool)->Result<Value,String> {
         let phase=self.phase.try_lock().map_err(|_|"native lifecycle observation still active")?;
         let (terminal,request,response)=match (&*phase,dispatch) {
@@ -99,7 +118,11 @@ impl Opening {
         };
         Ok(Self{gate,generation:admission.generation_id().clone(),ingress:admission.ingress_sequence(),
             request_binding:admission.request_binding_sha256().clone(),request_commitment:admission.request_commitment_sha256().clone(),
-            opening:admission.opening_spill_receipt().signed_receipt_sha256().clone(),phase:Mutex::new(Phase::Open),details_selected})
+            opening:admission.opening_spill_receipt().signed_receipt_sha256().clone(),phase:Mutex::new(Phase::Open),details_selected,
+            native_early_sampling:admission.sampling().uses_native_early_sampling()
+                && state.policy_shadow_generation_control.as_ref().ok_or("facts selector has no actual generation owner")?
+                    .native_request_facts_selected()?,
+            facts_attempted:std::sync::atomic::AtomicBool::new(false)})
     }
     pub(super) fn append(&self,receipt:&policy_shadow::VerifiedShadowSpillReceipt)->Result<(),String> {
         let state=self.gate.upgrade().ok_or("runtime original outlived actual serving owner")?;

@@ -7,6 +7,7 @@ Its data is not a verification token, Fleet signature or activation permission.
 from serverware import authority_policy_canary as p
 from serverware import authority_policy_canary_native_observation_originals as originals
 from serverware import authority_policy_canary_native_observation_semantics as semantics
+from serverware import authority_policy_canary_native_opening as opening_profile
 
 PROFILE = "serverware.nativePolicyObservationResult/v1"
 _TERMINAL = frozenset({"active-pre-dispatch-terminal", "response-terminal-appended"})
@@ -45,10 +46,13 @@ def readiness_observations(state, record, compiler, *, admitted):
     p.require(list(admissions) == list(range(first, first + len(admissions))))
     results, evaluated = [], set()
     for sequence, (opening, opening_receipt) in admissions.items():
+        native_early = opening[0] == opening_profile.EARLY_EVENT
+        decision = (opening_profile.early_sampling(opening, opening_receipt, opening[1])
+            if native_early else opening[3]["decision"])
         events = events_by_ingress[sequence]
         terminal_receipt = request_receipt = response_receipt = None
         request_original = response_original = None
-        if opening[3]["decision"] == "excluded-by-assignment":
+        if decision == "excluded-by-assignment":
             event, _ = _one(events, "sampled-out")
             p.require(len(events) == 1 and sequence not in detailed
                 and event["responseFactsSha256"] == opening_receipt["request_commitment_sha256"],
@@ -56,7 +60,7 @@ def readiness_observations(state, record, compiler, *, admitted):
             result = {"status": "excluded", "reason": "deterministic-assignment-sampling"}
             facts = {"state": "unavailable", "reason": "deterministic-assignment-sampling"}
         else:
-            p.require(opening[3]["decision"] == "included" and sequence in detailed
+            p.require(decision == "included" and sequence in detailed
                 and not any(event["event"] in {"sampled-out", "transport-excluded"} for event, _ in events),
                 "included ingress lacks its actual detailed evaluation")
             terminals = [(event, receipt) for event, receipt in events if event["event"] in _TERMINAL]
@@ -65,6 +69,9 @@ def readiness_observations(state, record, compiler, *, admitted):
             request, request_receipt = _one(events, "candidate-evaluated")
             p.require(detailed[sequence]["request"] == (request, request_receipt))
             request_original = request["observationOriginal"]
+            if native_early:
+                p.require(request_original["apiVersion"] == originals.REQUEST_V3,
+                    "native early sampling cannot stand in for later captured request facts")
             dispatched = terminal["event"] == "response-terminal-appended"
             if dispatched:
                 response, response_receipt = _one(events, "response-evaluated")
@@ -80,8 +87,16 @@ def readiness_observations(state, record, compiler, *, admitted):
                 terminal_receipt=terminal_receipt, request_receipt=request_receipt,
                 response_receipt=response_receipt, assignment=admitted["assignment"],
                 compiler_payload=analysis, publication=admitted["publication"])
+            if native_early:
+                from serverware import authority_policy_canary_native_request_commitment as protected
+                # The fixed finalization admission has already verified this
+                # actual computation and its exact protected opening/classifier.
+                _, commitment, _ = protected.shape(request_original["protectedRequest"])
+                facts_commitment = p.sha256(p.canonical(commitment))
+            else:
+                facts_commitment = opening_receipt["request_commitment_sha256"]
             facts = {"state": "captured", "capturedAtUnixNanos": request_original["factsCapturedAtUnixNanos"],
-                "requestCommitmentSha256": opening_receipt["request_commitment_sha256"]}
+                "requestCommitmentSha256": facts_commitment}
             evaluated.add(sequence)
         derived = {"apiVersion": PROFILE, "generationId": accounting["generationId"],
             "ingressSequence": sequence, "openingReceiptSha256": opening_receipt["signed_receipt_sha256"],

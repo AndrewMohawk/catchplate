@@ -66,4 +66,14 @@ impl RemoteNativeCustodyClosure {
     pub(in crate::policy_shadow) fn worker_executable_sha256(&self)->&Sha256Digest{&self.0.configuration.manifest.worker_executable_sha256}
     pub(in crate::policy_shadow) fn guest(&self)->&GuestClosureBinding{&self.0.guest}
     pub(in crate::policy_shadow) fn driver(&self)->&Arc<ConstructedDriver>{&self.0.driver}
+    pub(in crate::policy_shadow) fn request_facts_selected(&self)->Result<bool,ShadowError>{
+        self.check()?;
+        let public:serde_json::Value=exact(self.0.driver.public_original())?;
+        let bundle:serde_json::Value=exact(public.get("phaseBundleOriginal").and_then(serde_json::Value::as_str)
+            .ok_or(ShadowError::BindingDrift)?.as_bytes())?;
+        let raw=bundle.get("runtimeOriginal").and_then(serde_json::Value::as_str).ok_or(ShadowError::BindingDrift)?;
+        require(Sha256Digest::compute(raw.as_bytes())==self.0.guest.runtime_configuration_sha256)?;
+        let runtime:serde_json::Value=exact(raw.as_bytes())?;
+        Ok(runtime.get("apiVersion").and_then(serde_json::Value::as_str)==Some("serverware.policyCustodyProductionRpcRuntime/v9"))
+    }
 }

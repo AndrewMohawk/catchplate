@@ -25,6 +25,8 @@ pub(super) mod spool_head_values;
 pub(super) mod spool_head;
 pub(super) mod spool_current;
 pub(super) mod spool_head_client;
+pub(super) mod active_effect_values;
+pub(super) mod active_effect_cleanup;
 pub(super) mod dispatch_service;
 pub(super) mod generation_certification;
 pub(super) mod generation_recovery;
@@ -308,15 +310,21 @@ struct RuntimeConfigHeaderV3 {
     spool_head:Option<spool_head::Selection>,
     #[serde(default,skip_serializing_if="Option::is_none")]
     spool_current:Option<spool_current::Selection>,
+    #[serde(default,skip_serializing_if="Option::is_none")]
+    spool_cleanup:Option<active_effect_cleanup::Selection>,
 }
 
 impl RuntimeConfigHeaderV3 {
     fn validate(&self) -> Result<(), ServiceRunnerError> {
         self.expected_peer.checked()?;
-        if !matches!((self.api_version.as_str(),self.generation_admission.as_ref(),self.dispatch_admission.as_ref(),self.spool_head.as_ref(),self.spool_current.as_ref()),
+        let ordinary_shape=matches!((self.api_version.as_str(),self.generation_admission.as_ref(),self.dispatch_admission.as_ref(),self.spool_head.as_ref(),self.spool_current.as_ref()),
                 (SERVICE_RUNTIME_CONFIG_VERSION,None,None,None,None)|(generation_service::RUNTIME,Some(_),None,None,None)
                 |(dispatch_service::RUNTIME,Some(_),Some(_),None,None)
-                |(spool_head::RUNTIME,Some(_),Some(_),Some(_),None)|(spool_head::RUNTIME,Some(_),Some(_),None,Some(_)))
+                |(spool_head::RUNTIME,Some(_),Some(_),Some(_),None)|(spool_head::RUNTIME,Some(_),Some(_),None,Some(_)));
+        let effects_shape=self.api_version==active_effect_cleanup::RUNTIME && self.generation_admission.is_some()
+            && matches!((self.dispatch_admission.as_ref(),self.spool_head.as_ref(),self.spool_current.as_ref(),self.spool_cleanup.as_ref()),
+                (Some(_),Some(_),None,None)|(Some(_),None,Some(_),None)|(None,None,None,Some(_)));
+        if !(ordinary_shape && self.spool_cleanup.is_none() || effects_shape)
             || self.startup_timeout_millis == 0
             || self.startup_timeout_millis
                 > MAX_STARTUP_TIMEOUT_MILLIS
@@ -353,7 +361,7 @@ impl RuntimeConfigHeaderV3 {
                 .as_os_str()
                 .as_bytes()
                 .contains(&0)
-            || self.activation_directory_identities.len() > 2+usize::from(self.generation_admission.is_some())+usize::from(self.dispatch_admission.is_some())+usize::from(self.spool_head.is_some())+usize::from(self.spool_current.is_some())
+            || self.activation_directory_identities.len() > 2+usize::from(self.generation_admission.is_some())+usize::from(self.dispatch_admission.is_some())+usize::from(self.spool_head.is_some())+usize::from(self.spool_current.is_some())+usize::from(self.spool_cleanup.is_some())
         {
             return Err(ServiceRunnerError::invalid(
                 "service runtime config header is incomplete or invalid",
@@ -383,6 +391,10 @@ impl RuntimeConfigHeaderV3 {
         if let Some(selection)=&self.spool_current {
             if selection.grant_fd_name!=spool_current::GRANT_FD {return Err(ServiceRunnerError::invalid("spool current grant descriptor name changed"));}
             self.activation_directory_identity(spool_current::DIRECTORY)?;
+        }
+        if let Some(selection)=&self.spool_cleanup {
+            if selection.grant_fd_name!=active_effect_cleanup::GRANT_FD {return Err(ServiceRunnerError::invalid("active effect cleanup grant descriptor changed"));}
+            self.activation_directory_identity(active_effect_cleanup::DIRECTORY)?;
         }
         for (name, identity) in
             &self.activation_directory_identities
@@ -422,7 +434,7 @@ impl RuntimeConfigHeaderV3 {
             &self.authority_history_manifest_credential,
             MAX_CONFIG_BYTES,
         )?;
-        let guest_runtime=matches!(self.api_version.as_str(),generation_service::RUNTIME|dispatch_service::RUNTIME|spool_head::RUNTIME);
+        let guest_runtime=matches!(self.api_version.as_str(),generation_service::RUNTIME|dispatch_service::RUNTIME|spool_head::RUNTIME|active_effect_cleanup::RUNTIME);
         let exact_original_pinned_by_guest = guest_runtime
             && matches!(credentials,CredentialDirectory::Guest(_));
         if (guest_runtime && !exact_original_pinned_by_guest)
@@ -1312,6 +1324,7 @@ fn run_cleanup_authorization_consumer_loaded(
     loaded.value.runtime.validate()?;
     let mut generation=generation_service::Gate::open(&loaded,&loaded.value.runtime,&bootstrap,&mut activation,
         TrustedHostServiceRoleV3::CleanupAuthorizationConsumer)?;
+    let mut effects=active_effect_cleanup::Gate::open(&loaded,&loaded.value.runtime,&bootstrap,&mut activation)?;
     let _authority_history =
         loaded.value.runtime.load_authority_history(
             &loaded.credentials,
@@ -1526,6 +1539,7 @@ fn run_cleanup_authorization_consumer_loaded(
             if let Some(gate)=&mut generation {
                 if let Some(reply)=gate.handle(&request,&server)? {return Ok(reply);}
             }
+            if let Some(gate)=&mut effects {if let Some(reply)=gate.handle(&request,&server)? {return Ok(reply);}}
             server.handle_exact_request_frame(&request)
         },
     )
@@ -3079,6 +3093,7 @@ fn require_exact_directory_identity_names(
     if runtime.dispatch_admission.is_some() {required_names.insert(dispatch_service::DIRECTORY);}
     if runtime.spool_head.is_some() {required_names.insert(spool_head::DIRECTORY);}
     if runtime.spool_current.is_some() {required_names.insert(spool_current::DIRECTORY);}
+    if runtime.spool_cleanup.is_some() {required_names.insert(active_effect_cleanup::DIRECTORY);}
     if !unique
         || runtime
             .activation_directory_identities

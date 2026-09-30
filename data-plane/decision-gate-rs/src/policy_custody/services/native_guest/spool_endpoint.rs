@@ -9,7 +9,8 @@ use crate::policy_shadow::policy_custody::protocol::domain_separated_signature_p
 use super::spool_signer::{self as signer,Kind};
 use std::os::fd::OwnedFd;
 impl Kind {
-    pub(super) fn endpoint(self)->peer::EndpointKind{match self{Self::Ingress=>peer::EndpointKind::IngressAdmission,Self::Ledger=>peer::EndpointKind::CommitRequest,Self::Terminal=>peer::EndpointKind::TerminalAppend}}
+    pub(super) fn endpoint(self)->peer::EndpointKind{match self{Self::Ingress=>peer::EndpointKind::IngressAdmission,Self::Ledger=>peer::EndpointKind::CommitRequest,Self::Terminal=>peer::EndpointKind::TerminalAppend,
+        Self::DispatchBarrier=>peer::EndpointKind::DispatchBarrier,Self::ActiveEffectBarrier=>peer::EndpointKind::ActiveEffectBarrier,Self::ActiveEffectCommit=>peer::EndpointKind::ActiveEffectCommit}}
 }
 pub(crate) struct Prepared {work:signer::Prepared,listener:OwnedFd,inspection:OwnedFd,kind:Kind}
 impl Prepared {

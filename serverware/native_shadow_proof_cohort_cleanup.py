@@ -30,7 +30,7 @@ CHILD_FIELDS = ("processId", "startTimeTicks", "pidfdDevice", "pidfdInode", "ter
 def configuration(value):
     p.require(value["apiVersion"] in ("serverware.nativeShadowProofCohortConfiguration/v2",
         "serverware.nativeShadowProofCohortConfiguration/v3", "serverware.nativeShadowProofCohortConfiguration/v4",
-        "serverware.nativeShadowProofCohortConfiguration/v5"))
+        "serverware.nativeShadowProofCohortConfiguration/v5", "serverware.nativeShadowProofCohortConfiguration/v6"))
     selected = p.fields(value["cleanup"], ("authority", "scopeId", "journal", "genesisSha256"))
     authority = p.fields(selected["authority"], ("publicKeyBase64url", "keyId"))
     raw = p.decoded(authority["publicKeyBase64url"], size=32)
@@ -56,7 +56,8 @@ def _api(kind, config):
     version = {"serverware.nativeShadowProofCohortConfiguration/v2": 1,
                "serverware.nativeShadowProofCohortConfiguration/v3": 2,
                "serverware.nativeShadowProofCohortConfiguration/v4": 3,
-               "serverware.nativeShadowProofCohortConfiguration/v5": 4}[config["apiVersion"]]
+               "serverware.nativeShadowProofCohortConfiguration/v5": 4,
+               "serverware.nativeShadowProofCohortConfiguration/v6": 5}[config["apiVersion"]]
     p.require(kind in ("Cleanup", "CleanupResult", "Terminal"))
     return "serverware.nativeShadowProofCohort" + kind + "/v" + str(version)
 
@@ -65,7 +66,8 @@ def _domain(config):
     return {"serverware.nativeShadowProofCohortCleanup/v1": DOMAIN,
             "serverware.nativeShadowProofCohortCleanup/v2": SIX_DOMAIN,
             "serverware.nativeShadowProofCohortCleanup/v3": b"serverware.nativeShadowProofCohortCleanup.signature/v3\0",
-            "serverware.nativeShadowProofCohortCleanup/v4": b"serverware.nativeShadowProofCohortCleanup.signature/v4\0"}[_api("Cleanup", config)]
+            "serverware.nativeShadowProofCohortCleanup/v4": b"serverware.nativeShadowProofCohortCleanup.signature/v4\0",
+            "serverware.nativeShadowProofCohortCleanup/v5": b"serverware.nativeShadowProofCohortCleanup.signature/v5\0"}[_api("Cleanup", config)]
 
 
 def authorize(*, configuration_raw, precreation_raw, observations_raw, release_raw, payload_raw,

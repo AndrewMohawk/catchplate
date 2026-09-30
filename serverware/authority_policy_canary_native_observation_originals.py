@@ -14,6 +14,7 @@ EVENT_V2 = "serverware.policyShadowRuntimeAccountingEvent/v2"
 REQUEST = "serverware.nativeRequestObservationOriginal/v1"
 RESPONSE = "serverware.nativeResponseObservationOriginal/v1"
 REQUEST_V2 = "serverware.nativeRequestObservationOriginal/v2"
+REQUEST_V3 = "serverware.nativeRequestObservationOriginal/v3"
 RESPONSE_V2 = "serverware.nativeResponseObservationOriginal/v2"
 MAX_BYTES, MAX_NODES, MAX_DEPTH = 8 * 1024, 512, 32
 LATENCY = frozenset({"factsCaptureNanos", "activeEvaluationNanos", "candidateEvaluationNanos",
@@ -216,12 +217,17 @@ def latency(value):
 
 
 def request_original(value, event, observed):
-    exact(value, {"apiVersion", "pureActiveEvaluation", "candidateEvaluation", "finalActiveEnforcement",
-        "factsCapturedAtUnixNanos", "latencySamples"})
-    p.require(value["apiVersion"] in {REQUEST, REQUEST_V2})
+    fields = {"apiVersion", "pureActiveEvaluation", "candidateEvaluation", "finalActiveEnforcement",
+        "factsCapturedAtUnixNanos", "latencySamples"}
+    p.require(type(value) is dict)
+    exact(value, fields | ({"protectedRequest"} if value.get("apiVersion") == REQUEST_V3 else set()))
+    p.require(value["apiVersion"] in {REQUEST, REQUEST_V2, REQUEST_V3})
     active, candidate, final = (value[name] for name in ("pureActiveEvaluation", "candidateEvaluation", "finalActiveEnforcement"))
-    evaluation(active, False, detailed=value["apiVersion"] == REQUEST_V2)
-    evaluation(candidate, True, detailed=value["apiVersion"] == REQUEST_V2)
+    evaluation(active, False, detailed=value["apiVersion"] in {REQUEST_V2, REQUEST_V3})
+    evaluation(candidate, True, detailed=value["apiVersion"] in {REQUEST_V2, REQUEST_V3})
+    if value["apiVersion"] == REQUEST_V3:
+        from serverware import authority_policy_canary_native_request_commitment as protected
+        protected.shape(value["protectedRequest"])
     p.require(active["policyPlanSha256"] == event["activePlanSha256"]
         and candidate["policyPlanSha256"] == event["candidatePlanSha256"]
         and candidate["disposition"] == event["candidateDisposition"])
@@ -394,7 +400,7 @@ def retained_constraints(state, evaluated, raw):
     return expected
 
 
-def validate_protected_originals(state, record, receipts, publication, load):
+def validate_protected_originals(state, record, receipts, publication, load, *, assignment, context):
     """After actual receipt signatures/current scope admission, join originals.
 
     Individual callers supply protected opening/terminal/request predecessors;
@@ -408,7 +414,12 @@ def validate_protected_originals(state, record, receipts, publication, load):
     if not selected:
         return {}
     terminals, requests, responses, pair = {}, {}, {}, None
+    openings = {}
     for event, receipt in events:
+        if type(event) is list:
+            p.require(receipt["ingress_sequence"] not in openings, "duplicate protected opening")
+            openings[receipt["ingress_sequence"]] = (event, receipt)
+            continue
         if type(event) is not dict or receipt["ingress_sequence"] not in selected:
             continue
         sequence = receipt["ingress_sequence"]
@@ -443,10 +454,15 @@ def validate_protected_originals(state, record, receipts, publication, load):
                     if pair is None:
                         pair = classifier.retained_pair(state, record)
                     classifier.require_binding(pair, lane, evaluated["authorityBinding"])
-                if original["apiVersion"] == REQUEST_V2 and evaluated["responseConstraints"] is not None:
+                if original["apiVersion"] in {REQUEST_V2, REQUEST_V3} and evaluated["responseConstraints"] is not None:
                     from serverware import db
                     management = db.loads(publication["management_request_json"], None)
                     retained_constraints(state, evaluated, management[lane + "PolicyBundle"])
+            if original["apiVersion"] == REQUEST_V3:
+                from serverware import authority_policy_canary_native_request_commitment as protected
+                p.require(sequence in openings, "later facts computation lacks its exact signed early opening")
+                protected.verify(state, record, original, receipt, openings[sequence],
+                    assignment=assignment, context=context, publication=publication)
             requests[sequence] = (event, receipt)
         else:
             p.require(sequence not in responses and sequence in requests and terminal["event"] == "response-terminal-appended")
@@ -459,7 +475,7 @@ def validate_protected_originals(state, record, receipts, publication, load):
                 p.require(event[name] == terminal[name])
             comparison = original["response"]
             prior = request["observationOriginal"]
-            p.require((original["apiVersion"] == RESPONSE_V2) == (prior["apiVersion"] == REQUEST_V2),
+            p.require((original["apiVersion"] == RESPONSE_V2) == (prior["apiVersion"] in {REQUEST_V2, REQUEST_V3}),
                 "native observation successor cannot mix prior preimage profiles")
             candidate = comparison["candidateValidation"]
             p.require(comparison["boundActiveValidation"]["activePolicySnapshotSha256"] == publication["active_policy_hash"]

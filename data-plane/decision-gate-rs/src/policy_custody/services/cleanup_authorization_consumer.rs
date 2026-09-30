@@ -1831,6 +1831,13 @@ impl super::generation_service::Owner for TrustedHostNoTeeCleanupAuthorizationCo
     }
 }
 
+impl super::active_effect_cleanup::Owner for TrustedHostNoTeeCleanupAuthorizationConsumerServer {
+    fn sign_active_effect_cleanup(&self, input: &super::active_effect_cleanup::Input)
+        -> Result<super::active_effect_values::Cleanup, ServiceError> {
+        input.sign(&self.signing_key)
+    }
+}
+
 impl TrustedHostNoTeeCleanupAuthorizationConsumerServer {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn new(

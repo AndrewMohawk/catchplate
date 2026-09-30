@@ -190,7 +190,13 @@ struct Observations {api_version:&'static str,configuration_sha256:Sha256Digest,
     #[serde(skip_serializing_if="Option::is_none")]
     ingress_admission:Option<ChildOriginal>,
     #[serde(skip_serializing_if="Option::is_none")]
-    terminal_append:Option<ChildOriginal>}
+    terminal_append:Option<ChildOriginal>,
+    #[serde(skip_serializing_if="Option::is_none")]
+    dispatch_barrier:Option<ChildOriginal>,
+    #[serde(skip_serializing_if="Option::is_none")]
+    active_effect_barrier:Option<ChildOriginal>,
+    #[serde(skip_serializing_if="Option::is_none")]
+    active_effect_commit:Option<ChildOriginal>}
 struct Program {launch:Original,launch_bytes:Vec<u8>,image_original:Original,image:image::Image,
     files:FileAdmission,activation:BTreeMap<String,OwnedFd>,inspection:Inspection,remote:OwnedFd}
 struct Cohort {
@@ -242,12 +248,15 @@ impl Cohort {
             let identity=self.children[index].parked_identity()?;
             Ok(ChildOriginal{process_id:identity.0,start_time_ticks:identity.1,executable:self.executables[index].observation()?})
         };
-        let original=Observations{api_version:if self.admission.eight(){"serverware.nativeShadowProofCohortOriginals/v4"}else if self.admission.seven(){"serverware.nativeShadowProofCohortOriginals/v3"}else if self.admission.six(){"serverware.nativeShadowProofCohortOriginals/v2"}else{SOURCE_API},configuration_sha256:self.admission.configuration_sha256(),
+        let original=Observations{api_version:if self.admission.eleven(){"serverware.nativeShadowProofCohortOriginals/v5"}else if self.admission.eight(){"serverware.nativeShadowProofCohortOriginals/v4"}else if self.admission.seven(){"serverware.nativeShadowProofCohortOriginals/v3"}else if self.admission.six(){"serverware.nativeShadowProofCohortOriginals/v2"}else{SOURCE_API},configuration_sha256:self.admission.configuration_sha256(),
             precreation_sha256:self.admission.precreation_sha256(),invocation_id:self.admission.invocation_id().into(),
             retrieval:child(0)?,persistence:child(1)?,trusted_time:child(2)?,generation_install:child(3)?,bridge:child(4)?,
             commit_request:if self.admission.six(){Some(child(5)?)}else{None},
             ingress_admission:if self.admission.seven(){Some(child(6)?)}else{None},
-            terminal_append:if self.admission.eight(){Some(child(7)?)}else{None}};
+            terminal_append:if self.admission.eight(){Some(child(7)?)}else{None},
+            dispatch_barrier:if self.admission.eleven(){Some(child(8)?)}else{None},
+            active_effect_barrier:if self.admission.eleven(){Some(child(9)?)}else{None},
+            active_effect_commit:if self.admission.eleven(){Some(child(10)?)}else{None}};
         let bytes=canonical_json_bytes(&original)?;self.check_startup()?;Ok(bytes)
     }
     fn release(&mut self,bytes:&[u8],observed:&[u8],rights:Vec<OwnedFd>)->Result<(),ShadowError> {
@@ -261,7 +270,7 @@ impl Cohort {
             let files=admit_files(&selected.delivery_configuration.path,selected.delivery_configuration.sha256.clone(),
                 &selected.delivery.path,selected.delivery.sha256.clone()).map_err(fail)?;
             self.admission.join(index,&selected,&files)?;
-            require_role(index,&service,self.admission.six(),self.admission.seven(),self.admission.eight())?;
+            require_role(index,&service,self.admission.six(),self.admission.seven(),self.admission.eight(),self.admission.eleven())?;
             let mut activation=BTreeMap::new();
             for (slot,entry) in files.payload.activation.iter().enumerate() {
                 require(entry.fd==6+slot as i32)?;
@@ -272,7 +281,7 @@ impl Cohort {
                     && ([libc::S_IFDIR,libc::S_IFSOCK].contains(&(stat.st_mode&libc::S_IFMT))
                         || (matches!(&service,SelectedService::PersistenceLocked(_)) && slot==2
                             && entry.name=="persistence-lock" && stat.st_mode&libc::S_IFMT==libc::S_IFREG)
-                        || (matches!(&service,SelectedService::LedgerRetrieval(_)|SelectedService::CompletionRetrieval(_)) && slot==3
+                        || (matches!(&service,SelectedService::LedgerRetrieval(_)|SelectedService::CompletionRetrieval(_)|SelectedService::EffectRetrieval(_)) && slot==3
                             && entry.name=="ledger-spool-lock" && stat.st_mode&libc::S_IFMT==libc::S_IFREG))
                     && all.insert((stat.st_dev,stat.st_ino))
                     && activation.insert(entry.name.clone(),fd).is_none())?;
@@ -331,24 +340,35 @@ impl Cohort {
 }
 // The exact slot does not create a service. Unknown or not-yet-connected
 // selectors refuse before ANY child is released.
-fn require_role(index:usize,service:&SelectedService,six:bool,seven:bool,eight:bool)->Result<(),ShadowError> {
+fn require_role(index:usize,service:&SelectedService,six:bool,seven:bool,eight:bool,eleven:bool)->Result<(),ShadowError> {
     require(match (index,service) {
         (0,SelectedService::Retrieval(_))=>!seven,
         (0,SelectedService::LedgerRetrieval(_))=>seven&&!eight,
-        (0,SelectedService::CompletionRetrieval(_))=>eight,
+        (0,SelectedService::CompletionRetrieval(_))=>eight&&!eleven,
+        (0,SelectedService::EffectRetrieval(_))=>eleven,
         (1,SelectedService::Persistence(_))|(1,SelectedService::PersistenceLocked(_))|
         (2,SelectedService::TrustedTime(_))|(3,SelectedService::Generation(_))=>true,
         (4,SelectedService::ProofBridge(_))=>!six,
         (4,SelectedService::CommitmentBridge(_))|(5,SelectedService::CommitRequest(_))=>six&&!seven,
         (4,SelectedService::SpoolBridge(_))|(5,SelectedService::LedgerSpool(_))=>seven&&!eight,
         (6,SelectedService::Ingress(_))=>seven,
-        (4,SelectedService::TerminalBridge(_))|(5,SelectedService::CompletionLedgerSpool(_))|(7,SelectedService::TerminalSpool(_))=>eight,
+        (4,SelectedService::TerminalBridge(_))=>eight&&!eleven,
+        (5,SelectedService::CompletionLedgerSpool(_))|(7,SelectedService::TerminalSpool(_))=>eight,
+        (4,SelectedService::ActiveEffectBridge(_))|(8,SelectedService::DispatchSpool(_))|
+        (9,SelectedService::ActiveEffectBarrier(_))|(10,SelectedService::ActiveEffectCommit(_))=>eleven,
         _=>false,
     })
 }
 fn assigned_peers(service:&SelectedService,files:&FileAdmission)
     ->Result<Vec<(usize,super::super::super::super::ExpectedPeerCredentialV3)>,ShadowError> {
     match service {
+        SelectedService::DispatchSpool(pin)|SelectedService::ActiveEffectBarrier(pin)|SelectedService::ActiveEffectCommit(pin)=>{
+            let original=pin.open(65536)?;let grant:admission::spool_signer::Configuration=exact(&original.read(65536).map_err(fail)?)?;
+            let kind=match service{SelectedService::DispatchSpool(_)=>admission::spool_signer::Kind::DispatchBarrier,
+                SelectedService::ActiveEffectBarrier(_)=>admission::spool_signer::Kind::ActiveEffectBarrier,
+                _=>admission::spool_signer::Kind::ActiveEffectCommit};
+            require(grant.kind()?==kind)?;grant.validate_shape()?;Ok(vec![(4,grant.expected_peer().clone())])
+        }
         SelectedService::LedgerSpool(pin)|SelectedService::CompletionLedgerSpool(pin)|SelectedService::Ingress(pin)|SelectedService::TerminalSpool(pin)=>{
             let original=pin.open(65536)?;let grant:admission::spool_signer::Configuration=exact(&original.read(65536).map_err(fail)?)?;
             let kind=match service{SelectedService::Ingress(_)=>admission::spool_signer::Kind::Ingress,
@@ -356,9 +376,10 @@ fn assigned_peers(service:&SelectedService,files:&FileAdmission)
             require(grant.completion_selected()==matches!(service,SelectedService::CompletionLedgerSpool(_)|SelectedService::TerminalSpool(_)))?;
             require(grant.kind()?==kind)?;grant.validate_shape()?;Ok(vec![(4,grant.expected_peer().clone())])
         }
-        SelectedService::LedgerRetrieval(pin)|SelectedService::CompletionRetrieval(pin)=>{
+        SelectedService::LedgerRetrieval(pin)|SelectedService::CompletionRetrieval(pin)|SelectedService::EffectRetrieval(pin)=>{
             let original=pin.open(65536)?;let grant:admission::ledger_retrieval::Configuration=exact(&original.read(65536).map_err(fail)?)?;
-            require(grant.completion_selected()==matches!(service,SelectedService::CompletionRetrieval(_)))?;
+            require(grant.completion_selected()==matches!(service,SelectedService::CompletionRetrieval(_)|SelectedService::EffectRetrieval(_))
+                && grant.effects_selected()==matches!(service,SelectedService::EffectRetrieval(_)))?;
             grant.validate_shape()?;Ok(vec![(4,grant.expected_peer().clone())])
         }
         SelectedService::CommitRequest(pin)=>{
@@ -386,11 +407,12 @@ fn assigned_peers(service:&SelectedService,files:&FileAdmission)
             let grant:admission::trusted_time::Configuration=exact(&original.read(65536).map_err(fail)?)?;
             grant.validate_shape()?;Ok(vec![(4,grant.expected_peer().clone())])
         }
-        SelectedService::ProofBridge(_)|SelectedService::CommitmentBridge(_)|SelectedService::SpoolBridge(_)|SelectedService::TerminalBridge(_)=>{
-            let terminal=matches!(service,SelectedService::TerminalBridge(_));
-            let spool=matches!(service,SelectedService::SpoolBridge(_)|SelectedService::TerminalBridge(_));
-            let commitment=matches!(service,SelectedService::CommitmentBridge(_)|SelectedService::SpoolBridge(_)|SelectedService::TerminalBridge(_));
-            let mut assigned=if terminal{proof_client::assigned_peers_terminal(files)?}else if spool{proof_client::assigned_peers_spool(files)?}else if commitment {proof_client::assigned_peers_selected(files,true)?}
+        SelectedService::ProofBridge(_)|SelectedService::CommitmentBridge(_)|SelectedService::SpoolBridge(_)|SelectedService::TerminalBridge(_)|SelectedService::ActiveEffectBridge(_)=>{
+            let effects=matches!(service,SelectedService::ActiveEffectBridge(_));
+            let terminal=matches!(service,SelectedService::TerminalBridge(_)|SelectedService::ActiveEffectBridge(_));
+            let spool=matches!(service,SelectedService::SpoolBridge(_)|SelectedService::TerminalBridge(_)|SelectedService::ActiveEffectBridge(_));
+            let commitment=matches!(service,SelectedService::CommitmentBridge(_)|SelectedService::SpoolBridge(_)|SelectedService::TerminalBridge(_)|SelectedService::ActiveEffectBridge(_));
+            let mut assigned=if effects{proof_client::assigned_peers_effects(files)?}else if terminal{proof_client::assigned_peers_terminal(files)?}else if spool{proof_client::assigned_peers_spool(files)?}else if commitment {proof_client::assigned_peers_selected(files,true)?}
                 else {proof_client::assigned_peers(files)?};
             let mut peers=Vec::new();
             for (index,kind) in [retrieval_peer::EndpointKind::Retrieval,retrieval_peer::EndpointKind::Persistence,
@@ -400,6 +422,8 @@ fn assigned_peers(service:&SelectedService,files:&FileAdmission)
             if commitment {peers.push((5,assigned.remove(&retrieval_peer::EndpointKind::CommitRequest).ok_or(ShadowError::BindingDrift)?));}
             if spool{peers.push((6,assigned.remove(&retrieval_peer::EndpointKind::IngressAdmission).ok_or(ShadowError::BindingDrift)?));}
             if terminal{peers.push((7,assigned.remove(&retrieval_peer::EndpointKind::TerminalAppend).ok_or(ShadowError::BindingDrift)?));}
+            if effects{for (index,kind) in [(8,retrieval_peer::EndpointKind::DispatchBarrier),(9,retrieval_peer::EndpointKind::ActiveEffectBarrier),
+                (10,retrieval_peer::EndpointKind::ActiveEffectCommit)]{peers.push((index,assigned.remove(&kind).ok_or(ShadowError::BindingDrift)?));}}
             require(assigned.is_empty())?;Ok(peers)
         }
         _=>Err(ShadowError::CustodyUnavailable),
@@ -408,6 +432,19 @@ fn assigned_peers(service:&SelectedService,files:&FileAdmission)
 pub(super) fn prepare_inspection(service:SelectedService,files:&FileAdmission,activation:&BTreeMap<String,OwnedFd>)
     ->Result<(Inspection,OwnedFd),ShadowError> {
     match service {
+        selected @ (SelectedService::DispatchSpool(_)|SelectedService::ActiveEffectBarrier(_)|SelectedService::ActiveEffectCommit(_))=>{
+            let (pin,kind,endpoint)=match selected {
+                SelectedService::DispatchSpool(pin)=>(pin,admission::spool_signer::Kind::DispatchBarrier,retrieval_peer::EndpointKind::DispatchBarrier),
+                SelectedService::ActiveEffectBarrier(pin)=>(pin,admission::spool_signer::Kind::ActiveEffectBarrier,retrieval_peer::EndpointKind::ActiveEffectBarrier),
+                SelectedService::ActiveEffectCommit(pin)=>(pin,admission::spool_signer::Kind::ActiveEffectCommit,retrieval_peer::EndpointKind::ActiveEffectCommit),
+                _=>return Err(ShadowError::BindingDrift),
+            };
+            let original=pin.open(65536)?;let grant:admission::spool_signer::Configuration=exact(&original.read(65536).map_err(fail)?)?;
+            require(grant.kind()?==kind)?;grant.validate_shape()?;
+            require(activation.len()==1)?;let socket=activation.get(endpoint.listener_name()).ok_or(ShadowError::BindingDrift)?;
+            let (owner,remote)=retrieval_peer::Inspector::prepare_endpoint(original,grant.expected_peer().checked().map_err(fail)?,grant.guest_uid(),socket,endpoint)?;
+            Ok((Inspection::Server(owner),remote))
+        }
         selected @ (SelectedService::LedgerSpool(_)|SelectedService::CompletionLedgerSpool(_)|SelectedService::Ingress(_)|SelectedService::TerminalSpool(_))=>{
             let (pin,expected_kind,completion)=match selected {
                 SelectedService::LedgerSpool(pin)=>(pin,admission::spool_signer::Kind::Ledger,false),
@@ -421,19 +458,21 @@ pub(super) fn prepare_inspection(service:SelectedService,files:&FileAdmission,ac
             require(kind==expected_kind && grant.completion_selected()==completion)?;
             let endpoint=match kind{admission::spool_signer::Kind::Ingress=>retrieval_peer::EndpointKind::IngressAdmission,
                 admission::spool_signer::Kind::Terminal=>retrieval_peer::EndpointKind::TerminalAppend,
-                admission::spool_signer::Kind::Ledger=>retrieval_peer::EndpointKind::CommitRequest};
+                admission::spool_signer::Kind::Ledger=>retrieval_peer::EndpointKind::CommitRequest,
+                _=>return Err(ShadowError::BindingDrift)};
             require(activation.len()==1)?;let socket=activation.get(endpoint.listener_name()).ok_or(ShadowError::BindingDrift)?;
             let (owner,remote)=retrieval_peer::Inspector::prepare_endpoint(original,grant.expected_peer().checked().map_err(fail)?,grant.guest_uid(),socket,endpoint)?;
             Ok((Inspection::Server(owner),remote))
         }
-        selected @ (SelectedService::LedgerRetrieval(_)|SelectedService::CompletionRetrieval(_))=>{
-            let completion=matches!(&selected,SelectedService::CompletionRetrieval(_));
-            let pin=match selected{SelectedService::LedgerRetrieval(pin)|SelectedService::CompletionRetrieval(pin)=>pin,
+        selected @ (SelectedService::LedgerRetrieval(_)|SelectedService::CompletionRetrieval(_)|SelectedService::EffectRetrieval(_))=>{
+            let completion=matches!(&selected,SelectedService::CompletionRetrieval(_)|SelectedService::EffectRetrieval(_));
+            let effects=matches!(&selected,SelectedService::EffectRetrieval(_));
+            let pin=match selected{SelectedService::LedgerRetrieval(pin)|SelectedService::CompletionRetrieval(pin)|SelectedService::EffectRetrieval(pin)=>pin,
                 _=>return Err(ShadowError::BindingDrift)};
             require(activation.len()==4 && activation.contains_key("ledger-spool-store") && activation.contains_key("ledger-spool-lock")
                 && activation.contains_key("retrieval-objects"))?;
             let original=pin.open(65536)?;let grant:admission::ledger_retrieval::Configuration=exact(&original.read(65536).map_err(fail)?)?;
-            require(grant.completion_selected()==completion)?;
+            require(grant.completion_selected()==completion && grant.effects_selected()==effects)?;
             grant.validate_shape()?;let socket=activation.get("retrieval-listener").ok_or(ShadowError::BindingDrift)?;
             let (owner,remote)=retrieval_peer::Inspector::prepare_endpoint(original,grant.expected_peer().checked().map_err(fail)?,grant.guest_uid(),socket,retrieval_peer::EndpointKind::Retrieval)?;
             Ok((Inspection::Server(owner),remote))
@@ -507,6 +546,10 @@ pub(super) fn prepare_inspection(service:SelectedService,files:&FileAdmission,ac
         }
         SelectedService::TerminalBridge(_)=>{
             let (owner,remote)=proof_client::Inspector::prepare_terminal(files,activation)?;
+            Ok((Inspection::ProofClient(owner),remote))
+        }
+        SelectedService::ActiveEffectBridge(_)=>{
+            let (owner,remote)=proof_client::Inspector::prepare_effects(files,activation)?;
             Ok((Inspection::ProofClient(owner),remote))
         }
         _=>Err(ShadowError::CustodyUnavailable),

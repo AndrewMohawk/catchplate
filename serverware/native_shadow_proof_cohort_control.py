@@ -39,7 +39,10 @@ _APIS = {"retrieval": ("serverware.nativeShadowRetrievalGuestLaunch/v1", "retrie
     "bridge": ("serverware.nativeProofBridgeLaunch/v1", "trustedTime"),
     "commitRequest": ("serverware.nativeShadowCommitRequestGuestLaunch/v1", "commitRequest"),
     "ingressAdmission": ("serverware.nativeShadowIngressGuestLaunch/v1", "ingress"),
-    "terminalAppend": ("serverware.nativeShadowTerminalSpoolGuestLaunch/v1", "terminalSpool")}
+    "terminalAppend": ("serverware.nativeShadowTerminalSpoolGuestLaunch/v1", "terminalSpool"),
+    "dispatchBarrier": ("serverware.nativeShadowDispatchBarrierGuestLaunch/v1", "dispatchBarrier"),
+    "activeEffectBarrier": ("serverware.nativeShadowActiveEffectBarrierGuestLaunch/v1", "activeEffectBarrier"),
+    "activeEffectCommit": ("serverware.nativeShadowActiveEffectCommitGuestLaunch/v1", "activeEffectCommit")}
 
 
 def _clock():
@@ -401,17 +404,23 @@ class ParkedProofCohort:
         """Source selection only; never proof that any service is ready."""
         self.check()
         return self._config["apiVersion"] in ("serverware.nativeShadowProofCohortConfiguration/v3", "serverware.nativeShadowProofCohortConfiguration/v4",
-            "serverware.nativeShadowProofCohortConfiguration/v5")
+            "serverware.nativeShadowProofCohortConfiguration/v5", "serverware.nativeShadowProofCohortConfiguration/v6")
 
     def spool_selected(self):
-        """Exact fixed-seven/eight selection, not service or generation readiness."""
+        """Explicit native-spool selection, not service or generation readiness."""
         self.check()
-        return self._config["apiVersion"] in ("serverware.nativeShadowProofCohortConfiguration/v4", "serverware.nativeShadowProofCohortConfiguration/v5")
+        return self._config["apiVersion"] in ("serverware.nativeShadowProofCohortConfiguration/v4", "serverware.nativeShadowProofCohortConfiguration/v5",
+            "serverware.nativeShadowProofCohortConfiguration/v6")
 
     def terminal_selected(self):
-        """The separately authorized fixed-eight profile, not terminal success."""
+        """A separately authorized terminal owner, not terminal success."""
         self.check()
-        return self._config["apiVersion"] == "serverware.nativeShadowProofCohortConfiguration/v5"
+        return self._config["apiVersion"] in ("serverware.nativeShadowProofCohortConfiguration/v5", "serverware.nativeShadowProofCohortConfiguration/v6")
+
+    def effects_selected(self):
+        """Fixed eleven-child inventory, not an effect or dispatch permit."""
+        self.check()
+        return self._config["apiVersion"] == "serverware.nativeShadowProofCohortConfiguration/v6"
 
     def prepare_spool_inputs(self):
         """New physical resources under this exact parked cohort owner."""
@@ -445,6 +454,8 @@ class ParkedProofCohort:
         if self.terminal_selected():
             api = {"bridge": "serverware.nativeProofBridgeLaunch/v4", "commitRequest": "serverware.nativeShadowCommitRequestGuestLaunch/v3",
                    "retrieval": "serverware.nativeShadowRetrievalGuestLaunch/v3"}.get(role, api)
+        if self.effects_selected():
+            api = {"bridge": "serverware.nativeProofBridgeLaunch/v5", "retrieval": "serverware.nativeShadowRetrievalGuestLaunch/v4"}.get(role, api)
         launch = p.fields(p.document(launch_original.raw, profile.MAX_BYTES), ("apiVersion", "keyAdmission", field))
         p.require(launch["apiVersion"] == api)
         nested = launch["keyAdmission"]
@@ -561,7 +572,7 @@ class ParkedProofCohort:
         self._origin(); self._child_live()
         p.require(self._release_sent and not self._cleanup_attempted
                   and self._config["apiVersion"] in ("serverware.nativeShadowProofCohortConfiguration/v2",
-                "serverware.nativeShadowProofCohortConfiguration/v3", "serverware.nativeShadowProofCohortConfiguration/v4", "serverware.nativeShadowProofCohortConfiguration/v5"))
+                "serverware.nativeShadowProofCohortConfiguration/v3", "serverware.nativeShadowProofCohortConfiguration/v4", "serverware.nativeShadowProofCohortConfiguration/v5", "serverware.nativeShadowProofCohortConfiguration/v6"))
         command = cleanup_profile.authorization(authorization_original, self._config_original.raw,
             self._precreate_original.raw, self._observation_bytes, self._release_original, self._boot, _clock())
         for fd, pid, start in self._parked:
@@ -677,7 +688,7 @@ class ParkedProofCohort:
                 self._pidfd = os.pidfd_open(self._child_pid, 0)
             cleanup_end = _clock() + 250_000_000
             if self._config["apiVersion"] in ("serverware.nativeShadowProofCohortConfiguration/v2",
-                "serverware.nativeShadowProofCohortConfiguration/v3", "serverware.nativeShadowProofCohortConfiguration/v4", "serverware.nativeShadowProofCohortConfiguration/v5"):
+                "serverware.nativeShadowProofCohortConfiguration/v3", "serverware.nativeShadowProofCohortConfiguration/v4", "serverware.nativeShadowProofCohortConfiguration/v5", "serverware.nativeShadowProofCohortConfiguration/v6"):
                 cleanup_end = min(cleanup_end, self._cleanup_deadline or self._lifetime, self._lifetime)
             while not _terminal(self._pidfd) and _clock() < cleanup_end:
                 select.select([self._pidfd], [], [], 0.01)
@@ -688,7 +699,7 @@ class ParkedProofCohort:
                 signal.pidfd_send_signal(self._pidfd, signal.SIGKILL)
             cleanup_end = _clock() + 250_000_000
             if self._config["apiVersion"] in ("serverware.nativeShadowProofCohortConfiguration/v2",
-                "serverware.nativeShadowProofCohortConfiguration/v3", "serverware.nativeShadowProofCohortConfiguration/v4", "serverware.nativeShadowProofCohortConfiguration/v5"):
+                "serverware.nativeShadowProofCohortConfiguration/v3", "serverware.nativeShadowProofCohortConfiguration/v4", "serverware.nativeShadowProofCohortConfiguration/v5", "serverware.nativeShadowProofCohortConfiguration/v6"):
                 cleanup_end = min(cleanup_end, self._cleanup_deadline or self._lifetime, self._lifetime)
             while (not _terminal(self._pidfd) or any(not _terminal(fd) for fd, _, _ in self._parked)) and _clock() < cleanup_end:
                 select.select([], [], [], 0.01)

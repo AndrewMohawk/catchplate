@@ -239,7 +239,7 @@ fn admit_files(configuration_path:&Path,expected_configuration_sha256:Sha256Dige
 }
 #[derive(Clone,Copy)]
 pub(super) enum NativeLock {Persistence,Ledger}
-fn take_activation(entries:&[Activation],dispatch_selected:bool,spool_selected:bool,native_lock:Option<NativeLock>)
+fn take_activation(entries:&[Activation],dispatch_selected:bool,spool_selected:bool,cleanup_selected:bool,native_lock:Option<NativeLock>)
     ->Result<(BTreeMap<String,OwnedFd>,BTreeSet<(u64,u64)>),ServiceRunnerError> {
     let mut activation=BTreeMap::new();
     let mut fd_identities=BTreeSet::new();
@@ -251,7 +251,8 @@ fn take_activation(entries:&[Activation],dispatch_selected:bool,spool_selected:b
         let stat=descriptor_stat(fd.as_fd())?;
         let public_grant=(entry.name==super::generation_service::GRANT_FD
             || (dispatch_selected && entry.name==super::dispatch_service::GRANT_FD)
-            || (spool_selected && matches!(entry.name.as_str(),"spool-head-grant"|"spool-current-grant")))
+            || (spool_selected && matches!(entry.name.as_str(),"spool-head-grant"|"spool-current-grant"))
+            || (cleanup_selected && entry.name==super::active_effect_cleanup::GRANT_FD))
             && stat.st_mode & libc::S_IFMT==libc::S_IFREG;
         let held_lock=stat.st_mode&libc::S_IFMT==libc::S_IFREG && match native_lock {
             Some(NativeLock::Persistence)=>entry.name=="persistence-lock" && index==2,
@@ -261,7 +262,7 @@ fn take_activation(entries:&[Activation],dispatch_selected:bool,spool_selected:b
         if public_grant {
             let seals=unsafe{libc::fcntl(fd.as_raw_fd(),libc::F_GET_SEALS)};
             let full=libc::F_SEAL_SEAL|libc::F_SEAL_GROW|libc::F_SEAL_SHRINK|libc::F_SEAL_WRITE;
-            let maximum=if spool_selected && entry.name=="spool-current-grant"{131072}else{65536};
+            let maximum=if spool_selected && entry.name=="spool-current-grant" || cleanup_selected && entry.name==super::active_effect_cleanup::GRANT_FD {131072}else{65536};
             if seals<0 || seals&full!=full || stat.st_size<=0 || stat.st_size>maximum {
                 return Err(fail("service grant is not one bounded fully sealed original"));
             }
@@ -297,10 +298,12 @@ impl PreparedGuestServiceDelivery {
         let runtime_value:serde_json::Value=decode_canonical_frame(&runtime.read(MAX_CONFIG_BYTES)?)?;
         let ordinary=matches!(p.service_role,Role::DurableRecoveryStore|Role::CurrentSignatureAuthority);
         let version=runtime_value.get("runtime").and_then(|v|v.get("apiVersion")).and_then(|v|v.as_str());
-        let spool_selected=ordinary && version==Some(super::spool_head::RUNTIME);
+        let effects=version==Some(super::active_effect_cleanup::RUNTIME);
+        let spool_selected=ordinary && (version==Some(super::spool_head::RUNTIME) || effects);
+        let cleanup_selected=effects && p.service_role==Role::CleanupAuthorizationConsumer;
         let dispatch_selected=ordinary && (version==Some(super::dispatch_service::RUNTIME) || spool_selected);
         if native_lock.is_some() && p.service_role!=Role::ProductionBridge {return Err(fail("native lock requires native guest role"));}
-        let (activation,fd_identities)=take_activation(&p.activation,dispatch_selected,spool_selected,native_lock)?;
+        let (activation,fd_identities)=take_activation(&p.activation,dispatch_selected,spool_selected,cleanup_selected,native_lock)?;
         let parent=Parent::inherited()?;
         if fd_identities.contains(&parent.identity()) { return Err(fail("activation aliases private parent channel")); }
         let mut p=p;

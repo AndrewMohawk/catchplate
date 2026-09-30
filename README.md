@@ -22,10 +22,11 @@ Checkpoint: **2026-09-30 — pre-production, source-only.**
 
 [![Project checkpoints, one segment per task: 36 of 46 source-landed; 10 active and 0 todo. Evidence handoff 10/10; historical recovery 4/5; permissions and grants 10/10; finalization and sessions 8/8; workloads and native 3/6; providers and operations 1/7. H05, N04, N05, N06 and O01 through O06 are in progress. Production acceptance remains 0/6. Source only; unbuilt, unexecuted and unprovisioned.](docs/images/project-progress.svg)](docs/production-status.md#next-source-milestones)
 
-The current `.347` source batch connects the [native configuration factory](docs/native-shadow-receiving-factory.md)
-and [scoped final Setup flow](docs/setup-native-final.md). Required dispatch and
-credential-use effects are being connected next: even an ordinary authenticated
-GET needs these handlers. Independent service packaging/provisioning and the
+The current `.348` source batch connects the [required request-effect services](docs/native-active-effects.md),
+their [native launch resources and grants](docs/native-shadow-effects-cohort.md),
+and the separate [cleanup authority](docs/native-active-effect-cleanup.md).
+It also connects [captured request facts to the genuine native commitment](docs/native-protected-request-facts.md)
+and runtime/v9 receiving. Independent service packaging/provisioning and the
 first consolidated build and end-to-end pilot check remain outstanding.
 
 The bar shows **committed source, not tested readiness or remaining effort**.

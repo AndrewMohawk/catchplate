@@ -32,6 +32,7 @@ pub(super) fn is_command(raw:&[u8])->Result<bool,ServiceError> {
 }
 pub(super) fn frame_deadline(raw:&[u8])->Result<u64,ServiceError> {
     if super::spool_current::is_command(raw)? {return decode_canonical_frame::<super::spool_current::Command>(raw)?.deadline();}
+    if super::active_effect_cleanup::is_command(raw)? {return decode_canonical_frame::<super::active_effect_cleanup::Command>(raw)?.deadline();}
     if super::spool_head_values::is_command(raw)? {
         return decode_canonical_frame::<super::spool_head_values::Command>(raw)?.deadline();
     }

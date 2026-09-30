@@ -151,7 +151,7 @@ def _checkpoint(state, value, *, existing=False, include_observations=False):
     validate_checkpoint_heartbeat(state, value["heartbeat"])
     computed = cumulative.verify(value, assignment=assignment, load=load, context=context, publication=publication, now=state.now)
     from serverware import authority_policy_canary_native_observation_originals as observations
-    admitted_observations = observations.validate_protected_originals(state, value, originals, publication, load)
+    admitted_observations = observations.validate_protected_originals(state, value, originals, publication, load, assignment=assignment, context=context)
     used = {receipt["signing_key_spki_sha256"] for receipt in originals}
     p.require(not any(row["assignment_envelope_digest"] == context["assignment_envelope_digest"]
         and row["public_key_digest"] in used for row in state.rows("policy_runtime_role_key_revocations")))

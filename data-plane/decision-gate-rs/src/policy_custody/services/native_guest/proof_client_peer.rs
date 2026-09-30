@@ -87,23 +87,27 @@ impl Inspector {
     }
     pub(in crate::policy_shadow::policy_custody::services) fn prepare_selected(files:&FileAdmission,
         activation:&BTreeMap<String,OwnedFd>,commitment:bool)->Result<(Self,OwnedFd),ShadowError> {
-        Self::prepare_inner(files,activation,commitment,false,false,false)
+        Self::prepare_inner(files,activation,commitment,false,false,false,false)
     }
     pub(in crate::policy_shadow::policy_custody::services) fn prepare_spool(files:&FileAdmission,
         activation:&BTreeMap<String,OwnedFd>)->Result<(Self,OwnedFd),ShadowError>{
-        Self::prepare_inner(files,activation,true,true,false,false)
+        Self::prepare_inner(files,activation,true,true,false,false,false)
     }
     pub(in crate::policy_shadow::policy_custody::services) fn prepare_terminal(files:&FileAdmission,
         activation:&BTreeMap<String,OwnedFd>)->Result<(Self,OwnedFd),ShadowError>{
-        Self::prepare_inner(files,activation,true,true,true,false)
+        Self::prepare_inner(files,activation,true,true,true,false,false)
+    }
+    pub(in crate::policy_shadow::policy_custody::services) fn prepare_effects(files:&FileAdmission,
+        activation:&BTreeMap<String,OwnedFd>)->Result<(Self,OwnedFd),ShadowError>{
+        Self::prepare_inner(files,activation,true,true,true,true,false)
     }
     pub(in crate::policy_shadow::policy_custody::services) fn prepare_native_facade(files:&FileAdmission,
-        activation:&BTreeMap<String,OwnedFd>,commitment:bool,spool:bool,terminal:bool)->Result<(Self,OwnedFd),ShadowError> {
-        Self::prepare_inner(files,activation,commitment,spool,terminal,true)
+        activation:&BTreeMap<String,OwnedFd>,commitment:bool,spool:bool,terminal:bool,effects:bool)->Result<(Self,OwnedFd),ShadowError> {
+        Self::prepare_inner(files,activation,commitment,spool,terminal,effects,true)
     }
-    fn prepare_inner(files:&FileAdmission,activation:&BTreeMap<String,OwnedFd>,commitment:bool,spool:bool,terminal:bool,native_facade:bool)
+    fn prepare_inner(files:&FileAdmission,activation:&BTreeMap<String,OwnedFd>,commitment:bool,spool:bool,terminal:bool,effects:bool,native_facade:bool)
         ->Result<(Self,OwnedFd),ShadowError> {
-        let selected=Selection::original(&files.retrieval_client_runtime().map_err(fail)?,commitment,spool,terminal)?;
+        let selected=Selection::original(&files.retrieval_client_runtime().map_err(fail)?,commitment,spool,terminal,effects)?;
         let mut entries=BTreeMap::new();
         for (kind,endpoint) in &selected.entries {
             let expected=endpoint.expected_peer.checked().map_err(fail)?;

@@ -141,7 +141,7 @@ def evaluated(request_original, response_original_or_none, *, terminal_receipt, 
     """
     from serverware import db
     request, response = request_original, response_original_or_none
-    p.require(request["apiVersion"] == originals.REQUEST_V2,
+    p.require(request["apiVersion"] in {originals.REQUEST_V2, originals.REQUEST_V3},
         "old original profile does not contain full native semantic inputs")
     event = originals.decoded(request_receipt)
     terminal = originals.decoded(terminal_receipt)

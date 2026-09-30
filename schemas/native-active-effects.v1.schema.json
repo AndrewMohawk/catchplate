@@ -1,0 +1,1521 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-active-effects.v1.schema.json",
+  "$ref": "#/$defs/bridgeSelection",
+  "description": "Closed required ordinary-request effect successor. Schema is not authority: actual independently assigned keys, signed full originals, genuine generation/opening, stored core, retained cleanup permit and three durable service transitions are mandatory. Unchanged 8 MiB whole-message/128 stored objects/32 MiB aggregate limits; original deadlines never renew. Old profiles unchanged.",
+  "$defs": {
+    "sha": {
+      "$ref": "native-ledger-completion.v1.schema.json#/$defs/sha"
+    },
+    "signature": {
+      "$ref": "native-ledger-completion.v1.schema.json#/$defs/signature"
+    },
+    "u64": {
+      "$ref": "native-ledger-completion.v1.schema.json#/$defs/u64"
+    },
+    "guest": {
+      "$ref": "native-ledger-completion.v1.schema.json#/$defs/guest"
+    },
+    "pin": {
+      "$ref": "native-ledger-completion.v1.schema.json#/$defs/pin"
+    },
+    "peer": {
+      "$ref": "native-ledger-completion.v1.schema.json#/$defs/peer"
+    },
+    "scope": {
+      "$ref": "native-ledger-completion.v1.schema.json#/$defs/scope"
+    },
+    "key": {
+      "$ref": "native-ledger-completion.v1.schema.json#/$defs/key"
+    },
+    "storeAdmission": {
+      "$ref": "native-ledger-completion.v1.schema.json#/$defs/storeAdmission"
+    },
+    "completionPolicy": {
+      "$ref": "native-ledger-completion.v1.schema.json#/$defs/completionPolicy"
+    },
+    "epoch": {
+      "$ref": "custody-service-generation-admission.v1.schema.json#/$defs/authorityEpoch"
+    },
+    "roleKey": {
+      "$ref": "native-ledger-spool.v1.schema.json#/$defs/roleKey"
+    },
+    "bytes32": {
+      "$ref": "native-shadow-role-keys.v1.schema.json#/$defs/bytes32"
+    },
+    "time": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9223372036854775807
+    },
+    "byteArray": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 8388608,
+      "items": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 255
+      }
+    },
+    "bridgeSelection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "headGrantOriginal",
+        "currentGrantOriginal",
+        "originFdName",
+        "cleanupGrantOriginal"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeSpoolServices/v3"
+        },
+        "headGrantOriginal": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 65536,
+          "pattern": "^[\\u0000-\\u007f]+$"
+        },
+        "currentGrantOriginal": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 131072,
+          "pattern": "^[\\u0000-\\u007f]+$"
+        },
+        "originFdName": {
+          "const": "generation-origin"
+        },
+        "cleanupGrantOriginal": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 131072,
+          "pattern": "^[\\u0000-\\u007f]+$"
+        }
+      }
+    },
+    "effects": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dispatchBarrier",
+        "activeEffectBarrier",
+        "activeEffectCommit"
+      ],
+      "properties": {
+        "dispatchBarrier": {
+          "$ref": "#/$defs/roleKey"
+        },
+        "activeEffectBarrier": {
+          "$ref": "#/$defs/roleKey"
+        },
+        "activeEffectCommit": {
+          "$ref": "#/$defs/roleKey"
+        }
+      }
+    },
+    "effectPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dispatchBarrier",
+        "activeEffectBarrier",
+        "activeEffectCommit",
+        "cleanupAuthorityEpoch",
+        "cleanupPublicKeyBase64url",
+        "cleanupInitialTransitionHeadSha256"
+      ],
+      "properties": {
+        "dispatchBarrier": {
+          "$ref": "#/$defs/roleKey"
+        },
+        "activeEffectBarrier": {
+          "$ref": "#/$defs/roleKey"
+        },
+        "activeEffectCommit": {
+          "$ref": "#/$defs/roleKey"
+        },
+        "cleanupAuthorityEpoch": {
+          "$ref": "#/$defs/epoch"
+        },
+        "cleanupPublicKeyBase64url": {
+          "$ref": "#/$defs/bytes32"
+        },
+        "cleanupInitialTransitionHeadSha256": {
+          "$ref": "#/$defs/sha"
+        }
+      }
+    },
+    "signerPayload": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "apiVersion",
+            "purpose",
+            "guest",
+            "assignmentPayloadSha256",
+            "keyAuthorizationSha256",
+            "scope",
+            "proofScopeOriginal",
+            "originVerifier",
+            "expectedPeer",
+            "commitRequest",
+            "trustCheckpointId",
+            "revocationGeneration",
+            "revocationRootSha256",
+            "issuedAtUnixNanos",
+            "expiresAtUnixNanos",
+            "signingKeyId",
+            "signingKeySpkiSha256"
+          ],
+          "properties": {
+            "apiVersion": {
+              "const": "serverware.nativeShadowDispatchBarrierServiceAssignment/v1"
+            },
+            "purpose": {
+              "const": "native-dispatch-barrier"
+            },
+            "guest": {
+              "$ref": "#/$defs/guest"
+            },
+            "assignmentPayloadSha256": {
+              "$ref": "#/$defs/sha"
+            },
+            "keyAuthorizationSha256": {
+              "$ref": "#/$defs/sha"
+            },
+            "scope": {
+              "$ref": "#/$defs/scope"
+            },
+            "proofScopeOriginal": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 16384,
+              "pattern": "^[\\u0000-\\u007f]+$"
+            },
+            "originVerifier": {
+              "$ref": "#/$defs/key"
+            },
+            "expectedPeer": {
+              "$ref": "#/$defs/peer"
+            },
+            "commitRequest": {
+              "type": "null"
+            },
+            "trustCheckpointId": {
+              "$ref": "#/$defs/sha"
+            },
+            "revocationGeneration": {
+              "$ref": "#/$defs/u64"
+            },
+            "revocationRootSha256": {
+              "$ref": "#/$defs/sha"
+            },
+            "issuedAtUnixNanos": {
+              "$ref": "#/$defs/time"
+            },
+            "expiresAtUnixNanos": {
+              "$ref": "#/$defs/time"
+            },
+            "signingKeyId": {
+              "$ref": "#/$defs/sha"
+            },
+            "signingKeySpkiSha256": {
+              "$ref": "#/$defs/sha"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "apiVersion",
+            "purpose",
+            "guest",
+            "assignmentPayloadSha256",
+            "keyAuthorizationSha256",
+            "scope",
+            "proofScopeOriginal",
+            "originVerifier",
+            "expectedPeer",
+            "commitRequest",
+            "trustCheckpointId",
+            "revocationGeneration",
+            "revocationRootSha256",
+            "issuedAtUnixNanos",
+            "expiresAtUnixNanos",
+            "signingKeyId",
+            "signingKeySpkiSha256"
+          ],
+          "properties": {
+            "apiVersion": {
+              "const": "serverware.nativeShadowActiveEffectBarrierServiceAssignment/v1"
+            },
+            "purpose": {
+              "const": "native-active-effect-barrier"
+            },
+            "guest": {
+              "$ref": "#/$defs/guest"
+            },
+            "assignmentPayloadSha256": {
+              "$ref": "#/$defs/sha"
+            },
+            "keyAuthorizationSha256": {
+              "$ref": "#/$defs/sha"
+            },
+            "scope": {
+              "$ref": "#/$defs/scope"
+            },
+            "proofScopeOriginal": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 16384,
+              "pattern": "^[\\u0000-\\u007f]+$"
+            },
+            "originVerifier": {
+              "$ref": "#/$defs/key"
+            },
+            "expectedPeer": {
+              "$ref": "#/$defs/peer"
+            },
+            "commitRequest": {
+              "type": "null"
+            },
+            "trustCheckpointId": {
+              "$ref": "#/$defs/sha"
+            },
+            "revocationGeneration": {
+              "$ref": "#/$defs/u64"
+            },
+            "revocationRootSha256": {
+              "$ref": "#/$defs/sha"
+            },
+            "issuedAtUnixNanos": {
+              "$ref": "#/$defs/time"
+            },
+            "expiresAtUnixNanos": {
+              "$ref": "#/$defs/time"
+            },
+            "signingKeyId": {
+              "$ref": "#/$defs/sha"
+            },
+            "signingKeySpkiSha256": {
+              "$ref": "#/$defs/sha"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "apiVersion",
+            "purpose",
+            "guest",
+            "assignmentPayloadSha256",
+            "keyAuthorizationSha256",
+            "scope",
+            "proofScopeOriginal",
+            "originVerifier",
+            "expectedPeer",
+            "commitRequest",
+            "trustCheckpointId",
+            "revocationGeneration",
+            "revocationRootSha256",
+            "issuedAtUnixNanos",
+            "expiresAtUnixNanos",
+            "signingKeyId",
+            "signingKeySpkiSha256"
+          ],
+          "properties": {
+            "apiVersion": {
+              "const": "serverware.nativeShadowActiveEffectCommitServiceAssignment/v1"
+            },
+            "purpose": {
+              "const": "native-active-effect-commit"
+            },
+            "guest": {
+              "$ref": "#/$defs/guest"
+            },
+            "assignmentPayloadSha256": {
+              "$ref": "#/$defs/sha"
+            },
+            "keyAuthorizationSha256": {
+              "$ref": "#/$defs/sha"
+            },
+            "scope": {
+              "$ref": "#/$defs/scope"
+            },
+            "proofScopeOriginal": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 16384,
+              "pattern": "^[\\u0000-\\u007f]+$"
+            },
+            "originVerifier": {
+              "$ref": "#/$defs/key"
+            },
+            "expectedPeer": {
+              "$ref": "#/$defs/peer"
+            },
+            "commitRequest": {
+              "type": "null"
+            },
+            "trustCheckpointId": {
+              "$ref": "#/$defs/sha"
+            },
+            "revocationGeneration": {
+              "$ref": "#/$defs/u64"
+            },
+            "revocationRootSha256": {
+              "$ref": "#/$defs/sha"
+            },
+            "issuedAtUnixNanos": {
+              "$ref": "#/$defs/time"
+            },
+            "expiresAtUnixNanos": {
+              "$ref": "#/$defs/time"
+            },
+            "signingKeyId": {
+              "$ref": "#/$defs/sha"
+            },
+            "signingKeySpkiSha256": {
+              "$ref": "#/$defs/sha"
+            }
+          }
+        }
+      ]
+    },
+    "signer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "payload",
+        "signature"
+      ],
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/signerPayload"
+        },
+        "signature": {
+          "$ref": "#/$defs/signature"
+        }
+      }
+    },
+    "headPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "purpose",
+        "guest",
+        "runtimeConfigurationSha256",
+        "authorityHistoryManifestSha256",
+        "scope",
+        "originVerifier",
+        "ingress",
+        "ledger",
+        "retrieval",
+        "proofScopeOriginal",
+        "initialTransitionHeadSha256",
+        "completion",
+        "effects"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeSpoolHeadGrant/v3"
+        },
+        "purpose": {
+          "const": "native-shared-spool-head"
+        },
+        "guest": {
+          "$ref": "#/$defs/guest"
+        },
+        "runtimeConfigurationSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "authorityHistoryManifestSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "scope": {
+          "$ref": "#/$defs/scope"
+        },
+        "originVerifier": {
+          "$ref": "#/$defs/key"
+        },
+        "ingress": {
+          "$ref": "#/$defs/roleKey"
+        },
+        "ledger": {
+          "$ref": "#/$defs/roleKey"
+        },
+        "retrieval": {
+          "$ref": "#/$defs/roleKey"
+        },
+        "proofScopeOriginal": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 16384,
+          "pattern": "^[\\u0000-\\u007f]+$"
+        },
+        "initialTransitionHeadSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "completion": {
+          "$ref": "#/$defs/completionPolicy"
+        },
+        "effects": {
+          "$ref": "#/$defs/effectPolicy"
+        }
+      }
+    },
+    "head": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "payload",
+        "signatureBase64url"
+      ],
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/headPayload"
+        },
+        "signatureBase64url": {
+          "$ref": "#/$defs/signature"
+        }
+      }
+    },
+    "currentPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "purpose",
+        "guest",
+        "runtimeConfigurationSha256",
+        "authorityHistoryManifestSha256",
+        "headGrantOriginal",
+        "durableAuthorityEpoch",
+        "durablePublicKeyBase64url",
+        "initialTransitionHeadSha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeSpoolCurrentGrant/v3"
+        },
+        "purpose": {
+          "const": "native-spool-current-signature"
+        },
+        "guest": {
+          "$ref": "#/$defs/guest"
+        },
+        "runtimeConfigurationSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "authorityHistoryManifestSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "headGrantOriginal": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 65536,
+          "pattern": "^[\\u0000-\\u007f]+$"
+        },
+        "durableAuthorityEpoch": {
+          "$ref": "#/$defs/epoch"
+        },
+        "durablePublicKeyBase64url": {
+          "$ref": "#/$defs/bytes32"
+        },
+        "initialTransitionHeadSha256": {
+          "$ref": "#/$defs/sha"
+        }
+      }
+    },
+    "current": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "payload",
+        "signatureBase64url"
+      ],
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/currentPayload"
+        },
+        "signatureBase64url": {
+          "$ref": "#/$defs/signature"
+        }
+      }
+    },
+    "cleanupPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "purpose",
+        "guest",
+        "runtimeConfigurationSha256",
+        "authorityHistoryManifestSha256",
+        "headGrantOriginal",
+        "durableAuthorityEpoch",
+        "durablePublicKeyBase64url",
+        "initialTransitionHeadSha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeActiveEffectCleanupGrant/v1"
+        },
+        "purpose": {
+          "const": "native-active-effect-cleanup"
+        },
+        "guest": {
+          "$ref": "#/$defs/guest"
+        },
+        "runtimeConfigurationSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "authorityHistoryManifestSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "headGrantOriginal": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 65536,
+          "pattern": "^[\\u0000-\\u007f]+$"
+        },
+        "durableAuthorityEpoch": {
+          "$ref": "#/$defs/epoch"
+        },
+        "durablePublicKeyBase64url": {
+          "$ref": "#/$defs/bytes32"
+        },
+        "initialTransitionHeadSha256": {
+          "$ref": "#/$defs/sha"
+        }
+      }
+    },
+    "cleanup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "payload",
+        "signatureBase64url"
+      ],
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/cleanupPayload"
+        },
+        "signatureBase64url": {
+          "$ref": "#/$defs/signature"
+        }
+      }
+    },
+    "retrievalPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "purpose",
+        "guest",
+        "assignmentPayloadSha256",
+        "keyAuthorizationSha256",
+        "trustCheckpointId",
+        "revocationGeneration",
+        "revocationRootSha256",
+        "issuedAtUnixNanos",
+        "expiresAtUnixNanos",
+        "signingKeyId",
+        "signingKeySpkiSha256",
+        "proofScopeOriginalBase64url",
+        "expectedPeer",
+        "spoolScope",
+        "ingress",
+        "ledger",
+        "terminal",
+        "store",
+        "effects"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeLedgerSpoolRetrievalGrant/v3"
+        },
+        "purpose": {
+          "const": "native-ledger-spool-retrieval"
+        },
+        "guest": {
+          "$ref": "native-ledger-completion.v1.schema.json#/$defs/retrievalPayload/properties/guest"
+        },
+        "assignmentPayloadSha256": {
+          "$ref": "native-ledger-completion.v1.schema.json#/$defs/retrievalPayload/properties/assignmentPayloadSha256"
+        },
+        "keyAuthorizationSha256": {
+          "$ref": "native-ledger-completion.v1.schema.json#/$defs/retrievalPayload/properties/keyAuthorizationSha256"
+        },
+        "trustCheckpointId": {
+          "$ref": "native-ledger-completion.v1.schema.json#/$defs/retrievalPayload/properties/trustCheckpointId"
+        },
+        "revocationGeneration": {
+          "$ref": "native-ledger-completion.v1.schema.json#/$defs/retrievalPayload/properties/revocationGeneration"
+        },
+        "revocationRootSha256": {
+          "$ref": "native-ledger-completion.v1.schema.json#/$defs/retrievalPayload/properties/revocationRootSha256"
+        },
+        "issuedAtUnixNanos": {
+          "$ref": "native-ledger-completion.v1.schema.json#/$defs/retrievalPayload/properties/issuedAtUnixNanos"
+        },
+        "expiresAtUnixNanos": {
+          "$ref": "native-ledger-completion.v1.schema.json#/$defs/retrievalPayload/properties/expiresAtUnixNanos"
+        },
+        "signingKeyId": {
+          "$ref": "native-ledger-completion.v1.schema.json#/$defs/retrievalPayload/properties/signingKeyId"
+        },
+        "signingKeySpkiSha256": {
+          "$ref": "native-ledger-completion.v1.schema.json#/$defs/retrievalPayload/properties/signingKeySpkiSha256"
+        },
+        "proofScopeOriginalBase64url": {
+          "$ref": "native-ledger-completion.v1.schema.json#/$defs/retrievalPayload/properties/proofScopeOriginalBase64url"
+        },
+        "expectedPeer": {
+          "$ref": "native-ledger-completion.v1.schema.json#/$defs/retrievalPayload/properties/expectedPeer"
+        },
+        "spoolScope": {
+          "$ref": "native-ledger-completion.v1.schema.json#/$defs/retrievalPayload/properties/spoolScope"
+        },
+        "ingress": {
+          "$ref": "native-ledger-completion.v1.schema.json#/$defs/retrievalPayload/properties/ingress"
+        },
+        "ledger": {
+          "$ref": "native-ledger-completion.v1.schema.json#/$defs/retrievalPayload/properties/ledger"
+        },
+        "terminal": {
+          "$ref": "native-ledger-completion.v1.schema.json#/$defs/retrievalPayload/properties/terminal"
+        },
+        "store": {
+          "$ref": "native-ledger-completion.v1.schema.json#/$defs/retrievalPayload/properties/store"
+        },
+        "effects": {
+          "$ref": "#/$defs/effects"
+        }
+      }
+    },
+    "retrieval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "payload",
+        "signature"
+      ],
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/retrievalPayload"
+        },
+        "signature": {
+          "$ref": "#/$defs/signature"
+        }
+      }
+    },
+    "dispatchLaunch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "keyAdmission",
+        "dispatchBarrier"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeShadowDispatchBarrierGuestLaunch/v1"
+        },
+        "keyAdmission": {
+          "$ref": "native-shadow-guest-admission.v1.schema.json#/$defs/launch"
+        },
+        "dispatchBarrier": {
+          "$ref": "#/$defs/pin"
+        }
+      }
+    },
+    "effectBarrierLaunch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "keyAdmission",
+        "activeEffectBarrier"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeShadowActiveEffectBarrierGuestLaunch/v1"
+        },
+        "keyAdmission": {
+          "$ref": "native-shadow-guest-admission.v1.schema.json#/$defs/launch"
+        },
+        "activeEffectBarrier": {
+          "$ref": "#/$defs/pin"
+        }
+      }
+    },
+    "effectCommitLaunch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "keyAdmission",
+        "activeEffectCommit"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeShadowActiveEffectCommitGuestLaunch/v1"
+        },
+        "keyAdmission": {
+          "$ref": "native-shadow-guest-admission.v1.schema.json#/$defs/launch"
+        },
+        "activeEffectCommit": {
+          "$ref": "#/$defs/pin"
+        }
+      }
+    },
+    "retrievalLaunch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "keyAdmission",
+        "retrieval"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeShadowRetrievalGuestLaunch/v4"
+        },
+        "keyAdmission": {
+          "$ref": "native-shadow-guest-admission.v1.schema.json#/$defs/launch"
+        },
+        "retrieval": {
+          "$ref": "#/$defs/pin"
+        }
+      }
+    },
+    "bridgeLaunch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "keyAdmission",
+        "trustedTime"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeProofBridgeLaunch/v5"
+        },
+        "keyAdmission": {
+          "$ref": "native-shadow-guest-admission.v1.schema.json#/$defs/launch"
+        },
+        "trustedTime": {
+          "$ref": "#/$defs/pin"
+        }
+      }
+    },
+    "preparation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "generationId",
+        "ingressSequence",
+        "effectIdSha256",
+        "effectKind",
+        "effectIntentSha256",
+        "preparedStateSha256"
+      ],
+      "properties": {
+        "generationId": {
+          "$ref": "#/$defs/sha"
+        },
+        "ingressSequence": {
+          "$ref": "#/$defs/u64"
+        },
+        "effectIdSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "effectKind": {
+          "enum": [
+            "credential-generation",
+            "credential-lease",
+            "credential-decrypt",
+            "credential-injection",
+            "oauth-rotation",
+            "provider-send"
+          ]
+        },
+        "effectIntentSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "preparedStateSha256": {
+          "$ref": "#/$defs/sha"
+        }
+      }
+    },
+    "binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "operation",
+        "operationIdSha256",
+        "requestSha256",
+        "durableRequestSha256",
+        "terminationFenceSha256",
+        "productionConfigurationBindingSha256",
+        "kernelDriverIdentitySha256",
+        "retainedDescriptorSetSha256",
+        "driverGenerationReceiptSha256",
+        "replayIdSha256",
+        "bindingSha256",
+        "openedAtBoottimeNanos",
+        "operationDeadlineBoottimeNanos",
+        "cleanupDeadlineBoottimeNanos"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.policyCustodyProductionDispatch/v4"
+        },
+        "operation": {
+          "enum": [
+            "append-active-effect-barrier",
+            "commit-active-effect",
+            "reconcile-active-effect"
+          ]
+        },
+        "operationIdSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "requestSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "durableRequestSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "terminationFenceSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "productionConfigurationBindingSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "kernelDriverIdentitySha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "retainedDescriptorSetSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "driverGenerationReceiptSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "replayIdSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "bindingSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "openedAtBoottimeNanos": {
+          "$ref": "#/$defs/u64"
+        },
+        "operationDeadlineBoottimeNanos": {
+          "$ref": "#/$defs/u64"
+        },
+        "cleanupDeadlineBoottimeNanos": {
+          "$ref": "#/$defs/u64"
+        }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "kind",
+        "canonicalBytesBase64",
+        "canonicalBytesLength",
+        "canonicalBytesSha256",
+        "artifactSha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.policyCustodyProductionDispatch/v4"
+        },
+        "kind": {
+          "enum": [
+            "active-effect-preparation",
+            "active-effect-commit-state",
+            "active-effect-permit",
+            "active-effect-commit-receipt"
+          ]
+        },
+        "canonicalBytesBase64": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 11184811,
+          "pattern": "^[A-Za-z0-9_-]+$"
+        },
+        "canonicalBytesLength": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8388608
+        },
+        "canonicalBytesSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "artifactSha256": {
+          "$ref": "#/$defs/sha"
+        }
+      }
+    },
+    "reference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "kind",
+        "originOperationIdSha256",
+        "originRequestSha256",
+        "signedReceiptSha256",
+        "trustCheckpointSha256",
+        "custodySlotNonceSha256",
+        "issuingServiceRole",
+        "referenceSha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.policyCustodyProductionDispatch/v4"
+        },
+        "kind": {
+          "const": "active-effect-permit"
+        },
+        "originOperationIdSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "originRequestSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "signedReceiptSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "trustCheckpointSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "custodySlotNonceSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "issuingServiceRole": {
+          "const": "cleanup-authorization-consumer"
+        },
+        "referenceSha256": {
+          "$ref": "#/$defs/sha"
+        }
+      }
+    },
+    "material": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "kind",
+        "issuingServiceRole",
+        "authorityEpoch",
+        "originOperationIdSha256",
+        "originRequestSha256",
+        "trustCheckpointSha256",
+        "custodySlotNonceSha256",
+        "artifact",
+        "exactCanonicalSignaturePayloadBytes",
+        "signatureBase64",
+        "exactSignedEnvelopeBytes",
+        "signedReceiptSha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.policyCustodyProductionDispatch/v4"
+        },
+        "kind": {
+          "const": "active-effect-permit"
+        },
+        "issuingServiceRole": {
+          "const": "cleanup-authorization-consumer"
+        },
+        "authorityEpoch": {
+          "$ref": "#/$defs/epoch"
+        },
+        "originOperationIdSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "originRequestSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "trustCheckpointSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "custodySlotNonceSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "artifact": {
+          "$ref": "#/$defs/artifact"
+        },
+        "exactCanonicalSignaturePayloadBytes": {
+          "$ref": "#/$defs/byteArray"
+        },
+        "signatureBase64": {
+          "$ref": "#/$defs/signature"
+        },
+        "exactSignedEnvelopeBytes": {
+          "$ref": "#/$defs/byteArray"
+        },
+        "signedReceiptSha256": {
+          "$ref": "#/$defs/sha"
+        }
+      }
+    },
+    "result": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "outcome",
+            "body"
+          ],
+          "properties": {
+            "outcome": {
+              "const": "artifact"
+            },
+            "body": {
+              "$ref": "#/$defs/artifact"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "outcome",
+            "body"
+          ],
+          "properties": {
+            "outcome": {
+              "const": "sealed-artifact"
+            },
+            "body": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "reference",
+                "exact_signed_artifact"
+              ],
+              "properties": {
+                "reference": {
+                  "$ref": "#/$defs/reference"
+                },
+                "exact_signed_artifact": {
+                  "$ref": "#/$defs/material"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "dispatch": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "operation",
+            "body"
+          ],
+          "properties": {
+            "operation": {
+              "const": "append-active-effect-barrier"
+            },
+            "body": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "binding",
+                "preparation"
+              ],
+              "properties": {
+                "binding": {
+                  "$ref": "#/$defs/binding"
+                },
+                "preparation": {
+                  "$ref": "#/$defs/artifact"
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "operation",
+            "body"
+          ],
+          "properties": {
+            "operation": {
+              "const": "commit-active-effect"
+            },
+            "body": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "binding",
+                "effect_permit",
+                "terminal_state",
+                "result_sha256"
+              ],
+              "properties": {
+                "binding": {
+                  "$ref": "#/$defs/binding"
+                },
+                "effect_permit": {
+                  "$ref": "#/$defs/reference"
+                },
+                "terminal_state": {
+                  "$ref": "#/$defs/artifact"
+                },
+                "result_sha256": {
+                  "$ref": "#/$defs/sha"
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "operation",
+            "body"
+          ],
+          "properties": {
+            "operation": {
+              "const": "reconcile-active-effect"
+            },
+            "body": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "binding",
+                "generation_id",
+                "ingress_sequence",
+                "effect_id_sha256"
+              ],
+              "properties": {
+                "binding": {
+                  "$ref": "#/$defs/binding"
+                },
+                "generation_id": {
+                  "$ref": "#/$defs/sha"
+                },
+                "ingress_sequence": {
+                  "$ref": "#/$defs/u64"
+                },
+                "effect_id_sha256": {
+                  "$ref": "#/$defs/sha"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "barrier": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "request",
+        "result"
+      ],
+      "properties": {
+        "request": {
+          "$ref": "#/$defs/dispatch"
+        },
+        "result": {
+          "$ref": "#/$defs/result"
+        }
+      }
+    },
+    "allocationPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "authorityEpoch",
+        "serviceGrantSha256",
+        "requestSha256",
+        "ownerStateSha256",
+        "originSha256",
+        "preparation",
+        "barrier",
+        "barrierOrdinal",
+        "predecessorHeadSha256",
+        "resultingHeadSha256",
+        "allocatedAtBoottimeNanos",
+        "originalDeadlineBoottimeNanos"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeActiveEffectAllocation/v1"
+        },
+        "authorityEpoch": {
+          "$ref": "#/$defs/epoch"
+        },
+        "serviceGrantSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "requestSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "ownerStateSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "originSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "preparation": {
+          "$ref": "#/$defs/preparation"
+        },
+        "barrier": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/barrier"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "barrierOrdinal": {
+          "$ref": "#/$defs/u64"
+        },
+        "predecessorHeadSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "resultingHeadSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "allocatedAtBoottimeNanos": {
+          "$ref": "#/$defs/u64"
+        },
+        "originalDeadlineBoottimeNanos": {
+          "$ref": "#/$defs/u64"
+        }
+      }
+    },
+    "allocation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "payload",
+        "signatureBase64url"
+      ],
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/allocationPayload"
+        },
+        "signatureBase64url": {
+          "$ref": "#/$defs/signature"
+        }
+      }
+    },
+    "core": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "request",
+        "allocation",
+        "proofScopeSha256",
+        "nativeGrantSha256",
+        "observedAtUnixNanos",
+        "trustedTimeCheckpointSha256",
+        "signingKeyId",
+        "signingKeySpkiSha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeActiveEffectCore/v1"
+        },
+        "request": {
+          "$ref": "#/$defs/dispatch"
+        },
+        "allocation": {
+          "$ref": "#/$defs/allocation"
+        },
+        "proofScopeSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "nativeGrantSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "observedAtUnixNanos": {
+          "$ref": "#/$defs/time"
+        },
+        "trustedTimeCheckpointSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "signingKeyId": {
+          "$ref": "#/$defs/sha"
+        },
+        "signingKeySpkiSha256": {
+          "$ref": "#/$defs/sha"
+        }
+      }
+    },
+    "prepared": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "core",
+        "preparedAtBoottimeNanos",
+        "signature"
+      ],
+      "properties": {
+        "core": {
+          "$ref": "#/$defs/core"
+        },
+        "preparedAtBoottimeNanos": {
+          "$ref": "#/$defs/u64"
+        },
+        "signature": {
+          "$ref": "#/$defs/signature"
+        }
+      }
+    },
+    "storedPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "guest",
+        "grantSha256",
+        "coreSha256",
+        "objectSha256",
+        "fsveritySha256",
+        "retrievalIdSha256",
+        "retrievalProofSha256",
+        "previousHeadSha256",
+        "sequence",
+        "storedAtBoottimeNanos",
+        "originalDeadlineBoottimeNanos",
+        "signingKeyId",
+        "signingKeySpkiSha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeActiveEffectStorage/v1"
+        },
+        "guest": {
+          "$ref": "#/$defs/guest"
+        },
+        "grantSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "coreSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "objectSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "fsveritySha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "retrievalIdSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "retrievalProofSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "previousHeadSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "sequence": {
+          "$ref": "#/$defs/u64"
+        },
+        "storedAtBoottimeNanos": {
+          "$ref": "#/$defs/u64"
+        },
+        "originalDeadlineBoottimeNanos": {
+          "$ref": "#/$defs/u64"
+        },
+        "signingKeyId": {
+          "$ref": "#/$defs/sha"
+        },
+        "signingKeySpkiSha256": {
+          "$ref": "#/$defs/sha"
+        }
+      }
+    },
+    "stored": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "payload",
+        "signature"
+      ],
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/storedPayload"
+        },
+        "signature": {
+          "$ref": "#/$defs/signature"
+        }
+      }
+    },
+    "completion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "prepared",
+        "stored",
+        "artifact",
+        "completedAtBoottimeNanos",
+        "signature"
+      ],
+      "properties": {
+        "prepared": {
+          "$ref": "#/$defs/prepared"
+        },
+        "stored": {
+          "$ref": "#/$defs/stored"
+        },
+        "artifact": {
+          "$ref": "#/$defs/artifact"
+        },
+        "completedAtBoottimeNanos": {
+          "$ref": "#/$defs/u64"
+        },
+        "signature": {
+          "$ref": "#/$defs/signature"
+        }
+      }
+    },
+    "cleanupCommand": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "completion"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeActiveEffectCleanupCommand/v1"
+        },
+        "completion": {
+          "$ref": "#/$defs/completion"
+        }
+      }
+    }
+  }
+}

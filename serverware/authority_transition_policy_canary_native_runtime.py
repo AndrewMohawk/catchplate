@@ -45,8 +45,8 @@ def apply(state, value, kind):
         opening_record=prior_openings[0], terminal_record=prior_terminals[0] if prior_terminals else None, now=state.now,
         request_record=prior_candidates[0] if prior_candidates else None)
     if observations.decoded(receipt).get("domain") == observations.EVENT_V2:
-        actual = [item["receipt"] for item in prior_terminals + prior_candidates] + [receipt]
-        observations.validate_protected_originals(state, value, actual, publication, load)
+        actual = [prior_openings[0]["opening_receipt"]] + [item["receipt"] for item in prior_terminals + prior_candidates] + [receipt]
+        observations.validate_protected_originals(state, value, actual, publication, load, assignment=assignment, context=context)
     state.charge(512 + len(assignment["authorityKeyIndependence"]["bindings"]))
     key = receipt["signing_key_spki_sha256"]
     profile.require(not any(row["assignment_envelope_digest"] == context["assignment_envelope_digest"]

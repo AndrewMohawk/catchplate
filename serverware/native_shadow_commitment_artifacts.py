@@ -166,7 +166,7 @@ def sign_service_transition_grant(*, payload_original, native_grant_original, ru
 
 def _sign_service_transition_grant(*, payload_original, native_grant_original, runtime_original,
                                   history_original, delivery_original, signing_key, now,
-                                  native_configuration_original, native_configuration_sha256, native_now, spool):
+                                  native_configuration_original, native_configuration_sha256, native_now, spool, effects=False):
     """Independent history-root signature; never the LedgerAppend/HMAC key."""
     payload = p.fields(g.document(payload_original, 65536), SERVICE_FIELDS)
     guest = p.guest(payload["guest"])
@@ -194,7 +194,8 @@ def _sign_service_transition_grant(*, payload_original, native_grant_original, r
     p.require(payload["nativeLedgerKeyId"] == ledger["keyId"]
         and payload["nativeLedgerKeySpkiSha256"] == ledger["keySpkiSha256"]
         and payload["nativeLedgerPublicKeyBase64url"] == ledger["publicKeyBase64url"])
-    p.require(runtime["apiVersion"] == ("serverware.policyCustodyServiceRuntimeConfig/v7" if spool else "serverware.policyCustodyServiceRuntimeConfig/v6")
+    p.require(type(spool) is bool and type(effects) is bool and (not effects or spool))
+    p.require(runtime["apiVersion"] == ("serverware.policyCustodyServiceRuntimeConfig/v8" if effects else "serverware.policyCustodyServiceRuntimeConfig/v7" if spool else "serverware.policyCustodyServiceRuntimeConfig/v6")
         and runtime["generationAdmission"] == {"grantFdName": "generation-grant"}
         and runtime["dispatchAdmission"] == {"grantFdName": "dispatch-grant"}
         and payload["nativeGrantSha256"] == p.sha(native_grant_original) and native["payload"]["scope"] == scope

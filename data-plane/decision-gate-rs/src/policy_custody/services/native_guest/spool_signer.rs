@@ -10,11 +10,17 @@ use crate::policy_shadow::policy_custody::production_dispatch::{ClosedProduction
     ClosedProductionDispatchResultV4 as DispatchResult,ClosedProductionDispatchResponseV4 as DispatchResponse};
 use crate::policy_shadow::policy_custody::authority_history::HistoricalServiceRoleV3;
 #[path="retrieval_scope.rs"] mod scope;
+#[path="active_effect_signer.rs"] mod active;
 #[derive(Debug,Clone,Copy,PartialEq,Eq)]
-pub(in crate::policy_shadow::policy_custody::services) enum Kind {Ingress,Ledger,Terminal}
+pub(in crate::policy_shadow::policy_custody::services) enum Kind {Ingress,Ledger,Terminal,DispatchBarrier,ActiveEffectBarrier,ActiveEffectCommit}
 impl Kind {
-    pub(super) fn role(self)->AuthorityRole{match self{Self::Ingress=>AuthorityRole::CustodyIngressAdmission,Self::Ledger=>AuthorityRole::CustodyLedgerAppend,Self::Terminal=>AuthorityRole::CustodyTerminalAppend}}
-    pub(super) fn signer(self)->PolicyShadowCustodySignerRole{match self{Self::Ingress=>PolicyShadowCustodySignerRole::IngressAdmission,Self::Ledger=>PolicyShadowCustodySignerRole::LedgerAppend,Self::Terminal=>PolicyShadowCustodySignerRole::TerminalAppend}}
+    pub(super) fn role(self)->AuthorityRole{match self{Self::Ingress=>AuthorityRole::CustodyIngressAdmission,Self::Ledger=>AuthorityRole::CustodyLedgerAppend,
+        Self::Terminal=>AuthorityRole::CustodyTerminalAppend,Self::DispatchBarrier=>AuthorityRole::CustodyDispatchBarrier,
+        Self::ActiveEffectBarrier=>AuthorityRole::CustodyActiveEffectBarrier,Self::ActiveEffectCommit=>AuthorityRole::CustodyActiveEffectCommit}}
+    pub(super) fn signer(self)->PolicyShadowCustodySignerRole{match self{Self::Ingress=>PolicyShadowCustodySignerRole::IngressAdmission,Self::Ledger=>PolicyShadowCustodySignerRole::LedgerAppend,
+        Self::Terminal=>PolicyShadowCustodySignerRole::TerminalAppend,Self::DispatchBarrier=>PolicyShadowCustodySignerRole::DispatchBarrier,
+        Self::ActiveEffectBarrier=>PolicyShadowCustodySignerRole::ActiveEffectBarrier,Self::ActiveEffectCommit=>PolicyShadowCustodySignerRole::ActiveEffectCommit}}
+    fn effects(self)->bool{matches!(self,Self::DispatchBarrier|Self::ActiveEffectBarrier|Self::ActiveEffectCommit)}
 }
 #[derive(Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
@@ -37,6 +43,9 @@ impl Configuration {
         Kind::Ledger if self.completion_selected()=>"serverware.nativeShadowLedgerSpoolServiceAssignment.signature/v2",
         Kind::Ledger=>"serverware.nativeShadowLedgerSpoolServiceAssignment.signature/v1",
         Kind::Terminal=>"serverware.nativeShadowTerminalSpoolServiceAssignment.signature/v1",
+        Kind::DispatchBarrier=>"serverware.nativeShadowDispatchBarrierServiceAssignment.signature/v1",
+        Kind::ActiveEffectBarrier=>"serverware.nativeShadowActiveEffectBarrierServiceAssignment.signature/v1",
+        Kind::ActiveEffectCommit=>"serverware.nativeShadowActiveEffectCommitServiceAssignment.signature/v1",
     })}
     pub(in crate::policy_shadow::policy_custody::services) fn kind(&self)->Result<Kind,ShadowError>{
         match (self.payload.api_version.as_str(),self.payload.purpose.as_str(),self.payload.commit_request.is_some()) {
@@ -44,6 +53,9 @@ impl Configuration {
             ("serverware.nativeShadowLedgerSpoolServiceAssignment/v1","native-ledger-spool-and-sampling",true)=>Ok(Kind::Ledger),
             ("serverware.nativeShadowLedgerSpoolServiceAssignment/v2","native-ledger-spool-and-sampling-with-unavailability",true)=>Ok(Kind::Ledger),
             ("serverware.nativeShadowTerminalSpoolServiceAssignment/v1","native-terminal-slot-append",false)=>Ok(Kind::Terminal),
+            ("serverware.nativeShadowDispatchBarrierServiceAssignment/v1","native-dispatch-barrier",false)=>Ok(Kind::DispatchBarrier),
+            ("serverware.nativeShadowActiveEffectBarrierServiceAssignment/v1","native-active-effect-barrier",false)=>Ok(Kind::ActiveEffectBarrier),
+            ("serverware.nativeShadowActiveEffectCommitServiceAssignment/v1","native-active-effect-commit",false)=>Ok(Kind::ActiveEffectCommit),
             _=>Err(ShadowError::BindingDrift),
         }
     }
@@ -106,6 +118,7 @@ pub(super) struct Work {
     original:services::guest_original::Original,configuration:Configuration,histories:ProductionServiceHistoricalKeyringsV4,
     origin:Option<(ShadowGenerationIdentity,Sha256Digest,RuntimeIdentity)>,flight:Option<Flight>,used:BTreeSet<Sha256Digest>,sampled:BTreeSet<Sha256Digest>,
     commitment:Option<super::commit_request::Work>,
+    effect_flight:Option<active::Flight>,
 }
 impl Work {
     fn from_prepared(prepared:Prepared,keys:&AdmittedKeys,delivery:&PreparedGuestServiceDelivery,
@@ -117,7 +130,7 @@ impl Work {
         let histories=services::production::load_production_histories(&loaded.value,&loaded.credentials).map_err(fail)?;
         let commitment=configuration.payload.commit_request.as_ref().map(|pin|super::commit_request::Work::from_pin(
             pin,keys,delivery,configuration.expected_peer(),trust,time)).transpose()?;
-        Ok(Self{original,configuration,histories,origin:None,flight:None,used:BTreeSet::new(),sampled:BTreeSet::new(),commitment})
+        Ok(Self{original,configuration,histories,origin:None,flight:None,used:BTreeSet::new(),sampled:BTreeSet::new(),commitment,effect_flight:None})
     }
     pub(super) fn expected_peer(&self)->&services::ExpectedPeerCredentialV3{self.configuration.expected_peer()}
     pub(super) fn kind(&self)->Result<Kind,ShadowError>{self.configuration.kind()}
@@ -133,10 +146,12 @@ impl Work {
         grant.verify(history).map_err(fail)?;
         require(p.scope==self.configuration.payload.scope && p.proof_scope_original==self.configuration.payload.proof_scope_original
             && p.origin_verifier==self.configuration.payload.origin_verifier
-            && (self.kind()?==Kind::Ingress || grant.completion_selected()==self.configuration.completion_selected()))?;
+            && (self.kind()?.effects() && grant.effects_selected()
+                || !self.kind()?.effects() && (self.kind()?==Kind::Ingress || grant.completion_selected()==self.configuration.completion_selected())))?;
         let checkpoint=trust.current_checkpoint()?;let a=keys.assignment.payload();
         let mut admitted=vec![&p.ingress,&p.ledger,&p.retrieval];
         if let Some(completion)=&p.completion{admitted.push(&completion.terminal);}
+        if let Some(effects)=&p.effects{admitted.extend([&effects.dispatch_barrier,&effects.active_effect_barrier,&effects.active_effect_commit]);}
         for key in admitted {
             let expected=a.authority_key_independence.binding(key.role,&a.assignment_id)?;
             let actual=key.material().map_err(fail)?;
@@ -164,6 +179,10 @@ impl Work {
     }
     pub(super) fn handle(&mut self,wire:&Request,keys:&AdmittedKeys,trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime)->Result<ResultBody,ShadowError>{
         self.check(keys,trust,time)?;let kind=self.kind()?;
+        if matches!(wire.request,Body::PrepareNativeActiveEffect{..}|Body::CompleteNativeActiveEffect{..}|Body::FinishNativeActiveEffect{..}) {
+            return self.handle_effect(wire,keys,trust,time);
+        }
+        require(self.effect_flight.is_none())?;
         let local=keys.keys.get(&kind.role()).ok_or(ShadowError::SignerBindingMismatch)?;
         let own=Sha256Digest::compute(&canonical_json_bytes(&self.configuration)?);
         let (earliest,latest)=time.now_interval_unix_nanos()?;
@@ -229,9 +248,13 @@ impl Work {
                 }else{
                     require(sampling.is_none() && self.flight.is_none() && self.used.len()<128 && self.used.insert(b.operation_id_sha256.clone()))?;
                     let (mut phase,event)=grant.payload.scope.request(&claim.request).map_err(fail)?;
-                    require((kind==Kind::Terminal)==(phase==fixed::Phase::Terminal))?;
+                    require((kind==Kind::Terminal)==(phase==fixed::Phase::Terminal)
+                        && (kind==Kind::DispatchBarrier)==(phase==fixed::Phase::Append && event.phase==crate::policy_shadow::ShadowSpoolPhase::DispatchBarrier)
+                        && !matches!(kind,Kind::ActiveEffectBarrier|Kind::ActiveEffectCommit)
+                        && (event.phase!=crate::policy_shadow::ShadowSpoolPhase::DispatchBarrier || grant.effects_selected()))?;
                     if allocation.payload.completion.as_ref().is_some_and(|v|v.disposition==head::CapacityDisposition::ReservationUnavailable){
-                        require(kind==Kind::Ledger && self.configuration.completion_selected() && phase==fixed::Phase::Reserve)?;
+                        require(kind==Kind::Ledger && self.configuration.completion_selected() && phase==fixed::Phase::Reserve
+                            && event.phase!=crate::policy_shadow::ShadowSpoolPhase::DispatchBarrier)?;
                         phase=fixed::Phase::Unavailable;
                     }
                     self.flight=Some(Flight{claim:claim.clone(),allocation:None,prepared:None,completion:None});
@@ -242,7 +265,8 @@ impl Work {
                 if let Some(decision)=&allocation.payload.completion {
                     require(decision.regular_append_capacity==grant.payload.completion.as_ref().ok_or(ShadowError::BindingDrift)?.regular_append_capacity)?;
                 }
-                let core=fixed::Core{api_version:if grant.completion_selected(){fixed::COMPLETION_CORE_API}else{fixed::CORE_API}.into(),phase,request:claim.request.clone(),proof_scope_sha256:grant.payload.scope.proof_scope_sha256.clone(),
+                let core=fixed::Core{api_version:if event.phase==crate::policy_shadow::ShadowSpoolPhase::DispatchBarrier{fixed::DISPATCH_CORE_API}
+                    else if grant.completion_selected(){fixed::COMPLETION_CORE_API}else{fixed::CORE_API}.into(),phase,request:claim.request.clone(),proof_scope_sha256:grant.payload.scope.proof_scope_sha256.clone(),
                     native_grant_sha256:own,allocation_sha256:fixed::sha(allocation).map_err(fail)?,event,event_ordinal:a.event_ordinal,
                     predecessor_event_ordinal:a.predecessor_event_ordinal,predecessor_head_sha256:a.predecessor_head_sha256.clone(),lane:a.lane,
                     observed_at_unix_nanos:observed,trusted_time_checkpoint_sha256:checkpoint,signing_key_id:local.binding.key_id.clone(),

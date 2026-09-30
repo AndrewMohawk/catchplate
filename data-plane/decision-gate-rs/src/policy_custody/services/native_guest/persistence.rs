@@ -102,10 +102,16 @@ fn dispatch_original(request_encoded:&str,reply_encoded:&str,scope:&scope::Scope
         Body::Dispatch(dispatch)=>dispatch,
         Body::FinishCommitRequest{computation,..}=>&computation.request,
         Body::FinishNativeSpool{completion,..}=>&completion.payload.claim.request,
+        Body::FinishNativeActiveEffect{completion,..}=>&completion.prepared.core.request,
         _=>return Err(ShadowError::BindingDrift),
     };
     dispatch.validate().map_err(fail)?;let binding=dispatch.binding();
-    let role=services::production::production_signer_role(dispatch).map_err(fail)?;
+    let role=if let Body::FinishNativeSpool{completion,..}=&request.request {
+        completion.payload.prepared.core.validate().map_err(fail)?;
+        // Reservation authority remains LedgerAppend even when the eventual
+        // event's distinct append authority is DispatchBarrier.
+        completion.payload.prepared.core.role()
+    }else{services::production::production_signer_role(dispatch).map_err(fail)?};
     require(request.api_version==PRODUCTION_AUTHORITY_ENDPOINT_PROTOCOL_VERSION && request.endpoint==Endpoint::ParentSigner(role)
         && request.request_sha256==request.computed_request_sha256().map_err(fail)?
         && request.replay_id_sha256==binding.replay_id_sha256 && request.deadline_boottime_nanos==binding.operation_deadline_boottime_nanos
@@ -148,6 +154,18 @@ fn dispatch_original(request_encoded:&str,reply_encoded:&str,scope:&scope::Scope
         require(artifact==&completion.payload.artifact)?;
         key.verify_strict(&signature_preimage(services::spool_head_values::COMPLETE_DOMAIN,&canonical_json_bytes(&completion.payload)?),
             &Signature::from_bytes(&completion.signature.decode()?)).map_err(|_|ShadowError::SignatureInvalid)?;
+    }
+    if let Body::FinishNativeActiveEffect{completion,result,service_transitions}=&request.request {
+        let core=&completion.prepared.core;core.validate().map_err(fail)?;
+        require(response.result==*result && response.service_transitions==*service_transitions && core.request==*dispatch
+            && core.role()==role && core.signing_key_id==reply.authority_key_id && core.signing_key_spki_sha256==reply.authority_key_spki_sha256)?;
+        let artifact=match result {
+            crate::policy_shadow::policy_custody::production_dispatch::ClosedProductionDispatchResultV4::Artifact(value)=>value,
+            crate::policy_shadow::policy_custody::production_dispatch::ClosedProductionDispatchResultV4::SealedArtifact{exact_signed_artifact,..}=>&exact_signed_artifact.artifact,
+            _=>return Err(ShadowError::BindingDrift),
+        };require(artifact==&completion.artifact)?;
+        key.verify_strict(&completion.preimage().map_err(fail)?,&Signature::from_bytes(&completion.signature.decode()?))
+            .map_err(|_|ShadowError::SignatureInvalid)?;
     }
     let rebuilt=ClosedProductionDispatchResponseV4::from_parts(dispatch,response.result.clone(),response.service_transitions.clone()).map_err(fail)?;
     require(canonical_json_bytes(&rebuilt)?==canonical_json_bytes(response)? && !response.service_transitions.is_empty()

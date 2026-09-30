@@ -3142,6 +3142,45 @@ impl PolicyShadowGenerationControl {
             &configuration,self.key_trust.as_ref(),retained.trusted_time.as_ref()).map_err(|error|error.to_string())
     }
 
+    pub(crate) fn native_request_facts_selected(&self)->Result<bool,String>{
+        let _installation=self.installation_lock.try_lock().map_err(|_|"facts selection installation busy")?;
+        let retained=self.retained_generation.try_lock().map_err(|_|"facts selection generation busy")?;
+        let retained=retained.as_ref().ok_or("facts selection lacks installed generation")?;
+        self.key_trust.authorize_at(retained.trusted_time.now_unix_nanos().map_err(|e|e.to_string())?)?;
+        retained.custody.native_request_facts_selected().map_err(|e|e.to_string())
+    }
+    pub(crate) fn commit_native_request_facts(&self,generation:&Sha256Digest,ingress:u64,observed:i64,
+        facts:&super::policy_shadow::ProtectedRequestFacts)->Result<super::policy_shadow::RequestCommitment,String>{
+        if !self.is_production || self.native_workers.is_none(){return Err("facts require actual native installed generation".into());}
+        let _installation=self.installation_lock.try_lock().map_err(|_|"facts installation busy")?;
+        let retained=self.retained_generation.try_lock().map_err(|_|"facts generation busy")?;
+        let retained=retained.as_ref().ok_or("facts have no installed generation")?;
+        if !retained.custody.native_request_facts_selected().map_err(|e|e.to_string())? {
+            return Err("facts commitment requires the actual effects runtime successor".into());
+        }
+        if retained.generation_identity.generation_id()!=generation{return Err("facts crossed installed generation".into());}
+        let now=retained.trusted_time.now_unix_nanos().map_err(|e|e.to_string())?;
+        self.key_trust.authorize_at(now)?;
+        let scope=super::policy_shadow::native_heartbeat::finalization_scope(&retained.generation_identity,&retained.assignment,
+            &retained.load_receipt,&retained.runtime_identity,&retained.publication_receipt.internal_envelope_sha256,
+            self.key_trust.as_ref(),retained.trusted_time.as_ref()).map_err(|e|e.to_string())?;
+        if observed>now || now>=scope["sealDeadlineUnixNanos"].as_i64().ok_or("original facts seal deadline")? {
+            return Err("facts capture or processing exceeds original generation lifetime".into());
+        }
+        let context=super::policy_shadow::RequestCommitmentContext::from_verified_binding(
+            &retained.assignment,&retained.runtime_identity,ingress,observed).map_err(|e|e.to_string())?;
+        // Actual installation/retained-generation guards survive the one call,
+        // its definite settlement and exact returned context validation.
+        let commitment=super::policy_core::native_request_facts::commit(retained.custody.as_ref(),facts,&context)?;
+        commitment.validate_binding(&retained.assignment,&retained.runtime_identity,ingress,observed).map_err(|e|e.to_string())?;
+        let completed=retained.trusted_time.now_unix_nanos().map_err(|e|e.to_string())?;
+        self.key_trust.authorize_at(completed)?;
+        if completed<now || completed>=scope["sealDeadlineUnixNanos"].as_i64().ok_or("original facts seal deadline")? {
+            return Err("facts completion exceeded the original generation deadline".into());
+        }
+        Ok(commitment)
+    }
+
     pub(crate) fn with_native_heartbeat_snapshot<T>(&self,state:&GateState,
         consume:impl FnOnce(super::policy_core::NativeAccountingSnapshot,Value)->Result<T,String>)
         ->Result<T,String>{

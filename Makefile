@@ -1472,6 +1472,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_policy_canary_native_opening.py \
 	serverware/authority_policy_canary_native_runtime.py \
 	serverware/authority_policy_canary_native_observation_originals.py \
+	serverware/authority_policy_canary_native_request_commitment.py \
 	serverware/authority_transition_policy_canary_native_detail.py \
 	serverware/authority_policy_canary_native_observation_semantics.py \
 	serverware/authority_policy_canary_native_comparison.py \
@@ -4105,6 +4106,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_policy_canary_native_opening.py \
 				serverware/authority_policy_canary_native_runtime.py \
 				serverware/authority_policy_canary_native_observation_originals.py \
+				serverware/authority_policy_canary_native_request_commitment.py \
 				serverware/authority_transition_policy_canary_native_detail.py \
 				serverware/authority_policy_canary_native_observation_semantics.py \
 				serverware/authority_policy_canary_native_comparison.py \
@@ -4437,6 +4439,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/policy_core_native_response.rs \
 				data-plane/decision-gate-rs/src/policy_core_effect_completion.rs \
 				data-plane/decision-gate-rs/src/policy_core_observation_originals.rs \
+				data-plane/decision-gate-rs/src/policy_core_native_request_facts.rs \
 				data-plane/decision-gate-rs/src/policy_core_dispatch_observation.rs \
 				data-plane/decision-gate-rs/src/policy_route_authority.rs \
 				data-plane/decision-gate-rs/src/policy_core_drain.rs \
@@ -4531,6 +4534,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/policy_custody/services/native_facade_receiver.rs \
 				data-plane/decision-gate-rs/src/policy_custody/native_closure_remote.rs \
 				data-plane/decision-gate-rs/src/policy_custody/native_remote_factory.rs \
+				data-plane/decision-gate-rs/src/policy_custody/native_request_commitment.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_constructed_driver.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/admission_remote.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/driver_lifecycle_admission.rs \
@@ -4561,6 +4565,10 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/policy_custody/services/spool_head.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/spool_current.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/spool_head_client.rs \
+				data-plane/decision-gate-rs/src/policy_custody/services/active_effect_values.rs \
+				data-plane/decision-gate-rs/src/policy_custody/services/active_effect_client.rs \
+				data-plane/decision-gate-rs/src/policy_custody/services/active_effect_cleanup.rs \
+				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/active_effect_signer.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/ledger_store.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/ledger_retrieval.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/spool_signer.rs \
@@ -4958,12 +4966,16 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-policy-canary-opening.v2.schema.json \
 				schemas/native-shadow-proof-cohort.v4.schema.json \
 				schemas/native-shadow-proof-cohort.v5.schema.json \
+				schemas/native-shadow-proof-cohort.v6.schema.json \
+				schemas/custody-effects-inputs.v1.schema.json \
 				schemas/native-ledger-completion.v1.schema.json \
+				schemas/native-active-effects.v1.schema.json \
 				schemas/native-shadow-driver-bootstrap.v1.schema.json \
 				schemas/native-shadow-driver-continuation.v1.schema.json \
 				schemas/native-shadow-driver-lifecycle.v1.schema.json \
 				schemas/native-shadow-gate-facade.v1.schema.json \
 				schemas/native-shadow-receiving-factory.v1.schema.json \
+				schemas/native-protected-request-commitment.v1.schema.json \
 				schemas/setup-native-final.v1.schema.json \
 				schemas/setup-native-hardware.v1.schema.json \
 				schemas/native-shadow-driver-outgoing.v1.schema.json \

@@ -128,7 +128,8 @@ class OperationalInputs:
                 ("apiVersion", "keyAdmission", "trustedTime"))
             allowed = ("serverware.nativeProofBridgeLaunch/v1", "serverware.nativeProofBridgeLaunch/v2")
             p.require(launch["apiVersion"] in allowed
-                or (outgoing is not None and launch["apiVersion"] == "serverware.nativeProofBridgeLaunch/v3"))
+                or (outgoing is not None and launch["apiVersion"] in ("serverware.nativeProofBridgeLaunch/v3",
+                    "serverware.nativeProofBridgeLaunch/v4", "serverware.nativeProofBridgeLaunch/v5")))
             inner = p.fields(launch["keyAdmission"], ("apiVersion", "deliveryConfiguration", "delivery", "trust", "timeBootstrap",
                 "assignment", "closure", "keys", "encryptedKeys", "admission", "verifierTransport"))
             p.require(inner["apiVersion"] == "serverware.nativeShadowGuestLaunch/v1"

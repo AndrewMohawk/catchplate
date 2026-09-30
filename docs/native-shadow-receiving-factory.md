@@ -13,7 +13,13 @@ signed bootstrap configuration/window. It adds one independently supplied
 `constructedAdmissionAuthority`: the actual assigned supervisor key's public
 ID, SPKI, material digest and raw public key. It must differ from the bootstrap
 and phase-two keys. The gate selects the closed receiver/v3; there is no host
-fallback. Current native bridge runtimes v5 through v8 are retained exactly.
+fallback. Native bridge runtimes v5 through v8 retain their exact previous
+selection. The explicit runtime v9 successor requires nativeSpoolServices/v3
+and the exact separately authorized HeadGrant/v3, CurrentGrant/v3 and
+CleanupGrant/v1 originals, with the unchanged generation scope and five
+ordinary service grant pins. The actual measured bridge independently admits
+their signatures; the receiving factory retains and checks the complete
+runtime original under the same constructed-driver/full-configuration authority.
 
 The real source-owned caller order is:
 

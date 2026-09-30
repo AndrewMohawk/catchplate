@@ -77,7 +77,7 @@ impl Wire {
 pub(super) fn verify(wire:Wire,generation:&ShadowGenerationIdentity,request:&Sha256Digest,
     configuration:&ProductionCustodyConfiguration,trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime,
     proofs:&dyn PolicyShadowPersistenceProofVerifier)->Result<PersistedIngressAdmission,ShadowError>{
-    if configuration.native_execution_closure().is_none(){return Err(ShadowError::CustodyUnavailable);}
+    if !configuration.retains_native_closure_owner(){return Err(ShadowError::CustodyUnavailable);}
     let c=&wire.sampling_commitment.context;c.validate(generation)?;
     if &c.request_binding_sha256!=request{return Err(ShadowError::BindingDrift);}
     let event=wire.sampling_commitment.event(generation)?;

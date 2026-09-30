@@ -28,7 +28,8 @@ pub(super) struct Payload {
 pub(super) struct Grant {pub(super) payload:Payload,pub(super) signature_base64url:String}
 impl Grant {
     pub(super) fn verify(&self,history:&RuntimeAuthorityHistory)->Result<(spool_head::Grant,VerifyingKey),ServiceError>{
-        let p=&self.payload;let completion=p.api_version=="serverware.nativeSpoolCurrentGrant/v2";
+        let p=&self.payload;let effects=p.api_version=="serverware.nativeSpoolCurrentGrant/v3";
+        let completion=effects || p.api_version=="serverware.nativeSpoolCurrentGrant/v2";
         require((completion || p.api_version=="serverware.nativeSpoolCurrentGrant/v1") && p.purpose=="native-spool-current-signature"
             && p.guest.service_role=="current-signature-authority" && p.runtime_configuration_sha256==p.guest.runtime_configuration_sha256
             && &p.authority_history_manifest_sha256==history.manifest_sha256()
@@ -37,11 +38,11 @@ impl Grant {
         let sig=URL_SAFE_NO_PAD.decode(&self.signature_base64url).map_err(|_|invalid())?;
         require(sig.len()==64 && URL_SAFE_NO_PAD.encode(&sig)==self.signature_base64url)?;
         history.root_authority_key().verify_strict(&super::super::protocol::domain_separated_signature_preimage(
-            if completion{b"serverware.nativeSpoolCurrentGrant.signature/v2"}else{DOMAIN},&encode_canonical_frame(p)?)?,
+            if effects{b"serverware.nativeSpoolCurrentGrant.signature/v3"}else if completion{b"serverware.nativeSpoolCurrentGrant.signature/v2"}else{DOMAIN},&encode_canonical_frame(p)?)?,
             &Signature::from_slice(&sig).map_err(|_|invalid())?).map_err(|_|invalid())?;
         let head:spool_head::Grant=decode_canonical_frame(p.head_grant_original.as_bytes())?;
-        require(head.completion_selected()==completion && head.payload.completion.is_some()==completion
-            && head.payload.api_version==(if completion{"serverware.nativeSpoolHeadGrant/v2"}else{"serverware.nativeSpoolHeadGrant/v1"})
+        require(head.completion_selected()==completion && head.payload.completion.is_some()==completion && head.effects_selected()==effects
+            && head.payload.api_version==(if effects{"serverware.nativeSpoolHeadGrant/v3"}else if completion{"serverware.nativeSpoolHeadGrant/v2"}else{"serverware.nativeSpoolHeadGrant/v1"})
             && head.payload.purpose=="native-shared-spool-head"
             && head.payload.guest.service_role=="durable-recovery-store" && head.payload.guest.uid!=p.guest.uid
             && head.payload.guest.boot_id_base64url==p.guest.boot_id_base64url
@@ -59,17 +60,32 @@ impl Grant {
 }
 #[derive(Debug,Clone,PartialEq,Eq,Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
-pub(super) struct Command {pub(super) api_version:String,pub(super) completion:Completion,pub(super) durable:Reply}
-impl Command {pub(super) fn deadline(&self)->Result<u64,ServiceError>{
+pub(super) struct LedgerCommand {pub(super) api_version:String,pub(super) completion:Completion,pub(super) durable:Reply}
+impl LedgerCommand {pub(super) fn deadline(&self)->Result<u64,ServiceError>{
     require(self.api_version==API)?;self.completion.payload.claim.request.validate().map_err(|_|invalid())?;
     Ok(self.completion.payload.claim.request.binding().operation_deadline_boottime_nanos)
 }}
+#[derive(Debug,Clone,PartialEq,Eq,Serialize,Deserialize)]
+#[serde(rename_all="camelCase",deny_unknown_fields)]
+pub(super) struct EffectCommand {pub(super) api_version:String,pub(super) completion:super::active_effect_values::Completion,
+    pub(super) cleanup:super::active_effect_values::Cleanup,pub(super) durable:Reply}
+#[derive(Debug,Clone,PartialEq,Eq,Serialize,Deserialize)]
+#[serde(untagged)]
+pub(super) enum Command {Ledger(LedgerCommand),Effect(EffectCommand)}
+impl Command {
+    fn request(&self)->&super::super::production_dispatch::ClosedProductionDispatchRequestV4{match self {
+        Self::Ledger(v)=>&v.completion.payload.claim.request,Self::Effect(v)=>&v.completion.prepared.core.request}}
+    fn durable(&self)->&Reply{match self{Self::Ledger(v)=>&v.durable,Self::Effect(v)=>&v.durable}}
+    pub(super) fn deadline(&self)->Result<u64,ServiceError>{match self{Self::Ledger(v)=>v.deadline(),Self::Effect(v)=>{
+        require(v.api_version=="serverware.nativeSpoolCurrentCommand/v2")?;self.request().validate().map_err(|_|invalid())?;
+        Ok(self.request().binding().operation_deadline_boottime_nanos)}}}
+}
 pub(super) fn is_command(raw:&[u8])->Result<bool,ServiceError>{let value:serde_json::Value=decode_canonical_frame(raw)?;
-    Ok(value.get("apiVersion").and_then(|v|v.as_str())==Some(API))}
+    Ok(matches!(value.get("apiVersion").and_then(|v|v.as_str()),Some(API|"serverware.nativeSpoolCurrentCommand/v2")))}
 pub(super) struct Input {command:Command,epoch:AuthorityEpochRefV3,predecessor:Sha256Digest,completed:u64}
 impl Input {pub(super) fn sign(&self,key:&SigningKey)->Result<Transition,ServiceError>{
-    let Reply::Committed{result,..}=&self.command.durable else{return Err(invalid());};
-    Transition::sign(HistoricalServiceRoleV3::CurrentSignatureAuthority,self.epoch.clone(),self.command.completion.payload.claim.request.binding(),
+    let (Reply::Committed{result,..}|Reply::EffectCommitted{result,..})=self.command.durable() else{return Err(invalid());};
+    Transition::sign(HistoricalServiceRoleV3::CurrentSignatureAuthority,self.epoch.clone(),self.command.request().binding(),
         self.predecessor.clone(),sha(result)?,self.completed,key).map_err(|_|invalid())
 }}
 pub(super) trait Owner:generation_service::Owner {fn sign_spool_current(&self,input:&Input)->Result<Transition,ServiceError>;}
@@ -84,13 +100,14 @@ impl Gate {
     pub(super) fn open<T>(loaded:&LoadedConfig<T>,runtime:&RuntimeConfigHeaderV3,bootstrap:&Bootstrap,
         activation:&mut BTreeMap<String,OwnedFd>)->Result<Option<Self>,ServiceRunnerError>{
         let Some(selection)=&runtime.spool_current else{return Ok(None);};
-        require(runtime.api_version==spool_head::RUNTIME && runtime.generation_admission.is_some() && runtime.dispatch_admission.is_some()
+        require(matches!(runtime.api_version.as_str(),spool_head::RUNTIME|super::active_effect_cleanup::RUNTIME) && runtime.generation_admission.is_some() && runtime.dispatch_admission.is_some()
             && runtime.spool_head.is_none() && selection.grant_fd_name==GRANT_FD)?;
         bootstrap.check()?;let association=bootstrap.generation_association()?;
         let grant_file=std::fs::File::from(take_activation_fd(activation,GRANT_FD)?);let grant_raw=read_grant(&grant_file)?;
         let grant:Grant=decode_canonical_frame(&grant_raw)?;
         let history=runtime.load_authority_history(&loaded.credentials,TrustedHostServiceRoleV3::CurrentSignatureAuthority)?;
         let (head_grant,durable_key)=grant.verify(&history)?;
+        require(head_grant.effects_selected()==(runtime.api_version==super::active_effect_cleanup::RUNTIME))?;
         require(grant.payload.guest==association.binding() && grant.payload.runtime_configuration_sha256==loaded.exact_sha256
             && grant_file.metadata()?.uid()==grant.payload.guest.uid && grant_file.metadata()?.gid()==grant.payload.guest.gid)?;
         let directory=take_activation_fd(activation,DIRECTORY)?;
@@ -117,16 +134,26 @@ impl Gate {
         require(scope.issued_at_boottime_nanos<=now && now<scope.expires_at_boottime_nanos)
     }
     fn validate<'a>(&self,command:&'a Command)->Result<(&'a ResultBody,&'a Transition),ServiceError>{
-        command.deadline()?;let p=&command.completion.payload;let grant=&self.head_grant.payload;
+        command.deadline()?;let request=command.request();let grant=&self.head_grant.payload;
+        let (artifact,result,transition)=match command {
+        Command::Ledger(command)=>{
+        let p=&command.completion.payload;
         p.claim.validate(&grant.scope)?;
         let role=self.head_grant.key(&p.claim.request)?;
-        require((p.prepared.core.api_version==super::ledger_spool_values::COMPLETION_CORE_API)==self.head_grant.completion_selected())?;
+        require(p.prepared.core.completion_selected()==self.head_grant.completion_selected()
+            && (p.prepared.core.api_version!=super::ledger_spool_values::DISPATCH_CORE_API || self.head_grant.effects_selected()))?;
         command.completion.verify_signature(role)?;
         let Reply::Committed{result,transition}=&command.durable else{return Err(invalid());};
-        let artifact=match result{ResultBody::Artifact(v)=>v,ResultBody::SealedArtifact{exact_signed_artifact,..}=>&exact_signed_artifact.artifact,_=>return Err(invalid())};
-        require(artifact==&p.artifact && transition.service_role==HistoricalServiceRoleV3::DurableRecoveryStore
+        (&p.artifact,result,transition)
+        },Command::Effect(command)=>{
+            require(self.head_grant.effects_selected())?;command.cleanup.verify(&command.completion,&self.head_grant)?;
+            let Reply::EffectCommitted{result,transition}=&command.durable else{return Err(invalid());};
+            require(result==&command.cleanup.result)?;(&command.completion.artifact,result,transition)
+        }};
+        let exact=match result{ResultBody::Artifact(v)=>v,ResultBody::SealedArtifact{exact_signed_artifact,..}=>&exact_signed_artifact.artifact,_=>return Err(invalid())};
+        require(exact==artifact && transition.service_role==HistoricalServiceRoleV3::DurableRecoveryStore
             && transition.authority_epoch==self.grant.payload.durable_authority_epoch && transition.predecessor_head_sha256==self.durable_head)?;
-        transition.validate_with_history(p.claim.request.binding(),&sha(result)?,|epoch,domain,payload,signature|{
+        transition.validate_with_history(request.binding(),&sha(result)?,|epoch,domain,payload,signature|{
             if epoch!=&self.grant.payload.durable_authority_epoch{return Err("durable epoch differs");}
             let raw=URL_SAFE_NO_PAD.decode(signature).map_err(|_|"durable signature invalid")?;
             if raw.len()!=64 || URL_SAFE_NO_PAD.encode(&raw)!=signature{return Err("durable signature invalid");}
@@ -134,8 +161,8 @@ impl Gate {
                 .map_err(|_|"durable signature invalid")?,&Signature::from_slice(&raw).map_err(|_|"durable signature invalid")?)
                 .map_err(|_|"durable signature invalid")
         }).map_err(|_|invalid())?;
-        require(self.records.iter().all(|(record,_)|record.command.completion.payload.claim.request.binding().operation_id_sha256!=p.claim.request.binding().operation_id_sha256
-            && record.command.completion.payload.claim.request.binding().replay_id_sha256!=p.claim.request.binding().replay_id_sha256))?;
+        require(self.records.iter().all(|(record,_)|record.command.request().binding().operation_id_sha256!=request.binding().operation_id_sha256
+            && record.command.request().binding().replay_id_sha256!=request.binding().replay_id_sha256))?;
         Ok((result,transition))
     }
     fn apply(&mut self,record:Record,transition:Transition)->Result<(),ServiceError>{
@@ -143,7 +170,7 @@ impl Gate {
         let (result,durable)=self.validate(&record.command)?;let next_durable=durable.resulting_head_sha256.clone();
         require(transition.service_role==HistoricalServiceRoleV3::CurrentSignatureAuthority && transition.predecessor_head_sha256==self.head
             && transition.authority_epoch==self.history.current_epoch().map_err(|_|invalid())?.epoch_reference())?;
-        transition.validate_with_history(record.command.completion.payload.claim.request.binding(),&sha(result)?,|epoch,domain,payload,signature|
+        transition.validate_with_history(record.command.request().binding(),&sha(result)?,|epoch,domain,payload,signature|
             self.history.verify_service_signature(epoch,domain,payload,signature).map_err(|_|"current spool signature differs")).map_err(|_|invalid())?;
         let bytes=encode_canonical_frame(&(&record,&transition))?.len();self.bytes=self.bytes.checked_add(bytes).ok_or_else(invalid)?;
         require(self.bytes<=64*1024*1024 && self.records.len()<MAX_RECORDS)?;

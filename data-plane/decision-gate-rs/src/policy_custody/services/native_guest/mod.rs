@@ -75,14 +75,24 @@ struct IngressLaunch {api_version:String,key_admission:Launch,ingress:Pin}
 #[derive(Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 struct TerminalSpoolLaunch {api_version:String,key_admission:Launch,terminal_spool:Pin}
+#[derive(Serialize,Deserialize)]
+#[serde(rename_all="camelCase",deny_unknown_fields)]
+struct DispatchBarrierLaunch {api_version:String,key_admission:Launch,dispatch_barrier:Pin}
+#[derive(Serialize,Deserialize)]
+#[serde(rename_all="camelCase",deny_unknown_fields)]
+struct ActiveEffectBarrierLaunch {api_version:String,key_admission:Launch,active_effect_barrier:Pin}
+#[derive(Serialize,Deserialize)]
+#[serde(rename_all="camelCase",deny_unknown_fields)]
+struct ActiveEffectCommitLaunch {api_version:String,key_admission:Launch,active_effect_commit:Pin}
 enum SelectedService {None,Retrieval(Pin),LedgerRetrieval(Pin),RetrievalBridge,Activation(Pin),Persistence(Pin),PersistenceLocked(Pin),
     TrustedTime(Pin),ProofBridge(Pin),Generation(Pin),CommitmentBridge(Pin),SpoolBridge(Pin),CommitRequest(Pin),LedgerSpool(Pin),Ingress(Pin),
-    TerminalSpool(Pin),CompletionLedgerSpool(Pin),CompletionRetrieval(Pin),TerminalBridge(Pin)}
+    TerminalSpool(Pin),CompletionLedgerSpool(Pin),CompletionRetrieval(Pin),TerminalBridge(Pin),
+    DispatchSpool(Pin),ActiveEffectBarrier(Pin),ActiveEffectCommit(Pin),EffectRetrieval(Pin),ActiveEffectBridge(Pin)}
 #[derive(Serialize,Deserialize)]
 #[serde(untagged)]
 enum Selection {KeyAdmission(Launch),Retrieval(RetrievalLaunch),RetrievalBridge(RetrievalBridgeLaunch),Activation(ActivationLaunch),
     Persistence(PersistenceLaunch),TrustedTime(TrustedTimeLaunch),Generation(GenerationLaunch),CommitRequest(CommitRequestLaunch),Ingress(IngressLaunch),
-    TerminalSpool(TerminalSpoolLaunch)}
+    TerminalSpool(TerminalSpoolLaunch),DispatchBarrier(DispatchBarrierLaunch),ActiveEffectBarrier(ActiveEffectBarrierLaunch),ActiveEffectCommit(ActiveEffectCommitLaunch)}
 fn selection(raw:&[u8])->Result<(Launch,SelectedService),ShadowError> {
     let value:Selection=exact(raw)?;
     let (launch,service)=match value {
@@ -92,6 +102,7 @@ fn selection(raw:&[u8])->Result<(Launch,SelectedService),ShadowError> {
                 "serverware.nativeShadowRetrievalGuestLaunch/v1"=>(value.key_admission,SelectedService::Retrieval(value.retrieval)),
                 "serverware.nativeShadowRetrievalGuestLaunch/v2"=>(value.key_admission,SelectedService::LedgerRetrieval(value.retrieval)),
                 "serverware.nativeShadowRetrievalGuestLaunch/v3"=>(value.key_admission,SelectedService::CompletionRetrieval(value.retrieval)),
+                "serverware.nativeShadowRetrievalGuestLaunch/v4"=>(value.key_admission,SelectedService::EffectRetrieval(value.retrieval)),
                 _=>return Err(ShadowError::BindingDrift),
             }
         }
@@ -119,6 +130,8 @@ fn selection(raw:&[u8])->Result<(Launch,SelectedService),ShadowError> {
                 (value.key_admission,SelectedService::SpoolBridge(value.trusted_time))
             } else if value.api_version=="serverware.nativeProofBridgeLaunch/v4" {
                 (value.key_admission,SelectedService::TerminalBridge(value.trusted_time))
+            } else if value.api_version=="serverware.nativeProofBridgeLaunch/v5" {
+                (value.key_admission,SelectedService::ActiveEffectBridge(value.trusted_time))
             } else {
                 require(value.api_version=="serverware.nativeShadowTrustedTimeGuestLaunch/v1")?;
                 (value.key_admission,SelectedService::TrustedTime(value.trusted_time))
@@ -144,6 +157,12 @@ fn selection(raw:&[u8])->Result<(Launch,SelectedService),ShadowError> {
             require(value.api_version=="serverware.nativeShadowTerminalSpoolGuestLaunch/v1")?;
             (value.key_admission,SelectedService::TerminalSpool(value.terminal_spool))
         }
+        Selection::DispatchBarrier(value)=>{require(value.api_version=="serverware.nativeShadowDispatchBarrierGuestLaunch/v1")?;
+            (value.key_admission,SelectedService::DispatchSpool(value.dispatch_barrier))}
+        Selection::ActiveEffectBarrier(value)=>{require(value.api_version=="serverware.nativeShadowActiveEffectBarrierGuestLaunch/v1")?;
+            (value.key_admission,SelectedService::ActiveEffectBarrier(value.active_effect_barrier))}
+        Selection::ActiveEffectCommit(value)=>{require(value.api_version=="serverware.nativeShadowActiveEffectCommitGuestLaunch/v1")?;
+            (value.key_admission,SelectedService::ActiveEffectCommit(value.active_effect_commit))}
     };
     require(launch.api_version=="serverware.nativeShadowGuestLaunch/v1")?;
     Ok((launch,service))
@@ -190,16 +209,17 @@ impl AdmittedGuest {
         let (selected,service_selection)=selection(&launch_bytes)?;
         let commitment_selected=matches!(&service_selection,SelectedService::CommitRequest(_)|SelectedService::LedgerSpool(_)|SelectedService::CompletionLedgerSpool(_));
         let sampling_selected=matches!(&service_selection,SelectedService::LedgerSpool(_)|SelectedService::CompletionLedgerSpool(_));
-        let commitment_bridge=matches!(&service_selection,SelectedService::CommitmentBridge(_)|SelectedService::SpoolBridge(_)|SelectedService::TerminalBridge(_));
-        let spool_bridge=matches!(&service_selection,SelectedService::SpoolBridge(_)|SelectedService::TerminalBridge(_));
+        let commitment_bridge=matches!(&service_selection,SelectedService::CommitmentBridge(_)|SelectedService::SpoolBridge(_)|SelectedService::TerminalBridge(_)|SelectedService::ActiveEffectBridge(_));
+        let spool_bridge=matches!(&service_selection,SelectedService::SpoolBridge(_)|SelectedService::TerminalBridge(_)|SelectedService::ActiveEffectBridge(_));
         require(inspection.is_some()==matches!(&service_selection,SelectedService::Retrieval(_)|SelectedService::LedgerRetrieval(_)|SelectedService::RetrievalBridge
             |SelectedService::Persistence(_)|SelectedService::PersistenceLocked(_)|SelectedService::TrustedTime(_)|SelectedService::ProofBridge(_)
             |SelectedService::Generation(_)|SelectedService::CommitRequest(_)|SelectedService::CommitmentBridge(_)
             |SelectedService::LedgerSpool(_)|SelectedService::Ingress(_)|SelectedService::SpoolBridge(_)
-            |SelectedService::TerminalSpool(_)|SelectedService::CompletionLedgerSpool(_)|SelectedService::CompletionRetrieval(_)|SelectedService::TerminalBridge(_)))?;
+            |SelectedService::TerminalSpool(_)|SelectedService::CompletionLedgerSpool(_)|SelectedService::CompletionRetrieval(_)|SelectedService::TerminalBridge(_)
+            |SelectedService::DispatchSpool(_)|SelectedService::ActiveEffectBarrier(_)|SelectedService::ActiveEffectCommit(_)|SelectedService::EffectRetrieval(_)|SelectedService::ActiveEffectBridge(_)))?;
         let native_lock=match &service_selection {
             SelectedService::PersistenceLocked(_)=>Some(super::NativeLock::Persistence),
-            SelectedService::LedgerRetrieval(_)|SelectedService::CompletionRetrieval(_)=>Some(super::NativeLock::Ledger),
+            SelectedService::LedgerRetrieval(_)|SelectedService::CompletionRetrieval(_)|SelectedService::EffectRetrieval(_)=>Some(super::NativeLock::Ledger),
             _=>None,
         };
         let mut delivery=PreparedGuestServiceDelivery::admit_selected(&selected.delivery_configuration.path,selected.delivery_configuration.sha256,
@@ -207,6 +227,12 @@ impl AdmittedGuest {
         require(inherited.iter().filter(|fd|**fd>=6).copied().eq(6..6+delivery.activation.len() as i32))?;
         let lifetime=process::Lifetime::arm(&delivery)?;
         let (spool_signer,service_selection,inspection)=match (service_selection,inspection){
+            (SelectedService::DispatchSpool(pin),Some(channel))=>(Some(admission::spool_endpoint::Prepared::open(
+                &pin,admission::spool_signer::Kind::DispatchBarrier,&mut delivery,channel)?),SelectedService::None,None),
+            (SelectedService::ActiveEffectBarrier(pin),Some(channel))=>(Some(admission::spool_endpoint::Prepared::open(
+                &pin,admission::spool_signer::Kind::ActiveEffectBarrier,&mut delivery,channel)?),SelectedService::None,None),
+            (SelectedService::ActiveEffectCommit(pin),Some(channel))=>(Some(admission::spool_endpoint::Prepared::open(
+                &pin,admission::spool_signer::Kind::ActiveEffectCommit,&mut delivery,channel)?),SelectedService::None,None),
             (SelectedService::TerminalSpool(pin),Some(channel))=>(Some(admission::spool_endpoint::Prepared::open_completion(
                 &pin,admission::spool_signer::Kind::Terminal,&mut delivery,channel)?),SelectedService::None,None),
             (SelectedService::CompletionLedgerSpool(pin),Some(channel))=>(Some(admission::spool_endpoint::Prepared::open_completion(
@@ -220,6 +246,7 @@ impl AdmittedGuest {
         // The successor takes its complete four-resource inventory before any
         // other purpose consumes a descriptor. It is not old v1 plus a flag.
         let (ledger_retrieval,service_selection,inspection)=match (service_selection,inspection){
+            (SelectedService::EffectRetrieval(pin),Some(channel))=>(Some(admission::ledger_retrieval::Prepared::open_effects(&pin,&mut delivery,channel)?),SelectedService::None,None),
             (SelectedService::CompletionRetrieval(pin),Some(channel))=>(
                 Some(admission::ledger_retrieval::Prepared::open_completion(&pin,&mut delivery,channel)?),SelectedService::None,None),
             (SelectedService::LedgerRetrieval(pin),Some(channel))=>(
@@ -248,6 +275,10 @@ impl AdmittedGuest {
             }
             (SelectedService::TerminalBridge(pin),Some(channel))=>{
                 let (prepared,grant)=proof_client::Prepared::open_terminal(&mut delivery,channel,&pin)?;
+                (None,None,None,None,None,Some(prepared),Some(grant),None,None)
+            }
+            (SelectedService::ActiveEffectBridge(pin),Some(channel))=>{
+                let (prepared,grant)=proof_client::Prepared::open_effects(&mut delivery,channel,&pin)?;
                 (None,None,None,None,None,Some(prepared),Some(grant),None,None)
             }
             (SelectedService::CommitRequest(pin),Some(channel))=>(None,None,None,None,None,None,None,None,

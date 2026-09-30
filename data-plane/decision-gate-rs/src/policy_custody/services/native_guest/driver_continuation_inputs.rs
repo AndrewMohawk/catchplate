@@ -76,7 +76,7 @@ pub(super) fn verify_parent(cold:&Cold,phase:&PhaseTwo,rights:&[OwnedFd])->Resul
     let rights=operation.take(duplicates)?;
     let raw=parent_file(&rights,"launch",&operation.launch,0,0,32768)?;
     let (launch,service)=selection(&raw)?;
-    let time_grant=match service {SelectedService::ProofBridge(p)|SelectedService::CommitmentBridge(p)|SelectedService::SpoolBridge(p)|SelectedService::TerminalBridge(p)=>p,
+    let time_grant=match service {SelectedService::ProofBridge(p)|SelectedService::CommitmentBridge(p)|SelectedService::SpoolBridge(p)|SelectedService::TerminalBridge(p)|SelectedService::ActiveEffectBridge(p)=>p,
         _=>return Err(ShadowError::BindingDrift)};
     require(launch.delivery_configuration.sha256==cold.config.delivery_configuration.sha256
         && launch.delivery_configuration.path==cold.config.delivery_configuration.path)?;
@@ -139,9 +139,10 @@ impl ParentInputs {
         let owned=operation.take(rights.iter().map(|v|retrieval_peer::duplicate(v.as_fd())).collect::<Result<Vec<_>,_>>()?)?;
         let launch_raw=parent_file(&owned,"launch",&operation.launch,0,0,32768)?;
         let (launch,selection)=selection(&launch_raw)?;
-        let commitment=matches!(&selection,SelectedService::CommitmentBridge(_)|SelectedService::SpoolBridge(_)|SelectedService::TerminalBridge(_));
-        let spool=matches!(&selection,SelectedService::SpoolBridge(_)|SelectedService::TerminalBridge(_));
-        let terminal=matches!(&selection,SelectedService::TerminalBridge(_));
+        let commitment=matches!(&selection,SelectedService::CommitmentBridge(_)|SelectedService::SpoolBridge(_)|SelectedService::TerminalBridge(_)|SelectedService::ActiveEffectBridge(_));
+        let spool=matches!(&selection,SelectedService::SpoolBridge(_)|SelectedService::TerminalBridge(_)|SelectedService::ActiveEffectBridge(_));
+        let terminal=matches!(&selection,SelectedService::TerminalBridge(_)|SelectedService::ActiveEffectBridge(_));
+        let effects=matches!(&selection,SelectedService::ActiveEffectBridge(_));
         let files=guest::admit_files(&launch.delivery_configuration.path,launch.delivery_configuration.sha256,
             &launch.delivery.path,launch.delivery.sha256).map_err(fail)?;
         let activation=files.payload.activation.iter().map(|entry|{
@@ -149,7 +150,8 @@ impl ParentInputs {
             Ok((entry.name.clone(),retrieval_peer::duplicate(fd.as_fd())?))
         }).collect::<Result<BTreeMap<_,_>,ShadowError>>()?;
         let (inspector,channel)=if cold.bridge_admission_selected() {
-            proof_client::Inspector::prepare_native_facade(&files,&activation,commitment,spool,terminal)?
+            proof_client::Inspector::prepare_native_facade(&files,&activation,commitment,spool,terminal,effects)?
+        } else if effects {proof_client::Inspector::prepare_effects(&files,&activation)?
         } else if terminal {proof_client::Inspector::prepare_terminal(&files,&activation)?
         } else if spool {proof_client::Inspector::prepare_spool(&files,&activation)?
         } else {proof_client::Inspector::prepare_selected(&files,&activation,commitment)?};

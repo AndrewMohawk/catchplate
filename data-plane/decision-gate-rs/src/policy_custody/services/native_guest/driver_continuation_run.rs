@@ -20,9 +20,10 @@ pub(super) fn run(mut prepared:Prepared,identity:driver_identity::Owner,
     let launch=original(&mut rights,"launch",operation.launch_pin(),0,0,32768)?;
     let launch_bytes=launch.read(32768).map_err(fail)?.to_vec();
     let (selected,service)=selection(&launch_bytes)?;
-    let (time_pin,commitment_bridge,spool_bridge,terminal_bridge)=match service {
-        SelectedService::ProofBridge(p)=>(p,false,false,false),SelectedService::CommitmentBridge(p)=>(p,true,false,false),
-        SelectedService::SpoolBridge(p)=>(p,true,true,false),SelectedService::TerminalBridge(p)=>(p,true,true,true),
+    let (time_pin,commitment_bridge,spool_bridge,terminal_bridge,effects_bridge)=match service {
+        SelectedService::ProofBridge(p)=>(p,false,false,false,false),SelectedService::CommitmentBridge(p)=>(p,true,false,false,false),
+        SelectedService::SpoolBridge(p)=>(p,true,true,false,false),SelectedService::TerminalBridge(p)=>(p,true,true,true,false),
+        SelectedService::ActiveEffectBridge(p)=>(p,true,true,true,true),
         _=>return Err(ShadowError::BindingDrift),
     };
     require(selected.delivery_configuration.sha256==prepared.cold.config.delivery_configuration.sha256
@@ -127,7 +128,7 @@ pub(super) fn run(mut prepared:Prepared,identity:driver_identity::Owner,
     let native_configuration=if full {keys.admitted_bridge_configuration(&trust,time.as_ref())?.clone()}
         else{native_configuration};
     retained.publish_public_admission(&keys,&closure_original,&assignment_original,&trust,time.as_ref())?;
-    let (proof_client,time_grant)=proof_client::Prepared::open_late(&mut delivery,inspection,time_grant,commitment_bridge,spool_bridge,terminal_bridge)?;
+    let (proof_client,time_grant)=proof_client::Prepared::open_late(&mut delivery,inspection,time_grant,commitment_bridge,spool_bridge,terminal_bridge,effects_bridge)?;
     let bridge_activation=std::sync::Mutex::new(Some(std::mem::take(&mut delivery.activation)));
     let owner=AdmittedGuest{_delivery:delivery,lifetime,keys,trust,time,launch,launch_bytes,
         originals:vec![assignment_original,closure_original,keys_original,encrypted_original,admission_original],

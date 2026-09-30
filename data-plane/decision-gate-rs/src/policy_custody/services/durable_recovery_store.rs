@@ -1213,6 +1213,8 @@ impl super::dispatch_service::Owner for TrustedHostNoTeeDurableRecoveryStoreServ
     }
 }
 impl super::spool_head::Owner for TrustedHostNoTeeDurableRecoveryStoreServer {
+    fn sign_effect_allocation(&self,input:&super::spool_head::EffectAllocationInput)
+        ->Result<super::active_effect_values::Allocation,ServiceError>{input.sign(&self.signer.signing_key)}
     fn sign_spool_allocation(&self,input:&super::spool_head::AllocationInput)
         ->Result<super::spool_head_values::Allocation,ServiceError>{input.sign(&self.signer.signing_key)}
     fn sign_spool_commit(&self,input:&super::spool_head::CommitInput)

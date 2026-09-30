@@ -181,7 +181,8 @@ def verify_drain(value, originals, generation, assignment):
     for item in originals:
         event = profile.document(bytes(item["canonical_event_bytes"]), 16 * 1024)
         if type(event) is list:
-            admissions[item["ingress_sequence"]] = (item, event[3]["decision"])
+            decision = opening.early_sampling(event, item, generation) if event[0] == opening.EARLY_EVENT else event[3]["decision"]
+            admissions[item["ingress_sequence"]] = (item, decision)
     expected = {sequence for sequence, (_, decision) in admissions.items() if decision == "included"}
     profile.require({row["ingressSequence"] for row in seal["lifecycles"]} == expected
         and len(admissions) == seal["admissionAttempts"])

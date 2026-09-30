@@ -68,10 +68,12 @@ those inputs itself.
 
 The independently supplied input directory must contain `inputs.json`,
 `seccomp.bpf`, `runtime.json`, `build-recipe.json`, and `provenance.json`.
-`inputs.json` is the existing canonical no-newline
+`inputs.json` is the existing canonical ASCII plus exactly one LF
 `serverware.nativeShadowCustodyImageInputs/v1` document. Its source pin must
 equal `preparation.json`'s `source.source_manifest_digest`; its four other pins
-must bind the exact public originals. Obtain the **full manifest SHA** from the
+must bind the exact public originals. Both the outer copier and custody packager
+require that same byte format; neither normalizes the supplied original. Its
+independent full-manifest digest includes the terminal LF. Obtain the **full manifest SHA** from the
 independent author, rather than treating a locally calculated hash as authority.
 No launch, C9 delivery, policy secret, seed or credential belongs in this public
 build directory. Only these five bounded files enter the private Docker context.

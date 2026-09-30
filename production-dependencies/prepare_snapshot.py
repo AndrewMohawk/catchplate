@@ -430,7 +430,7 @@ def prepare(*, expected_commit: str, existing_cache: Path, snapshot_id: str, out
     image_id = image[0].get("Id", "")
     if not re.fullmatch(r"sha256:[0-9a-f]{64}", image_id):
         raise ValueError("builder image lacks an immutable configuration digest")
-    output.mkdir(mode=0o750)
+    output.mkdir(mode=0o700)
     report: dict[str, Any] = {"apiVersion": "serverware.dependencySnapshotCandidate/v1", "ok": False,
         "published": False, "reviewed_pins_installed": False, "production_release_authority": False,
         "scope": "local-engineering-preparation-only", "source": source,
@@ -438,17 +438,18 @@ def prepare(*, expected_commit: str, existing_cache: Path, snapshot_id: str, out
         "rust_vendor_mode": "refresh-locked" if refresh_rust else "unchanged-reviewed-carry-forward",
         "snapshot_id": snapshot_id, "builder": {"reference": PYTHON_IMAGE, "image_id": image_id}}
     try:
+        # Set every owned ancestor explicitly. Path.mkdir(parents=True) does
+        # not apply its mode to intermediate directories, and a permissive
+        # operator umask must not create group-writable input/cache parents.
+        for relative in ("data-plane", "data-plane/decision-gate-rs", "inputs",
+                         "work", "work/download", "work/verify", "snapshot", "snapshot/cache"):
+            (output / relative).mkdir(mode=0o700)
         for relative in SOURCE_INPUTS:
             path = output / relative
-            path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(captured[relative])
-        (output / "inputs").mkdir()
         (output / "inputs/requirements.lock").write_bytes(captured["requirements.lock"])
-        for phase in ("download", "verify"):
-            (output / "work" / phase).mkdir(parents=True)
         snapshot = output / "snapshot"
         cache = snapshot / "cache"
-        cache.mkdir(parents=True)
         carried = {}
         for original in originals[1:]:
             for relative, digest in original["entries"].items():

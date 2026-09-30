@@ -34,7 +34,10 @@ a host Docker socket.
 
 Use a new candidate directory on NVMe outside the checkout. The tool requires
 4 GiB free and refuses existing outputs, checkout descendants, and root-backed
-`/tmp`. Its two fixed Python containers each have one CPU, 2 GiB memory, 128 PIDs, a
+`/tmp`. It creates the candidate and each input/work/cache ancestor with explicit
+owner-only mode `0700`, independent of a permissive operator umask. It never
+repairs or adopts a failed candidate directory; a corrected invocation uses a
+new task-specific output. Its two fixed Python containers each have one CPU, 2 GiB memory, 128 PIDs, a
 read-only root, no capabilities, no new privileges, and a 1400-second deadline.
 Bulky downloads, unpacking, and installation use a bounded 1536 MiB container
 tmpfs; only archives, logs, and reports persist on the selected filesystem.

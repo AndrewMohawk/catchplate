@@ -349,9 +349,9 @@ def copy_native_pilot_public_inputs(directory: Path, expected_sha256: str,
     fields = {"apiVersion", "sourceManifestSha256", *(item[0] for item in PUBLIC_GUEST_FILES.values())}
     if (type(document) is not dict or set(document) != fields
             or document.get("apiVersion") != "serverware.nativeShadowCustodyImageInputs/v1"
-            or canonical_json(document).encode("ascii") != raw
+            or (canonical_json(document) + "\n").encode("ascii") != raw
             or document["sourceManifestSha256"] != metadata["source_manifest_digest"]):
-        raise RuntimeError("public guest manifest must be canonical and pin this exact admitted source")
+        raise RuntimeError("public guest manifest must be canonical ASCII plus exactly one LF and pin this exact admitted source")
     for filename, (field, maximum) in PUBLIC_GUEST_FILES.items():
         pin = document[field]
         if type(pin) is not str or not re.fullmatch(r"sha256:[0-9a-f]{64}", pin) or pin == "sha256:" + "0" * 64:

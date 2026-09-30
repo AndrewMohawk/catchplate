@@ -9,10 +9,10 @@ use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 
 const MAX_IMAGE: u64 = 512 * 1024 * 1024;
 const ALL_SEALS: libc::c_int = libc::F_SEAL_WRITE | libc::F_SEAL_GROW | libc::F_SEAL_SHRINK | libc::F_SEAL_SEAL;
-const LOOP_CONFIGURE: libc::c_ulong = 0x4c0a;
-const LOOP_GET_STATUS64: libc::c_ulong = 0x4c05;
-const LOOP_CTL_GET_FREE: libc::c_ulong = 0x4c82;
-const BLKROGET: libc::c_ulong = 0x125e;
+const LOOP_CONFIGURE: libc::Ioctl = 0x4c0a;
+const LOOP_GET_STATUS64: libc::Ioctl = 0x4c05;
+const LOOP_CTL_GET_FREE: libc::Ioctl = 0x4c82;
+const BLKROGET: libc::Ioctl = 0x125e;
 const LOOP_FLAGS: u32 = 1 | 4; // READ_ONLY | AUTOCLEAR
 
 #[repr(C)]

@@ -355,9 +355,10 @@ fn filter(executable: RawFd, profile: Profile) -> Result<(Vec<libc::sock_filter>
     prctl.extend(one_of(16,&[libc::PR_GET_DUMPABLE as u32,libc::PR_GET_NO_NEW_PRIVS as u32]));
     branch(&mut out,libc::SYS_prctl,prctl)?;
     // Existing hard CORE=0 cannot be raised by the unprivileged interpreter.
-    branch(&mut out,libc::SYS_setrlimit,one_of(16,&[libc::RLIMIT_CORE]))?;
+    let core_limit=u32::try_from(libc::RLIMIT_CORE).map_err(|_|"verifier core resource identifier invalid")?;
+    branch(&mut out,libc::SYS_setrlimit,one_of(16,&[core_limit]))?;
     let mut limit=equals(16,0);limit.extend(equals(20,0));
-    limit.extend([s(0x20,0,0,24),s(0x15,0,1,libc::RLIMIT_CORE),s(0x06,0,0,ALLOW)]);
+    limit.extend([s(0x20,0,0,24),s(0x15,0,1,core_limit),s(0x06,0,0,ALLOW)]);
     limit.extend(equals(32,0));limit.extend(equals(36,0));limit.push(s(0x06,0,0,ALLOW));
     branch(&mut out,libc::SYS_prlimit64,limit)?;
     branch(&mut out,libc::SYS_arch_prctl,one_of(16,&[0x1002,0x1003]))?;

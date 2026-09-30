@@ -211,54 +211,29 @@ build is not live readiness or production acceptance.
 
 ## Live preparation remains with the genuine owners
 
-Engineering attempt 9 on 2026-09-30 used source `f76325d2` and the unchanged,
+Engineering attempt 12 on 2026-09-30 used source `0b80631f` and the unchanged,
 unpublished `v3-candidate-cba01916` dependencies in an isolated dirty-tree
-checkout. It built the nonrelease Linux/amd64 control image
-`sha256:dc09784034751b7545754f54fb51377d909eadac59c136dfd1d5878c719705c0`.
-The shared preparation stage allowed packaging to proceed independently of the
-main Rust compile. The corrected loader-path handling advanced, then packaging
-stopped because `ldd` was invoked on Python's build-only
-`config-3.11-x86_64-linux-gnu/python.o` object. This surfaced about ten seconds
-into glibc dependency compilation, which was canceled rather than completed.
-Neither Rust stage has a successful result from this attempt. The fixed
-resource arguments were recorded; no live cgroup-limit sample was obtained
-before the short-lived workers exited.
-The next build excludes only that exact top-level stdlib build directory and
-admits only executable/shared-object ELF types before writing runtime output.
-The actual runtime modules remain included; unresolved loader errors still fail
-the build.
-Retained evidence is under
-`codex-offload/serverware/engineering-builds/f76325d2-lqsaw9`.
-There is no gate image, complete two-image report, project test result,
-service deployment or pilot acceptance from this attempt. Canonical reviewed
-dependency pins and the nonrelease boundary remain unchanged.
+checkout. All three fixed Python runtime packages completed: broker, role-key
+provisioner and shadow-key delivery. The static Alpine/musl compilation exposed
+112 compiler diagnostics across 11 files, mapped to the current correction
+batch; the concurrent glibc compilation was canceled, not completed. Retained
+`build.log` and `errors-by-source.tsv` are under
+`codex-offload/serverware/engineering-builds/0b80631f-wdnr7n`.
 
-Attempt 8 (`33586f89`) completed the main glibc build in 9m06s, initialized the
-actual custody ledger, and installed all 31 offline Python wheels. Its runner
-used `--keep-going` and reduced 30,170 warnings to eight summaries without
-clipping. The next failure was the pinned loader's legitimate
-`/usr/local/bin/../lib/libpython3.11.so.1.0` spelling. The integrated fix requires
-original and normalized paths to resolve to the same allowed file, preserving
-runtime interpreter paths. Attempt 8 evidence remains under
-`codex-offload/serverware/engineering-builds/33586f89-fe7loz`; that compile result
-does not claim the later source snapshot has built successfully.
+The correction batch shares the fixed kernel `statx` ABI across both libc
+targets, preserving required mount-ID and descriptor-association checks without
+emulation. Native ancillary lengths and ioctl requests now use their target ABI
+types. These are compiler/packaging repairs, not relaxed runtime admission or
+new dependency versions; their next verification is the combined image build.
 
-Earlier attempts stopped at 18 library errors, then 95 distinct diagnostics
-across 53 files, then 32 distinct diagnostics across 19 files, then five errors,
-then one filesystem-comparison type error in attempt 6.
-Attempt 7 completed the main Rust build, then stopped at `tar: not found` after
-direct Debian-package extraction. The base contains tar and a merged-`/usr`
-layout; the liblzo archive contains a real `lib` directory. Staging the verified
-packages and installing only their fixed build-tool files under `/usr` resolved
-that blocker in attempt 8, without changing dependency hashes or base pins.
-Attempt 5 stopped before Rust when BuildKit could not materialize a pinned base;
-all five exact base-image references were subsequently found missing and restored
-without changing their digests. Their removal cause is unproven; separate
-failure and recovery evidence is retained under
-`codex-offload/serverware/engineering-builds/abdca80f-ouzbia`.
-Attempt 6's actual RUN-worker limits were
-`cpu.max=800000 100000`, `memory.max=25769803776` and `memory.swap.max=0`;
-these observations are not aggregate limits across concurrent workers.
+The last completed main glibc build remains attempt 8, source `33586f89`, with
+evidence under `codex-offload/serverware/engineering-builds/33586f89-fe7loz`.
+That earlier result does not establish a successful build of the current source.
+There is still no gate image, complete two-image report or testable native pilot.
+Build-first work continues without broad tests; project test results, service
+deployment and connected pilot acceptance remain outstanding. Canonical reviewed
+dependency pins, independent admission requirements and the nonrelease boundary
+are unchanged; production acceptance remains **0/6 verified**.
 
 The source-fixed prerequisite list points at the actual existing callers:
 `ParkedProofCohort.start`, `FiveServiceLaunch.start_effects`,

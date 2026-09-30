@@ -55,11 +55,13 @@ pub(super) fn send(socket: RawFd, bytes: &[u8], descriptor: Option<RawFd>) -> Re
     message.msg_iov = &mut vector; message.msg_iovlen = 1;
     if let Some(fd) = descriptor {
         message.msg_control = control.as_mut_ptr().cast();
-        message.msg_controllen = unsafe { libc::CMSG_SPACE(size_of::<i32>() as _) } as usize;
+        message.msg_controllen = unsafe { libc::CMSG_SPACE(size_of::<i32>() as _) }
+            .try_into().map_err(|_| "shadow packet ancillary buffer length")?;
         let header = unsafe { libc::CMSG_FIRSTHDR(&message) };
         require(!header.is_null())?;
         unsafe { (*header).cmsg_level = libc::SOL_SOCKET; (*header).cmsg_type = libc::SCM_RIGHTS;
-            (*header).cmsg_len = libc::CMSG_LEN(size_of::<i32>() as _) as usize;
+            (*header).cmsg_len = libc::CMSG_LEN(size_of::<i32>() as _)
+                .try_into().map_err(|_| "shadow packet ancillary header length")?;
             std::ptr::write_unaligned(libc::CMSG_DATA(header).cast::<i32>(), fd); }
     }
     require(unsafe { libc::sendmsg(socket, &message, libc::MSG_DONTWAIT | libc::MSG_NOSIGNAL) } == bytes.len() as isize)
@@ -70,17 +72,21 @@ pub(super) fn receive(socket: RawFd, expected_rights: usize) -> Result<Packet, S
     let mut vector = libc::iovec {iov_base:bytes.as_mut_ptr().cast(),iov_len:bytes.len()};
     let mut message: libc::msghdr = unsafe { zeroed() };
     message.msg_iov=&mut vector; message.msg_iovlen=1;
-    message.msg_control=control.as_mut_ptr().cast(); message.msg_controllen=size_of::<[usize;64]>();
+    message.msg_control=control.as_mut_ptr().cast();
+    message.msg_controllen=size_of::<[usize;64]>().try_into().map_err(|_|"shadow packet ancillary capacity")?;
     let length=unsafe {libc::recvmsg(socket,&mut message,libc::MSG_DONTWAIT|libc::MSG_CMSG_CLOEXEC)};
     require(length>=0)?;
     let mut bad=length==0 || length as usize>bytes.len() || message.msg_flags&(libc::MSG_TRUNC|libc::MSG_CTRUNC)!=0;
     let mut rights=Vec::new(); let mut senders=Vec::new(); let mut credentials=None;
+    let control_length=usize::try_from(message.msg_controllen).map_err(|_|"shadow packet received ancillary length")?;
     let mut header=unsafe {libc::CMSG_FIRSTHDR(&message)};
     while !header.is_null() {
         let item=unsafe {&*header}; let base=unsafe {libc::CMSG_LEN(0)} as usize;
-        if item.cmsg_len<base || (header as usize).checked_sub(message.msg_control as usize)
-            .and_then(|n|n.checked_add(item.cmsg_len)).is_none_or(|n|n>message.msg_controllen) {bad=true;break;}
-        let count=item.cmsg_len-base; let data=unsafe {libc::CMSG_DATA(header)};
+        let item_length=match usize::try_from(item.cmsg_len){Ok(value)=>value,Err(_)=>{bad=true;break;}};
+        if item_length<base || (header as usize).checked_sub(message.msg_control as usize)
+            .and_then(|n|n.checked_add(item_length))
+            .is_none_or(|n|n>control_length || n>size_of::<[usize;64]>()) {bad=true;break;}
+        let count=item_length-base; let data=unsafe {libc::CMSG_DATA(header)};
         if item.cmsg_level==libc::SOL_SOCKET && matches!(item.cmsg_type,libc::SCM_RIGHTS|SCM_PIDFD) {
             if count%size_of::<i32>()!=0 {bad=true;}
             for i in 0..count/size_of::<i32>() {

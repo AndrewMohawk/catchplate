@@ -5,13 +5,14 @@
 //! original absolute cleanup bound, leader pidfd and exact reap semantics.
 
 use std::cell::Cell;
+use std::ffi::CStr;
 use std::fmt;
 use std::io;
 use std::mem::zeroed;
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
+use crate::linux_statx::{self, Statx, BASIC_STATS, MNT_ID, SYNC_AS_STAT};
 
 const CGROUP2_SUPER_MAGIC: libc::c_long = 0x6367_7270;
-const STATX_MNT_ID: libc::c_uint = 0x0000_1000;
 const MAX_EVENTS_BYTES: usize = 4096;
 
 #[derive(Debug)]
@@ -56,11 +57,11 @@ impl DirectoryObservationV1 {
     pub fn gid(&self) -> libc::gid_t { self.gid }
 }
 
-fn observation(stat: &libc::stat, statx: &libc::statx)
+fn observation(stat: &libc::stat, statx: &Statx)
     -> Result<DirectoryObservationV1, Error>
 {
-    if statx.stx_mask & libc::STATX_BASIC_STATS != libc::STATX_BASIC_STATS
-        || statx.stx_mask & STATX_MNT_ID == 0 || statx.stx_ino != stat.st_ino
+    if statx.stx_mask & BASIC_STATS != BASIC_STATS
+        || statx.stx_mask & MNT_ID == 0 || statx.stx_ino != stat.st_ino
         || statx.stx_size != stat.st_size as u64
         || u32::from(statx.stx_mode) != stat.st_mode
         || statx.stx_uid != stat.st_uid || statx.stx_gid != stat.st_gid
@@ -76,11 +77,11 @@ fn observation(stat: &libc::stat, statx: &libc::statx)
 
 fn descriptor(fd: BorrowedFd<'_>) -> Result<DirectoryObservationV1, Error> {
     let mut stat: libc::stat = unsafe { zeroed() };
-    let mut statx: libc::statx = unsafe { zeroed() };
+    let mut statx: Statx = unsafe { zeroed() };
     if unsafe { libc::fstat(fd.as_raw_fd(), &mut stat) } != 0
-        || unsafe { libc::statx(fd.as_raw_fd(), b"\0".as_ptr().cast(),
-            libc::AT_EMPTY_PATH | libc::AT_STATX_SYNC_AS_STAT,
-            libc::STATX_BASIC_STATS | STATX_MNT_ID, &mut statx) } != 0
+        || linux_statx::statx(fd.as_raw_fd(), c"",
+            libc::AT_EMPTY_PATH | SYNC_AS_STAT,
+            BASIC_STATS | MNT_ID, &mut statx) != 0
     {
         return Err(io::Error::last_os_error().into());
     }
@@ -92,7 +93,7 @@ fn filesystem(fd: BorrowedFd<'_>) -> Result<(), Error> {
     if unsafe { libc::fstatfs(fd.as_raw_fd(), &mut value) } != 0 {
         return Err(io::Error::last_os_error().into());
     }
-    if value.f_type != CGROUP2_SUPER_MAGIC {
+    if i128::from(value.f_type) != i128::from(CGROUP2_SUPER_MAGIC) {
         return Err(Error::Invalid("descriptor is not on cgroup v2"));
     }
     Ok(())
@@ -111,8 +112,8 @@ pub fn verify_directory(fd: BorrowedFd<'_>) -> Result<DirectoryObservationV1, Er
 #[derive(Clone, Copy)]
 enum Kind { Kill, Events }
 impl Kind {
-    fn name(self) -> &'static [u8] {
-        match self { Self::Kill => b"cgroup.kill\0", Self::Events => b"cgroup.events\0" }
+    fn name(self) -> &'static CStr {
+        match self { Self::Kill => c"cgroup.kill", Self::Events => c"cgroup.events" }
     }
     fn flags(self) -> libc::c_int {
         libc::O_CLOEXEC | libc::O_NOFOLLOW | match self {
@@ -124,11 +125,11 @@ impl Kind {
 
 fn named(directory: BorrowedFd<'_>, kind: Kind) -> Result<DirectoryObservationV1, Error> {
     let mut stat: libc::stat = unsafe { zeroed() };
-    let mut statx: libc::statx = unsafe { zeroed() };
+    let mut statx: Statx = unsafe { zeroed() };
     let flags = libc::AT_SYMLINK_NOFOLLOW | libc::AT_NO_AUTOMOUNT;
     if unsafe { libc::fstatat(directory.as_raw_fd(), kind.name().as_ptr().cast(), &mut stat, flags) } != 0
-        || unsafe { libc::statx(directory.as_raw_fd(), kind.name().as_ptr().cast(),
-            flags | libc::AT_STATX_SYNC_AS_STAT, libc::STATX_BASIC_STATS | STATX_MNT_ID, &mut statx) } != 0
+        || linux_statx::statx(directory.as_raw_fd(), kind.name(),
+            flags | SYNC_AS_STAT, BASIC_STATS | MNT_ID, &mut statx) != 0
     {
         return Err(io::Error::last_os_error().into());
     }

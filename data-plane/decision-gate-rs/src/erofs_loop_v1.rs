@@ -9,15 +9,15 @@ use std::fmt;
 use std::io;
 use std::mem::zeroed;
 use std::os::fd::{AsRawFd, BorrowedFd, RawFd};
+use crate::linux_statx::{self, Statx, BASIC_STATS, MNT_ID, SYNC_AS_STAT};
 
 const EROFS_SUPER_MAGIC: libc::c_long = 0xe0f5_e1e2_u32 as libc::c_long;
 const ST_RDONLY: libc::c_ulong = 1;
-const BLKROGET: libc::c_ulong = 0x125e;
-const LOOP_GET_STATUS64: libc::c_ulong = 0x4c05;
+const BLKROGET: libc::Ioctl = 0x125e;
+const LOOP_GET_STATUS64: libc::Ioctl = 0x4c05;
 const LOOP_READ_ONLY: u32 = 1;
-const FS_IOC_MEASURE_VERITY: libc::c_ulong = 0xc004_6686;
+const FS_IOC_MEASURE_VERITY: libc::Ioctl = 0xc004_6686u32 as libc::Ioctl;
 const FS_VERITY_SHA256: u16 = 1;
-const STATX_MNT_ID: libc::c_uint = 0x0000_1000;
 const MAX_IMAGE_BYTES: u64 = 64 * 1024 * 1024 * 1024;
 
 #[derive(Debug)]
@@ -100,13 +100,12 @@ impl ErofsLoopObservationV1 {
 
 fn descriptor(fd: RawFd) -> Result<DescriptorObservationV1, ErofsLoopErrorV1> {
     let mut stat: libc::stat = unsafe { zeroed() };
-    let mut statx: libc::statx = unsafe { zeroed() };
+    let mut statx: Statx = unsafe { zeroed() };
     if unsafe { libc::fstat(fd, &mut stat) } != 0
-        || unsafe { libc::statx(fd, b"\0".as_ptr() as *const libc::c_char,
-            libc::AT_EMPTY_PATH | libc::AT_STATX_SYNC_AS_STAT,
-            libc::STATX_BASIC_STATS | STATX_MNT_ID, &mut statx) } != 0
-        || statx.stx_mask & libc::STATX_BASIC_STATS != libc::STATX_BASIC_STATS
-        || statx.stx_mask & STATX_MNT_ID == 0
+        || linux_statx::statx(fd, c"", libc::AT_EMPTY_PATH | SYNC_AS_STAT,
+            BASIC_STATS | MNT_ID, &mut statx) != 0
+        || statx.stx_mask & BASIC_STATS != BASIC_STATS
+        || statx.stx_mask & MNT_ID == 0
         || statx.stx_ino != stat.st_ino || statx.stx_size != stat.st_size as u64
         || u32::from(statx.stx_mode) != stat.st_mode
     {

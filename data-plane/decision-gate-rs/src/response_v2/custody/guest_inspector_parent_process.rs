@@ -218,7 +218,9 @@ pub(super) fn receive(socket: RawFd) -> Result<(Vec<u8>, OwnedFd, libc::ucred), 
     let mut vector = libc::iovec { iov_base: bytes.as_mut_ptr().cast(), iov_len: bytes.len() };
     let mut message: libc::msghdr = unsafe { zeroed() };
     message.msg_iov = &mut vector; message.msg_iovlen = 1;
-    message.msg_control = control.as_mut_ptr().cast(); message.msg_controllen = size_of::<[usize; 64]>();
+    message.msg_control = control.as_mut_ptr().cast();
+    message.msg_controllen = size_of::<[usize; 64]>().try_into()
+        .map_err(|_| "inspector initialized control capacity exceeds ABI".to_owned())?;
     let length = unsafe { libc::recvmsg(socket, &mut message, libc::MSG_DONTWAIT | libc::MSG_CMSG_CLOEXEC) };
     if length < 0 { return Err("inspector initialized receive failed".into()); }
     let mut owned = Vec::new();
@@ -229,12 +231,13 @@ pub(super) fn receive(socket: RawFd) -> Result<(Vec<u8>, OwnedFd, libc::ucred), 
     while !header.is_null() {
         let item = unsafe { &*header };
         let base = unsafe { libc::CMSG_LEN(0) } as usize;
+        let header_length = item.cmsg_len as usize;
         let offset = (header as usize).checked_sub(message.msg_control as usize);
-        if item.cmsg_len < base || offset.and_then(|v| v.checked_add(item.cmsg_len))
-            .is_none_or(|end| end > message.msg_controllen) {
+        if header_length < base || offset.and_then(|v| v.checked_add(header_length))
+            .is_none_or(|end| end > message.msg_controllen as usize) {
             invalid = true; break;
         }
-        let count = item.cmsg_len - base;
+        let count = header_length - base;
         let data = unsafe { libc::CMSG_DATA(header) };
         if item.cmsg_level == libc::SOL_SOCKET && matches!(item.cmsg_type, SCM_PIDFD | libc::SCM_RIGHTS) {
             if count % size_of::<i32>() != 0 || item.cmsg_type != SCM_PIDFD || count != size_of::<i32>() { invalid = true; }

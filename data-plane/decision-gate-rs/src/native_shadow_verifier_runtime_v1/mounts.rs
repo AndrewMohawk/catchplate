@@ -43,7 +43,8 @@ impl Mount {
         let mut fs: libc::statfs = unsafe { std::mem::zeroed() };
         ensure(unsafe { libc::fstatvfs(self.file.as_raw_fd(), &mut flags) } == 0
             && flags.f_flag & 15 == 15 && unsafe { libc::fstatfs(self.file.as_raw_fd(), &mut fs) } == 0
-            && filesystem.is_none_or(|expected| fs.f_type == expected), "verifier readonly mount flags/type differ")
+            && filesystem.is_none_or(|expected| i128::from(fs.f_type) == i128::from(expected)),
+            "verifier readonly mount flags/type differ")
     }
 }
 

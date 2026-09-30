@@ -71,6 +71,8 @@ pub mod native_canary_finalization_v1;
 pub mod native_policy_activation_transport;
 pub mod release_profile_v1;
 #[cfg(target_os = "linux")]
+mod linux_statx;
+#[cfg(target_os = "linux")]
 pub mod erofs_loop_v1;
 pub mod native_secret_broker_v1;
 pub(crate) mod native_shadow_verifier_runtime_v1;

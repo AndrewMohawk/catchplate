@@ -4486,6 +4486,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/response_v2/custody/supervisor.rs \
 				data-plane/decision-gate-rs/src/response_v2/custody/guest_delivery.rs \
 				data-plane/decision-gate-rs/src/custody_protocol.rs \
+				data-plane/decision-gate-rs/src/linux_statx.rs \
 				data-plane/decision-gate-rs/src/native_startup_config/mod.rs \
 				data-plane/decision-gate-rs/src/native_startup_config/capture_retirement.rs \
 				data-plane/decision-gate-rs/src/native_startup_config/reconnect.rs \

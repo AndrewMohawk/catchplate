@@ -119,7 +119,9 @@ fn receive(fd: RawFd) -> io::Result<Packet> {
     let mut vector = libc::iovec { iov_base:bytes.as_mut_ptr().cast(), iov_len:bytes.len() };
     let mut message: libc::msghdr = unsafe { zeroed() };
     message.msg_iov = &mut vector; message.msg_iovlen = 1;
-    message.msg_control = ancillary.as_mut_ptr().cast(); message.msg_controllen = size_of_val(&ancillary);
+    message.msg_control = ancillary.as_mut_ptr().cast();
+    message.msg_controllen = size_of_val(&ancillary).try_into()
+        .map_err(|_| other("inspector receive control capacity exceeds ABI"))?;
     let count = unsafe { libc::recvmsg(fd, &mut message, libc::MSG_CMSG_CLOEXEC | libc::MSG_DONTWAIT) };
     if count < 0 { return Err(io::Error::last_os_error()); }
     // Own every received descriptor before reporting ANY malformed metadata.
@@ -130,8 +132,9 @@ fn receive(fd: RawFd) -> io::Result<Packet> {
     while !header.is_null() {
         let h = unsafe { &*header };
         let base = unsafe { libc::CMSG_LEN(0) } as usize;
-        if h.cmsg_len < base { invalid = true; break; }
-        let length = h.cmsg_len - base;
+        let header_length = h.cmsg_len as usize;
+        if header_length < base { invalid = true; break; }
+        let length = header_length - base;
         let data = unsafe { libc::CMSG_DATA(header) };
         if h.cmsg_level == libc::SOL_SOCKET && (h.cmsg_type == libc::SCM_RIGHTS || h.cmsg_type == SCM_PIDFD) {
             if length % size_of::<RawFd>() != 0 { invalid = true; }

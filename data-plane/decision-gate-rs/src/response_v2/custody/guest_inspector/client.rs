@@ -249,18 +249,22 @@ impl Client {
 
 fn send(fd:RawFd,bytes:&[u8],files:&[RawFd])->io::Result<()> {
     require(bytes.len() <= wire::MAX_FRAME && (files.len() == 2 || files.len() == 3),"inspector request bounds")?;
+    let descriptor_bytes=files.len()*size_of::<RawFd>();
+    let descriptor_length=u32::try_from(descriptor_bytes).map_err(|_| error("inspector descriptor length exceeds ABI"))?;
     let mut ancillary = [0usize;8];
     let mut vector = libc::iovec { iov_base:bytes.as_ptr() as *mut libc::c_void,iov_len:bytes.len() };
     let mut message:libc::msghdr = unsafe { zeroed() };
     message.msg_iov=&mut vector; message.msg_iovlen=1;
     message.msg_control=ancillary.as_mut_ptr().cast();
-    message.msg_controllen=unsafe { libc::CMSG_SPACE((files.len()*size_of::<RawFd>()) as u32) } as usize;
+    message.msg_controllen=unsafe { libc::CMSG_SPACE(descriptor_length) }.try_into()
+        .map_err(|_| error("inspector control length exceeds ABI"))?;
     let header=unsafe { libc::CMSG_FIRSTHDR(&message) };
     require(!header.is_null(),"inspector ancillary layout")?;
     unsafe {
         (*header).cmsg_level=libc::SOL_SOCKET; (*header).cmsg_type=libc::SCM_RIGHTS;
-        (*header).cmsg_len=libc::CMSG_LEN((files.len()*size_of::<RawFd>()) as u32) as usize;
-        std::ptr::copy_nonoverlapping(files.as_ptr().cast::<u8>(),libc::CMSG_DATA(header),files.len()*size_of::<RawFd>());
+        (*header).cmsg_len=libc::CMSG_LEN(descriptor_length).try_into()
+            .map_err(|_| error("inspector header length exceeds ABI"))?;
+        std::ptr::copy_nonoverlapping(files.as_ptr().cast::<u8>(),libc::CMSG_DATA(header),descriptor_bytes);
     }
     require(unsafe { libc::sendmsg(fd,&message,libc::MSG_DONTWAIT|libc::MSG_NOSIGNAL) } == bytes.len() as isize,
         "inspection request uncertain; no resend")
@@ -270,15 +274,17 @@ fn receive(fd:RawFd)->io::Result<(Vec<u8>,libc::ucred,OwnedFd)> {
     let mut vector=libc::iovec { iov_base:bytes.as_mut_ptr().cast(),iov_len:bytes.len() };
     let mut message:libc::msghdr=unsafe { zeroed() };
     message.msg_iov=&mut vector; message.msg_iovlen=1; message.msg_control=ancillary.as_mut_ptr().cast();
-    message.msg_controllen=std::mem::size_of_val(&ancillary);
+    message.msg_controllen=std::mem::size_of_val(&ancillary).try_into()
+        .map_err(|_| error("inspector receive control capacity exceeds ABI"))?;
     let count=unsafe { libc::recvmsg(fd,&mut message,libc::MSG_DONTWAIT|libc::MSG_CMSG_CLOEXEC) };
     if count < 0 { return Err(io::Error::last_os_error()); }
     let mut bad=false; let mut sender=Vec::new(); let mut credentials=Vec::new(); let mut rejected=Vec::new();
     let mut header=unsafe { libc::CMSG_FIRSTHDR(&message) };
     while !header.is_null() {
         let h=unsafe { &*header }; let base=unsafe { libc::CMSG_LEN(0) } as usize;
-        if h.cmsg_len < base { bad=true; break; }
-        let length=h.cmsg_len-base; let data=unsafe { libc::CMSG_DATA(header) };
+        let header_length=h.cmsg_len as usize;
+        if header_length < base { bad=true; break; }
+        let length=header_length-base; let data=unsafe { libc::CMSG_DATA(header) };
         if h.cmsg_level==libc::SOL_SOCKET && (h.cmsg_type==libc::SCM_RIGHTS || h.cmsg_type==4) {
             if h.cmsg_type==libc::SCM_RIGHTS || length != size_of::<RawFd>() { bad=true; }
             for n in 0..length/size_of::<RawFd>() {

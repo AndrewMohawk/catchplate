@@ -1,6 +1,7 @@
 //! Fixed-name kernel/filesystem originals. No public FD, path, PID or write API.
 use super::{live, require, CGROUP_ID, PROC_CGROUP};
 use crate::cgroup_control_v1::{verify_directory, DirectoryObservationV1};
+use crate::linux_statx::{self, Statx, BASIC_STATS, MNT_ID, SYNC_AS_STAT};
 use std::ffi::CString;
 use std::fs::File;
 use std::os::fd::{AsFd, AsRawFd, FromRawFd, RawFd};
@@ -10,7 +11,6 @@ const CGROUP2: libc::c_long = 0x6367_7270;
 const SYSFS: libc::c_long = 0x6265_6572;
 const NSFS: libc::c_long = 0x6e73_6673;
 const PROCFS: libc::c_long = 0x9fa0;
-const MNT_ID: u32 = 0x1000;
 const MOUNT_LIMIT: usize = 256 * 1024;
 const READ_FLAGS: i32 = libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC;
 
@@ -22,11 +22,11 @@ fn owned(fd: RawFd) -> Result<File, String> {
 }
 fn node(file: &File) -> Result<Node, String> {
     let mut stat: libc::stat = unsafe { std::mem::zeroed() };
-    let mut statx: libc::statx = unsafe { std::mem::zeroed() };
+    let mut statx: Statx = unsafe { std::mem::zeroed() };
     require(unsafe { libc::fstat(file.as_raw_fd(), &mut stat) } == 0
-        && unsafe { libc::statx(file.as_raw_fd(), b"\0".as_ptr().cast(), libc::AT_EMPTY_PATH | libc::AT_STATX_SYNC_AS_STAT,
-            libc::STATX_BASIC_STATS | MNT_ID, &mut statx) } == 0
-        && statx.stx_mask & (libc::STATX_BASIC_STATS | MNT_ID) == (libc::STATX_BASIC_STATS | MNT_ID)
+        && linux_statx::statx(file.as_raw_fd(), c"", libc::AT_EMPTY_PATH | SYNC_AS_STAT,
+            BASIC_STATS | MNT_ID, &mut statx) == 0
+        && statx.stx_mask & (BASIC_STATS | MNT_ID) == (BASIC_STATS | MNT_ID)
         && stat.st_ino == statx.stx_ino && stat.st_dev == libc::makedev(statx.stx_dev_major, statx.stx_dev_minor)
         && stat.st_mode == u32::from(statx.stx_mode) && stat.st_uid == statx.stx_uid && stat.st_gid == statx.stx_gid,
         "gate cgroup descriptor identity differs")?;
@@ -36,7 +36,7 @@ fn node(file: &File) -> Result<Node, String> {
 fn fs_type(file: &File) -> Result<libc::c_long, String> {
     let mut stat: libc::statfs = unsafe { std::mem::zeroed() };
     require(unsafe { libc::fstatfs(file.as_raw_fd(), &mut stat) } == 0, "gate cgroup filesystem unavailable")?;
-    Ok(stat.f_type)
+    libc::c_long::try_from(stat.f_type).map_err(|_| "gate cgroup filesystem type out of range".into())
 }
 fn protected(file: &File, directory: bool) -> Result<(), String> {
     let value = node(file)?;

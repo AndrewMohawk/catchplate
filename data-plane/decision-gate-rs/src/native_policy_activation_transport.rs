@@ -147,9 +147,13 @@ fn send(fd:BorrowedFd<'_>,bytes:&[u8],right:Option<BorrowedFd<'_>>)->Result<bool
     let mut header:libc::msghdr=unsafe{std::mem::zeroed()};header.msg_iov=&mut iov;header.msg_iovlen=1;
     let mut control=[0usize;4];
     if let Some(right)=right{
-        header.msg_control=control.as_mut_ptr().cast();header.msg_controllen=unsafe{libc::CMSG_SPACE(std::mem::size_of::<i32>() as _)} as _;
+        header.msg_control=control.as_mut_ptr().cast();
+        header.msg_controllen=unsafe{libc::CMSG_SPACE(std::mem::size_of::<i32>() as _)}
+            .try_into().map_err(|_|"activation ancillary buffer length")?;
         let c=unsafe{libc::CMSG_FIRSTHDR(&header)};
-        unsafe{(*c).cmsg_level=libc::SOL_SOCKET;(*c).cmsg_type=libc::SCM_RIGHTS;(*c).cmsg_len=libc::CMSG_LEN(std::mem::size_of::<i32>() as _) as _;
+        unsafe{(*c).cmsg_level=libc::SOL_SOCKET;(*c).cmsg_type=libc::SCM_RIGHTS;
+            (*c).cmsg_len=libc::CMSG_LEN(std::mem::size_of::<i32>() as _)
+                .try_into().map_err(|_|"activation ancillary header length")?;
             std::ptr::write_unaligned(libc::CMSG_DATA(c).cast::<i32>(),right.as_raw_fd());}
     }
     let n=unsafe{libc::sendmsg(fd.as_raw_fd(),&header,libc::MSG_DONTWAIT|libc::MSG_NOSIGNAL)};
@@ -159,14 +163,19 @@ fn send(fd:BorrowedFd<'_>,bytes:&[u8],right:Option<BorrowedFd<'_>>)->Result<bool
 fn receive(fd:BorrowedFd<'_>,maximum:usize)->Result<Option<(Vec<u8>,Vec<OwnedFd>)>,String>{
     let mut bytes=vec![0;maximum];let mut control=[0usize;32];
     let mut iov=libc::iovec{iov_base:bytes.as_mut_ptr().cast(),iov_len:bytes.len()};let mut h:libc::msghdr=unsafe{std::mem::zeroed()};
-    h.msg_iov=&mut iov;h.msg_iovlen=1;h.msg_control=control.as_mut_ptr().cast();h.msg_controllen=std::mem::size_of_val(&control);
+    h.msg_iov=&mut iov;h.msg_iovlen=1;h.msg_control=control.as_mut_ptr().cast();
+    h.msg_controllen=std::mem::size_of_val(&control).try_into().map_err(|_|"activation ancillary capacity")?;
     let n=unsafe{libc::recvmsg(fd.as_raw_fd(),&mut h,libc::MSG_DONTWAIT|libc::MSG_CMSG_CLOEXEC)};
     if n<0{let e=std::io::Error::last_os_error();if matches!(e.raw_os_error(),Some(libc::EAGAIN)|Some(libc::EINTR)){return Ok(None);}return Err("activation transport receive".into());}
     let mut valid=n>0 && h.msg_flags&(libc::MSG_TRUNC|libc::MSG_CTRUNC)==0;let mut rights=Vec::new();
+    let control_length=usize::try_from(h.msg_controllen).map_err(|_|"activation received ancillary length")?;
     let mut c=unsafe{libc::CMSG_FIRSTHDR(&h)};
     while !c.is_null(){let item=unsafe{&*c};let base=unsafe{libc::CMSG_LEN(0)} as usize;
-        if item.cmsg_len<base{valid=false;break;}
-        let len=item.cmsg_len-base;
+        let item_length=match usize::try_from(item.cmsg_len){Ok(value)=>value,Err(_)=>{valid=false;break;}};
+        if item_length<base || (c as usize).checked_sub(h.msg_control as usize)
+            .and_then(|offset|offset.checked_add(item_length))
+            .is_none_or(|end|end>control_length || end>std::mem::size_of_val(&control)){valid=false;break;}
+        let len=item_length-base;
         if item.cmsg_level==libc::SOL_SOCKET && (item.cmsg_type==libc::SCM_RIGHTS || item.cmsg_type==4){
             valid &= item.cmsg_type==libc::SCM_RIGHTS && len%std::mem::size_of::<i32>()==0;
             for offset in (0..len/std::mem::size_of::<i32>()).map(|i|i*std::mem::size_of::<i32>()){

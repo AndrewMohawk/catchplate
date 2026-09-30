@@ -20,6 +20,11 @@ not deployed integrations.
 
 ### Example: time-limited npm publishing
 
+![An application asks Serverware to publish @acme/widgets. Only 09:00–17:00 UTC is allowed; otherwise no request reaches npm. The npm token stays inside Serverware.](docs/images/npm-time-window-flow.svg)
+
+<details>
+<summary>Editable Mermaid source</summary>
+
 ```mermaid
 flowchart LR
     APP["Application / CI<br/>npm publish<br/>@acme/widgets v1.2.4"]
@@ -42,6 +47,8 @@ flowchart LR
     DENY -->|Policy denial| APP
 ```
 
+</details>
+
 The time window authorizes requests; it does not schedule or queue releases.
 `npm publish` releases a new package version; `npm update` updates installed dependencies.
 
@@ -53,6 +60,11 @@ but only after an authorized developer approves that specific update using a
 **YubiKey with FIDO2/WebAuthn**. Approval is bound to the AWS account, region,
 repository and image digest—not blanket permission to push arbitrary images.
 The pipeline does not receive the upstream AWS/ECR credential.
+
+![A build pipeline and a developer's YubiKey approval meet at Serverware. Only a fresh approval for the exact image and repository allows an ECR push; otherwise it is blocked. AWS credentials stay inside Serverware.](docs/images/ecr-yubikey-flow.svg)
+
+<details>
+<summary>Editable Mermaid source</summary>
 
 ```mermaid
 flowchart TD
@@ -77,6 +89,8 @@ flowchart TD
     DENY -->|Policy denial| CI
     ECR -.->|Separate build and rollout authorization| TEE["AWS Nitro Enclaves<br/>Build EIF, deploy and attest"]
 ```
+
+</details>
 
 ECR publication is not enclave deployment or attestation: Nitro separately
 [builds an enclave image file (EIF) from a container image](https://docs.aws.amazon.com/enclaves/latest/user/cmd-nitro-build-enclave.html).

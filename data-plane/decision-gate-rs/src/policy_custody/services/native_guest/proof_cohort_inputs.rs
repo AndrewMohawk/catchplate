@@ -1,4 +1,4 @@
-//! Explicit five- or six-purpose selection under one signed original boot
+//! Explicit fixed cohort selection under one signed original boot
 //! window. Preparation is not service, TEE or production-driver authority.
 use super::*;
 use super::super::super::super::super::guest_original::Process;
@@ -23,7 +23,11 @@ struct Authority {public_key_base64url:String,key_id:Sha256Digest}
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 struct Configuration {api_version:String,authority:Authority,executable_sha256:Sha256Digest,
     retrieval_configuration:Pin,persistence_configuration:Pin,trusted_time_configuration:Pin,
-    generation_install_configuration:Pin,bridge_configuration:Pin,
+    generation_install_configuration:Pin,
+    #[serde(default,skip_serializing_if="Option::is_none")]
+    bridge_configuration:Option<Pin>,
+    #[serde(default,skip_serializing_if="Option::is_none")]
+    external_driver:Option<external_driver::Configuration>,
     #[serde(default,skip_serializing_if="Option::is_none")]
     cleanup:Option<cleanup::Configuration>,
     #[serde(default,skip_serializing_if="Option::is_none")]
@@ -53,7 +57,11 @@ pub(in crate::policy_shadow::policy_custody::services::guest::native_guest::pare
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 struct ReleasePayload {api_version:String,configuration_sha256:Sha256Digest,precreation_sha256:Sha256Digest,
     observation_sha256:Sha256Digest,invocation_id:String,retrieval:RoleRelease,persistence:RoleRelease,
-    trusted_time:RoleRelease,generation_install:RoleRelease,bridge:RoleRelease,signing_key_id:Sha256Digest,
+    trusted_time:RoleRelease,generation_install:RoleRelease,signing_key_id:Sha256Digest,
+    #[serde(default,skip_serializing_if="Option::is_none")]
+    bridge:Option<RoleRelease>,
+    #[serde(default,skip_serializing_if="Option::is_none")]
+    external_driver_sha256:Option<Sha256Digest>,
     #[serde(default,skip_serializing_if="Option::is_none")]
     commit_request:Option<RoleRelease>,
     #[serde(default,skip_serializing_if="Option::is_none")]
@@ -91,7 +99,10 @@ impl Admission {
         let configuration=Original::proof_cohort_configuration().map_err(fail)?;
         let configuration_bytes=configuration.read(32768).map_err(fail)?.to_vec();
         let config:Configuration=exact(&configuration_bytes)?;
-        let effects=config.api_version=="serverware.nativeShadowProofCohortConfiguration/v6";
+        let endpoint_only=config.api_version==external_driver::CONFIG_API;
+        require(config.bridge_configuration.is_some()!=endpoint_only
+            && config.external_driver.is_some()==endpoint_only)?;
+        let effects=config.api_version=="serverware.nativeShadowProofCohortConfiguration/v6" || endpoint_only;
         require([&config.dispatch_barrier_configuration,&config.active_effect_barrier_configuration,
             &config.active_effect_commit_configuration].iter().all(|pin|pin.is_some()==effects))?;
         require(match (config.api_version.as_str(),&config.cleanup,&config.commit_request_configuration,&config.ingress_admission_configuration,&config.terminal_append_configuration) {
@@ -106,14 +117,16 @@ impl Admission {
                 value.validate(&config.authority.public_key_base64url)?;true},
             ("serverware.nativeShadowProofCohortConfiguration/v6",Some(value),Some(_),Some(_),Some(_))=>{
                 value.validate(&config.authority.public_key_base64url)?;true},
+            (external_driver::CONFIG_API,Some(value),Some(_),Some(_),Some(_))=>{
+                value.validate(&config.authority.public_key_base64url)?;true},
             _=>false,
         })?;
         let raw=public(&config.authority.public_key_base64url)?;
         require(Sha256Digest::compute(&raw)==config.authority.key_id)?;
         let key=VerifyingKey::from_bytes(&raw).map_err(fail)?;
         let mut cold=vec![config.retrieval_configuration.open(65536)?,config.persistence_configuration.open(65536)?,
-            config.trusted_time_configuration.open(65536)?,config.generation_install_configuration.open(65536)?,
-            config.bridge_configuration.open(65536)?];
+            config.trusted_time_configuration.open(65536)?,config.generation_install_configuration.open(65536)?];
+        if let Some(pin)=&config.bridge_configuration {cold.push(pin.open(65536)?);}
         if let Some(pin)=&config.commit_request_configuration {cold.push(pin.open(65536)?);}
         if let Some(pin)=&config.ingress_admission_configuration {cold.push(pin.open(65536)?);}
         if let Some(pin)=&config.terminal_append_configuration {cold.push(pin.open(65536)?);}
@@ -169,8 +182,27 @@ impl Admission {
     pub(super) fn seven(&self)->bool {matches!(self.config.api_version.as_str(),"serverware.nativeShadowProofCohortConfiguration/v4"|"serverware.nativeShadowProofCohortConfiguration/v5"|"serverware.nativeShadowProofCohortConfiguration/v6")}
     pub(super) fn eight(&self)->bool {matches!(self.config.api_version.as_str(),"serverware.nativeShadowProofCohortConfiguration/v5"|"serverware.nativeShadowProofCohortConfiguration/v6")}
     pub(super) fn eleven(&self)->bool {self.config.api_version=="serverware.nativeShadowProofCohortConfiguration/v6"}
+    pub(super) fn endpoint_only(&self)->bool {self.config.api_version==external_driver::CONFIG_API}
+    pub(super) fn external_driver(&self)->Option<&external_driver::Configuration> {self.config.external_driver.as_ref()}
+    pub(super) fn window_binding(&self)->Result<Vec<u8>,ShadowError> {
+        self.check_startup()?;canonical_json_bytes(&self.window)
+    }
+    pub(super) fn require_driver_delivery_configuration(&self,raw:&[u8])->Result<(),ShadowError> {
+        self.check_startup()?;require(self.endpoint_only() && !raw.is_empty() && raw.len()<=65536)?;
+        let c:super::super::super::super::Configuration=exact(raw)?;
+        require(c.api_version=="serverware.policyCustodyGuestConfiguration/v1"
+            && c.service_role==super::super::super::super::Role::ProductionBridge
+            && c.authority.key_id==self.config.authority.key_id
+            && c.authority.public_key_base64url==self.config.authority.public_key_base64url
+            && c.uid>0 && c.gid>0 && c.uid!=u32::MAX && c.gid!=u32::MAX
+            && ![64988,64989,64990,65534].contains(&c.uid)
+            && ![64988,64989,64990,65534].contains(&c.gid)
+            && self.identities.iter().all(|(uid,gid)|c.uid!=*uid && c.gid!=*gid))?;
+        self.check_startup()
+    }
     pub(super) fn roles(&self)->&'static [&'static str] {
-        if self.eleven(){&["retrieval","persistence","trustedTime","generationInstall","bridge","commitRequest","ingressAdmission","terminalAppend",
+        if self.endpoint_only(){external_driver::ROLES}
+        else if self.eleven(){&["retrieval","persistence","trustedTime","generationInstall","bridge","commitRequest","ingressAdmission","terminalAppend",
             "dispatchBarrier","activeEffectBarrier","activeEffectCommit"]}
         else if self.eight(){&["retrieval","persistence","trustedTime","generationInstall","bridge","commitRequest","ingressAdmission","terminalAppend"]}
         else if self.seven(){&["retrieval","persistence","trustedTime","generationInstall","bridge","commitRequest","ingressAdmission"]}
@@ -190,37 +222,43 @@ impl Admission {
     pub(in crate::policy_shadow::policy_custody::services::guest::native_guest::parent) fn precreation_sha256(&self)->Sha256Digest {Sha256Digest::compute(&self.precreation_bytes)}
     pub(in crate::policy_shadow::policy_custody::services::guest::native_guest::parent) fn invocation_id(&self)->&str {&self.window.invocation_id}
     pub(in crate::policy_shadow::policy_custody::services::guest::native_guest::parent) fn executable_sha256(&self)->&Sha256Digest {&self.config.executable_sha256}
-    pub(in crate::policy_shadow::policy_custody::services::guest::native_guest::parent) fn release(&self,bytes:&[u8],observed:&[u8])->Result<Vec<RoleRelease>,ShadowError> {
-        self.check_startup()?;let release:Release=exact(bytes)?;
-        verify(&self.key,if self.eleven(){ELEVEN_RELEASE_DOMAIN}else if self.eight(){EIGHT_RELEASE_DOMAIN}else if self.seven(){SEVEN_RELEASE_DOMAIN}else if self.six(){SIX_RELEASE_DOMAIN}else{RELEASE_DOMAIN},&release.payload,&release.signature_base64url)?;
+    pub(in crate::policy_shadow::policy_custody::services::guest::native_guest::parent) fn release(&self,bytes:&[u8],observed:&[u8],external_driver_sha256:Option<&Sha256Digest>)->Result<Vec<RoleRelease>,ShadowError> {
+        self.check_startup()?;let endpoint_only=self.endpoint_only();
+        require(external_driver_sha256.is_some()==endpoint_only)?;
+        let release:Release=exact(bytes)?;
+        verify(&self.key,if endpoint_only{external_driver::RELEASE_DOMAIN}else if self.eleven(){ELEVEN_RELEASE_DOMAIN}else if self.eight(){EIGHT_RELEASE_DOMAIN}else if self.seven(){SEVEN_RELEASE_DOMAIN}else if self.six(){SIX_RELEASE_DOMAIN}else{RELEASE_DOMAIN},&release.payload,&release.signature_base64url)?;
         let p=release.payload;
-        require(p.api_version==(if self.eleven(){"serverware.nativeShadowProofCohortRelease/v5"}else if self.eight(){"serverware.nativeShadowProofCohortRelease/v4"}else if self.seven(){"serverware.nativeShadowProofCohortRelease/v3"}else if self.six(){"serverware.nativeShadowProofCohortRelease/v2"}else{"serverware.nativeShadowProofCohortRelease/v1"})
-            && p.commit_request.is_some()==self.six()
-            && p.ingress_admission.is_some()==self.seven()
-            && p.terminal_append.is_some()==self.eight()
-            && p.dispatch_barrier.is_some()==self.eleven()
-            && p.active_effect_barrier.is_some()==self.eleven()
-            && p.active_effect_commit.is_some()==self.eleven()
+        require(p.api_version==(if endpoint_only{external_driver::RELEASE_API}else if self.eleven(){"serverware.nativeShadowProofCohortRelease/v5"}else if self.eight(){"serverware.nativeShadowProofCohortRelease/v4"}else if self.seven(){"serverware.nativeShadowProofCohortRelease/v3"}else if self.six(){"serverware.nativeShadowProofCohortRelease/v2"}else{"serverware.nativeShadowProofCohortRelease/v1"})
+            && p.bridge.is_some()!=endpoint_only && p.external_driver_sha256.as_ref()==external_driver_sha256
+            && p.commit_request.is_some()==(self.six()||endpoint_only)
+            && p.ingress_admission.is_some()==(self.seven()||endpoint_only)
+            && p.terminal_append.is_some()==(self.eight()||endpoint_only)
+            && p.dispatch_barrier.is_some()==(self.eleven()||endpoint_only)
+            && p.active_effect_barrier.is_some()==(self.eleven()||endpoint_only)
+            && p.active_effect_commit.is_some()==(self.eleven()||endpoint_only)
             && p.configuration_sha256==self.configuration_sha256() && p.precreation_sha256==self.precreation_sha256()
             && p.observation_sha256==Sha256Digest::compute(observed) && p.invocation_id==self.window.invocation_id
             && p.signing_key_id==self.config.authority.key_id)?;
-        let mut roles=vec![p.retrieval,p.persistence,p.trusted_time,p.generation_install,p.bridge];
+        let mut roles=vec![p.retrieval,p.persistence,p.trusted_time,p.generation_install];
+        if let Some(role)=p.bridge {roles.push(role);}
         if let Some(role)=p.commit_request {roles.push(role);}
         if let Some(role)=p.ingress_admission {roles.push(role);}
         if let Some(role)=p.terminal_append {roles.push(role);}
         for role in [p.dispatch_barrier,p.active_effect_barrier,p.active_effect_commit].into_iter().flatten(){roles.push(role);}
-        self.check_startup()?;Ok(roles)
+        require(roles.len()==self.roles().len())?;self.check_startup()?;Ok(roles)
     }
     pub(in crate::policy_shadow::policy_custody::services::guest::native_guest::parent) fn join(&self,index:usize,launch:&Launch,files:&FileAdmission)->Result<(),ShadowError> {
         self.check_startup()?;files.check_preparation().map_err(fail)?;
-        let expected=match index {0=>&self.config.retrieval_configuration,1=>&self.config.persistence_configuration,
-            2=>&self.config.trusted_time_configuration,3=>&self.config.generation_install_configuration,
-            4=>&self.config.bridge_configuration,5=>self.config.commit_request_configuration.as_ref().ok_or(ShadowError::BindingDrift)?,
-            6=>self.config.ingress_admission_configuration.as_ref().ok_or(ShadowError::BindingDrift)?,
-            7=>self.config.terminal_append_configuration.as_ref().ok_or(ShadowError::BindingDrift)?,
-            8=>self.config.dispatch_barrier_configuration.as_ref().ok_or(ShadowError::BindingDrift)?,
-            9=>self.config.active_effect_barrier_configuration.as_ref().ok_or(ShadowError::BindingDrift)?,
-            10=>self.config.active_effect_commit_configuration.as_ref().ok_or(ShadowError::BindingDrift)?,
+        let expected=match self.roles().get(index).copied().ok_or(ShadowError::BindingDrift)? {
+            "retrieval"=>&self.config.retrieval_configuration,"persistence"=>&self.config.persistence_configuration,
+            "trustedTime"=>&self.config.trusted_time_configuration,"generationInstall"=>&self.config.generation_install_configuration,
+            "bridge"=>self.config.bridge_configuration.as_ref().ok_or(ShadowError::BindingDrift)?,
+            "commitRequest"=>self.config.commit_request_configuration.as_ref().ok_or(ShadowError::BindingDrift)?,
+            "ingressAdmission"=>self.config.ingress_admission_configuration.as_ref().ok_or(ShadowError::BindingDrift)?,
+            "terminalAppend"=>self.config.terminal_append_configuration.as_ref().ok_or(ShadowError::BindingDrift)?,
+            "dispatchBarrier"=>self.config.dispatch_barrier_configuration.as_ref().ok_or(ShadowError::BindingDrift)?,
+            "activeEffectBarrier"=>self.config.active_effect_barrier_configuration.as_ref().ok_or(ShadowError::BindingDrift)?,
+            "activeEffectCommit"=>self.config.active_effect_commit_configuration.as_ref().ok_or(ShadowError::BindingDrift)?,
             _=>return Err(ShadowError::BindingDrift)};
         let p=&files.payload;
         require(canonical_json_bytes(&launch.delivery_configuration)?==canonical_json_bytes(expected)?

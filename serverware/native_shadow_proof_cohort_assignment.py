@@ -25,6 +25,7 @@ SEVEN_ROLES = SIX_ROLES + ("ingressAdmission",)
 EIGHT_ROLES = SEVEN_ROLES + ("terminalAppend",)
 EFFECT_ROLES = ("dispatchBarrier", "activeEffectBarrier", "activeEffectCommit")
 ELEVEN_ROLES = EIGHT_ROLES + EFFECT_ROLES
+ENDPOINT_ROLES = tuple(role for role in ELEVEN_ROLES if role != "bridge")
 COLD_NAMES = tuple(role + "Configuration" for role in ROLES)
 CONFIG_FIELDS = ("apiVersion", "authority", "executableSha256") + COLD_NAMES
 WINDOW_FIELDS = ("configurationSha256", "authorityKeyId", "bootIdBase64url", "timeNamespaceDevice",
@@ -49,6 +50,11 @@ def configuration(raw):
         p.fields(value, CONFIG_FIELDS + ("cleanup", "commitRequestConfiguration", "ingressAdmissionConfiguration"))
     elif value.get("apiVersion") == "serverware.nativeShadowProofCohortConfiguration/v5":
         p.fields(value, CONFIG_FIELDS + ("cleanup", "commitRequestConfiguration", "ingressAdmissionConfiguration", "terminalAppendConfiguration"))
+    elif value.get("apiVersion") == "serverware.nativeShadowProofCohortConfiguration/v7":
+        p.fields(value, ("apiVersion", "authority", "executableSha256", "cleanup", "externalDriver")
+            + tuple(role + "Configuration" for role in ENDPOINT_ROLES))
+        from serverware.native_shadow_endpoint_driver import configuration as external_configuration
+        external_configuration(value["externalDriver"])
     else:
         p.fields(value, CONFIG_FIELDS + ("cleanup", "commitRequestConfiguration", "ingressAdmissionConfiguration", "terminalAppendConfiguration")
             + tuple(role + "Configuration" for role in EFFECT_ROLES))
@@ -63,7 +69,9 @@ def roles(config):
     p.require(config["apiVersion"] in ("serverware.nativeShadowProofCohortConfiguration/v1",
         "serverware.nativeShadowProofCohortConfiguration/v2", "serverware.nativeShadowProofCohortConfiguration/v3",
         "serverware.nativeShadowProofCohortConfiguration/v4", "serverware.nativeShadowProofCohortConfiguration/v5",
-        "serverware.nativeShadowProofCohortConfiguration/v6"))
+        "serverware.nativeShadowProofCohortConfiguration/v6", "serverware.nativeShadowProofCohortConfiguration/v7"))
+    if endpoint_driver_selected(config):
+        return ENDPOINT_ROLES
     if config["apiVersion"] == "serverware.nativeShadowProofCohortConfiguration/v6":
         return ELEVEN_ROLES
     if config["apiVersion"] == "serverware.nativeShadowProofCohortConfiguration/v5":
@@ -74,14 +82,28 @@ def roles(config):
 
 
 def originals_fields(config):
-    return ("apiVersion", "configurationSha256", "precreationSha256", "invocationId") + roles(config)
+    return ("apiVersion", "configurationSha256", "precreationSha256", "invocationId") + roles(config) + (
+        ("externalDriver",) if endpoint_driver_selected(config) else ())
 
 
 def release_fields(config):
-    return ("apiVersion", "configurationSha256", "precreationSha256", "observationSha256", "invocationId") + roles(config) + ("signingKeyId",)
+    return ("apiVersion", "configurationSha256", "precreationSha256", "observationSha256", "invocationId") + roles(config) + ("signingKeyId",) + (
+        ("externalDriverSha256",) if endpoint_driver_selected(config) else ())
+
+
+def endpoint_driver_selected(config):
+    return config["apiVersion"] == "serverware.nativeShadowProofCohortConfiguration/v7"
+
+
+def external_driver_sha256(config, observed):
+    from serverware.native_shadow_endpoint_driver import original
+    p.require(endpoint_driver_selected(config))
+    return p.sha(p.canonical(original(observed["externalDriver"], config["externalDriver"])))
 
 
 def originals_api(config):
+    if endpoint_driver_selected(config):
+        return "serverware.nativeShadowProofCohortOriginals/v6"
     if roles(config) == ELEVEN_ROLES:
         return "serverware.nativeShadowProofCohortOriginals/v5"
     if roles(config) == EIGHT_ROLES:
@@ -92,6 +114,8 @@ def originals_api(config):
 
 
 def release_api(config):
+    if endpoint_driver_selected(config):
+        return "serverware.nativeShadowProofCohortRelease/v6"
     if roles(config) == ELEVEN_ROLES:
         return "serverware.nativeShadowProofCohortRelease/v5"
     if roles(config) == EIGHT_ROLES:
@@ -102,6 +126,8 @@ def release_api(config):
 
 
 def release_domain(config):
+    if endpoint_driver_selected(config):
+        return b"serverware.nativeShadowProofCohortRelease.signature/v6\0"
     if roles(config) == ELEVEN_ROLES:
         return ELEVEN_RELEASE_DOMAIN
     if roles(config) == EIGHT_ROLES:
@@ -130,9 +156,12 @@ def _configuration(raw, expected_sha256, originals, signing_key, commit_request_
     p.digest(config["executableSha256"])
     _key(signing_key, config["authority"])
     selected = roles(config)
-    p.require((commit_request_original is not None) == (selected in (SIX_ROLES, SEVEN_ROLES, EIGHT_ROLES, ELEVEN_ROLES)))
-    p.require((ingress_admission_original is not None) == (selected in (SEVEN_ROLES, EIGHT_ROLES, ELEVEN_ROLES)))
-    p.require((terminal_append_original is not None) == (selected in (EIGHT_ROLES, ELEVEN_ROLES)))
+    if endpoint_driver_selected(config):
+        p.require(originals[-1] is None)  # the measured driver is not a parked child
+        originals = originals[:-1]
+    p.require((commit_request_original is not None) == (selected in (SIX_ROLES, SEVEN_ROLES, EIGHT_ROLES, ELEVEN_ROLES, ENDPOINT_ROLES)))
+    p.require((ingress_admission_original is not None) == (selected in (SEVEN_ROLES, EIGHT_ROLES, ELEVEN_ROLES, ENDPOINT_ROLES)))
+    p.require((terminal_append_original is not None) == (selected in (EIGHT_ROLES, ELEVEN_ROLES, ENDPOINT_ROLES)))
     if commit_request_original is not None:
         originals += (commit_request_original,)
     if ingress_admission_original is not None:
@@ -140,7 +169,7 @@ def _configuration(raw, expected_sha256, originals, signing_key, commit_request_
     if terminal_append_original is not None:
         originals += (terminal_append_original,)
     for original in (dispatch_barrier_original, active_effect_barrier_original, active_effect_commit_original):
-        p.require((original is not None) == (selected == ELEVEN_ROLES))
+        p.require((original is not None) == (selected in (ELEVEN_ROLES, ENDPOINT_ROLES)))
         if original is not None:
             originals += (original,)
     cold_names = tuple(role + "Configuration" for role in selected)
@@ -244,6 +273,8 @@ def sign_release(*, configuration_raw, configuration_sha256, retrieval_configura
               and payload["observationSha256"] == p.sha(observations_raw)
               and payload["invocationId"] == observed["invocationId"]
               and payload["signingKeyId"] == config["authority"]["keyId"])
+    if endpoint_driver_selected(config):
+        p.require(payload["externalDriverSha256"] == external_driver_sha256(config, observed))
     for name in roles(config):
         role = p.fields(payload[name], ("launch", "image"))
         delivery._pin(role["launch"]); delivery._pin(role["image"])

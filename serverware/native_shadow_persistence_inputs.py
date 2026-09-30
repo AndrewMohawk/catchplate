@@ -6,6 +6,7 @@ All signatures and genesis/head inputs require independently supplied authority.
 """
 from __future__ import annotations
 
+import copy
 import errno
 import fcntl
 import os
@@ -80,14 +81,18 @@ class PersistenceInputs:
         deadline = p.ns(startup_deadline_boottime_ns)
         p.require(_clock() < deadline <= _clock() + 30_000_000_000
             and deadline == cohort.startup_deadline_boottime_ns())
-        child = cohort.bridge_original()
-        p.require(peer["pid"] == child["processId"] and peer["startTimeTicks"] == child["startTimeTicks"])
+        endpoint = cohort.endpoint_driver_selected()
+        child = copy.deepcopy(cohort._external_driver.value) if endpoint else cohort.bridge_original()
+        process = child["driver"] if endpoint else child
+        p.require(peer["pid"] == process["processId"] and peer["startTimeTicks"] == process["startTimeTicks"])
+        if endpoint:
+            p.require((peer["uid"], peer["gid"]) == (cohort._cold["bridge"]["uid"], cohort._cold["bridge"]["gid"]))
         for expected, actual in (("executableDevice", "device"), ("executableInode", "inode"),
                                  ("executableLength", "length"), ("executableSha256", "sha256")):
             p.require(peer[expected] == child["executable"][actual])
         owner = cls(_TOKEN)
         try:
-            owner._cohort, owner._child = cohort, child
+            owner._cohort, owner._child, owner._endpoint = cohort, child, endpoint
             owner._pid, owner._start, owner._boot = os.getpid(), originals._start(), originals._boot()
             owner._deadline, owner._configuration_raw, owner._configuration_sha = deadline, configuration_raw, configuration_sha256
             owner._uid, owner._gid, owner._peer_gid = cold["uid"], cold["gid"], peer["gid"]
@@ -158,7 +163,11 @@ class PersistenceInputs:
             and os.getresgid() == (0, 0, 0) and os.getpid() == self._pid
             and originals._start() == self._start and originals._boot() == self._boot and _clock() < self._deadline)
         self._cohort.check()
-        p.require(self._cohort.bridge_original() == self._child)
+        p.require(self._cohort.endpoint_driver_selected() == self._endpoint)
+        if self._endpoint:
+            p.require(self._cohort._external_driver.value == self._child)
+        else:
+            p.require(self._cohort.bridge_original() == self._child)
         for parent, name, child, expected in self._parents:
             info = os.fstat(parent)
             p.require(info.st_uid == info.st_gid == 0 and info.st_mode & 0o022 == 0

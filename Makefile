@@ -1567,6 +1567,8 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/native_shadow_persistence_inputs.py \
 	serverware/native_shadow_proof_cohort_assignment.py \
 	serverware/native_shadow_proof_cohort_control.py \
+	serverware/native_shadow_endpoint_driver.py \
+	serverware/native_pilot_launch.py \
 	serverware/native_shadow_proof_cohort_cleanup.py \
 	serverware/native_shadow_driver_bootstrap.py \
 	serverware/native_shadow_constructed_driver.py \
@@ -4205,6 +4207,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/native_shadow_persistence_inputs.py \
 				serverware/native_shadow_proof_cohort_assignment.py \
 				serverware/native_shadow_proof_cohort_control.py \
+				serverware/native_shadow_endpoint_driver.py \
+				serverware/native_pilot_launch.py \
 				serverware/native_shadow_proof_cohort_cleanup.py \
 				serverware/native_shadow_driver_bootstrap.py \
 				serverware/native_shadow_constructed_driver.py \
@@ -4606,6 +4610,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/proof_client.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/proof_client_peer.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/proof_cohort.rs \
+				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/proof_cohort_driver.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/proof_cohort_inputs.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/proof_cohort_cleanup.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/process.rs \
@@ -4999,6 +5004,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-shadow-proof-cohort.v4.schema.json \
 				schemas/native-shadow-proof-cohort.v5.schema.json \
 				schemas/native-shadow-proof-cohort.v6.schema.json \
+				schemas/native-shadow-proof-cohort.v7.schema.json \
 				schemas/custody-effects-inputs.v1.schema.json \
 				schemas/native-ledger-completion.v1.schema.json \
 				schemas/native-active-effects.v1.schema.json \

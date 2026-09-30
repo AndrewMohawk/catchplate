@@ -9,6 +9,8 @@ use std::mem::{size_of,size_of_val,zeroed};
 pub(super) mod inputs;
 #[path="proof_cohort_cleanup.rs"]
 mod cleanup;
+#[path="proof_cohort_driver.rs"]
+mod external_driver;
 const MAX_WIRE:usize=32768;
 const LAUNCH_PATH:&str="/etc/serverware/native-shadow-guest-launch.json";
 const IMAGE_PATH:&str="/opt/serverware/native-shadow-custody-runtime.squashfs";
@@ -76,6 +78,19 @@ impl Control {
             cohort.check_startup()?;self.check()?;
             if retrieval_peer::send(self.socket.as_fd(),bytes,&[])? {return Ok(());}
             wait(self.socket.as_fd(),libc::POLLOUT)?;
+        }
+    }
+    fn driver(&self,admission:&inputs::Admission)->Result<external_driver::Owner,ShadowError>{
+        let config=admission.external_driver().ok_or(ShadowError::BindingDrift)?;
+        loop {
+            admission.check_startup()?;self.check()?;
+            if let Some(packet)=retrieval_peer::receive(self.socket.as_fd(),MAX_WIRE,3)? {
+                require(retrieval_peer::same_credentials(&packet.credentials,&self.peer) && packet.rights.len()==3)?;
+                retrieval_peer::same_process(packet.pidfd.as_fd(),self.peer.pid)?;
+                let owner=external_driver::Owner::admit(config,&packet.bytes,packet.rights,self.peer.pid,admission)?;
+                self.check()?;return Ok(owner);
+            }
+            wait(self.socket.as_fd(),libc::POLLIN)?;
         }
     }
     fn receive(&self,cohort:&Cohort)->Result<(Vec<u8>,Vec<OwnedFd>),ShadowError> {
@@ -185,7 +200,11 @@ struct ChildOriginal {process_id:i32,start_time_ticks:u64,executable:inputs::Exe
 #[serde(rename_all="camelCase")]
 struct Observations {api_version:&'static str,configuration_sha256:Sha256Digest,precreation_sha256:Sha256Digest,
     invocation_id:String,retrieval:ChildOriginal,persistence:ChildOriginal,trusted_time:ChildOriginal,
-    generation_install:ChildOriginal,bridge:ChildOriginal,
+    generation_install:ChildOriginal,
+    #[serde(skip_serializing_if="Option::is_none")]
+    bridge:Option<ChildOriginal>,
+    #[serde(skip_serializing_if="Option::is_none")]
+    external_driver:Option<external_driver::BindingOriginal>,
     #[serde(skip_serializing_if="Option::is_none")]
     commit_request:Option<ChildOriginal>,
     #[serde(skip_serializing_if="Option::is_none")]
@@ -206,16 +225,26 @@ struct Cohort {
     children:Vec<child::Child>,programs:Vec<Program>,executables:Vec<inputs::Executable>,
     launch_target:Target,image_target:Target,admission:inputs::Admission,_watchdog:Watchdog,
     cleanup:Option<cleanup::Owner>,
+    external_driver:Option<external_driver::Owner>,
 }
 impl Cohort {
-    fn prepare()->Result<Self,ShadowError> {
+    fn prepare(control:&Control)->Result<Self,ShadowError> {
         let admission=inputs::Admission::open()?;let watchdog=Watchdog::arm_proof_cohort(&admission)?;
         let cleanup=admission.cleanup()?;
+        // The foreign driver is already measured by its own supervisor. Admit
+        // its real descriptors before creating any owned endpoint children.
+        let external_driver=if admission.endpoint_only(){Some(control.driver(&admission)?)}else{None};
+        if let Some(driver)=&external_driver {
+            for index in 0..admission.roles().len(){
+                let role=admission.role_identity(index)?;
+                require(role.0!=driver.identity().0 && role.1!=driver.identity().1)?;
+            }
+        }
         let launch_target=Target::open(LAUNCH_PATH)?;let image_target=Target::open(IMAGE_PATH)?;
         let mut executables=Vec::with_capacity(admission.roles().len());
         for _ in admission.roles() {executables.push(inputs::Executable::create(&admission)?);}
         process::isolate_mounts()?;
-        let mut owner=Self{children:Vec::new(),programs:Vec::new(),executables,launch_target,image_target,admission,_watchdog:watchdog,cleanup};
+        let mut owner=Self{children:Vec::new(),programs:Vec::new(),executables,launch_target,image_target,admission,_watchdog:watchdog,cleanup,external_driver};
         for executable in &owner.executables {
             owner.admission.check_startup()?;
             owner.children.push(child::Child::precreate(executable.fd(),owner.launch_target.file.as_fd(),
@@ -228,12 +257,23 @@ impl Cohort {
         require(now()?.checked_add(REAP_RESERVE_NS).is_some_and(|v|v<self.admission.lifetime()))
     }
     fn check(&self)->Result<(),ShadowError> {
+        self.check_owned()?;
+        if let Some(driver)=&self.external_driver {driver.check_active()?;}
+        Ok(())
+    }
+    // Cleanup checks only owned children. Foreign death cancels serving, but
+    // must not prevent the endpoint parent's own terminal/reap operation.
+    fn check_owned(&self)->Result<(),ShadowError> {
         self.check_resources()?;
         for child in &self.children {require(child.check()?)?;}
         Ok(())
     }
+    fn external_driver_sha256(&self)->Result<Option<Sha256Digest>,ShadowError>{
+        self.external_driver.as_ref().map(external_driver::Owner::binding_sha256).transpose()
+    }
     fn check_resources(&self)->Result<(),ShadowError> {
         self.admission.check()?;self.launch_target.check()?;self.image_target.check()?;
+        if let Some(driver)=&self.external_driver {driver.check_retained()?;}
         for executable in &self.executables {executable.check()?;}
         if let Some(owner)=&self.cleanup {owner.check()?;}
         for program in &self.programs {
@@ -246,23 +286,27 @@ impl Cohort {
     fn observations(&self)->Result<Vec<u8>,ShadowError> {
         self.check_startup()?;require(self.children.len()==self.admission.roles().len() && self.programs.is_empty())?;
         let child=|index:usize|->Result<ChildOriginal,ShadowError> {
+            let index=if self.admission.endpoint_only(){external_driver::owned_index(index).ok_or(ShadowError::BindingDrift)?}else{index};
             let identity=self.children[index].parked_identity()?;
             Ok(ChildOriginal{process_id:identity.0,start_time_ticks:identity.1,executable:self.executables[index].observation()?})
         };
-        let original=Observations{api_version:if self.admission.eleven(){"serverware.nativeShadowProofCohortOriginals/v5"}else if self.admission.eight(){"serverware.nativeShadowProofCohortOriginals/v4"}else if self.admission.seven(){"serverware.nativeShadowProofCohortOriginals/v3"}else if self.admission.six(){"serverware.nativeShadowProofCohortOriginals/v2"}else{SOURCE_API},configuration_sha256:self.admission.configuration_sha256(),
+        let endpoint=self.admission.endpoint_only();
+        let original=Observations{api_version:if endpoint{"serverware.nativeShadowProofCohortOriginals/v6"}else if self.admission.eleven(){"serverware.nativeShadowProofCohortOriginals/v5"}else if self.admission.eight(){"serverware.nativeShadowProofCohortOriginals/v4"}else if self.admission.seven(){"serverware.nativeShadowProofCohortOriginals/v3"}else if self.admission.six(){"serverware.nativeShadowProofCohortOriginals/v2"}else{SOURCE_API},configuration_sha256:self.admission.configuration_sha256(),
             precreation_sha256:self.admission.precreation_sha256(),invocation_id:self.admission.invocation_id().into(),
-            retrieval:child(0)?,persistence:child(1)?,trusted_time:child(2)?,generation_install:child(3)?,bridge:child(4)?,
-            commit_request:if self.admission.six(){Some(child(5)?)}else{None},
-            ingress_admission:if self.admission.seven(){Some(child(6)?)}else{None},
-            terminal_append:if self.admission.eight(){Some(child(7)?)}else{None},
-            dispatch_barrier:if self.admission.eleven(){Some(child(8)?)}else{None},
-            active_effect_barrier:if self.admission.eleven(){Some(child(9)?)}else{None},
-            active_effect_commit:if self.admission.eleven(){Some(child(10)?)}else{None}};
+            retrieval:child(0)?,persistence:child(1)?,trusted_time:child(2)?,generation_install:child(3)?,bridge:if endpoint{None}else{Some(child(4)?)},
+            external_driver:self.external_driver.as_ref().map(external_driver::Owner::original).transpose()?,
+            commit_request:if endpoint||self.admission.six(){Some(child(5)?)}else{None},
+            ingress_admission:if endpoint||self.admission.seven(){Some(child(6)?)}else{None},
+            terminal_append:if endpoint||self.admission.eight(){Some(child(7)?)}else{None},
+            dispatch_barrier:if endpoint||self.admission.eleven(){Some(child(8)?)}else{None},
+            active_effect_barrier:if endpoint||self.admission.eleven(){Some(child(9)?)}else{None},
+            active_effect_commit:if endpoint||self.admission.eleven(){Some(child(10)?)}else{None}};
         let bytes=canonical_json_bytes(&original)?;self.check_startup()?;Ok(bytes)
     }
     fn release(&mut self,bytes:&[u8],observed:&[u8],rights:Vec<OwnedFd>)->Result<(),ShadowError> {
         require(self.observations()?==observed)?;
-        let releases=self.admission.release(bytes,observed)?;
+        let external=self.external_driver_sha256()?;
+        let releases=self.admission.release(bytes,observed,external.as_ref())?;
         let mut rights=rights.into_iter();let mut all=BTreeSet::new();
         for (index,release) in releases.into_iter().enumerate() {
             self.check_startup()?;
@@ -271,7 +315,9 @@ impl Cohort {
             let files=admit_files(&selected.delivery_configuration.path,selected.delivery_configuration.sha256.clone(),
                 &selected.delivery.path,selected.delivery.sha256.clone()).map_err(fail)?;
             self.admission.join(index,&selected,&files)?;
-            require_role(index,&service,self.admission.six(),self.admission.seven(),self.admission.eight(),self.admission.eleven())?;
+            let endpoint=self.admission.endpoint_only();
+            let logical=if endpoint{external_driver::logical_index(index)?}else{index};
+            require_role(logical,&service,endpoint||self.admission.six(),endpoint||self.admission.seven(),endpoint||self.admission.eight(),endpoint||self.admission.eleven())?;
             let mut activation=BTreeMap::new();
             for (slot,entry) in files.payload.activation.iter().enumerate() {
                 require(entry.fd==6+slot as i32)?;
@@ -289,6 +335,11 @@ impl Cohort {
             }
             let peers=assigned_peers(&service,&files)?;
             for (other,peer) in peers {
+                if endpoint && other==4 {
+                    self.external_driver.as_ref().ok_or(ShadowError::BindingDrift)?.require_peer(&peer)?;
+                    continue;
+                }
+                let other=if endpoint{external_driver::owned_index(other).ok_or(ShadowError::BindingDrift)?}else{other};
                 let actual=self.children[other].parked_identity()?;
                 require((peer.pid,peer.start_time_ticks)==actual)?;
                 self.executables[other].require_peer(&peer)?;
@@ -574,7 +625,7 @@ impl Drop for Cohort {
 }
 pub(super) fn run()->! {
     let result=(||{
-        let control=Control::inherited()?;let mut cohort=Cohort::prepare()?;
+        let control=Control::inherited()?;let mut cohort=Cohort::prepare(&control)?;
         let observations=cohort.observations()?;control.send(&observations,&cohort)?;
         let (release,rights)=control.receive(&cohort)?;
         cohort.release(&release,&observations,rights)?;

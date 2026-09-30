@@ -71,8 +71,16 @@ impl Observation {
     pub(super) fn require_child(&self,packet:&retrieval_peer::Packet,executable:&File)->Result<(),ShadowError> {
         require(unsafe{libc::geteuid()}==0 && self.process_id==packet.credentials.pid
             && self.uid==packet.credentials.uid && self.gid==packet.credentials.gid && self.seccomp_filter_count>0)?;
-        retrieval_peer::same_process(packet.pidfd.as_fd(),self.process_id)?;
-        let own_pidfd=descriptor("self-pidfd",packet.pidfd.as_fd())?;
+        self.require_process(packet.pidfd.as_fd(),executable)
+    }
+    /// Independently sample a real retained process descriptor. This does not
+    /// assert parent/child ownership or manufacture SCM sender credentials.
+    /// The four recorded descriptors are the original measurement inputs,
+    /// never a census of descriptors subsequently admitted to the bridge.
+    pub(super) fn require_process(&self,pidfd:BorrowedFd<'_>,executable:&File)->Result<(),ShadowError> {
+        require(unsafe{libc::geteuid()}==0 && self.seccomp_filter_count>0)?;
+        retrieval_peer::same_process(pidfd,self.process_id)?;
+        let own_pidfd=descriptor("self-pidfd",pidfd)?;
         let exe=File::open(format!("/proc/{}/exe",self.process_id)).map_err(fail)?;
         let m=exe.metadata().map_err(fail)?;let original=executable.metadata().map_err(fail)?;
         require((m.dev(),m.ino(),m.len())==(original.dev(),original.ino(),original.len()))?;
@@ -85,6 +93,12 @@ impl Observation {
         let group_stat=group_fd.metadata().map_err(fail)?;
         let status=bounded(&format!("/proc/{}/status",self.process_id),65536)?;
         let status=std::str::from_utf8(&status).map_err(fail)?;
+        for (label,expected) in [("Uid:",self.uid),("Gid:",self.gid)] {
+            let values:Vec<_>=status.lines().filter_map(|v|v.strip_prefix(label)).collect();
+            require(values.len()==1)?;
+            let ids=values[0].split_whitespace().map(str::parse::<u32>).collect::<Result<Vec<_>,_>>().map_err(fail)?;
+            require(ids==[expected;4])?;
+        }
         for (label,expected) in [("Threads:","1"),("NoNewPrivs:","1"),("Seccomp:","2"),
             ("CapInh:","0000000000000000"),("CapPrm:","0000000000000000"),
             ("CapEff:","0000000000000000"),("CapBnd:","0000000000000000"),("CapAmb:","0000000000000000")] {
@@ -106,7 +120,8 @@ impl Observation {
             && self.descriptors[2].name=="cgroup" && self.descriptors[2].inode==group_stat.ino()
             && self.descriptors[2].device==group_stat.dev() && self.descriptors[2].mode==group_stat.mode()
             && self.descriptors[2].mount_id==handle.1
-            && self.root.name=="root" && self.root.mode==root_stat.mode() && self.descriptors[3]==self.root)
+            && self.root.name=="root" && self.root.mode==root_stat.mode() && self.descriptors[3]==self.root)?;
+        retrieval_peer::same_process(pidfd,self.process_id)
     }
 }
 pub(super) struct Owner {

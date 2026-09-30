@@ -19,10 +19,11 @@ import build_production_images as build
 
 DOCKERFILE = "data-plane/decision-gate-rs/Dockerfile.production"
 PROFILES = {
-    "cohort": "serverware.nativeShadowProofCohortConfiguration/v6",
-    "cohortRoles": ["retrieval", "persistence", "trustedTime", "generationInstall", "bridge",
+    "cohort": "serverware.nativeShadowProofCohortConfiguration/v7",
+    "cohortRoles": ["retrieval", "persistence", "trustedTime", "generationInstall",
                     "commitRequest", "ingressAdmission", "terminalAppend", "dispatchBarrier",
                     "activeEffectBarrier", "activeEffectCommit"],
+    "externalBridge": "serverware.nativeShadowDriverBootstrapConfiguration/v4",
     "bridgeLaunch": "serverware.nativeProofBridgeLaunch/v5",
     "bridgeRuntime": "serverware.policyCustodyProductionRpcRuntime/v9",
     "spool": "serverware.nativeSpoolServices/v3",
@@ -58,7 +59,7 @@ def preparation(metadata):
         },
         "requiredExternalOriginals": [
             "Public guest seccomp/runtime/build-recipe/provenance originals and their independently pinned manifest",
-            "Protected cohort control/configuration-v6 and original precreation window; eleven distinct actual child assignments",
+            "Protected endpoint cohort control/configuration-v7 and original precreation window; ten distinct actual child assignments plus the independently pinned retained DriverBootstrap bridge",
             "Protected custody-effects-five.json v6, five C9 configurations, service credentials and signed authority histories",
             "Driver bootstrap/configuration/window, actual post-drop measurement, independently signed phase-two scope and constructed admission",
             "Actual gate native startup/lifecycle/receiving configuration, signed policy, assignment, compiler and canary inventory",
@@ -69,13 +70,14 @@ def preparation(metadata):
             "Independent Setup hardware/proxy/final issuer artifacts, protected configurations and sealed key delivery",
         ],
         "existingOwners": {
-            "nativeCohort": "serverware.native_shadow_proof_cohort_control.ParkedProofCohort.start",
+            "liveComposition": "serverware.native_pilot_launch.NativePilotLaunch.start / start_endpoints / prepare_resources / release",
+            "nativeCohort": "serverware.native_shadow_proof_cohort_control.ParkedProofCohort.start_for_driver",
             "ordinaryFive": "serverware.custody_generation_launch.FiveServiceLaunch.start_effects",
             "generationInputs": "serverware.custody_generation_business.BusinessResources.prepare_commitment(five).commitment_inputs()",
             "spoolResources": "serverware.native_shadow_spool_inputs.SpoolInputs.prepare",
             "driver": "serverware.native_shadow_driver_bootstrap.DriverBootstrap.start",
             "outgoingAndContinuation": "serverware.native_shadow_driver_inputs.OperationalInputs.prepare_outgoing",
-            "orderedRelease": "serverware.custody_generation_launch.FiveServiceLaunch.release_proof_cohort",
+            "orderedRelease": "serverware.custody_generation_launch.FiveServiceLaunch.release_endpoint_cohort / ParkedProofCohort.continue_driver",
         },
         "boundary": "Preparation is build data only. Actual live owners must measure, admit, sign independently, retain and release under original deadlines; no launch is performed.",
     }

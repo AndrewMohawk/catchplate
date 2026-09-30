@@ -18,11 +18,12 @@ Checkpoint: **2026-09-30 — pre-production, pilot assembly.**
 
 **36/46 source checkpoints landed · 10 active · 0 todo.**
 
-**Production acceptance: 0/6 verified.** Both engineering images now build, including the glibc and selected static musl binaries. Pilot artifact assembly, service provisioning and connected verification remain. No production deployment.
+**Production acceptance: 0/6 verified.** Both engineering images built at `253730f0`. The new single-bridge launch connection is source-landed, not yet built or exercised. Pilot artifact assembly, service provisioning and connected verification remain. No production deployment.
 
 [![Project checkpoints, one segment per task: 36 of 46 source-landed; 10 active and 0 todo. Evidence handoff 10/10; historical recovery 4/5; permissions and grants 10/10; finalization and sessions 8/8; workloads and native 3/6; providers and operations 1/7. H05, N04, N05, N06 and O01 through O06 are in progress. Production acceptance remains 0/6. Engineering assembly is not an accepted pilot or production deployment.](docs/images/project-progress.svg)](docs/production-status.md#next-source-milestones)
 
-The current `.349` source batch adds [pilot artifact assembly](docs/native-pilot-build.md),
+The current `.350` source batch connects the [single-bridge pilot launch](docs/native-pilot-launch.md)
+and bounded strict artifact builds. It builds on [pilot artifact assembly](docs/native-pilot-build.md),
 [one-request collection and Setup import](docs/native-pilot-request-collection.md),
 and [independent Setup issuer packages](docs/native-setup-independent-issuer-installation.md).
 The [dependency candidate](docs/production-dependency-snapshot.md#current-candidate-evidence)

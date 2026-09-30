@@ -1,0 +1,627 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-shadow-proof-cohort.v7.schema.json",
+  "$ref": "#/$defs/configuration",
+  "$defs": {
+    "sha": {
+      "$ref": "native-shadow-proof-cohort.v1.schema.json#/$defs/sha"
+    },
+    "pin": {
+      "$ref": "native-shadow-proof-cohort.v1.schema.json#/$defs/pin"
+    },
+    "ns": {
+      "$ref": "native-shadow-proof-cohort.v1.schema.json#/$defs/ns"
+    },
+    "invocation": {
+      "$ref": "native-shadow-proof-cohort.v1.schema.json#/$defs/invocation"
+    },
+    "signature": {
+      "$ref": "native-shadow-proof-cohort.v1.schema.json#/$defs/signature"
+    },
+    "childOriginal": {
+      "$ref": "native-shadow-proof-cohort.v1.schema.json#/$defs/childOriginal"
+    },
+    "childTerminal": {
+      "$ref": "native-shadow-proof-cohort.v2.schema.json#/$defs/childTerminal"
+    },
+    "roleRelease": {
+      "$ref": "native-shadow-proof-cohort.v1.schema.json#/$defs/roleRelease"
+    },
+    "configuration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "authority",
+        "executableSha256",
+        "retrievalConfiguration",
+        "persistenceConfiguration",
+        "trustedTimeConfiguration",
+        "generationInstallConfiguration",
+        "commitRequestConfiguration",
+        "ingressAdmissionConfiguration",
+        "terminalAppendConfiguration",
+        "cleanup",
+        "dispatchBarrierConfiguration",
+        "activeEffectBarrierConfiguration",
+        "activeEffectCommitConfiguration",
+        "externalDriver"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeShadowProofCohortConfiguration/v7"
+        },
+        "authority": {
+          "$ref": "policy-custody-guest-delivery.v1.schema.json#/$defs/authority"
+        },
+        "executableSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "retrievalConfiguration": {
+          "$ref": "#/$defs/pin"
+        },
+        "persistenceConfiguration": {
+          "$ref": "#/$defs/pin"
+        },
+        "trustedTimeConfiguration": {
+          "$ref": "#/$defs/pin"
+        },
+        "generationInstallConfiguration": {
+          "$ref": "#/$defs/pin"
+        },
+        "commitRequestConfiguration": {
+          "$ref": "#/$defs/pin"
+        },
+        "ingressAdmissionConfiguration": {
+          "$ref": "#/$defs/pin"
+        },
+        "cleanup": {
+          "$ref": "native-shadow-proof-cohort.v2.schema.json#/$defs/cleanupConfiguration"
+        },
+        "terminalAppendConfiguration": {
+          "$ref": "#/$defs/pin"
+        },
+        "dispatchBarrierConfiguration": {
+          "$ref": "#/$defs/pin"
+        },
+        "activeEffectBarrierConfiguration": {
+          "$ref": "#/$defs/pin"
+        },
+        "activeEffectCommitConfiguration": {
+          "$ref": "#/$defs/pin"
+        },
+        "externalDriver": {
+          "$ref": "#/$defs/externalDriverPins"
+        }
+      },
+      "description": "Exactly ten owned endpoint children and one separately retained measured DriverBootstrap bridge. Fixed endpoint order: retrieval, persistence, trustedTime, generationInstall, commitRequest, ingressAdmission, terminalAppend, dispatchBarrier, activeEffectBarrier, activeEffectCommit. Existing fixed-eleven configurations are unchanged. Configuration and initial binding each fit the unchanged 32768-byte frame ceiling."
+    },
+    "controlConfiguration": {
+      "$ref": "native-shadow-proof-cohort.v1.schema.json#/$defs/controlConfiguration"
+    },
+    "precreation": {
+      "$ref": "native-shadow-proof-cohort.v1.schema.json#/$defs/precreation"
+    },
+    "observations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "configurationSha256",
+        "precreationSha256",
+        "invocationId",
+        "retrieval",
+        "persistence",
+        "trustedTime",
+        "generationInstall",
+        "commitRequest",
+        "ingressAdmission",
+        "terminalAppend",
+        "dispatchBarrier",
+        "activeEffectBarrier",
+        "activeEffectCommit",
+        "externalDriver"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeShadowProofCohortOriginals/v6"
+        },
+        "configurationSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "precreationSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "invocationId": {
+          "$ref": "#/$defs/invocation"
+        },
+        "retrieval": {
+          "$ref": "#/$defs/childOriginal"
+        },
+        "persistence": {
+          "$ref": "#/$defs/childOriginal"
+        },
+        "trustedTime": {
+          "$ref": "#/$defs/childOriginal"
+        },
+        "generationInstall": {
+          "$ref": "#/$defs/childOriginal"
+        },
+        "commitRequest": {
+          "$ref": "#/$defs/childOriginal"
+        },
+        "ingressAdmission": {
+          "$ref": "#/$defs/childOriginal"
+        },
+        "terminalAppend": {
+          "$ref": "#/$defs/childOriginal"
+        },
+        "dispatchBarrier": {
+          "$ref": "#/$defs/childOriginal"
+        },
+        "activeEffectBarrier": {
+          "$ref": "#/$defs/childOriginal"
+        },
+        "activeEffectCommit": {
+          "$ref": "#/$defs/childOriginal"
+        },
+        "externalDriver": {
+          "$ref": "#/$defs/externalDriverOriginal"
+        }
+      },
+      "description": "Actual ten local child observations plus the separately retained, live-measured external driver binding. The external driver is never a cohort ChildOriginal or a child reaping claim."
+    },
+    "releasePayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "configurationSha256",
+        "precreationSha256",
+        "observationSha256",
+        "invocationId",
+        "retrieval",
+        "persistence",
+        "trustedTime",
+        "generationInstall",
+        "commitRequest",
+        "ingressAdmission",
+        "signingKeyId",
+        "terminalAppend",
+        "dispatchBarrier",
+        "activeEffectBarrier",
+        "activeEffectCommit",
+        "externalDriverSha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeShadowProofCohortRelease/v6"
+        },
+        "configurationSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "precreationSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "observationSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "invocationId": {
+          "$ref": "#/$defs/invocation"
+        },
+        "retrieval": {
+          "$ref": "#/$defs/roleRelease"
+        },
+        "persistence": {
+          "$ref": "#/$defs/roleRelease"
+        },
+        "trustedTime": {
+          "$ref": "#/$defs/roleRelease"
+        },
+        "generationInstall": {
+          "$ref": "#/$defs/roleRelease"
+        },
+        "commitRequest": {
+          "$ref": "#/$defs/roleRelease"
+        },
+        "ingressAdmission": {
+          "$ref": "#/$defs/roleRelease"
+        },
+        "signingKeyId": {
+          "$ref": "#/$defs/sha"
+        },
+        "terminalAppend": {
+          "$ref": "#/$defs/roleRelease"
+        },
+        "dispatchBarrier": {
+          "$ref": "#/$defs/roleRelease"
+        },
+        "activeEffectBarrier": {
+          "$ref": "#/$defs/roleRelease"
+        },
+        "activeEffectCommit": {
+          "$ref": "#/$defs/roleRelease"
+        },
+        "externalDriverSha256": {
+          "$ref": "#/$defs/sha"
+        }
+      }
+    },
+    "release": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "payload",
+        "signatureBase64url"
+      ],
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/releasePayload"
+        },
+        "signatureBase64url": {
+          "$ref": "#/$defs/signature"
+        }
+      },
+      "description": "Independent existing C9 authority signs ASCII serverware.nativeShadowProofCohortRelease.signature/v6, NUL, complete canonical payload including externalDriverSha256. Ten endpoint inventories only; unchanged 32768-byte packet and 128-rights aggregate ceiling. External DriverBootstrap continuation remains a separate one-shot operation after actual ordinary listeners and endpoint release."
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "purpose",
+        "configurationSha256",
+        "precreationSha256",
+        "observationSha256",
+        "releaseSha256",
+        "invocationId",
+        "operationIdSha256",
+        "requestedAtBoottimeNs",
+        "deadlineBoottimeNs",
+        "signingKeyId",
+        "externalDriverSha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeShadowProofCohortCleanup/v6"
+        },
+        "purpose": {
+          "const": "terminate-owned-proof-cohort"
+        },
+        "configurationSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "precreationSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "observationSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "releaseSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "invocationId": {
+          "$ref": "#/$defs/invocation"
+        },
+        "operationIdSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "requestedAtBoottimeNs": {
+          "$ref": "#/$defs/ns"
+        },
+        "deadlineBoottimeNs": {
+          "$ref": "#/$defs/ns"
+        },
+        "signingKeyId": {
+          "$ref": "#/$defs/sha"
+        },
+        "externalDriverSha256": {
+          "$ref": "#/$defs/sha"
+        }
+      }
+    },
+    "authorization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "payload",
+        "signatureBase64url"
+      ],
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/payload"
+        },
+        "signatureBase64url": {
+          "$ref": "#/$defs/signature"
+        }
+      },
+      "description": "Distinct cleanup authority signs ASCII serverware.nativeShadowProofCohortCleanup.signature/v6, NUL, complete canonical payload including externalDriverSha256. Original signed boot/lifetime and cleanup bounds remain unchanged; only ten locally owned endpoints may be signaled/reaped."
+    },
+    "terminal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "authorizationSha256",
+        "configurationSha256",
+        "precreationSha256",
+        "observationSha256",
+        "releaseSha256",
+        "invocationId",
+        "completedAtBoottimeNs",
+        "children",
+        "externalDriverSha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeShadowProofCohortTerminal/v6"
+        },
+        "authorizationSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "configurationSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "precreationSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "observationSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "releaseSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "invocationId": {
+          "$ref": "#/$defs/invocation"
+        },
+        "completedAtBoottimeNs": {
+          "$ref": "#/$defs/ns"
+        },
+        "children": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "retrieval",
+            "persistence",
+            "trustedTime",
+            "generationInstall",
+            "commitRequest",
+            "ingressAdmission",
+            "terminalAppend",
+            "dispatchBarrier",
+            "activeEffectBarrier",
+            "activeEffectCommit"
+          ],
+          "properties": {
+            "retrieval": {
+              "$ref": "#/$defs/childTerminal"
+            },
+            "persistence": {
+              "$ref": "#/$defs/childTerminal"
+            },
+            "trustedTime": {
+              "$ref": "#/$defs/childTerminal"
+            },
+            "generationInstall": {
+              "$ref": "#/$defs/childTerminal"
+            },
+            "commitRequest": {
+              "$ref": "#/$defs/childTerminal"
+            },
+            "ingressAdmission": {
+              "$ref": "#/$defs/childTerminal"
+            },
+            "terminalAppend": {
+              "$ref": "#/$defs/childTerminal"
+            },
+            "dispatchBarrier": {
+              "$ref": "#/$defs/childTerminal"
+            },
+            "activeEffectBarrier": {
+              "$ref": "#/$defs/childTerminal"
+            },
+            "activeEffectCommit": {
+              "$ref": "#/$defs/childTerminal"
+            }
+          }
+        },
+        "externalDriverSha256": {
+          "$ref": "#/$defs/sha"
+        }
+      }
+    },
+    "result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "authorizationSha256",
+        "intentRecordSha256",
+        "terminalOriginal",
+        "terminalRecordSha256",
+        "externalDriverSha256"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeShadowProofCohortCleanupResult/v6"
+        },
+        "authorizationSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "intentRecordSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "terminalRecordSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "terminalOriginal": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32256,
+          "pattern": "^[\\u0000-\\u007f]+$"
+        },
+        "externalDriverSha256": {
+          "$ref": "#/$defs/sha"
+        }
+      },
+      "description": "Complete response <=32768 bytes; exact ten-endpoint terminal original and durable journal readback after real local reaps. Binds externalDriverSha256 without claiming that the foreign driver was terminated or reaped. DriverBootstrap retains its separate subtree cleanup responsibility."
+    },
+    "genesis": {
+      "$ref": "native-shadow-proof-cohort.v2.schema.json#/$defs/genesis"
+    },
+    "record": {
+      "$ref": "native-shadow-proof-cohort.v2.schema.json#/$defs/record"
+    },
+    "externalDriverPins": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "configurationSha256",
+        "windowSha256",
+        "observationSha256",
+        "supervisorExecutableSha256"
+      ],
+      "properties": {
+        "configurationSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "windowSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "observationSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "supervisorExecutableSha256": {
+          "$ref": "#/$defs/sha"
+        }
+      }
+    },
+    "driverBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "configurationOriginal",
+        "windowOriginal",
+        "observationOriginal"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeShadowEndpointDriverBinding/v1"
+        },
+        "configurationOriginal": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32768,
+          "pattern": "^[\\u0000-\\u007f]+$"
+        },
+        "windowOriginal": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32768,
+          "pattern": "^[\\u0000-\\u007f]+$"
+        },
+        "observationOriginal": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32768,
+          "pattern": "^[\\u0000-\\u007f]+$"
+        }
+      },
+      "description": "Exact originals under fixed protected bootstrap paths, bound by signed cohort configuration/precreation. One authenticated initial control packet <=32768 bytes with exactly three SCM_RIGHTS in order supervisor PIDFD, driver PIDFD, measured sealed executable. No reconstitution of a process owner or SCM identity."
+    },
+    "retainedProcess": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "processId",
+        "startTimeTicks",
+        "pidfdDevice",
+        "pidfdInode"
+      ],
+      "properties": {
+        "processId": {
+          "type": "integer",
+          "minimum": 2
+        },
+        "startTimeTicks": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "pidfdDevice": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "pidfdInode": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "externalDriverOriginal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "bindingSha256",
+        "configurationSha256",
+        "windowSha256",
+        "observationSha256",
+        "supervisor",
+        "driver",
+        "executable"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeShadowEndpointDriverOriginal/v1"
+        },
+        "bindingSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "configurationSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "windowSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "observationSha256": {
+          "$ref": "#/$defs/sha"
+        },
+        "supervisor": {
+          "$ref": "#/$defs/retainedProcess"
+        },
+        "driver": {
+          "$ref": "#/$defs/retainedProcess"
+        },
+        "executable": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "device",
+            "inode",
+            "length",
+            "sha256"
+          ],
+          "properties": {
+            "device": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "inode": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "length": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 67108864
+            },
+            "sha256": {
+              "$ref": "#/$defs/sha"
+            }
+          }
+        }
+      }
+    }
+  }
+}

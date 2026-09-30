@@ -257,11 +257,28 @@ def bridge_selection(owner):
 
 
 def _require_native_release(launcher, cohort, transfers):
+    p.require(not cohort.endpoint_driver_selected())
+    return _require_release(launcher, cohort, transfers, inputs=None)
+
+
+def _require_endpoint_release(launcher, cohort, driver, inputs, transfers):
+    from serverware.native_shadow_driver_inputs import OperationalInputs
+    p.require(cohort.endpoint_driver_selected() and type(inputs) is OperationalInputs
+        and cohort._external_driver.driver is driver and inputs._driver is driver
+        and driver._prepared_inputs is inputs and not inputs._begun)
+    inputs.check(); driver.check()
+    return _require_release(launcher, cohort, transfers, inputs=inputs)
+
+
+def _require_release(launcher, cohort, transfers, *, inputs):
     from serverware.native_shadow_proof_cohort_control import ParkedProofCohort, RetainedActivationFds
     p.require(type(cohort) is ParkedProofCohort and cohort.spool_selected() and type(transfers) is dict)
     terminal = cohort.terminal_selected()
     effects = cohort.effects_selected()
     roles = {"retrieval", "persistence", "trustedTime", "generationInstall", "bridge", "commitRequest", "ingressAdmission"}
+    if inputs is not None:
+        p.require(effects and cohort.endpoint_driver_selected())
+        roles.remove("bridge")
     p.require((not effects or terminal) and set(transfers) == (roles | ({"terminalAppend"} if terminal else set())
         | (set(EFFECT_KEYS) if effects else set())))
     owner = launcher._input_owner; _release_current(owner)
@@ -276,9 +293,10 @@ def _require_native_release(launcher, cohort, transfers):
         value = transfers[role]
         p.require(type(value) is RetainedActivationFds and value._cohort is cohort and value._role == role)
         value.check(); p.require(value._grant_bytes == owner._spools[ROLES[0]]._native[name])
-    bridge = transfers["bridge"]
-    p.require(type(bridge) is RetainedActivationFds and bridge._cohort is cohort and bridge._role == "bridge")
-    bridge.check()
+    if inputs is None:
+        bridge = transfers["bridge"]
+        p.require(type(bridge) is RetainedActivationFds and bridge._cohort is cohort and bridge._role == "bridge")
+        bridge.check()
     ledger = g.document(transfers["commitRequest"]._grant_bytes, 65536)["payload"]
     pin = ledger["commitRequest"]; g.c9._pin(pin)
     companion = o.Original(pin["path"], 65536, sha=pin["sha256"]); owner._originals.append(companion)
@@ -287,11 +305,20 @@ def _require_native_release(launcher, cohort, transfers):
     p.require(all(scope == scopes[0] for scope in scopes)); commitment._same_cohort(owner, scopes[0])
     expected_commitment = {"apiVersion": "serverware.nativeCommitRequestServices/v1",
         "serviceGrantOriginals": {role: owner._commitments[role].original().decode("ascii") for role in ROLES}}
-    pin = g.document(bridge._delivery_bytes, 65536)["payload"]["runtimeConfig"]
-    original = o.Original(pin["path"], g.MAX_BYTES, sha=pin["sha256"]); owner._originals.append(original)
-    runtime = g.document(original.read(), g.MAX_BYTES)
+    if inputs is None:
+        pin = g.document(bridge._delivery_bytes, 65536)["payload"]["runtimeConfig"]
+        original = o.Original(pin["path"], g.MAX_BYTES, sha=pin["sha256"]); owner._originals.append(original)
+        runtime = g.document(original.read(), g.MAX_BYTES)
+    else:
+        # This raw original and these descriptors belong to the actual
+        # already-verified OperationalInputs, not a fake bridge transfer.
+        inputs.check()
+        runtime = g.document(inputs._runtime_raw, g.MAX_BYTES)
     p.require(runtime["apiVersion"] == ("serverware.policyCustodyProductionRpcRuntime/v9" if effects else "serverware.policyCustodyProductionRpcRuntime/v8" if terminal else "serverware.policyCustodyProductionRpcRuntime/v7") and runtime["spool"] == expected
         and runtime["commitRequest"] == expected_commitment)
     from serverware.native_shadow_spool_inputs import SpoolInputs
     p.require(type(cohort._spool_resources) is SpoolInputs)
-    cohort._spool_resources.require_release(transfers, owner._spools[ROLES[0]].original())
+    if inputs is None:
+        cohort._spool_resources.require_release(transfers, owner._spools[ROLES[0]].original())
+    else:
+        cohort._spool_resources.require_endpoint_release(transfers, owner._spools[ROLES[0]].original(), inputs)

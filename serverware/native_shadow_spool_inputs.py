@@ -136,6 +136,8 @@ class SpoolInputs:
         else:
             self._cohort._origin(); self._cohort._child_live()
             p.require(self._cohort._release_sent and not self._cohort._cleanup_attempted)
+            if self._cohort._external_driver is not None:
+                self._cohort._external_driver.check(live=True)
         for parent, name, child, expected in self._parents:
             info = os.fstat(parent)
             p.require(info.st_uid == info.st_gid == 0 and info.st_mode & 0o022 == 0
@@ -232,6 +234,17 @@ class SpoolInputs:
         return {"genesisSha256": p.sha(raw), "sequence": 0, "headSha256": p.sha(raw)}
 
     def require_release(self, transfers, head_original):
+        p.require(self._cohort._external_driver is None)
+        return self._require_release(transfers, head_original, inputs=None)
+
+    def require_endpoint_release(self, transfers, head_original, inputs):
+        from serverware.native_shadow_driver_inputs import OperationalInputs
+        p.require(type(inputs) is OperationalInputs and self._cohort._external_driver is not None
+            and inputs._driver is self._cohort._external_driver.driver and not inputs._begun)
+        inputs.check()
+        return self._require_release(transfers, head_original, inputs=inputs)
+
+    def _require_release(self, transfers, head_original, *, inputs):
         self.check(); p.require(self._genesis is not None and self._head is None)
         head = p.document(head_original, 65536)["payload"]
         head_version = 3 if self._effects_selected else 2 if self._terminal_selected else 1
@@ -255,8 +268,13 @@ class SpoolInputs:
                     and retrieval["effects"][role] == key)
             roles += tuple(EFFECT_LISTENERS)
         for role in roles:
-            transfer = transfers[role]; transfer.check()
-            held = {entry["name"]: fd for entry, fd in zip(transfer._entries, transfer._fds, strict=True)}
+            if role == "bridge" and inputs is not None:
+                inputs.check()
+                held = {name.removeprefix("activation:"): fd for name, fd in inputs._descriptors.items()
+                    if name.startswith("activation:")}
+            else:
+                transfer = transfers[role]; transfer.check()
+                held = {entry["name"]: fd for entry, fd in zip(transfer._entries, transfer._fds, strict=True)}
             for name, fd in self.additions(role):
                 p.require(name in held and o.structural(os.fstat(held[name])) == o.structural(os.fstat(fd)))
 
@@ -273,6 +291,9 @@ class SpoolInputs:
         # children. Files survive for operator reconciliation; no unlink.
         if self._closed:
             return
+        if self._cohort._external_driver is not None:
+            p.require(self._cohort._parent_reaped)
+            self._cohort._external_driver.terminal()
         self._closed = True
         if hasattr(self, "_relay"):
             self._relay.close()

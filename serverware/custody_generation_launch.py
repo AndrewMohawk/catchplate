@@ -300,6 +300,7 @@ class FiveServiceLaunch:
         self._bridge_attempted = True
         try:
             cohort.check()
+            p.require(not cohort.endpoint_driver_selected())
             if self._spool:
                 from serverware.custody_spool_inputs import _require_native_release
                 _require_native_release(self, cohort, transfers)
@@ -335,6 +336,50 @@ class FiveServiceLaunch:
                 _release_current(self._input_owner)
             # Exact native release retains its own original deadlines and
             # purpose checks; this method cannot renew or replace them.
+            return cohort.release(release_original=release_original, transfers=transfers)
+        except BaseException:
+            self._failed = True; self._stop.set(); raise
+
+    def release_endpoint_cohort(self, cohort, *, driver, inputs, release_original, transfers):
+        """All five real final-role listens precede ten-endpoint release.
+
+        The bridge identity comes from the retained measured DriverBootstrap,
+        never from a parked endpoint or a caller-projected process record.
+        """
+        from serverware.native_shadow_proof_cohort_control import ParkedProofCohort
+        from serverware.native_shadow_driver_bootstrap import DriverBootstrap
+        from serverware.native_shadow_driver_inputs import OperationalInputs
+        self.check()
+        p.require(type(cohort) is ParkedProofCohort and type(driver) is DriverBootstrap
+            and type(inputs) is OperationalInputs and self._effects and self._inspected and self._attempted
+            and not self._bridge_attempted and threading.current_thread() is threading.main_thread())
+        self._bridge_attempted = True
+        try:
+            cohort.check(); driver.check(); inputs.check()
+            p.require(cohort.endpoint_driver_selected() and cohort._external_driver.driver is driver
+                and inputs._driver is driver and driver._prepared_inputs is inputs)
+            from serverware.custody_spool_inputs import _require_endpoint_release, _release_current
+            _require_endpoint_release(self, cohort, driver, inputs, transfers)
+            measured = cohort._external_driver.value
+            for role in g.ROLES:
+                expected = g.document(self._input_owner._roles[role]["runtime_raw"], g.MAX_BYTES)["runtime"]["expectedPeer"]
+                p.require(expected["pid"] == measured["driver"]["processId"]
+                    and expected["startTimeTicks"] == measured["driver"]["startTimeTicks"]
+                    and expected["executableDevice"] == measured["executable"]["device"]
+                    and expected["executableInode"] == measured["executable"]["inode"]
+                    and expected["executableLength"] == measured["executable"]["length"]
+                    and expected["executableSha256"] == measured["executable"]["sha256"]
+                    and (expected["uid"], expected["gid"]) == (driver._config["uid"], driver._config["gid"]))
+            while not self._listening.is_set():
+                self.check(); cohort.check(); inputs.check()
+                remaining = self._startup - o.clock(); p.require(remaining > 0)
+                self._listening.wait(min(0.01, remaining / 1_000_000_000))
+            self.check(); cohort.check(); inputs.check()
+            p.require(o.clock() < self._startup and all(item["phase"] in {"listening", "constructed"}
+                for item in self._children.values()))
+            from serverware.custody_commitment_inputs import _release_current as commitment_current
+            commitment_current(self._input_owner); _release_current(self._input_owner)
+            cohort._authorize_endpoint_release(self, driver, inputs)
             return cohort.release(release_original=release_original, transfers=transfers)
         except BaseException:
             self._failed = True; self._stop.set(); raise

@@ -19,7 +19,8 @@ steps. No dependency fetch is invoked. The build host/operator must provision
 the exact base images and builder/cache beforehand; `--network=none` is not a
 claim that an independently configured BuildKit daemon cannot access a registry.
 
-The fixed selection is the actual eleven-child cohort configuration/v6,
+The fixed selection is the ten-endpoint cohort configuration/v7 paired with
+the one actual measured driver bootstrap configuration/v4,
 bridge launch/v5, production RPC runtime/v9, spool services/v3, and ordinary
 five-service launch/v6. Only DRS, CurrentSignatureAuthority and Cleanup select
 ordinary effects runtime/v8 and `--guest-c9-effects-inspected`; the other two
@@ -317,20 +318,21 @@ requirements and the nonrelease boundary are unchanged; production acceptance
 remains **0/6 verified**.
 
 The source-fixed prerequisite list points at the actual existing callers:
-`ParkedProofCohort.start`, `FiveServiceLaunch.start_effects`,
+`NativePilotLaunch.start`, `ParkedProofCohort.start_for_driver`,
+`FiveServiceLaunch.start_effects`,
 `BusinessResources.prepare_commitment(five).commitment_inputs()`,
 `SpoolInputs.prepare`, `DriverBootstrap.start`,
 and `OperationalInputs.prepare_outgoing`. These require genuine privileged
 owners and separately provisioned originals; this build script does not call
 them and does not serialize fake substitutes for their private types.
 
-The live caller is not yet composed: the existing fixed-eleven cohort owns a
-parked bridge child, while `DriverBootstrap` owns a different measured bridge.
-The ordinary service release requires its peer to be the actual cohort bridge;
-launching both cannot satisfy that identity check. The next source connection
-is an explicit endpoint-only cohort bound to the retained measured driver,
-with separate genuine cleanup owners. Existing fixed-eleven behavior and peer
-checks remain unchanged; a wrapper that merely starts both paths is not a pilot.
+The [live composition](native-pilot-launch.md) uses an explicit endpoint-only
+cohort bound to the retained measured driver, with separate genuine cleanup
+owners. The existing fixed-eleven cohort owns a different parked bridge and is
+not combined with `DriverBootstrap`. Configuration/v7 and its signed precreation
+are supplied after the real driver observation exists, under the unchanged
+startup deadline. Existing fixed-eleven behavior and peer checks stay unchanged.
+This source connection is not a tested launch or a testable pilot.
 
 An independently authorized operator must supply and retain the protected
 cohort/ordinary/driver configurations, current signed histories and assignments,
@@ -341,12 +343,12 @@ PIDFD/start/executable observations and post-drop driver/peer measurements must
 exist **before** the independent next-stage signatures. Static installation
 files cannot predetermine those identities or renew their deadlines.
 
-The actual `FiveServiceLaunch.release_proof_cohort` checks the complete ordinary
-five-service listening state and exact effects-selected grants before one-shot
-native release. Keep every resource/process owner alive through the original
+The actual `FiveServiceLaunch.release_endpoint_cohort` checks the complete ordinary
+five-service listening state, the same measured driver and exact effects-selected
+grants before one-shot endpoint release and driver continuation. Keep every resource/process owner alive through the original
 serving interval and its real terminal/reap cleanup. Do not replace this caller
 with shell background processes, numeric PID lists, a generated Compose file,
-or a new generic launcher. The paired [eleven-child guide](native-shadow-effects-cohort.md)
+or a new generic launcher. The [existing effects guide](native-shadow-effects-cohort.md)
 and [driver lifecycle](native-shadow-driver-lifecycle.md) describe those owners.
 
 ## Independent issuers are separate installations

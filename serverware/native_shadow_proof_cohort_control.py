@@ -170,6 +170,13 @@ class RetainedActivationFds:
             original.close()
 
 
+class EndpointStartError(ValueError):
+    """A failed start retains its real owner until separate driver cleanup."""
+    def __init__(self, cohort):
+        super().__init__("endpoint cohort start failed; retained owner requires cleanup")
+        self.cohort = cohort
+
+
 class ParkedProofCohort:
     """Private live process owner. There is no JSON/ready/PID constructor."""
     def __init__(self, token):
@@ -183,6 +190,8 @@ class ParkedProofCohort:
         self._release_sent = self._cleanup_attempted = self._cleanup_sent = self._parent_reaped = False
         self._release_original = self._cleanup_authorization = self._cleanup_result = None
         self._cleanup_deadline = None
+        self._external_driver = self._endpoint_inputs = self._endpoint_five = None
+        self._driver_attempted = self._stop_attempted = False
 
     def _open(self, path, bound, digest=None, mode=0o400):
         p.require(len(self._originals) < 96)
@@ -193,6 +202,18 @@ class ParkedProofCohort:
     @classmethod
     def start(cls):
         """One actual fixed, no-argument, empty-environment child invocation."""
+        return cls._start(None)
+
+    @classmethod
+    def start_for_driver(cls, driver):
+        """Ten endpoints bound to this actual measured, separately owned driver."""
+        from serverware.native_shadow_driver_bootstrap import DriverBootstrap
+        p.require(cls is ParkedProofCohort and type(driver) is DriverBootstrap)
+        driver.check()
+        return cls._start(driver)
+
+    @classmethod
+    def _start(cls, driver):
         global _LIVE
         p.require(_LIVE is None and os.getresuid() == (0, 0, 0) and os.getresgid() == (0, 0, 0)
             and len(os.listdir("/proc/self/task")) == 1)
@@ -206,6 +227,7 @@ class ParkedProofCohort:
             owner._config_original = owner._open(CONFIGURATION, profile.MAX_BYTES, control["configurationSha256"])
             owner._precreate_original = owner._open(PRECREATION, profile.MAX_BYTES, control["precreationSha256"])
             owner._config = profile.configuration(owner._config_original.raw)
+            p.require(profile.endpoint_driver_selected(owner._config) == (driver is not None))
             owner._roles = profile.roles(owner._config)
             authority = p.fields(owner._config["authority"], ("publicKeyBase64url", "keyId"))
             public = p.decoded(authority["publicKeyBase64url"], size=32)
@@ -229,6 +251,19 @@ class ParkedProofCohort:
                 profile.PRECREATE_DOMAIN + p.canonical(owner._window))
             owner._startup = p.ns(owner._window["startupDeadlineBoottimeNs"])
             owner._lifetime = p.ns(owner._window["lifetimeDeadlineBoottimeNs"])
+            if driver is not None:
+                from serverware.native_shadow_endpoint_driver import EndpointDriver
+                owner._external_driver = EndpointDriver.retain(driver, owner._config["externalDriver"], owner._window)
+                # Real driver C9, used only as the peer/resource owner. It is
+                # not inserted into the owned child inventory or release map.
+                pin = driver._config["deliveryConfiguration"]
+                delivery._pin(pin)
+                cold = delivery.configuration(owner._open(pin["path"], 65536, pin["sha256"]).raw, pin["sha256"])
+                p.require(cold["serviceRole"] == "production-bridge"
+                    and (cold["uid"], cold["gid"]) == (driver._config["uid"], driver._config["gid"])
+                    and cold["uid"] not in {value["uid"] for value in owner._cold.values()}
+                    and cold["gid"] not in {value["gid"] for value in owner._cold.values()})
+                owner._cold["bridge"] = cold
             used = p.sha(owner._precreate_original.raw)
             p.require(used not in _USED and len(_USED) < 1024)
             _USED.add(used)
@@ -258,10 +293,16 @@ class ParkedProofCohort:
             owner._exec_identity = originals._identity(os.fstat(owner._exec))
             p.require(os.pread(owner._exec, len(raw) + 1, 0) == raw)
             owner._spawn()
+            if owner._external_driver is not None:
+                owner._external_driver.send(owner._socket)
             owner._receive_originals()
             owner.check()
             return owner
-        except BaseException:
+        except BaseException as error:
+            if driver is not None:
+                # Give the actual caller the retained cleanup capability even
+                # on partial start. Do not drop rights while its driver lives.
+                raise EndpointStartError(owner) from error
             owner.close()
             raise
 
@@ -327,6 +368,8 @@ class ParkedProofCohort:
         self._origin()
         p.require(not self._attempted and _clock() < self._startup)
         self._child_live()
+        if self._external_driver is not None:
+            self._external_driver.check(live=True)
         for fd, pid, start in self._parked:
             p.require(not _terminal(fd) and _pidfd_pid(fd) == pid and _process(pid) == (self._child_pid, start))
         # Do NOT call transfer.check here: persistence owns this same cohort
@@ -364,6 +407,9 @@ class ParkedProofCohort:
                     and observed["configurationSha256"] == p.sha(self._config_original.raw)
                     and observed["precreationSha256"] == p.sha(self._precreate_original.raw)
                     and observed["invocationId"] == self._window["invocationId"])
+                if self._external_driver is not None:
+                    p.require(observed["externalDriver"] == self._external_driver.value)
+                    profile.external_driver_sha256(self._config, observed)
                 identities = set()
                 for role in self._roles:
                     value = p.fields(observed[role], ("processId", "startTimeTicks", "executable"))
@@ -393,8 +439,12 @@ class ParkedProofCohort:
 
     def bridge_original(self):
         self.check()
-        p.require(self._observed is not None)
+        p.require(self._observed is not None and self._external_driver is None)
         return copy.deepcopy(self._observed["bridge"])
+
+    def endpoint_driver_selected(self):
+        self.check()
+        return profile.endpoint_driver_selected(self._config)
 
     def startup_deadline_boottime_ns(self):
         self.check()
@@ -404,23 +454,25 @@ class ParkedProofCohort:
         """Source selection only; never proof that any service is ready."""
         self.check()
         return self._config["apiVersion"] in ("serverware.nativeShadowProofCohortConfiguration/v3", "serverware.nativeShadowProofCohortConfiguration/v4",
-            "serverware.nativeShadowProofCohortConfiguration/v5", "serverware.nativeShadowProofCohortConfiguration/v6")
+            "serverware.nativeShadowProofCohortConfiguration/v5", "serverware.nativeShadowProofCohortConfiguration/v6",
+            "serverware.nativeShadowProofCohortConfiguration/v7")
 
     def spool_selected(self):
         """Explicit native-spool selection, not service or generation readiness."""
         self.check()
         return self._config["apiVersion"] in ("serverware.nativeShadowProofCohortConfiguration/v4", "serverware.nativeShadowProofCohortConfiguration/v5",
-            "serverware.nativeShadowProofCohortConfiguration/v6")
+            "serverware.nativeShadowProofCohortConfiguration/v6", "serverware.nativeShadowProofCohortConfiguration/v7")
 
     def terminal_selected(self):
         """A separately authorized terminal owner, not terminal success."""
         self.check()
-        return self._config["apiVersion"] in ("serverware.nativeShadowProofCohortConfiguration/v5", "serverware.nativeShadowProofCohortConfiguration/v6")
+        return self._config["apiVersion"] in ("serverware.nativeShadowProofCohortConfiguration/v5", "serverware.nativeShadowProofCohortConfiguration/v6",
+            "serverware.nativeShadowProofCohortConfiguration/v7")
 
     def effects_selected(self):
-        """Fixed eleven-child inventory, not an effect or dispatch permit."""
+        """Fixed effects inventory, not an effect or dispatch permit."""
         self.check()
-        return self._config["apiVersion"] == "serverware.nativeShadowProofCohortConfiguration/v6"
+        return self._config["apiVersion"] in ("serverware.nativeShadowProofCohortConfiguration/v6", "serverware.nativeShadowProofCohortConfiguration/v7")
 
     def prepare_spool_inputs(self):
         """New physical resources under this exact parked cohort owner."""
@@ -507,6 +559,10 @@ class ParkedProofCohort:
         """One SCM_RIGHTS attempt; no automatic retry, acknowledgement or ready return."""
         from serverware.native_shadow_persistence_inputs import PersistenceTransfer
         self.check()
+        if self._external_driver is not None:
+            # Set only by the actual all-five listening owner below.
+            p.require(self._endpoint_five is not None and self._endpoint_inputs is not None)
+            self._endpoint_five.check(); self._endpoint_inputs.check()
         if self.spool_selected():
             from serverware.native_shadow_spool_inputs import SpoolInputs
             p.require(type(self._spool_resources) is SpoolInputs and self._spool_resources._head is not None)
@@ -520,6 +576,8 @@ class ParkedProofCohort:
             and payload["observationSha256"] == p.sha(self.original_bytes())
             and payload["invocationId"] == self._window["invocationId"]
             and payload["signingKeyId"] == self._config["authority"]["keyId"])
+        if self._external_driver is not None:
+            p.require(payload["externalDriverSha256"] == profile.external_driver_sha256(self._config, self._observed))
         self._key.verify(p.decoded(signed["signatureBase64url"], size=64),
             profile.release_domain(self._config) + p.canonical(payload))
         expected, identities = {}, set()
@@ -563,6 +621,29 @@ class ParkedProofCohort:
         self._release_sent = True
         # No subsequent preparation check, resend or claim about child gates.
 
+    def _authorize_endpoint_release(self, five, driver, inputs):
+        from serverware.custody_generation_launch import FiveServiceLaunch
+        from serverware.native_shadow_driver_inputs import OperationalInputs
+        self.check()
+        p.require(type(five) is FiveServiceLaunch and type(inputs) is OperationalInputs
+            and self._external_driver is not None and self._external_driver.driver is driver
+            and inputs._driver is driver and driver._prepared_inputs is inputs
+            and five._effects and five._attempted and five._bridge_attempted
+            and five._listening.is_set() and self._endpoint_inputs is None)
+        five.check(); inputs.check()
+        self._endpoint_five, self._endpoint_inputs = five, inputs
+
+    def continue_driver(self, *, inputs, signed_scope_original, public_originals):
+        """Continue exactly the bound driver once, after actual endpoint release."""
+        p.require(self._external_driver is not None and self._release_sent and not self._driver_attempted
+            and not self._cleanup_attempted and inputs is self._endpoint_inputs)
+        self._origin(); self._child_live(); self._external_driver.check(live=True)
+        self._endpoint_five.check(); inputs.check()
+        p.require(_clock() < self._startup)
+        self._driver_attempted = True
+        return self._external_driver.driver.continue_scope(inputs=inputs,
+            signed_scope_original=signed_scope_original, public_originals=public_originals)
+
     def request_termination(self, *, authorization_original):
         """One separately authorized whole-cohort cancellation, never Settle/v4.
 
@@ -572,7 +653,8 @@ class ParkedProofCohort:
         self._origin(); self._child_live()
         p.require(self._release_sent and not self._cleanup_attempted
                   and self._config["apiVersion"] in ("serverware.nativeShadowProofCohortConfiguration/v2",
-                "serverware.nativeShadowProofCohortConfiguration/v3", "serverware.nativeShadowProofCohortConfiguration/v4", "serverware.nativeShadowProofCohortConfiguration/v5", "serverware.nativeShadowProofCohortConfiguration/v6"))
+                "serverware.nativeShadowProofCohortConfiguration/v3", "serverware.nativeShadowProofCohortConfiguration/v4", "serverware.nativeShadowProofCohortConfiguration/v5", "serverware.nativeShadowProofCohortConfiguration/v6",
+                "serverware.nativeShadowProofCohortConfiguration/v7"))
         command = cleanup_profile.authorization(authorization_original, self._config_original.raw,
             self._precreate_original.raw, self._observation_bytes, self._release_original, self._boot, _clock())
         for fd, pid, start in self._parked:
@@ -587,6 +669,8 @@ class ParkedProofCohort:
 
     def _cleanup_check(self):
         self._origin()
+        if self._external_driver is not None:
+            self._external_driver.check(live=False)
         p.require(self._cleanup_attempted and self._cleanup_authorization is not None
                   and self._cleanup_deadline is not None and _clock() < self._cleanup_deadline)
         p.require(originals._identity(os.fstat(self._exec)) == self._exec_identity
@@ -618,7 +702,12 @@ class ParkedProofCohort:
         # Retain the exact original; this is local lifecycle observation, not
         # an operation result, native attestation, retry permit or readiness.
         self._cleanup_result = bytes(raw)
-        self.close()
+        if self._external_driver is None:
+            self.close()
+        else:
+            # This receipt covers only local endpoints. Their successful reap
+            # must not close resources still held by the separate live driver.
+            self.stop_endpoints()
         p.require(_clock() < self._cleanup_deadline)
         return self._cleanup_result
 
@@ -669,14 +758,22 @@ class ParkedProofCohort:
 
     def cleanup_original(self):
         """Read the already observed original. This grants no action authority."""
-        p.require(self._closed and self._parent_reaped and self._cleanup_result is not None)
+        p.require(self._parent_reaped and self._cleanup_result is not None
+            and (self._closed or self._external_driver is not None))
         return self._cleanup_result
 
-    def close(self):
-        """Cancel and retain until terminal evidence; cleanup never renews permission."""
-        global _LIVE
+    def stop_endpoints(self):
+        """Terminate/reap only owned children; keep every shared resource held."""
         if self._closed:
             return
+        if self._parent_reaped:
+            if self._socket is not None:
+                self._socket.close(); self._socket = None
+            return
+        # A partially failed termination is unknown, not a fresh cancellation
+        # opportunity. The original retained owner remains available to report.
+        p.require(not self._stop_attempted)
+        self._stop_attempted = True
         if self._socket is not None:
             self._socket.close()  # Rust observes EOF and signals/reaps its children.
             self._socket = None
@@ -688,7 +785,8 @@ class ParkedProofCohort:
                 self._pidfd = os.pidfd_open(self._child_pid, 0)
             cleanup_end = _clock() + 250_000_000
             if self._config["apiVersion"] in ("serverware.nativeShadowProofCohortConfiguration/v2",
-                "serverware.nativeShadowProofCohortConfiguration/v3", "serverware.nativeShadowProofCohortConfiguration/v4", "serverware.nativeShadowProofCohortConfiguration/v5", "serverware.nativeShadowProofCohortConfiguration/v6"):
+                "serverware.nativeShadowProofCohortConfiguration/v3", "serverware.nativeShadowProofCohortConfiguration/v4", "serverware.nativeShadowProofCohortConfiguration/v5", "serverware.nativeShadowProofCohortConfiguration/v6",
+                "serverware.nativeShadowProofCohortConfiguration/v7"):
                 cleanup_end = min(cleanup_end, self._cleanup_deadline or self._lifetime, self._lifetime)
             while not _terminal(self._pidfd) and _clock() < cleanup_end:
                 select.select([self._pidfd], [], [], 0.01)
@@ -699,7 +797,8 @@ class ParkedProofCohort:
                 signal.pidfd_send_signal(self._pidfd, signal.SIGKILL)
             cleanup_end = _clock() + 250_000_000
             if self._config["apiVersion"] in ("serverware.nativeShadowProofCohortConfiguration/v2",
-                "serverware.nativeShadowProofCohortConfiguration/v3", "serverware.nativeShadowProofCohortConfiguration/v4", "serverware.nativeShadowProofCohortConfiguration/v5", "serverware.nativeShadowProofCohortConfiguration/v6"):
+                "serverware.nativeShadowProofCohortConfiguration/v3", "serverware.nativeShadowProofCohortConfiguration/v4", "serverware.nativeShadowProofCohortConfiguration/v5", "serverware.nativeShadowProofCohortConfiguration/v6",
+                "serverware.nativeShadowProofCohortConfiguration/v7"):
                 cleanup_end = min(cleanup_end, self._cleanup_deadline or self._lifetime, self._lifetime)
             while (not _terminal(self._pidfd) or any(not _terminal(fd) for fd, _, _ in self._parked)) and _clock() < cleanup_end:
                 select.select([], [], [], 0.01)
@@ -709,6 +808,16 @@ class ParkedProofCohort:
             reaped = os.waitid(os.P_PIDFD, self._pidfd, os.WEXITED)
             p.require(reaped.si_pid == terminal.si_pid and reaped.si_code == terminal.si_code
                 and reaped.si_status == terminal.si_status)
+        self._parent_reaped = True
+
+    def close(self):
+        """Release resources only after separate endpoint and driver reaps."""
+        global _LIVE
+        if self._closed:
+            return
+        self.stop_endpoints()
+        if self._external_driver is not None:
+            self._external_driver.terminal()
         for transfer in self._transfers:
             transfer.close()
         for transfer in self._retained:
@@ -722,6 +831,8 @@ class ParkedProofCohort:
                 os.close(fd)
         for original in reversed(self._originals):
             original.close()
+        if self._external_driver is not None:
+            self._external_driver.close()
         self._closed = True
         if _LIVE is self:
             _LIVE = None

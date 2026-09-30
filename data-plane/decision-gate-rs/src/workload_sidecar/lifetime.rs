@@ -59,7 +59,8 @@ fn identity(settings: &NamespaceSettings) -> Result<(), String> {
 
 fn namespace_identity(file: &File) -> Result<(u64, u64), String> {
     let mut fs: libc::statfs = unsafe { std::mem::zeroed() };
-    ensure(unsafe { libc::fstatfs(file.as_raw_fd(), &mut fs) } == 0 && fs.f_type == NSFS_MAGIC
+    // glibc and musl expose different signedness for statfs::f_type.
+    ensure(unsafe { libc::fstatfs(file.as_raw_fd(), &mut fs) } == 0 && fs.f_type as u64 == NSFS_MAGIC as u64
         && unsafe { libc::ioctl(file.as_raw_fd(), NS_GET_NSTYPE) } == libc::CLONE_NEWNET,
         "sidecar namespace descriptor is not an actual network namespace")?;
     let info = file.metadata().map_err(|_| "inspect held sidecar network namespace")?;

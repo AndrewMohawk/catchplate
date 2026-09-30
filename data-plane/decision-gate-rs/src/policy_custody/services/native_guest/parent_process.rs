@@ -18,7 +18,8 @@ struct CloneArgs {flags:u64,pidfd:u64,child_tid:u64,parent_tid:u64,exit_signal:u
     stack_size:u64,tls:u64,set_tid:u64,set_tid_size:u64,cgroup:u64}
 #[repr(C)]
 struct Action {handler:usize,flags:usize,restorer:usize,mask:u64}
-struct PreparedChild {parent:i32,channel:OwnedFd,gate:OwnedFd,executable:OwnedFd,null:OwnedFd,activation:Vec<OwnedFd>}
+struct PreparedChild {parent:i32,channel:OwnedFd,gate:OwnedFd,executable:OwnedFd,null:OwnedFd,
+    activation:Vec<OwnedFd>,inspection:Option<OwnedFd>}
 impl PreparedChild {
     unsafe fn enter(&self)->! {
         let mut good=unsafe{libc::prctl(libc::PR_SET_PDEATHSIG,libc::SIGKILL)}==0
@@ -27,6 +28,7 @@ impl PreparedChild {
         // unmarked FD3 and signed activation slots. All sources are >=128.
         good &= unsafe{libc::syscall(libc::SYS_close_range,3u32,u32::MAX,4u32)}==0;
         good &= unsafe{libc::dup3(self.channel.as_raw_fd(),3,0)}==3;
+        if let Some(fd)=&self.inspection {good &= unsafe{libc::dup3(fd.as_raw_fd(),4,0)}==4;}
         for (index,fd) in self.activation.iter().enumerate() {
             good &= unsafe{libc::dup3(fd.as_raw_fd(),6+index as i32,0)}==6+index as i32;
         }
@@ -52,12 +54,13 @@ impl PreparedChild {
         loop {std::hint::spin_loop();}
     }
 }
-pub(super) struct Child {
+pub(in crate::policy_shadow::policy_custody::services::guest::native_guest) struct Child {
     channel:OwnedFd,pidfd:OwnedFd,gate:Option<OwnedFd>,pid:i32,parent:i32,start:Option<u64>,
     deadline:u64,reaped:bool,
 }
 impl Child {
-    pub(super) fn spawn(executable:BorrowedFd<'_>,activation:&[BorrowedFd<'_>],deadline:u64)->Result<Self,ShadowError> {
+    pub(super) fn spawn(executable:BorrowedFd<'_>,activation:&[BorrowedFd<'_>],inspection:Option<BorrowedFd<'_>>,
+        deadline:u64)->Result<Self,ShadowError> {
         require(cfg!(target_arch="x86_64") && !activation.is_empty() && activation.len()<=64 && now()?<deadline)?;
         let mut disposition:libc::sigaction=unsafe{zeroed()};
         require(unsafe{libc::sigaction(libc::SIGCHLD,std::ptr::null(),&mut disposition)}==0
@@ -73,7 +76,8 @@ impl Child {
         let parent=unsafe{libc::getpid()};
         let prepared=PreparedChild{parent,channel:duplicate(remote.as_fd())?,gate:duplicate(read.as_fd())?,
             executable:duplicate(executable)?,null:duplicate(null.as_fd())?,
-            activation:activation.iter().map(|fd|duplicate(*fd)).collect::<Result<_,_>>()?};
+            activation:activation.iter().map(|fd|duplicate(*fd)).collect::<Result<_,_>>()?,
+            inspection:inspection.map(duplicate).transpose()?};
         let mut pidfd=-1i32;
         let args=CloneArgs{flags:libc::CLONE_PIDFD as u64,pidfd:(&mut pidfd as *mut i32) as u64,
             exit_signal:libc::SIGCHLD as u64,..CloneArgs::default()};
@@ -141,6 +145,15 @@ impl Child {
             let result=unsafe{libc::poll(&mut wait,1,1)};
             require(result>=0 || std::io::Error::last_os_error().raw_os_error()==Some(libc::EINTR))?;
         }
+    }
+    pub(in crate::policy_shadow::policy_custody::services::guest::native_guest) fn require_inspection_sender(
+        &self,packet:&retrieval_peer::Packet,uid:u32,gid:u32)->Result<(),ShadowError> {
+        require(self.check()? && packet.credentials.pid==self.pid
+            && packet.credentials.uid==uid && packet.credentials.gid==gid)?;
+        retrieval_peer::same_process(packet.pidfd.as_fd(),self.pid)?;
+        // self.identity rechecks the actual clone PIDFD/start/parent original;
+        // no wire PID or ready DTO is accepted as child ownership.
+        require(Some(self.identity()?)==self.start && self.terminal(false)?.is_none())
     }
 }
 impl Drop for Child {

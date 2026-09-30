@@ -5,7 +5,7 @@ use std::os::fd::{AsFd,AsRawFd,OwnedFd};
 #[path="parent_image.rs"]
 mod image;
 #[path="parent_process.rs"]
-mod child;
+pub(in crate::policy_shadow::policy_custody::services::guest::native_guest) mod child;
 
 // Cleanup is a narrowing of the signed lifetime, never a fresh interval.
 const REAP_RESERVE_NS:u64=250_000_000;
@@ -58,15 +58,14 @@ struct Running {
     // Drop child first: its Drop refuses process continuation without actual
     // same-PIDFD reap. Thus the image/originals cannot retire under a live child.
     child:child::Child,image:image::Image,files:FileAdmission,activation:BTreeMap<String,OwnedFd>,
-    launch:Original,launch_bytes:Vec<u8>,_watchdog:Watchdog,
+    launch:Original,launch_bytes:Vec<u8>,_watchdog:Watchdog,inspector:Option<retrieval_peer::Inspector>,
 }
 impl Running {
     fn start()->Result<Self,ShadowError> {
         let inherited=inherited()?;
         let launch=Original::native_launch().map_err(fail)?;
         let launch_bytes=launch.read(32768).map_err(fail)?.to_vec();
-        let selected:Launch=exact(&launch_bytes)?;
-        require(selected.api_version=="serverware.nativeShadowGuestLaunch/v1")?;
+        let (selected,retrieval_pin)=selection(&launch_bytes)?;
         let files=admit_files(&selected.delivery_configuration.path,selected.delivery_configuration.sha256,
             &selected.delivery.path,selected.delivery.sha256).map_err(fail)?;
         require(inherited.iter().filter(|fd|**fd>=6).copied().eq(6..6+files.payload.activation.len() as i32)
@@ -76,13 +75,20 @@ impl Running {
         let (activation,_)=take_activation(&files.payload.activation).map_err(fail)?;
         process::isolate_mounts()?;
         let image=image::Image::prepare(&selected.closure,&files)?;
+        let (inspector,inspection)=if let Some(pin)=retrieval_pin {
+            require(activation.len()==2 && activation.contains_key("retrieval-listener")
+                && activation.contains_key("retrieval-objects"))?;
+            let (owner,channel)=retrieval_peer::Inspector::prepare(&pin,&activation)?;
+            (Some(owner),Some(channel))
+        } else {(None,None)};
         let ordered=files.payload.activation.iter().map(|entry| {
             activation.get(&entry.name).map(AsFd::as_fd).ok_or(ShadowError::BindingDrift)
         }).collect::<Result<Vec<_>,_>>()?;
         files.check_preparation().map_err(fail)?;
         require(now()?.checked_add(REAP_RESERVE_NS).ok_or(ShadowError::BindingDrift)?<files.lifetime())?;
-        let child=child::Child::spawn(image.executable(),&ordered,files.lifetime())?;
-        let mut owner=Self{child,image,files,activation,launch,launch_bytes,_watchdog:watchdog};
+        let child=child::Child::spawn(image.executable(),&ordered,inspection.as_ref().map(AsFd::as_fd),files.lifetime())?;
+        drop(inspection);
+        let mut owner=Self{child,image,files,activation,launch,launch_bytes,_watchdog:watchdog,inspector};
         owner.check_originals()?;owner.files.check_preparation().map_err(fail)?;
         owner.child.release()?;Ok(owner)
     }
@@ -102,6 +108,9 @@ impl Running {
         loop {
             self.check_originals()?;
             if now()?>=self.files.lifetime()-REAP_RESERVE_NS || !self.child.check()? {break;}
+            if let Some(inspector)=&mut self.inspector {
+                inspector.progress(&self.child,self.files.lifetime(),self.files.payload.uid,self.files.payload.gid)?;
+            }
             let result=unsafe{libc::poll(std::ptr::null_mut(),0,25)};
             require(result==0 || (result<0 && std::io::Error::last_os_error().raw_os_error()==Some(libc::EINTR)))?;
         }

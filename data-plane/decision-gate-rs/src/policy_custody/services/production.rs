@@ -462,7 +462,7 @@ impl ProductionRpcRuntimeConfigV4 {
     rename_all = "kebab-case",
     deny_unknown_fields
 )]
-enum ProductionAuthorityEndpointIdentityV4 {
+pub(super) enum ProductionAuthorityEndpointIdentityV4 {
     ParentSigner(
         super::super::super::PolicyShadowCustodySignerRole,
     ),
@@ -476,7 +476,7 @@ enum ProductionAuthorityEndpointIdentityV4 {
     rename_all = "kebab-case",
     deny_unknown_fields
 )]
-enum ProductionAuthorityEndpointRequestBodyV4 {
+pub(super) enum ProductionAuthorityEndpointRequestBodyV4 {
     Dispatch(ClosedProductionDispatchRequestV4),
     Generation(ClosedProductionGenerationRequestV4),
     RequestTermination {
@@ -492,13 +492,13 @@ enum ProductionAuthorityEndpointRequestBodyV4 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct ProductionAuthorityEndpointRequestV4 {
-    api_version: String,
-    endpoint: ProductionAuthorityEndpointIdentityV4,
-    replay_id_sha256: super::super::super::Sha256Digest,
-    deadline_boottime_nanos: u64,
-    request: ProductionAuthorityEndpointRequestBodyV4,
-    request_sha256: super::super::super::Sha256Digest,
+pub(super) struct ProductionAuthorityEndpointRequestV4 {
+    pub(super) api_version: String,
+    pub(super) endpoint: ProductionAuthorityEndpointIdentityV4,
+    pub(super) replay_id_sha256: super::super::super::Sha256Digest,
+    pub(super) deadline_boottime_nanos: u64,
+    pub(super) request: ProductionAuthorityEndpointRequestBodyV4,
+    pub(super) request_sha256: super::super::super::Sha256Digest,
 }
 
 impl ProductionAuthorityEndpointRequestV4 {
@@ -522,7 +522,7 @@ impl ProductionAuthorityEndpointRequestV4 {
         Ok(wire)
     }
 
-    fn computed_request_sha256(
+    pub(super) fn computed_request_sha256(
         &self,
     ) -> Result<
         super::super::super::Sha256Digest,
@@ -555,7 +555,7 @@ impl ProductionAuthorityEndpointRequestV4 {
     rename_all = "kebab-case",
     deny_unknown_fields
 )]
-enum ProductionAuthorityEndpointResultV4 {
+pub(super) enum ProductionAuthorityEndpointResultV4 {
     Dispatch(ClosedProductionDispatchResponseV4),
     Generation(ClosedProductionGenerationResponseV4),
     TerminationRequested,
@@ -585,21 +585,21 @@ struct ProductionShadowSpoolRoutingV4 {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct ProductionAuthorityEndpointReplyV4 {
-    api_version: String,
-    endpoint: ProductionAuthorityEndpointIdentityV4,
-    request_sha256: super::super::super::Sha256Digest,
-    replay_id_sha256: super::super::super::Sha256Digest,
-    completed_at_boottime_nanos: u64,
-    authority_key_id: super::super::super::Sha256Digest,
-    authority_key_spki_sha256: super::super::super::Sha256Digest,
-    result: ProductionAuthorityEndpointResultV4,
-    result_sha256: super::super::super::Sha256Digest,
-    signature_base64: String,
+pub(super) struct ProductionAuthorityEndpointReplyV4 {
+    pub(super) api_version: String,
+    pub(super) endpoint: ProductionAuthorityEndpointIdentityV4,
+    pub(super) request_sha256: super::super::super::Sha256Digest,
+    pub(super) replay_id_sha256: super::super::super::Sha256Digest,
+    pub(super) completed_at_boottime_nanos: u64,
+    pub(super) authority_key_id: super::super::super::Sha256Digest,
+    pub(super) authority_key_spki_sha256: super::super::super::Sha256Digest,
+    pub(super) result: ProductionAuthorityEndpointResultV4,
+    pub(super) result_sha256: super::super::super::Sha256Digest,
+    pub(super) signature_base64: String,
 }
 
 impl ProductionAuthorityEndpointReplyV4 {
-    fn signature_payload(
+    pub(super) fn signature_payload(
         &self,
     ) -> Result<Vec<u8>, ProductionPrimitiveRejectionV4> {
         super::super::super::canonical_json_bytes(&(

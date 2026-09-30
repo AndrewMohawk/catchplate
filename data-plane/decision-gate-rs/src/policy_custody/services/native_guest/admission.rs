@@ -3,6 +3,8 @@ use super::*;
 use super::super::native_guest::process::{Context,ContextOwner};
 #[path="result.rs"]
 mod result;
+#[path="retrieval.rs"]
+pub(crate) mod retrieval;
 const DOMAIN:&str="serverware.nativeShadowKeyAdmissionAssignment.signature/v1";
 const POSSESSION:&str="serverware.nativeShadowKeyAdmissionPossession.signature/v1";
 #[derive(Serialize,Deserialize)]

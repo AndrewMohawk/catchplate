@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.dev/schemas/native-shadow-retrieval-store.v1.schema.json",
+  "title": "Native immutable retrieval store operator artifacts",
+  "description": "Public data only. Exact ASCII/integer canonical originals, independent pins and actual filesystem checks remain mandatory. Neither form grants service or release authority.",
+  "oneOf": [{"$ref": "#/$defs/manifest"}, {"$ref": "#/$defs/installed"}],
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "positive": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807},
+    "manifest": {
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "proofScopeOriginalBase64url", "objectOriginalsBase64url"],
+      "properties": {
+        "apiVersion": {"const": "serverware.nativeShadowRetrievalStoreManifest/v1"},
+        "proofScopeOriginalBase64url": {"type": "string", "minLength": 1, "maxLength": 21846, "pattern": "^[A-Za-z0-9_-]+$"},
+        "objectOriginalsBase64url": {
+          "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1, "maxLength": 1398102, "pattern": "^[A-Za-z0-9_-]+$"}
+        }
+      }
+    },
+    "installedObject": {
+      "type": "object", "additionalProperties": false,
+      "required": ["retrievalIdSha256", "proofSha256", "objectSha256", "filename", "fsVeritySha256", "byteLength", "device", "inode", "mode"],
+      "properties": {
+        "retrievalIdSha256": {"$ref": "#/$defs/digest"},
+        "proofSha256": {"$ref": "#/$defs/digest"},
+        "objectSha256": {"$ref": "#/$defs/digest"},
+        "filename": {"type": "string", "pattern": "^[0-9a-f]{64}\\.json$"},
+        "fsVeritySha256": {"$ref": "#/$defs/digest"},
+        "byteLength": {"type": "integer", "minimum": 1, "maximum": 1048576},
+        "device": {"$ref": "#/$defs/positive"},
+        "inode": {"$ref": "#/$defs/positive"},
+        "mode": {"const": 292}
+      }
+    },
+    "installed": {
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "manifestSha256", "releaseAuthority", "serviceReady", "directoryDevice", "directoryInode", "directoryMode", "objects"],
+      "properties": {
+        "apiVersion": {"const": "serverware.nativeShadowRetrievalStoreInstalled/v1"},
+        "manifestSha256": {"$ref": "#/$defs/digest"},
+        "releaseAuthority": {"const": false},
+        "serviceReady": {"const": false},
+        "directoryDevice": {"$ref": "#/$defs/positive"},
+        "directoryInode": {"$ref": "#/$defs/positive"},
+        "directoryMode": {"const": 365},
+        "objects": {"type": "array", "minItems": 1, "maxItems": 16, "items": {"$ref": "#/$defs/installedObject"}}
+      }
+    }
+  }
+}

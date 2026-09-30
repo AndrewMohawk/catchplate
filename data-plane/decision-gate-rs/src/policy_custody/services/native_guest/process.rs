@@ -28,7 +28,9 @@ pub(super) fn initial_confinement()->Result<BTreeSet<i32>,ShadowError> {
             require(std::io::Error::last_os_error().raw_os_error()==Some(libc::EBADF))?;continue;
         }
         inherited.insert(fd);
-        if fd<=3 || (6..=69).contains(&fd) {continue;}
+        // FD4 is reserved only for the separately decoded retrieval launch.
+        // The entry takes it before opening files and rejects it for old v1.
+        if fd<=4 || (6..=69).contains(&fd) {continue;}
         return Err(ShadowError::BindingDrift);
     }
     require(inherited.contains(&3))?;

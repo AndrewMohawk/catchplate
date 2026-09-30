@@ -1535,6 +1535,22 @@ impl AuthenticatedInheritedSeqpacket {
         )
     }
 
+    /// Fixed native parent inspectors call the SAME actual peer checks before
+    /// and after joining a received kernel packet PIDFD. This exposes no
+    /// executable descriptor, target selector, or caller-created measurement.
+    pub(super) fn revalidate_packet_pidfd(
+        &self,
+        sender: BorrowedFd<'_>,
+    ) -> Result<(), ServiceError> {
+        self.revalidate_peer()?;
+        require_live_pidfd(sender.as_raw_fd(), self.peer_credentials.pid)?;
+        if process_start_time_ticks(self.peer_credentials.pid)? != self.peer_start_time_ticks {
+            return Err(ServiceError::Invalid("packet sender start identity changed"));
+        }
+        self.revalidate_peer()?;
+        require_live_pidfd(sender.as_raw_fd(), self.peer_credentials.pid)
+    }
+
     pub(super) fn into_socket(self) -> OwnedFd {
         self.socket
     }

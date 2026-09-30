@@ -1,4 +1,4 @@
-//! Fixed native guest entry through independent key admission only.
+//! Fixed native guest entry; old key admission and explicit first proof service.
 use crate::policy_shadow::*;
 use crate::policy_shadow::native_custody_closure::{Configuration as ClosureConfiguration,
     NativeCustodyClosureOwner,PreparedNativeCustodyClosure,PrekeyExecutable};
@@ -13,22 +13,23 @@ use std::sync::Arc;
 mod authority;
 mod time;
 mod parent;
+pub(in crate::policy_shadow::policy_custody::services) mod retrieval_peer;
 pub(crate) mod process;
 fn fail<T>(_:T)->ShadowError {ShadowError::CustodyUnavailable}
 fn require(ok:bool)->Result<(),ShadowError> {if ok {Ok(())} else {Err(ShadowError::BindingDrift)}}
-fn now()->Result<u64,ShadowError> {production_now_boottime_nanos()}
+pub(in crate::policy_shadow::policy_custody::services) fn now()->Result<u64,ShadowError> {production_now_boottime_nanos()}
 fn decimal(s:&str)->Result<u64,ShadowError> {
     let value=s.parse::<u64>().map_err(fail)?;require(value>0 && value.to_string()==s)?;Ok(value)
 }
-fn exact<T:serde::de::DeserializeOwned+Serialize>(raw:&[u8])->Result<T,ShadowError> {
+pub(in crate::policy_shadow::policy_custody::services) fn exact<T:serde::de::DeserializeOwned+Serialize>(raw:&[u8])->Result<T,ShadowError> {
     let value:T=serde_json::from_slice(raw).map_err(fail)?;
     require(canonical_json_bytes(&value)?.as_slice()==raw)?;Ok(value)
 }
 #[derive(Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
-struct Pin {path:PathBuf,sha256:Sha256Digest}
+pub(in crate::policy_shadow::policy_custody::services) struct Pin {path:PathBuf,sha256:Sha256Digest}
 impl Pin {
-    fn open(&self,maximum:usize)->Result<Original,ShadowError> {
+    pub(in crate::policy_shadow::policy_custody::services) fn open(&self,maximum:usize)->Result<Original,ShadowError> {
         Original::open(&self.path,0,0,maximum,self.sha256.clone()).map_err(fail)
     }
 }
@@ -38,23 +39,50 @@ struct Launch {
     api_version:String,delivery_configuration:Pin,delivery:Pin,trust:Pin,time_bootstrap:Pin,assignment:Pin,
     closure:Pin,keys:Pin,encrypted_keys:Pin,admission:Pin,verifier_transport:NativeVerifierTransportPin,
 }
+#[derive(Serialize,Deserialize)]
+#[serde(rename_all="camelCase",deny_unknown_fields)]
+struct RetrievalLaunch {api_version:String,key_admission:Launch,retrieval:Pin}
+#[derive(Serialize,Deserialize)]
+#[serde(untagged)]
+enum Selection {KeyAdmission(Launch),Retrieval(RetrievalLaunch)}
+fn selection(raw:&[u8])->Result<(Launch,Option<Pin>),ShadowError> {
+    let value:Selection=exact(raw)?;
+    let (launch,service)=match value {
+        Selection::KeyAdmission(value)=>(value,None),
+        Selection::Retrieval(value)=>{
+            require(value.api_version=="serverware.nativeShadowRetrievalGuestLaunch/v1")?;
+            (value.key_admission,Some(value.retrieval))
+        }
+    };
+    require(launch.api_version=="serverware.nativeShadowGuestLaunch/v1")?;
+    Ok((launch,service))
+}
 struct AdmittedGuest {
     _delivery:PreparedGuestServiceDelivery,lifetime:process::Lifetime,keys:admission::AdmittedKeys,
     trust:authority::Trust,time:Arc<authority::Clock>,launch:Original,launch_bytes:Vec<u8>,originals:Vec<Original>,
+    retrieval:Option<admission::retrieval::Service>,
 }
 impl AdmittedGuest {
     fn start()->Result<Self,ShadowError> {
         require(std::env::args_os().count()==1 && std::env::vars_os().next().is_none()
             && unsafe{libc::getuid()}==0 && unsafe{libc::geteuid()}==0)?;
         let inherited=process::initial_confinement()?;
+        use std::os::fd::{FromRawFd,OwnedFd};
+        let inspection=if inherited.contains(&4) {Some(unsafe{OwnedFd::from_raw_fd(4)})} else {None};
+        if inspection.is_some() {require(unsafe{libc::fcntl(4,libc::F_SETFD,libc::FD_CLOEXEC)}==0)?;}
         let launch=Original::native_launch().map_err(fail)?;
         let launch_bytes=launch.read(32768).map_err(fail)?.to_vec();
-        let selected:Launch=exact(&launch_bytes)?;
-        require(selected.api_version=="serverware.nativeShadowGuestLaunch/v1")?;
-        let delivery=PreparedGuestServiceDelivery::admit(&selected.delivery_configuration.path,selected.delivery_configuration.sha256,
+        let (selected,retrieval_pin)=selection(&launch_bytes)?;
+        require(inspection.is_some()==retrieval_pin.is_some())?;
+        let mut delivery=PreparedGuestServiceDelivery::admit(&selected.delivery_configuration.path,selected.delivery_configuration.sha256,
             &selected.delivery.path,selected.delivery.sha256).map_err(fail)?;
         require(inherited.iter().filter(|fd|**fd>=6).copied().eq(6..6+delivery.activation.len() as i32))?;
         let mut lifetime=process::Lifetime::arm(&delivery)?;
+        let retrieval=match (retrieval_pin,inspection) {
+            (Some(pin),Some(channel))=>Some(admission::retrieval::Prepared::open(&pin,&mut delivery,channel)?),
+            (None,None)=>None,
+            _=>return Err(ShadowError::BindingDrift),
+        };
         let closure_original=selected.closure.open(1024*1024)?;
         let closure_configuration:ClosureConfiguration=exact(&closure_original.read(1024*1024).map_err(fail)?)?;
         let prekey=PrekeyExecutable::open(&closure_configuration,&delivery)?;
@@ -77,9 +105,10 @@ impl AdmittedGuest {
         let context=process::ContextOwner::bind(&delivery,closure.clone())?;
         let mut keys=keys.bind_admission(admission_configuration,context,&closure,&trust,time.as_ref())?;
         keys.admit_external(&trust,time.as_ref())?;
+        let retrieval=retrieval.map(|value|value.bind(&keys,&delivery,&trust,time.as_ref())).transpose()?;
         lifetime.admitted()?;
         let owner=Self{_delivery:delivery,lifetime,keys,trust,time,launch,launch_bytes,
-            originals:vec![assignment_original,closure_original,keys_original,encrypted_original,admission_original]};
+            originals:vec![assignment_original,closure_original,keys_original,encrypted_original,admission_original],retrieval};
         owner.check()?;Ok(owner)
     }
     fn check(&self)->Result<(),ShadowError> {
@@ -88,7 +117,10 @@ impl AdmittedGuest {
         for original in &self.originals {original.read(4*1024*1024).map_err(fail)?;}
         self.keys.check(&self.trust,self.time.as_ref())
     }
-    fn hold(self)->Result<(),ShadowError> {
+    fn hold(mut self)->Result<(),ShadowError> {
+        if let Some(service)=self.retrieval.take() {
+            return service.serve(&self.keys,&self.trust,self.time.as_ref(),&||self.check());
+        }
         // No service socket, ready announcement, receipt or sign RPC. Retain
         // actual keys until original authority expires or parent/lifetime fails.
         loop {

@@ -1501,6 +1501,9 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/native_shadow_nitro_verifier.py \
 	serverware/native_shadow_key_admission_profile.py \
 	serverware/native_shadow_key_admission_verifier.py \
+	serverware/native_shadow_retrieval_artifacts.py \
+	serverware/native_shadow_retrieval_store.py \
+	scripts/install_native_shadow_retrieval_store.py \
 	serverware/native_shadow_time_profile.py \
 	serverware/native_shadow_time_originals.py \
 	serverware/native_shadow_time_issuer.py \
@@ -4032,6 +4035,9 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/native_shadow_nitro_verifier.py \
 				serverware/native_shadow_key_admission_profile.py \
 				serverware/native_shadow_key_admission_verifier.py \
+				serverware/native_shadow_retrieval_artifacts.py \
+				serverware/native_shadow_retrieval_store.py \
+				scripts/install_native_shadow_retrieval_store.py \
 				serverware/native_shadow_time_profile.py \
 				serverware/native_shadow_time_originals.py \
 				serverware/native_shadow_time_issuer.py \
@@ -4309,6 +4315,10 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/time.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/process.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/admission.rs \
+				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/retrieval.rs \
+				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/retrieval_peer.rs \
+				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/retrieval_scope.rs \
+				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/retrieval_store.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/result.rs \
 				data-plane/decision-gate-rs/src/native_shadow_verifier_runtime_v1.rs \
 				data-plane/decision-gate-rs/src/native_shadow_verifier_runtime_v1/mounts.rs \
@@ -4654,6 +4664,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-shadow-verifier-launch.v1.schema.json \
 				schemas/native-shadow-verifier-transport.v1.schema.json \
 				schemas/native-shadow-guest-admission.v1.schema.json \
+				schemas/native-shadow-retrieval-store.v1.schema.json \
+				schemas/native-shadow-retrieval-service.v1.schema.json \
 				schemas/native-shadow-guest-time-issuer.v1.schema.json \
 				schemas/native-shadow-time-issuer-launch.v1.schema.json \
 				schemas/native-shadow-custody-image-inputs.v1.schema.json \

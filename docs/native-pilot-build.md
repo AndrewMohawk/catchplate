@@ -137,6 +137,12 @@ Cargo's exit status still gates every subsequent packaging check. This bounds
 compiler-warning display, not arbitrary tool output or the daemon's log cap;
 it does not suppress compiler checks or claim warning-free/accepted builds.
 
+The runner also uses the pinned Cargo 1.88 `--keep-going` option to continue
+building the remaining selected targets whose dependencies can still build
+after another target fails. Failed dependencies still block their dependants;
+this does not add targets or retry failures. Any compilation failure retains a
+nonzero exit status and blocks subsequent packaging.
+
 Only complete assembly creates `artifacts.json` with `artifactBuildComplete:true`.
 It always has `releaseAuthority:false`, `liveReady:false`,
 `launchPrepared:false`, and `executionAccepted:false`. `attempt.json` and

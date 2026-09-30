@@ -181,7 +181,7 @@ fn record(line: &[u8]) -> Option<Record> {
 }
 
 fn run() -> io::Result<i32> {
-    let mut child = Command::new("cargo").args(["build", "--message-format=json"])
+    let mut child = Command::new("cargo").args(["build", "--keep-going", "--message-format=json"])
         .args(std::env::args_os().skip(1)).stdout(Stdio::piped()).stderr(Stdio::inherit()).spawn()?;
     let output = child.stdout.take().ok_or_else(|| io::Error::other("Cargo stdout unavailable"))?;
     let mut reader = BufReader::new(output);

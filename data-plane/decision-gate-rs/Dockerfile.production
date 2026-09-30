@@ -85,7 +85,8 @@ RUN --network=none set -eu; \
     cp -R /source/ops/systemd/serverware-policy-custody@recovery-target-provider.service.d /policy-custody-assets/systemd/serverware-policy-custody@recovery-target-provider.service.d; \
     cp -R /source/ops/systemd/serverware-policy-custody@current-signature-authority.service.d /policy-custody-assets/systemd/serverware-policy-custody@current-signature-authority.service.d; \
     cp -R /source/ops/systemd/serverware-policy-custody@bounded-cleanup-helper.service.d /policy-custody-assets/systemd/serverware-policy-custody@bounded-cleanup-helper.service.d
-RUN --network=none cargo build --release --frozen \
+RUN --network=none rustc --edition=2021 /source/scripts/cargo_build_diagnostics.rs -o /usr/local/bin/serverware-cargo-build
+RUN --network=none /usr/local/bin/serverware-cargo-build --release --frozen \
     && install -d -m 0710 /runtime-layout/serverware-custody \
     && install -d -m 0700 /runtime-layout/serverware-custody-state \
     && install -d -m 0755 /runtime-layout/serverware-custody-trust \
@@ -129,7 +130,8 @@ RUN --network=none set -eu; \
     cp -R /source/data-plane/decision-gate-rs/src /src/src; \
     cp -R /source/data-plane/decision-gate-rs/trust /src/trust; \
     cp -R /source/schemas /schemas
-RUN --network=none cargo build --release --frozen \
+RUN --network=none rustc --edition=2021 /source/scripts/cargo_build_diagnostics.rs -o /usr/local/bin/serverware-cargo-build
+RUN --network=none /usr/local/bin/serverware-cargo-build --release --frozen \
         --bin serverware-production-launcher --bin serverware-native-response-verifier \
         --bin serverware-native-ingress-verifier --bin serverware-native-ingress-client \
         --bin serverware-native-bootstrap-client \

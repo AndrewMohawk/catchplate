@@ -126,6 +126,17 @@ exit code without embedding the already-streamed compiler output in an error
 JSON field. Metadata, dependency verification, hashing and image inspection
 keep their captured-output behavior. No automatic retry is introduced.
 
+The two Rust build stages use a dependency-free runner compiled by the pinned
+`rustc`. It runs the same `cargo build` selections with JSON diagnostics and
+unchanged lint/check flags. To prevent repeated compiler warnings from consuming
+BuildKit's step log allowance, each invocation displays at most eight warning
+summaries of 200 characters and a final warning count. Non-warning diagnostics
+retain their full rendered text, including child notes; malformed or unknown
+records pass through unchanged. Cargo stderr remains live and unfiltered, and
+Cargo's exit status still gates every subsequent packaging check. This bounds
+compiler-warning display, not arbitrary tool output or the daemon's log cap;
+it does not suppress compiler checks or claim warning-free/accepted builds.
+
 Only complete assembly creates `artifacts.json` with `artifactBuildComplete:true`.
 It always has `releaseAuthority:false`, `liveReady:false`,
 `launchPrepared:false`, and `executionAccepted:false`. `attempt.json` and
@@ -185,23 +196,28 @@ build is not live readiness or production acceptance.
 
 ## Live preparation remains with the genuine owners
 
-Engineering attempt 3 on 2026-09-30 used source `1d2ffb80` and the unchanged,
+Engineering attempt 4 on 2026-09-30 used source `b350fbfa` and the unchanged,
 unpublished `v3-candidate-cba01916` dependencies in an isolated dirty-tree
 checkout. It built the nonrelease Linux/amd64 control image
-`sha256:751ec6e9b738c1fabc888f7381343372b3bbfeaa4aa99ade8c634b397c2bb959`.
-The gate ended in an ordinary Rust compiler failure: 37 emitted diagnostics,
-32 unique diagnostics across 19 files. Fixes for the reported diagnostics are
-source-integrated for the next consolidated build; compilation has not passed.
+`sha256:ae82192fd81bb680e23fed47db9e54aea098f1823918a41e6034829ff6e62240`.
+The shared library compiled, but Cargo exited 101 with five reported `E0282`
+filesystem-comparison errors in `serverware-coder-docker-proxy`. Their source
+fixes are integrated for the next consolidated build. The warning-heavy output
+hit BuildKit's 2-MiB cap before the terminal tail delivered those diagnostics;
+retained output is not a recovery of discarded intermediate logs. The bounded
+warning runner described above is integrated for the next build, not yet an
+observed successful compilation.
 Retained evidence is under
-`codex-offload/serverware/engineering-builds/1d2ffb80-ukwn3y`.
+`codex-offload/serverware/engineering-builds/b350fbfa-2j1vja`.
 There is no gate image, complete two-image report, project test result,
 service deployment or pilot acceptance from this attempt. Canonical reviewed
 dependency pins and the nonrelease boundary remain unchanged.
 
-Earlier attempts stopped at 18 library errors and then 95 distinct diagnostics
-across 53 files. The second attempt's actual RUN-worker limits were
+Earlier attempts stopped at 18 library errors, then 95 distinct diagnostics
+across 53 files, then 32 distinct diagnostics across 19 files. Attempt 4's actual
+RUN-worker limits were
 `cpu.max=800000 100000`, `memory.max=25769803776` and `memory.swap.max=0`;
-these historical observations are not a fresh resource measurement.
+these observations are not aggregate limits across concurrent workers.
 
 The source-fixed prerequisite list points at the actual existing callers:
 `ParkedProofCohort.start`, `FiveServiceLaunch.start_effects`,

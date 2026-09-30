@@ -52,6 +52,17 @@ This candidate may be staged for an engineering-only build in an isolated dirty
 worktree. Such staging never authorizes a production build, publication, or
 reviewed-pin installation; those still require the dependency-owner handoff.
 
+A later engineering build may reuse these exact candidate bytes after an
+explicitly reviewed logging-only Dockerfile change. The hashes of
+`requirements.lock`, `Cargo.toml`, `Cargo.lock`, and all six cache artifacts,
+the pinned base images, and the dependency-verification steps must remain
+unchanged; existing manifest and archive checks still apply. Preserve the
+original candidate, report, and proposed manifests unchanged. Record the exact
+Dockerfile drift and its review in **new build evidence**, and capture the new
+build source identity. The report's eleven captured inputs remain preparation
+provenance, not a claim that the later source is identical. This requires no
+candidate regeneration or rebinding and grants no production approval.
+
 ## Preconditions
 
 Freeze a clean commit containing the producer and its reviewed changes first.

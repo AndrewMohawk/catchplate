@@ -118,7 +118,7 @@ impl Policy {
                 if unsafe { libc::fstatfs(fd, &mut value) } != 0 {
                     return Err(std::io::Error::last_os_error().into());
                 }
-                if value.f_type != TMPFS_MAGIC as _ {
+                if value.f_type as u64 != TMPFS_MAGIC as u64 {
                     return Err(rejected("native output is not on its retained tmpfs"));
                 }
             }

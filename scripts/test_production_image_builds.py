@@ -739,33 +739,50 @@ def assert_production_schema_build_stages(dockerfile: str) -> None:
 
     if origins.get("source-preparation") != (
         "FROM rust:1.88-slim-bookworm@sha256:38bc5a86d998772d4aec2348656ed21438d20fcdce2795b56ca434cf21430d89 AS source-preparation"
-    ) or origins.get("build") != "FROM source-preparation AS build":
-        raise AssertionError("build must inherit the fixed pinned verified source-preparation stage")
+    ) or origins.get("build") != (
+        "FROM rust:1.88-slim-bookworm@sha256:38bc5a86d998772d4aec2348656ed21438d20fcdce2795b56ca434cf21430d89 AS build"
+    ):
+        raise AssertionError("build and source-preparation must retain the same fixed pinned Rust base")
+    source = stages["source-preparation"]
+    prerequisites = (
+        "tar --no-same-owner -xf /source-contract/source.tar -C /source",
+        "sha256sum -c /source-contract/source.files.sha256",
+        "done < /source-contract/source.files.mode",
+        "cp -R /source/schemas /schemas",
+    )
+    positions = []
+    for requirement in prerequisites:
+        if source.count(requirement) != 1:
+            raise AssertionError(f"source-preparation must retain verified schema prerequisite: {requirement}")
+        positions.append(source.index(requirement))
+    if positions != sorted(positions):
+        raise AssertionError("source-preparation must verify complete source before exporting schemas")
     for name in ("build", "launcher-build"):
         if name not in stages:
             raise AssertionError(f"missing production schema build stage: {name}")
-        lines = stages["source-preparation"] + stages[name] if name == "build" else stages[name]
+        lines = stages[name]
         copies = [index for index, line in enumerate(lines)
-                  if line == "cp -R /source/schemas /schemas"]
+                  if line == "COPY --from=source-preparation /schemas /schemas"]
         builds = [index for index, line in enumerate(lines)
                   if line == "RUN --network=none /usr/local/bin/serverware-cargo-build --release --frozen"]
         if len(copies) != 1 or len(builds) != 1 or copies[0] >= builds[0]:
             raise AssertionError(f"{name} must copy verified schemas before its offline Rust build")
-        if name == "build":
-            prerequisites = (
-                "tar --no-same-owner -xf /source-contract/source.tar -C /source",
-                "sha256sum -c /source-contract/source.files.sha256",
-                "done < /source-contract/source.files.mode",
-            )
-        else:
-            prerequisites = ("COPY --from=source-preparation /source /source",)
+        if ("COPY --from=source-preparation /source /source" in lines
+                or "COPY --from=source-preparation /dependency-cache /dependency-cache" in lines):
+            raise AssertionError(f"{name} must not import unrelated full source or dependency caches")
+        prerequisites = (("COPY --from=source-preparation /src /src",) if name == "build" else (
+            "COPY --from=source-preparation /src/Cargo.toml /src/Cargo.lock /src/",
+            "COPY --from=source-preparation /src/src /src/src",
+            "COPY --from=source-preparation /src/trust /src/trust",
+            "COPY --from=source-preparation /src/.cargo /src/.cargo",
+        ))
         positions = []
         for requirement in prerequisites:
             if lines.count(requirement) != 1:
                 raise AssertionError(f"{name} must retain verified-source prerequisite: {requirement}")
             positions.append(lines.index(requirement))
         if positions != sorted(positions) or positions[-1] >= copies[0]:
-            raise AssertionError(f"{name} must verify source before copying embedded schemas")
+            raise AssertionError(f"{name} must consume verified compiler inputs before embedded schemas")
 
 
 def assert_reproducible_rust_binary_config() -> None:
@@ -778,24 +795,21 @@ def assert_reproducible_rust_binary_config() -> None:
     # compensate for missing, redirected, unverified or late source here.
     sections = re.split(r"(?=^FROM )", production, flags=re.MULTILINE)
     for stage in ("build", "launcher-build"):
-        source_stage = "source-preparation" if stage == "build" else stage
         index = next(index for index, section in enumerate(sections)
-                     if re.search(rf" AS {re.escape(source_stage)}$", section.splitlines()[0] if section else ""))
-        end = index + (2 if stage == "build" else 1)
-        if stage == "build" and sections[index + 1].splitlines()[0] != "FROM source-preparation AS build":
-            raise AssertionError("build must directly inherit source-preparation")
+                     if re.search(rf" AS {re.escape(stage)}$", section.splitlines()[0] if section else ""))
+        end = index + 1
         original = "".join(sections[index:end])
         copy_line = next(line for line in original.splitlines(keepends=True)
-                         if line.strip().startswith("cp -R /source/schemas /schemas"))
+                         if line.strip() == "COPY --from=source-preparation /schemas /schemas")
         changed_cases = {
             "missing copy": original.replace(copy_line, ""),
-            "unverified source": original.replace("cp -R /source/schemas /schemas", "cp -R /unverified/schemas /schemas"),
-            "wrong destination": original.replace("cp -R /source/schemas /schemas", "cp -R /source/schemas /wrong-schemas"),
+            "unverified source": original.replace("COPY --from=source-preparation /schemas /schemas", "COPY schemas /schemas"),
+            "wrong destination": original.replace("COPY --from=source-preparation /schemas /schemas", "COPY --from=source-preparation /schemas /wrong-schemas"),
             "late copy": original.replace(copy_line, "") + "\n" + copy_line,
         }
         prerequisite = (
-            "sha256sum -c /source-contract/source.files.sha256"
-            if stage == "build" else "COPY --from=source-preparation /source /source"
+            "COPY --from=source-preparation /src /src"
+            if stage == "build" else "COPY --from=source-preparation /src/src /src/src"
         )
         changed_cases["missing source verification"] = original.replace(prerequisite, "# omitted prerequisite")
         for label, section in changed_cases.items():
@@ -808,6 +822,20 @@ def assert_reproducible_rust_binary_config() -> None:
                     raise AssertionError(f"{stage} {label} reached wrong stage guard: {exc}") from exc
             else:
                 raise AssertionError(f"production accepted {stage} {label}")
+    # Both compiler closures must still depend on the original full-source
+    # hash verification, not merely on correctly spelled COPY instructions.
+    source_index = next(index for index, section in enumerate(sections)
+                        if section and section.splitlines()[0].endswith(" AS source-preparation"))
+    candidate = list(sections)
+    candidate[source_index] = candidate[source_index].replace(
+        "sha256sum -c /source-contract/source.files.sha256", "# omitted source hash verification")
+    try:
+        assert_production_schema_build_stages("".join(candidate))
+    except AssertionError as exc:
+        if "source-preparation" not in str(exc):
+            raise AssertionError(f"missing source hash verification reached wrong guard: {exc}") from exc
+    else:
+        raise AssertionError("production accepted missing source-preparation hash verification")
     cargo = (ROOT / "data-plane" / "decision-gate-rs" / "Cargo.toml").read_text(encoding="utf-8")
     if "[profile.release]" not in cargo or 'strip = "symbols"' not in cargo:
         raise AssertionError("Rust release binaries must strip nondeterministic symbol tables")
@@ -1474,13 +1502,26 @@ def assert_production_copy_classification(dockerfile: str, *, family: str) -> No
             "tar -xzf cache/cargo-vendor.tar.gz -C /src",
         ))
         require_stage_order(stages, "build", (
-            "FROM source-preparation AS build",
+            "FROM rust:1.88-slim-bookworm@sha256:38bc5a86d998772d4aec2348656ed21438d20fcdce2795b56ca434cf21430d89 AS build",
+            "COPY --from=source-preparation /src /src",
+            "COPY --from=source-preparation /schemas /schemas",
+            "COPY --from=source-preparation /source/scripts/cargo_build_diagnostics.rs /source/scripts/cargo_build_diagnostics.rs",
+            "COPY --from=source-preparation /policy-custody-assets /policy-custody-assets",
             "RUN --network=none rustc --edition=2021 /source/scripts/cargo_build_diagnostics.rs -o /usr/local/bin/serverware-cargo-build",
             "RUN --network=none /usr/local/bin/serverware-cargo-build --release --frozen",
         ))
         require_stage_order(stages, "launcher-build", (
-            "COPY --from=source-preparation /source /source",
-            "COPY --from=source-preparation /dependency-cache /dependency-cache",
+            "COPY --from=source-preparation /src/Cargo.toml /src/Cargo.lock /src/",
+            "COPY --from=source-preparation /src/src /src/src",
+            "COPY --from=source-preparation /src/trust /src/trust",
+            "COPY --from=source-preparation /src/.cargo /src/.cargo",
+            "COPY --from=source-preparation /schemas /schemas",
+            "COPY --from=source-preparation /source/scripts/cargo_build_diagnostics.rs /source/scripts/cargo_build_diagnostics.rs",
+            "COPY --from=source-preparation /dependency-cache/data-plane/decision-gate-rs /dependency-cache/data-plane/decision-gate-rs",
+            "COPY --from=source-preparation /dependency-cache/rust-linux-amd64.sha256 /dependency-cache/rust-linux-amd64.sha256",
+            "COPY --from=source-preparation /dependency-cache/cache/cargo-vendor.tar.gz /dependency-cache/cache/cargo-vendor.tar.gz",
+            "COPY --from=source-preparation /dependency-cache/cache/musl-1.2.5-r12.apk /dependency-cache/cache/musl-1.2.5-r12.apk",
+            "COPY --from=source-preparation /dependency-cache/cache/musl-dev-1.2.5-r12.apk /dependency-cache/cache/musl-dev-1.2.5-r12.apk",
             "RUN --network=none set -eu", "cd /dependency-cache",
             'test "$(grep -Ec \'^[0-9a-f]{64}  \' rust-linux-amd64.sha256)" -eq 5',
             "grep -E '^[0-9a-f]{64}  ' rust-linux-amd64.sha256 | sha256sum -c -",

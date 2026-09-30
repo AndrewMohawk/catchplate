@@ -129,9 +129,14 @@ def capture(expected_commit: str, candidate: Path, deadline: float) -> dict[str,
             require((candidate / name).parent.resolve() == (candidate / name).parent, "candidate Cargo parent is a symlink")
             require(data == read_file(candidate / name, MAX_INPUT, deadline), "candidate Cargo original differs from captured commit")
         result[name] = data
+    build_from = ("\nFROM " + RUST_IMAGE + " AS build\n").encode("ascii")
     require(("\nFROM " + RUST_IMAGE + " AS source-preparation\n").encode("ascii") in result[paths[2]]
-            and b"\nFROM source-preparation AS build\n" in result[paths[2]],
+            and result[paths[2]].count(build_from) == 1,
             "pinned Rust vendor image or production preparation lineage differs")
+    build_stage = result[paths[2]].split(build_from, 1)[1].split(b"\nFROM ", 1)[0]
+    require(b"\nCOPY --from=source-preparation /src /src\n" in build_stage
+            and b"\nCOPY --from=source-preparation /schemas /schemas\n" in build_stage,
+            "production Rust compiler must consume the verified preparation outputs")
     return result
 
 

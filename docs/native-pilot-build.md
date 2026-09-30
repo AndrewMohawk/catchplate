@@ -273,6 +273,24 @@ assembly still requires every selected binary and runtime output; this changes
 build scheduling, not acceptance checks. Concurrent steps retain separate
 resource limits, not an aggregate eight-CPU/24-GiB reservation.
 
+The glibc and musl compiler stages now start from their same exact pinned bases
+and copy only verified Rust inputs, schemas, the diagnostic wrapper and required
+runtime assets. The musl stage retains its exact offline APK/vendor verification.
+Neither compiler inherits the full documentation/control-plane tree or unrelated
+Python dependency cache. Full source-archive, content and mode verification still
+precedes those copies; Python packaging and provenance keep their original full
+source owner. No source file is dropped from release capture or authentication.
+
+This separates compilation cache inputs from unrelated repository changes; it
+does not promise a cache hit or a measured speedup. Matching compiler inputs and
+the fixed engineering `SOURCE_DATE_EPOCH=0` can reuse existing layers. Strict
+production still derives its epoch from the authenticated source commit, and a
+changed epoch invalidates compilation layers, as documented in
+[Docker's cache rules](https://docs.docker.com/build/cache/invalidation/).
+No shared compiler cache mount, new dependency, networked build step or relaxed
+production identity is introduced. This change is not part of the frozen
+engineering attempt 16 source and does not trigger its restart.
+
 The result's existing `metadata` object records
 `build_resource_profile.name=engineering-bounded-8cpu-24g-per-step/v1`, the exact
 resource arguments, required capability and non-aggregate scope. Source identity

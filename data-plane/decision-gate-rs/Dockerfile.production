@@ -86,7 +86,21 @@ RUN --network=none set -eu; \
     cp -R /source/ops/systemd/serverware-policy-custody@current-signature-authority.service.d /policy-custody-assets/systemd/serverware-policy-custody@current-signature-authority.service.d; \
     cp -R /source/ops/systemd/serverware-policy-custody@bounded-cleanup-helper.service.d /policy-custody-assets/systemd/serverware-policy-custody@bounded-cleanup-helper.service.d
 
-FROM source-preparation AS build
+# A fresh pinned compiler filesystem imports only the verified Rust closure.
+# The full source/provenance owner still runs first, but unrelated source bytes
+# do not enter this stage's filesystem or compiler COPY checksums.
+FROM rust:1.88-slim-bookworm@sha256:38bc5a86d998772d4aec2348656ed21438d20fcdce2795b56ca434cf21430d89 AS build
+
+ARG SOURCE_DATE_EPOCH="0"
+ENV SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH} \
+    CARGO_NET_OFFLINE=true \
+    RUSTFLAGS="-C link-arg=-Wl,--build-id=none"
+
+WORKDIR /src
+COPY --from=source-preparation /src /src
+COPY --from=source-preparation /schemas /schemas
+COPY --from=source-preparation /source/scripts/cargo_build_diagnostics.rs /source/scripts/cargo_build_diagnostics.rs
+COPY --from=source-preparation /policy-custody-assets /policy-custody-assets
 RUN --network=none rustc --edition=2021 /source/scripts/cargo_build_diagnostics.rs -o /usr/local/bin/serverware-cargo-build
 RUN --network=none /usr/local/bin/serverware-cargo-build --release --frozen \
     && install -d -m 0710 /runtime-layout/serverware-custody \
@@ -111,8 +125,17 @@ ENV SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH} \
     RUSTFLAGS="-C link-arg=-Wl,--build-id=none"
 
 WORKDIR /src
-COPY --from=source-preparation /source /source
-COPY --from=source-preparation /dependency-cache /dependency-cache
+COPY --from=source-preparation /src/Cargo.toml /src/Cargo.lock /src/
+COPY --from=source-preparation /src/src /src/src
+COPY --from=source-preparation /src/trust /src/trust
+COPY --from=source-preparation /src/.cargo /src/.cargo
+COPY --from=source-preparation /schemas /schemas
+COPY --from=source-preparation /source/scripts/cargo_build_diagnostics.rs /source/scripts/cargo_build_diagnostics.rs
+COPY --from=source-preparation /dependency-cache/data-plane/decision-gate-rs /dependency-cache/data-plane/decision-gate-rs
+COPY --from=source-preparation /dependency-cache/rust-linux-amd64.sha256 /dependency-cache/rust-linux-amd64.sha256
+COPY --from=source-preparation /dependency-cache/cache/cargo-vendor.tar.gz /dependency-cache/cache/cargo-vendor.tar.gz
+COPY --from=source-preparation /dependency-cache/cache/musl-1.2.5-r12.apk /dependency-cache/cache/musl-1.2.5-r12.apk
+COPY --from=source-preparation /dependency-cache/cache/musl-dev-1.2.5-r12.apk /dependency-cache/cache/musl-dev-1.2.5-r12.apk
 RUN --network=none set -eu; \
     cd /dependency-cache; \
     test "$(grep -Ec '^[0-9a-f]{64}  ' rust-linux-amd64.sha256)" -eq 5; \
@@ -123,20 +146,7 @@ RUN --network=none set -eu; \
         add \
         cache/musl-1.2.5-r12.apk \
         cache/musl-dev-1.2.5-r12.apk; \
-    tar -xzf cache/cargo-vendor.tar.gz -C /src; \
-    mkdir -p /src/.cargo; \
-    printf '%s\n' \
-        '[source.crates-io]' \
-        'replace-with = "vendored-sources"' \
-        '' \
-        '[source.vendored-sources]' \
-        'directory = "/src/vendor"' \
-        > /src/.cargo/config.toml; \
-    cp /source/data-plane/decision-gate-rs/Cargo.toml /src/Cargo.toml; \
-    cp /source/data-plane/decision-gate-rs/Cargo.lock /src/Cargo.lock; \
-    cp -R /source/data-plane/decision-gate-rs/src /src/src; \
-    cp -R /source/data-plane/decision-gate-rs/trust /src/trust; \
-    cp -R /source/schemas /schemas
+    tar -xzf cache/cargo-vendor.tar.gz -C /src
 RUN --network=none rustc --edition=2021 /source/scripts/cargo_build_diagnostics.rs -o /usr/local/bin/serverware-cargo-build
 RUN --network=none /usr/local/bin/serverware-cargo-build --release --frozen \
         --bin serverware-production-launcher --bin serverware-native-response-verifier \

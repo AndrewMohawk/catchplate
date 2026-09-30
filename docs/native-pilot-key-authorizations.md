@@ -1,3 +1,5 @@
+> Publication note: deployment-specific addresses, identities and paths in this document are example placeholders, not a public service or release-verification evidence.
+
 # Native endpoint key authorizations
 
 The `.377` source connects two genuine authorization issuers and twenty ordered
@@ -116,7 +118,36 @@ allow/deny/cleanup acceptance still remain.
 
 ## Focused verification
 
-Verification for this assembled batch is pending. The new pure controls use
-synthetic signed originals, not protected owners, a running issuer or native
-admission. No cloud or paid action is part of the batch, and unchanged native
-sources will not be rebuilt merely for these Python changes.
+Exact source **`dbf915d430f66bba53a491b135d6a1577d7aa6b2`** passed one focused
+Python **3.11.15** run: **79 controls** (67 prior and 12 new), grammar checks for
+fourteen changed Python files, both Make source inventories and **72 relative
+documentation links**. The environment-cleared command used `-I -S -B`, CPU 0,
+a private network namespace and a 120-second timeout. It started at
+`2026-09-30T23:18:53.981420450Z`, ended at
+`2026-09-30T23:19:03.280406167Z` and exited **0**, without retry.
+
+The new controls cover all ten complete role-key/admission payloads, exact C9
+Guest13 and preceding-envelope hashes, supervisor/C9/verifier key separation,
+signature domains, closed policy/input fields, original time bounds and signed
+role-leaf runtime/worker bindings. The source inventory check independently
+asserts the twenty job names, operation order, no-publication outputs and next
+job 63. These are synthetic in-memory fixtures; unrelated assignment policy
+fields remain empty. They do not prove complete native assignment admission,
+real process ownership or runtime provenance.
+
+No live issuer entrypoint, protected owner, installer or native service was
+executed; no DB/app/authority-store module was imported. The retained engineering
+dependency candidate is still not an approved release snapshot. Rust, schemas
+and dependency lock were unchanged, so no native rebuild was repeated. No
+cloud or paid action ran. Production acceptance remains **0/6**.
+
+Durable evidence is retained at:
+
+```text
+/home/catchplate/codex-offload/serverware/engineering-builds/dbf915d4-key-authorizations-0Urfnc/
+```
+
+It contains the frozen source archive/commit, exact check and runner scripts,
+complete result log, machine-readable result and verified `SHA256SUMS`. The
+archive is **85,022,720 bytes**, SHA256
+`be2e70b17b1053ce3d8e4bd44b27e34e5fc633ec18f69d5b9b13b1c71abddbf4`.

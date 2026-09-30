@@ -11,33 +11,39 @@ const MAX_IPC:usize=4096;
 /// Source-selected endpoint mechanics only. This is not a purpose grant.
 #[derive(Debug,Clone,Copy,PartialEq,Eq,PartialOrd,Ord,Serialize,Deserialize)]
 #[serde(rename_all="kebab-case")]
-pub(in crate::policy_shadow::policy_custody::services) enum EndpointKind {Retrieval,Persistence,TrustedTime,GenerationInstallEnvelope}
+pub(in crate::policy_shadow::policy_custody::services) enum EndpointKind {Retrieval,Persistence,TrustedTime,GenerationInstallEnvelope,CommitRequest}
 impl EndpointKind {
     pub(in crate::policy_shadow::policy_custody::services) fn socket_path(self)->&'static str {match self {
         Self::Retrieval=>"/run/serverware-shadow-retrieval/listener.sock",
         Self::Persistence=>"/run/serverware-shadow-persistence/listener.sock",
         Self::TrustedTime=>"/run/serverware-shadow-trusted-time/listener.sock",
+        Self::CommitRequest=>"/run/serverware-shadow-commit-request/listener.sock",
         Self::GenerationInstallEnvelope=>"/run/serverware-shadow-generation-install/listener.sock"}}
     pub(in crate::policy_shadow::policy_custody::services) fn directory_path(self)->&'static str {match self {
         Self::Retrieval=>"/run/serverware-shadow-retrieval",Self::Persistence=>"/run/serverware-shadow-persistence",
         Self::TrustedTime=>"/run/serverware-shadow-trusted-time",
+        Self::CommitRequest=>"/run/serverware-shadow-commit-request",
         Self::GenerationInstallEnvelope=>"/run/serverware-shadow-generation-install"}}
     pub(in crate::policy_shadow::policy_custody::services) fn listener_name(self)->&'static str {match self {
         Self::Retrieval=>"retrieval-listener",Self::Persistence=>"persistence-listener",Self::TrustedTime=>"trusted-time-listener",
+        Self::CommitRequest=>"commit-request-listener",
         Self::GenerationInstallEnvelope=>"shadow-generation-install-listener"}}
     pub(in crate::policy_shadow::policy_custody::services) fn peer_directory_name(self)->&'static str {match self {
         Self::Retrieval=>"retrieval-peer-directory",Self::Persistence=>"persistence-peer-directory",Self::TrustedTime=>"trusted-time-peer-directory",
+        Self::CommitRequest=>"commit-request-peer-directory",
         Self::GenerationInstallEnvelope=>"shadow-generation-install-directory"}}
     pub(in crate::policy_shadow::policy_custody::services) fn inspection_api(self)->&'static str {match self {
         Self::Retrieval=>"serverware.nativeShadowRetrievalInspection/v1",
         Self::Persistence=>"serverware.nativeShadowPersistenceInspection/v1",
         Self::TrustedTime=>"serverware.nativeShadowTrustedTimeInspection/v1",
+        Self::CommitRequest=>"serverware.nativeShadowCommitRequestInspection/v1",
         Self::GenerationInstallEnvelope=>"serverware.nativeShadowGenerationInstallPeerInspection/v1"}}
-    pub(in crate::policy_shadow::policy_custody::services) fn production_kind(self)->services::production::ProductionProofEndpointKindV4 {match self {
-        Self::Retrieval=>services::production::ProductionProofEndpointKindV4::Retrieval,
-        Self::Persistence=>services::production::ProductionProofEndpointKindV4::Persistence,
-        Self::TrustedTime=>services::production::ProductionProofEndpointKindV4::TrustedTime,
-        Self::GenerationInstallEnvelope=>services::production::ProductionProofEndpointKindV4::GenerationInstallEnvelope}}
+    pub(in crate::policy_shadow::policy_custody::services) fn production_kind(self)->Option<services::production::ProductionProofEndpointKindV4> {match self {
+        Self::Retrieval=>Some(services::production::ProductionProofEndpointKindV4::Retrieval),
+        Self::Persistence=>Some(services::production::ProductionProofEndpointKindV4::Persistence),
+        Self::TrustedTime=>Some(services::production::ProductionProofEndpointKindV4::TrustedTime),
+        Self::GenerationInstallEnvelope=>Some(services::production::ProductionProofEndpointKindV4::GenerationInstallEnvelope),
+        Self::CommitRequest=>None}}
 }
 use std::os::unix::fs::MetadataExt;
 #[derive(PartialEq,Eq)]

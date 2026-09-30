@@ -4,6 +4,11 @@ mod policy_shadow;
 
 #[cfg(target_os = "linux")]
 fn main() {
+    match std::env::args().nth(1).as_deref() {
+        Some("--guest-c9-commitment")=>policy_shadow::run_commitment_custody_guest("durable-recovery-store",false),
+        Some("--guest-c9-commitment-inspected")=>policy_shadow::run_commitment_custody_guest("durable-recovery-store",true),
+        _=>{},
+    }
     if std::env::args().nth(1).as_deref()==Some("--guest-c9-generation-inspected") {
         policy_shadow::run_inspected_ordinary_custody_guest("durable-recovery-store");
     }

@@ -1557,6 +1557,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	scripts/verify_native_shadow_custody.py \
 	serverware/native_shadow_key_contract.py \
 	serverware/native_shadow_key_helper.py \
+	serverware/native_shadow_commitment_artifacts.py \
 	scripts/native_shadow_key_kms_parent.py \
 	scripts/encrypt_native_shadow_local_keys.py \
 	serverware/oauth_refresh_material.py \
@@ -4137,6 +4138,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				scripts/verify_native_shadow_custody.py \
 				serverware/native_shadow_key_contract.py \
 				serverware/native_shadow_key_helper.py \
+				serverware/native_shadow_commitment_artifacts.py \
 				scripts/native_shadow_key_kms_parent.py \
 				scripts/encrypt_native_shadow_local_keys.py \
 				serverware/oauth_refresh_material.py \
@@ -4426,6 +4428,10 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/time.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/generation_service.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/generation_service_client.rs \
+				data-plane/decision-gate-rs/src/policy_custody/services/dispatch_commitment.rs \
+				data-plane/decision-gate-rs/src/policy_custody/services/dispatch_service.rs \
+				data-plane/decision-gate-rs/src/policy_custody/services/dispatch_service_client.rs \
+				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/commit_request.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/generation_certification.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/generation_recovery.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/generation_install.rs \
@@ -4490,6 +4496,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/policy_custody/services/native_keys.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_verifier_result.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_key_delivery.rs \
+				data-plane/decision-gate-rs/src/policy_custody/services/native_commitment_key.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_verifier_transport.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/guest_original.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/guest_ordinary.rs \
@@ -4812,6 +4819,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-shadow-proof-cohort.v2.schema.json \
 				schemas/custody-service-generation-admission.v1.schema.json \
 				schemas/native-generation-coordinator.v1.schema.json \
+				schemas/native-shadow-commit-request.v1.schema.json \
+				schemas/native-shadow-commitment-keys.v1.schema.json \
 				schemas/custody-five-service-launch.v1.schema.json \
 				schemas/custody-five-service-business-inputs.v1.schema.json \
 				schemas/custody-ordinary-peer-inspection.v1.schema.json \

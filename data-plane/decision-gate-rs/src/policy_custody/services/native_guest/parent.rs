@@ -171,6 +171,20 @@ impl Running {
                 let (owner,channel)=proof_client::Inspector::prepare(&files,&activation)?;
                 (Some(Inspection::ProofClient(owner)),Some(channel))
             }
+            SelectedService::CommitmentBridge(_)=>{
+                let (owner,channel)=proof_client::Inspector::prepare_selected(&files,&activation,true)?;
+                (Some(Inspection::ProofClient(owner)),Some(channel))
+            }
+            SelectedService::CommitRequest(pin)=>{
+                require(activation.len()==1)?;
+                let original=pin.open(65536)?;
+                let config:admission::commit_request::Configuration=exact(&original.read(65536).map_err(fail)?)?;
+                config.validate_shape()?;
+                let (owner,channel)=retrieval_peer::Inspector::prepare_endpoint(original,config.expected_peer().checked().map_err(fail)?,
+                    config.guest_uid(),activation.get("commit-request-listener").ok_or(ShadowError::BindingDrift)?,
+                    retrieval_peer::EndpointKind::CommitRequest)?;
+                (Some(Inspection::Server(owner)),Some(channel))
+            }
             SelectedService::None=>(None,None),
             SelectedService::Activation(_)=>{
                 require(activation.len()==2 && activation.contains_key("activation-channel")

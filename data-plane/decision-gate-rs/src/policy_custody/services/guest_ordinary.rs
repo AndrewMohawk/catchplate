@@ -15,13 +15,16 @@ struct Launch {api_version:String,delivery_configuration:Pin,delivery:Pin}
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 struct InspectedLaunch {api_version:String,delivery_configuration:Pin,delivery:Pin,peer_inspection_credential:String}
 
-enum EntryProfile {Generation,InspectedGeneration}
+enum EntryProfile {Generation,InspectedGeneration,CommitRequest,InspectedCommitRequest}
 impl EntryProfile {
     fn selector(&self)->&'static str {match self {
         Self::Generation=>"--guest-c9-generation",
         Self::InspectedGeneration=>"--guest-c9-generation-inspected",
+        Self::CommitRequest=>"--guest-c9-commitment",
+        Self::InspectedCommitRequest=>"--guest-c9-commitment-inspected",
     }}
-    fn inspected(&self)->bool {matches!(self,Self::InspectedGeneration)}
+    fn inspected(&self)->bool {matches!(self,Self::InspectedGeneration|Self::InspectedCommitRequest)}
+    fn commitment(&self)->bool {matches!(self,Self::CommitRequest|Self::InspectedCommitRequest)}
     fn launch(&self,raw:&[u8])->Result<(Pin,Pin),ServiceRunnerError> {match self {
         Self::Generation=>{
             let value:Launch=exact(raw)?;
@@ -31,6 +34,17 @@ impl EntryProfile {
         Self::InspectedGeneration=>{
             let value:InspectedLaunch=exact(raw)?;
             require(value.api_version=="serverware.custodyOrdinaryServiceGuestLaunch/v2"
+                && value.peer_inspection_credential==super::ordinary_inspection::CREDENTIAL)?;
+            Ok((value.delivery_configuration,value.delivery))
+        },
+        Self::CommitRequest=>{
+            let value:Launch=exact(raw)?;
+            require(value.api_version=="serverware.custodyOrdinaryServiceGuestLaunch/v3")?;
+            Ok((value.delivery_configuration,value.delivery))
+        },
+        Self::InspectedCommitRequest=>{
+            let value:InspectedLaunch=exact(raw)?;
+            require(value.api_version=="serverware.custodyOrdinaryServiceGuestLaunch/v4"
                 && value.peer_inspection_credential==super::ordinary_inspection::CREDENTIAL)?;
             Ok((value.delivery_configuration,value.delivery))
         },
@@ -117,7 +131,11 @@ fn entry(role:&str,profile:EntryProfile)->Result<(),ServiceRunnerError> {
         && delivery.owner.payload.service_role!=Role::ProductionBridge
         && inherited.iter().filter(|fd|**fd>=6).copied().eq(6..6+delivery.activation.len() as i32))?;
     let runtime:serde_json::Value=exact(&delivery.owner.runtime.read(MAX_CONFIG_BYTES)?)?;
-    require(runtime.get("runtime").and_then(|v|v.get("apiVersion")).and_then(|v|v.as_str())==Some(generation_service::RUNTIME))?;
+    let expected=if profile.commitment(){
+        require(matches!(delivery.owner.payload.service_role,Role::DurableRecoveryStore|Role::CurrentSignatureAuthority))?;
+        super::super::dispatch_service::RUNTIME
+    }else{generation_service::RUNTIME};
+    require(runtime.get("runtime").and_then(|v|v.get("apiVersion")).and_then(|v|v.as_str())==Some(expected))?;
     let lifetime=Lifetime::arm(&delivery.owner)?;
     *delivery.owner.ordinary_lifetime.lock().map_err(|_|fail("ordinary lifetime owner poisoned"))?=Some(lifetime);
     // The only fork is before service threads, private key reads and role drop.
@@ -151,5 +169,10 @@ pub(crate) fn run(role:&str)->! {
 }
 pub(crate) fn run_inspected(role:&str)->! {
     let _=entry(role,EntryProfile::InspectedGeneration);
+    unsafe{libc::_exit(1)}
+}
+pub(crate) fn run_commitment(role:&str,inspected:bool)->! {
+    let profile=if inspected{EntryProfile::InspectedCommitRequest}else{EntryProfile::CommitRequest};
+    let _=entry(role,profile);
     unsafe{libc::_exit(1)}
 }

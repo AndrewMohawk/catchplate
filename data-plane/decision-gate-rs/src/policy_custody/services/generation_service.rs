@@ -31,6 +31,10 @@ pub(super) fn is_command(raw:&[u8])->Result<bool,ServiceError> {
     Ok(matches!(value.get("apiVersion").and_then(|v|v.as_str()),Some(API|super::generation_certification::API)))
 }
 pub(super) fn frame_deadline(raw:&[u8])->Result<u64,ServiceError> {
+    if super::dispatch_commitment::is_command(raw)? {
+        let command:super::dispatch_commitment::Command=decode_canonical_frame(raw)?;
+        return command.deadline();
+    }
     let value:serde_json::Value=decode_canonical_frame(raw)?;
     if value.get("apiVersion").and_then(|v|v.as_str())==Some(API) {
         let command:Command=decode_canonical_frame(raw)?;
@@ -46,6 +50,11 @@ pub(super) fn frame_deadline(raw:&[u8])->Result<u64,ServiceError> {
 }
 pub(super) fn check_response_deadline(raw:&[u8],deadline:u64)->Result<(),ServiceError> {
     let value:serde_json::Value=decode_canonical_frame(raw)?;
+    if value.get("apiVersion").and_then(|v|v.as_str())==Some(super::super::production_dispatch::PRODUCTION_DISPATCH_PROTOCOL_VERSION)
+        && value.get("exactSignedEnvelopeBytes").is_some() {
+        let response:super::super::production_dispatch::SignedProductionServiceTransitionV4=decode_canonical_frame(raw)?;
+        return ensure(response.completed_at_boottime_nanos<deadline);
+    }
     if value.get("resultKind").is_some() {
         let response:Response=decode_canonical_frame(raw)?;
         ensure(match response {

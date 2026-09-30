@@ -13,6 +13,8 @@ mod verifier_transport;
 pub(crate) use verifier_transport::NativeVerifierTransportPin;
 #[path="native_key_delivery.rs"]
 mod encrypted;
+#[path="native_commitment_key.rs"]
+mod commitment;
 #[path="native_guest/admission.rs"]
 pub(crate) mod admission;
 pub(crate) use encrypted::NativeShadowEncryptedKeysConfiguration;

@@ -39,11 +39,7 @@ def run():
     seeds_info, seeds_raw = original(4, 16368)
     kek_info, kek = original(5, 32)
     p.require(len(kek) == 32 and len({(v.st_dev, v.st_ino) for v in (inventory_info, seeds_info, kek_info)}) == 3)
-    value = p.document(seeds_raw, 16368)
-    p.fields(value, ("apiVersion", "inventorySha256", "seeds"))
-    p.require(value["apiVersion"] == "serverware.nativeShadowLocalKeySeeds/v1"
-              and value["inventorySha256"] == p.sha(raw) and type(value["seeds"]) is list
-              and len(value["seeds"]) == len(inventory["localKeys"]))
+    value = c.seeds(p.document(seeds_raw, 16368), inventory)
     for item, expected in zip(value["seeds"], inventory["localKeys"]):
         p.fields(item, ("role", "keyId", "seedBase64url"))
         p.require(item["role"] == expected["role"] and item["keyId"] == expected["keyId"])
@@ -51,8 +47,9 @@ def run():
         public = key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
         p.require(p.encoded(public) == expected["publicKeyBase64url"])
     nonce = os.urandom(12)
-    ciphertext = AESGCM(kek).encrypt(nonce, seeds_raw, c.AAD_DOMAIN+raw)
-    output = p.canonical({"apiVersion":"serverware.nativeShadowEncryptedLocalKeys/v1", "inventorySha256":p.sha(raw),
+    ciphertext = AESGCM(kek).encrypt(nonce, seeds_raw, c.aad(inventory))
+    output = p.canonical({"apiVersion":("serverware.nativeShadowEncryptedLocalKeys/v2" if c.extended(inventory)
+                                      else "serverware.nativeShadowEncryptedLocalKeys/v1"), "inventorySha256":p.sha(raw),
                           "nonce":p.encoded(nonce), "ciphertext":p.encoded(ciphertext)})
     # Actual process exit, not an assertion that Python/OpenSSL copies erased.
     sys.stdout.buffer.write(output); sys.stdout.buffer.flush()

@@ -227,7 +227,7 @@ fn admit_files(configuration_path:&Path,expected_configuration_sha256:Sha256Dige
         delivery_sha256:expected_delivery_sha256,startup,lifetime};
     owner.check_preparation()?;Ok(owner)
 }
-fn take_activation(entries:&[Activation])->Result<(BTreeMap<String,OwnedFd>,BTreeSet<(u64,u64)>),ServiceRunnerError> {
+fn take_activation(entries:&[Activation],dispatch_selected:bool)->Result<(BTreeMap<String,OwnedFd>,BTreeSet<(u64,u64)>),ServiceRunnerError> {
     let mut activation=BTreeMap::new();
     let mut fd_identities=BTreeSet::new();
     for (index,entry) in entries.iter().enumerate() {
@@ -236,18 +236,19 @@ fn take_activation(entries:&[Activation])->Result<(BTreeMap<String,OwnedFd>,BTre
         set_cloexec(entry.fd)?;
         let fd=unsafe { OwnedFd::from_raw_fd(entry.fd) };
         let stat=descriptor_stat(fd.as_fd())?;
-        let generation_grant=entry.name==super::generation_service::GRANT_FD
+        let public_grant=(entry.name==super::generation_service::GRANT_FD
+            || (dispatch_selected && entry.name==super::dispatch_service::GRANT_FD))
             && stat.st_mode & libc::S_IFMT==libc::S_IFREG;
-        if generation_grant {
+        if public_grant {
             let seals=unsafe{libc::fcntl(fd.as_raw_fd(),libc::F_GET_SEALS)};
             let full=libc::F_SEAL_SEAL|libc::F_SEAL_GROW|libc::F_SEAL_SHRINK|libc::F_SEAL_WRITE;
             if seals<0 || seals&full!=full || stat.st_size<=0 || stat.st_size>65536 {
-                return Err(fail("generation grant is not one bounded fully sealed original"));
+                return Err(fail("service grant is not one bounded fully sealed original"));
             }
         }
         if (stat.st_dev,stat.st_ino,stat.st_mode,stat.st_uid,stat.st_gid)
             !=(entry.device,entry.inode,entry.mode,entry.uid,entry.gid)
-            || (!generation_grant && ![libc::S_IFDIR,libc::S_IFSOCK].contains(&(stat.st_mode & libc::S_IFMT)))
+            || (!public_grant && ![libc::S_IFDIR,libc::S_IFSOCK].contains(&(stat.st_mode & libc::S_IFMT)))
             || !fd_identities.insert((stat.st_dev,stat.st_ino)) {
             return Err(fail("guest activation original substituted or aliased"));
         }
@@ -263,7 +264,13 @@ impl PreparedGuestServiceDelivery {
         let FileAdmission {process,configuration,envelope,runtime,mut credentials,payload:p,
             delivery_sha256:expected_delivery_sha256,startup,lifetime}=admit_files(configuration_path,
                 expected_configuration_sha256,delivery_path,expected_delivery_sha256)?;
-        let (activation,fd_identities)=take_activation(&p.activation)?;
+        // Only the independently pinned ordinary two-service successor admits
+        // the additional public grant FD. Native proof runtime/v6 is different.
+        let runtime_value:serde_json::Value=decode_canonical_frame(&runtime.read(MAX_CONFIG_BYTES)?)?;
+        let dispatch_selected=matches!(p.service_role,Role::DurableRecoveryStore|Role::CurrentSignatureAuthority)
+            && runtime_value.get("runtime").and_then(|v|v.get("apiVersion")).and_then(|v|v.as_str())
+                ==Some(super::dispatch_service::RUNTIME);
+        let (activation,fd_identities)=take_activation(&p.activation,dispatch_selected)?;
         let parent=Parent::inherited()?;
         if fd_identities.contains(&parent.identity()) { return Err(fail("activation aliases private parent channel")); }
         let mut p=p;

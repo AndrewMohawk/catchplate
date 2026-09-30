@@ -13,6 +13,8 @@ pub(crate) mod trusted_time;
 pub(crate) mod generation_install;
 #[path="activation.rs"]
 pub(crate) mod activation;
+#[path="commit_request.rs"]
+pub(crate) mod commit_request;
 const DOMAIN:&str="serverware.nativeShadowKeyAdmissionAssignment.signature/v1";
 const POSSESSION:&str="serverware.nativeShadowKeyAdmissionPossession.signature/v1";
 #[derive(Serialize,Deserialize)]
@@ -76,6 +78,7 @@ pub(crate) struct AdmittedKeys {
     closure:NativeCustodyClosureOwner,context:ContextOwner,authorization:Authorization,keys:BTreeMap<AuthorityRole,LocalKey>,
     encrypted:NativeShadowEncryptedKeysConfiguration,nsm:ShadowNsmV1,transport:Option<verifier_transport::PreparedTransport>,
     evidence:Option<Evidence>,result:Option<result::VerifiedResult>,attempted:bool,poisoned:AtomicBool,
+    commitment:Option<commitment::Owner>,
 }
 impl PreparedNativeCustodyKeys {
     pub(crate) fn bind_admission(mut self,authorization:Authorization,context:ContextOwner,
@@ -88,11 +91,11 @@ impl PreparedNativeCustodyKeys {
         require(self.checkpoint.permits_successor(&checkpoint))?;
         let mut nsm=self.nsm.consume().map_err(fail)?;
         let source=self.encrypted.take().ok_or(ShadowError::CustodyUnavailable)?;
-        let (keys,encrypted)=source.bind_admission(&self.configuration,&self.assignment,&self.association,
+        let (keys,encrypted,commitment)=source.bind_admission(&self.configuration,&self.assignment,&self.association,
             closure,&mut nsm,&checkpoint,trust,time)?;
         let owner=AdmittedKeys{configuration:self.configuration,assignment:self.assignment,association:self.association,
             closure:closure.clone(),context,authorization,keys,encrypted,nsm,transport:Some(transport),evidence:None,result:None,
-            attempted:false,poisoned:AtomicBool::new(false)};
+            attempted:false,poisoned:AtomicBool::new(false),commitment};
         owner.check(trust,time)?;owner.association.check_startup().map_err(fail)?;Ok(owner)
     }
 }
@@ -115,6 +118,7 @@ impl AdmittedKeys {
             self.context.check()?;self.closure.require_origin(&self.association)?;
             self.authorization.verify(&self.configuration,&self.assignment,&self.association,trust,time)?;
             self.encrypted.verify(&self.configuration,&self.assignment,&self.association,&trust.current_checkpoint()?,trust,time)?;
+            if let Some(owner)=&self.commitment {owner.check(&self.configuration,&self.assignment,&self.association,trust,time)?;}
             if let Some(t)=&self.transport {t.check(&self.configuration,&self.assignment,&self.association,trust,time)?;}
             if let Some(r)=&self.result {r.check(self,trust,time)?;}
             self.closure.trusted_freshness(time)

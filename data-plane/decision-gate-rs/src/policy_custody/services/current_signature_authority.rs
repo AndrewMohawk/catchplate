@@ -272,6 +272,13 @@ impl super::generation_service::Owner for TrustedHostNoTeeCurrentSignatureAuthor
         super::generation_service::sign_observation(payload,&self.signer.signing_key)
     }
 }
+impl super::dispatch_service::Owner for TrustedHostNoTeeCurrentSignatureAuthorityServer {
+    fn sign_commitment_transition(&self,input:&super::dispatch_service::TransitionInput)
+        ->Result<super::super::production_dispatch::SignedProductionServiceTransitionV4,ServiceError> {
+        self.signer.pin.validate().map_err(|_|ServiceError::Invalid("CommitRequest current signer changed"))?;
+        input.sign(&self.signer.signing_key)
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum CurrentAuthoritySubjectKey {

@@ -22,7 +22,7 @@ pub struct Configuration {
 }
 impl Configuration {
     pub fn validate(&self)->Result<(),String> {
-        ensure(self.api_version=="serverware.nativeShadowKeyKmsTransport/v1" && self.kms_parent_port>1023
+        ensure(matches!(self.api_version.as_str(),"serverware.nativeShadowKeyKmsTransport/v1"|"serverware.nativeShadowKeyKmsTransport/v2") && self.kms_parent_port>1023
             && self.kms_parent_port!=u32::MAX && !self.kms_key_id.is_empty() && self.kms_key_id.len()<=2048
             && !self.kms_key_id.chars().any(char::is_control),"shadow KMS fixed transport differs")?;
         for pin in [&self.ciphertext_blob_sha256,&self.kek_sha256,&self.encrypted_inventory_sha256,
@@ -30,7 +30,8 @@ impl Configuration {
         ensure(self.helper_image.profile=="sealed-memfd-squashfs-v1"&&self.helper_image.image_path==IMAGE_PATH,
             "shadow KMS helper purpose differs")?;
         ensure((1..=32).contains(&self.encryption_context.len())&&canonical_ascii_bytes(&self.encryption_context)?.len()<=8192
-            && self.encryption_context.get("serverwarePurpose").map(String::as_str)==Some("native-shadow-local-role-keys/v1")
+            && self.encryption_context.get("serverwarePurpose").map(String::as_str)==Some(if self.api_version=="serverware.nativeShadowKeyKmsTransport/v2" {
+                "native-shadow-local-role-keys-and-request-commitment/v2"} else {"native-shadow-local-role-keys/v1"})
             && self.encryption_context.iter().all(|(k,v)|!k.is_empty()&&k.len()<=1024&&!v.is_empty()&&v.len()<=1024
                 && !k.chars().chain(v.chars()).any(char::is_control)),"shadow KMS admitted encryption context differs")
     }
@@ -43,8 +44,9 @@ pub struct Binding {
     pub worker_executable_sha256:String,pub structurally_verified_seccomp_policy_sha256:String,
 }
 impl Binding {
+    fn extended(&self)->bool {self.api_version=="serverware.nativeShadowKeyDeliveryBinding/v2"}
     fn validate(&self,uid:u32,gid:u32,deadline:u64)->Result<[u8;32],String> {
-        ensure(self.api_version=="serverware.nativeShadowKeyDeliveryBinding/v1","shadow delivery binding purpose differs")?;
+        ensure(self.api_version=="serverware.nativeShadowKeyDeliveryBinding/v1"||self.extended(),"shadow delivery binding purpose differs")?;
         for p in [&self.key_authorization_sha256,&self.delivery_authorization_sha256,&self.execution_closure_manifest_sha256,
             &self.worker_executable_sha256,&self.structurally_verified_seccomp_policy_sha256]{digest(p)?;}
         fields(&self.guest,&["configurationSha256","deliverySha256","runtimeConfigurationSha256","serviceRole","uid","gid",
@@ -52,13 +54,20 @@ impl Binding {
             "lifetimeDeadlineBoottimeNs","invocationId"])?;
         ensure(self.guest["uid"].as_u64()==Some(uid.into())&&self.guest["gid"].as_u64()==Some(gid.into())
             && self.guest["startupDeadlineBoottimeNs"]==deadline.to_string(),"shadow role/deadline original differs")?;
-        fields(&self.inventory,&["apiVersion","fullKeySetRootSha256","localKeySetRootSha256","localKeys"])?;
-        ensure(self.inventory["apiVersion"]=="serverware.nativeShadowLocalKeyInventory/v1"
+        if self.extended() {
+            fields(&self.inventory,&["apiVersion","fullKeySetRootSha256","localKeySetRootSha256","localKeys","requestCommitment"])?;
+            let descriptor=&self.inventory["requestCommitment"];
+            fields(descriptor,&["keyId","keyEpoch","secretSha256"])?;
+            digest(descriptor["keyId"].as_str().ok_or("commitment key absent")?)?;
+            digest(descriptor["secretSha256"].as_str().ok_or("commitment pin absent")?)?;
+            ensure(descriptor["keyEpoch"].as_u64().is_some_and(|v|v>0&&v<=i64::MAX as u64),"commitment epoch invalid")?;
+        } else {fields(&self.inventory,&["apiVersion","fullKeySetRootSha256","localKeySetRootSha256","localKeys"])?;}
+        ensure(self.inventory["apiVersion"]==(if self.extended(){"serverware.nativeShadowLocalKeyInventory/v2"}else{"serverware.nativeShadowLocalKeyInventory/v1"})
             && self.inventory["localKeys"].as_array().is_some_and(|v|(1..=16).contains(&v.len())),"shadow local inventory differs")?;
         for name in ["fullKeySetRootSha256","localKeySetRootSha256"] {digest(self.inventory[name].as_str().ok_or("shadow key root absent")?)?;}
         let challenge=decoded(&Value::String(self.challenge_base64url.clone()),32,Some(32))?;
         ensure(challenge.iter().any(|b|*b!=0),"shadow original nonce absent")?;
-        let mut preimage=b"serverware/native-shadow-kms-nonce/v1\0".to_vec();preimage.extend_from_slice(&challenge);
+        let mut preimage=if self.extended(){b"serverware/native-shadow-kms-nonce/v2\0".to_vec()}else{b"serverware/native-shadow-kms-nonce/v1\0".to_vec()};preimage.extend_from_slice(&challenge);
         Ok(Sha256::digest(&preimage).into())
     }
 }
@@ -72,10 +81,12 @@ impl PreparedShadowKeyHelper {
     pub fn begin(mut self,binding:Binding,recipient:&CredentialRecipientV1,ciphertext_original:Vec<u8>)->Result<ShadowKeyRecipient,String> {
         self.process.final_identity()?;self.process.check()?;
         let nonce=binding.validate(self.uid,self.gid,self.deadline)?;
+        let extended=binding.extended();
+        ensure(extended==(self.configuration.api_version=="serverware.nativeShadowKeyKmsTransport/v2"),"shadow transport inventory profile differs")?;
         ensure(sha(&ciphertext_original)==self.configuration.encrypted_inventory_sha256,"shadow ciphertext original changed")?;
         let encrypted=document(&ciphertext_original,32768)?;
         fields(&encrypted,&["apiVersion","inventorySha256","nonce","ciphertext"])?;
-        ensure(encrypted["apiVersion"]=="serverware.nativeShadowEncryptedLocalKeys/v1"
+        ensure(encrypted["apiVersion"]==(if extended{"serverware.nativeShadowEncryptedLocalKeys/v2"}else{"serverware.nativeShadowEncryptedLocalKeys/v1"})
             && encrypted["inventorySha256"]==sha(&canonical_ascii_bytes(&binding.inventory)?),"shadow ciphertext inventory differs")?;
         decoded(&encrypted["nonce"],12,Some(12))?;
         ensure(decoded(&encrypted["ciphertext"],16384,None)?.len()>16,"shadow ciphertext authentication absent")?;
@@ -87,7 +98,8 @@ impl PreparedShadowKeyHelper {
         let rsa=decoded(&hello["recipientPublicKey"],1024,None)?;
         ensure(hello["apiVersion"]==CHANNEL&&hello["phase"]=="recipient"&&hello["recipientPublicKeySha256"]==sha(&rsa),
             "shadow real helper RSA original differs")?;
-        let request=json!({"apiVersion":"serverware.nativeShadowKeyKmsRecipientRequest/v1","material":"shadow-local-key-kek",
+        let request=json!({"apiVersion":if extended{"serverware.nativeShadowKeyKmsRecipientRequest/v2"}else{"serverware.nativeShadowKeyKmsRecipientRequest/v1"},
+            "material":if extended{"shadow-local-key-and-commitment-kek"}else{"shadow-local-key-kek"},
             "binding":binding,"transport":self.configuration,"recipientPublicKeySha256":sha(&rsa),
             "roleRecipientPublicKey":encoded(&role_public),"nonce":encoded(&nonce),"deadlineBoottimeNs":self.deadline.to_string()});
         let request_sha=sha(&canonical_ascii_bytes(&request)?);

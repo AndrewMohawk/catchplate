@@ -39,9 +39,11 @@ def configuration(path):
     finally:
         os.close(fd)
     p.fields(value, ("apiVersion", "enclaveCid", "transport", "bindingSha256", "ciphertextBlob", "region"))
-    p.require(value["apiVersion"] == "serverware.nativeShadowKeyKmsParent/v1")
+    p.require(value["apiVersion"] in ("serverware.nativeShadowKeyKmsParent/v1", "serverware.nativeShadowKeyKmsParent/v2"))
     p.integer(value["enclaveCid"], 4, (1 << 32)-2)
     c.transport(value["transport"]); p.digest(value["bindingSha256"])
+    p.require(value["transport"]["apiVersion"] == ("serverware.nativeShadowKeyKmsTransport/v2"
+        if value["apiVersion"] == "serverware.nativeShadowKeyKmsParent/v2" else "serverware.nativeShadowKeyKmsTransport/v1"))
     blob = p.decoded(value["ciphertextBlob"], maximum=6144)
     p.require(p.sha(blob) == value["transport"]["ciphertextBlobSha256"])
     if value["region"] is not None:

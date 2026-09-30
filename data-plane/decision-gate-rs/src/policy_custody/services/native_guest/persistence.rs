@@ -98,7 +98,11 @@ fn assigned_key(keys:&AdmittedKeys,trust:&dyn EnvelopeKeyTrust,role:AuthorityRol
 fn dispatch_original(request_encoded:&str,reply_encoded:&str,scope:&scope::Scope,keys:&AdmittedKeys,
     trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime)->Result<(Request,Vec<u8>,Option<receipts::Receipt>),ShadowError>{
     let (request,raw):(Request,_)=original(request_encoded)?;let (reply,_):(Reply,_)=original(reply_encoded)?;
-    let Body::Dispatch(dispatch)=&request.request else{return Err(ShadowError::BindingDrift);};
+    let dispatch=match &request.request {
+        Body::Dispatch(dispatch)=>dispatch,
+        Body::FinishCommitRequest{computation,..}=>&computation.request,
+        _=>return Err(ShadowError::BindingDrift),
+    };
     dispatch.validate().map_err(fail)?;let binding=dispatch.binding();
     let role=services::production::production_signer_role(dispatch).map_err(fail)?;
     require(request.api_version==PRODUCTION_AUTHORITY_ENDPOINT_PROTOCOL_VERSION && request.endpoint==Endpoint::ParentSigner(role)
@@ -118,6 +122,18 @@ fn dispatch_original(request_encoded:&str,reply_encoded:&str,scope:&scope::Scope
     key.verify_strict(&domain_separated_signature_preimage(b"serverware.policyCustodyProductionAuthorityEndpointSignature/v4",
         &reply.signature_payload().map_err(fail)?).map_err(fail)?,&signature).map_err(|_|ShadowError::SignatureInvalid)?;
     let ResultBody::Dispatch(response)=&reply.result else{return Err(ShadowError::BindingDrift);};
+    if let Body::FinishCommitRequest{computation,service_transitions}=&request.request {
+        require(role==PolicyShadowCustodySignerRole::LedgerAppend && response.result==computation.result
+            && response.service_transitions==*service_transitions
+            && computation.result_sha256==Sha256Digest::compute(&canonical_json_bytes(&computation.result)?)
+            && computation.api_version=="serverware.nativeShadowCommitRequestComputation/v1"
+            && binding.opened_at_boottime_nanos<=computation.computed_at_boottime_nanos
+            && computation.computed_at_boottime_nanos<request.deadline_boottime_nanos)?;
+        let sig=URL_SAFE_NO_PAD.decode(&computation.signature_base64url).map_err(fail)?;
+        require(URL_SAFE_NO_PAD.encode(&sig)==computation.signature_base64url)?;
+        key.verify_strict(&computation.preimage().map_err(fail)?,&Signature::from_slice(&sig).map_err(fail)?)
+            .map_err(|_|ShadowError::SignatureInvalid)?;
+    }
     let rebuilt=ClosedProductionDispatchResponseV4::from_parts(dispatch,response.result.clone(),response.service_transitions.clone()).map_err(fail)?;
     require(canonical_json_bytes(&rebuilt)?==canonical_json_bytes(response)? && !response.service_transitions.is_empty()
         && response.service_transitions.len()<=5)?;

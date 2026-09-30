@@ -148,12 +148,8 @@ def run():
     encrypted = frame["encryptedInventory"]
     p.require(p.sha(p.canonical(encrypted)) == transport["encryptedInventorySha256"])
     iv, ciphertext = c.encrypted(encrypted, inventory)
-    raw = AESGCM(kek).decrypt(iv, ciphertext, c.AAD_DOMAIN+p.canonical(inventory)); kek = None
-    payload = p.document(raw, 16368)
-    p.fields(payload, ("apiVersion", "inventorySha256", "seeds"))
-    p.require(payload["apiVersion"] == "serverware.nativeShadowLocalKeySeeds/v1"
-              and payload["inventorySha256"] == p.sha(p.canonical(inventory))
-              and type(payload["seeds"]) is list and len(payload["seeds"]) == len(inventory["localKeys"]))
+    raw = AESGCM(kek).decrypt(iv, ciphertext, c.aad(inventory)); kek = None
+    payload = c.seeds(p.document(raw, 16368), inventory)
     for item, key in zip(payload["seeds"], inventory["localKeys"]):
         p.fields(item, ("role", "keyId", "seedBase64url"))
         p.require(item["role"] == key["role"] and item["keyId"] == key["keyId"])

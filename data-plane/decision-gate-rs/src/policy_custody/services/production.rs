@@ -302,10 +302,12 @@ pub(super) struct ProductionRpcRuntimeConfigV4 {
     expected_maximum_durability_worker_nanos: u64,
     service_sessions: Vec<ProductionServiceSessionConfigV4>,
     histories: Vec<ProductionHistoryConfigV4>,
-    parent_signer_endpoints: Vec<ProductionParentSignerEndpointConfigV4>,
+    pub(super) parent_signer_endpoints: Vec<ProductionParentSignerEndpointConfigV4>,
     pub(super) proof_endpoints: Vec<ProductionProofEndpointConfigV4>,
     #[serde(default,skip_serializing_if="Option::is_none")]
     generation_admission:Option<super::generation_service_client::Selection>,
+    #[serde(default,skip_serializing_if="Option::is_none")]
+    pub(super) commit_request:Option<super::dispatch_service::client::Selection>,
 }
 
 impl ProductionRpcRuntimeConfigV4 {
@@ -327,8 +329,9 @@ impl ProductionRpcRuntimeConfigV4 {
             .iter()
             .map(|history| history.service_role)
             .collect::<BTreeSet<_>>();
-        if !matches!((self.api_version.as_str(),self.generation_admission.as_ref()),
-            (PRODUCTION_RPC_RUNTIME_CONFIG_VERSION,None)|(super::generation_service_client::RUNTIME,Some(_)))
+        if !matches!((self.api_version.as_str(),self.generation_admission.as_ref(),self.commit_request.as_ref()),
+            (PRODUCTION_RPC_RUNTIME_CONFIG_VERSION,None,None)|(super::generation_service_client::RUNTIME,Some(_),None)
+            |(super::dispatch_service::client::BRIDGE_RUNTIME,Some(_),Some(_)))
             || self.startup_timeout_millis == 0
             || self.startup_timeout_millis > 30_000
             || !self.listener_socket_path.is_absolute()
@@ -361,6 +364,7 @@ impl ProductionRpcRuntimeConfigV4 {
         self.expected_facade_peer.checked()?;
         if let Some(selection)=&self.generation_admission {selection.validate()?;}
         self.journal_directory_identity.validate()?;
+        if let Some(selection)=&self.commit_request {selection.validate()?;}
         let mut names = BTreeSet::from([
             PRODUCTION_RPC_LISTENER_FD_NAME.to_owned(),
             PRODUCTION_RPC_JOURNAL_FD_NAME.to_owned(),
@@ -488,6 +492,9 @@ pub(super) enum ProductionAuthorityEndpointIdentityV4 {
 pub(super) enum ProductionAuthorityEndpointRequestBodyV4 {
     SampleTrustedTime {operation_sha256:super::super::super::Sha256Digest},
     Dispatch(ClosedProductionDispatchRequestV4),
+    PrepareCommitRequest {request:ClosedProductionDispatchRequestV4},
+    FinishCommitRequest {computation:super::dispatch_commitment::Computation,
+        service_transitions:Vec<super::super::production_dispatch::SignedProductionServiceTransitionV4>},
     Generation(ClosedProductionGenerationRequestV4),
     /// Explicit selected successor: actual five local effects/observations.
     /// The coordinator must verify them and perform its own durable effect;
@@ -582,6 +589,7 @@ pub(super) enum ProductionAuthorityEndpointResultV4 {
     TrustedTimeInterval(native_guest::trusted_time_sample::Sample),
     PersistenceCommitted { commit_original_sha256: super::super::super::Sha256Digest },
     Dispatch(ClosedProductionDispatchResponseV4),
+    CommitRequestPrepared(super::dispatch_commitment::Computation),
     Generation(ClosedProductionGenerationResponseV4),
     GenerationProposal(super::generation_certification::Proposal),
     TerminationRequested,
@@ -716,6 +724,7 @@ pub(super) struct ConcreteFiveV3ProductionAuthoritiesV4 {
     proof_endpoints:
         BTreeMap<ProductionProofEndpointKindV4, ProductionPinnedEndpointV4>,
     generation_admission:Option<std::sync::Mutex<super::generation_service_client::Client>>,
+    commit_request:Option<std::sync::Mutex<super::dispatch_service::client::Client>>,
 }
 
 impl ConcreteFiveV3ProductionAuthoritiesV4 {
@@ -770,6 +779,7 @@ impl ConcreteFiveV3ProductionAuthoritiesV4 {
             parent_signer_endpoints,
             proof_endpoints,
             generation_admission:None,
+            commit_request:None,
         })
     }
 
@@ -1064,13 +1074,32 @@ impl ConcreteFiveV3ProductionAuthoritiesV4 {
         })?;
         let role = production_signer_role(request)?;
         let endpoint = self.parent_signer_endpoint(role)?;
+        let mut commitment=if matches!(request,ClosedProductionDispatchRequestV4::CommitRequest{..}) {
+            self.commit_request.as_ref().map(|v|v.try_lock()).transpose().map_err(|_|ProductionPrimitiveRejectionV4::rejected(
+                ProductionRpcRejectionCodeV4::ArtifactPrimitiveUnavailable,"CommitRequest owner is busy"))?
+        } else {None};
+        let body=if let Some(owner)=commitment.as_mut() {
+            owner.begin(request).map_err(|_|ProductionPrimitiveRejectionV4::rejected(
+                ProductionRpcRejectionCodeV4::ArtifactPrimitiveUnavailable,"CommitRequest contact owner unavailable"))?;
+            let prepare=ProductionAuthorityEndpointRequestV4::new(endpoint.identity,request.binding().replay_id_sha256.clone(),
+                request.binding().operation_deadline_boottime_nanos,ProductionAuthorityEndpointRequestBodyV4::PrepareCommitRequest{request:request.clone()})?;
+            let prepared=self.call_endpoint_original(endpoint,prepare,ProductionRpcRejectionCodeV4::ArtifactPrimitiveUnavailable)?;
+            let ProductionAuthorityEndpointResultV4::CommitRequestPrepared(computation)=prepared.result else {
+                return Err(ProductionPrimitiveRejectionV4::rejected(ProductionRpcRejectionCodeV4::ArtifactPrimitiveUnavailable,
+                    "native HMAC computation original absent"));
+            };
+            if computation.request!=*request {return Err(ProductionPrimitiveRejectionV4::rejected(
+                ProductionRpcRejectionCodeV4::InvalidRequest,"native computation request differs"));}
+            let service_transitions=owner.exchange(&self.sessions,computation.clone(),&endpoint.authority_key,&endpoint.authority_key_id)
+                .map_err(|_|ProductionPrimitiveRejectionV4::rejected(ProductionRpcRejectionCodeV4::ArtifactPrimitiveUnavailable,
+                    "actual CommitRequest service transition incomplete"))?;
+            ProductionAuthorityEndpointRequestBodyV4::FinishCommitRequest{computation,service_transitions}
+        } else {ProductionAuthorityEndpointRequestBodyV4::Dispatch(request.clone())};
         let wire = ProductionAuthorityEndpointRequestV4::new(
             endpoint.identity,
             request.binding().replay_id_sha256.clone(),
             request.binding().operation_deadline_boottime_nanos,
-            ProductionAuthorityEndpointRequestBodyV4::Dispatch(
-                request.clone(),
-            ),
+            body,
         )?;
         let reply=self.call_endpoint_original(
             endpoint,
@@ -1098,6 +1127,8 @@ impl ConcreteFiveV3ProductionAuthoritiesV4 {
         }
         match reply.result {
             ProductionAuthorityEndpointResultV4::Dispatch(response) => {
+                if let Some(owner)=commitment.as_mut() {owner.completed(&response).map_err(|_|ProductionPrimitiveRejectionV4::rejected(
+                    ProductionRpcRejectionCodeV4::ArtifactPrimitiveUnavailable,"CommitRequest completion differs"))?;}
                 Ok(response)
             }
             ProductionAuthorityEndpointResultV4::Rejected(rejection) => {
@@ -2370,10 +2401,13 @@ fn run_production_rpc_service_loaded_inner(
     } else {None};
 
     let native_proof_owner=inspected_proofs.as_ref().map(|(_,v)|Arc::clone(v));
-    let mut native_proofs=if let Some((prepared,owner))=inspected_proofs.take() {
-        prepared.attach(&mut activation,&loaded.value.proof_endpoints,owner)
+    let (mut native_proofs,mut native_commitment)=if let Some((prepared,owner))=inspected_proofs.take() {
+        prepared.attach(&mut activation,&loaded.value,owner)
             .map_err(|_|ServiceRunnerError::invalid("native proof endpoint construction refused"))?
-    } else {BTreeMap::new()};
+    } else {(BTreeMap::new(),None)};
+    if loaded.value.commit_request.is_some()!=native_commitment.is_some() {
+        return Err(ServiceRunnerError::invalid("CommitRequest requires its actual inspected native endpoint owner"));
+    }
 
     let listener = super::take_activation_fd(
         &mut activation,
@@ -2479,6 +2513,15 @@ fn run_production_rpc_service_loaded_inner(
     )?;
     let mut parent_signer_endpoints = Vec::with_capacity(10);
     for configured in &loaded.value.parent_signer_endpoints {
+        if configured.signer_role==super::super::super::PolicyShadowCustodySignerRole::LedgerAppend {
+            if let Some(session)=native_commitment.take() {
+                parent_signer_endpoints.push(load_pinned_endpoint_session(
+                    ProductionAuthorityEndpointIdentityV4::ParentSigner(configured.signer_role),EndpointSession::NativeProof(session),
+                    &configured.authority_binding_credential,configured.authority_key_id.clone(),configured.authority_key_spki_sha256.clone(),
+                    &loaded.credentials)?);
+                continue;
+            }
+        }
         let socket = super::take_activation_fd(
             &mut activation,
             &configured.activation_fd_name,
@@ -2544,7 +2587,14 @@ fn run_production_rpc_service_loaded_inner(
         parent_signer_endpoints,
         proof_endpoints,
     )?;
-    if let Some(owner)=native_proof_owner {authority.enable_native_proofs(owner)?;}
+    if let Some(owner)=native_proof_owner {
+        if let Some(selection)=loaded.value.commit_request.clone() {
+            if !owner.commitment_bridge_selected() {return Err(ServiceRunnerError::invalid("CommitRequest bridge purpose differs"));}
+            authority.commit_request=Some(std::sync::Mutex::new(super::dispatch_service::client::Client::new(selection,
+                load_production_histories(&loaded.value,&loaded.credentials)?,Arc::clone(&owner),&loaded.value.expected_service_configuration_sha256)?));
+        }
+        authority.enable_native_proofs(owner)?;
+    }
     if let Some(selection)=loaded.value.generation_admission.clone() {
         authority.generation_admission=Some(std::sync::Mutex::new(super::generation_service_client::Client::new(
             selection,load_production_histories(&loaded.value,&loaded.credentials)?,bootstrap.clone())?));
@@ -2621,7 +2671,7 @@ fn load_pinned_endpoint_session(
     })
 }
 
-fn load_production_histories(
+pub(super) fn load_production_histories(
     runtime: &ProductionRpcRuntimeConfigV4,
     credentials: &super::CredentialDirectory,
 ) -> Result<ProductionServiceHistoricalKeyringsV4, ServiceRunnerError> {

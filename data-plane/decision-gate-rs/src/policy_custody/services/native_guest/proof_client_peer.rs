@@ -80,7 +80,11 @@ pub(in crate::policy_shadow::policy_custody::services) struct Inspector {
 impl Inspector {
     pub(in crate::policy_shadow::policy_custody::services) fn prepare(files:&FileAdmission,
         activation:&BTreeMap<String,OwnedFd>)->Result<(Self,OwnedFd),ShadowError> {
-        let selected=Selection::original(&files.retrieval_client_runtime().map_err(fail)?)?;
+        Self::prepare_selected(files,activation,false)
+    }
+    pub(in crate::policy_shadow::policy_custody::services) fn prepare_selected(files:&FileAdmission,
+        activation:&BTreeMap<String,OwnedFd>,commitment:bool)->Result<(Self,OwnedFd),ShadowError> {
+        let selected=Selection::original(&files.retrieval_client_runtime().map_err(fail)?,commitment)?;
         let mut entries=BTreeMap::new();
         for (kind,endpoint) in &selected.entries {
             let expected=endpoint.expected_peer.checked().map_err(fail)?;

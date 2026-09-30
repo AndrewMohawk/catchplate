@@ -7,6 +7,7 @@ use ring::{aead,hkdf};
 use zeroize::Zeroize;
 const CREDENTIAL:&str="shadow-encrypted-role-inventory";
 const DOMAIN:&str="serverware.nativeShadowEncryptedKeyDelivery.signature/v1";
+const EXTENDED_DOMAIN:&str="serverware.nativeShadowEncryptedKeyDelivery.signature/v2";
 #[derive(Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 struct Payload {
@@ -22,16 +23,35 @@ struct Payload {
 struct Authorization {payload:Payload,signature:CanonicalEd25519Signature}
 #[derive(Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
-pub(crate) struct NativeShadowEncryptedKeysConfiguration {api_version:String,authorization:Authorization}
+struct LegacyConfiguration {api_version:String,authorization:Authorization}
+#[derive(Serialize,Deserialize)]
+#[serde(rename_all="camelCase",deny_unknown_fields)]
+struct CommitmentConfiguration {api_version:String,authorization:Authorization,request_commitment:commitment::Authorization}
+#[derive(Serialize,Deserialize)]
+#[serde(untagged)]
+pub(crate) enum NativeShadowEncryptedKeysConfiguration {Legacy(LegacyConfiguration),Commitment(CommitmentConfiguration)}
 impl NativeShadowEncryptedKeysConfiguration {
+    pub(in crate::policy_shadow::policy_custody::services) fn has_commitment(&self)->bool {self.commitment().is_some()}
+    fn authorization(&self)->&Authorization {match self {Self::Legacy(v)=>&v.authorization,Self::Commitment(v)=>&v.authorization}}
+    fn commitment(&self)->Option<&commitment::Authorization> {match self {Self::Legacy(_)=>None,Self::Commitment(v)=>Some(&v.request_commitment)}}
     pub(super) fn verify(&self,key_configuration:&NativeCustodyKeyConfiguration,assignment:&VerifiedAssignment,
         association:&GuestClosureAssociation,checkpoint:&AtomicTrustCheckpoint,trust:&dyn EnvelopeKeyTrust,
         time:&dyn TrustedTime)->Result<(),ShadowError> {
         super::verify(key_configuration,assignment,association,checkpoint,trust,time)?;
-        let p=&self.authorization.payload;let a=assignment.payload();let k=&key_configuration.authorization.payload;
-        require(self.api_version=="serverware.nativeShadowEncryptedKeyDelivery/v1"
-            && p.api_version=="serverware.nativeShadowEncryptedKeyDeliveryAssignment/v1"&&p.purpose=="kms-recipient-shadow-local-keys"
-            && key_configuration.api_version=="serverware.nativeShadowRoleKeys/v2"
+        let authorization=self.authorization();let p=&authorization.payload;let a=assignment.payload();let k=&key_configuration.authorization.payload;
+        match self {
+            Self::Legacy(v)=>require(v.api_version=="serverware.nativeShadowEncryptedKeyDelivery/v1"
+                && p.api_version=="serverware.nativeShadowEncryptedKeyDeliveryAssignment/v1" && p.purpose=="kms-recipient-shadow-local-keys"
+                && p.transport.api_version=="serverware.nativeShadowKeyKmsTransport/v1")?,
+            Self::Commitment(v)=>{
+                require(v.api_version=="serverware.nativeShadowEncryptedKeyDelivery/v2"
+                    && p.api_version=="serverware.nativeShadowEncryptedKeyDeliveryAssignment/v2"
+                    && p.purpose=="kms-recipient-shadow-local-keys-and-request-commitment"
+                    && p.transport.api_version=="serverware.nativeShadowKeyKmsTransport/v2")?;
+                v.request_commitment.verify(key_configuration,assignment,association,checkpoint,trust,time)?;
+            }
+        }
+        require(key_configuration.api_version=="serverware.nativeShadowRoleKeys/v2"
             && p.assignment_id==a.assignment_id&&p.assignment_payload_sha256==*assignment.payload_sha256()
             && p.assignment_revision==a.assignment_revision&&p.key_authorization_sha256==Sha256Digest::compute(&canonical_json_bytes(&key_configuration.authorization)?)
             && p.guest==association.binding()&&p.full_key_set_root_sha256==k.full_key_set_root_sha256
@@ -55,7 +75,8 @@ impl NativeShadowEncryptedKeysConfiguration {
         let key=trust.resolve_ed25519_key(checkpoint,authority_role_signature_domain(AuthorityRole::CustodySupervisorCapability),
             &signer.key_id,&signer.key_spki_sha256)?;
         require(ed25519_public_key_material_sha256(&key)==signer.key_material_sha256)?;
-        key.verify_strict(&signature_preimage(DOMAIN,&canonical_json_bytes(p)?),&Signature::from_bytes(&self.authorization.signature.decode()?))
+        let domain=if self.commitment().is_some(){EXTENDED_DOMAIN}else{DOMAIN};
+        key.verify_strict(&signature_preimage(domain,&canonical_json_bytes(p)?),&Signature::from_bytes(&authorization.signature.decode()?))
             .map_err(|_|ShadowError::SignatureInvalid)?;
         require(trust.current_checkpoint()?==*checkpoint)
     }
@@ -66,7 +87,7 @@ impl PreparedNativeCustodyKeys {
         assignment:&VerifiedAssignment,trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime,
         delivery:&PreparedGuestServiceDelivery)->Result<Self,ShadowError> {
         let association=delivery.closure_association().map_err(fail)?;association.check_preparation().map_err(fail)?;
-        let checkpoint=trust.current_checkpoint()?;let k=&configuration.authorization.payload;let p=&encrypted.authorization.payload;
+        let checkpoint=trust.current_checkpoint()?;let k=&configuration.authorization.payload;let p=&encrypted.authorization().payload;
         require(configuration.api_version=="serverware.nativeShadowRoleKeys/v2"
             && k.trust_checkpoint_id==checkpoint.checkpoint_id&&k.revocation_generation==checkpoint.revocation_generation
             && k.revocation_root_sha256==checkpoint.revocation_root_sha256
@@ -89,6 +110,13 @@ impl Drop for Seed {fn drop(&mut self){self.seed_base64url.zeroize();}}
 #[derive(Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 struct Seeds {api_version:String,inventory_sha256:Sha256Digest,seeds:Vec<Seed>}
+#[derive(Serialize,Deserialize)]
+#[serde(rename_all="camelCase",deny_unknown_fields)]
+struct CommitmentSecret {key_id:Sha256Digest,key_epoch:u64,secret_base64url:String}
+impl Drop for CommitmentSecret {fn drop(&mut self){self.secret_base64url.zeroize();}}
+#[derive(Serialize,Deserialize)]
+#[serde(rename_all="camelCase",deny_unknown_fields)]
+struct CommitmentSeeds {api_version:String,inventory_sha256:Sha256Digest,seeds:Vec<Seed>,request_commitment:CommitmentSecret}
 struct KeyLength;
 impl hkdf::KeyType for KeyLength {fn len(&self)->usize {32}}
 fn decode(value:&serde_json::Value,maximum:usize,exact:Option<usize>)->Result<Zeroizing<Vec<u8>>,ShadowError> {
@@ -106,14 +134,18 @@ impl Prepared {
         association:&GuestClosureAssociation,closure:&NativeCustodyClosureOwner,production:&ProductionCustodyConfiguration,
         nsm:&mut ShadowNsmV1,checkpoint:&AtomicTrustCheckpoint,trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime)
         ->Result<(BTreeMap<AuthorityRole,LocalKey>,NativeShadowEncryptedKeysConfiguration),ShadowError> {
+        // This older production-driver constructor has no HMAC operation owner.
+        // The explicit successor is selected only by actual native admission.
+        require(self.configuration.commitment().is_none())?;
         let bindings=full_bindings(assignment)?;
         for (role,binding) in &bindings {require(production.authority_binding(*role)?==binding)?;}
-        self.bind_keys(key_configuration,assignment,association,closure,&bindings,nsm,checkpoint,trust,time)
+        let (keys,configuration,commitment)=self.bind_keys(key_configuration,assignment,association,closure,&bindings,nsm,checkpoint,trust,time)?;
+        require(commitment.is_none())?;Ok((keys,configuration))
     }
     pub(super) fn bind_admission(self,key_configuration:&NativeCustodyKeyConfiguration,assignment:&VerifiedAssignment,
         association:&GuestClosureAssociation,closure:&NativeCustodyClosureOwner,nsm:&mut ShadowNsmV1,
         checkpoint:&AtomicTrustCheckpoint,trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime)
-        ->Result<(BTreeMap<AuthorityRole,LocalKey>,NativeShadowEncryptedKeysConfiguration),ShadowError> {
+        ->Result<(BTreeMap<AuthorityRole,LocalKey>,NativeShadowEncryptedKeysConfiguration,Option<commitment::Owner>),ShadowError> {
         // Actual independently verified assignment, not a production driver or
         // caller-provided authority map. Admission exposes no service signing.
         let bindings=full_bindings(assignment)?;
@@ -123,7 +155,7 @@ impl Prepared {
         association:&GuestClosureAssociation,closure:&NativeCustodyClosureOwner,
         bindings:&BTreeMap<AuthorityRole,ProductionCustodyKeyBinding>,nsm:&mut ShadowNsmV1,
         checkpoint:&AtomicTrustCheckpoint,trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime)
-        ->Result<(BTreeMap<AuthorityRole,LocalKey>,NativeShadowEncryptedKeysConfiguration),ShadowError> {
+        ->Result<(BTreeMap<AuthorityRole,LocalKey>,NativeShadowEncryptedKeysConfiguration,Option<commitment::Owner>),ShadowError> {
         association.check_startup().map_err(fail)?;closure.require_origin(association)?;
         self.configuration.verify(key_configuration,assignment,association,checkpoint,trust,time)?;
         let mut public_keys=Vec::new();
@@ -134,13 +166,17 @@ impl Prepared {
             public_keys.push(PublicKey{role:*role,key_id:b.key_id().clone(),key_spki_sha256:b.key_spki_sha256().clone(),
                 key_material_sha256:b.key_material_sha256().clone(),public_key_base64url:URL_SAFE_NO_PAD.encode(key.to_bytes())});
         }
-        let p=&self.configuration.authorization.payload;
-        let inventory=serde_json::json!({"apiVersion":"serverware.nativeShadowLocalKeyInventory/v1",
+        let p=&self.configuration.authorization().payload;
+        let extended=self.configuration.commitment().is_some();
+        let mut inventory=serde_json::json!({"apiVersion":if extended{"serverware.nativeShadowLocalKeyInventory/v2"}else{"serverware.nativeShadowLocalKeyInventory/v1"},
             "fullKeySetRootSha256":p.full_key_set_root_sha256,"localKeySetRootSha256":p.local_key_set_root_sha256,"localKeys":public_keys});
+        if let Some(authorization)=self.configuration.commitment() {
+            inventory["requestCommitment"]=serde_json::to_value(authorization.descriptor()).map_err(fail)?;
+        }
         let inventory_sha=Sha256Digest::compute(&canonical_json_bytes(&inventory)?);
-        let binding=mechanism::Binding{api_version:"serverware.nativeShadowKeyDeliveryBinding/v1".into(),
+        let binding=mechanism::Binding{api_version:if extended{"serverware.nativeShadowKeyDeliveryBinding/v2".into()}else{"serverware.nativeShadowKeyDeliveryBinding/v1".into()},
             guest:serde_json::to_value(association.binding()).map_err(fail)?,key_authorization_sha256:p.key_authorization_sha256.as_str().into(),
-            delivery_authorization_sha256:Sha256Digest::compute(&canonical_json_bytes(&self.configuration.authorization)?).as_str().into(),
+            delivery_authorization_sha256:Sha256Digest::compute(&canonical_json_bytes(self.configuration.authorization())?).as_str().into(),
             inventory,challenge_base64url:p.challenge_base64url.clone(),execution_closure_manifest_sha256:closure.manifest_sha256().as_str().into(),
             worker_executable_sha256:closure.worker_executable_sha256().as_str().into(),
             structurally_verified_seccomp_policy_sha256:closure.seccomp_policy_sha256().as_str().into()};
@@ -168,12 +204,28 @@ impl Prepared {
         let cipher=aead::LessSafeKey::new(aead::UnboundKey::new(&aead::AES_256_GCM,key.as_ref()).map_err(fail)?);
         let mut encrypted=decode(&output["ciphertext"],16384,None)?;
         let plaintext=cipher.open_in_place(aead::Nonce::assume_unique_for_key(nonce),aead::Aad::from(&aad),encrypted.as_mut()).map_err(fail)?;
-        let document:Seeds=serde_json::from_slice(plaintext).map_err(fail)?;
-        let canonical=Zeroizing::new(canonical_json_bytes(&document)?);
-        require(canonical.as_slice()==plaintext&&document.api_version=="serverware.nativeShadowLocalKeySeeds/v1"
-            &&document.inventory_sha256==inventory_sha&&document.seeds.len()==public_keys.len())?;
+        let (seeds,commitment)=if let Some(authorization)=self.configuration.commitment() {
+            let document:CommitmentSeeds=serde_json::from_slice(plaintext).map_err(fail)?;
+            let canonical=Zeroizing::new(canonical_json_bytes(&document)?);
+            require(canonical.as_slice()==plaintext && document.api_version=="serverware.nativeShadowLocalKeySeeds/v2"
+                && document.inventory_sha256==inventory_sha && document.seeds.len()==public_keys.len())?;
+            let d=authorization.descriptor();let supplied=&document.request_commitment;
+            require(supplied.key_id==d.key_id && supplied.key_epoch==d.key_epoch)?;
+            let secret=decode_text(&supplied.secret_base64url,32,Some(32))?;
+            for seed in &document.seeds {
+                require(decode_text(&seed.seed_base64url,32,Some(32))?.as_slice()!=secret.as_slice())?;
+            }
+            let owner=commitment::Owner::from_recipient(authorization.clone(),secret.as_slice())?;
+            (document.seeds,Some(owner))
+        } else {
+            let document:Seeds=serde_json::from_slice(plaintext).map_err(fail)?;
+            let canonical=Zeroizing::new(canonical_json_bytes(&document)?);
+            require(canonical.as_slice()==plaintext && document.api_version=="serverware.nativeShadowLocalKeySeeds/v1"
+                && document.inventory_sha256==inventory_sha && document.seeds.len()==public_keys.len())?;
+            (document.seeds,None)
+        };
         let mut keys=BTreeMap::new();
-        for (original,expected) in document.seeds.iter().zip(&public_keys) {
+        for (original,expected) in seeds.iter().zip(&public_keys) {
             require(original.role==expected.role&&original.key_id==expected.key_id)?;
             let bytes=decode_text(&original.seed_base64url,32,Some(32))?;
             let seed=Zeroizing::new(<[u8;32]>::try_from(bytes.as_slice()).map_err(fail)?);
@@ -183,6 +235,6 @@ impl Prepared {
         }
         association.check_startup().map_err(fail)?;closure.require_origin(association)?;
         self.configuration.verify(key_configuration,assignment,association,checkpoint,trust,time)?;
-        Ok((keys,self.configuration))
+        Ok((keys,self.configuration,commitment))
     }
 }

@@ -1457,6 +1457,14 @@ impl SignedProductionServiceTransitionV4 {
         result_sha256: &Sha256Digest,
         keyrings: &FiveServiceHistoricalKeyringsV4<'_>,
     ) -> Result<(), &'static str> {
+        self.validate_with_history(binding,result_sha256,|epoch,domain,payload,signature|{
+            keyrings.history(self.service_role).verify_service_signature(epoch,domain,payload,signature)
+                .map_err(|_|"production service transition signature is invalid or its epoch is not retained")
+        })
+    }
+
+    pub(super) fn validate_with_history(&self,binding:&ProductionDispatchBindingV4,result_sha256:&Sha256Digest,
+        verify:impl FnOnce(&AuthorityEpochRefV3,&[u8],&[u8],&str)->Result<(),&'static str>)->Result<(),&'static str> {
         for digest in [
             &self.operation_id_sha256,
             &self.request_sha256,
@@ -1503,17 +1511,12 @@ impl SignedProductionServiceTransitionV4 {
                 "production service transition payload bytes are not exact canonical bytes",
             );
         }
-        keyrings
-            .history(self.service_role)
-            .verify_service_signature(
+        verify(
                 &self.authority_epoch,
                 SERVICE_TRANSITION_DOMAIN,
                 &payload,
                 &self.signature_base64,
-            )
-            .map_err(|_| {
-                "production service transition signature is invalid or its epoch is not retained"
-            })?;
+            )?;
         let expected_envelope = canonical_json_bytes(&(
             &self.api_version,
             self.service_role,

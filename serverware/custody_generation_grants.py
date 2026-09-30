@@ -76,12 +76,21 @@ def configuration(raw, expected_sha, role):
 
 
 def sign_delivery(*, cold_raw, cold_sha, role, payload_raw, activation, boot, startup, lifetime, now, signing_key):
+    return _sign_delivery(cold_raw=cold_raw,cold_sha=cold_sha,role=role,payload_raw=payload_raw,
+        activation=activation,boot=boot,startup=startup,lifetime=lifetime,now=now,signing_key=signing_key,commitment=False)
+
+
+def _sign_delivery(*, cold_raw, cold_sha, role, payload_raw, activation, boot, startup, lifetime, now, signing_key, commitment):
     cold = configuration(cold_raw, cold_sha, role)
+    p.require(type(commitment) is bool and (not commitment or role in (ROLES[0],ROLES[3])))
+    names = BUSINESS[role] + ("generation-journal", "generation-grant")
+    if commitment:
+        names += ("dispatch-journal", "dispatch-grant")
     payload = p.fields(document(payload_raw, 65536), c9.FIELDS)
     p.require(payload["configurationSha256"] == cold_sha and payload["authorityKeyId"] == cold["authority"]["keyId"]
         and all(payload[field] == cold[field] for field in ("serviceRole", "uid", "gid"))
         and payload["activation"] == activation
-        and tuple(item["name"] for item in activation) == BUSINESS[role] + ("generation-journal", "generation-grant"))
+        and tuple(item["name"] for item in activation) == names)
     for index, entry in enumerate(activation, 6):
         p.fields(entry, ("name", "fd", "device", "inode", "mode", "uid", "gid"))
         p.require(entry["fd"] == index)
@@ -97,7 +106,7 @@ def sign_delivery(*, cold_raw, cold_sha, role, payload_raw, activation, boot, st
         p.fields(credential, ("name", "original", "length", "signing"))
         name = credential["name"]
         p.require(type(name) is str and re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", name)
-            and name not in names and name != "generation-grant")
+            and name not in names and name != "generation-grant" and (not commitment or name != "dispatch-grant"))
         names.add(name); c9._pin(credential["original"])
         total += p.integer(credential["length"], maximum=MAX_BYTES)
         if credential["signing"] is not None:
@@ -121,6 +130,11 @@ def sign_delivery(*, cold_raw, cold_sha, role, payload_raw, activation, boot, st
 
 
 def sign_grant(*, payload_raw, guest, runtime_raw, history_raw, delivery_raw, signing_key, now):
+    return _sign_grant(payload_raw=payload_raw,guest=guest,runtime_raw=runtime_raw,history_raw=history_raw,
+        delivery_raw=delivery_raw,signing_key=signing_key,now=now,commitment=False)
+
+
+def _sign_grant(*, payload_raw, guest, runtime_raw, history_raw, delivery_raw, signing_key, now, commitment):
     payload = p.fields(document(payload_raw, 65536), GRANT)
     runtime = document(runtime_raw, MAX_BYTES)["runtime"]
     history = p.fields(document(history_raw, MAX_BYTES), HISTORY)
@@ -128,12 +142,14 @@ def sign_grant(*, payload_raw, guest, runtime_raw, history_raw, delivery_raw, si
     p.guest(guest)
     scope = p.fields(payload["scope"], SCOPE)
     role = guest["serviceRole"]
+    p.require(type(commitment) is bool and (not commitment or role in (ROLES[0],ROLES[3])))
     p.require(role in ROLES and payload["apiVersion"] == "serverware.custodyServiceGenerationGrant/v1"
         and payload["purpose"] == "cold-service-generation-admission" and payload["serviceRole"] == role
         and payload["guest"] == guest and p.sha(delivery_raw) == guest["deliverySha256"]
         and p.sha(runtime_raw) == guest["runtimeConfigurationSha256"] == payload["runtimeConfigurationSha256"])
-    p.require(runtime["apiVersion"] == "serverware.policyCustodyServiceRuntimeConfig/v5"
-        and runtime["generationAdmission"] == {"grantFdName": "generation-grant"})
+    p.require(runtime["apiVersion"] == ("serverware.policyCustodyServiceRuntimeConfig/v6" if commitment else "serverware.policyCustodyServiceRuntimeConfig/v5")
+        and runtime["generationAdmission"] == {"grantFdName": "generation-grant"}
+        and (not commitment or runtime.get("dispatchAdmission") == {"grantFdName":"dispatch-grant"}))
     p.require(history["apiVersion"] == "serverware.policyCustodyAuthorityHistory/v3"
         and history["authorityRole"] == {"authorityKind": "isolated-service", "role": role})
     semantic = p.framed(b"serverware.policyCustodyAuthorityHistoryManifest/v3",

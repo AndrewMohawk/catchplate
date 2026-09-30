@@ -88,12 +88,16 @@ def assert_base_images_pinned(path: Path) -> None:
         for line in path.read_text(encoding="utf-8").splitlines()
         if line.strip().upper().startswith("FROM ")
     ]
-    mutable = [
-        line
-        for line in from_lines
-        if "@sha256:" not in line
-        and re.fullmatch(r"FROM\s+scratch(?:\s+AS\s+[A-Za-z0-9._-]+)?", line, re.IGNORECASE) is None
-    ]
+    mutable = []
+    declared = set()
+    for line in from_lines:
+        fields = line.split()
+        if len(fields) not in {2, 4} or (len(fields) == 4 and fields[2].upper() != "AS"):
+            raise AssertionError(f"unsupported production FROM: {line}")
+        if "@sha256:" not in fields[1] and fields[1].lower() != "scratch" and fields[1] not in declared:
+            mutable.append(line)
+        if len(fields) == 4:
+            declared.add(fields[3])
     if not from_lines or mutable:
         raise AssertionError(f"{path} contains a mutable production base image: {from_lines}")
 
@@ -716,6 +720,7 @@ def assert_development_image_identity_validation() -> None:
 def assert_production_schema_build_stages(dockerfile: str) -> None:
     """Source regression contract, not a general Dockerfile/shell validator."""
     stages: dict[str, list[str]] = {}
+    origins: dict[str, str] = {}
     current: list[str] = []
     for raw in dockerfile.splitlines():
         line = raw.strip()
@@ -727,17 +732,22 @@ def assert_production_schema_build_stages(dockerfile: str) -> None:
                 if name in stages:
                     raise AssertionError(f"duplicate production build stage: {name}")
                 stages[name] = current
+                origins[name] = line
         elif line and not line.startswith("#"):
             current.append(line.removesuffix("\\").rstrip().removesuffix(";").rstrip())
 
+    if origins.get("source-preparation") != (
+        "FROM rust:1.88-slim-bookworm@sha256:38bc5a86d998772d4aec2348656ed21438d20fcdce2795b56ca434cf21430d89 AS source-preparation"
+    ) or origins.get("build") != "FROM source-preparation AS build":
+        raise AssertionError("build must inherit the fixed pinned verified source-preparation stage")
     for name in ("build", "launcher-build"):
-        lines = stages.get(name)
-        if lines is None:
+        if name not in stages:
             raise AssertionError(f"missing production schema build stage: {name}")
+        lines = stages["source-preparation"] + stages[name] if name == "build" else stages[name]
         copies = [index for index, line in enumerate(lines)
                   if line == "cp -R /source/schemas /schemas"]
         builds = [index for index, line in enumerate(lines)
-                  if line.startswith("RUN --network=none cargo build --release --frozen")]
+                  if line == "RUN --network=none /usr/local/bin/serverware-cargo-build --release --frozen"]
         if len(copies) != 1 or len(builds) != 1 or copies[0] >= builds[0]:
             raise AssertionError(f"{name} must copy verified schemas before its offline Rust build")
         if name == "build":
@@ -747,7 +757,7 @@ def assert_production_schema_build_stages(dockerfile: str) -> None:
                 "done < /source-contract/source.files.mode",
             )
         else:
-            prerequisites = ("COPY --from=build /source /source",)
+            prerequisites = ("COPY --from=source-preparation /source /source",)
         positions = []
         for requirement in prerequisites:
             if lines.count(requirement) != 1:
@@ -767,9 +777,13 @@ def assert_reproducible_rust_binary_config() -> None:
     # compensate for missing, redirected, unverified or late source here.
     sections = re.split(r"(?=^FROM )", production, flags=re.MULTILINE)
     for stage in ("build", "launcher-build"):
+        source_stage = "source-preparation" if stage == "build" else stage
         index = next(index for index, section in enumerate(sections)
-                     if re.search(rf" AS {re.escape(stage)}$", section.splitlines()[0] if section else ""))
-        original = sections[index]
+                     if re.search(rf" AS {re.escape(source_stage)}$", section.splitlines()[0] if section else ""))
+        end = index + (2 if stage == "build" else 1)
+        if stage == "build" and sections[index + 1].splitlines()[0] != "FROM source-preparation AS build":
+            raise AssertionError("build must directly inherit source-preparation")
+        original = "".join(sections[index:end])
         copy_line = next(line for line in original.splitlines(keepends=True)
                          if line.strip().startswith("cp -R /source/schemas /schemas"))
         changed_cases = {
@@ -780,12 +794,12 @@ def assert_reproducible_rust_binary_config() -> None:
         }
         prerequisite = (
             "sha256sum -c /source-contract/source.files.sha256"
-            if stage == "build" else "COPY --from=build /source /source"
+            if stage == "build" else "COPY --from=source-preparation /source /source"
         )
         changed_cases["missing source verification"] = original.replace(prerequisite, "# omitted prerequisite")
         for label, section in changed_cases.items():
             candidate = list(sections)
-            candidate[index] = section
+            candidate[index:end] = [section]
             try:
                 assert_production_schema_build_stages("".join(candidate))
             except AssertionError as exc:
@@ -910,7 +924,8 @@ def assert_gate_response_context_publish_wait() -> None:
         if "--build-id=none" not in dockerfile:
             raise AssertionError(f"{relative} must omit nondeterministic GNU linker build IDs")
         lock_mode = "--frozen" if relative.endswith("Dockerfile.production") else "--locked"
-        if f"cargo build --release {lock_mode}" not in dockerfile:
+        command = "/usr/local/bin/serverware-cargo-build" if relative.endswith("Dockerfile.production") else "cargo build"
+        if f"{command} --release {lock_mode}" not in dockerfile:
             raise AssertionError(f"{relative} must build the lockfile-pinned Rust release")
 
 
@@ -920,7 +935,7 @@ def assert_static_launcher_artifact_embedded() -> None:
     required = (
         "FROM rust:1.88-alpine3.22@sha256:64eba3726734dcfe89e0a62a0485007a3ab7c7372ce5b38c621d8812f70215f0 AS launcher-build",
         "COPY production-dependencies/cache/musl-1.2.5-r12.apk",
-        "--network=none cargo build --release --frozen --bin serverware-production-launcher",
+        "RUN --network=none /usr/local/bin/serverware-cargo-build --release --frozen \\\n        --bin serverware-production-launcher",
         "FROM scratch AS production-launcher-artifact",
         "COPY --from=launcher-build /src/target/release/serverware-production-launcher /serverware-production-launcher",
         "COPY --from=launcher-build /src/target/release/serverware-production-launcher /usr/local/libexec/serverware-production-launcher",
@@ -1225,7 +1240,7 @@ def assert_production_copy_classification(dockerfile: str, *, family: str) -> No
     if family not in {"python", "rust"}:
         raise AssertionError("unknown production Dockerfile family")
     cache_stage = f"{family}-production-dependency-cache"
-    source_stage = "verified-production-source" if family == "python" else "build"
+    source_stage = "verified-production-source" if family == "python" else "source-preparation"
     cache_inputs = (PYTHON_CACHE_INPUT,) if family == "python" else RUST_CACHE_INPUTS
     committed_inputs = COMMITTED_COPY_INPUTS if family == "python" else ()
     expected = [
@@ -1278,7 +1293,8 @@ def assert_production_copy_classification(dockerfile: str, *, family: str) -> No
             "-r /dependency-cache/requirements.lock",
         ))
     else:
-        require_stage_order(stages, "build", (
+        require_stage_order(stages, "source-preparation", (
+            "FROM rust:1.88-slim-bookworm@sha256:38bc5a86d998772d4aec2348656ed21438d20fcdce2795b56ca434cf21430d89 AS source-preparation",
             "COPY --from=rust-production-dependency-cache /dependency-cache /dependency-cache",
             "done < /source-contract/source.files.mode",
             "cp /source/data-plane/decision-gate-rs/Cargo.toml /dependency-cache/data-plane/decision-gate-rs/Cargo.toml",
@@ -1286,18 +1302,24 @@ def assert_production_copy_classification(dockerfile: str, *, family: str) -> No
             "cp /source/production-dependencies/rust-linux-amd64.sha256 /dependency-cache/rust-linux-amd64.sha256",
             "cd /dependency-cache", "sha256sum -c rust-linux-amd64.sha256",
             "tar -xzf cache/cargo-vendor.tar.gz -C /src",
-            "RUN --network=none cargo build --release --frozen",
+        ))
+        require_stage_order(stages, "build", (
+            "FROM source-preparation AS build",
+            "RUN --network=none rustc --edition=2021 /source/scripts/cargo_build_diagnostics.rs -o /usr/local/bin/serverware-cargo-build",
+            "RUN --network=none /usr/local/bin/serverware-cargo-build --release --frozen",
         ))
         require_stage_order(stages, "launcher-build", (
-            "COPY --from=build /source /source",
-            "COPY --from=build /dependency-cache /dependency-cache",
+            "COPY --from=source-preparation /source /source",
+            "COPY --from=source-preparation /dependency-cache /dependency-cache",
             "RUN --network=none set -eu", "cd /dependency-cache",
             'test "$(grep -Ec \'^[0-9a-f]{64}  \' rust-linux-amd64.sha256)" -eq 5',
             "grep -E '^[0-9a-f]{64}  ' rust-linux-amd64.sha256 | sha256sum -c -",
             "apk", "--no-network", "--repositories-file /dev/null", "add",
             "cache/musl-1.2.5-r12.apk", "cache/musl-dev-1.2.5-r12.apk",
             "tar -xzf cache/cargo-vendor.tar.gz -C /src",
-            "RUN --network=none cargo build --release --frozen --bin serverware-production-launcher",
+            "RUN --network=none rustc --edition=2021 /source/scripts/cargo_build_diagnostics.rs -o /usr/local/bin/serverware-cargo-build",
+            "RUN --network=none /usr/local/bin/serverware-cargo-build --release --frozen",
+            "--bin serverware-production-launcher --bin serverware-native-response-verifier",
         ))
 
 

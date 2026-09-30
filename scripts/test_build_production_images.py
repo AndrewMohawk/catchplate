@@ -153,17 +153,18 @@ def dockerfile_stage(lines: list[str], name: str) -> list[str]:
 
 
 def assert_dockerfile_copies_trust_into_rust_builds() -> None:
-    required = "COPY data-plane/decision-gate-rs/trust ./trust"
     dockerfiles = (
-        (ROOT / "data-plane/decision-gate-rs/Dockerfile", ("build",)),
+        (ROOT / "data-plane/decision-gate-rs/Dockerfile", ("build",),
+         "COPY data-plane/decision-gate-rs/trust ./trust"),
         (
             ROOT / "data-plane/decision-gate-rs/Dockerfile.production",
-            ("build", "launcher-build"),
+            ("source-preparation", "launcher-build"),
+            "cp -R /source/data-plane/decision-gate-rs/trust /src/trust",
         ),
     )
-    for path, stages in dockerfiles:
+    for path, stages, required in dockerfiles:
         lines = [
-            line.strip()
+            line.strip().removesuffix("\\").rstrip().removesuffix(";").rstrip()
             for line in path.read_text(encoding="utf-8").splitlines()
             if line.strip()
         ]
@@ -179,6 +180,11 @@ def assert_dockerfile_copies_trust_into_rust_builds() -> None:
         for line in dockerfiles[1][0].read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
+    if dockerfile_stage(production_lines, "build")[0] != "FROM source-preparation AS build":
+        raise AssertionError("production build must inherit its verified trust directory")
+    launcher_lines = dockerfile_stage(production_lines, "launcher-build")
+    if launcher_lines.count("COPY --from=source-preparation /source /source") != 1:
+        raise AssertionError("production launcher must copy trust from verified source-preparation")
     authority_args = [
         line
         for line in production_lines

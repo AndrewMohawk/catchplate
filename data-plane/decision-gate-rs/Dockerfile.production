@@ -6,7 +6,7 @@ COPY production-dependencies/cache/python-wheelhouse-linux-amd64.tar.gz /depende
 COPY production-dependencies/cache/squashfs-tools_4.5.1-1_amd64.deb /dependency-cache/cache/squashfs-tools_4.5.1-1_amd64.deb
 COPY production-dependencies/cache/liblzo2-2_2.10-2_amd64.deb /dependency-cache/cache/liblzo2-2_2.10-2_amd64.deb
 
-FROM rust:1.88-slim-bookworm@sha256:38bc5a86d998772d4aec2348656ed21438d20fcdce2795b56ca434cf21430d89 AS build
+FROM rust:1.88-slim-bookworm@sha256:38bc5a86d998772d4aec2348656ed21438d20fcdce2795b56ca434cf21430d89 AS source-preparation
 
 ARG SOURCE_DATE_EPOCH="0"
 ARG SERVERWARE_SOURCE_ARCHIVE
@@ -85,6 +85,8 @@ RUN --network=none set -eu; \
     cp -R /source/ops/systemd/serverware-policy-custody@recovery-target-provider.service.d /policy-custody-assets/systemd/serverware-policy-custody@recovery-target-provider.service.d; \
     cp -R /source/ops/systemd/serverware-policy-custody@current-signature-authority.service.d /policy-custody-assets/systemd/serverware-policy-custody@current-signature-authority.service.d; \
     cp -R /source/ops/systemd/serverware-policy-custody@bounded-cleanup-helper.service.d /policy-custody-assets/systemd/serverware-policy-custody@bounded-cleanup-helper.service.d
+
+FROM source-preparation AS build
 RUN --network=none rustc --edition=2021 /source/scripts/cargo_build_diagnostics.rs -o /usr/local/bin/serverware-cargo-build
 RUN --network=none /usr/local/bin/serverware-cargo-build --release --frozen \
     && install -d -m 0710 /runtime-layout/serverware-custody \
@@ -104,8 +106,8 @@ ENV SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH} \
     RUSTFLAGS="-C link-arg=-Wl,--build-id=none"
 
 WORKDIR /src
-COPY --from=build /source /source
-COPY --from=build /dependency-cache /dependency-cache
+COPY --from=source-preparation /source /source
+COPY --from=source-preparation /dependency-cache /dependency-cache
 RUN --network=none set -eu; \
     cd /dependency-cache; \
     test "$(grep -Ec '^[0-9a-f]{64}  ' rust-linux-amd64.sha256)" -eq 5; \
@@ -259,8 +261,8 @@ ENV SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_NO_INDEX=1
-COPY --from=build /source /source
-COPY --from=build /source-contract /source-contract
+COPY --from=source-preparation /source /source
+COPY --from=source-preparation /source-contract /source-contract
 COPY --from=rust-production-dependency-cache /dependency-cache /dependency-cache
 # Keep liblzo2's real archive /lib directory away from this merged-/usr base's
 # /lib symlink and ELF interpreter links. Stage both verified packages separately
@@ -347,24 +349,24 @@ COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverwa
 COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-setup-native-hardware /usr/local/libexec/serverware-setup-native-hardware
 COPY --from=native-setup-issuers-runtime /setup-issuers-output/setup-native-hardware-verifier/setup-native-hardware-verifier-runtime.squashfs /opt/serverware/setup-native-hardware-verifier-runtime.squashfs
 COPY --from=native-setup-issuers-runtime /setup-issuers-output/setup-native-hardware-verifier/setup-native-hardware-verifier-runtime.json /usr/share/serverware/setup-native-hardware-verifier-runtime.json
-COPY --from=build --chown=0:0 --chmod=0444 /source/ops/native-setup-issuers/serverware-setup-native-hardware.service /usr/lib/systemd/system/serverware-setup-native-hardware.service
-COPY --from=build --chown=0:0 --chmod=0444 /source/ops/native-setup-issuers/serverware-setup-native-hardware.conf /usr/lib/tmpfiles.d/serverware-setup-native-hardware.conf
+COPY --from=source-preparation --chown=0:0 --chmod=0444 /source/ops/native-setup-issuers/serverware-setup-native-hardware.service /usr/lib/systemd/system/serverware-setup-native-hardware.service
+COPY --from=source-preparation --chown=0:0 --chmod=0444 /source/ops/native-setup-issuers/serverware-setup-native-hardware.conf /usr/lib/tmpfiles.d/serverware-setup-native-hardware.conf
 
 FROM scratch AS native-setup-proxy-artifact
 COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-native-setup-proxy /usr/local/libexec/serverware-native-setup-proxy
 COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-setup-native-proxy /usr/local/libexec/serverware-setup-native-proxy
 COPY --from=native-setup-issuers-runtime /setup-issuers-output/setup-native-proxy-verifier/setup-native-proxy-verifier-runtime.squashfs /opt/serverware/setup-native-proxy-verifier-runtime.squashfs
 COPY --from=native-setup-issuers-runtime /setup-issuers-output/setup-native-proxy-verifier/setup-native-proxy-verifier-runtime.json /usr/share/serverware/setup-native-proxy-verifier-runtime.json
-COPY --from=build --chown=0:0 --chmod=0444 /source/ops/native-setup-issuers/serverware-setup-native-proxy.service /usr/lib/systemd/system/serverware-setup-native-proxy.service
-COPY --from=build --chown=0:0 --chmod=0444 /source/ops/native-setup-issuers/serverware-setup-native-proxy.conf /usr/lib/tmpfiles.d/serverware-setup-native-proxy.conf
+COPY --from=source-preparation --chown=0:0 --chmod=0444 /source/ops/native-setup-issuers/serverware-setup-native-proxy.service /usr/lib/systemd/system/serverware-setup-native-proxy.service
+COPY --from=source-preparation --chown=0:0 --chmod=0444 /source/ops/native-setup-issuers/serverware-setup-native-proxy.conf /usr/lib/tmpfiles.d/serverware-setup-native-proxy.conf
 
 FROM scratch AS native-setup-final-artifact
 COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-native-setup-final /usr/local/libexec/serverware-native-setup-final
 COPY --from=launcher-build --chown=0:0 --chmod=0555 /src/target/release/serverware-setup-native-final /usr/local/libexec/serverware-setup-native-final
 COPY --from=native-setup-issuers-runtime /setup-issuers-output/setup-native-final-authority/setup-native-final-authority-runtime.squashfs /opt/serverware/setup-native-final-authority-runtime.squashfs
 COPY --from=native-setup-issuers-runtime /setup-issuers-output/setup-native-final-authority/setup-native-final-authority-runtime.json /usr/share/serverware/setup-native-final-authority-runtime.json
-COPY --from=build --chown=0:0 --chmod=0444 /source/ops/native-setup-issuers/serverware-setup-native-final.service /usr/lib/systemd/system/serverware-setup-native-final.service
-COPY --from=build --chown=0:0 --chmod=0444 /source/ops/native-setup-issuers/serverware-setup-native-final.conf /usr/lib/tmpfiles.d/serverware-setup-native-final.conf
+COPY --from=source-preparation --chown=0:0 --chmod=0444 /source/ops/native-setup-issuers/serverware-setup-native-final.service /usr/lib/systemd/system/serverware-setup-native-final.service
+COPY --from=source-preparation --chown=0:0 --chmod=0444 /source/ops/native-setup-issuers/serverware-setup-native-final.conf /usr/lib/tmpfiles.d/serverware-setup-native-final.conf
 
 # Explicit static claimant image only. These public inputs must be independently
 # supplied and pinned; no keys, boot delivery, verifier policy or time authority.
@@ -415,7 +417,7 @@ COPY --from=build /src/target/release/serverware-decision-gate /usr/local/bin/se
 COPY --from=build /src/target/release/serverware-proof-client /usr/local/bin/serverware-proof-client
 COPY --from=build /src/target/release/serverware-custody-runtime /usr/local/bin/serverware-custody-runtime
 COPY --from=build /src/target/release/serverware-response-observation-v2-custody /usr/local/bin/serverware-response-observation-v2-custody
-COPY --from=build /source-contract/source-manifest.json /usr/share/serverware/source-manifest.json
+COPY --from=source-preparation /source-contract/source-manifest.json /usr/share/serverware/source-manifest.json
 COPY --from=build /src/target/release/serverware-policy-shadow-custody /usr/local/bin/serverware-policy-shadow-custody
 COPY --from=build /src/target/release/serverware-policy-custody-durable-recovery-store /usr/local/bin/serverware-policy-custody-durable-recovery-store
 COPY --from=build /src/target/release/serverware-policy-custody-recovery-target-provider /usr/local/bin/serverware-policy-custody-recovery-target-provider

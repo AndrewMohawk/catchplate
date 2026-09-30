@@ -187,6 +187,15 @@ those observations are not reservations. Recheck current load, available memory
 and NVMe/Docker capacity before running it. No global Docker configuration,
 privileged entitlement or alternative architecture is introduced.
 
+Within the gate image, a shared `source-preparation` stage verifies the complete
+source archive, file hashes/modes and locked vendor bytes before any consumer
+uses them. The main glibc build, static Alpine launcher build and Python runtime
+packaging consume that prepared source independently. They no longer serialize
+behind the main Rust compilation merely to copy source files. Final image
+assembly still requires every selected binary and runtime output; this changes
+build scheduling, not acceptance checks. Concurrent steps retain separate
+resource limits, not an aggregate eight-CPU/24-GiB reservation.
+
 The result's existing `metadata` object records
 `build_resource_profile.name=engineering-bounded-8cpu-24g-per-step/v1`, the exact
 resource arguments, required capability and non-aggregate scope. Source identity

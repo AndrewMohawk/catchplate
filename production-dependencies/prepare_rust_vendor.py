@@ -129,8 +129,9 @@ def capture(expected_commit: str, candidate: Path, deadline: float) -> dict[str,
             require((candidate / name).parent.resolve() == (candidate / name).parent, "candidate Cargo parent is a symlink")
             require(data == read_file(candidate / name, MAX_INPUT, deadline), "candidate Cargo original differs from captured commit")
         result[name] = data
-    require(("FROM " + RUST_IMAGE + " AS build\n").encode("ascii") in result[paths[2]],
-            "pinned Rust vendor image differs from actual production builder")
+    require(("\nFROM " + RUST_IMAGE + " AS source-preparation\n").encode("ascii") in result[paths[2]]
+            and b"\nFROM source-preparation AS build\n" in result[paths[2]],
+            "pinned Rust vendor image or production preparation lineage differs")
     return result
 
 

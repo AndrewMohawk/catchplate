@@ -123,6 +123,28 @@ fn result_shape(raw: &[u8],purpose:crate::native_shadow_verifier_runtime_v1::Res
     let value = json::parse(raw,MAX_RESULT)?;
     ensure(canonical_ascii_bytes(&value)? == raw, "verifier output is not original canonical ASCII")?;
     let outer = value.as_object().ok_or("verifier output is not an object")?;
+    if purpose==crate::native_shadow_verifier_runtime_v1::ResultPurpose::BridgeAdmission {
+        ensure(outer.len()==3 && value["apiVersion"]=="serverware.nativeShadowBridgeAdmissionVerifierResult/v1",
+            "verifier combined output purpose differs")?;
+        let context=value["contextResultOriginal"].as_str().ok_or("combined context original absent")?;
+        let production=value["productionResultOriginal"].as_str().ok_or("combined production original absent")?;
+        ensure(context.is_ascii() && production.is_ascii(),"combined originals encoding differs")?;
+        let context_value=json::parse(context.as_bytes(),MAX_RESULT)?;
+        ensure(canonical_ascii_bytes(&context_value)?==context.as_bytes(),"combined context original not canonical")?;
+        let original=context_value.as_object().ok_or("combined context envelope absent")?;
+        let payload=context_value["payload"].as_object().ok_or("combined context payload absent")?;
+        let names=["apiVersion","purpose","statementSha256","quoteSha256","nativeContextSha256","admissionAuthorizationSha256",
+            "keyAuthorizationSha256","fullKeySetRootSha256","localKeySetRootSha256","measurementSha256","endorsementEvidenceSha256",
+            "endorsementRootSha256","collateralPolicySha256","revocationSourceSha256","collateralRevocationGeneration",
+            "collateralRevocationRootSha256","trustCheckpointId","trustRevocationGeneration","trustRevocationRootSha256",
+            "verifiedAtUnixNanos","expiresAtUnixNanos","signingKeyId","signingKeySpkiSha256","productionConfigurationBindingSha256"];
+        ensure(original.len()==3 && context_value["apiVersion"]=="serverware.nativeShadowBridgeContextVerifierResult/v1"
+            && context_value["signature"].is_string() && payload.len()==names.len()
+            && names.iter().all(|name|payload.contains_key(*name))
+            && payload["apiVersion"]=="serverware.nativeShadowBridgeContextResult/v1"
+            && payload["purpose"]=="native-shadow-context-and-production-admission","combined context fields differ")?;
+        return result_shape(production.as_bytes(),crate::native_shadow_verifier_runtime_v1::ResultPurpose::Production);
+    }
     if purpose==crate::native_shadow_verifier_runtime_v1::ResultPurpose::KeyAdmission {
         ensure(outer.len()==3 && value["apiVersion"]=="serverware.nativeShadowKeyAdmissionVerifierResult/v1"
             && value["signature"].is_string(),"verifier admission output purpose differs")?;

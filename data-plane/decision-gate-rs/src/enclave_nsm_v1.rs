@@ -351,6 +351,13 @@ impl ShadowNsmV1 {
         self.quote_keys_fixed(statement_sha256,full_key_set,local_key_set,possession_sha256,nonce,deadline,
             b"serverware/native-shadow-key-admission-evidence/v1\0")
     }
+    /// Independently admitted combined purpose. The SAME key-quote latch is
+    /// consumed, including on failure; it cannot follow either older purpose.
+    pub fn quote_bridge_admission(&mut self,statement_sha256:[u8;32],full_key_set:[u8;32],local_key_set:[u8;32],
+        possession_sha256:[u8;32],nonce:[u8;32],deadline:u64)->Result<ShadowRoleKeyQuoteV1,String> {
+        self.quote_keys_fixed(statement_sha256,full_key_set,local_key_set,possession_sha256,nonce,deadline,
+            b"serverware/native-shadow-bridge-admission-evidence/v1\0")
+    }
     fn quote_keys_fixed(&mut self,statement_sha256:[u8;32],full_key_set:[u8;32],local_key_set:[u8;32],
         possession_sha256:[u8;32],nonce:[u8;32],deadline:u64,prefix:&'static[u8])->Result<ShadowRoleKeyQuoteV1,String> {
         if self.attempted || (self.recipient_attempted&&!self.recipient_complete) {

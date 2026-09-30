@@ -1526,6 +1526,8 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/native_shadow_nitro_verifier.py \
 	serverware/native_shadow_key_admission_profile.py \
 	serverware/native_shadow_key_admission_verifier.py \
+	serverware/native_shadow_bridge_admission_profile.py \
+	serverware/native_shadow_bridge_admission_verifier.py \
 	serverware/native_shadow_retrieval_artifacts.py \
 	serverware/native_shadow_retrieval_store.py \
 	serverware/native_shadow_guest_delivery.py \
@@ -4115,6 +4117,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/native_shadow_nitro_verifier.py \
 				serverware/native_shadow_key_admission_profile.py \
 				serverware/native_shadow_key_admission_verifier.py \
+				serverware/native_shadow_bridge_admission_profile.py \
+				serverware/native_shadow_bridge_admission_verifier.py \
 				serverware/native_shadow_retrieval_artifacts.py \
 				serverware/native_shadow_retrieval_store.py \
 				serverware/native_shadow_guest_delivery.py \
@@ -4839,6 +4843,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-shadow-proof-cohort.v3.schema.json \
 				schemas/native-shadow-driver-bootstrap.v1.schema.json \
 				schemas/native-shadow-driver-continuation.v1.schema.json \
+				schemas/native-shadow-bridge-admission.v1.schema.json \
 				schemas/custody-service-generation-admission.v1.schema.json \
 				schemas/native-generation-coordinator.v1.schema.json \
 				schemas/native-shadow-commit-request.v1.schema.json \

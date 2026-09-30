@@ -17,7 +17,9 @@ pub(in crate::policy_shadow::policy_custody::services) struct Resources {
 }
 impl Resources {
     pub(super) fn open(inputs:&ColdInputs,cold:&Cold)->Result<Self,ShadowError>{
-        cold.check()?;require(inputs.api_version=="serverware.nativeShadowDriverContinuationPreparation/v1"
+        cold.check()?;require(matches!((cold.config.api_version.as_str(),inputs.api_version.as_str()),
+            ("serverware.nativeShadowDriverBootstrapConfiguration/v2","serverware.nativeShadowDriverContinuationPreparation/v1")
+            |("serverware.nativeShadowDriverBootstrapConfiguration/v3","serverware.nativeShadowDriverContinuationPreparation/v2"))
             && inputs.key_transport.api_version=="serverware.nativeShadowKeyKmsTransport/v1")?;
         inputs.key_transport.validate().map_err(fail)?;
         // Root owns only mechanisms here. No ciphertext, seed, business
@@ -45,6 +47,12 @@ pub(in crate::policy_shadow) struct Retained {
     phase:PhaseTwo,guest:GuestClosureBinding,operation:Operation,
 }
 impl Retained {
+    pub(in crate::policy_shadow::policy_custody::services) fn bridge_admission_selected(&self)->bool{
+        self.prepared.cold.config.api_version=="serverware.nativeShadowDriverBootstrapConfiguration/v3"
+    }
+    pub(in crate::policy_shadow::policy_custody::services) fn driver_identity(&self)->Result<&ProductionCustodyKernelDriverIdentity,ShadowError>{
+        self.check()?;Ok(&self.observation.driver)
+    }
     pub(in crate::policy_shadow::policy_custody::services) fn constructed(&self)->Result<(),ShadowError>{
         self.check_startup()?;
         let mut timer=self.prepared.startup_timer.lock().map_err(fail)?;

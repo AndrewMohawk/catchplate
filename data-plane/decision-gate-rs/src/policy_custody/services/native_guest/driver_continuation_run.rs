@@ -116,10 +116,14 @@ pub(super) fn run(mut prepared:Prepared,identity:driver_identity::Owner,
     let mut keys=PreparedNativeCustodyKeys::open_encrypted_late(keys_configuration,encrypted_configuration,&assignment,&trust,time.as_ref(),&delivery,resources)?;
     keys.prepare_late_verifier(verifier,&trust,time.as_ref())?;
     let context=process::ContextOwner::bind(&delivery,closure.clone())?;
-    let mut keys=keys.bind_admission(authorization,context,&closure,&trust,time.as_ref())?;
+    let full=retained.bridge_admission_selected();
+    let mut keys=if full {keys.bind_bridge_admission(authorization,context,&closure,native_configuration.clone(),&trust,time.as_ref())?}
+        else{keys.bind_admission(authorization,context,&closure,&trust,time.as_ref())?};
     keys.admit_external(&trust,time.as_ref())?;
-    // This is the actual independently verified context quote, not a fabricated
-    // full-configuration TEE result. The latter remains unactivated below.
+    // Only explicit cold v3 receives an activated configuration from the actual
+    // combined-purpose owner after both independent signatures were verified.
+    let native_configuration=if full {keys.admitted_bridge_configuration(&trust,time.as_ref())?.clone()}
+        else{native_configuration};
     let (proof_client,time_grant)=proof_client::Prepared::open_late(&mut delivery,inspection,time_grant,commitment_bridge)?;
     let bridge_activation=std::sync::Mutex::new(Some(std::mem::take(&mut delivery.activation)));
     let owner=AdmittedGuest{_delivery:delivery,lifetime,keys,trust,time,launch,launch_bytes,

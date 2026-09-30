@@ -34,7 +34,7 @@ pub(in crate::policy_shadow::policy_custody::services::guest::native_guest) stru
 impl Operation {
     pub(super) fn parse(phase:&PhaseTwo)->Result<Self,ShadowError>{
         phase.check()?;let signed:SignedScope=exact(phase.scope())?;
-        require(signed.payload.api_version=="serverware.nativeShadowDriverScope/v2")?;
+        require(matches!(signed.payload.api_version.as_str(),"serverware.nativeShadowDriverScope/v2"|"serverware.nativeShadowDriverScope/v3"))?;
         let value=signed.payload.operation.ok_or(ShadowError::BindingDrift)?;
         require(value.api_version=="serverware.nativeShadowDriverOperation/v1"
             && !value.descriptors.is_empty() && value.descriptors.len()<=MAX_RIGHTS-2

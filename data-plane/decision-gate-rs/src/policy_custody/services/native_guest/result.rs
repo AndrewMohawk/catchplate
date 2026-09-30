@@ -12,6 +12,8 @@ struct Payload {
     collateral_revocation_generation:u64,collateral_revocation_root_sha256:Sha256Digest,
     trust_checkpoint_id:Sha256Digest,trust_revocation_generation:u64,trust_revocation_root_sha256:Sha256Digest,
     verified_at_unix_nanos:i64,expires_at_unix_nanos:i64,signing_key_id:Sha256Digest,signing_key_spki_sha256:Sha256Digest,
+    #[serde(default,skip_serializing_if="Option::is_none")]
+    production_configuration_binding_sha256:Option<Sha256Digest>,
 }
 #[derive(Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
@@ -23,9 +25,18 @@ impl VerifiedResult {
         let p=&self.wire.payload;let checkpoint=trust.current_checkpoint()?;
         let evidence=owner.evidence.as_ref().ok_or(ShadowError::CustodyUnavailable)?;
         let statement=&evidence.statement;
-        require(self.wire.api_version=="serverware.nativeShadowKeyAdmissionVerifierResult/v1"
-            && p.api_version=="serverware.nativeShadowKeyAdmissionResult/v1" && p.purpose=="native-shadow-key-admission"
-            && p.statement_sha256==Sha256Digest::compute(&canonical_json_bytes(statement)?)
+        let domain=if let Some(configuration)=&owner.production {
+            require(self.wire.api_version=="serverware.nativeShadowBridgeContextVerifierResult/v1"
+                && p.api_version=="serverware.nativeShadowBridgeContextResult/v1" && p.purpose=="native-shadow-context-and-production-admission"
+                && p.production_configuration_binding_sha256.as_ref()==Some(configuration.production_configuration_binding_sha256())
+                && p.production_configuration_binding_sha256==statement.production_configuration_binding_sha256)?;
+            "serverware.nativeShadowBridgeContextResult.signature/v1"
+        }else{
+            require(self.wire.api_version=="serverware.nativeShadowKeyAdmissionVerifierResult/v1"
+                && p.api_version=="serverware.nativeShadowKeyAdmissionResult/v1" && p.purpose=="native-shadow-key-admission"
+                && p.production_configuration_binding_sha256.is_none() && statement.production_configuration_binding_sha256.is_none())?;DOMAIN
+        };
+        require(p.statement_sha256==Sha256Digest::compute(&canonical_json_bytes(statement)?)
             && p.quote_sha256==Sha256Digest::compute(&URL_SAFE_NO_PAD.decode(&evidence.attestation_document_base64url).map_err(fail)?)
             && p.native_context_sha256==statement.native_context_sha256
             && p.admission_authorization_sha256==statement.admission_authorization_sha256
@@ -46,9 +57,22 @@ impl VerifiedResult {
         require(p.signing_key_id==b.key_id && p.signing_key_spki_sha256==b.key_spki_sha256)?;
         let key=trust.resolve_ed25519_key(&checkpoint,authority_role_signature_domain(AuthorityRole::CustodyAttestationVerifier),&b.key_id,&b.key_spki_sha256)?;
         require(ed25519_public_key_material_sha256(&key)==b.key_material_sha256)?;
-        key.verify_strict(&signature_preimage(DOMAIN,&canonical_json_bytes(p)?),&Signature::from_bytes(&self.wire.signature.decode()?))
+        key.verify_strict(&signature_preimage(domain,&canonical_json_bytes(p)?),&Signature::from_bytes(&self.wire.signature.decode()?))
             .map_err(|_|ShadowError::SignatureInvalid)?;
         require(trust.current_checkpoint()?==checkpoint)
+    }
+    pub(super) fn require_production(&self,wire:&CustodyTeeAttestationVerifierResultWire)->Result<(),ShadowError>{
+        let p=&self.wire.payload;
+        require(p.production_configuration_binding_sha256.as_ref()==Some(&wire.production_configuration_binding_sha256)
+            && p.quote_sha256==wire.quote_sha256 && p.full_key_set_root_sha256==wire.quote_bound_custody_key_set_root_sha256
+            && p.measurement_sha256==wire.measurement_sha256 && p.endorsement_evidence_sha256==wire.endorsement_evidence_sha256
+            && p.endorsement_root_sha256==wire.endorsement_root_sha256 && p.collateral_policy_sha256==wire.collateral_policy_sha256
+            && p.revocation_source_sha256==wire.revocation_source_sha256 && p.collateral_revocation_generation==wire.collateral_revocation_generation
+            && p.collateral_revocation_root_sha256==wire.collateral_revocation_root_sha256
+            && p.trust_checkpoint_id==wire.trust_checkpoint_id && p.trust_revocation_generation==wire.trust_revocation_generation
+            && p.trust_revocation_root_sha256==wire.trust_revocation_root_sha256
+            && p.verified_at_unix_nanos==wire.verified_at_unix_nanos && p.expires_at_unix_nanos==wire.expires_at_unix_nanos
+            && p.signing_key_id==wire.signing_key_id && p.signing_key_spki_sha256==wire.signing_key_spki_sha256)
     }
 }
 pub(super) fn verify(raw:&[u8],owner:&AdmittedKeys,trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime)->Result<VerifiedResult,ShadowError> {

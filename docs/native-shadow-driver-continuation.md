@@ -1,7 +1,9 @@
 # Native driver operational continuation
 
-This is a source-only intermediate connection, not a tested pilot or full native
-configuration activation. Bootstrap v1 and closure v1 stay strict and unchanged.
+This is the source-only context-admission v2 connection, not a tested pilot or
+full native configuration activation. The explicit [combined admission v3](native-shadow-bridge-admission.md)
+adds real bridge-native activation without changing this older profile.
+Bootstrap v1 and closure v1 stay strict and unchanged.
 
 ## Explicit acyclic choice
 
@@ -82,7 +84,7 @@ resources. The Python producer opens/retains resources; it does not provision
 authorities or fabricate final peer measurements. Real root inspectors continue
 to require the final executable/UID/IMA/security-label/cgroup evidence.
 
-## Immediate remaining full-purpose join
+## Context-only boundary and combined successor
 
 The retained native configuration is **not activated** by the context-only key
 admission result. `AdmittedKeys` verifies a native context quote; full
@@ -90,12 +92,12 @@ admission result. `AdmittedKeys` verifies a native context quote; full
 TEE-verifier result. One NSM owner intentionally permits one key quote, so
 duplicating KMS/key owners or resetting quote state is not a solution.
 
-The immediate next implementation is an explicitly admitted combined single-
-quote profile with a genuine external verifier producer, or an equally strict
-full-configuration bridge adapter that verifies every actual context binding.
-No placeholder `VerifiedResult`, trusted-host alias, configuration-ready bit or
-activation claim is supplied here. The measured four-descriptor bootstrap
-identity is also not a complete operational settlement/reaper census.
+The explicit v3 successor now binds context and full configuration before the
+same one-shot quote, verifies both independently signed result originals, and
+activates the actual bridge-native configuration. No placeholder
+`VerifiedResult` or trusted-host alias is used. The external gate still needs
+its genuine receiving native owner/facade connection. The four-descriptor
+bootstrap identity is not a complete operational settlement/reaper census.
 
 No builds, tests, parser execution, runtime launch, signing, provisioning,
 provider/cloud calls or pilot verification were performed for this source slice.

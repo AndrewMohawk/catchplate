@@ -64,7 +64,8 @@ impl Cold {
         let config:Configuration=exact(&configuration_bytes)?;
         require(matches!((config.api_version.as_str(),config.continuation.is_some()),
             ("serverware.nativeShadowDriverBootstrapConfiguration/v1",false)
-            |("serverware.nativeShadowDriverBootstrapConfiguration/v2",true))
+            |("serverware.nativeShadowDriverBootstrapConfiguration/v2",true)
+            |("serverware.nativeShadowDriverBootstrapConfiguration/v3",true))
             && config.uid>0 && config.gid>0 && config.uid!=u32::MAX && config.gid!=u32::MAX
             && ![64988,64989,64990,65534].contains(&config.uid) && ![64988,64989,64990,65534].contains(&config.gid)
             && config.bootstrap_authority.key_id!=config.phase_two_authority.key_id)?;
@@ -231,9 +232,10 @@ impl PhaseTwo {
     pub(super) fn retain(cold:&Cold,observation:&driver_identity::Observation,scope:&[u8],fd:OwnedFd)->Result<Self,ShadowError> {
         cold.check_observation(observation)?;require(scope.len()<=32768)?;
         let signed:SignedScope=exact(scope)?;let s=&signed.payload;
-        let domain=match (cold.config.continuation.is_some(),s.api_version.as_str(),s.operation.is_some()) {
-            (false,"serverware.nativeShadowDriverScope/v1",false)=>SCOPE_DOMAIN,
-            (true,"serverware.nativeShadowDriverScope/v2",true)=>b"serverware.nativeShadowDriverScope.signature/v2\0".as_slice(),
+        let domain=match (cold.config.api_version.as_str(),s.api_version.as_str(),s.operation.is_some()) {
+            ("serverware.nativeShadowDriverBootstrapConfiguration/v1","serverware.nativeShadowDriverScope/v1",false)=>SCOPE_DOMAIN,
+            ("serverware.nativeShadowDriverBootstrapConfiguration/v2","serverware.nativeShadowDriverScope/v2",true)=>b"serverware.nativeShadowDriverScope.signature/v2\0".as_slice(),
+            ("serverware.nativeShadowDriverBootstrapConfiguration/v3","serverware.nativeShadowDriverScope/v3",true)=>b"serverware.nativeShadowDriverScope.signature/v3\0".as_slice(),
             _=>return Err(ShadowError::BindingDrift),
         };
         verify(&cold.config.phase_two_authority.key()?,domain,s,&signed.signature_base64url)?;

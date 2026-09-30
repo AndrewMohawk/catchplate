@@ -92,7 +92,7 @@ class OperationalInputs:
     def prepare(cls, driver, *, launch_pin, activation_fds, production):
         p.require(type(driver) is bootstrap.DriverBootstrap)
         driver.check()
-        p.require(driver._config["apiVersion"] == "serverware.nativeShadowDriverBootstrapConfiguration/v2"
+        p.require(driver._config["apiVersion"] in ("serverware.nativeShadowDriverBootstrapConfiguration/v2", "serverware.nativeShadowDriverBootstrapConfiguration/v3")
             and not driver._attempted and not hasattr(driver, "_prepared_inputs"))
         owner = cls(_TOKEN, driver)
         driver._prepared_inputs = owner  # no second preparation/reset for this bootstrap

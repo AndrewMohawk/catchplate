@@ -18,7 +18,7 @@ struct ResultFields {
     trust_checkpoint_id:Sha256Digest,trust_revocation_generation:u64,trust_revocation_root_sha256:Sha256Digest,
     signing_key_id:Sha256Digest,signing_key_spki_sha256:Sha256Digest,signature:CanonicalEd25519Signature,
 }
-fn decode(raw:&[u8])->Result<CustodyTeeAttestationVerifierResultWire,ShadowError> {
+pub(super) fn decode(raw:&[u8])->Result<CustodyTeeAttestationVerifierResultWire,ShadowError> {
     if raw.is_empty() || raw.len()>32*1024 {return Err(ShadowError::CustodyUnavailable);}
     let original:Original=serde_json::from_slice(raw).map_err(|_|ShadowError::BindingDrift)?;
     if original.api_version!="serverware.nativeShadowNitroVerifierResult/v1"

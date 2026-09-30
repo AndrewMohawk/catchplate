@@ -74,7 +74,7 @@ struct Operation {
     issued_at_boottime_ns: String, deadline_boottime_ns: String,
 }
 #[derive(Clone,Copy,PartialEq,Eq)]
-pub(crate) enum ResultPurpose { Production, KeyAdmission }
+pub(crate) enum ResultPurpose { Production, KeyAdmission, BridgeAdmission }
 struct Policy { uid: u32, gid: u32, issued: u64, deadline: u64, purpose:Option<ResultPurpose>, profile:Profile }
 fn policy(value: &Value, origin: &Origin) -> Result<Policy, String> {
     let fields = value.as_object().ok_or("verifier policy is not an object")?;
@@ -83,6 +83,9 @@ fn policy(value: &Value, origin: &Origin) -> Result<Policy, String> {
             &["apiVersion","uid","gid","operation","authorization","expectedStatement","authorityKeys",
                 "trustCheckpoint","nitro","collateralRevocation","expectedAttestation","maximumResultAgeNanos"]),
         Some("serverware.nativeShadowNitroVerifierConfiguration/v2")=>(ResultPurpose::KeyAdmission,"expectedScope",
+            &["apiVersion","uid","gid","operation","authorization","expectedScope","authorityKeys",
+                "trustCheckpoint","nitro","collateralRevocation","expectedAttestation","maximumResultAgeNanos","admissionAuthorization"]),
+        Some("serverware.nativeShadowNitroVerifierConfiguration/v3")=>(ResultPurpose::BridgeAdmission,"expectedScope",
             &["apiVersion","uid","gid","operation","authorization","expectedScope","authorityKeys",
                 "trustCheckpoint","nitro","collateralRevocation","expectedAttestation","maximumResultAgeNanos","admissionAuthorization"]),
         _=>return Err("verifier original policy purpose differs".into()),
@@ -170,6 +173,7 @@ impl RuntimeAdmission {
         Ok(match self.result_purpose()? {
             ResultPurpose::Production=>"serverware.nativeShadowRoleKeyEvidence/v1",
             ResultPurpose::KeyAdmission=>"serverware.nativeShadowKeyAdmissionEvidence/v1",
+            ResultPurpose::BridgeAdmission=>"serverware.nativeShadowBridgeAdmissionEvidence/v1",
         })
     }
     pub(crate) fn prepare(self) -> Result<PreparedRuntime, String> {

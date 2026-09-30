@@ -1167,6 +1167,10 @@ impl ConcreteFiveV3ProductionAuthoritiesV4 {
                 "production generation request is invalid",
             )
         })?;
+        if let Some(owner)=&self.native_proof_owner {
+            owner.require_native_generation(request).map_err(|_|ProductionPrimitiveRejectionV4::rejected(
+                ProductionRpcRejectionCodeV4::GenerationConflict,"generation request differs from actual activated native configuration"))?;
+        }
         let endpoint = self.proof_endpoint(
             ProductionProofEndpointKindV4::GenerationInstallEnvelope,
         )?;
@@ -2361,6 +2365,15 @@ fn run_production_rpc_service_loaded_inner(
     loaded.value.validate()?;
     let startup_deadline =
         bootstrap.deadline(loaded.value.startup_timeout_millis)?;
+    if let Some((_,owner))=&inspected_proofs {
+        if let Some(configuration)=owner.active_native_configuration()
+            .map_err(|_|ServiceRunnerError::invalid("full native configuration admission refused"))? {
+            if loaded.value.generation_admission.is_none()
+                || configuration.dispatcher_protocol_set_sha256()!=&loaded.value.expected_production_dispatch_protocol_set_sha256 {
+                return Err(ServiceRunnerError::invalid("activated native bridge requires actual generation coordinator and protocol"));
+            }
+        }
+    }
     let mut required_names = vec![
         PRODUCTION_RPC_LISTENER_FD_NAME,
         PRODUCTION_RPC_JOURNAL_FD_NAME,

@@ -18,6 +18,7 @@ mod driver_bootstrap;
 pub(in crate::policy_shadow) use driver_bootstrap::continuation as driver_continuation;
 mod driver_identity;
 mod driver_bootstrap_parent;
+mod bridge_configuration;
 pub(in crate::policy_shadow::policy_custody::services) mod retrieval_peer;
 pub(in crate::policy_shadow::policy_custody::services) mod retrieval_client;
 pub(in crate::policy_shadow::policy_custody::services) mod proof_client;
@@ -130,11 +131,21 @@ pub(in crate::policy_shadow::policy_custody::services) struct AdmittedGuest {
     time_grant:Option<admission::trusted_time::ClientGrant>,proof_bridge:bool,
     commit_request:Option<admission::commit_request::Service>,commitment_bridge:bool,
     bridge_activation:std::sync::Mutex<Option<BTreeMap<String,std::os::fd::OwnedFd>>>,
-    // Context-key admission does not activate this full configuration. Its
-    // native closure/driver identity nevertheless come from actual owners.
+    // Old context-only admission leaves this unactivated. Explicit driver v3
+    // populates it only from the genuine combined-purpose key owner.
     native_configuration:Option<ProductionCustodyConfiguration>,
 }
 impl AdmittedGuest {
+    pub(in crate::policy_shadow::policy_custody::services) fn active_native_configuration(&self)
+        ->Result<Option<&ProductionCustodyConfiguration>,ShadowError>{
+        self.check()?;
+        let Some(retained)=&self._delivery.owner.native_continuation else{return Ok(None);};
+        if !retained.bridge_admission_selected(){return Ok(None);}
+        let actual=self.keys.admitted_bridge_configuration(&self.trust,self.time.as_ref())?;
+        let retained=self.native_configuration.as_ref().ok_or(ShadowError::BindingDrift)?;
+        require(actual.production_configuration_binding_sha256()==retained.production_configuration_binding_sha256())?;
+        retained.revalidate_active_attestation(&self.trust,self.time.as_ref())?;Ok(Some(retained))
+    }
     fn start()->Result<Self,ShadowError> {
         require(std::env::args_os().count()==1 && std::env::vars_os().next().is_none()
             && unsafe{libc::getuid()}==0 && unsafe{libc::geteuid()}==0)?;

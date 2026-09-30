@@ -151,7 +151,11 @@ class Originals:
             p.require(len(set(identities)) == 3)
             owner.config_raw = owner.config_original.read()
             owner.configuration = p.document(owner.config_raw, p.MAX_CONFIG)
-            if owner.configuration.get("apiVersion") == "serverware.nativeShadowNitroVerifierConfiguration/v2":
+            if owner.configuration.get("apiVersion") == "serverware.nativeShadowNitroVerifierConfiguration/v3":
+                from serverware import native_shadow_bridge_admission_profile as admission
+                p.fields(owner.configuration, admission.CONFIG_FIELDS)
+                scope_name = "expectedScope"
+            elif owner.configuration.get("apiVersion") == "serverware.nativeShadowNitroVerifierConfiguration/v2":
                 from serverware import native_shadow_key_admission_profile as admission
                 p.fields(owner.configuration, admission.CONFIG_FIELDS)
                 scope_name = "expectedScope"

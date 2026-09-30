@@ -84,10 +84,13 @@ class DriverBootstrap:
             config_raw = owner._open(CONFIGURATION, 65536, control["configurationSha256"]).raw
             config = p.document(config_raw, 65536)
             fields = ("apiVersion", "bootstrapAuthority", "phaseTwoAuthority", "deliveryConfiguration", "uid", "gid", "image")
-            if config.get("apiVersion") == "serverware.nativeShadowDriverBootstrapConfiguration/v2":
+            if config.get("apiVersion") in ("serverware.nativeShadowDriverBootstrapConfiguration/v2", "serverware.nativeShadowDriverBootstrapConfiguration/v3"):
                 fields += ("continuation",)
                 continuation = p.fields(config["continuation"], ("apiVersion", "keyTransport"))
-                p.require(continuation["apiVersion"] == "serverware.nativeShadowDriverContinuationPreparation/v1")
+                expected = ("serverware.nativeShadowDriverContinuationPreparation/v2"
+                    if config["apiVersion"] == "serverware.nativeShadowDriverBootstrapConfiguration/v3"
+                    else "serverware.nativeShadowDriverContinuationPreparation/v1")
+                p.require(continuation["apiVersion"] == expected)
             else:
                 p.require(config.get("apiVersion") == "serverware.nativeShadowDriverBootstrapConfiguration/v1")
             owner._config = p.fields(config, fields)
@@ -275,16 +278,18 @@ class DriverBootstrap:
         from serverware.native_shadow_driver_inputs import OperationalInputs
         self.check()
         p.require(type(inputs) is OperationalInputs and inputs._driver is self
-            and self._config["apiVersion"] == "serverware.nativeShadowDriverBootstrapConfiguration/v2"
+            and self._config["apiVersion"] in ("serverware.nativeShadowDriverBootstrapConfiguration/v2", "serverware.nativeShadowDriverBootstrapConfiguration/v3")
             and not self._attempted and type(signed_scope_original) is bytes and type(public_originals) is bytes)
         inputs.check()
         signed = p.fields(p.document(signed_scope_original, 32768), ("payload", "signatureBase64url"))
         scope = p.fields(signed["payload"], ("apiVersion", "configurationSha256", "windowSha256", "observationSha256",
             "kernelDriverIdentitySha256", "invocationId", "startupDeadlineBoottimeNs", "lifetimeDeadlineBoottimeNs",
             "originals", "publicBundleSha256", "signingKeyId", "operation"))
-        self._phase_key.verify(p.decoded(signed["signatureBase64url"], size=64),
-            b"serverware.nativeShadowDriverScope.signature/v2\0" + p.canonical(scope))
-        p.require(scope["apiVersion"] == "serverware.nativeShadowDriverScope/v2"
+        combined = self._config["apiVersion"] == "serverware.nativeShadowDriverBootstrapConfiguration/v3"
+        domain = b"serverware.nativeShadowDriverScope.signature/v3\0" if combined else b"serverware.nativeShadowDriverScope.signature/v2\0"
+        version = "serverware.nativeShadowDriverScope/v3" if combined else "serverware.nativeShadowDriverScope/v2"
+        self._phase_key.verify(p.decoded(signed["signatureBase64url"], size=64), domain + p.canonical(scope))
+        p.require(scope["apiVersion"] == version
             and scope["configurationSha256"] == self._config_sha and scope["windowSha256"] == self._window_sha
             and scope["observationSha256"] == p.sha(self._observation_raw)
             and scope["kernelDriverIdentitySha256"] == self._observation["driver"]["identitySha256"]

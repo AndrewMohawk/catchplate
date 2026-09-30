@@ -8,8 +8,10 @@ launchers and runtime profiles are unchanged. Nothing was built or executed.
 The explicit [v2 operational continuation](native-shadow-driver-continuation.md)
 now connects the same retained measurement to native context/key admission and
 the inspected bridge constructor. It preserves the v1 retention-only behavior.
-Full-purpose configuration activation, complete operational settlement/reaper
-ownership and connected-pilot verification remain required.
+The [v3 combined admission](native-shadow-bridge-admission.md) additionally
+activates the bridge-native configuration. The external gate's native receiving
+owner, complete operational settlement/reaper ownership and connected-pilot
+verification remain required.
 
 ## Actual caller and owner
 
@@ -99,8 +101,8 @@ Its native configuration comes from the real
 `from_native_closure_with_settlement_authority` constructor, not a deserialized
 legacy software closure. The raw v1 `PhaseTwo` owner grants none of this.
 
-That configuration remains unactivated until a genuine full-purpose verifier
-result is connected. Complete operational descriptors, generation/settlement
+The context-only v2 configuration remains unactivated; the explicit v3 successor
+connects a genuine full-purpose verifier result. Complete operational descriptors, generation/settlement
 ownership and a genuine stable reaper remain required; none can be synthesized
 from this four-descriptor measurement. Packaging, signed deployment inputs and
 connected-pilot execution are still unperformed.

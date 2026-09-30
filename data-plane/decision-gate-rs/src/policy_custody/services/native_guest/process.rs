@@ -37,23 +37,40 @@ pub(super) fn initial_confinement()->Result<BTreeSet<i32>,ShadowError> {
     Ok(inherited)
 }
 
-struct Timer(libc::timer_t);
+// The kernel timer ID is an opaque handle, not a Rust memory pointer. Retain
+// its actual creating process so owned admission may be checked by threads
+// without manufacturing a timer from a caller-supplied scalar.
+struct Timer {handle:usize,pid:i32,deadline:u64}
 impl Timer {
     fn arm(deadline:u64)->Result<Self,ShadowError> {
         let mut event:libc::sigevent=unsafe{std::mem::zeroed()};
         event.sigev_notify=libc::SIGEV_SIGNAL;event.sigev_signo=libc::SIGKILL;
         let mut timer=std::ptr::null_mut();
         require(unsafe{libc::timer_create(libc::CLOCK_BOOTTIME,&mut event,&mut timer)}==0)?;
-        let owner=Self(timer);
+        let owner=Self{handle:timer as usize,pid:unsafe{libc::getpid()},deadline};
         let value=libc::itimerspec {it_interval:libc::timespec{tv_sec:0,tv_nsec:0},
             it_value:libc::timespec{tv_sec:(deadline/1_000_000_000) as _,tv_nsec:(deadline%1_000_000_000) as _}};
         require(unsafe{libc::timer_settime(timer,libc::TIMER_ABSTIME,&value,std::ptr::null_mut())}==0)?;
         Ok(owner)
     }
+    fn check(&self)->Result<(),ShadowError> {
+        require(unsafe{libc::getpid()}==self.pid)?;
+        let before=now()?;let mut value:libc::itimerspec=unsafe{std::mem::zeroed()};
+        require(unsafe{libc::timer_gettime(self.handle as libc::timer_t,&mut value)}==0)?;
+        let after=now()?;
+        require(before<=after && after<self.deadline && value.it_interval.tv_sec==0
+            && value.it_interval.tv_nsec==0 && value.it_value.tv_sec>=0
+            && (0..1_000_000_000).contains(&value.it_value.tv_nsec))?;
+        let remaining=(value.it_value.tv_sec as u128)*1_000_000_000+value.it_value.tv_nsec as u128;
+        require(remaining>0 && remaining>=(self.deadline-after) as u128
+            && remaining<=(self.deadline-before) as u128)
+    }
 }
-impl Drop for Timer {fn drop(&mut self){unsafe{libc::timer_delete(self.0);}}}
+impl Drop for Timer {fn drop(&mut self){if unsafe{libc::getpid()}==self.pid {
+    unsafe{libc::timer_delete(self.handle as libc::timer_t);}
+}}}
 pub(super) struct Lifetime {
-    association:GuestClosureAssociation,startup:Option<Timer>,_lifetime:Timer,parent:i32,
+    association:GuestClosureAssociation,startup:std::sync::Mutex<Option<Timer>>,_lifetime:Timer,parent:i32,
 }
 impl Lifetime {
     pub(super) fn arm(delivery:&PreparedGuestServiceDelivery)->Result<Self,ShadowError> {
@@ -66,13 +83,13 @@ impl Lifetime {
         let startup=Some(Timer::arm(association.startup())?);
         let lifetime=Timer::arm(association.lifetime())?;
         association.check_preparation().map_err(fail)?;
-        Ok(Self{association,startup,_lifetime:lifetime,parent})
+        Ok(Self{association,startup:std::sync::Mutex::new(startup),_lifetime:lifetime,parent})
     }
-    pub(super) fn admitted(&mut self)->Result<(),ShadowError> {
+    pub(super) fn admitted(&self)->Result<(),ShadowError> {
         self.association.check_startup().map_err(fail)?;
         // Disarm only the completed startup bound. The original absolute
         // lifetime timer was armed before setup and is never replaced.
-        self.startup.take().ok_or(ShadowError::CustodyUnavailable)?;
+        self.startup.lock().map_err(fail)?.take().ok_or(ShadowError::CustodyUnavailable)?;
         self.check()
     }
     pub(super) fn check(&self)->Result<(),ShadowError> {
@@ -80,6 +97,19 @@ impl Lifetime {
         let mut signal=0;
         require(unsafe{libc::getppid()}==self.parent
             && unsafe{libc::prctl(libc::PR_GET_PDEATHSIG,&mut signal)}==0 && signal==libc::SIGKILL)
+    }
+    pub(super) fn check_threaded_bridge(&self)->Result<(),ShadowError> {
+        self.association.check().map_err(fail)?;
+        require(unsafe{libc::getppid()}==self.parent)?;
+        self._lifetime.check()?;
+        if let Some(timer)=self.startup.lock().map_err(fail)?.as_ref(){timer.check()?;}
+        // PDEATHSIG is thread-local. It remains required on the actual
+        // initial thread; workers retain the same process-wide SIGKILL timer
+        // and genuine C9 parent channel/PIDFD, not an inherited-bit assertion.
+        if unsafe{libc::syscall(libc::SYS_gettid)}==unsafe{libc::getpid()} as libc::c_long {
+            self.check()?;
+        }
+        Ok(())
     }
 }
 

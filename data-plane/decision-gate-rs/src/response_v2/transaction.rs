@@ -685,13 +685,15 @@ pub(super) fn execute_response_observation_v2_transaction(
         };
 
     let mut native_response_guard = None;
+    let mut native_shadow_capture = None;
     let (dispatch_evidence, upstream_response) = if client.guest_listener.is_some() {
-        let (evidence, object, guard) = super::target_dispatch_client::execute_native_capture(
+        let (evidence, object, guard, capture) = super::target_dispatch_client::execute_native_capture(
             state, snapshot, decision, request, upstream_url, provider_headers, injection_plan,
             &session, &mut cursor, &stable_resume_id, &staged_request, &staged_input_original,
             &credential_free_request, shadow_finalization, shadow_dispatch_barrier_crossed,
         )?;
         native_response_guard = Some(guard);
+        native_shadow_capture = capture;
         (evidence, object)
     } else {
     let live_authorization_evidence =
@@ -1696,6 +1698,20 @@ pub(super) fn execute_response_observation_v2_transaction(
         if !releasable {
             return Err(ResponseObservationV2TransactionError::Denied);
         }
+    }
+    if let Some(capture) = native_shadow_capture.take() {
+        // Commitments are taken from the actual verified originals in this transaction,
+        // reached only after all normal release and completion checks above.
+        // A native capture is never converted into a legacy transport signature.
+        let active_validation = json!({
+            "domain":"serverware.policyShadowNativeReleasedResponse/v1",
+            "outcome":"released",
+            "inspectionReceiptSha256":inspection.inspection_receipt_sha256,
+            "finalEnvelopeVerificationSha256":final_envelope_verification.verification_result_sha256,
+            "releaseRetrievalReceiptSha256":consumption.retrieval_receipt_sha256,
+            "releasedResponseSha256":sha256_prefixed(&response_bytes),
+        });
+        capture.finish(snapshot, &active_validation, &response_bytes);
     }
     Ok(SensitiveResponseBytes::new(response_bytes.to_vec()))
     })();

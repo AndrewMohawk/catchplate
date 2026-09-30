@@ -149,6 +149,11 @@ impl FileAdmission {
     pub(in crate::policy_shadow) fn startup(&self)->u64 {self.startup}
     pub(in crate::policy_shadow) fn lifetime(&self)->u64 {self.lifetime}
     pub(in crate::policy_shadow) fn runtime_sha256(&self)->&Sha256Digest {&self.payload.runtime_config.sha256}
+    pub(in crate::policy_shadow::policy_custody::services) fn retrieval_client_runtime(&self)->Result<Vec<u8>,ServiceRunnerError> {
+        self.check_preparation()?;
+        if self.payload.service_role!=Role::ProductionBridge {return Err(fail("retrieval client requires signed production bridge role"));}
+        Ok(self.runtime.read(MAX_CONFIG_BYTES)?.to_vec())
+    }
 }
 fn admit_files(configuration_path:&Path,expected_configuration_sha256:Sha256Digest,
     delivery_path:&Path,expected_delivery_sha256:Sha256Digest)->Result<FileAdmission,ServiceRunnerError> {
@@ -261,6 +266,11 @@ impl PreparedGuestServiceDelivery {
     pub(crate) fn role_uid(&self)->u32 { self.owner.payload.uid }
     pub(crate) fn role_gid(&self)->u32 { self.owner.payload.gid }
     pub(crate) fn startup_deadline_boottime_ns(&self)->u64 { self.owner.startup }
+    pub(in crate::policy_shadow::policy_custody::services) fn retrieval_client_runtime(&self)->Result<Vec<u8>,ServiceRunnerError> {
+        self.closure_association()?.check_preparation()?;
+        if self.owner.payload.service_role!=Role::ProductionBridge {return Err(fail("retrieval client requires signed production bridge role"));}
+        Ok(self.owner.runtime.read(MAX_CONFIG_BYTES)?.to_vec())
+    }
     pub(crate) fn closure_association(&self)->Result<GuestClosureAssociation,ServiceRunnerError> {
         let association=GuestClosureAssociation {owner:Arc::clone(&self.owner)};
         association.check_preparation()?;
@@ -362,11 +372,18 @@ impl Delivery {
 }
 
 #[derive(Clone)]
-pub(super) enum Bootstrap { Host, Guest(Arc<Delivery>) }
+pub(super) enum Bootstrap { Host, Guest(Arc<Delivery>), NativeRetrieval(Arc<native_guest::AdmittedGuest>) }
 impl Bootstrap {
-    pub(super) fn check(&self)->Result<(),ServiceRunnerError> { match self { Self::Host=>Ok(()),Self::Guest(v)=>v.check() } }
+    fn guest(&self)->Option<&Arc<Delivery>> {match self {
+        Self::Host=>None,Self::Guest(v)=>Some(v),Self::NativeRetrieval(v)=>Some(v.delivery()),
+    }}
+    pub(super) fn check(&self)->Result<(),ServiceRunnerError> {match self {
+        Self::Host=>Ok(()),Self::Guest(v)=>v.check(),
+        Self::NativeRetrieval(v)=>v.check().map_err(|_|fail("native retrieval admission changed")),
+    }}
     pub(super) fn deadline(&self,timeout:u64)->Result<u64,ServiceRunnerError> {
-        match self { Self::Host=>startup_deadline(timeout),Self::Guest(v)=>{
+        self.check()?;
+        match self.guest() { None=>startup_deadline(timeout),Some(v)=>{
             v.check_startup()?;
             let allowance=timeout.checked_mul(1_000_000).ok_or_else(||fail("startup allowance overflow"))?;
             if v.startup-ns(&v.payload.issued_at_boottime_ns)?>allowance { return Err(fail("signed guest startup exceeds original runtime budget")); }
@@ -374,20 +391,26 @@ impl Bootstrap {
         }}
     }
     pub(super) fn invocation(&self,runtime:&RuntimeConfigHeaderV3)->Result<Sha256Digest,ServiceRunnerError> {
-        match self { Self::Host=>runtime.observed_service_invocation_id_sha256(),Self::Guest(v)=>{
+        self.check()?;
+        match self.guest() { None=>runtime.observed_service_invocation_id_sha256(),Some(v)=>{
             v.check_startup()?; Ok(Sha256Digest::compute(v.payload.invocation_id.as_bytes()))
         }}
     }
     pub(super) fn ready(&self,role:TrustedHostServiceRoleV3)->Result<(),ServiceRunnerError> {
-        match self { Self::Host=>notify_systemd_ready(role),Self::Guest(v)=>v.ready() }
+        match self { Self::Host=>notify_systemd_ready(role),Self::Guest(v)=>v.ready(),
+            Self::NativeRetrieval(_)=>Err(fail("native retrieval bridge is not a legacy service readiness owner")) }
     }
     pub(super) fn ready_status(&self,status:&str)->Result<(),ServiceRunnerError> {
-        match self { Self::Host=>notify_systemd_ready_status(status),Self::Guest(v)=>v.ready() }
+        match self { Self::Host=>notify_systemd_ready_status(status),Self::Guest(v)=>v.ready(),
+            // The actual complete bridge constructor calls this only after its
+            // real dependencies/recovery/facade sessions exist. No FD3 notice
+            // or native-driver readiness projection is emitted.
+            Self::NativeRetrieval(v)=>v.bridge_constructed().map_err(|_|fail("native bridge startup owner refused")) }
     }
-    pub(super) fn receive_deadline(&self)->Option<u64> { match self { Self::Host=>None,Self::Guest(v)=>Some(v.lifetime) } }
+    pub(super) fn receive_deadline(&self)->Option<u64> {self.guest().map(|v|v.lifetime)}
     pub(super) fn require_deadline(&self,deadline:u64)->Result<(),ServiceRunnerError> {
         self.check()?;
-        if matches!(self,Self::Guest(v) if deadline>v.lifetime) { return Err(fail("service operation exceeds original guest lifetime")); }
+        if self.guest().is_some_and(|v|deadline>v.lifetime) { return Err(fail("service operation exceeds original guest lifetime")); }
         Ok(())
     }
 }

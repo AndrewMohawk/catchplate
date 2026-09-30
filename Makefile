@@ -4245,6 +4245,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/policy_shadow_runtime.rs \
 				data-plane/decision-gate-rs/src/policy_shadow_checkpoint.rs \
 				data-plane/decision-gate-rs/src/policy_core_cumulative.rs \
+				data-plane/decision-gate-rs/src/policy_core_native_response.rs \
 				data-plane/decision-gate-rs/src/policy_shadow_cumulative.rs \
 				data-plane/decision-gate-rs/src/policy_shadow_heartbeat.rs \
 				data-plane/decision-gate-rs/src/policy_shadow_opening.rs \
@@ -4335,6 +4336,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/admission.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/retrieval.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/retrieval_peer.rs \
+				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/retrieval_client.rs \
+				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/retrieval_client_peer.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/retrieval_scope.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/retrieval_store.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/result.rs \
@@ -4687,6 +4690,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-shadow-guest-admission.v1.schema.json \
 				schemas/native-shadow-retrieval-store.v1.schema.json \
 				schemas/native-shadow-retrieval-service.v1.schema.json \
+				schemas/native-shadow-retrieval-client.v1.schema.json \
 				schemas/native-shadow-guest-time-issuer.v1.schema.json \
 				schemas/native-shadow-time-issuer-launch.v1.schema.json \
 				schemas/native-shadow-custody-image-inputs.v1.schema.json \

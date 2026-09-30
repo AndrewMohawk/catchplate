@@ -55,6 +55,7 @@ use std::sync::mpsc::{
 };
 use std::sync::{Arc, Mutex};
 use std::thread;
+use super::guest::native_guest::{self, retrieval_client};
 
 const PRODUCTION_RPC_SESSION_COUNT: usize = 4;
 const PRODUCTION_RPC_WORKER_COUNT: usize = 4;
@@ -298,11 +299,11 @@ pub(super) struct ProductionRpcRuntimeConfigV4 {
     service_sessions: Vec<ProductionServiceSessionConfigV4>,
     histories: Vec<ProductionHistoryConfigV4>,
     parent_signer_endpoints: Vec<ProductionParentSignerEndpointConfigV4>,
-    proof_endpoints: Vec<ProductionProofEndpointConfigV4>,
+    pub(super) proof_endpoints: Vec<ProductionProofEndpointConfigV4>,
 }
 
 impl ProductionRpcRuntimeConfigV4 {
-    fn validate(&self) -> Result<(), ServiceRunnerError> {
+    pub(super) fn validate(&self) -> Result<(), ServiceRunnerError> {
         let expected_roles = BTreeSet::from([
             TrustedHostServiceRoleV3::DurableRecoveryStore,
             TrustedHostServiceRoleV3::CleanupAuthorizationConsumer,
@@ -623,10 +624,45 @@ impl ProductionAuthorityEndpointReplyV4 {
 
 struct ProductionPinnedEndpointV4 {
     identity: ProductionAuthorityEndpointIdentityV4,
-    session: AuthenticatedInheritedSeqpacket,
+    session: EndpointSession,
     authority_key_id: super::super::super::Sha256Digest,
     authority_key_spki_sha256: super::super::super::Sha256Digest,
     authority_key: VerifyingKey,
+}
+enum EndpointSession {
+    Host(AuthenticatedInheritedSeqpacket),
+    NativeRetrieval(retrieval_client::Session),
+}
+struct EndpointPacket {
+    frame:Vec<u8>,
+    original:Option<native_guest::retrieval_peer::Packet>,
+}
+impl EndpointSession {
+    fn revalidate_peer(&self)->Result<(),ServiceRunnerError> {match self {
+        Self::Host(v)=>v.revalidate_peer().map_err(Into::into),
+        Self::NativeRetrieval(v)=>v.check().map_err(|_|ServiceRunnerError::invalid("native retrieval owner changed")),
+    }}
+    fn progress_fd(&self)->std::os::fd::BorrowedFd<'_> {match self {
+        Self::Host(v)=>v.progress_fd(),Self::NativeRetrieval(v)=>v.progress_fd(),
+    }}
+    fn send(&self,raw:&[u8],deadline:u64)->Result<bool,ServiceRunnerError> {match self {
+        Self::Host(v)=>v.try_send(raw,&[],0).map_err(Into::into),
+        Self::NativeRetrieval(v)=>v.send(raw,deadline).map_err(|_|ServiceRunnerError::invalid("native retrieval send inspection refused")),
+    }}
+    fn receive(&self,deadline:u64)->Result<Option<EndpointPacket>,ServiceRunnerError> {match self {
+        Self::Host(v)=>Ok(v.try_receive(0)?.map(|v|EndpointPacket{frame:v.frame,original:None})),
+        Self::NativeRetrieval(v)=>Ok(v.receive(deadline)
+            .map_err(|_|ServiceRunnerError::invalid("native retrieval packet inspection refused"))?
+            .map(|v|EndpointPacket{frame:v.bytes.clone(),original:Some(v)})),
+    }}
+    fn after_reply(&self,packet:&EndpointPacket,deadline:u64)->Result<(),ServiceRunnerError> {match self {
+        Self::Host(v)=>v.revalidate_peer().map_err(Into::into),
+        Self::NativeRetrieval(v)=>{
+            let original=packet.original.as_ref().ok_or_else(||ServiceRunnerError::invalid("native retrieval packet original absent"))?;
+            if original.bytes!=packet.frame {return Err(ServiceRunnerError::invalid("native retrieval exact reply changed"));}
+            v.after_verify(original,deadline).map_err(|_|ServiceRunnerError::invalid("native retrieval final inspection refused"))
+        }
+    }}
 }
 
 /// Concrete extracted composition. The five v3 sessions establish exact
@@ -767,7 +803,7 @@ impl ConcreteFiveV3ProductionAuthoritiesV4 {
             )
         })?;
         loop {
-            if endpoint.session.try_send(&exact, &[], 0).map_err(|_| {
+            if endpoint.session.send(&exact, request.deadline_boottime_nanos).map_err(|_| {
                 ProductionPrimitiveRejectionV4::rejected(
                     ProductionRpcRejectionCodeV4::RecoveryNotReady,
                     "production authority endpoint send failed",
@@ -788,7 +824,7 @@ impl ConcreteFiveV3ProductionAuthoritiesV4 {
             })?;
         }
         let packet = loop {
-            if let Some(packet) = endpoint.session.try_receive(0).map_err(|_| {
+            if let Some(packet) = endpoint.session.receive(request.deadline_boottime_nanos).map_err(|_| {
                 ProductionPrimitiveRejectionV4::rejected(
                     ProductionRpcRejectionCodeV4::RecoveryNotReady,
                     "production authority endpoint receive failed",
@@ -921,7 +957,7 @@ impl ConcreteFiveV3ProductionAuthoritiesV4 {
                 ));
             }
         }
-        endpoint.session.revalidate_peer().map_err(|_| {
+        endpoint.session.after_reply(&packet,request.deadline_boottime_nanos).map_err(|_| {
             ProductionPrimitiveRejectionV4::rejected(
                 ProductionRpcRejectionCodeV4::RecoveryNotReady,
                 "production authority endpoint peer identity changed after reply",
@@ -2089,8 +2125,26 @@ pub(in crate::policy_shadow::policy_custody) fn run_production_rpc_service_from_
 pub(super) fn run_production_rpc_service_loaded(
     loaded: super::LoadedConfig<ProductionRpcRuntimeConfigV4>,
     bootstrap: super::Bootstrap,
-    mut activation: BTreeMap<String, OwnedFd>,
+    activation: BTreeMap<String, OwnedFd>,
 ) -> Result<(), ServiceRunnerError> {
+    run_production_rpc_service_loaded_inner(loaded,bootstrap,activation,None)
+}
+
+pub(super) fn run_production_rpc_service_inspected(
+    loaded:super::LoadedConfig<ProductionRpcRuntimeConfigV4>,
+    activation:BTreeMap<String,OwnedFd>,prepared:retrieval_client::Prepared,
+    owner:Arc<native_guest::AdmittedGuest>,
+)->Result<(),ServiceRunnerError> {
+    owner.check().map_err(|_|ServiceRunnerError::invalid("native bridge admission refused"))?;
+    let bootstrap=super::Bootstrap::NativeRetrieval(Arc::clone(&owner));
+    run_production_rpc_service_loaded_inner(loaded,bootstrap,activation,Some((prepared,owner)))
+}
+
+fn run_production_rpc_service_loaded_inner(
+    loaded:super::LoadedConfig<ProductionRpcRuntimeConfigV4>,bootstrap:super::Bootstrap,
+    mut activation:BTreeMap<String,OwnedFd>,
+    mut inspected:Option<(retrieval_client::Prepared,Arc<native_guest::AdmittedGuest>)>,
+)->Result<(),ServiceRunnerError> {
     bootstrap.check()?;
     loaded.value.validate()?;
     let startup_deadline =
@@ -2121,6 +2175,18 @@ pub(super) fn run_production_rpc_service_loaded(
             .map(|endpoint| endpoint.activation_fd_name.as_str()),
     );
     super::require_exact_activation_names(&activation, &required_names)?;
+
+    // Connect only this selected socket as the actual final-role process,
+    // before dependent handshakes consume the original startup interval.
+    // This retains native originals, not a substitute readiness observation.
+    let mut native_retrieval=if let Some((prepared,owner))=inspected.take() {
+        let configured=loaded.value.proof_endpoints.iter()
+            .find(|v|v.endpoint_kind==ProductionProofEndpointKindV4::Retrieval)
+            .ok_or_else(||ServiceRunnerError::invalid("native retrieval endpoint absent"))?;
+        let socket=super::take_activation_fd(&mut activation,&configured.activation_fd_name)?;
+        Some(prepared.attach(socket,configured,owner)
+            .map_err(|_|ServiceRunnerError::invalid("native retrieval factory refused"))?)
+    } else {None};
 
     let listener = super::take_activation_fd(
         &mut activation,
@@ -2245,11 +2311,15 @@ pub(super) fn run_production_rpc_service_loaded(
     }
     let mut proof_endpoints = BTreeMap::new();
     for configured in &loaded.value.proof_endpoints {
-        let socket = super::take_activation_fd(
-            &mut activation,
-            &configured.activation_fd_name,
-        )?;
-        let endpoint = load_pinned_endpoint(
+        let identity=ProductionAuthorityEndpointIdentityV4::Proof(configured.endpoint_kind);
+        let endpoint = if configured.endpoint_kind==ProductionProofEndpointKindV4::Retrieval && native_retrieval.is_some() {
+            let session=EndpointSession::NativeRetrieval(native_retrieval.take().expect("owned native retrieval endpoint"));
+            load_pinned_endpoint_session(identity,session,
+                &configured.authority_binding_credential,configured.authority_key_id.clone(),
+                configured.authority_key_spki_sha256.clone(),&loaded.credentials)?
+        } else {
+            let socket=super::take_activation_fd(&mut activation,&configured.activation_fd_name)?;
+            load_pinned_endpoint(
             ProductionAuthorityEndpointIdentityV4::Proof(
                 configured.endpoint_kind,
             ),
@@ -2260,7 +2330,8 @@ pub(super) fn run_production_rpc_service_loaded(
             configured.authority_key_id.clone(),
             configured.authority_key_spki_sha256.clone(),
             &loaded.credentials,
-        )?;
+            )?
+        };
         if proof_endpoints
             .insert(configured.endpoint_kind, endpoint)
             .is_some()
@@ -2320,6 +2391,14 @@ fn load_pinned_endpoint(
     credentials: &super::CredentialDirectory,
 ) -> Result<ProductionPinnedEndpointV4, ServiceRunnerError> {
     validate_exact_peer_path(socket.as_raw_fd(), expected_socket_path)?;
+    let session=EndpointSession::Host(AuthenticatedInheritedSeqpacket::from_inherited(socket,expected_peer)?);
+    load_pinned_endpoint_session(identity,session,authority_key_credential,authority_key_id,authority_key_spki_sha256,credentials)
+}
+fn load_pinned_endpoint_session(
+    identity:ProductionAuthorityEndpointIdentityV4,session:EndpointSession,authority_key_credential:&str,
+    authority_key_id:super::super::super::Sha256Digest,authority_key_spki_sha256:super::super::super::Sha256Digest,
+    credentials:&super::CredentialDirectory,
+)->Result<ProductionPinnedEndpointV4,ServiceRunnerError> {
     let authority_key =
         credentials.read_verifying_key(authority_key_credential)?;
     let spki = authority_key.to_public_key_der().map_err(|_| {
@@ -2336,10 +2415,7 @@ fn load_pinned_endpoint(
             "production endpoint authority credential differs from its key pins",
         ));
     }
-    let session = AuthenticatedInheritedSeqpacket::from_inherited(
-        socket,
-        expected_peer,
-    )?;
+    session.revalidate_peer()?;
     Ok(ProductionPinnedEndpointV4 {
         identity,
         session,

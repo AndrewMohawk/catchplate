@@ -57,6 +57,10 @@ use zeroize::{Zeroize, Zeroizing};
 mod cumulative;
 pub(crate) use cumulative::{NativeAccountingSnapshot,NativeCumulativeAttempt};
 
+#[path="policy_core_native_response.rs"]
+mod native_response;
+pub(crate) use native_response::NativeResponseRetention;
+
 const SHADOW_QUEUE_ITEMS: usize = 1_024;
 const SHADOW_QUEUE_BYTES: usize = 128 * 1024 * 1024;
 const SHADOW_MAX_JOB_BYTES: usize = 20 * 1024 * 1024;
@@ -7184,15 +7188,46 @@ impl ShadowRequestHandle {
             .pending_active
             .clone()
             .ok_or("active dispatch barrier evidence is unavailable")?;
+        let terminal_effects = self.post_dispatch_terminal_effects(
+            &pending, decision, returned_response, reason, provider_response_observed, None, None,
+        )?;
+        let terminal_response_sha256 = sha256_prefixed(returned_response);
+        let parsed_response_validation_sha256: Option<String> = None;
+        let observed_gmail_metadata_sha256: Option<String> = None;
+        self.finalize_post_dispatch_terminal(
+            snapshot,
+            terminal_outcome,
+            returned_http_status,
+            returned_response,
+            Some(digest_json_ensure_ascii(&json!({
+                "domain":"serverware.policyShadowExactPostDispatchLocalResponse/v1",
+                "status":returned_http_status,
+                "responseSha256":terminal_response_sha256,
+                "responseBytes":returned_response.len(),
+                "failureClassSha256":sha256_prefixed(reason.label().as_bytes()),
+                "providerResponseObserved":provider_response_observed,
+            }))),
+            parsed_response_validation_sha256,
+            observed_gmail_metadata_sha256,
+            terminal_effects,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn post_dispatch_terminal_effects(
+        &self,
+        pending: &PendingActiveDecision,
+        decision: &Value,
+        returned_response: &[u8],
+        reason: PolicyShadowTerminalReason,
+        provider_response_observed: bool,
+        exact_response_validation_sha256: Option<&str>,
+        native_dispatch_completion_sha256: Option<&str>,
+    ) -> Result<ActiveTerminalEffectSet, String> {
         let effect_results = decision
             .get("policy_effect_results")
             .and_then(Value::as_object);
         let terminal_response_sha256 = sha256_prefixed(returned_response);
-        // Parsed adapter output is not authoritative response-validation or
-        // Gmail fanout evidence. Those results must come from the active
-        // executor or the authenticated raw transport path.
-        let parsed_response_validation_sha256: Option<String> = None;
-        let observed_gmail_metadata_sha256: Option<String> = None;
         let mut evidence = Vec::with_capacity(
             pending.effect_requirements.as_slice().len(),
         );
@@ -7253,13 +7288,14 @@ impl ShadowRequestHandle {
                     } else {
                         ActiveEffectTerminalState::ProviderOutcomeUnknown
                     },
-                    canonical_digest(&json!({
-                        "domain":"serverware.policyShadowDispatchTerminal/v1",
-                        "failureClassSha256":sha256_prefixed(
-                            reason.label().as_bytes()
-                        ),
-                        "providerResponseObserved":provider_response_observed,
-                    }))?,
+                    match native_dispatch_completion_sha256 {
+                        Some(digest) => Sha256Digest::parse(digest.to_owned()).map_err(shadow_error)?,
+                        None => canonical_digest(&json!({
+                            "domain":"serverware.policyShadowDispatchTerminal/v1",
+                            "failureClassSha256":sha256_prefixed(reason.label().as_bytes()),
+                            "providerResponseObserved":provider_response_observed,
+                        }))?,
+                    },
                 ),
                 ActiveEffectRequirement::QuotaTerminal
                 | ActiveEffectRequirement::DurableBudgetTerminal => {
@@ -7320,6 +7356,13 @@ impl ShadowRequestHandle {
                         ),
                     }
                 }
+                ActiveEffectRequirement::ResponseValidation
+                    if exact_response_validation_sha256.is_some() => (
+                        ActiveEffectTerminalState::Completed,
+                        Sha256Digest::parse(exact_response_validation_sha256
+                            .ok_or("exact native response validation is unavailable")?.to_owned())
+                            .map_err(shadow_error)?,
+                    ),
                 ActiveEffectRequirement::ResponseValidation => (
                     if provider_response_observed {
                         ActiveEffectTerminalState::ProviderOutcomeUnknown
@@ -7420,25 +7463,7 @@ impl ShadowRequestHandle {
                 digest,
             ));
         }
-        let terminal_effects =
-            ActiveTerminalEffectSet::from_active_executor(evidence)?;
-        self.finalize_post_dispatch_terminal(
-            snapshot,
-            terminal_outcome,
-            returned_http_status,
-            returned_response,
-            Some(digest_json_ensure_ascii(&json!({
-                "domain":"serverware.policyShadowExactPostDispatchLocalResponse/v1",
-                "status":returned_http_status,
-                "responseSha256":terminal_response_sha256,
-                "responseBytes":returned_response.len(),
-                "failureClassSha256":sha256_prefixed(reason.label().as_bytes()),
-                "providerResponseObserved":provider_response_observed,
-            }))),
-            parsed_response_validation_sha256,
-            observed_gmail_metadata_sha256,
-            terminal_effects,
-        )
+        ActiveTerminalEffectSet::from_active_executor(evidence)
     }
 
     pub(crate) fn record_dispatch_barrier(
@@ -8643,7 +8668,7 @@ impl ShadowResponseAttempt {
             active_validation,
             parsed_upstream_body,
             returned_response,
-            terminal_effects,
+            |_| Ok(terminal_effects),
         );
         if result.is_err() {
             if !self.hook.record_unavailable(
@@ -8655,15 +8680,18 @@ impl ShadowResponseAttempt {
         self.completed = true;
     }
 
-    fn try_finish_exact(
+    fn try_finish_exact<F>(
         &self,
         snapshot: &Arc<Snapshot>,
         capture: VerifiedRawResponseCapture,
         active_validation: &Value,
         parsed_upstream_body: &[u8],
         returned_response: &[u8],
-        terminal_effects: ActiveTerminalEffectSet,
-    ) -> Result<(), String> {
+        terminal_effects: F,
+    ) -> Result<(), String>
+    where
+        F: FnOnce(&str) -> Result<ActiveTerminalEffectSet, String>,
+    {
         if !self.hook.inner.generation_is_current_for(snapshot) {
             return Err("active snapshot changed before exact response finalization".to_string());
         }
@@ -8713,6 +8741,7 @@ impl ShadowResponseAttempt {
             .clone()
             .ok_or("active dispatch barrier evidence is unavailable")?;
         let terminal_response_sha256 = sha256_prefixed(returned_response);
+        let terminal_effects = terminal_effects(&active_response_validation_sha256)?;
         let terminal_effect_commitments = terminal_effects.validate_exact_and_commit(
             &pending.effect_requirements,
             Some(&active_response_validation_sha256),

@@ -55,12 +55,12 @@ pub(in crate::policy_shadow::policy_custody::services) fn configure(fd:BorrowedF
     let flags=unsafe{libc::fcntl(fd.as_raw_fd(),libc::F_GETFL)};
     require(flags>=0 && unsafe{libc::fcntl(fd.as_raw_fd(),libc::F_SETFL,flags|libc::O_NONBLOCK)}==0)
 }
-fn credentials(fd:BorrowedFd<'_>)->Result<libc::ucred,ShadowError> {
+pub(super) fn credentials(fd:BorrowedFd<'_>)->Result<libc::ucred,ShadowError> {
     let mut value:libc::ucred=unsafe{zeroed()};let mut length=size_of::<libc::ucred>() as _;
     require(unsafe{libc::getsockopt(fd.as_raw_fd(),libc::SOL_SOCKET,libc::SO_PEERCRED,
         (&mut value as *mut libc::ucred).cast(),&mut length)}==0 && length as usize==size_of::<libc::ucred>())?;Ok(value)
 }
-fn peer_pidfd(fd:BorrowedFd<'_>)->Result<OwnedFd,ShadowError> {
+pub(super) fn peer_pidfd(fd:BorrowedFd<'_>)->Result<OwnedFd,ShadowError> {
     let mut value=-1i32;let mut length=size_of::<i32>() as _;
     let result=unsafe{libc::getsockopt(fd.as_raw_fd(),libc::SOL_SOCKET,77,(&mut value as *mut i32).cast(),&mut length)};
     require(result==0 && value>=0)?;let owned=unsafe{OwnedFd::from_raw_fd(value)};
@@ -75,7 +75,7 @@ pub(in crate::policy_shadow::policy_custody::services) fn same_process(fd:Borrow
     let lines:Vec<_>=raw.lines().filter_map(|line|line.strip_prefix("Pid:")).collect();
     require(lines.len()==1 && lines[0].trim().parse::<i32>().map_err(fail)?==pid)
 }
-fn same_credentials(a:&libc::ucred,b:&libc::ucred)->bool {a.pid==b.pid && a.uid==b.uid && a.gid==b.gid}
+pub(super) fn same_credentials(a:&libc::ucred,b:&libc::ucred)->bool {a.pid==b.pid && a.uid==b.uid && a.gid==b.gid}
 pub(in crate::policy_shadow::policy_custody::services) struct Packet {pub(in crate::policy_shadow::policy_custody::services) bytes:Vec<u8>,pub(in crate::policy_shadow::policy_custody::services) credentials:libc::ucred,
     pub(in crate::policy_shadow::policy_custody::services) pidfd:OwnedFd,pub(in crate::policy_shadow::policy_custody::services) rights:Vec<OwnedFd>}
 pub(in crate::policy_shadow::policy_custody::services) fn receive(fd:BorrowedFd<'_>,maximum:usize,rights_count:usize)->Result<Option<Packet>,ShadowError> {

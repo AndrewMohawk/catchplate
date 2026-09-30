@@ -14,6 +14,7 @@ mod release;
 mod transparency_contract;
 mod transaction;
 mod target_dispatch_client;
+pub(crate) use target_dispatch_client::CommittedNativeCapture;
 mod staging_client;
 
 pub(super) use attestation::*;

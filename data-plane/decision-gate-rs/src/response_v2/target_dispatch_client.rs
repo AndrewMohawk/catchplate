@@ -6,6 +6,43 @@ use serverware_decision_gate::response_observation_v2::state_authority::{canonic
 use base64::{engine::general_purpose::STANDARD,Engine as _};
 
 fn invalid()->ResponseObservationV2TransactionError {ResponseObservationV2TransactionError::InvalidResponse}
+
+/// Source-owned raw TLS capture retained only after verified persistence and
+/// the actual provider-send effect commit. No wire constructor, Clone or
+/// Deserialize implementation can turn a completion DTO into this owner.
+pub(crate) struct CommittedNativeCapture {
+    raw: Zeroizing<Vec<u8>>,
+    capture: wire::NativeCaptureEnvelope,
+    completion: wire::CompletedCapture,
+    method: String,
+    hook: policy_core::ShadowResponseHook,
+    finished: bool,
+    _retention: policy_core::NativeResponseRetention,
+}
+
+impl CommittedNativeCapture {
+    pub(crate) fn raw(&self) -> &[u8] { &self.raw }
+    pub(crate) fn capture(&self) -> &wire::NativeCaptureEnvelope { &self.capture }
+    pub(crate) fn completion(&self) -> &wire::CompletedCapture { &self.completion }
+    pub(crate) fn method(&self) -> &str { &self.method }
+
+    // Only the transaction module calls this, after exact release consumption,
+    // final-envelope verification, reflection and durable-policy completion.
+    pub(super) fn finish(mut self, snapshot: &Arc<Snapshot>, validation: &Value, response: &[u8]) {
+        self.hook.finish_native_response(snapshot, &self, validation, response);
+        self.finished = true;
+    }
+}
+
+impl Drop for CommittedNativeCapture {
+    fn drop(&mut self) {
+        if !self.finished {
+            self.hook.record_unavailable(
+                policy_core::PolicyShadowTerminalReason::ActiveResponseValidationUnavailable,
+            );
+        }
+    }
+}
 fn same<T:Serialize>(a:&T,b:&T)->Result<bool,ResponseObservationV2TransactionError> {
     Ok(profile::canonical(a).map_err(|_|invalid())?==profile::canonical(b).map_err(|_|invalid())?)
 }
@@ -164,7 +201,7 @@ pub(super) fn execute_native_capture(state:&GateState,snapshot:&Arc<Snapshot>,de
     session:&ResponseObservationV2Session<'_>,cursor:&mut ResponseObservationV2AttemptCursor,
     stable_resume_id:&str,staged:&ImmutableObjectReference,staged_input:&ExactByteObjectDescriptor,
     staged_bytes:&[u8],shadow:Option<&policy_core::ShadowRequestHandle>,barrier_crossed:&mut bool)
-    ->Result<(EvidenceReference,ImmutableObjectReference,ResponseSecretGuard),ResponseObservationV2TransactionError> {
+    ->Result<(EvidenceReference,ImmutableObjectReference,ResponseSecretGuard,Option<CommittedNativeCapture>),ResponseObservationV2TransactionError> {
     use serverware_decision_gate::response_observation_v2::state_authority::contract::{Digest,Identifier};
     if staged.object_type!=ImmutableObjectType::StagedRequest || staged.object_sha256!=staged_input.sha256
         || staged.byte_length!=staged_input.byte_length || cursor.attempt.state!=V2AttemptState::Staged {
@@ -205,11 +242,33 @@ pub(super) fn execute_native_capture(state:&GateState,snapshot:&Arc<Snapshot>,de
         cursor.attempt=AttemptStateReference {attempt_id:completed.post_state.attempt_id.clone(),
             state:V2AttemptState::Dispatched,state_sha256:completed.post_state.authoritative_state_sha256.clone(),
             attempt_revision:completed.post_state.attempt_revision,fencing_token:completed.post_state.fencing_token};
-        Ok((evidence,completed.object,captured.response_guard))
+        let object = completed.object.clone();
+        let retained = match shadow {
+            Some(owner) => {
+                let originals_bytes = profile::canonical(&captured.request.capture).map_err(|_|invalid())?.len()
+                    .checked_add(profile::canonical(&completed).map_err(|_|invalid())?.len())
+                    .ok_or_else(invalid)?;
+                match owner.reserve_native_response_retention(captured.raw.len(), originals_bytes) {
+                    Ok(retention) => Some(CommittedNativeCapture {
+                        raw: captured.raw, capture: captured.request.capture, completion: completed,
+                        method: request.method.clone(), hook: owner.response_hook(), finished: false,
+                        _retention: retention,
+                    }),
+                    Err(_) => {
+                        owner.response_hook().record_unavailable(
+                            policy_core::PolicyShadowTerminalReason::ActiveResponseValidationUnavailable,
+                        );
+                        None
+                    },
+                }
+            },
+            None => None,
+        };
+        Ok((evidence,object,captured.response_guard,retained))
     })();
     if let Some(permit)=shadow_permit.take() {
         let (effect,outcome)=match &result {
-            Ok((evidence,object,_))=>(digest_json_ensure_ascii(&json!({
+            Ok((evidence,object,_,_))=>(digest_json_ensure_ascii(&json!({
                 "domain":"serverware.policyShadowNativeCapture/v1","requestSha256":final_request_sha,
                 "dispatchEvidenceSha256":evidence.evidence_sha256,"upstreamResponseSha256":object.object_sha256,
                 "outcome":"response-observed"})),ActiveEffectCommitState::Committed),

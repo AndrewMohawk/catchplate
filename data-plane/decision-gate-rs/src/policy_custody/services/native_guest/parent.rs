@@ -58,14 +58,23 @@ struct Running {
     // Drop child first: its Drop refuses process continuation without actual
     // same-PIDFD reap. Thus the image/originals cannot retire under a live child.
     child:child::Child,image:image::Image,files:FileAdmission,activation:BTreeMap<String,OwnedFd>,
-    launch:Original,launch_bytes:Vec<u8>,_watchdog:Watchdog,inspector:Option<retrieval_peer::Inspector>,
+    launch:Original,launch_bytes:Vec<u8>,_watchdog:Watchdog,inspector:Option<Inspection>,
+}
+enum Inspection {Server(retrieval_peer::Inspector),Client(retrieval_client::Inspector)}
+impl Inspection {
+    fn progress(&mut self,child:&child::Child,files:&FileAdmission)->Result<(),ShadowError> {
+        match self {
+            Self::Server(v)=>v.progress(child,files.lifetime(),files.payload.uid,files.payload.gid),
+            Self::Client(v)=>v.progress(child,files),
+        }
+    }
 }
 impl Running {
     fn start()->Result<Self,ShadowError> {
         let inherited=inherited()?;
         let launch=Original::native_launch().map_err(fail)?;
         let launch_bytes=launch.read(32768).map_err(fail)?.to_vec();
-        let (selected,retrieval_pin)=selection(&launch_bytes)?;
+        let (selected,service_selection)=selection(&launch_bytes)?;
         let files=admit_files(&selected.delivery_configuration.path,selected.delivery_configuration.sha256,
             &selected.delivery.path,selected.delivery.sha256).map_err(fail)?;
         require(inherited.iter().filter(|fd|**fd>=6).copied().eq(6..6+files.payload.activation.len() as i32)
@@ -75,12 +84,19 @@ impl Running {
         let (activation,_)=take_activation(&files.payload.activation).map_err(fail)?;
         process::isolate_mounts()?;
         let image=image::Image::prepare(&selected.closure,&files)?;
-        let (inspector,inspection)=if let Some(pin)=retrieval_pin {
-            require(activation.len()==2 && activation.contains_key("retrieval-listener")
-                && activation.contains_key("retrieval-objects"))?;
-            let (owner,channel)=retrieval_peer::Inspector::prepare(&pin,&activation)?;
-            (Some(owner),Some(channel))
-        } else {(None,None)};
+        let (inspector,inspection)=match service_selection {
+            SelectedService::Retrieval(pin)=>{
+                require(activation.len()==2 && activation.contains_key("retrieval-listener")
+                    && activation.contains_key("retrieval-objects"))?;
+                let (owner,channel)=retrieval_peer::Inspector::prepare(&pin,&activation)?;
+                (Some(Inspection::Server(owner)),Some(channel))
+            }
+            SelectedService::RetrievalBridge=>{
+                let (owner,channel)=retrieval_client::Inspector::prepare(&files,&activation)?;
+                (Some(Inspection::Client(owner)),Some(channel))
+            }
+            SelectedService::None=>(None,None),
+        };
         let ordered=files.payload.activation.iter().map(|entry| {
             activation.get(&entry.name).map(AsFd::as_fd).ok_or(ShadowError::BindingDrift)
         }).collect::<Result<Vec<_>,_>>()?;
@@ -109,7 +125,7 @@ impl Running {
             self.check_originals()?;
             if now()?>=self.files.lifetime()-REAP_RESERVE_NS || !self.child.check()? {break;}
             if let Some(inspector)=&mut self.inspector {
-                inspector.progress(&self.child,self.files.lifetime(),self.files.payload.uid,self.files.payload.gid)?;
+                inspector.progress(&self.child,&self.files)?;
             }
             let result=unsafe{libc::poll(std::ptr::null_mut(),0,25)};
             require(result==0 || (result<0 && std::io::Error::last_os_error().raw_os_error()==Some(libc::EINTR)))?;

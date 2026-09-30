@@ -14,6 +14,7 @@ mod authority;
 mod time;
 mod parent;
 pub(in crate::policy_shadow::policy_custody::services) mod retrieval_peer;
+pub(in crate::policy_shadow::policy_custody::services) mod retrieval_client;
 pub(crate) mod process;
 fn fail<T>(_:T)->ShadowError {ShadowError::CustodyUnavailable}
 fn require(ok:bool)->Result<(),ShadowError> {if ok {Ok(())} else {Err(ShadowError::BindingDrift)}}
@@ -43,24 +44,34 @@ struct Launch {
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 struct RetrievalLaunch {api_version:String,key_admission:Launch,retrieval:Pin}
 #[derive(Serialize,Deserialize)]
+#[serde(rename_all="camelCase",deny_unknown_fields)]
+struct RetrievalBridgeLaunch {api_version:String,key_admission:Launch}
+enum SelectedService {None,Retrieval(Pin),RetrievalBridge}
+#[derive(Serialize,Deserialize)]
 #[serde(untagged)]
-enum Selection {KeyAdmission(Launch),Retrieval(RetrievalLaunch)}
-fn selection(raw:&[u8])->Result<(Launch,Option<Pin>),ShadowError> {
+enum Selection {KeyAdmission(Launch),Retrieval(RetrievalLaunch),RetrievalBridge(RetrievalBridgeLaunch)}
+fn selection(raw:&[u8])->Result<(Launch,SelectedService),ShadowError> {
     let value:Selection=exact(raw)?;
     let (launch,service)=match value {
-        Selection::KeyAdmission(value)=>(value,None),
+        Selection::KeyAdmission(value)=>(value,SelectedService::None),
         Selection::Retrieval(value)=>{
             require(value.api_version=="serverware.nativeShadowRetrievalGuestLaunch/v1")?;
-            (value.key_admission,Some(value.retrieval))
+            (value.key_admission,SelectedService::Retrieval(value.retrieval))
+        }
+        Selection::RetrievalBridge(value)=>{
+            require(value.api_version=="serverware.nativeShadowRetrievalBridgeLaunch/v1")?;
+            (value.key_admission,SelectedService::RetrievalBridge)
         }
     };
     require(launch.api_version=="serverware.nativeShadowGuestLaunch/v1")?;
     Ok((launch,service))
 }
-struct AdmittedGuest {
+pub(in crate::policy_shadow::policy_custody::services) struct AdmittedGuest {
     _delivery:PreparedGuestServiceDelivery,lifetime:process::Lifetime,keys:admission::AdmittedKeys,
     trust:authority::Trust,time:Arc<authority::Clock>,launch:Original,launch_bytes:Vec<u8>,originals:Vec<Original>,
     retrieval:Option<admission::retrieval::Service>,
+    retrieval_client:Option<retrieval_client::Prepared>,bridge_selected:bool,
+    bridge_activation:std::sync::Mutex<Option<BTreeMap<String,std::os::fd::OwnedFd>>>,
 }
 impl AdmittedGuest {
     fn start()->Result<Self,ShadowError> {
@@ -72,15 +83,16 @@ impl AdmittedGuest {
         if inspection.is_some() {require(unsafe{libc::fcntl(4,libc::F_SETFD,libc::FD_CLOEXEC)}==0)?;}
         let launch=Original::native_launch().map_err(fail)?;
         let launch_bytes=launch.read(32768).map_err(fail)?.to_vec();
-        let (selected,retrieval_pin)=selection(&launch_bytes)?;
-        require(inspection.is_some()==retrieval_pin.is_some())?;
+        let (selected,service_selection)=selection(&launch_bytes)?;
+        require(inspection.is_some()!=matches!(&service_selection,SelectedService::None))?;
         let mut delivery=PreparedGuestServiceDelivery::admit(&selected.delivery_configuration.path,selected.delivery_configuration.sha256,
             &selected.delivery.path,selected.delivery.sha256).map_err(fail)?;
         require(inherited.iter().filter(|fd|**fd>=6).copied().eq(6..6+delivery.activation.len() as i32))?;
-        let mut lifetime=process::Lifetime::arm(&delivery)?;
-        let retrieval=match (retrieval_pin,inspection) {
-            (Some(pin),Some(channel))=>Some(admission::retrieval::Prepared::open(&pin,&mut delivery,channel)?),
-            (None,None)=>None,
+        let lifetime=process::Lifetime::arm(&delivery)?;
+        let (retrieval,retrieval_client)=match (service_selection,inspection) {
+            (SelectedService::Retrieval(pin),Some(channel))=>(Some(admission::retrieval::Prepared::open(&pin,&mut delivery,channel)?),None),
+            (SelectedService::RetrievalBridge,Some(channel))=>(None,Some(retrieval_client::Prepared::open(&mut delivery,channel)?)),
+            (SelectedService::None,None)=>(None,None),
             _=>return Err(ShadowError::BindingDrift),
         };
         let closure_original=selected.closure.open(1024*1024)?;
@@ -106,18 +118,26 @@ impl AdmittedGuest {
         let mut keys=keys.bind_admission(admission_configuration,context,&closure,&trust,time.as_ref())?;
         keys.admit_external(&trust,time.as_ref())?;
         let retrieval=retrieval.map(|value|value.bind(&keys,&delivery,&trust,time.as_ref())).transpose()?;
-        lifetime.admitted()?;
+        let bridge_selected=retrieval_client.is_some();
+        let bridge_activation=std::sync::Mutex::new(if bridge_selected {
+            Some(std::mem::take(&mut delivery.activation))
+        } else {None});
+        if !bridge_selected {lifetime.admitted()?;}
         let owner=Self{_delivery:delivery,lifetime,keys,trust,time,launch,launch_bytes,
-            originals:vec![assignment_original,closure_original,keys_original,encrypted_original,admission_original],retrieval};
+            originals:vec![assignment_original,closure_original,keys_original,encrypted_original,admission_original],
+            retrieval,retrieval_client,bridge_selected,bridge_activation};
         owner.check()?;Ok(owner)
     }
-    fn check(&self)->Result<(),ShadowError> {
-        self.lifetime.check()?;
+    pub(in crate::policy_shadow::policy_custody::services) fn check(&self)->Result<(),ShadowError> {
+        if self.bridge_selected {self.lifetime.check_threaded_bridge()?;} else {self.lifetime.check()?;}
         require(self.launch.read(32768).map_err(fail)?.as_slice()==self.launch_bytes.as_slice())?;
         for original in &self.originals {original.read(4*1024*1024).map_err(fail)?;}
         self.keys.check(&self.trust,self.time.as_ref())
     }
     fn hold(mut self)->Result<(),ShadowError> {
+        if let Some(prepared)=self.retrieval_client.take() {
+            return retrieval_client::run(Arc::new(self),prepared);
+        }
         if let Some(service)=self.retrieval.take() {
             return service.serve(&self.keys,&self.trust,self.time.as_ref(),&||self.check());
         }
@@ -128,6 +148,12 @@ impl AdmittedGuest {
             let result=unsafe{libc::poll(std::ptr::null_mut(),0,100)};
             require(result==0 || (result<0 && std::io::Error::last_os_error().raw_os_error()==Some(libc::EINTR)))?;
         }
+    }
+    pub(in crate::policy_shadow::policy_custody::services) fn delivery(&self)->&Arc<super::Delivery> {
+        &self._delivery.owner
+    }
+    pub(in crate::policy_shadow::policy_custody::services) fn bridge_constructed(&self)->Result<(),ShadowError> {
+        require(self.bridge_selected)?;self.check()?;self.lifetime.admitted()
     }
 }
 pub(crate) fn run()->! {

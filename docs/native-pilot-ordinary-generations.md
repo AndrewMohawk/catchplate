@@ -1,3 +1,5 @@
+> Publication note: deployment-specific addresses, identities and paths in this document are example placeholders, not a public service or release-verification evidence.
+
 # Ordinary generation grants and retained installation window
 
 The `.375` source connects five ordinary generation decisions after the five
@@ -81,9 +83,35 @@ Native receiver signature, Guest13, resource-owner, checkpoint and actual
 service-admission checks remain required. This fixes the caller's time binding,
 not deployment, attestation or installation completion.
 
-## Verification boundary
+## Focused verification
 
-Verification of the frozen `.375` batch is pending. No live service, installer,
-issuer or protected/cloud operation is claimed by this source. Complete job
-coverage, supervisor entrypoint/package, provisioned authorities and connected
-application allow/deny/cleanup acceptance remain required.
+Exact source `22e4ca2fe50030521b72e6d59b2707050c18bbd7` passed **55 focused
+Python 3.11.15 controls** (42 preceding controls and 13 new controls), grammar
+checks for twelve Python files, both Make source inventories and **48 relative
+documentation links**. The run used a cleared environment, a private network
+namespace, CPU 0 and `-I -S -B`; it started at
+`2026-09-30T22:47:20.936970319Z`, finished at
+`2026-09-30T22:47:24.626188444Z` and exited **0**.
+
+One cached, offline Rust 1.88 `cargo check --offline --locked --bin
+serverware-decision-gate -j1` also exited **0**, reporting **54.91 seconds**.
+Its retained run started at `2026-09-30T22:47:22.684846251Z` and finished at
+`2026-09-30T22:48:18.889653491Z`. The limits were no network, one CPU, 8 GiB,
+128 PIDs and a 1,200-second timeout. The missing cached image reference was
+restored to the same pinned digest; its layers were already local. The logs
+retain **312 library warnings and 2,439 binary warnings**. No Rust tests or
+project service binaries were run.
+
+Evidence location:
+`/home/catchplate/codex-offload/serverware/engineering-builds/22e4ca2f-generation-commissioning-Jm6lTz/`.
+All eleven copied files were byte-compared; `SHA256SUMS` verifies the ten listed
+original/result files. Both retained sessions ended with exit **0**.
+The exact-source archive is **84,858,880 bytes**, SHA256
+`d26fcebe92682a8e7a948586844f436ebbbddd4c104dcfe155901fcd90d30a42`.
+
+No DB, app or `authority_store` module was imported. No live owner, installer,
+issuer, service, cloud or paid operation ran. These focused checks leave
+coverage at **42/85**, **43 jobs missing**, source checkpoints **36/46** and
+production acceptance **0/6**. Complete job coverage, supervisor
+entrypoint/package, provisioned authorities and connected application
+allow/deny/cleanup acceptance remain required.

@@ -51,7 +51,8 @@ pub(in crate::policy_shadow) fn activate(public:&[u8],configuration:ProductionCu
     let value:serde_json::Value=exact(public,8*1024*1024)?;
     let field=|name:&str|->Result<&[u8],ShadowError>{Ok(value.get(name).and_then(serde_json::Value::as_str)
         .ok_or(ShadowError::BindingDrift)?.as_bytes())};
-    let keys:NativeCustodyKeyConfiguration=exact(field("keyConfigurationOriginal")?,65536)?;
+    let mut keys:NativeCustodyKeyConfiguration=exact(field("keyConfigurationOriginal")?,65536)?;
+    keys.bind_remote_closure(configuration.remote_native_execution_closure().ok_or(ShadowError::BindingDrift)?)?;
     let authorization:Authorization=exact(field("admissionAuthorizationOriginal")?,65536)?;
     let evidence:RemoteEvidence=exact(field("evidenceOriginal")?,131072)?;
     let combined:Combined=exact(field("combinedResultOriginal")?,32768)?;

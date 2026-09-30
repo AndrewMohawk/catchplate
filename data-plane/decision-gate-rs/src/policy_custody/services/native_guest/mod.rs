@@ -89,6 +89,16 @@ enum SelectedService {None,Retrieval(Pin),LedgerRetrieval(Pin),RetrievalBridge,A
     TerminalSpool(Pin),CompletionLedgerSpool(Pin),CompletionRetrieval(Pin),TerminalBridge(Pin),
     DispatchSpool(Pin),ActiveEffectBarrier(Pin),ActiveEffectCommit(Pin),EffectRetrieval(Pin),ActiveEffectBridge(Pin)}
 impl SelectedService {
+    fn closure_set_role(&self)->Option<&'static str>{
+        use NativeVerifierTransportRole as Role;
+        self.verifier_role().map(|role|match role {
+            Role::Retrieval=>"retrieval",Role::Persistence=>"persistence",Role::TrustedTime=>"trustedTime",
+            Role::GenerationInstall=>"generationInstall",Role::CommitRequest=>"commitRequest",
+            Role::IngressAdmission=>"ingressAdmission",Role::TerminalAppend=>"terminalAppend",
+            Role::DispatchBarrier=>"dispatchBarrier",Role::ActiveEffectBarrier=>"activeEffectBarrier",
+            Role::ActiveEffectCommit=>"activeEffectCommit",Role::Bridge=>"bridge",
+        })
+    }
     fn verifier_role(&self)->Option<NativeVerifierTransportRole>{
         use NativeVerifierTransportRole as Role;
         match self {
@@ -227,6 +237,7 @@ impl AdmittedGuest {
         let launch_bytes=launch.read(32768).map_err(fail)?.to_vec();
         let (selected,service_selection)=selection(&launch_bytes)?;
         let verifier_role=service_selection.verifier_role();
+        let closure_set_role=service_selection.closure_set_role();
         let commitment_selected=matches!(&service_selection,SelectedService::CommitRequest(_)|SelectedService::LedgerSpool(_)|SelectedService::CompletionLedgerSpool(_));
         let sampling_selected=matches!(&service_selection,SelectedService::LedgerSpool(_)|SelectedService::CompletionLedgerSpool(_));
         let commitment_bridge=matches!(&service_selection,SelectedService::CommitmentBridge(_)|SelectedService::SpoolBridge(_)|SelectedService::TerminalBridge(_)|SelectedService::ActiveEffectBridge(_));
@@ -308,12 +319,12 @@ impl AdmittedGuest {
         };
         let closure_original=selected.closure.open(1024*1024)?;
         let closure_configuration:ClosureConfiguration=exact(&closure_original.read(1024*1024).map_err(fail)?)?;
-        let prekey=PrekeyExecutable::open(&closure_configuration,&delivery)?;
+        let prekey=PrekeyExecutable::open(&closure_configuration,&delivery,closure_set_role)?;
         let (trust,time)=authority::Trust::open(selected.trust.open(1024*1024)?,selected.time_bootstrap.open(65536)?,&delivery,&prekey)?;
         let assignment_original=selected.assignment.open(4*1024*1024)?;
         let assignment=trust.verify_assignment(&assignment_original.read(4*1024*1024).map_err(fail)?)?;
         let keys_original=selected.keys.open(65536)?;
-        let keys_configuration:NativeCustodyKeyConfiguration=exact(&keys_original.read(65536).map_err(fail)?)?;
+        let mut keys_configuration:NativeCustodyKeyConfiguration=exact(&keys_original.read(65536).map_err(fail)?)?;
         let encrypted_original=selected.encrypted_keys.open(65536)?;
         let encrypted_configuration:NativeShadowEncryptedKeysConfiguration=exact(&encrypted_original.read(65536).map_err(fail)?)?;
         require(encrypted_configuration.has_commitment()==commitment_selected)?;
@@ -321,8 +332,9 @@ impl AdmittedGuest {
         let admission_original=selected.admission.open(65536)?;
         let admission_configuration:admission::Authorization=exact(&admission_original.read(65536).map_err(fail)?)?;
         process::isolate_mounts()?;
-        let closure=PreparedNativeCustodyClosure::open(closure_configuration,&assignment,&trust,time.as_ref(),&delivery)?;
+        let closure=PreparedNativeCustodyClosure::open(closure_configuration,&assignment,&trust,time.as_ref(),&delivery,closure_set_role)?;
         closure.require_prekey(&prekey)?;drop(prekey);
+        keys_configuration.bind_prepared_closure(&closure)?;
         let mut keys=PreparedNativeCustodyKeys::open_encrypted(keys_configuration,encrypted_configuration,&assignment,&trust,time.as_ref(),&delivery)?;
         if verifier_role.is_some() {
             keys.prepare_selected_external_verifier(selected.verifier_transport,verifier_role,&trust,time.as_ref())?;

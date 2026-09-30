@@ -28,6 +28,8 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 from serverware import native_pilot_delivery_authority as c9
+from serverware import native_pilot_assignment as assignment_profile
+from serverware import native_pilot_closure_set as closure_set
 from serverware import native_pilot_generation_install_authority as generation
 from serverware import native_pilot_native_service_authority as services
 from serverware import native_pilot_publication as publication
@@ -82,6 +84,7 @@ _MANIFEST = ("apiVersion", "profile", "imageSha256", "workerExecutableSha256", "
 _CLOSURE = ("apiVersion", "purpose", "profile", "assignmentId", "assignmentPayloadSha256", "assignmentRevision",
     "manifestSha256", "guest", "trustCheckpointId", "revocationGeneration", "revocationRootSha256",
     "issuedAtUnixNanos", "expiresAtUnixNanos", "signingKeyId", "signingKeySpkiSha256")
+_CLOSURE_SET = _CLOSURE + ("guestRole", "setRootSha256", "seccompSetRootSha256", "leafSha256")
 _ENCRYPTED = ("apiVersion", "purpose", "assignmentId", "assignmentPayloadSha256", "assignmentRevision",
     "keyAuthorizationSha256", "guest", "fullKeySetRootSha256", "localKeySetRootSha256", "challengeBase64url",
     "transport", "trustCheckpointId", "revocationGeneration", "revocationRootSha256", "issuedAtUnixNanos",
@@ -171,21 +174,28 @@ def shape(purpose: str, raw: bytes) -> dict:
         p.integer(value["timestampErrorNanos"], minimum=0, maximum=1_000_000_000)
         p.integer(value["maximumClockRateErrorPpm"], minimum=0, maximum=10000)
     elif name == "assignment":
-        p.fields(value, _ENVELOPE); p.fields(value["payload"], _ASSIGNMENT)
-        p.require(value["apiVersion"] == value["signatureDomain"] == "serverware.policyShadowAssignment/v1"
-            and value["kind"] == "PolicyShadowAssignment" and value["signatureAlgorithm"] == "Ed25519"
-            and value["canonicalProfile"] == "serverware.canonicalJson/ascii-integer-v1"
-            and p.digest(value["payloadSha256"]) == p.sha(p.canonical(value["payload"])))
-        p.decoded(value["signature"], size=64)
+        assignment_profile.shape(value)
     elif name == "closure":
-        p.fields(value, ("apiVersion", "manifest", "authorization"))
+        multi = value.get("apiVersion") == "serverware.nativeCustodyClosure/v3"
+        p.fields(value, ("apiVersion", "manifest", "authorization", "closureSet") if multi
+            else ("apiVersion", "manifest", "authorization"))
         manifest = p.fields(value["manifest"], _MANIFEST)
         version = "2" if role == "bridge" else "1"
-        p.require(value["apiVersion"] == "serverware.nativeCustodyClosure/v" + version
+        p.require(value["apiVersion"] == "serverware.nativeCustodyClosure/v" + ("3" if multi else version)
             and manifest["apiVersion"] == "serverware.nativeCustodyExecutionClosure/v" + version
             and manifest["profile"] == ("measured-bootstrap-late-runtime-static-amd64-v1" if role == "bridge"
                 else "sealed-memfd-squashfs-static-amd64-v1"))
-        _signed(value["authorization"], _CLOSURE)
+        payload = _signed(value["authorization"], _CLOSURE_SET if multi else _CLOSURE)
+        if multi:
+            selected = closure_set.require_binding(p.canonical(value["closureSet"]),
+                expected_set_root=payload["setRootSha256"], expected_seccomp_set_root=payload["seccompSetRootSha256"])
+            leaf = closure_set.leaf_binding(selected, role)
+            p.require(payload["apiVersion"] == "serverware.nativeCustodyClosureAssignment/v3"
+                and payload["purpose"] == "shadow-custody-closure-set-member"
+                and payload["profile"] == "native-multi-guest-closure-set-v1"
+                and payload["guestRole"] == role and payload["leafSha256"] == leaf["leafSha256"]
+                and payload["manifestSha256"] == leaf["manifestSha256"] == manifest["manifestSha256"])
+            c9._same(manifest, selected["members"][ROLES.index(role)]["manifest"])
     elif name == "keys":
         p.fields(value, ("apiVersion", "authorization"))
         p.require(value["apiVersion"] == "serverware.nativeShadowRoleKeys/v2")
@@ -258,7 +268,7 @@ def _public_joins(role, documents, guest, runtime_raw, grant, observed, config, 
     a = assignment["payload"]
     p.require(assignment["signingKeyId"] == trust["assignmentKey"]["keyId"]
         and assignment["signingKeySpkiSha256"] == trust["assignmentKey"]["keySpkiSha256"])
-    assignment_key.verify(p.decoded(assignment["signature"], size=64), p.preimage(assignment["signatureDomain"], a))
+    assignment_key.verify(p.decoded(assignment["signature"], size=64), p.preimage(assignment_profile.domain(assignment), a))
     p.freshness(a["issuedAtUnixNanos"], a["expiresAtUnixNanos"], now)
     independence = p.fields(a["authorityKeyIndependence"], ("bindings", "keyIdSetRootSha256", "spkiSetRootSha256",
         "keyMaterialSetRootSha256", "independenceRootSha256"))
@@ -308,17 +318,28 @@ def _public_joins(role, documents, guest, runtime_raw, grant, observed, config, 
     closure, manifest = documents["closure"], documents["closure"]["manifest"]
     c = closure["authorization"]["payload"]
     version = "2" if role == "bridge" else "1"
-    p.require(c["apiVersion"] == "serverware.nativeCustodyClosureAssignment/v" + version
-        and c["purpose"] == ("shadow-custody-bootstrap-late-runtime" if role == "bridge" else "shadow-custody-execution-closure")
-        and c["profile"] == manifest["profile"]
-        and c["manifestSha256"] == manifest["manifestSha256"] == k["executionClosureManifestSha256"]
-        == a["custodyAuthority"]["executionClosureManifestSha256"])
+    multi = assignment_profile.version(assignment) == 2
+    p.require(closure["apiVersion"] == "serverware.nativeCustodyClosure/v" + ("3" if multi else version))
+    p.require(c["manifestSha256"] == manifest["manifestSha256"] == k["executionClosureManifestSha256"])
+    if multi:
+        leaf = assignment_profile.closure_binding(assignment, p.canonical(closure["closureSet"]), role)
+        p.require(c["apiVersion"] == "serverware.nativeCustodyClosureAssignment/v3"
+            and c["purpose"] == "shadow-custody-closure-set-member"
+            and c["profile"] == "native-multi-guest-closure-set-v1" and c["guestRole"] == role)
+        for name in ("setRootSha256", "seccompSetRootSha256", "leafSha256", "manifestSha256"):
+            p.require(c[name] == leaf[name])
+        p.require(manifest["seccompPolicy"]["structurallyVerifiedPolicySha256"] == leaf["structurallyVerifiedPolicySha256"])
+    else:
+        p.require(c["apiVersion"] == "serverware.nativeCustodyClosureAssignment/v" + version
+            and c["purpose"] == ("shadow-custody-bootstrap-late-runtime" if role == "bridge" else "shadow-custody-execution-closure")
+            and c["profile"] == manifest["profile"]
+            and manifest["manifestSha256"] == a["custodyAuthority"]["executionClosureManifestSha256"]
+            and manifest["seccompPolicy"]["structurallyVerifiedPolicySha256"]
+            == a["custodyAuthority"]["structurallyVerifiedSeccompPolicySha256"])
     p.require(manifest["manifestSha256"] == p.framed(("serverware.nativeCustodyExecutionClosure/v" + version).encode("ascii"),
         (p.canonical([manifest[name] for name in _MANIFEST[:-1]]),)))
     executable = observed["driver"]["driverExecutableSha256"] if role == "bridge" else observed[role]["executable"]["sha256"]
     p.require(manifest["workerExecutableSha256"] == executable)
-    p.require(manifest["seccompPolicy"]["structurallyVerifiedPolicySha256"]
-        == a["custodyAuthority"]["structurallyVerifiedSeccompPolicySha256"])
     if role == "bridge":
         image = config["image"]
         p.require(manifest["imageSha256"] == image["imageSha256"]
@@ -330,7 +351,7 @@ def _public_joins(role, documents, guest, runtime_raw, grant, observed, config, 
         c9._same(documents["encryptedKeys"]["authorization"]["payload"]["transport"], config["continuation"]["keyTransport"])
     else:
         p.require(manifest["runtimeConfigurationSha256"] == guest["runtimeConfigurationSha256"] == p.sha(runtime_raw))
-    verify(closure["authorization"], "serverware.nativeCustodyClosureAssignment.signature/v" + version)
+    verify(closure["authorization"], "serverware.nativeCustodyClosureAssignment.signature/v" + ("3" if multi else version))
     common["executionClosureManifestSha256"] = manifest["manifestSha256"]
     profile = bridge_admission if role == "bridge" else admission
     verify(documents["admission"], profile.ADMISSION_DOMAIN)

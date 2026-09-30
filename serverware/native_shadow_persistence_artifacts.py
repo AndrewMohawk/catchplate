@@ -35,7 +35,7 @@ def fresh_originals(*, genesis_original, genesis_sha256, journal_original, journ
 
 def _service_grant_payload(*, configuration_original, configuration_sha256, scope_original, scope_sha256,
                           peer_original, peer_sha256, guest, journal_original, journal_sha256,
-                          permissions, issued_at, expires_at, now):
+                          permissions, issued_at, expires_at, now, assignment_payload_original=None):
     """One fixed public validation recipe shared by signing and receiving."""
     p.require(type(configuration_original) is bytes and 1 <= len(configuration_original) <= p.MAX_CONFIG
         and type(scope_original) is bytes and 1 <= len(scope_original) <= 16384
@@ -56,11 +56,7 @@ def _service_grant_payload(*, configuration_original, configuration_sha256, scop
     p.require(admitted["guest"] == guest and guest["serviceRole"] == "production-bridge"
         and peer["uid"] != guest["uid"]
         and "custody-store-response" in configuration["authorization"]["payload"]["localRoles"])
-    for target, source in (("assignment_id", "assignmentId"), ("assignment_payload_sha256", "assignmentPayloadSha256"),
-            ("assignment_revision", "assignmentRevision"), ("execution_closure_manifest_sha256", "executionClosureManifestSha256"),
-            ("structurally_verified_seccomp_policy_sha256", "structurallyVerifiedSeccompPolicySha256"),
-            ("asserted_custody_key_set_root_sha256", "fullKeySetRootSha256")):
-        p.require(scope[target] == admitted[source])
+    data.require_admitted_scope(scope, admitted, assignment_payload_original=assignment_payload_original)
     for name, role in (("store_response_authority", "custody-store-response"),
                        ("retrieval_response_authority", "custody-retrieval-response")):
         expected = keys[p.ROLES.index(role)]
@@ -85,7 +81,7 @@ def _service_grant_payload(*, configuration_original, configuration_sha256, scop
 
 def verify_service_grant(*, signed_grant_original, configuration_original, configuration_sha256,
                          scope_original, scope_sha256, peer_original, peer_sha256, guest,
-                         journal_original, journal_sha256, now):
+                         journal_original, journal_sha256, now, assignment_payload_original=None):
     """Admit exact independent Store/Verify bytes, not a local success claim."""
     signed = p.fields(p.document(signed_grant_original, 65536), ("payload", "signature"))
     supplied = signed["payload"]
@@ -95,7 +91,7 @@ def verify_service_grant(*, signed_grant_original, configuration_original, confi
         peer_original=peer_original, peer_sha256=peer_sha256, guest=guest,
         journal_original=journal_original, journal_sha256=journal_sha256,
         permissions=supplied["permissions"], issued_at=supplied["issuedAtUnixNanos"],
-        expires_at=supplied["expiresAtUnixNanos"], now=now)
+        expires_at=supplied["expiresAtUnixNanos"], now=now, assignment_payload_original=assignment_payload_original)
     # Canonical bytes also preserve JSON integer/bool distinctions; ordinary
     # Python mapping equality alone would equate 1 and true in nested originals.
     p.require(p.canonical(supplied) == p.canonical(payload))
@@ -105,7 +101,7 @@ def verify_service_grant(*, signed_grant_original, configuration_original, confi
 
 def sign_service_grant(*, configuration_original, configuration_sha256, scope_original, scope_sha256,
                        peer_original, peer_sha256, guest, journal_original, journal_sha256,
-                       permissions, issued_at, expires_at, now, signing_key):
+                       permissions, issued_at, expires_at, now, signing_key, assignment_payload_original=None):
     """The existing independent supervisor explicitly authorizes Store/Verify.
 
     The grant is not inferred from key possession, from the C9 delivery signer,
@@ -115,7 +111,8 @@ def sign_service_grant(*, configuration_original, configuration_sha256, scope_or
         configuration_sha256=configuration_sha256, scope_original=scope_original, scope_sha256=scope_sha256,
         peer_original=peer_original, peer_sha256=peer_sha256, guest=guest,
         journal_original=journal_original, journal_sha256=journal_sha256,
-        permissions=permissions, issued_at=issued_at, expires_at=expires_at, now=now)
+        permissions=permissions, issued_at=issued_at, expires_at=expires_at, now=now,
+        assignment_payload_original=assignment_payload_original)
     p.require(isinstance(signing_key, Ed25519PrivateKey))
     public = signing_key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
     p.require(p.encoded(public) == supervisor["publicKeyBase64url"])

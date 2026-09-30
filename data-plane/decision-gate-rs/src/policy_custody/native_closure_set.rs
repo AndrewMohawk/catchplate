@@ -38,7 +38,7 @@ struct Member {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct Wire {
+pub(super) struct Wire {
     api_version: String,
     members: [Member; 11],
     set_root_sha256: Sha256Digest,

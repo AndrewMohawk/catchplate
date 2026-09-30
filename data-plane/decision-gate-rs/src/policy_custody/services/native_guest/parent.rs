@@ -117,7 +117,7 @@ impl Running {
         };
         let (activation,_)=take_activation(&files.payload.activation,false,false,false,native_lock).map_err(fail)?;
         process::isolate_mounts()?;
-        let image=image::Image::prepare(&selected.closure,&files)?;
+        let image=image::Image::prepare(&selected.closure,&files,service_selection.closure_set_role())?;
         let (inspector,inspection)=match service_selection {
             service @ (SelectedService::LedgerRetrieval(_)|SelectedService::LedgerSpool(_)|SelectedService::Ingress(_)|SelectedService::SpoolBridge(_)
                 |SelectedService::CompletionRetrieval(_)|SelectedService::CompletionLedgerSpool(_)|SelectedService::TerminalSpool(_)|SelectedService::TerminalBridge(_)

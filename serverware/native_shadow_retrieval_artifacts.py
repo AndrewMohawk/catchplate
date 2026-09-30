@@ -21,6 +21,9 @@ SCOPE_VALUES = ("assignment_id", "assignment_payload_sha256", "assignment_revisi
     "production_configuration_binding_sha256", "asserted_custody_key_set_root_sha256",
     "execution_closure_manifest_sha256", "structurally_verified_seccomp_policy_sha256")
 SCOPE_FIELDS = SCOPE_VALUES + ("store_response_authority", "retrieval_response_authority", "binding_sha256")
+SCOPE_SET_API = "serverware.policyShadowProductionCustodyProofScope/v2"
+SCOPE_SET_VALUES = ("execution_closure_set_root_sha256", "structurally_verified_seccomp_set_root_sha256")
+SCOPE_SET_FIELDS = SCOPE_FIELDS + ("api_version",) + SCOPE_SET_VALUES
 RECEIPT_ROLES = frozenset(("ingress-admission", "unavailable-ingress", "dispatch-barrier", "active-effect-barrier",
     "active-effect-commit", "terminal-append", "ledger-append", "spool-compaction", "publication-reconciliation",
     "activation-publication"))
@@ -32,8 +35,14 @@ OBJECT_FIELDS = ("apiVersion", "proofScopeSha256", "signerRole", "canonicalRecei
 
 
 def scope_original(raw):
-    value = p.fields(p.document(raw, 16384), SCOPE_FIELDS)
-    for name in SCOPE_VALUES + ("binding_sha256",):
+    value = p.document(raw, 16384)
+    p.require(type(value) is dict)
+    successor = "api_version" in value
+    p.fields(value, SCOPE_SET_FIELDS if successor else SCOPE_FIELDS)
+    if successor:
+        p.require(value["api_version"] == SCOPE_SET_API)
+    values = SCOPE_VALUES + (SCOPE_SET_VALUES if successor else ())
+    for name in values + ("binding_sha256",):
         if name == "assignment_revision":
             p.integer(value[name])
         else:
@@ -44,13 +53,62 @@ def scope_original(raw):
         p.require(key["role"] == role)
         for field in ("key_id", "key_spki_sha256", "key_material_sha256"):
             p.digest(key[field])
-    p.require(value["binding_sha256"] == p.framed(b"serverware.policyShadowProductionCustodyProofScope/v1",
-        (p.canonical([value[name] for name in SCOPE_VALUES]),)))
+    domain = SCOPE_SET_API.encode("ascii") if successor else b"serverware.policyShadowProductionCustodyProofScope/v1"
+    p.require(value["binding_sha256"] == p.framed(domain, (p.canonical([value[name] for name in values]),)))
     return value
+
+
+def require_assignment_scope(scope, assignment_payload_original):
+    """Compare a v2 scope to exact supplied assignment bytes, not approve them.
+
+    Callers must authenticate the assignment's signature or bind these bytes to
+    their actual signed key authorization. The old bridge anchors remain leaves.
+    """
+    from serverware import authority_policy_canary_native_opening as opening
+    p.require(scope.get("api_version") == SCOPE_SET_API
+        and type(assignment_payload_original) is bytes and 0 < len(assignment_payload_original) <= 4 * 1024 * 1024)
+    assignment = opening.assignment_payload(p.document(assignment_payload_original, 4 * 1024 * 1024), version=2)
+    p.require(p.sha(assignment_payload_original) == scope["assignment_payload_sha256"])
+    authority = assignment["custodyAuthority"]
+    expected = {
+        "assignment_id": assignment["assignmentId"], "assignment_revision": assignment["assignmentRevision"],
+        "authority_id": authority["authorityId"], "storage_realm_sha256": authority["storageRealmSha256"],
+        "retrieval_namespace_sha256": authority["retrievalNamespaceSha256"],
+        "authority_key_independence_sha256": assignment["authorityKeyIndependence"]["independenceRootSha256"],
+        "execution_closure_manifest_sha256": authority["executionClosureManifestSha256"],
+        "structurally_verified_seccomp_policy_sha256": authority["structurallyVerifiedSeccompPolicySha256"],
+        "execution_closure_set_root_sha256": assignment["nativeClosureSet"]["setRootSha256"],
+        "structurally_verified_seccomp_set_root_sha256": assignment["nativeClosureSet"]["seccompSetRootSha256"],
+    }
+    _, expected["asserted_custody_key_set_root_sha256"] = opening._keys(assignment)
+    p.require(p.canonical({name: scope[name] for name in expected}) == p.canonical(expected))
+    return assignment
+
+
+def require_admitted_scope(scope, admitted, *, assignment_payload_original=None):
+    """Join roots through actual signed key-authorization assignment bytes.
+
+    v2 does not equate an endpoint's individual key-admission leaf with the
+    bridge anchors. Full role membership remains a native closure-owner check.
+    """
+    for target, source in (("assignment_id", "assignmentId"), ("assignment_payload_sha256", "assignmentPayloadSha256"),
+            ("assignment_revision", "assignmentRevision"), ("asserted_custody_key_set_root_sha256", "fullKeySetRootSha256")):
+        p.require(scope[target] == admitted[source])
+    if scope.get("api_version") == SCOPE_SET_API:
+        require_assignment_scope(scope, assignment_payload_original)
+    else:
+        for target, source in (("execution_closure_manifest_sha256", "executionClosureManifestSha256"),
+                ("structurally_verified_seccomp_policy_sha256", "structurallyVerifiedSeccompPolicySha256")):
+            p.require(scope[target] == admitted[source])
 
 
 def _authority(scope, role, receipt):
     p.require(role in RECEIPT_ROLES and type(receipt) is bytes and 1 <= len(receipt) <= MAX_OBJECT)
+    if scope.get("api_version") == SCOPE_SET_API:
+        return p.canonical(["serverware.policyShadowAssignmentBoundCustodyReceipt/v2", scope["binding_sha256"],
+            scope["execution_closure_manifest_sha256"], scope["structurally_verified_seccomp_policy_sha256"],
+            scope["execution_closure_set_root_sha256"], scope["structurally_verified_seccomp_set_root_sha256"],
+            role, p.sha(receipt)])
     return p.canonical(["serverware.policyShadowAssignmentBoundCustodyReceipt/v1", scope["binding_sha256"],
         scope["execution_closure_manifest_sha256"], scope["structurally_verified_seccomp_policy_sha256"],
         role, p.sha(receipt)])
@@ -129,7 +187,8 @@ def _peer(raw):
 
 
 def sign_service_grant(*, configuration_original, configuration_sha256, scope_raw, scope_sha256,
-                       peer_original, peer_sha256, issued_at, expires_at, now, signing_key):
+                       peer_original, peer_sha256, issued_at, expires_at, now, signing_key,
+                       assignment_payload_original=None):
     """Explicit separate operational grant, not a key-admission conversion.
 
     Public pins/time must come from the independent operator. Native service
@@ -147,11 +206,7 @@ def sign_service_grant(*, configuration_original, configuration_sha256, scope_ra
     guest = admitted["guest"]
     p.require(guest["serviceRole"] == "production-bridge" and guest["uid"] != peer["uid"]
         and "custody-retrieval-response" in configuration["authorization"]["payload"]["localRoles"])
-    for target, source in (("assignment_id", "assignmentId"), ("assignment_payload_sha256", "assignmentPayloadSha256"),
-            ("assignment_revision", "assignmentRevision"), ("execution_closure_manifest_sha256", "executionClosureManifestSha256"),
-            ("structurally_verified_seccomp_policy_sha256", "structurallyVerifiedSeccompPolicySha256"),
-            ("asserted_custody_key_set_root_sha256", "fullKeySetRootSha256")):
-        p.require(scope[target] == admitted[source])
+    require_admitted_scope(scope, admitted, assignment_payload_original=assignment_payload_original)
     for name, role in (("store_response_authority", "custody-store-response"),
                        ("retrieval_response_authority", "custody-retrieval-response")):
         expected = keys[p.ROLES.index(role)]

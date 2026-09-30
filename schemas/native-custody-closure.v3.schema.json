@@ -1,0 +1,140 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-custody-closure.v3.schema.json",
+  "description": "Complete live original remains <=1MiB including the entire set. Dedicated signature domain serverware.nativeCustodyClosureAssignment.signature/v3. GuestRole is checked against the source-selected native endpoint, never selected from this JSON. Both roots must match authenticated Assignment/v2, legacy anchors must equal the bridge leaf, and manifest must be the selected member. Static-set12MiB limit does not increase any live channel bound.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion",
+    "manifest",
+    "authorization",
+    "closureSet"
+  ],
+  "properties": {
+    "apiVersion": {
+      "const": "serverware.nativeCustodyClosure/v3"
+    },
+    "manifest": {
+      "oneOf": [
+        {
+          "$ref": "native-custody-closure.v1.schema.json#/$defs/manifest"
+        },
+        {
+          "$ref": "native-custody-closure.v2.schema.json#/$defs/manifest"
+        }
+      ]
+    },
+    "authorization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "payload",
+        "signature"
+      ],
+      "properties": {
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "apiVersion",
+            "purpose",
+            "profile",
+            "assignmentId",
+            "assignmentPayloadSha256",
+            "assignmentRevision",
+            "manifestSha256",
+            "guest",
+            "trustCheckpointId",
+            "revocationGeneration",
+            "revocationRootSha256",
+            "issuedAtUnixNanos",
+            "expiresAtUnixNanos",
+            "signingKeyId",
+            "signingKeySpkiSha256",
+            "guestRole",
+            "setRootSha256",
+            "seccompSetRootSha256",
+            "leafSha256"
+          ],
+          "properties": {
+            "apiVersion": {
+              "const": "serverware.nativeCustodyClosureAssignment/v3"
+            },
+            "purpose": {
+              "const": "shadow-custody-closure-set-member"
+            },
+            "profile": {
+              "const": "native-multi-guest-closure-set-v1"
+            },
+            "assignmentId": {
+              "$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"
+            },
+            "assignmentPayloadSha256": {
+              "$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"
+            },
+            "assignmentRevision": {
+              "$ref": "policy-shadow-assignment.v1.schema.json#/$defs/positiveI64"
+            },
+            "manifestSha256": {
+              "$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"
+            },
+            "guest": {
+              "$ref": "native-custody-closure.v2.schema.json#/$defs/guest"
+            },
+            "trustCheckpointId": {
+              "$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"
+            },
+            "revocationGeneration": {
+              "$ref": "policy-shadow-assignment.v1.schema.json#/$defs/unsignedI64"
+            },
+            "revocationRootSha256": {
+              "$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"
+            },
+            "issuedAtUnixNanos": {
+              "$ref": "policy-shadow-assignment.v1.schema.json#/$defs/positiveI64"
+            },
+            "expiresAtUnixNanos": {
+              "$ref": "policy-shadow-assignment.v1.schema.json#/$defs/positiveI64"
+            },
+            "signingKeyId": {
+              "$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"
+            },
+            "signingKeySpkiSha256": {
+              "$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"
+            },
+            "guestRole": {
+              "enum": [
+                "retrieval",
+                "persistence",
+                "trustedTime",
+                "generationInstall",
+                "commitRequest",
+                "ingressAdmission",
+                "terminalAppend",
+                "dispatchBarrier",
+                "activeEffectBarrier",
+                "activeEffectCommit",
+                "bridge"
+              ]
+            },
+            "setRootSha256": {
+              "$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"
+            },
+            "seccompSetRootSha256": {
+              "$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"
+            },
+            "leafSha256": {
+              "$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"
+            }
+          }
+        },
+        "signature": {
+          "$ref": "policy-shadow-assignment.v1.schema.json#/$defs/ed25519Signature"
+        }
+      }
+    },
+    "closureSet": {
+      "$ref": "native-custody-execution-closure-set.v1.schema.json"
+    }
+  }
+}

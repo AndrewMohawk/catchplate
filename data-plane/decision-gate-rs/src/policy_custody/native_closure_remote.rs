@@ -4,7 +4,7 @@ use super::*;
 use policy_custody::services::ConstructedDriver;
 
 struct Core {driver:Arc<ConstructedDriver>,configuration:Configuration,guest:GuestClosureBinding,
-    assignment:VerifiedAssignment}
+    assignment:VerifiedAssignment,membership:Option<Membership>}
 #[derive(Clone)]
 pub(in crate::policy_shadow) struct RemoteNativeCustodyClosure(Arc<Core>);
 impl std::fmt::Debug for RemoteNativeCustodyClosure {
@@ -17,22 +17,27 @@ fn exact<T:serde::de::DeserializeOwned+Serialize>(raw:&[u8])->Result<T,ShadowErr
     let value:T=serde_json::from_slice(raw).map_err(unavailable)?;require(canonical_json_bytes(&value)?==raw)?;Ok(value)
 }
 impl RemoteNativeCustodyClosure {
+    pub(in crate::policy_shadow) fn key_membership(&self)->Result<Option<KeyMembership>,ShadowError>{
+        self.check()?;
+        Ok(self.0.membership.as_ref().map(|member|KeyMembership::from_admitted(
+            &self.0.configuration,member,self.0.guest.clone())))
+    }
     pub(in crate::policy_shadow) fn admit(driver:Arc<ConstructedDriver>,assignment:&VerifiedAssignment,
         trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime)->Result<Self,ShadowError>{
         driver.check(trust,time)?;
         // The wire was admitted only through the live receiver's sealed FD.
         let public:serde_json::Value=exact(driver.public_original())?;
         let original=public.get("closureOriginal").and_then(serde_json::Value::as_str).ok_or(ShadowError::BindingDrift)?;
+        require(!original.is_empty() && original.len()<=1024*1024)?;
         let configuration:Configuration=exact(original.as_bytes())?;
         let keys:serde_json::Value=exact(public.get("keyConfigurationOriginal").and_then(serde_json::Value::as_str)
             .ok_or(ShadowError::BindingDrift)?.as_bytes())?;
         let guest:GuestClosureBinding=serde_json::from_value(keys.get("authorization").and_then(|v|v.get("payload"))
             .and_then(|v|v.get("guest")).ok_or(ShadowError::BindingDrift)?.clone()).map_err(unavailable)?;
-        require(configuration.api_version=="serverware.nativeCustodyClosure/v2"
-            && configuration.manifest.api_version=="serverware.nativeCustodyExecutionClosure/v2"
-            && configuration.manifest.profile==BOOTSTRAP_PROFILE)?;
-        configuration.manifest.validate()?;
-        let value=Self(Arc::new(Core{driver,configuration,guest,assignment:assignment.clone()}));
+        // This receiver is the retained constructed bridge, never an endpoint
+        // selected by the closure document's own role string.
+        let membership=configuration.require_profile(Some("bridge"),true)?;
+        let value=Self(Arc::new(Core{driver,configuration,guest,assignment:assignment.clone(),membership}));
         value.verify_current(&trust.current_checkpoint()?,trust)?;value.freshness(time.now_unix_nanos()?)?;Ok(value)
     }
     pub(in crate::policy_shadow) fn check(&self)->Result<(),ShadowError>{
@@ -44,7 +49,7 @@ impl RemoteNativeCustodyClosure {
         require(p.trust_checkpoint_id==checkpoint.checkpoint_id && p.revocation_generation==checkpoint.revocation_generation
             && p.revocation_root_sha256==checkpoint.revocation_root_sha256)?;
         verify_assignment(&self.0.configuration.authorization,&self.0.configuration.manifest,&self.0.guest,
-            &self.0.assignment,checkpoint,trust)
+            &self.0.assignment,checkpoint,trust,self.0.membership.as_ref())
     }
     pub(in crate::policy_shadow) fn freshness(&self,now:i64)->Result<(),ShadowError>{
         self.check()?;let p=&self.0.configuration.authorization.payload;
@@ -64,6 +69,12 @@ impl RemoteNativeCustodyClosure {
     pub(in crate::policy_shadow) fn manifest_sha256(&self)->&Sha256Digest{&self.0.configuration.manifest.manifest_sha256}
     pub(in crate::policy_shadow) fn seccomp_policy_sha256(&self)->&Sha256Digest{self.0.configuration.manifest.seccomp_policy.policy_sha256()}
     pub(in crate::policy_shadow) fn worker_executable_sha256(&self)->&Sha256Digest{&self.0.configuration.manifest.worker_executable_sha256}
+    pub(in crate::policy_shadow) fn native_closure_set(&self)->Option<&NativeClosureSetCommitment>{
+        self.0.membership.as_ref().map(|member|&member.commitment)
+    }
+    pub(in crate::policy_shadow) fn native_closure_set_role(&self)->Option<&str>{
+        self.0.membership.as_ref().map(|member|member.role)
+    }
     pub(in crate::policy_shadow) fn guest(&self)->&GuestClosureBinding{&self.0.guest}
     pub(in crate::policy_shadow) fn driver(&self)->&Arc<ConstructedDriver>{&self.0.driver}
     pub(in crate::policy_shadow) fn request_facts_selected(&self)->Result<bool,ShadowError>{

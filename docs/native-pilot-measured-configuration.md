@@ -1,22 +1,24 @@
-# Measured legacy production configuration
+# Measured production configuration
 
 `native_pilot_measured_configuration.MeasuredConfigurationRecipe` derives the
-current native production configuration hash from independently approved static
+version-selected native production configuration hash from independently approved static
 originals and a real process-owned bootstrap observation. It is a callable
 prerequisite, not a connected full commissioning supervisor or authority issuer.
 
-The protected recipe has exactly ten fields:
+The legacy protected recipe has exactly ten fields. Explicit recipe/v2 has
+those same fields plus the required `closureSetOriginal`:
 
 | Field | Required input |
 | --- | --- |
-| `apiVersion` | `serverware.nativePilotMeasuredConfigurationRecipe/v1` |
+| `apiVersion` | `serverware.nativePilotMeasuredConfigurationRecipe/v1` or explicit `/v2` |
 | `source` | Existing exact five-field runtime source identity |
 | `conductorInventorySha256`, `authorityInventorySha256` | Independently approved installed-runtime inventory hashes |
 | `bootstrapOriginals` | Exact literal `control`, `configuration`, `window`, `deliveryConfiguration` originals |
-| `assignmentOriginal` | Existing complete signed custody-bearing assignment |
+| `assignmentOriginal` | Complete signed custody-bearing assignment; its explicit version must match the recipe |
 | `trustOriginal`, `trustSha256` | Independently approved and pinned public trust original, selecting the assignment and role verification keys |
 | `closureManifestOriginal` | Existing single bridge `nativeCustodyExecutionClosure/v2`, measured-bootstrap-late-runtime profile |
 | `production` | Existing eight static backend/protocol/limit fields, without an expected configuration hash |
+| `closureSetOriginal` | Only in recipe/v2: complete canonical eleven-member closure set, matching both roots signed by assignment/v2 |
 
 The eight production fields are `signerBackendSha256`,
 `persistenceBackendSha256`, `retrievalBackendSha256`,
@@ -41,9 +43,15 @@ the original observation, window, assignment, trust, key set and bridge manifest
 Malformed input or failure cannot be retried on a replacement owner or a renewed
 deadline.
 
-The derived transcript preserves all 24 existing `ConfigurationBinding` fields
-and the native `serverware.policyShadowProductionCustodyConfiguration/v1` framed
-hash recipe. The supervisor instance is SHA-256 of the original invocation ID's
+Legacy derivation preserves all 24 existing `ConfigurationBinding` fields and
+the `serverware.policyShadowProductionCustodyConfiguration/v1` framed hash.
+Recipe/v2 adds `nativeClosureSet`, exactly `setRootSha256` and
+`seccompSetRootSha256`, as the 25th field and selects the `/v2` hash domain.
+The old manifest and seccomp fields remain the actual bridge leaf, never set
+roots. Full set validation checks all eleven members, both signed roots and
+the exact bridge manifest before the real observation is used.
+
+The supervisor instance is SHA-256 of the original invocation ID's
 ASCII bytes; the boot hash uses the decoded original boot ID. The driver identity
 is the actual original bootstrap observation's measured identity—not a predicted
 PID or a later fabricated descriptor census. The later constructed-driver census
@@ -52,17 +60,34 @@ is not needed for this hash and remains required by its separate native owner.
 The six-field result is unsigned data: `apiVersion`, `recipeSha256`,
 `configurationBindingOriginal`, `configurationBindingSha256`,
 `proofScopeOriginal`, and the existing nine-field `production` object with its
-derived `expectedConfigurationBindingSha256`. The proof scope preserves the
-existing eleven-value framed digest and independent Store/Retrieval key bindings.
+derived `expectedConfigurationBindingSha256`. The result's explicit version
+matches its recipe. Legacy proof scope preserves the exact fourteen fields,
+eleven-value framed digest and independent Store/Retrieval key bindings.
+Proof scope/v2 adds exactly `api_version` equal to
+`serverware.policyShadowProductionCustodyProofScope/v2`,
+`execution_closure_set_root_sha256`, and
+`structurally_verified_seccomp_set_root_sha256`. Its `/v2` framed digest appends
+the two roots to the old eleven-value tuple. The corresponding authority receipt
+array is `[domain/v2, scopeBinding, bridgeManifest, bridgePolicy, setRoot,
+seccompSetRoot, signerRole, receiptSha256]`; legacy bytes remain unchanged.
 No receipt, nonempty retrieval object, journal, key, admission, trusted-time proof,
 deployment authorization or successful pilot is produced. Local freshness checks
 do not replace the native receiver's trusted-time/currentness checks.
 
-This profile is explicitly **legacy single-closure only**. A closure-set root or
-seccomp-set root must not be inserted into the old single-manifest fields. A
-future versioned assignment/scope admission must select and authenticate that
-different meaning before a corresponding derivation can be connected. Therefore
-this helper does not resolve the current multi-endpoint/bridge closure conflict.
+The v2 retrieval/persistence and spool artifact paths require the complete
+assignment payload original. Its exact hash must match the real signed key
+authorization; roots and bridge anchors must match that original. Endpoint leaf
+membership remains a separate check by the actual native closure owner. The
+conductor passes its already pinned assignment into the retained endpoint owner
+and then the existing persistence signed-original intake; it does not reconstruct
+an assignment from hashes or silently treat an endpoint leaf as the bridge.
+Opening/checkpoint receipt verification uses the same explicit transcript.
+
+No closure-set root may be inserted into a legacy single-manifest field. These
+connected data/receiver changes do not add independent commissioning decisions,
+create retrieval receipts, raise the supervisor's supported job count, or make a
+full pilot runnable by themselves. Generic legacy assignment DB admission is not
+expanded by this native-only successor.
 
 `close()` releases its retained public descriptor only after the bound process
 reports genuine completed cleanup. Unknown cleanup retains it. Source grammar

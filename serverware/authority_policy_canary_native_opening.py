@@ -42,17 +42,24 @@ def material(domain, value):
     return framed(domain, profile.canonical(value))
 
 
-def assignment_fields(value):
-    """Two exact existing wire shapes; neither drops fields before verification."""
+def assignment_fields(value, *, version=1):
+    """Exact explicit-version shapes; legacy callers never infer v2 admission."""
     from serverware import db
     old = db._POLICY_SHADOW_DIRECT_PAYLOAD_FIELDS["canary_assignment"]
-    profile.require(type(value) is dict and set(value) in (old, old | {"custodyAuthority", "authorityKeyIndependence"}),
+    native = old | {"custodyAuthority", "authorityKeyIndependence"}
+    profile.require(type(version) is int and version in (1, 2))
+    shapes = (old, native) if version == 1 else (native | {"nativeClosureSet"},)
+    profile.require(type(value) is dict and set(value) in shapes,
         "assignment is neither the exact legacy nor actual native custody original")
+    if version == 2:
+        binding = value["nativeClosureSet"]
+        profile.require(type(binding) is dict and set(binding) == {"setRootSha256", "seccompSetRootSha256"})
+        profile.digest(binding["setRootSha256"]); profile.digest(binding["seccompSetRootSha256"])
     return frozenset(value)
 
 
-def assignment_payload(value):
-    assignment_fields(value)
+def assignment_payload(value, *, version=1):
+    assignment_fields(value, version=version)
     return value
 
 
@@ -163,8 +170,11 @@ def verify(value, *, assignment, load, context, publication, now):
     from serverware import db
     profile.require(type(value) is dict and set(value) == FIELDS and value["apiVersion"] in SCHEMAS
         and len(profile.canonical(value)) <= MAX_RECORD)
-    profile.require(assignment_fields(assignment) == db._POLICY_SHADOW_DIRECT_PAYLOAD_FIELDS["canary_assignment"]
-        | {"custodyAuthority", "authorityKeyIndependence"}, "opening requires the actual custody-bearing assignment")
+    successor = "nativeClosureSet" in assignment
+    profile.require(assignment_fields(assignment, version=2 if successor else 1)
+        == db._POLICY_SHADOW_DIRECT_PAYLOAD_FIELDS["canary_assignment"]
+        | {"custodyAuthority", "authorityKeyIndependence"} | ({"nativeClosureSet"} if successor else set()),
+        "opening requires the actual custody-bearing assignment")
     receipt = value["opening_receipt"]
     profile.require(type(receipt) is dict and set(receipt) == RECEIPT_FIELDS
         and receipt["event_phase"] == "ingress-open" and receipt["disposition"] == "appended")
@@ -213,6 +223,28 @@ def verify(value, *, assignment, load, context, publication, now):
         "recordSha256": profile.sha256(profile.canonical(value)), "coverage": "opening-only"}
 
 
+def receipt_authority_payload(*, assignment, assignment_payload_sha256, configuration_binding_sha256,
+                              key_root, role, receipt_payload):
+    """Exact shared transcript for an already authenticated native assignment.
+
+    The caller owns assignment signature admission; this arithmetic does not
+    turn the additional roots or a stored observation into authority.
+    """
+    successor = "nativeClosureSet" in assignment
+    assignment_payload(assignment, version=2 if successor else 1)
+    authority = assignment["custodyAuthority"]
+    values = [assignment["assignmentId"], assignment_payload_sha256, assignment["assignmentRevision"],
+        authority["authorityId"], authority["storageRealmSha256"], authority["retrievalNamespaceSha256"],
+        assignment["authorityKeyIndependence"]["independenceRootSha256"], configuration_binding_sha256, key_root,
+        authority["executionClosureManifestSha256"], authority["structurallyVerifiedSeccompPolicySha256"]]
+    roots = [assignment["nativeClosureSet"][name] for name in ("setRootSha256", "seccompSetRootSha256")] if successor else []
+    version = "2" if successor else "1"
+    scope = material("serverware.policyShadowProductionCustodyProofScope/v" + version, values + roots)
+    return ["serverware.policyShadowAssignmentBoundCustodyReceipt/v" + version, scope,
+        authority["executionClosureManifestSha256"], authority["structurallyVerifiedSeccompPolicySha256"],
+        *roots, role, profile.sha256(receipt_payload)]
+
+
 def verify_receipt_signature(value, receipt, *, assignment, context, publication, role):
     """Source-fixed role selected only after a closed event/phase admission."""
     from serverware import db
@@ -239,15 +271,10 @@ def verify_receipt_signature(value, receipt, *, assignment, context, publication
         "predecessor_head_sha256", "resulting_head_sha256", "trusted_observed_at_unix_nanos", "trusted_time_checkpoint_sha256",
         "persistence_receipt_sha256", "retrieval_id_sha256", "retrieval_proof_sha256")]
     payload += [role, receipt["signing_key_id"], receipt["signing_key_spki_sha256"]]
-    authority = assignment["custodyAuthority"]
     evidence = db.loads(publication["generation_evidence_json"], None)
-    scope = material("serverware.policyShadowProductionCustodyProofScope/v1", [assignment["assignmentId"],
-        context["assignment_payload_digest"], assignment["assignmentRevision"], authority["authorityId"], authority["storageRealmSha256"],
-        authority["retrievalNamespaceSha256"], assignment["authorityKeyIndependence"]["independenceRootSha256"],
-        evidence["custody"]["custodyConfigurationSha256"], key_root, authority["executionClosureManifestSha256"],
-        authority["structurallyVerifiedSeccompPolicySha256"]])
-    bound = ["serverware.policyShadowAssignmentBoundCustodyReceipt/v1", scope, authority["executionClosureManifestSha256"],
-        authority["structurallyVerifiedSeccompPolicySha256"], role, profile.sha256(profile.canonical(payload))]
+    bound = receipt_authority_payload(assignment=assignment, assignment_payload_sha256=context["assignment_payload_digest"],
+        configuration_binding_sha256=evidence["custody"]["custodyConfigurationSha256"], key_root=key_root,
+        role=role, receipt_payload=profile.canonical(payload))
     message = b"\0".join((db._POLICY_AUTHORITY_SIGNATURE_FRAME, domains[role],
         db._POLICY_AUTHORITY_CANONICAL_PROFILE.encode("ascii"), profile.canonical(bound)))
     verifier.verify(profile.decoded(receipt["signature"], 64, length=64), message)

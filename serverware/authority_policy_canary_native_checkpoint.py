@@ -84,15 +84,11 @@ def verify(value, *, assignment, context, publication, now):
     profile.require(receipt["signed_receipt_sha256"] == opening.material("serverware.policyShadowSpoolCompactionReceipt/v1",
         original + [receipt["signing_key_id"], receipt["signing_key_spki_sha256"], receipt["signature"]]))
     payload = original + ["spool-compaction", receipt["signing_key_id"], receipt["signing_key_spki_sha256"]]
-    authority = assignment["custodyAuthority"]
     evidence = db.loads(publication["generation_evidence_json"], None)
-    scope = opening.material("serverware.policyShadowProductionCustodyProofScope/v1", [assignment["assignmentId"],
-        context["assignment_payload_digest"], assignment["assignmentRevision"], authority["authorityId"], authority["storageRealmSha256"],
-        authority["retrievalNamespaceSha256"], assignment["authorityKeyIndependence"]["independenceRootSha256"],
-        evidence["custody"]["custodyConfigurationSha256"], key_root, authority["executionClosureManifestSha256"],
-        authority["structurallyVerifiedSeccompPolicySha256"]])
-    bound = ["serverware.policyShadowAssignmentBoundCustodyReceipt/v1", scope, authority["executionClosureManifestSha256"],
-        authority["structurallyVerifiedSeccompPolicySha256"], "spool-compaction", profile.sha256(profile.canonical(payload))]
+    bound = opening.receipt_authority_payload(assignment=assignment,
+        assignment_payload_sha256=context["assignment_payload_digest"],
+        configuration_binding_sha256=evidence["custody"]["custodyConfigurationSha256"], key_root=key_root,
+        role="spool-compaction", receipt_payload=profile.canonical(payload))
     message = b"\0".join((db._POLICY_AUTHORITY_SIGNATURE_FRAME, b"serverware.policyShadowSpoolCompaction/v1",
         db._POLICY_AUTHORITY_CANONICAL_PROFILE.encode("ascii"), profile.canonical(bound)))
     verifier.verify(profile.decoded(receipt["signature"], 64, length=64), message)

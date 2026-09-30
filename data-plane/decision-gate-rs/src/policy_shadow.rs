@@ -144,6 +144,7 @@ pub(crate) const MERKLE_NODE_DOMAIN: &[u8] = b"serverware.policyShadowMerkleNode
 pub(crate) const MERKLE_EMPTY_DOMAIN: &[u8] = b"serverware.policyShadowMerkleEmpty/v1";
 pub(crate) const READINESS_CORE_DOMAIN: &[u8] = b"serverware.policyReadinessCore/v2";
 pub(crate) const ASSIGNMENT_DOMAIN: &str = "serverware.policyShadowAssignment/v1";
+pub(crate) const NATIVE_SET_ASSIGNMENT_DOMAIN: &str = "serverware.policyShadowAssignment/v2";
 pub(crate) const LOAD_RECEIPT_DOMAIN: &str = "serverware.policyShadowLoadReceipt/v1";
 pub(crate) const INGRESS_EVIDENCE_DOMAIN: &str =
     "serverware.policyShadowIngressEvidence/v1";
@@ -545,6 +546,11 @@ pub(crate) trait EnvelopePayload: Serialize + Clone {
     const KIND: &'static str;
     const SIGNATURE_DOMAIN: &'static str;
 
+    // A successor may select an explicit domain from its closed typed payload.
+    // Existing payloads retain their exact constant versions by default.
+    fn envelope_api_version(&self) -> &'static str { Self::API_VERSION }
+    fn envelope_signature_domain(&self) -> &'static str { Self::SIGNATURE_DOMAIN }
+
     fn issued_at_unix_nanos(&self) -> i64;
     fn expires_at_unix_nanos(&self) -> i64;
     fn validate_intrinsic(&self) -> Result<(), ShadowError>;
@@ -590,10 +596,10 @@ impl<T: EnvelopePayload> SignedEnvelope<T> {
         let signature = CanonicalEd25519Signature(signature);
         signature.decode()?;
         Ok(Self {
-            api_version: T::API_VERSION.to_string(),
+            api_version: payload.envelope_api_version().to_string(),
             kind: T::KIND.to_string(),
             canonical_profile: CANONICAL_PROFILE.to_string(),
-            signature_domain: T::SIGNATURE_DOMAIN.to_string(),
+            signature_domain: payload.envelope_signature_domain().to_string(),
             payload,
             payload_sha256: Sha256Digest::compute(&canonical_payload),
             signature_algorithm: SIGNATURE_ALGORITHM.to_string(),
@@ -729,6 +735,8 @@ impl PolicyShadowCustodySignerRole {
 /// inspect the exact scope but cannot substitute a different realm.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct ProductionCustodyProofScope {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    api_version: Option<&'static str>,
     assignment_id: Sha256Digest,
     assignment_payload_sha256: Sha256Digest,
     assignment_revision: u64,
@@ -740,6 +748,10 @@ pub(crate) struct ProductionCustodyProofScope {
     asserted_custody_key_set_root_sha256: Sha256Digest,
     execution_closure_manifest_sha256: Sha256Digest,
     structurally_verified_seccomp_policy_sha256: Sha256Digest,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    execution_closure_set_root_sha256: Option<Sha256Digest>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    structurally_verified_seccomp_set_root_sha256: Option<Sha256Digest>,
     store_response_authority: ProductionCustodyKeyBinding,
     retrieval_response_authority: ProductionCustodyKeyBinding,
     binding_sha256: Sha256Digest,
@@ -821,6 +833,18 @@ impl ProductionCustodyProofScope {
         role: PolicyShadowCustodySignerRole,
         canonical_receipt_payload: &[u8],
     ) -> Result<Vec<u8>, ShadowError> {
+        match (self.api_version, &self.execution_closure_set_root_sha256,
+            &self.structurally_verified_seccomp_set_root_sha256) {
+            (Some("serverware.policyShadowProductionCustodyProofScope/v2"), Some(set_root), Some(seccomp_root)) =>
+                return canonical_json_bytes(&(
+                "serverware.policyShadowAssignmentBoundCustodyReceipt/v2",
+                &self.binding_sha256, &self.execution_closure_manifest_sha256,
+                &self.structurally_verified_seccomp_policy_sha256, set_root, seccomp_root,
+                role, Sha256Digest::compute(canonical_receipt_payload),
+            )),
+            (None, None, None) => {},
+            _ => return Err(ShadowError::BindingDrift),
+        }
         canonical_json_bytes(&(
             "serverware.policyShadowAssignmentBoundCustodyReceipt/v1",
             &self.binding_sha256,
@@ -1141,9 +1165,9 @@ pub(crate) fn verify_envelope<T: EnvelopePayload>(
     trusted_time: &dyn TrustedTime,
     maximum_age_nanos: i64,
 ) -> Result<VerifiedSignedEnvelope<T>, ShadowError> {
-    if envelope.api_version != T::API_VERSION
+    if envelope.api_version != envelope.payload.envelope_api_version()
         || envelope.kind != T::KIND
-        || envelope.signature_domain != T::SIGNATURE_DOMAIN
+        || envelope.signature_domain != envelope.payload.envelope_signature_domain()
     {
         return Err(ShadowError::EnvelopeDomainMismatch);
     }
@@ -1315,9 +1339,9 @@ pub(crate) fn verify_wire_at_checkpoint<T: EnvelopePayload>(
     key_trust: &dyn EnvelopeKeyTrust,
     maximum_age_nanos: i64,
 ) -> Result<(), ShadowError> {
-    if envelope.api_version != T::API_VERSION
+    if envelope.api_version != envelope.payload.envelope_api_version()
         || envelope.kind != T::KIND
-        || envelope.signature_domain != T::SIGNATURE_DOMAIN
+        || envelope.signature_domain != envelope.payload.envelope_signature_domain()
         || envelope.canonical_profile != CANONICAL_PROFILE
         || envelope.signature_algorithm != SIGNATURE_ALGORITHM
         || &envelope.signing_key_id != expected_signer.key_id
@@ -3658,6 +3682,34 @@ impl ReadinessThresholds {
     }
 }
 
+/// Signed aggregate commitments, never replacements for an actual leaf digest.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct NativeClosureSetCommitment {
+    pub(in crate::policy_shadow) set_root_sha256: Sha256Digest,
+    pub(in crate::policy_shadow) seccomp_set_root_sha256: Sha256Digest,
+}
+
+impl NativeClosureSetCommitment {
+    fn validate(&self) -> Result<(), ShadowError> {
+        if self.set_root_sha256 == Sha256Digest::compute(&[])
+            || self.seccomp_set_root_sha256 == Sha256Digest::compute(&[])
+            || self.set_root_sha256.raw_bytes()? == [0; 32]
+            || self.seccomp_set_root_sha256.raw_bytes()? == [0; 32]
+        {
+            return Err(ShadowError::BindingDrift);
+        }
+        Ok(())
+    }
+}
+
+// An omitted optional successor field preserves legacy bytes. An explicitly
+// present null must not be normalized into a legacy profile before signing.
+fn deserialize_optional_present<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where D: Deserializer<'de>, T: Deserialize<'de> {
+    T::deserialize(deserializer).map(Some)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct PolicyShadowAssignmentPayload {
@@ -3673,6 +3725,8 @@ pub(crate) struct PolicyShadowAssignmentPayload {
     fleet: FleetAssignment,
     custody_authority: CustodyAuthority,
     authority_key_independence: AuthorityKeyIndependence,
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_optional_present")]
+    native_closure_set: Option<NativeClosureSetCommitment>,
     observation_window: ObservationWindow,
     readiness_thresholds: ReadinessThresholds,
     issued_at_unix_nanos: i64,
@@ -3712,6 +3766,7 @@ impl PolicyShadowAssignmentPayload {
             fleet,
             custody_authority,
             authority_key_independence,
+            native_closure_set: None,
             observation_window,
             readiness_thresholds,
             issued_at_unix_nanos,
@@ -3773,6 +3828,12 @@ impl EnvelopePayload for PolicyShadowAssignmentPayload {
     const KIND: &'static str = "PolicyShadowAssignment";
     const SIGNATURE_DOMAIN: &'static str = ASSIGNMENT_DOMAIN;
 
+    fn envelope_api_version(&self) -> &'static str {
+        if self.native_closure_set.is_some() { NATIVE_SET_ASSIGNMENT_DOMAIN } else { ASSIGNMENT_DOMAIN }
+    }
+
+    fn envelope_signature_domain(&self) -> &'static str { self.envelope_api_version() }
+
     fn issued_at_unix_nanos(&self) -> i64 {
         self.issued_at_unix_nanos
     }
@@ -3782,6 +3843,14 @@ impl EnvelopePayload for PolicyShadowAssignmentPayload {
     }
 
     fn validate_intrinsic(&self) -> Result<(), ShadowError> {
+        if let Some(commitment) = &self.native_closure_set {
+            commitment.validate()?;
+            if !matches!(&self.custody_authority.attestation_mode,
+                CustodyAttestationMode::Tee { platform: TeePlatform::AwsNitroEnclave, .. })
+            {
+                return Err(ShadowError::BindingDrift);
+            }
+        }
         validate_positive(self.assignment_revision, "assignment_revision")?;
         validate_positive(self.generation_epoch, "generation_epoch")?;
         validate_positive(
@@ -7105,6 +7174,16 @@ impl RetainedProductionCustodyClosure {
         #[cfg(target_os="linux")] Self::Native(v)=>v.worker_executable_sha256(),
         #[cfg(target_os="linux")] Self::RemoteNative(v)=>v.worker_executable_sha256(),
     }}
+    fn native_closure_set(&self)->Option<&NativeClosureSetCommitment> {match self {
+        Self::Legacy(_)=>None,
+        #[cfg(target_os="linux")] Self::Native(v)=>v.native_closure_set(),
+        #[cfg(target_os="linux")] Self::RemoteNative(v)=>v.native_closure_set(),
+    }}
+    fn native_closure_set_role(&self)->Option<&str> {match self {
+        Self::Legacy(_)=>None,
+        #[cfg(target_os="linux")] Self::Native(v)=>v.native_closure_set_role(),
+        #[cfg(target_os="linux")] Self::RemoteNative(v)=>v.native_closure_set_role(),
+    }}
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -7283,6 +7362,14 @@ impl ProductionCustodyConfiguration {
             MAX_ENVELOPE_AGE_NANOS,
         )?;
         let payload = assignment.payload();
+        // Only the genuine admitted bridge may construct the common production
+        // configuration. Endpoints retain their own leaves under the same roots.
+        if execution_closure_manifest.native_closure_set() != payload.native_closure_set.as_ref()
+            || (payload.native_closure_set.is_some()
+                && execution_closure_manifest.native_closure_set_role() != Some("bridge"))
+        {
+            return Err(ShadowError::BindingDrift);
+        }
         if payload
                 .custody_authority
                 .execution_closure_manifest_sha256
@@ -7357,6 +7444,8 @@ impl ProductionCustodyConfiguration {
         #[derive(Serialize)]
         #[serde(rename_all = "camelCase")]
         struct ConfigurationBinding<'a> {
+            #[serde(skip_serializing_if = "Option::is_none")]
+            native_closure_set: Option<&'a NativeClosureSetCommitment>,
             assignment_id: &'a Sha256Digest,
             assignment_payload_sha256: &'a Sha256Digest,
             assignment_revision: u64,
@@ -7384,6 +7473,7 @@ impl ProductionCustodyConfiguration {
             asserted_custody_key_set_root_sha256: &'a Sha256Digest,
         }
         let configuration_binding = ConfigurationBinding {
+            native_closure_set: payload.native_closure_set.as_ref(),
             assignment_id: &payload.assignment_id,
             assignment_payload_sha256: assignment.payload_sha256(),
             assignment_revision: payload.assignment_revision,
@@ -7421,12 +7511,11 @@ impl ProductionCustodyConfiguration {
                 &asserted_custody_key_set_root_sha256,
         };
         let production_configuration_binding_sha256 = hash_domain_frames(
-            b"serverware.policyShadowProductionCustodyConfiguration/v1",
+            if payload.native_closure_set.is_some() { b"serverware.policyShadowProductionCustodyConfiguration/v2" }
+                else { b"serverware.policyShadowProductionCustodyConfiguration/v1" },
             &[&canonical_json_bytes(&configuration_binding)?],
         );
-        let proof_scope_binding_sha256 = hash_domain_frames(
-            b"serverware.policyShadowProductionCustodyProofScope/v1",
-            &[&canonical_json_bytes(&(
+        let mut proof_scope_values = serde_json::to_value(&(
                 &payload.assignment_id,
                 assignment.payload_sha256(),
                 payload.assignment_revision,
@@ -7440,9 +7529,19 @@ impl ProductionCustodyConfiguration {
                 &asserted_custody_key_set_root_sha256,
                 &execution_closure_manifest_sha256,
                 &structurally_verified_seccomp_policy_sha256,
-            ))?],
+            )).map_err(|_| ShadowError::BindingDrift)?;
+        if let Some(commitment) = &payload.native_closure_set {
+            let values = proof_scope_values.as_array_mut().ok_or(ShadowError::BindingDrift)?;
+            values.push(serde_json::to_value(&commitment.set_root_sha256).map_err(|_| ShadowError::BindingDrift)?);
+            values.push(serde_json::to_value(&commitment.seccomp_set_root_sha256).map_err(|_| ShadowError::BindingDrift)?);
+        }
+        let proof_scope_binding_sha256 = hash_domain_frames(
+            if payload.native_closure_set.is_some() { b"serverware.policyShadowProductionCustodyProofScope/v2" }
+                else { b"serverware.policyShadowProductionCustodyProofScope/v1" },
+            &[&canonical_json_bytes(&proof_scope_values)?],
         );
         let proof_scope = ProductionCustodyProofScope {
+            api_version: payload.native_closure_set.as_ref().map(|_| "serverware.policyShadowProductionCustodyProofScope/v2"),
             assignment_id: payload.assignment_id.clone(),
             assignment_payload_sha256:
                 assignment.payload_sha256().clone(),
@@ -7466,6 +7565,8 @@ impl ProductionCustodyConfiguration {
                 execution_closure_manifest_sha256.clone(),
             structurally_verified_seccomp_policy_sha256:
                 structurally_verified_seccomp_policy_sha256.clone(),
+            execution_closure_set_root_sha256: payload.native_closure_set.as_ref().map(|v| v.set_root_sha256.clone()),
+            structurally_verified_seccomp_set_root_sha256: payload.native_closure_set.as_ref().map(|v| v.seccomp_set_root_sha256.clone()),
             store_response_authority,
             retrieval_response_authority,
             binding_sha256: proof_scope_binding_sha256,

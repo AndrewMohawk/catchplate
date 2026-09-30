@@ -222,7 +222,7 @@ def sign(operation: str, input_original: bytes, signing_key: Ed25519PrivateKey) 
         scope_raw, _ = _original(value["spoolScopeOriginal"], 16384)
         proof_raw, _ = _original(value["proofScopeOriginal"], 16384)
         _, origin = _original(value["originVerifierOriginal"], 4096)
-        actual_scope = spool._scope(scope_raw, proof_raw, admitted, guest)
+        actual_scope = spool._scope(scope_raw, proof_raw, admitted, guest, assignment_payload_original=assignment_raw)
         p.require(expires <= p.integer(origin["notAfterUnixNanos"]))
         if operation == "ledger":
             pin, companion_expiry = _companion(value, keys, admitted, checkpoint, peer, actual_scope, now)
@@ -268,7 +268,8 @@ def sign(operation: str, input_original: bytes, signing_key: Ed25519PrivateKey) 
             configuration_sha256=value["configurationSha256"], scope_original=proof_raw, scope_sha256=p.sha(proof_raw),
             peer_original=peer_raw, peer_sha256=value["peerSha256"], guest=guest,
             journal_original=journal_raw, journal_sha256=p.sha(journal_raw), permissions=value["permissions"],
-            issued_at=issued, expires_at=expires, now=now, signing_key=signing_key)
+            issued_at=issued, expires_at=expires, now=now, signing_key=signing_key,
+            assignment_payload_original=assignment_raw)
     else:
         p.require(operation == "trustedTime")
         bootstrap_raw, _ = _original(value["bootstrapOriginal"], 65536)

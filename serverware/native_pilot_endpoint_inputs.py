@@ -55,12 +55,13 @@ class PilotEndpointInputs:
         self._persistence = self._trusted_time = self._retrieval = None
         self._closed = self._poisoned = self._delivery_attempted = self._retain_attempted = False
         self._deliveries = self._guests = self._spool_journal = None
+        self._assignment_raw = self._assignment_payload = None
         self._transfers = {}
 
     @classmethod
     def prepare(cls, pilot, *, cold_originals, peer_original, peer_sha256,
                 proof_scope_original, proof_scope_sha256, retrieval_manifest_original,
-                retrieval_manifest_sha256, object_directory_fd):
+                retrieval_manifest_sha256, object_directory_fd, assignment_original=None):
         from serverware.native_pilot_launch import NativePilotLaunch
         from serverware.native_shadow_proof_cohort_control import ParkedProofCohort
         from serverware.native_shadow_spool_inputs import SpoolInputs
@@ -85,6 +86,17 @@ class PilotEndpointInputs:
         value._peer_raw, value._peer_sha = peer_original, peer_sha256
         value._scope = artifacts.scope_original(proof_scope_original)
         value._scope_raw, value._scope_sha = proof_scope_original, proof_scope_sha256
+        if value._scope.get("api_version") == artifacts.SCOPE_SET_API:
+            from serverware import native_pilot_assignment as assignment_profile
+            p.require(type(assignment_original) is bytes and 0 < len(assignment_original) <= assignment_profile.MAX_BYTES)
+            assignment = assignment_profile.shape(p.document(assignment_original, assignment_profile.MAX_BYTES))
+            p.require(assignment_profile.version(assignment) == 2)
+            value._assignment_raw = bytes(assignment_original)
+            value._assignment_payload = p.canonical(assignment["payload"])
+            artifacts.require_assignment_scope(value._scope, value._assignment_payload)
+            # This is the exact operator's retained public original, not a new
+            # signature verdict. Persistence intake binds its payload hash to
+            # actual signed key authorization; Rust verifies full membership.
         value._objects = artifacts.manifest_objects(retrieval_manifest_original, retrieval_manifest_sha256)
         manifest = p.document(retrieval_manifest_original, artifacts.MAX_MANIFEST)
         p.require(p.decoded(manifest["proofScopeOriginalBase64url"], maximum=16384) == proof_scope_original)
@@ -249,7 +261,8 @@ class PilotEndpointInputs:
                 journal_original=journal_original, journal_sha256=journal_sha256)
             self._persistence.admit_service_grant(signed_grant_original=grants["persistence"],
                 configuration_original=persistence_configuration_original,
-                configuration_sha256=persistence_configuration_sha256)
+                configuration_sha256=persistence_configuration_sha256,
+                assignment_payload_original=self._assignment_payload)
             self._transfers["persistence"] = self._persistence.take_for_launch(
                 signed_delivery_sha256=p.sha(self._deliveries["persistence"]),
                 service_grant_sha256=p.sha(grants["persistence"]))

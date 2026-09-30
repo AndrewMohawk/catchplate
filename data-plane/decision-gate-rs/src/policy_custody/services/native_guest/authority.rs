@@ -104,7 +104,7 @@ impl EnvelopeKeyTrust for Trust {
     fn resolve_ed25519_key(&self,checkpoint:&AtomicTrustCheckpoint,domain:&str,id:&Sha256Digest,spki:&Sha256Digest)
         ->Result<VerifyingKey,ShadowError> {
         self.check()?;require(checkpoint==&self.checkpoint)?;
-        if domain==ASSIGNMENT_DOMAIN && id==&self.configuration.assignment_key.key_id
+        if matches!(domain,ASSIGNMENT_DOMAIN|NATIVE_SET_ASSIGNMENT_DOMAIN) && id==&self.configuration.assignment_key.key_id
             && spki==&self.configuration.assignment_key.key_spki_sha256 {return Ok(self.assignment);}
         let record=self.configuration.role_keys.iter().find(|r|authority_role_signature_domain(r.role)==domain
             && &r.key.key_id==id && &r.key.key_spki_sha256==spki).ok_or(ShadowError::TrustResolutionFailed)?;

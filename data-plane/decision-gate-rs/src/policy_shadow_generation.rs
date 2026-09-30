@@ -21,7 +21,7 @@ use super::policy_shadow::{
     VerifiedActivationPublicationReceipt, VerifiedAssignment,
     VerifiedLoadReceipt,
     WebAuthnAssertionEvidence, WebAuthnVerification,
-    VerifiedWebAuthnAssertion, ASSIGNMENT_DOMAIN,
+    VerifiedWebAuthnAssertion, ASSIGNMENT_DOMAIN, NATIVE_SET_ASSIGNMENT_DOMAIN,
     ACTIVATION_APPROVAL_DOMAIN, ACTIVE_DECISION_DOMAIN, CANONICAL_PROFILE,
     CHECKPOINT_DOMAIN, HEARTBEAT_DOMAIN, INGRESS_EVIDENCE_DOMAIN,
     LOAD_RECEIPT_DOMAIN, OBSERVATION_DOMAIN,
@@ -247,7 +247,7 @@ struct PinnedEnvelopeKeyTrust {
 
 fn required_trust_role(signature_domain: &str) -> Option<&'static str> {
     match signature_domain {
-        ASSIGNMENT_DOMAIN => Some("assignment-authority"),
+        ASSIGNMENT_DOMAIN | NATIVE_SET_ASSIGNMENT_DOMAIN => Some("assignment-authority"),
         LOAD_RECEIPT_DOMAIN => Some("fleet-shadow-runtime"),
         INGRESS_EVIDENCE_DOMAIN => Some("fleet-ingress-runtime"),
         ACTIVE_DECISION_DOMAIN => Some("fleet-active-decision-runtime"),
@@ -489,7 +489,7 @@ impl PinnedEnvelopeKeyTrust {
                 }
                 previous_domain = Some(domain);
                 if record.role == "assignment-authority"
-                    && domain == ASSIGNMENT_DOMAIN
+                    && matches!(domain.as_str(), ASSIGNMENT_DOMAIN | NATIVE_SET_ASSIGNMENT_DOMAIN)
                     && record.key_id
                         == manifest.assignment_signing_key_id
                     && record.key_spki_sha256

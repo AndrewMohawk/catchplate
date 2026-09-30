@@ -1,0 +1,430 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/policy-shadow-assignment.v2.schema.json",
+  "description": "Native-only explicit successor; exact canonical ASCII no-LF signed envelope <=4MiB. Both roots authorize the fixed11 closure set. Legacy custodyAuthority executionClosureManifestSha256 and structurallyVerifiedSeccompPolicySha256 STILL identify its bridge member, not either set root. Signer, trusted-time, independence, fleet/policy and original-byte checks remain receiving authority duties. Generic v1 DB admission is not extended.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion",
+    "kind",
+    "canonicalProfile",
+    "signatureDomain",
+    "payload",
+    "payloadSha256",
+    "signatureAlgorithm",
+    "signingKeyId",
+    "signingKeySpkiSha256",
+    "signature"
+  ],
+  "properties": {
+    "apiVersion": {
+      "const": "serverware.policyShadowAssignment/v2"
+    },
+    "kind": {
+      "const": "PolicyShadowAssignment"
+    },
+    "canonicalProfile": {
+      "const": "serverware.canonicalJson/ascii-integer-v1"
+    },
+    "signatureDomain": {
+      "const": "serverware.policyShadowAssignment/v2"
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "assignmentId",
+        "canaryId",
+        "assignmentRevision",
+        "generationEpoch",
+        "minimumGenerationTombstoneEpoch",
+        "policyIdentity",
+        "expectedLoadedSnapshots",
+        "responseValidationObligations",
+        "responseValidationObligationsRootSha256",
+        "fleet",
+        "custodyAuthority",
+        "authorityKeyIndependence",
+        "observationWindow",
+        "readinessThresholds",
+        "issuedAtUnixNanos",
+        "expiresAtUnixNanos",
+        "nativeClosureSet"
+      ],
+      "properties": {
+        "assignmentId": {
+          "$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"
+        },
+        "canaryId": {
+          "$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"
+        },
+        "assignmentRevision": {
+          "$ref": "policy-shadow-assignment.v1.schema.json#/$defs/positiveI64"
+        },
+        "generationEpoch": {
+          "$ref": "policy-shadow-assignment.v1.schema.json#/$defs/positiveI64"
+        },
+        "minimumGenerationTombstoneEpoch": {
+          "$ref": "policy-shadow-assignment.v1.schema.json#/$defs/positiveI64"
+        },
+        "policyIdentity": {
+          "$ref": "policy-shadow-assignment.v1.schema.json#/$defs/policyIdentity"
+        },
+        "expectedLoadedSnapshots": {
+          "$ref": "policy-shadow-assignment.v1.schema.json#/$defs/assignedSnapshotIdentities"
+        },
+        "responseValidationObligations": {
+          "type": "array",
+          "maxItems": 512,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "policy-shadow-assignment.v1.schema.json#/$defs/responseValidationObligation"
+          }
+        },
+        "responseValidationObligationsRootSha256": {
+          "$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"
+        },
+        "fleet": {
+          "$ref": "policy-shadow-assignment.v1.schema.json#/$defs/fleet"
+        },
+        "custodyAuthority": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "authorityId",
+            "storageRealmSha256",
+            "retrievalNamespaceSha256",
+            "executionClosureManifestSha256",
+            "structurallyVerifiedSeccompPolicySha256",
+            "attestationMode",
+            "ingressAdmissionKeyId",
+            "ingressAdmissionKeySpkiSha256",
+            "unavailableIngressKeyId",
+            "unavailableIngressKeySpkiSha256",
+            "dispatchBarrierKeyId",
+            "dispatchBarrierKeySpkiSha256",
+            "terminalAppendKeyId",
+            "terminalAppendKeySpkiSha256",
+            "ledgerAppendKeyId",
+            "ledgerAppendKeySpkiSha256",
+            "spoolCompactionKeyId",
+            "spoolCompactionKeySpkiSha256",
+            "activeEffectBarrierKeyId",
+            "activeEffectBarrierKeySpkiSha256",
+            "activeEffectCommitKeyId",
+            "activeEffectCommitKeySpkiSha256",
+            "publicationReconciliationKeyId",
+            "publicationReconciliationKeySpkiSha256",
+            "activationPublicationKeyId",
+            "activationPublicationKeySpkiSha256",
+            "resultEnvelopeKeyId",
+            "resultEnvelopeKeySpkiSha256",
+            "storeResponseKeyId",
+            "storeResponseKeySpkiSha256",
+            "signerResponseKeyId",
+            "signerResponseKeySpkiSha256",
+            "retrievalResponseKeyId",
+            "retrievalResponseKeySpkiSha256",
+            "trustedTimeResponseKeyId",
+            "trustedTimeResponseKeySpkiSha256",
+            "providerResponseKeyId",
+            "providerResponseKeySpkiSha256",
+            "attestationVerifierKeyId",
+            "attestationVerifierKeySpkiSha256",
+            "supervisorCapabilityKeyId",
+            "supervisorCapabilityKeySpkiSha256"
+          ],
+          "properties": {
+            "authorityId": {
+              "$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"
+            },
+            "storageRealmSha256": {
+              "$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"
+            },
+            "retrievalNamespaceSha256": {
+              "$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"
+            },
+            "executionClosureManifestSha256": {
+              "$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"
+            },
+            "structurallyVerifiedSeccompPolicySha256": {
+              "$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"
+            },
+            "attestationMode": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "mode",
+                "platform",
+                "expectedMeasurementSha256",
+                "endorsementRootSha256",
+                "collateralPolicySha256",
+                "revocationSourceSha256"
+              ],
+              "properties": {
+                "mode": {
+                  "const": "tee"
+                },
+                "platform": {
+                  "const": "aws-nitro-enclave"
+                },
+                "expectedMeasurementSha256": {
+                  "$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"
+                },
+                "endorsementRootSha256": {
+                  "$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"
+                },
+                "collateralPolicySha256": {
+                  "$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"
+                },
+                "revocationSourceSha256": {
+                  "$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"
+                }
+              }
+            },
+            "ingressAdmissionKeyId": {
+              "$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"
+            },
+            "ingressAdmissionKeySpkiSha256": {
+              "$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"
+            },
+            "unavailableIngressKeyId": {
+              "$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"
+            },
+            "unavailableIngressKeySpkiSha256": {
+              "$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"
+            },
+            "dispatchBarrierKeyId": {
+              "$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"
+            },
+            "dispatchBarrierKeySpkiSha256": {
+              "$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"
+            },
+            "terminalAppendKeyId": {
+              "$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"
+            },
+            "terminalAppendKeySpkiSha256": {
+              "$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"
+            },
+            "ledgerAppendKeyId": {
+              "$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"
+            },
+            "ledgerAppendKeySpkiSha256": {
+              "$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"
+            },
+            "spoolCompactionKeyId": {
+              "$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"
+            },
+            "spoolCompactionKeySpkiSha256": {
+              "$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"
+            },
+            "activeEffectBarrierKeyId": {
+              "$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"
+            },
+            "activeEffectBarrierKeySpkiSha256": {
+              "$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"
+            },
+            "activeEffectCommitKeyId": {
+              "$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"
+            },
+            "activeEffectCommitKeySpkiSha256": {
+              "$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"
+            },
+            "publicationReconciliationKeyId": {
+              "$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"
+            },
+            "publicationReconciliationKeySpkiSha256": {
+              "$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"
+            },
+            "activationPublicationKeyId": {
+              "$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"
+            },
+            "activationPublicationKeySpkiSha256": {
+              "$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"
+            },
+            "resultEnvelopeKeyId": {
+              "$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"
+            },
+            "resultEnvelopeKeySpkiSha256": {
+              "$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"
+            },
+            "storeResponseKeyId": {
+              "$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"
+            },
+            "storeResponseKeySpkiSha256": {
+              "$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"
+            },
+            "signerResponseKeyId": {
+              "$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"
+            },
+            "signerResponseKeySpkiSha256": {
+              "$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"
+            },
+            "retrievalResponseKeyId": {
+              "$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"
+            },
+            "retrievalResponseKeySpkiSha256": {
+              "$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"
+            },
+            "trustedTimeResponseKeyId": {
+              "$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"
+            },
+            "trustedTimeResponseKeySpkiSha256": {
+              "$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"
+            },
+            "providerResponseKeyId": {
+              "$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"
+            },
+            "providerResponseKeySpkiSha256": {
+              "$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"
+            },
+            "attestationVerifierKeyId": {
+              "$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"
+            },
+            "attestationVerifierKeySpkiSha256": {
+              "$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"
+            },
+            "supervisorCapabilityKeyId": {
+              "$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"
+            },
+            "supervisorCapabilityKeySpkiSha256": {
+              "$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"
+            }
+          }
+        },
+        "authorityKeyIndependence": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "bindings",
+            "keyIdSetRootSha256",
+            "spkiSetRootSha256",
+            "keyMaterialSetRootSha256",
+            "independenceRootSha256"
+          ],
+          "properties": {
+            "bindings": {
+              "type": "array",
+              "minItems": 25,
+              "maxItems": 256,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "role",
+                  "scopeSha256",
+                  "keyAlgorithm",
+                  "keyId",
+                  "keySpkiSha256",
+                  "keyMaterialSha256"
+                ],
+                "properties": {
+                  "role": {
+                    "enum": [
+                      "compiler-analysis",
+                      "activation-readiness",
+                      "activation-approval",
+                      "fleet-tee-attestation",
+                      "fleet-ingress",
+                      "fleet-active-decision",
+                      "fleet-shadow",
+                      "custody-ingress-admission",
+                      "custody-unavailable-ingress",
+                      "custody-dispatch-barrier",
+                      "custody-terminal-append",
+                      "custody-ledger-append",
+                      "custody-spool-compaction",
+                      "custody-active-effect-barrier",
+                      "custody-active-effect-commit",
+                      "custody-publication-reconciliation",
+                      "custody-activation-publication",
+                      "custody-result-envelope",
+                      "custody-store-response",
+                      "custody-signer-response",
+                      "custody-retrieval-response",
+                      "custody-trusted-time-response",
+                      "custody-provider-response",
+                      "custody-attestation-verifier",
+                      "custody-supervisor-capability"
+                    ]
+                  },
+                  "scopeSha256": {
+                    "$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"
+                  },
+                  "keyAlgorithm": {
+                    "type": "string",
+                    "pattern": "^[Ee][Dd]25519$"
+                  },
+                  "keyId": {
+                    "$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"
+                  },
+                  "keySpkiSha256": {
+                    "$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"
+                  },
+                  "keyMaterialSha256": {
+                    "$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"
+                  }
+                }
+              }
+            },
+            "keyIdSetRootSha256": {
+              "$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"
+            },
+            "spkiSetRootSha256": {
+              "$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"
+            },
+            "keyMaterialSetRootSha256": {
+              "$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"
+            },
+            "independenceRootSha256": {
+              "$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"
+            }
+          }
+        },
+        "observationWindow": {
+          "$ref": "policy-shadow-assignment.v1.schema.json#/$defs/observationWindow"
+        },
+        "readinessThresholds": {
+          "$ref": "policy-shadow-assignment.v1.schema.json#/$defs/readinessThresholds"
+        },
+        "issuedAtUnixNanos": {
+          "$ref": "policy-shadow-assignment.v1.schema.json#/$defs/signedI64"
+        },
+        "expiresAtUnixNanos": {
+          "$ref": "policy-shadow-assignment.v1.schema.json#/$defs/signedI64"
+        },
+        "nativeClosureSet": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "setRootSha256",
+            "seccompSetRootSha256"
+          ],
+          "properties": {
+            "setRootSha256": {
+              "$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"
+            },
+            "seccompSetRootSha256": {
+              "$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"
+            }
+          }
+        }
+      }
+    },
+    "payloadSha256": {
+      "$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"
+    },
+    "signatureAlgorithm": {
+      "const": "Ed25519"
+    },
+    "signingKeyId": {
+      "$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"
+    },
+    "signingKeySpkiSha256": {
+      "$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"
+    },
+    "signature": {
+      "$ref": "policy-shadow-assignment.v1.schema.json#/$defs/ed25519Signature"
+    }
+  }
+}

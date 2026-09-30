@@ -1324,6 +1324,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	scripts/authority/sign_native_pilot_driver.py \
 	scripts/authority/sign_native_pilot_window.py \
 	scripts/authority/sign_native_pilot_closure.py \
+	scripts/authority/sign_native_pilot_assignment.py \
 	scripts/authority/prepare_native_pilot_closure_set.py \
 	scripts/test_native_pilot_closure_set.py \
 	scripts/authority/sign_native_pilot_delivery.py \
@@ -1607,6 +1608,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/native_pilot_driver_authority.py \
 	serverware/native_pilot_window_authority.py \
 	serverware/native_pilot_closure_authority.py \
+	serverware/native_pilot_assignment.py \
 	serverware/native_pilot_closure_set.py \
 	serverware/native_pilot_measured_configuration.py \
 	serverware/native_pilot_delivery_authority.py \
@@ -4030,6 +4032,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				scripts/authority/sign_native_pilot_driver.py \
 				scripts/authority/sign_native_pilot_window.py \
 				scripts/authority/sign_native_pilot_closure.py \
+				scripts/authority/sign_native_pilot_assignment.py \
 				scripts/authority/prepare_native_pilot_closure_set.py \
 				scripts/test_native_pilot_closure_set.py \
 				scripts/authority/sign_native_pilot_delivery.py \
@@ -4307,6 +4310,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/native_pilot_driver_authority.py \
 				serverware/native_pilot_window_authority.py \
 				serverware/native_pilot_closure_authority.py \
+				serverware/native_pilot_assignment.py \
 				serverware/native_pilot_closure_set.py \
 				serverware/native_pilot_measured_configuration.py \
 				serverware/native_pilot_delivery_authority.py \
@@ -5180,6 +5184,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/policy-custody-guest-delivery.v1.schema.json \
 				schemas/native-custody-closure.v1.schema.json \
 				schemas/native-custody-closure.v2.schema.json \
+				schemas/native-custody-closure.v3.schema.json \
+				schemas/policy-shadow-assignment.v2.schema.json \
 				schemas/native-custody-execution-closure-set.v1.schema.json \
 				schemas/native-pilot-closure-set-preparation.v1.schema.json \
 				schemas/native-shadow-role-keys.v1.schema.json \

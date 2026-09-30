@@ -21,6 +21,7 @@ pub(super) fn run(mut prepared:Prepared,identity:driver_identity::Owner,
     let launch_bytes=launch.read(32768).map_err(fail)?.to_vec();
     let (selected,service)=selection(&launch_bytes)?;
     let verifier_role=service.verifier_role();
+    let closure_set_role=service.closure_set_role();
     let (time_pin,commitment_bridge,spool_bridge,terminal_bridge,effects_bridge)=match service {
         SelectedService::ProofBridge(p)=>(p,false,false,false,false),SelectedService::CommitmentBridge(p)=>(p,true,false,false,false),
         SelectedService::SpoolBridge(p)=>(p,true,true,false,false),SelectedService::TerminalBridge(p)=>(p,true,true,true,false),
@@ -84,7 +85,7 @@ pub(super) fn run(mut prepared:Prepared,identity:driver_identity::Owner,
     let lifetime=process::Lifetime::adopt_late(&delivery)?;
     let closure_original=original(&mut rights,"closure",&selected.closure,0,0,1024*1024)?;
     let closure_configuration:ClosureConfiguration=exact(&closure_original.read(1024*1024).map_err(fail)?)?;
-    let prekey=PrekeyExecutable::from_late_owner(&closure_configuration,&delivery,&retained)?;
+    let prekey=PrekeyExecutable::from_late_owner(&closure_configuration,&delivery,&retained,closure_set_role)?;
     let trust_original=original(&mut rights,"trust",&selected.trust,0,0,1024*1024)?;
     let time_original=original(&mut rights,"time",&selected.time_bootstrap,0,0,65536)?;
     let assignment_original=original(&mut rights,"assignment",&selected.assignment,0,0,4*1024*1024)?;
@@ -102,7 +103,7 @@ pub(super) fn run(mut prepared:Prepared,identity:driver_identity::Owner,
     let time_nsm=resources.time.take().ok_or(ShadowError::BindingDrift)?;
     let (trust,time)=authority::Trust::open_late(trust_original,time_original,&delivery,&prekey,time_nsm)?;
     let assignment=trust.verify_assignment(&assignment_original.read(4*1024*1024).map_err(fail)?)?;
-    let closure=PreparedNativeCustodyClosure::bind_late(closure_configuration,&assignment,&trust,time.as_ref(),&delivery,&retained,&prekey)?;
+    let closure=PreparedNativeCustodyClosure::bind_late(closure_configuration,&assignment,&trust,time.as_ref(),&delivery,&retained,&prekey,closure_set_role)?;
     drop(prekey);
     let settings=&retained.operation.production;
     let native_configuration=ProductionCustodyConfiguration::from_native_closure_with_settlement_authority(
@@ -112,7 +113,8 @@ pub(super) fn run(mut prepared:Prepared,identity:driver_identity::Owner,
         settings.dispatcher_protocol_set_sha256.clone(),retained.observation.driver.clone(),settings.maximum_rpc_nanos,
         settings.cleanup_reserve_nanos,settings.maximum_in_flight_calls,settings.maximum_async_durability_nanos)?;
     require(native_configuration.production_configuration_binding_sha256()==&settings.expected_configuration_binding_sha256)?;
-    let keys_configuration:NativeCustodyKeyConfiguration=exact(&keys_original.read(65536).map_err(fail)?)?;
+    let mut keys_configuration:NativeCustodyKeyConfiguration=exact(&keys_original.read(65536).map_err(fail)?)?;
+    keys_configuration.bind_native_closure(&closure)?;
     let encrypted_configuration:NativeShadowEncryptedKeysConfiguration=exact(&encrypted_original.read(65536).map_err(fail)?)?;
     // The bridge itself never acquires the endpoint's request-commitment HMAC.
     require(!encrypted_configuration.has_commitment())?;

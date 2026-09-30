@@ -9215,6 +9215,27 @@ def _policy_shadow_activation_trust() -> tuple[
     return public_key, scope_digest, closure_digest, seccomp_digest, key_id
 
 
+def _policy_shadow_activation_scope_roots() -> tuple[str, ...]:
+    """Independently configured successor pins, never selected by a receipt."""
+    version = os.environ.get("SERVERWARE_POLICY_SHADOW_ACTIVATION_PROOF_SCOPE_VERSION", "v1")
+    roots = tuple(os.environ.get(name, "") for name in (
+        "SERVERWARE_POLICY_SHADOW_ACTIVATION_EXECUTION_CLOSURE_SET_ROOT_SHA256",
+        "SERVERWARE_POLICY_SHADOW_ACTIVATION_SECCOMP_SET_ROOT_SHA256",
+    ))
+    if version == "v1" and not any(roots):
+        return ()
+    if version != "v2" or any(
+        re.fullmatch(r"sha256:[0-9a-f]{64}", value) is None
+        or value == "sha256:" + "0" * 64
+        for value in roots
+    ):
+        raise HTTPException(
+            status_code=503,
+            detail="activation-publication closure-set trust is not fully pinned",
+        )
+    return roots
+
+
 def _verify_policy_shadow_activation_receipt(
     receipt: Any,
     *,
@@ -9303,12 +9324,15 @@ def _verify_policy_shadow_activation_receipt(
             status_code=503,
             detail="activation-publication signer is not independently trusted",
         )
+    scope_roots = _policy_shadow_activation_scope_roots()
     assignment_bound = _policy_authority_canonical_bytes(
         [
-            "serverware.policyShadowAssignmentBoundCustodyReceipt/v1",
+            ("serverware.policyShadowAssignmentBoundCustodyReceipt/v2" if scope_roots
+                else "serverware.policyShadowAssignmentBoundCustodyReceipt/v1"),
             scope,
             closure,
             seccomp,
+            *scope_roots,
             "activation-publication",
             "sha256:" + hashlib.sha256(canonical_payload).hexdigest(),
         ]

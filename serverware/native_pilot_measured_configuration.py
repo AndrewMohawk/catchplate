@@ -1,9 +1,9 @@
-"""Actual-owner derivation of the current legacy native configuration binding.
+"""Actual-owner derivation of explicitly versioned native configuration binding.
 
 The independently approved root-protected recipe is retained before spawn.
 Only the real coordinator's bootstrap observation supplies process-dependent
-values. This implements the existing single bridge-closure v2 / configuration
-hash v1 contract, not a closure-set successor. It emits unsigned derived data,
+values. Legacy v1 preserves its single bridge closure; recipe v2 additionally
+authenticates the complete closure set under assignment v2. It emits unsigned derived data,
 never a receipt, object store, authorization, native admission or readiness.
 """
 from __future__ import annotations
@@ -16,7 +16,9 @@ import time
 from scripts import native_pilot_runtime_artifacts as artifact
 from scripts.authority import native_pilot_authority_io as io
 from serverware import authority_policy_canary_native_opening as opening
+from serverware import native_pilot_assignment as assignments
 from serverware import native_pilot_closure_authority as closure
+from serverware import native_pilot_closure_set as closure_set
 from serverware import native_pilot_delivery_authority as c9
 from serverware import native_pilot_driver_authority as driver_authority
 from serverware import native_pilot_launch_publication as launch
@@ -32,6 +34,7 @@ MAX_RECIPE = 8 * 1024 * 1024
 FIELDS = ("apiVersion", "source", "conductorInventorySha256", "authorityInventorySha256",
     "bootstrapOriginals", "assignmentOriginal", "trustOriginal", "trustSha256",
     "closureManifestOriginal", "production")
+SET_FIELDS = FIELDS + ("closureSetOriginal",)
 PRODUCTION_FIELDS = scope.PRODUCTION_FIELDS[:-1]
 OPERATIONS = (
     "recover-current-state", "verify-checkpoint-successor", "verify-current-checkpoint-head", "verify-observation-evidence",
@@ -78,11 +81,13 @@ def _assignment(value, now):
     p.require(set(p.ROLES).issubset(keys))
     raw, _ = scope._original(value["assignmentOriginal"], 4 * 1024 * 1024)
     envelope = launch.shape("native-bridge-assignment", raw)
-    assignment = opening.assignment_payload(envelope["payload"])
+    selected = 2 if value["apiVersion"] == "serverware.nativePilotMeasuredConfigurationRecipe/v2" else 1
+    p.require(assignments.version(envelope) == selected)
+    assignment = opening.assignment_payload(envelope["payload"], version=selected)
     p.require(envelope["signingKeyId"] == trust["assignmentKey"]["keyId"]
         and envelope["signingKeySpkiSha256"] == trust["assignmentKey"]["keySpkiSha256"])
     assignment_key.verify(p.decoded(envelope["signature"], size=64),
-        p.preimage("serverware.policyShadowAssignment/v1", assignment))
+        p.preimage(assignments.domain(envelope), assignment))
     p.freshness(assignment["issuedAtUnixNanos"], assignment["expiresAtUnixNanos"], now)
     p.digest(assignment["assignmentId"])
     p.integer(assignment["assignmentRevision"], maximum=p.MAX_U64)
@@ -99,6 +104,18 @@ def _assignment(value, now):
         bindings[role] = public
     p.require(p.key_root([bindings[role] for role in p.ROLES]) == key_root)
     return envelope, bindings, key_root
+
+
+def _closure_set(value, envelope, manifest):
+    """Authenticate common roots without changing the measured bridge leaf."""
+    text = value["closureSetOriginal"]
+    p.require(type(text) is str and text.isascii() and 0 < len(text) <= closure_set.MAX_BYTES)
+    raw = text.encode("ascii")
+    selected = closure_set.validate(raw)
+    binding = assignments.closure_binding(envelope, raw, "bridge")
+    p.require(p.canonical(selected["members"][-1]["manifest"]) == p.canonical(manifest)
+        and binding["manifestSha256"] == manifest["manifestSha256"])
+    return envelope["payload"]["nativeClosureSet"]
 
 
 def _phase(process, phase):
@@ -136,19 +153,24 @@ class MeasuredConfigurationRecipe:
             owner._raw = io.read_public(owner._fd, MAX_RECIPE)
             owner._sha = p.digest(recipe_sha256)
             p.require(p.sha(owner._raw) == owner._sha)
-            value = p.fields(p.document(owner._raw, MAX_RECIPE), FIELDS)
-            p.require(value["apiVersion"] == "serverware.nativePilotMeasuredConfigurationRecipe/v1")
+            value = p.document(owner._raw, MAX_RECIPE)
+            p.require(type(value) is dict and value.get("apiVersion") in
+                ("serverware.nativePilotMeasuredConfigurationRecipe/v1", "serverware.nativePilotMeasuredConfigurationRecipe/v2"))
+            successor = value["apiVersion"] == "serverware.nativePilotMeasuredConfigurationRecipe/v2"
+            p.fields(value, SET_FIELDS if successor else FIELDS)
             owner._source = artifact._source(p.fields(value["source"], artifact.SOURCE_FIELDS))
             for name in ("conductorInventorySha256", "authorityInventorySha256"):
                 p.digest(value[name])
             from serverware.native_pilot_supervisor_policy import _bootstrap_originals
             raw, control, config, _, window = _bootstrap_originals(value["bootstrapOriginals"])
             _production(value["production"])
-            _assignment(value, time.time_ns())
+            envelope, _, _ = _assignment(value, time.time_ns())
             manifest_raw, manifest = scope._original(value["closureManifestOriginal"], closure.MAX_BYTES)
             p.fields(manifest, closure.MANIFEST_FIELDS)
             p.require(manifest["apiVersion"] == "serverware.nativeCustodyExecutionClosure/v2"
                 and manifest["profile"] == closure.PROFILE and len(manifest_raw) <= closure.MAX_BYTES)
+            if successor:
+                _closure_set(value, envelope, manifest)
             owner._value = copy.deepcopy(value)
             owner._bootstrap, owner._control, owner._config, owner._window = raw, control, config, window
             owner.check()
@@ -194,7 +216,7 @@ class MeasuredConfigurationRecipe:
             raise
 
     def derive(self, *, process, request) -> dict:
-        """Return exact legacy hash/proof-scope data after the real bootstrap result."""
+        """Return the selected hash/proof-scope after the real bootstrap result."""
         from serverware.native_pilot_supervisor_process import AuthorityCoordinatorProcess, JobRequest
         self.check()
         p.require(not self._derive_attempted)
@@ -235,6 +257,8 @@ class MeasuredConfigurationRecipe:
             envelope, keys, key_root = _assignment(self._value, time.time_ns())
             manifest = closure._manifest({"manifestOriginal": self._value["closureManifestOriginal"]},
                 self._config, observed, envelope["payload"])
+            if self._value["apiVersion"] == "serverware.nativePilotMeasuredConfigurationRecipe/v2":
+                _closure_set(self._value, envelope, manifest)
             result = self._derive(envelope, keys, key_root, manifest, observed)
             self.check()
             process.check_request(request)
@@ -265,21 +289,34 @@ class MeasuredConfigurationRecipe:
             "kernelRetainedDriverIdentitySha256": observed["driver"]["identitySha256"],
             "assertedCustodyKeySetRootSha256": key_root}
         p.require(len(binding) == 24)
+        successor = self._value["apiVersion"] == "serverware.nativePilotMeasuredConfigurationRecipe/v2"
+        version = "2" if successor else "1"
+        if successor:
+            binding["nativeClosureSet"] = copy.deepcopy(assignment["nativeClosureSet"])
+            p.require(len(binding) == 25)
         binding_raw = p.canonical(binding)
-        binding_sha = p.framed(b"serverware.policyShadowProductionCustodyConfiguration/v1", (binding_raw,))
+        binding_sha = p.framed(("serverware.policyShadowProductionCustodyConfiguration/v" + version).encode("ascii"), (binding_raw,))
         proof_values = (assignment["assignmentId"], envelope["payloadSha256"], assignment["assignmentRevision"],
             authority["authorityId"], authority["storageRealmSha256"], authority["retrievalNamespaceSha256"],
             assignment["authorityKeyIndependence"]["independenceRootSha256"], binding_sha, key_root,
             manifest["manifestSha256"], manifest["seccompPolicy"]["structurallyVerifiedPolicySha256"])
         proof = dict(zip(retrieval.SCOPE_VALUES, proof_values, strict=True))
+        if successor:
+            roots = assignment["nativeClosureSet"]
+            proof["api_version"] = retrieval.SCOPE_SET_API
+            proof.update(zip(retrieval.SCOPE_SET_VALUES, (roots["setRootSha256"], roots["seccompSetRootSha256"]), strict=True))
+            proof_values += (roots["setRootSha256"], roots["seccompSetRootSha256"])
         proof["store_response_authority"] = {name: keys["custody-store-response"][source] for name, source in
             (("role", "role"), ("key_id", "keyId"), ("key_spki_sha256", "keySpkiSha256"), ("key_material_sha256", "keyMaterialSha256"))}
         proof["retrieval_response_authority"] = {name: keys["custody-retrieval-response"][source] for name, source in
             (("role", "role"), ("key_id", "keyId"), ("key_spki_sha256", "keySpkiSha256"), ("key_material_sha256", "keyMaterialSha256"))}
-        proof["binding_sha256"] = p.framed(b"serverware.policyShadowProductionCustodyProofScope/v1", (p.canonical(proof_values),))
+        proof["binding_sha256"] = p.framed(("serverware.policyShadowProductionCustodyProofScope/v" + version).encode("ascii"),
+            (p.canonical(proof_values),))
         proof_raw = p.canonical(proof)
         retrieval.scope_original(proof_raw)
-        return {"apiVersion": "serverware.nativePilotMeasuredConfiguration/v1", "recipeSha256": self._sha,
+        if successor:
+            retrieval.require_assignment_scope(proof, p.canonical(assignment))
+        return {"apiVersion": "serverware.nativePilotMeasuredConfiguration/v" + version, "recipeSha256": self._sha,
             "configurationBindingOriginal": binding_raw.decode("ascii"), "configurationBindingSha256": binding_sha,
             "proofScopeOriginal": proof_raw.decode("ascii"),
             "production": {**production, "expectedConfigurationBindingSha256": binding_sha}}

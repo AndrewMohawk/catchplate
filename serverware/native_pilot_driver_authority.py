@@ -27,6 +27,7 @@ import re
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
+from serverware import native_pilot_assignment as assignment_profile
 from serverware import native_pilot_scope_authority as scope_authority
 from serverware import native_shadow_bridge_admission_profile as bridge
 from serverware import native_shadow_constructed_driver as admission
@@ -237,9 +238,10 @@ def _assignment(value, exported, verifier, keys, now):
     _, envelope = _original(exported["assignmentOriginal"], 4 * 1024 * 1024)
     p.fields(envelope, ("apiVersion", "kind", "canonicalProfile", "signatureDomain", "payload",
         "payloadSha256", "signatureAlgorithm", "signingKeyId", "signingKeySpkiSha256", "signature"))
-    payload = opening.assignment_payload(envelope["payload"])
+    assignment_profile.shape(envelope)
+    payload = opening.assignment_payload(envelope["payload"], version=assignment_profile.version(envelope))
     spki = p.sha(key.public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo))
-    domain = "serverware.policyShadowAssignment/v1"
+    domain = assignment_profile.domain(envelope)
     p.require(envelope["apiVersion"] == envelope["signatureDomain"] == domain
         and envelope["kind"] == "PolicyShadowAssignment" and envelope["canonicalProfile"] == "serverware.canonicalJson/ascii-integer-v1"
         and envelope["signatureAlgorithm"] == "Ed25519" and envelope["signingKeyId"] == envelope["signingKeySpkiSha256"] == spki
@@ -257,13 +259,15 @@ def _assignment(value, exported, verifier, keys, now):
     for entry in keys:
         p.require(all(bindings[entry["role"]][name] == entry[name]
                       for name in ("keyId", "keySpkiSha256", "keyMaterialSha256")))
-    return payload
+    return envelope
 
 
-def _closure(exported, config, verifier, scope, key, now):
+def _closure(exported, config, verifier, scope, key, now, assignment):
+    from serverware import native_pilot_launch_publication as launch
     _, closure = _original(exported["closureOriginal"], 1024 * 1024)
-    p.fields(closure, ("apiVersion", "manifest", "authorization"))
-    p.require(closure["apiVersion"] == "serverware.nativeCustodyClosure/v2")
+    multi = assignment_profile.version(assignment) == 2
+    launch.shape("native-bridge-closure", p.canonical(closure))
+    p.require(closure["apiVersion"] == "serverware.nativeCustodyClosure/v" + ("3" if multi else "2"))
     fields = ("apiVersion", "profile", "imageSha256", "workerExecutableSha256", "seccompPolicy",
               "runtimeConfigurationSha256", "buildProvenance", "manifestSha256")
     manifest = p.fields(closure["manifest"], fields)
@@ -286,18 +290,23 @@ def _closure(exported, config, verifier, scope, key, now):
         and provenance["buildRecipeSha256"] == image["buildRecipeSha256"]
         and provenance["provenanceStatementSha256"] == image["provenanceSha256"])
     signed = p.fields(closure["authorization"], ("payload", "signature"))
-    payload = p.fields(signed["payload"], ("apiVersion", "purpose", "profile", "assignmentId", "assignmentPayloadSha256",
-        "assignmentRevision", "manifestSha256", "guest", "trustCheckpointId", "revocationGeneration", "revocationRootSha256",
-        "issuedAtUnixNanos", "expiresAtUnixNanos", "signingKeyId", "signingKeySpkiSha256"))
-    p.require(payload["apiVersion"] == "serverware.nativeCustodyClosureAssignment/v2"
-        and payload["purpose"] == "shadow-custody-bootstrap-late-runtime" and payload["profile"] == manifest["profile"]
-        and payload["manifestSha256"] == manifest["manifestSha256"])
+    payload = p.fields(signed["payload"], launch._CLOSURE_SET if multi else launch._CLOSURE)
+    p.require(payload["manifestSha256"] == manifest["manifestSha256"])
+    if multi:
+        leaf = assignment_profile.closure_binding(assignment, p.canonical(closure["closureSet"]), "bridge")
+        p.require(payload["guestRole"] == "bridge")
+        for name in ("setRootSha256", "seccompSetRootSha256", "leafSha256", "manifestSha256"):
+            p.require(payload[name] == leaf[name])
+    else:
+        p.require(payload["apiVersion"] == "serverware.nativeCustodyClosureAssignment/v2"
+            and payload["purpose"] == "shadow-custody-bootstrap-late-runtime" and payload["profile"] == manifest["profile"])
     auth = verifier["authorization"]["payload"]
     for name in ("assignmentId", "assignmentPayloadSha256", "assignmentRevision", "guest", "trustCheckpointId",
                  "revocationGeneration", "revocationRootSha256", "signingKeyId", "signingKeySpkiSha256"):
         _same(payload[name], auth[name])
     p.freshness(payload["issuedAtUnixNanos"], payload["expiresAtUnixNanos"], now)
-    key.verify(p.decoded(signed["signature"], size=64), p.preimage("serverware.nativeCustodyClosureAssignment.signature/v2", payload))
+    key.verify(p.decoded(signed["signature"], size=64),
+        p.preimage("serverware.nativeCustodyClosureAssignment.signature/v" + ("3" if multi else "2"), payload))
     return payload["expiresAtUnixNanos"]
 
 
@@ -450,13 +459,14 @@ def sign(operation: str, input_original: bytes, signing_key: Ed25519PrivateKey) 
         _same(key_configuration["authorization"], verifier["authorization"])
         _, admitted = _original(exported["admissionAuthorizationOriginal"], 65536)
         _same(admitted, verifier["admissionAuthorization"])
-        assignment = _assignment(value, exported, verifier, keys, wall)
+        assignment_envelope = _assignment(value, exported, verifier, keys, wall)
+        assignment = assignment_envelope["payload"]
         custody = assignment["custodyAuthority"]
         p.require(custody["executionClosureManifestSha256"] == scope["executionClosureManifestSha256"]
             and custody["structurallyVerifiedSeccompPolicySha256"] == scope["structurallyVerifiedSeccompPolicySha256"])
         mode = custody["attestationMode"]
         _same({name: mode[name] for name in verifier["expectedAttestation"]}, verifier["expectedAttestation"])
-        expiries.append(_closure(exported, config, verifier, scope, public, wall))
+        expiries.append(_closure(exported, config, verifier, scope, public, wall, assignment_envelope))
         statement, result_expiry = _evidence(exported, verifier, scope, keys, wall)
         expiries.extend((result_expiry, assignment["expiresAtUnixNanos"], verifier["authorization"]["payload"]["expiresAtUnixNanos"],
             verifier["admissionAuthorization"]["payload"]["expiresAtUnixNanos"]))

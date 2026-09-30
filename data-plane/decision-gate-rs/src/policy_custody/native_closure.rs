@@ -9,6 +9,7 @@ use std::os::unix::fs::{FileExt,MetadataExt};
 
 const PROFILE:&str="sealed-memfd-squashfs-static-amd64-v1";
 const BOOTSTRAP_PROFILE:&str="measured-bootstrap-late-runtime-static-amd64-v1";
+const SET_PROFILE:&str="native-multi-guest-closure-set-v1";
 #[path="native_closure_late.rs"] mod late;
 #[path="native_closure_remote.rs"] mod remote;
 #[path="native_closure_set.rs"] pub(in crate::policy_shadow) mod closure_set;
@@ -49,31 +50,101 @@ struct AssignmentPayload {
     guest:GuestClosureBinding,trust_checkpoint_id:Sha256Digest,revocation_generation:u64,
     revocation_root_sha256:Sha256Digest,issued_at_unix_nanos:i64,expires_at_unix_nanos:i64,
     signing_key_id:Sha256Digest,signing_key_spki_sha256:Sha256Digest,
+    #[serde(default,skip_serializing_if="Option::is_none",deserialize_with="deserialize_optional_present")]
+    guest_role:Option<String>,
+    #[serde(default,skip_serializing_if="Option::is_none",deserialize_with="deserialize_optional_present")]
+    set_root_sha256:Option<Sha256Digest>,
+    #[serde(default,skip_serializing_if="Option::is_none",deserialize_with="deserialize_optional_present")]
+    seccomp_set_root_sha256:Option<Sha256Digest>,
+    #[serde(default,skip_serializing_if="Option::is_none",deserialize_with="deserialize_optional_present")]
+    leaf_sha256:Option<Sha256Digest>,
 }
 #[derive(Debug,Clone,PartialEq,Eq,Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 struct Assignment {payload:AssignmentPayload,signature:CanonicalEd25519Signature}
 #[derive(Debug,Clone,PartialEq,Eq,Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
-pub(in crate::policy_shadow) struct Configuration {api_version:String,manifest:Manifest,authorization:Assignment}
+pub(in crate::policy_shadow) struct Configuration {
+    api_version:String,manifest:Manifest,authorization:Assignment,
+    #[serde(default,skip_serializing_if="Option::is_none",deserialize_with="deserialize_optional_present")]
+    closure_set:Option<closure_set::Wire>,
+}
+
+#[derive(Debug,Clone,PartialEq,Eq)]
+struct Membership {
+    set:closure_set::ValidatedSet,commitment:NativeClosureSetCommitment,role:&'static str,
+}
+/// Non-wire evidence minted only by a genuine admitted closure below. This is
+/// not a live owner; callers must retain their original closure revalidation.
+#[derive(Debug,Clone)]
+pub(in crate::policy_shadow) struct KeyMembership {
+    membership:Membership,assignment_payload_sha256:Sha256Digest,guest:GuestClosureBinding,
+    manifest_sha256:Sha256Digest,seccomp_policy_sha256:Sha256Digest,
+}
+impl KeyMembership {
+    fn from_admitted(configuration:&Configuration,membership:&Membership,guest:GuestClosureBinding)->Self {
+        Self{membership:membership.clone(),assignment_payload_sha256:configuration.authorization.payload.assignment_payload_sha256.clone(),
+            guest,manifest_sha256:configuration.manifest.manifest_sha256.clone(),
+            seccomp_policy_sha256:configuration.manifest.seccomp_policy.policy_sha256().clone()}
+    }
+    pub(in crate::policy_shadow) fn require(&self,assignment:&VerifiedAssignment,guest:&GuestClosureBinding,
+        manifest:&Sha256Digest)->Result<(),ShadowError>{
+        let leaf=self.membership.set.role_binding(self.membership.role)?;
+        let bridge=self.membership.set.role_binding("bridge")?;let a=assignment.payload();
+        require(&self.assignment_payload_sha256==assignment.payload_sha256() && &self.guest==guest
+            && manifest==&self.manifest_sha256 && leaf.manifest_sha256()==manifest
+            && leaf.seccomp_policy_sha256()==&self.seccomp_policy_sha256
+            && a.native_closure_set.as_ref()==Some(&self.membership.commitment)
+            && &a.custody_authority.execution_closure_manifest_sha256==bridge.manifest_sha256()
+            && &a.custody_authority.structurally_verified_seccomp_policy_sha256==bridge.seccomp_policy_sha256())
+    }
+}
+impl AssignmentPayload {
+    fn legacy_fields(&self)->bool {self.guest_role.is_none() && self.set_root_sha256.is_none()
+        && self.seccomp_set_root_sha256.is_none() && self.leaf_sha256.is_none()}
+}
 
 impl Configuration {
-    fn require_legacy(&self)->Result<(),ShadowError>{
-        require(self.api_version=="serverware.nativeCustodyClosure/v1"
-            && self.manifest.api_version=="serverware.nativeCustodyExecutionClosure/v1"
-            && self.manifest.profile==PROFILE)?;self.manifest.validate()
+    fn require_profile(&self,role:Option<&'static str>,late:bool)->Result<Option<Membership>,ShadowError>{
+        self.manifest.validate()?;
+        require(self.manifest.api_version==(if late{"serverware.nativeCustodyExecutionClosure/v2"}
+            else{"serverware.nativeCustodyExecutionClosure/v1"})
+            && self.manifest.profile==(if late{BOOTSTRAP_PROFILE}else{PROFILE}))?;
+        if self.api_version!="serverware.nativeCustodyClosure/v3" {
+            require(self.api_version==(if late{"serverware.nativeCustodyClosure/v2"}else{"serverware.nativeCustodyClosure/v1"})
+                && self.closure_set.is_none() && self.authorization.payload.legacy_fields())?;
+            return Ok(None);
+        }
+        // Live configuration keeps its original one-MiB cap; the larger static
+        // preflight grammar does not widen launch, phase or original ceilings.
+        require(canonical_json_bytes(self)?.len()<=1024*1024)?;
+        let role=role.ok_or(ShadowError::BindingDrift)?;require((role=="bridge")==late)?;
+        let p=&self.authorization.payload;
+        require(p.api_version=="serverware.nativeCustodyClosureAssignment/v3"
+            && p.purpose=="shadow-custody-closure-set-member" && p.profile==SET_PROFILE
+            && p.guest_role.as_deref()==Some(role))?;
+        let commitment=NativeClosureSetCommitment {
+            set_root_sha256:p.set_root_sha256.clone().ok_or(ShadowError::BindingDrift)?,
+            seccomp_set_root_sha256:p.seccomp_set_root_sha256.clone().ok_or(ShadowError::BindingDrift)?,
+        };
+        let set=closure_set::ValidatedSet::from_bytes(
+            &canonical_json_bytes(self.closure_set.as_ref().ok_or(ShadowError::BindingDrift)?)?,
+            &commitment.set_root_sha256,&commitment.seccomp_set_root_sha256)?;
+        require(p.leaf_sha256.as_ref()==Some(set.require_member(role,&self.manifest)?.leaf_sha256()))?;
+        Ok(Some(Membership{set,commitment,role}))
     }
-    pub(in crate::policy_shadow) fn require_pair_image(&self,image:&Sha256Digest,executable:&Sha256Digest)->Result<(),ShadowError> {
-        self.require_legacy()?;
+    pub(in crate::policy_shadow) fn require_pair_image(&self,image:&Sha256Digest,executable:&Sha256Digest,
+        role:Option<&'static str>)->Result<(),ShadowError> {
+        self.require_profile(role,false)?;
         require(&self.manifest.image_sha256==image && &self.manifest.worker_executable_sha256==executable)
     }
     /// Root parent cold-original selection only. The child independently
     /// verifies the NEW closure signature after genuine trusted-time delivery.
     /// No native assignment/TEE authority is returned by this image mechanism.
     pub(in crate::policy_shadow) fn prepare_parent_image(&self,
-        delivery:&policy_custody::services::guest::FileAdmission)->Result<ShadowImage,ShadowError> {
+        delivery:&policy_custody::services::guest::FileAdmission,role:Option<&'static str>)->Result<ShadowImage,ShadowError> {
         delivery.check_preparation().map_err(unavailable)?;
-        self.require_legacy()?;
+        self.require_profile(role,false)?;
         let m=&self.manifest;let b=&m.build_provenance;
         require(&m.runtime_configuration_sha256==delivery.runtime_sha256())?;
         let image=ShadowImage::open(m.image_sha256.as_str(),m.worker_executable_sha256.as_str(),[
@@ -86,9 +157,24 @@ impl Configuration {
 }
 
 fn verify_assignment(wire:&Assignment,manifest:&Manifest,guest:&GuestClosureBinding,
-    assignment:&VerifiedAssignment,checkpoint:&AtomicTrustCheckpoint,trust:&dyn EnvelopeKeyTrust)->Result<(),ShadowError> {
+    assignment:&VerifiedAssignment,checkpoint:&AtomicTrustCheckpoint,trust:&dyn EnvelopeKeyTrust,
+    membership:Option<&Membership>)->Result<(),ShadowError> {
     let p=&wire.payload;let original=assignment.payload();
-    let domain=if manifest.profile==BOOTSTRAP_PROFILE {
+    let domain=if let Some(member)=membership {
+        let leaf=member.set.require_member(member.role,manifest)?;
+        let bridge=member.set.role_binding("bridge")?;
+        require(p.api_version=="serverware.nativeCustodyClosureAssignment/v3"
+            && p.purpose=="shadow-custody-closure-set-member" && p.profile==SET_PROFILE
+            && p.guest_role.as_deref()==Some(member.role)
+            && p.set_root_sha256.as_ref()==Some(member.set.set_root_sha256())
+            && p.seccomp_set_root_sha256.as_ref()==Some(member.set.seccomp_set_root_sha256())
+            && p.leaf_sha256.as_ref()==Some(leaf.leaf_sha256())
+            && original.native_closure_set.as_ref()==Some(&member.commitment)
+            && &original.custody_authority.execution_closure_manifest_sha256==bridge.manifest_sha256()
+            && &original.custody_authority.structurally_verified_seccomp_policy_sha256==bridge.seccomp_policy_sha256()
+            && (member.role=="bridge" || guest.runtime_configuration_sha256==manifest.runtime_configuration_sha256))?;
+        "serverware.nativeCustodyClosureAssignment.signature/v3"
+    } else if manifest.profile==BOOTSTRAP_PROFILE {
         require(p.api_version=="serverware.nativeCustodyClosureAssignment/v2"
             && p.purpose=="shadow-custody-bootstrap-late-runtime" && p.profile==BOOTSTRAP_PROFILE)?;
         "serverware.nativeCustodyClosureAssignment.signature/v2"
@@ -102,9 +188,12 @@ fn verify_assignment(wire:&Assignment,manifest:&Manifest,guest:&GuestClosureBind
         && p.assignment_payload_sha256==*assignment.payload_sha256() && p.assignment_revision==original.assignment_revision
         && p.manifest_sha256==manifest.manifest_sha256 && &p.guest==guest)?;
     require(matches!(&original.custody_authority.attestation_mode,
-        CustodyAttestationMode::Tee {platform:TeePlatform::AwsNitroEnclave,..})
-        && original.custody_authority.execution_closure_manifest_sha256==manifest.manifest_sha256
-        && original.custody_authority.structurally_verified_seccomp_policy_sha256==*manifest.seccomp_policy.policy_sha256())?;
+        CustodyAttestationMode::Tee {platform:TeePlatform::AwsNitroEnclave,..}))?;
+    if membership.is_none() {
+        require(original.native_closure_set.is_none() && p.legacy_fields()
+            && original.custody_authority.execution_closure_manifest_sha256==manifest.manifest_sha256
+            && original.custody_authority.structurally_verified_seccomp_policy_sha256==*manifest.seccomp_policy.policy_sha256())?;
+    }
     // Validate interval shape here. Freshness separately uses actual TrustedTime,
     // never the (potentially older) current checkpoint's as-of time.
     validate_freshness(p.issued_at_unix_nanos,p.expires_at_unix_nanos,p.issued_at_unix_nanos,MAX_ENVELOPE_AGE_NANOS)?;
@@ -177,20 +266,21 @@ fn check_root(image:&ShadowImage)->Result<(),ShadowError> {
 /// The later full closure constructor still verifies all authority and bytes.
 pub(in crate::policy_shadow) struct PrekeyExecutable {
     executable:File,identity:ExecutableIdentity,association:GuestClosureAssociation,
+    membership:Option<Membership>,
 }
 impl PrekeyExecutable {
-    pub(in crate::policy_shadow) fn open(configuration:&Configuration,delivery:&PreparedGuestServiceDelivery)
+    pub(in crate::policy_shadow) fn open(configuration:&Configuration,delivery:&PreparedGuestServiceDelivery,role:Option<&'static str>)
         ->Result<Self,ShadowError> {
         let association=delivery.closure_association().map_err(unavailable)?;
         association.check_preparation().map_err(unavailable)?;
-        configuration.require_legacy()?;
+        let membership=configuration.require_profile(role,false)?;
         require(configuration.manifest.runtime_configuration_sha256==association.binding().runtime_configuration_sha256)?;
         let executable=File::open("/proc/self/exe").map_err(unavailable)?;
         let identity=executable_identity(&executable)?;
         let bytes=read(&executable,128*1024*1024)?;
         require(Sha256Digest::compute(&bytes)==configuration.manifest.worker_executable_sha256)?;
         serverware_decision_gate::native_shadow_workers::validate_static_amd64_elf_verifier(&bytes).map_err(unavailable)?;
-        let owner=Self{executable,identity,association};owner.check()?;Ok(owner)
+        let owner=Self{executable,identity,association,membership};owner.check()?;Ok(owner)
     }
     pub(in crate::policy_shadow) fn check(&self)->Result<(),ShadowError> {
         self.association.check_native_preparation().map_err(unavailable)?;
@@ -204,22 +294,32 @@ impl PrekeyExecutable {
 pub(in crate::policy_shadow) struct PreparedNativeCustodyClosure {
     configuration:Configuration,association:GuestClosureAssociation,image:Arc<ShadowImage>,
     executable:File,executable_identity:ExecutableIdentity,checkpoint:AtomicTrustCheckpoint,
+    membership:Option<Membership>,
 }
 impl PreparedNativeCustodyClosure {
+    pub(in crate::policy_shadow) fn key_membership(&self)->Result<Option<KeyMembership>,ShadowError>{
+        self.association.check_preparation().map_err(unavailable)?;
+        self.image.check(self.association.startup()).map_err(unavailable)?;
+        require(executable_identity(&self.executable)?==self.executable_identity)?;
+        check_current_executable(&self.executable_identity)?;
+        Ok(self.membership.as_ref().map(|member|KeyMembership::from_admitted(&self.configuration,member,self.association.binding())))
+    }
     pub(in crate::policy_shadow) fn require_prekey(&self,original:&PrekeyExecutable)->Result<(),ShadowError> {
         original.check()?;self.association.check_preparation().map_err(unavailable)?;
-        require(self.association.same_origin(&original.association) && self.executable_identity==original.identity)
+        require(self.association.same_origin(&original.association) && self.executable_identity==original.identity
+            && self.membership==original.membership)
     }
     pub(in crate::policy_shadow) fn open(configuration:Configuration,assignment:&VerifiedAssignment,
-        trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime,delivery:&PreparedGuestServiceDelivery)->Result<Self,ShadowError> {
+        trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime,delivery:&PreparedGuestServiceDelivery,
+        role:Option<&'static str>)->Result<Self,ShadowError> {
         let association=delivery.closure_association().map_err(unavailable)?;association.check_preparation().map_err(unavailable)?;
-        configuration.require_legacy()?;
+        let membership=configuration.require_profile(role,false)?;
         revalidate_verified_freshness(assignment,trust,time,MAX_ENVELOPE_AGE_NANOS)?;
         let checkpoint=trust.current_checkpoint()?;let p=&configuration.authorization.payload;
         require(p.trust_checkpoint_id==checkpoint.checkpoint_id && p.revocation_generation==checkpoint.revocation_generation
             && p.revocation_root_sha256==checkpoint.revocation_root_sha256)?;
         verify_assignment(&configuration.authorization,&configuration.manifest,&association.binding(),assignment,
-            &checkpoint,trust)?;
+            &checkpoint,trust,membership.as_ref())?;
         validate_trusted_freshness(p.issued_at_unix_nanos,p.expires_at_unix_nanos,time,MAX_ENVELOPE_AGE_NANOS)?;
         let m=&configuration.manifest;let b=&m.build_provenance;
         let image=ShadowImage::open(m.image_sha256.as_str(),m.worker_executable_sha256.as_str(),[
@@ -236,7 +336,7 @@ impl PreparedNativeCustodyClosure {
         // Same full bytes, not merely a matching path or mutable executable.
         require(read(image.executable(),128*1024*1024)?==bytes)?;
         check_current_executable(&executable_identity)?;association.check_preparation().map_err(unavailable)?;
-        Ok(Self {configuration,association,image:Arc::new(image),executable,executable_identity,checkpoint})
+        Ok(Self {configuration,association,image:Arc::new(image),executable,executable_identity,checkpoint,membership})
     }
     pub(in crate::policy_shadow) fn root(&self)->Result<BorrowedFd<'_>,ShadowError> {
         self.association.check_preparation().map_err(unavailable)?;self.image.check(self.association.startup()).map_err(unavailable)?;
@@ -269,6 +369,10 @@ impl fmt::Debug for NativeCustodyClosureOwner {
 impl PartialEq for NativeCustodyClosureOwner {fn eq(&self,other:&Self)->bool {Arc::ptr_eq(&self.0,&other.0)}}
 impl Eq for NativeCustodyClosureOwner {}
 impl NativeCustodyClosureOwner {
+    pub(in crate::policy_shadow) fn key_membership(&self)->Result<Option<KeyMembership>,ShadowError>{
+        self.check()?;let p=&self.0.prepared;
+        Ok(p.membership.as_ref().map(|member|KeyMembership::from_admitted(&p.configuration,member,p.association.binding())))
+    }
     pub(in crate::policy_shadow) fn require_origin(&self,association:&GuestClosureAssociation)->Result<(),ShadowError> {
         self.check()?;require(self.0.prepared.association.same_origin(association))
     }
@@ -286,7 +390,7 @@ impl NativeCustodyClosureOwner {
         self.check()?;let p=&self.0.prepared;
         require(p.checkpoint.permits_successor(checkpoint))?;
         verify_assignment(&p.configuration.authorization,&p.configuration.manifest,&p.association.binding(),assignment,
-            checkpoint,trust)
+            checkpoint,trust,p.membership.as_ref())
     }
     pub(super) fn freshness(&self,now:i64)->Result<(),ShadowError> {
         self.check()?;let p=&self.0.prepared.configuration.authorization.payload;
@@ -309,4 +413,10 @@ impl NativeCustodyClosureOwner {
     pub(super) fn manifest_sha256(&self)->&Sha256Digest {&self.0.prepared.configuration.manifest.manifest_sha256}
     pub(super) fn seccomp_policy_sha256(&self)->&Sha256Digest {self.0.prepared.configuration.manifest.seccomp_policy.policy_sha256()}
     pub(super) fn worker_executable_sha256(&self)->&Sha256Digest {&self.0.prepared.configuration.manifest.worker_executable_sha256}
+    pub(in crate::policy_shadow) fn native_closure_set(&self)->Option<&NativeClosureSetCommitment> {
+        self.0.prepared.membership.as_ref().map(|member|&member.commitment)
+    }
+    pub(in crate::policy_shadow) fn native_closure_set_role(&self)->Option<&str> {
+        self.0.prepared.membership.as_ref().map(|member|member.role)
+    }
 }

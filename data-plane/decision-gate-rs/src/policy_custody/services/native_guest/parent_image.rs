@@ -19,12 +19,16 @@ impl Image {
     /// against a caller assertion about what the child will execute.
     pub(super) fn prepare_pair(pin:&Pin,delivery:&FileAdmission,executable:BorrowedFd<'_>,
         image_sha256:&Sha256Digest,executable_sha256:&Sha256Digest)->Result<Self,ShadowError> {
+        Self::prepare_pair_selected(pin,delivery,executable,image_sha256,executable_sha256,None)
+    }
+    pub(super) fn prepare_pair_selected(pin:&Pin,delivery:&FileAdmission,executable:BorrowedFd<'_>,
+        image_sha256:&Sha256Digest,executable_sha256:&Sha256Digest,role:Option<&'static str>)->Result<Self,ShadowError> {
         delivery.check_preparation().map_err(fail)?;
         let configuration=pin.open(1024*1024)?;
         let configuration_bytes=configuration.read(1024*1024).map_err(fail)?.to_vec();
         let selected:ClosureConfiguration=exact(&configuration_bytes)?;
-        selected.require_pair_image(image_sha256,executable_sha256)?;
-        let image=selected.prepare_parent_image(delivery)?;
+        selected.require_pair_image(image_sha256,executable_sha256,role)?;
+        let image=selected.prepare_parent_image(delivery,role)?;
         let source=image.executable();let stat=source.metadata().map_err(fail)?;
         require(stat.is_file() && stat.len()>0 && stat.len()<=MAX_EXECUTABLE)?;
         let raw=unsafe{libc::fcntl(executable.as_raw_fd(),libc::F_DUPFD_CLOEXEC,128)};
@@ -38,12 +42,12 @@ impl Image {
         let owner=Self{image,configuration,configuration_bytes,executable,identity:(stat.dev(),stat.ino(),stat.len())};
         owner.check(delivery)?;delivery.check_preparation().map_err(fail)?;Ok(owner)
     }
-    pub(super) fn prepare(pin:&Pin,delivery:&FileAdmission)->Result<Self,ShadowError> {
+    pub(super) fn prepare(pin:&Pin,delivery:&FileAdmission,role:Option<&'static str>)->Result<Self,ShadowError> {
         delivery.check_preparation().map_err(fail)?;
         let configuration=pin.open(1024*1024)?;
         let configuration_bytes=configuration.read(1024*1024).map_err(fail)?.to_vec();
         let selected:ClosureConfiguration=exact(&configuration_bytes)?;
-        let image=selected.prepare_parent_image(delivery)?;
+        let image=selected.prepare_parent_image(delivery,role)?;
         let source=image.executable();let stat=source.metadata().map_err(fail)?;
         require(stat.is_file() && stat.len()>0 && stat.len()<=MAX_EXECUTABLE)?;
         let mut bytes=vec![0;stat.len() as usize];let mut offset=0;

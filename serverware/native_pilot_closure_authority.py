@@ -1,4 +1,4 @@
-"""Fixed v2 late-runtime closure issuer over independently approved originals.
+"""Fixed legacy bridge v2 and multi-guest v3 closure issuers.
 
 Runs after genuine driver observation and operational C9 delivery, before bridge
 launch installation. C9 signing does not consume a closure. This producer neither
@@ -8,8 +8,15 @@ The protected trust original, not a candidate payload, selects verification keys
 
 The native receiver still validates seccomp semantics, trusted time/currentness,
 actual image and retained driver/guest ownership. Local checks/signatures here
-are not those measurements or approval. No v1 endpoint profile, key generation,
+are not those measurements or approval. No legacy v1 endpoint issuer, key generation,
 installation, history creation, renewed deadline or automatic retry is offered.
+
+Input/v1 remains exact and bridge-only. Explicit Input/v2 has the same fields,
+plus guestRole and closureSetOriginal; controlOriginal is present only for
+bridge. Endpoint configuration/window/observation are the actual v7 cohort
+configuration, signed precreation, and originals/v6. Every input is separately
+approved; no arbitrary JSON is treated as a kernel owner. Both profiles retain
+the same 8 MiB input and 1 MiB complete live closure bounds.
 """
 from __future__ import annotations
 
@@ -19,6 +26,8 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from serverware import authority_policy_canary_native_opening as opening
+from serverware import native_pilot_assignment as assignment_profile
+from serverware import native_pilot_closure_set as closure_set
 from serverware import native_pilot_delivery_authority as c9
 from serverware import native_pilot_driver_authority as driver_authority
 from serverware import native_pilot_launch_publication as launch
@@ -34,6 +43,9 @@ DOMAIN = "serverware.nativeCustodyClosureAssignment.signature/v2"
 INPUT_FIELDS = ("apiVersion", "controlOriginal", "configurationOriginal", "windowOriginal",
     "observationOriginal", "deliveryConfigurationOriginal", "deliveryOriginal", "runtimeOriginal",
     "trustOriginal", "trustSha256", "assignmentOriginal", "manifestOriginal", "payloadOriginal")
+SET_INPUT_FIELDS = tuple(name for name in INPUT_FIELDS if name != "controlOriginal") + ("guestRole", "closureSetOriginal")
+SET_DOMAIN = "serverware.nativeCustodyClosureAssignment.signature/v3"
+SET_PROFILE = "native-multi-guest-closure-set-v1"
 PAYLOAD_FIELDS = launch._CLOSURE
 MANIFEST_FIELDS = launch._MANIFEST
 PROVENANCE_FIELDS = ("sourceTreeSha256", "dependencyLockSha256", "buildRecipeSha256",
@@ -104,11 +116,11 @@ def _authority(value, signing_key, now):
     p.require(set(p.ROLES).issubset(role_keys))
     assignment_raw, _ = c9._original(value["assignmentOriginal"], 4 * 1024 * 1024)
     envelope = launch.shape("native-bridge-assignment", assignment_raw)
-    assignment = opening.assignment_payload(envelope["payload"])
+    assignment = opening.assignment_payload(envelope["payload"], version=assignment_profile.version(envelope))
     p.require(envelope["signingKeyId"] == trust["assignmentKey"]["keyId"]
         and envelope["signingKeySpkiSha256"] == trust["assignmentKey"]["keySpkiSha256"])
     assignment_key.verify(p.decoded(envelope["signature"], size=64),
-        p.preimage("serverware.policyShadowAssignment/v1", assignment))
+        p.preimage(assignment_profile.domain(envelope), assignment))
     p.freshness(assignment["issuedAtUnixNanos"], assignment["expiresAtUnixNanos"], now)
     p.digest(assignment["assignmentId"])
     p.integer(assignment["assignmentRevision"], maximum=p.MAX_U64)
@@ -176,30 +188,80 @@ def _manifest(value, config, observed, assignment):
     return manifest
 
 
+def _endpoint_guest(value, role):
+    config_raw, config = c9._original(value["configurationOriginal"], 32768)
+    window_raw, signed_window = c9._original(value["windowOriginal"], 32768)
+    _, observed = c9._original(value["observationOriginal"], 32768)
+    cold_raw, _ = c9._original(value["deliveryConfigurationOriginal"], 65536)
+    cold = delivery.configuration(cold_raw, p.sha(cold_raw))
+    window = c9._endpoint_owner(role, cold, cold_raw, config_raw, window_raw, signed_window, observed)
+    runtime_raw, _ = c9._original(value["runtimeOriginal"], 65536)
+    launch.shape("native-runtime-" + role, runtime_raw)
+    signed_raw, signed = c9._original(value["deliveryOriginal"], delivery.MAX_DELIVERY)
+    p.fields(signed, ("apiVersion", "payload", "signatureBase64url"))
+    payload = p.fields(signed["payload"], delivery.FIELDS)
+    p.require(signed["apiVersion"] == "serverware.policyCustodyGuestDelivery/v1"
+        and payload["configurationSha256"] == p.sha(cold_raw)
+        and payload["authorityKeyId"] == cold["authority"]["keyId"])
+    for name in ("serviceRole", "uid", "gid"):
+        c9._same(payload[name], cold[name])
+    for name in c9.WINDOW_FIELDS:
+        c9._same(payload[name], window[name])
+    delivery._pin(payload["runtimeConfig"])
+    c9._same(payload["runtimeConfig"], {"path": launch.DESTINATIONS["native-runtime-" + role], "sha256": p.sha(runtime_raw)})
+    c9._activation(payload["activation"], c9.ENDPOINTS[role])
+    c9._credentials(payload["credentials"], cold["authority"])
+    driver._key(cold["authority"]).verify(p.decoded(signed["signatureBase64url"], size=64),
+        delivery.DOMAIN + p.canonical(payload))
+    return config, window, observed, delivery._delivery_guest(payload, signed_raw)
+
+
 def sign(*, input_original: bytes, signing_key):
-    """Return the existing full v2 closure original and unchanged startup deadline.
+    """Return a full v2/v3 closure original and its unchanged startup deadline.
 
     INPUT_FIELDS is closed; all *Original values are literal canonical ASCII
     strings, not paths. The entire input and explicit trustSha256 need separate
     authority approval. No authorization is inferred from observations or pins.
     """
     p.require(isinstance(signing_key, Ed25519PrivateKey))
-    value = p.fields(p.document(input_original, MAX_INPUT), INPUT_FIELDS)
-    p.require(value["apiVersion"] == "serverware.nativePilotClosureAuthorityInput/v1")
+    value = p.document(input_original, MAX_INPUT)
+    multi = value.get("apiVersion") == "serverware.nativePilotClosureAuthorityInput/v2"
+    role = value.get("guestRole") if multi else "bridge"
+    p.require(type(role) is str and role in closure_set.ROLES)
+    fields = SET_INPUT_FIELDS + (("controlOriginal",) if role == "bridge" else ()) if multi else INPUT_FIELDS
+    p.fields(value, fields)
+    p.require(value["apiVersion"] == "serverware.nativePilotClosureAuthorityInput/v" + ("2" if multi else "1"))
     boot, wall = originals._boot(), time.time_ns()
-    config, window, observed, guest = _guest(value)
+    config, window, observed, guest = _guest(value) if role == "bridge" else _endpoint_guest(value, role)
     envelope, checkpoint, binding, issued_floor, expires_ceiling = _authority(value, signing_key, wall)
-    manifest = _manifest(value, config, observed, envelope["payload"])
+    p.require(assignment_profile.version(envelope) == (2 if multi else 1))
+    selected = leaf = None
+    if multi:
+        set_raw, _ = c9._original(value["closureSetOriginal"], MAX_BYTES)
+        leaf = assignment_profile.closure_binding(envelope, set_raw, role)
+        selected = closure_set.validate(set_raw)
+        _, manifest = c9._original(value["manifestOriginal"], MAX_BYTES)
+        c9._same(manifest, selected["members"][closure_set.ROLES.index(role)]["manifest"])
+        if role == "bridge":
+            _manifest(value, config, observed, envelope["payload"])
+        else:
+            p.require(manifest["workerExecutableSha256"] == observed[role]["executable"]["sha256"]
+                and manifest["runtimeConfigurationSha256"] == guest["runtimeConfigurationSha256"])
+    else:
+        manifest = _manifest(value, config, observed, envelope["payload"])
     _, payload = c9._original(value["payloadOriginal"], 65536)
-    p.fields(payload, PAYLOAD_FIELDS)
-    expected = {"apiVersion": "serverware.nativeCustodyClosureAssignment/v2",
-        "purpose": "shadow-custody-bootstrap-late-runtime", "profile": PROFILE,
+    p.fields(payload, launch._CLOSURE_SET if multi else PAYLOAD_FIELDS)
+    expected = {"apiVersion": "serverware.nativeCustodyClosureAssignment/v" + ("3" if multi else "2"),
+        "purpose": "shadow-custody-closure-set-member" if multi else "shadow-custody-bootstrap-late-runtime",
+        "profile": SET_PROFILE if multi else PROFILE,
         "assignmentId": envelope["payload"]["assignmentId"], "assignmentPayloadSha256": envelope["payloadSha256"],
         "assignmentRevision": envelope["payload"]["assignmentRevision"], "manifestSha256": manifest["manifestSha256"],
         "guest": guest, "trustCheckpointId": checkpoint["checkpointId"],
         "revocationGeneration": checkpoint["revocationGeneration"], "revocationRootSha256": checkpoint["revocationRootSha256"],
         "issuedAtUnixNanos": payload["issuedAtUnixNanos"], "expiresAtUnixNanos": payload["expiresAtUnixNanos"],
         "signingKeyId": binding["keyId"], "signingKeySpkiSha256": binding["keySpkiSha256"]}
+    if multi:
+        expected.update(guestRole=role, **{name: leaf[name] for name in ("setRootSha256", "seccompSetRootSha256", "leafSha256")})
     c9._same(payload, expected)
     p.freshness(payload["issuedAtUnixNanos"], payload["expiresAtUnixNanos"], wall)
     p.require(issued_floor <= payload["issuedAtUnixNanos"] < payload["expiresAtUnixNanos"] <= expires_ceiling
@@ -213,12 +275,19 @@ def sign(*, input_original: bytes, signing_key):
         return now, current_wall
 
     before_boot, before_wall = check()
-    message = p.preimage(DOMAIN, payload)
+    message = p.preimage(SET_DOMAIN if multi else DOMAIN, payload)
+    result = {"apiVersion": "serverware.nativeCustodyClosure/v" + ("3" if multi else "2"), "manifest": manifest,
+        "authorization": {"payload": payload, "signature": ""}}
+    if multi:
+        result["closureSet"] = selected
+    # The whole original, not just its member, retains the live 1 MiB cap.
+    # Check the exact encoded size before signing (Ed25519 base64url is86).
+    p.require(len(p.canonical(result)) + 86 <= MAX_BYTES)
     signature = signing_key.sign(message)
     signing_key.public_key().verify(signature, message)
-    raw = p.canonical({"apiVersion": "serverware.nativeCustodyClosure/v2", "manifest": manifest,
-        "authorization": {"payload": payload, "signature": p.encoded(signature)}})
+    result["authorization"]["signature"] = p.encoded(signature)
+    raw = p.canonical(result)
     p.require(len(raw) <= MAX_BYTES)
-    launch.shape("native-bridge-closure", raw)
+    launch.shape("native-" + role + "-closure", raw)
     check(before_boot, before_wall)
     return raw, p.ns(window["startupDeadlineBoottimeNs"])

@@ -113,7 +113,7 @@ class Operator:
                 peer_original=peer, peer_sha256=inputs["peer"]["sha256"],
                 proof_scope_original=scope, proof_scope_sha256=inputs["proofScope"]["sha256"],
                 retrieval_manifest_original=manifest, retrieval_manifest_sha256=inputs["retrievalManifest"]["sha256"],
-                object_directory_fd=directory)
+                object_directory_fd=directory, assignment_original=assignment)
         finally:
             # The composite claims/duplicates the genuine directory before any
             # resource side effects. Only this caller's extra FD closes here.

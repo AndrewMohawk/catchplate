@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Sign one independently approved measured-bootstrap late-runtime v2 closure.
+"""Sign one independently approved legacy bridge v2 or member v3 closure.
 
 Run python3 -I -B with a complete root:root0400 public input FD and a distinct,
 already provisioned sealed root:root0400 32-byte supervisor-capability key FD.
 Stdout is the existing full closure original, canonical ASCII without LF, on a
-root supervisor pipe. No v1 profile, key generation, install or automatic retry.
+root supervisor pipe. Input/v1 is legacy bridge-only; Input/v2 explicitly binds
+one of the eleven fixed roles to signed Assignment/v2 and the complete set.
+No legacy v1 endpoint issuer, key generation, install or automatic retry.
 Must run on the original admitted boot/time namespace before the original
 startup deadline. An independent supervisor must bound filesystem/crypto stalls
 and reject failed/partial output; Python/OpenSSL copies are not erased custody.

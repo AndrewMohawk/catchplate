@@ -307,7 +307,7 @@ class PersistenceInputs:
             raise
 
     def sign_service_grant(self, *, configuration_original, configuration_sha256, permissions,
-                           issued_at, expires_at, now, signing_key):
+                           issued_at, expires_at, now, signing_key, assignment_payload_original=None):
         self.check()
         p.require(self._genesis is not None and not self._grant_attempted and not self._taken)
         self._grant_attempted = True
@@ -319,7 +319,8 @@ class PersistenceInputs:
             configuration_sha256=configuration_sha256, scope_original=self._scope_raw, scope_sha256=self._scope_sha,
             peer_original=self._peer_raw, peer_sha256=self._peer_sha, guest=self._guest,
             journal_original=self._journal_raw, journal_sha256=self._journal_sha, permissions=permissions,
-            issued_at=issued_at, expires_at=expires_at, now=now, signing_key=signing_key)
+            issued_at=issued_at, expires_at=expires_at, now=now, signing_key=signing_key,
+            assignment_payload_original=assignment_payload_original)
         signed = p.document(grant, 65536)
         p.require(signed["payload"]["signingKeyId"] != cold["authority"]["keyId"])
         self.check()
@@ -343,7 +344,8 @@ class PersistenceInputs:
                 os.close(fd)
             raise
 
-    def admit_service_grant(self, *, signed_grant_original, configuration_original, configuration_sha256):
+    def admit_service_grant(self, *, signed_grant_original, configuration_original, configuration_sha256,
+                            assignment_payload_original=None):
         """Verify independent operational authority against retained genesis.
 
         No private authority key or supplied current time is accepted. The
@@ -358,7 +360,8 @@ class PersistenceInputs:
             configuration_original=configuration_original, configuration_sha256=configuration_sha256,
             scope_original=self._scope_raw, scope_sha256=self._scope_sha,
             peer_original=self._peer_raw, peer_sha256=self._peer_sha, guest=self._guest,
-            journal_original=self._journal_raw, journal_sha256=self._journal_sha, now=observed)
+            journal_original=self._journal_raw, journal_sha256=self._journal_sha, now=observed,
+            assignment_payload_original=assignment_payload_original)
         p.require(supervisor["publicKeyBase64url"] != cold["authority"]["publicKeyBase64url"]
             and supervisor["keyId"] != cold["authority"]["keyId"])
         self.check()

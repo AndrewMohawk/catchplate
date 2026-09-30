@@ -1,7 +1,8 @@
 //! Independently preassigned native shadow-role keys. Possession evidence only;
 //! no raw signing/key-return operation or receipt-server success is exposed.
 use crate::policy_shadow::*;
-use crate::policy_shadow::native_custody_closure::NativeCustodyClosureOwner;
+use crate::policy_shadow::native_custody_closure::{NativeCustodyClosureOwner,PreparedNativeCustodyClosure,
+    RemoteNativeCustodyClosure,KeyMembership};
 use super::{GuestClosureAssociation,GuestClosureBinding,PreparedGuestServiceDelivery};
 use ed25519_dalek::{Signer,SigningKey};
 use serverware_decision_gate::enclave_runtime_identity_v1::{PreparedShadowNsmV1,ShadowNsmV1};
@@ -62,7 +63,24 @@ struct Payload {
 struct Authorization {payload:Payload,signature:CanonicalEd25519Signature}
 #[derive(Debug,Clone,Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
-pub(crate) struct NativeCustodyKeyConfiguration {api_version:String,authorization:Authorization}
+pub(crate) struct NativeCustodyKeyConfiguration {
+    api_version:String,authorization:Authorization,
+    #[serde(skip)]
+    closure_membership:Option<KeyMembership>,
+}
+impl NativeCustodyKeyConfiguration {
+    fn retain_membership(&mut self,membership:Option<KeyMembership>)->Result<(),ShadowError>{
+        require(self.closure_membership.is_none())?;
+        if membership.is_some(){require(self.api_version=="serverware.nativeShadowRoleKeys/v2")?;}
+        self.closure_membership=membership;Ok(())
+    }
+    pub(in crate::policy_shadow::policy_custody::services) fn bind_prepared_closure(&mut self,closure:&PreparedNativeCustodyClosure)
+        ->Result<(),ShadowError>{self.retain_membership(closure.key_membership()?)}
+    pub(in crate::policy_shadow::policy_custody::services) fn bind_native_closure(&mut self,closure:&NativeCustodyClosureOwner)
+        ->Result<(),ShadowError>{self.retain_membership(closure.key_membership()?)}
+    pub(in crate::policy_shadow::policy_custody::services) fn bind_remote_closure(&mut self,closure:&RemoteNativeCustodyClosure)
+        ->Result<(),ShadowError>{self.retain_membership(closure.key_membership()?)}
+}
 fn challenge(text:&str)->Result<[u8;32],ShadowError> {
     let raw=URL_SAFE_NO_PAD.decode(text).map_err(fail)?;
     require(raw.len()==32 && raw.iter().any(|v|*v!=0) && URL_SAFE_NO_PAD.encode(&raw)==text)?;
@@ -89,9 +107,16 @@ fn verify_guest(configuration:&NativeCustodyKeyConfiguration,assignment:&Verifie
     };
     require(p.purpose=="shadow-role-key-possession" && p.assignment_id==a.assignment_id
         && &p.assignment_payload_sha256==assignment.payload_sha256() && p.assignment_revision==a.assignment_revision
-        && p.execution_closure_manifest_sha256==a.custody_authority.execution_closure_manifest_sha256
         && &p.guest==guest && (1..=16).contains(&p.local_roles.len())
         && p.local_roles.windows(2).all(|pair|pair[0]<pair[1]))?;
+    if a.native_closure_set.is_some() {
+        require(configuration.api_version=="serverware.nativeShadowRoleKeys/v2")?;
+        configuration.closure_membership.as_ref().ok_or(ShadowError::BindingDrift)?
+            .require(assignment,guest,&p.execution_closure_manifest_sha256)?;
+    } else {
+        require(configuration.closure_membership.is_none()
+            && p.execution_closure_manifest_sha256==a.custody_authority.execution_closure_manifest_sha256)?;
+    }
     require(matches!(&a.custody_authority.attestation_mode,CustodyAttestationMode::Tee {platform:TeePlatform::AwsNitroEnclave,..}))?;
     for role in &p.local_roles {credential(*role)?;}
     challenge(&p.challenge_base64url)?;

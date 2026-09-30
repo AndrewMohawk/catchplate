@@ -48,7 +48,7 @@ def sign_effects_transition_grant(**values):
     return old._sign_service_transition_grant(**values, spool=True, effects=True)
 
 
-def _scope(raw, proof_raw, admitted, guest):
+def _scope(raw, proof_raw, admitted, guest, *, assignment_payload_original=None):
     value = p.fields(p.document(raw, 16384), inputs.SCOPE)
     for name in inputs.SCOPE:
         if name in ("assignmentRevision", "issuedAtBoottimeNanos", "expiresAtBoottimeNanos"):
@@ -56,6 +56,8 @@ def _scope(raw, proof_raw, admitted, guest):
         else:
             p.digest(value[name])
     proof = retrieval.scope_original(proof_raw)
+    if proof.get("api_version") == retrieval.SCOPE_SET_API:
+        retrieval.require_admitted_scope(proof, admitted, assignment_payload_original=assignment_payload_original)
     p.require(value["assignmentPayloadSha256"] == admitted["assignmentPayloadSha256"]
         and value["assignmentRevision"] == admitted["assignmentRevision"]
         and value["proofScopeSha256"] == p.sha(proof_raw)
@@ -90,7 +92,8 @@ def _sign_signer(*, configuration_original, configuration_sha256, assignment_pay
         "activeEffectCommit": ("ActiveEffectCommit", "custody-active-effect-commit", "native-active-effect-commit")}
     role = effect_profiles[effect][1] if effect is not None else "custody-terminal-append" if terminal else "custody-ingress-admission" if ingress else "custody-ledger-append"
     config, admitted, keys = _input(configuration_original, configuration_sha256, assignment_payload_original, role, now, signing_key)
-    scope = _scope(scope_original, proof_scope_original, admitted, admitted["guest"])
+    scope = _scope(scope_original, proof_scope_original, admitted, admitted["guest"],
+        assignment_payload_original=assignment_payload_original)
     key_live(origin_verifier, now)
     p.require(origin_verifier["keyId"] not in {key["keyId"] for key in keys})
     if ingress or terminal or effect is not None:
@@ -145,7 +148,8 @@ def _sign_retrieval_service(*, configuration_original, configuration_sha256, ass
                            issued_at, expires_at, now, signing_key, terminal_key=None, completion=False, effects=None):
     config, admitted, keys = _input(configuration_original, configuration_sha256, assignment_payload_original,
         "custody-retrieval-response", now, signing_key)
-    scope = _scope(scope_original, proof_scope_original, admitted, admitted["guest"])
+    scope = _scope(scope_original, proof_scope_original, admitted, admitted["guest"],
+        assignment_payload_original=assignment_payload_original)
     p.require(completion == (terminal_key is not None) and (effects is None or completion))
     role_keys = ((ingress_key, "custody-ingress-admission"), (ledger_key, "custody-ledger-append"))
     if completion:

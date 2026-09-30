@@ -347,12 +347,13 @@ impl Cohort {
                 // assigned, NOT measurements of these still-root trampolines.
                 require((peer.uid,peer.gid)==self.admission.role_identity(other)?)?;
             }
+            let closure_set_role=service.closure_set_role();
             let (inspection,remote)=prepare_inspection(service,&files,&activation)?;
             let image_original=release.image.open(512*1024*1024)?;
             image_original.read(512*1024*1024).map_err(fail)?;
             let view=View::bind(&self.image_target,&image_original)?;
-            let image=image::Image::prepare_pair(&selected.closure,&files,self.executables[index].fd(),
-                &release.image.sha256,self.admission.executable_sha256())?;
+            let image=image::Image::prepare_pair_selected(&selected.closure,&files,self.executables[index].fd(),
+                &release.image.sha256,self.admission.executable_sha256(),closure_set_role)?;
             view.retire()?;
             self.programs.push(Program{launch,launch_bytes,image_original,image,files,activation,inspection,remote});
         }

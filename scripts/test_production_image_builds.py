@@ -1040,11 +1040,12 @@ def assert_native_runtime_loader_paths() -> None:
 
 
 def assert_native_runtime_stdlib_build_directory() -> None:
-    """Exercise the fixed stdlib exclusion without reading or copying files."""
+    """Exercise the fixed stdlib exclusions without reading or copying files."""
     package = package_native_broker_runtime
     source = Path("/source/python3.11")
     target = Path("/usr/local/lib/python3.11")
     config = "config-3.11-x86_64-linux-gnu"
+    tkinter = "_tkinter.cpython-311-x86_64-linux-gnu.so"
 
     def walk(root: Path, *, followlinks: bool):
         if root != source or followlinks:
@@ -1052,11 +1053,11 @@ def assert_native_runtime_stdlib_build_directory() -> None:
         subdirs = [config, "lib-dynload", "package"]
         yield str(source), subdirs, ["sysconfig.py", "_sysconfigdata__linux_x86_64-linux-gnu.py"]
         for name in subdirs:
-            nested = [config] if name == "package" else []
-            files = ["python.o"] if name == config else ["_ssl.so"] if name == "lib-dynload" else ["__init__.py"]
+            nested = [config, "lib-dynload"] if name == "package" else []
+            files = ["python.o"] if name == config else ["_ssl.so", tkinter] if name == "lib-dynload" else ["__init__.py"]
             yield str(source / name), nested, files
             for child in nested:
-                yield str(source / name / child), [], ["nested.dat"]
+                yield str(source / name / child), [], ["nested.dat"] if child == config else [tkinter]
 
     for stdlib in (True, False):
         closure = package.Closure(0)
@@ -1068,9 +1069,13 @@ def assert_native_runtime_stdlib_build_directory() -> None:
         names = ["_sysconfigdata__linux_x86_64-linux-gnu.py", "sysconfig.py"]
         if not stdlib:
             names.append(config + "/python.o")
-        names.extend(["lib-dynload/_ssl.so", "package/__init__.py", "package/" + config + "/nested.dat"])
+        names.append("lib-dynload/_ssl.so")
+        if not stdlib:
+            names.append("lib-dynload/" + tkinter)
+        names.extend(["package/__init__.py", "package/" + config + "/nested.dat",
+                      "package/lib-dynload/" + tkinter])
         if add.call_args_list != [mock.call(source / name, target / name) for name in names]:
-            raise AssertionError("runtime tree changed the top-level-only stdlib config exclusion")
+            raise AssertionError("runtime tree changed the exact stdlib config or tkinter exclusions")
 
 
 def assert_native_runtime_elf_types() -> None:

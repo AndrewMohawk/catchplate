@@ -123,6 +123,10 @@ class Closure:
                 if name.endswith((".pyc", ".pyo")):
                     continue
                 path = base / name
+                if stdlib and path.relative_to(source) == Path("lib-dynload/_tkinter.cpython-311-x86_64-linux-gnu.so"):
+                    # Match the excluded tkinter/IDLE packages: the headless
+                    # runtime does not ship their Tk-dependent native module.
+                    continue
                 require(not path.is_symlink(), "runtime module symlink refused")
                 self.add(path, target / path.relative_to(source))
 

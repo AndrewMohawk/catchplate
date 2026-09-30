@@ -44,6 +44,9 @@ def main():
     signal.signal(signal.SIGTERM, _stop)
     signal.signal(signal.SIGINT, _stop)
     try:
+        # The fixed supervisor blocks these only through child/PIDFD/pipe
+        # acquisition. Install handlers before unblocking or owning resources.
+        signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGTERM, signal.SIGINT})
         if not (sys.flags.isolated and sys.flags.dont_write_bytecode
                 and os.getresuid() == (0, 0, 0) and os.getresgid() == (0, 0, 0)):
             raise ValueError("isolated privileged authority coordinator required")

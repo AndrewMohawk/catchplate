@@ -1619,6 +1619,10 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/native_pilot_authority_channel.py \
 	serverware/native_pilot_approval_install.py \
 	serverware/native_pilot_bootstrap_install.py \
+	serverware/native_pilot_supervisor.py \
+	serverware/native_pilot_supervisor_process.py \
+	serverware/native_pilot_supervisor_policy.py \
+	serverware/native_pilot_supervisor_precreation.py \
 	serverware/native_pilot_service_inputs.py \
 	scripts/run_native_pilot.py \
 	serverware/native_shadow_proof_cohort_cleanup.py \
@@ -4311,6 +4315,10 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/native_pilot_authority_channel.py \
 				serverware/native_pilot_approval_install.py \
 				serverware/native_pilot_bootstrap_install.py \
+				serverware/native_pilot_supervisor.py \
+				serverware/native_pilot_supervisor_process.py \
+				serverware/native_pilot_supervisor_policy.py \
+				serverware/native_pilot_supervisor_precreation.py \
 				serverware/native_pilot_service_inputs.py \
 				scripts/run_native_pilot.py \
 				serverware/native_shadow_proof_cohort_cleanup.py \

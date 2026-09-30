@@ -57,16 +57,28 @@ class _Runtime:
         self.directories, self.identities, self.records, self.children = {}, {}, {}, {}
         self.protected_directories = set()
         self.manifest = self.interpreter_head = None
+        self._authority = False
 
-    def admit(self, raw):
+    def admit(self, raw, *, authority=False):
+        _require(type(authority) is bool)
+        self._authority = authority
         _require(0 < len(raw) <= artifact.MAX_MANIFEST_BYTES)
         value = json.loads(raw.decode("ascii"), object_pairs_hook=p._pairs, parse_float=p._reject, parse_constant=p._reject)
-        p.fields(value, _INVENTORY_FIELDS)
-        _require(artifact._canonical(value) == raw and value["apiVersion"] == artifact.API_VERSION
-            and value["target"] == "native-pilot-conductor-artifact" and value["command"] == artifact.COMMAND
+        p.fields(value, _INVENTORY_FIELDS + (("requiredArguments",) if authority else ()))
+        if authority:
+            _require(artifact._canonical(value["requiredArguments"]) == artifact._canonical({
+                "runtimeInventory": ["--runtime-inventory-fd", "--runtime-inventory-sha256"],
+                "authorityKeys": "--authority-key PURPOSE=FD repeated for the exact source-selected KEY_PURPOSES",
+                "inventoryKind": artifact.API_VERSION, "conductorInventoryDerived": False}))
+        boundary = ("Offline authority-coordinator package/source observations only. No execution, DSO-resolution proof, independent approval, installed owner, keys, protected inputs or native pilot acceptance is produced. The original separate conductor inventory remains required."
+            if authority else "Offline package/source observations only. No execution, DSO-resolution proof, independent approval, installation, authority coordinator, or native service readiness is produced.")
+        _require(artifact._canonical(value) == raw
+            and value["apiVersion"] == (artifact.AUTHORITY_API_VERSION if authority else artifact.API_VERSION)
+            and value["target"] == (artifact.AUTHORITY_TARGET if authority else "native-pilot-conductor-artifact")
+            and value["command"] == (artifact.AUTHORITY_COMMAND if authority else artifact.COMMAND)
             and artifact._canonical(value["intendedInstalledOwnership"]) == artifact._canonical({"uid": 0, "gid": 0})
             and value["exportOwnership"] == "Host-export UID/GID are checked for stability, not interpreted as installed ownership."
-            and value["boundary"] == "Offline package/source observations only. No execution, DSO-resolution proof, independent approval, installation, authority coordinator, or native service readiness is produced."
+            and value["boundary"] == boundary
             and all(value[name] is False for name in ("releaseAuthority", "liveReady", "launchPrepared", "dynamicLoaderClosureVerified")))
         p.fields(value["source"], artifact.SOURCE_FIELDS)
         source = artifact._source(value["source"])
@@ -122,7 +134,7 @@ class _Runtime:
             _require(info.st_uid == info.st_gid == 0 and stat.S_IMODE(info.st_mode) == int(record["mode"], 8))
             if record["type"] == "directory":
                 _require(stat.S_ISDIR(info.st_mode))
-                if path in self.protected_directories or path.split("/", 1)[0] in ("app", "vendor", "runtime"):
+                if path in self.protected_directories or path.split("/", 1)[0] in ("app", "vendor", "runtime", "authority"):
                     _require(not info.st_mode & 0o022)
                 child = os.open(name, _FLAGS | os.O_DIRECTORY, dir_fd=fd)
                 self.directories[path] = child
@@ -159,6 +171,10 @@ class _Runtime:
             _require(self.records.get(path, {}).get("type") == "directory")
         _require(self.children["app"] == {"serverware", "scripts"}
             and self.children["app/scripts"] == {"run_native_pilot.py", "native_pilot_runtime_entrypoint.py"})
+        if authority:
+            for path in ("authority", "authority/app", "authority/app/scripts", "authority/app/scripts/authority"):
+                _require(self.records.get(path, {}).get("type") == "directory"
+                    and self.records[path]["mode"] == "0555")
         for path, mode in ((artifact.INTERPRETER, "0555"), (artifact.ENTRYPOINT, "0444"),
                            (artifact.CONDUCTOR, "0444"), (artifact.SOURCE_MANIFEST, "0444")):
             record = self.records.get(path, {})
@@ -166,7 +182,7 @@ class _Runtime:
         head = self.interpreter_head
         _require(head is not None and len(head) == 64 and head[:7] == b"\x7fELF\x02\x01\x01"
             and int.from_bytes(head[16:18], "little") in (2, 3) and int.from_bytes(head[18:20], "little") == 62)
-        artifact._bind_source(self, source)
+        artifact._bind_source(self, source, authority=authority)
         self.check()
 
     def check(self):
@@ -178,7 +194,7 @@ class _Runtime:
             _require(identity == self.identities[path])
             if record["type"] == "directory":
                 _require(_structural(os.fstat(self.directories[path])) == identity)
-                if path.split("/", 1)[0] in ("app", "vendor", "runtime"):
+                if path.split("/", 1)[0] in (("app", "vendor", "runtime", "authority") if self._authority else ("app", "vendor", "runtime")):
                     _require(not info.st_mode & 0o022)
                     scan = os.open(".", _FLAGS | os.O_DIRECTORY, dir_fd=self.directories[path])
                     try:

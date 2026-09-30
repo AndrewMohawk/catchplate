@@ -32,9 +32,12 @@ approval installer. No arbitrary templates, callbacks, future-result placeholder
 or success flags can replace those checks. The original per-job protocol remains
 valid; commissioning policy is not approval of arbitrary future JSON.
 
-This design is not implemented or admitted. Its process owner, commissioning
-policy admission, all purpose composers, prior-result verification and bounded
-cleanup still need code and connected verification. Independent policy selection,
+The first [supervisor source increment](native-pilot-supervisor.md) now implements
+the actual authority-process owner, pinned commissioning policy, and the first
+three fixed job composers, including prior-signature verification. The full-run
+owner refuses before spawn because the other 57 jobs remain unimplemented. This
+is not yet a runnable or admitted supervisor; its executable packaging and
+connected verification also remain open. Independent policy selection,
 dependency approval, private key/service provisioning and actual hardware remain
 external requirements. Completing an individual signer or installer does not
 close this supervisor gap or establish a testable pilot.

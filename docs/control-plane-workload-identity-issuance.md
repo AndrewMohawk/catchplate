@@ -7,6 +7,11 @@ trust or authenticate a workload channel. Existing local enrollment CLI modes
 remain network-free; separate [explicit CLI submission and portal controls](workload-identity-submission.md)
 now connect to these actions in source.
 
+The portal also accepts [explicit native request-first originals](native-workload-identity-submission.md#browser-issuance-and-local-certificate-admission).
+The common HTTP envelope does not select a profile: the independently admitted
+[native cold caller/issuer](native-workload-identity-issuer-bootstrap.md) must
+already be configured. Browser format selection cannot substitute for that owner.
+
 ## Authority stays separate
 
 ```mermaid

@@ -10,11 +10,17 @@ WORKLOAD_ISSUANCE_HTML = r"""
           <h2 id="workload-issuance-heading">Issue a workload certificate</h2>
           <p class="hint">Use an active OIDC operator cookie. A policy author requests; a different approver approves with a fresh passkey. An entered bearer token is not used. Both ceremonies are additional to the independent signed issuance grant.</p>
           <p class="hint">Select only the public originals below. Keep the workload private key on its host. The packet can contain a CA-install capability: it is sent only to this control plane, never copied to browser storage, logs or the approval queue.</p>
+          <label for="workload-issuance-profile">Original file format</label>
+          <select id="workload-issuance-profile" autocomplete="off">
+            <option value="legacy">Legacy packet-bound request</option>
+            <option value="native">Native request-first bootstrap</option>
+          </select>
+          <p id="workload-issuance-profile-note" class="hint">Select the format your independently provisioned issuer accepts. This changes local file checks only; it cannot enable a server profile or convert originals.</p>
           <label for="workload-issuance-grant">Independently signed issuance grant (JSON, at most 32 KiB)</label>
           <input id="workload-issuance-grant" type="file" accept="application/json,.json" autocomplete="off">
-          <label for="workload-issuance-packet">Original enrollment packet (JSON, at most 8 MiB)</label>
+          <label id="workload-issuance-packet-label" for="workload-issuance-packet">Original enrollment packet (JSON, at most 8 MiB)</label>
           <input id="workload-issuance-packet" type="file" accept="application/json,.json" autocomplete="off">
-          <label for="workload-issuance-request">Locally prepared signed CSR request (JSON, at most 64 KiB)</label>
+          <label id="workload-issuance-request-label" for="workload-issuance-request">Locally prepared signed CSR request (JSON, at most 64 KiB)</label>
           <input id="workload-issuance-request" type="file" accept="application/json,.json" autocomplete="off">
           <p class="hint">The portal limits the encoded request to 3 MiB; the server's cold-context and 64 MiB aggregate bounds can be tighter. These file ceilings cannot all be combined. No private-key or replacement-CSR field is accepted.</p>
           <div class="toolbar">
@@ -52,7 +58,18 @@ WORKLOAD_ISSUANCE_SCRIPT = r"""
     const workloadIssuancePath = '/api/agents/workload-identity/issue';
     const workloadIssuanceSchema = 'serverware.workloadIdentityIssuanceResponse/v1';
     const workloadIssuanceFileIds = ['workload-issuance-grant', 'workload-issuance-packet', 'workload-issuance-request'];
-    const workloadIssuanceLimits = [32 * 1024, 8 * 1024 * 1024, 64 * 1024];
+    // Local format discrimination only. The server's retained cold authority,
+    // never this selector or a caller-supplied hint, chooses the real verifier.
+    const workloadIssuanceProfiles = Object.freeze({
+      legacy: Object.freeze({packetLimit: 8 * 1024 * 1024,
+        packetSchema: 'serverware.agentEnrollment/v1',
+        grantSchema: 'serverware.signedWorkloadIdentityIssuanceAuthorization/v1',
+        requestSchema: 'serverware.signedWorkloadIdentityRequest/v1'}),
+      native: Object.freeze({packetLimit: 512 * 1024,
+        packetSchema: 'serverware.nativeEnrollmentPacket/v2',
+        grantSchema: 'serverware.signedNativeWorkloadIdentityIssuanceAuthorization/v1',
+        requestSchema: 'serverware.signedWorkloadIdentityBootstrapRequest/v1'})
+    });
     const workloadIssuanceAttempts = new Set();
     const workloadIssuanceApprovalAttempts = new Set();
     const workloadIssuanceAssertionAttempts = new Set();
@@ -69,6 +86,22 @@ WORKLOAD_ISSUANCE_SCRIPT = r"""
       return typeof value === 'string' && value.length > 0 && value.length <= maximum
         && !/[\u0000-\u001f\u007f-\u009f\ud800-\udfff]/u.test(value);
     }
+    function workloadIssuanceNativePrincipal(value) {
+      if (typeof value !== 'string' || value.length === 0 || value.length > 1024) return false;
+      // Python's native request profile admits Unicode scalar strings bounded
+      // by their UTF-8 bytes. Do not normalize, trim or silently replace a lone
+      // surrogate with TextEncoder's replacement character before hashing.
+      for (const scalar of value) {
+        const point = scalar.codePointAt(0);
+        if (point >= 0xd800 && point <= 0xdfff) return false;
+      }
+      return new TextEncoder().encode(value).byteLength <= 1024;
+    }
+    function workloadIssuanceProfile() {
+      const name = $('workload-issuance-profile')?.value;
+      workloadIssuanceNeed(Object.hasOwn(workloadIssuanceProfiles, name));
+      return workloadIssuanceProfiles[name];
+    }
     function workloadIssuanceDigest(value) { return typeof value === 'string' && /^sha256:[0-9a-f]{64}$/.test(value); }
     function workloadIssuanceId(value) { return typeof value === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(value); }
     function workloadIssuanceNeed(ok) { if (!ok) throw new Error('Workload issuance data or current context is unavailable. No automatic retry is permitted.'); }
@@ -82,7 +115,7 @@ WORKLOAD_ISSUANCE_SCRIPT = r"""
     function workloadIssuanceScope() {
       // Existing public auth/policy/credential facts invalidate UI state only;
       // the server independently authenticates the real cookie and originals.
-      return sessionActivationAuthScope();
+      return JSON.stringify([sessionActivationAuthScope(), $('workload-issuance-profile')?.value]);
     }
     function workloadIssuanceAuth(role) {
       const value = state.authStatus;
@@ -115,6 +148,17 @@ WORKLOAD_ISSUANCE_SCRIPT = r"""
         return;
       }
       workloadIssuanceContext = observed;
+      const native = $('workload-issuance-profile').value === 'native';
+      $('workload-issuance-profile').disabled = workloadIssuanceBusy;
+      $('workload-issuance-packet-label').textContent = native
+        ? 'Original native enrollment packet v2 (JSON, at most 512 KiB)'
+        : 'Original enrollment packet (JSON, at most 8 MiB)';
+      $('workload-issuance-request-label').textContent = native
+        ? 'Original request-first signed bootstrap CSR request (JSON, at most 64 KiB)'
+        : 'Locally prepared signed CSR request (JSON, at most 64 KiB)';
+      $('workload-issuance-profile-note').textContent = native
+        ? 'Native mode requires a native issuance grant, the extracted native packet v2 and its exact target bootstrap request. No legacy packet-signing key is needed. The independently provisioned cold issuer must already accept this profile; this selector grants no permission.'
+        : 'Legacy mode requires the packet-bound grant and request. This changes local file checks only; it cannot enable a server profile or convert originals.';
       let allowed = false;
       try { workloadIssuanceAuth('policy_author'); allowed = true; } catch (_) {}
       $('workload-issuance-start').disabled = workloadIssuanceBusy || workloadIssuanceUncertain || !allowed || workloadIssuancePending !== null;
@@ -248,27 +292,42 @@ WORKLOAD_ISSUANCE_SCRIPT = r"""
       workloadIssuanceNeed(bytes.byteLength <= maximum && bytesToB64(bytes) === value);
       return bytes;
     }
-    function workloadIssuanceFiles() {
+    function workloadIssuanceFiles(profile) {
+      const limits = [32 * 1024, profile.packetLimit, 64 * 1024];
       return workloadIssuanceFileIds.map((id, index) => {
         const list = $(id).files;
-        workloadIssuanceNeed(list && list.length === 1 && list[0].size >= 2 && list[0].size <= workloadIssuanceLimits[index]);
+        workloadIssuanceNeed(list && list.length === 1 && list[0].size >= 2 && list[0].size <= limits[index]);
         return list[0];
       });
     }
-    async function workloadIssuanceOriginals(files, current) {
+    async function workloadIssuanceOriginals(files, current, profile) {
       workloadIssuanceNeed(files.reduce((total, file) => total + Math.ceil(file.size * 4 / 3), 0)
         + 40 * 1024 <= 3 * 1024 * 1024);
       const wrappers = [], parsed = [];
+      const native = profile === workloadIssuanceProfiles.native;
+      let embeddedRequest = null, requestedPrincipal = null, requestedNonce = null;
       for (let index = 0; index < files.length; index += 1) {
         current(); let bytes = new Uint8Array(await files[index].arrayBuffer()); current();
         workloadIssuanceNeed(bytes.byteLength === files[index].size);
         let text = new TextDecoder('utf-8', {fatal: true}).decode(bytes);
         workloadIssuanceNeed(!/-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----/.test(text));
         const value = workloadIssuanceJson(text, true);
-        if (index === 1) workloadIssuanceNeed(value?.apiVersion === 'serverware.agentEnrollment/v1');
+        if (index === 1) {
+          workloadIssuanceNeed(value?.apiVersion === profile.packetSchema);
+          if (native) {
+            workloadIssuanceNeed(workloadIssuanceClosed(value, ['apiVersion', 'purpose', 'delegationBase64url',
+              'setupAuthorizationBase64url', 'targetRequestBase64url', 'targetIssuerCertificateDerBase64url',
+              'policyRequirementsBase64url']) && value.purpose === 'workload-bootstrap'
+              && typeof value.targetRequestBase64url === 'string');
+            embeddedRequest = value.targetRequestBase64url;
+          }
+        }
         else workloadIssuanceNeed(workloadIssuanceClosed(value, ['schema', 'payload', 'signature'])
-          && value.schema === (index === 0 ? 'serverware.signedWorkloadIdentityIssuanceAuthorization/v1'
-            : 'serverware.signedWorkloadIdentityRequest/v1'));
+          && value.schema === (index === 0 ? profile.grantSchema : profile.requestSchema));
+        if (native && index === 2) {
+          workloadIssuanceNeed(value.payload?.schema === 'serverware.workloadIdentityBootstrapRequest/v1');
+          requestedPrincipal = value.payload.principalId; requestedNonce = value.payload.nonce;
+        }
         wrappers.push(Object.freeze({base64Url: bytesToB64(bytes), byteCount: bytes.byteLength,
           bytesDigest: await workloadIssuanceHash(bytes)}));
         // Retain only the grant's public scalar binding, never packet/capability graphs.
@@ -277,10 +336,17 @@ WORKLOAD_ISSUANCE_SCRIPT = r"""
       }
       const grant = parsed[0];
       workloadIssuanceNeed(grant && typeof grant === 'object' && grant.packetSha256 === wrappers[1].bytesDigest
-        && grant.requestSha256 === wrappers[2].bytesDigest && workloadIssuanceText(grant.principalId)
+        && grant.requestSha256 === wrappers[2].bytesDigest
+        && (native ? workloadIssuanceNativePrincipal(grant.principalId) : workloadIssuanceText(grant.principalId))
         && workloadIssuanceText(grant.nonce) && workloadIssuanceText(grant.grantId)
         && ['bootstrapDigest', 'configurationDigest', 'issuerCertificateSha256'].every(key => workloadIssuanceDigest(grant[key]))
         && typeof grant.serialNumber === 'string' && /^[1-9a-f][0-9a-f]{0,39}$/.test(grant.serialNumber));
+      if (native) workloadIssuanceNeed(grant.schema === 'serverware.nativeWorkloadIdentityIssuanceAuthorization/v1'
+        && grant.purpose === 'native-workload-identity-issuance' && grant.trustMode === 'trusted-host-local'
+        && /^[A-Za-z0-9_-]{32,256}$/.test(grant.nonce)
+        && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(grant.grantId)
+        && embeddedRequest === wrappers[2].base64Url
+        && requestedPrincipal === grant.principalId && requestedNonce === grant.nonce);
       const binding = Object.freeze({action: workloadIssuanceAction, authorizationDigest: wrappers[0].bytesDigest,
         packetDigest: wrappers[1].bytesDigest, requestDigest: wrappers[2].bytesDigest,
         principalId: grant.principalId, nonce: grant.nonce, bootstrapDigest: grant.bootstrapDigest,
@@ -523,24 +589,26 @@ WORKLOAD_ISSUANCE_SCRIPT = r"""
         && wrapper.bytesDigest === association.certificateSha256);
       const bytes = workloadIssuanceBase64(wrapper.base64Url, 64 * 1024);
       workloadIssuanceNeed(bytes.byteLength === wrapper.byteCount && await workloadIssuanceHash(bytes) === wrapper.bytesDigest);
-      current(); return {certificate: bytes};
+      current(); return {certificate: bytes, certificateDigest: wrapper.bytesDigest};
     }
     async function workloadIssuanceSubmit(continuing = false) {
       if (workloadIssuanceBusy || workloadIssuanceUncertain) return;
       let originals = null;
       const prior = workloadIssuancePending, epoch = workloadIssuanceEpoch, context = workloadIssuanceScope();
       try {
-        const userId = workloadIssuanceAuth('policy_author'), files = workloadIssuanceFiles();
+        const userId = workloadIssuanceAuth('policy_author'), profile = workloadIssuanceProfile();
+        const files = workloadIssuanceFiles(profile);
         workloadIssuanceNeed(continuing ? prior !== null : prior === null);
         const current = () => { workloadIssuanceNeed(epoch === workloadIssuanceEpoch
           && context === workloadIssuanceScope() && userId === workloadIssuanceAuth('policy_author')
+          && profile === workloadIssuanceProfile()
           && files.every((file, index) => $(workloadIssuanceFileIds[index]).files?.[0] === file)); };
         workloadIssuanceBusy = true; workloadIssuanceContact = false;
         workloadIssuanceController = new AbortController();
         // Consume the explicit continuation locally before any new options.
         if (continuing) workloadIssuancePending = null;
         renderWorkloadIssuance();
-        originals = await workloadIssuanceOriginals(files, current); current();
+        originals = await workloadIssuanceOriginals(files, current, profile); current();
         const attempt = originals.payloadDigest;
         if (continuing) workloadIssuanceNeed(prior.payloadDigest === attempt && prior.resourceId === originals.resourceId);
         else { workloadIssuanceNeed(!workloadIssuanceAttempts.has(attempt)); workloadIssuanceAttempts.add(attempt); }
@@ -562,7 +630,9 @@ WORKLOAD_ISSUANCE_SCRIPT = r"""
           workloadIssuanceMessage('Approval is required. A different operator must review the exact binding. After approval, explicitly continue with a new passkey; nothing is resubmitted automatically.');
         } else if (outcome.certificate) {
           workloadIssuanceContact = false; workloadIssuanceCertificate = outcome.certificate;
-          workloadIssuanceMessage('Server returned a matching public certificate. Download it for genuine local admission; enrollment and proxy authentication remain unconfirmed.');
+          workloadIssuanceMessage('Server returned a matching public certificate: ' + outcome.certificateDigest
+            + '. Download and pin these exact bytes for local admission; enrollment and proxy authentication remain unconfirmed.'
+            + (profile === workloadIssuanceProfiles.native ? ' On the workload host use --admit-native-workload-certificate with the retained request/key, independent issuer and explicit SANs.' : ''));
         } else { workloadIssuanceUncertain = true; workloadIssuanceMessage('No certificate result was admitted. Do not retry an uncertain issuance.', true); }
       } catch (_) {
         if (workloadIssuanceContact) workloadIssuanceUncertain = true;
@@ -619,10 +689,12 @@ WORKLOAD_ISSUANCE_SCRIPT = r"""
         'bootstrapDigest', 'configurationDigest', 'issuerCertificateDigest', 'grantId'];
       if (!workloadIssuanceClosed(value, fields) || value.action !== workloadIssuanceAction
           || !fields.filter(key => key.endsWith('Digest')).every(key => workloadIssuanceDigest(value[key]))
-          || !['principalId', 'nonce', 'grantId'].every(key => workloadIssuanceText(value[key]))) return {};
+          || !(workloadIssuanceText(value.principalId) || workloadIssuanceNativePrincipal(value.principalId))
+          || !['nonce', 'grantId'].every(key => workloadIssuanceText(value[key]))) return {};
       return Object.fromEntries(fields.map(key => [key, value[key]]));
     }
     function initWorkloadIssuance() {
+      $('workload-issuance-profile').addEventListener('change', () => workloadIssuanceInvalidate('Original file format changed.'));
       workloadIssuanceFileIds.forEach(id => $(id).addEventListener('change', () => workloadIssuanceInvalidate('Original file selection changed.', false)));
       $('workload-issuance-options-receipt').addEventListener('change', () => workloadIssuanceInvalidate('Options receipt selection changed.', false));
       $('workload-issuance-import-options').addEventListener('click', workloadIssuanceImportOptions);

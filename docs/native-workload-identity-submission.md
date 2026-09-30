@@ -78,6 +78,52 @@ The server separately enforces the original challenge lifetime and current sessi
 If those intervals expire during human approval, stop; do not reinterpret an old
 claim, receipt or unknown outcome as permission to retry.
 
+## Browser issuance and local certificate admission
+
+The portal's **Issue a workload certificate** workspace now has an explicit
+**Native request-first bootstrap** file format. Use the same independently
+provisioned issuer and originals from steps 1–4 above; the browser is an
+alternative to the CLI options/submission steps, not another issuance attempt.
+
+Select the signed native grant, the exact extracted native packet v2 and its
+original signed target bootstrap request. The portal checks their schemas,
+original-byte pins and matching target request before requesting options. It
+preserves native principal spelling and the 1024-byte UTF-8 bound, without
+normalization or a legacy packet/signing-key alias. Grant/packet/request ceilings
+are 32/512/64 KiB, inside the existing 3 MiB encoded request limit.
+
+The selector changes local checks only. It is not transmitted as authority:
+the server's independently provisioned cold owner selects the actual verifier
+and re-admits the signatures and all originals. The existing OIDC cookie/CSRF,
+fresh requester passkey, distinct approver and explicit fresh-passkey continuation
+remain mandatory. Switching format discards selected files, pending continuation
+and downloadable results without clearing attempt locks or unknown outcomes.
+
+After a matching certificate response, the portal displays its exact SHA-256
+and offers the public leaf for download. On the workload host, invoke
+`serverware-enrollment --admit-native-workload-certificate` with:
+
+- `--workload-packet`, `--workload-issuer`, `--workload-request`,
+  `--workload-private-key` and `--workload-certificate`, each with its matching
+  `-sha256` pin. Keep the originally retained private key on this host.
+- The independent `--expected-principal`, `--expected-nonce` and repeated
+  `--workload-san-dns` and/or `--workload-san-uri` values used for preparation.
+  At least one SAN is required; duplicates are refused.
+- `--workload-output-directory`, an existing current-user-owned mode-0700
+  directory with no previous destination, and optional `--workload-timeout-ms`.
+
+This command calls the existing [native retained-key verifier](native-workload-identity-provisioning.md).
+It verifies the actual issuer signature, request/key/SAN association and original
+validity, then publishes `client-certificate.pem` as a protected leaf-plus-issuer
+chain without replacing any identity. It cannot contact an issuer, create a key,
+install trust or finish Setup. Standalone admission does not claim to verify the
+separate issuance grant's chosen serial/dates; the CLI submission lane above
+also checks that grant association. Missing or late results do not permit retry.
+
+The separate CLI options-receipt/passkey bridge works with both native and legacy
+receipts because the action and endpoint are unchanged. Import never submits
+issuance; download never renews the server's original challenge lifetime.
+
 ## Explicit CLI and SDK inputs
 
 Native options and submission share:

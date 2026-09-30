@@ -7,6 +7,14 @@ It publishes a leaf-plus-issuer chain without replacing an existing identity.
 It performs no network operation, issuance, system trust installation or native
 runtime admission. This source has not been built, executed or provisioned.
 
+The explicit local CLI is `serverware-enrollment --admit-native-workload-certificate`.
+It exposes this verifier with all five independently pinned files, expected
+principal/nonce and explicit unique SANs; see the
+[browser-to-local handoff](native-workload-identity-submission.md#browser-issuance-and-local-certificate-admission).
+It rejects operator/network, legacy packet-signing-key and Setup-receipt options.
+It emits only protected file paths/digests and local-admission status; issuance,
+proxy authentication, completed enrollment and automatic retry remain false.
+
 ## Explicit local trust contract
 
 The standalone function requires:

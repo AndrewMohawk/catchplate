@@ -728,6 +728,54 @@ def _extract_native_bootstrap_mode(parser: argparse.ArgumentParser, args: argpar
     return True
 
 
+def _native_workload_certificate_mode(parser: argparse.ArgumentParser, args: argparse.Namespace) -> bool:
+    """Admit a downloaded native leaf locally, without issuance or trust install."""
+    if not args.admit_native_workload_certificate:
+        return False
+    pin_names = ("packet", "issuer", "request", "private-key", "certificate")
+    allowed = {"--admit-native-workload-certificate", "--expected-principal", "--expected-nonce",
+        "--workload-output-directory", "--workload-timeout-ms", "--workload-san-dns", "--workload-san-uri",
+        *("--workload-" + name + suffix for name in pin_names for suffix in ("", "-sha256"))}
+    supplied = {item.split("=", 1)[0] for item in sys.argv[1:] if item.startswith("--")}
+    if supplied - allowed:
+        parser.error("native local certificate admission accepts only local pins, identity, SANs and output")
+
+    def argument(name: str):
+        return getattr(args, "workload_" + name.replace("-", "_"))
+
+    required = [("--expected-principal", args.expected_principal), ("--expected-nonce", args.expected_nonce),
+        ("--workload-output-directory", args.workload_output_directory),
+        *(("--workload-" + name + suffix, argument(name + suffix))
+            for name in pin_names for suffix in ("", "-sha256"))]
+    missing = [flag for flag, value in required if value is None or value == ""]
+    if missing:
+        parser.error("native local certificate admission requires " + ", ".join(missing))
+    if (not args.workload_san_dns and not args.workload_san_uri
+            or len(set(args.workload_san_dns)) != len(args.workload_san_dns)
+            or len(set(args.workload_san_uri)) != len(args.workload_san_uri)):
+        parser.error("native local certificate admission requires explicit unique target DNS/URI SANs")
+    from .native_workload_identity_provisioning import admit_certificate
+    from ._workload_tls import PinnedFile
+
+    def pin(name: str) -> PinnedFile:
+        return PinnedFile(argument(name), argument(name + "-sha256"))
+
+    admitted = admit_certificate(packet=pin("packet"), issuer=pin("issuer"), request=pin("request"),
+        private_key=pin("private-key"), certificate=pin("certificate"),
+        expected_principal=args.expected_principal, expected_nonce=args.expected_nonce,
+        requested_sans={"dnsNames": sorted(args.workload_san_dns), "uris": sorted(args.workload_san_uri)},
+        output_directory=args.workload_output_directory, timeout_ms=args.workload_timeout_ms)
+    print(json.dumps({"schema": "serverware.workloadIdentityLocalResult/v1",
+        "profile": "native-request-first-p256-v1", "status": "certificate-admitted-local-only",
+        "clientCertificate": {"path": os.fspath(admitted.client_certificate.path),
+            "sha256": admitted.client_certificate.sha256},
+        "clientPrivateKey": {"path": os.fspath(admitted.client_private_key.path),
+            "sha256": admitted.client_private_key.sha256},
+        "issuanceAuthorized": False, "proxyAuthenticated": False, "enrollmentComplete": False,
+        "automaticRetryAllowed": False}, indent=2, sort_keys=True))
+    return True
+
+
 def _native_workload_issuance_mode(parser: argparse.ArgumentParser, args: argparse.Namespace) -> bool:
     """Explicit native operator modes; no legacy packet-key or manifest alias."""
     if not (args.request_native_workload_issuance_options or args.submit_native_workload_issuance):
@@ -992,6 +1040,8 @@ def main() -> None:
         help="request fresh native issuance options from the pinned operator endpoint; no CA contact")
     workload_modes.add_argument("--submit-native-workload-issuance", action="store_true",
         help="submit native originals once and admit the returned leaf against the retained request key")
+    workload_modes.add_argument("--admit-native-workload-certificate", action="store_true",
+        help="locally verify a downloaded native leaf against pinned bootstrap originals and the retained key")
     for name in ("packet", "packet-signing-key", "issuer", "request", "private-key", "certificate",
             "authorization", "tls-ca", "cookie", "csrf", "options", "assertion", "approval", "capture"):
         parser.add_argument("--workload-" + name, type=Path)
@@ -1053,7 +1103,8 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    if (_extract_native_bootstrap_mode(parser, args) or _native_workload_issuance_mode(parser, args)
+    if (_extract_native_bootstrap_mode(parser, args) or _native_workload_certificate_mode(parser, args)
+            or _native_workload_issuance_mode(parser, args)
             or _workload_bootstrap_mode(parser, args) or _workload_issuance_mode(parser, args)
             or _workload_identity_mode(parser, args)):
         return

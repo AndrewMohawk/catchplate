@@ -131,6 +131,14 @@ The portal consumes bounded public grant, packet and request files. Private keys
 stay on the workload host; the browser does not generate or import them. Inputs
 are page-local and are not saved to browser storage or printed to logs.
 
+The explicit file-format selector distinguishes the legacy packet-bound lane
+described here from [native request-first issuance](native-workload-identity-submission.md#browser-issuance-and-local-certificate-admission).
+Native mode uses its own signed grant, packet v2 and bootstrap CSR request; no
+conversion or server-profile override occurs. Its packet limit is 512 KiB.
+Changing format clears local selections and pending/download state but never
+clears uncertainty or attempt locks. The server independently chooses and
+enforces its cold-admitted issuer profile in either mode.
+
 Request and approval buttons require an active OIDC operator session and use its
 current cookie and CSRF path, not an entered bearer credential. Issuance requires
 a fresh browser WebAuthn ceremony. Pending approval is a displayed state, not an automatic retry loop:

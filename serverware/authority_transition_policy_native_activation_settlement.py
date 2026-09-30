@@ -166,7 +166,7 @@ def committed_policy(state, high, published):
     p.require(p.sha256(p.canonical(policy)) == prepared["activationPolicySha256"])
     receipt = publication.verify(preparation["publication_original"], prepared=prepared,
         request_sha256=preparation["publication_request_sha256"], assignment=assigned, policy=policy)
-    audits = profile.canonical_original(final["audit_originals_json"])
+    audits = profile.completed_audit_originals(final["audit_originals_json"])
     p.require(type(audits) is list and len(audits) == 4 and len({row["id"] for row in audits}) == 4
         and all(row["status"] == "audited" and row["audited_at"] is not None and row["audit_event_hash"] is not None for row in audits))
     from serverware import authority_transition_policy_native_activation as approval

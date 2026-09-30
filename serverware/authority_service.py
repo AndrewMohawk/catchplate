@@ -72,6 +72,7 @@ from serverware import authority_setup_policy_admission as setup_policy_admissio
 from serverware import authority_setup_native_enrollment as setup_native_enrollment
 from serverware import authority_setup_native_enrollment_policy as setup_native_enrollment_policy
 from serverware import authority_setup_native_ca as setup_native_ca
+from serverware import authority_setup_native_canary as setup_native_canary
 from serverware import authority_policy_canary as policy_canary
 from serverware import authority_policy_canary_policy as policy_canary_policy
 from serverware import authority_policy_canary_heartbeat_policy as heartbeat_policy
@@ -8336,10 +8337,11 @@ class AuthorityProcess:
             operation_id=operation_id,
         )
         from serverware import authority_publication_approval as publication_approval
-        if operation in (setup_native_ca.ASSERTION_OPERATIONS | setup_native_enrollment.ASSERTION_OPERATIONS | publication_approval.assertion_operations() | oauth_activation.ASSERTION_OPERATIONS | oauth_exchange.ASSERTION_OPERATIONS | oauth_measured_exchange.ASSERTION_OPERATIONS | oauth_measured_setup.ASSERTION_OPERATIONS | oauth_setup.ASSERTION_OPERATIONS | oauth_reconnect.ASSERTION_OPERATIONS | policy_candidate.ASSERTION_OPERATIONS | setup_policy.ASSERTION_OPERATIONS | oauth_succession.ASSERTION_OPERATIONS):
+        if operation in (setup_native_canary.ASSERTION_OPERATIONS | setup_native_ca.ASSERTION_OPERATIONS | setup_native_enrollment.ASSERTION_OPERATIONS | publication_approval.assertion_operations() | oauth_activation.ASSERTION_OPERATIONS | oauth_exchange.ASSERTION_OPERATIONS | oauth_measured_exchange.ASSERTION_OPERATIONS | oauth_measured_setup.ASSERTION_OPERATIONS | oauth_setup.ASSERTION_OPERATIONS | oauth_reconnect.ASSERTION_OPERATIONS | policy_candidate.ASSERTION_OPERATIONS | setup_policy.ASSERTION_OPERATIONS | oauth_succession.ASSERTION_OPERATIONS):
             # This is a new, independently admitted purpose. Legacy argument
             # adapters and physical-evidence receipt families are not relabeled.
-            selected_profile = (setup_native_ca if operation in setup_native_ca.OPERATIONS else
+            selected_profile = (setup_native_canary if operation in setup_native_canary.OPERATIONS else
+                setup_native_ca if operation in setup_native_ca.OPERATIONS else
                 setup_native_enrollment if operation in setup_native_enrollment.OPERATIONS else
                 setup_policy if operation in setup_policy.OPERATIONS else
                 policy_candidate if operation in policy_candidate.OPERATIONS else
@@ -8377,6 +8379,9 @@ class AuthorityProcess:
                     configuration_payload=self.configuration.payload, root_key=self.configuration.root_key,
                     now_epoch_ns=time.time_ns())
             policy = values["credential_policy"]
+            if operation in setup_native_canary.OPERATIONS:
+                setup_native_canary.verify_original(operation, values,
+                    configuration_payload=self.configuration.payload, root_key=self.configuration.root_key, now_epoch_ns=time.time_ns())
             if operation in setup_native_ca.OPERATIONS:
                 setup_native_ca.verify_original(operation, values,
                     configuration_payload=self.configuration.payload, root_key=self.configuration.root_key, now_epoch_ns=time.time_ns())
@@ -8633,6 +8638,12 @@ class AuthorityProcess:
                 configuration_payload=self.configuration.payload, root_key=self.configuration.root_key, now_epoch_ns=time.time_ns())
             if setup_native_enrollment.request_digest(operation, original_values) != request_digest:
                 raise AuthorityServiceError("native Setup issuer original commitment differs")
+        if operation in setup_native_canary.OPERATIONS:
+            original_values = {name: value for name, value in arguments.items() if name != "authn_evidence"}
+            setup_native_canary.verify_original(operation, original_values,
+                configuration_payload=self.configuration.payload, root_key=self.configuration.root_key, now_epoch_ns=time.time_ns())
+            if setup_native_canary.request_digest(operation, original_values) != request_digest:
+                raise AuthorityServiceError("native Setup canary original commitment differs")
         if operation in setup_native_ca.OPERATIONS:
             original_values = {name: value for name, value in arguments.items() if name != "authn_evidence"}
             setup_native_ca.verify_original(operation, original_values,
@@ -9267,6 +9278,9 @@ class AuthorityProcess:
                 root_key=self.configuration.root_key, now_epoch_ns=time.time_ns())
         if planner_request["operation"] in setup_native_enrollment.OPERATIONS:
             setup_native_enrollment_policy.verify_original(planner_request["operation"], planner_request["typedRequest"]["arguments"],
+                configuration_payload=self.configuration.payload, root_key=self.configuration.root_key, now_epoch_ns=time.time_ns())
+        if planner_request["operation"] in setup_native_canary.OPERATIONS:
+            setup_native_canary.verify_original(planner_request["operation"], planner_request["typedRequest"]["arguments"],
                 configuration_payload=self.configuration.payload, root_key=self.configuration.root_key, now_epoch_ns=time.time_ns())
         if planner_request["operation"] in setup_native_ca.OPERATIONS:
             setup_native_ca.verify_original(planner_request["operation"], planner_request["typedRequest"]["arguments"],

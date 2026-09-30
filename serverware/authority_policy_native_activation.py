@@ -79,6 +79,18 @@ def publication_tuple(value, *, before):
     return value
 
 
+def completed_audit_originals(value):
+    """Only the finalizer's exact canonical four-row list, not a new codec."""
+    p.require(type(value) is str and value.isascii() and 2 <= len(value) <= MAX_ORIGINAL)
+    # The shared document decoder deliberately admits object roots only. Keep
+    # that contract: a fixed source wrapper uses its duplicate/depth/node checks.
+    original = value.encode("ascii")
+    wrapped = p.document(b'{"audits":' + original + b'}', MAX_ORIGINAL + 11)
+    p.require(set(wrapped) == {"audits"} and type(wrapped["audits"]) is list and len(wrapped["audits"]) == 4
+        and all(type(row) is dict for row in wrapped["audits"]) and p.canonical(wrapped["audits"]) == original)
+    return wrapped["audits"]
+
+
 def validate_policy(value, *, payload=None, root_key=None):
     if value is None:
         if payload is not None:

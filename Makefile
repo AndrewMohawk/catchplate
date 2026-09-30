@@ -1450,6 +1450,9 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_setup_native_ca.py \
 	serverware/authority_transition_setup_native_ca.py \
 	serverware/control_plane_setup_native_ca.py \
+	serverware/authority_setup_native_canary.py \
+	serverware/authority_transition_setup_native_canary.py \
+	serverware/control_plane_setup_native_canary.py \
 	serverware/authority_setup_policy_admission.py \
 	serverware/authority_transition_setup_policy.py \
 	serverware/control_plane_setup_policy.py \
@@ -1457,6 +1460,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/portal_setup_native.py \
 	serverware/portal_setup_native_enrollment.py \
 	serverware/portal_setup_native_ca.py \
+	serverware/portal_setup_native_canary.py \
 	serverware/authority_policy_candidate_evidence.py \
 	serverware/authority_policy_canary_native_opening.py \
 	serverware/authority_policy_canary_native_runtime.py \
@@ -4045,6 +4049,9 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_setup_native_ca.py \
 				serverware/authority_transition_setup_native_ca.py \
 				serverware/control_plane_setup_native_ca.py \
+				serverware/authority_setup_native_canary.py \
+				serverware/authority_transition_setup_native_canary.py \
+				serverware/control_plane_setup_native_canary.py \
 				serverware/authority_setup_policy_admission.py \
 				serverware/authority_transition_setup_policy.py \
 				serverware/control_plane_setup_policy.py \
@@ -4052,6 +4059,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/portal_setup_native.py \
 				serverware/portal_setup_native_enrollment.py \
 				serverware/portal_setup_native_ca.py \
+				serverware/portal_setup_native_canary.py \
 				serverware/authority_policy_candidate_evidence.py \
 				serverware/authority_policy_canary_native_opening.py \
 				serverware/authority_policy_canary_native_runtime.py \
@@ -4869,6 +4877,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/setup-policy-candidate-http.v1.schema.json \
 				schemas/setup-native-enrollment.v1.schema.json \
 				schemas/setup-native-ca-installation.v1.schema.json \
+				schemas/setup-native-canary.v1.schema.json \
 				schemas/native-oauth-measured-setup.v1.schema.json \
 				schemas/native-oauth-measured-reconnect.v1.schema.json \
 				schemas/native-oauth-retired-scope-succession.v1.schema.json \

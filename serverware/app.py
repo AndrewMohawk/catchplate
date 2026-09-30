@@ -670,6 +670,7 @@ async def bounded_control_plane_request_middleware(request: Request, call_next):
         **{path: control_plane_setup_policy.MAX_REQUEST for path in control_plane_setup_policy.PATHS},
         control_plane_setup_policy.NATIVE_ENROLLMENT_LOOKUP_PATH: 4096,
         control_plane_setup_policy.NATIVE_CA_LOOKUP_PATH: 4096,
+        **{path: 32768 for path in control_plane_setup_policy.NATIVE_CANARY_PATHS},
         **{path: control_plane_policy_canary.MAX_REQUEST for path in control_plane_policy_canary.PATHS},
         control_plane_policy_canary_delivery.PATH: control_plane_policy_canary_delivery.MAX_REQUEST,
         **{path: activation_permission_contract.MAX_REQUEST_BYTES for path in activation_permission_routes.PATHS},
@@ -11110,6 +11111,10 @@ async def policy_authority_candidate_handoff(
 @app.post(control_plane_setup_policy.NATIVE_INSTALLED_PATH)
 @app.post(control_plane_setup_policy.NATIVE_ENROLLMENT_LOOKUP_PATH)
 @app.post(control_plane_setup_policy.NATIVE_CA_LOOKUP_PATH)
+@app.post(control_plane_setup_policy.NATIVE_CANARY_PREFIX + "/draft")
+@app.post(control_plane_setup_policy.NATIVE_CANARY_PREFIX + "/options")
+@app.post(control_plane_setup_policy.NATIVE_CANARY_PREFIX + "/record")
+@app.post(control_plane_setup_policy.NATIVE_CANARY_PREFIX + "/lookup")
 async def controlled_setup_policy_candidate(request: Request, response: Response) -> dict[str, Any]:
     response.headers["Cache-Control"] = "no-store"
     response.headers["Pragma"] = "no-cache"
@@ -23420,6 +23425,7 @@ UI_HTML = r"""
       workloadIssuanceInvalidate('Browser session state became unknown.');
       setupEnrollmentClear();
       setupNativeCaClear();
+      setupNativeCanaryClear();
       adminPublicationInvalidate('Browser session state became unknown.');
       oauthActivationInvalidate('Browser session state became unknown.');
       oidcSessionStatusUnknown = true;
@@ -23449,6 +23455,7 @@ UI_HTML = r"""
         workloadIssuanceInvalidate('Browser authentication changed.');
         setupEnrollmentClear();
         setupNativeCaClear();
+        setupNativeCanaryClear();
         adminPublicationInvalidate('Browser authentication changed.');
         oauthActivationInvalidate('Browser authentication changed.');
       }
@@ -23506,6 +23513,7 @@ UI_HTML = r"""
       workloadIssuanceInvalidate('Sign-in started.');
       setupEnrollmentClear();
       setupNativeCaClear();
+      setupNativeCanaryClear();
       oauthActivationInvalidate('Sign-in started.');
       clearCustodyView('Sign-in is changing. Custody metadata cleared.');
       const returnTo = `${window.location.pathname}${window.location.search}`;
@@ -23716,6 +23724,7 @@ UI_HTML = r"""
       workloadIssuanceInvalidate('Sign-out started.');
       setupEnrollmentClear();
       setupNativeCaClear();
+      setupNativeCanaryClear();
       adminPublicationInvalidate('Sign-out started.');
       oauthActivationInvalidate('Sign-out started.');
       clearCustodyView('Signing out. Custody metadata cleared.');
@@ -26637,6 +26646,7 @@ UI_HTML = r"""
       workloadIssuanceInvalidate('Entered operator credentials changed.');
       setupEnrollmentClear();
       setupNativeCaClear();
+      setupNativeCanaryClear();
       adminPublicationInvalidate('Entered operator credentials changed.');
       oauthActivationInvalidate('Entered operator credentials changed.');
       publicRevocationInvalidate('Entered operator credentials changed.');

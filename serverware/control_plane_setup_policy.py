@@ -23,7 +23,10 @@ INSTALLED_PATH = PREFIX + "/installed"
 NATIVE_INSTALLED_PATH = PREFIX + "/native-installed"
 NATIVE_ENROLLMENT_LOOKUP_PATH = "/api/setup/native-enrollment/lookup"
 NATIVE_CA_LOOKUP_PATH = "/api/setup/native-ca/lookup"
+NATIVE_CANARY_PREFIX = "/api/setup/native-canary"
+NATIVE_CANARY_PATHS = frozenset(NATIVE_CANARY_PREFIX + "/" + phase for phase in ("draft", "options", "record", "lookup"))
 PATHS = PATHS | {MATERIALIZE_PATH, INSTALLED_PATH, NATIVE_INSTALLED_PATH, NATIVE_ENROLLMENT_LOOKUP_PATH, NATIVE_CA_LOOKUP_PATH}
+PATHS = PATHS | NATIVE_CANARY_PATHS
 MATERIALIZE_REQUEST_SCHEMA = "serverware.setupPolicyMaterializationRequest/v1"
 MATERIALIZE_DRAFT_SCHEMA = "serverware.setupPolicyMaterializationDraft/v1"
 INSTALLED_SCHEMA = "serverware.setupPolicyInstalledObservation/v1"
@@ -362,6 +365,9 @@ def on_request(request, raw):
     profile.require(type(raw) is bytes and 0 < len(raw) <= MAX_REQUEST
         and request.headers.get("content-length") == str(len(raw)))
     path = request.url.path
+    if path in NATIVE_CANARY_PATHS:
+        from serverware import control_plane_setup_native_canary
+        return control_plane_setup_native_canary.on_request(request, raw)
     if path == NATIVE_CA_LOOKUP_PATH:
         from serverware import control_plane_setup_native_ca
         try:

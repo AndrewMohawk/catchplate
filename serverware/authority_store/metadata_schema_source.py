@@ -6,6 +6,22 @@ from serverware.authority_store.v9_schema_source import authority_v9_schema_sour
 
 def metadata_base_schema_source() -> str:
     return """
+            CREATE TABLE IF NOT EXISTS setup_native_canary_associations (
+                session_id TEXT PRIMARY KEY, revision BIGINT NOT NULL, phase TEXT NOT NULL, owner_id TEXT NOT NULL,
+                setup_sha256 TEXT NOT NULL, continuation_sha256 TEXT NOT NULL, enrollment_sha256 TEXT NOT NULL,
+                installation_sha256 TEXT NOT NULL, canary_id TEXT NOT NULL, finalization_sha256 TEXT NOT NULL,
+                publication_sha256 TEXT NOT NULL, policy_hash TEXT NOT NULL, request_original TEXT NOT NULL,
+                request_digest TEXT NOT NULL UNIQUE, configuration_digest TEXT NOT NULL, audit_event_digest TEXT NOT NULL,
+                associated_at TEXT NOT NULL,
+                CHECK (revision = 0 AND phase = 'canary_publication_associated'),
+                CHECK (length(session_id) = 36 AND length(owner_id) BETWEEN 1 AND 1024 AND length(canary_id) BETWEEN 1 AND 256),
+                CHECK (length(setup_sha256) = 71 AND length(continuation_sha256) = 71 AND length(enrollment_sha256) = 71
+                    AND length(installation_sha256) = 71 AND length(finalization_sha256) = 71 AND length(publication_sha256) = 71
+                    AND length(policy_hash) = 71 AND length(request_digest) = 71 AND length(configuration_digest) = 71
+                    AND length(audit_event_digest) = 71),
+                CHECK (length(request_original) BETWEEN 2 AND 16384)
+            );
+
             CREATE TABLE IF NOT EXISTS setup_native_ca_installations (
                 session_id TEXT PRIMARY KEY, revision BIGINT NOT NULL, phase TEXT NOT NULL, owner_id TEXT NOT NULL,
                 enrollment_sha256 TEXT NOT NULL, installation_original TEXT NOT NULL, host_key_id TEXT NOT NULL,

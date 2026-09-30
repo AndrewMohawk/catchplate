@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "serverware.nativePilotInventoryPublication/v1",
+  "$ref": "#/$defs/publication",
+  "$comment": "Offline independently enrolled compiler signer input, not runtime provisioning or native delivery permission. All original signatures remain complete. Controlled native intake independently checks current trust/revocation, assignment key and exact inventory roots; legacy constrained/7 and Fleet remain unchanged.",
+  "$defs": {
+    "sha": {"type":"string","pattern":"^sha256:[0-9a-f]{64}$"},
+    "positive": {"type":"integer","minimum":1,"maximum":9223372036854775807},
+    "unsigned": {"type":"integer","minimum":0,"maximum":9223372036854775807},
+    "inventory": {"type":"array","minItems":1,"maxItems":128,"uniqueItems":true,"items":{"$ref":"#/$defs/sha"}},
+    "pilot": {
+      "type":"object","additionalProperties":false,
+      "required":["mode","principalSetRootSha256","routeSetRootSha256","maximumRequests","maximumDurationNanos","maximumWriteRequests","cells","principalSha256s","routeSha256s"],
+      "properties":{
+        "mode":{"const":"constrained-native-inventory-v1"},
+        "principalSetRootSha256":{"$ref":"#/$defs/sha"},"routeSetRootSha256":{"$ref":"#/$defs/sha"},
+        "maximumRequests":{"$ref":"#/$defs/positive"},"maximumDurationNanos":{"$ref":"#/$defs/positive"},"maximumWriteRequests":{"$ref":"#/$defs/unsigned"},
+        "cells":{"type":"array","minItems":1,"maxItems":128,"uniqueItems":true,"items":{"$ref":"policy-shadow-observation.v1.schema.json#/$defs/semanticExpansionCell"}},
+        "principalSha256s":{"$ref":"#/$defs/inventory"},"routeSha256s":{"$ref":"#/$defs/inventory"}
+      },
+      "description":"Inventories are canonical sorted unique complete approved sets, never inferred from policy principals. Domain-separated leaf hashes use ASCII digest strings; pair hashes use decoded SHA bytes; odd leaves promote unchanged. Every actual expansion cell must pin both independently approved recomputed roots."
+    },
+    "analysis": {
+      "type":"object","additionalProperties":false,
+      "required":["analysisId","assignmentSha256","assignmentPayloadSha256","assignmentRevision","canaryId","policyIdentity","expectedLoadedSnapshots","responseValidationObligationsRootSha256","routeAuthorityRootSha256","operationAuthorityRootSha256","authorityAnalysis","pilotRestrictions","issuedAtUnixNanos","expiresAtUnixNanos"],
+      "properties":{
+        "analysisId":{"$ref":"#/$defs/sha"},"assignmentSha256":{"$ref":"#/$defs/sha"},"assignmentPayloadSha256":{"$ref":"#/$defs/sha"},"assignmentRevision":{"$ref":"#/$defs/positive"},"canaryId":{"$ref":"#/$defs/sha"},
+        "policyIdentity":{"$ref":"policy-shadow-assignment.v1.schema.json#/$defs/policyIdentity"},
+        "expectedLoadedSnapshots":{"$ref":"policy-shadow-assignment.v1.schema.json#/$defs/assignedSnapshotIdentities"},
+        "responseValidationObligationsRootSha256":{"$ref":"#/$defs/sha"},"routeAuthorityRootSha256":{"$ref":"#/$defs/sha"},"operationAuthorityRootSha256":{"$ref":"#/$defs/sha"},
+        "authorityAnalysis":{"$ref":"policy-authority-analysis.v1.schema.json#/$defs/approvedExpansionAnalysis"},
+        "pilotRestrictions":{"$ref":"#/$defs/pilot"},"issuedAtUnixNanos":{"$ref":"#/$defs/positive"},"expiresAtUnixNanos":{"$ref":"#/$defs/positive"}
+      },
+      "description":"Exact existing controlled compiler-analysis14 payload with explicit native pilot successor; not the separate legacy Rust/Fleet analysis payload. Enclosing compiler signature domain remains serverware.policyAuthorityAnalysis/v1 over all fourteen fields."
+    },
+    "recordBinding": {
+      "type":"object","additionalProperties":false,
+      "required":["assignment_envelope_digest","assignment_payload_digest","assignment_revision","canary_id","artifact_envelope_digest","artifact_payload_digest","compiler_digest","compiler_config_digest","policy_schema_digest","semantic_model_digest","route_authority_root_digest","operation_authority_root_digest","response_obligations_digest","analysis_mode","approval_mode","required_approval_quorum","expansion_cells_json","expansion_cells_digest","pilot_restrictions_json","pilot_restrictions_digest"],
+      "properties":{
+        "assignment_envelope_digest":{"$ref":"#/$defs/sha"},"assignment_payload_digest":{"$ref":"#/$defs/sha"},"assignment_revision":{"$ref":"#/$defs/positive"},"canary_id":{"$ref":"#/$defs/sha"},
+        "artifact_envelope_digest":{"$ref":"#/$defs/sha"},"artifact_payload_digest":{"$ref":"#/$defs/sha"},"compiler_digest":{"$ref":"#/$defs/sha"},"compiler_config_digest":{"$ref":"#/$defs/sha"},"policy_schema_digest":{"$ref":"#/$defs/sha"},"semantic_model_digest":{"$ref":"#/$defs/sha"},
+        "route_authority_root_digest":{"$ref":"#/$defs/sha"},"operation_authority_root_digest":{"$ref":"#/$defs/sha"},"response_obligations_digest":{"$ref":"#/$defs/sha"},
+        "analysis_mode":{"const":"approved-expansion"},"approval_mode":{"enum":["single-person-hardware-webauthn","two-person-hardware-webauthn"]},"required_approval_quorum":{"enum":[1,2]},
+        "expansion_cells_json":{"type":"string","minLength":2,"maxLength":524288},"expansion_cells_digest":{"$ref":"#/$defs/sha"},"pilot_restrictions_json":{"type":"string","minLength":2,"maxLength":524288},"pilot_restrictions_digest":{"$ref":"#/$defs/sha"}
+      }
+    },
+    "publication": {
+      "type":"object","additionalProperties":false,"required":["apiVersion","assignmentEnvelope","analysisPayload","recordBinding"],
+      "properties":{
+        "apiVersion":{"const":"serverware.nativePilotInventoryPublication/v1"},
+        "assignmentEnvelope":{"$ref":"policy-shadow-assignment.v1.schema.json"},
+        "analysisPayload":{"$ref":"#/$defs/analysis"},"recordBinding":{"$ref":"#/$defs/recordBinding"}
+      },
+      "description":"Whole canonical input <=512 KiB. Three distinct retained regular FDs supply this public input, independently selected assignment verification public key, and operator-owned mode0400/0600 compiler key. Output is one existing compiler-analysis event, not an HTTP request and not sent by this command."
+    }
+  }
+}

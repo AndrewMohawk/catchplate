@@ -2,6 +2,7 @@
 from serverware import authority_policy_canary as profile
 from serverware.authority_transition_policy_canary_membership import record, integers
 from serverware.authority_transition_policy_canary_state import exact, apply_verification
+from serverware import authority_policy_canary_native_pilot as native_pilot
 
 
 def compiler_analysis(state, value):
@@ -32,14 +33,17 @@ def compiler_analysis(state, value):
         profile.require(item["approval_mode"] == "none" and item["required_approval_quorum"] == 1
             and not cells and pilot == {"mode": "not-applicable"})
     else:
-        profile.require(item["analysis_mode"] == "approved-expansion" and set(pilot) == {"mode", "principalSetRootSha256",
-            "routeSetRootSha256", "maximumRequests", "maximumDurationNanos", "maximumWriteRequests", "cells"})
+        native = pilot.get("mode") == native_pilot.MODE
+        profile.require(item["analysis_mode"] == "approved-expansion" and set(pilot) == (native_pilot.FIELDS if native else {
+            "mode", "principalSetRootSha256", "routeSetRootSha256", "maximumRequests", "maximumDurationNanos", "maximumWriteRequests", "cells"}))
+        if native:
+            native_pilot.validate(pilot)
         profile.digest(pilot["principalSetRootSha256"]); profile.digest(pilot["routeSetRootSha256"])
         db._candidate_authority_int("pilot requests", pilot["maximumRequests"], minimum=1)
         db._candidate_authority_int("pilot duration", pilot["maximumDurationNanos"], minimum=1)
         db._candidate_authority_int("pilot writes", pilot["maximumWriteRequests"])
         quorum = {"two-person-hardware-webauthn": 2, "single-person-hardware-webauthn": 1}.get(item["approval_mode"], 0)
-        profile.require(bool(cells) and pilot["mode"] == "constrained" and pilot["cells"] == normalized
+        profile.require(bool(cells) and pilot["mode"] == (native_pilot.MODE if native else "constrained") and pilot["cells"] == normalized
             and quorum == item["required_approval_quorum"] and pilot["maximumRequests"] <= maximum_requests
             and pilot["maximumWriteRequests"] <= min(maximum_writes, pilot["maximumRequests"]))
     assignment = state.one("policy_canary_assignments", assignment_envelope_digest=item["assignment_envelope_digest"])
@@ -47,6 +51,8 @@ def compiler_analysis(state, value):
         "artifact_payload_digest", "compiler_digest", "compiler_config_digest", "policy_schema_digest", "semantic_model_digest", "response_obligations_digest"))
     verified = state.static("compiler_analysis", item, "analysis", db._candidate_authority_signed_record(item, current_prefix="analysis"))
     apply_verification(item, verified, interval=True)
+    if pilot.get("mode") == native_pilot.MODE:
+        native_pilot.admit(state, item, assignment)
     payload = db.loads(item["analysis_payload_json"], None)
     profile.require(payload["expectedLoadedSnapshots"] == db.loads(assignment["expected_snapshots_json"], None)
         and payload["responseValidationObligationsRootSha256"] == assignment["response_obligations_digest"])

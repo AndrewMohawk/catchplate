@@ -58,7 +58,10 @@ fn evaluation(snapshot: &PolicyPlanSnapshot, value: &PolicyEvaluation, principal
     // Early deny/indeterminate paths currently may not retain a classified
     // route+operation. Preserve absence; this is not an evaluated authority
     // binding and cannot qualify for native readiness.
-    let authority = principal.and_then(|principal|
+    if principal.is_some() && value.evaluated_principal_id.as_deref().is_some_and(|actual|Some(actual)!=principal) {
+        return Err("observation authenticated principal differs from actual evaluator".into());
+    }
+    let authority = value.evaluated_principal_id.as_deref().and_then(|principal|
         snapshot.observed_authority_binding(value, principal).ok());
     Ok(json!({
         "snapshotSha256": value.snapshot_hash,
@@ -68,6 +71,8 @@ fn evaluation(snapshot: &PolicyPlanSnapshot, value: &PolicyEvaluation, principal
         "disposition": value.disposition_label(),
         "policyPlan": plan,
         "authorityBinding": authority,
+        "dispatchProjection": value.dispatch_projection,
+        "responseConstraints": value.response_constraints,
     }))
 }
 
@@ -103,7 +108,7 @@ pub(super) fn request(lifecycle: &ShadowRequestLifecycle, active: &FinalActiveDe
 {
     let original = active.native_original.as_ref().ok_or("actual native terminal original missing")?;
     bounded(json!({
-        "apiVersion": "serverware.nativeRequestObservationOriginal/v1",
+        "apiVersion": "serverware.nativeRequestObservationOriginal/v2",
         "pureActiveEvaluation": original["pureActiveEvaluation"],
         "candidateEvaluation": evaluation(&lifecycle.generation.candidate, candidate,
             lifecycle.facts.authenticated_principal_id.as_deref())?,
@@ -119,7 +124,7 @@ pub(super) fn response(job: &ShadowResponseJob, candidate_validation: Value,
 {
     let original = job.response_original.as_ref().ok_or("actual native response original missing")?;
     bounded(json!({
-        "apiVersion": "serverware.nativeResponseObservationOriginal/v1",
+        "apiVersion": "serverware.nativeResponseObservationOriginal/v2",
         "response": {
             "responseFacts": original["responseFacts"],
             "boundActiveValidation": original["boundActiveValidation"],

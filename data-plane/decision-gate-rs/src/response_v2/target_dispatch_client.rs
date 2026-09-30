@@ -25,6 +25,7 @@ impl CommittedNativeCapture {
     pub(crate) fn capture(&self) -> &wire::NativeCaptureEnvelope { &self.capture }
     pub(crate) fn completion(&self) -> &wire::CompletedCapture { &self.completion }
     pub(crate) fn method(&self) -> &str { &self.method }
+    pub(super) fn detailed_observations_selected(&self) -> bool { self.hook.native_details_selected() }
 
     // Only the transaction module calls this, after exact release consumption,
     // final-envelope verification, reflection and durable-policy completion.

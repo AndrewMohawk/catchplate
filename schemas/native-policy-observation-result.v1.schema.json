@@ -1,0 +1,49 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "$id":"serverware.nativePolicyObservationResult/v1",
+  "$ref":"#/$defs/derivedRecord",
+  "$comment":"Native derived data, not a signed Fleet ObservationResult. Only the source-fixed complete census factory constructs this record after current purpose, signature, protected predecessor and classifier admission. Its complete canonical SHA is the native detail recordSha256. No new caller-supplied result admission.",
+  "$defs":{
+    "sha":{"type":"string","pattern":"^sha256:[0-9a-f]{64}$"},
+    "nullableSha":{"oneOf":[{"$ref":"#/$defs/sha"},{"type":"null"}]},
+    "unsigned":{"type":"integer","minimum":0,"maximum":9223372036854775807},
+    "facts":{
+      "oneOf":[
+        {"type":"object","additionalProperties":false,"required":["state","capturedAtUnixNanos","requestCommitmentSha256"],"properties":{"state":{"const":"captured"},"capturedAtUnixNanos":{"type":"integer","minimum":1,"maximum":9223372036854775807},"requestCommitmentSha256":{"$ref":"#/$defs/sha"}}},
+        {"type":"object","additionalProperties":false,"required":["state","reason"],"properties":{"state":{"const":"unavailable"},"reason":{"const":"deterministic-assignment-sampling"}}}
+      ]
+    },
+    "derivedRecord":{
+      "type":"object","additionalProperties":false,
+      "required":["apiVersion","generationId","ingressSequence","openingReceiptSha256","ingressReceiptSha256s","terminalReceiptSha256","requestReceiptSha256","responseReceiptSha256","requestOriginalSha256","responseOriginalSha256","compilerAnalysisSha256","factsState","result"],
+      "properties":{
+        "apiVersion":{"const":"serverware.nativePolicyObservationResult/v1"},"generationId":{"$ref":"#/$defs/sha"},"ingressSequence":{"type":"integer","minimum":1,"maximum":9223372036854775807},"openingReceiptSha256":{"$ref":"#/$defs/sha"},
+        "ingressReceiptSha256s":{"type":"array","minItems":1,"maxItems":64,"uniqueItems":true,"items":{"$ref":"#/$defs/sha"}},
+        "terminalReceiptSha256":{"$ref":"#/$defs/nullableSha"},"requestReceiptSha256":{"$ref":"#/$defs/nullableSha"},"responseReceiptSha256":{"$ref":"#/$defs/nullableSha"},"requestOriginalSha256":{"$ref":"#/$defs/nullableSha"},"responseOriginalSha256":{"$ref":"#/$defs/nullableSha"},"compilerAnalysisSha256":{"$ref":"#/$defs/sha"},"factsState":{"$ref":"#/$defs/facts"},
+        "result":{"oneOf":[{"$ref":"policy-shadow-observation.v1.schema.json#/$defs/evaluatedResult"},{"$ref":"policy-shadow-observation.v1.schema.json#/$defs/excludedResult"}]}
+      },
+      "description":"References reuse exact data grammars only. Native finalization binding hashes actual terminal/request receipts and final original, never a fabricated Fleet signature. Accepted/accepted released output mismatch is divergence. Applied response obligations bind real attempted rules and response even when unsafe; all noncomparable/divergent/unavailable samples still fail readiness."
+    },
+    "responseConstraints":{
+      "type":"object","additionalProperties":false,"required":["domain","routeSha256","adapterTypeSha256","adapterConfigSha256","constraintSha256s"],
+      "properties":{"domain":{"const":"serverware.policyShadowNativeResponseConstraints/v1"},"routeSha256":{"$ref":"#/$defs/sha"},"adapterTypeSha256":{"$ref":"#/$defs/sha"},"adapterConfigSha256":{"$ref":"#/$defs/sha"},"constraintSha256s":{"type":"array","maxItems":128,"uniqueItems":true,"items":{"$ref":"#/$defs/sha"}}},
+      "description":"Recomputed from exact signed installed route. Adapter config and response-phase constraints use policyTypedCanonical/v1, preserving finite binary64. Digests sorted/deduplicated. Not the older plan responseValidationCommitments list."
+    },
+    "dispatch":{
+      "type":"object","additionalProperties":false,"required":["domain","principalSha256","routeSha256","request","operationSha256","credentialSlotSha256","injectionPolicySha256"],
+      "properties":{
+        "domain":{"const":"serverware.policyShadowCredentialFreeDispatch/v1"},"principalSha256":{"$ref":"#/$defs/sha"},"routeSha256":{"$ref":"#/$defs/sha"},"operationSha256":{"$ref":"#/$defs/sha"},"credentialSlotSha256":{"$ref":"#/$defs/nullableSha"},"injectionPolicySha256":{"$ref":"#/$defs/sha"},
+        "request":{"type":"object","additionalProperties":false,"required":["method","scheme","authoritySha256","pathSha256","querySha256","headersSha256","bodySha256","bodyLength"],"properties":{"method":{"type":"string","pattern":"^[A-Z!#$%&'*+.^_`|~-]{1,64}$"},"scheme":{"enum":["http","https"]},"authoritySha256":{"$ref":"#/$defs/sha"},"pathSha256":{"$ref":"#/$defs/sha"},"querySha256":{"$ref":"#/$defs/sha"},"headersSha256":{"$ref":"#/$defs/sha"},"bodySha256":{"$ref":"#/$defs/sha"},"bodyLength":{"$ref":"#/$defs/unsigned"}}}
+      },
+      "description":"Actual post-rewrite credential-free target and forwarded request commitments, not final injected bytes. Injection policy uses typed canonical transcript. Dispatch comparison SHA is canonical ASCII full projection; no lane or snapshot hash is substituted."
+    },
+    "releasedResponse":{
+      "type":"object","additionalProperties":false,
+      "required":["domain","outcome","inspectionReceiptSha256","finalEnvelopeVerificationSha256","releaseRetrievalReceiptSha256","releasedResponseSha256","releasedEntitySha256","releasedEntityBytes","releasedStatus","releasedContentType","releasedContentTypeState","releaseMode","releasedParsedResponseSha256"],
+      "properties":{
+        "domain":{"const":"serverware.policyShadowNativeReleasedResponse/v2"},"outcome":{"const":"released"},"inspectionReceiptSha256":{"$ref":"#/$defs/sha"},"finalEnvelopeVerificationSha256":{"$ref":"#/$defs/sha"},"releaseRetrievalReceiptSha256":{"$ref":"#/$defs/sha"},"releasedResponseSha256":{"$ref":"#/$defs/sha"},"releasedEntitySha256":{"$ref":"#/$defs/sha"},"releasedEntityBytes":{"$ref":"#/$defs/unsigned"},"releasedStatus":{"type":"integer","minimum":100,"maximum":599},"releasedContentType":{"type":["string","null"],"maxLength":1024},"releasedContentTypeState":{"enum":["absent","present","unavailable"]},"releaseMode":{"const":"native-immutable-exact"},"releasedParsedResponseSha256":{"$ref":"#/$defs/sha"}
+      },
+      "description":"Exactly the selected native response original/v2 activeValidation thirteen fields. Physical duplicate/non-ASCII/oversized media is unavailable, never comparable. Native releaseMode is provenance, not candidate adapter behavior. Original/v1 stays exact six-field release validation."
+    }
+  }
+}

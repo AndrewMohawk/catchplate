@@ -44,7 +44,7 @@ def projection(result, contract, compiler):
         pure, final, candidate = (result[name] for name in ("pureActiveEvaluation", "finalActiveEnforcement", "candidateEvaluation"))
         p.require(all(type(value) is dict for value in (pure, final, candidate)))
         p.require(pure["outcome"] in db._POLICY_AUTHORITY_OUTCOMES and candidate["outcome"] in db._POLICY_AUTHORITY_OUTCOMES
-            and final["finalOutcome"] in db._POLICY_AUTHORITY_OUTCOMES and type(final["upstreamDispatchAuthorized"]) is bool
+            and final["finalOutcome"] in {"allow", "deny", "conditional", "error"} and type(final["upstreamDispatchAuthorized"]) is bool
             and candidate["evaluationPurpose"] == "candidate-shadow"
             and candidate["effectCapabilitiesAvailable"] is False and candidate["effectIntentsExecuted"] is False)
         item.update(active_outcome=pure["outcome"], candidate_outcome=candidate["outcome"],
@@ -72,7 +72,7 @@ def projection(result, contract, compiler):
     for name, value in values.items():
         _json(item, name, value)
     binding, cells, obligation, comparison = semantics.components(item)
-    semantics.compiler_scope(item, contract, compiler, binding, cells, obligation, comparison, active)
+    semantics.native_compiler_scope(item, contract, compiler, binding, cells, obligation, comparison, active)
     return item, binding, cells, obligation, comparison
 
 
@@ -92,7 +92,10 @@ def aggregate(observations, contract, compiler):
         inc(totals, "ingressAdmitted")
         inc(totals, {"evaluated": "evaluated", "dropped": "dropped", "error": "errors", "excluded": "excluded",
             "transport-excluded": "excluded"}[status])
-        if facts["state"] == "unavailable":
+        # The source-fixed census owner has already joined these two excluded
+        # statuses to the genuine signed opening/sampling and exclusion event.
+        # Deliberately not capturing facts is not missing required evidence.
+        if facts["state"] == "unavailable" and status not in {"excluded", "transport-excluded"}:
             inc(totals, "unavailableEvidence")
         if status == "evaluated":
             active, candidate = item["active_outcome"], item["candidate_outcome"]
@@ -200,7 +203,9 @@ def requirements(counters, assignment, analysis, pilot, *, member, duration):
         p.require(pilot == {"mode": "not-applicable"} and not cells and not actual
             and not any(totals[name] for name in tuple(_EXPANDING.values()) + ("authorityExpansionObservations", "authorityExpansionWriteObservations")))
     else:
-        p.require(analysis["mode"] == "approved-expansion" and pilot["mode"] == "constrained" and pilot["cells"] == cells
+        from serverware import authority_policy_canary_native_pilot as inventory
+        inventory.validate(pilot)
+        p.require(analysis["mode"] == "approved-expansion" and pilot["mode"] == inventory.MODE and pilot["cells"] == cells
             and len(actual) == len(cells) and 0 < totals["authorityExpansionObservations"] <= pilot["maximumRequests"]
             and totals["authorityExpansionWriteObservations"] <= pilot["maximumWriteRequests"] and duration <= pilot["maximumDurationNanos"])
         for observed, authorized in zip(actual, cells, strict=True):

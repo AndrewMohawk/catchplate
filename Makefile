@@ -1452,6 +1452,12 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_policy_canary_native_opening.py \
 	serverware/authority_policy_canary_native_runtime.py \
 	serverware/authority_policy_canary_native_observation_originals.py \
+	serverware/authority_transition_policy_canary_native_detail.py \
+	serverware/authority_policy_canary_native_observation_semantics.py \
+	serverware/authority_policy_canary_native_comparison.py \
+	serverware/authority_policy_canary_native_pilot.py \
+	serverware/native_pilot_inventory_publication.py \
+	scripts/authority/publish_native_pilot_inventory.py \
 	serverware/policy_route_authority.py \
 	serverware/authority_transition_policy_canary_route_authority.py \
 	serverware/authority_policy_canary_native_checkpoint.py \
@@ -4002,6 +4008,12 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_policy_canary_native_opening.py \
 				serverware/authority_policy_canary_native_runtime.py \
 				serverware/authority_policy_canary_native_observation_originals.py \
+				serverware/authority_transition_policy_canary_native_detail.py \
+				serverware/authority_policy_canary_native_observation_semantics.py \
+				serverware/authority_policy_canary_native_comparison.py \
+				serverware/authority_policy_canary_native_pilot.py \
+				serverware/native_pilot_inventory_publication.py \
+				scripts/authority/publish_native_pilot_inventory.py \
 				serverware/policy_route_authority.py \
 				serverware/authority_transition_policy_canary_route_authority.py \
 				serverware/authority_policy_canary_native_checkpoint.py \
@@ -4271,6 +4283,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/policy_core_native_response.rs \
 				data-plane/decision-gate-rs/src/policy_core_effect_completion.rs \
 				data-plane/decision-gate-rs/src/policy_core_observation_originals.rs \
+				data-plane/decision-gate-rs/src/policy_core_dispatch_observation.rs \
 				data-plane/decision-gate-rs/src/policy_route_authority.rs \
 				data-plane/decision-gate-rs/src/policy_core_drain.rs \
 				data-plane/decision-gate-rs/src/policy_shadow_cumulative.rs \
@@ -4711,6 +4724,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-policy-canary-finalization.v1.schema.json \
 				schemas/native-policy-canary-cumulative-checkpoint.v2.schema.json \
 				schemas/native-policy-canary-readiness.v1.schema.json \
+				schemas/native-policy-observation-result.v1.schema.json \
+				schemas/native-pilot-inventory-publication.v1.schema.json \
 				schemas/policy-bundle.v2.schema.json \
 				schemas/setup-policy-candidate-http.v1.schema.json \
 				schemas/native-oauth-measured-setup.v1.schema.json \

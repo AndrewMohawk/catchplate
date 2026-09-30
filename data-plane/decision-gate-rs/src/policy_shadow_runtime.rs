@@ -20,12 +20,12 @@ pub(super) fn accounting_label(event: &Value) -> Result<&str, ShadowError> {
             if object.len() != FIELDS.len() || FIELDS.iter().any(|field| !object.contains_key(*field)) {
                 return Err(ShadowError::BindingDrift);
             }
-            let (phase, profile) = match label {
-                "candidate-evaluated" => ("candidate", "serverware.nativeRequestObservationOriginal/v1"),
-                "response-evaluated" => ("response", "serverware.nativeResponseObservationOriginal/v1"),
+            let (phase, profiles) = match label {
+                "candidate-evaluated" => ("candidate", ["serverware.nativeRequestObservationOriginal/v1", "serverware.nativeRequestObservationOriginal/v2"]),
+                "response-evaluated" => ("response", ["serverware.nativeResponseObservationOriginal/v1", "serverware.nativeResponseObservationOriginal/v2"]),
                 _ => return Err(ShadowError::BindingDrift),
             };
-            if event["phase"] != phase || event["observationOriginal"]["apiVersion"] != profile {
+            if event["phase"] != phase || !event["observationOriginal"]["apiVersion"].as_str().is_some_and(|profile|profiles.contains(&profile)) {
                 return Err(ShadowError::BindingDrift);
             }
             Ok(label)

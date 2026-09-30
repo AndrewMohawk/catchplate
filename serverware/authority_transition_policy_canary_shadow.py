@@ -96,6 +96,27 @@ def direct_result(item, ingress, active):
 
 def compiler_scope(item, contract, compiler, binding, cells, obligation, comparison, active):
     from serverware import db
+    return _compiler_scope(item, contract, compiler, binding, cells, obligation, comparison, active,
+        db._policy_authority_response_comparison, _legacy_pilot)
+
+
+def native_compiler_scope(item, contract, compiler, binding, cells, obligation, comparison, active):
+    from serverware import authority_policy_canary_native_comparison as native
+    return _compiler_scope(item, contract, compiler, binding, cells, obligation, comparison, active,
+        native.validate, native.pilot_profile)
+
+
+def _legacy_pilot(value, analysis_mode, cells):
+    from serverware import db
+    pilot = db._candidate_authority_strict_object("compiler pilot", value,
+        frozenset({"mode"}) if analysis_mode == "no-expansion" else frozenset({"mode", "principalSetRootSha256", "routeSetRootSha256",
+            "maximumRequests", "maximumDurationNanos", "maximumWriteRequests", "cells"}))
+    profile.require(pilot == {"mode": "not-applicable"} if analysis_mode == "no-expansion" else
+        pilot["mode"] == "constrained" and pilot["cells"] == cells)
+
+
+def _compiler_scope(item, contract, compiler, binding, cells, obligation, comparison, active, comparison_validator, pilot_validator):
+    from serverware import db
     for original, name, digest_name in ((contract, "expected_snapshots_json", "expected_snapshots_digest"),
             (contract, "response_obligations_json", "response_obligations_json_digest"),
             (compiler, "expansion_cells_json", "expansion_cells_digest"), (compiler, "pilot_restrictions_json", "pilot_restrictions_digest")):
@@ -128,7 +149,7 @@ def compiler_scope(item, contract, compiler, binding, cells, obligation, compari
     assigned = None if binding is None else by_route.get(binding["routeSha256"])
     profile.require((obligation is None if assigned is None else obligation is not None and obligation["obligationRootSha256"] == assigned["obligationRootSha256"]))
     if item["observation_status"] == "evaluated":
-        comparison = db._policy_authority_response_comparison("observed comparison", comparison, obligation=obligation,
+        comparison = comparison_validator("observed comparison", comparison, obligation=obligation,
             active_snapshot_digest=snapshots["active"]["compiledSnapshotSha256"], candidate_snapshot_digest=snapshots["candidate"]["compiledSnapshotSha256"],
             final_active_outcome=active["final_active_outcome"], upstream_dispatch_authorized=active["upstream_dispatch_authorized"],
             active_dispatch_commitment_digest=active["active_dispatch_commitment_digest"],
@@ -136,11 +157,8 @@ def compiler_scope(item, contract, compiler, binding, cells, obligation, compari
         item["response_comparison_class"], item["response_capture_mode"] = comparison["classification"], comparison["captureMode"]
     else:
         item["response_comparison_class"] = item["response_capture_mode"] = None
-    pilot = db._candidate_authority_strict_object("compiler pilot", db.loads(compiler["pilot_restrictions_json"], None),
-        frozenset({"mode"}) if compiler["analysis_mode"] == "no-expansion" else frozenset({"mode", "principalSetRootSha256", "routeSetRootSha256",
-            "maximumRequests", "maximumDurationNanos", "maximumWriteRequests", "cells"}))
-    profile.require(pilot == {"mode": "not-applicable"} if compiler["analysis_mode"] == "no-expansion" else
-        pilot["mode"] == "constrained" and pilot["cells"] == [authorized[digest] for digest in sorted(authorized)])
+    pilot_validator(db.loads(compiler["pilot_restrictions_json"], None), compiler["analysis_mode"],
+        [authorized[digest] for digest in sorted(authorized)])
 
 
 def shadow(state, value):

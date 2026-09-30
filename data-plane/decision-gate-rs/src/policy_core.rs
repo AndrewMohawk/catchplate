@@ -67,6 +67,8 @@ pub(crate) use native_response::NativeResponseRetention;
 mod effect_completion;
 #[path="policy_core_observation_originals.rs"]
 mod observation_originals;
+#[path="policy_core_dispatch_observation.rs"]
+mod dispatch_observation;
 
 const SHADOW_QUEUE_ITEMS: usize = 1_024;
 const SHADOW_QUEUE_BYTES: usize = 128 * 1024 * 1024;
@@ -665,6 +667,9 @@ enum SeparatedPolicyPlan {
 
 #[derive(Clone)]
 pub(crate) struct PolicyEvaluation {
+    evaluated_principal_id: Option<String>,
+    dispatch_projection: Option<Value>,
+    response_constraints: Option<Value>,
     snapshot_hash: String,
     route_id: Option<String>,
     disposition: PureDisposition,
@@ -1051,6 +1056,7 @@ fn terminal_evaluation(
             reason: canonical_reason_identifier(&reason)?,
         }
     };
+    let dispatch_projection = Some(dispatch_observation::no_dispatch(&outcome));
     let plan = separated_plan(snapshot.lane, outcome, Vec::new(), Vec::new(), &[])?;
     let semantic_sha256 = match &plan {
         SeparatedPolicyPlan::Active(plan) => plan.semantic_commitment().map_err(shadow_error)?,
@@ -1061,6 +1067,9 @@ fn terminal_evaluation(
     .as_str()
     .to_string();
     Ok(PolicyEvaluation {
+        evaluated_principal_id: None,
+        dispatch_projection,
+        response_constraints: None,
         snapshot_hash: snapshot.snapshot.hash.clone(),
         route_id: None,
         disposition: if indeterminate {
@@ -1731,10 +1740,10 @@ fn evaluate_policy_plan_request(
         &mut operation,
         i128::from(context.decision_at_epoch_ms),
     ) {
-        return denied(snapshot, payload, 403);
+        return dispatch_observation::matched_denial(denied(snapshot, payload, 403)?, principal, route, &operation);
     }
     if let Err(payload) = validate_response_binding_sources(route, &operation) {
-        return denied(snapshot, payload, 403);
+        return dispatch_observation::matched_denial(denied(snapshot, payload, 403)?, principal, route, &operation);
     }
     forwarded_headers = match strip_identity_request_content_encoding(&forwarded_headers) {
         Ok(headers) => headers,
@@ -1796,6 +1805,10 @@ fn evaluate_policy_plan_request(
         validations.sort_by(|left, right| left.as_str().cmp(right.as_str()));
         validations.dedup_by(|left, right| left.as_str() == right.as_str());
     }
+    let dispatch_projection = Some(dispatch_observation::dispatch(
+        &request, &forwarded_headers, &provider_url, principal, route, &operation, &injection,
+    )?);
+    let response_constraints = Some(dispatch_observation::response_constraints(route)?);
     let plan = separated_plan(snapshot.lane, outcome, rewrites, validations, &conditions)?;
     let semantic_sha256 = match &plan {
         SeparatedPolicyPlan::Active(plan) => plan.semantic_commitment().map_err(shadow_error)?,
@@ -1806,6 +1819,9 @@ fn evaluate_policy_plan_request(
     .as_str()
     .to_string();
     Ok(PolicyEvaluation {
+        evaluated_principal_id: Some(principal.id.clone()),
+        dispatch_projection,
+        response_constraints,
         snapshot_hash: compiled.hash.clone(),
         route_id: Some(route.id.clone()),
         disposition,
@@ -8614,6 +8630,10 @@ pub(crate) struct ShadowResponseAttempt {
 }
 
 impl ShadowResponseHook {
+    pub(crate) fn native_details_selected(&self) -> bool {
+        self.inner.native_observation.as_ref().is_some_and(|owner|owner.details_selected())
+    }
+
     pub(crate) fn begin(
         &self,
         snapshot: &Arc<Snapshot>,
@@ -11712,6 +11732,9 @@ mod active_terminal_record_tests {
             active_evaluation_nanos: None,
             decision_at_epoch_ms: 1,
             active_evaluation: PolicyEvaluation {
+                evaluated_principal_id: None,
+                dispatch_projection: None,
+                response_constraints: None,
                 snapshot_hash: sha256_prefixed(b"component policy"),
                 route_id: None,
                 disposition: if dispatch { PureDisposition::Permit } else {

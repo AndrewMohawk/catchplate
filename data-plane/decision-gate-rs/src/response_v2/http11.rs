@@ -15,6 +15,9 @@ const MAX_V2_INFORMATIONAL_RESPONSES: usize = 8;
 const MAX_V2_CHUNKS: usize = 65_536;
 
 pub(crate) struct StrictHttp11Response {
+    // Actual final physical Content-Type, not a reconstructed header map.
+    // Err means ambiguous/non-ASCII/oversized; it does not reject old parsers.
+    pub(crate) content_type: Result<Option<String>, ()>,
     pub(crate) status: u16,
     pub(crate) keep_alive: bool,
     pub(crate) entity_body: Zeroizing<Vec<u8>>,
@@ -175,6 +178,12 @@ pub(crate) fn response_observation_v2_parse_http11(
         }
         let previously_validated_unknown_method_no_body =
             request_method.is_none() && cursor == response.len();
+        let content_type = match headers.get("content-type") {
+            None => Ok(None),
+            Some(values) if values.len() == 1 && values[0].len() <= 1024 && values[0].is_ascii() =>
+                std::str::from_utf8(&values[0]).map(|value|Some(value.to_string())).map_err(|_|()),
+            Some(_) => Err(()),
+        };
         let no_body = is_head
             || status == 204
             || status == 205
@@ -204,6 +213,7 @@ pub(crate) fn response_observation_v2_parse_http11(
                 0,
                 Vec::new(),
                 Zeroizing::new(Vec::new()),
+                content_type,
             );
         }
         let (
@@ -276,6 +286,7 @@ pub(crate) fn response_observation_v2_parse_http11(
             trailer_section_length,
             trailer_names,
             entity_body,
+            content_type,
         );
     }
 }
@@ -291,6 +302,7 @@ fn response_observation_v2_finish_http11(
     trailer_section_length: u64,
     trailer_names: Vec<String>,
     entity_body: Zeroizing<Vec<u8>>,
+    content_type: Result<Option<String>, ()>,
 ) -> Result<StrictHttp11Response, String> {
     let decoded_entity_length =
         u64::try_from(entity_body.len()).map_err(|_| {
@@ -338,6 +350,7 @@ fn response_observation_v2_finish_http11(
             decoded_entity_length,
         };
     Ok(StrictHttp11Response {
+        content_type,
         status,
         keep_alive,
         entity_body,

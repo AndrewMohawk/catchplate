@@ -37,21 +37,21 @@ def _final(state, record):
         from serverware import authority_transition_policy_canary_native_finalization as finalization
     except ImportError as error:
         raise ValueError("native finalization evidence producer is unavailable") from error
-    return finalization.validate_readiness_checkpoint(state, record)
+    return finalization.validate_readiness_checkpoint(state, record, include_observations=True)
 
 
-def _details(state, record, compiler):
+def _details(state, record, compiler, admitted):
     try:
         from serverware import authority_transition_policy_canary_native_detail as detail
     except ImportError as error:
         raise ValueError("native detailed-observation producer is unavailable") from error
-    return detail.readiness_observations(state, record, compiler)
+    return detail.readiness_observations(state, record, compiler, admitted=admitted)
 
 
 def _member(state, checkpoint, compiler, committed):
     from serverware import db
     admitted = _final(state, checkpoint)
-    p.require(type(admitted) is dict and set(admitted) == {"context", "assignment", "load", "publication", "accounting", "seal"})
+    p.require(type(admitted) is dict and set(admitted) == {"context", "assignment", "load", "publication", "accounting", "seal", "observations"})
     context, assignment, load = (admitted[name] for name in ("context", "assignment", "load"))
     accounting, seal = admitted["accounting"], admitted["seal"]
     p.require(seal is not None and checkpoint["accounting"] == accounting and checkpoint["seal"] == seal,
@@ -95,7 +95,7 @@ def _member(state, checkpoint, compiler, committed):
     # The exact admitted-event marker is joined to the real receipt codec; no
     # event count supplied by a checkpoint can stand in for this list.
     p.require(len(opening) == accounting["counters"]["admitted"] > 0)
-    observations = _details(state, checkpoint, compiler)
+    observations = _details(state, checkpoint, compiler, admitted)
     p.require(type(observations) is tuple and len(observations) == len(opening))
     state.charge(64 + 32 * len(observations))
     first = window["firstIngressSequence"]
@@ -106,8 +106,9 @@ def _member(state, checkpoint, compiler, committed):
     analysis = db.loads(compiler["analysis_payload_json"], None)
     counts.requirements(aggregate, assignment, analysis["authorityAnalysis"], analysis["pilotRestrictions"],
         member=True, duration=end - start)
+    evaluated = sum(value["result"]["status"] == "evaluated" for value in observations)
     p.require(accounting["counters"]["active-pre-dispatch-terminal"] + accounting["counters"]["response-terminal-appended"]
-        >= len(opening) and not any(accounting["counters"][name] for name in
+        == evaluated and not any(accounting["counters"][name] for name in
             ("unsupported-required-ingress", "cleanup-quarantined", "failure")), "native final lifecycle is incomplete")
     member = {name: context[name] for name in ("member_ordinal", "member_id", "instance_id", "boot_id", "membership_root_digest")}
     member.update(checkpointSha256=p.sha256(p.canonical(checkpoint)), generationId=accounting["generationId"],

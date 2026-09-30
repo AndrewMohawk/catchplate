@@ -1703,7 +1703,7 @@ pub(super) fn execute_response_observation_v2_transaction(
         // Commitments are taken from the actual verified originals in this transaction,
         // reached only after all normal release and completion checks above.
         // A native capture is never converted into a legacy transport signature.
-        let active_validation = json!({
+        let mut active_validation = json!({
             "domain":"serverware.policyShadowNativeReleasedResponse/v1",
             "outcome":"released",
             "inspectionReceiptSha256":inspection.inspection_receipt_sha256,
@@ -1711,6 +1711,21 @@ pub(super) fn execute_response_observation_v2_transaction(
             "releaseRetrievalReceiptSha256":consumption.retrieval_receipt_sha256,
             "releasedResponseSha256":sha256_prefixed(&response_bytes),
         });
+        if capture.detailed_observations_selected() {
+            let (media_state, media) = match &parsed.content_type {
+                Ok(Some(value)) => ("present", Some(canonical_response_content_type(Some(value)))),
+                Ok(None) => ("absent", None),
+                Err(()) => ("unavailable", None),
+            };
+            active_validation["domain"] = json!("serverware.policyShadowNativeReleasedResponse/v2");
+            active_validation["releasedEntitySha256"] = json!(sha256_prefixed(&parsed.entity_body));
+            active_validation["releasedEntityBytes"] = json!(parsed.entity_body.len());
+            active_validation["releasedStatus"] = json!(parsed.status);
+            active_validation["releasedContentType"] = json!(media);
+            active_validation["releasedContentTypeState"] = json!(media_state);
+            active_validation["releaseMode"] = json!("native-immutable-exact");
+            active_validation["releasedParsedResponseSha256"] = json!(inspection.parsed_response_sha256);
+        }
         capture.finish(snapshot, &active_validation, &response_bytes);
     }
     Ok(SensitiveResponseBytes::new(response_bytes.to_vec()))

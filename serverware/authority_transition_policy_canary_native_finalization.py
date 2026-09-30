@@ -140,7 +140,7 @@ def checkpoints(state, value):
     return sorted(found, key=lambda record: record["checkpoint_sequence"])
 
 
-def _checkpoint(state, value, *, existing=False):
+def _checkpoint(state, value, *, existing=False, include_observations=False):
     from serverware import authority_policy_canary_native_final_cumulative as cumulative
     from serverware import authority_policy_canary_native_checkpoint as interval
     p.require(type(value) is dict and set(value) == cumulative.FIELDS and value["apiVersion"] == cumulative.SCHEMA)
@@ -151,7 +151,7 @@ def _checkpoint(state, value, *, existing=False):
     validate_checkpoint_heartbeat(state, value["heartbeat"])
     computed = cumulative.verify(value, assignment=assignment, load=load, context=context, publication=publication, now=state.now)
     from serverware import authority_policy_canary_native_observation_originals as observations
-    observations.validate_protected_originals(state, value, originals, publication, load)
+    admitted_observations = observations.validate_protected_originals(state, value, originals, publication, load)
     used = {receipt["signing_key_spki_sha256"] for receipt in originals}
     p.require(not any(row["assignment_envelope_digest"] == context["assignment_envelope_digest"]
         and row["public_key_digest"] in used for row in state.rows("policy_runtime_role_key_revocations")))
@@ -202,15 +202,18 @@ def _checkpoint(state, value, *, existing=False):
             p.require(reference["signedReceiptSha256"] == original["signed_receipt_sha256"]
                 and reference["eventSha256"] == original["event_sha256"] and reference["resultingHeadSha256"] == original["resulting_head_sha256"])
         p.require(selected["receipt"]["trusted_observed_at_unix_nanos"] <= value["accounting"]["observedAtUnixNanos"])
-    return computed, {"context": context, "assignment": assignment, "load": load, "publication": publication,
+    scope = {"context": context, "assignment": assignment, "load": load, "publication": publication,
         "accounting": value["accounting"], "seal": value["seal"]}
+    if include_observations:
+        scope["observations"] = admitted_observations
+    return computed, scope
 
 
 def apply_checkpoint(state, value):
     return _checkpoint(state, value)[0]
 
 
-def validate_readiness_checkpoint(state, record):
+def validate_readiness_checkpoint(state, record, *, include_observations=False):
     """Current protected scope and exact latest consumed final original.
 
     Actual verifier AND planner must also re-admit the nested finalization
@@ -219,7 +222,7 @@ def validate_readiness_checkpoint(state, record):
     permission. No new expiry, contact, checkpoint or activation is created.
     """
     p.require(record.get("seal") is not None)
-    return _checkpoint(state, record, existing=True)[1]
+    return _checkpoint(state, record, existing=True, include_observations=include_observations)[1]
 
 
 def require_unsealed(state, value, generation):

@@ -13,6 +13,8 @@ EVENT_V1 = "serverware.policyShadowRuntimeAccountingEvent/v1"
 EVENT_V2 = "serverware.policyShadowRuntimeAccountingEvent/v2"
 REQUEST = "serverware.nativeRequestObservationOriginal/v1"
 RESPONSE = "serverware.nativeResponseObservationOriginal/v1"
+REQUEST_V2 = "serverware.nativeRequestObservationOriginal/v2"
+RESPONSE_V2 = "serverware.nativeResponseObservationOriginal/v2"
 MAX_BYTES, MAX_NODES, MAX_DEPTH = 8 * 1024, 512, 32
 LATENCY = frozenset({"factsCaptureNanos", "activeEvaluationNanos", "candidateEvaluationNanos",
     "responseValidationNanos", "shadowTotalNanos"})
@@ -147,8 +149,8 @@ def plan(value, candidate):
     return selected
 
 
-def evaluation(value, candidate):
-    exact(value, EVALUATION)
+def evaluation(value, candidate, *, detailed=False):
+    exact(value, EVALUATION | ({"dispatchProjection", "responseConstraints"} if detailed else set()))
     for name in ("snapshotSha256", "policyPlanSha256"):
         p.digest(value[name])
     for name in ("routeSha256", "operationSha256"):
@@ -166,6 +168,44 @@ def evaluation(value, candidate):
         p.require(binding["operation"] in {"read", "search", "write", "publish", "delete", "administrative"}
             and binding["requestAuthorityClass"] == ("read" if binding["operation"] in {"read", "search"} else "write")
             and binding["routeSha256"] == value["routeSha256"] and value["operationSha256"] is not None)
+    if detailed:
+        dispatch, constraints = value["dispatchProjection"], value["responseConstraints"]
+        if dispatch is not None:
+            p.require(type(dispatch) is dict)
+            if dispatch.get("domain") == "serverware.policyShadowNoDispatch/v1":
+                exact(dispatch, {"domain", "outcome"})
+                p.require(dispatch["outcome"] == value["policyPlan"]["outcome"]
+                    and value["disposition"] in {"deny", "indeterminate"})
+            else:
+                exact(dispatch, {"domain", "principalSha256", "routeSha256", "request", "operationSha256",
+                    "credentialSlotSha256", "injectionPolicySha256"})
+                p.require(dispatch["domain"] == "serverware.policyShadowCredentialFreeDispatch/v1"
+                    and value["disposition"] in {"permit", "conditional"}
+                    and dispatch["routeSha256"] == value["routeSha256"]
+                    and dispatch["operationSha256"] == value["operationSha256"])
+                for name in ("principalSha256", "routeSha256", "operationSha256", "injectionPolicySha256"):
+                    p.digest(dispatch[name])
+                if dispatch["credentialSlotSha256"] is not None:
+                    p.digest(dispatch["credentialSlotSha256"])
+                if binding is not None:
+                    p.require(dispatch["principalSha256"] == binding["principalSha256"])
+                request = exact(dispatch["request"], {"method", "scheme", "authoritySha256", "pathSha256",
+                    "querySha256", "headersSha256", "bodySha256", "bodyLength"})
+                p.require(type(request["method"]) is str and re.fullmatch(r"[A-Z!#$%&'*+.^_`|~-]{1,64}", request["method"]) is not None
+                    and request["scheme"] in {"http", "https"})
+                integer(request["bodyLength"])
+                for name in ("authoritySha256", "pathSha256", "querySha256", "headersSha256", "bodySha256"):
+                    p.digest(request[name])
+        if constraints is not None:
+            exact(constraints, {"domain", "routeSha256", "adapterTypeSha256", "adapterConfigSha256", "constraintSha256s"})
+            p.require(constraints["domain"] == "serverware.policyShadowNativeResponseConstraints/v1"
+                and constraints["routeSha256"] == value["routeSha256"])
+            for name in ("routeSha256", "adapterTypeSha256", "adapterConfigSha256"):
+                p.digest(constraints[name])
+            digests = constraints["constraintSha256s"]
+            p.require(type(digests) is list and len(digests) <= 128 and digests == sorted(set(digests)))
+            for digest in digests:
+                p.digest(digest)
 
 
 def latency(value):
@@ -178,9 +218,10 @@ def latency(value):
 def request_original(value, event, observed):
     exact(value, {"apiVersion", "pureActiveEvaluation", "candidateEvaluation", "finalActiveEnforcement",
         "factsCapturedAtUnixNanos", "latencySamples"})
-    p.require(value["apiVersion"] == REQUEST)
+    p.require(value["apiVersion"] in {REQUEST, REQUEST_V2})
     active, candidate, final = (value[name] for name in ("pureActiveEvaluation", "candidateEvaluation", "finalActiveEnforcement"))
-    evaluation(active, False); evaluation(candidate, True)
+    evaluation(active, False, detailed=value["apiVersion"] == REQUEST_V2)
+    evaluation(candidate, True, detailed=value["apiVersion"] == REQUEST_V2)
     p.require(active["policyPlanSha256"] == event["activePlanSha256"]
         and candidate["policyPlanSha256"] == event["candidatePlanSha256"]
         and candidate["disposition"] == event["candidateDisposition"])
@@ -235,7 +276,7 @@ def request_original(value, event, observed):
 
 def response_original(value, event, observed):
     exact(value, {"apiVersion", "response", "latencySamples"})
-    p.require(value["apiVersion"] == RESPONSE)
+    p.require(value["apiVersion"] in {RESPONSE, RESPONSE_V2})
     response = exact(value["response"], {"responseFacts", "boundActiveValidation", "activeValidation", "candidateValidation"})
     facts, bound, active, candidate = (response[name] for name in ("responseFacts", "boundActiveValidation", "activeValidation", "candidateValidation"))
     exact(facts, {"domain", "capturedAtEpochMs", "status", "physicalHeaderCount", "physicalHeadersSha256", "rawResponseHeadBytes",
@@ -251,12 +292,27 @@ def response_original(value, event, observed):
             "runtimeAttestationSha256", "peerIdentitySha256"):
         p.digest(facts[name])
     exact(bound, {"domain", "activePolicySnapshotSha256", "responseObligationRootSha256", "responseFactsSha256", "activeValidationSha256"})
-    exact(active, {"domain", "outcome", "inspectionReceiptSha256", "finalEnvelopeVerificationSha256", "releaseRetrievalReceiptSha256", "releasedResponseSha256"})
+    released_fields = {"domain", "outcome", "inspectionReceiptSha256", "finalEnvelopeVerificationSha256", "releaseRetrievalReceiptSha256", "releasedResponseSha256"}
+    successor = value["apiVersion"] == RESPONSE_V2
+    exact(active, released_fields | ({"releasedEntitySha256", "releasedEntityBytes", "releasedStatus", "releasedContentType",
+        "releasedContentTypeState", "releaseMode", "releasedParsedResponseSha256"} if successor else set()))
     p.require(bound["domain"] == "serverware.policyShadowBoundActiveResponseValidation/v1"
-        and active["domain"] == "serverware.policyShadowNativeReleasedResponse/v1" and active["outcome"] == "released")
-    for item in (bound, active):
-        for name in set(item) - {"domain", "outcome"}:
+        and active["domain"] == ("serverware.policyShadowNativeReleasedResponse/v2" if successor else "serverware.policyShadowNativeReleasedResponse/v1")
+        and active["outcome"] == "released")
+    for item, names in ((bound, set(bound) - {"domain"}), (active, released_fields - {"domain", "outcome"})):
+        for name in names:
             p.digest(item[name])
+    if successor:
+        p.digest(active["releasedEntitySha256"]); p.digest(active["releasedParsedResponseSha256"])
+        integer(active["releasedEntityBytes"]); integer(active["releasedStatus"], 100, 599)
+        p.require(active["releaseMode"] == "native-immutable-exact"
+            and active["releasedContentTypeState"] in {"absent", "present", "unavailable"})
+        media = active["releasedContentType"]
+        if active["releasedContentTypeState"] == "present":
+            p.require(type(media) is str and len(media) <= 1024
+                and re.fullmatch(r"[a-z0-9!#$&^_.+\-]+/[a-z0-9!#$&^_.+\-]+", media) is not None)
+        else:
+            p.require(media is None)
     p.require(hashed(facts) == event["responseFactsSha256"] == bound["responseFactsSha256"]
         and hashed(active) == bound["activeValidationSha256"] and hashed(bound) == event["activeResponseValidationSha256"])
     exact(candidate, {"domain", "outcome", "routeIdSha256", "capturedAtEpochMs", "status", "bodySha256", "physicalHeadersSha256",
@@ -315,6 +371,29 @@ def decoded(receipt):
     return p.document(bytes(receipt["canonical_event_bytes"]), 16 * 1024)
 
 
+def retained_constraints(state, evaluated, raw):
+    """Recompute the v2 rule originals from the actual signed installed route."""
+    from serverware import policy_route_authority as classifier
+    selected = [route for route in raw["routes"] if classifier.text_digest(route["id"]) == evaluated["routeSha256"]]
+    p.require(len(selected) == 1, "native response constraint route is not an exact installed route")
+    route = selected[0]
+    state.charge(len(raw["routes"]) + 2 * ((len(classifier.canonical(route)) + 255) // 256))
+    rules = route.get("constraints")
+    # Actual loader maps omitted/null constraints to its empty retained list.
+    rules = [] if rules is None else rules
+    digests = sorted({classifier.digest(value) for value in rules
+        if value.get("type") == "traversalBudget" or value.get("phase", "request") in {"response", "both"}})
+    expected = {"domain": "serverware.policyShadowNativeResponseConstraints/v1", "routeSha256": evaluated["routeSha256"],
+        "adapterTypeSha256": classifier.text_digest(route["adapter"]["type"]),
+        "adapterConfigSha256": classifier.digest(route["adapter"]["config"]), "constraintSha256s": digests}
+    p.require(evaluated["responseConstraints"] == expected, "native response constraints differ from signed installed rules")
+    dispatch = evaluated["dispatchProjection"]
+    if dispatch is not None and dispatch["domain"] == "serverware.policyShadowCredentialFreeDispatch/v1":
+        credential = route.get("credentialRef")
+        p.require(dispatch["credentialSlotSha256"] == (None if credential is None else classifier.text_digest(credential)))
+    return expected
+
+
 def validate_protected_originals(state, record, receipts, publication, load):
     """After actual receipt signatures/current scope admission, join originals.
 
@@ -364,6 +443,10 @@ def validate_protected_originals(state, record, receipts, publication, load):
                     if pair is None:
                         pair = classifier.retained_pair(state, record)
                     classifier.require_binding(pair, lane, evaluated["authorityBinding"])
+                if original["apiVersion"] == REQUEST_V2 and evaluated["responseConstraints"] is not None:
+                    from serverware import db
+                    management = db.loads(publication["management_request_json"], None)
+                    retained_constraints(state, evaluated, management[lane + "PolicyBundle"])
             requests[sequence] = (event, receipt)
         else:
             p.require(sequence not in responses and sequence in requests and terminal["event"] == "response-terminal-appended")
@@ -376,6 +459,8 @@ def validate_protected_originals(state, record, receipts, publication, load):
                 p.require(event[name] == terminal[name])
             comparison = original["response"]
             prior = request["observationOriginal"]
+            p.require((original["apiVersion"] == RESPONSE_V2) == (prior["apiVersion"] == REQUEST_V2),
+                "native observation successor cannot mix prior preimage profiles")
             candidate = comparison["candidateValidation"]
             p.require(comparison["boundActiveValidation"]["activePolicySnapshotSha256"] == publication["active_policy_hash"]
                 and comparison["boundActiveValidation"]["responseObligationRootSha256"] == load["responseValidationObligationsRootSha256"]

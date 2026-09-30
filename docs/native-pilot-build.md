@@ -109,7 +109,8 @@ machine pipes. The bootstrap uses only fixed packaged import roots; it accepts
 no module/path selector. The build does not install, mount, chroot into or launch
 the operator. Its local archive hash is a measurement, not independent approval,
 a dynamic-loader closure proof, a successful pilot or production release evidence.
-This source batch has not built or executed the new target.
+The engineering raw export below has built this target; the strict package and
+installed runtime remain unexecuted.
 
 ## Authority coordinator runtime package
 
@@ -155,8 +156,9 @@ script, module, executable or import path.
 Packaging does not provision that inventory, the sealed key FDs, independent
 supervisor approval channel, protected job originals, native executables or
 resource environment. No key, signature, approval, installation or live pilot
-is produced. This package has not been built or executed in this source batch;
-the actual process/signing workflow remains separately authorized operator work.
+is produced. The engineering raw export below has built this target, not this
+strict package or its execution environment. The actual process/signing workflow
+remains separately authorized operator work.
 
 ## Operator commands
 
@@ -471,6 +473,14 @@ steps and the same fixed per-step resources. Their output explicitly reports
 packages and must not be passed to runtime admission or installed as an approved
 pilot. The strict inventory/package tools still reject this engineering source
 identity. Canonical reviewed dependency pins remain unchanged.
+
+Both engineering tar exports completed from frozen source `9939bf1e`, using the
+unchanged `v3-candidate-cba01916` in an isolated checkout. The conductor and
+authority wrappers exited zero, both observed complete by
+`2026-09-30T17:31:39Z`; their reports retain all three non-release/raw-only flags
+above. The first local-export attempt at `7582114d` completed assembly but failed
+on the protected directory mode; that partial attempt remains separate evidence.
+No runtime extraction, installation, execution, signing or cloud operation ran.
 
 ## Live preparation remains with the genuine owners
 

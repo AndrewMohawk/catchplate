@@ -1609,6 +1609,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/custody_generation_business.py \
 	serverware/native_shadow_persistence_artifacts.py \
 	serverware/native_shadow_persistence_inputs.py \
+	serverware/native_shadow_generation_install_inputs.py \
 	serverware/native_shadow_proof_cohort_assignment.py \
 	serverware/native_shadow_proof_cohort_control.py \
 	serverware/native_shadow_endpoint_driver.py \
@@ -4347,6 +4348,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/custody_generation_business.py \
 				serverware/native_shadow_persistence_artifacts.py \
 				serverware/native_shadow_persistence_inputs.py \
+				serverware/native_shadow_generation_install_inputs.py \
 				serverware/native_shadow_proof_cohort_assignment.py \
 				serverware/native_shadow_proof_cohort_control.py \
 				serverware/native_shadow_endpoint_driver.py \

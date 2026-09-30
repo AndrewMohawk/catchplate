@@ -4,7 +4,7 @@ use super::originals::ArtifactV1;
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-pub(super) enum Mode { Legacy, EnclaveV5, EncryptedV6, MeasuredRefreshV7, GuestInspectorV8, MeasuredIssuanceV9, GuestCohortV10, MeasuredCleanupV11, GuestRoleKeysV12, MeasuredPendingRetirementV13, GateCgroupV14, MeasuredSetupV15, MeasuredCaptureRetirementV16, MeasuredReconnectV17, MeasuredSuccessionV18, MeasuredCanaryDeliveryV19 }
+pub(super) enum Mode { Legacy, EnclaveV5, EncryptedV6, MeasuredRefreshV7, GuestInspectorV8, MeasuredIssuanceV9, GuestCohortV10, MeasuredCleanupV11, GuestRoleKeysV12, MeasuredPendingRetirementV13, GateCgroupV14, MeasuredSetupV15, MeasuredCaptureRetirementV16, MeasuredReconnectV17, MeasuredSuccessionV18, MeasuredCanaryDeliveryV19, NativeHeartbeatV20 }
 
 pub(super) fn arguments(mut arguments: impl Iterator<Item = OsString>)
     -> Result<Option<(ArtifactV1, ArtifactV1, bool, Mode)>, String>
@@ -26,6 +26,7 @@ pub(super) fn arguments(mut arguments: impl Iterator<Item = OsString>)
         else if argument == "--native-measured-reconnect-startup-v17" { Mode::MeasuredReconnectV17 }
         else if argument == "--native-measured-succession-startup-v18" { Mode::MeasuredSuccessionV18 }
         else if argument == "--native-measured-canary-delivery-startup-v19" { Mode::MeasuredCanaryDeliveryV19 }
+        else if argument == "--native-canary-heartbeat-startup-v20" { Mode::NativeHeartbeatV20 }
         else { return Err("decision gate accepts no arguments or an explicit native startup mode".to_owned()); };
     let mut configuration = None;
     let mut configuration_pin = None;

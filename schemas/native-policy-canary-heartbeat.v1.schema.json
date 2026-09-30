@@ -1,0 +1,519 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-policy-canary-heartbeat.v1.schema.json",
+  "title": "Separately assigned native complete-ledger heartbeat",
+  "$ref": "#/$defs/record",
+  "$comment": "Canonical ASCII no LF. Record <=65536 bytes; complete existing intake and frame bounds unchanged. observed equals issued from the same trusted ledger snapshot; expiry within original operation, native lifetime, assignment and purpose. This is native-heartbeat-only, never a Fleet heartbeat/readiness seal. Current policy signature/key/quote and complete protected prior batch roots are independently verified; schema alone grants no authority.",
+  "$defs": {
+    "digest": {
+      "$ref": "policy-canary-controlled-evidence.v1.schema.json#/$defs/digest"
+    },
+    "epoch": {
+      "$ref": "policy-canary-controlled-evidence.v1.schema.json#/$defs/epoch"
+    },
+    "assignment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "holderId",
+        "bootId",
+        "keyId",
+        "controlPlaneResponseSigningKeyId",
+        "releaseRecordSha256",
+        "policyHash",
+        "configurationSha256",
+        "caCertificateSha256",
+        "caPublicKeySpkiSha256",
+        "expectedBinaryDigest",
+        "expectedPcrs",
+        "expectedEif",
+        "expectedModuleId",
+        "maxAgeSeconds",
+        "futureSkewSeconds",
+        "instanceId",
+        "canaryId",
+        "canaryAssignmentSha256",
+        "canaryBootId"
+      ],
+      "properties": {
+        "holderId": {
+          "$ref": "policy-canary-controlled-evidence.v1.schema.json#/$defs/assignment/properties/holderId"
+        },
+        "bootId": {
+          "$ref": "policy-canary-controlled-evidence.v1.schema.json#/$defs/assignment/properties/bootId"
+        },
+        "keyId": {
+          "$ref": "policy-canary-controlled-evidence.v1.schema.json#/$defs/assignment/properties/keyId"
+        },
+        "controlPlaneResponseSigningKeyId": {
+          "$ref": "policy-canary-controlled-evidence.v1.schema.json#/$defs/assignment/properties/controlPlaneResponseSigningKeyId"
+        },
+        "releaseRecordSha256": {
+          "$ref": "policy-canary-controlled-evidence.v1.schema.json#/$defs/assignment/properties/releaseRecordSha256"
+        },
+        "policyHash": {
+          "$ref": "policy-canary-controlled-evidence.v1.schema.json#/$defs/assignment/properties/policyHash"
+        },
+        "configurationSha256": {
+          "$ref": "policy-canary-controlled-evidence.v1.schema.json#/$defs/assignment/properties/configurationSha256"
+        },
+        "caCertificateSha256": {
+          "$ref": "policy-canary-controlled-evidence.v1.schema.json#/$defs/assignment/properties/caCertificateSha256"
+        },
+        "caPublicKeySpkiSha256": {
+          "$ref": "policy-canary-controlled-evidence.v1.schema.json#/$defs/assignment/properties/caPublicKeySpkiSha256"
+        },
+        "expectedBinaryDigest": {
+          "$ref": "policy-canary-controlled-evidence.v1.schema.json#/$defs/assignment/properties/expectedBinaryDigest"
+        },
+        "expectedPcrs": {
+          "$ref": "policy-canary-controlled-evidence.v1.schema.json#/$defs/assignment/properties/expectedPcrs"
+        },
+        "expectedEif": {
+          "$ref": "policy-canary-controlled-evidence.v1.schema.json#/$defs/assignment/properties/expectedEif"
+        },
+        "expectedModuleId": {
+          "$ref": "policy-canary-controlled-evidence.v1.schema.json#/$defs/assignment/properties/expectedModuleId"
+        },
+        "maxAgeSeconds": {
+          "$ref": "policy-canary-controlled-evidence.v1.schema.json#/$defs/assignment/properties/maxAgeSeconds"
+        },
+        "futureSkewSeconds": {
+          "$ref": "policy-canary-controlled-evidence.v1.schema.json#/$defs/assignment/properties/futureSkewSeconds"
+        },
+        "instanceId": {
+          "$ref": "policy-canary-controlled-evidence.v1.schema.json#/$defs/assignment/properties/instanceId"
+        },
+        "canaryId": {
+          "$ref": "policy-canary-controlled-evidence.v1.schema.json#/$defs/assignment/properties/canaryId"
+        },
+        "canaryAssignmentSha256": {
+          "$ref": "policy-canary-controlled-evidence.v1.schema.json#/$defs/assignment/properties/canaryAssignmentSha256"
+        },
+        "canaryBootId": {
+          "$ref": "policy-canary-controlled-evidence.v1.schema.json#/$defs/assignment/properties/canaryBootId"
+        }
+      }
+    },
+    "trustRoots": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "awsNitroRootCertificatesPem",
+        "awsNitroCrlsDerBase64url",
+        "nitroCertificateProfile"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.policyCanaryHeartbeatTrustRoots/v1"
+        },
+        "awsNitroRootCertificatesPem": {
+          "$ref": "policy-canary-controlled-evidence.v1.schema.json#/$defs/trustRoots/properties/awsNitroRootCertificatesPem"
+        },
+        "awsNitroCrlsDerBase64url": {
+          "const": []
+        },
+        "nitroCertificateProfile": {
+          "$ref": "credential-currentness-authority.v1.schema.json#/$defs/certificateProfile"
+        }
+      }
+    },
+    "policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "deploymentId",
+        "issuedAtEpochNs",
+        "expiresAtEpochNs",
+        "operationMaxSeconds",
+        "maximumGapNanos",
+        "trustRoots",
+        "assignments"
+      ],
+      "properties": {
+        "schema": {
+          "const": "serverware.policyCanaryHeartbeatAuthorityPolicy/v1"
+        },
+        "deploymentId": {
+          "$ref": "policy-canary-controlled-evidence.v1.schema.json#/$defs/component"
+        },
+        "issuedAtEpochNs": {
+          "$ref": "#/$defs/epoch"
+        },
+        "expiresAtEpochNs": {
+          "$ref": "#/$defs/epoch"
+        },
+        "operationMaxSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 30
+        },
+        "maximumGapNanos": {
+          "type": "integer",
+          "minimum": 1000000000,
+          "maximum": 60000000000
+        },
+        "trustRoots": {
+          "$ref": "#/$defs/trustRoots"
+        },
+        "assignments": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/assignment"
+          }
+        }
+      }
+    },
+    "configuration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "intakeUrl",
+        "deploymentId",
+        "instanceId",
+        "authorityRootPublicKeyBase64Url",
+        "authorityRootSpkiSha256",
+        "authorityConfigurationOriginalBase64Url",
+        "authorityConfigurationSha256",
+        "canaries",
+        "recoveryTargets"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativeCanaryDurableDelivery/v2"
+        },
+        "intakeUrl": {
+          "$ref": "native-policy-canary-durable-delivery.v1.schema.json#/$defs/configuration/properties/intakeUrl"
+        },
+        "deploymentId": {
+          "$ref": "native-policy-canary-durable-delivery.v1.schema.json#/$defs/configuration/properties/deploymentId"
+        },
+        "instanceId": {
+          "$ref": "native-policy-canary-durable-delivery.v1.schema.json#/$defs/configuration/properties/instanceId"
+        },
+        "authorityRootPublicKeyBase64Url": {
+          "$ref": "native-policy-canary-durable-delivery.v1.schema.json#/$defs/configuration/properties/authorityRootPublicKeyBase64Url"
+        },
+        "authorityRootSpkiSha256": {
+          "$ref": "native-policy-canary-durable-delivery.v1.schema.json#/$defs/configuration/properties/authorityRootSpkiSha256"
+        },
+        "authorityConfigurationOriginalBase64Url": {
+          "$ref": "native-policy-canary-durable-delivery.v1.schema.json#/$defs/configuration/properties/authorityConfigurationOriginalBase64Url"
+        },
+        "authorityConfigurationSha256": {
+          "$ref": "native-policy-canary-durable-delivery.v1.schema.json#/$defs/configuration/properties/authorityConfigurationSha256"
+        },
+        "canaries": {
+          "$ref": "native-policy-canary-durable-delivery.v1.schema.json#/$defs/configuration/properties/canaries"
+        },
+        "recoveryTargets": {
+          "$ref": "native-policy-canary-durable-delivery.v1.schema.json#/$defs/configuration/properties/recoveryTargets"
+        }
+      }
+    },
+    "statement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "purpose",
+        "deploymentId",
+        "instanceId",
+        "holderId",
+        "keyId",
+        "controlPlaneResponseSigningKeyId",
+        "policyHash",
+        "dataPlaneBinarySha256",
+        "purposeAssignmentSha256",
+        "canaryAssignmentSha256",
+        "canaryBootId",
+        "assignmentPayloadSha256",
+        "loadReceiptSha256",
+        "publicationSha256",
+        "generationId",
+        "runtimeIdentitySha256",
+        "previousHeartbeatSha256",
+        "baselineHeadSha256",
+        "headSha256",
+        "bootId",
+        "nonce",
+        "canaryId",
+        "heartbeatSequence",
+        "baselineEventOrdinal",
+        "eventOrdinal",
+        "originalCount",
+        "lastIngressSequence",
+        "openingReceiptSha256",
+        "observedAtUnixNanos",
+        "issuedAtEpochNs",
+        "expiresAtEpochNs"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativePolicyShadowHeartbeatStatement/v1"
+        },
+        "purpose": {
+          "const": "native-policy-shadow-heartbeat"
+        },
+        "deploymentId": {
+          "$ref": "policy-canary-controlled-evidence.v1.schema.json#/$defs/component"
+        },
+        "instanceId": {
+          "$ref": "policy-canary-controlled-evidence.v1.schema.json#/$defs/component"
+        },
+        "holderId": {
+          "$ref": "#/$defs/digest"
+        },
+        "keyId": {
+          "$ref": "#/$defs/digest"
+        },
+        "controlPlaneResponseSigningKeyId": {
+          "$ref": "#/$defs/digest"
+        },
+        "policyHash": {
+          "$ref": "#/$defs/digest"
+        },
+        "dataPlaneBinarySha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "purposeAssignmentSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "canaryAssignmentSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "canaryBootId": {
+          "$ref": "#/$defs/digest"
+        },
+        "assignmentPayloadSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "loadReceiptSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "publicationSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "generationId": {
+          "$ref": "#/$defs/digest"
+        },
+        "runtimeIdentitySha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "previousHeartbeatSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "baselineHeadSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "headSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "bootId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{43}$"
+        },
+        "nonce": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{43}$"
+        },
+        "canaryId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "heartbeatSequence": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 32
+        },
+        "baselineEventOrdinal": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9223372036854775807
+        },
+        "eventOrdinal": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9223372036854775807
+        },
+        "originalCount": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 64
+        },
+        "lastIngressSequence": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/epoch"
+            }
+          ]
+        },
+        "openingReceiptSha256": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/digest"
+            }
+          ]
+        },
+        "observedAtUnixNanos": {
+          "$ref": "#/$defs/epoch"
+        },
+        "issuedAtEpochNs": {
+          "$ref": "#/$defs/epoch"
+        },
+        "expiresAtEpochNs": {
+          "$ref": "#/$defs/epoch"
+        }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "statement",
+        "signature",
+        "nativeKeyEvidence"
+      ],
+      "properties": {
+        "statement": {
+          "$ref": "#/$defs/statement"
+        },
+        "signature": {
+          "type": "string",
+          "pattern": "^ed25519:[A-Za-z0-9_-]{86}$"
+        },
+        "nativeKeyEvidence": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "apiVersion",
+            "responseProofPublicKey",
+            "attestationDocumentB64"
+          ],
+          "properties": {
+            "apiVersion": {
+              "const": "serverware.nativeResponseProofKeyEvidence/v1"
+            },
+            "responseProofPublicKey": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{43}$"
+            },
+            "attestationDocumentB64": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 16384,
+              "pattern": "^[A-Za-z0-9_-]+$"
+            }
+          }
+        }
+      }
+    },
+    "record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "canary_id",
+        "instance_id",
+        "boot_id",
+        "assignment_envelope_digest",
+        "assignment_payload_digest",
+        "load_receipt_envelope_digest",
+        "publication_envelope_digest",
+        "evidence"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativePolicyShadowHeartbeat/v1"
+        },
+        "canary_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "instance_id": {
+          "$ref": "policy-canary-controlled-evidence.v1.schema.json#/$defs/component"
+        },
+        "boot_id": {
+          "$ref": "#/$defs/digest"
+        },
+        "assignment_envelope_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "assignment_payload_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "load_receipt_envelope_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "publication_envelope_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "evidence": {
+          "$ref": "#/$defs/evidence"
+        }
+      }
+    },
+    "observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "coverage",
+        "recordSha256",
+        "generationId",
+        "heartbeatSequence",
+        "eventOrdinal",
+        "headSha256",
+        "observedAtUnixNanos",
+        "okForAction"
+      ],
+      "properties": {
+        "apiVersion": {
+          "const": "serverware.nativePolicyShadowHeartbeat/v1"
+        },
+        "coverage": {
+          "const": "native-heartbeat-only"
+        },
+        "recordSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "generationId": {
+          "$ref": "#/$defs/digest"
+        },
+        "heartbeatSequence": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 32
+        },
+        "eventOrdinal": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9223372036854775807
+        },
+        "headSha256": {
+          "$ref": "#/$defs/digest"
+        },
+        "observedAtUnixNanos": {
+          "$ref": "#/$defs/epoch"
+        },
+        "okForAction": {
+          "const": false
+        }
+      }
+    }
+  }
+}

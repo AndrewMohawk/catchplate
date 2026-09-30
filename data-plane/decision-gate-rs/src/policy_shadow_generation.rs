@@ -3085,6 +3085,27 @@ impl PolicyShadowGenerationControl {
             &configuration,self.key_trust.as_ref(),retained.trusted_time.as_ref()).map_err(|error|error.to_string())
     }
 
+    pub(crate) fn with_native_heartbeat_snapshot<T>(&self,state:&GateState,
+        consume:impl FnOnce(super::policy_core::NativeAccountingSnapshot,Value)->Result<T,String>)
+        ->Result<T,String>{
+        if !self.is_production || self.native_workers.is_none(){return Err("heartbeat requires native installed generation".into());}
+        let _installation=self.installation_lock.try_lock().map_err(|_|"heartbeat installation busy")?;
+        let retained=self.retained_generation.try_lock().map_err(|_|"heartbeat generation busy")?;
+        let retained=retained.as_ref().ok_or("heartbeat has no installed generation")?;
+        self.key_trust.authorize_at(retained.trusted_time.now_unix_nanos().map_err(|e|e.to_string())?)?;
+        let scope=super::policy_shadow::native_heartbeat::scope(&retained.generation_identity,&retained.assignment,
+            &retained.load_receipt,&retained.runtime_identity,&retained.publication_receipt.internal_envelope_sha256,
+            self.key_trust.as_ref(),retained.trusted_time.as_ref()).map_err(|e|e.to_string())?;
+        let snapshot=state.policy_shadow.native_accounting_snapshot(retained.generation_identity.generation_id(),retained.trusted_time.as_ref())?;
+        if snapshot.observed_at_unix_nanos()<scope["startsAtUnixNanos"].as_i64().ok_or("heartbeat window start")?
+            || snapshot.observed_at_unix_nanos()>=scope["expiresAtUnixNanos"].as_i64().ok_or("heartbeat window end")? {
+            return Err("heartbeat outside actual assignment window".into());
+        }
+        // Retain these actual installation/generation guards through signing
+        // and definite delivery. The ledger lock itself was released above.
+        consume(snapshot,scope)
+    }
+
     pub(crate) fn native_runtime_observation(&self,receipt:&super::policy_shadow::VerifiedShadowSpillReceipt,
         opening:&Sha256Digest,terminal:Option<&Sha256Digest>)
         ->Result<super::policy_shadow::native_runtime::Observation,String> {
@@ -3119,6 +3140,23 @@ impl PolicyShadowGenerationControl {
         opening:&Sha256Digest,terminal:&Sha256Digest,request:&Sha256Digest)
         ->Result<super::policy_shadow::native_runtime::Observation,String> {
         self.native_observation(receipt,opening,Some(terminal),Some(request))
+    }
+    pub(crate) fn native_cumulative_observation(&self,heartbeat:&super::native_canary_heartbeat::RetainedHeartbeat,
+        attempt:&super::policy_core::NativeCumulativeAttempt,interval:&Sha256Digest)
+        ->Result<super::policy_shadow::native_cumulative::Checkpoint,String> {
+        if !self.is_production || self.native_workers.is_none() {return Err("cumulative checkpoint needs actual native custody".into());}
+        let _installation=self.installation_lock.try_lock().map_err(|_|"cumulative installation busy")?;
+        let retained=self.retained_generation.try_lock().map_err(|_|"cumulative generation busy")?;
+        let retained=retained.as_ref().ok_or("cumulative generation absent")?;
+        self.key_trust.authorize_at(retained.trusted_time.now_unix_nanos().map_err(|error|error.to_string())?)?;
+        let snapshot=heartbeat.snapshot();
+        if snapshot.generation_id()!=retained.generation_identity.generation_id() {return Err("cumulative heartbeat generation changed".into());}
+        let configuration=retained.custody.production_configuration_binding_sha256().ok_or("cumulative custody configuration absent")?;
+        super::policy_shadow::native_cumulative::Checkpoint::from_originals(&retained.generation_identity,
+            snapshot.baseline_event_ordinal(),snapshot.baseline_head_sha256(),snapshot.event_ordinal(),snapshot.head_sha256(),
+            snapshot.observed_at_unix_nanos(),snapshot.originals(),heartbeat.original(),heartbeat.sha256(),attempt.sequence(),attempt.previous(),
+            interval,&retained.assignment,&retained.runtime_identity,&retained.publication_receipt.internal_envelope_sha256,
+            &configuration,self.key_trust.as_ref(),retained.trusted_time.as_ref()).map_err(|error|error.to_string())
     }
     fn native_observation(&self,receipt:&super::policy_shadow::VerifiedShadowSpillReceipt,
         opening:&Sha256Digest,terminal:Option<&Sha256Digest>,request:Option<&Sha256Digest>)

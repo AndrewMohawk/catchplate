@@ -43,6 +43,8 @@ pub(super) fn configuration(value: Value) -> Result<ConfigurationParts, String> 
         && original.enrollment_authorizer.api_version == "serverware.nativeEnrollmentAuthorizer/v1"
         && original.enrollment_setup_authorizer.api_version == "serverware.nativeEnrollmentSetupAuthorizer/v1",
         "native v19 authorizer version differs")?;
+    ensure(original.measured_canary_delivery.api_version == "serverware.nativeCanaryDurableDelivery/v1",
+        "native v19 retains exactly the original interval-only delivery profile")?;
     original.measured_canary_delivery.validate()?;
     ensure(original.measured_canary_delivery.instance_id == original.measured_succession.instance_id
         && original.measured_canary_delivery.deployment_id == original.measured_succession.deployment_id

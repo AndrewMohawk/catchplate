@@ -14,6 +14,7 @@ mod native_audit_owner;
 mod native_audit_transport;
 mod native_canary_transport;
 mod native_canary_delivery;
+mod native_canary_heartbeat;
 mod native_secret_broker;
 mod native_target_dispatch;
 mod native_staging;

@@ -182,7 +182,8 @@ def verify_receipt_signature(value, receipt, *, assignment, context, publication
     """Source-fixed role selected only after a closed event/phase admission."""
     from serverware import db
     domains = {"ingress-admission": b"serverware.policyShadowIngressAdmission/v1",
-        "terminal-append": b"serverware.policyShadowTerminalAppend/v1", "ledger-append": b"serverware.policyShadowLedgerAppend/v1"}
+        "terminal-append": b"serverware.policyShadowTerminalAppend/v1", "ledger-append": b"serverware.policyShadowLedgerAppend/v1",
+        "dispatch-barrier": b"serverware.policyShadowDispatchBarrier/v1"}
     profile.require(role in domains)
     key, key_root = _keys(assignment, "custody-" + role)
     public = profile.decoded(value["signing_public_key_base64url"], 32, length=32)

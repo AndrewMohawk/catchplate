@@ -63,6 +63,7 @@ pub mod native_oauth_browser_v1;
 pub mod native_audit_batch_v1;
 pub mod native_canary_evidence_v1;
 pub mod native_canary_delivery_v1;
+pub mod native_canary_heartbeat_v1;
 pub mod release_profile_v1;
 #[cfg(target_os = "linux")]
 pub mod erofs_loop_v1;
@@ -2316,6 +2317,37 @@ impl CustodyRuntime {
         identity.verify_canary_tls(tls, deadline).map_err(native_proof_error)?;
         owner.verify_live(deadline).map_err(native_proof_error)?;
         prepared.signed(&signature, fresh.public_key(), fresh.document(), tls).map_err(native_proof_error)
+    }
+
+    pub fn sign_native_canary_heartbeat(&self,identity:&mut EnclaveRuntimeIdentityV1,
+        prepared:&native_canary_heartbeat_v1::Prepared,measured_binary:&str,deadline:u64)->Result<Value,ProtocolError>{
+        self.verify_native_process()?;
+        let CustodySigningBackend::Native{owner,quote,..}=&self.signing_backend else{return Err(invalid_statement("heartbeat requires native custody"));};
+        let deadline=deadline.min(prepared.deadline()).min(identity.deadline());
+        prepared.check(deadline).map_err(native_proof_error)?;
+        let statement=prepared.statement();
+        if statement["bootId"]!=self.boot_id || statement["keyId"]!=self.key_id
+            || statement["holderId"]!=native_currentness_v1::holder_id(&self.boot_id,&self.key_id).map_err(native_proof_error)?
+            || statement["controlPlaneResponseSigningKeyId"].as_str()!=self.control_plane_response_signing_key_id.as_deref()
+            || !native_currentness_v1::digest(measured_binary) || statement["dataPlaneBinarySha256"]!=measured_binary {
+            return Err(invalid_statement("heartbeat actual native signer scope"));
+        }
+        let mut owner=owner.lock().map_err(|_|invalid_statement("heartbeat native key poisoned"))?;
+        let original=identity.deadline().min(owner.deadline());
+        owner.verify_identity(identity,original).map_err(native_proof_error)?;let deadline=deadline.min(original);
+        let hash=statement["policyHash"].as_str().ok_or_else(||invalid_statement("heartbeat policy"))?;
+        let mut policy=[0u8;32];hex::decode_to_slice(&hash[7..],&mut policy).map_err(|_|invalid_statement("heartbeat policy bytes"))?;
+        owner.verify_policy_commitment(policy,deadline).map_err(native_proof_error)?;
+        identity.verify_policy_commitment(policy,deadline).map_err(native_proof_error)?;
+        let key=owner.public_key_bytes().map_err(native_proof_error)?;
+        if quote.public_key()!=key.as_slice() || sha256_prefixed(&ed25519_spki_der(&key))!=self.key_id{return Err(invalid_statement("heartbeat key changed"));}
+        let signature=owner.sign(&prepared.preimage().map_err(native_proof_error)?,deadline).map_err(native_proof_error)?;
+        let nonce=prepared.attestation_nonce(&signature).map_err(native_proof_error)?;
+        let fresh=owner.quote_fresh(identity,nonce,deadline).map_err(native_proof_error)?;
+        if fresh.public_key()!=key.as_slice() || fresh.user_data()!=quote.user_data() || fresh.nonce()!=&nonce
+            || fresh.document().is_empty() || fresh.document().len()>12*1024{return Err(invalid_statement("heartbeat quote scope"));}
+        prepared.check(deadline).map_err(native_proof_error)?;owner.verify_live(deadline).map_err(native_proof_error)?;
+        prepared.signed(&signature,fresh.public_key(),fresh.document()).map_err(native_proof_error)
     }
 
     /// Closed prepare/recover/claim signing under the same actual canary TLS

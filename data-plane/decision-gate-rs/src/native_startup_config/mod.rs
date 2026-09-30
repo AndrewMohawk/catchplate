@@ -9,6 +9,7 @@ mod capture_retirement;
 mod reconnect;
 mod succession;
 mod canary_delivery;
+mod canary_heartbeat;
 mod gate;
 mod originals;
 mod parameters;
@@ -405,7 +406,7 @@ fn configuration(raw: &[u8], mode: cli::Mode) -> Result<ConfigurationParts, Stri
     let value = json::parse(raw, MAX_CONFIGURATION_BYTES)?;
     let version = value.get("apiVersion").and_then(Value::as_str);
     ensure(match mode {
-        cli::Mode::Legacy => !matches!(version, Some("serverware.nativeStartupConfiguration/v6" | "serverware.nativeStartupConfiguration/v7" | "serverware.nativeStartupConfiguration/v8" | "serverware.nativeStartupConfiguration/v9" | "serverware.nativeStartupConfiguration/v10" | "serverware.nativeStartupConfiguration/v11" | "serverware.nativeStartupConfiguration/v12" | "serverware.nativeStartupConfiguration/v13" | "serverware.nativeStartupConfiguration/v14" | "serverware.nativeStartupConfiguration/v15" | "serverware.nativeStartupConfiguration/v16" | "serverware.nativeStartupConfiguration/v17" | "serverware.nativeStartupConfiguration/v18" | "serverware.nativeStartupConfiguration/v19")),
+        cli::Mode::Legacy => !matches!(version, Some("serverware.nativeStartupConfiguration/v6" | "serverware.nativeStartupConfiguration/v7" | "serverware.nativeStartupConfiguration/v8" | "serverware.nativeStartupConfiguration/v9" | "serverware.nativeStartupConfiguration/v10" | "serverware.nativeStartupConfiguration/v11" | "serverware.nativeStartupConfiguration/v12" | "serverware.nativeStartupConfiguration/v13" | "serverware.nativeStartupConfiguration/v14" | "serverware.nativeStartupConfiguration/v15" | "serverware.nativeStartupConfiguration/v16" | "serverware.nativeStartupConfiguration/v17" | "serverware.nativeStartupConfiguration/v18" | "serverware.nativeStartupConfiguration/v19" | "serverware.nativeStartupConfiguration/v20")),
         cli::Mode::EnclaveV5 => version == Some("serverware.nativeStartupConfiguration/v5"),
         cli::Mode::EncryptedV6 => version == Some("serverware.nativeStartupConfiguration/v6"),
         cli::Mode::MeasuredRefreshV7 => version == Some("serverware.nativeStartupConfiguration/v7"),
@@ -421,8 +422,10 @@ fn configuration(raw: &[u8], mode: cli::Mode) -> Result<ConfigurationParts, Stri
         cli::Mode::MeasuredReconnectV17 => version == Some("serverware.nativeStartupConfiguration/v17"),
         cli::Mode::MeasuredSuccessionV18 => version == Some("serverware.nativeStartupConfiguration/v18"),
         cli::Mode::MeasuredCanaryDeliveryV19 => version == Some("serverware.nativeStartupConfiguration/v19"),
+        cli::Mode::NativeHeartbeatV20 => version == Some("serverware.nativeStartupConfiguration/v20"),
     }, "native startup mode does not admit this configuration version")?;
     match value.get("apiVersion").and_then(Value::as_str) {
+        Some("serverware.nativeStartupConfiguration/v20") => canary_heartbeat::configuration(value),
         Some("serverware.nativeStartupConfiguration/v19") => canary_delivery::configuration(value),
         Some("serverware.nativeStartupConfiguration/v18") => succession::configuration(value),
         Some("serverware.nativeStartupConfiguration/v17") => reconnect::configuration(value),

@@ -110,7 +110,7 @@ class AuthorityVerifierReadSourceTests(unittest.TestCase):
         self.assertIs(type(authority_contract.VERIFIER_READ_TABLES), frozenset)
         self.assertEqual(authority_contract.VERIFIER_READ_TABLES, TABLES)
         self.assertEqual(authority_contract.SOURCE_REVISION,
-                         "serverware.policyCandidateAuthoritySource/2026-07-30.317")
+                         "serverware.policyCandidateAuthoritySource/2026-07-30.318")
         self.assertTrue(all(type(table) is str for table in authority_contract.VERIFIER_READ_TABLES))
 
     def test_real_helper_returns_fixed_sql_and_exact_separate_parameters(self):

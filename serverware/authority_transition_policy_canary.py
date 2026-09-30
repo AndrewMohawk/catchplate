@@ -20,8 +20,12 @@ from serverware import authority_transition_policy_canary_native_opening as nati
 from serverware import authority_policy_canary_native_opening as opening_profile
 from serverware import authority_policy_canary_native_runtime as runtime_profile
 from serverware import authority_transition_policy_canary_native_runtime as native_runtime
+from serverware import authority_transition_policy_canary_native_heartbeat as native_heartbeat
+from serverware import authority_policy_canary_heartbeat_policy as heartbeat_profile
 from serverware import authority_policy_canary_native_checkpoint as checkpoint_profile
 from serverware import authority_transition_policy_canary_native_checkpoint as native_checkpoint
+from serverware import authority_policy_canary_native_cumulative as cumulative_profile
+from serverware import authority_transition_policy_canary_native_cumulative as native_cumulative
 from serverware.authority_transition_policy_canary_state import State
 
 
@@ -44,7 +48,10 @@ def _program(values, database_now, request_digest, snapshot):
         for field, expected in (("instance_id", signed["instanceId"]), ("boot_id", signed["canaryBootId"]),
                 ("assignment_envelope_digest", signed["canaryAssignmentSha256"])):
             profile.require(field not in item or item[field] == expected, "native sender cannot select another assigned evidence lane")
-        if kind == "custody" and item.get("apiVersion") == opening_profile.SCHEMA:
+        if kind == "custody" and item.get("apiVersion") == heartbeat_profile.RECORD:
+            profile.require(len(original["events"]) == 1, "native heartbeat owns one original batch")
+            stored = native_heartbeat.apply(state, item)
+        elif kind == "custody" and item.get("apiVersion") == opening_profile.SCHEMA:
             profile.require(len(original["events"]) == 1, "native opening owns one indivisible original batch")
             stored = native_opening.apply(state, item)
         elif kind in {"active-decision", "shadow-observation"} and item.get("apiVersion") in {runtime_profile.SCHEMA, runtime_profile.RESPONSE_SCHEMA}:
@@ -53,6 +60,9 @@ def _program(values, database_now, request_digest, snapshot):
         elif kind == "checkpoint" and item.get("apiVersion") == checkpoint_profile.SCHEMA:
             profile.require(len(original["events"]) == 1, "native checkpoint owns one indivisible original batch")
             stored = native_checkpoint.apply(state, item)
+        elif kind == "checkpoint" and item.get("apiVersion") == cumulative_profile.SCHEMA:
+            profile.require(len(original["events"]) == 1, "native cumulative checkpoint owns one indivisible original")
+            stored = native_cumulative.apply(state, item)
         elif kind == "checkpoint":
             stored = db.stage_policy_canary_checkpoint(item, _controlled_state=state)
         elif kind == "readiness":

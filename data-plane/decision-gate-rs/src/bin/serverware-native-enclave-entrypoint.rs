@@ -59,6 +59,7 @@ fn main() -> Result<(), String> {
         Some("--measured-reconnect-v17") => { arguments.remove(0); "--native-measured-reconnect-startup-v17" },
         Some("--measured-succession-v18") => { arguments.remove(0); "--native-measured-succession-startup-v18" },
         Some("--measured-canary-delivery-v19") => { arguments.remove(0); "--native-measured-canary-delivery-startup-v19" },
+        Some("--canary-heartbeat-v20") => { arguments.remove(0); "--native-canary-heartbeat-startup-v20" },
         _ => "--native-encrypted-startup",
     };
     if arguments.is_empty() || arguments.len() > 9 {

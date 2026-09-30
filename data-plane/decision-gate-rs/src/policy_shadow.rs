@@ -36,10 +36,14 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 #[path = "policy_shadow_opening.rs"]
 pub(crate) mod native_opening;
+#[path = "policy_shadow_heartbeat.rs"]
+pub(crate) mod native_heartbeat;
 #[path="policy_shadow_runtime.rs"]
 pub(crate) mod native_runtime;
 #[path="policy_shadow_checkpoint.rs"]
 pub(crate) mod native_checkpoint;
+#[path="policy_shadow_cumulative.rs"]
+pub(crate) mod native_cumulative;
 
 #[cfg(target_os = "linux")]
 #[path = "policy_custody/mod.rs"]

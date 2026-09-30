@@ -34,6 +34,12 @@ unbuilt and unexecuted.
    listen and accept under its final identity. Neither the installer report nor
    the object manifest authorizes that launch.
 
+The [retained activation producer](native-shadow-retrieval-activation.md) now
+creates that actual fixed listener, retains the existing object-directory
+descriptor, and signs only an independently approved exact C9 payload before a
+one-shot descriptor handoff. The complete outer supervised launch remains
+separate; preparing descriptors does not claim a running service.
+
 ## Operator invocation
 
 The installed `scripts/install_native_shadow_retrieval_store.py` requires Python

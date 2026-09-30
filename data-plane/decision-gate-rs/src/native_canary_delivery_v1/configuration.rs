@@ -46,7 +46,7 @@ pub(crate) fn signed(value:&Value,key:&str,schema:&str)->Result<(),String> {
 }
 impl Authority {
     pub fn admit(config:Configuration)->Result<Self,String> {
-        require(config.api_version=="serverware.nativeCanaryDurableDelivery/v1"
+        require(matches!(config.api_version.as_str(),"serverware.nativeCanaryDurableDelivery/v1"|"serverware.nativeCanaryDurableDelivery/v2")
             && crate::native_canary_evidence_v1::component(&config.deployment_id)
             && crate::native_canary_evidence_v1::component(&config.instance_id)
             && (1..=16).contains(&config.canaries.len()),"native canary cold profile")?;
@@ -87,9 +87,32 @@ impl Authority {
             require(seen.contains(&target.canary_id) && targets.insert(target.slot_id.clone())
                 && target.original_expires_at_epoch_ns>0 && target.original_expires_at_epoch_ns<=i64::MAX as u64,"canary explicit recovery selector")?;
         }
-        let result=Self{config,payload,original,digest,pid:std::process::id()}; result.check()?; Ok(result)
+        let result=Self{config,payload,original,digest,pid:std::process::id()}; result.check()?;
+        if result.native_cumulative_selected()? {
+            for binding in &result.config.canaries {result.heartbeat_assignment(&binding.canary_id)?;}
+        }
+        Ok(result)
     }
     pub fn configuration(&self)->&Configuration { &self.config }
+    pub fn native_cumulative_selected(&self)->Result<bool,String> {
+        if self.config.api_version=="serverware.nativeCanaryDurableDelivery/v1" {return Ok(false);}
+        self.check()?;
+        Ok(self.config.api_version=="serverware.nativeCanaryDurableDelivery/v2")
+    }
+    pub fn heartbeat_assignment(&self,canary:&str)->Result<(&Value,String),String> {
+        require(self.native_cumulative_selected()?,"native heartbeat not cold selected")?;
+        let binding=self.binding(canary)?;
+        let policy=&self.payload["policyCanaryHeartbeatPolicy"];
+        let matches:Vec<_>=policy["assignments"].as_array().ok_or("heartbeat assignments")?.iter()
+            .filter(|item|item["canaryId"]==canary && item["instanceId"]==self.config.instance_id
+                && item["canaryAssignmentSha256"]==binding.canary_assignment_sha256 && item["canaryBootId"]==binding.canary_boot_id).collect();
+        require(matches.len()==1,"heartbeat has no unique independent assignment")?;
+        Ok((matches[0],crate::sha256_prefixed(&ascii(matches[0])?)))
+    }
+    pub fn heartbeat_policy(&self)->Result<&Value,String> {
+        require(self.native_cumulative_selected()?,"heartbeat profile absent")?;
+        Ok(&self.payload["policyCanaryHeartbeatPolicy"])
+    }
     pub fn operation_deadline(&self,original:u64,include_intake:bool)->Result<u64,String>{
         self.check()?;let epoch=crate::native_canary_evidence_v1::now_epoch()?;let boot=crate::native_canary_evidence_v1::now_boot()?;
         let mut deadline=original;
@@ -105,6 +128,9 @@ impl Authority {
     pub fn check(&self)->Result<(),String> {
         let now=crate::native_canary_evidence_v1::now_epoch()?;
         require(self.pid==std::process::id(),"canary authority owner process changed")?;
+        if self.config.api_version=="serverware.nativeCanaryDurableDelivery/v2" {
+            crate::native_canary_heartbeat_v1::validate_policy(&self.payload["policyCanaryHeartbeatPolicy"],&self.config.deployment_id,now)?;
+        }
         for (field,schema) in [("policyCanaryIntakePolicy","serverware.policyCanaryIntakeAuthorityPolicy/v2"),
             ("policyCanaryDeliveryPolicy","serverware.policyCanaryDeliveryAuthorityPolicy/v1")] {
             let value=&self.payload[field];

@@ -153,3 +153,6 @@ def verify_original(operation, arguments, *, configuration_payload, root_key, no
     values = profile.arguments(operation, arguments, typed="businessIntent" in arguments)
     verify_evidence(operation, values["batch_original"], values["native_evidence"], values["control_plane_configuration_digest"],
         configuration_payload=configuration_payload, root_key=root_key, now_epoch_ns=now_epoch_ns)
+    from serverware import authority_policy_canary_heartbeat_policy as heartbeat
+    heartbeat.verify_batch(values["batch_original"], configuration_payload=configuration_payload,
+        root_key=root_key, now_epoch_ns=now_epoch_ns, before_original=values["before_original"])

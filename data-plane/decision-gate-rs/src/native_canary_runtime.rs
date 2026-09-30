@@ -45,6 +45,25 @@ impl CheckpointAttempt {
                 String::from_utf8(raw).map_err(|_|"checkpoint ASCII")?)?;
             let complete=native_canary_delivery::submit(&self.state,batch,self.deadline)?;
             if complete.observation().status()!="consumed" {return Err("checkpoint not definitely consumed".into());}
+            if native_canary_delivery::native_cumulative_selected(&self.state)? {
+                // Same original processing window; the heartbeat's ledger lock
+                // fixes both the complete retained head and its observation time.
+                let heartbeat=native_canary_heartbeat::checkpoint(&self.state,self.deadline)?;
+                let attempt=self.state.policy_shadow.native_cumulative_begin(heartbeat.snapshot())?;
+                let checkpoint=control.native_cumulative_observation(&heartbeat,&attempt,applied.receipt().signed_receipt_sha256())?;
+                let digest=checkpoint.sha256().map_err(|error|error.to_string())?;
+                let event=checkpoint.into_event();
+                let mut id=[0u8;16];SystemRandom::new().fill(&mut id).map_err(|_|"cumulative entropy")?;
+                id[6]=(id[6]&15)|64;id[8]=(id[8]&63)|128;let id=hex::encode(id);
+                let request=format!("{}-{}-{}-{}-{}",&id[..8],&id[8..12],&id[12..16],&id[16..20],&id[20..]);
+                let raw=serverware_decision_gate::native_response_profile_v1::canonical_ascii_bytes(&json!({
+                    "apiVersion":"serverware.policyCanaryEvidenceOriginal/v1","requestId":request,
+                    "canaryId":event["record"]["canary_id"],"events":[event]}))?;
+                let batch=serverware_decision_gate::native_canary_evidence_v1::BatchOriginal::parse(
+                    String::from_utf8(raw).map_err(|_|"cumulative ASCII")?)?;
+                let complete=native_canary_delivery::submit(&self.state,batch,self.deadline)?;
+                self.state.policy_shadow.native_cumulative_complete(attempt,&digest,&complete)?;
+            }
             Ok(())
         })();
         if result.is_err(){self.state.policy_shadow.fail_native_observation();}

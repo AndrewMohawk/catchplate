@@ -1452,6 +1452,10 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/authority_policy_canary_native_opening.py \
 	serverware/authority_policy_canary_native_runtime.py \
 	serverware/authority_policy_canary_native_checkpoint.py \
+	serverware/authority_policy_canary_native_cumulative.py \
+	serverware/authority_transition_policy_canary_native_cumulative.py \
+	serverware/authority_policy_canary_heartbeat_policy.py \
+	serverware/authority_transition_policy_canary_native_heartbeat.py \
 	serverware/authority_transition_policy_canary_native_checkpoint.py \
 	serverware/authority_transition_policy_canary_native_runtime.py \
 	serverware/authority_transition_policy_canary_native_opening.py \
@@ -1503,6 +1507,8 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/native_shadow_key_admission_verifier.py \
 	serverware/native_shadow_retrieval_artifacts.py \
 	serverware/native_shadow_retrieval_store.py \
+	serverware/native_shadow_guest_delivery.py \
+	serverware/native_shadow_retrieval_activation.py \
 	scripts/install_native_shadow_retrieval_store.py \
 	serverware/native_shadow_time_profile.py \
 	serverware/native_shadow_time_originals.py \
@@ -3986,6 +3992,10 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/authority_policy_canary_native_opening.py \
 				serverware/authority_policy_canary_native_runtime.py \
 				serverware/authority_policy_canary_native_checkpoint.py \
+				serverware/authority_policy_canary_native_cumulative.py \
+				serverware/authority_transition_policy_canary_native_cumulative.py \
+				serverware/authority_policy_canary_heartbeat_policy.py \
+				serverware/authority_transition_policy_canary_native_heartbeat.py \
 				serverware/authority_transition_policy_canary_native_checkpoint.py \
 				serverware/authority_transition_policy_canary_native_runtime.py \
 				serverware/authority_transition_policy_canary_native_opening.py \
@@ -4037,6 +4047,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/native_shadow_key_admission_verifier.py \
 				serverware/native_shadow_retrieval_artifacts.py \
 				serverware/native_shadow_retrieval_store.py \
+				serverware/native_shadow_guest_delivery.py \
+				serverware/native_shadow_retrieval_activation.py \
 				scripts/install_native_shadow_retrieval_store.py \
 				serverware/native_shadow_time_profile.py \
 				serverware/native_shadow_time_originals.py \
@@ -4226,10 +4238,15 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/native_canary_delivery.rs \
 				data-plane/decision-gate-rs/src/native_canary_opening.rs \
 				data-plane/decision-gate-rs/src/native_canary_runtime.rs \
+				data-plane/decision-gate-rs/src/native_canary_heartbeat.rs \
+				data-plane/decision-gate-rs/src/native_canary_heartbeat_v1.rs \
 				data-plane/decision-gate-rs/src/native_loaded_policy_v1.rs \
 				data-plane/decision-gate-rs/src/native_loaded_policy.rs \
 				data-plane/decision-gate-rs/src/policy_shadow_runtime.rs \
 				data-plane/decision-gate-rs/src/policy_shadow_checkpoint.rs \
+				data-plane/decision-gate-rs/src/policy_core_cumulative.rs \
+				data-plane/decision-gate-rs/src/policy_shadow_cumulative.rs \
+				data-plane/decision-gate-rs/src/policy_shadow_heartbeat.rs \
 				data-plane/decision-gate-rs/src/policy_shadow_opening.rs \
 				data-plane/decision-gate-rs/src/native_canary_delivery_v1.rs \
 				data-plane/decision-gate-rs/src/native_canary_delivery_v1/wire.rs \
@@ -4263,6 +4280,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/native_startup_config/reconnect.rs \
 				data-plane/decision-gate-rs/src/native_startup_config/succession.rs \
 				data-plane/decision-gate-rs/src/native_startup_config/canary_delivery.rs \
+				data-plane/decision-gate-rs/src/native_startup_config/canary_heartbeat.rs \
 				data-plane/decision-gate-rs/src/response_v2/client_transport.rs \
 				data-plane/decision-gate-rs/src/response_v2/custody/guest_listener.rs \
 				data-plane/decision-gate-rs/src/response_v2/custody/guest_public_artifacts.rs \
@@ -4637,6 +4655,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-startup-configuration.v17.schema.json \
 				schemas/native-startup-configuration.v18.schema.json \
 				schemas/native-startup-configuration.v19.schema.json \
+				schemas/native-startup-configuration.v20.schema.json \
 				schemas/native-oauth-succession-runtime.v1.schema.json \
 				schemas/native-oauth-capture-retirement.v1.schema.json \
 				schemas/oauth-measured-capture-retirement-authority.v1.schema.json \
@@ -4650,6 +4669,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-policy-canary-runtime-observation.v1.schema.json \
 				schemas/native-policy-canary-response-observation.v1.schema.json \
 				schemas/native-policy-canary-checkpoint-observation.v1.schema.json \
+				schemas/native-policy-canary-cumulative-checkpoint.v1.schema.json \
+				schemas/native-policy-canary-heartbeat.v1.schema.json \
 				schemas/setup-policy-candidate-http.v1.schema.json \
 				schemas/native-oauth-measured-setup.v1.schema.json \
 				schemas/native-oauth-measured-reconnect.v1.schema.json \

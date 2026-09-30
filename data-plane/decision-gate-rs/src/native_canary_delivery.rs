@@ -6,6 +6,17 @@ use serverware_decision_gate::{native_canary_delivery_v1 as wire,native_canary_e
 pub(super) use wire::Configuration;
 use std::collections::BTreeMap;
 
+/// Source selection from the actual cold owner, never a caller capability bit.
+/// Call before acquiring any generation/ledger lock.
+pub(crate) fn native_cumulative_selected(state:&GateState)->Result<bool,String>{
+    let Some(holder)=&state.measured_canary_delivery else{return Ok(false);};
+    let owner=holder.try_lock().map_err(|_|"native cumulative delivery owner busy")?;
+    if owner.authority.configuration().api_version=="serverware.nativeCanaryDurableDelivery/v1" {return Ok(false);}
+    owner.check(state)?;
+    if owner.heartbeat.poisoned {return Err("native heartbeat owner is poisoned".into());}
+    owner.authority.native_cumulative_selected()
+}
+
 #[derive(Clone,Copy,PartialEq,Eq)]
 enum Phase { PrepareAttempted, Prepared, ClaimAttempted, IntakeAttempted, Consumed }
 struct Pending {
@@ -13,9 +24,9 @@ struct Pending {
     expires:u64,deadline:u64,assignment:String,phase:Phase,first:Option<wire::Completion>,
 }
 pub(super) struct Owner {
-    authority:wire::Authority,transport:native_canary_transport::Owner,
+    pub(super) authority:wire::Authority,transport:native_canary_transport::Owner,
     pending:BTreeMap<String,Pending>,heads:BTreeMap<String,String>,observations:BTreeMap<String,wire::Completion>,
-    initialized:bool,pid:u32,
+    pub(super) initialized:bool,pid:u32,pub(super) heartbeat:native_canary_heartbeat::Chain,
 }
 
 pub(super) fn prepare(config:Configuration,inputs:&gate_state_init::GateStateInputs,
@@ -27,7 +38,7 @@ pub(super) fn prepare(config:Configuration,inputs:&gate_state_init::GateStateInp
         return Err("canary durable delivery requires the same explicit native instance/encrypted cold profile".into());
     }
     let transport=native_canary_transport::prepare(roots,relays,&config.intake_url,&config.deployment_id,&config.instance_id,identity,deadline)?;
-    Ok(Owner{authority,transport,pending:BTreeMap::new(),heads:BTreeMap::new(),observations:BTreeMap::new(),initialized:false,pid:std::process::id()})
+    Ok(Owner{authority,transport,pending:BTreeMap::new(),heads:BTreeMap::new(),observations:BTreeMap::new(),initialized:false,pid:std::process::id(),heartbeat:native_canary_heartbeat::Chain::new()})
 }
 fn original_deadline(state:&GateState,deadline:u64)->Result<u64,String>{
     let remaining=native_service_remaining(state)?.ok_or("canary actual native lifetime absent")?;
@@ -37,7 +48,7 @@ fn original_deadline(state:&GateState,deadline:u64)->Result<u64,String>{
     if selected<=now{return Err("canary original native deadline elapsed".into());}Ok(selected)
 }
 impl Owner {
-    fn check(&self,state:&GateState)->Result<(),String>{
+    pub(super) fn check(&self,state:&GateState)->Result<(),String>{
         if self.pid!=std::process::id(){return Err("canary durable owner crossed process".into());}
         self.authority.check()?;native_service_remaining(state)?.ok_or("canary native lifetime absent")?;Ok(())
     }

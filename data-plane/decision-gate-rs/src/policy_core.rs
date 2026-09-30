@@ -53,6 +53,10 @@ use std::time::Duration;
 use url::Url;
 use zeroize::{Zeroize, Zeroizing};
 
+#[path="policy_core_cumulative.rs"]
+mod cumulative;
+pub(crate) use cumulative::{NativeAccountingSnapshot,NativeCumulativeAttempt};
+
 const SHADOW_QUEUE_ITEMS: usize = 1_024;
 const SHADOW_QUEUE_BYTES: usize = 128 * 1024 * 1024;
 const SHADOW_MAX_JOB_BYTES: usize = 20 * 1024 * 1024;
@@ -2586,6 +2590,7 @@ struct GenerationAccounting {
     compaction_requested: bool,
     local_ordering_gap: bool,
     spool_backpressure: bool,
+    native_history: cumulative::History,
 }
 
 impl GenerationAccounting {
@@ -2614,6 +2619,7 @@ impl GenerationAccounting {
             compaction_requested: false,
             local_ordering_gap: false,
             spool_backpressure: false,
+            native_history: cumulative::History::new(spill_predecessor_event_ordinal,spill_predecessor_head_sha256),
         }
     }
 
@@ -2806,6 +2812,7 @@ struct AccountingLedger {
     hard_unready_signal: AtomicBool,
     compaction_in_progress: AtomicBool,
     native_observation_owner: OnceLock<std::sync::Weak<GateState>>,
+    native_original_budget: OnceLock<(Arc<AtomicUsize>,Arc<AtomicBool>)>,
 }
 
 /// Constructed only after exact successful local application of a completed
@@ -3769,6 +3776,7 @@ impl AccountingLedger {
             hard_unready_signal: AtomicBool::new(!receipt_arena_ready),
             compaction_in_progress: AtomicBool::new(false),
             native_observation_owner: OnceLock::new(),
+            native_original_budget: OnceLock::new(),
         }
     }
 
@@ -4147,6 +4155,14 @@ impl AccountingLedger {
             state.generations[index].permanent_readiness_invalid = true;
             state.hard_unready = true;
             return false;
+        }
+        if let Some(budget)=self.native_original_budget.get() {
+            if state.generations[index].native_history.retain(receipt,budget).is_err() {
+                state.generations[index].permanent_readiness_invalid=true;
+                state.hard_unready=true;
+                self.hard_unready_signal.store(true,Ordering::Release);
+                return false;
+            }
         }
         let mut contiguous_ordinal =
             state.generations[index].last_spill_event_ordinal;
@@ -4546,6 +4562,14 @@ impl AccountingLedger {
                 state.generations[index].permanent_readiness_invalid = true;
                 state.hard_unready = true;
                 return None;
+            }
+            if let Some(budget)=self.native_original_budget.get() {
+                if state.generations[index].native_history.retain(&receipt,budget).is_err() {
+                    state.generations[index].permanent_readiness_invalid=true;
+                    state.hard_unready=true;
+                    self.hard_unready_signal.store(true,Ordering::Release);
+                    return None;
+                }
             }
             durable_receipt =
                 receipt_ref.durable_receipt(receipt.ingress_sequence());
@@ -9061,6 +9085,10 @@ impl ShadowRuntime {
         if !std::ptr::eq(self,&state.policy_shadow) || state.measured_canary_delivery.is_none() {
             return Err("native observation must bind the actual selected serving owner".into());
         }
+        if native_canary_delivery::native_cumulative_selected(state)? {
+            self.ledger.native_original_budget.set((Arc::clone(&self.queued_bytes),Arc::clone(&self.queue_poisoned)))
+                .map_err(|_|"native cumulative budget bound twice")?;
+        }
         self.ledger.native_observation_owner.set(Arc::downgrade(state))
             .map_err(|_|"native checkpoint owner bound twice")?;
         self.native_observation_owner.set(Arc::downgrade(state)).map_err(|_|"native observation owner bound twice".into())
@@ -9069,6 +9097,57 @@ impl ShadowRuntime {
     pub(crate) fn fail_native_observation(&self) {
         self.native_opening_failed.store(true,Ordering::Release);
         self.ledger.mark_hard_unready();
+    }
+
+    pub(crate) fn native_accounting_snapshot(&self,expected:&Sha256Digest,clock:&dyn policy_shadow::TrustedTime)
+        ->Result<NativeAccountingSnapshot,String> {
+        if self.ledger.native_original_budget.get().is_none() || self.native_opening_failed.load(Ordering::Acquire)
+            || self.queue_poisoned.load(Ordering::Acquire) || self.ledger.hard_unready_signal.load(Ordering::Acquire) {
+            return Err("native complete accounting is unavailable".into());
+        }
+        let current=self.generation.try_read().map_err(|_|"native accounting generation busy")?;
+        let current=current.as_ref().ok_or("native accounting generation absent")?;
+        if current.generation.generation_id()!=expected.as_str() {return Err("native accounting generation changed".into());}
+        let mut state=self.ledger.state.try_lock().map_err(|_|"native accounting ledger busy")?;
+        if state.hard_unready {return Err("native accounting ledger is uncertain".into());}
+        let accounting=state.generations.iter_mut().find(|entry|entry.generation_id.matches_digest(expected))
+            .ok_or("native accounting generation is not retained")?;
+        if !accounting.live || accounting.prepared || accounting.local_ordering_gap || accounting.spool_backpressure {
+            return Err("native accounting is not a complete current ledger".into());
+        }
+        accounting.native_history.snapshot(expected.clone(),accounting.last_spill_event_ordinal,accounting.last_spill_head_sha256,clock)
+    }
+
+    pub(crate) fn native_cumulative_begin(&self,snapshot:&NativeAccountingSnapshot)->Result<NativeCumulativeAttempt,String> {
+        if self.native_opening_failed.load(Ordering::Acquire) || self.ledger.native_original_budget.get().is_none() {
+            return Err("native cumulative owner is not live".into());
+        }
+        let mut state=self.ledger.state.try_lock().map_err(|_|"native cumulative ledger busy")?;
+        if state.hard_unready {return Err("native cumulative ledger uncertain".into());}
+        let accounting=state.generations.iter_mut().find(|entry|entry.generation_id.matches_digest(snapshot.generation_id()))
+            .ok_or("native cumulative generation missing")?;
+        if !accounting.live || accounting.prepared || accounting.local_ordering_gap {return Err("native cumulative generation changed".into());}
+        accounting.native_history.begin(snapshot)
+    }
+
+    pub(crate) fn native_cumulative_complete(&self,attempt:NativeCumulativeAttempt,checkpoint:&Sha256Digest,
+        completion:&serverware_decision_gate::native_canary_delivery_v1::Completion)->Result<(),String> {
+        let observation=completion.observation();
+        if observation.status()!="consumed" {return Err("native cumulative lacks definite protected consumption".into());}
+        let original=observation.intake()["batch_original"].as_str().ok_or("native cumulative committed batch absent")?;
+        let batch:Value=serde_json::from_str(original).map_err(|_|"native cumulative committed batch malformed")?;
+        let events=batch["events"].as_array().ok_or("native cumulative committed events absent")?;
+        if events.len()!=1 || events[0]["kind"]!="checkpoint"
+            || events[0]["record"]["apiVersion"]!=policy_shadow::native_cumulative::PROFILE
+            || Sha256Digest::compute(&canonical_json_bytes(&events[0]["record"]).map_err(shadow_error)?)!=*checkpoint
+            || events[0]["record"]["checkpoint_sequence"].as_u64()!=Some(attempt.sequence()) {
+            return Err("native cumulative completion differs from its exact original".into());
+        }
+        let mut state=self.ledger.state.try_lock().map_err(|_|"native cumulative completion ledger busy")?;
+        if state.hard_unready {return Err("native cumulative completion follows uncertainty".into());}
+        let accounting=state.generations.iter_mut().find(|entry|entry.generation_id.matches_digest(&attempt.generation))
+            .ok_or("native cumulative completion generation missing")?;
+        accounting.native_history.complete(&attempt,checkpoint.clone())
     }
 
     #[cfg(test)]

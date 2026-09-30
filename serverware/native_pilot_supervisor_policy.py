@@ -20,6 +20,8 @@ independently selected installation interval; later native/release jobs remain
 outside its scope.
 Explicit v7 additionally delegates the remaining seven native C9 deliveries;
 it does not authorize subsequent native grants, launches or release jobs.
+Explicit v8 adds two ordered key/admission authorizations per native endpoint.
+Legacy capability inventories remain closed; downstream grants are separate.
 
 Only the actual AuthorityCoordinatorProcess and its current opaque JobRequest
 can enter bootstrap(). No signing, publication, process launch, arbitrary
@@ -31,6 +33,7 @@ import copy
 import fcntl
 import json
 import os
+import time
 
 from scripts import native_pilot_runtime_artifacts as artifact
 from scripts.authority import native_pilot_authority_io as io
@@ -41,7 +44,7 @@ from serverware import native_pilot_scope_authority as scope
 from serverware import native_pilot_window_authority as window_authority
 from serverware import native_shadow_driver_bootstrap as driver
 from serverware import native_shadow_nitro_originals as originals
-from serverware.native_pilot_phase_execution import KEY_PURPOSES, MAX_APPROVAL
+from serverware.native_pilot_phase_execution import KEY_AUTHORIZATION_JOBS, KEY_PURPOSES, MAX_APPROVAL
 
 p = driver.p
 MAX_POLICY = 4 * 1024 * 1024
@@ -67,12 +70,18 @@ GENERATION_FIELDS = DELIVERY_FIELDS + ("ordinaryGenerationsOriginal",)
 NATIVE_DELIVERY_POLICY_API = "serverware.nativePilotSupervisorCommissioningPolicy/v7"
 NATIVE_DELIVERY_PURPOSE = "initial-driver-bootstrap-precreation-endpoints-ordinary-generations-and-native-deliveries"
 NATIVE_DELIVERY_FIELDS = GENERATION_FIELDS + ("nativeDeliveriesOriginal",)
-GENERATION_POLICY_APIS = (GENERATION_POLICY_API, NATIVE_DELIVERY_POLICY_API)
+KEY_AUTHORIZATION_POLICY_API = "serverware.nativePilotSupervisorCommissioningPolicy/v8"
+KEY_AUTHORIZATION_PURPOSE = "initial-driver-bootstrap-precreation-endpoints-generations-and-native-key-authorizations"
+KEY_AUTHORIZATION_FIELDS = NATIVE_DELIVERY_FIELDS + ("nativeKeyAuthorizationsOriginal",)
+NATIVE_DELIVERY_POLICY_APIS = (NATIVE_DELIVERY_POLICY_API, KEY_AUTHORIZATION_POLICY_API)
+GENERATION_POLICY_APIS = (GENERATION_POLICY_API,) + NATIVE_DELIVERY_POLICY_APIS
 DELIVERY_POLICY_APIS = (DELIVERY_POLICY_API,) + GENERATION_POLICY_APIS
 INITIAL_POLICY_APIS = (INITIAL_POLICY_API,) + DELIVERY_POLICY_APIS
 ENDPOINT_POLICY_APIS = (ENDPOINT_POLICY_API,) + INITIAL_POLICY_APIS
 MEASURED_POLICY_APIS = (MEASURED_POLICY_API,) + ENDPOINT_POLICY_APIS
-LEGACY_KEY_PURPOSES = tuple(name for name in KEY_PURPOSES if not name.startswith("ordinary-initial-"))
+INITIAL_KEY_PURPOSES = tuple(name for name in KEY_PURPOSES
+    if name not in {job.key for job in KEY_AUTHORIZATION_JOBS})
+LEGACY_KEY_PURPOSES = tuple(name for name in INITIAL_KEY_PURPOSES if not name.startswith("ordinary-initial-"))
 BOOTSTRAP_FIELDS = ("control", "configuration", "window", "deliveryConfiguration")
 _TOKEN = object()
 _USED = False
@@ -143,6 +152,7 @@ class SupervisorPolicy:
         self._ordinary_deliveries = None
         self._ordinary_generations = None
         self._native_deliveries = None
+        self._native_key_authorizations = None
         self._recipe_attempted = self._measured_attempted = False
 
     @classmethod
@@ -163,15 +173,16 @@ class SupervisorPolicy:
             value = _policy_document(owner._raw)
             p.require(type(value) is dict and value.get("apiVersion") in
                 (POLICY_API,) + MEASURED_POLICY_APIS)
-            native_delivery = value["apiVersion"] == NATIVE_DELIVERY_POLICY_API
+            key_authorization = value["apiVersion"] == KEY_AUTHORIZATION_POLICY_API
+            native_delivery = value["apiVersion"] in NATIVE_DELIVERY_POLICY_APIS
             ordinary_generation = value["apiVersion"] in GENERATION_POLICY_APIS
             ordinary_delivery = value["apiVersion"] in DELIVERY_POLICY_APIS
             initial = value["apiVersion"] in INITIAL_POLICY_APIS
             endpoint = value["apiVersion"] in ENDPOINT_POLICY_APIS
             measured = value["apiVersion"] in MEASURED_POLICY_APIS
-            p.fields(value, NATIVE_DELIVERY_FIELDS if native_delivery else GENERATION_FIELDS if ordinary_generation else DELIVERY_FIELDS if ordinary_delivery else INITIAL_FIELDS if initial else
+            p.fields(value, KEY_AUTHORIZATION_FIELDS if key_authorization else NATIVE_DELIVERY_FIELDS if native_delivery else GENERATION_FIELDS if ordinary_generation else DELIVERY_FIELDS if ordinary_delivery else INITIAL_FIELDS if initial else
                 ENDPOINT_FIELDS if endpoint else MEASURED_FIELDS if measured else FIELDS)
-            p.require(value["purpose"] == (NATIVE_DELIVERY_PURPOSE if native_delivery else GENERATION_PURPOSE if ordinary_generation else DELIVERY_PURPOSE if ordinary_delivery else INITIAL_PURPOSE if initial else
+            p.require(value["purpose"] == (KEY_AUTHORIZATION_PURPOSE if key_authorization else NATIVE_DELIVERY_PURPOSE if native_delivery else GENERATION_PURPOSE if ordinary_generation else DELIVERY_PURPOSE if ordinary_delivery else INITIAL_PURPOSE if initial else
                 ENDPOINT_PURPOSE if endpoint else MEASURED_PURPOSE if measured else PURPOSE))
             if measured:
                 p.digest(value["measuredRecipeSha256"])
@@ -179,7 +190,8 @@ class SupervisorPolicy:
             source = artifact._source(value["source"])
             for field in ("conductorInventorySha256", "authorityInventorySha256"):
                 p.digest(value[field])
-            keys = p.fields(value["keyBindings"], KEY_PURPOSES if initial else LEGACY_KEY_PURPOSES)
+            keys = p.fields(value["keyBindings"], KEY_PURPOSES if key_authorization
+                else INITIAL_KEY_PURPOSES if initial else LEGACY_KEY_PURPOSES)
             for digest in keys.values():
                 p.digest(digest)
             raw, control, config, cold, window = _bootstrap_originals(value["bootstrapOriginals"])
@@ -245,6 +257,12 @@ class SupervisorPolicy:
                     cold_raw = precreation["nativeColdOriginals"][role].encode("ascii")
                     native_cold = delivery.configuration(cold_raw, p.sha(cold_raw))
                     p.require(keys["native-delivery-" + role] == native_cold["authority"]["keyId"])
+            if key_authorization:
+                from serverware import native_pilot_key_profile as key_profile
+                policy_text = value["nativeKeyAuthorizationsOriginal"]
+                p.require(type(policy_text) is str and policy_text.isascii())
+                native_key_authorizations = key_profile.validate_policy(
+                    p.document(policy_text.encode("ascii"), MAX_POLICY))
             owner._value = copy.deepcopy(value)
             owner._value["precreation"] = precreation
             if endpoint:
@@ -258,6 +276,8 @@ class SupervisorPolicy:
                 owner._ordinary_generations = ordinary_generations
             if native_delivery:
                 owner._native_deliveries = native_deliveries
+            if key_authorization:
+                owner._native_key_authorizations = native_key_authorizations
             owner._bootstrap, owner._control, owner._config, owner._window = raw, control, config, window
             owner._bindings = {"apiVersion": "serverware.nativePilotSupervisorBindings/v1",
                 "conductorInventorySha256": value["conductorInventorySha256"],
@@ -294,7 +314,7 @@ class SupervisorPolicy:
     def retain_measured_recipe(self, recipe):
         """Retain only the source-selected real recipe before process setup.
 
-        Legacy policy forbids a recipe. v2-v7 require the already independently
+        Legacy policy forbids a recipe. v2-v8 require the already independently
         approved original pin, not future process-dependent configuration data.
         """
         from serverware.native_pilot_measured_configuration import MeasuredConfigurationRecipe
@@ -411,11 +431,34 @@ class SupervisorPolicy:
         return copy.deepcopy(self._ordinary_generations)
 
     def native_delivery_policy(self, *, process, request) -> dict:
-        """Only v7 delegates the remaining seven fixed native C9 decisions."""
+        """Only v7+ delegate the remaining seven fixed native C9 decisions."""
         self.check(process)
         process.check_request(request)
-        p.require(self._value["apiVersion"] == NATIVE_DELIVERY_POLICY_API)
+        p.require(self._value["apiVersion"] in NATIVE_DELIVERY_POLICY_APIS)
         return copy.deepcopy(self._native_deliveries)
+
+    def native_key_authorization_policy(self, *, process, request) -> dict:
+        """V8 only: match every new capability to the actual signed recipe key."""
+        from serverware import native_pilot_measured_configuration as measured
+        self.check(process)
+        process.check_request(request)
+        p.require(self._value["apiVersion"] == KEY_AUTHORIZATION_POLICY_API)
+        recipe = {"apiVersion": "serverware.nativePilotMeasuredConfigurationRecipe/v2",
+            **self.endpoint_recipe_originals(process=process, request=request)}
+        _, bindings, _ = measured._assignment(recipe, time.time_ns())
+        # The retained recipe's signed assignment and independently pinned
+        # trust select this key, not a caller-authored result or C9 authority.
+        trust_raw, _ = scope._original(recipe["trustOriginal"], 1024 * 1024)
+        trust = p.document(trust_raw, 1024 * 1024)
+        selected = [row["key"] for row in trust["roleKeys"]
+            if row["role"] == "custody-supervisor-capability"]
+        p.require(len(selected) == 1 and selected[0]["keyId"]
+            == bindings["custody-supervisor-capability"]["keyId"])
+        digest = p.sha(p.decoded(selected[0]["publicKeyBase64url"], size=32))
+        p.require(all(self._value["keyBindings"][job.key] == digest for job in KEY_AUTHORIZATION_JOBS))
+        self.check(process)
+        process.check_request(request)
+        return copy.deepcopy(self._native_key_authorizations)
 
     def precreation(self):
         self.check()
@@ -498,7 +541,10 @@ class SupervisorPolicy:
             from serverware.native_pilot_supervisor_process import AuthorityCoordinatorProcess
             p.require(type(self._process) is AuthorityCoordinatorProcess and self._process._closed
                 and self._process._result["status"] in ("not-started", "stopped-cleanup-complete", "failed-cleanup-complete"))
-            if self._value["apiVersion"] == NATIVE_DELIVERY_POLICY_API:
+            if self._value["apiVersion"] == KEY_AUTHORIZATION_POLICY_API:
+                from serverware import native_pilot_supervisor_key_authorizations as key_authorizations
+                key_authorizations.close(self._process)
+            if self._value["apiVersion"] in NATIVE_DELIVERY_POLICY_APIS:
                 from serverware import native_pilot_supervisor_native_deliveries as native_deliveries
                 native_deliveries.close(self._process)
             if self._value["apiVersion"] in GENERATION_POLICY_APIS:

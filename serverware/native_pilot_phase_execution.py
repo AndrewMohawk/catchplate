@@ -27,6 +27,7 @@ from serverware import native_pilot_bridge_install as bridge_install
 from serverware import native_pilot_delivery_authority as delivery_authority
 from serverware import native_pilot_driver_authority as driver_authority
 from serverware import native_pilot_generation_install_authority as generation_authority
+from serverware import native_pilot_key_authority as key_authority
 from serverware import native_pilot_launch_publication as launch_install
 from serverware import native_pilot_native_service_authority as native_authority
 from serverware import native_pilot_ordinary_initial_authority as initial_authority
@@ -90,6 +91,14 @@ INITIAL_JOBS = tuple(_Job(
 INITIAL_JOB_INFO = {job.name: (role, operation) for job, (role, operation) in zip(INITIAL_JOBS,
     ((role, operation) for role in generation.ROLES for operation in initial_authority.OPERATIONS), strict=True)}
 
+KEY_AUTHORIZATION_JOBS = tuple(_signed(
+    ("native-role-keys-" if operation == "role-keys" else "native-key-admission-") + role,
+    "native-key", role, key_authority.MAX_INPUT)
+    for role in cohort.ENDPOINT_ROLES for operation in ("role-keys", "admission"))
+KEY_AUTHORIZATION_JOB_INFO = {job.name: (role, operation) for job, (role, operation) in zip(
+    KEY_AUTHORIZATION_JOBS,
+    ((role, operation) for role in cohort.ENDPOINT_ROLES for operation in ("role-keys", "admission")), strict=True)}
+
 
 # No user-controlled operation list. Dependencies intentionally precede later
 # approval requests; every later producer receives its complete approved bytes.
@@ -109,6 +118,7 @@ JOBS = {
                   "ordinary-generation-" + role) for role in generation.ROLES),
         *(_signed("native-delivery-" + role, "delivery", role, delivery_authority.MAX_INPUT,
                   "native-delivery-" + role) for role in cohort.ENDPOINT_ROLES if role not in ENDPOINT_INPUT_ROLES),
+        *KEY_AUTHORIZATION_JOBS,
         _signed("native-service-commitRequest", "native", "commitRequest", native_authority.MAX_INPUT,
                 "native-service-commitRequest"),
         *(_signed("native-service-" + operation, "native", operation, native_authority.MAX_INPUT,
@@ -299,6 +309,12 @@ class PhaseExecution:
     def _known(self, field, value, output):
         p.require(_raw(value[field], 131072) == self._outputs[output])
 
+    def _key_configuration(self, role, original):
+        """Downstream verifier settings must retain this attempt's two outputs."""
+        value = p.document(_raw(original, p.MAX_CONFIG), p.MAX_CONFIG)
+        p.require(p.canonical(value["authorization"]) == self._outputs["native-role-keys-" + role]
+            and p.canonical(value["admissionAuthorization"]) == self._outputs["native-key-admission-" + role])
+
     def _bind_initial(self, job, value):
         role, operation = INITIAL_JOB_INFO[job.name]
         extra = () if operation == "checkpoint" else ("initialCheckpointOriginal",)
@@ -422,7 +438,16 @@ class PhaseExecution:
                         self._known("headGrantOriginal", value, "ordinary-head")
                     if operation == "current":
                         self._known("cleanupGrantOriginal", value, "ordinary-cleanup")
+        elif job.family == "native-key":
+            role, operation = KEY_AUTHORIZATION_JOB_INFO[job.name]
+            p.require(value["role"] == role == job.role and value["operation"] == operation)
+            delivery_job = "native-delivery-" + role
+            self._known("deliveryOriginal", value, delivery_job)
+            p.require(_raw(value["deliveryInputOriginal"], delivery_authority.MAX_INPUT) == self._inputs[delivery_job])
+            if operation == "admission":
+                self._known("roleKeyOriginal", value, "native-role-keys-" + role)
         elif job.family == "native":
+            self._key_configuration(_NATIVE_ENDPOINT[job.role], value["configurationOriginal"])
             self._known("deliveryOriginal", value, "native-delivery-" + _NATIVE_ENDPOINT[job.role])
             _same(value["observationOriginal"], observed["cohortObservationOriginal"])
             if job.role == "ledger":
@@ -433,6 +458,7 @@ class PhaseExecution:
                 for name in native_authority.SIGNERS:
                     p.require(_raw(value["nativeGrantOriginals"][name], 65536) == self._outputs["native-service-" + name])
         elif job.family == "generation-install":
+            self._key_configuration("generationInstall", value["nativeConfigurationOriginal"])
             self._known("coordinatorDeliveryOriginal", value, "native-delivery-generationInstall")
             _same(value["observationOriginal"], observed["cohortObservationOriginal"])
             for role, service in p.fields(value["services"], generation.ROLES).items():
@@ -440,6 +466,10 @@ class PhaseExecution:
                 self._known("generationGrantOriginal", service, "ordinary-generation-" + role)
         elif job.family == "launch":
             _same(value["role"], job.role)
+            if job.role != "bridge":
+                keys = p.document(_raw(value["originals"]["keys"], 65536), 65536)
+                p.require(p.canonical(keys["authorization"]) == self._outputs["native-role-keys-" + job.role])
+                self._known("admission", value["originals"], "native-key-admission-" + job.role)
             _same(value["keyAdmission"]["delivery"], self._pins["native-delivery-" + job.role])
             key = "native-generation-install-grant" if job.role == "generationInstall" else "native-service-" + (
                 "trustedTime" if job.role == "bridge" else _GRANT_FOR_ENDPOINT[job.role])
@@ -505,6 +535,11 @@ class PhaseExecution:
             signed = self._cohort_sign(job.role, value, key)
         elif job.family == "delivery":
             signed = delivery_authority.sign(raw, key)
+        elif job.family == "native-key":
+            role, operation = KEY_AUTHORIZATION_JOB_INFO[job.name]
+            signed, original_deadline = key_authority.sign(operation, role, raw, key)
+            deadline = min(deadline, original_deadline)
+            self._process._io_check(deadline)
         elif job.family == "native":
             signed = native_authority.sign(job.role, raw, key)
         elif job.family == "generation-install":

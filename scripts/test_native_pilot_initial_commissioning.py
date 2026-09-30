@@ -107,7 +107,7 @@ class SyntheticInitialCommissioningControls(unittest.TestCase):
             for role in ROLES for operation in OPERATIONS)
         jobs = execution.JOBS["service-originals"][:25]
         self.assertEqual(tuple(job.name for job in jobs), expected)
-        self.assertEqual(len(execution.KEY_PURPOSES), 57)
+        self.assertEqual(len(execution.KEY_PURPOSES), 77)
         initial_keys = set()
         for job, (role, operation) in zip(jobs,
                 ((role, operation) for role in ROLES for operation in OPERATIONS), strict=True):
@@ -130,7 +130,20 @@ class SyntheticInitialCommissioningControls(unittest.TestCase):
         self.assertEqual(supervisor.SUPPORTED_JOBS[7:32], tuple(("service-originals", name) for name in expected))
         self.assertEqual(supervisor.SUPPORTED_JOBS[32:37], tuple(("service-originals", "ordinary-delivery-" + role) for role in ROLES))
         self.assertEqual(supervisor.SUPPORTED_JOBS[37:42], tuple(("service-originals", "ordinary-generation-" + role) for role in ROLES))
-        self.assertEqual((len(supervisor._ORDER), len(supervisor.missing_jobs())), (85, 36))
+        endpoints = ("retrieval", "persistence", "trustedTime", "generationInstall", "commitRequest",
+            "ingressAdmission", "terminalAppend", "dispatchBarrier", "activeEffectBarrier", "activeEffectCommit")
+        pairs = tuple((role, operation) for role in endpoints for operation in ("role-keys", "admission"))
+        key_names = tuple(("native-role-keys-" if operation == "role-keys" else "native-key-admission-")
+            + role for role, operation in pairs)
+        self.assertEqual(tuple(job.name for job in execution.KEY_AUTHORIZATION_JOBS), key_names)
+        self.assertEqual(execution.JOBS["service-originals"][42:62], execution.KEY_AUTHORIZATION_JOBS)
+        self.assertEqual(supervisor.SUPPORTED_JOBS[49:69], tuple(("service-originals", name) for name in key_names))
+        for job, pair in zip(execution.KEY_AUTHORIZATION_JOBS, pairs, strict=True):
+            self.assertEqual(execution.KEY_AUTHORIZATION_JOB_INFO[job.name], pair)
+            self.assertEqual((job.family, job.purpose, job.key, job.maximum),
+                ("native-key", None, job.name, 32 * 1024 * 1024))
+        self.assertEqual(execution.JOBS["service-originals"][62].name, "native-service-commitRequest")
+        self.assertEqual((len(supervisor._ORDER), len(supervisor.missing_jobs())), (105, 36))
         with self.assertRaises(ValueError):
             supervisor.require_complete_coverage()
 

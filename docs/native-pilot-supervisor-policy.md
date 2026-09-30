@@ -4,7 +4,7 @@
 independently selected policy and implements the first `driver-bootstrap`
 decision. The separate precreation composer implements the next two jobs. This
 is not a complete decision service, a runnable pilot supervisor, or
-approval of unimplemented future jobs. Current v7 source composes 49 of 85 jobs;
+approval of unimplemented future jobs. Current v8 source composes 69 of 105 jobs;
 the decision spine refuses startup while the remaining 36 are unimplemented.
 Production acceptance remains 0/6.
 
@@ -120,8 +120,9 @@ complete-pilot verification was performed as part of authoring this source.
 
 Policy/v4 has the eleven v3 fields plus `ordinaryInitialHistories`. Its purpose
 is `initial-driver-bootstrap-precreation-endpoints-and-ordinary-initial-history`.
-The expanded coordinator requires 57 exact key selectors; v1–v3 keep their old
-42-selector shape and therefore cannot bind it. No legacy policy is silently
+At v4 the coordinator expanded to 57 exact key selectors; v1–v3 kept their old
+42-selector shape. V4–v7 still keep 57 and cannot bind the current v8 inventory
+of 77 selectors. No legacy policy is silently
 upgraded or given new signing authority.
 
 The new fragment is `serverware.nativePilotSupervisorOrdinaryInitialPolicy/v1`
@@ -138,7 +139,7 @@ each v4 role entry accept positive u64 values. All other integers, older policy
 versions and the original byte/depth/node limits keep their existing grammar.
 
 `ordinary_initial_policy(process=..., request=...)` accepts only the bound actual
-process and pending request under v4 or its explicit v5/v6/v7 successors. The fixed
+process and pending request under v4 or its explicit v5/v6/v7/v8 successors. The fixed
 composers verify every prior signature against its literal approved input. The next job observes the
 actual output; receiving an approval reply alone is not success. The complete
 wrapper is published to one fixed root-owned path per role. Downstream delivery
@@ -168,7 +169,7 @@ Reserved names and all fifteen source-owned public paths cannot be supplied as
 static credentials. No private credential is generated or opened by this policy.
 
 `ordinary_delivery_policy(process=..., request=...)` returns a checked copy only
-for v5/v6/v7 and the actual pending owner. The composer joins its recipes to the five
+for v5/v6/v7/v8 and the actual pending owner. The composer joins its recipes to the five
 verified initial wrappers and actual peer/preparation/directory observations.
 The retained installer writes only its fifteen fixed public files from that
 composer's actual prepared originals; it is not a general root writer. Five
@@ -196,7 +197,7 @@ approved role history-root key. The total 57 selectors and outer 4 MiB bound
 remain unchanged; the literal field does not widen legacy outer integer rules.
 
 `ordinary_generation_policy(process=..., request=...)` is available only to
-explicit v6/v7 with the actual pending owner. Jobs 31–35 form existing complete
+explicit v6/v7/v8 with the actual pending owner. Jobs 31–35 form existing complete
 generation inputs, verify each preceding root-signed result and retain exact
 originals. The next job's handoff is read-only. Native callers use the same
 original installation interval without renewal; no running-service acceptance
@@ -215,8 +216,35 @@ checked during policy admission. No private credential is opened or created.
 The existing 57 selectors and 4 MiB outer bound remain unchanged. The original
 three-role `endpointDeliveries` contract remains separate; no old policy is
 widened. `native_delivery_policy(process=..., request=...)` returns a checked
-copy only under v7 with the actual pending owner. Jobs 36–42 use the same
+copy only under v7/v8 with the actual pending owner. Jobs 36–42 use the same
 independently authenticated measured recipe and signed role-specific closure
 leaves, genuine cohort observations and unchanged windows. Job 43 only obtains
-a verified read-only handoff, not authority for its native-service grant.
+a verified read-only handoff. V8 separately authorizes the new key decisions
+that now precede the native-service grants.
 See [native delivery composition](native-pilot-native-deliveries.md).
+
+## Native-key-authorization successor: v8
+
+Policy/v8 retains v7's fifteen fields and adds `nativeKeyAuthorizationsOriginal`,
+with purpose
+`initial-driver-bootstrap-precreation-endpoints-generations-and-native-key-authorizations`.
+Its literal canonical ASCII object has exactly ten endpoint-role entries. Each
+contains `localRoles`, `challengeBase64url`, `issuedAtUnixNanos` and
+`expiresAtUnixNanos`. Roles are ordered and unique, with each endpoint's required
+local role included; the challenge and interval are supplied by the independent
+authority, not generated from a request or current clock.
+
+There are twenty new fixed purpose selectors, for 77 total; they select an
+already provisioned supervisor capability, not twenty generated keys. Before
+returning `native_key_authorization_policy(process=..., request=...)`, the owner
+resolves the supervisor public key through the actual retained recipe's signed
+assignment and pinned trust and matches every new selector to its raw public
+material. This post-bootstrap check is separate from the initial admission of
+the independently selected capability pins. The signer also checks the actual
+private capability against that resolved public authority.
+
+Service jobs 43–62 execute role-major pairs. Admission consumes the genuine
+preceding signed role-key original, not a predicted digest. Job 63 provides a
+verified read-only handoff. No verifier configuration, Nitro result, key seed,
+launch or service grant is fabricated. The outer 4 MiB policy limit and original
+legacy integer rules remain unchanged. See [full contracts](native-pilot-key-authorizations.md).

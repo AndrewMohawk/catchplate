@@ -3,7 +3,8 @@
 These are purpose-specific commands for an independently operated authority,
 not independent approval automation or a pilot quickstart. They produce the existing
 cohort precreation/release, driver admission/continuation, native and ordinary
-delivery, and native and ordinary service grants from explicitly approved input.
+delivery, native endpoint key/admission authorizations, and native and ordinary
+service grants from explicitly approved input.
 Restricted installers publish literal public originals, configuration bundles
 and fixed endpoint/bridge launches at the paths consumed by the pilot owners.
 
@@ -15,6 +16,13 @@ matching key. Do not connect untrusted conductor JSON directly to a signing
 command without that authority's own approval and observation checks.
 
 ## Authority-side execution
+
+The [native key-authorization issuer](native-pilot-key-authorizations.md) now
+supplies the existing role-key/v2 and admission/v1 signatures for each of ten
+actual endpoint deliveries. Its two fixed operations use separate approved
+inputs and the assignment-authenticated supervisor capability. The second
+consumes the real first signed original. Twenty source-fixed decisions are now
+in the coordinator; this is not Nitro attestation or a native admission result.
 
 The [ordinary current-key issuer](native-pilot-ordinary-key-authorization.md)
 produces an existing v3 checkpoint under an authenticated supplied fresh retained
@@ -29,9 +37,10 @@ one, obtains three separate one-key anchor signatures, then verifies and
 assembles the explicit wrapper without a private key. Typed INITIAL commitments
 are not past receipts. Native opt-in admission checks the actual process and
 empty directories before gates write; legacy raw history remains unchanged.
-Supervisor policy/job/output-publication wiring and ordinary runtime/delivery
-composition remain open. Coverage is still 7/60 fixed jobs, 53 unsupported and
-0/6 production acceptance; these commands do not bypass the startup guard.
+Supervisor history/runtime/delivery wiring has since landed, followed by
+generation, native-delivery and key-authorization decisions. Current coverage is
+69/105 fixed jobs, 36 unsupported and 0/6 production acceptance; these commands
+do not bypass the startup guard. See [current supervisor scope](native-pilot-supervisor.md).
 
 The [driver-window issuer](native-pilot-window-authority.md) handles the existing
 pre-start Window/v1 under the bootstrap authority. The
@@ -39,7 +48,7 @@ pre-start Window/v1 under the bootstrap authority. The
 window and the actual fixed supervisor executable before publishing the control
 file last. The separate [closure issuer](native-pilot-closure-authority.md)
 authorizes the v2 late-runtime execution closure after genuine observation and
-C9 delivery. None is called by the current 60-job coordinator, and none supplies
+C9 delivery. None is called by the current 105-job coordinator, and none supplies
 the missing independently authorized commissioning decision engine.
 
 Use a separately admitted Linux Python runtime and protected source/dependencies.
@@ -73,8 +82,8 @@ python3 -I -B scripts/authority/sign_native_pilot_ordinary_initial.py --operatio
 These are separate invocations with separately supplied purpose-matching FDs,
 not a script which provisions inputs or loads all three private keys. Assembly
 forbids `--authority-key-fd`. The [ceremony guide](native-pilot-ordinary-initial-history.md)
-specifies its exact input11/12/13 contracts and wrapper4. No fixed publication
-purpose or coordinator job for these outputs is added by this source batch.
+specifies its exact input11/12/13 contracts and wrapper4. The current coordinator
+connects that ceremony and publishes only each complete assembled wrapper.
 
 FD 3 must hold the independently approved canonical ASCII JSON input, without
 a terminal newline. It must be a root:root `0400` read-only, single-link regular

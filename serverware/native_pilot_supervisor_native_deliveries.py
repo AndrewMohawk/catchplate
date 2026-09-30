@@ -15,17 +15,18 @@ import time
 from serverware import custody_generation_grants as generation
 from serverware import native_pilot_delivery_authority as c9
 from serverware import native_pilot_native_delivery_profile as profile
+from serverware import native_pilot_ordinary_install as installation
 from serverware import native_pilot_precreation_install as precreation
 from serverware import native_pilot_supervisor_endpoint_deliveries as endpoints
 from serverware import native_pilot_supervisor_ordinary_generations as generations
 from serverware import native_shadow_nitro_originals as originals
 from serverware import native_shadow_proof_cohort_assignment as cohort
-from serverware.native_pilot_phase_execution import JOBS, MAX_RETAINED_BYTES
+from serverware.native_pilot_phase_execution import JOBS, KEY_AUTHORIZATION_JOBS, MAX_RETAINED_BYTES
 
 p = c9.p
 ROLES = profile.ROLES
 FIRST_INDEX = 36
-NEXT_JOB = "native-service-commitRequest"
+NEXT_JOB = "native-role-keys-retrieval"
 _LIVE = None
 _USED = False
 
@@ -63,6 +64,7 @@ class _Attempt:
         self.next, self.retained_bytes = 0, 0
         self.inflight = None
         self.failed = self.closed = self.close_attempted = False
+        self.key_boundary_open = False
         self.inputs, self.deliveries, self.results = {}, {}, {}
         self.generations, self.generation_inputs = {}, {}
         self.fragment = self.measured = self.recipe_originals = None
@@ -211,13 +213,25 @@ def compose(policy, *, process, request) -> bytes:
 
 
 def require_deliveries(policy, *, process, request) -> dict:
-    """Seven verified originals at job43; no service-grant approval is implied."""
+    """Seven verified originals at first key job43; no key approval implied."""
+    return _verified_deliveries(policy, process=process, request=request, first=True)
+
+
+def recheck_deliveries(policy, *, process, request) -> dict:
+    """Recheck an opened boundary at exact key jobs43--62 and handoff63."""
+    return _verified_deliveries(policy, process=process, request=request, first=False)
+
+
+def _verified_deliveries(policy, *, process, request, first):
     _owners(policy, process, request)
     owner = _LIVE
+    names = tuple(job.name for job in KEY_AUTHORIZATION_JOBS) + ("native-service-commitRequest",)
+    index = request.job_index - FIRST_INDEX - len(ROLES)
     p.require(owner is not None and owner.policy is policy and owner.process is process
         and not owner.failed and not owner.closed and owner.inflight is None and owner.next == len(ROLES)
-        and request.phase == "service-originals" and request.job_index == FIRST_INDEX + len(ROLES)
-        and request.job == NEXT_JOB and JOBS["service-originals"][request.job_index - 1].name == NEXT_JOB)
+        and installation.native_completed_boundary(request)
+        and 0 <= index < len(names) and request.job == names[index]
+        and (index == 0 and request.job == NEXT_JOB if first else owner.key_boundary_open))
     owner.inflight = request
     try:
         _current(owner, request)
@@ -226,6 +240,7 @@ def require_deliveries(policy, *, process, request) -> dict:
         p.require(tuple(owner.deliveries) == ROLES)
         result = {role: {"deliveryOriginal": owner.deliveries[role],
             "runtimeOriginal": owner.fragment[role]["runtimeOriginal"].encode("ascii")} for role in ROLES}
+        owner.key_boundary_open = True
         owner.inflight = None
         return result
     except BaseException:

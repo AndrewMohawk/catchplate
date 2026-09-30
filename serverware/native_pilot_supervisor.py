@@ -1,6 +1,6 @@
 """Fixed commissioning decisions joined to their real process and installer.
 
-The initial 49 of 85 job composers exist. The complete-coverage check refuses
+The initial 69 of 105 job composers exist. The complete-coverage check refuses
 startup before spawning a child, not after a live attempt reaches a missing job.
 There is no executable entrypoint, configurable dispatcher, approval callback,
 signer, new deadline or source of deployment approval in this module.
@@ -17,11 +17,12 @@ from serverware import native_pilot_supervisor_initial_history as initial_histor
 from serverware import native_pilot_supervisor_ordinary_deliveries as ordinary_deliveries
 from serverware import native_pilot_supervisor_ordinary_generations as ordinary_generations
 from serverware import native_pilot_supervisor_native_deliveries as native_deliveries
+from serverware import native_pilot_supervisor_key_authorizations as key_authorizations
 from serverware import custody_generation_grants as generation
 from serverware import native_shadow_nitro_originals as originals
 from serverware import native_shadow_nitro_profile as p
 from serverware.native_pilot_operator_channel import STAGES
-from serverware.native_pilot_phase_execution import INITIAL_JOBS, JOBS, MAX_APPROVAL
+from serverware.native_pilot_phase_execution import INITIAL_JOBS, JOBS, KEY_AUTHORIZATION_JOBS, MAX_APPROVAL
 from serverware.native_pilot_supervisor_policy import SupervisorPolicy
 from serverware.native_pilot_supervisor_process import AuthorityCoordinatorProcess
 
@@ -35,7 +36,8 @@ SUPPORTED_JOBS = (("bootstrap-admission", "driver-bootstrap"),
     *(("service-originals", job.name) for job in INITIAL_JOBS),
     *(("service-originals", "ordinary-delivery-" + role) for role in generation.ROLES),
     *(("service-originals", "ordinary-generation-" + role) for role in generation.ROLES),
-    *(("service-originals", "native-delivery-" + role) for role in native_deliveries.ROLES))
+    *(("service-originals", "native-delivery-" + role) for role in native_deliveries.ROLES),
+    *(("service-originals", job.name) for job in KEY_AUTHORIZATION_JOBS))
 _ORDER = tuple((phase, job.name) for phase in STAGES for job in JOBS[phase])
 _TOKEN = object()
 _USED = False
@@ -146,9 +148,12 @@ class CommissioningSupervisor:
         elif slot in SUPPORTED_JOBS[37:42]:
             input_raw = ordinary_generations.compose(self._policy, process=self._process, request=request)
             approval_raw = _approval(request.raw, input_raw)
-        else:
-            p.require(slot in SUPPORTED_JOBS[42:])
+        elif slot in SUPPORTED_JOBS[42:49]:
             input_raw = native_deliveries.compose(self._policy, process=self._process, request=request)
+            approval_raw = _approval(request.raw, input_raw)
+        else:
+            p.require(slot in SUPPORTED_JOBS[49:])
+            input_raw = key_authorizations.compose(self._policy, process=self._process, request=request)
             approval_raw = _approval(request.raw, input_raw)
         p.require(type(input_raw) is bytes and type(approval_raw) is bytes)
         p.document(approval_raw, MAX_APPROVAL)

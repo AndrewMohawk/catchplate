@@ -2,10 +2,12 @@
 
 # Remaining native delivery commissioning
 
-The `.376` source connects all seven remaining native C9 delivery decisions.
+The `.376` source connected all seven remaining native C9 delivery decisions.
 Together with the earlier Retrieval, Persistence and TrustedTime deliveries,
 all ten native roles now have policy/input composers. Supervisor coverage is
-**49/85**, with **36 jobs missing**, beginning with `native-service-commitRequest`.
+**49/85** at that checkpoint. The subsequent
+[key-authorization connection](native-pilot-key-authorizations.md) adds twenty
+required decisions, reaching **69/105**, with **36 current jobs still missing**.
 Startup still refuses before spawn. This is not a runnable pilot; project
 source checkpoints remain **36/46** and production acceptance **0/6**.
 
@@ -74,16 +76,18 @@ the endpoint runtime originals before launching their services. This does not
 introduce a future-file dependency or permit substituting a different runtime.
 
 Before the ten native service grants and GenerationInstall can be composed,
-the endpoint key/admission authorizations need genuine issuers. Existing code
-verifies `RoleKeyAssignment/v2` and `KeyAdmissionAssignment/v1` originals but
-does not produce them. The admission verifier's signed result is a different
+the endpoint key/admission authorizations need genuine issuers. At `.376`, code
+verified `RoleKeyAssignment/v2` and `KeyAdmissionAssignment/v1` originals but
+did not produce them; `.377` now connects their issuance separately. The
+admission verifier's signed result is a different
 protocol, not a substitute. Each pair must bind the actual C9/Guest13 and then
 the exact signed role-key assignment hash, under the assignment-authenticated
 `custody-supervisor-capability` authority and explicitly approved roles,
 challenge and original validity. Ten pairs require new fixed signing decisions
 and explicit policy/capability wiring before verifier configuration assembly.
-The current 85-job inventory does not include those prerequisites; **36 missing
-current composers is not the total remaining work**.
+The historical 85-job inventory omitted those prerequisites. Its successor
+adds them explicitly; **36 missing current composers is not the total remaining
+work**.
 
 After those prerequisites come native service/generation and dependent
 dispatch/spool decisions, the remaining supervisor jobs and executable

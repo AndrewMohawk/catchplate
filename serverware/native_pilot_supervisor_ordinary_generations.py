@@ -250,7 +250,7 @@ def require_generations(policy, *, process, request) -> dict:
 
 
 def recheck_generations(policy, *, process, request) -> dict:
-    """Recheck the opened boundary for exact native jobs36--42 and handoff43."""
+    """Recheck the opened boundary through fixed native jobs and handoff63."""
     return _verified_generations(policy, process=process, request=request, first=False)
 
 

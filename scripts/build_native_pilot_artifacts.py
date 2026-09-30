@@ -97,13 +97,17 @@ def read_original(path, maximum):
         os.close(descriptor)
 
 
-def write_original(path, value):
-    data = build.canonical_json(value).encode("ascii")
+def write_bytes(path, data):
     with path.open("xb") as stream:
         os.fchmod(stream.fileno(), 0o444)
         stream.write(data)
         stream.flush()
         os.fsync(stream.fileno())
+
+
+def write_original(path, value, *, terminal_lf=False):
+    data = build.canonical_json(value).encode("ascii") + (b"\n" if terminal_lf else b"")
+    write_bytes(path, data)
 
 
 def new_output(path):
@@ -113,6 +117,49 @@ def new_output(path):
     # No overwrite, recovery, cleanup, recursive deletion or automatic retry.
     path.mkdir(mode=0o700)
     return path
+
+
+def package_public_inputs(args, metadata, plan):
+    paths = {
+        "seccomp.bpf": args.seccomp,
+        "runtime.json": args.runtime,
+        "build-recipe.json": args.build_recipe,
+        "provenance.json": args.provenance,
+    }
+    for path in (args.preparation, *paths.values()):
+        if not path.is_absolute() or path.parent.resolve() != path.parent:
+            raise RuntimeError("public input originals require absolute paths without symlink ancestors")
+    if read_original(args.preparation, 128 * 1024) != build.canonical_json(plan).encode("ascii"):
+        raise RuntimeError("preparation must be the exact fixed profile for this clean source snapshot")
+    originals = {
+        name: read_original(paths[name], maximum)
+        for name, (_, maximum) in build.PUBLIC_GUEST_FILES.items()
+    }
+    if len(originals["seccomp.bpf"]) % 8:
+        raise RuntimeError("seccomp artifact is not exact classic-BPF instructions")
+    # The existing custody packager treats the other three originals as opaque
+    # pinned bytes. Copying/hashing them is not runtime or provenance admission.
+    manifest = {
+        "apiVersion": "serverware.nativeShadowCustodyImageInputs/v1",
+        "sourceManifestSha256": metadata["source_manifest_digest"],
+        **{field: "sha256:" + hashlib.sha256(originals[name]).hexdigest()
+           for name, (field, _) in build.PUBLIC_GUEST_FILES.items()},
+    }
+    output = new_output(args.out)
+    for name, raw in originals.items():
+        write_bytes(output / name, raw)
+    # Only these five files belong in the existing packager's input directory.
+    # The manifest is last; partial output is retained, never repaired/retried.
+    write_original(output / "inputs.json", manifest, terminal_lf=True)
+    manifest_raw = read_original(output / "inputs.json", 16384)
+    if manifest_raw != (build.canonical_json(manifest) + "\n").encode("ascii"):
+        raise RuntimeError("written public input manifest differs from its exact original")
+    return {
+        "measuredPublicInputsSha256": "sha256:" + hashlib.sha256(manifest_raw).hexdigest(),
+        "independentPinAuthenticated": False,
+        "independentPinAuthenticationRequired": True,
+        "boundary": "Locally measured bytes only. Obtain independent authentication of this exact manifest pin before build admission; no policy, provenance, signature or release authority is created.",
+    }
 
 
 def native_inventory(output):
@@ -179,6 +226,13 @@ def main():
     sub = parser.add_subparsers(dest="command", required=True)
     prepare = sub.add_parser("prepare", help="emit source-bound public input requirements; no Docker or service execution")
     prepare.add_argument("--out", type=Path, required=True)
+    public_inputs = sub.add_parser("public-inputs", help="copy operator public originals and measure an unapproved manifest; never build or sign")
+    public_inputs.add_argument("--out", type=Path, required=True)
+    public_inputs.add_argument("--preparation", type=Path, required=True)
+    public_inputs.add_argument("--seccomp", type=Path, required=True)
+    public_inputs.add_argument("--runtime", type=Path, required=True)
+    public_inputs.add_argument("--build-recipe", type=Path, required=True)
+    public_inputs.add_argument("--provenance", type=Path, required=True)
     compile_command = sub.add_parser("build", help="assemble the fixed offline artifacts and local control/gate images; never launch")
     compile_command.add_argument("--out", type=Path, required=True)
     compile_command.add_argument("--preparation", type=Path, required=True)
@@ -187,6 +241,12 @@ def main():
     args = parser.parse_args()
     metadata = build.build_metadata()  # strict clean committed source, no dirty-tree escape
     plan = preparation(metadata)
+    if args.command == "public-inputs":
+        measured = package_public_inputs(args, metadata, plan)
+        print(build.canonical_json({"apiVersion": "serverware.nativePilotBuildCommand/v1", "command": args.command,
+            "output": str(args.out), "releaseAuthority": False, "liveReady": False, "launchPrepared": False,
+            **measured}))
+        return
     output = new_output(args.out)
     write_original(output / "preparation.json", plan)
     if args.command == "build":

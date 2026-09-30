@@ -20,6 +20,38 @@ broker packaging inputs; it is not evidence that a v2 snapshot exists. Updating
 the identity or manifest without producing and reviewing new wheel bytes does
 not resolve the handoff requirement.
 
+## Current candidate evidence
+
+Candidate `serverware-production-dependencies-linux-amd64-v3-candidate-cba01916`
+was prepared successfully from source commit
+`cba01916ef4353e92fa5c3ee56396eab1c6a5951`: **245 Rust crates and 31 Python
+wheels**. It remains **unpublished and unreviewed**; canonical reviewed dependency
+pins are unchanged.
+
+| Artifact, relative to the candidate | Bytes | SHA-256 |
+| --- | ---: | --- |
+| `snapshot/cache/cargo-vendor.tar.gz` | 38,696,173 | `46f1084925158fae9eb240aac23451892a494e900b144d536dc75297ba5eaea0` |
+| `snapshot/cache/python-wheelhouse-linux-amd64.tar.gz` | 19,032,896 | `5769273bdb18eec0b83768eb04e25decf018ef2cd9187126ee5f98a013fb6406` |
+
+`candidate-report.json` has SHA-256
+`38b4ea78b2ab07faa68e3193087d33072998bddb9dd404e9b5fd9e6fe6f37a00`.
+The retained layout includes the three proposed manifests under `snapshot/`,
+six artifacts under `snapshot/cache/`, captured `requirements.lock` and
+`data-plane/decision-gate-rs/{Cargo.toml,Cargo.lock}`, and bounded phase
+invocations, logs, and complete inventories under `work/`.
+
+Rust crate checksums match the original lock; every selected file matches its
+locked archive, and actual vendor files equal the selected map plus generated
+checksum manifests. The pinned Cargo invocation owns selection; 737 omitted
+archive filenames are recorded, not independently approved. Python wheel hashes
+and inventory match the original lock. Deterministic packaging and offline
+Python installation (31 packages, no network, `pip check`) were intrinsic
+preparation checks, **not a project test suite or production acceptance**.
+
+This candidate may be staged for an engineering-only build in an isolated dirty
+worktree. Such staging never authorizes a production build, publication, or
+reviewed-pin installation; those still require the dependency-owner handoff.
+
 ## Preconditions
 
 Freeze a clean commit containing the producer and its reviewed changes first.

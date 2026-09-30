@@ -79,6 +79,30 @@ independent author, rather than treating a locally calculated hash as authority.
 No launch, C9 delivery, policy secret, seed or credential belongs in this public
 build directory. Only these five bounded files enter the private Docker context.
 
+To package operator-owned originals against that exact clean-source preparation:
+
+```sh
+python3 -B scripts/build_native_pilot_artifacts.py public-inputs \
+  --preparation /srv/catchplate-fast/tmp/pilot-build-preparation/preparation.json \
+  --seccomp /srv/operator-guest-originals/seccomp.bpf \
+  --runtime /srv/operator-guest-originals/runtime.json \
+  --build-recipe /srv/operator-guest-originals/build-recipe.json \
+  --provenance /srv/operator-guest-originals/provenance.json \
+  --out /srv/catchplate-fast/tmp/pilot-public-inputs
+```
+
+All supplied originals must be bounded regular files at absolute non-symlink
+paths. The command copies them unchanged, checks the existing seccomp instruction
+alignment, and writes only the five expected files into a new directory. It
+creates the existing canonical ASCII plus one-LF `inputs.json` from their exact
+raw hashes and the preparation's source pin. It does not synthesize or approve
+seccomp/runtime/policy/provenance, contact Docker, or generate keys/signatures.
+`measuredPublicInputsSha256` hashes the complete written manifest including LF;
+`independentPinAuthenticated:false` is explicit. Independently authenticate that
+exact pin before supplying it to the build command. A local hash alone is not
+approval. Existing outputs are refused; partial failure outputs are not repaired
+or automatically retried.
+
 ```sh
 make build-native-pilot-artifacts \
   NATIVE_PILOT_OUTPUT=/srv/catchplate-fast/tmp/pilot-built-artifacts \

@@ -286,6 +286,26 @@ build is not live readiness or production acceptance.
 
 ## Live preparation remains with the genuine owners
 
+The latest consolidated engineering attempt (15) used the pushed single-bridge
+source `d865eeb80f4ce72cd5b73fab0ca2472b939d451e` and the same unchanged
+unpublished candidate in an isolated checkout. Session `49282` ran from
+`2026-09-30T12:59:42.075602505Z` to `2026-09-30T13:06:02.035699165Z`, exiting 1.
+The control image completed as
+`sha256:a7cc2c0143fdb75c90b658c58d4c59c50810b9ea338b984a3cf2825e5ee10580`.
+The gate's glibc build exited 101 with one unique `E0412`: the new driver-binding
+module lacked the `ExpectedPeerCredentialV3` import. That error appeared in
+12 target diagnostics; its import is now corrected in source. The concurrent
+musl step was canceled, not successful. There is no completed gate image or
+final two-image report for this attempt, and the fix has not been rebuilt.
+
+The full log, exact command/source selection, diagnostic index and worker-limit
+observations are retained under
+`codex-offload/serverware/engineering-builds/d865eeb8-suhpli` with a verified
+`SHA256SUMS` manifest. Both sampled Rust workers had the selected 8-CPU,
+24-GiB, no-swap limits; those limits remain per RUN, not aggregate. No broad
+test suite, pilot launch, cloud provisioning or automatic retry ran. The next
+compilation follows the connected implementation batch, not each individual edit.
+
 Engineering attempt 14 built both images successfully from exact source
 `253730f074040392fbf0d50a1c4924b620a9c341`, using the unchanged, unpublished
 `v3-candidate-cba01916` dependencies in an isolated dirty-tree checkout. Job

@@ -1,6 +1,7 @@
 //! Foreign measured bridge retention. This owner never signals or reaps it.
 //! Only the genuine DriverBootstrap supervisor owns that child and its image.
 use super::*;
+use crate::policy_shadow::policy_custody::services::ExpectedPeerCredentialV3;
 use std::os::unix::fs::FileExt;
 
 pub(super) const CONFIG_API:&str="serverware.nativeShadowProofCohortConfiguration/v7";

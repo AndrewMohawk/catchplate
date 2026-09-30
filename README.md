@@ -18,7 +18,7 @@ Checkpoint: **2026-09-30 — pre-production, pilot assembly.**
 
 **36/46 source checkpoints landed · 10 active · 0 todo.**
 
-**Production acceptance: 0/6 verified.** Both engineering images built at `253730f0`. The new single-bridge launch connection is source-landed, not yet built or exercised. Pilot artifact assembly, service provisioning and connected verification remain. No production deployment.
+**Production acceptance: 0/6 verified.** Both baseline engineering images built at `253730f0`. The latest launch-path build completed the control image but hit a gate compilation error; its missing import is fixed, with the consolidated rebuild pending. Pilot assembly, provisioning and connected verification remain. No production deployment.
 
 [![Project checkpoints, one segment per task: 36 of 46 source-landed; 10 active and 0 todo. Evidence handoff 10/10; historical recovery 4/5; permissions and grants 10/10; finalization and sessions 8/8; workloads and native 3/6; providers and operations 1/7. H05, N04, N05, N06 and O01 through O06 are in progress. Production acceptance remains 0/6. Engineering assembly is not an accepted pilot or production deployment.](docs/images/project-progress.svg)](docs/production-status.md#next-source-milestones)
 

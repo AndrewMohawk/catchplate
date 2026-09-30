@@ -4,8 +4,9 @@
 independently selected policy and implements the first `driver-bootstrap`
 decision. The separate precreation composer implements the next two jobs. This
 is not a complete decision service, a runnable pilot supervisor, or
-approval of unimplemented future jobs. The decision spine must refuse startup
-while fixed-job coverage remains incomplete.
+approval of unimplemented future jobs. Current v5 source composes 37 of 85 jobs;
+the decision spine refuses startup while the remaining 48 are unimplemented.
+Production acceptance remains 0/6.
 
 ## External approval boundary
 
@@ -115,7 +116,7 @@ terminal-and-reaped state. No caller-authored status object releases it.
 No signing, approval installation, process launch, build, hardware execution or
 complete-pilot verification was performed as part of authoring this source.
 
-## Current initial-history successor
+## Initial-history successor: v4
 
 Policy/v4 has the eleven v3 fields plus `ordinaryInitialHistories`. Its purpose
 is `initial-driver-bootstrap-precreation-endpoints-and-ordinary-initial-history`.
@@ -137,11 +138,42 @@ each v4 role entry accept positive u64 values. All other integers, older policy
 versions and the original byte/depth/node limits keep their existing grammar.
 
 `ordinary_initial_policy(process=..., request=...)` accepts only the bound actual
-process and pending request, and only v4. The fixed composers verify every
-prior signature against its literal approved input. The next job observes the
+process and pending request under v4 or its explicit v5 successor. The fixed
+composers verify every prior signature against its literal approved input. The next job observes the
 actual output; receiving an approval reply alone is not success. The complete
 wrapper is published to one fixed root-owned path per role. Downstream delivery
 requires an independently installed service-owned copy at its separate fixed
 slot, with the same retained bytes, digest and length; later grant inputs use
-the same wrapper. The copy installer remains required implementation. See
+the same wrapper. V5 connects that fixed public copy installer without changing
+v4's authorization. See
 [the full connection](native-pilot-ordinary-initial-history.md#supervisor-connection).
+
+## Ordinary-delivery successor: v5
+
+Policy/v5 has the twelve v4 fields plus `ordinaryDeliveriesOriginal`, with purpose
+`initial-driver-bootstrap-precreation-endpoints-and-ordinary-deliveries`.
+The added value is the complete canonical ASCII original of
+`serverware.nativePilotOrdinaryRuntimePolicy/v1`, not a template or an arbitrary
+runtime document. The outer policy retains its 4 MiB limit and the exact 57-key
+inventory. Each ordinary-delivery selector must equal the selected cold C9
+authority. Earlier versions keep their exact fields and scopes; v4 does not
+implicitly gain delivery or installation permission.
+
+The runtime policy has exactly `apiVersion` and five-role `services`, whose rows
+are exactly `runtimeHeader`, `service` and `credentials`. It selects static
+limits, independent root/public-key bindings, explicit fresh-profile service
+choices and metadata for existing credentials. It excludes predicted live
+identities, directory observations and generated public-file destinations.
+Reserved names and all fifteen source-owned public paths cannot be supplied as
+static credentials. No private credential is generated or opened by this policy.
+
+`ordinary_delivery_policy(process=..., request=...)` returns a checked copy only
+for v5 and the actual pending owner. The composer joins its recipes to the five
+verified initial wrappers and actual peer/preparation/directory observations.
+The retained installer writes only its fifteen fixed public files from that
+composer's actual prepared originals; it is not a general root writer. Five
+existing C9 signing jobs consume the resulting complete inputs. The subsequent
+first-generation boundary is read-only and verifies the final delivery result;
+it supplies no generation approval. See
+[ordinary-service deliveries](native-pilot-ordinary-deliveries.md) for the paths,
+ownership, failure retention and unchanged native admission boundary.

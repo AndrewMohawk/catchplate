@@ -13,6 +13,8 @@ Explicit v4 additionally delegates the fixed five-step initial-history ceremony
 for each ordinary role. It does not approve subsequent ordinary C9 or runtime
 composition. Legacy policies retain their old key field set and cannot bind
 the expanded coordinator's capability inventory.
+Explicit v5 additionally delegates five ordinary runtime/public-input and C9
+delivery decisions. It does not authorize subsequent generation or release.
 
 Only the actual AuthorityCoordinatorProcess and its current opaque JobRequest
 can enter bootstrap(). No signing, publication, process launch, arbitrary
@@ -51,6 +53,12 @@ ENDPOINT_FIELDS = MEASURED_FIELDS + ("endpointPreparation", "endpointDeliveries"
 INITIAL_POLICY_API = "serverware.nativePilotSupervisorCommissioningPolicy/v4"
 INITIAL_PURPOSE = "initial-driver-bootstrap-precreation-endpoints-and-ordinary-initial-history"
 INITIAL_FIELDS = ENDPOINT_FIELDS + ("ordinaryInitialHistories",)
+DELIVERY_POLICY_API = "serverware.nativePilotSupervisorCommissioningPolicy/v5"
+DELIVERY_PURPOSE = "initial-driver-bootstrap-precreation-endpoints-and-ordinary-deliveries"
+DELIVERY_FIELDS = INITIAL_FIELDS + ("ordinaryDeliveriesOriginal",)
+INITIAL_POLICY_APIS = (INITIAL_POLICY_API, DELIVERY_POLICY_API)
+ENDPOINT_POLICY_APIS = (ENDPOINT_POLICY_API,) + INITIAL_POLICY_APIS
+MEASURED_POLICY_APIS = (MEASURED_POLICY_API,) + ENDPOINT_POLICY_APIS
 LEGACY_KEY_PURPOSES = tuple(name for name in KEY_PURPOSES if not name.startswith("ordinary-initial-"))
 BOOTSTRAP_FIELDS = ("control", "configuration", "window", "deliveryConfiguration")
 _TOKEN = object()
@@ -63,12 +71,12 @@ def _same(first, second):
 
 
 def _policy_document(raw):
-    """Keep the legacy JSON bounds; widen only v4's five role counters."""
+    """Keep legacy JSON bounds; widen only v4/v5 initial-history counters."""
     p.require(type(raw) is bytes and 0 < len(raw) <= MAX_POLICY)
     value = json.loads(raw.decode("ascii"), object_pairs_hook=p._pairs,
         parse_float=p._reject, parse_constant=p._reject)
     p.require(type(value) is dict)
-    if value.get("apiVersion") != INITIAL_POLICY_API:
+    if value.get("apiVersion") not in INITIAL_POLICY_APIS:
         p.require(p.canonical(value) == raw)
         return value
     from serverware import native_pilot_supervisor_initial_history as ordinary
@@ -119,6 +127,7 @@ class SupervisorPolicy:
         self._failed = self._closed = self._bind_attempted = self._bootstrap_attempted = False
         self._bootstrap_input = None
         self._recipe = None
+        self._ordinary_deliveries = None
         self._recipe_attempted = self._measured_attempted = False
 
     @classmethod
@@ -138,12 +147,15 @@ class SupervisorPolicy:
             p.require(p.sha(owner._raw) == owner._digest)
             value = _policy_document(owner._raw)
             p.require(type(value) is dict and value.get("apiVersion") in
-                (POLICY_API, MEASURED_POLICY_API, ENDPOINT_POLICY_API, INITIAL_POLICY_API))
-            initial = value["apiVersion"] == INITIAL_POLICY_API
-            endpoint = value["apiVersion"] in (ENDPOINT_POLICY_API, INITIAL_POLICY_API)
-            measured = value["apiVersion"] in (MEASURED_POLICY_API, ENDPOINT_POLICY_API, INITIAL_POLICY_API)
-            p.fields(value, INITIAL_FIELDS if initial else ENDPOINT_FIELDS if endpoint else MEASURED_FIELDS if measured else FIELDS)
-            p.require(value["purpose"] == (INITIAL_PURPOSE if initial else ENDPOINT_PURPOSE if endpoint else MEASURED_PURPOSE if measured else PURPOSE))
+                (POLICY_API,) + MEASURED_POLICY_APIS)
+            ordinary_delivery = value["apiVersion"] == DELIVERY_POLICY_API
+            initial = value["apiVersion"] in INITIAL_POLICY_APIS
+            endpoint = value["apiVersion"] in ENDPOINT_POLICY_APIS
+            measured = value["apiVersion"] in MEASURED_POLICY_APIS
+            p.fields(value, DELIVERY_FIELDS if ordinary_delivery else INITIAL_FIELDS if initial else
+                ENDPOINT_FIELDS if endpoint else MEASURED_FIELDS if measured else FIELDS)
+            p.require(value["purpose"] == (DELIVERY_PURPOSE if ordinary_delivery else INITIAL_PURPOSE if initial else
+                ENDPOINT_PURPOSE if endpoint else MEASURED_PURPOSE if measured else PURPOSE))
             if measured:
                 p.digest(value["measuredRecipeSha256"])
             p.fields(value["source"], artifact.SOURCE_FIELDS)
@@ -185,6 +197,17 @@ class SupervisorPolicy:
                         # independently selected key ID or the SPKI bytes.
                         raw_key = p.decoded(public["publicKeySpkiBase64"], size=44)[-32:]
                         p.require(keys["ordinary-initial-" + name + "-" + role] == p.sha(raw_key))
+            if ordinary_delivery:
+                from serverware import native_pilot_ordinary_runtime_profile as runtime
+                policy_text = value["ordinaryDeliveriesOriginal"]
+                p.require(type(policy_text) is str and policy_text.isascii())
+                policy_fragment = generation.document(policy_text.encode("ascii"), MAX_POLICY)
+                ordinary_deliveries = runtime.validate_policy(policy_fragment,
+                    ordinary_cold_originals=precreation["ordinaryColdOriginals"], initial_policy=ordinary_initial)
+                for role in generation.ROLES:
+                    cold_raw = precreation["ordinaryColdOriginals"][role].encode("ascii")
+                    service_cold = generation.configuration(cold_raw, p.sha(cold_raw), role)
+                    p.require(keys["ordinary-delivery-" + role] == service_cold["authority"]["keyId"])
             owner._value = copy.deepcopy(value)
             owner._value["precreation"] = precreation
             if endpoint:
@@ -192,6 +215,8 @@ class SupervisorPolicy:
                 owner._value["endpointDeliveries"] = endpoint_deliveries
             if initial:
                 owner._value["ordinaryInitialHistories"] = ordinary_initial
+            if ordinary_delivery:
+                owner._ordinary_deliveries = ordinary_deliveries
             owner._bootstrap, owner._control, owner._config, owner._window = raw, control, config, window
             owner._bindings = {"apiVersion": "serverware.nativePilotSupervisorBindings/v1",
                 "conductorInventorySha256": value["conductorInventorySha256"],
@@ -228,7 +253,7 @@ class SupervisorPolicy:
     def retain_measured_recipe(self, recipe):
         """Retain only the source-selected real recipe before process setup.
 
-        Legacy policy forbids a recipe. v2/v3/v4 require the already independently
+        Legacy policy forbids a recipe. v2-v5 require the already independently
         approved original pin, not future process-dependent configuration data.
         """
         from serverware.native_pilot_measured_configuration import MeasuredConfigurationRecipe
@@ -259,7 +284,7 @@ class SupervisorPolicy:
             retained = p.fields(process.bootstrap_originals(), BOOTSTRAP_FIELDS)
             p.require(all(type(retained[name]) is bytes and retained[name] == raw
                 for name, raw in self._bootstrap.items()))
-            if self._value["apiVersion"] in (MEASURED_POLICY_API, ENDPOINT_POLICY_API, INITIAL_POLICY_API):
+            if self._value["apiVersion"] in MEASURED_POLICY_APIS:
                 p.require(self._recipe_attempted and self._recipe is not None)
                 self._recipe.require_original(self._value["measuredRecipeSha256"])
                 self._recipe.bind(process)
@@ -293,7 +318,7 @@ class SupervisorPolicy:
         The actual pending request and original startup allowance are required.
         """
         self.check(process)
-        p.require(self._value["apiVersion"] in (MEASURED_POLICY_API, ENDPOINT_POLICY_API, INITIAL_POLICY_API)
+        p.require(self._value["apiVersion"] in MEASURED_POLICY_APIS
             and self._recipe is not None and self._measured_attempted)
         value = self._recipe.result(process=process, request=request)
         self.check(process)
@@ -303,19 +328,19 @@ class SupervisorPolicy:
     def endpoint_policy(self) -> dict:
         """Return the admitted static v3 preparation fragment, not live facts."""
         self.check()
-        p.require(self._value["apiVersion"] in (ENDPOINT_POLICY_API, INITIAL_POLICY_API))
+        p.require(self._value["apiVersion"] in ENDPOINT_POLICY_APIS)
         return copy.deepcopy(self._value["endpointPreparation"])
 
     def endpoint_deliveries(self) -> dict:
         """Return the three independently selected C9 public input fragments."""
         self.check()
-        p.require(self._value["apiVersion"] in (ENDPOINT_POLICY_API, INITIAL_POLICY_API))
+        p.require(self._value["apiVersion"] in ENDPOINT_POLICY_APIS)
         return copy.deepcopy(self._value["endpointDeliveries"])
 
     def endpoint_recipe_originals(self, *, process, request) -> dict:
         """Read only the same retained recipe's authenticated public originals."""
         self.check(process)
-        p.require(self._value["apiVersion"] in (ENDPOINT_POLICY_API, INITIAL_POLICY_API)
+        p.require(self._value["apiVersion"] in ENDPOINT_POLICY_APIS
             and self._recipe is not None and self._measured_attempted)
         self._recipe.require_original(self._value["measuredRecipeSha256"])
         value = self._recipe.public_originals(process=process, request=request)
@@ -324,11 +349,18 @@ class SupervisorPolicy:
         return value
 
     def ordinary_initial_policy(self, *, process, request) -> dict:
-        """Only v4 delegates initial history; the checked fragment is not a result."""
+        """Only v4/v5 delegate initial history; the fragment is not a result."""
         self.check(process)
         process.check_request(request)
-        p.require(self._value["apiVersion"] == INITIAL_POLICY_API)
+        p.require(self._value["apiVersion"] in INITIAL_POLICY_APIS)
         return copy.deepcopy(self._value["ordinaryInitialHistories"])
+
+    def ordinary_delivery_policy(self, *, process, request) -> dict:
+        """Only v5 delegates ordinary public-input installation and C9 decisions."""
+        self.check(process)
+        process.check_request(request)
+        p.require(self._value["apiVersion"] == DELIVERY_POLICY_API)
+        return copy.deepcopy(self._ordinary_deliveries)
 
     def precreation(self):
         self.check()
@@ -411,10 +443,13 @@ class SupervisorPolicy:
             from serverware.native_pilot_supervisor_process import AuthorityCoordinatorProcess
             p.require(type(self._process) is AuthorityCoordinatorProcess and self._process._closed
                 and self._process._result["status"] in ("not-started", "stopped-cleanup-complete", "failed-cleanup-complete"))
-            if self._value["apiVersion"] == INITIAL_POLICY_API:
+            if self._value["apiVersion"] == DELIVERY_POLICY_API:
+                from serverware import native_pilot_supervisor_ordinary_deliveries as ordinary_deliveries
+                ordinary_deliveries.close(self._process)
+            if self._value["apiVersion"] in INITIAL_POLICY_APIS:
                 from serverware import native_pilot_supervisor_initial_history as ordinary
                 ordinary.close(self._process)
-            if self._value["apiVersion"] in (ENDPOINT_POLICY_API, INITIAL_POLICY_API):
+            if self._value["apiVersion"] in ENDPOINT_POLICY_APIS:
                 from serverware import native_pilot_supervisor_endpoint_inputs as endpoint_inputs
                 # Close partial publication/directory owners only after genuine
                 # process cleanup. Failure retains this policy and its recipe.

@@ -70,24 +70,25 @@ class EndpointCommissioningGrammarTests(unittest.TestCase):
             ("endpoint-deliveries", "native-delivery-trustedTime"))
         self.assertEqual(supervisor.SUPPORTED_JOBS[:7], expected)
         self.assertEqual(supervisor._ORDER[:7], expected)
-        self.assertEqual(len(supervisor.SUPPORTED_JOBS), 32)
-        self.assertEqual(supervisor._ORDER[:32], supervisor.SUPPORTED_JOBS)
+        self.assertEqual(len(supervisor.SUPPORTED_JOBS), 37)
+        self.assertEqual(supervisor._ORDER[:37], supervisor.SUPPORTED_JOBS)
         self.assertEqual(len(supervisor._ORDER), 85)
-        self.assertEqual(len(supervisor.missing_jobs()), 53)
+        self.assertEqual(len(supervisor.missing_jobs()), 48)
         self.assertEqual(supervisor.missing_jobs()[0],
-            ("service-originals", "ordinary-delivery-durable-recovery-store"))
+            ("service-originals", "ordinary-generation-durable-recovery-store"))
         with self.assertRaises(ValueError):
             supervisor.require_complete_coverage()
 
     def test_policy_versions_keep_distinct_field_sets(self):
         self.assertEqual((len(policy.FIELDS), len(policy.MEASURED_FIELDS), len(policy.ENDPOINT_FIELDS),
-            len(policy.INITIAL_FIELDS)), (8, 9, 11, 12))
+            len(policy.INITIAL_FIELDS), len(policy.DELIVERY_FIELDS)), (8, 9, 11, 12, 13))
         self.assertEqual(set(policy.MEASURED_FIELDS) - set(policy.FIELDS), {"measuredRecipeSha256"})
         self.assertEqual(set(policy.ENDPOINT_FIELDS) - set(policy.MEASURED_FIELDS),
             {"endpointPreparation", "endpointDeliveries"})
         self.assertEqual(set(policy.INITIAL_FIELDS) - set(policy.ENDPOINT_FIELDS), {"ordinaryInitialHistories"})
+        self.assertEqual(set(policy.DELIVERY_FIELDS) - set(policy.INITIAL_FIELDS), {"ordinaryDeliveriesOriginal"})
         self.assertEqual(len({policy.POLICY_API, policy.MEASURED_POLICY_API, policy.ENDPOINT_POLICY_API,
-            policy.INITIAL_POLICY_API}), 4)
+            policy.INITIAL_POLICY_API, policy.DELIVERY_POLICY_API}), 5)
         self.assertEqual(policy.INITIAL_POLICY_API, "serverware.nativePilotSupervisorCommissioningPolicy/v4")
         self.assertEqual(len(policy.LEGACY_KEY_PURPOSES), 42)
 

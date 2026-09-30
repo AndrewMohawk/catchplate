@@ -7,8 +7,9 @@ inputs, issue checkpoint one, separately sign its retained anchor, and assemble
 an opt-in wrapper which the native service checks before state-writing gates.
 
 The `.373` source connects the ceremony to the independent supervisor through
-explicit commissioning policy/v4. Coverage is **32/85** fixed jobs: the previous
-seven plus 25 ceremony jobs. The same **53 existing jobs** remain unsupported,
+explicit commissioning policy/v4. Coverage at that checkpoint was **32/85** fixed
+jobs. The subsequent [ordinary delivery connection](native-pilot-ordinary-deliveries.md)
+brings coverage to **37/85**, with **48 jobs** still unsupported,
 so the coverage guard still refuses before spawn. This is source implementation,
 not an executed ceremony or pilot result; production acceptance remains **0/6**.
 
@@ -222,7 +223,8 @@ serialization. They do not execute protected owners, signers, installers or
 services. The original native source is unchanged and was not rebuilt.
 Commands, exact source archive and logs are retained at
 `codex-offload/serverware/engineering-builds/21eef81b-initial-commissioning-QZ3L75`.
-The service-owned copy installer and connected pilot acceptance remain open.
+The `.374` source adds the service-owned copy installer; its live execution and
+connected pilot acceptance remain open.
 
 The following is historical **`.372` verification**.
 

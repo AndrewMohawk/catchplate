@@ -127,8 +127,9 @@ class SyntheticInitialCommissioningControls(unittest.TestCase):
         for role in ROLES:
             self.assertNotEqual(initial_profile.INITIAL_CREDENTIAL_PATHS[role],
                 publication.DESTINATIONS["ordinary-initial-history-" + role])
-        self.assertEqual(supervisor.SUPPORTED_JOBS[7:], tuple(("service-originals", name) for name in expected))
-        self.assertEqual((len(supervisor._ORDER), len(supervisor.missing_jobs())), (85, 53))
+        self.assertEqual(supervisor.SUPPORTED_JOBS[7:32], tuple(("service-originals", name) for name in expected))
+        self.assertEqual(supervisor.SUPPORTED_JOBS[32:], tuple(("service-originals", "ordinary-delivery-" + role) for role in ROLES))
+        self.assertEqual((len(supervisor._ORDER), len(supervisor.missing_jobs())), (85, 48))
         with self.assertRaises(ValueError):
             supervisor.require_complete_coverage()
 

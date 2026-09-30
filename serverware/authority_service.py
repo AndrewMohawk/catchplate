@@ -75,6 +75,8 @@ from serverware import authority_setup_native_ca as setup_native_ca
 from serverware import authority_setup_native_canary as setup_native_canary
 from serverware import authority_setup_native_runtime as setup_native_runtime
 from serverware import authority_setup_native_runtime_policy as setup_native_runtime_policy
+from serverware import authority_setup_native_hardware as setup_native_hardware
+from serverware import authority_setup_native_hardware_policy as setup_native_hardware_policy
 from serverware import authority_policy_canary as policy_canary
 from serverware import authority_policy_canary_policy as policy_canary_policy
 from serverware import authority_policy_canary_heartbeat_policy as heartbeat_policy
@@ -1208,7 +1210,7 @@ class MeasuredConfiguration:
                 "authority configuration root signature is invalid"
             ) from exc
         if (
-            set(payload) - {setup_native_runtime_policy.FIELD, setup_native_ca.FIELD, setup_native_enrollment_policy.FIELD, evidence_policy.FIELD, transition_policy.FIELD, enrollment_policy.FIELD, oauth_activation_policy.FIELD, oauth_exchange_policy.FIELD, oauth_revocation_policy.FIELD, oauth_refresh_policy.FIELD, credential_currentness_policy.FIELD, oauth_refresh_cleanup_policy.FIELD, oauth_measured_refresh_policy.FIELD, oauth_measured_exchange_policy.FIELD, oauth_measured_setup_policy.FIELD, oauth_reconnect_policy.FIELD, oauth_measured_cleanup_policy.FIELD, oauth_pending_retirement_policy.FIELD, oauth_capture_retirement_policy.FIELD, policy_candidate_policy.FIELD, setup_policy_admission.FIELD, policy_canary_policy.FIELD, heartbeat_policy.FIELD, finalization_policy.FIELD, native_readiness_policy.FIELD, native_activation.FIELD, canary_delivery_policy.FIELD, oauth_succession_policy.FIELD}
+            set(payload) - {setup_native_hardware_policy.FIELD, setup_native_runtime_policy.FIELD, setup_native_ca.FIELD, setup_native_enrollment_policy.FIELD, evidence_policy.FIELD, transition_policy.FIELD, enrollment_policy.FIELD, oauth_activation_policy.FIELD, oauth_exchange_policy.FIELD, oauth_revocation_policy.FIELD, oauth_refresh_policy.FIELD, credential_currentness_policy.FIELD, oauth_refresh_cleanup_policy.FIELD, oauth_measured_refresh_policy.FIELD, oauth_measured_exchange_policy.FIELD, oauth_measured_setup_policy.FIELD, oauth_reconnect_policy.FIELD, oauth_measured_cleanup_policy.FIELD, oauth_pending_retirement_policy.FIELD, oauth_capture_retirement_policy.FIELD, policy_candidate_policy.FIELD, setup_policy_admission.FIELD, policy_canary_policy.FIELD, heartbeat_policy.FIELD, finalization_policy.FIELD, native_readiness_policy.FIELD, native_activation.FIELD, canary_delivery_policy.FIELD, oauth_succession_policy.FIELD}
                 != required_payload_fields
             or payload.get("schema") != CONFIG_SCHEMA
             or payload.get("sourceRevision") != SOURCE_REVISION
@@ -1312,6 +1314,7 @@ class MeasuredConfiguration:
             setup_native_enrollment_policy.validate_policy(payload.get(setup_native_enrollment_policy.FIELD), payload=payload, root_key=root_key)
             setup_native_ca.validate_policy(payload.get(setup_native_ca.FIELD), payload=payload, root_key=root_key)
             setup_native_runtime_policy.validate_policy(payload.get(setup_native_runtime_policy.FIELD), payload=payload, root_key=root_key)
+            setup_native_hardware_policy.validate_policy(payload.get(setup_native_hardware_policy.FIELD), payload=payload, root_key=root_key)
         except (TypeError, ValueError) as exc:
             raise AuthorityServiceError("authority native Setup enrollment admission is invalid") from exc
         try:
@@ -8340,10 +8343,11 @@ class AuthorityProcess:
             operation_id=operation_id,
         )
         from serverware import authority_publication_approval as publication_approval
-        if operation in (setup_native_runtime.ASSERTION_OPERATIONS | setup_native_canary.ASSERTION_OPERATIONS | setup_native_ca.ASSERTION_OPERATIONS | setup_native_enrollment.ASSERTION_OPERATIONS | publication_approval.assertion_operations() | oauth_activation.ASSERTION_OPERATIONS | oauth_exchange.ASSERTION_OPERATIONS | oauth_measured_exchange.ASSERTION_OPERATIONS | oauth_measured_setup.ASSERTION_OPERATIONS | oauth_setup.ASSERTION_OPERATIONS | oauth_reconnect.ASSERTION_OPERATIONS | policy_candidate.ASSERTION_OPERATIONS | setup_policy.ASSERTION_OPERATIONS | oauth_succession.ASSERTION_OPERATIONS):
+        if operation in (setup_native_hardware.ASSERTION_OPERATIONS | setup_native_runtime.ASSERTION_OPERATIONS | setup_native_canary.ASSERTION_OPERATIONS | setup_native_ca.ASSERTION_OPERATIONS | setup_native_enrollment.ASSERTION_OPERATIONS | publication_approval.assertion_operations() | oauth_activation.ASSERTION_OPERATIONS | oauth_exchange.ASSERTION_OPERATIONS | oauth_measured_exchange.ASSERTION_OPERATIONS | oauth_measured_setup.ASSERTION_OPERATIONS | oauth_setup.ASSERTION_OPERATIONS | oauth_reconnect.ASSERTION_OPERATIONS | policy_candidate.ASSERTION_OPERATIONS | setup_policy.ASSERTION_OPERATIONS | oauth_succession.ASSERTION_OPERATIONS):
             # This is a new, independently admitted purpose. Legacy argument
             # adapters and physical-evidence receipt families are not relabeled.
-            selected_profile = (setup_native_runtime if operation in setup_native_runtime.OPERATIONS else
+            selected_profile = (setup_native_hardware if operation in setup_native_hardware.OPERATIONS else
+                setup_native_runtime if operation in setup_native_runtime.OPERATIONS else
                 setup_native_canary if operation in setup_native_canary.OPERATIONS else
                 setup_native_ca if operation in setup_native_ca.OPERATIONS else
                 setup_native_enrollment if operation in setup_native_enrollment.OPERATIONS else
@@ -8383,6 +8387,9 @@ class AuthorityProcess:
                     configuration_payload=self.configuration.payload, root_key=self.configuration.root_key,
                     now_epoch_ns=time.time_ns())
             policy = values["credential_policy"]
+            if operation in setup_native_hardware.OPERATIONS:
+                setup_native_hardware_policy.verify_original(operation, values,
+                    configuration_payload=self.configuration.payload, root_key=self.configuration.root_key, now_epoch_ns=time.time_ns())
             if operation in setup_native_runtime.OPERATIONS:
                 setup_native_runtime_policy.verify_original(operation, values,
                     configuration_payload=self.configuration.payload, root_key=self.configuration.root_key, now_epoch_ns=time.time_ns())
@@ -8657,6 +8664,12 @@ class AuthorityProcess:
                 configuration_payload=self.configuration.payload, root_key=self.configuration.root_key, now_epoch_ns=time.time_ns())
             if setup_native_runtime.request_digest(operation, original_values) != request_digest:
                 raise ValueError("native Setup runtime request digest differs")
+        if operation in setup_native_hardware.OPERATIONS:
+            original_values = {name: value for name, value in arguments.items() if name != "authn_evidence"}
+            setup_native_hardware_policy.verify_original(operation, original_values,
+                configuration_payload=self.configuration.payload, root_key=self.configuration.root_key, now_epoch_ns=time.time_ns())
+            if setup_native_hardware.request_digest(operation, original_values) != request_digest:
+                raise ValueError("native Setup hardware request digest differs")
         if operation in setup_native_ca.OPERATIONS:
             original_values = {name: value for name, value in arguments.items() if name != "authn_evidence"}
             setup_native_ca.verify_original(operation, original_values,
@@ -9297,6 +9310,9 @@ class AuthorityProcess:
                 configuration_payload=self.configuration.payload, root_key=self.configuration.root_key, now_epoch_ns=time.time_ns())
         if planner_request["operation"] in setup_native_runtime.OPERATIONS:
             setup_native_runtime_policy.verify_original(planner_request["operation"], planner_request["typedRequest"]["arguments"],
+                configuration_payload=self.configuration.payload, root_key=self.configuration.root_key, now_epoch_ns=time.time_ns())
+        if planner_request["operation"] in setup_native_hardware.OPERATIONS:
+            setup_native_hardware_policy.verify_original(planner_request["operation"], planner_request["typedRequest"]["arguments"],
                 configuration_payload=self.configuration.payload, root_key=self.configuration.root_key, now_epoch_ns=time.time_ns())
         if planner_request["operation"] in setup_native_ca.OPERATIONS:
             setup_native_ca.verify_original(planner_request["operation"], planner_request["typedRequest"]["arguments"],

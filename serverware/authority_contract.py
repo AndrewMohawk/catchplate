@@ -11,7 +11,7 @@ from serverware import authority_oauth_retirement_succession_catalog as retireme
 from serverware.authority_query_read_work import _ValidationWork
 
 
-SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.344"
+SOURCE_REVISION = "serverware.policyCandidateAuthoritySource/2026-07-30.345"
 SCHEMA_VERSION = 9
 CONTRACT_SCHEMA = "serverware.policyAuthorityOperationContract/v3"
 BUSINESS_INTENT_SCHEMA = "serverware.policyAuthorityBusinessIntent/v2"
@@ -265,6 +265,7 @@ _AUDIT_COUNTER_REPLACEMENT_OPERATIONS = frozenset({
     "setup.native-ca.prepare", "setup.native-ca.complete",
     "setup.native-canary.record",
     "setup.native-runtime.prepare", "setup.native-runtime.complete",
+    "setup.native-hardware.prepare", "setup.native-hardware.complete",
     "setup.native-enrollment.request", "setup.native-enrollment.decide",
     "setup.native-enrollment.prepare", "setup.native-enrollment.complete",
     "native-policy-activation.request", "native-policy-activation.decide", "native-policy-activation.consume",
@@ -1478,6 +1479,7 @@ V9_ADDITIONAL_PROTECTED_TABLES = tuple(sorted({
     "setup_native_ca_installations",
     "setup_native_canary_associations",
     "setup_native_runtime_attempts",
+    "setup_native_hardware_attempts",
     "policy_native_canary_ready", "policy_native_canary_heads", "policy_native_activation_preparations", "policy_native_activation_finalizations", "policy_native_activation_holds",
     "setup_policy_continuations",
     "policy_canary_delivery_slots", "policy_canary_delivery_heads", "policy_canary_delivery_parts",
@@ -1665,6 +1667,21 @@ _OPERATIONS = {
                 "rbac_role_bindings", "metadata_audit_outbox", "webauthn_credentials", "webauthn_challenges", "webauthn_trust_publication_high_water", "webauthn_trust_publications") + _PHASE2_AGGREGATE,
             writes=("setup_native_runtime_attempts", "metadata_audit_outbox") + _PHASE2_AGGREGATE,
             mutation_kinds={"setup_native_runtime_attempts": ("INSERT", "UPDATE")},
+            webauthn="bound-verified-assertion-receipt" if phase == "prepare" else "not-required",
+            proof_primitives=("primary-key-row", "bounded-limit-plus-one", "aggregate-high-water", "capacity-reservation"),
+            maximum_query_rows=64, maximum_mutations=8, maximum_work_units=8192,
+        ) for phase in ("prepare", "complete")
+    },
+    **{
+        "setup.native-hardware." + phase: _spec(
+            "serverware_policy_authority_setup_native_hardware_" + phase,
+            reads=("setup_native_hardware_attempts", "setup_native_runtime_attempts", "setup_native_canary_associations", "setup_native_ca_installations", "setup_native_enrollments",
+                "setup_policy_continuations", "setup_sessions", "credentials", "credential_generations", "credential_currentness_roots",
+                "policy_high_water", "policy_publications", "policy_candidate_artifacts", "policy_canary_assignments", "policy_canary_heads",
+                "policy_native_canary_ready", "policy_native_canary_heads", "policy_native_activation_preparations", "policy_native_activation_finalizations",
+                "rbac_role_bindings", "metadata_audit_outbox", "webauthn_credentials", "webauthn_challenges", "webauthn_trust_publication_high_water", "webauthn_trust_publications") + _PHASE2_AGGREGATE,
+            writes=("setup_native_hardware_attempts", "metadata_audit_outbox") + _PHASE2_AGGREGATE,
+            mutation_kinds={"setup_native_hardware_attempts": ("INSERT", "UPDATE")},
             webauthn="bound-verified-assertion-receipt" if phase == "prepare" else "not-required",
             proof_primitives=("primary-key-row", "bounded-limit-plus-one", "aggregate-high-water", "capacity-reservation"),
             maximum_query_rows=64, maximum_mutations=8, maximum_work_units=8192,

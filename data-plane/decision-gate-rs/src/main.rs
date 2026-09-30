@@ -36,6 +36,7 @@ mod native_proof_signer;
 mod native_response_attestation;
 mod native_loaded_policy;
 mod native_generation_origin;
+mod native_setup_hardware;
 mod credential_currentness;
 mod native_runtime_lifetime;
 mod native_background_workers;
@@ -49680,6 +49681,7 @@ fn handle_gate_connection(
         && (matches!(head.target.as_str(), "/v1/decide" | "/v1/grants")
             || head.target == serverware_decision_gate::native_loaded_policy_v1::PATH
             || head.target == serverware_decision_gate::native_generation_origin_v1::PATH
+            || head.target == serverware_decision_gate::native_setup_hardware_v1::PATH
             || policy_shadow_install_post
             || policy_shadow_activation_post);
     let proxy_request = head.method == "CONNECT" || absolute_form_target(&head.target);
@@ -49702,6 +49704,10 @@ fn handle_gate_connection(
         }
         if head.method == "POST" && head.target == serverware_decision_gate::native_loaded_policy_v1::PATH {
             native_loaded_policy::handle(&state,head,&mut stream);
+            return;
+        }
+        if head.method == "POST" && head.target == serverware_decision_gate::native_setup_hardware_v1::PATH {
+            native_setup_hardware::handle(&state,head,&mut stream);
             return;
         }
         if head.method=="POST" && head.target==serverware_decision_gate::native_generation_origin_v1::PATH {

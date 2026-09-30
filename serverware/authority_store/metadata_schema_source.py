@@ -6,6 +6,26 @@ from serverware.authority_store.v9_schema_source import authority_v9_schema_sour
 
 def metadata_base_schema_source() -> str:
     return """
+            CREATE TABLE IF NOT EXISTS setup_native_hardware_attempts (
+                session_id TEXT PRIMARY KEY, revision BIGINT NOT NULL, phase TEXT NOT NULL, owner_id TEXT NOT NULL,
+                inputs_original TEXT NOT NULL, attempt_original TEXT NOT NULL, attempt_sha256 TEXT NOT NULL UNIQUE,
+                prepare_request_digest TEXT NOT NULL UNIQUE, prepare_audit_id TEXT NOT NULL UNIQUE,
+                evidence_original TEXT, hardware_receipt_original TEXT, proxy_receipt_original TEXT, result_original TEXT,
+                complete_request_digest TEXT UNIQUE, configuration_digest TEXT NOT NULL, created_at TEXT NOT NULL, completed_at TEXT,
+                CHECK (length(session_id) = 36 AND length(owner_id) BETWEEN 1 AND 1024 AND length(prepare_audit_id) = 36),
+                CHECK (length(attempt_sha256) = 71 AND length(prepare_request_digest) = 71 AND length(configuration_digest) = 71),
+                CHECK (length(inputs_original) BETWEEN 2 AND 4194304 AND length(attempt_original) BETWEEN 2 AND 8192),
+                CHECK ((revision = 0 AND phase = 'hardware_outcome_unknown' AND evidence_original IS NULL AND hardware_receipt_original IS NULL
+                    AND proxy_receipt_original IS NULL AND result_original IS NULL AND complete_request_digest IS NULL AND completed_at IS NULL)
+                    OR (revision = 1 AND phase = 'hardware_proxy_verified' AND evidence_original IS NOT NULL AND hardware_receipt_original IS NOT NULL
+                    AND proxy_receipt_original IS NOT NULL AND result_original IS NOT NULL AND complete_request_digest IS NOT NULL AND completed_at IS NOT NULL)),
+                CHECK (evidence_original IS NULL OR length(evidence_original) BETWEEN 2 AND 65536),
+                CHECK (hardware_receipt_original IS NULL OR length(hardware_receipt_original) BETWEEN 2 AND 16384),
+                CHECK (proxy_receipt_original IS NULL OR length(proxy_receipt_original) BETWEEN 2 AND 16384),
+                CHECK (result_original IS NULL OR length(result_original) BETWEEN 2 AND 8192),
+                CHECK (complete_request_digest IS NULL OR length(complete_request_digest) = 71)
+            );
+
             CREATE TABLE IF NOT EXISTS setup_native_runtime_attempts (
                 session_id TEXT PRIMARY KEY, revision BIGINT NOT NULL, phase TEXT NOT NULL, owner_id TEXT NOT NULL,
                 association_sha256 TEXT NOT NULL, scope_original TEXT NOT NULL, attempt_original TEXT NOT NULL,

@@ -49,6 +49,7 @@ pub mod native_lease_profile_v1;
 pub mod native_currentness_v1;
 pub mod native_loaded_policy_v1;
 pub mod native_generation_origin_v1;
+pub mod native_setup_hardware_v1;
 pub mod native_target_dispatch_v1;
 pub mod native_shadow_workers;
 pub mod native_staging_v1;
@@ -1758,6 +1759,47 @@ impl CustodyRuntime {
         self.verify_native_process()?;
         Ok(serde_json::json!({"statement":statement,
             "signature":format!("ed25519:{}",general_purpose::URL_SAFE_NO_PAD.encode(signature)),
+            "nativeKeyEvidence":{"apiVersion":"serverware.nativeResponseProofKeyEvidence/v1",
+                "attestationDocumentB64":general_purpose::URL_SAFE_NO_PAD.encode(fresh.document()),
+                "responseProofPublicKey":general_purpose::URL_SAFE_NO_PAD.encode(fresh.public_key())}}))
+    }
+
+    /// Fixed Setup challenge, signed by the retained native role-4 owner only.
+    /// Association hashes never become assertions that Linux was measured.
+    pub fn sign_native_setup_hardware(&self,identity:&mut EnclaveRuntimeIdentityV1,
+        statement:&native_setup_hardware_v1::Statement,deadline:u64)->Result<Value,ProtocolError> {
+        self.verify_native_process()?;
+        let CustodySigningBackend::Native {owner,quote,..}=&self.signing_backend else {
+            return Err(invalid_statement("Setup hardware requires native custody"));
+        };
+        let now=||SystemTime::now().duration_since(UNIX_EPOCH).map_err(|_|invalid_statement("Setup hardware clock"))?
+            .as_nanos().try_into().map_err(|_|invalid_statement("Setup hardware clock overflow"));
+        statement.validate(now()?).map_err(native_proof_error)?;
+        if statement.boot_id!=self.boot_id || statement.key_id!=self.key_id
+            || Some(statement.control_plane_response_signing_key_id.as_str())!=self.control_plane_response_signing_key_id.as_deref() {
+            return Err(invalid_statement("Setup hardware custody identity differs"));
+        }
+        let mut owner=owner.lock().map_err(|_|invalid_statement("Setup hardware owner poisoned"))?;
+        let deadline=deadline.min(owner.deadline()).min(identity.deadline());
+        owner.verify_identity(identity,deadline).map_err(native_proof_error)?;
+        let mut policy=[0;32]; hex::decode_to_slice(&statement.attempt.policy_hash[7..],&mut policy)
+            .map_err(|_|invalid_statement("Setup hardware policy digest"))?;
+        owner.verify_policy_commitment(policy,deadline).map_err(native_proof_error)?;
+        let key=owner.public_key_bytes().map_err(native_proof_error)?;
+        if quote.public_key()!=key.as_slice() || sha256_prefixed(&ed25519_spki_der(&key))!=self.key_id {
+            return Err(invalid_statement("Setup hardware original key differs"));
+        }
+        let signature=owner.sign(&statement.preimage().map_err(native_proof_error)?,deadline).map_err(native_proof_error)?;
+        let nonce=statement.nonce(&signature).map_err(native_proof_error)?;
+        let fresh=owner.quote_fresh(identity,nonce,deadline).map_err(native_proof_error)?;
+        if fresh.public_key()!=key.as_slice() || fresh.user_data()!=quote.user_data() || fresh.nonce()!=&nonce
+            || fresh.user_data().len()>512 || fresh.document().is_empty() || fresh.document().len()>12*1024 {
+            return Err(invalid_statement("Setup hardware quote lost fixed purpose/key/scope"));
+        }
+        statement.validate(now()?).map_err(native_proof_error)?;
+        owner.verify_live(deadline).map_err(native_proof_error)?; identity.verify_live(deadline).map_err(native_proof_error)?;
+        self.verify_native_process()?;
+        Ok(serde_json::json!({"statement":statement,"signature":format!("ed25519:{}",general_purpose::URL_SAFE_NO_PAD.encode(signature)),
             "nativeKeyEvidence":{"apiVersion":"serverware.nativeResponseProofKeyEvidence/v1",
                 "attestationDocumentB64":general_purpose::URL_SAFE_NO_PAD.encode(fresh.document()),
                 "responseProofPublicKey":general_purpose::URL_SAFE_NO_PAD.encode(fresh.public_key())}}))

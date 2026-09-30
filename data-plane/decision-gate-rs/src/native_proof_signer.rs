@@ -113,6 +113,18 @@ impl CustodySignerTransport {
         self.verify_live()?; Ok(value)
     }
 
+    pub(super) fn setup_hardware_evidence(&self,identity:&mut EnclaveRuntimeIdentityV1,
+        prepared:&native_setup_hardware::Prepared,deadline:u64)->Result<Value,String> {
+        let Self::Native(owner)=self else {return Err("Setup hardware refuses UDS custody".into());};
+        self.verify_live()?;
+        owner.active.fetch_update(Ordering::AcqRel,Ordering::Acquire,
+            |active|(active<CUSTODY_MAX_CONCURRENT_CONNECTIONS).then_some(active+1))
+            .map_err(|_|"native Setup hardware concurrency bound")?;
+        let _permit=NativeOperationPermit(&owner.active);
+        let value=owner.runtime.sign_native_setup_hardware(identity,prepared.statement(),deadline).map_err(|e|e.to_string())?;
+        self.verify_live()?; Ok(value)
+    }
+
     pub(super) fn currentness_evidence(&self, identity: &mut EnclaveRuntimeIdentityV1,
         prepared: &credential_currentness::PreparedEvidence, deadline: u64) -> Result<Value, String> {
         let Self::Native(owner) = self else { return Err("currentness refuses unmeasured UDS custody".to_owned()); };

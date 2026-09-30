@@ -1587,6 +1587,15 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/native_generation_origin_relay.py \
 	serverware/native_shadow_spool_inputs.py \
 	serverware/native_shadow_spool_artifacts.py \
+	scripts/verify_native_setup_hardware.py \
+	scripts/verify_native_setup_proxy.py \
+	serverware/authority_setup_native_hardware.py \
+	serverware/authority_setup_native_hardware_policy.py \
+	serverware/authority_transition_setup_native_hardware.py \
+	serverware/control_plane_setup_native_hardware.py \
+	serverware/native_setup_independent_originals.py \
+	serverware/native_setup_independent_verifier.py \
+	serverware/portal_setup_native_hardware.py \
 	scripts/issue_native_generation_origin.py \
 	scripts/package_native_generation_origin_runtime.py \
 	scripts/verify_native_shadow_custody.py \
@@ -4203,6 +4212,15 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/native_generation_origin_relay.py \
 				serverware/native_shadow_spool_inputs.py \
 				serverware/native_shadow_spool_artifacts.py \
+				scripts/verify_native_setup_hardware.py \
+				scripts/verify_native_setup_proxy.py \
+				serverware/authority_setup_native_hardware.py \
+				serverware/authority_setup_native_hardware_policy.py \
+				serverware/authority_transition_setup_native_hardware.py \
+				serverware/control_plane_setup_native_hardware.py \
+				serverware/native_setup_independent_originals.py \
+				serverware/native_setup_independent_verifier.py \
+				serverware/portal_setup_native_hardware.py \
 				scripts/issue_native_generation_origin.py \
 				scripts/package_native_generation_origin_runtime.py \
 				scripts/verify_native_shadow_custody.py \
@@ -4510,6 +4528,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/commit_request.rs \
 				data-plane/decision-gate-rs/src/native_generation_origin.rs \
 				data-plane/decision-gate-rs/src/native_generation_origin_v1.rs \
+				data-plane/decision-gate-rs/src/native_setup_hardware.rs \
+				data-plane/decision-gate-rs/src/native_setup_hardware_v1.rs \
 				data-plane/decision-gate-rs/src/bin/serverware-native-generation-origin-issuer.rs \
 				data-plane/decision-gate-rs/src/native_shadow_verifier_runtime_v1/origin_issuer.rs \
 				data-plane/decision-gate-rs/src/native_shadow_verifier_supervisor_v1/origin_issuer.rs \
@@ -4920,6 +4940,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-shadow-driver-continuation.v1.schema.json \
 				schemas/native-shadow-driver-lifecycle.v1.schema.json \
 				schemas/native-shadow-gate-facade.v1.schema.json \
+				schemas/setup-native-hardware.v1.schema.json \
 				schemas/native-shadow-driver-outgoing.v1.schema.json \
 				schemas/native-shadow-bridge-admission.v1.schema.json \
 				schemas/custody-service-generation-admission.v1.schema.json \

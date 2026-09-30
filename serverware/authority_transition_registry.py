@@ -13,6 +13,7 @@ from serverware import authority_transition_setup_native_enrollment
 from serverware import authority_transition_setup_native_ca
 from serverware import authority_transition_setup_native_canary
 from serverware import authority_transition_setup_native_runtime
+from serverware import authority_transition_setup_native_hardware
 from serverware import authority_transition_policy_canary
 from serverware import authority_transition_policy_canary_delivery
 from serverware import authority_transition_policy_native_activation
@@ -61,6 +62,7 @@ def _merge_kernels() -> dict[
         authority_transition_setup_native_ca.KERNELS,
         authority_transition_setup_native_canary.KERNELS,
         authority_transition_setup_native_runtime.KERNELS,
+        authority_transition_setup_native_hardware.KERNELS,
         authority_transition_policy_canary.KERNELS,
         authority_transition_policy_canary_delivery.KERNELS,
         authority_transition_policy_native_activation.KERNELS,

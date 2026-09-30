@@ -214,6 +214,17 @@ def native_setup_runtime_owner():
     return _owner, chosen, now
 
 
+def native_setup_hardware_owner():
+    """Same independently retained signed configuration, distinct Setup purpose."""
+    from serverware import authority_setup_native_hardware_policy as hardware
+    profile.require(selected() and type(_owner) is _Cold)
+    now = _owner.check()
+    chosen = hardware.validate_policy(_owner.payload.get(hardware.FIELD), payload=_owner.payload, root_key=_owner.root)
+    profile.require(chosen is not None and policy.full_configuration_digest(_owner.payload) == _owner.configuration_digest
+        and all(hardware.p.OPERATIONS <= set(_owner.payload["roles"][role].get("enabledOperations", ())) for role in ("verifier", "planner")))
+    return _owner, chosen, now
+
+
 class _Peer:
     def __init__(self, transport):
         self.transport, self.tls = transport, transport.get_extra_info("ssl_object")

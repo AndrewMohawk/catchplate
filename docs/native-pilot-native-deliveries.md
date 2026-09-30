@@ -1,3 +1,5 @@
+> Publication note: deployment-specific addresses, identities and paths in this document are example placeholders, not a public service or release-verification evidence.
+
 # Remaining native delivery commissioning
 
 The `.376` source connects all seven remaining native C9 delivery decisions.
@@ -92,8 +94,33 @@ evidence remain required for production completion.
 
 ## Focused verification
 
-Verification for this connected source batch is pending. Planned checks cover
-closed policy/input/result contracts and synthetic signatures, not real
-protected owners or deployed service behavior. No cloud or paid action is
-part of this batch. Unchanged native sources will not be rebuilt merely for
-these Python commissioning changes.
+Exact source **`fb339c26cf0a843872fe5ddb76768f47468db9be`** passed one focused
+network-isolated Python **3.11.15** run: **67 controls** (55 prior and 12 new),
+grammar checks for twelve changed Python files, both Make source inventories
+and **52 relative documentation links**. The command used an empty environment,
+`-I -S -B`, CPU 0, a private network namespace and a 120-second timeout.
+It started at `2026-09-30T23:05:40.458432146Z`, ended at
+`2026-09-30T23:05:45.058512215Z` and exited **0**. No retries were needed.
+
+The new controls cover all seven complete inputs and C9 signatures, closed
+roles/markers/metadata, fixed pins, original windows and exact signed role-leaf
+bindings. Test keys, process observations and policies are synthetic in-memory
+data. The reused assignment fixture leaves unrelated policy fields empty and
+does not demonstrate complete native assignment admission. No real owner,
+issuer entrypoint, protected installer or service was executed; no DB/app/
+authority-store module was imported. The retained engineering dependency
+candidate is not an approved release snapshot. Rust, schemas and dependency
+lock were unchanged; no native rebuild, cloud or paid action ran.
+
+Durable evidence is retained at:
+
+```text
+/home/catchplate/codex-offload/serverware/engineering-builds/fb339c26-native-deliveries-e3ALOo/
+```
+
+The directory contains the frozen source archive and commit, exact runner/check
+scripts, full result log, machine-readable result and verified `SHA256SUMS`.
+The archive is **84,930,560 bytes**, SHA256
+`888a7a8b123d3d192eeba23287bcbc03cb3577422f2aa9beceeb2d7193cd718e`.
+These results do not establish a runnable pilot or independent production
+acceptance. All six production gates remain open.

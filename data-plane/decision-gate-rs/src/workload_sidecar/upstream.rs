@@ -362,7 +362,7 @@ impl Tunnel {
     pub(super) fn check(&mut self) -> Result<(), String> {
         self.source.check()?;
         self.bounds.check()?;
-        self.transport.check().map_err(|_| "sidecar tunnel original principal/session expired")
+        self.transport.check().map_err(|_| "sidecar tunnel original principal/session expired".to_owned())
     }
     pub(super) fn step(&mut self, outgoing: &[u8], incoming: &mut [u8])
         -> Result<(usize, usize, bool), String> {

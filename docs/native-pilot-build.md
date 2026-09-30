@@ -306,7 +306,34 @@ build is not live readiness or production acceptance.
 
 ## Live preparation remains with the genuine owners
 
-The latest consolidated engineering attempt (15) used the pushed single-bridge
+The latest consolidated engineering attempt (16) successfully built both images
+from source `172f6b4e42f552ced2aacdb582791e80d28dfc62`, including the native trust
+and retained-publication recovery batch. It used the unchanged unpublished
+`v3-candidate-cba01916` dependencies in an isolated engineering checkout. All
+five previously pinned base images had to be restored at their exact Linux/amd64
+digests before the sole build invocation; no base or dependency pin changed.
+
+Session `55371` ran from `2026-09-30T13:40:45.948312895Z` to
+`2026-09-30T13:53:29.136143417Z` and exited 0. Glibc completed in 9m26s followed
+by the build-internal ledger initialization; static musl completed in 10m47s.
+The broker, role-key provisioner and shadow-key delivery Python packages also
+completed. Actual worker observations confirm the same per-RUN 8-CPU, 24-GiB,
+no-swap bounds, not an aggregate build limit.
+
+- Control: `sha256:3d4a50b5714d53454409975cfd017cd2de2899afb89d44ea4c43b96ab84d5735`
+- Gate: `sha256:3c9b2f2fa56d727c293534e88ad911ce503cefd118f7c48803b42d123eb6d2b3`
+
+The final report records `ok:true`, `no_shell.ok:true`,
+`identity_mode:development-dirty-tree` and `production_release_eligible:false`.
+Original outputs, invocation, cache restoration, resource observations and the
+bounded result summary are retained with verified hashes under
+`codex-offload/serverware/engineering-builds/172f6b4e-uessyy`. The report SHA-256
+is `bdf6db64b432b4f29d51b40ae6abfb85143561a87eb287eb787ba9e9cb30f366`.
+Stopped-container packaging checks are not project tests or a deployed pilot.
+The later `b6087f5d` compiler-input isolation is not included in this result and
+has not been built or benchmarked. No further build is implied by a status update.
+
+The preceding engineering attempt (15) used the pushed single-bridge
 source `d865eeb80f4ce72cd5b73fab0ca2472b939d451e` and the same unchanged
 unpublished candidate in an isolated checkout. Session `49282` ran from
 `2026-09-30T12:59:42.075602505Z` to `2026-09-30T13:06:02.035699165Z`, exiting 1.
@@ -316,15 +343,16 @@ The gate's glibc build exited 101 with one unique `E0412`: the new driver-bindin
 module lacked the `ExpectedPeerCredentialV3` import. That error appeared in
 12 target diagnostics; its import is now corrected in source. The concurrent
 musl step was canceled, not successful. There is no completed gate image or
-final two-image report for this attempt, and the fix has not been rebuilt.
+final two-image report for that attempt. The correction was subsequently
+compiled successfully in attempt 16.
 
 The full log, exact command/source selection, diagnostic index and worker-limit
 observations are retained under
 `codex-offload/serverware/engineering-builds/d865eeb8-suhpli` with a verified
 `SHA256SUMS` manifest. Both sampled Rust workers had the selected 8-CPU,
 24-GiB, no-swap limits; those limits remain per RUN, not aggregate. No broad
-test suite, pilot launch, cloud provisioning or automatic retry ran. The next
-compilation follows the connected implementation batch, not each individual edit.
+test suite, pilot launch, cloud provisioning or automatic retry ran. Attempt 16
+followed the connected implementation batch, not each individual edit.
 
 Engineering attempt 14 built both images successfully from exact source
 `253730f074040392fbf0d50a1c4924b620a9c341`, using the unchanged, unpublished

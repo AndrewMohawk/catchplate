@@ -29,8 +29,9 @@ It builds on the [single-bridge launch](docs/native-pilot-launch.md), [pilot art
 and [independent Setup issuer packages](docs/native-setup-independent-issuer-installation.md).
 The [dependency candidate](docs/production-dependency-snapshot.md#current-candidate-evidence)
 is built: 245 Rust crates and 31 Python wheels, not yet independently reviewed or
-published. The successful engineering image build uses those bytes in an isolated
-non-release checkout; canonical reviewed pins are unchanged. Next are assembled artifacts
+published. Both service images built successfully from `.351` source `172f6b4e`
+using those bytes in an isolated non-release checkout; canonical reviewed pins
+are unchanged. This is not a deployed pilot. Next are assembled artifacts
 and provisioned inputs, then one connected pilot acceptance run. Broad testing
 remains deferred until that build is connected.
 

@@ -1,6 +1,7 @@
 # Native workload trust verification
 
-Status: source-only, unbuilt and unexecuted. This is partial N04 integration,
+Status: native trust source at `172f6b4e` compiled in engineering attempt 16;
+its startup and handshake flows remain unexecuted. This is partial N04 integration,
 not a provisioned identity, tested pilot or production enrollment receipt.
 
 A workload needs to know both **which proxy it reached** and **which credential

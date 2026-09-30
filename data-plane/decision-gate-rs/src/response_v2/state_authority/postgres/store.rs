@@ -1153,11 +1153,6 @@ where
                     canonical_jcs_bytes(&mutation.generation)?;
                 let generation_sha256 =
                     sha256_digest(&canonical_generation);
-                // Selection is from the independently pinned original, not a
-                // missing-column probe or a caller success/profile flag.
-                super::sequence_originals::require_database(
-                    transaction.as_mut(), &mutation.generation.migration_sha256,
-                )?;
                 if generation_sha256
                     != mutation.canonical_generation_sha256
                     || generation_sha256
@@ -1205,6 +1200,13 @@ where
                 let existing = transaction.query_optional(
                     statements::LOCK_GENERATION_SQL,
                     &[text(&frame.request.generation_id)],
+                )?;
+                // Selection is from the independently pinned original, not a
+                // missing-column probe or a caller success/profile flag.
+                // Retain the database guard in this same install transaction,
+                // before either replay handling or any generation inserts.
+                super::sequence_originals::require_database(
+                    transaction.as_mut(), &mutation.generation.migration_sha256,
                 )?;
                 if let Some(existing_generation) = existing {
                     let (stored, status, stored_sha256) =

@@ -1,6 +1,7 @@
 //! Private inherited router endpoint. This is not a general measurement RPC.
 use super::wire::{self, require, Bootstrap, Operation, Phase, Request};
-use super::super::{guest_delivery, peer_measurement as peer, Config, V2RuntimeError};
+use super::super::{guest_delivery, peer_measurement as peer,
+    RootOwnedResponseObservationV2Config as Config, V2RuntimeError};
 use serde::{Deserialize, Serialize};
 use std::{fs::File, io, mem::{size_of, zeroed}, os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd},
     os::unix::fs::{FileExt, MetadataExt}, sync::{Arc, Mutex, TryLockError, atomic::{AtomicBool, Ordering}},

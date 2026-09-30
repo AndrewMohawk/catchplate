@@ -2,7 +2,8 @@
 use super::{config::CustodyServiceRole as Role,guest_delivery::{PreparedRoleDelivery,ProvisioningSeed},
     guest_role_provisioning_files::Outputs,guest_role_provisioning_process::{Process,Slots}};
 use crate::{native_serving_privileges::{Association,Owner as ServingOwner,Prepared},
-    native_secret_broker_v1::ImageConfiguration,enclave_nsm_v1::NsmDeviceV1,
+    native_secret_broker_v1::ImageConfiguration,
+    enclave_runtime_identity_v1::quote_guest_role_key_recipient,
     enclave_vsock_v1::VsockStreamV1,native_response_profile_v1::canonical_ascii_bytes};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD,Engine as _};
 use serde::{Deserialize,Serialize};
@@ -110,13 +111,12 @@ impl Owner {
             "kmsKeyId":config.kms_key_id,"ciphertextBlobSha256":config.ciphertext_blob_sha256,"encryptionContext":config.encryption_context,
             "recipientPublicKeySha256":sha(&public),"nonce":URL_SAFE_NO_PAD.encode(&nonce)});
         let request_raw=canonical_ascii_bytes(&request)?;let request_sha=sha(&request_raw);
-        let mut quote_binding=b"serverware/native-role-key-recipient/v1\0".to_vec();quote_binding.extend_from_slice(&Sha256::digest(&request_raw));
         // A fresh fixed-ioctl owner at root, not a fabricated serving identity
         // or caller-supplied success. KMS remains the independent quote verifier.
         prepared.check()?;
         for original in originals {original.check().map_err(|e|e.to_string())?;}
-        let mut nsm=NsmDeviceV1::open(deadline)?;
-        let quote=nsm.attest(&public,&nonce,&quote_binding,deadline)?;
+        let quote=quote_guest_role_key_recipient(prepared,&public,&nonce,
+            Sha256::digest(&request_raw).into(),deadline)?;
         let response=kms(&config,&request,&request_sha,&quote,deadline)?;
         let done=document(&child.exchange(&canonical_ascii_bytes(&json!({"apiVersion":CHANNEL,"phase":"provision",
             "request":request,"requestSha256":request_sha,"ciphertextForRecipient":response["ciphertextForRecipient"],

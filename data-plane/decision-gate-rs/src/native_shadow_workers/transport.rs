@@ -3,7 +3,7 @@ use super::wire::{require, now, MAX_FRAME};
 use std::{mem::{size_of, zeroed}, os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd}};
 const SO_PASSPIDFD: i32 = 76;
 const SCM_PIDFD: i32 = 4;
-pub(super) use crate::response_observation_v2_custody::peer_measurement::{open_peer_pidfd, prove_owned_process, ensure_pidfd_alive};
+pub(super) use crate::response_observation_v2::custody::peer_measurement::{open_peer_pidfd, prove_owned_process, ensure_pidfd_alive};
 
 pub(super) fn pair() -> Result<(OwnedFd, OwnedFd), String> {
     let mut fds = [-1; 2];

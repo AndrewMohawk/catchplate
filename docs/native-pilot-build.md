@@ -178,6 +178,14 @@ build is not live readiness or production acceptance.
 
 ## Live preparation remains with the genuine owners
 
+The first engineering assembly used source `0fdce4ef` and the unpublished
+`v3-candidate-cba01916` dependencies on 2026-09-30. It produced the Linux/amd64
+control image `sha256:c28fafd8a60b7a55bc3bfadceee50d22358d054f5c1f334a1b104666208db401`,
+explicitly labeled `production_release_eligible=false`. The proxy compilation
+stopped with 18 Rust integration errors; no gate image, complete two-image
+report, service deployment or pilot acceptance resulted from that attempt.
+The engineering resource flags were accepted and retained throughout.
+
 The source-fixed prerequisite list points at the actual existing callers:
 `ParkedProofCohort.start`, `FiveServiceLaunch.start_effects`,
 `GenerationInputs.prepare`, `SpoolInputs.prepare`, `DriverBootstrap.start`,

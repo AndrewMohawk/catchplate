@@ -37,7 +37,7 @@ pub fn validate_channel(fd:BorrowedFd<'_>)->Result<(),String>{
     }
     let mut address:libc::sockaddr_un=unsafe{std::mem::zeroed()};let mut len=std::mem::size_of_val(&address) as libc::socklen_t;
     require(unsafe{libc::getpeername(fd.as_raw_fd(),(&mut address as *mut libc::sockaddr_un).cast(),&mut len)}==0
-        && address.sun_family==libc::AF_UNIX as _)?;
+        && address.sun_family==libc::AF_UNIX as libc::sa_family_t)?;
     require(identity(fd)?.mode&libc::S_IFMT==libc::S_IFSOCK)?;
     let flags=unsafe{libc::fcntl(fd.as_raw_fd(),libc::F_GETFL)};
     require(flags>=0 && unsafe{libc::fcntl(fd.as_raw_fd(),libc::F_SETFL,flags|libc::O_NONBLOCK)}==0

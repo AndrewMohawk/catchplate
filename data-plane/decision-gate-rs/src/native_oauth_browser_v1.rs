@@ -107,10 +107,10 @@ impl Accepted {
     }
     pub fn kind(&self)->&Kind{&self.kind}
     pub fn deadline(&self)->u64{self.deadline}
-    pub fn shutdown_handle(&self)->Result<VsockShutdownV1,String>{self.stream.sock.shutdown_handle().map_err(|_|"native browser shutdown owner")}
+    pub fn shutdown_handle(&self)->Result<VsockShutdownV1,String>{self.stream.sock.shutdown_handle().map_err(|_|"native browser shutdown owner".to_owned())}
     pub fn check(&self)->Result<(),String>{
         self.ingress.check(self.deadline)?;
-        self.stream.sock.verify_connected_original(self.deadline).map_err(|_|"native browser socket original changed")
+        self.stream.sock.verify_connected_original(self.deadline).map_err(|_|"native browser socket original changed".to_owned())
     }
     pub(crate) fn command(&self)->Result<Value,String>{
         wire::ensure(self.purpose == Purpose::Unbound, "Setup ingress cannot become unbound issuance")?;

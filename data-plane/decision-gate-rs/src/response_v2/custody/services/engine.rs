@@ -79,9 +79,9 @@ use super::super::super::state_authority::topology::ServiceRole;
 use super::super::super::state_authority::transparency_contract::
     canonical_transparency_sha256;
 
-pub(super) struct EngineResult {
-    pub result: serde_json::Value,
-    pub exact_object_fds: Vec<OwnedFd>,
+pub(in super::super) struct EngineResult {
+    pub(in super::super) result: serde_json::Value,
+    pub(in super::super) exact_object_fds: Vec<OwnedFd>,
 }
 
 struct LocalAuthorityArtifactSigner<'a> {

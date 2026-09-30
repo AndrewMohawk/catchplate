@@ -54,6 +54,27 @@ const INGRESS_BINDING_DOMAIN: &[u8] = b"serverware/native-tls13-mandatory-client
 const MAX_INGRESS_CERTIFICATE_BYTES: usize = 16 * 1024;
 const MAX_INGRESS_SPKI_BYTES: usize = 1024;
 
+/// The root role-key provisioner supplies its actual retained request digest.
+/// Keep the fixed purpose inside the existing private NSM owner; the returned
+/// COSE document still requires the independent KMS verifier's admission.
+#[cfg(target_os = "linux")]
+pub(crate) fn quote_guest_role_key_recipient(
+    prepared: &crate::native_serving_privileges::Prepared,
+    public_key: &[u8],
+    nonce: &[u8],
+    request_sha256: [u8; 32],
+    deadline: u64,
+) -> Result<Vec<u8>, String> {
+    prepared.check()?;
+    let deadline = deadline.min(prepared.deadline());
+    let mut binding = b"serverware/native-role-key-recipient/v1\0".to_vec();
+    binding.extend_from_slice(&request_sha256);
+    let mut nsm = NsmDeviceV1::open(deadline)?;
+    let quote = nsm.attest(public_key, nonce, &binding, deadline)?;
+    prepared.check()?;
+    Ok(quote)
+}
+
 /// Ordinary independently expected commitments must be admitted by the caller.
 /// Nonzero hashes alone establish neither signed release nor policy authority.
 pub struct RuntimeScopeCommitmentsV1 {

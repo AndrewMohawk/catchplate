@@ -89,7 +89,7 @@ impl Completion {
             && measured["requestDigest"]==request_digest && measured["sourceRevision"]==payload["sourceRevision"] && measured["operationManifestDigest"]==*manifest
             && measured["operationContractDigest"]==*manifest && measured["queryManifestDigest"]==payload["queryManifestDigest"]
             && measured["fence"]==response["fence"] && measured["deadlineMonotonicNs"]==response["deadlineMonotonicNs"],"delivery measured source/request contract")?;
-        require(measured["handlerContractDigest"]==radix::handler_commitment(operation,text(payload,"sourceRevision")?),"delivery exact source handler contract")?;
+        require(measured["handlerContractDigest"]==radix::handler_commitment(operation,text(payload,"sourceRevision")?)?,"delivery exact source handler contract")?;
         radix::verify(operation,plan)?;
         let transition=&plan["rootTransition"];
         for(field,domain,value)in [("rootTransitionDigest","serverware.policyAuthorityPrimaryRootTransition/v1",transition),

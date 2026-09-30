@@ -503,7 +503,7 @@ fn read_pidfd_fdinfo(
     })
 }
 
-fn open_proc_task_directory(pid: libc::pid_t) -> io::Result<File> {
+pub(super) fn open_proc_task_directory(pid: libc::pid_t) -> io::Result<File> {
     let path = CString::new(format!("/proc/{pid}")).map_err(|_| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -527,7 +527,7 @@ fn open_proc_task_directory(pid: libc::pid_t) -> io::Result<File> {
     Ok(File::from(unsafe { OwnedFd::from_raw_fd(raw) }))
 }
 
-fn read_proc_start_time(
+pub(super) fn read_proc_start_time(
     proc_directory: &File,
     expected_pid: libc::pid_t,
 ) -> io::Result<u64> {
@@ -842,7 +842,7 @@ impl ExecutableFileIdentity {
     }
 }
 
-fn executable_integrity_signal(
+pub(super) fn executable_integrity_signal(
     executable: &File,
     metadata: &fs::Metadata,
 ) -> io::Result<Option<String>> {

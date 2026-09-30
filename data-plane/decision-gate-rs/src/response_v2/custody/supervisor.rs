@@ -536,6 +536,7 @@ mod linux_runtime {
         ExecutableMeasurementCache, PeerMeasurement, capture_connection, capture_packet,
         received_fd_is_cloexec, open_peer_pidfd, ensure_pidfd_alive,
         prove_pidfds_same_process, peer_security_label,
+        executable_integrity_signal, open_proc_task_directory, read_proc_start_time,
         socket_peer_credentials, EXECUTABLE_CACHE_ENTRIES_PER_WORKER,
         MAX_EXECUTABLE_CACHE_ENTRIES,
     };

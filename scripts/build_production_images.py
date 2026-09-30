@@ -24,6 +24,7 @@ BUILD_API_VERSION = "serverware.productionImagesBuild/v2"
 BUILD_KIND = "ProductionImagesBuild"
 PRODUCTION_PLATFORM = "linux/amd64"
 ENGINEERING_BOUNDED_BUILD_PROFILE = "engineering-bounded-8cpu-24g-per-step/v1"
+NATIVE_PILOT_BOUNDED_BUILD_PROFILE = "native-pilot-bounded-8cpu-24g-per-step/v1"
 ENGINEERING_BUILD_RESOURCES = (
     "memory=24g",
     "memory-swap=24g",
@@ -427,6 +428,30 @@ def private_build_context(metadata: dict[str, Any]):
         yield context
 
 
+def native_pilot_build_resource_profile(metadata: dict[str, Any]) -> dict[str, Any]:
+    """Fixed strict-source pilot limits, not a development identity override."""
+    if (
+        metadata["source_identity_mode"] != serverware_source_tree.PRODUCTION_IDENTITY_MODE
+        or metadata["production_release_eligible"] is not True
+    ):
+        raise RuntimeError("native pilot resource limits require strict production-commit identity")
+    return {
+        "name": NATIVE_PILOT_BOUNDED_BUILD_PROFILE,
+        # The limits are identical to engineering builds; their source admission
+        # is separate. Equal memory and memory-swap bounds permit no swap.
+        "resources": list(ENGINEERING_BUILD_RESOURCES),
+        "scope": "per-linux-run-step",
+        "required_buildkit_capability": "exec.meta.linux.resources",
+        "aggregate_limit": False,
+        "image_builds_sequential": True,
+    }
+
+
+def _native_pilot_resource_arguments(metadata: dict[str, Any]) -> list[str]:
+    profile = native_pilot_build_resource_profile(metadata)
+    return [argument for resource in profile["resources"] for argument in ("--resource", resource)]
+
+
 def build_command(
     dockerfile: str,
     tag: str,
@@ -435,6 +460,7 @@ def build_command(
     metadata: dict[str, Any],
     context: Path,
     engineering_bounded_build: bool = False,
+    native_pilot_bounded_build: bool = False,
 ) -> list[str]:
     if platform != PRODUCTION_PLATFORM:
         raise RuntimeError(f"production image platform must be {PRODUCTION_PLATFORM}")
@@ -443,6 +469,11 @@ def build_command(
         or metadata["production_release_eligible"] is not False
     ):
         raise RuntimeError("engineering resource limits require non-production dirty-tree identity")
+    pilot_resources: list[str] = []
+    if native_pilot_bounded_build:
+        if engineering_bounded_build or dockerfile not in {item[1] for item in DEFAULT_IMAGES}:
+            raise RuntimeError("native pilot resource limits require a fixed pilot image and no engineering selection")
+        pilot_resources = _native_pilot_resource_arguments(metadata)
     command = [
         "docker",
         "build",
@@ -457,6 +488,7 @@ def build_command(
     if engineering_bounded_build:
         for resource in ENGINEERING_BUILD_RESOURCES:
             command.extend(("--resource", resource))
+    command.extend(pilot_resources)
     component = "control plane" if dockerfile == "Dockerfile.production" else "decision gate"
     image_title = f"Serverware {component} {metadata['image_title_suffix']}"
     command.extend(source_build_arguments(metadata, image_title=image_title))
@@ -507,6 +539,7 @@ def artifact_build_command(
     metadata: dict[str, Any],
     context: Path,
     public_inputs_sha256: str | None = None,
+    native_pilot_bounded_build: bool = False,
 ) -> list[str]:
     if (dockerfile, target) not in PRODUCTION_ARTIFACT_TARGETS:
         raise RuntimeError("unsupported production artifact Dockerfile/target pair")
@@ -516,6 +549,11 @@ def artifact_build_command(
         raise RuntimeError(f"production artifact platform must be {PRODUCTION_PLATFORM}")
     if not output.startswith("type=local,dest=") or output == "type=local,dest=":
         raise RuntimeError("production artifact output must be a non-empty local destination")
+    pilot_resources: list[str] = []
+    if native_pilot_bounded_build:
+        if target != NATIVE_PILOT_TARGET:
+            raise RuntimeError("native pilot resource limits require the fixed pilot artifact target")
+        pilot_resources = _native_pilot_resource_arguments(metadata)
     if target == NATIVE_PILOT_TARGET:
         if not isinstance(public_inputs_sha256, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", public_inputs_sha256):
             raise RuntimeError("native pilot artifact requires its independent public guest input pin")
@@ -537,6 +575,7 @@ def artifact_build_command(
         output,
         "-f",
         str(context / dockerfile),
+        *pilot_resources,
         *source_build_arguments(metadata),
         *extra,
         str(context),

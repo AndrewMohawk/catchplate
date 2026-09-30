@@ -49,6 +49,7 @@ def preparation(metadata):
         "source": {key: metadata[key] for key in ("revision", "source_tree_digest", "source_manifest_digest",
                                                    "source_archive_digest", "source_date_epoch")},
         "profiles": PROFILES,
+        "buildResourceProfile": build.native_pilot_build_resource_profile(metadata),
         "publicGuestBuildInputs": {
             "apiVersion": "serverware.nativeShadowCustodyImageInputs/v1",
             "sourceManifestSha256": metadata["source_manifest_digest"],
@@ -70,7 +71,7 @@ def preparation(metadata):
         "existingOwners": {
             "nativeCohort": "serverware.native_shadow_proof_cohort_control.ParkedProofCohort.start",
             "ordinaryFive": "serverware.custody_generation_launch.FiveServiceLaunch.start_effects",
-            "generationInputs": "serverware.custody_generation_inputs.GenerationInputs.prepare",
+            "generationInputs": "serverware.custody_generation_business.BusinessResources.prepare_commitment(five).commitment_inputs()",
             "spoolResources": "serverware.native_shadow_spool_inputs.SpoolInputs.prepare",
             "driver": "serverware.native_shadow_driver_bootstrap.DriverBootstrap.start",
             "outgoingAndContinuation": "serverware.native_shadow_driver_inputs.OperationalInputs.prepare_outgoing",
@@ -194,10 +195,12 @@ def assemble(args, metadata, plan, output):
         build.copy_native_pilot_public_inputs(args.public_inputs, args.public_inputs_sha256, metadata, context)
         write_original(output / "attempt.json", {"apiVersion": "serverware.nativePilotBuildAttempt/v1",
             "source": plan["source"], "releaseAuthority": False, "liveReady": False,
+            "buildResourceProfile": plan["buildResourceProfile"],
             "publicInputsSha256": args.public_inputs_sha256})
         for service, dockerfile in (("control", "Dockerfile.production"), ("gate", DOCKERFILE)):
             tag = "serverware/native-pilot-" + service + ":" + metadata["revision"]
-            build.run_build(build.build_command(dockerfile, tag, platform=build.PRODUCTION_PLATFORM, metadata=metadata, context=context))
+            build.run_build(build.build_command(dockerfile, tag, platform=build.PRODUCTION_PLATFORM,
+                metadata=metadata, context=context, native_pilot_bounded_build=True))
             image = build.image_id(tag)
             build.verify_image_platform(image, build.PRODUCTION_PLATFORM)
             paths = (["/usr/local/bin/serverware-decision-gate",
@@ -209,13 +212,15 @@ def assemble(args, metadata, plan, output):
             images.append({"service": service, "imageId": image, "tag": tag, "originalSha256s": originals})
         build.run_build(build.artifact_build_command(DOCKERFILE, build.NATIVE_PILOT_TARGET,
             "type=local,dest=" + str(output / "artifacts"), network="none", platform=build.PRODUCTION_PLATFORM,
-            metadata=metadata, context=context, public_inputs_sha256=args.public_inputs_sha256))
+            metadata=metadata, context=context, public_inputs_sha256=args.public_inputs_sha256,
+            native_pilot_bounded_build=True))
     artifacts, guest = native_inventory(output)
     if guest.get("sourceManifestSha256") != metadata["source_manifest_digest"] or guest.get("inputManifestSha256") != args.public_inputs_sha256:
         raise RuntimeError("guest artifact source/public-input pins differ from this attempt")
     result = {"apiVersion": "serverware.nativePilotArtifacts/v1", "artifactBuildComplete": True,
         "releaseAuthority": False, "liveReady": False, "launchPrepared": False, "executionAccepted": False,
         "source": plan["source"], "profiles": PROFILES, "images": images, "nativeArtifacts": artifacts,
+        "buildResourceProfile": plan["buildResourceProfile"],
         "publicInputsSha256": args.public_inputs_sha256, "requiredExternalOriginals": plan["requiredExternalOriginals"],
         "boundary": "Unsigned local build outputs only; independent reproducibility/admission, installation, live-owner preparation and connected pilot acceptance remain required."}
     write_original(output / "artifacts.json", result)

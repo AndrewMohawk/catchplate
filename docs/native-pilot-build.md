@@ -206,10 +206,29 @@ The local image tags are source-specific conveniences; record and admit the
 actual image IDs/digests before any deployment. This manifest is unsigned build
 data, not a reproducibility proof or an artifact-admission signature.
 
+## Strict pilot build resource profile
+
+The fixed pilot assembler selects
+`native-pilot-bounded-8cpu-24g-per-step/v1` for both service image builds and the
+`native-pilot-artifacts` export. It requests eight CPU equivalents, 24 GiB of
+memory and no swap per Linux RUN step using the four resource arguments shown
+below. Preparation, attempt and completed artifact metadata record the profile
+and `aggregate_limit:false`. Concurrent steps, cache/export work and the builder
+daemon are not covered by an aggregate limit.
+
+This selection requires the unchanged clean `production-commit` source identity;
+it does not enable dirty source or change dependency/public-input admission.
+Unsupported builder resource capabilities must fail the build without a retry
+that removes the limits. The ordinary image/artifact CLI defaults are unchanged.
+The strict pilot resource connection is source implementation, not a completed
+strict pilot build. Regenerate preparation after any source or reviewed-pin
+commit before obtaining admission of source-bound public inputs.
+
 ## Separate engineering-only image build resource profile
 
-The existing two-image dirty-tree builder has an explicit fixed resource
-selection. It does not apply to the full pilot command or any artifact export:
+The existing two-image dirty-tree builder has a separate explicit fixed resource
+selection. This engineering flag is unavailable to the full pilot command and
+artifact exports; their fixed pilot selection is described above:
 
 ```sh
 python3 -B scripts/build_production_images.py \
@@ -299,10 +318,19 @@ remains **0/6 verified**.
 
 The source-fixed prerequisite list points at the actual existing callers:
 `ParkedProofCohort.start`, `FiveServiceLaunch.start_effects`,
-`GenerationInputs.prepare`, `SpoolInputs.prepare`, `DriverBootstrap.start`,
+`BusinessResources.prepare_commitment(five).commitment_inputs()`,
+`SpoolInputs.prepare`, `DriverBootstrap.start`,
 and `OperationalInputs.prepare_outgoing`. These require genuine privileged
 owners and separately provisioned originals; this build script does not call
 them and does not serialize fake substitutes for their private types.
+
+The live caller is not yet composed: the existing fixed-eleven cohort owns a
+parked bridge child, while `DriverBootstrap` owns a different measured bridge.
+The ordinary service release requires its peer to be the actual cohort bridge;
+launching both cannot satisfy that identity check. The next source connection
+is an explicit endpoint-only cohort bound to the retained measured driver,
+with separate genuine cleanup owners. Existing fixed-eleven behavior and peer
+checks remain unchanged; a wrapper that merely starts both paths is not a pilot.
 
 An independently authorized operator must supply and retain the protected
 cohort/ordinary/driver configurations, current signed histories and assignments,

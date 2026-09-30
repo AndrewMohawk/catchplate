@@ -22,12 +22,12 @@ Checkpoint: **2026-09-30 — pre-production, source-only.**
 
 [![Project checkpoints, one segment per task: 36 of 46 source-landed; 10 active and 0 todo. Evidence handoff 10/10; historical recovery 4/5; permissions and grants 10/10; finalization and sessions 8/8; workloads and native 3/6; providers and operations 1/7. H05, N04, N05, N06 and O01 through O06 are in progress. Production acceptance remains 0/6. Source only; unbuilt, unexecuted and unprovisioned.](docs/images/project-progress.svg)](docs/production-status.md#next-source-milestones)
 
-The current `.328` source batch connects the [five-service launcher](docs/custody-five-service-launch.md):
-actual parked children receive separately authorized launch/grant originals,
-drop privileges and enter their existing service loops under retained deadlines.
-Resource provisioning, generation coordination, remaining receipt endpoints,
-final Setup and deployment acceptance are still open. These are code milestones,
-not a verified pilot release. Broad testing follows the connected pilot flow.
+The current `.329` source batch connects [real service resources](docs/custody-five-service-business-inputs.md)
+to the five-service launcher: fresh listeners and journal/state directories stay
+owned through descriptor transfer, child termination and reap. Privileged peer
+inspection, generation coordination, remaining receipt endpoints, final Setup
+and deployment acceptance remain open. These are code milestones, not a verified
+pilot release. Broad testing follows the connected pilot flow.
 
 The bar shows **committed source, not tested readiness or remaining effort**.
 Green means source-landed; amber means partial implementation. No current pilot

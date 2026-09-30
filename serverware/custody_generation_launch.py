@@ -93,6 +93,7 @@ class FiveServiceLaunch:
         self._children, self._originals = {}, []
         self._attempted = self._closed = self._failed = False
         self._stop = threading.Event(); self._input_owner = None
+        self._business_resources = None
         self._thread = self._transfer = None
 
     @classmethod
@@ -182,6 +183,8 @@ class FiveServiceLaunch:
             and os.getresuid() == (0, 0, 0) and os.getresgid() == (0, 0, 0) and o.clock() < self._lifetime)
         for original in self._originals:
             original.check()
+        if self._business_resources is not None:
+            self._business_resources._check_resources()
         for item in self._children.values():
             o.live(item["pidfd"], item["pid"], item["start"], self._pid)
             if item["phase"] != "constructed":

@@ -34,6 +34,7 @@ class GenerationInputs:
         self._launcher = launcher
         self._roles, self._fds, self._originals = {}, [], []
         self._closed = self._taken = self._released = False
+        self._business_owner = None
 
     @classmethod
     def prepare(cls, launcher, *, business_descriptors):
@@ -140,6 +141,8 @@ class GenerationInputs:
         runtime = o.Original(runtime_pin["path"], g.MAX_BYTES, sha=runtime_pin["sha256"])
         self._originals.append(runtime)
         runtime_raw = runtime.read(); header = g.document(runtime_raw, g.MAX_BYTES)["runtime"]
+        if self._business_owner is not None:
+            self._business_owner._require_runtime_peer(header)
         p.require(header["apiVersion"] == "serverware.policyCustodyServiceRuntimeConfig/v5"
             and header["generationAdmission"] == {"grantFdName": "generation-grant"}
             and header["activationDirectoryIdentities"] == self.directory_identities(role))
@@ -217,6 +220,8 @@ class GenerationInputs:
             original.close()
         for fd in reversed(self._fds):
             os.close(fd)
+        if self._business_owner is not None:
+            self._business_owner._close_after_reap()
 
 
 class GenerationTransfer:

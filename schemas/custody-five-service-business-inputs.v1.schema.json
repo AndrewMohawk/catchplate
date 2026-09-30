@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/custody-five-service-business-inputs.v1.schema.json",
+  "$ref": "#/$defs/configuration",
+  "$comment": "Fresh protected Linux resource creation. This does not authenticate the final bridge process or create journal contents, receipts, keys or readiness. The actual source owner retains real listeners, directory FDs, locks and original child cleanup ownership.",
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "pin": {
+      "type": "object", "additionalProperties": false, "required": ["path", "sha256"],
+      "properties": {
+        "path": {"type": "string", "minLength": 2, "maxLength": 4096, "pattern": "^/[^\\u0000]+$"},
+        "sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "configuration": {
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "launchConfigurationSha256", "invocationId", "clientConfiguration"],
+      "properties": {
+        "apiVersion": {"const": "serverware.custodyFiveServiceBusinessInputs/v1"},
+        "launchConfigurationSha256": {"$ref": "#/$defs/sha256"},
+        "invocationId": {"type": "string", "pattern": "^[0-9a-f]{32}$", "not": {"const": "00000000000000000000000000000000"}},
+        "clientConfiguration": {"$ref": "#/$defs/pin", "description": "Exact independently installed production-bridge C9 cold configuration, used only for intended socket DAC UID/GID. Not a final peer-measurement original."}
+      }
+    }
+  }
+}

@@ -15,7 +15,7 @@ const IMAGE_PATH:&str="/opt/serverware/native-shadow-custody-runtime.squashfs";
 
 #[derive(Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
-pub(super) struct Authority {public(super) public_key_base64url:String,pub(super) key_id:Sha256Digest}
+pub(super) struct Authority {pub(super) public_key_base64url:String,pub(super) key_id:Sha256Digest}
 impl Authority {
     pub(super) fn key(&self)->Result<VerifyingKey,ShadowError>{
         let raw=URL_SAFE_NO_PAD.decode(&self.public_key_base64url).map_err(fail)?;

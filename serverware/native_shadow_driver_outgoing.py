@@ -126,7 +126,7 @@ def _selection(raw, launch_version, bridge_uid):
     p.require(type(signers) is list and len(signers) == 10)
     selected_signers = {5: set(), 6: {"ledger-append"}, 7: {"ledger-append", "ingress-admission"},
         8: {"ledger-append", "ingress-admission", "terminal-append"},
-            9: set(_NATIVE_SIGNERS), 10: set(_NATIVE_SIGNERS)}[suffix]
+            9: set(_NATIVE_SIGNERS), 10: set(_NATIVE_SIGNERS), 11: set(_NATIVE_SIGNERS)}[suffix]
     for entry in signers:
         p.fields(entry, ("signerRole", "authorityBindingCredential", "activationFdName", "expectedSocketPath", "expectedPeer", "authorityKeyId", "authorityKeySpkiSha256"))
         role, name = entry["signerRole"], _name(entry["activationFdName"])
@@ -150,7 +150,7 @@ def _selection(raw, launch_version, bridge_uid):
         roles.add(role); names.add(name); names.add(directory_name); excluded.add(name)
         _peer(entry["expectedPeer"], bridge_uid)
         _name(entry["authorityBindingCredential"]); p.digest(entry["authorityKeyId"]); p.digest(entry["authorityKeySpkiSha256"])
-    p.require(len(outgoing) == {5: 15, 6: 14, 7: 13, 8: 12, 9: 9, 10: 9}[suffix])
+    p.require(len(outgoing) == {5: 15, 6: 14, 7: 13, 8: 12, 9: 9, 10: 9, 11: 9}[suffix])
     for ordinal in range(len(outgoing)):
         p.require(_DIRECTORY_PREFIX + str(ordinal) not in names)
     return runtime, tuple((name, outgoing[name]) for name in sorted(outgoing)), frozenset(excluded)

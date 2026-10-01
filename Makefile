@@ -1750,6 +1750,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	scripts/test_native_pilot_genesis_rendezvous_install.py \
 	scripts/test_native_pilot_resource_roots.py \
 	scripts/install_native_pilot_genesis_rendezvous.py \
+	scripts/prepare_native_pilot_resource_roots.py \
 	scripts/test_native_pilot_adopted_bridge.py \
 	scripts/test_native_pilot_adopted_endpoints.py \
 	scripts/test_native_pilot_adopted_ordinary.py \
@@ -4689,6 +4690,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				scripts/test_native_pilot_genesis_rendezvous_install.py \
 				scripts/test_native_pilot_resource_roots.py \
 				scripts/install_native_pilot_genesis_rendezvous.py \
+				scripts/prepare_native_pilot_resource_roots.py \
 				scripts/test_native_pilot_adopted_bridge.py \
 				scripts/test_native_pilot_adopted_endpoints.py \
 				scripts/test_native_pilot_adopted_ordinary.py \

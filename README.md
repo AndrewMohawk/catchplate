@@ -147,8 +147,8 @@ Policy/v16 adds [complete bridge runtime composition](docs/native-pilot-bridge-c
 from actual signed heads and service originals. Focused checks pass; complete
 authenticated/live execution remains unverified.
 Policy/v17 connects [bridge credential delivery, five authorizations and launch](docs/native-pilot-bridge-commissioning.md).
-Those five prerequisites are now included in the inventory; focused verification
-of this assembled batch is pending. Startup still refuses until the remaining
+Those five prerequisites are now included in the inventory; focused checks pass
+with [documented limits](docs/native-pilot-bridge-commissioning.md#focused-verification). Startup still refuses until the remaining
 six jobs, beginning with cohort release, are connected;
 these counts are not a percentage of product readiness.
 Protected deployment is not provisioned. This is not

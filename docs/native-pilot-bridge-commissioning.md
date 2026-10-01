@@ -1,9 +1,12 @@
+> Publication note: deployment-specific addresses, identities and paths in this document are example placeholders, not a public service or release-verification evidence.
+
 # Bridge delivery and launch commissioning
 
 The `.390` source connects seven fixed bridge decisions: C9 credential delivery,
 role keys, key admission, closure, encrypted-key delivery, verifier transport and
 launch installation. These are source connections, not credential provisioning
-or a running bridge. Focused verification is pending on the assembled batch.
+or a running bridge. Focused verification passes after a syntax correction and
+a fixture-only installation-path correction; see the exact evidence below.
 
 ## Independent selections and actual inputs
 
@@ -71,3 +74,24 @@ genuine cleanup intent and compatible parent/reap ownership, executable
 packaging and full independent provisioning/dependency/Nitro/KMS/provider/
 hardware/provenance acceptance. No cloud or paid operation is required for
 this source batch.
+
+## Focused verification
+
+Initial `c0093311` stopped at grammar admission with a mismatched parenthesis;
+no controls ran. Corrected `c3e9ccda` passed **34/35 controls in eight selected
+suites**, **14-file Python 3.11.15 grammar/both Make inventories**, and **53
+relative links** in 30.524 seconds. The remaining C9 projection error was its
+synthetic outgoing installation path, not a rejected real installer result.
+
+Fixture-only `74e94c48` uses the actual fixed publication destination and adds
+a literal-path assertion. Its **one affected control passed**, with all fourteen
+changed-file grammar/inventory checks, in 5.033 seconds (exit **0**). The 34
+successes were not rerun. No production guard was weakened.
+
+Exact archives, commands, harnesses, logs, results and checksum manifest are
+retained locally at
+`/home/catchplate/codex-offload/serverware/engineering-builds/74e94c48-bridge-commissioning-i6kI0B/`.
+Runs used one CPU, a cleared environment and a private network namespace.
+No protected owner, production signing entrypoint, provisioner, publisher,
+service, native rebuild, cloud or paid operation ran. The projection and live
+acceptance limitations above remain open.

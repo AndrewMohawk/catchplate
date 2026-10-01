@@ -6,7 +6,9 @@ under explicit policy/v17. Seven decisions use the actual runtime-owner handoff,
 five newly represented signing jobs and complete existing producer validators.
 Coverage is **158/164** handled jobs, **113** selectors and **six** missing slots
 starting at cohort release. Legacy v11-v16 remain closed to 108 selectors.
-Focused verification of the assembled batch is pending. Startup still refuses;
+Focused verification passes after a syntax and fixture-path correction;
+[exact evidence and limits](native-pilot-bridge-commissioning.md#focused-verification).
+Startup still refuses;
 credential provisioning, full positive launch authentication and live owner
 execution are not established.
 

@@ -1780,6 +1780,7 @@ where
     durable_requests: BTreeMap<String, Vec<u8>>,
     durable_responses: BTreeMap<String, Vec<u8>>,
     replay_state: replay_journal::State,
+    dispatch_identities: replay_journal::DispatchIdentities,
     journal_keys: BTreeSet<super::super::super::Sha256Digest>,
 }
 
@@ -1808,11 +1809,13 @@ where
         let mut replay_state = replay_journal::State::new(MAX_PRODUCTION_RPC_REPLAY_RECORDS,
             MAX_PRODUCTION_RPC_REPLAY_BYTES, chain.terminal_head.as_ref().map_or(0, |head| head.exact_head_bytes.len()));
         let mut journal_keys = BTreeSet::new();
+        let mut dispatch_identities = replay_journal::DispatchIdentities::default();
         let mut pending: Option<replay_journal::Start> = None;
         for record in chain.records {
             let request: ProductionRpcRequestV4 =
                 decode_canonical_frame(&record.exact_request_bytes)?;
             request.validate().map_err(ServiceRunnerError::invalid)?;
+            dispatch_identities.require(&request, &record.exact_request_bytes, &durable_requests)?;
             let physical_bytes = record.exact_record_bytes.len().checked_add(record.exact_request_bytes.len())
                 .and_then(|bytes| bytes.checked_add(record.exact_response_bytes.len()))
                 .ok_or_else(|| ServiceRunnerError::invalid("production RPC recovery accounting overflowed"))?;
@@ -1869,6 +1872,7 @@ where
             }
             replay_state.recover_complete(&record.exact_request_bytes, physical_bytes)
                 .map_err(ServiceRunnerError::invalid)?;
+            dispatch_identities.remember(&request)?;
             pending = None;
             if matches!(
                 response.response,
@@ -1894,6 +1898,7 @@ where
             durable_requests,
             durable_responses,
             replay_state,
+            dispatch_identities,
             journal_keys,
         })
     }
@@ -1940,6 +1945,9 @@ where
 
     fn handle_ready_request(&mut self, request: &ProductionRpcRequestV4, exact_request: &[u8])
         -> Result<Vec<u8>, ServiceRunnerError> {
+        // Reject operation/fence aliases before cached response lookup, journal
+        // writes, trusted-time sampling or any other authority contact.
+        self.dispatch_identities.require(request, exact_request, &self.durable_requests)?;
         let replay_key = request.replay_id_sha256.as_str().to_owned();
         if let Some(replayed) = self.replay.get(&replay_key) {
             if replayed.exact_request != exact_request {
@@ -2047,6 +2055,7 @@ where
         if let Some(sample) = &time_sample {
             sample.check().map_err(|_| ServiceRunnerError::invalid("original trusted time interval expired during durable completion"))?;
         }
+        self.dispatch_identities.remember(request)?;
         self.replay_state.complete(exact_response.len()).map_err(ServiceRunnerError::invalid)?;
         let returned_response = original_response.unwrap_or_else(|| exact_response.clone());
         self.durable_requests

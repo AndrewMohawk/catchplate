@@ -234,10 +234,9 @@ impl Gate {
         self.durable_key.verify_strict(&super::super::protocol::domain_separated_signature_preimage(
             effect::ALLOCATION_DOMAIN, &encode_canonical_frame(p)?)?, &signature(&allocation.signature_base64url)?)
             .map_err(|_| invalid())?;
-        require(self.records.iter().all(|(record, _)| {
-            let previous = record.command.request().binding();
-            previous.operation_id_sha256 != binding.operation_id_sha256 && previous.replay_id_sha256 != binding.replay_id_sha256
-        }))?;
+        for (record, _) in &self.records {
+            require(!super::completed_operation::relation(record.command.request().binding(), binding).map_err(|_| invalid())?)?;
+        }
         let effect_id = p.preparation.effect_id_sha256().clone();
         match command.request() {
             Dispatch::AppendActiveEffectBarrier { .. } => require(!self.barriers.contains_key(&effect_id) && !self.consumed.contains(&effect_id))?,
@@ -275,6 +274,13 @@ impl Gate {
         let command: Command = decode_canonical_frame(raw)?;
         let deadline = command.deadline()?;
         self.bootstrap.require_deadline(deadline).map_err(|_| invalid())?;
+        require(boottime_now_nanos().map_err(|_| invalid())? < deadline)?;
+        for (record, reply) in &self.records {
+            if super::completed_operation::relation(record.command.request().binding(), command.request().binding()).map_err(|_| invalid())? {
+                require(record.command == command && record.owner_state_sha256 == owner.generation_state(deadline)?)?;
+                return Ok(Some(encode_canonical_frame(reply)?));
+            }
+        }
         self.validate(&command)?;
         let now = boottime_now_nanos().map_err(|_| invalid())?;
         require(command.completion.completed_at_boottime_nanos <= now && now < deadline && self.records.len() < MAX_RECORDS)?;

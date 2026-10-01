@@ -6,7 +6,7 @@ use std::fs::File;
 use std::io::Write;
 use std::os::fd::{AsFd,AsRawFd,BorrowedFd,FromRawFd,OwnedFd};
 use std::os::unix::fs::{FileExt,MetadataExt};
-const MAX_RECORDS:u64=128;
+const MAX_RECORDS:u64=invocations::MAX_INVOCATIONS as u64;
 const MAX_TOTAL:usize=32*1024*1024;
 const MAX_ORIGINAL:usize=services::common::MAX_SERVICE_FRAME_BYTES;
 #[derive(Serialize,Deserialize)]
@@ -47,7 +47,7 @@ fn read(file:&File,uid:u32,gid:u32,maximum:usize)->Result<Vec<u8>,ShadowError>{
 }
 struct Held {name:String,file:File,bytes:Vec<u8>}
 pub(super) struct Store {directory:OwnedFd,identity:Identity,lock:File,uid:u32,gid:u32,held:Vec<Held>,
-    originals:Vec<Commit>,sequence:u64,head:Sha256Digest,total:usize,poisoned:bool}
+    originals:Vec<Commit>,invocations:invocations::Index,sequence:u64,head:Sha256Digest,total:usize,poisoned:bool}
 impl Store {
     pub(super) fn open(directory:OwnedFd,admission:&Admission,scope:&scope::Scope,guest:&GuestClosureBinding)->Result<Self,ShadowError>{
         Self::open_inner(directory,None,admission,scope,guest)
@@ -79,7 +79,7 @@ impl Store {
         require(m.is_file() && m.nlink()==1 && m.uid()==uid && m.gid()==gid && m.mode()&0o7777==0o600 && m.len()==0
             && m.dev()==id.device && unsafe{libc::flock(lock.as_raw_fd(),libc::LOCK_EX|libc::LOCK_NB)}==0)?;
         let mut store=Self{directory,identity:id,lock,uid,gid,held:Vec::new(),originals:Vec::new(),sequence:0,
-            head:admission.genesis_sha256.clone(),total:0,poisoned:false};
+            invocations:invocations::Index::default(),head:admission.genesis_sha256.clone(),total:0,poisoned:false};
         let genesis=store.retain("genesis.json".into())?;
         require(Sha256Digest::compute(&genesis)==admission.genesis_sha256)?;
         let g:Genesis=guest::exact(&genesis)?;
@@ -94,6 +94,8 @@ impl Store {
             let head:Head=guest::exact(&raw_head)?;
             require(head.api_version=="serverware.nativeShadowPersistenceHead/v1" && head.sequence==sequence
                 && head.previous_head_sha256==store.head && head.commit_original_sha256==Sha256Digest::compute(&raw))?;
+            store.invocations.record(invocation_identity(&commit.payload.request_original_base64url,
+                &commit.payload.reply_original_base64url)?).map_err(fail)?;
             store.sequence=sequence;store.head=Sha256Digest::compute(&raw_head);store.originals.push(commit);
         }
         require(store.head==admission.head_sha256)?;store.check()?;Ok(store)
@@ -138,6 +140,9 @@ impl Store {
         self.names()
     }
     pub(super) fn originals(&self)->&[Commit]{&self.originals}
+    pub(super) fn replay(&self,request:&str,reply:&str)->Result<bool,ShadowError>{
+        self.check()?;self.invocations.replay(&invocation_identity(request,reply)?).map_err(fail)
+    }
     pub(super) fn next(&self)->Result<(u64,Sha256Digest),ShadowError>{
         self.check()?;require(self.sequence<MAX_RECORDS)?;Ok((self.sequence+1,self.head.clone()))
     }
@@ -155,6 +160,8 @@ impl Store {
     pub(super) fn commit(&mut self,payload:CommitPayload,
         sign:impl FnOnce(CommitPayload)->Result<Commit,ShadowError>,check:&impl Fn()->Result<(),ShadowError>)->Result<Sha256Digest,ShadowError>{
         self.check()?;check()?;
+        let invocation=invocation_identity(&payload.request_original_base64url,&payload.reply_original_base64url)?;
+        require(!self.invocations.replay(&invocation).map_err(fail)?)?;
         let sequence=self.sequence.checked_add(1).ok_or(ShadowError::CounterOverflow)?;
         require(sequence<=MAX_RECORDS && payload.sequence==sequence && payload.previous_head_sha256==self.head)?;
         let originals=canonical_json_bytes(&(&payload.request_original_base64url,&payload.reply_original_base64url))?;
@@ -165,13 +172,16 @@ impl Store {
             && self.total.checked_add(originals.len()).and_then(|n|n.checked_add(predicted+1024)).is_some_and(|n|n<=MAX_TOTAL))?;
         self.poisoned=true;
         self.create(format!("originals-{sequence:020}.json"),originals)?;check()?;
-        let commit=sign(payload)?;let raw=canonical_json_bytes(&commit)?;
+        let commit=sign(payload)?;
+        require(invocation_identity(&commit.payload.request_original_base64url,&commit.payload.reply_original_base64url)?==invocation)?;
+        let raw=canonical_json_bytes(&commit)?;
         let digest=Sha256Digest::compute(&raw);
         self.create(format!("commit-{sequence:020}.json"),raw)?;check()?;
         let head=canonical_json_bytes(&Head{api_version:"serverware.nativeShadowPersistenceHead/v1".into(),sequence,
             previous_head_sha256:self.head.clone(),commit_original_sha256:digest.clone()})?;
         let head_sha256=Sha256Digest::compute(&head);
         self.create(format!("head-{sequence:020}.json"),head)?;check()?;
+        self.invocations.record(invocation).map_err(fail)?;
         self.sequence=sequence;self.head=head_sha256;self.originals.push(commit);self.poisoned=false;
         self.check()?;check()?;Ok(digest)
     }

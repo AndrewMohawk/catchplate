@@ -110,11 +110,15 @@ impl Gate {
         require(self.grant.payload.scope.issued_at_boottime_nanos<=now && now<self.grant.payload.scope.expires_at_boottime_nanos)
     }
     fn recover(&mut self)->Result<(),ServiceError>{
-        let mut head=self.grant.payload.initial_head_sha256.clone();let mut operations=BTreeSet::new();let mut replays=BTreeSet::new();
+        let mut head=self.grant.payload.initial_head_sha256.clone();let mut bindings=Vec::new();
         let grant_sha=Sha256Digest::compute(&self.grant_raw);
         for (record,transition) in &self.records {
-            require(record.grant_sha256==grant_sha && operations.insert(record.command.computation.request.binding().operation_id_sha256.clone())
-                && replays.insert(record.command.computation.request.binding().replay_id_sha256.clone()))?;
+            require(record.grant_sha256==grant_sha)?;
+            let binding=record.command.computation.request.binding();
+            for prior in &bindings {
+                require(!super::completed_operation::relation(prior,binding).map_err(|_|invalid())?)?;
+            }
+            bindings.push(binding.clone());
             record.command.deadline()?;
             record.command.computation.verify(&self.grant.payload.scope,&self.grant.payload.native_grant_sha256,&self.key)?;
             self.verify_transition(&record.command,transition,&head)?;head=transition.resulting_head_sha256.clone();
@@ -134,17 +138,18 @@ impl Gate {
         if !fixed::is_command(raw)? {return Ok(None);}
         self.check()?;let command:Command=decode_canonical_frame(raw)?;let deadline=command.deadline()?;
         self.bootstrap.require_deadline(deadline).map_err(|_|invalid())?;
-        require(boottime_now_nanos().map_err(|_|invalid())?<deadline && self.records.len()<MAX_RECORDS)?;
+        require(boottime_now_nanos().map_err(|_|invalid())?<deadline)?;
         command.computation.verify(&self.grant.payload.scope,&self.grant.payload.native_grant_sha256,&self.key)?;
-        // Exact replays return the old definite signature; altered operation or
-        // replay labels never create another transition or renew the deadline.
+        // Exact replays return the old definite signature; operation, replay
+        // or fence aliases never create another transition or renew a deadline.
         for (record,receipt) in &self.records {
-            if record.command.computation.request.binding().operation_id_sha256==command.computation.request.binding().operation_id_sha256
-                || record.command.computation.request.binding().replay_id_sha256==command.computation.request.binding().replay_id_sha256 {
+            if super::completed_operation::relation(record.command.computation.request.binding(),
+                command.computation.request.binding()).map_err(|_|invalid())? {
                 require(record.command==command && record.owner_state_sha256==owner.generation_state(deadline)?)?;
                 return Ok(Some(encode_canonical_frame(receipt)?));
             }
         }
+        require(self.records.len()<MAX_RECORDS)?;
         let state=owner.generation_state(deadline)?;
         let input=TransitionInput{role:historical_service_role(self.grant.payload.service_role),
             epoch:self.history.current_epoch().map_err(|_|invalid())?.epoch_reference(),binding:command.computation.request.binding().clone(),

@@ -28,6 +28,7 @@ pub(super) mod spool_head_client;
 pub(super) mod active_effect_values;
 pub(super) mod active_effect_cleanup;
 pub(super) mod dispatch_service;
+mod completed_operation;
 pub(super) mod generation_certification;
 pub(super) mod generation_recovery;
 mod initial_history;

@@ -8,7 +8,7 @@ use services::production::{ProductionAuthorityEndpointIdentityV4 as Endpoint,
     ProductionAuthorityEndpointReplyV4 as Reply,ProductionAuthorityEndpointResultV4 as ResultBody,
     ProductionProofEndpointKindV4 as Kind};
 use crate::policy_shadow::policy_custody::production_dispatch::{ProductionRpcRequestBodyV4,
-    PRODUCTION_AUTHORITY_ENDPOINT_PROTOCOL_VERSION,ClosedProductionDispatchResponseV4};
+    PRODUCTION_AUTHORITY_ENDPOINT_PROTOCOL_VERSION,ClosedProductionDispatchRequestV4,ClosedProductionDispatchResponseV4};
 use crate::policy_shadow::policy_custody::protocol::domain_separated_signature_preimage;
 use guest::retrieval_peer as peer;
 use std::os::fd::OwnedFd;
@@ -16,6 +16,7 @@ use std::os::fd::OwnedFd;
 #[path="retrieval_scope.rs"] mod scope;
 #[path="persistence_receipts.rs"] mod receipts;
 #[path="persistence_store.rs"] mod store;
+#[path="persistence_invocations.rs"] mod invocations;
 const GRANT_DOMAIN:&str="serverware.nativeShadowPersistenceServiceAssignment.signature/v1";
 const COMMIT_DOMAIN:&str="serverware.nativeShadowPersistenceCommit.signature/v1";
 #[derive(Clone,Copy,PartialEq,Eq,Serialize,Deserialize)]
@@ -95,16 +96,36 @@ fn assigned_key(keys:&AdmittedKeys,trust:&dyn EnvelopeKeyTrust,role:AuthorityRol
     let key=trust.resolve_ed25519_key(&checkpoint,domain,key_id,spki)?;
     require(ed25519_public_key_material_sha256(&key)==binding.key_material_sha256 && trust.current_checkpoint()?==checkpoint)?;Ok(key)
 }
+fn final_dispatch(request:&Request)->Result<&ClosedProductionDispatchRequestV4,ShadowError>{
+    match &request.request {
+        Body::Dispatch(dispatch)=>Ok(dispatch),
+        Body::FinishCommitRequest{computation,..}=>Ok(&computation.request),
+        Body::FinishNativeSpool{completion,..}=>Ok(&completion.payload.claim.request),
+        Body::FinishNativeActiveEffect{completion,..}=>Ok(&completion.prepared.core.request),
+        _=>Err(ShadowError::BindingDrift),
+    }
+}
+// The store uses this relation before any write and while replaying its exact
+// admitted chain. Signature/trust admission remains dispatch_original below.
+fn invocation_identity(request_encoded:&str,reply_encoded:&str)->Result<invocations::Identity,ShadowError>{
+    let (request,raw):(Request,_)=original(request_encoded)?;
+    let (reply,reply_raw):(Reply,_)=original(reply_encoded)?;
+    let dispatch=final_dispatch(&request)?;dispatch.validate().map_err(fail)?;let binding=dispatch.binding();
+    require(request.api_version==PRODUCTION_AUTHORITY_ENDPOINT_PROTOCOL_VERSION
+        && request.request_sha256==request.computed_request_sha256().map_err(fail)?
+        && request.replay_id_sha256==binding.replay_id_sha256
+        && request.deadline_boottime_nanos==binding.operation_deadline_boottime_nanos
+        && reply.api_version==request.api_version && reply.endpoint==request.endpoint
+        && reply.request_sha256==request.request_sha256 && reply.replay_id_sha256==request.replay_id_sha256)?;
+    Ok(invocations::Identity{operation_id:binding.operation_id_sha256.as_str().into(),
+        termination_fence:binding.termination_fence_sha256.as_str().into(),replay_id:binding.replay_id_sha256.as_str().into(),
+        request_original_sha256:Sha256Digest::compute(&raw).as_str().into(),
+        reply_original_sha256:Sha256Digest::compute(&reply_raw).as_str().into()})
+}
 fn dispatch_original(request_encoded:&str,reply_encoded:&str,scope:&scope::Scope,keys:&AdmittedKeys,
     trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime)->Result<(Request,Vec<u8>,Option<receipts::Receipt>),ShadowError>{
     let (request,raw):(Request,_)=original(request_encoded)?;let (reply,_):(Reply,_)=original(reply_encoded)?;
-    let dispatch=match &request.request {
-        Body::Dispatch(dispatch)=>dispatch,
-        Body::FinishCommitRequest{computation,..}=>&computation.request,
-        Body::FinishNativeSpool{completion,..}=>&completion.payload.claim.request,
-        Body::FinishNativeActiveEffect{completion,..}=>&completion.prepared.core.request,
-        _=>return Err(ShadowError::BindingDrift),
-    };
+    let dispatch=final_dispatch(&request)?;
     dispatch.validate().map_err(fail)?;let binding=dispatch.binding();
     let role=if let Body::FinishNativeSpool{completion,..}=&request.request {
         completion.payload.prepared.core.validate().map_err(fail)?;
@@ -233,6 +254,7 @@ impl Service {
     fn check(&self,keys:&AdmittedKeys,trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime)->Result<(),ShadowError>{
         require(self.original.read(65536).map_err(fail)?.as_slice()==canonical_json_bytes(&self.configuration)?.as_slice())?;
         self.configuration.verify(keys,&self.scope,trust,time)?;self.store.check()?;self.channel.check()?;
+        let mut receipt_originals:BTreeMap<Sha256Digest,Vec<u8>>=BTreeMap::new();
         for commit in self.store.originals() {
             let p=&commit.payload;
             require(p.api_version=="serverware.nativeShadowPersistenceCommit/v1" && p.guest==keys.association.binding()
@@ -245,6 +267,11 @@ impl Service {
             require(p.original_deadline_boottime_nanos==request.deadline_boottime_nanos && p.request_original_sha256==Sha256Digest::compute(&raw)
                 && p.stored_at_boottime_nanos>0 && p.stored_at_boottime_nanos<p.original_deadline_boottime_nanos
                 && p.stored_at_boottime_nanos<=guest::now()? && canonical_json_bytes(&p.receipt)?==canonical_json_bytes(&receipt)?)?;
+            if let Some(receipt)=&p.receipt {
+                let raw=canonical_json_bytes(receipt)?;
+                if let Some(prior)=receipt_originals.get(&receipt.persistence_receipt_sha256) {require(prior==&raw)?;}
+                else{receipt_originals.insert(receipt.persistence_receipt_sha256.clone(),raw);}
+            }
         }Ok(())
     }
     fn commit(&mut self,request:&Request,request_encoded:&str,reply_encoded:&str,keys:&AdmittedKeys,trust:&dyn EnvelopeKeyTrust,
@@ -252,20 +279,23 @@ impl Service {
         require(self.configuration.payload.permissions.contains(&Permission::StoreDispatchOriginal))?;
         let (original,raw,receipt)=dispatch_original(request_encoded,reply_encoded,&self.scope,keys,trust,time)?;
         require(request.deadline_boottime_nanos==original.deadline_boottime_nanos && request.replay_id_sha256==original.replay_id_sha256)?;
+        let replay=self.store.replay(request_encoded,reply_encoded)?;
         for commit in self.store.originals() {
             let p=&commit.payload;
             let prior:Request=guest::exact(&URL_SAFE_NO_PAD.decode(&p.request_original_base64url).map_err(fail)?)?;
             if prior.replay_id_sha256==original.replay_id_sha256 || p.request_original_sha256==Sha256Digest::compute(&raw) {
-                require(p.request_original_base64url==request_encoded && p.reply_original_base64url==reply_encoded)?;
+                require(replay && p.request_original_base64url==request_encoded && p.reply_original_base64url==reply_encoded)?;
                 return Ok(Sha256Digest::compute(&canonical_json_bytes(commit)?));
             }
             if let (Some(prior),Some(next))=(&p.receipt,&receipt) {
                 if prior.persistence_receipt_sha256==next.persistence_receipt_sha256 {
                     require(canonical_json_bytes(prior)?==canonical_json_bytes(next)?)?;
-                    return Ok(Sha256Digest::compute(&canonical_json_bytes(commit)?));
                 }
             }
         }
+        require(!replay)?;
+        // A shared business receipt is not this invocation's final-original
+        // record. Distinct admitted invocations persist their own exact pair.
         let (sequence,previous_head_sha256)=self.store.next()?;
         let local=keys.keys.get(&AuthorityRole::CustodyStoreResponse).ok_or(ShadowError::SignerBindingMismatch)?;
         let payload=CommitPayload{api_version:"serverware.nativeShadowPersistenceCommit/v1".into(),guest:keys.association.binding(),

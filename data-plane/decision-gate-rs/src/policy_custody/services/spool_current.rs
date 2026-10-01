@@ -161,8 +161,9 @@ impl Gate {
                 .map_err(|_|"durable signature invalid")?,&Signature::from_slice(&raw).map_err(|_|"durable signature invalid")?)
                 .map_err(|_|"durable signature invalid")
         }).map_err(|_|invalid())?;
-        require(self.records.iter().all(|(record,_)|record.command.request().binding().operation_id_sha256!=request.binding().operation_id_sha256
-            && record.command.request().binding().replay_id_sha256!=request.binding().replay_id_sha256))?;
+        for (record,_) in &self.records {
+            require(!super::completed_operation::relation(record.command.request().binding(),request.binding()).map_err(|_|invalid())?)?;
+        }
         Ok((result,transition))
     }
     fn apply(&mut self,record:Record,transition:Transition)->Result<(),ServiceError>{
@@ -179,7 +180,15 @@ impl Gate {
     pub(super) fn handle(&mut self,raw:&[u8],owner:&impl Owner)->Result<Option<Vec<u8>>,ServiceError>{
         if !is_command(raw)?{return Ok(None);}
         self.check()?;let command:Command=decode_canonical_frame(raw)?;let deadline=command.deadline()?;
-        self.bootstrap.require_deadline(deadline).map_err(|_|invalid())?;self.validate(&command)?;
+        self.bootstrap.require_deadline(deadline).map_err(|_|invalid())?;
+        require(boottime_now_nanos().map_err(|_|invalid())?<deadline)?;
+        for (record,transition) in &self.records {
+            if super::completed_operation::relation(record.command.request().binding(),command.request().binding()).map_err(|_|invalid())? {
+                require(record.command==command && record.owner_state_sha256==owner.generation_state(deadline)?)?;
+                return Ok(Some(encode_canonical_frame(transition)?));
+            }
+        }
+        self.validate(&command)?;
         require(boottime_now_nanos().map_err(|_|invalid())?<deadline && self.records.len()<MAX_RECORDS)?;
         let owner_state=owner.generation_state(deadline)?;
         let transition=owner.sign_spool_current(&Input{command:command.clone(),epoch:self.history.current_epoch().map_err(|_|invalid())?.epoch_reference(),

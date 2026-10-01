@@ -205,6 +205,34 @@ impl Gate {
         let now=boottime_now_nanos().map_err(|_|invalid())?;
         require(self.grant.payload.scope.issued_at_boottime_nanos<=now && now<self.grant.payload.scope.expires_at_boottime_nanos)
     }
+    fn require_new_binding(&self,request:&Dispatch)->Result<(),ServiceError>{
+        for (record,_) in &self.records {
+            require(!super::completed_operation::relation(record.command.request().binding(),request.binding()).map_err(|_|invalid())?)?;
+        }
+        Ok(())
+    }
+    fn retained_command(&self,command:&Command)->Result<Option<(&Record,&Reply)>,ServiceError>{
+        let mut exact=None;
+        for (record,reply) in &self.records {
+            if !super::completed_operation::relation(record.command.request().binding(),command.request().binding()).map_err(|_|invalid())? {
+                continue;
+            }
+            if &record.command==command {
+                require(exact.is_none())?;exact=Some((record,reply));
+            }else{
+                // A single invocation legitimately allocates, then commits.
+                // Its completed output can still feed a different invocation.
+                // Once committed, only the final exact Commit can replay;
+                // replaying its earlier allocation cannot reopen that stage.
+                require(match (&record.command.action,&command.action) {
+                    (Action::Claim(prior),Action::Commit(next))=>prior==&next.payload.claim,
+                    (Action::EffectClaim(prior),Action::EffectCommit{completion,..})=>prior==&completion.prepared.core.request,
+                    _=>false,
+                })?;
+            }
+        }
+        Ok(exact)
+    }
     fn origin(&self,claim:&Claim)->Result<Option<State>,ServiceError>{
         claim.validate(&self.grant.payload.scope)?;
         if let Some(ingress)=&claim.ingress {
@@ -230,14 +258,15 @@ impl Gate {
         let initial=self.origin(claim)?;let state=self.state.as_ref().or(initial.as_ref()).ok_or_else(invalid)?;
         require(state.effect_pending.is_none())?;
         self.grant.key(&claim.request)?;
-        require(self.records.iter().all(|(record,_)|record.command.request().binding().operation_id_sha256!=claim.request.binding().operation_id_sha256
-            && record.command.request().binding().replay_id_sha256!=claim.request.binding().replay_id_sha256))?;
+        self.require_new_binding(&claim.request)?;
         let (ordinal,predecessor,head,ingress,lane)=match &claim.request {
             Dispatch::BeginIngress{..}=>{require(state.pending.is_none() && state.openings.len()<64)?;
                 (state.ordinal.checked_add(1).ok_or_else(invalid)?,state.ordinal,state.head.clone(),state.next_ingress,0)},
             Dispatch::ReserveSpoolAppend{..}|Dispatch::AppendTerminal{..}=>{
                 require(state.pending.is_none())?;let (_,event)=self.grant.payload.scope.request(&claim.request)?;
-                require((!matches!(claim.request,Dispatch::AppendTerminal{..}) || !state.terminals.contains(&event.ingress_sequence))
+                // Terminal closes this ingress to new reservations as well
+                // as duplicate terminal records, not merely one operation ID.
+                require(!state.terminals.contains(&event.ingress_sequence)
                     && state.openings.get(&event.ingress_sequence)==Some(&(event.request_binding_sha256.clone(),event.request_commitment_sha256.clone())))?;
                 (state.ordinal.checked_add(1).ok_or_else(invalid)?,state.ordinal,state.head.clone(),event.ingress_sequence,0)
             },
@@ -317,6 +346,7 @@ impl Gate {
     }
     fn apply(&mut self,record:&Record,reply:&Reply)->Result<(),ServiceError>{
         require(record.grant_sha256==Sha256Digest::compute(&self.grant_raw))?;
+        require(self.retained_command(&record.command)?.is_none())?;
         match (&record.command.action,reply) {
             (Action::Claim(claim),Reply::Allocated(allocation))=>{
                 let expected=self.allocation_payload(claim,record.owner_state_sha256.clone(),allocation.payload.allocated_at_boottime_nanos)?;
@@ -387,9 +417,8 @@ impl Gate {
     fn effect_allocation(&self,request:&Dispatch,owner_state:Sha256Digest,observed:u64)->Result<effect::AllocationPayload,ServiceError>{
         require(self.grant.effects_selected())?;self.grant.payload.scope.binding(request)?;
         let state=self.state.as_ref().ok_or_else(invalid)?;
-        require(state.pending.is_none() && state.effect_pending.is_none()
-            && self.records.iter().all(|(r,_)|r.command.request().binding().operation_id_sha256!=request.binding().operation_id_sha256
-                && r.command.request().binding().replay_id_sha256!=request.binding().replay_id_sha256))?;
+        require(state.pending.is_none() && state.effect_pending.is_none())?;
+        self.require_new_binding(request)?;
         let (preparation,barrier)=match request {
             Dispatch::AppendActiveEffectBarrier{preparation,..}=>{
                 let p:crate::policy_shadow::ActiveEffectPreparation=decode_canonical_frame(&preparation.exact_bytes().map_err(|_|invalid())?)?;
@@ -434,10 +463,12 @@ impl Gate {
         if !wire::is_command(raw)?{return Ok(None);}
         self.check()?;let command:Command=decode_canonical_frame(raw)?;let deadline=command.deadline()?;
         self.bootstrap.require_deadline(deadline).map_err(|_|invalid())?;
-        require(boottime_now_nanos().map_err(|_|invalid())?<deadline && self.records.len()<MAX_RECORDS)?;
-        // No successful replay or timeout repair: exact retained state is
-        // diagnostic/recovery evidence, not permission to repeat an effect.
-        require(self.records.iter().all(|(record,_)|record.command!=command))?;
+        require(boottime_now_nanos().map_err(|_|invalid())?<deadline)?;
+        if let Some((record,reply))=self.retained_command(&command)? {
+            require(record.owner_state_sha256==owner.generation_state(deadline)?)?;
+            return Ok(Some(encode_canonical_frame(reply)?));
+        }
+        require(self.records.len()<MAX_RECORDS)?;
         let owner_state=owner.generation_state(deadline)?;
         let reply=match &command.action {
             Action::Claim(claim)=>{

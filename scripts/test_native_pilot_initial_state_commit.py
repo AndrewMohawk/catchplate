@@ -11,6 +11,7 @@ from __future__ import annotations
 import ast
 import codecs
 import fcntl
+import importlib
 import os
 from pathlib import Path
 import stat
@@ -63,6 +64,9 @@ class InitialStateCommitControls(unittest.TestCase):
         # Private storage chroots intentionally contain no Python library.
         # Load the real text codec before entering them; do not stub _boot.
         codecs.lookup("ascii")
+        # StateStore lazily imports its fixed directory profile. Standalone
+        # reruns must not depend on another suite having already loaded it.
+        importlib.import_module("serverware.native_pilot_startup_profile")
         directory = tempfile.TemporaryDirectory(prefix="initial-state-commit-fixture-", dir=os.environ.get("TMPDIR"))
         cls.addClassCleanup(directory.cleanup)
         cls.addClassCleanup(runtime_fixture.thaw, Path(directory.name))

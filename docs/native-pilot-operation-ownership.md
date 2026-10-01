@@ -1,6 +1,6 @@
 # Native pilot operation ownership and cleanup
 
-This is a source-backed architecture decision for `.393`, not an implementation
+This is a source-backed architecture decision from `.393`, updated by `.394`, not an implementation
 or runtime acceptance claim. The selected native dispatcher and the existing
 process-termination settlement contract currently describe different ownership
 models. Neither a durable request fence nor successful service shutdown closes
@@ -115,13 +115,18 @@ choose helper-child topology merely to make an existing boolean pass.
    the connected execution and failure paths; source completeness, helper
    registration, and thread/service shutdown remain insufficient evidence.
 
-The next source pass must not mistake existing terminal append for complete
-retirement. In `spool_head.rs`, terminal allocation checks pending allocations,
-but does not require all retained effect barriers consumed; regular reservation
-also lacks the terminal-ingress guard already used by effect allocation.
-Consumption can include `OutcomeUnknown` or `ReconcileRequired`, so even a
-consumed barrier does not prove resolved effects. Native signer `used`/`finished`
-sets and cleared flights likewise do not provide durable restart-safe retirement.
-Implement authenticated close-before-settle transitions and an exact outstanding
-effect inventory, with explicit unresolved refusal, before producing a successor
-terminal statement. These findings are source review, not live failure evidence.
+The `.394` [invocation fences](native-pilot-invocation-fences.md) now reject new
+spool reservations on terminal ingress and operation/replay/fence aliases in the
+bridge, four ordinary gates and native persistence. This is not whole-ingress
+effect settlement. Consumption can include `OutcomeUnknown` or
+`ReconcileRequired`; a completed invocation can also leave a valid reservation or
+barrier for a later, different operation. Do not conflate those lifetimes.
+
+Further review found that the fixed native signers' final Finish replies follow
+their last operation work, on serial, fixed-peer connections. Combined with the
+bridge's durable start/completion and alias guards, this provides a possible
+successful-invocation proof route without a new journal in every signer. Existing
+in-memory `used`/`finished` sets alone are still insufficient. Bind authentic
+final replies and durable originals under an explicit successor; external roles
+and uncertain/aborted attempts require their own evidence. These are source
+findings, not live quiescence or terminal-settlement proof.

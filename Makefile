@@ -619,6 +619,7 @@ override CODER_ISOLATED_TEST_SCRIPTS := \
 	scripts/test_authority_primary_contract.py \
 	scripts/test_bootstrap_metadata_store.py \
 	scripts/test_provision_metadata_roles.py \
+	scripts/test_development_policy_genesis.py \
 	scripts/test_control_plane_optional_startup.py \
 	scripts/test_demo_seed_policy.py \
 	scripts/test_oidc_session_activation_delivery_facade.py \

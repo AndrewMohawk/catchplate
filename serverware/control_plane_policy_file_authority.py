@@ -37,14 +37,21 @@ class CurrentPolicyAuthority:
         from serverware.control_plane_policy_file_publication import PolicyFilePublication, _require, _sha
         from serverware.control_plane_policy_file_genesis import GenesisPolicyAuthority
         from serverware.control_plane_policy_genesis_maintenance import MaintenanceOwner, GenesisAdmissionRead
-        _require((type(publication) is PolicyFilePublication and cls in {CurrentPolicyAuthority, GenesisPolicyAuthority}
-            and publication.consumed is not None) or (type(publication) is MaintenanceOwner and cls is GenesisAdmissionRead))
+        ordinary = (type(publication) is PolicyFilePublication and cls in {CurrentPolicyAuthority, GenesisPolicyAuthority}
+            and publication.consumed is not None) or (type(publication) is MaintenanceOwner and cls is GenesisAdmissionRead)
+        offline = False
+        if not ordinary and cls.__module__ == "serverware.development_policy_genesis":
+            from serverware.development_policy_genesis import OfflineDevelopmentGenesis, GenesisRead
+            offline = type(publication) is OfflineDevelopmentGenesis and cls is GenesisRead
+        _require(ordinary or offline)
         publication.check()
         owner = object.__new__(cls)
         owner.publication = publication
         owner.connection = owner.parent = owner.descriptor = None
         owner.original = None
         owner.configuration = (os.environ.get(cls.DSN_PATH), os.environ.get(cls.DSN_SHA))
+        if offline:
+            publication._retain_authority(owner)
         try:
             path, digest = owner.configuration
             _require(type(path) is str and Path(path).is_absolute() and type(digest) is str)
@@ -68,7 +75,8 @@ class CurrentPolicyAuthority:
             owner.check()
             return owner
         except BaseException:
-            owner.close()
+            if not offline:
+                owner.close()
             raise
 
     def _contract(self):

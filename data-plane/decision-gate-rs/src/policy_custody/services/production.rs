@@ -317,11 +317,18 @@ pub(super) struct ProductionRpcRuntimeConfigV4 {
     #[serde(default, skip_serializing_if = "Option::is_none",
         deserialize_with = "crate::policy_shadow::deserialize_optional_present")]
     ordinary_initial_histories: Option<initial_history::Members>,
+    #[serde(default, skip_serializing_if="Option::is_none",
+        deserialize_with="crate::policy_shadow::deserialize_optional_present")]
+    helper_bootstrap: Option<super::helper_initial::Manifest>,
 }
 
 impl ProductionRpcRuntimeConfigV4 {
     pub(super) fn initial_history_selected(&self) -> bool {
-        self.api_version == super::spool_head_client::INITIAL_HISTORY_RUNTIME
+        matches!(self.api_version.as_str(), super::spool_head_client::INITIAL_HISTORY_RUNTIME
+            |super::spool_head_client::HELPER_INITIAL_RUNTIME)
+    }
+    pub(super) fn helper_initial_selected(&self) -> bool {
+        self.api_version == super::spool_head_client::HELPER_INITIAL_RUNTIME
     }
     pub(super) fn native_driver_selection(&self)->Result<(super::super::super::Sha256Digest,super::super::super::Sha256Digest),ServiceRunnerError>{
         self.validate()?;Ok((self.expected_driver_process_identity_sha256.clone(),
@@ -370,12 +377,13 @@ impl ProductionRpcRuntimeConfigV4 {
             |(super::spool_head_client::RUNTIME,Some(_),Some(_),Some(_))
             |(super::spool_head_client::COMPLETION_RUNTIME,Some(_),Some(_),Some(_))
             |(super::spool_head_client::EFFECTS_RUNTIME,Some(_),Some(_),Some(_))
-            |(super::spool_head_client::INITIAL_HISTORY_RUNTIME,Some(_),Some(_),Some(_)))
+            |(super::spool_head_client::INITIAL_HISTORY_RUNTIME,Some(_),Some(_),Some(_))
+            |(super::spool_head_client::HELPER_INITIAL_RUNTIME,Some(_),Some(_),Some(_)))
             || self.spool.as_ref().is_some_and(|value|value.completion_selected())
                 != matches!(self.api_version.as_str(),super::spool_head_client::COMPLETION_RUNTIME
-                    |super::spool_head_client::EFFECTS_RUNTIME|super::spool_head_client::INITIAL_HISTORY_RUNTIME)
+                    |super::spool_head_client::EFFECTS_RUNTIME|super::spool_head_client::INITIAL_HISTORY_RUNTIME|super::spool_head_client::HELPER_INITIAL_RUNTIME)
             || self.spool.as_ref().is_some_and(|value|value.effects_selected())
-                != matches!(self.api_version.as_str(),super::spool_head_client::EFFECTS_RUNTIME|super::spool_head_client::INITIAL_HISTORY_RUNTIME)
+                != matches!(self.api_version.as_str(),super::spool_head_client::EFFECTS_RUNTIME|super::spool_head_client::INITIAL_HISTORY_RUNTIME|super::spool_head_client::HELPER_INITIAL_RUNTIME)
             || self.startup_timeout_millis == 0
             || self.startup_timeout_millis > 30_000
             || !self.listener_socket_path.is_absolute()
@@ -406,6 +414,7 @@ impl ProductionRpcRuntimeConfigV4 {
             ));
         }
         initial_history::validate(self)?;
+        initial_history::validate_helper(self)?;
         self.expected_facade_peer.checked()?;
         if let Some(selection)=&self.generation_admission {selection.validate()?;}
         self.journal_directory_identity.validate()?;
@@ -2604,6 +2613,20 @@ fn run_production_rpc_service_loaded_inner(
         } else {
             AuthenticatedInheritedSeqpacket::from_inherited(socket,expected_peer)?
         };
+        if configured.service_role == TrustedHostServiceRoleV3::BoundedCleanupHelper {
+            if let Some(manifest) = &loaded.value.helper_bootstrap {
+                if manifest.deadline.absolute_boottime_nanos() > startup_deadline {
+                    return Err(ServiceRunnerError::invalid("initial helper bootstrap exceeds original startup deadline"));
+                }
+                bootstrap.check()?;
+                // The seal is a genuine authenticated socket response, checked
+                // only after the helper's real durable initialization/seal.
+                // Existing role handshakes and five-service readiness remain
+                // mandatory and are not replaced by this startup exchange.
+                super::helper_initial::initialize(&authenticated, manifest)?;
+                bootstrap.check()?;
+            }
+        }
         for configured_handshake in &configured.handshakes {
             if configured_handshake
                     .request

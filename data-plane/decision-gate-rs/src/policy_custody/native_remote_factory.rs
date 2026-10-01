@@ -28,12 +28,14 @@ pub(in crate::policy_shadow) fn require_runtime(runtime:&serde_json::Value)->Res
     match runtime.get("apiVersion").and_then(serde_json::Value::as_str) {
         Some("serverware.policyCustodyProductionRpcRuntime/v5"|"serverware.policyCustodyProductionRpcRuntime/v6"
             |"serverware.policyCustodyProductionRpcRuntime/v7"|"serverware.policyCustodyProductionRpcRuntime/v8")=>Ok(()),
-        Some("serverware.policyCustodyProductionRpcRuntime/v9"|"serverware.policyCustodyProductionRpcRuntime/v10")=>{
-            if runtime.get("apiVersion").and_then(serde_json::Value::as_str)==Some("serverware.policyCustodyProductionRpcRuntime/v10") {
+        Some("serverware.policyCustodyProductionRpcRuntime/v9"|"serverware.policyCustodyProductionRpcRuntime/v10"
+            |"serverware.policyCustodyProductionRpcRuntime/v11")=>{
+            if matches!(runtime.get("apiVersion").and_then(serde_json::Value::as_str),
+                Some("serverware.policyCustodyProductionRpcRuntime/v10"|"serverware.policyCustodyProductionRpcRuntime/v11")) {
                 super::services::production::validate_initial_history_runtime(&canonical_json_bytes(runtime)?)
                     .map_err(|_|ShadowError::BindingDrift)?;
             } else {
-                ensure(runtime.get("ordinaryInitialHistories").is_none())?;
+                ensure(runtime.get("ordinaryInitialHistories").is_none() && runtime.get("helperBootstrap").is_none())?;
             }
             // The actual measured bridge validates these independently signed
             // ordinary history grants. The receiving factory additionally pins

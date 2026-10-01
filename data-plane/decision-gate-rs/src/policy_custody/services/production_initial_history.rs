@@ -18,11 +18,50 @@ pub(super) struct Member {
 
 pub(super) type Members = BTreeMap<TrustedHostServiceRoleV3, Member>;
 
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct OrdinaryRuntime {
-    runtime: RuntimeConfigHeaderV3,
-    service: serde_json::Value,
+fn ordinary_header(role: TrustedHostServiceRoleV3, raw: &[u8]) -> Result<RuntimeConfigHeaderV3, ServiceRunnerError> {
+    // Literal ordinary originals are flat {runtime, ...role-specific fields}.
+    // Decode the actual closed consumer type; never invent a `service` wrapper.
+    use super::super::*;
+    let header = match role {
+        TrustedHostServiceRoleV3::DurableRecoveryStore => decode_canonical_frame::<DurableRecoveryStoreRuntimeConfigV3>(raw)?.runtime,
+        TrustedHostServiceRoleV3::CleanupAuthorizationConsumer => decode_canonical_frame::<CleanupAuthorizationConsumerRuntimeConfigV3>(raw)?.runtime,
+        TrustedHostServiceRoleV3::RecoveryTargetProvider => decode_canonical_frame::<RecoveryTargetProviderRuntimeConfigV3>(raw)?.runtime,
+        TrustedHostServiceRoleV3::CurrentSignatureAuthority => decode_canonical_frame::<CurrentSignatureAuthorityRuntimeConfigV3>(raw)?.runtime,
+        TrustedHostServiceRoleV3::BoundedCleanupHelper => {
+            let value: BoundedCleanupHelperRuntimeConfigV3 = decode_canonical_frame(raw)?;
+            require(if value.runtime.api_version == helper_initial::RUNTIME {
+                value.initial_endpoint_histories.is_some() && value.initial_endpoint_pins.is_some()
+            } else { value.initial_endpoint_histories.is_none() && value.initial_endpoint_pins.is_none() })?;
+            value.runtime
+        }
+    };
+    require(header.api_version != helper_initial::RUNTIME || role == TrustedHostServiceRoleV3::BoundedCleanupHelper)?;
+    Ok(header)
+}
+
+pub(super) fn validate_helper(runtime: &ProductionRpcRuntimeConfigV4) -> Result<(), ServiceRunnerError> {
+    require(runtime.helper_initial_selected() == runtime.helper_bootstrap.is_some())?;
+    let Some(manifest) = &runtime.helper_bootstrap else { return Ok(()); };
+    manifest.validate()?;
+    let member = runtime.ordinary_initial_histories.as_ref()
+        .and_then(|members| members.get(&TrustedHostServiceRoleV3::BoundedCleanupHelper))
+        .ok_or_else(|| error("initial helper runtime member absent"))?;
+    let helper: super::super::BoundedCleanupHelperRuntimeConfigV3 = decode_canonical_frame(member.runtime_original.as_bytes())?;
+    helper.runtime.validate()?;
+    let members = helper.initial_endpoint_histories.as_ref().ok_or_else(|| error("initial helper role histories absent"))?;
+    let pins = helper.initial_endpoint_pins.as_ref().ok_or_else(|| error("initial helper role pins absent"))?;
+    require(helper.runtime.api_version == super::super::helper_initial::RUNTIME
+        && pins.keys().copied().collect::<Vec<_>>() == super::super::helper_initial::ROLES
+        && manifest.service_configuration_sha256 == Sha256Digest::compute(member.runtime_original.as_bytes())
+        && manifest.operation_generation == helper.runtime.operation_generation
+        && manifest.shared_configuration_sha256 == helper.runtime.shared_configuration_sha256
+        && manifest.initial_endpoint_history_sha256 == super::super::helper_initial::history_pins(members)?
+        && runtime.expected_helper_endpoint_roles.iter().copied().collect::<Vec<_>>() == super::super::helper_initial::ROLES)?;
+    let session = runtime.service_sessions.iter().find(|session| session.service_role == TrustedHostServiceRoleV3::BoundedCleanupHelper)
+        .ok_or_else(|| error("initial helper session absent"))?;
+    require(session.expected_socket_path == helper.runtime.listener_socket_path
+        && session.handshakes.iter().map(|h| h.endpoint_role).collect::<Vec<_>>() == super::super::helper_initial::ROLES
+        && session.handshakes.iter().all(|h| h.request.deadline == manifest.deadline))
 }
 
 fn require(value: bool) -> Result<(), ServiceRunnerError> {
@@ -124,11 +163,13 @@ pub(super) fn load(runtime: &ProductionRpcRuntimeConfigV4,
     for configured in &runtime.histories {
         let role = trusted_service_role(configured.service_role);
         let member = members.get(&role).ok_or_else(|| error("initial bridge role missing"))?;
-        let ordinary: OrdinaryRuntime = decode_canonical_frame(member.runtime_original.as_bytes())?;
-        let header = &ordinary.runtime;
+        let header = ordinary_header(role, member.runtime_original.as_bytes())?;
+        let header = &header;
         header.validate()?;
-        require(ordinary.service.is_object()
-            && runtime.expected_service_configuration_sha256.get(&role)
+        if role == TrustedHostServiceRoleV3::BoundedCleanupHelper {
+            require(runtime.helper_initial_selected() == (header.api_version == super::super::helper_initial::RUNTIME))?;
+        }
+        require(runtime.expected_service_configuration_sha256.get(&role)
                 == Some(&Sha256Digest::compute(member.runtime_original.as_bytes()))
             && header.authority_history_manifest_sha256 == configured.manifest_sha256
             && header.authority_history_root_key_id == configured.root_key_id
@@ -152,6 +193,11 @@ pub(super) fn load(runtime: &ProductionRpcRuntimeConfigV4,
             && uids.insert(grant.guest().uid) && gids.insert(grant.guest().gid))?;
         super::super::initial_history::require_remote_guest(&exact, header, role, &grant)?;
         let (scope_raw, issued, expires) = grant.history_scope_original()?;
+        if role == TrustedHostServiceRoleV3::BoundedCleanupHelper {
+            if let Some(manifest) = &runtime.helper_bootstrap {
+                require(manifest.deadline.absolute_boottime_nanos() <= expires)?;
+            }
+        }
         let scope: serde_json::Value = decode_canonical_frame(&scope_raw)?;
         scope_binding(&scope, configuration)?;
         if let Some(previous) = &common_scope { require(previous == &scope_raw)?; }
@@ -169,4 +215,37 @@ pub(super) fn load(runtime: &ProductionRpcRuntimeConfigV4,
         take_history(&mut histories, HistoricalServiceRoleV3::CurrentSignatureAuthority)?,
         take_history(&mut histories, HistoricalServiceRoleV3::BoundedCleanupHelper)?,
     )
+}
+
+#[cfg(test)]
+mod flat_runtime_tests {
+    use super::*;
+
+    #[test]
+    fn actual_flat_helper_runtime_is_decoded_without_synthetic_service_wrapper() {
+        // Syntactic public fixture only, not authenticated runtime admission.
+        let pin = Sha256Digest::compute(b"SYNTHETIC flat ordinary runtime");
+        let peer = serde_json::json!({"uid":1,"gid":2,"pid":3,"processIdentitySha256":pin,
+            "startTimeTicks":4,"executableDevice":5,"executableInode":6,"executableLength":7,
+            "executableSha256":pin,"cgroupPathSha256":pin,"cgroupMountId":8,"cgroupInode":9,
+            "securityLabelSha256":pin,"configurationGenerationSha256":pin});
+        let header = serde_json::json!({"apiVersion":"serverware.policyCustodyServiceRuntimeConfig/v5",
+            "startupTimeoutMillis":10,"operationGeneration":1,"serviceRestartEpoch":1,"readinessEpoch":1,
+            "durabilityWorkerQueueDepth":8,"maximumDurabilityWorkerNanos":100,
+            "authorityHistoryManifestSha256":pin,"authorityHistoryManifestCredential":"synthetic-history",
+            "authorityHistoryRootKeyId":pin,"authorityHistoryRootKeySpkiSha256":pin,
+            "productionDispatchProtocolSetSha256":pin,"deploymentGenerationSha256":pin,
+            "sharedConfigurationSha256":pin,"listenerSocketPath":"/run/synthetic/helper.sock",
+            "expectedPeer":peer,"activationDirectoryIdentities":{}});
+        let flat = serde_json::json!({"runtime":header,"signingKeyCredential":"synthetic-signing",
+            "currentHeadAuthorityVerifyingKeyCredential":"synthetic-public","currentHeadAuthorityKeyId":pin,
+            "endpointProcessIdentitySha256":pin,"endpointGeneration":1,"helperGeneration":1,
+            "signingKeyId":pin,"checkpointSequence":1,"currentKeyAuthorizationCheckpointSha256":pin,
+            "revocationGeneration":1,"revocationRootSha256":pin});
+        let raw = encode_canonical_frame(&flat).unwrap();
+        assert!(ordinary_header(TrustedHostServiceRoleV3::BoundedCleanupHelper,&raw).is_ok());
+        let mut service = flat.clone(); service.as_object_mut().unwrap().remove("runtime");
+        let wrapped = encode_canonical_frame(&serde_json::json!({"runtime":header,"service":service})).unwrap();
+        assert!(ordinary_header(TrustedHostServiceRoleV3::BoundedCleanupHelper,&wrapped).is_err());
+    }
 }

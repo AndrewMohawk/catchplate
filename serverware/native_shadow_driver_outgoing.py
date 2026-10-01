@@ -111,7 +111,7 @@ def _selection(raw, launch_version, bridge_uid):
             and spool["originFdName"] == "generation-origin")
         for key in ("headGrantOriginal", "currentGrantOriginal") + (("cleanupGrantOriginal",) if suffix >= 9 else ()):
             p.require(type(spool[key]) is str and spool[key].isascii())
-            p.document(spool[key].encode("ascii"), 131072 if suffix == 10 and key != "headGrantOriginal" else 65536)
+            p.document(spool[key].encode("ascii"), 131072 if suffix in (10, 11) and key != "headGrantOriginal" else 65536)
     outgoing, names, roles, excluded = {}, {"production-listener", "production-journal", "generation-origin"}, set(), set()
     sessions = runtime["serviceSessions"]
     p.require(type(sessions) is list and len(sessions) == 5)

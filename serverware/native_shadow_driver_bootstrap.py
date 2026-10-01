@@ -462,7 +462,7 @@ class DriverBootstrap:
             and p.canonical(scope["operation"]) == inputs._operation)
         runtime = bridge_runtime.shape(inputs._runtime_raw)
         p.require(bridge_runtime.version(runtime) != 10 or suffix == "v4")
-        maximum = bridge_runtime.MAX_BRIDGE_INPUT if bridge_runtime.version(runtime) == 10 else 1024 * 1024
+        maximum = bridge_runtime.MAX_BRIDGE_INPUT if bridge_runtime.version(runtime) in (10, 11) else 1024 * 1024
         bundle = p.fields(p.document(public_originals, maximum), ("runtimeOriginal", "deliveryOriginal", "generationOriginals"))
         pins = p.fields(scope["originals"], ("runtimeSha256", "deliverySha256", "generationGrants"))
         p.fields(bundle["generationOriginals"], ROLES); p.fields(pins["generationGrants"], ROLES)

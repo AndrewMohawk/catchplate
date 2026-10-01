@@ -51,17 +51,22 @@ class InitialRequests:
             # there is no resampling/retry and no caller-selected entropy.
             owner._issued = owner._previous = o.clock()
             p.require(before <= owner._issued)
-            entropy = os.getrandom(32 * len(g.ROLES))
-            p.require(len(entropy) == 32 * len(g.ROLES))
+            selections = tuple(profile.iter_selection(owner._selection))
+            entropy = os.getrandom(32 * len(selections))
+            p.require(len(entropy) == 32 * len(selections))
             rows = {}
-            for index, role in enumerate(g.ROLES):
-                selected = owner._selection[role]
+            helper = len(selections) != len(g.ROLES)
+            for index, (role, endpoint_role, selected) in enumerate(selections):
                 raw = profile.request_original(selected, entropy=entropy[index * 32:(index + 1) * 32],
                     issued_at_boottime_ns=owner._issued)
-                rows[role] = {name: selected[name] for name in profile.ROW_FIELDS[:4]}
-                rows[role].update(requestOriginal=raw.decode("ascii"), requestSha256=profile.head.request_sha256(raw))
+                row = {name: selected[name] for name in profile.ROW_FIELDS[:4]}
+                row.update(requestOriginal=raw.decode("ascii"), requestSha256=profile.head.request_sha256(raw))
+                if helper and role == g.ROLES[-1]:
+                    rows.setdefault(role, {})[endpoint_role] = row
+                else:
+                    rows[role] = row
             source = owner._source
-            owner._raw = p.canonical({"apiVersion": profile.API,
+            owner._raw = p.canonical({"apiVersion": profile.HELPER_API if helper else profile.API,
                 "launchSha256": p.sha(source["launch_original"]),
                 "preparationSha256": p.sha(source["preparation_original"]),
                 "resourcesSha256": p.sha(source["resources_original"]),
@@ -142,6 +147,14 @@ class InitialRequests:
                 and p.sha(history_raw) == entry["original"]["sha256"])
             g._admit_grant(signed_raw=item["grant_raw"], guest=guest, runtime_raw=runtime_raw,
                 history_raw=history_raw, delivery_raw=delivery_raw, now=now, **inputs._profile(role))
+            if role == g.ROLES[-1] and header["apiVersion"] == profile.initial.HELPER_RUNTIME_API:
+                runtime = profile.runtime.validate_runtime(role, runtime_raw)
+                members = profile.initial.helper_endpoint_histories(history_raw, runtime=runtime)
+                for name, expected in profile.initial.helper_public_keys(runtime, members, delivery["credentials"]).items():
+                    entries = [entry for entry in delivery["credentials"] if entry["name"] == name]
+                    held = [value for value in inputs._originals if type(value) is o.Original
+                        and value.path == entries[0]["original"]["path"]]
+                    p.require(len(held) == 1 and held[0].read() == expected)
             directories = dict(item["descriptors"])
             for name in state_owner.DIRECTORIES[role]:
                 fd = directories[name]
@@ -176,25 +189,28 @@ class InitialRequests:
         # all terminal clock checks consequently retain this authority bound.
         grant_deadline = profile.key._uint(source["grant_deadline"])
         p.require(now < grant_deadline)
-        for row in selected.values():
+        for _, _, row in profile.iter_selection(selected):
             row["deadline"] = min(row["deadline"], grant_deadline)
         return selected
+
+    def _deadline(self):
+        return min(row["deadline"] for _, _, row in profile.iter_selection(self._selection))
 
     def check(self):
         try:
             self._owner()
             p.require(type(self._raw) is bytes and self._source is not None and self._selection is not None)
             now = o.clock()
-            p.require(self._issued <= self._previous <= now < min(item["deadline"] for item in self._selection.values()))
+            p.require(self._issued <= self._previous <= now < self._deadline())
             self._previous = now
             p.require(self._snapshot() == self._source and self._select(self._source, now) == self._selection)
             profile.shape(self._raw)
             after = o.clock()
-            p.require(now <= after < min(item["deadline"] for item in self._selection.values()))
+            p.require(now <= after < self._deadline())
             self._previous = after
             self._owner()
             terminal = o.clock()
-            p.require(after <= terminal < min(item["deadline"] for item in self._selection.values()))
+            p.require(after <= terminal < self._deadline())
             self._previous = terminal
         except BaseException:
             self._failed = True

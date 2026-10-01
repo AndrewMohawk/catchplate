@@ -15,6 +15,7 @@ from serverware import native_pilot_ordinary_key_profile as key
 
 p = g.p
 API = "serverware.nativePilotOrdinaryRuntimePolicy/v1"
+HELPER_API = "serverware.nativePilotOrdinaryRuntimePolicy/v2"
 MAX_POLICY = g.MAX_BYTES
 HISTORY_NAME = "authority-history"
 INSPECTION_NAME = "peer-inspection-policy"
@@ -99,7 +100,8 @@ def credentials(value):
 
 def shape(fragment):
     p.fields(fragment, ("apiVersion", "services"))
-    p.require(fragment["apiVersion"] == API)
+    p.require(fragment["apiVersion"] in (API, HELPER_API))
+    helper = fragment["apiVersion"] == HELPER_API
     rows = p.fields(fragment["services"], g.ROLES)
     for role, row in rows.items():
         p.fields(row, ("runtimeHeader", "service", "credentials"))
@@ -110,7 +112,8 @@ def shape(fragment):
         for field in HEADER[3:]:
             digest(header[field])
         credentials(row["credentials"])
-        service = p.fields(row["service"], SERVICE[role])
+        service = p.fields(row["service"], SERVICE[role] + (("initialEndpointRoles", "initialEndpointPins")
+            if helper and role == HELPER else ()))
         for field in SERVICE[role]:
             if field.endswith("Credential"):
                 name(service[field])
@@ -125,6 +128,10 @@ def shape(fragment):
             digest(service["genesisPredecessorReceiptSha256"])
         elif role == HELPER:
             key._uint(service["helperGeneration"])
+            if helper:
+                p.require(service["initialEndpointRoles"] == list(initial.HELPER_ENDPOINT_ROLES))
+                for selected in p.fields(service["initialEndpointPins"], initial.HELPER_ENDPOINT_ROLES).values():
+                    pin(selected)
         else:
             pin(service["serviceSigningPin"])
             if role == RECOVERY:
@@ -152,6 +159,10 @@ def bind_keys(role, row, authorities, endpoint_roles):
     expected.append((service[signing_name], selected["service"], True))
     if role in (DRS, CLEANUP, HELPER):
         expected.append((service["currentHeadAuthorityVerifyingKeyCredential"], selected["checkpoint"], False))
+    if role == HELPER and "initialEndpointPins" in service:
+        for selection in service["initialEndpointPins"].values():
+            expected.extend(((selection["endpointVerifyingKeyCredential"], selected["service"], False),
+                (selection["checkpointAuthorityVerifyingKeyCredential"], selected["checkpoint"], False)))
     if role == CLEANUP:
         target = service["cleanupAuthority"]
         expected.append((target["verifyingKeyCredential"], authorities[target["serviceRole"]]["service"], False))
@@ -163,7 +174,8 @@ def bind_keys(role, row, authorities, endpoint_roles):
             expected.append((service["lineageAuthorityVerifyingKeyCredential"], lineage, False))
         else:
             for item in service["currentSubjects"]:
-                p.require(subject(item["subject"]) == endpoint_roles[item["serviceRole"]])
+                allowed = endpoint_roles[item["serviceRole"]]
+                p.require(subject(item["subject"]) in (allowed if type(allowed) is tuple else (allowed,)))
                 pins.append((item["serviceRole"], item["pin"]))
         for target, selection in pins:
             expected.extend(((selection["endpointVerifyingKeyCredential"], authorities[target]["service"], False),
@@ -188,6 +200,11 @@ def validate_policy(fragment, *, ordinary_cold_originals, initial_policy):
     initial = p.fields(initial_policy["services"], g.ROLES)
     authorities = {role: initial[role]["authorities"] for role in g.ROLES}
     roles = {role: initial[role]["endpointRole"] for role in g.ROLES}
+    if fragment["apiVersion"] == HELPER_API:
+        # The static recipe selects roles, never future signed wrapper bytes.
+        from serverware import native_pilot_ordinary_initial_profile as initial_profile
+        p.require(roles[HELPER] in initial_profile.HELPER_ENDPOINT_ROLES)
+        roles[HELPER] = initial_profile.HELPER_ENDPOINT_ROLES
     for role, row in rows.items():
         raw = ordinary_cold_originals[role].encode("ascii")
         cold = g.configuration(raw, p.sha(raw), role)

@@ -15,6 +15,7 @@ pub(super) const RUNTIME:&str="serverware.policyCustodyProductionRpcRuntime/v7";
 pub(super) const COMPLETION_RUNTIME:&str="serverware.policyCustodyProductionRpcRuntime/v8";
 pub(super) const EFFECTS_RUNTIME:&str="serverware.policyCustodyProductionRpcRuntime/v9";
 pub(super) const INITIAL_HISTORY_RUNTIME:&str="serverware.policyCustodyProductionRpcRuntime/v10";
+pub(super) const HELPER_INITIAL_RUNTIME:&str="serverware.policyCustodyProductionRpcRuntime/v11";
 pub(super) const ORIGIN_FD:&str="generation-origin";
 #[derive(Debug,Clone,Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]

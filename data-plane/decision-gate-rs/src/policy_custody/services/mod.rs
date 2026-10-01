@@ -31,6 +31,7 @@ pub(super) mod dispatch_service;
 pub(super) mod generation_certification;
 pub(super) mod generation_recovery;
 mod initial_history;
+mod helper_initial;
 mod native_facade_lifecycle;
 pub(crate) use native_facade_lifecycle::{Prepared as PreparedNativeCustodyLifecycle,Owner as NativeCustodyLifecycleOwner};
 pub(in crate::policy_shadow) use native_facade_lifecycle::constructed::ConstructedDriver;
@@ -322,7 +323,8 @@ impl RuntimeConfigHeaderV3 {
         let ordinary_shape=matches!((self.api_version.as_str(),self.generation_admission.as_ref(),self.dispatch_admission.as_ref(),self.spool_head.as_ref(),self.spool_current.as_ref()),
                 (SERVICE_RUNTIME_CONFIG_VERSION,None,None,None,None)|(generation_service::RUNTIME,Some(_),None,None,None)
                 |(dispatch_service::RUNTIME,Some(_),Some(_),None,None)
-                |(spool_head::RUNTIME,Some(_),Some(_),Some(_),None)|(spool_head::RUNTIME,Some(_),Some(_),None,Some(_)));
+                |(spool_head::RUNTIME,Some(_),Some(_),Some(_),None)|(spool_head::RUNTIME,Some(_),Some(_),None,Some(_))
+                |(helper_initial::RUNTIME,Some(_),None,None,None));
         let effects_shape=self.api_version==active_effect_cleanup::RUNTIME && self.generation_admission.is_some()
             && matches!((self.dispatch_admission.as_ref(),self.spool_head.as_ref(),self.spool_current.as_ref(),self.spool_cleanup.as_ref()),
                 (Some(_),Some(_),None,None)|(Some(_),None,Some(_),None)|(None,None,None,Some(_)));
@@ -435,7 +437,7 @@ impl RuntimeConfigHeaderV3 {
             &self.authority_history_manifest_credential,
             MAX_CONFIG_BYTES,
         )?;
-        let guest_runtime=matches!(self.api_version.as_str(),generation_service::RUNTIME|dispatch_service::RUNTIME|spool_head::RUNTIME|active_effect_cleanup::RUNTIME);
+        let guest_runtime=matches!(self.api_version.as_str(),generation_service::RUNTIME|dispatch_service::RUNTIME|spool_head::RUNTIME|active_effect_cleanup::RUNTIME|helper_initial::RUNTIME);
         let exact_original_pinned_by_guest = guest_runtime
             && matches!(credentials,CredentialDirectory::Guest(_));
         if (guest_runtime && !exact_original_pinned_by_guest)
@@ -466,6 +468,9 @@ impl RuntimeConfigHeaderV3 {
         expected_role: TrustedHostServiceRoleV3,
         bootstrap: &Bootstrap, activation: &BTreeMap<String, OwnedFd>,
     ) -> Result<RuntimeAuthorityHistory, ServiceRunnerError> {
+        if self.api_version == helper_initial::RUNTIME && expected_role != TrustedHostServiceRoleV3::BoundedCleanupHelper {
+            return Err(ServiceRunnerError::invalid("initial helper runtime selected for a different service"));
+        }
         let bytes = self.authority_history_original(credentials)?;
         if initial_history::selected(&bytes)? {
             return initial_history::admit(&bytes, self, expected_role, bootstrap, activation);
@@ -803,6 +808,12 @@ struct BoundedCleanupHelperRuntimeConfigV3 {
     current_key_authorization_checkpoint_sha256: Sha256Digest,
     revocation_generation: u64,
     revocation_root_sha256: Sha256Digest,
+    #[serde(default, skip_serializing_if="Option::is_none",
+        deserialize_with="crate::policy_shadow::deserialize_optional_present")]
+    initial_endpoint_histories: Option<helper_initial::Histories>,
+    #[serde(default, skip_serializing_if="Option::is_none",
+        deserialize_with="crate::policy_shadow::deserialize_optional_present")]
+    initial_endpoint_pins: Option<BTreeMap<PolicyCustodyEndpointRole, EndpointTrustPinCredentialV3>>,
 }
 
 struct LoadedConfig<T> {
@@ -2018,11 +2029,28 @@ fn run_bounded_cleanup_helper_loaded(
         &loaded.credentials, TrustedHostServiceRoleV3::BoundedCleanupHelper,
         &bootstrap, &activation,
     )?;
+    let mut initial = match (loaded.value.runtime.api_version == helper_initial::RUNTIME,
+        loaded.value.initial_endpoint_histories.as_ref(), loaded.value.initial_endpoint_pins.as_ref()) {
+        (true, Some(histories), Some(pins)) => Some(initial_history::admit_helper_histories(
+            &loaded.value.runtime.authority_history_original(&loaded.credentials)?, histories, pins,
+            &loaded.value.runtime, &loaded.credentials, &bootstrap, &activation)?),
+        (false, None, None) => None,
+        _ => return Err(ServiceRunnerError::invalid("helper initialization requires its explicit complete successor runtime")),
+    };
+    let mut initial_deadline = initial.as_ref().and_then(|roles| roles.values().next()).map(|role| role.deadline.clone());
     let mut generation=generation_service::Gate::open(&loaded,&loaded.value.runtime,&bootstrap,&mut activation,
         TrustedHostServiceRoleV3::BoundedCleanupHelper)?;
     let startup_deadline = bootstrap.deadline(
         loaded.value.runtime.startup_timeout_millis,
     )?;
+    if let Some(original) = initial_deadline.as_mut() {
+        let gate = generation.as_ref().ok_or_else(|| ServiceRunnerError::invalid("initial helper generation authority absent"))?;
+        let prior = original.to_runtime().map_err(|error| ServiceRunnerError::invalid(error.to_string()))?;
+        let clipped = gate.initial_startup_deadline(startup_deadline.min(prior.absolute_nanos()))?;
+        *original = super::protocol::ProtocolBoottimeDeadline::from_runtime(
+            super::boottime::BoottimeDeadline::from_absolute_in_expected_domain(prior.domain(), clipped)
+                .map_err(|error| ServiceRunnerError::invalid(error.to_string()))?);
+    }
     let expected_peer = loaded.value.runtime.expected_peer.checked()?;
     require_exact_activation_names(
         &activation,
@@ -2067,7 +2095,7 @@ fn run_bounded_cleanup_helper_loaded(
                 .value
                 .current_head_authority_verifying_key_credential,
         )?;
-    let signer = CleanupHelperSigningAuthorityV3::new(
+    let mut signer = CleanupHelperSigningAuthorityV3::new(
         signing_key,
         current_head_authority,
         loaded.value.current_head_authority_key_id,
@@ -2082,6 +2110,7 @@ fn run_bounded_cleanup_helper_loaded(
         loaded.value.revocation_generation,
         loaded.value.revocation_root_sha256,
     )?;
+    if let Some(roles) = initial.take() { signer = signer.with_initial_roles(roles)?; }
     let report = TrustedHostNoTeeServiceReportV3::new(
         TrustedHostServiceRoleV3::BoundedCleanupHelper,
         loaded.value.runtime.operation_generation,
@@ -2113,7 +2142,7 @@ fn run_bounded_cleanup_helper_loaded(
             .runtime
             .deployment_generation_sha256
             .clone(),
-        loaded.exact_sha256,
+        loaded.exact_sha256.clone(),
         loaded.value.endpoint_process_identity_sha256,
         Some(signing_credential_sha256),
     )?;
@@ -2137,15 +2166,25 @@ fn run_bounded_cleanup_helper_loaded(
                     .shared_configuration_sha256
                     .clone(),
             )?;
+    if let Some(deadline) = initial_deadline {
+        let histories = loaded.value.initial_endpoint_histories.as_ref()
+            .ok_or_else(|| ServiceRunnerError::invalid("initial helper histories disappeared"))?;
+        server.select_initial_bootstrap(helper_initial::Receiver::new(
+            loaded.exact_sha256.clone(), &loaded.value.runtime, histories, deadline)?)?;
+    }
     if !activation.is_empty() {
         return Err(ServiceRunnerError::invalid(
             "cleanup-helper retained an unexpected activation descriptor",
         ));
     }
     while !server.bootstrap_is_sealed() {
+        if loaded.value.runtime.api_version == helper_initial::RUNTIME {
+            generation.as_ref().ok_or_else(|| ServiceRunnerError::invalid("initial helper generation authority absent"))?
+                .initial_startup_deadline(server.bootstrap_deadline(startup_deadline))?;
+        }
         let packet = receive_packet(
             handshake_transport.as_raw_fd(),
-            Some(startup_deadline),
+            Some(server.bootstrap_deadline(startup_deadline)),
         )?;
         let response = server.handle_authenticated_bootstrap_packet(
             ReceivedSeqpacket {
@@ -2154,14 +2193,18 @@ fn run_bounded_cleanup_helper_loaded(
             },
             startup_deadline,
         )?;
+        if loaded.value.runtime.api_version == helper_initial::RUNTIME {
+            generation.as_ref().ok_or_else(|| ServiceRunnerError::invalid("initial helper generation authority absent"))?
+                .initial_startup_deadline(server.bootstrap_deadline(startup_deadline))?;
+        }
         send_packet_until(
             handshake_transport.as_raw_fd(),
             &response,
             &[],
-            Some(startup_deadline),
+            Some(server.bootstrap_deadline(startup_deadline)),
         )?;
     }
-    server.readiness_seal()?;
+    server.expected_handshake_roles()?;
     perform_bounded_cleanup_handshakes(
         handshake_transport.as_raw_fd(),
         &server,
@@ -2175,8 +2218,12 @@ fn run_bounded_cleanup_helper_loaded(
             .runtime
             .expected_peer
             .configuration_generation_sha256,
-        startup_deadline,
+        server.bootstrap_deadline(startup_deadline),
     )?;
+    if loaded.value.runtime.api_version == helper_initial::RUNTIME {
+        generation.as_ref().ok_or_else(|| ServiceRunnerError::invalid("initial helper generation authority absent"))?
+            .initial_startup_deadline(server.bootstrap_deadline(startup_deadline))?;
+    }
     drop(handshake_transport);
     bootstrap.ready(
         TrustedHostServiceRoleV3::BoundedCleanupHelper,

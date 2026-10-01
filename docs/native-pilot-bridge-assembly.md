@@ -6,7 +6,10 @@ runtime evidence. Service material is connected; the `.384`
 signing/history/versioned-reader paths. The `.385`
 [preparation batch](native-pilot-bridge-preparation.md) adds genuine request/peer
 acquisition, conductor binding and bridge-specific authorization producers.
-No bridge composer coverage, service
+The `.386` [fresh-helper path](native-pilot-helper-initial.md) adds role-complete
+request/history validation, durable native initialization before handshakes,
+runtime/v11 with launch/v7, and pure bridge-launch preparation. Its verification
+is pending at source freeze. No bridge composer coverage, service
 availability or successful launch follows from this document.
 
 ## Existing phase and installer
@@ -27,13 +30,15 @@ configuration. Runtime is fixed at
 `/etc/serverware/native-pilot-inputs/bridge-runtime.json`; outgoing configuration
 is `/etc/serverware/native-shadow-driver-outgoing.json`. The legacy v9 runtime
 keeps its 64 KiB bound and launch/v5. Explicit runtime/v10 uses launch/v6 and a
-4 MiB ceiling, with a 16 MiB bridge bundle; outgoing remains 8 KiB. The successor
+4 MiB ceiling, with a 16 MiB bridge bundle; runtime/v11 uses launch/v7 under the
+same bounds and requires the fresh-helper bootstrap manifest. Outgoing remains
+8 KiB. The successor
 is needed because valid Current/Cleanup originals may each exceed the legacy
 runtime's entire 64 KiB budget. Version-specific branches retain old refusals.
 
 The outgoing original is completely derivable: configuration/window/observation
 hashes, original invocation, actual cold pin, runtime pin and fixed
-`nativeProofBridgeLaunch/v5` or the explicit v10-selected `/v6`. The exact driver observation is the retained
+`nativeProofBridgeLaunch/v5`, v10-selected `/v6`, or v11-selected `/v7`. The exact driver observation is the retained
 bootstrap original, not a new sample or a renewed window.
 
 ## Runtime sources, not a literal template
@@ -141,7 +146,9 @@ history results are explicit initial-history wrappers. The `.384` explicit v10
 adapter reuses [initial-history admission](../data-plane/decision-gate-rs/src/policy_custody/services/initial_history.rs)
 with actual ordinary runtime/grant originals and the admitted bridge context,
 retaining initial-state/checkpoint/three-authority semantics. Legacy raw history
-remains separate. Complete supervisor composition and live receiver acceptance
+remains separate. The `.386` adapter corrects ordinary decoding to the actual
+five closed flat runtime types; v11 retains these joins and adds explicit helper
+initialization. Complete supervisor composition and live receiver acceptance
 are still required; a successful public shape check does not establish them.
 
 The four non-native signers are `unavailable-ingress`, `spool-compaction`,
@@ -175,30 +182,32 @@ launch: `native-role-keys-bridge`, `native-key-admission-bridge`,
 `native-verifier-transport-bridge`. Their producers now exist. Each needs the
 authenticated assignment-supervisor capability, not the bridge C9 cold key.
 There is no bridge request-commitment/HMAC job. The pure endpoint-launch builder
-still excludes bridge; a bridge-specific preparation/result adapter must reuse
-the real installer's public validation, actual TrustedTime grant and original
-bootstrap transport. Do not widen the ten-role endpoint builders.
+still excludes bridge. The `.386` bridge-specific preparation/result adapter
+now reuses the real installer's public validation, actual TrustedTime grant and
+original bootstrap transport. It checks nine fixed public pins without writing
+or republishing runtime; retained supervisor composition and actual publication
+remain unconnected. The ten-role endpoint builders are unchanged.
 
 ## Helper bootstrap precedes complete handshake composition
 
-The `.385` request export has one request per ordinary service, and its runtime
-association check binds every handshake for that service to that single
-endpoint role. This is not sufficient for multi-role cleanup-helper startup.
-The actual [helper](../data-plane/decision-gate-rs/src/policy_custody/services/bounded_cleanup_helper.rs)
-derives the ordered distinct endpoint roles from its durably sealed, nonempty
-effect manifest. The [service runner](../data-plane/decision-gate-rs/src/policy_custody/services/mod.rs)
-receives authenticated bootstrap packets until that seal exists, then performs
-the helper handshakes. The
-[production bridge](../data-plane/decision-gate-rs/src/policy_custody/services/production.rs)
-currently proceeds from ordinary connection directly to configured handshakes;
-this path does not implement that helper bootstrap exchange.
+The `.385` one-request-per-service export was insufficient for multi-role helper
+startup. The `.386` [explicit fresh path](native-pilot-helper-initial.md) selects
+helper runtime/v9 with four separately signed histories/pins. Request export/v2
+contains eight real requests: four other services plus four helper roles. The
+helper-specific current-head Input/v2 binds each selected member and original
+runtime; currentness remains independently approved.
 
-The next connected slice must resolve the actual manifest/bootstrap ownership,
-role-indexed request/history/currentness coverage and bootstrap-before-handshake
-ordering. Selecting `expectedHelperEndpointRoles` in policy, repeating one head,
-or relaxing the single-role association is not a substitute. Do not assume five
-current-head jobs complete this dependency graph; its cardinality depends on
-the authenticated helper role set.
+The actual helper now durably records `InstallInitial` against an empty journal,
+then `SealInitial` against the actual persisted head, before admitting its four
+ordered handshakes. Production runtime/v11 executes this exchange before those
+handshakes, under the original startup/request/grant deadline minimum. Legacy
+effect-manifest bootstrap remains separate. No initial seal supplies a real
+`ReapWorker` PIDFD or its parent/subreaper registration and proof.
+
+The remaining source connection is the retained supervisor role ceremonies and
+request-bound currentness composition, followed by complete runtime/launch
+composition. Selecting roles or repeating one head is not a substitute. Do not
+infer a complete expanded job count from the existing inventory.
 
 For later composition, the handshake wire API is
 `serverware.policyCustodyTrustedHostService/v4`, while its digest uses

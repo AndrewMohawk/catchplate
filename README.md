@@ -153,6 +153,9 @@ connects actual-owner trust requests and process observations to the conductor,
 plus bridge-only authorization producers. Its focused checks pass after one
 fixture-only correction; nine current composer slots, their remaining helper/
 authorization prerequisites, and independent live acceptance are still open.
+The [fresh-helper and bridge successor](docs/native-pilot-helper-initial.md)
+adds source-only initialization-before-handshake wiring and pure bridge-launch
+checks; verification is pending, with composer and acceptance counts unchanged.
 The total includes 20 key/admission and 31 late launch prerequisites missing from
 the earlier 85-job inventory; it is not a percentage of product readiness.
 The [native history handoff repair](docs/native-pilot-operational-histories.md)

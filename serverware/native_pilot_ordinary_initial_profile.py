@@ -19,6 +19,9 @@ p = g.p
 MAX_STATE = 65536
 STATE_API = "serverware.custodyOrdinaryInitialState/v1"
 WRAPPER_API = "serverware.custodyOrdinaryInitialHistory/v1"
+HELPER_RUNTIME_API = "serverware.policyCustodyServiceRuntimeConfig/v9"
+MAX_HELPER_HISTORY = 1024 * 1024
+HELPER_ENDPOINT_ROLES = ("settlement-store", "fence-authority", "cgroup-executor", "termination-ledger")
 INITIAL_CREDENTIAL_PATHS = {role: "/etc/serverware/custody-" + role + "-initial-history.json"
     for role in g.ROLES}
 STATE_FIELDS = ("apiVersion", "serviceRole", "preparationSha256", "resourcesSha256", "launchSha256",
@@ -210,3 +213,98 @@ def runtime_manifest(raw, *, runtime, guest):
     identity = history["firstRetainedEpoch"]["retainedEpoch"]["endpointProcessIdentity"]
     p.require((identity["endpointUid"], identity["endpointGid"]) == (guest["uid"], guest["gid"]))
     return history
+
+
+def helper_histories(primary_raw, members, *, root_pin):
+    """Authenticate four real role-specific wrappers, never relabel a checkpoint.
+
+    Every member uses the existing initial ceremony and independent root pin.
+    Common facts name one prepared helper; only role-bound hashes/signatures
+    differ. This public check is neither acquisition nor a currentness decision.
+    """
+    p.fields(members, HELPER_ENDPOINT_ROLES)
+    p.require(type(primary_raw) is bytes and 0 < len(primary_raw) <= MAX_HELPER_HISTORY)
+    result, primary = {}, None
+    for endpoint_role in HELPER_ENDPOINT_ROLES:
+        text = members[endpoint_role]
+        p.require(type(text) is str and text.isascii() and 0 < len(text) <= MAX_HELPER_HISTORY)
+        raw = text.encode("ascii")
+        wrapper = p.fields(g.document(raw, MAX_HELPER_HISTORY), WRAPPER_FIELDS)
+        p.require(wrapper["apiVersion"] == WRAPPER_API)
+        history = _wrapper(wrapper, role=g.ROLES[-1], root_pin=root_pin)
+        epoch = history["firstRetainedEpoch"]["retainedEpoch"]
+        identity, checkpoint = epoch["endpointProcessIdentity"], wrapper["initialCheckpoint"]
+        p.require(identity["endpointRole"] == checkpoint["payload"]["endpointRole"] == endpoint_role)
+        result[endpoint_role] = dict(original=raw, wrapper=wrapper, history=history,
+            state=wrapper["initialState"], checkpoint=checkpoint, epoch=epoch, identity=identity)
+        if raw == primary_raw:
+            p.require(primary is None)
+            primary = result[endpoint_role]
+    p.require(primary is not None)
+    for item in result.values():
+        for name in STATE_FIELDS:
+            if name != "endpointProcessIdentitySha256":
+                p.require(item["state"][name] == primary["state"][name])
+        for name in key.IDENTITY_FIELDS:
+            if name not in ("endpointRole", "identitySha256"):
+                p.require(item["identity"][name] == primary["identity"][name])
+        for name in key.PAYLOAD_FIELDS:
+            if name not in ("endpointRole", "endpointProcessIdentitySha256", "predecessorCheckpointSha256"):
+                p.require(item["checkpoint"]["payload"][name] == primary["checkpoint"]["payload"][name])
+        for name, value in item["epoch"].items():
+            if name not in ("endpointProcessIdentity", "endpointProcessIdentitySha256", "checkpointSha256",
+                            "durableEpochHeadSha256", "epochSha256"):
+                p.require(value == primary["epoch"][name])
+        p.require(item["history"]["rootAuthority"] == primary["history"]["rootAuthority"])
+    p.require(len({row["identity"]["identitySha256"] for row in result.values()}) == len(HELPER_ENDPOINT_ROLES)
+        and len({row["checkpoint"]["checkpointSha256"] for row in result.values()}) == len(HELPER_ENDPOINT_ROLES))
+    return copy.deepcopy(result)
+
+
+def helper_endpoint_histories(primary_raw, *, runtime):
+    """Bind authenticated members to the explicit helper runtime successor."""
+    header = runtime["runtime"]
+    p.require(header["apiVersion"] == HELPER_RUNTIME_API)
+    result = helper_histories(primary_raw, runtime["initialEndpointHistories"], root_pin={
+        "keyId": header["authorityHistoryRootKeyId"], "keySpkiSha256": header["authorityHistoryRootKeySpkiSha256"]})
+    primary = next(row for row in result.values() if row["original"] == primary_raw)
+    state, checkpoint = primary["state"], primary["checkpoint"]
+    payload = checkpoint["payload"]
+    p.require(header["authorityHistoryManifestSha256"] == primary["history"]["manifestSha256"]
+        and header["operationGeneration"] == state["operationGeneration"]
+        and header["serviceRestartEpoch"] == state["serviceGeneration"]
+        and header["deploymentGenerationSha256"] == state["deploymentGenerationSha256"]
+        and header["activationDirectoryIdentities"] == {name: item["identity"]
+            for name, item in state["directories"].items()}
+        and runtime["endpointProcessIdentitySha256"] == primary["identity"]["identitySha256"]
+        and runtime["currentHeadAuthorityKeyId"] == checkpoint["authorityKeyId"]
+        and runtime["currentKeyAuthorizationCheckpointSha256"] == checkpoint["checkpointSha256"])
+    for target, source in (("signingKeyId", "authorizedSigningKeyId"), ("endpointGeneration", "exactEndpointGeneration"),
+            ("checkpointSequence", "checkpointSequence"), ("revocationGeneration", "revocationGenerationHighWater"),
+            ("revocationRootSha256", "revocationRootSha256")):
+        p.require(runtime[target] == payload[source])
+    return result
+
+
+def helper_public_keys(runtime, contexts, credentials):
+    """Select only exact C9 public verification originals, never signing seeds."""
+    from serverware import native_pilot_ordinary_key_authority as authority
+
+    p.fields(contexts, HELPER_ENDPOINT_ROLES)
+    pins = p.fields(runtime["initialEndpointPins"], HELPER_ENDPOINT_ROLES)
+    p.require(type(credentials) is list)
+    selected = {}
+    for endpoint_role in HELPER_ENDPOINT_ROLES:
+        epoch = contexts[endpoint_role]["epoch"]
+        for field, public in (("endpointVerifyingKeyCredential", epoch["serviceSigningKey"]),
+                ("checkpointAuthorityVerifyingKeyCredential", epoch["checkpointAuthority"])):
+            name = pins[endpoint_role][field]
+            records = [item for item in credentials if item["name"] == name]
+            p.require(len(records) == 1)
+            raw = authority._raw_key(authority._key(public))
+            record = records[0]
+            p.require(record["length"] == 32 and record["signing"] is None
+                and record["original"]["sha256"] == p.sha(raw))
+            p.require(name not in selected or selected[name] == raw)
+            selected[name] = raw
+    return selected

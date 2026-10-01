@@ -175,7 +175,8 @@ def sign_grant(*, payload_raw, guest, runtime_raw, history_raw, delivery_raw, si
 
 def _grant_values(*, payload_raw, guest, runtime_raw, history_raw, delivery_raw, now, commitment, spool=False, effects=False):
     payload = p.fields(document(payload_raw, 65536), GRANT)
-    runtime = document(runtime_raw, MAX_BYTES)["runtime"]
+    runtime_value = document(runtime_raw, MAX_BYTES)
+    runtime = runtime_value["runtime"]
     from serverware import native_pilot_ordinary_initial_profile as initial
     history = initial.runtime_manifest(history_raw, runtime=runtime, guest=guest)
     delivery = document(delivery_raw, 65536)["payload"]
@@ -191,7 +192,18 @@ def _grant_values(*, payload_raw, guest, runtime_raw, history_raw, delivery_raw,
         and (not effects or spool and role in (ROLES[0], ROLES[1], ROLES[3])
             and commitment == (role in (ROLES[0], ROLES[3])))
         and (not spool or commitment or effects and role == ROLES[1]))
-    version = 8 if effects else 7 if spool else 6 if commitment else 5
+    helper = role == ROLES[-1] and runtime["apiVersion"] == initial.HELPER_RUNTIME_API
+    if helper:
+        p.require(not commitment and not spool and not effects)
+        from serverware import native_pilot_ordinary_runtime_profile as helper_runtime
+        helper_runtime.validate_runtime(role, runtime_raw)
+        # Authenticate every role member under the independently pinned root,
+        # with this actual C9-selected primary original, before grant authority.
+        members = initial.helper_endpoint_histories(history_raw, runtime=runtime_value)
+        initial.helper_public_keys(runtime_value, members, delivery["credentials"])
+    else:
+        p.require(all(name not in runtime_value for name in ("initialEndpointHistories", "initialEndpointPins")))
+    version = 9 if helper else 8 if effects else 7 if spool else 6 if commitment else 5
     p.require(runtime["apiVersion"] == f"serverware.policyCustodyServiceRuntimeConfig/v{version}"
         and runtime["generationAdmission"] == {"grantFdName": "generation-grant"}
         and (runtime.get("dispatchAdmission") == {"grantFdName":"dispatch-grant"}

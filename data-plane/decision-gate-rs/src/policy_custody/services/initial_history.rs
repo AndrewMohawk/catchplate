@@ -5,7 +5,7 @@
 //! Live admission precedes every gate; subsequent history loads authenticate
 //! the wrapper without inspecting directories that those gates have written.
 use super::*;
-use super::super::protocol::{pidfd_stat_identity_sha256, ProtocolBoottimeDomain};
+use super::super::protocol::{pidfd_stat_identity_sha256, ProtocolBoottimeDomain, ProtocolBoottimeDeadline};
 use crate::policy_shadow::hash_domain_frames;
 use sha2::{Digest, Sha256};
 use std::os::unix::fs::FileExt;
@@ -206,6 +206,92 @@ fn authenticate(raw: &[u8], runtime: &RuntimeConfigHeaderV3, role: TrustedHostSe
 pub(super) fn load(raw: &[u8], runtime: &RuntimeConfigHeaderV3, role: TrustedHostServiceRoleV3)
     -> Result<RuntimeAuthorityHistory, ServiceRunnerError> {
     Ok(authenticate(raw, runtime, role)?.history)
+}
+
+pub(super) struct HelperAuthorization {
+    pub(super) checkpoint: SignedEndpointKeyAuthorizationCheckpoint,
+    pub(super) checkpoint_authority: VerifyingKey,
+    pub(super) deadline: ProtocolBoottimeDeadline,
+}
+
+fn common_value<T: Serialize>(value: &T, excluded: &[&str]) -> Result<serde_json::Value, ServiceRunnerError> {
+    let mut value = serde_json::to_value(value).map_err(error)?;
+    let fields = value.as_object_mut().ok_or_else(|| error("helper common context is not an object"))?;
+    for name in excluded { require(fields.remove(*name).is_some())?; }
+    Ok(value)
+}
+
+/// Four independently authenticated role wrappers for the same measured
+/// helper. Only role-derived identities and INITIAL commitments may differ.
+/// The independent root comes from the signed runtime, never from a member.
+pub(super) fn admit_helper_histories(primary_raw: &[u8], members: &helper_initial::Histories,
+    pins: &BTreeMap<PolicyCustodyEndpointRole, EndpointTrustPinCredentialV3>,
+    runtime: &RuntimeConfigHeaderV3, credentials: &CredentialDirectory,
+    bootstrap: &Bootstrap, activation: &BTreeMap<String, OwnedFd>)
+    -> Result<BTreeMap<PolicyCustodyEndpointRole, HelperAuthorization>, ServiceRunnerError> {
+    require(runtime.api_version == helper_initial::RUNTIME)?;
+    helper_initial::history_pins(members)?;
+    require(pins.keys().copied().collect::<Vec<_>>() == helper_initial::ROLES)?;
+    let role = TrustedHostServiceRoleV3::BoundedCleanupHelper;
+    let primary = authenticate(primary_raw, runtime, role)?;
+    let primary_epoch = primary.history.current_epoch().map_err(error)?.statement();
+    require(members.get(&primary.checkpoint.payload.endpoint_role)
+        .is_some_and(|raw| raw.as_bytes() == primary_raw))?;
+    let state = common_value(&primary.state, &["endpointProcessIdentitySha256"])?;
+    let identity = common_value(&primary_epoch.endpoint_process_identity, &["endpointRole", "identitySha256"])?;
+    let payload = common_value(&primary.checkpoint.payload,
+        &["endpointRole", "endpointProcessIdentitySha256", "predecessorCheckpointSha256"])?;
+    let mut authenticated = BTreeMap::new();
+    let mut forbidden = BTreeSet::new();
+    for (endpoint_role, raw) in members {
+        let wrapper: Wrapper = decode_canonical_frame(raw.as_bytes())?;
+        let mut header = runtime.clone();
+        // This semantic pin is selected by the signed runtime's literal member;
+        // independent root/role/key and complete initial-wrapper verification
+        // remain mandatory below. No member can choose a different root.
+        header.authority_history_manifest_sha256 = wrapper.history.manifest_sha256.clone();
+        let owner = authenticate(raw.as_bytes(), &header, role)?;
+        let epoch = owner.history.current_epoch().map_err(error)?.statement();
+        require(owner.checkpoint.payload.endpoint_role == *endpoint_role
+            && common_value(&owner.state, &["endpointProcessIdentitySha256"])? == state
+            && common_value(&epoch.endpoint_process_identity, &["endpointRole", "identitySha256"])? == identity
+            && common_value(&owner.checkpoint.payload,
+                &["endpointRole", "endpointProcessIdentitySha256", "predecessorCheckpointSha256"])? == payload
+            && epoch.checkpoint_authority == primary_epoch.checkpoint_authority
+            && epoch.service_signing_key == primary_epoch.service_signing_key)?;
+        for domain in [PREDECESSOR, HISTORY_ROOT, DURABLE_HEAD] {
+            forbidden.insert(owner.state.commitment(domain)?);
+        }
+        authenticated.insert(*endpoint_role, (header, owner));
+    }
+    let mut result = BTreeMap::new();
+    for (endpoint_role, (header, owner)) in authenticated {
+        let epoch = owner.history.current_epoch().map_err(error)?.statement();
+        let authority = epoch.checkpoint_authority.validate_and_decode().map_err(error)?;
+        let pin = pins.get(&endpoint_role).ok_or_else(|| error("initial helper role pin absent"))?;
+        super::super::protocol::require_nonzero_digest("initialHelper.consumePredecessor",
+            &pin.consume_cursor.expected_predecessor_receipt_sha256).map_err(error)?;
+        require(pin.endpoint_process_identity == epoch.endpoint_process_identity
+            && pin.signed_current_key_authorization == owner.checkpoint
+            && pin.declared_socket_path == runtime.listener_socket_path
+            && pin.consume_head_observed_at_boottime_nanos == ns(&owner.state.issued_at_boottime_ns)?
+            && pin.consume_cursor.sequence_high_water == 0 && pin.consume_cursor.expected_next_sequence == 1)?;
+        require(!forbidden.contains(&pin.consume_cursor.expected_predecessor_receipt_sha256))?;
+        require(credentials.read_verifying_key(&pin.endpoint_verifying_key_credential)?
+                == epoch.service_signing_key.validate_and_decode().map_err(error)?
+            && credentials.read_verifying_key(&pin.checkpoint_authority_verifying_key_credential)? == authority)?;
+        pin.build_historical(credentials)?;
+        // All live process/executable/window and actual empty-directory checks
+        // occur before the first generation/helper journal is opened.
+        let raw = members.get(&endpoint_role).ok_or_else(|| error("initial helper member absent"))?;
+        admit(raw.as_bytes(), &header, role, bootstrap, activation)?;
+        let until = owner.checkpoint.payload.valid_until_boottime.to_runtime().map_err(error)?;
+        let deadline = ProtocolBoottimeDeadline::from_runtime(
+            super::super::boottime::BoottimeDeadline::from_absolute_in_expected_domain(until.domain(),
+                until.absolute_nanos().min(ns(&owner.state.startup_deadline_boottime_ns)?)).map_err(error)?);
+        result.insert(endpoint_role, HelperAuthorization { checkpoint: owner.checkpoint, checkpoint_authority: authority, deadline });
+    }
+    Ok(result)
 }
 
 /// Bind an authenticated initial wrapper to an already signature-admitted

@@ -28,6 +28,22 @@ def canonical(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
 
 
+def helper_fixture():
+    """Grammar-only fresh-helper manifest, not an admitted runtime or journal."""
+    value = {"apiVersion": "serverware.policyCustodyCleanupHelperInitialBootstrap/v1", "initialization": "fresh-helper",
+        "operationGeneration": 1, "sharedConfigurationSha256": p.sha(b"synthetic-shared"),
+        "serviceConfigurationSha256": p.sha(b"synthetic-helper-runtime"),
+        "initialEndpointHistorySha256": {role: p.sha(("synthetic-history/" + role).encode("ascii"))
+            for role in ("settlement-store", "fence-authority", "cgroup-executor", "termination-ledger")},
+        "deadline": {"domain": {"authorityBootId": list(range(1, 17)), "timeNamespaceDevice": 4, "timeNamespaceInode": 5},
+            "absoluteBoottimeNanos": 2000000000}}
+    framed = canonical([value[name] for name in ("apiVersion", "initialization", "operationGeneration",
+        "sharedConfigurationSha256", "serviceConfigurationSha256", "initialEndpointHistorySha256", "deadline")])
+    value["manifestSha256"] = p.sha(b"serverware.policyCustodyCleanupHelperInitialBootstrap/v1\0"
+        + len(framed).to_bytes(8, "big") + framed)
+    return value
+
+
 def fixture(version=10):
     # The unused header values deliberately make this only a shape fixture.
     value = {field: None for field in bridge.BASE_FIELDS}
@@ -44,7 +60,7 @@ def fixture(version=10):
             "headGrantOriginal": "{}", "currentGrantOriginal": "{}", "originFdName": "generation-origin"}
         if version >= 9:
             value["spool"]["cleanupGrantOriginal"] = "{}"
-    if version == 10:
+    if version in (10, 11):
         rows = {}
         for role in generation.ROLES:
             payload = {name: None for name in generation.GRANT}
@@ -52,6 +68,8 @@ def fixture(version=10):
             rows[role] = {"runtimeOriginal": '{"runtime":{}}', "generationGrantOriginal": canonical(
                 {"payload": payload, "signatureBase64url": p.encoded(bytes(64))}).decode("ascii")}
         value["ordinaryInitialHistories"] = rows
+    if version == 11:
+        value["helperBootstrap"] = helper_fixture()
     return value
 
 
@@ -61,17 +79,33 @@ def padded(size):
 
 class BridgeRuntimeControls(unittest.TestCase):
     def test_explicit_versions_and_launch_mapping_preserve_legacy(self):
-        for version in range(4, 11):
+        for version in range(4, 12):
             raw = canonical(fixture(version))
             self.assertEqual(bridge.runtime_version(raw), version)
-            self.assertEqual(bridge.maximum_for_version(version), 4 * 1024 * 1024 if version == 10 else 65536)
+            self.assertEqual(bridge.maximum_for_version(version), 4 * 1024 * 1024 if version in (10, 11) else 65536)
             if version >= 5:
                 api = "serverware.nativeProofBridgeLaunch/v" + str(version - 4)
                 self.assertEqual(bridge.launch_for_runtime(raw), api)
                 self.assertEqual(bridge.maximum_for_launch(api), bridge.maximum_for_version(version))
-        for version in (3, 11, True):
+        for version in (3, 12, True):
             with self.assertRaises(ValueError): bridge.maximum_for_version(version)
-        with self.assertRaises(ValueError): bridge.maximum_for_launch("serverware.nativeProofBridgeLaunch/v7")
+        with self.assertRaises(ValueError): bridge.maximum_for_launch("serverware.nativeProofBridgeLaunch/v8")
+
+    def test_helper_bootstrap_is_required_only_for_v11_and_closed(self):
+        value = fixture(11); frozen = copy.deepcopy(value)
+        self.assertEqual(bridge.shape(canonical(value)), frozen)
+        self.assertEqual(value, frozen)
+        for change in ("missing", "null", "field", "digest", "role"):
+            value = fixture(11)
+            if change == "missing": value.pop("helperBootstrap")
+            elif change == "null": value["helperBootstrap"] = None
+            elif change == "field": value["helperBootstrap"]["observedEmpty"] = True
+            elif change == "digest": value["helperBootstrap"]["manifestSha256"] = p.sha(b"wrong-manifest")
+            else: value["helperBootstrap"]["initialEndpointHistorySha256"].pop("fence-authority")
+            with self.subTest(change=change), self.assertRaises(ValueError): bridge.shape(canonical(value))
+        for version in range(4, 11):
+            value = fixture(version); value["helperBootstrap"] = helper_fixture()
+            with self.subTest(version=version), self.assertRaises(ValueError): bridge.shape(canonical(value))
 
     def test_successor_requires_exact_five_role_rows_and_original_shapes(self):
         original = fixture(); frozen = copy.deepcopy(original)
@@ -118,7 +152,7 @@ class BridgeRuntimeControls(unittest.TestCase):
         for changed in (raw + b"\n", raw.replace(b'"apiVersion":', b'"extra":null,"apiVersion":', 1),
                 raw.replace(b'"apiVersion":', b'"apiVersion":"duplicate","apiVersion":', 1)):
             with self.assertRaises(ValueError): bridge.shape(changed)
-        value = fixture(); value["apiVersion"] = bridge.PREFIX + "11"
+        value = fixture(); value["apiVersion"] = bridge.PREFIX + "12"
         with self.assertRaises(ValueError): bridge.shape(canonical(value))
         value = fixture(9); value["ordinaryInitialHistories"] = fixture()["ordinaryInitialHistories"]
         with self.assertRaises(ValueError): bridge.shape(canonical(value))
@@ -136,16 +170,19 @@ class BridgeRuntimeControls(unittest.TestCase):
         for role in delivery.ENDPOINTS:
             self.assertEqual(publication.PROFILES["native-runtime-" + role][2], 65536)
         self.assertEqual(outgoing.bridge_runtime.LAUNCH_RUNTIME["serverware.nativeProofBridgeLaunch/v6"], 10)
+        self.assertEqual(outgoing.bridge_runtime.LAUNCH_RUNTIME["serverware.nativeProofBridgeLaunch/v7"], 11)
         value = {name: "{}" for name in delivery.INPUT_FIELDS}
         value.update(apiVersion="serverware.nativePilotDeliverySigningInput/v1", role="bridge",
             runtimeOriginal=canonical(fixture()).decode("ascii"), observationOriginal=padded(delivery.MAX_INPUT))
         delivery.input_document(canonical(value))  # Bounds/grammar only; no signer is called.
+        value["runtimeOriginal"] = canonical(fixture(11)).decode("ascii")
+        delivery.input_document(canonical(value))
         for role in ("retrieval", "bridge"):
             changed = copy.deepcopy(value); changed["role"] = role
             changed["runtimeOriginal"] = canonical(fixture(9)).decode("ascii") if role == "bridge" else "{}"
             with self.assertRaises(ValueError): delivery.input_document(canonical(changed))
 
-    def test_bridge_launch_shape_selects_only_explicit_v5_or_v6(self):
+    def test_bridge_launch_shape_selects_only_explicit_v5_v6_or_v7(self):
         pins = {name: {"path": launch.DESTINATIONS["native-bridge-" + suffix], "sha256": p.sha(name.encode("ascii"))}
             for name, (suffix, _) in launch.COMPONENTS.items()}
         pins.update(apiVersion="serverware.nativeShadowGuestLaunch/v1",
@@ -153,10 +190,10 @@ class BridgeRuntimeControls(unittest.TestCase):
             delivery={"path": publication.DESTINATIONS["native-delivery-bridge"], "sha256": p.sha(b"delivery")})
         value = {"apiVersion": "serverware.nativeProofBridgeLaunch/v6", "keyAdmission": pins,
             "trustedTime": {"path": publication.DESTINATIONS["native-service-trustedTime"], "sha256": p.sha(b"grant")}}
-        for version in (5, 6):
+        for version in (5, 6, 7):
             value["apiVersion"] = "serverware.nativeProofBridgeLaunch/v" + str(version)
             launch.shape("native-launch-bridge", canonical(value))
-        value["apiVersion"] = "serverware.nativeProofBridgeLaunch/v7"
+        value["apiVersion"] = "serverware.nativeProofBridgeLaunch/v8"
         with self.assertRaises(ValueError): launch.shape("native-launch-bridge", canonical(value))
 
 

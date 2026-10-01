@@ -61,7 +61,7 @@ use ed25519_dalek::pkcs8::EncodePublicKey;
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::mem::{size_of, zeroed};
 use std::os::fd::{
@@ -1033,6 +1033,7 @@ pub(super) struct CleanupHelperSigningAuthorityV3 {
     current_key_authorization_checkpoint_sha256: Sha256Digest,
     revocation_generation: u64,
     revocation_root_sha256: Sha256Digest,
+    initial_roles: Option<BTreeMap<PolicyCustodyEndpointRole, CleanupHelperSigningAuthorityV3>>,
 }
 
 impl CleanupHelperSigningAuthorityV3 {
@@ -1111,7 +1112,51 @@ impl CleanupHelperSigningAuthorityV3 {
             current_key_authorization_checkpoint_sha256,
             revocation_generation,
             revocation_root_sha256,
+            initial_roles: None,
         })
+    }
+
+    pub(super) fn with_initial_roles(mut self, roles: BTreeMap<PolicyCustodyEndpointRole,
+        super::initial_history::HelperAuthorization>) -> Result<Self, ServiceError> {
+        if roles.keys().copied().collect::<Vec<_>>() != super::helper_initial::ROLES {
+            return Err(ServiceError::Invalid("initial helper role authorities incomplete"));
+        }
+        let mut selected = BTreeMap::new();
+        let mut primary = false;
+        for (role, authorization) in roles {
+            let checkpoint = authorization.checkpoint;
+            let payload = checkpoint.payload;
+            if payload.endpoint_role != role || payload.authorized_signing_key_id != self.signing_key_id
+                || payload.authorized_signing_key_spki_sha256 != self.signing_key_spki_sha256 {
+                return Err(ServiceError::Invalid("initial helper role signing credential differs from authenticated history"));
+            }
+            let member = Self::new(self.signing_key.clone(), authorization.checkpoint_authority,
+                checkpoint.authority_key_id, payload.endpoint_process_identity_sha256,
+                payload.exact_endpoint_generation, self.helper_generation, payload.authorized_signing_key_id,
+                payload.checkpoint_sequence, checkpoint.checkpoint_sha256,
+                payload.revocation_generation_high_water, payload.revocation_root_sha256)?;
+            if member.endpoint_process_identity_sha256 == self.endpoint_process_identity_sha256 {
+                if primary || member.current_head_authority_key_id != self.current_head_authority_key_id
+                    || member.current_head_authority_key_spki_sha256 != self.current_head_authority_key_spki_sha256
+                    || member.endpoint_generation != self.endpoint_generation
+                    || member.checkpoint_sequence != self.checkpoint_sequence
+                    || member.current_key_authorization_checkpoint_sha256 != self.current_key_authorization_checkpoint_sha256
+                    || member.revocation_generation != self.revocation_generation
+                    || member.revocation_root_sha256 != self.revocation_root_sha256 {
+                    return Err(ServiceError::Invalid("initial helper primary signing context changed"));
+                }
+                primary = true;
+            }
+            selected.insert(role, member);
+        }
+        if !primary { return Err(ServiceError::Invalid("initial helper primary authority absent")); }
+        self.initial_roles = Some(selected);
+        Ok(self)
+    }
+
+    fn initial_role(&self, role: PolicyCustodyEndpointRole) -> Result<Option<&Self>, ServiceError> {
+        self.initial_roles.as_ref().map(|roles| roles.get(&role)
+            .ok_or(ServiceError::Invalid("initial helper effect role not authorized"))).transpose()
     }
 
     fn verify_current_head(
@@ -1120,6 +1165,9 @@ impl CleanupHelperSigningAuthorityV3 {
         endpoint_role: PolicyCustodyEndpointRole,
         deadline: &ProtocolBoottimeDeadline,
     ) -> Result<(), ServiceError> {
+        if let Some(selected) = self.initial_role(endpoint_role)? {
+            return selected.verify_current_head(current_head, endpoint_role, deadline);
+        }
         current_head.validate(endpoint_role, deadline)?;
         let signed = &current_head.signed_current_head;
         let statement = &signed.statement;
@@ -1172,6 +1220,9 @@ impl CleanupHelperSigningAuthorityV3 {
         &self,
         intent: CleanupEffectIntentV3,
     ) -> Result<PersistedCleanupEffectIntentV3, ServiceError> {
+        if let Some(selected) = self.initial_role(intent.action.required_endpoint_role())? {
+            return selected.persist_intent(intent);
+        }
         intent.validate()?;
         let exact_canonical_intent_bytes =
             canonical_json_bytes(&intent).map_err(|_| {
@@ -1253,6 +1304,9 @@ impl CleanupHelperSigningAuthorityV3 {
         &self,
         prepared: &PersistedCleanupEffectIntentV3,
     ) -> Result<(), ServiceError> {
+        if let Some(selected) = self.initial_role(prepared.intent.action.required_endpoint_role())? {
+            return selected.verify_intent(prepared);
+        }
         prepared.validate()?;
         if prepared.endpoint_process_identity_sha256
                 != self.endpoint_process_identity_sha256
@@ -1307,6 +1361,9 @@ impl CleanupHelperSigningAuthorityV3 {
         intent: &CleanupEffectIntentV3,
         relationship_proved_at_boottime_nanos: u64,
     ) -> Result<PersistedCleanupWorkerParentProofV3, ServiceError> {
+        if let Some(selected) = self.initial_role(intent.action.required_endpoint_role())? {
+            return selected.sign_parent_proof(intent, relationship_proved_at_boottime_nanos);
+        }
         intent.validate()?;
         if intent.action != CleanupAction::ReapWorker
             || relationship_proved_at_boottime_nanos == 0
@@ -1362,6 +1419,9 @@ impl CleanupHelperSigningAuthorityV3 {
         proof: &PersistedCleanupWorkerParentProofV3,
         intent: &CleanupEffectIntentV3,
     ) -> Result<(), ServiceError> {
+        if let Some(selected) = self.initial_role(intent.action.required_endpoint_role())? {
+            return selected.verify_parent_proof(proof, intent);
+        }
         proof.validate_against(intent)?;
         if proof.helper_process_identity_sha256
                 != self.endpoint_process_identity_sha256
@@ -1417,6 +1477,9 @@ impl CleanupHelperSigningAuthorityV3 {
         exact_execute_request_bytes: &[u8],
         parent_proof: Option<PersistedCleanupWorkerParentProofV3>,
     ) -> Result<PersistedCleanupEffectExecutionV3, ServiceError> {
+        if let Some(selected) = self.initial_role(prepared.intent.action.required_endpoint_role())? {
+            return selected.persist_execution(prepared, request, exact_execute_request_bytes, parent_proof);
+        }
         self.verify_intent(prepared)?;
         let entered_at_boottime_nanos =
             boottime_now_nanos().map_err(|_| {
@@ -1509,6 +1572,9 @@ impl CleanupHelperSigningAuthorityV3 {
         execution: &PersistedCleanupEffectExecutionV3,
         prepared: &PersistedCleanupEffectIntentV3,
     ) -> Result<(), ServiceError> {
+        if let Some(selected) = self.initial_role(prepared.intent.action.required_endpoint_role())? {
+            return selected.verify_execution(execution, prepared);
+        }
         self.verify_intent(prepared)?;
         execution.validate_against(prepared)?;
         if execution.endpoint_process_identity_sha256
@@ -1572,6 +1638,9 @@ impl CleanupHelperSigningAuthorityV3 {
         cgroup_observation: CgroupPopulationObservation,
         observed_at_boottime_nanos: u64,
     ) -> Result<SignedCleanupResultV3, ServiceError> {
+        if let Some(selected) = self.initial_role(prepared.intent.action.required_endpoint_role())? {
+            return selected.sign_result(prepared, worker_observation, cgroup_observation, observed_at_boottime_nanos);
+        }
         prepared.validate()?;
         let intent = &prepared.intent;
         let authorization = &intent.authorization.payload;
@@ -2032,6 +2101,7 @@ pub(super) struct TrustedHostNoTeeBoundedCleanupHelperServer {
     reconciled_executing_ordinals: BTreeSet<u16>,
     ready_reap_workers: Vec<ReadyReapWorker>,
     readiness_sealed: bool,
+    initial_bootstrap: Option<super::helper_initial::Receiver>,
     pending_effect: Option<PendingEffectExecution>,
     pending_reply: Option<Vec<u8>>,
 }
@@ -2049,6 +2119,11 @@ impl super::generation_service::Owner for TrustedHostNoTeeBoundedCleanupHelperSe
             self.signer.verify_parent_proof(&worker.proof,&worker.intent)?;
         }
         let workers:Vec<_>=self.ready_reap_workers.iter().map(|w|(&w.intent,&w.proof)).collect();
+        if let Some(initial) = &self.initial_bootstrap {
+            return Ok(Sha256Digest::compute(&super::encode_canonical_frame(&(
+                &self.report,initial.seal()?,self.journal.current_head(deadline)?,
+                &self.registered_reap_ordinals,&self.reconciled_executing_ordinals,workers))?));
+        }
         Ok(Sha256Digest::compute(&super::encode_canonical_frame(&(
             &self.report,self.readiness_seal()?,self.journal.current_head(deadline)?,
             &self.registered_reap_ordinals,&self.reconciled_executing_ordinals,workers))?))
@@ -2128,6 +2203,7 @@ impl TrustedHostNoTeeBoundedCleanupHelperServer {
             reconciled_executing_ordinals: BTreeSet::new(),
             ready_reap_workers: Vec::new(),
             readiness_sealed: false,
+            initial_bootstrap: None,
             pending_effect: None,
             pending_reply: None,
         })
@@ -2146,6 +2222,9 @@ impl TrustedHostNoTeeBoundedCleanupHelperServer {
             return Err(ServiceError::Invalid(
                 "cleanup-helper bootstrap is unavailable or already sealed",
             ));
+        }
+        if self.initial_bootstrap.is_some() {
+            return self.handle_initial_bootstrap(packet, startup_deadline_nanos);
         }
         let request: CleanupHelperBootstrapRequestV3 =
             decode_canonical_frame(&packet.frame)?;
@@ -2502,6 +2581,39 @@ impl TrustedHostNoTeeBoundedCleanupHelperServer {
         Ok(persisted)
     }
 
+    pub(super) fn select_initial_bootstrap(&mut self, receiver: super::helper_initial::Receiver)
+        -> Result<(), ServiceError> {
+        if self.initial_bootstrap.is_some() || self.expected_manifest.is_some() || self.readiness_sealed
+            || self.signer.initial_roles.is_none() {
+            return Err(ServiceError::Invalid("initial helper bootstrap selection refused"));
+        }
+        self.initial_bootstrap = Some(receiver);
+        Ok(())
+    }
+
+    fn handle_initial_bootstrap(&mut self, packet: ReceivedSeqpacket, deadline: u64) -> Result<Vec<u8>, ServiceError> {
+        if !packet.rights.is_empty() { return Err(ServiceError::Invalid("initial helper bootstrap carried SCM_RIGHTS")); }
+        let request: super::helper_initial::Request = decode_canonical_frame(&packet.frame)?;
+        let deadline = deadline.min(self.initial_bootstrap.as_ref()
+            .ok_or(ServiceError::Invalid("initial helper selection absent"))?.request_deadline(&request)?);
+        let head = self.journal.current_head(deadline)?;
+        let reply = self.initial_bootstrap.as_ref().ok_or(ServiceError::Invalid("initial helper selection absent"))?
+            .prepare(&request, head)?;
+        let exact = encode_canonical_frame(&reply)?;
+        let persisted = self.journal.append(Sha256Digest::compute(&packet.frame), &packet.frame, &exact, deadline)?
+            .exact_response_bytes().to_vec();
+        if persisted != exact { return Err(ServiceError::IdempotencyConflict); }
+        let receiver = self.initial_bootstrap.as_mut().ok_or(ServiceError::Invalid("initial helper selection absent"))?;
+        receiver.committed(request, reply)?;
+        self.readiness_sealed = receiver.seal().is_ok();
+        self.peer_authentication.revalidate_peer()?;
+        Ok(persisted)
+    }
+
+    pub(super) fn bootstrap_deadline(&self, original: u64) -> u64 {
+        self.initial_bootstrap.as_ref().map_or(original, |initial| original.min(initial.deadline()))
+    }
+
     fn reconcile_executing_for_readiness(
         &mut self,
         key: &CleanupEffectKeyV3,
@@ -2596,6 +2708,9 @@ impl TrustedHostNoTeeBoundedCleanupHelperServer {
     }
 
     pub(super) fn bootstrap_is_sealed(&self) -> bool {
+        if let Some(initial) = &self.initial_bootstrap {
+            return self.readiness_sealed && initial.seal().is_ok();
+        }
         self.readiness_sealed
             && self.readiness_seal.is_some()
             && self.expected_manifest.as_ref().is_some_and(
@@ -2619,6 +2734,10 @@ impl TrustedHostNoTeeBoundedCleanupHelperServer {
     pub(super) fn expected_handshake_roles(
         &self,
     ) -> Result<&[PolicyCustodyEndpointRole], ServiceError> {
+        if let Some(initial) = &self.initial_bootstrap {
+            initial.seal()?;
+            return Ok(&super::helper_initial::ROLES);
+        }
         Ok(&self.readiness_seal()?.authorized_endpoint_roles)
     }
 

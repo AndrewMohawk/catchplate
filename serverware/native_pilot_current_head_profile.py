@@ -22,6 +22,7 @@ from serverware import native_shadow_driver_bootstrap as driver
 
 p = g.p
 API = "serverware.nativePilotCurrentHeadAuthorityInput/v1"
+HELPER_API = "serverware.nativePilotCurrentHeadAuthorityInput/v2"
 PROTOCOL_API = "serverware.policyCustodyProtocol/v3"
 CURRENTNESS_PROFILE = "initial-checkpoint-current-for-exact-request-v1"
 DOMAIN = b"serverware.policyCustodyTrustedHostCurrentHeadAttestation/v3"
@@ -127,9 +128,12 @@ def binding(value: dict) -> dict:
 
 def prepare_input(input_original: bytes, *, boot: tuple, now_boottime_ns: int) -> dict:
     """Check independently approved exact originals; never decide currentness."""
-    value = p.fields(p.document(input_original, MAX_INPUT), INPUT_FIELDS)
+    value = p.document(input_original, MAX_INPUT)
+    helper = value.get("apiVersion") == HELPER_API
+    p.fields(value, INPUT_FIELDS + (("endpointRole", "runtimeOriginal") if helper else ()))
     role = value["serviceRole"]
-    p.require(value["apiVersion"] == API and role in g.ROLES)
+    p.require(value["apiVersion"] in (API, HELPER_API) and role in g.ROLES
+        and (not helper or role == g.ROLES[-1]))
     now = key._uint(now_boottime_ns)
     configuration_raw, _ = _original(value["driverConfigurationOriginal"], 65536)
     configuration = window_authority.validate_configuration(configuration_raw)
@@ -153,6 +157,17 @@ def prepare_input(input_original: bytes, *, boot: tuple, now_boottime_ns: int) -
     p.fields(wrapper, initial.WRAPPER_FIELDS)
     p.require(wrapper["apiVersion"] == initial.WRAPPER_API)
     root = p.fields(value["rootAuthority"], ("keyId", "keySpkiSha256"))
+    if helper:
+        from serverware import native_pilot_ordinary_runtime_profile as runtime_profile
+        runtime_raw, _ = _original(value["runtimeOriginal"], g.MAX_BYTES)
+        runtime = runtime_profile.validate_runtime(role, runtime_raw)
+        p.require(runtime["runtime"]["apiVersion"] == initial.HELPER_RUNTIME_API
+            and root == {"keyId": runtime["runtime"]["authorityHistoryRootKeyId"],
+                "keySpkiSha256": runtime["runtime"]["authorityHistoryRootKeySpkiSha256"]})
+        members = initial.helper_endpoint_histories(history_raw, runtime=runtime)
+        p.require(value["endpointRole"] in initial.HELPER_ENDPOINT_ROLES)
+        selected = members[value["endpointRole"]]
+        history_raw, wrapper = selected["original"], selected["wrapper"]
     history = initial.manifest(history_raw, role=role, root_pin=root)
     epoch = history["firstRetainedEpoch"]["retainedEpoch"]
     state, checkpoint = wrapper["initialState"], wrapper["initialCheckpoint"]
@@ -169,7 +184,10 @@ def prepare_input(input_original: bytes, *, boot: tuple, now_boottime_ns: int) -
                 and history_authority._raw_key(public) != p.decoded(other["publicKeyBase64url"], size=32))
     request_raw, _ = _original(value["requestOriginal"], MAX_REQUEST)
     pending = request(request_raw)
+    p.require(not helper or pending["endpointRole"] == value["endpointRole"])
     floor = pending["operation"]["body"]["accepted_floor"]
+    if helper:
+        p.require(floor["consumeCursor"] == runtime["initialEndpointPins"][value["endpointRole"]]["consumeCursor"])
     p.require(pending["endpointRole"] == payload["endpointRole"]
         and floor["checkpointSequence"] == payload["checkpointSequence"]
         and floor["checkpointSha256"] == checkpoint["checkpointSha256"])

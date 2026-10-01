@@ -480,7 +480,7 @@ class PhaseExecution:
                 prior = p.document(self._inputs["install-bridge-runtime"], bridge_install.MAX_BRIDGE_INPUT)
                 _same(value["runtimeOriginal"], prior["runtimeOriginal"])
                 runtime_raw, runtime = bridge_runtime.original(value["runtimeOriginal"])
-                p.require(bridge_runtime.version(runtime) == 10 or len(p.canonical(value)) <= delivery_authority.MAX_INPUT)
+                p.require(bridge_runtime.version(runtime) in (10, 11) or len(p.canonical(value)) <= delivery_authority.MAX_INPUT)
                 pin = self._installations["install-bridge-runtime"]["pins"]["bridge-runtime"]
                 p.require(pin["sha256"] == p.sha(runtime_raw))
         elif job.family == "ordinary-initial":
@@ -616,15 +616,23 @@ class PhaseExecution:
                 p.require(prepared_peers["gate"]["sourceOriginalSha256"] == p.sha(gate_raw)
                     and (gate_peer["processId"], gate_peer["startTimeTicks"])
                         == (gate["gateProcessId"], gate["gateStartTimeTicks"]))
-                for role, row in initial_requests["requests"].items():
+                helper_histories = None
+                for role, endpoint_role, row in preparation.requests_profile.iter_requests(initial_requests):
                     prior = p.document(self._inputs["ordinary-generation-" + role], service_authority.MAX_INPUT_BYTES)
+                    original = _raw(prior["services"][role]["historyOriginal"], generation.MAX_BYTES)
+                    if role == generation.ROLES[-1] and initial_requests["apiVersion"] == preparation.requests_profile.HELPER_API:
+                        if helper_histories is None:
+                            from serverware import native_pilot_ordinary_initial_profile as initial
+                            helper_runtime = generation.document(_raw(prior["services"][role]["runtimeOriginal"],
+                                generation.MAX_BYTES), generation.MAX_BYTES)
+                            helper_histories = initial.helper_endpoint_histories(original, runtime=helper_runtime)
+                        original = helper_histories[endpoint_role]["original"]
                     p.require(initial_requests["launchSha256"] == p.sha(_raw(prior["launchOriginal"], 65536))
-                        and row["initialHistorySha256"] == p.sha(
-                            _raw(prior["services"][role]["historyOriginal"], generation.MAX_BYTES)))
+                        and row["initialHistorySha256"] == p.sha(original))
                 preparation.require_runtime(prep_raw,
                     runtime_raw, driver_observation_raw=_raw(value["driverObservationOriginal"], 65536),
                     cohort_observation_raw=_raw(observed["cohortObservationOriginal"], cohort.MAX_BYTES), peer_ids=ids)
-            p.require(bridge_runtime.version(runtime) == 10 or len(p.canonical(value)) <= bridge_install.MAX_INPUT)
+            p.require(bridge_runtime.version(runtime) in (10, 11) or len(p.canonical(value)) <= bridge_install.MAX_INPUT)
             _same(runtime["generationAdmission"]["grants"], observed["ordinaryGenerationGrants"])
             _same(observed["ordinaryGenerationGrants"], {role: self._pins["ordinary-generation-" + role]["sha256"]
                 for role in generation.ROLES})
@@ -635,7 +643,7 @@ class PhaseExecution:
             for field, output in (("headGrantOriginal", "ordinary-head"), ("cleanupGrantOriginal", "ordinary-cleanup"),
                                   ("currentGrantOriginal", "ordinary-current")):
                 self._known(field, runtime["spool"], output)
-            if bridge_runtime.version(runtime) == 10:
+            if bridge_runtime.version(runtime) in (10, 11):
                 for role, row in runtime["ordinaryInitialHistories"].items():
                     prior = p.document(self._inputs["ordinary-generation-" + role], service_authority.MAX_INPUT_BYTES)
                     _same(row["runtimeOriginal"], prior["services"][role]["runtimeOriginal"])
@@ -648,7 +656,7 @@ class PhaseExecution:
             self._scope_bundle = _raw(value["publicBundleOriginal"], bridge_runtime.MAX_BRIDGE_INPUT)
             bundle = p.document(self._scope_bundle, bridge_runtime.MAX_BRIDGE_INPUT)
             _, runtime = bridge_runtime.original(bundle["runtimeOriginal"])
-            p.require(bridge_runtime.version(runtime) == 10 or len(self._scope_bundle) <= 1024 * 1024)
+            p.require(bridge_runtime.version(runtime) in (10, 11) or len(self._scope_bundle) <= 1024 * 1024)
 
     @staticmethod
     def _array_original(value):
@@ -780,7 +788,7 @@ class PhaseExecution:
             p.fields(value, ("phaseTwoPublic",))
             bundle = p.document(self._scope_bundle, bridge_runtime.MAX_BRIDGE_INPUT)
             _, runtime = bridge_runtime.original(bundle["runtimeOriginal"])
-            maximum = bridge_runtime.MAX_BRIDGE_INPUT if bridge_runtime.version(runtime) == 10 else 1024 * 1024
+            maximum = bridge_runtime.MAX_BRIDGE_INPUT if bridge_runtime.version(runtime) in (10, 11) else 1024 * 1024
             p.require(self._public.read(value["phaseTwoPublic"], maximum=maximum) == self._scope_bundle)
             self._public_bundle_pin = copy.deepcopy(value["phaseTwoPublic"])
             result = {"pin": self._public_bundle_pin}

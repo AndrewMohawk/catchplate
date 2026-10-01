@@ -16,7 +16,7 @@ plus guestRole and closureSetOriginal; controlOriginal is present only for
 bridge. Endpoint configuration/window/observation are the actual v7 cohort
 configuration, signed precreation, and originals/v6. Every input is separately
 approved; no arbitrary JSON is treated as a kernel owner. Legacy and endpoint
-inputs retain 8 MiB; only explicit bridge runtime/v10 permits 16 MiB input.
+inputs retain 8 MiB; only explicit bridge runtime/v10-v11 permits 16 MiB input.
 The complete live closure remains bounded at 1 MiB in every profile.
 """
 from __future__ import annotations
@@ -223,11 +223,11 @@ def _endpoint_guest(value, role, *, boot, now):
 
 
 def input_document(input_original: bytes):
-    """Explicit v10 bridge bound; old bridge and endpoint inputs stay 8 MiB."""
+    """Explicit v10/v11 bridge bound; old bridge and endpoint inputs stay 8 MiB."""
     value = p.document(input_original, MAX_BRIDGE_INPUT)
     bridge = value.get("apiVersion") == "serverware.nativePilotClosureAuthorityInput/v1" or (
         value.get("apiVersion") == "serverware.nativePilotClosureAuthorityInput/v2" and value.get("guestRole") == "bridge")
-    successor = bridge and bridge_runtime.version(bridge_runtime.original(value["runtimeOriginal"])[1]) == 10
+    successor = bridge and bridge_runtime.version(bridge_runtime.original(value["runtimeOriginal"])[1]) in (10, 11)
     p.require(successor or len(input_original) <= MAX_INPUT)
     return value
 

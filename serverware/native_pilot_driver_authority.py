@@ -178,7 +178,7 @@ def _phase_bundle(original):
     p.fields(bundle, ("runtimeOriginal", "deliveryOriginal", "generationOriginals"))
     runtime_raw, runtime = bridge_runtime.original(bundle["runtimeOriginal"])
     version = bridge_runtime.version(runtime)
-    p.require(version in (9, 10) and (version == 10 or len(raw) <= 1024 * 1024))
+    p.require(version in (9, 10, 11) and (version in (10, 11) or len(raw) <= 1024 * 1024))
     return raw, bundle, runtime_raw, runtime
 
 

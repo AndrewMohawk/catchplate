@@ -39,12 +39,16 @@ def expected(observed, ids):
     return value
 
 
-def fixture():
-    _, contexts, kw = request_fixture()
+def fixture(*, fresh_helper=False):
+    if fresh_helper:
+        from test_native_pilot_helper_initial import fixture as helper_fixture, export as helper_export
+        _, contexts, kw = helper_fixture()
+    else:
+        _, contexts, kw = request_fixture()
     selected = profile.requests_profile.select(contexts, **kw)
-    requests = export(selected, kw)
+    requests = helper_export(selected, kw) if fresh_helper else export(selected, kw)
     driver_raw, cohort_raw = b'{"synthetic":"driver"}', b'{"synthetic":"cohort"}'
-    value = dict(apiVersion=profile.API, driverObservationSha256=p.sha(driver_raw),
+    value = dict(apiVersion=profile.HELPER_API if fresh_helper else profile.API, driverObservationSha256=p.sha(driver_raw),
         initialTrustRequestsOriginal=p.canonical(requests).decode("ascii"))
     groups, ids = {}, {}
     for index, (field, kind) in enumerate(profile.PEER_FIELDS):
@@ -61,11 +65,13 @@ def fixture():
         if kind == "native-endpoints": peer["sourceOriginalSha256"] = p.sha(cohort_raw)
         groups[kind] = peer
         value[field] = p.canonical(peer).decode("ascii")
-    runtime = runtime_fixture()
+    runtime = runtime_fixture(11 if fresh_helper else 10)
+    runtime["expectedDriverProcessIdentitySha256"] = p.sha(b"SYNTHETIC admitted client process")
+    runtime["expectedDriverConfigurationGenerationSha256"] = p.sha(b"SYNTHETIC admitted client configuration")
     runtime["expectedFacadePeer"] = expected(groups["gate"]["peers"]["gate"], ids["gate"]["gate"])
     runtime["expectedServiceConfigurationSha256"] = {}
-    runtime["serviceSessions"] = []
-    for role, row in requests["requests"].items():
+    sessions = {}
+    for role, _, row in profile.requests_profile.iter_requests(requests):
         pending = profile.head.request(row["requestOriginal"].encode("ascii"))
         statement = dict(apiVersion=profile.head.PROTOCOL_API, endpointRole=row["endpointRole"],
             requestNonceSha256=pending["requestNonceSha256"], requestSha256=row["requestSha256"],
@@ -73,12 +79,24 @@ def fixture():
             revocationGenerationHighWater=1, revocationRootSha256=p.sha(b"SYNTHETIC revocation"),
             issuedAtBoottimeNanos=pending["requestedAtBoottimeNanos"], deadline=pending["deadline"])
         signed = profile.head.envelope(statement, p.sha(b"SYNTHETIC key ID"), p.sha(b"SYNTHETIC SPKI"), p.encoded(bytes(64)))
-        runtime["serviceSessions"].append(dict(serviceRole=role,
-            expectedPeer=expected(groups["ordinary-services"]["peers"][role], ids["ordinary-services"][role]),
-            handshakes=[dict(endpointRole=row["endpointRole"], request=dict(deadline=pending["deadline"],
-                expectedCurrentHead=profile.head.binding(signed)))]))
+        handshake = profile.handshakes_profile.frame(service_role=role,
+            trust_request_original=row["requestOriginal"].encode("ascii"), signed_current_head=signed,
+            client_process_identity_sha256=runtime["expectedDriverProcessIdentitySha256"],
+            client_configuration_generation_sha256=runtime["expectedDriverConfigurationGenerationSha256"])
+        session = sessions.setdefault(role, dict(serviceRole=role,
+            expectedPeer=expected(groups["ordinary-services"]["peers"][role], ids["ordinary-services"][role]), handshakes=[]))
+        session["handshakes"].append(dict(endpointRole=row["endpointRole"], request=p.document(handshake, 65536)))
         runtime["ordinaryInitialHistories"][role]["runtimeOriginal"] = contexts[role]["runtimeOriginal"].decode("ascii")
         runtime["expectedServiceConfigurationSha256"][role] = row["runtimeConfigurationSha256"]
+    runtime["serviceSessions"] = list(sessions.values())
+    if fresh_helper:
+        pending = [profile.head.request(row["requestOriginal"].encode("ascii"))
+            for role, _, row in profile.requests_profile.iter_requests(requests) if role == "bounded-cleanup-helper"]
+        deadline = copy.deepcopy(pending[0]["deadline"])
+        deadline["absoluteBoottimeNanos"] = min(row["deadline"]["absoluteBoottimeNanos"] for row in pending)
+        raw = profile.helper_bootstrap.build(contexts["bounded-cleanup-helper"]["runtimeOriginal"], deadline=deadline)
+        runtime["helperBootstrap"] = p.document(raw, 65536)
+        runtime["expectedHelperEndpointRoles"] = list(profile.helper_bootstrap.ROLES)
     for field, discriminator, mapping in (("parentSignerEndpoints", "signerRole", profile.NATIVE_SIGNERS),
             ("proofEndpoints", "endpointKind", profile.NATIVE_PROOFS)):
         runtime[field] = [{discriminator: name,
@@ -88,6 +106,35 @@ def fixture():
 
 
 class BridgePreparationControls(unittest.TestCase):
+    def test_v11_binds_all_eight_role_requests_and_exact_fresh_manifest(self):
+        value, runtime, context = fixture(fresh_helper=True)
+        self.assertEqual(sum(len(row["handshakes"]) for row in runtime["serviceSessions"]), 8)
+        self.assertEqual(profile.require_runtime(p.canonical(value), p.canonical(runtime), **context), runtime)
+
+    def test_v11_missing_duplicate_extra_or_reordered_helper_role_refuses(self):
+        value, runtime, context = fixture(fresh_helper=True)
+        for mutation in ("missing", "duplicate", "extra", "reordered"):
+            changed = copy.deepcopy(runtime)
+            helper = next(row for row in changed["serviceSessions"] if row["serviceRole"] == "bounded-cleanup-helper")
+            if mutation == "missing": helper["handshakes"].pop()
+            elif mutation == "duplicate": helper["handshakes"][1] = copy.deepcopy(helper["handshakes"][0])
+            elif mutation == "reordered": helper["handshakes"].reverse()
+            else: helper["handshakes"].append(copy.deepcopy(helper["handshakes"][0]))
+            with self.assertRaises(ValueError): profile.require_runtime(p.canonical(value), p.canonical(changed), **context)
+
+    def test_v11_manifest_rehash_does_not_authorize_another_runtime_or_deadline(self):
+        value, runtime, context = fixture(fresh_helper=True)
+        for name, replacement in (("serviceConfigurationSha256", p.sha(b"SYNTHETIC wrong helper")),
+                ("deadline", dict(runtime["helperBootstrap"]["deadline"], absoluteBoottimeNanos=9999999))):
+            changed = copy.deepcopy(runtime); manifest = changed["helperBootstrap"]
+            manifest[name] = replacement
+            manifest["manifestSha256"] = p.framed(profile.helper_bootstrap.DOMAIN,
+                (p.canonical([manifest[field] for field in profile.helper_bootstrap.FIELDS[:-1]]),))
+            with self.assertRaises(ValueError): profile.require_runtime(p.canonical(value), p.canonical(changed), **context)
+        runtime["apiVersion"] = profile.runtime_profile.PREFIX + "10"
+        del runtime["helperBootstrap"]
+        with self.assertRaises(ValueError): profile.require_runtime(p.canonical(value), p.canonical(runtime), **context)
+
     def test_closed_composite_and_all_owned_peer_request_joins(self):
         value, runtime, context = fixture()
         self.assertEqual(profile.shape(p.canonical(value)), value)
@@ -127,6 +174,8 @@ class BridgePreparationControls(unittest.TestCase):
         signed = profile.head.envelope(signed["statement"], signed["authorityKeyId"], signed["authorityKeySpkiSha256"],
             signed["authoritySignatureBase64"])
         request["expectedCurrentHead"] = profile.head.binding(signed)
+        request["requestSha256"] = p.framed(profile.handshakes_profile.DOMAIN,
+            (p.canonical([request[name] for name in profile.handshakes_profile.FIELDS[:-1]]),))
         with self.assertRaises(ValueError): profile.require_runtime(p.canonical(value), p.canonical(runtime), **context)
 
     def test_original_driver_cohort_and_ordinary_runtime_are_pinned(self):

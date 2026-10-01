@@ -82,7 +82,11 @@ def _cold(value, role, launch):
 def _runtime(raw, role):
     header = g.document(raw, g.MAX_BYTES)["runtime"]
     effects = role in spool.EFFECT_ROLES
-    p.require(header["apiVersion"] == "serverware.policyCustodyServiceRuntimeConfig/v" + ("8" if effects else "5")
+    fresh_helper = role == g.ROLES[-1] and header["apiVersion"] == "serverware.policyCustodyServiceRuntimeConfig/v9"
+    if fresh_helper:
+        from serverware import native_pilot_ordinary_runtime_profile as ordinary
+        ordinary.validate_runtime(role, raw)
+    p.require(header["apiVersion"] == "serverware.policyCustodyServiceRuntimeConfig/v" + ("9" if fresh_helper else "8" if effects else "5")
         and header["generationAdmission"] == {"grantFdName": "generation-grant"}
         and (header.get("dispatchAdmission") == {"grantFdName": "dispatch-grant"}
              if role in commitment.ROLES else header.get("dispatchAdmission") is None))
@@ -109,6 +113,10 @@ def _service(value, role, launch, boot, startup, lifetime, now, *, granted):
     history_raw = _original(value["historyOriginal"], g.MAX_BYTES)
     header = _runtime(runtime_raw, role)
     p.require(p.sha(runtime_raw) == guest["runtimeConfigurationSha256"])
+    if role == g.ROLES[-1] and header["apiVersion"] == "serverware.policyCustodyServiceRuntimeConfig/v9":
+        from serverware import native_pilot_ordinary_initial_profile as initial
+        initial.runtime_manifest(history_raw, runtime=header, guest=guest)
+        initial.helper_endpoint_histories(history_raw, runtime=g.document(runtime_raw, g.MAX_BYTES))
     item = dict(cold=cold, guest=guest, runtime_raw=runtime_raw, history_raw=history_raw,
                 delivery_raw=delivery_raw, header=header)
     if granted:

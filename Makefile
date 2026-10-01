@@ -1347,6 +1347,9 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	scripts/test_native_pilot_bridge_runtime.py \
 	scripts/test_native_pilot_bridge_authorizations.py \
 	scripts/test_native_pilot_bridge_preparation.py \
+	scripts/test_native_pilot_bridge_launches.py \
+	scripts/test_native_pilot_helper_initial.py \
+	scripts/test_native_pilot_service_handshakes.py \
 	scripts/test_native_pilot_initial_requests.py \
 	scripts/test_native_pilot_peer_preparation.py \
 	scripts/authority/sign_native_pilot_key_authorization.py \
@@ -1661,6 +1664,9 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/native_pilot_bridge_authority.py \
 	serverware/native_pilot_bridge_key_profile.py \
 	serverware/native_pilot_bridge_preparation.py \
+	serverware/native_pilot_bridge_launch_publication.py \
+	serverware/native_pilot_helper_bootstrap_profile.py \
+	serverware/native_pilot_service_handshakes.py \
 	serverware/native_pilot_initial_requests.py \
 	serverware/native_pilot_initial_requests_profile.py \
 	serverware/native_pilot_peer_owners.py \
@@ -4131,6 +4137,9 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				scripts/test_native_pilot_bridge_runtime.py \
 				scripts/test_native_pilot_bridge_authorizations.py \
 				scripts/test_native_pilot_bridge_preparation.py \
+				scripts/test_native_pilot_bridge_launches.py \
+				scripts/test_native_pilot_helper_initial.py \
+				scripts/test_native_pilot_service_handshakes.py \
 				scripts/test_native_pilot_initial_requests.py \
 				scripts/test_native_pilot_peer_preparation.py \
 				scripts/authority/sign_native_pilot_key_authorization.py \
@@ -4439,6 +4448,9 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/native_pilot_bridge_authority.py \
 				serverware/native_pilot_bridge_key_profile.py \
 				serverware/native_pilot_bridge_preparation.py \
+				serverware/native_pilot_bridge_launch_publication.py \
+				serverware/native_pilot_helper_bootstrap_profile.py \
+				serverware/native_pilot_service_handshakes.py \
 				serverware/native_pilot_initial_requests.py \
 				serverware/native_pilot_initial_requests_profile.py \
 				serverware/native_pilot_peer_owners.py \
@@ -4847,6 +4859,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/policy_custody/services/generation_service.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/initial_history.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/production_initial_history.rs \
+				data-plane/decision-gate-rs/src/policy_custody/services/helper_initial.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/generation_service_client.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/dispatch_commitment.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/dispatch_service.rs \

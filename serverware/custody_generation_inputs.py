@@ -216,11 +216,15 @@ class GenerationInputs:
         runtime_pin = payload["runtimeConfig"]
         runtime = o.Original(runtime_pin["path"], g.MAX_BYTES, sha=runtime_pin["sha256"])
         self._originals.append(runtime)
-        runtime_raw = runtime.read(); header = g.document(runtime_raw, g.MAX_BYTES)["runtime"]
+        runtime_raw = runtime.read(); runtime_value = g.document(runtime_raw, g.MAX_BYTES)
+        header = runtime_value["runtime"]
+        from serverware import native_pilot_ordinary_initial_profile as initial
+        helper = role == g.ROLES[-1] and header["apiVersion"] == initial.HELPER_RUNTIME_API
+        p.require(helper or all(name not in runtime_value for name in ("initialEndpointHistories", "initialEndpointPins")))
         if self._business_owner is not None:
             self._business_owner._require_runtime_peer(header)
         selected = role in self._commitments
-        version = 8 if self._effects and role in self._spools else 7 if role in self._spools else 6 if selected else 5
+        version = 9 if helper else 8 if self._effects and role in self._spools else 7 if role in self._spools else 6 if selected else 5
         p.require(header["apiVersion"] == f"serverware.policyCustodyServiceRuntimeConfig/v{version}"
             and header["generationAdmission"] == {"grantFdName": "generation-grant"}
             and (header.get("dispatchAdmission") == {"grantFdName": "dispatch-grant"} if selected else header.get("dispatchAdmission") is None)
@@ -257,8 +261,15 @@ class GenerationInputs:
         p.require(len(selected) == 1 and selected[0]["signing"] is None)
         history_raw = originals[history_name].read()
         p.require(p.sha(history_raw) == selected[0]["original"]["sha256"])
-        from serverware import native_pilot_ordinary_initial_profile as initial
         initial.runtime_manifest(history_raw, runtime=header, guest=guest)
+        if helper:
+            from serverware import native_pilot_ordinary_runtime_profile as helper_runtime
+            helper_runtime.validate_runtime(role, runtime_raw)
+            members = initial.helper_endpoint_histories(history_raw, runtime=runtime_value)
+            for name, expected in initial.helper_public_keys(runtime_value, members, payload["credentials"]).items():
+                # These exact selected metadata records are non-signing public
+                # keys. No seed read/export or inferred possession is involved.
+                p.require(originals[name].read() == expected)
         delivery = o.publish(f"/etc/serverware/custody-{role}-delivery.json", signed)
         self._originals.append(delivery)
         item.update(delivery=delivery, delivery_raw=signed, guest=guest, runtime=runtime,

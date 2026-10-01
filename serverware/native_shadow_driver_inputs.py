@@ -154,7 +154,8 @@ class OperationalInputs:
             allowed = ("serverware.nativeProofBridgeLaunch/v1", "serverware.nativeProofBridgeLaunch/v2")
             p.require(launch["apiVersion"] in allowed
                 or (outgoing is not None and launch["apiVersion"] in ("serverware.nativeProofBridgeLaunch/v3",
-                    "serverware.nativeProofBridgeLaunch/v4", "serverware.nativeProofBridgeLaunch/v5", "serverware.nativeProofBridgeLaunch/v6")))
+                    "serverware.nativeProofBridgeLaunch/v4", "serverware.nativeProofBridgeLaunch/v5", "serverware.nativeProofBridgeLaunch/v6",
+                    "serverware.nativeProofBridgeLaunch/v7")))
             inner = p.fields(launch["keyAdmission"], ("apiVersion", "deliveryConfiguration", "delivery", "trust", "timeBootstrap",
                 "assignment", "closure", "keys", "encryptedKeys", "admission", "verifierTransport"))
             p.require(inner["apiVersion"] == "serverware.nativeShadowGuestLaunch/v1"
@@ -194,7 +195,8 @@ class OperationalInputs:
                     ("verifier", "verifierTransport", 32768)):
                 owner._public(name, inner[field], bound)
             verifier_paths = ("/etc/serverware/native-shadow-public-exchange.json",)
-            if launch["apiVersion"] in ("serverware.nativeProofBridgeLaunch/v5", "serverware.nativeProofBridgeLaunch/v6"):
+            if launch["apiVersion"] in ("serverware.nativeProofBridgeLaunch/v5", "serverware.nativeProofBridgeLaunch/v6",
+                    "serverware.nativeProofBridgeLaunch/v7"):
                 verifier_paths += ("/etc/serverware/native-pilot-inputs/native-bridge-verifier.json",)
             p.require(inner["verifierTransport"]["path"] in verifier_paths)
             owner._public("time-grant", launch["trustedTime"], 65536)

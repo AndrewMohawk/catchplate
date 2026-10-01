@@ -50,7 +50,8 @@ def shape(purpose: str, raw: bytes) -> dict:
     if purpose == "bridge-outgoing":
         value = p.fields(p.document(raw, 8192), OUTGOING_FIELDS)
         p.require(value["apiVersion"] == "serverware.nativeShadowDriverOutgoingInputs/v1"
-            and value["bridgeLaunchVersion"] in ("serverware.nativeProofBridgeLaunch/v5", "serverware.nativeProofBridgeLaunch/v6"))
+            and value["bridgeLaunchVersion"] in ("serverware.nativeProofBridgeLaunch/v5", "serverware.nativeProofBridgeLaunch/v6",
+                "serverware.nativeProofBridgeLaunch/v7"))
         for name in ("driverConfigurationSha256", "driverWindowSha256", "driverObservationSha256"):
             p.digest(value[name])
         delivery._pin(value["deliveryConfiguration"])
@@ -59,7 +60,7 @@ def shape(purpose: str, raw: bytes) -> dict:
         publication._invocation(value["invocationId"])
         return value
     value = bridge_runtime.shape(raw)
-    p.require(bridge_runtime.version(value) in (9, 10)
+    p.require(bridge_runtime.version(value) in (9, 10, 11)
         and value["listenerSocketPath"] == resources.LISTENER_PATH)
     p.integer(value["startupTimeoutMillis"], maximum=30000)
     generation = p.fields(value["generationAdmission"], ("apiVersion", "grants"))
@@ -74,7 +75,7 @@ def shape(purpose: str, raw: bytes) -> dict:
     spool = p.fields(value["spool"], ("apiVersion", "headGrantOriginal", "currentGrantOriginal", "originFdName", "cleanupGrantOriginal"))
     p.require(spool["apiVersion"] == "serverware.nativeSpoolServices/v3" and spool["originFdName"] == "generation-origin")
     for name in ("headGrantOriginal", "currentGrantOriginal", "cleanupGrantOriginal"):
-        scope._original(spool[name], 131072 if bridge_runtime.version(value) == 10 and name != "headGrantOriginal" else 65536)
+        scope._original(spool[name], 131072 if bridge_runtime.version(value) in (10, 11) and name != "headGrantOriginal" else 65536)
     histories = value["histories"]
     p.require(type(histories) is list and len(histories) == 5)
     roles = []
@@ -126,7 +127,7 @@ def install(bundle_original: bytes, *, expected_sha256: str) -> dict:
         runtime_raw, _ = bridge_runtime.original(value["runtimeOriginal"])
         outgoing_raw, _ = scope._original(value["outgoingOriginal"], 8192)
         runtime = shape("bridge-runtime", runtime_raw)
-        p.require(bridge_runtime.version(runtime) == 10 or len(bundle_original) <= MAX_INPUT)
+        p.require(bridge_runtime.version(runtime) in (10, 11) or len(bundle_original) <= MAX_INPUT)
         selected = shape("bridge-outgoing", outgoing_raw)
         scope._same(selected, {"apiVersion": "serverware.nativeShadowDriverOutgoingInputs/v1",
             "driverConfigurationSha256": p.sha(config_raw), "driverWindowSha256": p.sha(window_raw),

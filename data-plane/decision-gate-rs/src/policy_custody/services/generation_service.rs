@@ -242,6 +242,14 @@ pub(super) struct Gate {
     certifications:Vec<(Certify,Certified)>,head:Option<Sha256Digest>,poisoned:bool,
 }
 impl Gate {
+    /// Read-only bound for the explicit fresh-helper startup exchange. It
+    /// retains the actual admitted grant/file/owner checks and never renews it.
+    pub(super) fn initial_startup_deadline(&self, ceiling:u64)->Result<u64,ServiceError> {
+        self.check()?;
+        let deadline=ceiling.min(self.grant.payload.expires_at_boottime_nanos);
+        ensure(boottime_now_nanos().map_err(|_|invalid())?<deadline)?;
+        Ok(deadline)
+    }
     pub(super) fn open<T>(loaded:&LoadedConfig<T>,runtime:&RuntimeConfigHeaderV3,bootstrap:&Bootstrap,
         activation:&mut BTreeMap<String,OwnedFd>,role:TrustedHostServiceRoleV3)->Result<Option<Self>,ServiceRunnerError> {
         let Some(selection)=&runtime.generation_admission else {return Ok(None);};

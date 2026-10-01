@@ -132,7 +132,7 @@ def shape(purpose: str, raw: bytes) -> dict:
         role = purpose[len("native-launch-"):]
         api, field, _ = LAUNCHES[role]
         p.fields(value, ("apiVersion", "keyAdmission", field))
-        p.require(value["apiVersion"] in (("serverware." + api, "serverware.nativeProofBridgeLaunch/v6")
+        p.require(value["apiVersion"] in (("serverware." + api, "serverware.nativeProofBridgeLaunch/v6", "serverware.nativeProofBridgeLaunch/v7")
             if role == "bridge" else ("serverware." + api,)))
         _inner(value["keyAdmission"], role)
         delivery._pin(value[field])
@@ -525,6 +525,24 @@ def checked_endpoint_result(bundle_original: bytes, result, *, delivery_input_or
     p.fields(result, tuple(expected))
     c9._same(result, expected)
     return p.document(p.canonical(result), 32768)
+
+
+def prepare_bridge_bundle(bundle_original: bytes, *, pair_context, service_grant_original: bytes,
+        boot, now_boottime_ns, now_unix_ns) -> dict:
+    """Pure bridge-only public joins; the actual pair retains control and C9."""
+    from serverware import native_pilot_bridge_launch_publication as bridge
+    return bridge.prepare_bridge_bundle(bundle_original, pair_context=pair_context,
+        service_grant_original=service_grant_original, boot=boot,
+        now_boottime_ns=now_boottime_ns, now_unix_ns=now_unix_ns)
+
+
+def checked_bridge_result(bundle_original: bytes, result, *, pair_context, service_grant_original: bytes,
+        boot, now_boottime_ns, now_unix_ns) -> dict:
+    """Check bridge result pins without claiming that publication occurred."""
+    from serverware import native_pilot_bridge_launch_publication as bridge
+    return bridge.checked_bridge_result(bundle_original, result, pair_context=pair_context,
+        service_grant_original=service_grant_original, boot=boot,
+        now_boottime_ns=now_boottime_ns, now_unix_ns=now_unix_ns)
 
 
 def install(bundle_original: bytes, *, expected_sha256: str) -> dict:

@@ -410,7 +410,7 @@ fn require_role(index:usize,service:&SelectedService,six:bool,seven:bool,eight:b
         (6,SelectedService::Ingress(_))=>seven,
         (4,SelectedService::TerminalBridge(_))=>eight&&!eleven,
         (5,SelectedService::CompletionLedgerSpool(_))|(7,SelectedService::TerminalSpool(_))=>eight,
-        (4,SelectedService::ActiveEffectBridge(_))|(4,SelectedService::InitialHistoryBridge(_))|(8,SelectedService::DispatchSpool(_))|
+        (4,SelectedService::ActiveEffectBridge(_))|(4,SelectedService::InitialHistoryBridge(..))|(8,SelectedService::DispatchSpool(_))|
         (9,SelectedService::ActiveEffectBarrier(_))|(10,SelectedService::ActiveEffectCommit(_))=>eleven,
         _=>false,
     })
@@ -463,13 +463,14 @@ fn assigned_peers(service:&SelectedService,files:&FileAdmission)
             let grant:admission::trusted_time::Configuration=exact(&original.read(65536).map_err(fail)?)?;
             grant.validate_shape()?;Ok(vec![(4,grant.expected_peer().clone())])
         }
-        SelectedService::ProofBridge(_)|SelectedService::CommitmentBridge(_)|SelectedService::SpoolBridge(_)|SelectedService::TerminalBridge(_)|SelectedService::ActiveEffectBridge(_)|SelectedService::InitialHistoryBridge(_)=>{
-            let initial_history=matches!(service,SelectedService::InitialHistoryBridge(_));
-            let effects=matches!(service,SelectedService::ActiveEffectBridge(_)|SelectedService::InitialHistoryBridge(_));
-            let terminal=matches!(service,SelectedService::TerminalBridge(_)|SelectedService::ActiveEffectBridge(_)|SelectedService::InitialHistoryBridge(_));
-            let spool=matches!(service,SelectedService::SpoolBridge(_)|SelectedService::TerminalBridge(_)|SelectedService::ActiveEffectBridge(_)|SelectedService::InitialHistoryBridge(_));
-            let commitment=matches!(service,SelectedService::CommitmentBridge(_)|SelectedService::SpoolBridge(_)|SelectedService::TerminalBridge(_)|SelectedService::ActiveEffectBridge(_)|SelectedService::InitialHistoryBridge(_));
-            let mut assigned=if initial_history{proof_client::assigned_peers_initial_history(files)?}else if effects{proof_client::assigned_peers_effects(files)?}else if terminal{proof_client::assigned_peers_terminal(files)?}else if spool{proof_client::assigned_peers_spool(files)?}else if commitment {proof_client::assigned_peers_selected(files,true)?}
+        SelectedService::ProofBridge(_)|SelectedService::CommitmentBridge(_)|SelectedService::SpoolBridge(_)|SelectedService::TerminalBridge(_)|SelectedService::ActiveEffectBridge(_)|SelectedService::InitialHistoryBridge(..)=>{
+            let initial_history=matches!(service,SelectedService::InitialHistoryBridge(..));
+            let helper_initial=matches!(service,SelectedService::InitialHistoryBridge(_,true));
+            let effects=matches!(service,SelectedService::ActiveEffectBridge(_)|SelectedService::InitialHistoryBridge(..));
+            let terminal=matches!(service,SelectedService::TerminalBridge(_)|SelectedService::ActiveEffectBridge(_)|SelectedService::InitialHistoryBridge(..));
+            let spool=matches!(service,SelectedService::SpoolBridge(_)|SelectedService::TerminalBridge(_)|SelectedService::ActiveEffectBridge(_)|SelectedService::InitialHistoryBridge(..));
+            let commitment=matches!(service,SelectedService::CommitmentBridge(_)|SelectedService::SpoolBridge(_)|SelectedService::TerminalBridge(_)|SelectedService::ActiveEffectBridge(_)|SelectedService::InitialHistoryBridge(..));
+            let mut assigned=if initial_history{proof_client::assigned_peers_initial_history(files,helper_initial)?}else if effects{proof_client::assigned_peers_effects(files)?}else if terminal{proof_client::assigned_peers_terminal(files)?}else if spool{proof_client::assigned_peers_spool(files)?}else if commitment {proof_client::assigned_peers_selected(files,true)?}
                 else {proof_client::assigned_peers(files)?};
             let mut peers=Vec::new();
             for (index,kind) in [retrieval_peer::EndpointKind::Retrieval,retrieval_peer::EndpointKind::Persistence,
@@ -606,12 +607,12 @@ pub(super) fn prepare_inspection(service:SelectedService,files:&FileAdmission,ac
             Ok((Inspection::ProofClient(owner),remote))
         }
         SelectedService::ActiveEffectBridge(_)=>{
-            proof_client::check_runtime_selection(files,false)?;
+            proof_client::check_runtime_selection(files,false,false)?;
             let (owner,remote)=proof_client::Inspector::prepare_effects(files,activation)?;
             Ok((Inspection::ProofClient(owner),remote))
         }
-        SelectedService::InitialHistoryBridge(_)=>{
-            proof_client::check_runtime_selection(files,true)?;
+        SelectedService::InitialHistoryBridge(_,helper_initial)=>{
+            proof_client::check_runtime_selection(files,true,helper_initial)?;
             let (owner,remote)=proof_client::Inspector::prepare_effects(files,activation)?;
             Ok((Inspection::ProofClient(owner),remote))
         }

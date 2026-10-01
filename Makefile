@@ -624,6 +624,10 @@ override CODER_ISOLATED_TEST_SCRIPTS := \
 	scripts/test_authority_local_entrypoint.py \
 	scripts/test_authority_local_admission.py \
 	scripts/test_authority_local_startup.py \
+	scripts/test_authority_local_artifacts.py \
+	scripts/test_authority_local_install.py \
+	scripts/test_authority_local_snapshot.py \
+	scripts/test_development_policy_commissioning.py \
 	scripts/test_control_plane_optional_startup.py \
 	scripts/test_demo_seed_policy.py \
 	scripts/test_oidc_session_activation_delivery_facade.py \

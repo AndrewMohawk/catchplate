@@ -47,12 +47,14 @@ REQUIRED_ROLES = {"retrieval": "custody-retrieval-response", "persistence": "cus
 
 
 def input_document(raw):
-    value = generation.document(raw, MAX_INPUT)
-    return value if value.get("apiVersion") == ADOPTED_API else p.document(raw, MAX_INPUT)
+    # The complete recipe is bounded at32MiB, not the C9 codec's4MiB.
+    # C9 originals are literal strings here; their selected reader below
+    # separately validates native unsigned metadata under its own cap.
+    return p.document(raw, MAX_INPUT)
 
 
 def canonical(value, *, adopted=False):
-    return generation.canonical(value) if adopted else p.canonical(value)
+    return p.canonical(value)
 
 
 def original(text, maximum, *, adopted=False):

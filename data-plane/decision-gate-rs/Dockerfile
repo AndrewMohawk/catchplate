@@ -28,7 +28,18 @@ FROM rust-source AS build
 ARG CARGO_BUILD_JOBS=2
 
 RUN set -eu; \
-    cargo build --release --locked; \
+    cargo build --release --locked \
+        --bin serverware-decision-gate \
+        --bin serverware-proof-client \
+        --bin serverware-response-proof-fixture \
+        --bin serverware-custody-runtime \
+        --bin serverware-response-observation-v2-custody \
+        --bin serverware-policy-shadow-custody \
+        --bin serverware-policy-custody-durable-recovery-store \
+        --bin serverware-policy-custody-recovery-target-provider \
+        --bin serverware-policy-custody-current-signature-authority \
+        --bin serverware-policy-custody-cleanup-authorization-consumer \
+        --bin serverware-policy-custody-bounded-cleanup-helper; \
     ledger_directory=/runtime-layout/serverware-custody-state; \
     ledger_payload='{"activeBindingCount":0,"activeBindingsAccumulator":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","apiVersion":"serverware.custodyAttemptLedger/v2","commitSequence":0,"maxObservedEpochMs":0,"prunedThroughEpochMs":0}'; \
     install -d -m 0700 "$ledger_directory"; \

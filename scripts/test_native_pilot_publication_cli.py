@@ -24,7 +24,11 @@ class PublicationCliTests(unittest.TestCase):
 
     def test_cold_modes_require_separate_purpose_and_correct_key_presence(self):
         self.assertEqual(set(entry.MODES), {"--prepare-closure-set", "--prepare-genesis-binding",
-            "--sign-assignment", "--sign-genesis-precreation", "--sign-genesis-release"})
+            "--sign-assignment", "--sign-genesis-precreation", "--sign-genesis-release",
+            "--sign-genesis-ordinary-checkpoint", "--sign-genesis-ordinary-root-anchor",
+            "--sign-genesis-ordinary-checkpoint-anchor", "--sign-genesis-ordinary-service-anchor",
+            "--assemble-genesis-ordinary-history", "--sign-genesis-ordinary-delivery",
+            "--sign-genesis-ordinary-grant"})
         for mode, purpose in (("--sign-genesis-precreation", "precreation"),
                               ("--sign-genesis-release", "release")):
             values = arguments(True)
@@ -45,6 +49,28 @@ class PublicationCliTests(unittest.TestCase):
         self.assertFalse(entry.valid_arguments(values[:-2]))
         values[0] = "--prepare-closure-set"
         self.assertFalse(entry.valid_arguments(values))
+
+    def test_initial_history_modes_are_fixed_and_assembly_is_keyless(self):
+        self.assertEqual(set(entry.INITIAL_MODES.values()),
+            {"checkpoint", "root-anchor", "checkpoint-anchor", "service-anchor", "assemble"})
+        for mode, operation in entry.INITIAL_MODES.items():
+            values = arguments(operation != "assemble")
+            values[0] = mode
+            self.assertTrue(entry.valid_arguments(values))
+            wrong = values + ["--authority-key-fd", "5"] if operation == "assemble" else values[:-2]
+            self.assertFalse(entry.valid_arguments(wrong))
+            self.assertIsNone(entry.genesis_operation(mode))
+
+    def test_ordinary_c9_and_grant_have_distinct_keyed_purposes(self):
+        self.assertEqual(entry.ORDINARY_MODES, {
+            "--sign-genesis-ordinary-delivery": "delivery", "--sign-genesis-ordinary-grant": "grant"})
+        for mode in entry.ORDINARY_MODES:
+            values = arguments(True)
+            values[0] = mode
+            self.assertTrue(entry.valid_arguments(values))
+            self.assertFalse(entry.valid_arguments(values[:-2]))
+            self.assertIsNone(entry.genesis_operation(mode))
+            self.assertNotIn(mode, entry.INITIAL_MODES)
 
     def test_alias_fds_and_noncanonical_numbers_refuse(self):
         for index, value in ((2, "0"), (2, "03"), (6, "3"), (10, "3"), (10, "4"),

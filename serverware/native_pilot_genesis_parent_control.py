@@ -23,6 +23,8 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from serverware import custody_generation_grants as codec
 from serverware import native_pilot_genesis_parent_authority as authority
 from serverware import native_pilot_genesis_parent_control_io as io
+from serverware import native_pilot_genesis_coordinator_peer as peer_wire
+from serverware import native_pilot_peer_resources as peer_resources
 from serverware import native_shadow_guest_delivery as c9
 from serverware import native_shadow_nitro_originals as originals
 from serverware.native_shadow_proof_cohort_control import _Original, _process, _structural, _terminal
@@ -92,6 +94,8 @@ class ParkedGenesisController:
         self._stdout_eof = False
         self._output = bytearray()
         self._spawn_mask = self._terminal_result = None
+        self._peer = self._peer_raw = None
+        self._peer_attempted = False
 
     @classmethod
     def prepare(cls, *, control_fd, control_sha256):
@@ -175,6 +179,11 @@ class ParkedGenesisController:
 
     def _check_sources(self, *, full=False):
         self._origin()
+        if self._peer is not None:
+            if _terminal(self._peer.pidfd):
+                p.require(self._released or self._close_attempted)
+            else:
+                self._peer.check()
         for value in self._inputs:
             value.check() if full else value.check_identity()
         for value in self._named:
@@ -352,6 +361,40 @@ class ParkedGenesisController:
             "uid": 0, "gid": 0, "pidfdDevice": info.st_dev, "pidfdInode": info.st_ino,
             "executable": {"device": self._exec_identity[0], "inode": self._exec_identity[1],
                 "length": self._exec_identity[6], "sha256": p.sha(self._executable.raw)}}
+
+    def peer_preparation_original(self):
+        """Capture once from this actual parked child; retain until real reap."""
+        try:
+            self.observation_original()
+            if not self._peer_attempted:
+                self._peer_attempted = True
+                observed = self._sample(self._context["deadline"])
+                with io.owning():
+                    self._peer = peer_resources._Peer(peer_resources._TOKEN,
+                        pidfd=self._parked_fd, pid=self._observed["processId"],
+                        start=self._observed["startTimeTicks"], parent=self._controller_pid,
+                        executable_fd=None, expected=self._observed["executable"],
+                        kind="genesis-coordinator", check=self._before_release)
+                value = {"apiVersion": peer_wire.API, "profile": peer_wire.wire.PROFILE,
+                    "ownerKind": peer_wire.ROLE, "phase": "parked-pre-exec",
+                    "configurationSha256": p.sha(self._configuration.raw),
+                    "sourceOriginalSha256": p.sha(self._observation_raw),
+                    **{field: self._window[field] for field in ("bootIdBase64url", "timeNamespaceDevice",
+                        "timeNamespaceInode", "issuedAtBoottimeNs", "startupDeadlineBoottimeNs",
+                        "lifetimeDeadlineBoottimeNs", "invocationId")},
+                    "observedAtBoottimeNs": str(observed), "peers": {peer_wire.ROLE: self._peer.value}}
+                self._peer_raw = codec.canonical(value)
+            p.require(self._peer is not None and self._peer_raw is not None)
+            self._peer.check()
+            peer_wire.validate(self._peer_raw, observation_raw=self._observation_raw,
+                configuration_raw=self._configuration.raw, precreation_raw=self._precreation.raw,
+                delivery_configuration_raw=self._cold.raw, boot=self._boot,
+                now_boottime_ns=self._sample(self._context["deadline"]))
+            self.observation_original()
+            return bytes(self._peer_raw)
+        except BaseException as error:
+            self._failed = True
+            raise GenesisControllerError(self) from error
 
     def _release_sources(self, signed):
         # Authenticate this one release before following any of its paths.
@@ -532,6 +575,10 @@ class ParkedGenesisController:
                         break
                     select.select([self._pidfd], [], [], 0.01)
             with io.owning():
+                if self._peer is not None:
+                    p.require(_terminal(self._peer.pidfd) and io.pidfd_pid(self._peer.pidfd) == -1)
+                    self._peer.close()
+                    self._peer = None
                 if self._socket is not None:
                     self._socket.close()
                     self._socket = None

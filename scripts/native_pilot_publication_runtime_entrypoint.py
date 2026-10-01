@@ -1,7 +1,7 @@
 """Fixed isolated pre-commissioning commands in the approved supervisor package.
 
-Prepare one static closure set or cold binding, or sign one independently
-approved assignment or cold parent original.
+Prepare one static closure set or cold binding, or issue one independently
+approved assignment, cold parent, initial history or ordinary service original.
 There is no child launch, publisher, provisioning, retry or default key. The
 complete input and installed runtime have separate externally supplied pins.
 Only these fixed commands exist; no caller-selected Python module is executed.
@@ -16,8 +16,17 @@ import time
 SCRIPT = "/supervisor/app/scripts/native_pilot_publication_runtime_entrypoint.py"
 PYTHON = "/runtime/python/bin/python3"
 IMPORT_ROOTS = ("/supervisor/app", "/authority/app", "/vendor", "/app")
-SIGNING_MODES = ("--sign-assignment", "--sign-genesis-precreation", "--sign-genesis-release")
-MODES = ("--prepare-closure-set", "--prepare-genesis-binding") + SIGNING_MODES
+INITIAL_MODES = {
+    "--sign-genesis-ordinary-checkpoint": "checkpoint",
+    "--sign-genesis-ordinary-root-anchor": "root-anchor",
+    "--sign-genesis-ordinary-checkpoint-anchor": "checkpoint-anchor",
+    "--sign-genesis-ordinary-service-anchor": "service-anchor",
+    "--assemble-genesis-ordinary-history": "assemble",
+}
+ORDINARY_MODES = {"--sign-genesis-ordinary-delivery": "delivery", "--sign-genesis-ordinary-grant": "grant"}
+SIGNING_MODES = ("--sign-assignment", "--sign-genesis-precreation", "--sign-genesis-release") + tuple(ORDINARY_MODES) + tuple(
+    mode for mode, operation in INITIAL_MODES.items() if operation != "assemble")
+MODES = ("--prepare-closure-set", "--prepare-genesis-binding", "--assemble-genesis-ordinary-history") + SIGNING_MODES
 
 
 def valid_arguments(arguments):
@@ -65,6 +74,8 @@ def main():
     from scripts.authority import prepare_native_pilot_closure_set as preparation
     from serverware import native_pilot_assignment as assignment
     from serverware import native_pilot_genesis_parent_authority as genesis
+    from serverware import native_pilot_genesis_ordinary_initial_authority as initial
+    from serverware import native_pilot_genesis_ordinary_authority as ordinary
     from serverware import native_pilot_publication_cold_binding as cold_binding
     from serverware import native_shadow_nitro_originals as originals
 
@@ -78,7 +89,11 @@ def main():
         mode = arguments[0]
         signing = mode in SIGNING_MODES
         purpose = genesis_operation(mode)
-        maximum = (genesis.MAX_INPUT if purpose is not None else cold_binding.MAX_INPUT
+        initial_purpose = INITIAL_MODES.get(mode)
+        ordinary_purpose = ORDINARY_MODES.get(mode)
+        maximum = (ordinary.MAX_INPUT if ordinary_purpose is not None else
+            initial.MAX_INPUT if initial_purpose is not None else
+            genesis.MAX_INPUT if purpose is not None else cold_binding.MAX_INPUT
             if mode == "--prepare-genesis-binding" else assignment.MAX_INPUT
             if signing else preparation.closure_set.MAX_BYTES)
         input_fd = int(arguments[6])
@@ -89,7 +104,7 @@ def main():
         before_boot, before_wall = originals._clock(), time.time_ns()
         key_fd = int(arguments[10]) if signing else None
         key_identity = None
-        payload = deadline = None
+        payload = deadline = epoch_limit = None
         previous_boot, previous_wall = before_boot, before_wall
 
         def check():
@@ -109,10 +124,33 @@ def main():
             previous_boot, previous_wall = after_boot, after_wall
             if deadline is not None:
                 p.require(after_boot < deadline)
+            if epoch_limit is not None:
+                p.require(after_wall < epoch_limit)
             if payload is not None:
                 p.freshness(payload["issuedAtUnixNanos"], payload["expiresAtUnixNanos"], after_wall)
 
-        if purpose is not None:
+        if ordinary_purpose is not None:
+            approved = ordinary.prepare_input(ordinary_purpose, raw, boot=originals._boot(),
+                now_boottime_ns=originals._clock(), now_unix_ns=time.time_ns())
+            deadline, epoch_limit = approved["deadline"], approved["epochLimit"]
+            key_identity = io._input(key_fd, 32, private=True)
+            check()
+            result = ordinary.sign(ordinary_purpose, input_original=raw,
+                signing_key=io.signing_key(key_fd))
+        elif initial_purpose is not None:
+            approved = initial.prepare_input(initial_purpose, raw,
+                boot=originals._boot(), now_boottime_ns=originals._clock())
+            deadline = approved["deadline"]
+            if initial_purpose == "assemble":
+                check()
+                result, result_deadline = initial.assemble(input_original=raw)
+            else:
+                key_identity = io._input(key_fd, 32, private=True)
+                check()  # Exact checkpoint/anchor purpose precedes key access.
+                result, result_deadline = initial.sign(initial_purpose,
+                    input_original=raw, signing_key=io.signing_key(key_fd))
+            p.require(result_deadline == deadline)
+        elif purpose is not None:
             value = genesis.input_document(raw)
             p.require(value["operation"] == purpose)
             approved = genesis.prepare_input(raw, boot=originals._boot(),
@@ -155,6 +193,8 @@ def main():
         p.require(previous_boot <= final_boot and previous_wall <= final_wall)
         if deadline is not None:
             p.require(final_boot < deadline)
+        if epoch_limit is not None:
+            p.require(final_wall < epoch_limit)
         if payload is not None:
             p.freshness(payload["issuedAtUnixNanos"], payload["expiresAtUnixNanos"], final_wall)
         return 0

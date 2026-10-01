@@ -1,5 +1,10 @@
 # Cold authority inputs and retained caller
 
+The next [cold ordinary-service slice](native-pilot-genesis-ordinary.md) adds
+explicit two-service preparation, initial history and service authorization.
+The original five modes below remain supported; the successor documents the
+additional fixed purposes and their separate authority requirements.
+
 This continues the [acyclic bootstrap](native-pilot-genesis-bootstrap.md).
 It provides purpose-fixed issuer inputs and an actual retained controller caller;
 it does not provision the authorities or complete the commissioning graph.

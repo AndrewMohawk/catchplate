@@ -1340,6 +1340,10 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	scripts/test_native_pilot_genesis_closure_schema.py \
 	scripts/test_native_pilot_genesis_parent_authority.py \
 	scripts/test_native_pilot_genesis_parent_control.py \
+	scripts/test_native_pilot_genesis_coordinator_peer.py \
+	scripts/test_native_pilot_genesis_ordinary_initial.py \
+	scripts/test_native_pilot_genesis_ordinary_control.py \
+	scripts/test_native_pilot_genesis_ordinary_runtime.py \
 	scripts/test_native_pilot_publication_cold_binding.py \
 	scripts/test_native_pilot_publication_cli.py \
 	scripts/native_pilot_publication_runtime_entrypoint.py \
@@ -1669,6 +1673,14 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/native_pilot_genesis_parent_authority.py \
 	serverware/native_pilot_genesis_parent_control.py \
 	serverware/native_pilot_genesis_parent_control_io.py \
+	serverware/native_pilot_genesis_coordinator_peer.py \
+	serverware/native_pilot_genesis_ordinary_initial_profile.py \
+	serverware/native_pilot_genesis_ordinary_initial_authority.py \
+	serverware/native_pilot_genesis_ordinary_control.py \
+	serverware/native_pilot_genesis_ordinary_control_process.py \
+	serverware/native_pilot_genesis_ordinary_resources.py \
+	serverware/native_pilot_genesis_ordinary_runtime.py \
+	serverware/native_pilot_genesis_ordinary_authority.py \
 	serverware/native_pilot_publication_cold_binding.py \
 	serverware/policy_shadow_assignment_fields.py \
 	serverware/native_pilot_closure_set.py \
@@ -4176,6 +4188,10 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				scripts/test_native_pilot_genesis_closure_schema.py \
 				scripts/test_native_pilot_genesis_parent_authority.py \
 				scripts/test_native_pilot_genesis_parent_control.py \
+				scripts/test_native_pilot_genesis_coordinator_peer.py \
+				scripts/test_native_pilot_genesis_ordinary_initial.py \
+				scripts/test_native_pilot_genesis_ordinary_control.py \
+				scripts/test_native_pilot_genesis_ordinary_runtime.py \
 				scripts/test_native_pilot_publication_cold_binding.py \
 				scripts/test_native_pilot_publication_cli.py \
 				scripts/native_pilot_publication_runtime_entrypoint.py \
@@ -4499,6 +4515,14 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/native_pilot_genesis_parent_authority.py \
 				serverware/native_pilot_genesis_parent_control.py \
 				serverware/native_pilot_genesis_parent_control_io.py \
+				serverware/native_pilot_genesis_coordinator_peer.py \
+				serverware/native_pilot_genesis_ordinary_initial_profile.py \
+				serverware/native_pilot_genesis_ordinary_initial_authority.py \
+				serverware/native_pilot_genesis_ordinary_control.py \
+				serverware/native_pilot_genesis_ordinary_control_process.py \
+				serverware/native_pilot_genesis_ordinary_resources.py \
+				serverware/native_pilot_genesis_ordinary_runtime.py \
+				serverware/native_pilot_genesis_ordinary_authority.py \
 				serverware/native_pilot_publication_cold_binding.py \
 				serverware/policy_shadow_assignment_fields.py \
 				serverware/native_pilot_closure_set.py \

@@ -117,7 +117,7 @@ class _Peer:
         self.pidfd_identity = (info.st_dev, info.st_ino)
         try:
             self.live(); check()
-            if kind == "native-endpoints":
+            if kind in ("native-endpoints", "genesis-coordinator"):
                 self.executable = _parked_target(pid, expected, self.live)
             elif kind == "gate":
                 # Fixed kernel link of the genuine already executing gate.
@@ -159,7 +159,7 @@ class _Peer:
             p.require(o.directory_identity(named_root) == self.root_identity)
         finally:
             os.close(named_root)
-        if self.kind == "native-endpoints":
+        if self.kind in ("native-endpoints", "genesis-coordinator"):
             p.require(fcntl.fcntl(self.executable, fcntl.F_GET_SEALS) & 15 == 15)
         if self.kind == "gate":
             current = os.stat(f"/proc/{self.pid}/exe")

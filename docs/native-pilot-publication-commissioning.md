@@ -34,7 +34,9 @@ Invoke it with the packaged `/runtime/python/bin/python3 -I -B` and exactly one
 fixed mode. The original modes are `--prepare-closure-set` and
 `--sign-assignment`; the [cold authority slice](native-pilot-genesis-authorities.md)
 adds `--prepare-genesis-binding`, `--sign-genesis-precreation` and
-`--sign-genesis-release`. Each is followed in source order by:
+`--sign-genesis-release`. The [cold ordinary-service slice](native-pilot-genesis-ordinary.md)
+adds fixed checkpoint/anchor, keyless history assembly, C9 delivery and grant
+modes. Each is followed in source order by:
 
 1. `--supervisor-inventory-fd N --supervisor-inventory-sha256 SHA256`
 2. `--input-fd N --input-sha256 SHA256`

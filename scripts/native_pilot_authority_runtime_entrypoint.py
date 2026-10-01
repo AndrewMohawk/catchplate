@@ -16,16 +16,18 @@ def valid_arguments(arguments):
     """Keep the operational invocation closed; cold commissioning is explicit."""
     if type(arguments) is not list or not arguments or not all(type(v) is str for v in arguments):
         return False
-    cold = arguments[0] in ("--run-native-genesis", "--run-native-genesis-handoff", "--run-native-genesis-listener")
+    cold = arguments[0] in ("--run-native-genesis", "--run-native-genesis-handoff", "--run-native-genesis-listener",
+        "--run-native-genesis-rendezvous")
     adopted = arguments[0] == "--run-adopted-native-pilot"
-    if arguments[0] not in ("--run-native-pilot", "--run-adopted-native-pilot", "--run-native-genesis", "--run-native-genesis-handoff", "--run-native-genesis-listener"):
+    if arguments[0] not in ("--run-native-pilot", "--run-adopted-native-pilot", "--run-native-genesis", "--run-native-genesis-handoff",
+            "--run-native-genesis-listener", "--run-native-genesis-rendezvous"):
         return False
     prefix = (("--supervisor-inventory-fd", "fd"), ("--supervisor-inventory-sha256", "sha"),
         ("--genesis-configuration-fd", "fd"), ("--genesis-configuration-sha256", "sha")) if cold else (
         ("--runtime-inventory-fd", "fd"), ("--runtime-inventory-sha256", "sha"))
     if arguments[0] == "--run-native-genesis-handoff":
         prefix += (("--core-handoff-fd", "fd"),)
-    elif arguments[0] == "--run-native-genesis-listener":
+    elif arguments[0] in ("--run-native-genesis-listener", "--run-native-genesis-rendezvous"):
         prefix = prefix[:2] + (("--genesis-listener-configuration-fd", "fd"), ("--genesis-listener-configuration-sha256", "sha"))
     elif adopted:
         prefix += (("--intake-configuration-fd", "fd"), ("--intake-configuration-sha256", "sha"))

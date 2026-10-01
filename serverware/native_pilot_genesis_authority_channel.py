@@ -78,7 +78,7 @@ class GenesisApprovalChannel:
         p.require(self._retained <= MAX_RETAINED)
         return original
 
-    def admit_listener(self, listener):
+    def admit_listener(self, listener, *, rendezvous=False):
         """One pre-job independent approval after real sender observation.
 
         The named v2 execution input is created by the external authority only
@@ -86,9 +86,10 @@ class GenesisApprovalChannel:
         and does not advance or widen the existing 66-job catalogue.
         """
         from serverware import native_pilot_genesis_handoff_listener as handoff
-        p.require(type(listener) is handoff.CoreHandoffListener and self._handoff
+        p.require(type(listener) is handoff.CoreHandoffListener and type(rendezvous) is bool and self._handoff
             and not self._failed and not self._closed and not self._complete
             and self._sequence == 0 and not self._listener_attempted)
+        p.require(listener.rendezvous_selected() is rendezvous)
         self._listener_attempted = True
         try:
             request_raw = listener.request_original()
@@ -98,11 +99,34 @@ class GenesisApprovalChannel:
             pipe._expiry = listener.expires_at_unix_ns  # Original cap inside every blocking pipe wait.
             pipe._check(deadline); listener.check(startup=True)
             pipe._write(request_raw + b"\n", deadline)
-            accepted = handoff.reply(pipe._read(deadline), request_raw)
+            if rendezvous:
+                from serverware import native_pilot_genesis_rendezvous_profile as selected
+
+                def observed_check():
+                    # Do not consume approval before actual receiver observation.
+                    # The listener holds this exact accepted socket until the
+                    # separately approved execution input promotes it.
+                    pipe._check(deadline)
+                    p.require(pipe._pending() == 0)
+
+                listener.observe_receiver(request_raw, observed_check)
+                request_raw = listener.rendezvous_request_original(request_raw)
+                selected.verify_request(request_raw)
+                observed_check(); listener.check(startup=True)
+                pipe._write(request_raw + b"\n", deadline)
+                accepted = selected.reply(pipe._read(deadline), request_raw)
+                input_path, approval_path = selected.INPUT_PATH, selected.APPROVAL_PATH
+                input_maximum, approval_maximum = selected.MAX_INPUT, selected.MAX_APPROVAL
+                check_approval = selected.approval
+            else:
+                accepted = handoff.reply(pipe._read(deadline), request_raw)
+                input_path, approval_path = handoff.INPUT_PATH, handoff.APPROVAL_PATH
+                input_maximum = approval_maximum = 4096
+                check_approval = handoff.approval
             listener.check(startup=True)
-            source = self._open(handoff.INPUT_PATH, 4096, accepted["inputSha256"])
-            approval = self._open(handoff.APPROVAL_PATH, 4096, accepted["approvalSha256"])
-            handoff.approval(approval.raw, request_raw=request_raw, input_sha256=accepted["inputSha256"])
+            source = self._open(input_path, input_maximum, accepted["inputSha256"])
+            approval = self._open(approval_path, approval_maximum, accepted["approvalSha256"])
+            check_approval(approval.raw, request_raw=request_raw, input_sha256=accepted["inputSha256"])
             listener.require_execution(source.raw)
             source.check(); approval.check(); listener.check(startup=True); pipe._check(deadline)
             p.require(pipe._pending() == 0)

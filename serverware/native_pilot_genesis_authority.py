@@ -28,8 +28,10 @@ _PREFIX = (("supervisor-inventory-fd", "fd"), ("supervisor-inventory-sha256", "s
 def arguments(values):
     """Canonical closed syntax, checked before any private descriptor read."""
     p.require(type(values) is list and values and all(type(v) is str for v in values))
-    p.require(values[0] in ("--run-native-genesis", "--run-native-genesis-handoff", "--run-native-genesis-listener"))
-    listener = values[0] == "--run-native-genesis-listener"
+    p.require(values[0] in ("--run-native-genesis", "--run-native-genesis-handoff", "--run-native-genesis-listener",
+        "--run-native-genesis-rendezvous"))
+    rendezvous = values[0] == "--run-native-genesis-rendezvous"
+    listener = values[0] in ("--run-native-genesis-listener", "--run-native-genesis-rendezvous")
     handoff = values[0] != "--run-native-genesis"
     prefix = (_PREFIX[:2] + (("genesis-listener-configuration-fd", "fd"),
         ("genesis-listener-configuration-sha256", "sha")) if listener else _PREFIX)
@@ -38,7 +40,7 @@ def arguments(values):
     offset = 1 + 2 * len(prefix)
     p.require(type(values) is list and len(values) == offset + 2 * len(jobs.KEY_PURPOSES)
         and all(type(v) is str for v in values))
-    selected, descriptors = {"handoff": handoff, "listener": listener}, set()
+    selected, descriptors = {"handoff": handoff, "listener": listener, "rendezvous": rendezvous}, set()
     for index, (name, kind) in enumerate(prefix):
         flag, value = values[1 + 2 * index:3 + 2 * index]
         p.require(flag == "--" + name)
@@ -139,12 +141,13 @@ def main(values):
             phase = "listener-approval"
             with io.owning():
                 try:
-                    listener = CoreHandoffListener.open(selected["genesis_listener_configuration_fd"],
+                    open_listener = CoreHandoffListener.open_rendezvous if selected["rendezvous"] else CoreHandoffListener.open
+                    listener = open_listener(selected["genesis_listener_configuration_fd"],
                         selected["genesis_listener_configuration_sha256"])
                 except ListenerError as error:
                     listener = error.owner
                     raise
-            late = channel.admit_listener(listener)
+            late = channel.admit_listener(listener, rendezvous=selected["rendezvous"])
         else:
             late = dict(configuration_fd=selected["genesis_configuration_fd"],
                 configuration_sha256=selected["genesis_configuration_sha256"])

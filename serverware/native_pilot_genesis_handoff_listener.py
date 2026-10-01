@@ -18,11 +18,13 @@ import time
 from serverware import native_pilot_adopted_intake as intake
 from serverware import native_pilot_genesis_execution_protocol as wire
 from serverware import native_pilot_genesis_parent_control_io as io
+from serverware import native_pilot_genesis_receiver_observation as receiver
 from serverware import native_shadow_nitro_originals as originals
 from serverware.native_pilot_genesis_core_channel import GenesisCoreChannel, GenesisCoreChannelError
 
 p = wire.p
 API = "serverware.nativePilotGenesisListenerConfiguration/v1"
+RENDEZVOUS_API = "serverware.nativePilotGenesisListenerConfiguration/v2"
 OBSERVATION_API = "serverware.nativePilotGenesisListenerObservation/v1"
 REQUEST_API = "serverware.nativePilotGenesisListenerRequest/v1"
 REPLY_API = "serverware.nativePilotGenesisListenerReply/v1"
@@ -34,9 +36,10 @@ _TOKEN = object()
 _READ = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK
 
 
-def configuration(raw, *, boot, now_boottime_ns, now_unix_ns):
+def configuration(raw, *, boot, now_boottime_ns, now_unix_ns, rendezvous=False):
+    p.require(type(rendezvous) is bool)
     value = p.fields(p.document(raw, 4096), ("apiVersion", "window", "expiresAtUnixNanos"))
-    p.require(value["apiVersion"] == API and p.canonical(value) == raw)
+    p.require(value["apiVersion"] == (RENDEZVOUS_API if rendezvous else API) and p.canonical(value) == raw)
     window = p.fields(value["window"], wire.endpoints.WINDOW)
     p.require(p.decoded(window["bootIdBase64url"], size=16) != bytes(16))
     p.integer(window["timeNamespaceDevice"], minimum=0, maximum=p.MAX_I64)
@@ -97,16 +100,29 @@ class CoreHandoffListener:
         self._directories, self._identities, self._links = [], [], []
         self._leaf = None
         self._bound = self._closed = self._close_attempted = self._accept_attempted = False
+        self._rendezvous = self._observe_attempted = self._request_attempted = self._promotion_attempted = False
+        self._receiver_fd = self._receiver_identity = self._receiver = None
+        self._sender_request = self._receiver_original = self._rendezvous_request = None
 
     @classmethod
     def open(cls, configuration_fd, configuration_sha256):
+        return cls._open(configuration_fd, configuration_sha256, rendezvous=False)
+
+    @classmethod
+    def open_rendezvous(cls, configuration_fd, configuration_sha256):
+        return cls._open(configuration_fd, configuration_sha256, rendezvous=True)
+
+    @classmethod
+    def _open(cls, configuration_fd, configuration_sha256, *, rendezvous):
+        p.require(cls is CoreHandoffListener and type(rendezvous) is bool)
         owner = cls(_TOKEN)
+        owner._rendezvous = rendezvous
         try:
             owner._origin()
             with io.owning():
                 owner._source = io.PublicInput(configuration_fd, 4096, configuration_sha256)
             owner._value = configuration(owner._source.raw, boot=owner._boot,
-                now_boottime_ns=owner._last, now_unix_ns=owner._wall)
+                now_boottime_ns=owner._last, now_unix_ns=owner._wall, rendezvous=rendezvous)
             owner.check(startup=True)
             with io.owning():
                 parent = os.open("/", _READ | os.O_DIRECTORY)
@@ -145,6 +161,10 @@ class CoreHandoffListener:
     def startup_deadline_boottime_ns(self):
         return p.ns(self._value["window"]["startupDeadlineBoottimeNs"])
 
+    def rendezvous_selected(self):
+        self._origin()
+        return self._rendezvous
+
     @property
     def expires_at_unix_ns(self):
         return self._value["expiresAtUnixNanos"]
@@ -171,6 +191,14 @@ class CoreHandoffListener:
         if self._accepted is not None:
             p.require(intake._structural(os.fstat(self._accepted.fileno())) == self._accepted_identity
                 and not self._accepted.get_inheritable())
+        if self._receiver_fd is not None:
+            p.require(intake._structural(os.fstat(self._receiver_fd)) == self._receiver_identity
+                and not os.get_inheritable(self._receiver_fd))
+            # Once custody was acknowledged the recipient may exit. Before
+            # that point every retained observation must still describe this
+            # same live kernel peer, including during independent approval.
+            if self._receiver is not None and (self._channel is None or not self._channel._acked):
+                p.require(receiver.peer_identity(self._accepted, self._receiver_fd, boot=self._boot) == self._receiver)
         self._origin()
         now, wall = originals._clock(), time.time_ns()
         window = self._value["window"]
@@ -190,33 +218,98 @@ class CoreHandoffListener:
             listenerSha256=p.sha(observed), configurationSha256=p.sha(self._source.raw),
             deadlineBoottimeNs=str(self.startup_deadline_boottime_ns), expiresAtUnixNanos=self.expires_at_unix_ns))
         self.check(startup=True)
+        if self._rendezvous:
+            p.require(self._sender_request is None or self._sender_request == result)
+            self._sender_request = result
         return result
 
     def require_execution(self, raw):
         self.check(startup=True)
-        selected = require_execution(raw, self._value, boot=self._boot,
-            now_boottime_ns=self._last, now_unix_ns=self._wall)
+        if self._rendezvous:
+            from serverware import native_pilot_genesis_rendezvous_profile as rendezvous
+            p.require(self._rendezvous_request is not None and self._receiver_original is not None)
+            selected = rendezvous.execution(raw, self._rendezvous_request, boot=self._boot,
+                now_boottime_ns=self._last, now_unix_ns=self._wall)
+            peer = selected["coreHandoff"]
+            p.require((peer["peerPid"], peer["peerUid"], peer["peerGid"]) == tuple(self._receiver[name]
+                for name in ("pid", "uid", "gid")))
+        else:
+            selected = require_execution(raw, self._value, boot=self._boot,
+                now_boottime_ns=self._last, now_unix_ns=self._wall)
         p.require(selected["coreHandoff"]["peerPid"] != self._pid)
         self.check(startup=True)
         return selected
 
+    def _accept_once(self, check):
+        p.require(not self._accept_attempted and callable(check) and self._accepted is None)
+        self._accept_attempted = True
+        while True:
+            self.check(startup=True); check(); self.check(startup=True)
+            remaining = min(self.startup_deadline_boottime_ns - self._last, self.expires_at_unix_ns - self._wall) / 1_000_000_000
+            ready, _, _ = select.select([self._socket], [], [], min(0.01, remaining))
+            self.check(startup=True); check(); self.check(startup=True)
+            if ready:
+                with io.owning():
+                    self._accepted, _ = self._socket.accept()
+                    self._accepted_identity = intake._structural(os.fstat(self._accepted.fileno()))
+                    self._accepted.set_inheritable(False)
+                    self._accepted.setblocking(False)
+                return
+
+    def observe_receiver(self, sender_request_raw, check):
+        """Accept once for observation only; no channel, rights or approval."""
+        try:
+            p.require(self._rendezvous and not self._observe_attempted
+                and self._sender_request is not None and sender_request_raw == self._sender_request)
+            self._observe_attempted = True
+            self._accept_once(check)
+            with io.owning():
+                self._receiver_fd = receiver.acquire_pidfd(self._accepted)
+                p.require(self._receiver_fd >= 3)
+                os.set_inheritable(self._receiver_fd, False)
+                self._receiver_identity = intake._structural(os.fstat(self._receiver_fd))
+            self._receiver = receiver.peer_identity(self._accepted, self._receiver_fd, boot=self._boot)
+            p.require(self._receiver["uid"] == self._receiver["gid"] == 0
+                and self._accepted_identity[3:] == (0, 0) and self._channel is None)
+            self.check(startup=True); check(); self.check(startup=True)
+            observed = p.canonical(dict(apiVersion=receiver.API,
+                senderRequestSha256=p.sha(sender_request_raw), configurationSha256=p.sha(self._source.raw),
+                bootIdBase64url=self._boot[0], timeNamespaceDevice=self._boot[1], timeNamespaceInode=self._boot[2],
+                receiver=self._receiver, socket=dict(zip(("device", "inode", "mode", "uid", "gid"),
+                    self._accepted_identity, strict=True)), deadlineBoottimeNs=str(self.startup_deadline_boottime_ns),
+                expiresAtUnixNanos=self.expires_at_unix_ns))
+            self.check(startup=True); check(); self.check(startup=True)
+            self._receiver_original = observed
+            return self._receiver_original
+        except BaseException as error:
+            raise ListenerError(self) from error
+
+    def rendezvous_request_original(self, sender_request_raw):
+        from serverware import native_pilot_genesis_rendezvous_profile as rendezvous
+        try:
+            p.require(self._rendezvous and not self._request_attempted and self._receiver_original is not None
+                and sender_request_raw == self._sender_request and self._channel is None)
+            self._request_attempted = True
+            self.check(startup=True)
+            request = rendezvous.request(sender_request_raw, self._receiver_original, self._source.raw)
+            self.check(startup=True)
+            self._rendezvous_request = request
+            return self._rendezvous_request
+        except BaseException as error:
+            raise ListenerError(self) from error
+
     def accept(self, raw, check):
         try:
-            p.require(not self._accept_attempted and callable(check))
-            self._accept_attempted = True
+            p.require(callable(check) and self._channel is None and not self._promotion_attempted)
+            self._promotion_attempted = True
+            if self._rendezvous:
+                p.require(self._accept_attempted and self._receiver_original is not None)
+            else:
+                p.require(not self._accept_attempted)
             selected = self.require_execution(raw)
-            while True:
-                self.check(startup=True); check(); self.check(startup=True)
-                remaining = min(self.startup_deadline_boottime_ns - self._last, self.expires_at_unix_ns - self._wall) / 1_000_000_000
-                ready, _, _ = select.select([self._socket], [], [], min(0.01, remaining))
-                self.check(startup=True); check(); self.check(startup=True)
-                if ready:
-                    with io.owning():
-                        self._accepted, _ = self._socket.accept()
-                        self._accepted_identity = intake._structural(os.fstat(self._accepted.fileno()))
-                        self._accepted.set_inheritable(False)
-                        self._accepted.setblocking(False)
-                    break
+            if not self._rendezvous:
+                self._accept_once(check)
+            self.check(startup=True); check(); self.check(startup=True)
             peer = selected["coreHandoff"]
             with io.owning():
                 try:
@@ -244,6 +337,11 @@ class CoreHandoffListener:
                     p.require(self._accepted_identity is None or intake._structural(os.fstat(self._accepted.fileno())) == self._accepted_identity)
                     channel, self._accepted = self._accepted, None
                     channel.close()
+                if self._receiver_fd is not None:
+                    p.require(self._receiver_identity is None
+                        or intake._structural(os.fstat(self._receiver_fd)) == self._receiver_identity)
+                    fd, self._receiver_fd = self._receiver_fd, None
+                    os.close(fd)
                 if self._socket is not None:
                     p.require(self._socket_identity is None or intake._structural(os.fstat(self._socket.fileno())) == self._socket_identity)
                     channel, self._socket = self._socket, None

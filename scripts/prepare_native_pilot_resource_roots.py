@@ -41,6 +41,15 @@ LEAVES = (
     "/var/lib/serverware/native-pilot-bridge",
 ) + tuple("/var/lib/serverware/custody-generation/" + role for role in ROLES)
 TARGETS = SHARED + LEAVES
+PROFILES = ("legacy", "adopted-cold")
+ADOPTED_SHARED = SHARED + ("/run/serverware",)
+ADOPTED_ADDITIONS = (
+    ("/run/serverware-custody-genesis", 0o711),
+    ("/var/lib/serverware/custody-genesis", 0o711),
+    ("/var/lib/serverware/publication-genesis-endpoints", 0o711),
+    ("/run/serverware-shadow-publication-reconciliation", 0o711),
+    ("/run/serverware/native-pilot-core-handoff", 0o700),
+)
 MAX_REPORT_BYTES = 32768
 
 
@@ -69,10 +78,38 @@ def split(path):
     return parent or "/", name
 
 
+def selection(profile):
+    """Select only a source-fixed inventory, never supplied paths or modes."""
+    require(type(profile) is str and profile in PROFILES, "unknown-resource-profile", "/")
+    if profile == "legacy":
+        return SHARED, LEAVES, {path: 0o711 for path in LEAVES}
+    leaves = LEAVES + tuple(path for path, _ in ADOPTED_ADDITIONS)
+    modes = {path: 0o711 for path in LEAVES}
+    modes.update(ADOPTED_ADDITIONS)
+    return ADOPTED_SHARED, leaves, modes
+
+
+def initial_report(profile, create):
+    shared, leaves, _ = selection(profile)
+    require(type(create) is bool, "invalid-resource-operation", "/")
+    report = {"apiVersion": "serverware.nativePilotResourceRoots/v1",
+              "operation": "create" if create else "inspect", "result": "refused",
+              "directories": [{"path": path, "kind": "resource-parent" if path in leaves else "shared-container",
+                               "state": "not-inspected"} for path in shared + leaves],
+              "releaseAuthority": False, "liveReady": False, "runtimeResourcesCreated": False,
+              "filesystemSupportVerified": False}
+    if profile == "adopted-cold":
+        report["apiVersion"] = "serverware.nativePilotResourceRoots/v2"
+        report["profile"] = profile
+    return report
+
+
 class Roots:
     """Retain every actual ancestor and name while checking this finite graph."""
 
-    def __init__(self, report):
+    def __init__(self, report, *, profile="legacy"):
+        self.shared, self.leaves, self.leaf_modes = selection(profile)
+        self.targets = self.shared + self.leaves
         self.nodes = {}
         self.records = {entry["path"]: entry for entry in report["directories"]}
         self.current = "/"
@@ -94,8 +131,8 @@ class Roots:
         try:
             info = os.fstat(fd)
             protected(info, path)
-            if path in LEAVES:
-                require(stat.S_IMODE(info.st_mode) == 0o711, "resource-parent-mode-differs", path)
+            if path in self.leaf_modes:
+                require(stat.S_IMODE(info.st_mode) == self.leaf_modes[path], "resource-parent-mode-differs", path)
         except BaseException:
             os.close(fd)
             raise
@@ -122,7 +159,7 @@ class Roots:
         try:
             require(structural(os.fstat(scan)) == expected, "scan-directory-changed", path)
             with os.scandir(scan) as entries:
-                if path in LEAVES:
+                if path in self.leaf_modes:
                     require(next(entries, None) is None, "resource-parent-not-empty", path)
                 elif path == SHARED[1]:
                     names = set()
@@ -135,32 +172,33 @@ class Roots:
             os.close(scan)
 
     def inspect(self):
-        for path in ANCHORS + TARGETS:
+        for path in ANCHORS + self.targets:
             self.current = path
             if path == "/":
                 fd = os.open("/", FLAGS)
             else:
                 parent, name = split(path)
                 if parent not in self.nodes:
-                    require(path in TARGETS, "missing-required-system-ancestor", path)
+                    require(path in self.targets, "missing-required-system-ancestor", path)
                     self.record(path, "missing")
                     continue
                 try:
                     fd = os.open(name, FLAGS, dir_fd=self.nodes[parent][0])
                 except FileNotFoundError:
-                    require(path in TARGETS, "missing-required-system-ancestor", path)
+                    require(path in self.targets, "missing-required-system-ancestor", path)
                     self.record(path, "missing")
                     continue
             info = self.retain(path, fd)
-            if path in TARGETS:
+            if path in self.targets:
                 self.record(path, "present", info)
         # Inspect every existing target before creating anything. Shared
-        # /var/lib/serverware may contain unrelated state and is not enumerated.
+        # /var/lib/serverware and selected /run/serverware may contain unrelated
+        # state and are not enumerated.
         self.recheck()
         self.check_populations()
 
     def check_populations(self):
-        for path in (SHARED[1],) + LEAVES:
+        for path in (SHARED[1],) + self.leaves:
             if path in self.nodes:
                 self.current = path
                 self.population(path)
@@ -171,14 +209,14 @@ class Roots:
         # during creation; no existing object's owner/mode is ever modified.
         previous_umask = os.umask(0o077)
         try:
-            for path in TARGETS:
+            for path in self.targets:
                 if path in self.nodes:
                     continue
                 self.recheck()
                 self.current = path
                 parent, name = split(path)
                 parent_fd = self.nodes[parent][0]
-                mode = 0o711 if path in LEAVES else 0o755
+                mode = self.leaf_modes.get(path, 0o755)
                 # EEXIST is an uncertainty/refusal, never permission to adopt
                 # a path which appeared after the retained preflight.
                 os.mkdir(name, 0o700, dir_fd=parent_fd)
@@ -210,14 +248,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--create", action="store_true",
                         help="create only missing fixed parent directories; preserve any partial result")
+    parser.add_argument("--profile", choices=PROFILES, default="legacy",
+                        help="select the fixed legacy inventory (default) or cold/adopted parent inventory")
     args = parser.parse_args()
-    report = {"apiVersion": "serverware.nativePilotResourceRoots/v1",
-              "operation": "create" if args.create else "inspect", "result": "refused",
-              "directories": [{"path": path, "kind": "resource-parent" if path in LEAVES else "shared-container",
-                               "state": "not-inspected"} for path in TARGETS],
-              "releaseAuthority": False, "liveReady": False, "runtimeResourcesCreated": False,
-              "filesystemSupportVerified": False}
-    owner = Roots(report)
+    report = initial_report(args.profile, args.create)
+    owner = Roots(report, profile=args.profile)
     code = 2
     try:
         require(sys.platform == "linux" and os.getresuid() == (0, 0, 0)
@@ -226,7 +261,7 @@ def main():
         if args.create:
             owner.create_missing()
         owner.check_populations()
-        complete = all(path in owner.nodes for path in TARGETS)
+        complete = all(path in owner.nodes for path in owner.targets)
         report["result"] = "parents-present" if complete else "parents-missing"
         code = 0 if complete else 1
     except Refused as error:

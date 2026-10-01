@@ -147,7 +147,9 @@ runtime. The [adopted authorization path](docs/native-pilot-adopted-authorizatio
 now connects current-head/bridge issuers and actual receiving methods in source.
 The [adopted orchestration path](docs/native-pilot-adopted-orchestration.md)
 adds a separate catalogue, packaged core intake and independent per-job approval
-exchange. The actual lifecycle and independently operated approvals still need
+exchange. [Observation-first rendezvous](docs/native-pilot-genesis-rendezvous.md)
+connects actual receiver identification before approval and core transfer.
+The actual lifecycle and independently operated approvals still need
 verification and provisioning; this is not a runnable pilot claim.
 The operational inventory
 includes service histories, delivery/generation grants, endpoint authorizations,

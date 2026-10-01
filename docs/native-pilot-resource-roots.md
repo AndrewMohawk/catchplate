@@ -11,14 +11,25 @@ sudo python3 -B scripts/prepare_native_pilot_resource_roots.py
 
 # Explicitly create only missing allowlisted directories.
 sudo python3 -B scripts/prepare_native_pilot_resource_roots.py --create
+
+# Separately select cold-to-operational adopted parents; still inspect-only.
+sudo python3 -B scripts/prepare_native_pilot_resource_roots.py --profile adopted-cold
+
+# Explicit creation of missing parents in that exact selected inventory.
+sudo python3 -B scripts/prepare_native_pilot_resource_roots.py --profile adopted-cold --create
 ```
 
-No arbitrary path, identity, profile or repair option exists. Both modes retain
+The default profile is `legacy`; spelling `--profile legacy` selects exactly
+the same existing inventory and report. The only successor is `adopted-cold`.
+No arbitrary path, identity, mode or repair option exists. Both actions retain
 and recheck the actual directory descriptors/names, reject symlink traversal,
 and require root:root ancestors without group/other write permission. Existing
-resource parents must be exactly `0711` and empty; any leftover entry refuses.
+resource parents must be exactly `0711` and empty, except the selected core
+handoff parent, which must be exactly `0700` and empty. Any leftover entry refuses.
 Checks read at most one entry per leaf. The generation container admits only
 the five fixed role names and each role directory must itself be empty.
+
+Both profiles include this unchanged legacy inventory:
 
 | Fixed parent(s) | Actual later writer and fresh child |
 | --- | --- |
@@ -30,7 +41,21 @@ the five fixed role names and each role directory must itself be empty.
 | `/var/lib/serverware/native-shadow-generation-install` | The GenerationInstall resource owner creates fresh `journal`, `generation.lock` and supplied genesis/record originals. |
 | `/run/serverware-native-pilot-bridge`, `/var/lib/serverware/native-pilot-bridge` | The bridge resource owner creates its listener and `production-journal`; the helper leaves both parents empty. |
 
-New resource parents are root:root `0711`. The two shared containers
+The `adopted-cold` profile adds only these parents:
+
+| Fixed parent | Required owner/mode | Actual later writer |
+| --- | --- | --- |
+| `/run/serverware-custody-genesis`, `/var/lib/serverware/custody-genesis` | root:root `0711` | Cold ordinary resources create their two role directories, listeners and journals. |
+| `/var/lib/serverware/publication-genesis-endpoints` | root:root `0711` | Cold endpoint resources create the actual Retrieval object/spool directories and held store lock. |
+| `/run/serverware-shadow-publication-reconciliation` | root:root `0711` | The selected cold or operational Publication owner creates its own listener. These ceremonies must not share a populated parent. |
+| `/run/serverware/native-pilot-core-handoff` | root:root `0700` | The actual cold sender creates the protected sequence-packet listener; this helper creates no socket. |
+
+The adopted profile also admits the shared ancestor `/run/serverware`: it is
+created as root:root `0755` only if missing. Existing protected modes and unrelated
+contents remain untouched; this shared container is not enumerated. The handoff
+leaf is still checked separately for its exact mode and empty population.
+
+New resource parents use the exact selected modes above. The two shared containers
 `/var/lib/serverware` and `/var/lib/serverware/custody-generation` are created
 as root:root `0755` only if missing; existing protected modes are left intact.
 The former may contain unrelated directories and is never enumerated. `/`,
@@ -54,3 +79,10 @@ fs-verity support, descriptor identities, exclusive fresh resources, originals,
 authority and lifetimes. This helper does not test filesystem feature support,
 prepare Retrieval objects, write configs/grants/keys/genesis, generate secrets,
 provision namespaces, start children, enable services or claim readiness.
+
+The legacy report remains `serverware.nativePilotResourceRoots/v1` with unchanged
+fields. The selected successor reports `serverware.nativePilotResourceRoots/v2`
+and `profile: "adopted-cold"`; neither report carries release authority. The
+focused controls in `scripts/test_native_pilot_resource_roots.py` cover the closed
+inventories and temporary-tree FD-relative filesystem behavior, not provisioning
+of these host paths or an actual cold-to-operational lifecycle.

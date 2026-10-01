@@ -10,6 +10,7 @@ use std::os::unix::fs::{FileExt,MetadataExt};
 const PROFILE:&str="sealed-memfd-squashfs-static-amd64-v1";
 const BOOTSTRAP_PROFILE:&str="measured-bootstrap-late-runtime-static-amd64-v1";
 const SET_PROFILE:&str="native-multi-guest-closure-set-v1";
+const PUBLICATION_SET_PROFILE:&str="native-multi-guest-closure-set-v2";
 #[path="native_closure_late.rs"] mod late;
 #[path="native_closure_remote.rs"] mod remote;
 #[path="native_closure_set.rs"] pub(in crate::policy_shadow) mod closure_set;
@@ -111,8 +112,9 @@ impl Configuration {
             else{"serverware.nativeCustodyExecutionClosure/v1"})
             && self.manifest.profile==(if late{BOOTSTRAP_PROFILE}else{PROFILE}))?;
         let genesis=self.api_version=="serverware.nativeCustodyClosure/v4";
-        if self.api_version!="serverware.nativeCustodyClosure/v3" && !genesis {
-            require(!role.is_some_and(|v|closure_set::GENESIS_ROLES.contains(&v)))?;
+        let publication=self.api_version=="serverware.nativeCustodyClosure/v5";
+        if self.api_version!="serverware.nativeCustodyClosure/v3" && !genesis && !publication {
+            require(!role.is_some_and(|v|closure_set::GENESIS_ROLES.contains(&v) || v=="publicationReconciliation"))?;
             require(self.api_version==(if late{"serverware.nativeCustodyClosure/v2"}else{"serverware.nativeCustodyClosure/v1"})
                 && self.closure_set.is_none() && self.authorization.payload.legacy_fields())?;
             return Ok(None);
@@ -121,11 +123,12 @@ impl Configuration {
         // preflight grammar does not widen launch, phase or original ceilings.
         require(canonical_json_bytes(self)?.len()<=1024*1024)?;
         let role=role.ok_or(ShadowError::BindingDrift)?;
-        require((role=="bridge")==late && genesis==closure_set::GENESIS_ROLES.contains(&role) && (!genesis || !late))?;
+        require((role=="bridge")==late && genesis==closure_set::GENESIS_ROLES.contains(&role) && (!genesis || !late)
+            && (role!="publicationReconciliation" || publication))?;
         let p=&self.authorization.payload;
-        require(p.api_version==(if genesis{"serverware.nativeCustodyClosureAssignment/v4"}else{"serverware.nativeCustodyClosureAssignment/v3"})
+        require(p.api_version==(if genesis{"serverware.nativeCustodyClosureAssignment/v4"}else if publication{"serverware.nativeCustodyClosureAssignment/v5"}else{"serverware.nativeCustodyClosureAssignment/v3"})
             && p.purpose=="shadow-custody-closure-set-member"
-            && p.profile==(if genesis{"native-publication-genesis-closure-set-v1"}else{SET_PROFILE})
+            && p.profile==(if genesis{"native-publication-genesis-closure-set-v1"}else if publication{PUBLICATION_SET_PROFILE}else{SET_PROFILE})
             && p.guest_role.as_deref()==Some(role))?;
         let commitment=NativeClosureSetCommitment {
             set_root_sha256:p.set_root_sha256.clone().ok_or(ShadowError::BindingDrift)?,
@@ -133,6 +136,7 @@ impl Configuration {
         };
         let raw=canonical_json_bytes(self.closure_set.as_ref().ok_or(ShadowError::BindingDrift)?)?;
         let set=if genesis{closure_set::ValidatedSet::from_genesis_bytes(&raw,&commitment.set_root_sha256,&commitment.seccomp_set_root_sha256)?}
+            else if publication{closure_set::ValidatedSet::from_publication_bytes(&raw,&commitment.set_root_sha256,&commitment.seccomp_set_root_sha256)?}
             else{closure_set::ValidatedSet::from_bytes(&raw,&commitment.set_root_sha256,&commitment.seccomp_set_root_sha256)?};
         require(p.leaf_sha256.as_ref()==Some(set.require_member(role,&self.manifest)?.leaf_sha256()))?;
         Ok(Some(Membership{set,commitment,role}))
@@ -168,9 +172,10 @@ fn verify_assignment(wire:&Assignment,manifest:&Manifest,guest:&GuestClosureBind
         let leaf=member.set.require_member(member.role,manifest)?;
         let bridge=member.set.role_binding(member.set.authority_role())?;
         let genesis=member.set.genesis();
-        require(p.api_version==(if genesis{"serverware.nativeCustodyClosureAssignment/v4"}else{"serverware.nativeCustodyClosureAssignment/v3"})
+        let publication=member.set.publication();
+        require(p.api_version==(if genesis{"serverware.nativeCustodyClosureAssignment/v4"}else if publication{"serverware.nativeCustodyClosureAssignment/v5"}else{"serverware.nativeCustodyClosureAssignment/v3"})
             && p.purpose=="shadow-custody-closure-set-member"
-            && p.profile==(if genesis{"native-publication-genesis-closure-set-v1"}else{SET_PROFILE})
+            && p.profile==(if genesis{"native-publication-genesis-closure-set-v1"}else if publication{PUBLICATION_SET_PROFILE}else{SET_PROFILE})
             && p.guest_role.as_deref()==Some(member.role)
             && p.set_root_sha256.as_ref()==Some(member.set.set_root_sha256())
             && p.seccomp_set_root_sha256.as_ref()==Some(member.set.seccomp_set_root_sha256())
@@ -179,7 +184,7 @@ fn verify_assignment(wire:&Assignment,manifest:&Manifest,guest:&GuestClosureBind
             && &original.custody_authority.execution_closure_manifest_sha256==bridge.manifest_sha256()
             && &original.custody_authority.structurally_verified_seccomp_policy_sha256==bridge.seccomp_policy_sha256()
             && (member.role=="bridge" || guest.runtime_configuration_sha256==manifest.runtime_configuration_sha256))?;
-        if genesis{"serverware.nativeCustodyClosureAssignment.signature/v4"}else{"serverware.nativeCustodyClosureAssignment.signature/v3"}
+        if genesis{"serverware.nativeCustodyClosureAssignment.signature/v4"}else if publication{"serverware.nativeCustodyClosureAssignment.signature/v5"}else{"serverware.nativeCustodyClosureAssignment.signature/v3"}
     } else if manifest.profile==BOOTSTRAP_PROFILE {
         require(p.api_version=="serverware.nativeCustodyClosureAssignment/v2"
             && p.purpose=="shadow-custody-bootstrap-late-runtime" && p.profile==BOOTSTRAP_PROFILE)?;

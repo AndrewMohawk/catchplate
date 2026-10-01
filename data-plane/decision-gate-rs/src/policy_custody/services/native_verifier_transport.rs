@@ -25,7 +25,7 @@ pub(crate) struct NativeVerifierTransportPin { path: String, sha256: Sha256Diges
 pub(crate) enum NativeVerifierTransportRole {
     Retrieval, Persistence, TrustedTime, GenerationInstall, CommitRequest,
     IngressAdmission, TerminalAppend, DispatchBarrier, ActiveEffectBarrier,
-    ActiveEffectCommit, Bridge,PublicationGenesisRetrieval,PublicationGenesis,PublicationGenesisCoordinator,
+    ActiveEffectCommit, Bridge,PublicationReconciliation,PublicationGenesisRetrieval,PublicationGenesis,PublicationGenesisCoordinator,
 }
 impl NativeVerifierTransportRole {
     fn path(self)->&'static str {
@@ -41,6 +41,7 @@ impl NativeVerifierTransportRole {
             Self::ActiveEffectBarrier=>"/etc/serverware/native-pilot-inputs/native-activeEffectBarrier-verifier.json",
             Self::ActiveEffectCommit=>"/etc/serverware/native-pilot-inputs/native-activeEffectCommit-verifier.json",
             Self::Bridge=>"/etc/serverware/native-pilot-inputs/native-bridge-verifier.json",
+            Self::PublicationReconciliation=>"/etc/serverware/native-pilot-inputs/native-publicationReconciliation-verifier.json",
             Self::PublicationGenesisRetrieval=>"/etc/serverware/native-pilot-inputs/native-publicationGenesisRetrieval-verifier.json",
             Self::PublicationGenesis=>"/etc/serverware/native-pilot-inputs/native-publicationGenesis-verifier.json",
             Self::PublicationGenesisCoordinator=>"/etc/serverware/native-pilot-inputs/native-publicationGenesisCoordinator-verifier.json",
@@ -53,9 +54,9 @@ impl NativeVerifierTransportPin {
     }
     pub(in crate::policy_shadow::policy_custody::services) fn retained_selected_pin(&self,
         role:Option<NativeVerifierTransportRole>)->Result<(&str,&Sha256Digest),ShadowError>{
-        let cold=matches!(role,Some(NativeVerifierTransportRole::PublicationGenesisRetrieval
+        let fixed_only=matches!(role,Some(NativeVerifierTransportRole::PublicationReconciliation|NativeVerifierTransportRole::PublicationGenesisRetrieval
             |NativeVerifierTransportRole::PublicationGenesis|NativeVerifierTransportRole::PublicationGenesisCoordinator));
-        require((!cold && self.path==CONFIGURATION_PATH) || role.map(|role|self.path==role.path()).unwrap_or(false))?;
+        require((!fixed_only && self.path==CONFIGURATION_PATH) || role.map(|role|self.path==role.path()).unwrap_or(false))?;
         Ok((&self.path,&self.sha256))
     }
 }

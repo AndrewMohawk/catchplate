@@ -14,6 +14,8 @@ const API: &str = "serverware.custodyOrdinaryInitialHistory/v1";
 const STATE_API: &str = "serverware.custodyOrdinaryInitialState/v1";
 const GENESIS_API: &str = "serverware.custodyOrdinaryInitialHistory/v2";
 const GENESIS_STATE_API: &str = "serverware.custodyOrdinaryInitialState/v2";
+const ADOPTION_API: &str = "serverware.custodyOrdinaryInitialHistory/v3";
+const ADOPTION_STATE_API: &str = "serverware.custodyOrdinaryInitialState/v3";
 const PREDECESSOR: &[u8] = b"serverware.custodyOrdinaryInitialCheckpointPredecessor/v1";
 const HISTORY_ROOT: &[u8] = b"serverware.custodyOrdinaryInitialHistoryRoot/v1";
 const DURABLE_HEAD: &[u8] = b"serverware.custodyOrdinaryInitialDurableHead/v1";
@@ -89,7 +91,8 @@ impl State {
     fn validate(&self, runtime: &RuntimeConfigHeaderV3, role: TrustedHostServiceRoleV3)
         -> Result<(), ServiceRunnerError> {
         let cold = runtime.api_version == super::publication_genesis_service::RUNTIME;
-        require(self.api_version == (if cold { GENESIS_STATE_API } else { STATE_API })
+        let adoption = runtime.api_version == super::publication_service::ADOPTION_RUNTIME;
+        require(self.api_version == (if cold { GENESIS_STATE_API } else if adoption { ADOPTION_STATE_API } else { STATE_API })
             && self.service_role == role
             && self.endpoint_generation > 0 && self.service_generation > 0
             && self.operation_generation > 0 && self.durable_epoch > 0
@@ -113,6 +116,12 @@ impl State {
                 TrustedHostServiceRoleV3::DurableRecoveryStore => &["journal", "publication-genesis-journal"][..],
                 TrustedHostServiceRoleV3::CurrentSignatureAuthority => &["publication-genesis-journal"][..],
                 _ => return Err(error("cold publication history requires DRS or CSA")),
+            }
+        } else if adoption {
+            match role {
+                TrustedHostServiceRoleV3::DurableRecoveryStore => &["journal", "generation-journal", "dispatch-journal", "spool-head-journal", "publication-journal"][..],
+                TrustedHostServiceRoleV3::CurrentSignatureAuthority => &["generation-journal", "dispatch-journal", "spool-current-journal", "publication-journal"][..],
+                _ => return Err(error("publication adoption history requires DRS or CSA")),
             }
         } else { directory_names(role) };
         let required: BTreeSet<_> = names.iter().copied().collect();
@@ -141,7 +150,7 @@ impl State {
 
 pub(super) fn selected(raw: &[u8]) -> Result<bool, ServiceRunnerError> {
     let value: serde_json::Value = decode_canonical_frame(raw)?;
-    Ok(matches!(value.get("apiVersion").and_then(serde_json::Value::as_str), Some(API | GENESIS_API)))
+    Ok(matches!(value.get("apiVersion").and_then(serde_json::Value::as_str), Some(API | GENESIS_API | ADOPTION_API)))
 }
 
 fn authenticate(raw: &[u8], runtime: &RuntimeConfigHeaderV3, role: TrustedHostServiceRoleV3)
@@ -152,7 +161,11 @@ fn authenticate(raw: &[u8], runtime: &RuntimeConfigHeaderV3, role: TrustedHostSe
 fn authenticate_window(raw: &[u8], runtime: &RuntimeConfigHeaderV3, role: TrustedHostServiceRoleV3,
     startup_admission: bool) -> Result<Authenticated, ServiceRunnerError> {
     let wrapper: Wrapper = decode_canonical_frame(raw)?;
-    require(wrapper.api_version == if runtime.api_version == super::publication_genesis_service::RUNTIME { GENESIS_API } else { API })?;
+    require(wrapper.api_version == match runtime.api_version.as_str() {
+        super::publication_genesis_service::RUNTIME => GENESIS_API,
+        super::publication_service::ADOPTION_RUNTIME => ADOPTION_API,
+        _ => API,
+    })?;
     let state = wrapper.initial_state;
     state.validate(runtime, role)?;
     let manifest = wrapper.history;
@@ -380,6 +393,18 @@ pub(super) fn load_retained_genesis_witness(raw: &[u8], runtime: &RuntimeConfigH
     require_genesis_guest_owner(&owner, role, binding)?;
     require_genesis_window_owner(&owner, issued, expires)?;
     Ok(owner.history)
+}
+
+/// Startup-only association for the explicitly selected adoption successor.
+/// Reusing the private original-window checks does not admit a cold runtime or
+/// turn an initial checkpoint into a currentness decision.
+pub(super) fn require_adoption_guest_window(raw: &[u8], runtime: &RuntimeConfigHeaderV3,
+    role: TrustedHostServiceRoleV3, binding: &guest::GuestClosureBinding, issued: u64, expires: u64)
+    -> Result<(), ServiceRunnerError> {
+    require(runtime.api_version == super::publication_service::ADOPTION_RUNTIME && selected(raw)?)?;
+    let owner = authenticate(raw, runtime, role)?;
+    require_genesis_guest_owner(&owner, role, binding)?;
+    require_genesis_window_owner(&owner, issued, expires)
 }
 
 pub(super) fn require_retained_completed_guest(raw: &[u8], runtime: &RuntimeConfigHeaderV3,

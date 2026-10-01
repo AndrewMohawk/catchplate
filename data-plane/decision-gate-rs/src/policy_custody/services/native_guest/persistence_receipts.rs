@@ -55,13 +55,25 @@ macro_rules! receipt {
 fn spill(wire:SignedShadowSpillReceipt,scope:&scope::Scope)->Result<Receipt,ShadowError>{
     let role=wire.signer_role();Ok(receipt!(&wire,role,canonical_signature_payload,scope))
 }
-pub(super) fn extract(request:&Dispatch,result:&DispatchResult,scope:&scope::Scope)->Result<Option<Receipt>,ShadowError>{
+pub(super) fn is_adopted(request:&Dispatch,result:&DispatchResult,adoption:Option<&Adoption>)->Result<bool,ShadowError>{
+    let Some(adoption)=adoption else{return Ok(false);};
+    let (Dispatch::RecoverCurrentState{..},DispatchResult::SealedArtifact{exact_signed_artifact,..})=(request,result)
+        else{return Ok(false);};
+    require(exact_signed_artifact.artifact.kind==ArtifactKind::PublicationReconciliationReceipt)?;
+    Ok(exact_signed_artifact.artifact.exact_bytes().map_err(fail)?==adoption.baseline_original()?.as_bytes())
+}
+pub(super) fn extract(request:&Dispatch,result:&DispatchResult,scope:&scope::Scope,adoption:Option<&Adoption>)->Result<Option<Receipt>,ShadowError>{
     use PolicyShadowCustodySignerRole as Role;
     let value=match (request,result) {
         (Dispatch::RecoverCurrentState{..}|Dispatch::CommitGenerationPublication{..},
             DispatchResult::SealedArtifact{exact_signed_artifact,..})=>{
             let wire:PublicationReconciliationReceiptWire=decode(&exact_signed_artifact.artifact,ArtifactKind::PublicationReconciliationReceipt)?;
-            receipt!(&wire,Role::PublicationReconciliation,canonical_payload,scope)
+            let mut receipt=receipt!(&wire,Role::PublicationReconciliation,canonical_payload,scope);
+            if let Some(adoption)=adoption {
+                require(is_adopted(request,result,Some(adoption))?)?;
+                receipt.signed_authority_payload_base64url=URL_SAFE_NO_PAD.encode(adoption.prior_authority_payload(&wire.canonical_payload()?)?);
+            }
+            receipt
         },
         (Dispatch::BeginIngress{request_binding_sha256,..},DispatchResult::Artifact(artifact))=>{
             let wire:IngressCustodyAdmissionWire=decode(artifact,ArtifactKind::IngressCustodyAdmission)?;

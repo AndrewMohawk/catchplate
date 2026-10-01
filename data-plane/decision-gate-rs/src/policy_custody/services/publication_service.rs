@@ -1,5 +1,6 @@
 //! Separately admitted durable policy-publication state and independent mirror.
-//! An empty journal means the signed baseline, never an invented genesis.
+//! The legacy profile starts at its signed baseline, never an invented genesis.
+//! Cold adoption first persists one exact authorized mapping before exposing it.
 //! Only a definite exact append/readback releases a completion witness.
 use super::*;
 use super::common::DurableAppendJournal;
@@ -15,11 +16,15 @@ use std::os::unix::fs::{FileExt, MetadataExt};
 use crate::policy_shadow::AuthorityRole;
 
 pub(super) const RUNTIME: &str = "serverware.policyCustodyServiceRuntimeConfig/v10";
+pub(super) const ADOPTION_RUNTIME: &str = "serverware.policyCustodyServiceRuntimeConfig/v12";
 pub(super) const API: &str = "serverware.nativePublicationServiceCommand/v1";
 pub(super) const GRANT_FD: &str = "publication-grant";
 pub(super) const DIRECTORY: &str = "publication-journal";
 pub(super) const MAX_GRANT: usize = 256 * 1024;
+pub(super) const MAX_ADOPTION_GRANT: usize = 3 * 1024 * 1024;
 const DOMAIN: &[u8] = b"serverware.nativePublicationServiceGrant.signature/v1";
+const ADOPTION_DOMAIN: &[u8] = b"serverware.nativePublicationServiceGrant.signature/v2";
+const ADOPTION_RECORD_API: &str = "serverware.nativePublicationAdoptionRecord/v1";
 const MAX_RECORDS: usize = 128;
 const MAX_RECORD: usize = 4 * 1024 * 1024;
 const MAX_BYTES: usize = 64 * 1024 * 1024;
@@ -53,7 +58,10 @@ pub(super) struct Grant { pub(super) payload: Payload, pub(super) signature_base
 impl Grant {
     pub(super) fn verify(&self, history: &RuntimeAuthorityHistory) -> Result<VerifyingKey, ServiceError> {
         let p = &self.payload;
-        require(p.api_version == "serverware.nativePublicationServiceGrant/v1"
+        let adopted = p.api_version == "serverware.nativePublicationServiceGrant/v2";
+        require((adopted || p.api_version == "serverware.nativePublicationServiceGrant/v1")
+            && adopted == p.admission.adoption.is_some()
+            && encode_canonical_frame(self)?.len() <= (if adopted { MAX_ADOPTION_GRANT } else { MAX_GRANT })
             && p.purpose == "native-policy-publication-state"
             && matches!(p.service_role, TrustedHostServiceRoleV3::DurableRecoveryStore | TrustedHostServiceRoleV3::CurrentSignatureAuthority)
             && p.guest.service_role == match p.service_role {
@@ -67,11 +75,23 @@ impl Grant {
             && p.admission.scope.expires_at_boottime_nanos <= p.guest.lifetime_deadline_boottime_ns.parse::<u64>().map_err(|_| invalid())?
             && p.retrieval.role == AuthorityRole::CustodyRetrievalResponse)?;
         p.admission.validate(&p.native)?;
-        verify_key_signature(history.root_authority_key(), DOMAIN, &encode_canonical_frame(p)?, &self.signature_base64url)?;
+        if let Some(adoption) = &p.admission.adoption {
+            adoption.require_history(p.service_role, history)?;
+            adoption.require_guest(&p.guest)?;
+            adoption.require_retrieval(&super::publication::RetrievalAuthority {
+                key_id: p.retrieval.key_id.clone(), key_spki_sha256: p.retrieval.key_spki_sha256.clone(),
+                public_key_base64url: p.retrieval.public_key_base64url.clone(),
+            })?;
+            require(p.admission.scope.expires_at_boottime_nanos <= adoption.deadline()?)?;
+        }
+        verify_key_signature(history.root_authority_key(), if adopted { ADOPTION_DOMAIN } else { DOMAIN }, &encode_canonical_frame(p)?, &self.signature_base64url)?;
         let raw = URL_SAFE_NO_PAD.decode(&p.durable_public_key_base64url).map_err(|_| invalid())?;
         require(raw.len() == 32 && URL_SAFE_NO_PAD.encode(&raw) == p.durable_public_key_base64url)?;
         let durable = VerifyingKey::from_bytes(&<[u8;32]>::try_from(raw.as_slice()).map_err(|_| invalid())?).map_err(|_| invalid())?;
         require(verifying_key_spki_sha256(&durable).map_err(|_|invalid())? == p.durable_authority_epoch.service_signing_key_spki_sha256)?;
+        if let Some(adoption) = &p.admission.adoption {
+            adoption.require_durable_authority(&p.durable_authority_epoch, &durable)?;
+        }
         let native = p.native.material()?;
         let retrieval = p.retrieval.material()?;
         let current = history.current_epoch().map_err(|_| invalid())?;
@@ -172,26 +192,58 @@ pub(super) trait Owner: generation_service::Owner {
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all="camelCase", deny_unknown_fields)]
 struct Record { command: Command, grant_sha256: Sha256Digest, owner_state_sha256: Sha256Digest }
+/// Internal durable mapping, not a new authority or externally signed receipt.
+/// The root-signed grant commits the independently signed adoption original.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all="camelCase", deny_unknown_fields)]
+struct AdoptionRecord {
+    api_version: String, service_role: TrustedHostServiceRoleV3, adoption_sha256: Sha256Digest,
+    grant_sha256: Sha256Digest, cold_bundle_sha256: Sha256Digest, prior_receipt_sha256: Sha256Digest,
+    initial_state_sha256: Sha256Digest, authority_history_manifest_sha256: Sha256Digest,
+    authority_epoch: AuthorityEpochRefV3, initial_transition_head_sha256: Sha256Digest,
+    initial_durable_transition_head_sha256: Sha256Digest, owner_state_sha256: Sha256Digest,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all="camelCase", deny_unknown_fields)]
+struct AdoptionAcknowledgment { api_version: String, record_sha256: Sha256Digest }
+impl AdoptionRecord {
+    fn key(&self) -> Result<Sha256Digest, ServiceError> {
+        Ok(crate::policy_shadow::hash_domain_frames(b"serverware.nativePublicationAdoptionJournalKey/v1",
+            &[&encode_canonical_frame(&(self.service_role, &self.adoption_sha256))?]))
+    }
+    fn response(&self) -> Result<Vec<u8>, ServiceError> {
+        encode_canonical_frame(&AdoptionAcknowledgment { api_version: "serverware.nativePublicationAdoptionPersisted/v1".into(),
+            record_sha256: sha(self)? })
+    }
+}
 struct Append { key: Sha256Digest, request: Vec<u8>, response: Vec<u8> }
 pub(super) struct Gate {
     grant: Grant, grant_raw: Vec<u8>, grant_file: std::fs::File, history: RuntimeAuthorityHistory,
     durable_key: VerifyingKey, bootstrap: Bootstrap, worker: BoundedServiceWorker<Append, Vec<u8>>,
     records: Vec<(Record, Witness)>, state: State, head: Sha256Digest, durable_head: Sha256Digest,
-    bytes: usize, poisoned: bool,
+    adoption: Option<AdoptionRecord>, bytes: usize, poisoned: bool,
 }
 impl Gate {
     pub(super) fn open<T>(loaded: &LoadedConfig<T>, runtime: &RuntimeConfigHeaderV3, bootstrap: &Bootstrap,
         activation: &mut BTreeMap<String, OwnedFd>, role: TrustedHostServiceRoleV3) -> Result<Option<Self>, ServiceRunnerError> {
         let Some(selection) = &runtime.publication_admission else { return Ok(None); };
-        require(runtime.api_version == RUNTIME && selection.grant_fd_name == GRANT_FD
+        require(matches!(runtime.api_version.as_str(), RUNTIME | ADOPTION_RUNTIME) && selection.grant_fd_name == GRANT_FD
             && matches!(role, TrustedHostServiceRoleV3::DurableRecoveryStore | TrustedHostServiceRoleV3::CurrentSignatureAuthority))?;
         bootstrap.check()?;
         let association = bootstrap.generation_association()?;
         let history = runtime.load_authority_history(&loaded.credentials, role)?;
         let grant_file = std::fs::File::from(take_activation_fd(activation, GRANT_FD)?);
-        let grant_raw = read_grant(&grant_file)?;
+        let maximum = if runtime.api_version == ADOPTION_RUNTIME { MAX_ADOPTION_GRANT } else { MAX_GRANT };
+        let grant_raw = read_grant(&grant_file, maximum)?;
         let grant: Grant = decode_canonical_frame(&grant_raw)?;
+        require((runtime.api_version == ADOPTION_RUNTIME) == (grant.payload.api_version == "serverware.nativePublicationServiceGrant/v2"))?;
         let durable_key = grant.verify(&history)?;
+        if runtime.api_version == ADOPTION_RUNTIME {
+            super::initial_history::require_adoption_guest_window(
+                &runtime.authority_history_original(&loaded.credentials)?, runtime, role, &grant.payload.guest,
+                grant.payload.admission.scope.issued_at_boottime_nanos,
+                grant.payload.admission.scope.expires_at_boottime_nanos)?;
+        }
         require(grant.payload.service_role == role && grant.payload.guest == association.binding()
             && grant.payload.runtime_configuration_sha256 == loaded.exact_sha256
             && grant_file.metadata()?.uid() == grant.payload.guest.uid && grant_file.metadata()?.gid() == grant.payload.guest.gid)?;
@@ -200,7 +252,17 @@ impl Gate {
         let mut journal = DurableAppendJournal::from_directory_without_orphan_repair(directory, role, MAX_RECORD)?;
         let chain = journal.verified_complete_chain(MAX_RECORDS, MAX_BYTES)?;
         let mut recovered = Vec::new();
-        for value in chain.records {
+        let mut adopted = None;
+        for (index, value) in chain.records.into_iter().enumerate() {
+            let parsed: serde_json::Value = decode_canonical_frame(&value.exact_request_bytes)?;
+            if parsed.get("apiVersion").and_then(|v| v.as_str()) == Some(ADOPTION_RECORD_API) {
+                let record: AdoptionRecord = decode_canonical_frame(&value.exact_request_bytes)?;
+                require(grant.payload.admission.adoption.is_some() && index == 0 && adopted.is_none()
+                    && value.idempotency_sha256 == record.key()? && value.exact_response_bytes == record.response()?)?;
+                adopted = Some(record);
+                continue;
+            }
+            require(grant.payload.admission.adoption.is_none() || adopted.is_some())?;
             let record: Record = decode_canonical_frame(&value.exact_request_bytes)?;
             require(value.idempotency_sha256 == sha(&record.command)?)?;
             let Reply::Witness(witness) = decode_canonical_frame(&value.exact_response_bytes)? else { return Err(invalid().into()); };
@@ -218,17 +280,59 @@ impl Gate {
         let head = grant.payload.initial_transition_head_sha256.clone();
         let durable_head = grant.payload.initial_durable_transition_head_sha256.clone();
         let mut value = Self { grant, grant_raw, grant_file, history, durable_key, bootstrap: bootstrap.clone(),
-            worker, records: Vec::new(), state, head, durable_head, bytes: 4096, poisoned: false };
+            worker, records: Vec::new(), state, head, durable_head, adoption: None, bytes: 4096, poisoned: false };
         value.check()?;
+        if let Some(record) = adopted { value.apply_adoption(record)?; }
         for (record, witness) in recovered { value.apply(record, witness)?; }
         Ok(Some(value))
     }
     fn check(&self) -> Result<(), ServiceError> {
-        require(!self.poisoned && read_grant(&self.grant_file)? == self.grant_raw)?;
+        require(!self.poisoned)?; self.check_originals()
+    }
+    fn check_originals(&self) -> Result<(), ServiceError> {
+        let maximum = if self.grant.payload.admission.adoption.is_some() { MAX_ADOPTION_GRANT } else { MAX_GRANT };
+        require(read_grant(&self.grant_file, maximum)? == self.grant_raw)?;
         self.bootstrap.check().map_err(|_| invalid())?;
         let now = boottime_now_nanos().map_err(|_| invalid())?;
         let scope = &self.grant.payload.admission.scope;
         require(scope.issued_at_boottime_nanos <= now && now < scope.expires_at_boottime_nanos)
+    }
+    fn adoption_record(&self, owner_state: Sha256Digest) -> Result<AdoptionRecord, ServiceError> {
+        let p = &self.grant.payload;
+        let authorization = p.admission.adoption.as_ref().ok_or_else(invalid)?;
+        require(owner_state != Sha256Digest::compute(&[]))?;
+        Ok(AdoptionRecord { api_version: ADOPTION_RECORD_API.into(), service_role: p.service_role,
+            adoption_sha256: authorization.identity()?, grant_sha256: Sha256Digest::compute(&self.grant_raw),
+            cold_bundle_sha256: sha(&authorization.cold_bundle()?)?, prior_receipt_sha256: Sha256Digest::compute(p.admission.prior_receipt_original.as_bytes()),
+            initial_state_sha256: State::admitted(&p.admission.prior_receipt_original)?.sha256()?,
+            authority_history_manifest_sha256: p.authority_history_manifest_sha256.clone(),
+            authority_epoch: self.history.current_epoch().map_err(|_| invalid())?.epoch_reference(),
+            initial_transition_head_sha256: p.initial_transition_head_sha256.clone(),
+            initial_durable_transition_head_sha256: p.initial_durable_transition_head_sha256.clone(), owner_state_sha256: owner_state })
+    }
+    fn apply_adoption(&mut self, record: AdoptionRecord) -> Result<(), ServiceError> {
+        require(self.records.is_empty() && self.adoption.is_none()
+            && record == self.adoption_record(record.owner_state_sha256.clone())?)?;
+        let bytes = record_budget(encode_canonical_frame(&record)?.len(), record.response()?.len())?;
+        require(self.bytes.checked_add(bytes).is_some_and(|v| v <= MAX_BYTES))?;
+        self.bytes += bytes; self.adoption = Some(record); Ok(())
+    }
+    fn require_adopted(&self) -> Result<(), ServiceError> {
+        require(self.grant.payload.admission.adoption.is_some() == self.adoption.is_some())
+    }
+    fn ensure_adopted(&mut self, owner: &impl Owner, deadline: u64) -> Result<(), ServiceError> {
+        if self.grant.payload.admission.adoption.is_none() { return self.require_adopted(); }
+        if self.adoption.is_some() { return self.require_adopted(); }
+        require(self.records.is_empty())?; self.check()?;
+        let owner_state = owner.generation_state(deadline)?;
+        let record = self.adoption_record(owner_state.clone())?;
+        let request = encode_canonical_frame(&record)?; let response = record.response()?;
+        require(self.bytes.checked_add(record_budget(request.len(), response.len())?).is_some_and(|v| v <= MAX_BYTES))?;
+        self.poisoned = true; self.check_originals()?;
+        let persisted = self.worker.execute(Append { key: record.key()?, request, response: response.clone() }, deadline).map_err(|_| invalid())?;
+        require(persisted == response && owner.generation_state(deadline)? == owner_state
+            && boottime_now_nanos().map_err(|_| invalid())? < deadline)?;
+        self.check_originals()?; self.apply_adoption(record)?; self.poisoned = false; self.check()
     }
     fn verify_durable_signature(&self, epoch: &AuthorityEpochRefV3, domain: &[u8], payload: &[u8], signature: &str)
         -> Result<(), &'static str> {
@@ -250,6 +354,7 @@ impl Gate {
         Ok(())
     }
     fn validate(&self, command: &Command) -> Result<State, ServiceError> {
+        self.require_adopted()?;
         command.deadline()?;
         let proposal = command.proposal()?;
         let p = &self.grant.payload;
@@ -309,7 +414,7 @@ impl Gate {
         let response_len = encode_canonical_frame(&Reply::Witness(witness.clone()))?.len();
         let bytes = record_budget(request_len, response_len)?;
         let total = self.bytes.checked_add(bytes).ok_or_else(invalid)?;
-        require(total <= MAX_BYTES && self.records.len() < MAX_RECORDS)?;
+        require(total <= MAX_BYTES && self.records.len() + usize::from(self.adoption.is_some()) < MAX_RECORDS)?;
         self.durable_head = match &record.command.action {
             Action::Mirror { durable, .. } => durable.transition.resulting_head_sha256.clone(),
             _ => transition.resulting_head_sha256.clone(),
@@ -329,6 +434,7 @@ impl Gate {
         self.bootstrap.require_deadline(deadline).map_err(|_| invalid())?;
         self.grant.payload.admission.request(command.request())?;
         require(boottime_now_nanos().map_err(|_| invalid())? < deadline)?;
+        self.ensure_adopted(owner, deadline)?;
         for (record, witness) in &self.records {
             if completed_operation::relation(record.command.request().binding(), command.request().binding()).map_err(|_| invalid())? {
                 require(record.owner_state_sha256 == owner.generation_state(deadline)?)?;
@@ -353,7 +459,7 @@ impl Gate {
             return Ok(Some(response));
         }
         self.validate(&command)?;
-        require(self.records.len() < MAX_RECORDS)?;
+        require(self.records.len() + usize::from(self.adoption.is_some()) < MAX_RECORDS)?;
         self.poisoned = true;
         let proposal = command.proposal()?;
         let completed = boottime_now_nanos().map_err(|_| invalid())?;
@@ -391,10 +497,10 @@ fn verify_key_signature(key: &VerifyingKey, domain: &[u8], payload: &[u8], signa
     key.verify_strict(&super::super::protocol::domain_separated_signature_preimage(domain, payload)?,
         &Signature::from_slice(&raw).map_err(|_| invalid())?).map_err(|_| invalid())
 }
-fn read_grant(file: &std::fs::File) -> Result<Vec<u8>, ServiceError> {
+fn read_grant(file: &std::fs::File, maximum: usize) -> Result<Vec<u8>, ServiceError> {
     let metadata = file.metadata()?;
     require(unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GET_SEALS) } == 15 && metadata.is_file()
-        && metadata.nlink() == 0 && metadata.mode() & 0o7777 == 0o600 && metadata.len() > 0 && metadata.len() <= MAX_GRANT as u64)?;
+        && metadata.nlink() == 0 && metadata.mode() & 0o7777 == 0o600 && metadata.len() > 0 && metadata.len() <= maximum as u64)?;
     let mut raw = vec![0; metadata.len() as usize];
     let mut offset = 0;
     while offset < raw.len() { let n = file.read_at(&mut raw[offset..], offset as u64)?; require(n > 0)?; offset += n; }

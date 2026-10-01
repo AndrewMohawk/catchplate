@@ -165,13 +165,13 @@ impl Gate {
     pub(super) fn open<T>(loaded:&LoadedConfig<T>,runtime:&RuntimeConfigHeaderV3,bootstrap:&Bootstrap,
         activation:&mut BTreeMap<String,OwnedFd>)->Result<Option<Self>,ServiceRunnerError>{
         let Some(selection)=&runtime.spool_head else{return Ok(None);};
-        require(matches!(runtime.api_version.as_str(),RUNTIME|super::active_effect_cleanup::RUNTIME|super::publication_service::RUNTIME) && runtime.generation_admission.is_some() && runtime.dispatch_admission.is_some()
+        require(matches!(runtime.api_version.as_str(),RUNTIME|super::active_effect_cleanup::RUNTIME|super::publication_service::RUNTIME|super::publication_service::ADOPTION_RUNTIME) && runtime.generation_admission.is_some() && runtime.dispatch_admission.is_some()
             && selection.grant_fd_name==GRANT_FD)?;
         bootstrap.check()?;let association=bootstrap.generation_association()?;
         let grant_file=std::fs::File::from(take_activation_fd(activation,GRANT_FD)?);
         let grant_raw=read_grant(&grant_file)?;let grant:Grant=decode_canonical_frame(&grant_raw)?;
         let history=runtime.load_authority_history(&loaded.credentials,TrustedHostServiceRoleV3::DurableRecoveryStore)?;
-        grant.verify(&history)?;require(grant.effects_selected()==matches!(runtime.api_version.as_str(),super::active_effect_cleanup::RUNTIME|super::publication_service::RUNTIME))?;
+        grant.verify(&history)?;require(grant.effects_selected()==matches!(runtime.api_version.as_str(),super::active_effect_cleanup::RUNTIME|super::publication_service::RUNTIME|super::publication_service::ADOPTION_RUNTIME))?;
         require(grant.payload.guest==association.binding() && grant.payload.runtime_configuration_sha256==loaded.exact_sha256
             && grant_file.metadata()?.uid()==grant.payload.guest.uid && grant_file.metadata()?.gid()==grant.payload.guest.gid)?;
         let directory=take_activation_fd(activation,DIRECTORY)?;

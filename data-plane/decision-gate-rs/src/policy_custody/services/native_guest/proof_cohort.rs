@@ -513,10 +513,12 @@ pub(super) fn prepare_inspection(service:SelectedService,files:&FileAdmission,ac
                 grant.expected_peer().checked().map_err(fail)?,grant.guest_uid(),socket,retrieval_peer::EndpointKind::Retrieval)?;
             Ok((Inspection::Server(owner),remote))
         }
-        SelectedService::Publication(pin)=>{
+        selected @ (SelectedService::Publication(_)|SelectedService::AdoptedPublication(_))=>{
+            let adopted=matches!(&selected,SelectedService::AdoptedPublication(_));
+            let pin=match selected{SelectedService::Publication(pin)|SelectedService::AdoptedPublication(pin)=>pin,_=>return Err(ShadowError::BindingDrift)};
             let original=pin.open(admission::publication::MAX_CONFIGURATION)?;
             let grant:admission::publication::Configuration=exact(&original.read(admission::publication::MAX_CONFIGURATION).map_err(fail)?)?;
-            grant.validate_shape()?;
+            grant.validate_shape()?;require(grant.adoption_selected()==adopted)?;
             let endpoint=retrieval_peer::EndpointKind::PublicationReconciliation;
             require(activation.len()==1)?;
             let socket=activation.get(endpoint.listener_name()).ok_or(ShadowError::BindingDrift)?;
@@ -556,19 +558,22 @@ pub(super) fn prepare_inspection(service:SelectedService,files:&FileAdmission,ac
             let (owner,remote)=retrieval_peer::Inspector::prepare_history_endpoint(original,grant.expected_peer().checked().map_err(fail)?,grant.guest_uid(),socket,endpoint)?;
             Ok((Inspection::Server(owner),remote))
         }
-        selected @ (SelectedService::LedgerRetrieval(_)|SelectedService::CompletionRetrieval(_)|SelectedService::EffectRetrieval(_)|SelectedService::PublicationRetrieval(_))=>{
-            let publication=matches!(&selected,SelectedService::PublicationRetrieval(_));
+        selected @ (SelectedService::LedgerRetrieval(_)|SelectedService::CompletionRetrieval(_)|SelectedService::EffectRetrieval(_)|SelectedService::PublicationRetrieval(_)|SelectedService::AdoptedPublicationRetrieval(_))=>{
+            let adopted=matches!(&selected,SelectedService::AdoptedPublicationRetrieval(_));
+            let publication=adopted || matches!(&selected,SelectedService::PublicationRetrieval(_));
             let completion=publication || matches!(&selected,SelectedService::CompletionRetrieval(_)|SelectedService::EffectRetrieval(_));
             let effects=publication || matches!(&selected,SelectedService::EffectRetrieval(_));
-            let pin=match selected{SelectedService::LedgerRetrieval(pin)|SelectedService::CompletionRetrieval(pin)|SelectedService::EffectRetrieval(pin)|SelectedService::PublicationRetrieval(pin)=>pin,
+            let pin=match selected{SelectedService::LedgerRetrieval(pin)|SelectedService::CompletionRetrieval(pin)|SelectedService::EffectRetrieval(pin)|SelectedService::PublicationRetrieval(pin)|SelectedService::AdoptedPublicationRetrieval(pin)=>pin,
                 _=>return Err(ShadowError::BindingDrift)};
-            require(activation.len()==4 && activation.contains_key("ledger-spool-store") && activation.contains_key("ledger-spool-lock")
-                && activation.contains_key("retrieval-objects"))?;
-            let original=pin.open(65536)?;let grant:admission::ledger_retrieval::Configuration=exact(&original.read(65536).map_err(fail)?)?;
+            require(activation.len()==(if adopted{5}else{4}) && activation.contains_key("ledger-spool-store") && activation.contains_key("ledger-spool-lock")
+                && activation.contains_key("retrieval-objects") && activation.contains_key("publication-genesis-core")==adopted)?;
+            let maximum=if adopted{admission::ledger_retrieval::MAX_ADOPTED_CONFIGURATION}else{65536};
+            let original=pin.open(maximum)?;let grant:admission::ledger_retrieval::Configuration=exact(&original.read(maximum).map_err(fail)?)?;
             require(grant.completion_selected()==completion && grant.effects_selected()==effects
-                && grant.publication_selected()==publication)?;
+                && grant.publication_selected()==publication && grant.adoption_selected()==adopted)?;
             grant.validate_shape()?;let socket=activation.get("retrieval-listener").ok_or(ShadowError::BindingDrift)?;
-            let (owner,remote)=retrieval_peer::Inspector::prepare_endpoint(original,grant.expected_peer().checked().map_err(fail)?,grant.guest_uid(),socket,retrieval_peer::EndpointKind::Retrieval)?;
+            let prepare=if adopted{retrieval_peer::Inspector::prepare_adopted_endpoint}else{retrieval_peer::Inspector::prepare_endpoint};
+            let (owner,remote)=prepare(original,grant.expected_peer().checked().map_err(fail)?,grant.guest_uid(),socket,retrieval_peer::EndpointKind::Retrieval)?;
             Ok((Inspection::Server(owner),remote))
         }
         SelectedService::CommitRequest(pin)=>{
@@ -605,14 +610,18 @@ pub(super) fn prepare_inspection(service:SelectedService,files:&FileAdmission,ac
                 grant.expected_peer().checked().map_err(fail)?,grant.guest_uid(),socket,retrieval_peer::EndpointKind::Persistence)?;
             Ok((Inspection::Server(owner),remote))
         }
-        SelectedService::PersistenceLocked(pin)=>{
+        selected @ (SelectedService::PersistenceLocked(_)|SelectedService::AdoptedPersistence(_))=>{
+            let adopted=matches!(&selected,SelectedService::AdoptedPersistence(_));
+            let pin=match selected{SelectedService::PersistenceLocked(pin)|SelectedService::AdoptedPersistence(pin)=>pin,_=>return Err(ShadowError::BindingDrift)};
             require(activation.len()==3 && activation.contains_key("persistence-journal")
                 && activation.contains_key("persistence-lock"))?;
-            let original=pin.open(65536)?;
-            let grant:admission::persistence::Configuration=exact(&original.read(65536).map_err(fail)?)?;
-            grant.validate_shape()?;
+            let maximum=if adopted{3*1024*1024}else{65536};
+            let original=pin.open(maximum)?;
+            let grant:admission::persistence::Configuration=exact(&original.read(maximum).map_err(fail)?)?;
+            grant.validate_shape()?;require(grant.adoption_selected()==adopted)?;
             let socket=activation.get("persistence-listener").ok_or(ShadowError::BindingDrift)?;
-            let (owner,remote)=retrieval_peer::Inspector::prepare_endpoint(original,
+            let prepare=if adopted{retrieval_peer::Inspector::prepare_adopted_endpoint}else{retrieval_peer::Inspector::prepare_endpoint};
+            let (owner,remote)=prepare(original,
                 grant.expected_peer().checked().map_err(fail)?,grant.guest_uid(),socket,retrieval_peer::EndpointKind::Persistence)?;
             Ok((Inspection::Server(owner),remote))
         }
@@ -652,8 +661,8 @@ pub(super) fn prepare_inspection(service:SelectedService,files:&FileAdmission,ac
             let (owner,remote)=proof_client::Inspector::prepare_effects(files,activation)?;
             Ok((Inspection::ProofClient(owner),remote))
         }
-        SelectedService::PublicationBridge(_)=>{
-            let (owner,remote)=proof_client::Inspector::prepare_publication(files,activation)?;
+        SelectedService::PublicationBridge(_,adoption)=>{
+            let (owner,remote)=proof_client::Inspector::prepare_publication(files,activation,adoption)?;
             Ok((Inspection::ProofClient(owner),remote))
         }
         _=>Err(ShadowError::CustodyUnavailable),

@@ -341,16 +341,19 @@ pub(super) struct ProductionRpcRuntimeConfigV4 {
 impl ProductionRpcRuntimeConfigV4 {
     pub(super) fn initial_history_selected(&self) -> bool {
         matches!(self.api_version.as_str(), super::spool_head_client::INITIAL_HISTORY_RUNTIME
-            |super::spool_head_client::HELPER_INITIAL_RUNTIME|super::super::native_terminal::RUNTIME|super::publication_client::RUNTIME)
+            |super::spool_head_client::HELPER_INITIAL_RUNTIME|super::super::native_terminal::RUNTIME|super::publication_client::RUNTIME|super::publication_client::ADOPTION_RUNTIME)
     }
     pub(super) fn helper_initial_selected(&self) -> bool {
-        matches!(self.api_version.as_str(),super::spool_head_client::HELPER_INITIAL_RUNTIME|super::super::native_terminal::RUNTIME|super::publication_client::RUNTIME)
+        matches!(self.api_version.as_str(),super::spool_head_client::HELPER_INITIAL_RUNTIME|super::super::native_terminal::RUNTIME|super::publication_client::RUNTIME|super::publication_client::ADOPTION_RUNTIME)
     }
     pub(super) fn native_terminal_selected(&self)->bool {
-        matches!(self.api_version.as_str(),super::super::native_terminal::RUNTIME|super::publication_client::RUNTIME)
+        matches!(self.api_version.as_str(),super::super::native_terminal::RUNTIME|super::publication_client::RUNTIME|super::publication_client::ADOPTION_RUNTIME)
     }
     pub(super) fn publication_selected(&self)->bool {
-        self.api_version==super::publication_client::RUNTIME
+        matches!(self.api_version.as_str(),super::publication_client::RUNTIME|super::publication_client::ADOPTION_RUNTIME)
+    }
+    pub(super) fn publication_adoption_selected(&self)->bool {
+        self.api_version==super::publication_client::ADOPTION_RUNTIME
     }
     pub(super) fn native_driver_selection(&self)->Result<(super::super::super::Sha256Digest,super::super::super::Sha256Digest),ServiceRunnerError>{
         self.validate()?;Ok((self.expected_driver_process_identity_sha256.clone(),
@@ -402,13 +405,15 @@ impl ProductionRpcRuntimeConfigV4 {
             |(super::spool_head_client::INITIAL_HISTORY_RUNTIME,Some(_),Some(_),Some(_))
             |(super::spool_head_client::HELPER_INITIAL_RUNTIME,Some(_),Some(_),Some(_))
             |(super::super::native_terminal::RUNTIME,Some(_),Some(_),Some(_))
-            |(super::publication_client::RUNTIME,Some(_),Some(_),Some(_)))
+            |(super::publication_client::RUNTIME,Some(_),Some(_),Some(_))
+            |(super::publication_client::ADOPTION_RUNTIME,Some(_),Some(_),Some(_)))
             || self.publication_selected()!=self.publication.is_some()
+            || self.publication.as_ref().is_some_and(|value|value.adoption_selected())!=self.publication_adoption_selected()
             || self.spool.as_ref().is_some_and(|value|value.completion_selected())
                 != matches!(self.api_version.as_str(),super::spool_head_client::COMPLETION_RUNTIME
-                    |super::spool_head_client::EFFECTS_RUNTIME|super::spool_head_client::INITIAL_HISTORY_RUNTIME|super::spool_head_client::HELPER_INITIAL_RUNTIME|super::super::native_terminal::RUNTIME|super::publication_client::RUNTIME)
+                    |super::spool_head_client::EFFECTS_RUNTIME|super::spool_head_client::INITIAL_HISTORY_RUNTIME|super::spool_head_client::HELPER_INITIAL_RUNTIME|super::super::native_terminal::RUNTIME|super::publication_client::RUNTIME|super::publication_client::ADOPTION_RUNTIME)
             || self.spool.as_ref().is_some_and(|value|value.effects_selected())
-                != matches!(self.api_version.as_str(),super::spool_head_client::EFFECTS_RUNTIME|super::spool_head_client::INITIAL_HISTORY_RUNTIME|super::spool_head_client::HELPER_INITIAL_RUNTIME|super::super::native_terminal::RUNTIME|super::publication_client::RUNTIME)
+                != matches!(self.api_version.as_str(),super::spool_head_client::EFFECTS_RUNTIME|super::spool_head_client::INITIAL_HISTORY_RUNTIME|super::spool_head_client::HELPER_INITIAL_RUNTIME|super::super::native_terminal::RUNTIME|super::publication_client::RUNTIME|super::publication_client::ADOPTION_RUNTIME)
             || self.startup_timeout_millis == 0
             || self.startup_timeout_millis > 30_000
             || !self.listener_socket_path.is_absolute()

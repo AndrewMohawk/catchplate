@@ -15,19 +15,20 @@ const KINDS:[EndpointKind;4]=[EndpointKind::Retrieval,EndpointKind::Persistence,
 #[derive(Clone)]
 struct Entry {activation_fd_name:String,expected_peer:services::ExpectedPeerCredentialV3,exact:Vec<u8>}
 struct Selection {entries:BTreeMap<EndpointKind,Entry>,runtime_sha256:Sha256Digest}
-fn require_runtime_selection(raw:&[u8],initial_history:bool,helper_initial:bool,native_terminal:bool,publication:bool)->Result<(),ShadowError>{
+fn require_runtime_selection(raw:&[u8],initial_history:bool,helper_initial:bool,native_terminal:bool,publication:bool,adoption:bool)->Result<(),ShadowError>{
     let runtime:ProductionRpcRuntimeConfigV4=exact(raw)?;
     runtime.validate().map_err(fail)?;
     require(runtime.initial_history_selected()==initial_history && runtime.helper_initial_selected()==helper_initial
-        && runtime.native_terminal_selected()==native_terminal && runtime.publication_selected()==publication)
+        && runtime.native_terminal_selected()==native_terminal && runtime.publication_selected()==publication
+        && runtime.publication_adoption_selected()==adoption)
 }
 pub(super) fn check_runtime_selection(files:&FileAdmission,initial_history:bool,helper_initial:bool,native_terminal:bool)->Result<(),ShadowError>{
     files.check_preparation().map_err(fail)?;
-    require_runtime_selection(&files.retrieval_client_runtime().map_err(fail)?,initial_history,helper_initial,native_terminal,false)
+    require_runtime_selection(&files.retrieval_client_runtime().map_err(fail)?,initial_history,helper_initial,native_terminal,false,false)
 }
-pub(super) fn check_publication_runtime(files:&FileAdmission)->Result<(),ShadowError>{
+pub(super) fn check_publication_runtime(files:&FileAdmission,adoption:bool)->Result<(),ShadowError>{
     files.check_preparation().map_err(fail)?;
-    require_runtime_selection(&files.retrieval_client_runtime().map_err(fail)?,true,true,true,true)
+    require_runtime_selection(&files.retrieval_client_runtime().map_err(fail)?,true,true,true,true,adoption)
 }
 pub(super) fn assigned_peers(files:&FileAdmission)->Result<BTreeMap<EndpointKind,services::ExpectedPeerCredentialV3>,ShadowError> {
     assigned_peers_selected(files,false)
@@ -58,8 +59,8 @@ pub(super) fn assigned_peers_initial_history(files:&FileAdmission,helper_initial
     Ok(Selection::original(&files.retrieval_client_runtime().map_err(fail)?,true,true,true,true,false)?.entries.into_iter()
         .map(|(kind,endpoint)|(kind,endpoint.expected_peer)).collect())
 }
-pub(super) fn assigned_peers_publication(files:&FileAdmission)->Result<BTreeMap<EndpointKind,services::ExpectedPeerCredentialV3>,ShadowError>{
-    check_publication_runtime(files)?;
+pub(super) fn assigned_peers_publication(files:&FileAdmission,adoption:bool)->Result<BTreeMap<EndpointKind,services::ExpectedPeerCredentialV3>,ShadowError>{
+    check_publication_runtime(files,adoption)?;
     Ok(Selection::original(&files.retrieval_client_runtime().map_err(fail)?,true,true,true,true,true)?.entries.into_iter()
         .map(|(kind,endpoint)|(kind,endpoint.expected_peer)).collect())
 }
@@ -123,7 +124,7 @@ impl Selection {
 }
 pub(in crate::policy_shadow::policy_custody::services) struct Prepared {
     selection:Selection,channel:OwnedFd,directories:BTreeMap<EndpointKind,inspection::Directory>,
-    native_facade:bool,initial_history:bool,helper_initial:bool,native_terminal:bool,publication:bool,
+    native_facade:bool,initial_history:bool,helper_initial:bool,native_terminal:bool,publication:bool,adoption:bool,
     outgoing_directories:BTreeMap<String,inspection::facade::OutgoingDirectory>,
 }
 impl Prepared {
@@ -134,44 +135,44 @@ impl Prepared {
     pub(super) fn open_selected(delivery:&mut PreparedGuestServiceDelivery,channel:OwnedFd,time_grant:&Pin,commitment:bool)
         ->Result<(Self,admission::trusted_time::ClientGrant),ShadowError> {
         let grant=admission::trusted_time::ClientGrant::open(time_grant)?;
-        Ok((Self::prepare_owned(delivery,channel,commitment,false,false,false,false,false,false,false)?,grant))
+        Ok((Self::prepare_owned(delivery,channel,commitment,false,false,false,false,false,false,false,false)?,grant))
     }
     pub(super) fn open_spool(delivery:&mut PreparedGuestServiceDelivery,channel:OwnedFd,time_grant:&Pin)
         ->Result<(Self,admission::trusted_time::ClientGrant),ShadowError>{
         let grant=admission::trusted_time::ClientGrant::open(time_grant)?;
-        Ok((Self::prepare_owned(delivery,channel,true,true,false,false,false,false,false,false)?,grant))
+        Ok((Self::prepare_owned(delivery,channel,true,true,false,false,false,false,false,false,false)?,grant))
     }
     pub(super) fn open_terminal(delivery:&mut PreparedGuestServiceDelivery,channel:OwnedFd,time_grant:&Pin)
         ->Result<(Self,admission::trusted_time::ClientGrant),ShadowError>{
         let grant=admission::trusted_time::ClientGrant::open(time_grant)?;
-        Ok((Self::prepare_owned(delivery,channel,true,true,true,false,false,false,false,false)?,grant))
+        Ok((Self::prepare_owned(delivery,channel,true,true,true,false,false,false,false,false,false)?,grant))
     }
     pub(super) fn open_effects(delivery:&mut PreparedGuestServiceDelivery,channel:OwnedFd,time_grant:&Pin)
         ->Result<(Self,admission::trusted_time::ClientGrant),ShadowError>{
         let grant=admission::trusted_time::ClientGrant::open(time_grant)?;
-        Ok((Self::prepare_owned(delivery,channel,true,true,true,true,false,false,false,false)?,grant))
+        Ok((Self::prepare_owned(delivery,channel,true,true,true,true,false,false,false,false,false)?,grant))
     }
     pub(super) fn open_initial_history(delivery:&mut PreparedGuestServiceDelivery,channel:OwnedFd,time_grant:&Pin,helper_initial:bool,native_terminal:bool)
         ->Result<(Self,admission::trusted_time::ClientGrant),ShadowError>{
         let grant=admission::trusted_time::ClientGrant::open(time_grant)?;
-        Ok((Self::prepare_owned(delivery,channel,true,true,true,true,true,helper_initial,native_terminal,false)?,grant))
+        Ok((Self::prepare_owned(delivery,channel,true,true,true,true,true,helper_initial,native_terminal,false,false)?,grant))
     }
-    pub(super) fn open_publication(delivery:&mut PreparedGuestServiceDelivery,channel:OwnedFd,time_grant:&Pin)
+    pub(super) fn open_publication(delivery:&mut PreparedGuestServiceDelivery,channel:OwnedFd,time_grant:&Pin,adoption:bool)
         ->Result<(Self,admission::trusted_time::ClientGrant),ShadowError>{
         let grant=admission::trusted_time::ClientGrant::open(time_grant)?;
-        Ok((Self::prepare_owned(delivery,channel,true,true,true,true,true,true,true,true)?,grant))
+        Ok((Self::prepare_owned(delivery,channel,true,true,true,true,true,true,true,true,adoption)?,grant))
     }
-    pub(super) fn open_late(delivery:&mut PreparedGuestServiceDelivery,channel:OwnedFd,time_grant:Original,commitment:bool,spool:bool,terminal:bool,effects:bool,initial_history:bool,helper_initial:bool,native_terminal:bool,publication:bool)
+    pub(super) fn open_late(delivery:&mut PreparedGuestServiceDelivery,channel:OwnedFd,time_grant:Original,commitment:bool,spool:bool,terminal:bool,effects:bool,initial_history:bool,helper_initial:bool,native_terminal:bool,publication:bool,adoption:bool)
         ->Result<(Self,admission::trusted_time::ClientGrant),ShadowError>{
         require(delivery.owner.native_continuation.is_some())?;
         let grant=admission::trusted_time::ClientGrant::from_retained(time_grant)?;
-        Ok((Self::prepare_owned(delivery,channel,commitment,spool,terminal,effects,initial_history,helper_initial,native_terminal,publication)?,grant))
+        Ok((Self::prepare_owned(delivery,channel,commitment,spool,terminal,effects,initial_history,helper_initial,native_terminal,publication,adoption)?,grant))
     }
-    fn prepare_owned(delivery:&mut PreparedGuestServiceDelivery,channel:OwnedFd,commitment:bool,spool:bool,terminal:bool,effects:bool,initial_history:bool,helper_initial:bool,native_terminal:bool,publication:bool)->Result<Self,ShadowError>{
+    fn prepare_owned(delivery:&mut PreparedGuestServiceDelivery,channel:OwnedFd,commitment:bool,spool:bool,terminal:bool,effects:bool,initial_history:bool,helper_initial:bool,native_terminal:bool,publication:bool,adoption:bool)->Result<Self,ShadowError>{
         require((!initial_history || commitment && spool && terminal && effects) && (!helper_initial || initial_history)
-            && (!native_terminal || helper_initial) && (!publication || native_terminal))?;
+            && (!native_terminal || helper_initial) && (!publication || native_terminal) && (!adoption || publication))?;
         let runtime_raw=delivery.retrieval_client_runtime().map_err(fail)?;
-        require_runtime_selection(&runtime_raw,initial_history,helper_initial,native_terminal,publication)?;
+        require_runtime_selection(&runtime_raw,initial_history,helper_initial,native_terminal,publication,adoption)?;
         let selection=Selection::original(&runtime_raw,commitment,spool,terminal,effects,publication)?;
         let mut directories=BTreeMap::new();
         for (kind,endpoint) in &selection.entries {
@@ -194,7 +195,7 @@ impl Prepared {
                 outgoing_directories.insert(name,inspection::facade::OutgoingDirectory::open(fd)?);
             }
         }
-        Ok(Self{selection,channel,directories,native_facade,initial_history,helper_initial,native_terminal,publication,outgoing_directories})
+        Ok(Self{selection,channel,directories,native_facade,initial_history,helper_initial,native_terminal,publication,adoption,outgoing_directories})
     }
     pub(in crate::policy_shadow::policy_custody::services) fn attach(mut self,
         activation:&mut BTreeMap<String,OwnedFd>,runtime:&ProductionRpcRuntimeConfigV4,owner:Arc<AdmittedGuest>)
@@ -205,7 +206,9 @@ impl Prepared {
             && runtime.helper_initial_selected()==self.helper_initial
             && runtime.native_terminal_selected()==self.native_terminal
             && runtime.publication_selected()==self.publication
-            && owner.publication_bridge_selected()==self.publication)?;
+            && owner.publication_bridge_selected()==self.publication
+            && runtime.publication_adoption_selected()==self.adoption
+            && owner.publication_adoption_bridge_selected()==self.adoption)?;
         let channel=inspection::Channel::bind(self.channel,&owner)?;
         let native_names=self.selection.entries.values().map(|v|v.activation_fd_name.clone()).collect();
         let facade=if self.native_facade {

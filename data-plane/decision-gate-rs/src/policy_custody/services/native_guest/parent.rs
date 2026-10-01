@@ -118,11 +118,12 @@ impl Running {
             service_selection.check_endpoint_runtime(&files.retrieval_client_runtime().map_err(fail)?)?;
         }
         let native_lock=match &service_selection {
-            SelectedService::PersistenceLocked(_)=>Some(super::super::NativeLock::Persistence),
+            SelectedService::PersistenceLocked(_)|SelectedService::AdoptedPersistence(_)=>Some(super::super::NativeLock::Persistence),
+            SelectedService::AdoptedPublicationRetrieval(_)=>Some(super::super::NativeLock::AdoptedLedger),
             SelectedService::LedgerRetrieval(_)|SelectedService::CompletionRetrieval(_)|SelectedService::EffectRetrieval(_)|SelectedService::PublicationRetrieval(_)|SelectedService::PublicationGenesisRetrieval(_)=>Some(super::super::NativeLock::Ledger),
             _=>None,
         };
-        let (activation,_)=take_activation(&files.payload.activation,false,false,false,false,false,native_lock).map_err(fail)?;
+        let (activation,_)=take_activation(&files.payload.activation,false,false,false,false,false,false,native_lock).map_err(fail)?;
         let genesis_coordinator=matches!(&service_selection,SelectedService::PublicationGenesisCoordinator);
         if genesis_coordinator{
             require(files.payload.activation.len()==10
@@ -140,7 +141,8 @@ impl Running {
                 |SelectedService::CompletionRetrieval(_)|SelectedService::CompletionLedgerSpool(_)|SelectedService::TerminalSpool(_)|SelectedService::TerminalBridge(_)
                 |SelectedService::EffectRetrieval(_)|SelectedService::ActiveEffectBridge(_)|SelectedService::InitialHistoryBridge(..)|SelectedService::DispatchSpool(_)
                 |SelectedService::ActiveEffectBarrier(_)|SelectedService::ActiveEffectCommit(_)
-                |SelectedService::Publication(_)|SelectedService::PublicationRetrieval(_)|SelectedService::PublicationBridge(_)
+                |SelectedService::Publication(_)|SelectedService::PublicationRetrieval(_)|SelectedService::PublicationBridge(..)
+                |SelectedService::AdoptedPublication(_)|SelectedService::AdoptedPublicationRetrieval(_)|SelectedService::AdoptedPersistence(_)
                 |SelectedService::PublicationGenesis(_)|SelectedService::PublicationGenesisRetrieval(_))=>{
                 let (owner,channel)=proof_cohort::prepare_inspection(service,&files,&activation)?;
                 (Some(owner),Some(channel))

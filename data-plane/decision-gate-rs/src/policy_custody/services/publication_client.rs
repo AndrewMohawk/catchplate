@@ -13,6 +13,7 @@ use super::super::production_dispatch::{ClosedProductionDispatchRequestV4 as Dis
 use crate::policy_shadow::PolicyShadowCustodySignerRole as Signer;
 
 pub(super) const RUNTIME:&str="serverware.policyCustodyProductionRpcRuntime/v13";
+pub(super) const ADOPTION_RUNTIME:&str=super::super::native_terminal::ADOPTION_RUNTIME;
 fn require(value:bool)->Result<(),ServiceError>{if value{Ok(())}else{Err(invalid())}}
 pub(super) fn selected(request:&Dispatch)->bool {
     matches!(request,Dispatch::RecoverCurrentState{..}|Dispatch::PrepareGenerationPublication{..}
@@ -23,11 +24,17 @@ pub(super) fn selected(request:&Dispatch)->bool {
 pub(super) struct Selection {api_version:String,durable_grant_original:String,current_grant_original:String}
 impl Selection {
     pub(super) fn originals(&self)->(&str,&str){(&self.durable_grant_original,&self.current_grant_original)}
+    pub(super) fn adoption_selected(&self)->bool {self.api_version=="serverware.nativePublicationServices/v2"}
     pub(super) fn validate(&self)->Result<(),ServiceError>{
-        require(self.api_version=="serverware.nativePublicationServices/v1")?;
+        let adopted=self.adoption_selected();
+        require(adopted || self.api_version=="serverware.nativePublicationServices/v1")?;
         for raw in [&self.durable_grant_original,&self.current_grant_original] {
-            require(!raw.is_empty() && raw.is_ascii() && raw.len()<=super::publication_service::MAX_GRANT)?;
-            let _:Grant=decode_canonical_frame(raw.as_bytes())?;
+            require(!raw.is_empty() && raw.is_ascii() && raw.len()<=if adopted {
+                super::publication_service::MAX_ADOPTION_GRANT}else{super::publication_service::MAX_GRANT})?;
+            let grant:Grant=decode_canonical_frame(raw.as_bytes())?;
+            require(adopted==grant.payload.admission.adoption.is_some()
+                && grant.payload.api_version==if adopted {"serverware.nativePublicationServiceGrant/v2"}
+                    else {"serverware.nativePublicationServiceGrant/v1"})?;
         }
         Ok(())
     }
@@ -41,7 +48,8 @@ impl Client {
     pub(super) fn new(selection:Selection,histories:ProductionServiceHistoricalKeyringsV4,
         owner:Arc<guest::native_guest::AdmittedGuest>,configurations:&BTreeMap<TrustedHostServiceRoleV3,Sha256Digest>)
         ->Result<Self,ServiceRunnerError>{
-        selection.validate()?;owner.check().map_err(|_|invalid())?;require(owner.publication_bridge_selected())?;
+        selection.validate()?;owner.check().map_err(|_|invalid())?;require(owner.publication_bridge_selected()
+            && selection.adoption_selected()==owner.publication_adoption_bridge_selected())?;
         let durable:Grant=decode_canonical_frame(selection.durable_grant_original.as_bytes())?;
         let current:Grant=decode_canonical_frame(selection.current_grant_original.as_bytes())?;
         let rings=histories.borrowed();
@@ -65,6 +73,7 @@ impl Client {
                 && binding.boot_id_base64url==bridge.boot_id_base64url
                 && binding.time_namespace_device==bridge.time_namespace_device && binding.time_namespace_inode==bridge.time_namespace_inode)?;
         }
+        if let Some(adoption)=&d.admission.adoption {adoption.require_guest(&bridge)?;}
         let heads=BTreeMap::from([(d.service_role,d.initial_transition_head_sha256.clone()),
             (c.service_role,c.initial_transition_head_sha256.clone())]);
         Ok(Self{durable,current,histories,owner,heads,used:BTreeSet::new(),poisoned:false})

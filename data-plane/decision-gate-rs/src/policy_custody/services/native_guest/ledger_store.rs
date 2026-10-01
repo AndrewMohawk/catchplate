@@ -34,7 +34,7 @@ fn fs(file:&File)->Result<(),ShadowError>{let mut s:libc::statfs=unsafe{std::mem
     let mut flags:libc::statvfs=unsafe{std::mem::zeroed()};
     require(unsafe{libc::fstatfs(file.as_raw_fd(),&mut s)}==0 && matches!(s.f_type as u64,0xef53|0x9123_683e)
         && unsafe{libc::fstatvfs(file.as_raw_fd(),&mut flags)}==0 && flags.f_flag&libc::ST_RDONLY==0)}
-fn measure(file:&File)->Result<Sha256Digest,ShadowError>{
+pub(super) fn measure(file:&File)->Result<Sha256Digest,ShadowError>{
     #[repr(C)] struct Digest {algorithm:u16,size:u16,bytes:[u8;32]}
     let mut d=Digest{algorithm:0,size:32,bytes:[0;32]};
     require(unsafe{libc::fcntl(file.as_raw_fd(),libc::F_GETFL)}&libc::O_ACCMODE==libc::O_RDONLY

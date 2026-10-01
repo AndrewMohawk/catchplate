@@ -256,6 +256,14 @@ impl Inspector {
         ->Result<(Self,OwnedFd),ShadowError> {
         Self::prepare_bounded(original,expected,guest_uid,socket,endpoint,65536)
     }
+    /// A closed adopted grant was parsed under its explicit launch selection.
+    /// Other roles and every legacy endpoint retain their existing ceiling.
+    pub(in crate::policy_shadow::policy_custody::services) fn prepare_adopted_endpoint(original:Original,
+        expected:services::common::ExpectedPeerCredentials,guest_uid:u32,socket:&OwnedFd,endpoint:EndpointKind)
+        ->Result<(Self,OwnedFd),ShadowError> {
+        require(matches!(endpoint,EndpointKind::Retrieval|EndpointKind::Persistence))?;
+        Self::prepare_bounded(original,expected,guest_uid,socket,endpoint,3*1024*1024)
+    }
     /// Only callers that already checked a closed history-bearing grant use
     /// this larger transport cap. Legacy profile caps remain in that parser.
     pub(in crate::policy_shadow::policy_custody::services) fn prepare_history_endpoint(original:Original,

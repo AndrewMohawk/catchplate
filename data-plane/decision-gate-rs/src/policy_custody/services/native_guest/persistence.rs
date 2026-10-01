@@ -22,6 +22,9 @@ pub(in crate::policy_shadow::policy_custody) use store::Head as PersistenceHead;
 const GRANT_DOMAIN:&str="serverware.nativeShadowPersistenceServiceAssignment.signature/v1";
 const COMPLETED_GRANT_DOMAIN:&str="serverware.nativeShadowPersistenceServiceAssignment.signature/v2";
 const PUBLICATION_GRANT_DOMAIN:&str="serverware.nativeShadowPersistenceServiceAssignment.signature/v3";
+const ADOPTION_GRANT_DOMAIN:&str="serverware.nativeShadowPersistenceServiceAssignment.signature/v4";
+pub(in crate::policy_shadow::policy_custody::services) const MAX_ADOPTION_GRANT:usize=3*1024*1024;
+use services::publication_adoption::Authorization as Adoption;
 pub(in crate::policy_shadow::policy_custody) const COMMIT_DOMAIN:&str="serverware.nativeShadowPersistenceCommit.signature/v1";
 #[derive(Clone,Copy,PartialEq,Eq,Serialize,Deserialize)]
 #[serde(rename_all="kebab-case")]
@@ -34,6 +37,8 @@ struct Payload {
     proof_scope_original_base64url:String,journal:store::Admission,expected_peer:services::ExpectedPeerCredentialV3,
     trust_checkpoint_id:Sha256Digest,revocation_generation:u64,revocation_root_sha256:Sha256Digest,
     issued_at_unix_nanos:i64,expires_at_unix_nanos:i64,signing_key_id:Sha256Digest,signing_key_spki_sha256:Sha256Digest,
+    #[serde(default,skip_serializing_if="Option::is_none",deserialize_with="deserialize_optional_present")]
+    adoption:Option<Box<Adoption>>,
 }
 #[derive(Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
@@ -46,17 +51,22 @@ impl Configuration {
                 [Permission::VerifyPersistence]|[Permission::StoreDispatchOriginal,Permission::VerifyPersistence]),
             "serverware.nativeShadowPersistenceServiceAssignment/v2"=>p.permissions==[
                 Permission::StoreDispatchOriginal,Permission::VerifyPersistence,Permission::VerifyCompletedInvocation],
-            "serverware.nativeShadowPersistenceServiceAssignment/v3"=>p.permissions==[
+            "serverware.nativeShadowPersistenceServiceAssignment/v3"|"serverware.nativeShadowPersistenceServiceAssignment/v4"=>p.permissions==[
                 Permission::StoreDispatchOriginal,Permission::VerifyPersistence,Permission::VerifyCompletedInvocation,Permission::VerifyPublicationInvocation],
             _=>false,
         };
-        require(permissions && p.purpose=="native-shadow-receipt-persistence" && p.guest.service_role=="production-bridge"
+        require(permissions && self.adoption_selected()==p.adoption.is_some()
+            && canonical_json_bytes(self)?.len()<=if self.adoption_selected(){MAX_ADOPTION_GRANT}else{65536}
+            && p.purpose=="native-shadow-receipt-persistence" && p.guest.service_role=="production-bridge"
             && p.expected_peer.uid!=0 && p.expected_peer.uid!=p.guest.uid && p.expected_peer.gid!=0
             && !p.proof_scope_original_base64url.is_empty() && p.proof_scope_original_base64url.len()<=21846)?;
         p.expected_peer.checked().map_err(fail)?;Ok(())
     }
     pub(in crate::policy_shadow::policy_custody::services) fn expected_peer(&self)->&services::ExpectedPeerCredentialV3{&self.payload.expected_peer}
     pub(in crate::policy_shadow::policy_custody::services) fn guest_uid(&self)->u32{self.payload.guest.uid}
+    pub(in crate::policy_shadow::policy_custody::services) fn adoption_selected(&self)->bool {
+        self.payload.api_version=="serverware.nativeShadowPersistenceServiceAssignment/v4"
+    }
     fn verify(&self,keys:&AdmittedKeys,scope:&scope::Scope,trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime)->Result<(),ShadowError>{
         self.validate_shape()?;keys.check(trust,time)?;require(keys.result.is_some())?;
         let p=&self.payload;let checkpoint=trust.current_checkpoint()?;
@@ -74,11 +84,20 @@ impl Configuration {
             &binding.key_id,&binding.key_spki_sha256)?;
         require(ed25519_public_key_material_sha256(&key)==binding.key_material_sha256)?;
         let domain=match p.api_version.as_str() {
+            "serverware.nativeShadowPersistenceServiceAssignment/v4"=>ADOPTION_GRANT_DOMAIN,
             "serverware.nativeShadowPersistenceServiceAssignment/v3"=>PUBLICATION_GRANT_DOMAIN,
             "serverware.nativeShadowPersistenceServiceAssignment/v2"=>COMPLETED_GRANT_DOMAIN,_=>GRANT_DOMAIN};
         key.verify_strict(&signature_preimage(domain,&canonical_json_bytes(p)?),&Signature::from_bytes(&self.signature.decode()?))
             .map_err(|_|ShadowError::SignatureInvalid)?;
         scope.check(keys)?;
+        if let Some(adoption)=&p.adoption {
+            adoption.require_authority(&binding.key_id,&binding.key_spki_sha256,&key,&checkpoint,time.now_unix_nanos()?)?;
+            let raw=String::from_utf8(canonical_json_bytes(scope)?).map_err(fail)?;
+            adoption.verify_current(keys.assignment.payload_sha256(),keys.assignment.payload().assignment_revision,
+                scope.configuration_binding(),&raw)?;
+            adoption.require_guest(&keys.association.binding()).map_err(fail)?;
+            require(guest::now()?<adoption.deadline_boottime()?)?;
+        }
         let local=keys.keys.get(&AuthorityRole::CustodyStoreResponse).ok_or(ShadowError::SignerBindingMismatch)?;
         let expected=keys.assignment.payload().authority_key_independence.binding(AuthorityRole::CustodyStoreResponse,
             &keys.assignment.payload().assignment_id)?;
@@ -150,7 +169,7 @@ fn invocation_identity(request_encoded:&str,reply_encoded:&str)->Result<invocati
         request_original_sha256:Sha256Digest::compute(&raw).as_str().into(),
         reply_original_sha256:Sha256Digest::compute(&reply_raw).as_str().into()})
 }
-fn dispatch_original(request_encoded:&str,reply_encoded:&str,scope:&scope::Scope,keys:&AdmittedKeys,
+fn dispatch_original(request_encoded:&str,reply_encoded:&str,scope:&scope::Scope,adoption:Option<&Adoption>,keys:&AdmittedKeys,
     trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime)->Result<(Request,Vec<u8>,Option<receipts::Receipt>),ShadowError>{
     let (request,raw):(Request,_)=original(request_encoded)?;let (reply,_):(Reply,_)=original(reply_encoded)?;
     let dispatch=final_dispatch(&request)?;
@@ -222,8 +241,9 @@ fn dispatch_original(request_encoded:&str,reply_encoded:&str,scope:&scope::Scope
     let rebuilt=ClosedProductionDispatchResponseV4::from_parts(dispatch,response.result.clone(),response.service_transitions.clone()).map_err(fail)?;
     require(canonical_json_bytes(&rebuilt)?==canonical_json_bytes(response)? && !response.service_transitions.is_empty()
         && response.service_transitions.len()<=5)?;
-    let receipt=receipts::extract(dispatch,&response.result,scope)?;
-    if let Some(receipt)=&receipt {
+    let adopted=receipts::is_adopted(dispatch,&response.result,adoption)?;
+    let receipt=receipts::extract(dispatch,&response.result,scope,if adopted{adoption}else{None})?;
+    if let Some(receipt)=&receipt { if !adopted {
         let (_,latest)=time.now_interval_unix_nanos()?;
         validate_custody_receipt_freshness(receipt.observed_at_unix_nanos,latest,MAX_ENVELOPE_AGE_NANOS)?;
         require(receipt.persistence_receipt_sha256!=Sha256Digest::compute(&[])
@@ -235,7 +255,7 @@ fn dispatch_original(request_encoded:&str,reply_encoded:&str,scope:&scope::Scope
             &receipt.signing_key_spki_sha256,receipt.signer_role.signature_domain())?;
         key.verify_strict(&signature_preimage(receipt.signer_role.signature_domain(),&authority),
             &Signature::from_bytes(&receipt.signature.decode()?)).map_err(|_|ShadowError::SignatureInvalid)?;
-    }
+    }}
     Ok((request,raw,receipt))
 }
 
@@ -270,20 +290,27 @@ pub(crate) struct Prepared {original:services::guest_original::Original,configur
     scope_original:Vec<u8>,scope:scope::Scope,directory:OwnedFd,listener:OwnedFd,inspection:OwnedFd,lock:Option<OwnedFd>}
 impl Prepared {
     pub(in crate::policy_shadow::policy_custody::services) fn open(pin:&guest::Pin,delivery:&mut PreparedGuestServiceDelivery,inspection:OwnedFd)->Result<Self,ShadowError>{
-        Self::open_inner(pin,delivery,inspection,None)
+        Self::open_inner(pin,delivery,inspection,None,false)
     }
     pub(in crate::policy_shadow::policy_custody::services) fn open_locked(pin:&guest::Pin,delivery:&mut PreparedGuestServiceDelivery,inspection:OwnedFd)->Result<Self,ShadowError>{
         require(delivery.activation.len()==3 && delivery.activation.contains_key("persistence-listener")
             && delivery.activation.contains_key("persistence-journal"))?;
         let lock=delivery.activation.remove("persistence-lock").ok_or(ShadowError::BindingDrift)?;
-        Self::open_inner(pin,delivery,inspection,Some(lock))
+        Self::open_inner(pin,delivery,inspection,Some(lock),false)
     }
-    fn open_inner(pin:&guest::Pin,delivery:&mut PreparedGuestServiceDelivery,inspection:OwnedFd,lock:Option<OwnedFd>)->Result<Self,ShadowError>{
+    pub(in crate::policy_shadow::policy_custody::services) fn open_adopted_locked(pin:&guest::Pin,delivery:&mut PreparedGuestServiceDelivery,inspection:OwnedFd)->Result<Self,ShadowError>{
+        require(delivery.activation.len()==3 && delivery.activation.contains_key("persistence-listener")
+            && delivery.activation.contains_key("persistence-journal"))?;
+        let lock=delivery.activation.remove("persistence-lock").ok_or(ShadowError::BindingDrift)?;
+        Self::open_inner(pin,delivery,inspection,Some(lock),true)
+    }
+    fn open_inner(pin:&guest::Pin,delivery:&mut PreparedGuestServiceDelivery,inspection:OwnedFd,lock:Option<OwnedFd>,adopted:bool)->Result<Self,ShadowError>{
         delivery.closure_association().map_err(fail)?.check_preparation().map_err(fail)?;
         require(delivery.activation.len()==2 && delivery.activation.contains_key("persistence-listener")
             && delivery.activation.contains_key("persistence-journal"))?;
-        let original=pin.open(65536)?;let configuration:Configuration=guest::exact(&original.read(65536).map_err(fail)?)?;
-        configuration.validate_shape()?;
+        let maximum=if adopted{MAX_ADOPTION_GRANT}else{65536};
+        let original=pin.open(maximum)?;let configuration:Configuration=guest::exact(&original.read(maximum).map_err(fail)?)?;
+        configuration.validate_shape()?;require(configuration.adoption_selected()==adopted)?;
         require(configuration.payload.guest==GuestClosureAssociation{owner:Arc::clone(&delivery.owner)}.binding())?;
         let scope_original=URL_SAFE_NO_PAD.decode(&configuration.payload.proof_scope_original_base64url).map_err(fail)?;
         require(!scope_original.is_empty() && scope_original.len()<=16384
@@ -312,13 +339,13 @@ pub(crate) struct Service {original:services::guest_original::Original,configura
 impl Service {
     fn require_selected_final(&self,request:&Request)->Result<(),ShadowError>{
         if matches!(request.request,Body::FinishNativePublication{..}) {
-            require(self.configuration.payload.api_version=="serverware.nativeShadowPersistenceServiceAssignment/v3"
+            require(matches!(self.configuration.payload.api_version.as_str(),"serverware.nativeShadowPersistenceServiceAssignment/v3"|"serverware.nativeShadowPersistenceServiceAssignment/v4")
                 && self.configuration.payload.permissions.contains(&Permission::VerifyPublicationInvocation))?;
         }
         Ok(())
     }
     fn check(&self,keys:&AdmittedKeys,trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime)->Result<(),ShadowError>{
-        require(self.original.read(65536).map_err(fail)?.as_slice()==canonical_json_bytes(&self.configuration)?.as_slice())?;
+        require(self.original.read(if self.configuration.adoption_selected(){MAX_ADOPTION_GRANT}else{65536}).map_err(fail)?.as_slice()==canonical_json_bytes(&self.configuration)?.as_slice())?;
         self.configuration.verify(keys,&self.scope,trust,time)?;self.store.check()?;self.channel.check()?;
         let mut receipt_originals:BTreeMap<Sha256Digest,Vec<u8>>=BTreeMap::new();
         for commit in self.store.originals() {
@@ -329,7 +356,8 @@ impl Service {
                 authority_role_signature_domain(AuthorityRole::CustodyStoreResponse))?;
             key.verify_strict(&signature_preimage(COMMIT_DOMAIN,&canonical_json_bytes(p)?),&Signature::from_bytes(&commit.signature.decode()?))
                 .map_err(|_|ShadowError::SignatureInvalid)?;
-            let (request,raw,receipt)=dispatch_original(&p.request_original_base64url,&p.reply_original_base64url,&self.scope,keys,trust,time)?;
+            let (request,raw,receipt)=dispatch_original(&p.request_original_base64url,&p.reply_original_base64url,&self.scope,
+                self.configuration.payload.adoption.as_deref(),keys,trust,time)?;
             self.require_selected_final(&request)?;
             require(p.original_deadline_boottime_nanos==request.deadline_boottime_nanos && p.request_original_sha256==Sha256Digest::compute(&raw)
                 && p.stored_at_boottime_nanos>0 && p.stored_at_boottime_nanos<p.original_deadline_boottime_nanos
@@ -344,7 +372,8 @@ impl Service {
     fn commit(&mut self,request:&Request,request_encoded:&str,reply_encoded:&str,keys:&AdmittedKeys,trust:&dyn EnvelopeKeyTrust,
         time:&dyn TrustedTime,check:&impl Fn()->Result<(),ShadowError>)->Result<Sha256Digest,ShadowError>{
         require(self.configuration.payload.permissions.contains(&Permission::StoreDispatchOriginal))?;
-        let (original,raw,receipt)=dispatch_original(request_encoded,reply_encoded,&self.scope,keys,trust,time)?;
+        let (original,raw,receipt)=dispatch_original(request_encoded,reply_encoded,&self.scope,
+            self.configuration.payload.adoption.as_deref(),keys,trust,time)?;
         self.require_selected_final(&original)?;
         require(request.deadline_boottime_nanos==original.deadline_boottime_nanos && request.replay_id_sha256==original.replay_id_sha256)?;
         let replay=self.store.replay(request_encoded,reply_encoded)?;
@@ -387,7 +416,16 @@ impl Service {
             ProductionRpcRequestBodyV4::VerifyAssignmentBoundPersistence{proof_scope_canonical_bytes,signer_role,persistence_receipt_sha256,
                 canonical_receipt_payload,signed_authority_payload}=>{
                 require(proof_scope_canonical_bytes==&self.scope_original)?;
-                self.scope.require_payload(*signer_role,canonical_receipt_payload,signed_authority_payload)?;
+                let baseline=if let Some(adoption)=&self.configuration.payload.adoption {
+                    let receipt=adoption.baseline_receipt()?;
+                    *signer_role==PolicyShadowCustodySignerRole::PublicationReconciliation
+                        && receipt.persistence_receipt_sha256==*persistence_receipt_sha256
+                        && receipt.canonical_payload()?==*canonical_receipt_payload
+                }else{false};
+                if baseline {
+                    require(self.configuration.payload.adoption.as_ref().ok_or(ShadowError::BindingDrift)?
+                        .prior_authority_payload(canonical_receipt_payload)?==*signed_authority_payload)?;
+                }else{self.scope.require_payload(*signer_role,canonical_receipt_payload,signed_authority_payload)?;}
                 (*signer_role,persistence_receipt_sha256,canonical_receipt_payload,Some(signed_authority_payload))
             },
             _=>return Err(ShadowError::BindingDrift),

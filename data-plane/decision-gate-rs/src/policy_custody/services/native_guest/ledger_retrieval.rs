@@ -16,8 +16,10 @@ use std::os::fd::OwnedFd;
 #[path="retrieval_scope.rs"] mod scope;
 #[path="retrieval_store.rs"] mod legacy;
 #[path="ledger_store.rs"] mod store;
+#[path="ledger_cold_core.rs"] mod cold_core;
 #[path="genesis_retrieval.rs"] pub(crate) mod genesis;
 const DOMAIN:&str="serverware.nativeLedgerSpoolRetrievalGrant.signature/v1";
+pub(in crate::policy_shadow::policy_custody::services) const MAX_ADOPTED_CONFIGURATION:usize=3*1024*1024;
 #[derive(Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 struct Payload {
@@ -42,7 +44,8 @@ struct PublicationAdmission {
     admission:publication::Admission,native:services::spool_head_values::RoleKey,
     drs_authority_epoch:crate::policy_shadow::policy_custody::authority_history::AuthorityEpochRefV3,
     drs_public_key_base64url:String,
-    baseline:PublicationBaseline,
+    #[serde(default,skip_serializing_if="Option::is_none",deserialize_with="deserialize_optional_present")]
+    baseline:Option<PublicationBaseline>,
 }
 /// Exactly one independently approved prior acyclic context. It cannot nest
 /// another Baseline, renew its window, or assert a cold/uninstalled genesis.
@@ -68,7 +71,8 @@ impl PublicationAdmission {
         durable_key(&self.drs_authority_epoch,&self.drs_public_key_base64url)
     }
     fn verify_baseline(&self,keys:&AdmittedKeys)->Result<(),ShadowError>{
-        let b=&self.baseline;
+        let b=self.baseline.as_ref().ok_or(ShadowError::BindingDrift)?;
+        require(self.admission.adoption.is_none() && b.admission.adoption.is_none())?;
         // The independently admitted prior generation may differ from the
         // replacement generation. No other scope field or original window is
         // substituted: cross-configuration/assignment/key/history recovery is
@@ -119,15 +123,19 @@ struct Effects {dispatch_barrier:services::spool_head_values::RoleKey,active_eff
 pub(crate) struct Configuration {payload:Payload,signature:CanonicalEd25519Signature}
 impl Configuration {
     pub(in crate::policy_shadow::policy_custody::services) fn completion_selected(&self)->bool {
-        matches!(self.payload.api_version.as_str(),"serverware.nativeLedgerSpoolRetrievalGrant/v2"|"serverware.nativeLedgerSpoolRetrievalGrant/v3"|"serverware.nativeLedgerSpoolRetrievalGrant/v4"|"serverware.nativeLedgerSpoolRetrievalGrant/v5")
+        matches!(self.payload.api_version.as_str(),"serverware.nativeLedgerSpoolRetrievalGrant/v2"|"serverware.nativeLedgerSpoolRetrievalGrant/v3"|"serverware.nativeLedgerSpoolRetrievalGrant/v4"|"serverware.nativeLedgerSpoolRetrievalGrant/v5"|"serverware.nativeLedgerSpoolRetrievalGrant/v6")
     }
     pub(in crate::policy_shadow::policy_custody::services) fn effects_selected(&self)->bool{
-        matches!(self.payload.api_version.as_str(),"serverware.nativeLedgerSpoolRetrievalGrant/v3"|"serverware.nativeLedgerSpoolRetrievalGrant/v4"|"serverware.nativeLedgerSpoolRetrievalGrant/v5")
+        matches!(self.payload.api_version.as_str(),"serverware.nativeLedgerSpoolRetrievalGrant/v3"|"serverware.nativeLedgerSpoolRetrievalGrant/v4"|"serverware.nativeLedgerSpoolRetrievalGrant/v5"|"serverware.nativeLedgerSpoolRetrievalGrant/v6")
     }
-    fn fresh_ledger_selected(&self)->bool{matches!(self.payload.api_version.as_str(),"serverware.nativeLedgerSpoolRetrievalGrant/v4"|"serverware.nativeLedgerSpoolRetrievalGrant/v5")}
+    fn fresh_ledger_selected(&self)->bool{matches!(self.payload.api_version.as_str(),"serverware.nativeLedgerSpoolRetrievalGrant/v4"|"serverware.nativeLedgerSpoolRetrievalGrant/v5"|"serverware.nativeLedgerSpoolRetrievalGrant/v6")}
     pub(in crate::policy_shadow::policy_custody::services) fn publication_selected(&self)->bool{
-        self.payload.api_version=="serverware.nativeLedgerSpoolRetrievalGrant/v5"
+        matches!(self.payload.api_version.as_str(),"serverware.nativeLedgerSpoolRetrievalGrant/v5"|"serverware.nativeLedgerSpoolRetrievalGrant/v6")
     }
+    pub(in crate::policy_shadow::policy_custody::services) fn adoption_selected(&self)->bool{
+        self.payload.api_version=="serverware.nativeLedgerSpoolRetrievalGrant/v6"
+    }
+    fn maximum(&self)->usize{if self.adoption_selected(){MAX_ADOPTED_CONFIGURATION}else{65536}}
     pub(in crate::policy_shadow::policy_custody::services) fn validate_shape(&self)->Result<(),ShadowError>{
         let p=&self.payload;
         require((self.completion_selected() || p.api_version=="serverware.nativeLedgerSpoolRetrievalGrant/v1")
@@ -136,9 +144,14 @@ impl Configuration {
             && p.expected_peer.uid!=p.guest.uid && p.proof_scope_original_base64url.len()<=21846
             && p.spool_scope.issued_at_boottime_nanos>=guest::decimal(&p.guest.issued_at_boottime_ns)?
             && p.spool_scope.expires_at_boottime_nanos<=guest::decimal(&p.guest.lifetime_deadline_boottime_ns)?
-            && self.publication_selected()==p.publication.is_some() && canonical_json_bytes(self)?.len()<=65536)?;
+            && self.publication_selected()==p.publication.is_some() && canonical_json_bytes(self)?.len()<=self.maximum())?;
+        if let Some(publication)=&p.publication {
+            require(self.adoption_selected()==publication.admission.adoption.is_some()
+                && self.adoption_selected()!=publication.baseline.is_some())?;
+        }
         if self.fresh_ledger_selected() {
-            require(p.initialization.as_deref()==Some(if self.publication_selected(){"fresh-ledger-with-publication-baseline"}else{"fresh-ledger"}) && p.store.sequence==0
+            require(p.initialization.as_deref()==Some(if self.adoption_selected(){"fresh-ledger-with-adopted-cold-publication"}
+                else if self.publication_selected(){"fresh-ledger-with-publication-baseline"}else{"fresh-ledger"}) && p.store.sequence==0
                 && p.store.head_sha256==p.store.genesis_sha256)?;
         }else{require(p.initialization.is_none())?;}
         p.expected_peer.checked().map_err(fail)?;Ok(())
@@ -168,12 +181,20 @@ impl Configuration {
         let key=trust.resolve_ed25519_key(&checkpoint,authority_role_signature_domain(AuthorityRole::CustodySupervisorCapability),
             &signer.key_id,&signer.key_spki_sha256)?;
         require(ed25519_public_key_material_sha256(&key)==signer.key_material_sha256)?;
-        key.verify_strict(&signature_preimage(if self.publication_selected(){"serverware.nativeLedgerSpoolRetrievalGrant.signature/v5"}
+        key.verify_strict(&signature_preimage(if self.adoption_selected(){"serverware.nativeLedgerSpoolRetrievalGrant.signature/v6"}
+            else if self.publication_selected(){"serverware.nativeLedgerSpoolRetrievalGrant.signature/v5"}
             else if self.fresh_ledger_selected(){"serverware.nativeLedgerSpoolRetrievalGrant.signature/v4"}
             else if self.effects_selected(){"serverware.nativeLedgerSpoolRetrievalGrant.signature/v3"}
             else if self.completion_selected(){"serverware.nativeLedgerSpoolRetrievalGrant.signature/v2"}else{DOMAIN},
             &canonical_json_bytes(p)?),&Signature::from_bytes(&self.signature.decode()?))
             .map_err(|_|ShadowError::SignatureInvalid)?;
+        if let Some(adoption)=p.publication.as_ref().and_then(|v|v.admission.adoption.as_ref()) {
+            adoption.require_authority(&signer.key_id,&signer.key_spki_sha256,&key,&checkpoint,time.now_unix_nanos()?)?;
+            adoption.require_guest(&p.guest).map_err(fail)?;
+            let local=keys.keys.get(&AuthorityRole::CustodyRetrievalResponse).ok_or(ShadowError::SignerBindingMismatch)?;
+            adoption.require_retrieval(&publication::RetrievalAuthority{key_id:local.binding.key_id.clone(),
+                key_spki_sha256:local.binding.key_spki_sha256.clone(),public_key_base64url:URL_SAFE_NO_PAD.encode(local.key.verifying_key().to_bytes())}).map_err(fail)?;
+        }
         require(p.ingress.role==AuthorityRole::CustodyIngressAdmission && p.ledger.role==AuthorityRole::CustodyLedgerAppend)?;
         let admitted_keys=keys;
         let mut keys=BTreeMap::new();
@@ -190,7 +211,10 @@ impl Configuration {
                 && publication.admission.proof_scope_original.as_bytes()==scope_raw
                 && publication.native.role==AuthorityRole::CustodyPublicationReconciliation)?;
             publication.admission.validate(&publication.native).map_err(fail)?;
-            publication.verify_baseline(admitted_keys)?;
+            if let Some(adoption)=&publication.admission.adoption {
+                adoption.require_durable_authority(&publication.drs_authority_epoch,&publication.key()?).map_err(fail)?;
+            }
+            if !self.adoption_selected(){publication.verify_baseline(admitted_keys)?;}
             require(publication.key()?!=publication.native.material().map_err(fail)?)?;
             roles.push(&publication.native);
         }
@@ -237,6 +261,8 @@ impl Prepared {
         inspection:OwnedFd)->Result<Self,ShadowError>{Ok(Self::Operational(OperationalPrepared::open_effects(pin,delivery,inspection)?))}
     pub(in crate::policy_shadow::policy_custody::services) fn open_publication(pin:&guest::Pin,delivery:&mut PreparedGuestServiceDelivery,
         inspection:OwnedFd)->Result<Self,ShadowError>{Ok(Self::Operational(OperationalPrepared::open_publication(pin,delivery,inspection)?))}
+    pub(in crate::policy_shadow::policy_custody::services) fn open_publication_adopted(pin:&guest::Pin,delivery:&mut PreparedGuestServiceDelivery,
+        inspection:OwnedFd)->Result<Self,ShadowError>{Ok(Self::Operational(OperationalPrepared::open_publication_adopted(pin,delivery,inspection)?))}
     pub(in crate::policy_shadow::policy_custody::services) fn open_genesis(pin:&guest::Pin,delivery:&mut PreparedGuestServiceDelivery,
         inspection:OwnedFd)->Result<Self,ShadowError>{Ok(Self::Genesis(genesis::Prepared::open(pin,delivery,inspection)?))}
     pub(in crate::policy_shadow::policy_custody::services) fn bind(self,keys:&AdmittedKeys,delivery:&PreparedGuestServiceDelivery,
@@ -253,27 +279,32 @@ impl Service {
     }}
 }
 pub(crate) struct OperationalPrepared {original:services::guest_original::Original,configuration:Configuration,
-    scope_raw:Vec<u8>,scope:scope::Scope,store:store::Store,legacy:legacy::Store,listener:OwnedFd,inspection:OwnedFd}
+    scope_raw:Vec<u8>,scope:scope::Scope,store:store::Store,legacy:legacy::Store,cold_core:Option<OwnedFd>,listener:OwnedFd,inspection:OwnedFd}
 impl OperationalPrepared {
     pub(in crate::policy_shadow::policy_custody::services) fn open(pin:&guest::Pin,delivery:&mut PreparedGuestServiceDelivery,
         inspection:OwnedFd)->Result<Self,ShadowError>{
-        Self::open_selected(pin,delivery,inspection,false,false,false)
+        Self::open_selected(pin,delivery,inspection,false,false,false,false)
     }
     pub(in crate::policy_shadow::policy_custody::services) fn open_completion(pin:&guest::Pin,delivery:&mut PreparedGuestServiceDelivery,
         inspection:OwnedFd)->Result<Self,ShadowError>{
-        Self::open_selected(pin,delivery,inspection,true,false,false)
+        Self::open_selected(pin,delivery,inspection,true,false,false,false)
     }
     pub(in crate::policy_shadow::policy_custody::services) fn open_effects(pin:&guest::Pin,delivery:&mut PreparedGuestServiceDelivery,
-        inspection:OwnedFd)->Result<Self,ShadowError>{Self::open_selected(pin,delivery,inspection,true,true,false)}
+        inspection:OwnedFd)->Result<Self,ShadowError>{Self::open_selected(pin,delivery,inspection,true,true,false,false)}
     pub(in crate::policy_shadow::policy_custody::services) fn open_publication(pin:&guest::Pin,delivery:&mut PreparedGuestServiceDelivery,
-        inspection:OwnedFd)->Result<Self,ShadowError>{Self::open_selected(pin,delivery,inspection,true,true,true)}
-    fn open_selected(pin:&guest::Pin,delivery:&mut PreparedGuestServiceDelivery,inspection:OwnedFd,completion:bool,effects:bool,publication:bool)->Result<Self,ShadowError>{
+        inspection:OwnedFd)->Result<Self,ShadowError>{Self::open_selected(pin,delivery,inspection,true,true,true,false)}
+    fn open_publication_adopted(pin:&guest::Pin,delivery:&mut PreparedGuestServiceDelivery,inspection:OwnedFd)->Result<Self,ShadowError>{
+        Self::open_selected(pin,delivery,inspection,true,true,true,true)
+    }
+    fn open_selected(pin:&guest::Pin,delivery:&mut PreparedGuestServiceDelivery,inspection:OwnedFd,completion:bool,effects:bool,publication:bool,adoption:bool)->Result<Self,ShadowError>{
         delivery.closure_association().map_err(fail)?.check_preparation().map_err(fail)?;
-        require(delivery.activation.keys().map(String::as_str).collect::<BTreeSet<_>>()
-            ==BTreeSet::from(["retrieval-listener","retrieval-objects","ledger-spool-store","ledger-spool-lock"]))?;
-        let original=pin.open(65536)?;let configuration:Configuration=guest::exact(&original.read(65536).map_err(fail)?)?;
+        let mut names=BTreeSet::from(["retrieval-listener","retrieval-objects","ledger-spool-store","ledger-spool-lock"]);
+        if adoption{names.insert(cold_core::ACTIVATION);}
+        require(delivery.activation.keys().map(String::as_str).collect::<BTreeSet<_>>()==names)?;
+        let maximum=if adoption{MAX_ADOPTED_CONFIGURATION}else{65536};
+        let original=pin.open(maximum)?;let configuration:Configuration=guest::exact(&original.read(maximum).map_err(fail)?)?;
         configuration.validate_shape()?;require(configuration.completion_selected()==completion && configuration.effects_selected()==effects
-            && configuration.publication_selected()==publication)?;
+            && configuration.publication_selected()==publication && configuration.adoption_selected()==adoption)?;
         require(configuration.payload.guest==GuestClosureAssociation{owner:Arc::clone(&delivery.owner)}.binding())?;
         let scope_raw=URL_SAFE_NO_PAD.decode(&configuration.payload.proof_scope_original_base64url).map_err(fail)?;
         require(!scope_raw.is_empty() && scope_raw.len()<=16384
@@ -284,10 +315,11 @@ impl OperationalPrepared {
             delivery.activation.remove("ledger-spool-lock").ok_or(ShadowError::BindingDrift)?,
             &configuration.payload.store,&configuration.payload.guest,&Sha256Digest::compute(&scope_raw))?;
         let objects=delivery.activation.remove("retrieval-objects").ok_or(ShadowError::BindingDrift)?;
-        let legacy=if configuration.fresh_ledger_selected() && !configuration.publication_selected(){legacy::Store::open_empty(objects)?}
+        let legacy=if adoption || (configuration.fresh_ledger_selected() && !configuration.publication_selected()){legacy::Store::open_empty(objects)?}
             else{legacy::Store::open(objects)?};
+        let cold_core=if adoption{Some(delivery.activation.remove(cold_core::ACTIVATION).ok_or(ShadowError::BindingDrift)?)}else{None};
         let listener=delivery.activation.remove("retrieval-listener").ok_or(ShadowError::BindingDrift)?;
-        Ok(Self{original,configuration,scope_raw,scope,store,legacy,listener,inspection})
+        Ok(Self{original,configuration,scope_raw,scope,store,legacy,cold_core,listener,inspection})
     }
     pub(in crate::policy_shadow::policy_custody::services) fn bind(self,keys:&AdmittedKeys,delivery:&PreparedGuestServiceDelivery,
         trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime)->Result<OperationalService,ShadowError>{
@@ -297,9 +329,16 @@ impl OperationalPrepared {
         // fresh writer never manufactures it: retain its actual immutable
         // object and recheck that descriptor through every signed response.
         let baseline=if let Some(selected)=&self.configuration.payload.publication {
-            let b=&selected.baseline;
-            Some(self.legacy.read_publication_core(&canonical_json_bytes(&b.prepared.core)?,
-                &b.stored.payload.retrieval_id_sha256,&b.stored.payload.object_sha256,&b.stored.payload.fsverity_sha256)?)
+            if let Some(adoption)=&selected.admission.adoption {
+                let bundle=adoption.cold_bundle().map_err(fail)?;
+                Some(Baseline::Cold(cold_core::ColdCore::open(self.cold_core.ok_or(ShadowError::BindingDrift)?,
+                    &bundle.completion.prepared,&bundle.completion.stored)?))
+            }else{
+                require(self.cold_core.is_none())?;
+                let b=selected.baseline.as_ref().ok_or(ShadowError::BindingDrift)?;
+                Some(Baseline::Legacy(self.legacy.read_publication_core(&canonical_json_bytes(&b.prepared.core)?,
+                    &b.stored.payload.retrieval_id_sha256,&b.stored.payload.object_sha256,&b.stored.payload.fsverity_sha256)?))
+            }
         }else{None};
         let check=||keys.check(trust,time);
         let mut channel=peer::Client::bind(self.inspection,self.listener,self.configuration.expected_peer().checked().map_err(fail)?,delivery,&check)?;
@@ -309,11 +348,13 @@ impl OperationalPrepared {
         value.check(keys,trust,time)?;Ok(value)
     }
 }
+enum Baseline {Legacy(legacy::Read),Cold(cold_core::ColdCore)}
+impl Baseline {fn check(&self)->Result<(),ShadowError>{match self{Self::Legacy(value)=>value.check(),Self::Cold(value)=>value.check()}}}
 pub(crate) struct OperationalService {original:services::guest_original::Original,configuration:Configuration,scope_raw:Vec<u8>,scope:scope::Scope,
-    store:store::Store,legacy:legacy::Store,baseline:Option<legacy::Read>,channel:peer::Client,replays:BTreeSet<Sha256Digest>}
+    store:store::Store,legacy:legacy::Store,baseline:Option<Baseline>,channel:peer::Client,replays:BTreeSet<Sha256Digest>}
 impl OperationalService {
     fn check(&self,keys:&AdmittedKeys,trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime)->Result<(),ShadowError>{
-        require(self.original.read(65536).map_err(fail)?.as_slice()==canonical_json_bytes(&self.configuration)?.as_slice())?;
+        require(self.original.read(self.configuration.maximum()).map_err(fail)?.as_slice()==canonical_json_bytes(&self.configuration)?.as_slice())?;
         let ledger=self.configuration.verify(keys,&self.scope,&self.scope_raw,trust,time)?;
         let local=keys.keys.get(&AuthorityRole::CustodyRetrievalResponse).ok_or(ShadowError::SignerBindingMismatch)?;
         for (prepared,stored) in self.store.originals(){
@@ -455,7 +496,9 @@ impl OperationalService {
                                 && *retrieval_id_sha256==prior.retrieval_id_sha256 && *retrieval_proof_sha256==prior.retrieval_proof_sha256
                                 && *canonical_receipt_payload==prior.canonical_payload()?)?;
                             self.baseline.as_ref().ok_or(ShadowError::BindingDrift)?.check()?;
-                            self.scope.require_payload(*signer_role,canonical_receipt_payload,signed_authority_payload)?;
+                            if let Some(adoption)=&selected.admission.adoption {
+                                require(adoption.prior_authority_payload(canonical_receipt_payload)?==*signed_authority_payload)?;
+                            }else{self.scope.require_payload(*signer_role,canonical_receipt_payload,signed_authority_payload)?;}
                         }else{
                             require(!self.configuration.fresh_ledger_selected())?;
                             held_legacy=Some(self.legacy.read(&self.scope,&self.scope_raw,*signer_role,retrieval_id_sha256,

@@ -262,7 +262,7 @@ pub(in crate::policy_shadow) fn verify(value: wire::Wire, request_raw: &[u8], re
         role.signature_domain(), configuration, trust, &checkpoint, binding.opened_at_boottime_nanos, now)?;
     verify_final_request(&final_request, response, &signer, &final_reply, publication_selected)?;
     let publication_deadline = if let ProductionAuthorityEndpointRequestBodyV4::FinishNativePublication { proposal, .. } = &final_request.request {
-        verify_publication_admission(&runtime, &histories, configuration, trust, &checkpoint, proposal, now)?
+        verify_publication_admission(&runtime, &histories, configuration, trust, time, &checkpoint, proposal, now)?
     } else { u64::MAX };
     factory.check(trust, time)?;
     ensure(trust.current_checkpoint()? == checkpoint)?;
@@ -332,9 +332,9 @@ fn verify_final_request(request: &ProductionAuthorityEndpointRequestV4, response
     }
 }
 
-fn verify_publication_admission(runtime: &ProductionRpcRuntimeConfigV4, histories: &ProductionServiceHistoricalKeyringsV4,
-    configuration: &ProductionCustodyConfiguration, trust: &dyn EnvelopeKeyTrust, checkpoint: &AtomicTrustCheckpoint,
-    proposal: &super::super::publication::Proposal, now: u64) -> Result<u64, ShadowError> {
+fn publication_admission(runtime: &ProductionRpcRuntimeConfigV4, histories: &ProductionServiceHistoricalKeyringsV4,
+    configuration: &ProductionCustodyConfiguration, trust: &dyn EnvelopeKeyTrust, time: &dyn TrustedTime,
+    checkpoint: &AtomicTrustCheckpoint, now: u64) -> Result<(super::super::publication_service::Grant,VerifyingKey), ShadowError> {
     use super::super::publication_service::Grant;
     ensure(runtime.publication_selected())?;
     let selection = runtime.publication.as_ref().ok_or(ShadowError::BindingDrift)?;
@@ -375,6 +375,48 @@ fn verify_publication_admission(runtime: &ProductionRpcRuntimeConfigV4, historie
         let assigned = key(configuration, trust, checkpoint, role_key.role, &role_key.key_id, &role_key.key_spki_sha256, domain)?;
         ensure(assigned == role_key.material().map_err(|_| ShadowError::BindingDrift)?)?;
     }
+    ensure(runtime.publication_adoption_selected()==d.admission.adoption.is_some())?;
+    if let Some(adoption)=&d.admission.adoption {
+        require_adoption_authority(adoption,configuration,trust,time,checkpoint)?;
+        adoption.require_guest(bridge).map_err(|_|ShadowError::BindingDrift)?;
+        ensure(d.admission.scope.expires_at_boottime_nanos<=adoption.deadline_boottime()?)?;
+    }
+    Ok((durable,durable_key))
+}
+
+fn require_adoption_authority(adoption:&super::super::publication_adoption::Authorization,
+    configuration:&ProductionCustodyConfiguration,trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime,
+    checkpoint:&AtomicTrustCheckpoint)->Result<(),ShadowError>{
+    let binding=configuration.authority_binding(AuthorityRole::CustodySupervisorCapability)?;
+    let authority=key(configuration,trust,checkpoint,AuthorityRole::CustodySupervisorCapability,
+        binding.key_id(),binding.key_spki_sha256(),authority_role_signature_domain(AuthorityRole::CustodySupervisorCapability))?;
+    adoption.require_authority(binding.key_id(),binding.key_spki_sha256(),&authority,checkpoint,time.now_unix_nanos()?)?;
+    let scope=String::from_utf8(canonical_json_bytes(configuration.proof_scope())?).map_err(|_|ShadowError::BindingDrift)?;
+    adoption.verify_current(configuration.assignment_payload_sha256(),configuration.assignment_revision(),
+        configuration.production_configuration_binding_sha256(),&scope)?;
+    ensure(boottime_now_nanos().map_err(|_|ShadowError::CustodyUnavailable)?<adoption.deadline_boottime()?)
+}
+
+/// Acquire only from the actual retained selected runtime and independently
+/// authenticated ordinary grants. An artifact cannot introduce an adoption.
+pub(in crate::policy_shadow) fn publication_adoption(factory:&Factory,configuration:&ProductionCustodyConfiguration,
+    trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime)->Result<super::super::publication_adoption::Authorization,ShadowError>{
+    factory.check(trust,time)?;ensure(factory.publication_adoption_selected())?;
+    let now=boottime_now_nanos().map_err(|_|ShadowError::CustodyUnavailable)?;
+    let (runtime,histories,deadline)=histories(factory,configuration,trust,time,now)?;
+    ensure(runtime.publication_adoption_selected() && now<deadline)?;
+    let checkpoint=trust.current_checkpoint()?;
+    let (grant,_)=publication_admission(&runtime,&histories,configuration,trust,time,&checkpoint,now)?;
+    let adoption=*grant.payload.admission.adoption.ok_or(ShadowError::BindingDrift)?;
+    factory.check(trust,time)?;ensure(trust.current_checkpoint()?==checkpoint)?;
+    Ok(adoption)
+}
+
+fn verify_publication_admission(runtime: &ProductionRpcRuntimeConfigV4, histories: &ProductionServiceHistoricalKeyringsV4,
+    configuration: &ProductionCustodyConfiguration, trust: &dyn EnvelopeKeyTrust, time:&dyn TrustedTime,
+    checkpoint: &AtomicTrustCheckpoint, proposal: &super::super::publication::Proposal, now: u64) -> Result<u64, ShadowError> {
+    let (durable,durable_key)=publication_admission(runtime,histories,configuration,trust,time,checkpoint,now)?;
+    let d=&durable.payload;
     proposal.verify_with_key(&d.admission, &d.native, &d.retrieval, &d.durable_authority_epoch, &durable_key)
         .map_err(|_| ShadowError::BindingDrift)?;
     ensure(proposal.completed_at_boottime_nanos <= now)?;

@@ -37,6 +37,20 @@ pub(in crate::policy_shadow::policy_custody::services) struct Authorization {
     issued_at_unix_nanos:i64,expires_at_unix_nanos:i64,signing_key_id:Sha256Digest,signing_key_spki_sha256:Sha256Digest,
 }
 impl Authorization {
+    pub(in crate::policy_shadow::policy_custody::services) fn verify_historical(&self,payload:&impl Serialize,signature:&CanonicalEd25519Signature,domain:&str,
+        scope:&fixed::Scope,supervisor:&services::publication::RetrievalAuthority,checkpoint:&Sha256Digest)
+        ->Result<(i64,i64,u64,Sha256Digest),ShadowError>{
+        scope.validate().map_err(fail)?;scope.guest(&self.guest).map_err(fail)?;
+        require(self.guest.service_role=="production-bridge" && self.guest.uid>0 && self.guest.gid>0
+            && self.assignment_payload_sha256==scope.assignment_payload_sha256
+            && self.key_authorization_sha256!=Sha256Digest::compute(&[])
+            && self.trust_checkpoint_id==*checkpoint
+            && self.issued_at_unix_nanos>0 && self.issued_at_unix_nanos<self.expires_at_unix_nanos
+            && self.signing_key_id==supervisor.key_id && self.signing_key_spki_sha256==supervisor.key_spki_sha256)?;
+        supervisor.material().map_err(fail)?.verify_strict(&signature_preimage(domain,&canonical_json_bytes(payload)?),
+            &Signature::from_bytes(&signature.decode()?)).map_err(|_|ShadowError::SignatureInvalid)?;
+        Ok((self.issued_at_unix_nanos,self.expires_at_unix_nanos,self.revocation_generation,self.revocation_root_sha256.clone()))
+    }
     pub(in crate::policy_shadow::policy_custody::services) fn verify(&self,payload:&impl Serialize,signature:&CanonicalEd25519Signature,
         domain:&str,scope:&fixed::Scope,role:AuthorityRole,keys:&AdmittedKeys,trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime)
         ->Result<(),ShadowError>{
@@ -94,6 +108,14 @@ struct Payload {
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 pub(crate) struct Configuration {payload:Payload,signature:CanonicalEd25519Signature}
 impl Configuration {
+    pub(in crate::policy_shadow::policy_custody::services) fn verify_adoption_original(raw:&str,expected_sha:&Sha256Digest,
+        scope:&fixed::Scope,supervisor:&services::publication::RetrievalAuthority,checkpoint:&Sha256Digest)
+        ->Result<(i64,i64,u64,Sha256Digest),ShadowError>{
+        require(raw.is_ascii() && !raw.is_empty() && raw.len()<=MAX_CONFIGURATION && Sha256Digest::compute(raw.as_bytes())==*expected_sha)?;
+        let value:Self=guest::exact(raw.as_bytes())?;value.validate_shape()?;
+        require(value.payload.scope==*scope)?;
+        value.payload.authorization.verify_historical(&value.payload,&value.signature,DOMAIN,scope,supervisor,checkpoint)
+    }
     pub(in crate::policy_shadow::policy_custody::services) fn expected_peer(&self)->&services::ExpectedPeerCredentialV3{&self.payload.expected_peer}
     pub(in crate::policy_shadow::policy_custody::services) fn guest_uid(&self)->u32{self.payload.authorization.guest.uid}
     pub(in crate::policy_shadow::policy_custody::services) fn validate_shape(&self)->Result<(),ShadowError>{

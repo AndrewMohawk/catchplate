@@ -39,11 +39,16 @@ struct Payload {
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 pub(crate) struct Configuration {payload:Payload,signature:CanonicalEd25519Signature}
 impl Configuration {
+    pub(in crate::policy_shadow::policy_custody::services) fn adoption_selected(&self)->bool{
+        self.payload.api_version=="serverware.nativePublicationServiceAssignment/v2"
+    }
     pub(in crate::policy_shadow::policy_custody::services) fn expected_peer(&self)->&services::ExpectedPeerCredentialV3{&self.payload.expected_peer}
     pub(in crate::policy_shadow::policy_custody::services) fn guest_uid(&self)->u32{self.payload.guest.uid}
     pub(in crate::policy_shadow::policy_custody::services) fn validate_shape(&self)->Result<(),ShadowError>{
         let p=&self.payload;let s=&p.admission.scope;
-        require(p.api_version=="serverware.nativePublicationServiceAssignment/v1" && p.purpose=="native-policy-publication-reconciliation"
+        require((p.api_version=="serverware.nativePublicationServiceAssignment/v1" || self.adoption_selected())
+            && self.adoption_selected()==p.admission.adoption.is_some()
+            && p.purpose=="native-policy-publication-reconciliation"
             && p.guest.service_role=="production-bridge" && p.expected_peer.uid>0 && p.expected_peer.gid>0
             && p.expected_peer.uid!=p.guest.uid
             && p.retrieval_guest.service_role=="production-bridge" && p.retrieval_guest.uid>0 && p.retrieval_guest.gid>0
@@ -79,8 +84,14 @@ impl Configuration {
         let key=trust.resolve_ed25519_key(&checkpoint,authority_role_signature_domain(AuthorityRole::CustodySupervisorCapability),
             &selected.key_id,&selected.key_spki_sha256)?;
         require(ed25519_public_key_material_sha256(&key)==selected.key_material_sha256)?;
-        key.verify_strict(&signature_preimage(DOMAIN,&canonical_json_bytes(p)?),&Signature::from_bytes(&self.signature.decode()?))
+        key.verify_strict(&signature_preimage(if self.adoption_selected(){"serverware.nativePublicationServiceAssignment.signature/v2"}else{DOMAIN},
+            &canonical_json_bytes(p)?),&Signature::from_bytes(&self.signature.decode()?))
             .map_err(|_|ShadowError::SignatureInvalid)?;
+        if let Some(adoption)=&p.admission.adoption {
+            adoption.require_authority(&selected.key_id,&selected.key_spki_sha256,&key,&checkpoint,time.now_unix_nanos()?)?;
+            adoption.require_guest(&p.guest).map_err(fail)?;
+            adoption.require_retrieval(&p.retrieval).map_err(fail)?;
+        }
         let retrieval=a.authority_key_independence.binding(AuthorityRole::CustodyRetrievalResponse,&a.assignment_id)?;
         let retrieval_key=p.retrieval.material().map_err(fail)?;
         let trusted=trust.resolve_ed25519_key(&checkpoint,authority_role_signature_domain(AuthorityRole::CustodyRetrievalResponse),
@@ -91,16 +102,20 @@ impl Configuration {
         require(proof.configuration_binding()==&s.production_configuration_binding_sha256 && proof.namespace()==&s.retrieval_namespace_sha256)?;
         p.admission.validate(&self.native(keys)?).map_err(fail)?;
         let prior=p.admission.receipt().map_err(fail)?;let now=time.now_unix_nanos()?;
-        require(prior.trusted_time_checkpoint_sha256==checkpoint.checkpoint_id
-            && prior.trusted_observed_at_unix_nanos<=now
-            && now.checked_sub(prior.trusted_observed_at_unix_nanos).is_some_and(|age|age<=MAX_ENVELOPE_AGE_NANOS)
-            && guest::now()?<s.expires_at_boottime_nanos && trust.current_checkpoint()?==checkpoint)
+        if p.admission.adoption.is_none(){
+            require(prior.trusted_time_checkpoint_sha256==checkpoint.checkpoint_id
+                && prior.trusted_observed_at_unix_nanos<=now
+                && now.checked_sub(prior.trusted_observed_at_unix_nanos).is_some_and(|age|age<=MAX_ENVELOPE_AGE_NANOS))?;
+        }
+        require(guest::now()?<s.expires_at_boottime_nanos && trust.current_checkpoint()?==checkpoint)
     }
 }
 pub(crate) enum Prepared {Operational(OperationalPrepared),Genesis(genesis::Prepared)}
 impl Prepared {
     pub(in crate::policy_shadow::policy_custody::services) fn open(pin:&guest::Pin,delivery:&mut PreparedGuestServiceDelivery,
         inspection:OwnedFd)->Result<Self,ShadowError>{Ok(Self::Operational(OperationalPrepared::open(pin,delivery,inspection)?))}
+    pub(in crate::policy_shadow::policy_custody::services) fn open_adopted(pin:&guest::Pin,delivery:&mut PreparedGuestServiceDelivery,
+        inspection:OwnedFd)->Result<Self,ShadowError>{Ok(Self::Operational(OperationalPrepared::open_adopted(pin,delivery,inspection)?))}
     pub(in crate::policy_shadow::policy_custody::services) fn open_genesis(pin:&guest::Pin,delivery:&mut PreparedGuestServiceDelivery,
         inspection:OwnedFd)->Result<Self,ShadowError>{Ok(Self::Genesis(genesis::Prepared::open(pin,delivery,inspection)?))}
     pub(in crate::policy_shadow::policy_custody::services) fn bind(self,keys:&AdmittedKeys,delivery:&PreparedGuestServiceDelivery,
@@ -120,11 +135,17 @@ pub(crate) struct OperationalPrepared {original:services::guest_original::Origin
 impl OperationalPrepared {
     pub(in crate::policy_shadow::policy_custody::services) fn open(pin:&guest::Pin,delivery:&mut PreparedGuestServiceDelivery,
         inspection:OwnedFd)->Result<Self,ShadowError>{
+        Self::open_selected(pin,delivery,inspection,false)
+    }
+    fn open_adopted(pin:&guest::Pin,delivery:&mut PreparedGuestServiceDelivery,inspection:OwnedFd)->Result<Self,ShadowError>{
+        Self::open_selected(pin,delivery,inspection,true)
+    }
+    fn open_selected(pin:&guest::Pin,delivery:&mut PreparedGuestServiceDelivery,inspection:OwnedFd,adopted:bool)->Result<Self,ShadowError>{
         delivery.closure_association().map_err(fail)?.check_preparation().map_err(fail)?;
         let name="publication-reconciliation-listener";
         require(delivery.activation.len()==1 && delivery.activation.contains_key(name))?;
         let original=pin.open(MAX_CONFIGURATION)?;let configuration:Configuration=guest::exact(&original.read(MAX_CONFIGURATION).map_err(fail)?)?;
-        configuration.validate_shape()?;
+        configuration.validate_shape()?;require(configuration.adoption_selected()==adopted)?;
         require(configuration.payload.guest==GuestClosureAssociation{owner:Arc::clone(&delivery.owner)}.binding())?;
         let listener=delivery.activation.remove(name).ok_or(ShadowError::BindingDrift)?;
         Ok(Self{original,configuration,listener,inspection})
@@ -136,6 +157,10 @@ impl OperationalPrepared {
         let histories=super::ordinary_histories::admit(&p.ordinary_services,keys,&p.expected_peer,&s.production_configuration_binding_sha256,
             &s.kernel_driver_identity_sha256,&s.retained_descriptor_set_sha256,&s.driver_generation_receipt_sha256,
             s.issued_at_boottime_nanos,s.expires_at_boottime_nanos,p.issued_at_unix_nanos,p.expires_at_unix_nanos)?;
+        if let Some(adoption)=&p.admission.adoption {
+            adoption.require_history(services::TrustedHostServiceRoleV3::DurableRecoveryStore,&histories.durable_recovery_store).map_err(fail)?;
+            adoption.require_history(services::TrustedHostServiceRoleV3::CurrentSignatureAuthority,&histories.current_signature_authority).map_err(fail)?;
+        }
         let check=||keys.check(trust,time);
         let mut channel=peer::Client::bind_endpoint(self.inspection,self.listener,p.expected_peer.checked().map_err(fail)?,
             delivery,&check,peer::EndpointKind::PublicationReconciliation)?;

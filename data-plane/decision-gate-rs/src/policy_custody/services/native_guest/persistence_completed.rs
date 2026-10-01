@@ -8,10 +8,10 @@ impl Service {
     pub(super) fn completed_invocation(&self,request:&Request,query:&Query,keys:&AdmittedKeys,
         trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime)->Result<Proof,ShadowError>{
         require(matches!(self.configuration.payload.api_version.as_str(),
-            "serverware.nativeShadowPersistenceServiceAssignment/v2"|"serverware.nativeShadowPersistenceServiceAssignment/v3")
+            "serverware.nativeShadowPersistenceServiceAssignment/v2"|"serverware.nativeShadowPersistenceServiceAssignment/v3"|"serverware.nativeShadowPersistenceServiceAssignment/v4")
             && self.configuration.payload.permissions.contains(&Permission::VerifyCompletedInvocation))?;
         if query.publication_selected() {
-            require(self.configuration.payload.api_version=="serverware.nativeShadowPersistenceServiceAssignment/v3"
+            require(matches!(self.configuration.payload.api_version.as_str(),"serverware.nativeShadowPersistenceServiceAssignment/v3"|"serverware.nativeShadowPersistenceServiceAssignment/v4")
                 && self.configuration.payload.permissions.contains(&Permission::VerifyPublicationInvocation))?;
         }
         query.validate().map_err(fail)?;let binding=query.dispatch.binding();let now=guest::now()?;
@@ -28,7 +28,7 @@ impl Service {
         }
         let commit=selected.ok_or(ShadowError::CustodyUnavailable)?;let payload=&commit.payload;
         let (prior,_,_)=dispatch_original(&payload.request_original_base64url,&payload.reply_original_base64url,
-            &self.scope,keys,trust,time)?;
+            &self.scope,self.configuration.payload.adoption.as_deref(),keys,trust,time)?;
         self.require_selected_final(&prior)?;
         if services::publication_client::selected(&query.dispatch) {
             require(query.publication_selected() && matches!(prior.request,Body::FinishNativePublication{..}))?;

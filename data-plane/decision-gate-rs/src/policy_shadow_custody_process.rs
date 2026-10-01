@@ -13,6 +13,7 @@ use super::super::{
     verify_production_custody_trusted_host_attestation,
     verify_production_ingress_custody_admission,
     verify_production_publication_reconciliation_receipt,
+    verify_adopted_production_publication_receipt,
     verify_production_reconciled_active_effect_commit,
     verify_production_shadow_spill_receipt,
     verify_production_spool_append_reservation_receipt,
@@ -1631,14 +1632,27 @@ impl RpcProductionPolicyShadowCustodyProcess {
                     ProductionArtifactKindV4::
                         PublicationReconciliationReceipt,
                 )?;
-                let verified =
+                let adoption=match &self.process_config.authority {
+                    ProcessAuthority::Native(owner) if owner.publication_adoption_selected()=>Some(
+                        super::services::production::native_terminal_verify::publication_adoption(owner,&configuration,
+                            self.key_trust.as_ref(),self.trusted_time.as_ref())?),
+                    _=>None,
+                };
+                let original=canonical_json_bytes(&wire)?;
+                let adopted=adoption.as_ref().map(|value|value.baseline_original())
+                    .transpose()?.is_some_and(|raw|original==raw.as_bytes());
+                let verified = if adopted {
+                    verify_adopted_production_publication_receipt(wire,adoption.as_ref().ok_or(ShadowError::BindingDrift)?,
+                        &configuration,self.key_trust.as_ref(),self.trusted_time.as_ref(),&self.persistence_verifier)?
+                }else{
                     verify_production_publication_reconciliation_receipt(
                         wire,
                         &configuration,
                         self.key_trust.as_ref(),
                         self.trusted_time.as_ref(),
                         &self.persistence_verifier,
-                    )?;
+                    )?
+                };
                 let mut state = self.ingress_publication.lock().map_err(|_| ShadowError::CustodyUnavailable)?;
                 let mut next = state.clone();
                 next.recover(revision, &verified)?;

@@ -108,13 +108,14 @@ impl Inspector {
         Self::prepare_inner(files,activation,true,true,true,true,false,false)
     }
     pub(in crate::policy_shadow::policy_custody::services) fn prepare_publication(files:&FileAdmission,
-        activation:&BTreeMap<String,OwnedFd>)->Result<(Self,OwnedFd),ShadowError>{
-        check_publication_runtime(files)?;
+        activation:&BTreeMap<String,OwnedFd>,adoption:bool)->Result<(Self,OwnedFd),ShadowError>{
+        check_publication_runtime(files,adoption)?;
         Self::prepare_inner(files,activation,true,true,true,true,true,false)
     }
     pub(in crate::policy_shadow::policy_custody::services) fn prepare_native_facade(files:&FileAdmission,
-        activation:&BTreeMap<String,OwnedFd>,commitment:bool,spool:bool,terminal:bool,effects:bool,publication:bool)->Result<(Self,OwnedFd),ShadowError> {
-        if publication{check_publication_runtime(files)?;}
+        activation:&BTreeMap<String,OwnedFd>,commitment:bool,spool:bool,terminal:bool,effects:bool,publication:bool,adoption:bool)->Result<(Self,OwnedFd),ShadowError> {
+        require(!adoption || publication)?;
+        if publication{check_publication_runtime(files,adoption)?;}
         Self::prepare_inner(files,activation,commitment,spool,terminal,effects,publication,true)
     }
     pub(in crate::policy_shadow::policy_custody::services) fn prepare_genesis(files:&FileAdmission,

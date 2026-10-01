@@ -272,7 +272,7 @@ impl PhaseTwo {
         let initial_history=matches!(runtime.get("apiVersion").and_then(serde_json::Value::as_str),
             Some("serverware.policyCustodyProductionRpcRuntime/v10"|"serverware.policyCustodyProductionRpcRuntime/v11"
                 |crate::policy_shadow::policy_custody::native_terminal::RUNTIME
-                |"serverware.policyCustodyProductionRpcRuntime/v13"));
+                |"serverware.policyCustodyProductionRpcRuntime/v13"|"serverware.policyCustodyProductionRpcRuntime/v14"));
         let bundle_bound=if initial_history {
             require(s.api_version=="serverware.nativeShadowDriverScope/v4"
                 && cold.config.api_version=="serverware.nativeShadowDriverBootstrapConfiguration/v4")?;

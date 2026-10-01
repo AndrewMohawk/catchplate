@@ -99,11 +99,12 @@ enum SelectedService {None,Retrieval(Pin),LedgerRetrieval(Pin),RetrievalBridge,A
     TrustedTime(Pin),ProofBridge(Pin),Generation(Pin),CommitmentBridge(Pin),SpoolBridge(Pin),CommitRequest(Pin),LedgerSpool(Pin),Ingress(Pin),
     TerminalSpool(Pin),CompletionLedgerSpool(Pin),CompletionRetrieval(Pin),TerminalBridge(Pin),
     DispatchSpool(Pin),ActiveEffectBarrier(Pin),ActiveEffectCommit(Pin),EffectRetrieval(Pin),ActiveEffectBridge(Pin),InitialHistoryBridge(Pin,bool,bool),
-    Publication(Pin),PublicationRetrieval(Pin),PublicationBridge(Pin),
+    Publication(Pin),PublicationRetrieval(Pin),PublicationBridge(Pin,bool),
+    AdoptedPublication(Pin),AdoptedPublicationRetrieval(Pin),AdoptedPersistence(Pin),
     PublicationGenesis(Pin),PublicationGenesisRetrieval(Pin),PublicationGenesisCoordinator}
 impl SelectedService {
     fn endpoint_runtime_role(&self)->Option<&'static str>{
-        if matches!(self,Self::Publication(_)){return Some("publicationReconciliation");}
+        if matches!(self,Self::Publication(_)|Self::AdoptedPublication(_)){return Some("publicationReconciliation");}
         self.closure_set_role().filter(|role|!["bridge","publicationGenesisCoordinator"].contains(role))
     }
     fn check_endpoint_runtime(&self,raw:&[u8])->Result<(),ShadowError>{
@@ -122,16 +123,18 @@ impl SelectedService {
             Role::PublicationGenesisRetrieval=>"publicationGenesisRetrieval",
             Role::PublicationGenesis=>"publicationGenesis",
             Role::PublicationGenesisCoordinator=>"publicationGenesisCoordinator",
+            Role::PublicationReconciliation=>"publicationReconciliation",
         })
     }
     fn verifier_role(&self)->Option<NativeVerifierTransportRole>{
         use NativeVerifierTransportRole as Role;
         match self {
-            Self::EffectRetrieval(_)|Self::PublicationRetrieval(_)=>Some(Role::Retrieval),
+            Self::EffectRetrieval(_)|Self::PublicationRetrieval(_)|Self::AdoptedPublicationRetrieval(_)=>Some(Role::Retrieval),
             Self::PublicationGenesisRetrieval(_)=>Some(Role::PublicationGenesisRetrieval),
             Self::PublicationGenesis(_)=>Some(Role::PublicationGenesis),
             Self::PublicationGenesisCoordinator=>Some(Role::PublicationGenesisCoordinator),
-            Self::PersistenceLocked(_)=>Some(Role::Persistence),
+            Self::AdoptedPublication(_)=>Some(Role::PublicationReconciliation),
+            Self::PersistenceLocked(_)|Self::AdoptedPersistence(_)=>Some(Role::Persistence),
             Self::TrustedTime(_)=>Some(Role::TrustedTime),
             Self::Generation(_)=>Some(Role::GenerationInstall),
             Self::CompletionLedgerSpool(_)=>Some(Role::CommitRequest),
@@ -140,7 +143,7 @@ impl SelectedService {
             Self::DispatchSpool(_)=>Some(Role::DispatchBarrier),
             Self::ActiveEffectBarrier(_)=>Some(Role::ActiveEffectBarrier),
             Self::ActiveEffectCommit(_)=>Some(Role::ActiveEffectCommit),
-            Self::ActiveEffectBridge(_)|Self::InitialHistoryBridge(..)|Self::PublicationBridge(_)=>Some(Role::Bridge),
+            Self::ActiveEffectBridge(_)|Self::InitialHistoryBridge(..)|Self::PublicationBridge(..)=>Some(Role::Bridge),
             _=>None,
         }
     }
@@ -161,6 +164,7 @@ fn selection(raw:&[u8])->Result<(Launch,SelectedService),ShadowError> {
                 "serverware.nativeShadowRetrievalGuestLaunch/v3"=>(value.key_admission,SelectedService::CompletionRetrieval(value.retrieval)),
                 "serverware.nativeShadowRetrievalGuestLaunch/v4"=>(value.key_admission,SelectedService::EffectRetrieval(value.retrieval)),
                 "serverware.nativeShadowRetrievalGuestLaunch/v5"=>(value.key_admission,SelectedService::PublicationRetrieval(value.retrieval)),
+                "serverware.nativeShadowRetrievalGuestLaunch/v6"=>(value.key_admission,SelectedService::AdoptedPublicationRetrieval(value.retrieval)),
                 "serverware.nativeShadowPublicationGenesisRetrievalGuestLaunch/v1"=>(value.key_admission,SelectedService::PublicationGenesisRetrieval(value.retrieval)),
                 _=>return Err(ShadowError::BindingDrift),
             }
@@ -181,6 +185,7 @@ fn selection(raw:&[u8])->Result<(Launch,SelectedService),ShadowError> {
             match value.api_version.as_str() {
                 "serverware.nativeShadowPersistenceGuestLaunch/v1"=>(value.key_admission,SelectedService::Persistence(value.persistence)),
                 "serverware.nativeShadowPersistenceGuestLaunch/v2"=>(value.key_admission,SelectedService::PersistenceLocked(value.persistence)),
+                "serverware.nativeShadowPersistenceGuestLaunch/v3"=>(value.key_admission,SelectedService::AdoptedPersistence(value.persistence)),
                 _=>return Err(ShadowError::BindingDrift),
             }
         }
@@ -202,7 +207,9 @@ fn selection(raw:&[u8])->Result<(Launch,SelectedService),ShadowError> {
             } else if value.api_version=="serverware.nativeProofBridgeLaunch/v8" {
                 (value.key_admission,SelectedService::InitialHistoryBridge(value.trusted_time,true,true))
             } else if value.api_version=="serverware.nativeProofBridgeLaunch/v9" {
-                (value.key_admission,SelectedService::PublicationBridge(value.trusted_time))
+                (value.key_admission,SelectedService::PublicationBridge(value.trusted_time,false))
+            } else if value.api_version=="serverware.nativeProofBridgeLaunch/v10" {
+                (value.key_admission,SelectedService::PublicationBridge(value.trusted_time,true))
             } else {
                 require(value.api_version=="serverware.nativeShadowTrustedTimeGuestLaunch/v1")?;
                 (value.key_admission,SelectedService::TrustedTime(value.trusted_time))
@@ -236,6 +243,7 @@ fn selection(raw:&[u8])->Result<(Launch,SelectedService),ShadowError> {
             (value.key_admission,SelectedService::ActiveEffectCommit(value.active_effect_commit))}
         Selection::Publication(value)=>match value.api_version.as_str(){
             "serverware.nativeShadowPublicationGuestLaunch/v1"=>(value.key_admission,SelectedService::Publication(value.publication)),
+            "serverware.nativeShadowPublicationGuestLaunch/v2"=>(value.key_admission,SelectedService::AdoptedPublication(value.publication)),
             "serverware.nativeShadowPublicationGenesisGuestLaunch/v1"=>(value.key_admission,SelectedService::PublicationGenesis(value.publication)),
             _=>return Err(ShadowError::BindingDrift),
         }
@@ -259,7 +267,7 @@ pub(in crate::policy_shadow::policy_custody::services) struct AdmittedGuest {
     time_grant:Option<admission::trusted_time::ClientGrant>,proof_bridge:bool,
     commit_request:Option<admission::commit_request::Service>,commitment_bridge:bool,
     spool_bridge:bool,
-    publication_bridge:bool,
+    publication_bridge:bool,publication_adoption_bridge:bool,
     bridge_activation:std::sync::Mutex<Option<BTreeMap<String,std::os::fd::OwnedFd>>>,
     // Old context-only admission leaves this unactivated. Explicit driver v3
     // populates it only from the genuine combined-purpose key owner.
@@ -290,9 +298,10 @@ impl AdmittedGuest {
         let closure_set_role=service_selection.closure_set_role();
         let commitment_selected=matches!(&service_selection,SelectedService::CommitRequest(_)|SelectedService::LedgerSpool(_)|SelectedService::CompletionLedgerSpool(_));
         let sampling_selected=matches!(&service_selection,SelectedService::LedgerSpool(_)|SelectedService::CompletionLedgerSpool(_));
-        let commitment_bridge=matches!(&service_selection,SelectedService::CommitmentBridge(_)|SelectedService::SpoolBridge(_)|SelectedService::TerminalBridge(_)|SelectedService::ActiveEffectBridge(_)|SelectedService::InitialHistoryBridge(..)|SelectedService::PublicationBridge(_));
-        let spool_bridge=matches!(&service_selection,SelectedService::SpoolBridge(_)|SelectedService::TerminalBridge(_)|SelectedService::ActiveEffectBridge(_)|SelectedService::InitialHistoryBridge(..)|SelectedService::PublicationBridge(_));
-        let publication_bridge=matches!(&service_selection,SelectedService::PublicationBridge(_));
+        let commitment_bridge=matches!(&service_selection,SelectedService::CommitmentBridge(_)|SelectedService::SpoolBridge(_)|SelectedService::TerminalBridge(_)|SelectedService::ActiveEffectBridge(_)|SelectedService::InitialHistoryBridge(..)|SelectedService::PublicationBridge(..));
+        let spool_bridge=matches!(&service_selection,SelectedService::SpoolBridge(_)|SelectedService::TerminalBridge(_)|SelectedService::ActiveEffectBridge(_)|SelectedService::InitialHistoryBridge(..)|SelectedService::PublicationBridge(..));
+        let publication_bridge=matches!(&service_selection,SelectedService::PublicationBridge(..));
+        let publication_adoption_bridge=matches!(&service_selection,SelectedService::PublicationBridge(_,true));
         let genesis_coordinator=matches!(&service_selection,SelectedService::PublicationGenesisCoordinator);
         require(inspection.is_some()==matches!(&service_selection,SelectedService::Retrieval(_)|SelectedService::LedgerRetrieval(_)|SelectedService::RetrievalBridge
             |SelectedService::Persistence(_)|SelectedService::PersistenceLocked(_)|SelectedService::TrustedTime(_)|SelectedService::ProofBridge(_)
@@ -300,10 +309,12 @@ impl AdmittedGuest {
             |SelectedService::LedgerSpool(_)|SelectedService::Ingress(_)|SelectedService::SpoolBridge(_)
             |SelectedService::TerminalSpool(_)|SelectedService::CompletionLedgerSpool(_)|SelectedService::CompletionRetrieval(_)|SelectedService::TerminalBridge(_)
             |SelectedService::DispatchSpool(_)|SelectedService::ActiveEffectBarrier(_)|SelectedService::ActiveEffectCommit(_)|SelectedService::EffectRetrieval(_)|SelectedService::ActiveEffectBridge(_)|SelectedService::InitialHistoryBridge(..)
-            |SelectedService::Publication(_)|SelectedService::PublicationRetrieval(_)|SelectedService::PublicationBridge(_)
+            |SelectedService::Publication(_)|SelectedService::PublicationRetrieval(_)|SelectedService::PublicationBridge(..)
+            |SelectedService::AdoptedPublication(_)|SelectedService::AdoptedPublicationRetrieval(_)|SelectedService::AdoptedPersistence(_)
             |SelectedService::PublicationGenesis(_)|SelectedService::PublicationGenesisRetrieval(_)|SelectedService::PublicationGenesisCoordinator))?;
         let native_lock=match &service_selection {
-            SelectedService::PersistenceLocked(_)=>Some(super::NativeLock::Persistence),
+            SelectedService::PersistenceLocked(_)|SelectedService::AdoptedPersistence(_)=>Some(super::NativeLock::Persistence),
+            SelectedService::AdoptedPublicationRetrieval(_)=>Some(super::NativeLock::AdoptedLedger),
             SelectedService::LedgerRetrieval(_)|SelectedService::CompletionRetrieval(_)|SelectedService::EffectRetrieval(_)|SelectedService::PublicationRetrieval(_)|SelectedService::PublicationGenesisRetrieval(_)=>Some(super::NativeLock::Ledger),
             _=>None,
         };
@@ -343,6 +354,7 @@ impl AdmittedGuest {
         let (ledger_retrieval,service_selection,inspection)=match (service_selection,inspection){
             (SelectedService::PublicationGenesisRetrieval(pin),Some(channel))=>(Some(admission::ledger_retrieval::Prepared::open_genesis(&pin,&mut delivery,channel)?),SelectedService::None,None),
             (SelectedService::PublicationRetrieval(pin),Some(channel))=>(Some(admission::ledger_retrieval::Prepared::open_publication(&pin,&mut delivery,channel)?),SelectedService::None,None),
+            (SelectedService::AdoptedPublicationRetrieval(pin),Some(channel))=>(Some(admission::ledger_retrieval::Prepared::open_publication_adopted(&pin,&mut delivery,channel)?),SelectedService::None,None),
             (SelectedService::EffectRetrieval(pin),Some(channel))=>(Some(admission::ledger_retrieval::Prepared::open_effects(&pin,&mut delivery,channel)?),SelectedService::None,None),
             (SelectedService::CompletionRetrieval(pin),Some(channel))=>(
                 Some(admission::ledger_retrieval::Prepared::open_completion(&pin,&mut delivery,channel)?),SelectedService::None,None),
@@ -353,6 +365,7 @@ impl AdmittedGuest {
         let (publication,service_selection,inspection)=match (service_selection,inspection){
             (SelectedService::PublicationGenesis(pin),Some(channel))=>(Some(admission::publication::Prepared::open_genesis(&pin,&mut delivery,channel)?),SelectedService::None,None),
             (SelectedService::Publication(pin),Some(channel))=>(Some(admission::publication::Prepared::open(&pin,&mut delivery,channel)?),SelectedService::None,None),
+            (SelectedService::AdoptedPublication(pin),Some(channel))=>(Some(admission::publication::Prepared::open_adopted(&pin,&mut delivery,channel)?),SelectedService::None,None),
             (selected,inspection)=>(None,selected,inspection),
         };
         let (retrieval,retrieval_client,activation,persistence,trusted_time,proof_client,time_grant,generation,commit_request)=match (service_selection,inspection) {
@@ -361,6 +374,7 @@ impl AdmittedGuest {
             (SelectedService::Activation(pin),None)=>(None,None,Some(admission::activation::Prepared::open(&pin,&mut delivery)?),None,None,None,None,None,None),
             (SelectedService::Persistence(pin),Some(channel))=>(None,None,None,Some(admission::persistence::Prepared::open(&pin,&mut delivery,channel)?),None,None,None,None,None),
             (SelectedService::PersistenceLocked(pin),Some(channel))=>(None,None,None,Some(admission::persistence::Prepared::open_locked(&pin,&mut delivery,channel)?),None,None,None,None,None),
+            (SelectedService::AdoptedPersistence(pin),Some(channel))=>(None,None,None,Some(admission::persistence::Prepared::open_adopted_locked(&pin,&mut delivery,channel)?),None,None,None,None,None),
             (SelectedService::TrustedTime(pin),Some(channel))=>(None,None,None,None,Some(admission::trusted_time::Prepared::open(&pin,&mut delivery,channel)?),None,None,None,None),
             (SelectedService::Generation(pin),Some(channel))=>(None,None,None,None,None,None,None,Some(admission::generation_install::Prepared::open(&pin,&mut delivery,channel)?),None),
             (SelectedService::ProofBridge(pin),Some(channel))=>{
@@ -387,8 +401,8 @@ impl AdmittedGuest {
                 let (prepared,grant)=proof_client::Prepared::open_initial_history(&mut delivery,channel,&pin,helper_initial,native_terminal)?;
                 (None,None,None,None,None,Some(prepared),Some(grant),None,None)
             }
-            (SelectedService::PublicationBridge(pin),Some(channel))=>{
-                let (prepared,grant)=proof_client::Prepared::open_publication(&mut delivery,channel,&pin)?;
+            (SelectedService::PublicationBridge(pin,adoption),Some(channel))=>{
+                let (prepared,grant)=proof_client::Prepared::open_publication(&mut delivery,channel,&pin,adoption)?;
                 (None,None,None,None,None,Some(prepared),Some(grant),None,None)
             }
             (SelectedService::CommitRequest(pin),Some(channel))=>(None,None,None,None,None,None,None,None,
@@ -443,7 +457,7 @@ impl AdmittedGuest {
         let owner=Self{_delivery:delivery,lifetime,keys,trust,time,launch,launch_bytes,
             originals:vec![assignment_original,closure_original,keys_original,encrypted_original,admission_original],
             retrieval,activation,persistence,retrieval_client,bridge_selected,bridge_activation,trusted_time,proof_client,time_grant,proof_bridge,generation,
-            commit_request,commitment_bridge,spool_bridge,publication_bridge,ledger_retrieval,spool_signer,publication,
+            commit_request,commitment_bridge,spool_bridge,publication_bridge,publication_adoption_bridge,ledger_retrieval,spool_signer,publication,
             genesis_client,genesis_coordinator,native_configuration:None};
         owner.check()?;
         if owner.proof_bridge {
@@ -507,6 +521,7 @@ impl AdmittedGuest {
     pub(in crate::policy_shadow::policy_custody::services) fn commitment_bridge_selected(&self)->bool {self.commitment_bridge}
     pub(in crate::policy_shadow::policy_custody::services) fn spool_bridge_selected(&self)->bool {self.spool_bridge}
     pub(in crate::policy_shadow::policy_custody::services) fn publication_bridge_selected(&self)->bool {self.publication_bridge}
+    pub(in crate::policy_shadow::policy_custody::services) fn publication_adoption_bridge_selected(&self)->bool {self.publication_adoption_bridge}
     pub(in crate::policy_shadow::policy_custody::services) fn genesis_coordinator_selected(&self)->bool {self.genesis_coordinator}
     pub(in crate::policy_shadow::policy_custody::services) fn guest_binding(&self)->GuestClosureBinding {self.keys.guest_binding()}
     pub(in crate::policy_shadow::policy_custody::services) fn delivery(&self)->&Arc<super::Delivery> {

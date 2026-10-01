@@ -45,6 +45,11 @@ impl RetrievalAuthority {
 pub(super) struct Admission {
     pub(super) scope:Scope,pub(super) proof_scope_original:String,pub(super) prior_receipt_original:String,
     pub(super) first_ingress_sequence:u64,pub(super) last_ingress_sequence:u64,
+    #[serde(default,skip_serializing_if="Option::is_none",deserialize_with="crate::policy_shadow::deserialize_optional_present")]
+    pub(super) adoption:Option<Box<super::publication_adoption::Authorization>>,
+}
+pub(super) fn authority_payload_for_adoption(scope:&str,payload:&[u8])->Result<Vec<u8>,ServiceError>{
+    super::guest::native_keys::admission::publication::authority_payload(scope,payload).map_err(|_|invalid())
 }
 impl Admission {
     pub(super) fn receipt(&self)->Result<Receipt,ServiceError>{original(&self.prior_receipt_original)}
@@ -56,6 +61,10 @@ impl Admission {
             && self.proof_scope_original.is_ascii() && !self.proof_scope_original.is_empty()
             && self.proof_scope_original.len()<=16384
             && Sha256Digest::compute(self.proof_scope_original.as_bytes())==self.scope.proof_scope_sha256)?;
+        if let Some(adoption)=&self.adoption {
+            adoption.require_admission(&self.scope,&self.proof_scope_original,native)?;
+            require(self.prior_receipt_original==adoption.cold_bundle()?.completion.receipt_original)?;
+        }
         self.verify_receipt(&self.prior_receipt_original,native).map(|_|())
     }
     pub(super) fn request(&self,request:&Dispatch)->Result<(),ServiceError>{
@@ -64,6 +73,14 @@ impl Admission {
             |Dispatch::CommitGenerationPublication{..}|Dispatch::AbortGenerationPublication{..}))
     }
     pub(super) fn verify_receipt(&self,raw:&str,native:&RoleKey)->Result<Receipt,ServiceError>{
+        if raw==self.prior_receipt_original {
+            if let Some(adoption)=&self.adoption {
+                adoption.require_admission(&self.scope,&self.proof_scope_original,native)?;
+                let bundle=adoption.cold_bundle()?;
+                require(raw==bundle.completion.receipt_original)?;
+                return original(raw);
+            }
+        }
         let receipt:Receipt=original(raw)?;receipt.validate_deserialized_invariants().map_err(|_|invalid())?;
         require(receipt.signer_role==Role::PublicationReconciliation && receipt.signing_key_id==native.key_id
             && receipt.signing_key_spki_sha256==native.key_spki_sha256)?;

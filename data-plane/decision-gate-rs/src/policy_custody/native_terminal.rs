@@ -10,6 +10,7 @@ pub(in crate::policy_shadow) const QUERY_API:&str="serverware.nativeCompletedInv
 pub(in crate::policy_shadow) const PROOF_API:&str="serverware.nativeCompletedInvocationProof/v1";
 pub(in crate::policy_shadow) const WIRE_API:&str="serverware.nativeInvocationSettlement/v1";
 pub(in crate::policy_shadow) const PUBLICATION_RUNTIME:&str="serverware.policyCustodyProductionRpcRuntime/v13";
+pub(in crate::policy_shadow) const ADOPTION_RUNTIME:&str="serverware.policyCustodyProductionRpcRuntime/v14";
 pub(in crate::policy_shadow) const PUBLICATION_QUERY_API:&str="serverware.nativeCompletedInvocationQuery/v2";
 pub(in crate::policy_shadow) const PUBLICATION_PROOF_API:&str="serverware.nativeCompletedInvocationProof/v2";
 pub(in crate::policy_shadow) const PUBLICATION_WIRE_API:&str="serverware.nativeInvocationSettlement/v2";

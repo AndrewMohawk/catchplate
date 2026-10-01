@@ -25,12 +25,41 @@ pub(in crate::policy_shadow) const MEMBER_ROLES: [&str; 11] = [
 ];
 
 const SET_API: &str = "serverware.nativeCustodyExecutionClosureSet/v1";
+const PUBLICATION_API: &str = "serverware.nativeCustodyExecutionClosureSet/v2";
+pub(in crate::policy_shadow) const PUBLICATION_ROLES: [&str; 12] = [
+    "retrieval", "persistence", "trustedTime", "generationInstall", "commitRequest",
+    "ingressAdmission", "terminalAppend", "dispatchBarrier", "activeEffectBarrier",
+    "activeEffectCommit", "publicationReconciliation", "bridge",
+];
 const GENESIS_API: &str = "serverware.nativePublicationGenesisClosureSet/v1";
 pub(in crate::policy_shadow) const GENESIS_ROLES: [&str;3] = [
     "publicationGenesisRetrieval", "publicationGenesis", "publicationGenesisCoordinator"];
 const LEAF_DOMAIN: &[u8] = b"serverware.nativeCustodyExecutionClosureSetLeaf/v1";
 const ROOT_DOMAIN: &[u8] = b"serverware.nativeCustodyExecutionClosureSetRoot/v1";
 const SECCOMP_ROOT_DOMAIN: &[u8] = b"serverware.nativeCustodySeccompSetRoot/v1";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SetProfile { Legacy, Genesis, Publication }
+impl SetProfile {
+    fn roles(self) -> &'static [&'static str] { match self {
+        Self::Legacy => &MEMBER_ROLES, Self::Genesis => &GENESIS_ROLES, Self::Publication => &PUBLICATION_ROLES,
+    } }
+    fn api(self) -> &'static str { match self {
+        Self::Legacy => SET_API, Self::Genesis => GENESIS_API, Self::Publication => PUBLICATION_API,
+    } }
+    fn leaf_domain(self) -> &'static [u8] { match self {
+        Self::Legacy => LEAF_DOMAIN, Self::Genesis => b"serverware.nativePublicationGenesisClosureSetLeaf/v1",
+        Self::Publication => b"serverware.nativeCustodyExecutionClosureSetLeaf/v2",
+    } }
+    fn root_domain(self) -> &'static [u8] { match self {
+        Self::Legacy => ROOT_DOMAIN, Self::Genesis => b"serverware.nativePublicationGenesisClosureSetRoot/v1",
+        Self::Publication => b"serverware.nativeCustodyExecutionClosureSetRoot/v2",
+    } }
+    fn seccomp_domain(self) -> &'static [u8] { match self {
+        Self::Legacy => SECCOMP_ROOT_DOMAIN, Self::Genesis => b"serverware.nativePublicationGenesisSeccompSetRoot/v1",
+        Self::Publication => b"serverware.nativeCustodySeccompSetRoot/v2",
+    } }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -54,7 +83,7 @@ pub(super) struct Wire {
 pub(in crate::policy_shadow) struct ValidatedSet {
     wire: Wire,
     leaves: Vec<Sha256Digest>,
-    genesis: bool,
+    profile: SetProfile,
 }
 
 /// Borrowed membership in a validated set, not a guest or custody capability.
@@ -70,19 +99,23 @@ impl ValidatedSet {
         expected_set_root: &Sha256Digest,
         expected_seccomp_set_root: &Sha256Digest,
     ) -> Result<Self, ShadowError> {
-        Self::selected(raw,expected_set_root,expected_seccomp_set_root,false)
+        Self::selected(raw,expected_set_root,expected_seccomp_set_root,SetProfile::Legacy)
     }
     pub(in crate::policy_shadow) fn from_genesis_bytes(raw:&[u8],expected_set_root:&Sha256Digest,
         expected_seccomp_set_root:&Sha256Digest)->Result<Self,ShadowError>{
-        Self::selected(raw,expected_set_root,expected_seccomp_set_root,true)
+        Self::selected(raw,expected_set_root,expected_seccomp_set_root,SetProfile::Genesis)
+    }
+    pub(in crate::policy_shadow) fn from_publication_bytes(raw:&[u8],expected_set_root:&Sha256Digest,
+        expected_seccomp_set_root:&Sha256Digest)->Result<Self,ShadowError>{
+        Self::selected(raw,expected_set_root,expected_seccomp_set_root,SetProfile::Publication)
     }
     fn selected(raw:&[u8],expected_set_root:&Sha256Digest,expected_seccomp_set_root:&Sha256Digest,
-        genesis:bool)->Result<Self,ShadowError>{
+        profile:SetProfile)->Result<Self,ShadowError>{
         require(!raw.is_empty() && raw.len() <= MAX_SET_BYTES && raw.is_ascii())?;
         let wire: Wire = serde_json::from_slice(raw).map_err(unavailable)?;
-        let roles=if genesis{GENESIS_ROLES.as_slice()}else{MEMBER_ROLES.as_slice()};
+        let roles=profile.roles();
         require(
-            wire.api_version == (if genesis{GENESIS_API}else{SET_API})
+            wire.api_version == profile.api()
                 && wire.members.len()==roles.len()
                 && &wire.set_root_sha256 == expected_set_root
                 && &wire.seccomp_set_root_sha256 == expected_seccomp_set_root,
@@ -94,7 +127,7 @@ impl ValidatedSet {
             require(member.role == role)?;
             let manifest = &member.manifest;
             require(canonical_json_bytes(manifest)?.len() <= MAX_MANIFEST_BYTES)?;
-            let (api, profile) = if role == "bridge" {
+            let (api, manifest_profile) = if role == "bridge" {
                 (
                     "serverware.nativeCustodyExecutionClosure/v2",
                     BOOTSTRAP_PROFILE,
@@ -102,33 +135,34 @@ impl ValidatedSet {
             } else {
                 ("serverware.nativeCustodyExecutionClosure/v1", PROFILE)
             };
-            require(manifest.api_version == api && manifest.profile == profile)?;
+            require(manifest.api_version == api && manifest.profile == manifest_profile)?;
             // The existing validator compiles/checks the exact seccomp policy,
             // validates build provenance and recomputes the original manifest.
             manifest.validate()?;
             leaves.push(hash_domain_frames(
-                if genesis{b"serverware.nativePublicationGenesisClosureSetLeaf/v1"}else{LEAF_DOMAIN},
+                profile.leaf_domain(),
                 &[&canonical_json_bytes(&(role, manifest))?],
             ));
             seccomp_members.push((role, manifest.seccomp_policy.policy_sha256()));
         }
         require(
             wire.set_root_sha256
-                == hash_domain_frames(if genesis{b"serverware.nativePublicationGenesisClosureSetRoot/v1"}else{ROOT_DOMAIN}, &[&canonical_json_bytes(&leaves)?])
+                == hash_domain_frames(profile.root_domain(), &[&canonical_json_bytes(&leaves)?])
                 && wire.seccomp_set_root_sha256
                     == hash_domain_frames(
-                        if genesis{b"serverware.nativePublicationGenesisSeccompSetRoot/v1"}else{SECCOMP_ROOT_DOMAIN},
+                        profile.seccomp_domain(),
                         &[&canonical_json_bytes(&seccomp_members)?],
                     ),
         )?;
         // Includes exact field spelling/order, integers, ASCII escaping and no
         // trailing LF; duplicate fields are refused by the typed deserializer.
         require(canonical_json_bytes(&wire)? == raw)?;
-        Ok(Self { wire, leaves, genesis })
+        Ok(Self { wire, leaves, profile })
     }
-    pub(in crate::policy_shadow) fn genesis(&self)->bool{self.genesis}
+    pub(in crate::policy_shadow) fn genesis(&self)->bool{self.profile==SetProfile::Genesis}
+    pub(in crate::policy_shadow) fn publication(&self)->bool{self.profile==SetProfile::Publication}
     pub(in crate::policy_shadow) fn authority_role(&self)->&'static str{
-        if self.genesis{"publicationGenesisCoordinator"}else{"bridge"}
+        if self.genesis(){"publicationGenesisCoordinator"}else{"bridge"}
     }
 
     pub(in crate::policy_shadow) fn set_root_sha256(&self) -> &Sha256Digest {
@@ -143,7 +177,7 @@ impl ValidatedSet {
         &self,
         role: &str,
     ) -> Result<RoleBinding<'_>, ShadowError> {
-        let roles=if self.genesis{GENESIS_ROLES.as_slice()}else{MEMBER_ROLES.as_slice()};
+        let roles=self.profile.roles();
         let index = roles
             .iter()
             .position(|expected| *expected == role)

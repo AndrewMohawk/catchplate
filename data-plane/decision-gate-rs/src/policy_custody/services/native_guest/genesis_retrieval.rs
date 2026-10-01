@@ -18,6 +18,14 @@ struct Payload {
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 pub(crate) struct Configuration {payload:Payload,signature:CanonicalEd25519Signature}
 impl Configuration {
+    pub(in crate::policy_shadow::policy_custody::services) fn verify_adoption_original(raw:&str,expected_sha:&Sha256Digest,
+        scope:&fixed::Scope,supervisor:&services::publication::RetrievalAuthority,checkpoint:&Sha256Digest)
+        ->Result<(i64,i64,u64,Sha256Digest),ShadowError>{
+        require(raw.is_ascii() && !raw.is_empty() && raw.len()<=MAX_CONFIGURATION && Sha256Digest::compute(raw.as_bytes())==*expected_sha)?;
+        let value:Self=guest::exact(raw.as_bytes())?;value.validate_shape()?;
+        require(value.payload.scope==*scope)?;
+        value.payload.authorization.verify_historical(&value.payload,&value.signature,DOMAIN,scope,supervisor,checkpoint)
+    }
     pub(in crate::policy_shadow::policy_custody::services) fn expected_peer(&self)->&services::ExpectedPeerCredentialV3{&self.payload.expected_peer}
     pub(in crate::policy_shadow::policy_custody::services) fn guest_uid(&self)->u32{self.payload.authorization.guest.uid}
     pub(in crate::policy_shadow::policy_custody::services) fn validate_shape(&self)->Result<(),ShadowError>{

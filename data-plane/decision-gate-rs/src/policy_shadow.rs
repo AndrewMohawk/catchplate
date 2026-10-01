@@ -5447,6 +5447,51 @@ pub(in crate::policy_shadow) fn verify_production_publication_reconciliation_rec
     })
 }
 
+/// The selected native receiver supplies an independently authenticated
+/// adoption from its retained runtime, never from this receipt. Only that
+/// literal historical baseline is exempt from current signer/scope equality.
+/// Storage proofs still run against the current outer configuration scope.
+#[cfg(target_os="linux")]
+pub(in crate::policy_shadow) fn verify_adopted_production_publication_receipt(
+    wire:PublicationReconciliationReceiptWire,
+    adoption:&policy_custody::services::publication_adoption::Authorization,
+    configuration:&ProductionCustodyConfiguration,key_trust:&dyn EnvelopeKeyTrust,
+    trusted_time:&dyn TrustedTime,proof_verifier:&dyn PolicyShadowPersistenceProofVerifier,
+)->Result<VerifiedPublicationReconciliationReceipt,ShadowError>{
+    wire.validate_deserialized_invariants()?;
+    configuration.revalidate_active_attestation(key_trust,trusted_time)?;
+    let checkpoint=key_trust.current_checkpoint()?;
+    let binding=configuration.authority_binding(AuthorityRole::CustodySupervisorCapability)?;
+    let key=key_trust.resolve_ed25519_key(&checkpoint,authority_role_signature_domain(AuthorityRole::CustodySupervisorCapability),
+        binding.key_id(),binding.key_spki_sha256())?;
+    if &ed25519_public_key_material_sha256(&key)!=binding.key_material_sha256()
+        || wire.signer_role!=PolicyShadowCustodySignerRole::PublicationReconciliation
+        || canonical_json_bytes(&wire)?!=adoption.baseline_original()?.as_bytes() {
+        return Err(ShadowError::BindingDrift);
+    }
+    adoption.require_authority(binding.key_id(),binding.key_spki_sha256(),&key,&checkpoint,trusted_time.now_unix_nanos()?)?;
+    let scope=String::from_utf8(canonical_json_bytes(configuration.proof_scope())?).map_err(|_|ShadowError::BindingDrift)?;
+    adoption.verify_current(configuration.assignment_payload_sha256(),configuration.assignment_revision(),
+        configuration.production_configuration_binding_sha256(),&scope)?;
+    let live=||->Result<(),ShadowError>{
+        if policy_custody::boottime::boottime_now_nanos().map_err(|_|ShadowError::CustodyUnavailable)?
+            >=adoption.deadline_boottime()? {return Err(ShadowError::CustodyUnavailable);}
+        Ok(())
+    };
+    live()?;
+    let canonical_payload=wire.canonical_payload()?;
+    let authority=adoption.prior_authority_payload(&canonical_payload)?;
+    proof_verifier.verify_assignment_bound_persistence_receipt(configuration.proof_scope(),wire.signer_role,
+        &wire.persistence_receipt_sha256,&canonical_payload,&authority)?;
+    proof_verifier.verify_assignment_bound_immutable_retrieval(configuration.proof_scope(),wire.signer_role,
+        &wire.retrieval_id_sha256,&wire.retrieval_proof_sha256,&canonical_payload,&authority)?;
+    live()?;configuration.revalidate_active_attestation(key_trust,trusted_time)?;
+    adoption.require_authority(binding.key_id(),binding.key_spki_sha256(),&key,&checkpoint,trusted_time.now_unix_nanos()?)?;
+    if key_trust.current_checkpoint()?!=checkpoint {return Err(ShadowError::TrustCheckpointMismatch);}
+    Ok(VerifiedPublicationReconciliationReceipt{wire,canonical_payload_sha256:Sha256Digest::compute(&canonical_payload),
+        verified_trust_checkpoint:checkpoint})
+}
+
 impl VerifiedPublicationReconciliationReceipt {
     pub(crate) fn state(&self) -> PublicationReconciliationState {
         self.wire.state

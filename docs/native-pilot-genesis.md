@@ -91,14 +91,15 @@ and before release. This is not a child-exit or cleanup success claim.
 The connected native producer and retained handoff pass the focused assembled
 compiler check below. Six pure signature/format controls are authored, not
 test-compiled or executed. No successful runtime execution is
-claimed. Cold-to-operational adoption must authenticate any change of
-assignment, configuration, owner or proof scope while preserving the literal
-receipt and roots. The existing Published/Commit-only baseline remains closed.
+claimed. A separately selected [operational adoption](native-pilot-adoption.md)
+now connects those context changes in source while preserving the literal
+receipt and roots. Its assembled verification and commissioning remain open;
+the legacy Published/Commit-only baseline remains closed.
 Full commissioning/package producers, actual retained handoff consumption,
 uncertain/restart recovery, the remaining signer families, independent service
 provisioning and connected application acceptance are still required.
 
-The next adoption contract must independently approve the exact cold bundle
+The adoption contract independently approves the exact cold bundle
 and prior authority context together with the actual current assignment,
 configuration and proof scope, without future load/grant hashes. Only that
 literal baseline may use prior keys and proof scope; new receipts must use

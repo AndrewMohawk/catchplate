@@ -238,8 +238,8 @@ fn admit_files(configuration_path:&Path,expected_configuration_sha256:Sha256Dige
     owner.check_preparation()?;Ok(owner)
 }
 #[derive(Clone,Copy)]
-pub(super) enum NativeLock {Persistence,Ledger}
-fn take_activation(entries:&[Activation],dispatch_selected:bool,spool_selected:bool,cleanup_selected:bool,publication_selected:bool,genesis_selected:bool,native_lock:Option<NativeLock>)
+pub(super) enum NativeLock {Persistence,Ledger,AdoptedLedger}
+fn take_activation(entries:&[Activation],dispatch_selected:bool,spool_selected:bool,cleanup_selected:bool,publication_selected:bool,adoption_selected:bool,genesis_selected:bool,native_lock:Option<NativeLock>)
     ->Result<(BTreeMap<String,OwnedFd>,BTreeSet<(u64,u64)>),ServiceRunnerError> {
     let mut activation=BTreeMap::new();
     let mut fd_identities=BTreeSet::new();
@@ -258,13 +258,24 @@ fn take_activation(entries:&[Activation],dispatch_selected:bool,spool_selected:b
             && stat.st_mode & libc::S_IFMT==libc::S_IFREG;
         let held_lock=stat.st_mode&libc::S_IFMT==libc::S_IFREG && match native_lock {
             Some(NativeLock::Persistence)=>entry.name=="persistence-lock" && index==2,
-            Some(NativeLock::Ledger)=>entry.name=="ledger-spool-lock" && index==3,
+            Some(NativeLock::Ledger|NativeLock::AdoptedLedger)=>entry.name=="ledger-spool-lock" && index==3,
             None=>false,
         };
+        let cold_core=matches!(native_lock,Some(NativeLock::AdoptedLedger))
+            && entry.name=="publication-genesis-core" && index==4 && stat.st_mode&libc::S_IFMT==libc::S_IFREG;
+        if cold_core {
+            let flags=unsafe{libc::fcntl(fd.as_raw_fd(),libc::F_GETFL)};
+            if flags<0 || flags&libc::O_ACCMODE!=libc::O_RDONLY || flags&libc::O_PATH!=0
+                || stat.st_mode&0o7777!=0o400 || stat.st_uid==0 || stat.st_gid==0
+                || stat.st_nlink!=1 || stat.st_size<=0 || stat.st_size>512*1024 {
+                return Err(fail("adopted publication core original is invalid"));
+            }
+        }
         if public_grant {
             let seals=unsafe{libc::fcntl(fd.as_raw_fd(),libc::F_GET_SEALS)};
             let full=libc::F_SEAL_SEAL|libc::F_SEAL_GROW|libc::F_SEAL_SHRINK|libc::F_SEAL_WRITE;
             let maximum=if genesis_selected && entry.name==super::publication_genesis_service::GRANT_FD {super::publication_genesis_service::MAX_GRANT as i64}
+                else if adoption_selected && entry.name==super::publication_service::GRANT_FD {super::publication_service::MAX_ADOPTION_GRANT as i64}
                 else if publication_selected && entry.name==super::publication_service::GRANT_FD {super::publication_service::MAX_GRANT as i64}
                 else if spool_selected && entry.name=="spool-current-grant" || cleanup_selected && entry.name==super::active_effect_cleanup::GRANT_FD {131072}else{65536};
             if seals<0 || seals&full!=full || stat.st_size<=0 || stat.st_size>maximum {
@@ -277,7 +288,7 @@ fn take_activation(entries:&[Activation],dispatch_selected:bool,spool_selected:b
         }
         if (stat.st_dev,stat.st_ino,stat.st_mode,stat.st_uid,stat.st_gid)
             !=(entry.device,entry.inode,entry.mode,entry.uid,entry.gid)
-            || (!public_grant && !held_lock && ![libc::S_IFDIR,libc::S_IFSOCK].contains(&(stat.st_mode & libc::S_IFMT)))
+            || (!public_grant && !held_lock && !cold_core && ![libc::S_IFDIR,libc::S_IFSOCK].contains(&(stat.st_mode & libc::S_IFMT)))
             || !fd_identities.insert((stat.st_dev,stat.st_ino)) {
             return Err(fail("guest activation original substituted or aliased"));
         }
@@ -318,7 +329,8 @@ impl PreparedGuestServiceDelivery {
         let runtime_value:serde_json::Value=decode_canonical_frame(&runtime.read(MAX_CONFIG_BYTES)?)?;
         let ordinary=matches!(p.service_role,Role::DurableRecoveryStore|Role::CurrentSignatureAuthority);
         let version=runtime_value.get("runtime").and_then(|v|v.get("apiVersion")).and_then(|v|v.as_str());
-        let publication_selected=ordinary && version==Some(super::publication_service::RUNTIME);
+        let publication_selected=ordinary && matches!(version,Some(super::publication_service::RUNTIME|super::publication_service::ADOPTION_RUNTIME));
+        let adoption_selected=ordinary && version==Some(super::publication_service::ADOPTION_RUNTIME);
         let genesis_selected=ordinary && version==Some(super::publication_genesis_service::RUNTIME);
         let effects=version==Some(super::active_effect_cleanup::RUNTIME) || publication_selected;
         let spool_selected=ordinary && (version==Some(super::spool_head::RUNTIME) || effects);
@@ -336,7 +348,7 @@ impl PreparedGuestServiceDelivery {
             }
             &p.activation[..9]
         }else{p.activation.as_slice()};
-        let (activation,fd_identities)=take_activation(selected_entries,dispatch_selected,spool_selected,cleanup_selected,publication_selected,genesis_selected,native_lock)?;
+        let (activation,fd_identities)=take_activation(selected_entries,dispatch_selected,spool_selected,cleanup_selected,publication_selected,adoption_selected,genesis_selected,native_lock)?;
         let parent=Parent::inherited()?;
         if fd_identities.contains(&parent.identity()) { return Err(fail("activation aliases private parent channel")); }
         let mut p=p;

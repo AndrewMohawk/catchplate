@@ -25,6 +25,7 @@ pub(super) mod spool_head_values;
 pub(super) mod spool_head;
 pub(super) mod spool_current;
 pub(super) mod publication;
+pub(in crate::policy_shadow) mod publication_adoption;
 pub(super) mod publication_state;
 pub(super) mod publication_service;
 pub(super) mod publication_client;
@@ -343,7 +344,7 @@ impl RuntimeConfigHeaderV3 {
         let effects_shape=self.api_version==active_effect_cleanup::RUNTIME && self.generation_admission.is_some()
             && matches!((self.dispatch_admission.as_ref(),self.spool_head.as_ref(),self.spool_current.as_ref(),self.spool_cleanup.as_ref()),
                 (Some(_),Some(_),None,None)|(Some(_),None,Some(_),None)|(None,None,None,Some(_)));
-        let publication_shape=self.api_version==publication_service::RUNTIME && self.publication_admission.is_some()
+        let publication_shape=matches!(self.api_version.as_str(),publication_service::RUNTIME|publication_service::ADOPTION_RUNTIME) && self.publication_admission.is_some()
             && self.generation_admission.is_some() && self.dispatch_admission.is_some() && self.spool_cleanup.is_none()
             && matches!((self.spool_head.as_ref(),self.spool_current.as_ref()),(Some(_),None)|(None,Some(_)));
         let genesis_shape=self.api_version==publication_genesis_service::RUNTIME && self.publication_genesis_admission.is_some()
@@ -467,7 +468,7 @@ impl RuntimeConfigHeaderV3 {
             &self.authority_history_manifest_credential,
             MAX_CONFIG_BYTES,
         )?;
-        let guest_runtime=matches!(self.api_version.as_str(),generation_service::RUNTIME|dispatch_service::RUNTIME|spool_head::RUNTIME|active_effect_cleanup::RUNTIME|helper_initial::RUNTIME|publication_service::RUNTIME|publication_genesis_service::RUNTIME);
+        let guest_runtime=matches!(self.api_version.as_str(),generation_service::RUNTIME|dispatch_service::RUNTIME|spool_head::RUNTIME|active_effect_cleanup::RUNTIME|helper_initial::RUNTIME|publication_service::RUNTIME|publication_service::ADOPTION_RUNTIME|publication_genesis_service::RUNTIME);
         let exact_original_pinned_by_guest = guest_runtime
             && matches!(credentials,CredentialDirectory::Guest(_));
         if (guest_runtime && !exact_original_pinned_by_guest)

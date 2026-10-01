@@ -30,10 +30,10 @@ pub(in crate::policy_shadow) fn require_runtime(runtime:&serde_json::Value)->Res
             |"serverware.policyCustodyProductionRpcRuntime/v7"|"serverware.policyCustodyProductionRpcRuntime/v8")=>Ok(()),
         Some("serverware.policyCustodyProductionRpcRuntime/v9"|"serverware.policyCustodyProductionRpcRuntime/v10"
             |"serverware.policyCustodyProductionRpcRuntime/v11"|"serverware.policyCustodyProductionRpcRuntime/v12"
-            |"serverware.policyCustodyProductionRpcRuntime/v13")=>{
+            |"serverware.policyCustodyProductionRpcRuntime/v13"|super::native_terminal::ADOPTION_RUNTIME)=>{
             if matches!(runtime.get("apiVersion").and_then(serde_json::Value::as_str),
                 Some("serverware.policyCustodyProductionRpcRuntime/v10"|"serverware.policyCustodyProductionRpcRuntime/v11"
-                    |"serverware.policyCustodyProductionRpcRuntime/v12"|"serverware.policyCustodyProductionRpcRuntime/v13")) {
+                    |"serverware.policyCustodyProductionRpcRuntime/v12"|"serverware.policyCustodyProductionRpcRuntime/v13"|super::native_terminal::ADOPTION_RUNTIME)) {
                 super::services::production::validate_initial_history_runtime(&canonical_json_bytes(runtime)?)
                     .map_err(|_|ShadowError::BindingDrift)?;
             } else {
@@ -144,6 +144,7 @@ pub(in crate::policy_shadow) struct Factory {
     operation_boundary:u64,
     native_terminal:bool,
     publication_terminal:bool,
+    publication_adoption:bool,
 }
 impl Factory {
     pub(in crate::policy_shadow) fn open(owner:&Arc<NativeCustodyLifecycleOwner>,source:&Sha256Digest,
@@ -201,7 +202,9 @@ impl Factory {
         ensure(Sha256Digest::compute(runtime_raw)==guest.runtime_configuration_sha256)?;
         let runtime:serde_json::Value=exact(runtime_raw)?;
         require_runtime(&runtime)?;
-        let publication_terminal=runtime.get("apiVersion").and_then(serde_json::Value::as_str)
+        let publication_adoption=runtime.get("apiVersion").and_then(serde_json::Value::as_str)
+            ==Some(super::native_terminal::ADOPTION_RUNTIME);
+        let publication_terminal=publication_adoption || runtime.get("apiVersion").and_then(serde_json::Value::as_str)
             ==Some(super::native_terminal::PUBLICATION_RUNTIME);
         let native_terminal=publication_terminal || runtime.get("apiVersion").and_then(serde_json::Value::as_str)
             ==Some(super::native_terminal::RUNTIME);
@@ -233,7 +236,7 @@ impl Factory {
         let lifetime=guest.lifetime_deadline_boottime_ns.parse::<u64>().map_err(|_|ShadowError::BindingDrift)?;
         let operation_boundary=lifetime.checked_sub(settings.cleanup_reserve_nanos).ok_or(ShadowError::BindingDrift)?;
         Ok(Self{configuration,manifest,driver,prior_admission_sha256:retained.bootstrap_admission_sha256().clone(),
-            settings,retained,installation_scope,operation_boundary,native_terminal,publication_terminal})
+            settings,retained,installation_scope,operation_boundary,native_terminal,publication_terminal,publication_adoption})
     }
     pub(in crate::policy_shadow) fn check(&self,trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime)->Result<(),ShadowError>{
         self.retained.check(trust,time)?;
@@ -242,6 +245,7 @@ impl Factory {
     }
     pub(in crate::policy_shadow) fn native_terminal_selected(&self)->bool {self.native_terminal}
     pub(in crate::policy_shadow) fn publication_terminal_selected(&self)->bool {self.publication_terminal}
+    pub(in crate::policy_shadow) fn publication_adoption_selected(&self)->bool {self.publication_adoption}
     /// Exact authenticated startup selection, never a history supplied by a
     /// terminal artifact. The original is rejoined to its retained live owner.
     pub(in crate::policy_shadow) fn native_terminal_runtime_original(&self,
@@ -253,7 +257,8 @@ impl Factory {
         let runtime:serde_json::Value=exact(&raw)?;
         require_runtime(&runtime)?;
         ensure(runtime.get("apiVersion").and_then(serde_json::Value::as_str)
-            ==Some(if self.publication_terminal {super::native_terminal::PUBLICATION_RUNTIME}else{super::native_terminal::RUNTIME}))?;
+            ==Some(if self.publication_adoption {super::native_terminal::ADOPTION_RUNTIME}
+                else if self.publication_terminal {super::native_terminal::PUBLICATION_RUNTIME}else{super::native_terminal::RUNTIME}))?;
         self.check(trust,time)?;Ok(raw)
     }
     pub(in crate::policy_shadow) fn generation_install_context(&self,previous:Option<&ProductionCustodyConfiguration>,

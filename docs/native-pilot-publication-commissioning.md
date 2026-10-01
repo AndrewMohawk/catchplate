@@ -31,7 +31,10 @@ complete-input approval and size limits. Schema checks are not trust approval.
 The supervisor package now includes the fixed entrypoint
 `/supervisor/app/scripts/native_pilot_publication_runtime_entrypoint.py`.
 Invoke it with the packaged `/runtime/python/bin/python3 -I -B` and exactly one
-of `--prepare-closure-set` or `--sign-assignment`, followed in source order by:
+fixed mode. The original modes are `--prepare-closure-set` and
+`--sign-assignment`; the [cold authority slice](native-pilot-genesis-authorities.md)
+adds `--prepare-genesis-binding`, `--sign-genesis-precreation` and
+`--sign-genesis-release`. Each is followed in source order by:
 
 1. `--supervisor-inventory-fd N --supervisor-inventory-sha256 SHA256`
 2. `--input-fd N --input-sha256 SHA256`

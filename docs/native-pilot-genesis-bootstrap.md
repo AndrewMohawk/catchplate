@@ -103,7 +103,9 @@ An invalid or duplicate release is terminal for this owner, not a retry request.
 Both signatures use the existing `policy_shadow::signature_preimage` framing
 (signed-envelope prefix, named domain and canonical-profile separators), not
 the older proof-cohort's bare domain-plus-payload helper. Producers for these
-new precreation and release originals still need to be connected.
+new precreation and release originals and the retained Python caller are in the
+[next source slice](native-pilot-genesis-authorities.md); the complete
+commissioning graph and live ceremony remain separate.
 
 The child independently admits the measured image, complete C9 delivery,
 closure, assignment, key material and service histories. There is no initial
@@ -147,9 +149,10 @@ Independent cold grant/closure issuers, the complete Python commissioning
 owner, actual cold-core descriptor transfer, native-validator-to-signer
 ownership, provisioned services and a connected allow/deny/cleanup run remain
 required. The earlier 164-job/113-selector graph does not include this ceremony.
-Cold proof scope still requires an independently approved production
-configuration binding; the hot measured-configuration recipe requires a real
-operational driver and cannot be reused by inventing a cold driver observation.
+The [cold binding producer](native-pilot-genesis-authorities.md#separate-cold-binding)
+uses a distinct approved cold commitment. The hot measured-configuration recipe
+still requires a real operational driver and cannot be reused by inventing a
+cold driver observation.
 Project checkpoints remain 36/46 source-landed and production acceptance 0/6.
 
 See [commissioning tools](native-pilot-publication-commissioning.md),

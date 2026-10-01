@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.dev/schemas/native-pilot-publication-cold-binding-input.v1.schema.json",
+  "title": "Independently approved cold publication binding input",
+  "description": "Complete canonical ASCII input is independently SHA-256 pinned and at most 4 MiB. The unsigned producer authenticates assignment v2 under the pinned trust, selects only cold closure-set v2 and derives a distinct cold-only commitment plus proofScope/v2. This is not a hot ProductionCustodyConfiguration, native admission, a signing approval or live process evidence. Signature, canonical-byte, exact key/root and original-interval joins are semantic producer checks beyond this schema.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "trustOriginal", "trustSha256", "assignmentOriginal", "closureSetOriginal", "commissioningIdSha256", "initialPublicationRevision", "window"],
+  "properties": {
+    "apiVersion": {"const": "serverware.nativePilotPublicationColdBindingInput/v1"},
+    "trustOriginal": {"type": "string", "minLength": 1, "maxLength": 1048576, "pattern": "^[\\x00-\\x7f]+$"},
+    "trustSha256": {"$ref": "#/$defs/digest"},
+    "assignmentOriginal": {"type": "string", "minLength": 1, "maxLength": 4194304, "pattern": "^[\\x00-\\x7f]+$"},
+    "closureSetOriginal": {"type": "string", "minLength": 1, "maxLength": 4194304, "pattern": "^[\\x00-\\x7f]+$"},
+    "commissioningIdSha256": {"$ref": "#/$defs/digest"},
+    "initialPublicationRevision": {"$ref": "#/$defs/positiveU64"},
+    "window": {"$ref": "#/$defs/window"}
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "positiveU64": {"type": "integer", "minimum": 1, "maximum": 18446744073709551615},
+    "unixNanos": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807},
+    "window": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bootIdBase64url", "timeNamespaceDevice", "timeNamespaceInode", "issuedAtBoottimeNanos", "expiresAtBoottimeNanos", "issuedAtUnixNanos", "expiresAtUnixNanos"],
+      "properties": {
+        "bootIdBase64url": {"type": "string", "pattern": "^[A-Za-z0-9_-]{22}$"},
+        "timeNamespaceDevice": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615},
+        "timeNamespaceInode": {"$ref": "#/$defs/positiveU64"},
+        "issuedAtBoottimeNanos": {"$ref": "#/$defs/positiveU64"},
+        "expiresAtBoottimeNanos": {"$ref": "#/$defs/positiveU64"},
+        "issuedAtUnixNanos": {"$ref": "#/$defs/unixNanos"},
+        "expiresAtUnixNanos": {"$ref": "#/$defs/unixNanos"}
+      }
+    }
+  }
+}

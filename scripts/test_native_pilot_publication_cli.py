@@ -16,11 +16,29 @@ def arguments(signing=False):
 
 
 class PublicationCliTests(unittest.TestCase):
-    def test_two_fixed_modes_and_import_roots(self):
+    def test_fixed_modes_and_import_roots(self):
         self.assertTrue(entry.valid_arguments(arguments()))
         self.assertTrue(entry.valid_arguments(arguments(True)))
         self.assertEqual(entry.IMPORT_ROOTS, ("/supervisor/app", "/authority/app", "/vendor", "/app"))
         self.assertEqual(entry.SCRIPT, "/supervisor/app/scripts/native_pilot_publication_runtime_entrypoint.py")
+
+    def test_cold_modes_require_separate_purpose_and_correct_key_presence(self):
+        self.assertEqual(set(entry.MODES), {"--prepare-closure-set", "--prepare-genesis-binding",
+            "--sign-assignment", "--sign-genesis-precreation", "--sign-genesis-release"})
+        for mode, purpose in (("--sign-genesis-precreation", "precreation"),
+                              ("--sign-genesis-release", "release")):
+            values = arguments(True)
+            values[0] = mode
+            self.assertTrue(entry.valid_arguments(values))
+            self.assertFalse(entry.valid_arguments(values[:-2]))
+            self.assertEqual(entry.genesis_operation(mode), purpose)
+        values = arguments()
+        values[0] = "--prepare-genesis-binding"
+        self.assertTrue(entry.valid_arguments(values))
+        self.assertFalse(entry.valid_arguments(values + ["--authority-key-fd", "5"]))
+        for mode in ("--sign-assignment", "--prepare-closure-set", "--prepare-genesis-binding",
+                     "--sign-adoption", "--sign-genesis"):
+            self.assertIsNone(entry.genesis_operation(mode))
 
     def test_no_extra_key_or_missing_signing_key(self):
         values = arguments(True)

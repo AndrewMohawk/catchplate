@@ -97,11 +97,81 @@ elif scenario in ('existing-target', 'existing-stage', 'journal-history', 'wrong
         kwargs['policy_sha256'] = 'sha256:' + '3' * 64
     else:
         os.chmod(original, 0o600)
+    retained_identity = None if retained is None else (retained.stat().st_dev, retained.stat().st_ino)
     error = refusal(lambda: module.OfflineDevelopmentGenesis.open(**kwargs))
-    assert type(error.owner) is module.OfflineDevelopmentGenesis and error.owner.failed
-    error.owner.close(); assert error.owner.closed
+    assert type(error) is module.DevelopmentGenesisError
+    owner = error.owner
+    assert type(owner) is module.OfflineDevelopmentGenesis and owner.failed
+    assert owner.authority is None and owner.stage_fd is None and not owner.installed and not owner.used
+    if scenario in ('existing-target', 'existing-stage', 'journal-history'):
+        # These are storage-guard controls, not merely any refusal.  The actual
+        # owner must already have admitted the signed source and acquired its
+        # real target parent; an earlier schema/signature rejection must fail.
+        assert owner.raw == raw and owner.input_identity is not None
+        assert owner.trust is not None and owner.trust.signing_key_id == value['metadata']['signingKeyId']
+        assert owner.material_binding['policyId'] == 'serverware-demo'
+        assert owner.material_binding['sequence'] == 1
+        assert owner.material_binding['kind'] == 'genesis-materialize'
+        assert owner.parent is not None
+        held_parent = os.fstat(owner.parent)
+        assert (held_parent.st_dev, held_parent.st_ino) == (root.stat().st_dev, root.stat().st_ino)
+        if scenario == 'journal-history':
+            assert owner.directory is not None
+            held_journal = os.fstat(owner.directory)
+            named_journal = (root / module.publication.JOURNAL).stat()
+            assert (held_journal.st_dev, held_journal.st_ino) == (named_journal.st_dev, named_journal.st_ino)
+            assert not bundles.POLICY_BUNDLE_PATH.exists() and not (root / module.STAGE).exists()
+            # The admitted named journal reached the actual nonempty scan.
+            trace = error.__cause__.__traceback__
+            reached_scan = False
+            while trace is not None:
+                frame = trace.tb_frame
+                reached_scan |= (frame.f_code is module.OfflineDevelopmentGenesis.check.__code__
+                    and frame.f_locals.get('self') is owner and 'entries' in frame.f_locals)
+                trace = trace.tb_next
+            assert reached_scan
+        else:
+            assert owner.directory is None and not (root / module.publication.JOURNAL).exists()
+            rejected_name = owner.basename if scenario == 'existing-target' else module.STAGE
+            trace = error.__cause__.__traceback__
+            reached_absence_guard = False
+            while trace is not None:
+                frame = trace.tb_frame
+                reached_absence_guard |= (frame.f_code is module.OfflineDevelopmentGenesis._absent.__code__
+                    and frame.f_locals.get('self') is owner and frame.f_locals.get('name') == rejected_name)
+                trace = trace.tb_next
+            assert reached_absence_guard
+            other = root / module.STAGE if scenario == 'existing-target' else bundles.POLICY_BUNDLE_PATH
+            assert not other.exists()
+    else:
+        assert owner.trust is None and owner.material_binding is None
+        assert owner.parent is None and owner.directory is None and not owner.pins
+        assert not bundles.POLICY_BUNDLE_PATH.exists() and not (root / module.STAGE).exists()
+        assert not (root / module.publication.JOURNAL).exists()
+        if scenario == 'wrong-hash':
+            # Permissions and protected-FD read succeeded; only the supplied
+            # original digest is wrong, before signed-source admission.
+            assert owner.input_fd is not None and owner.input_identity is not None and owner.raw == raw
+            assert module._sha(owner.raw) != kwargs['policy_sha256']
+            assert len(owner.handles) == 1
+        else:
+            # Refuse the caller's actual mode before duplicating or reading it.
+            assert original.stat().st_mode & 0o7777 == 0o600
+            assert owner.input_fd is None and owner.input_identity is None and owner.raw is None
+            assert not owner.handles
+            trace = error.__cause__.__traceback__
+            reached_mode_guard = False
+            while trace is not None:
+                frame = trace.tb_frame
+                reached_mode_guard |= (frame.f_code is module.public_io._input.__code__
+                    and frame.f_locals.get('fd') == fd and 'info' in frame.f_locals
+                    and frame.f_locals['info'].st_mode & 0o7777 == 0o600)
+                trace = trace.tb_next
+            assert reached_mode_guard
+    owner.close(); assert owner.closed and not owner.handles
     if retained is not None:
         assert retained.read_bytes() == b'keep'
+        assert (retained.stat().st_dev, retained.stat().st_ino) == retained_identity
 elif scenario == 'no-replace':
     # Exercise the exact shared kernel mechanism, not a fabricated PG owner.
     parent = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)

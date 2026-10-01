@@ -8146,7 +8146,6 @@ def demo_policy_bundle(credential_id: str = "cred-demo-bearer") -> dict[str, Any
                         "type": "operationPolicy",
                         "description": "Only publish and dist-tag writes may reach this JIT-protected npm route.",
                         "allowedOperations": ["npm.publish", "npm.distTagWrite"],
-                        "deniedOperations": ["npm.tokenWrite", "npm.metadataWrite"],
                     },
                     {
                         "id": "npm-publish-identity-binding",

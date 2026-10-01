@@ -45,6 +45,28 @@ def endpoint(admit, database, *, development=True, channel="dev"):
 
 
 class DemoSeedPolicyTests(unittest.TestCase):
+    def test_demo_npm_allowlist_compiles_and_preserves_denials(self):
+        from serverware.constraints import _enforce_operation_policy
+
+        # Structural/compiler admission only; synthetic signature-shaped data
+        # does not claim genuine signing or commissioned policy authority.
+        value = candidate()
+        snapshot = policy.bundles.compile_policy_bundle(value, validate_schema=True)
+        route = next(route for route in value["routes"] if route["id"] == "demo.npm.publish.jit")
+        constraint = next(item for item in route["constraints"] if item["type"] == "operationPolicy")
+        self.assertIsNotNone(snapshot)
+        self.assertEqual(constraint["allowedOperations"], ["npm.publish", "npm.distTagWrite"])
+        self.assertNotIn("deniedOperations", constraint)
+        for operation in ("npm.publish", "npm.distTagWrite"):
+            with self.subTest(operation=operation):
+                self.assertTrue(_enforce_operation_policy(constraint, {"operation": operation}).allowed)
+        for operation in ("npm.tokenWrite", "npm.metadataWrite", "npm.unknown", ""):
+            with self.subTest(operation=operation):
+                decision = _enforce_operation_policy(constraint, {"operation": operation})
+                self.assertFalse(decision.allowed)
+                self.assertEqual(decision.status_code, 403)
+                self.assertEqual(decision.payload["error"], "credential_operation_not_allowed")
+
     def test_exact_semantics_allow_existing_counters_without_mutation(self):
         value = candidate()
         value["metadata"].update(sequence=23, rollbackEpoch=7)

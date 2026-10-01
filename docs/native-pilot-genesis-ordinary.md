@@ -93,8 +93,30 @@ cached, offline Rust 1.88 check for the gate, DRS, CSA, cold controller and
 adoption validator (2m47s). The check is CPU/memory-bounded and has no network;
 it uses the previously pinned image and vendor cache. It does not run Rust
 tests, privileged owners, real signing authorities or a live cold ceremony.
-Existing compiler warnings remain. The Python source integration and its
-single frozen focused pass are still pending at this checkpoint.
+Existing compiler warnings remain (312 library, 2,040 each DRS/CSA, 2,804
+controller, 3,095 validator and 2,555 gate, including duplicates).
+
+Exact Python integration commit `9f0e182f7ac873277e166fa36ecc7ecb46371754`
+passes **53 focused controls** in seven suites (1.391 seconds), sixteen-file
+Python 3.11.15 grammar and both Make inventories. The single run uses the
+frozen source archive, one CPU, an empty environment and an isolated network
+namespace. It covers synthetic initial-history/C9/native-grant transcripts,
+clock and substitution refusals, public peer associations, protocol shapes and
+fixed CLI purposes. It does not execute actual owners, signing entrypoints,
+descriptor transfer, service readiness or cleanup. Native source is identical
+to the preceding checked commit and was not rebuilt.
+The final five-document file-target check passes 436 local targets; anchors and
+external URLs were not checked.
+
+Independent source review corrected the cold listener path, actual grant FD
+mode (`0600`, distinct from the protected input file), incomplete resource
+checks during acquisition, original expiry ceilings and post-I/O clock checks.
+The retained controller peer capture was independently reviewed. These checks
+do not establish runtime correctness beyond their stated scope.
+
+Both exact source archives, commands, harnesses, logs and checksums are retained
+at `codex-offload/serverware/engineering-builds/9f0e182f-genesis-ordinary-9aB7JF/`.
+No image rebuild, cloud resource or paid test was used.
 
 The native publication and retrieval grant originals still require their own
 authentic issuers; ordinary grant production cannot create those authorities

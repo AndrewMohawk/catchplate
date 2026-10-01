@@ -1799,6 +1799,14 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/native_pilot_current_head_decision_service.py \
 	serverware/native_pilot_current_head_decision_service_profile.py \
 	scripts/run_native_pilot_current_head_decisions.py \
+	serverware/native_pilot_current_head_state.py \
+	serverware/native_pilot_current_head_worker.py \
+	serverware/native_pilot_current_head_worker_profile.py \
+	scripts/run_native_pilot_current_head_worker.py \
+	scripts/test_native_pilot_current_head_state.py \
+	scripts/test_native_pilot_current_head_worker.py \
+	scripts/test_native_pilot_current_head_worker_profile.py \
+	scripts/test_native_pilot_current_head_worker_entrypoint.py \
 	scripts/test_native_pilot_current_head_decision_service.py \
 	scripts/test_native_pilot_current_head_decision_entrypoint.py \
 	scripts/test_native_pilot_current_head_evidence_channel.py \
@@ -4811,6 +4819,14 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/native_pilot_current_head_decision_service.py \
 				serverware/native_pilot_current_head_decision_service_profile.py \
 				scripts/run_native_pilot_current_head_decisions.py \
+				serverware/native_pilot_current_head_state.py \
+				serverware/native_pilot_current_head_worker.py \
+				serverware/native_pilot_current_head_worker_profile.py \
+				scripts/run_native_pilot_current_head_worker.py \
+				scripts/test_native_pilot_current_head_state.py \
+				scripts/test_native_pilot_current_head_worker.py \
+				scripts/test_native_pilot_current_head_worker_profile.py \
+				scripts/test_native_pilot_current_head_worker_entrypoint.py \
 				scripts/test_native_pilot_current_head_decision_service.py \
 				scripts/test_native_pilot_current_head_decision_entrypoint.py \
 				scripts/test_native_pilot_current_head_evidence_channel.py \

@@ -41,7 +41,7 @@ LEAVES = (
     "/var/lib/serverware/native-pilot-bridge",
 ) + tuple("/var/lib/serverware/custody-generation/" + role for role in ROLES)
 TARGETS = SHARED + LEAVES
-PROFILES = ("legacy", "adopted-cold", "adopted-operational", "commissioning-startup")
+PROFILES = ("legacy", "adopted-cold", "adopted-operational", "commissioning-startup", "commissioning-decisions")
 ADOPTED_SHARED = SHARED + ("/run/serverware",)
 ADOPTED_ADDITIONS = (
     ("/run/serverware-custody-genesis", 0o711),
@@ -55,6 +55,7 @@ STARTUP_DIRECTORIES = (
     "/etc/serverware/native-pilot-startup",
     "/etc/serverware/native-pilot-current-head-decisions",
 )
+DECISION_STATE_DIRECTORY = "/etc/serverware/native-pilot-current-head-state"
 MAX_REPORT_BYTES = 32768
 
 
@@ -91,14 +92,17 @@ def selection(profile):
     leaves = LEAVES + tuple(path for path, _ in ADOPTED_ADDITIONS)
     modes = {path: 0o711 for path in LEAVES}
     modes.update(ADOPTED_ADDITIONS)
-    if profile in ("adopted-operational", "commissioning-startup"):
+    if profile in ("adopted-operational", "commissioning-startup", "commissioning-decisions"):
         # A provisioning option only. The independently approved endpoint
         # input must still explicitly select this path; there is no fallback.
         leaves += (OPERATIONAL_OBJECTS,)
         modes[OPERATIONAL_OBJECTS] = 0o700
-    if profile == "commissioning-startup":
+    if profile in ("commissioning-startup", "commissioning-decisions"):
         leaves += STARTUP_DIRECTORIES
         modes.update(dict.fromkeys(STARTUP_DIRECTORIES, 0o700))
+        if profile == "commissioning-decisions":
+            leaves += (DECISION_STATE_DIRECTORY,)
+            modes[DECISION_STATE_DIRECTORY] = 0o700
         return ADOPTED_SHARED + ("/etc/serverware",), leaves, modes
     return ADOPTED_SHARED, leaves, modes
 
@@ -118,10 +122,11 @@ def initial_report(profile, create):
     if profile == "adopted-operational":
         # This is not the received cold-core directory or a populated store.
         report["directories"][-1].update(kind="auxiliary-retrieval-objects", expectedMode="0700")
-    elif profile == "commissioning-startup":
+    elif profile in ("commissioning-startup", "commissioning-decisions"):
         kinds = {OPERATIONAL_OBJECTS: "auxiliary-retrieval-objects",
                  STARTUP_DIRECTORIES[0]: "startup-public-handoff",
-                 STARTUP_DIRECTORIES[1]: "independent-current-head-decisions"}
+                 STARTUP_DIRECTORIES[1]: "independent-current-head-decisions",
+                 DECISION_STATE_DIRECTORY: "authoritative-current-head-state"}
         for row in report["directories"]:
             if row["path"] in kinds:
                 row.update(kind=kinds[row["path"]], expectedMode="0700")
@@ -133,7 +138,7 @@ class Roots:
 
     def __init__(self, report, *, profile="legacy"):
         self.shared, self.leaves, self.leaf_modes = selection(profile)
-        self.anchors = ANCHORS + (("/etc",) if profile == "commissioning-startup" else ())
+        self.anchors = ANCHORS + (("/etc",) if profile in ("commissioning-startup", "commissioning-decisions") else ())
         self.targets = self.shared + self.leaves
         self.nodes = {}
         self.records = {entry["path"]: entry for entry in report["directories"]}
@@ -274,7 +279,7 @@ def main():
     parser.add_argument("--create", action="store_true",
                         help="create only missing fixed directories; preserve any partial result")
     parser.add_argument("--profile", choices=PROFILES, default="legacy",
-                        help="select legacy (default), adopted-cold, adopted-operational, or commissioning-startup with two empty public handoff directories")
+                        help="select legacy (default), adopted-cold, adopted-operational, commissioning-startup, or commissioning-decisions with an empty authoritative state directory")
     args = parser.parse_args()
     report = initial_report(args.profile, args.create)
     owner = Roots(report, profile=args.profile)

@@ -67,6 +67,7 @@ def fixture(parent, profile="supervisor"):
         "scripts/run_native_pilot_lifecycle.py",
         "scripts/run_native_pilot_approval_provider.py",
         "scripts/run_native_pilot_current_head_decisions.py",
+        "scripts/run_native_pilot_current_head_worker.py",
         "scripts/run_native_pilot_startup.py",
         "scripts/run_native_pilot_startup_child.py",
     )
@@ -146,6 +147,7 @@ class SupervisorRuntimeTests(unittest.TestCase):
             "supervisor/app/scripts/run_native_pilot_lifecycle.py",
             "supervisor/app/scripts/run_native_pilot_approval_provider.py",
             "supervisor/app/scripts/run_native_pilot_current_head_decisions.py",
+            "supervisor/app/scripts/run_native_pilot_current_head_worker.py",
             "supervisor/app/scripts/run_native_pilot_startup.py",
             "supervisor/app/scripts/run_native_pilot_startup_child.py"})
         self.assertIn("authority/app/scripts/authority/native_pilot_authority_io.py", files)

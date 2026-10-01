@@ -23,6 +23,11 @@ PROVIDER_INPUTS = ("policy", "supervisor-inventory", "recipe", "conductor-invent
 DECISION_CLI = "/supervisor/app/scripts/run_native_pilot_current_head_decisions.py"
 DECISION_MODE = "current-head-decision-service"
 DECISION_INPUTS = ("supervisor-inventory", "configuration")
+HEAD_WORKER_CLI = "/supervisor/app/scripts/run_native_pilot_current_head_worker.py"
+HEAD_WORKER_MODE = "current-head-worker"
+HEAD_UPDATE_MODE = "current-head-state-update"
+HEAD_WORKER_INPUTS = ("supervisor-inventory", "policy")
+HEAD_UPDATE_INPUTS = ("supervisor-inventory", "authorization")
 STARTUP_CLI = "/supervisor/app/scripts/run_native_pilot_startup.py"
 STARTUP_MODE = "commissioning-startup"
 STARTUP_CHILD_CLI = "/supervisor/app/scripts/run_native_pilot_startup_child.py"
@@ -132,6 +137,10 @@ def valid_arguments(arguments):
         return _public_peer_arguments(arguments, PROVIDER_INPUTS, ("approval-socket", "current-head-socket"))
     if arguments[0] == DECISION_MODE:
         return _public_peer_arguments(arguments, DECISION_INPUTS, ("approval-socket",))
+    if arguments[0] == HEAD_WORKER_MODE:
+        return _public_peer_arguments(arguments, HEAD_WORKER_INPUTS, ())
+    if arguments[0] == HEAD_UPDATE_MODE:
+        return _public_peer_arguments(arguments, HEAD_UPDATE_INPUTS, ())
     adopted = arguments[0] == "--run-adopted-native-pilot"
     inputs = INPUTS + (("intake-configuration",) if adopted else ())
     keys_offset = 1 + 4 * len(inputs) + 8
@@ -195,6 +204,7 @@ def main():
     sys.path[:0] = list(IMPORT_ROOTS)
     selected_cli = {LIFECYCLE_MODE: LIFECYCLE_CLI, PROVIDER_MODE: PROVIDER_CLI,
         DECISION_MODE: DECISION_CLI, STARTUP_MODE: STARTUP_CLI,
+        HEAD_WORKER_MODE: HEAD_WORKER_CLI, HEAD_UPDATE_MODE: HEAD_WORKER_CLI,
         STARTUP_CHILD_MODE: STARTUP_CHILD_CLI}.get(sys.argv[1], CLI)
     runpy.run_path(selected_cli, run_name="__main__")
 

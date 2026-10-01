@@ -22,6 +22,7 @@ from serverware import native_pilot_publication as publication
 from serverware import native_shadow_nitro_originals as originals
 from serverware.native_pilot_genesis_authority import _SelfRuntime
 from serverware.native_pilot_lifecycle import _Protected
+from serverware.native_pilot_current_head_state import AtomicPublisher
 from serverware.native_pilot_supervisor_approval_channel import ApprovalPeer
 
 p = profile.p
@@ -43,7 +44,7 @@ class CurrentHeadDecisionService:
         self._pid, self._start, self._boot = os.getpid(), originals._start(), originals._boot()
         self._last, self._wall = originals._clock(), time.time_ns()
         self._sources, self._handles, self._files, self._roots = [], [], [], {}
-        self._runtime = self._peer = self._prepared = self._active = None
+        self._runtime = self._peer = self._prepared = self._active = self._atomic = None
         self._allowed, self._bytes = set(), 0
         self._failed = self._closed = self._closing = self._running = self._used = False
         self.stage, self.decisions = "opening", 0
@@ -93,6 +94,14 @@ class CurrentHeadDecisionService:
             pin = owner._prepared["value"]["directory"]
             p.require(stat.S_IMODE(leaf.st_mode) == 0o700 and (leaf.st_dev, leaf.st_ino) == (pin["device"], pin["inode"]))
             owner._scan()  # Exact empty task directory before any publication.
+            with ownership.owning():
+                try:
+                    owner._atomic = AtomicPublisher.open(directory=pin, check=owner.check)
+                except BaseException as error:
+                    if getattr(error, "owner", None) is not None:
+                        p.require(type(error.owner) is AtomicPublisher)
+                        owner._atomic = error.owner
+                    raise
             peer = owner._prepared["value"]["providerPeer"]
             with ownership.owning():
                 try:
@@ -165,24 +174,13 @@ class CurrentHeadDecisionService:
     def _publish(self, name, raw):
         self.check()
         p.require(type(raw) is bytes and 0 < len(raw) <= 32 * 1024 * 1024 and name not in self._allowed)
-        directory = self._roots[profile.DIRECTORY][0][0]
-        with ownership.owning():
-            fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW,
-                0o400, dir_fd=directory)
-            row = self._handle(fd)
-            self._allowed.add(name)
-        os.fchmod(fd, 0o400)
-        offset = 0
-        while offset < len(raw):
-            self.check()
-            count = os.write(fd, raw[offset:offset + 65536]); p.require(count > 0)
-            offset += count
-        os.fsync(fd); self.check()
-        written = originals._identity(os.fstat(fd))
-        self._drop(row)
-        opened, actual = self._read(name, len(raw))
-        p.require(actual == raw and originals._identity(os.fstat(opened)) == written)
-        os.fsync(directory); self.check()
+        # A waiting worker treats the final name as readiness. Publish only
+        # complete, fsynced, read-back bytes through atomic no-overwrite link.
+        self._atomic.publish(name, raw)
+        self._allowed.add(name)
+        _, actual = self._read(name, len(raw))
+        p.require(actual == raw)
+        self.check()
 
     def run(self):
         try:
@@ -234,6 +232,7 @@ class CurrentHeadDecisionService:
             self._closing = True
             with ownership.owning():
                 if self._peer is not None: self._peer.close()
+                if self._atomic is not None: self._atomic.close()
                 while self._handles: self._drop(self._handles[-1])
                 for held in reversed(self._sources): held.close()
                 if self._runtime is not None: self._runtime.close()

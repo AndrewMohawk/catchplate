@@ -356,6 +356,7 @@ RUN --network=none set -eu; \
     install -m 0444 /source/scripts/run_native_pilot_lifecycle.py /supervisor-runtime-root/supervisor/app/scripts/run_native_pilot_lifecycle.py; \
     install -m 0444 /source/scripts/run_native_pilot_approval_provider.py /supervisor-runtime-root/supervisor/app/scripts/run_native_pilot_approval_provider.py; \
     install -m 0444 /source/scripts/run_native_pilot_current_head_decisions.py /supervisor-runtime-root/supervisor/app/scripts/run_native_pilot_current_head_decisions.py; \
+    install -m 0444 /source/scripts/run_native_pilot_current_head_worker.py /supervisor-runtime-root/supervisor/app/scripts/run_native_pilot_current_head_worker.py; \
     install -m 0444 /source/scripts/run_native_pilot_startup.py /supervisor-runtime-root/supervisor/app/scripts/run_native_pilot_startup.py; \
     install -m 0444 /source/scripts/run_native_pilot_startup_child.py /supervisor-runtime-root/supervisor/app/scripts/run_native_pilot_startup_child.py; \
     test -z "$(find /supervisor-runtime-root -type l -print -quit)"; \

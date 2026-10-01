@@ -144,6 +144,18 @@ class CurrentHeadDecisionServiceControls(unittest.TestCase):
         # Callback checks the actual local owner, never recursively the channel.
         self.assertNotIn("self._peer", ast.unparse(methods["check"]))
 
+    def test_receiver_publishes_complete_final_names_through_retained_atomic_owner(self):
+        tree = ast.parse((ROOT / "serverware/native_pilot_current_head_decision_service.py").read_text())
+        owner = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "CurrentHeadDecisionService")
+        methods = {node.name: node for node in owner.body if isinstance(node, ast.FunctionDef)}
+        publish = ast.unparse(methods["_publish"])
+        self.assertIn("self._atomic.publish(name, raw)", publish)
+        self.assertNotIn("os.write", publish)
+        self.assertNotIn("os.O_CREAT", publish)
+        self.assertLess(publish.index("self._atomic.publish"), publish.index("self._read"))
+        self.assertIn("owner._atomic = error.owner", ast.unparse(methods["open"]))
+        self.assertIn("self._atomic.close()", ast.unparse(methods["close"]))
+
 
 if __name__ == "__main__":
     unittest.main()

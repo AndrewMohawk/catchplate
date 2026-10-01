@@ -140,7 +140,7 @@ def sandbox(profile="adopted-cold"):
         for path in (tree / "run", tree / "var", tree / "var/lib"):
             path.mkdir()
             path.chmod(0o755)
-        if profile == "commissioning-startup":
+        if profile in ("commissioning-startup", "commissioning-decisions"):
             (tree / "etc").mkdir(); (tree / "etc").chmod(0o755)
         real_open, real_stat = os.open, os.stat
 
@@ -166,6 +166,35 @@ def sandbox(profile="adopted-cold"):
 @unittest.skipUnless(sys.platform == "linux" and os.getresuid() == (0, 0, 0)
     and os.getresgid() == (0, 0, 0), "requires isolated Linux root/user namespace")
 class FilesystemControls(unittest.TestCase):
+    def test_decision_profile_adds_only_empty_state_root_without_seeding_authority(self):
+        shared, leaves, modes = roots.selection("commissioning-decisions")
+        old_shared, old_leaves, old_modes = roots.selection("commissioning-startup")
+        path = "/etc/serverware/native-pilot-current-head-state"
+        self.assertEqual(shared, old_shared)
+        self.assertEqual(leaves, old_leaves + (path,))
+        self.assertEqual(modes, old_modes | {path: 0o700})
+        with sandbox("commissioning-decisions") as (tree, owner, report):
+            owner.inspect(); owner.create_missing(); owner.check_populations()
+            leaf = tree / path.lstrip("/")
+            self.assertEqual(tuple(leaf.iterdir()), ())
+            self.assertEqual(stat.S_IMODE(leaf.stat().st_mode), 0o700)
+            selected = next(row for row in report["directories"] if row["path"] == path)
+            self.assertEqual(selected["kind"], "authoritative-current-head-state")
+            self.assertEqual(selected["expectedMode"], "0700")
+            self.assertFalse(report["releaseAuthority"])
+            self.assertFalse(report["runtimeResourcesCreated"])
+
+    def test_decision_state_populated_or_wrong_mode_is_not_reset(self):
+        for fault in ("populated", "mode"):
+            with self.subTest(fault=fault), sandbox("commissioning-decisions") as (tree, owner, _):
+                leaf = tree / "etc/serverware/native-pilot-current-head-state"
+                leaf.mkdir(parents=True); leaf.parent.chmod(0o700)
+                leaf.chmod(0o755 if fault == "mode" else 0o700)
+                if fault == "populated": (leaf / "current.json").write_bytes(b"preserve")
+                with self.assertRaises(roots.Refused): owner.inspect()
+                if fault == "populated": self.assertEqual((leaf / "current.json").read_bytes(), b"preserve")
+                self.assertFalse((tree / "var/lib/serverware").exists())
+
     def test_default_cli_is_legacy_inspection_only(self):
         with sandbox("legacy") as (tree, _, _):
             output = io.StringIO()

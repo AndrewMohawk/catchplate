@@ -55,6 +55,7 @@ SUPERVISOR_FILES = (
     "scripts/run_native_pilot_lifecycle.py",
     "scripts/run_native_pilot_approval_provider.py",
     "scripts/run_native_pilot_current_head_decisions.py",
+    "scripts/run_native_pilot_current_head_worker.py",
     "scripts/run_native_pilot_startup.py",
     "scripts/run_native_pilot_startup_child.py",
 )

@@ -58,6 +58,8 @@ use std::thread;
 use super::guest::native_guest::{self, retrieval_client};
 #[path = "production_initial_history.rs"]
 mod initial_history;
+#[path = "production_replay.rs"]
+mod replay_journal;
 
 const PRODUCTION_RPC_SESSION_COUNT: usize = 4;
 const PRODUCTION_RPC_WORKER_COUNT: usize = 4;
@@ -1777,8 +1779,8 @@ where
     replay: BTreeMap<String, ReplayedProductionResponse>,
     durable_requests: BTreeMap<String, Vec<u8>>,
     durable_responses: BTreeMap<String, Vec<u8>>,
-    replay_bytes: usize,
-    recovery_ready: bool,
+    replay_state: replay_journal::State,
+    journal_keys: BTreeSet<super::super::super::Sha256Digest>,
 }
 
 impl<A> ProductionRpcServiceBridgeV4<A>
@@ -1791,7 +1793,7 @@ where
         journal_directory: OwnedFd,
     ) -> Result<Self, ServiceRunnerError> {
         histories.validate_roles()?;
-        let mut journal = DurableAppendJournal::from_directory(
+        let mut journal = DurableAppendJournal::from_directory_without_orphan_repair(
             journal_directory,
             TrustedHostServiceRoleV3::DurableRecoveryStore,
             MAX_SERVICE_FRAME_BYTES,
@@ -1803,13 +1805,48 @@ where
         let mut replay = BTreeMap::new();
         let mut durable_requests = BTreeMap::new();
         let mut durable_responses = BTreeMap::new();
-        let mut replay_bytes = 0_usize;
+        let mut replay_state = replay_journal::State::new(MAX_PRODUCTION_RPC_REPLAY_RECORDS,
+            MAX_PRODUCTION_RPC_REPLAY_BYTES, chain.terminal_head.as_ref().map_or(0, |head| head.exact_head_bytes.len()));
+        let mut journal_keys = BTreeSet::new();
+        let mut pending: Option<replay_journal::Start> = None;
         for record in chain.records {
             let request: ProductionRpcRequestV4 =
                 decode_canonical_frame(&record.exact_request_bytes)?;
+            request.validate().map_err(ServiceRunnerError::invalid)?;
+            let physical_bytes = record.exact_record_bytes.len().checked_add(record.exact_request_bytes.len())
+                .and_then(|bytes| bytes.checked_add(record.exact_response_bytes.len()))
+                .ok_or_else(|| ServiceRunnerError::invalid("production RPC recovery accounting overflowed"))?;
+            if !journal_keys.insert(record.idempotency_sha256.clone()) {
+                return Err(ServiceRunnerError::invalid("production RPC journal key is duplicated"));
+            }
+            let key = request.replay_id_sha256.as_str().to_owned();
+            if let Some(start) = replay_journal::Start::decode(&record.exact_response_bytes)? {
+                start.require_request(&request, &record.exact_request_bytes, record.sequence)?;
+                let previous = durable_responses.get(&key).map(|raw: &Vec<u8>| super::super::super::Sha256Digest::compute(raw));
+                if pending.is_some() || start.keys()?.0 != record.idempotency_sha256
+                    || start.previous_response_sha256 != previous
+                    || durable_requests.get(&key).is_some_and(|raw| raw != &record.exact_request_bytes)
+                    || replay.contains_key(&key) {
+                    return Err(ServiceRunnerError::invalid("production RPC recovered attempt changed prior originals"));
+                }
+                replay_state.recover_start(&record.exact_request_bytes, physical_bytes)
+                    .map_err(ServiceRunnerError::invalid)?;
+                pending = Some(start);
+                continue;
+            }
+            let recertifying = if let Some(start) = &pending {
+                if start.keys()?.1 != record.idempotency_sha256 {
+                    return Err(ServiceRunnerError::invalid("production RPC completion does not name its exact attempt"));
+                }
+                start.previous_response_sha256.is_some()
+            } else {
+                if record.idempotency_sha256 != request.replay_id_sha256 {
+                    return Err(ServiceRunnerError::invalid("legacy production RPC journal key differs"));
+                }
+                false
+            };
             let response: ProductionRpcResponseV4 =
                 decode_canonical_frame(&record.exact_response_bytes)?;
-            request.validate().map_err(ServiceRunnerError::invalid)?;
             response
                 .validate_for_request(&request)
                 .map_err(ServiceRunnerError::invalid)?;
@@ -1818,30 +1855,21 @@ where
                 &request,
                 &response,
             )?;
-            let record_bytes = record
-                .exact_request_bytes
-                .len()
-                .checked_add(record.exact_response_bytes.len())
-                .ok_or_else(|| {
-                    ServiceRunnerError::invalid(
-                        "production RPC recovered replay bytes overflowed",
-                    )
-            })?;
-            let key = request.replay_id_sha256.as_str().to_owned();
-            if durable_requests
-                .insert(key.clone(), record.exact_request_bytes.clone())
-                .is_some()
-                || durable_responses
-                    .insert(
-                        key.clone(),
-                        record.exact_response_bytes.clone(),
-                    )
-                    .is_some()
-            {
-                return Err(ServiceRunnerError::invalid(
-                    "production RPC recovery contains a duplicate replay identity",
-                ));
+            if recertifying {
+                let prior: ProductionRpcResponseV4 = decode_canonical_frame(durable_responses.get(&key)
+                    .ok_or_else(|| ServiceRunnerError::invalid("production RPC recertification lost prior response"))?)?;
+                if prior.response != response.response {
+                    return Err(ServiceRunnerError::invalid("production RPC recovered recertification changed response body"));
+                }
+            } else {
+                if durable_requests.insert(key.clone(), record.exact_request_bytes.clone()).is_some()
+                    || durable_responses.insert(key.clone(), record.exact_response_bytes.clone()).is_some() {
+                    return Err(ServiceRunnerError::invalid("production RPC recovery contains a duplicate replay identity"));
+                }
             }
+            replay_state.recover_complete(&record.exact_request_bytes, physical_bytes)
+                .map_err(ServiceRunnerError::invalid)?;
+            pending = None;
             if matches!(
                 response.response,
                 ProductionRpcResponseBodyV4::Dispatch(_)
@@ -1856,19 +1884,8 @@ where
                     },
                 );
             }
-            replay_bytes = replay_bytes
-                .checked_add(record_bytes)
-                .ok_or_else(|| {
-                    ServiceRunnerError::invalid(
-                        "production RPC recovered replay bytes overflowed",
-                    )
-                })?;
-            if replay_bytes > MAX_PRODUCTION_RPC_REPLAY_BYTES {
-                return Err(ServiceRunnerError::invalid(
-                    "production RPC recovered replay bytes exceed the fixed bound",
-                ));
-            }
         }
+        replay_state.finish_recovery().map_err(ServiceRunnerError::invalid)?;
         Ok(Self {
             authority,
             histories,
@@ -1876,28 +1893,53 @@ where
             replay,
             durable_requests,
             durable_responses,
-            replay_bytes,
-            recovery_ready: true,
+            replay_state,
+            journal_keys,
         })
     }
 
     pub(super) fn recovery_ready(&self) -> bool {
-        self.recovery_ready
+        self.replay_state.ready()
     }
 
     fn handle_exact_request(
         &mut self,
         exact_request: &[u8],
     ) -> Result<Vec<u8>, ServiceRunnerError> {
-        if !self.recovery_ready {
-            return Err(ServiceRunnerError::invalid(
-                "production RPC service has not completed durable recovery",
-            ));
-        }
         let request: ProductionRpcRequestV4 =
             decode_canonical_frame(exact_request)?;
         request.validate().map_err(ServiceRunnerError::invalid)?;
         require_live_deadline(request.deadline_boottime_nanos)?;
+        if !self.replay_state.ready() {
+            return Self::fenced_response(&request);
+        }
+        match self.handle_ready_request(&request, exact_request) {
+            Err(_) if !self.replay_state.ready() => Self::fenced_response(&request),
+            result => result,
+        }
+    }
+
+    // This is only a request-bound transport refusal. It is never journaled
+    // as a completed attempt and never asserts effect absence or cleanup.
+    fn fenced_response(request: &ProductionRpcRequestV4) -> Result<Vec<u8>, ServiceRunnerError> {
+        let mut response = ProductionRpcResponseV4 {
+            api_version: PRODUCTION_RPC_PROTOCOL_VERSION.to_owned(),
+            request_id_sha256: request.request_id_sha256.clone(),
+            request_sha256: request.request_sha256.clone(),
+            replay_id_sha256: request.replay_id_sha256.clone(),
+            completed_at_boottime_nanos: require_live_deadline(request.deadline_boottime_nanos)?,
+            response: ProductionRpcResponseBodyV4::Rejected(ProductionRpcRejectionV4::new(
+                ProductionRpcRejectionCodeV4::RecoveryNotReady, request.request_sha256.clone(),
+                "production RPC attempt is uncertain; no outcome or cleanup is established")),
+            response_sha256: super::super::super::Sha256Digest::compute(&[]),
+        };
+        response.response_sha256 = response.computed_response_sha256().map_err(ServiceRunnerError::invalid)?;
+        response.validate_for_request(request).map_err(ServiceRunnerError::invalid)?;
+        encode_canonical_frame(&response).map_err(Into::into)
+    }
+
+    fn handle_ready_request(&mut self, request: &ProductionRpcRequestV4, exact_request: &[u8])
+        -> Result<Vec<u8>, ServiceRunnerError> {
         let replay_key = request.replay_id_sha256.as_str().to_owned();
         if let Some(replayed) = self.replay.get(&replay_key) {
             if replayed.exact_request != exact_request {
@@ -1915,42 +1957,34 @@ where
                 "production RPC durable replay identity was reused for different exact request bytes",
             ));
         }
-        let reserved_replay_bytes = if was_durable {
-            self.replay_bytes
-        } else {
-            self.replay_bytes
-                .checked_add(exact_request.len())
-                .and_then(|bytes| {
-                    bytes.checked_add(MAX_SERVICE_FRAME_BYTES)
-                })
-                .ok_or_else(|| {
-                    ServiceRunnerError::invalid(
-                        "production RPC replay capacity overflowed",
-                    )
-                })?
-        };
-        if (self.durable_requests.len()
-            >= MAX_PRODUCTION_RPC_REPLAY_RECORDS
-            && !self.durable_requests.contains_key(&replay_key))
-            || reserved_replay_bytes > MAX_PRODUCTION_RPC_REPLAY_BYTES
-        {
-            return Err(ServiceRunnerError::invalid(
-                "production RPC durable replay capacity is exhausted",
-            ));
+        let sequence = self.replay_state.next_sequence().map_err(ServiceRunnerError::invalid)?;
+        let start = replay_journal::Start::new(request, exact_request, sequence,
+            self.durable_responses.get(&replay_key).map(Vec::as_slice));
+        let start_raw = encode_canonical_frame(&start)?;
+        let (start_key, completion_key) = start.keys()?;
+        // Legacy replay identifiers were caller-selected. Refuse any actual
+        // namespace overlap; domain separation alone is not a migration check.
+        if start_key == completion_key || self.journal_keys.contains(&start_key)
+            || self.journal_keys.contains(&completion_key) {
+            return Err(ServiceRunnerError::invalid("production RPC attempt journal key overlaps a retained record"));
         }
+        self.replay_state.begin(exact_request, start_raw.len(), MAX_SERVICE_FRAME_BYTES)
+            .map_err(ServiceRunnerError::invalid)?;
+        let persisted = self.journal.append_exact_exchange(start_key.clone(), exact_request, &start_raw)?;
+        if persisted.exact_response_bytes() != start_raw
+            || self.journal.lookup_persisted_exact_response(&start_key)?.as_deref() != Some(start_raw.as_slice()) {
+            return Err(ServiceRunnerError::invalid("production RPC start readback differs"));
+        }
+        self.journal_keys.insert(start_key);
+        self.replay_state.start_persisted().map_err(ServiceRunnerError::invalid)?;
+        require_live_deadline(request.deadline_boottime_nanos)?;
 
-        let time_sample=self.authority.trusted_time_for_operation(&request)
+        let time_sample=self.authority.trusted_time_for_operation(request)
             .map_err(|_|ServiceRunnerError::invalid("original trusted time interval refused operation"))?;
-        let response_body = match self.dispatch_to_authority(&request) {
-            Ok(response) => response,
-            Err(rejection) => ProductionRpcResponseBodyV4::Rejected(
-                ProductionRpcRejectionV4::new(
-                    rejection.code,
-                    request.request_sha256.clone(),
-                    rejection.reason,
-                ),
-            ),
-        };
+        // A local rejection code does not prove that earlier contacts in this
+        // compound operation had no effect. Every Err retains the start fence.
+        let response_body = self.dispatch_to_authority(request)
+            .map_err(|_| ServiceRunnerError::invalid("production authority attempt is incomplete or uncertain"))?;
         if let Some(sample)=&time_sample {
             sample.check().map_err(|_|ServiceRunnerError::invalid("original trusted time interval expired during operation"))?;
         }
@@ -1971,14 +2005,14 @@ where
             .computed_response_sha256()
             .map_err(ServiceRunnerError::invalid)?;
         response
-            .validate_for_request(&request)
+            .validate_for_request(request)
             .map_err(ServiceRunnerError::invalid)?;
         validate_authority_response(
             &self.histories.borrowed(),
-            &request,
+            request,
             &response,
         )?;
-        if was_durable {
+        let original_response = if was_durable {
             let durable_response = self
                 .durable_responses
                 .get(&replay_key)
@@ -1994,39 +2028,27 @@ where
                     "production RPC live authority recertification differs from the durable response body",
                 ));
             }
-            self.replay.insert(
-                replay_key,
-                ReplayedProductionResponse {
-                    exact_request: exact_request.to_vec(),
-                    exact_response: durable_response.clone(),
-                },
-            );
-            return Ok(durable_response.clone());
-        }
+            Some(durable_response.clone())
+        } else { None };
         let exact_response = encode_canonical_frame(&response)?;
         let persisted = self.journal.append_exact_exchange(
-            request.replay_id_sha256.clone(),
+            completion_key.clone(),
             exact_request,
             &exact_response,
         )?;
-        if persisted.exact_response_bytes() != exact_response {
+        if persisted.exact_response_bytes() != exact_response
+            || self.journal.lookup_persisted_exact_response(&completion_key)?.as_deref() != Some(exact_response.as_slice()) {
             return Err(ServiceRunnerError::invalid(
                 "production RPC journal replay differs from the newly validated response",
             ));
         }
-        if !was_durable {
-            self.replay_bytes = self
-                .replay_bytes
-                .checked_add(exact_request.len())
-                .and_then(|bytes| {
-                    bytes.checked_add(exact_response.len())
-                })
-                .ok_or_else(|| {
-                    ServiceRunnerError::invalid(
-                        "production RPC replay byte accounting overflowed",
-                    )
-                })?;
+        self.journal_keys.insert(completion_key);
+        require_live_deadline(request.deadline_boottime_nanos)?;
+        if let Some(sample) = &time_sample {
+            sample.check().map_err(|_| ServiceRunnerError::invalid("original trusted time interval expired during durable completion"))?;
         }
+        self.replay_state.complete(exact_response.len()).map_err(ServiceRunnerError::invalid)?;
+        let returned_response = original_response.unwrap_or_else(|| exact_response.clone());
         self.durable_requests
             .entry(replay_key.clone())
             .or_insert_with(|| exact_request.to_vec());
@@ -2037,10 +2059,10 @@ where
             replay_key,
             ReplayedProductionResponse {
                 exact_request: exact_request.to_vec(),
-                exact_response: exact_response.clone(),
+                exact_response: returned_response.clone(),
             },
         );
-        Ok(exact_response)
+        Ok(returned_response)
     }
 
     fn dispatch_to_authority(
@@ -2802,8 +2824,7 @@ fn run_production_rpc_service_loaded_inner(
             if !owner.commitment_bridge_selected() {return Err(ServiceRunnerError::invalid("CommitRequest bridge purpose differs"));}
             authority.commit_request=Some(std::sync::Mutex::new(super::dispatch_service::client::Client::new(selection,
                 load_bridge_histories(&loaded.value,&loaded.credentials,&bootstrap)?,Arc::clone(&owner),&loaded.value.expected_service_configuration_sha256,
-                matches!(loaded.value.api_version.as_str(),super::spool_head_client::EFFECTS_RUNTIME
-                    |super::spool_head_client::INITIAL_HISTORY_RUNTIME))?));
+                loaded.value.spool.as_ref().is_some_and(|selection| selection.effects_selected()))?));
         }
         authority.enable_native_proofs(owner)?;
     }

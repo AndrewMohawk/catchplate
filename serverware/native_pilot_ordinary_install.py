@@ -22,7 +22,7 @@ from serverware.native_pilot_ordinary_runtime_recipe import INSPECTION_PATHS, RU
 from serverware import native_pilot_precreation_install as precreation
 from serverware import native_pilot_supervisor_initial_history as histories
 from serverware import native_shadow_nitro_originals as originals
-from serverware.native_pilot_phase_execution import INITIAL_JOBS, JOBS, KEY_AUTHORIZATION_JOBS
+from serverware.native_pilot_phase_execution import INITIAL_JOBS, JOBS, KEY_AUTHORIZATION_JOBS, LAUNCH_AUTHORIZATION_JOBS
 from serverware.native_shadow_proof_cohort_assignment import ENDPOINT_ROLES
 
 p = g.p
@@ -43,7 +43,7 @@ _NATIVE_COMPLETED_JOBS = tuple("native-delivery-" + role for role in ENDPOINT_RO
              "activeEffectCommit", "retrieval", "persistence", "trustedTime")) + (
                 "native-generation-install-grant", "ordinary-dispatch-durable-recovery-store",
                 "ordinary-dispatch-current-signature-authority", "ordinary-head", "ordinary-cleanup",
-                "ordinary-current", "install-launch-retrieval")
+                "ordinary-current") + tuple(job.name for job in LAUNCH_AUTHORIZATION_JOBS) + ("install-launch-retrieval",)
 
 
 def native_completed_boundary(request):

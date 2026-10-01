@@ -3,8 +3,8 @@
 The originating process owns every prerequisite and pending request. Complete
 inputs and genuine signed results are retained without recomposition; failures
 consume the attempt. No key, file, activation resource, service receipt, clock
-window or running service is created by this composer. The next launch job can
-only read the completed handoff; this module never performs that installation.
+window or running service is created by this composer. The next authorization
+job can only read the completed handoff; this module never performs a launch.
 """
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ import time
 from serverware import custody_generation_grants as generation
 from serverware import native_pilot_native_service_authority as native_authority
 from serverware import native_pilot_ordinary_generation_profile as generation_profile
+from serverware import native_pilot_ordinary_install as installation
 from serverware import native_pilot_ordinary_transition_profile as profile
 from serverware import native_pilot_precreation_install as precreation
 from serverware import native_pilot_publication as publication
@@ -20,12 +21,13 @@ from serverware import native_pilot_service_authority as authority
 from serverware import native_pilot_supervisor_endpoint_deliveries as endpoints
 from serverware import native_pilot_supervisor_native_services as native
 from serverware import native_shadow_nitro_originals as originals
-from serverware.native_pilot_phase_execution import JOBS, MAX_RETAINED_BYTES
+from serverware.native_pilot_phase_execution import JOBS, LAUNCH_AUTHORIZATION_JOBS, MAX_RETAINED_BYTES
 
 p = generation.p
 TRANSITIONS = profile.JOBS
 FIRST_INDEX = 74
-NEXT_JOB = "install-launch-retrieval"
+NEXT_JOB = "native-closure-retrieval"
+_AUTHORIZATION_LAST_INDEX = FIRST_INDEX + len(TRANSITIONS) + len(LAUNCH_AUTHORIZATION_JOBS)
 JOB_NAMES = tuple("ordinary-" + operation + ("-" + role if operation == "dispatch" else "")
     for operation, role in TRANSITIONS)
 _LIVE = None
@@ -72,6 +74,7 @@ class _Attempt:
         self.next = self.retained_bytes = 0
         self.inflight = None
         self.failed = self.closed = self.close_attempted = False
+        self.authorization_boundary_open = False
         self.inputs, self.outputs, self.results = {}, {}, {}
         self.generation_inputs, self.generation_results = {}, {}
         self.native_context = self.ordinary_context = self.ordinary_context_sha = self.fragment = None
@@ -216,13 +219,24 @@ def compose(policy, *, process, request) -> bytes:
 
 
 def require_transitions(policy, *, process, request) -> dict:
-    """Read-only five-result handoff at actual install-launch-retrieval job79."""
+    """Read-only five-result first handoff at actual native-closure-retrieval79."""
+    return _verified_transitions(policy, process=process, request=request, first=True)
+
+
+def recheck_transitions(policy, *, process, request) -> dict:
+    """Recheck an opened boundary through the exact thirty-one jobs/handoff110."""
+    return _verified_transitions(policy, process=process, request=request, first=False)
+
+
+def _verified_transitions(policy, *, process, request, first):
     _owners(policy, process, request)
     owner = _LIVE
     p.require(owner is not None and owner.policy is policy and owner.process is process
         and not owner.failed and not owner.closed and owner.inflight is None and owner.next == len(TRANSITIONS)
-        and request.phase == "service-originals" and request.job_index == FIRST_INDEX + len(TRANSITIONS)
-        and request.job == NEXT_JOB and JOBS["service-originals"][request.job_index - 1].name == NEXT_JOB)
+        and installation.native_completed_boundary(request)
+        and FIRST_INDEX + len(TRANSITIONS) <= request.job_index <= _AUTHORIZATION_LAST_INDEX
+        and (request.job_index == FIRST_INDEX + len(TRANSITIONS) and request.job == NEXT_JOB
+             if first else owner.authorization_boundary_open))
     owner.inflight = request
     try:
         now, epoch = _current(owner, request)
@@ -230,6 +244,7 @@ def require_transitions(policy, *, process, request) -> dict:
         _current(owner, request)
         p.require(tuple(owner.outputs) == JOB_NAMES)
         result = {job: {"inputOriginal": owner.inputs[job], "grantOriginal": owner.outputs[job]} for job in JOB_NAMES}
+        owner.authorization_boundary_open = True
         owner.inflight = None
         return result
     except BaseException:

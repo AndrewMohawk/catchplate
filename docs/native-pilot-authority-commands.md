@@ -40,7 +40,7 @@ empty directories before gates write; legacy raw history remains unchanged.
 Supervisor history/runtime/delivery wiring has since landed, followed by
 generation, native-delivery, key-authorization, native-service and
 [ordinary-transition decisions](native-pilot-ordinary-transitions.md). Current coverage is
-85/105 fixed jobs, 20 unsupported and 0/6 production acceptance; these commands
+116/136 fixed jobs, 20 unsupported and 0/6 production acceptance; these commands
 do not bypass the startup guard. See [current supervisor scope](native-pilot-supervisor.md).
 
 The [driver-window issuer](native-pilot-window-authority.md) handles the existing
@@ -49,8 +49,19 @@ pre-start Window/v1 under the bootstrap authority. The
 window and the actual fixed supervisor executable before publishing the control
 file last. The separate [closure issuer](native-pilot-closure-authority.md)
 authorizes the v2 late-runtime execution closure after genuine observation and
-C9 delivery. None is called by the current 105-job coordinator, and none supplies
-the missing independently authorized commissioning decision engine.
+C9 delivery. The current 136-job coordinator now calls that closure issuer for
+ten endpoint jobs, followed by the fixed encrypted-delivery and verifier-transport
+issuers. CommitRequest first has a separate request-commitment signature.
+The driver-window issuer and bootstrap installer remain outside that job graph.
+These commands do not supply the still-missing launch/remaining decisions.
+
+The new protected-input commands are
+`sign_native_pilot_encrypted_delivery.py --operation request-commitment|delivery --role ROLE --input-fd FD --authority-key-fd FD`
+and `sign_native_pilot_verifier_transport.py --role ROLE --input-fd FD --authority-key-fd FD`.
+The first operation is CommitRequest-only. Both consume existing complete public
+originals and exactly one independently provisioned supervisor capability; they
+do not create secrets, ciphertext or verifier verdicts. See
+[late launch authorizations](native-pilot-launch-authorizations.md).
 
 Use a separately admitted Linux Python runtime and protected source/dependencies.
 These commands are deliberately not added to the conductor's two-script runtime

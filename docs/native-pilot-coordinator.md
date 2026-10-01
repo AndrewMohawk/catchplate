@@ -15,7 +15,7 @@ been executed as evidence of pilot readiness.
 ## Remaining supervisor implementation
 
 The per-job executor and approval installer do not implement the independent
-complete decision service. The former waits for 105 approved complete inputs;
+complete decision service. The former waits for 136 approved complete inputs;
 the latter only publishes approval/input originals supplied by the supervisor.
 Calling this solely operational provisioning was incorrect. The original driver
 startup interval is at most 30 seconds, so a human cannot be the assumed per-job
@@ -33,10 +33,10 @@ or success flags can replace those checks. The original per-job protocol remains
 valid; commissioning policy is not approval of arbitrary future JSON.
 
 The current [supervisor source](native-pilot-supervisor.md) implements the actual
-authority-process owner, pinned commissioning policy, and the first 69 fixed
-job composers, including prior-signature verification. Twenty required native
-key/admission decisions were added to the previous 85-job inventory. The full-run
-owner refuses before spawn because the other 36 jobs remain unimplemented. This
+authority-process owner, pinned commissioning policy, and the first 116 fixed
+job composers, including prior-signature verification. Twenty native key/admission
+and 31 late launch authorizations were added to the previous 85-job inventory.
+The full-run owner refuses before spawn because the other 20 jobs remain unimplemented. This
 is not yet a runnable or admitted supervisor; its executable packaging and
 connected verification also remain open. Independent policy selection,
 dependency approval, private key/service provisioning and actual hardware remain

@@ -66,12 +66,18 @@ def _original(value, maximum, *, array=False):
 
 
 def _live(window, previous=0):
-    _same(list(originals._boot()), [window[name] for name in WINDOW_FIELDS[:3]])
+    return window_at(window, boot=originals._boot(),
+        now=time.clock_gettime_ns(time.CLOCK_BOOTTIME), previous=previous)
+
+
+def window_at(window, *, boot, now, previous=0):
+    """Pure unchanged window checks; supplied clocks do not establish ownership."""
+    _same(list(boot), [window[name] for name in WINDOW_FIELDS[:3]])
     p.require(p.decoded(window["bootIdBase64url"], size=16) != bytes(16))
     for name in WINDOW_FIELDS[1:3]:
         p.integer(window[name], maximum=p.MAX_U64)
     issued, startup, lifetime = (p.ns(window[name]) for name in WINDOW_FIELDS[3:6])
-    now = time.clock_gettime_ns(time.CLOCK_BOOTTIME)
+    p.integer(now, maximum=p.MAX_U64)
     p.require(previous <= now and issued <= now < startup <= lifetime
         and startup - issued <= 30_000_000_000 and now + 250_000_000 < lifetime)
     cohort._invocation(window["invocationId"])
@@ -123,6 +129,12 @@ def endpoint_owner(role, cold, cold_raw, config_raw, window_raw, signed, observe
 
 
 def _bridge_owner(cold, cold_raw, config_raw, window_raw, signed, observed):
+    return bridge_owner(cold, cold_raw, config_raw, window_raw, signed, observed,
+        boot=originals._boot(), now=time.clock_gettime_ns(time.CLOCK_BOOTTIME))
+
+
+def bridge_owner(cold, cold_raw, config_raw, window_raw, signed, observed, *, boot, now):
+    """Pure original/signature checks; the live wrapper supplies actual clocks."""
     config = p.fields(p.document(config_raw, 65536), ("apiVersion", "bootstrapAuthority", "phaseTwoAuthority",
         "deliveryConfiguration", "uid", "gid", "image", "continuation", "lifecycle"))
     p.require(config["apiVersion"] == "serverware.nativeShadowDriverBootstrapConfiguration/v4")
@@ -138,7 +150,7 @@ def _bridge_owner(cold, cold_raw, config_raw, window_raw, signed, observed):
         and window["signingKeyId"] == config["bootstrapAuthority"]["keyId"])
     driver._key(config["bootstrapAuthority"]).verify(p.decoded(signed["signatureBase64url"], size=64),
         driver.WINDOW_DOMAIN + p.canonical(window))
-    now = _live(window)
+    window_at(window, boot=boot, now=now)
     p.require(p.ns(window["startupDeadlineBoottimeNs"]) < p.ns(window["lifetimeDeadlineBoottimeNs"])
         - p.integer(lifecycle["cleanupReserveNanos"], minimum=1_000_000, maximum=5_000_000_000))
     p.fields(observed, ("apiVersion", "configurationSha256", "windowSha256", "invocationId", "processId",

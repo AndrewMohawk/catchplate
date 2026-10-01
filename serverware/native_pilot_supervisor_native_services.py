@@ -32,7 +32,7 @@ p = generation.p
 OPERATIONS = profile.OPERATIONS
 FIRST_INDEX = 63
 NEXT_JOB = "ordinary-dispatch-durable-recovery-store"
-_TRANSITION_LAST_INDEX = 79
+_TRANSITION_LAST_INDEX = 110
 JOB_NAMES = tuple("native-generation-install-grant" if operation == "generationInstall"
     else "native-service-" + operation for operation in OPERATIONS)
 _LIVE = None
@@ -283,7 +283,7 @@ def require_services(policy, *, process, request) -> dict:
 
 
 def recheck_services(policy, *, process, request) -> dict:
-    """Recheck an opened boundary through fixed transition jobs and handoff79."""
+    """Recheck the opened boundary through late authorizations and handoff110."""
     return _verified_services(policy, process=process, request=request, first=False)
 
 

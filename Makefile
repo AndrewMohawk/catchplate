@@ -1340,7 +1340,10 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	scripts/test_native_pilot_key_authorizations.py scripts/test_native_pilot_runtime_evidence.py scripts/test_native_pilot_history_grants.py \
 	scripts/test_native_pilot_native_services.py \
 	scripts/test_native_pilot_ordinary_transitions.py \
+	scripts/test_native_pilot_launch_authorizations.py \
 	scripts/authority/sign_native_pilot_key_authorization.py \
+	scripts/authority/sign_native_pilot_encrypted_delivery.py \
+	scripts/authority/sign_native_pilot_verifier_transport.py \
 	scripts/authority/sign_native_pilot_delivery.py \
 	scripts/authority/sign_native_pilot_service.py \
 	scripts/authority/sign_native_pilot_ordinary_key.py \
@@ -1648,6 +1651,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/native_pilot_native_service_authority.py \
 	serverware/native_pilot_native_service_profile.py \
 	serverware/native_pilot_ordinary_transition_profile.py \
+	serverware/native_pilot_launch_authorization_profile.py \
 	serverware/native_pilot_launch_publication.py \
 	serverware/native_pilot_coordinator_process.py \
 	serverware/native_pilot_coordinator_channel.py \
@@ -1664,10 +1668,13 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/native_pilot_supervisor_native_deliveries.py \
 	serverware/native_pilot_native_delivery_profile.py \
 	serverware/native_pilot_key_authority.py \
+	serverware/native_pilot_encrypted_authority.py \
+	serverware/native_pilot_verifier_authority.py \
 	serverware/native_pilot_key_profile.py serverware/native_pilot_runtime_evidence.py \
 	serverware/native_pilot_supervisor_key_authorizations.py \
 	serverware/native_pilot_supervisor_native_services.py \
 	serverware/native_pilot_supervisor_ordinary_transitions.py \
+	serverware/native_pilot_supervisor_launch_authorizations.py \
 	serverware/native_pilot_supervisor_precreation.py \
 	serverware/native_pilot_supervisor_endpoint_policy.py \
 	serverware/native_pilot_supervisor_endpoint_inputs.py \
@@ -4091,7 +4098,10 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				scripts/test_native_pilot_key_authorizations.py scripts/test_native_pilot_runtime_evidence.py scripts/test_native_pilot_history_grants.py \
 				scripts/test_native_pilot_native_services.py \
 				scripts/test_native_pilot_ordinary_transitions.py \
+				scripts/test_native_pilot_launch_authorizations.py \
 				scripts/authority/sign_native_pilot_key_authorization.py \
+				scripts/authority/sign_native_pilot_encrypted_delivery.py \
+				scripts/authority/sign_native_pilot_verifier_transport.py \
 				scripts/authority/sign_native_pilot_delivery.py \
 				scripts/authority/sign_native_pilot_service.py \
 				scripts/authority/sign_native_pilot_ordinary_key.py \
@@ -4393,6 +4403,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/native_pilot_native_service_authority.py \
 				serverware/native_pilot_native_service_profile.py \
 				serverware/native_pilot_ordinary_transition_profile.py \
+				serverware/native_pilot_launch_authorization_profile.py \
 				serverware/native_pilot_launch_publication.py \
 				serverware/native_pilot_coordinator_process.py \
 				serverware/native_pilot_coordinator_channel.py \
@@ -4409,10 +4420,13 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/native_pilot_supervisor_native_deliveries.py \
 				serverware/native_pilot_native_delivery_profile.py \
 				serverware/native_pilot_key_authority.py \
+				serverware/native_pilot_encrypted_authority.py \
+				serverware/native_pilot_verifier_authority.py \
 				serverware/native_pilot_key_profile.py serverware/native_pilot_runtime_evidence.py \
 				serverware/native_pilot_supervisor_key_authorizations.py \
 				serverware/native_pilot_supervisor_native_services.py \
 				serverware/native_pilot_supervisor_ordinary_transitions.py \
+				serverware/native_pilot_supervisor_launch_authorizations.py \
 				serverware/native_pilot_supervisor_precreation.py \
 				serverware/native_pilot_supervisor_endpoint_policy.py \
 				serverware/native_pilot_supervisor_endpoint_inputs.py \

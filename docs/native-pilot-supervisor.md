@@ -1,10 +1,11 @@
 # Native pilot commissioning supervisor
 
 This is a partial source implementation, not a runnable or deployed supervisor.
-The `.380` source connects five ordinary transition grants after eleven
+The `.381` source connects 31 late launch authorizations after five ordinary
+transition grants, eleven
 native operational grants, twenty
 native key/admission authorizations, all ten C9 deliveries, ordinary grants
-and initial history. **85 of 105**
+and initial history. **116 of 136**
 jobs now have fixed policy/input composers. Source coverage is not production
 acceptance, which remains **0/6**. The automated
 owner refuses startup **before spawning** while any job is unimplemented. There
@@ -44,7 +45,7 @@ The original short startup window is never renewed to accommodate preparation.
 
 `native_pilot_supervisor_policy.SupervisorPolicy` retains a protected policy FD
 whose literal bytes match an independently supplied pin. Its closed grammar binds
-both runtime inventories, their source metadata, all 77 measured public-key
+both runtime inventories, their source metadata, all 108 measured public-key
 bindings, the four approved bootstrap originals and the explicit precreation
 fragment. Selecting these values and approving their digest remains a separate
 commissioning responsibility. Computing a digest locally does not approve it.
@@ -101,7 +102,8 @@ approved local-role lists, challenges and original UNIX validity intervals.
 Twenty new signing decisions bind actual C9 identities and preceding signed
 role-key results. Their purpose selectors must resolve to the authenticated
 assignment's supervisor capability key. V1–v3 retain 42 selectors and v4–v7
-retain 57; v8–v10 can bind the expanded 77-selector coordinator. No old policy
+retain 57; v8–v10 keep their 77-selector inventory and cannot bind v11's
+108-selector coordinator. No old policy
 is silently promoted. See [native key authorizations](native-pilot-key-authorizations.md).
 
 Explicit policy/v9 adds only `nativeServicesOriginal`, with eleven original
@@ -116,6 +118,13 @@ Head/Cleanup/Current. Their five selectors match the corresponding approved
 ordinary history roots. Actual signed predecessors determine all other inputs;
 starting heads are not historical receipts. See
 [ordinary transitions](native-pilot-ordinary-transitions.md).
+
+Explicit policy/v11 adds `nativeLaunchAuthorizationsOriginal`: original validity
+intervals, provisioned encrypted-transport commitments, the CommitRequest secret
+descriptor and verifier ports. Its 31 added purpose selectors resolve to the
+actual assignment's supervisor authority. The real C9/key results supply late
+guest identity; no ciphertext, future guest or signature is invented. See
+[late launch authorizations](native-pilot-launch-authorizations.md).
 
 ## Implemented composition
 
@@ -135,6 +144,7 @@ starting heads are not historical receipts. See
 | Ten ordered role-key/admission pairs | Local roles, nonzero challenge and original UNIX interval | Actual C9 input/output and Guest13, authenticated assignment/trust/closure leaf, then the exact preceding signed role-key original |
 | Eleven native operational grants | Verifier settings, original intervals, spool/origin policy, genuine startup receipt and explicit fresh-store/time settings | Actual authenticated key pairs, five ordinary histories, complete prior native grants, original peer/guest and fresh-ledger endpoint result |
 | Five ordinary transition grants | Two dispatch starting heads, three spool starting heads, append capacity and approved history-root keys | Complete authenticated native inputs/grants, actual ordinary histories and signed Head/Cleanup predecessors |
+| 31 late launch authorizations | Existing transport/ciphertext commitments, CommitRequest secret descriptor, verifier ports and original intervals | Actual C9/role-key/admission originals, closure-set leaf and authentic preceding CommitRequest assignment; no early publication |
 
 The original boot, time namespace, invocation and startup/lifetime interval are
 preserved; no timestamp renewal, invented journal, placeholder signature or
@@ -146,7 +156,7 @@ actually approved for that job.
 `native_pilot_supervisor.CommissioningSupervisor` connects the owners/composers
 to the existing approval installer and reply protocol. `prepare(policy=...,
 process=..., measured_recipe=...)` requires the actual retained recipe/v2 for
-policy/v2–v10; policy/v1 requires no recipe. It checks the independent recipe pin
+policy/v2–v11; policy/v1 requires no recipe. It checks the independent recipe pin
 before bootstrap preparation, then binds that owner to the same actual process
 before spawn. On the genuine pending `cohort-precreation` request, `step()` derives
 once from the verified prior bootstrap result. A downstream fixed composer can
@@ -181,7 +191,7 @@ the old contradictory pre-start scope/manifest requirements.
 The other 20 jobs, from `install-launch-retrieval` in `service-originals`
 through `shutdown`, still need fixed
 policy composition and applicable prior-result verification. Existing signers,
-installers and the 105-job executor do not supply those independent decisions.
+installers and the 136-job executor do not supply those independent decisions.
 The first-generation boundary revalidates the five actual deliveries; explicit
 v6 decisions then compose the five grants. Explicit v7 selects seven subsequent
 native deliveries; every continuation revalidates the opened ordinary-grant
@@ -191,7 +201,9 @@ complete prior signatures; job 63 reads all ten completed authorization pairs.
 V9 separately authorizes jobs 63–73 for native operational grants, verifies
 each actual preceding result and opens only a read-only handoff at job 74.
 V10 authorizes jobs 74–78 for ordinary dispatch/Head/Cleanup/Current and
-exposes only a verified read-only handoff at job79.
+exposes only a verified read-only handoff at job79. V11 uses that boundary for
+31 late authorization jobs 79–109, then exposes a read-only handoff at the first
+launch job110. Existing launch installation requires the actual produced originals.
 Further composition still needs independently approved authority inputs and
 actual resource observations. A cgroup-original digest is not a cgroup-path
 digest; neither can be substituted for the other.
@@ -200,7 +212,7 @@ and its exact leaf/runtime bytes; the marker alone supplies neither authorizatio
 nor service settings.
 
 Complete coverage, the executable supervisor entrypoint/package, connected
-runtime verification and protected deployment remain required. These 85
+runtime verification and protected deployment remain required. These 116
 composers do not close an overall project checkpoint or establish pilot readiness.
 
 External dependencies remain: approved immutable dependency publication, genuine

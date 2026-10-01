@@ -107,7 +107,7 @@ class SyntheticInitialCommissioningControls(unittest.TestCase):
             for role in ROLES for operation in OPERATIONS)
         jobs = execution.JOBS["service-originals"][:25]
         self.assertEqual(tuple(job.name for job in jobs), expected)
-        self.assertEqual(len(execution.KEY_PURPOSES), 77)
+        self.assertEqual(len(execution.KEY_PURPOSES), 108)
         initial_keys = set()
         for job, (role, operation) in zip(jobs,
                 ((role, operation) for role in ROLES for operation in OPERATIONS), strict=True):
@@ -150,7 +150,19 @@ class SyntheticInitialCommissioningControls(unittest.TestCase):
         transition_names = ("ordinary-dispatch-durable-recovery-store", "ordinary-dispatch-current-signature-authority",
             "ordinary-head", "ordinary-cleanup", "ordinary-current")
         self.assertEqual(supervisor.SUPPORTED_JOBS[80:85], tuple(("service-originals", name) for name in transition_names))
-        self.assertEqual((len(supervisor._ORDER), len(supervisor.missing_jobs())), (105, 20))
+        launch_pairs = tuple((role, operation) for role in endpoints for operation in
+            (("closure", "request-commitment", "encrypted-delivery", "verifier-transport")
+             if role == "commitRequest" else ("closure", "encrypted-delivery", "verifier-transport")))
+        launch_names = tuple("native-" + operation + "-" + role for role, operation in launch_pairs)
+        self.assertEqual(len(launch_names), 31)
+        self.assertEqual(tuple(job.name for job in execution.LAUNCH_AUTHORIZATION_JOBS), launch_names)
+        self.assertEqual(execution.JOBS["service-originals"][78:109], execution.LAUNCH_AUTHORIZATION_JOBS)
+        self.assertEqual(supervisor.SUPPORTED_JOBS[85:116], tuple(("service-originals", name) for name in launch_names))
+        for job, pair in zip(execution.LAUNCH_AUTHORIZATION_JOBS, launch_pairs, strict=True):
+            self.assertEqual(execution.LAUNCH_AUTHORIZATION_JOB_INFO[job.name], pair)
+            self.assertEqual((job.family, job.purpose, job.key), ("native-launch-authorization", None, job.name))
+        self.assertEqual(execution.JOBS["service-originals"][109].name, "install-launch-retrieval")
+        self.assertEqual((len(supervisor._ORDER), len(supervisor.missing_jobs())), (136, 20))
         with self.assertRaises(ValueError):
             supervisor.require_complete_coverage()
 

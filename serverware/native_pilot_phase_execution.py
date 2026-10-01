@@ -24,8 +24,10 @@ from serverware import custody_generation_grants as generation
 from serverware import custody_generation_originals as generation_originals
 from serverware import custody_spool_inputs as spool
 from serverware import native_pilot_bridge_install as bridge_install
+from serverware import native_pilot_closure_authority as closure_authority
 from serverware import native_pilot_delivery_authority as delivery_authority
 from serverware import native_pilot_driver_authority as driver_authority
+from serverware import native_pilot_encrypted_authority as encrypted_authority
 from serverware import native_pilot_generation_install_authority as generation_authority
 from serverware import native_pilot_key_authority as key_authority
 from serverware import native_pilot_launch_publication as launch_install
@@ -35,6 +37,7 @@ from serverware import native_pilot_ordinary_initial_profile as initial_profile
 from serverware import native_pilot_precreation_install as precreation_install
 from serverware import native_pilot_scope_authority as scope_authority
 from serverware import native_pilot_service_authority as service_authority
+from serverware import native_pilot_verifier_authority as verifier_authority
 from serverware import native_shadow_nitro_originals as originals
 from serverware import native_shadow_nitro_profile as p
 from serverware import native_shadow_proof_cohort_assignment as cohort
@@ -99,6 +102,17 @@ KEY_AUTHORIZATION_JOB_INFO = {job.name: (role, operation) for job, (role, operat
     KEY_AUTHORIZATION_JOBS,
     ((role, operation) for role in cohort.ENDPOINT_ROLES for operation in ("role-keys", "admission")), strict=True)}
 
+_LAUNCH_AUTHORIZATION_ORDER = tuple((role, operation) for role in cohort.ENDPOINT_ROLES
+    for operation in (("closure", "request-commitment", "encrypted-delivery", "verifier-transport")
+        if role == "commitRequest" else ("closure", "encrypted-delivery", "verifier-transport")))
+LAUNCH_AUTHORIZATION_JOBS = tuple(_signed("native-" + operation + "-" + role,
+    "native-launch-authorization", role,
+    closure_authority.MAX_INPUT if operation == "closure" else
+    verifier_authority.MAX_INPUT if operation == "verifier-transport" else encrypted_authority.MAX_INPUT)
+    for role, operation in _LAUNCH_AUTHORIZATION_ORDER)
+LAUNCH_AUTHORIZATION_JOB_INFO = {job.name: selected for job, selected in
+    zip(LAUNCH_AUTHORIZATION_JOBS, _LAUNCH_AUTHORIZATION_ORDER, strict=True)}
+
 
 # No user-controlled operation list. Dependencies intentionally precede later
 # approval requests; every later producer receives its complete approved bytes.
@@ -129,6 +143,7 @@ JOBS = {
                   "ordinary-dispatch-" + role) for role in commitment.ROLES),
         *(_signed("ordinary-" + operation, "ordinary-" + operation, role, service_authority.MAX_INPUT_BYTES,
                   "ordinary-" + operation) for operation, role in zip(("head", "cleanup", "current"), spool.EFFECT_ROLES, strict=True)),
+        *LAUNCH_AUTHORIZATION_JOBS,
         *(_plain("install-launch-" + role, "launch", launch_install.MAX_INPUT, role) for role in cohort.ENDPOINT_ROLES),
         _plain("service-material", "service-material", 32768),
     ),
@@ -332,6 +347,34 @@ class PhaseExecution:
         p.require(p.canonical(value["authorization"]) == self._outputs["native-role-keys-" + role]
             and p.canonical(value["admissionAuthorization"]) == self._outputs["native-key-admission-" + role])
 
+    def _bind_launch_authorization(self, job, value):
+        """Bind complete inputs to this attempt's actual C9/key/pair originals."""
+        role, operation = LAUNCH_AUTHORIZATION_JOB_INFO[job.name]
+        p.require(role == job.role)
+        if operation == "closure":
+            p.require(value["apiVersion"] == "serverware.nativePilotClosureAuthorityInput/v2"
+                and value["guestRole"] == role)
+            prior = p.document(self._inputs["native-delivery-" + role], delivery_authority.MAX_INPUT)
+            for target, source in (("configurationOriginal", "ownerConfigurationOriginal"),
+                    ("windowOriginal", "windowOriginal"), ("observationOriginal", "observationOriginal"),
+                    ("deliveryConfigurationOriginal", "configurationOriginal"), ("runtimeOriginal", "runtimeOriginal")):
+                _same(value[target], prior[source])
+            self._known("deliveryOriginal", value, "native-delivery-" + role)
+            approved = p.document(self._inputs["native-role-keys-" + role], key_authority.MAX_INPUT)
+            for field in ("trustOriginal", "trustSha256", "assignmentOriginal", "closureSetOriginal"):
+                _same(value[field], approved["recipeOriginals"][field])
+        else:
+            p.require(value["role"] == role)
+            if operation != "verifier-transport":
+                p.require(value["operation"] == ("delivery" if operation == "encrypted-delivery" else operation))
+            for field, previous in (("roleKeyInputOriginal", "native-role-keys-" + role),
+                    ("admissionInputOriginal", "native-key-admission-" + role)):
+                p.require(_raw(value[field], key_authority.MAX_INPUT) == self._inputs[previous])
+            self._known("roleKeyOriginal", value, "native-role-keys-" + role)
+            self._known("admissionOriginal", value, "native-key-admission-" + role)
+            if operation == "encrypted-delivery" and role == "commitRequest":
+                self._known("requestCommitmentOriginal", value, "native-request-commitment-commitRequest")
+
     def _bind_initial(self, job, value):
         role, operation = INITIAL_JOB_INFO[job.name]
         extra = () if operation == "checkpoint" else ("initialCheckpointOriginal",)
@@ -463,6 +506,8 @@ class PhaseExecution:
             p.require(_raw(value["deliveryInputOriginal"], delivery_authority.MAX_INPUT) == self._inputs[delivery_job])
             if operation == "admission":
                 self._known("roleKeyOriginal", value, "native-role-keys-" + role)
+        elif job.family == "native-launch-authorization":
+            self._bind_launch_authorization(job, value)
         elif job.family == "native":
             if value["apiVersion"] == "serverware.nativePilotNativeServiceAuthorityInput/v3":
                 self._native_histories(value)
@@ -497,6 +542,10 @@ class PhaseExecution:
                 keys = p.document(_raw(value["originals"]["keys"], 65536), 65536)
                 p.require(p.canonical(keys["authorization"]) == self._outputs["native-role-keys-" + job.role])
                 self._known("admission", value["originals"], "native-key-admission-" + job.role)
+                p.require(_raw(value["originals"]["closure"], closure_authority.MAX_BYTES)
+                    == self._outputs["native-closure-" + job.role])
+                self._known("encryptedKeys", value["originals"], "native-encrypted-delivery-" + job.role)
+                self._known("verifierTransport", value["originals"], "native-verifier-transport-" + job.role)
             _same(value["keyAdmission"]["delivery"], self._pins["native-delivery-" + job.role])
             key = "native-generation-install-grant" if job.role == "generationInstall" else "native-service-" + (
                 "trustedTime" if job.role == "bridge" else _GRANT_FOR_ENDPOINT[job.role])
@@ -565,6 +614,17 @@ class PhaseExecution:
         elif job.family == "native-key":
             role, operation = KEY_AUTHORIZATION_JOB_INFO[job.name]
             signed, original_deadline = key_authority.sign(operation, role, raw, key)
+            deadline = min(deadline, original_deadline)
+            self._process._io_check(deadline)
+        elif job.family == "native-launch-authorization":
+            role, operation = LAUNCH_AUTHORIZATION_JOB_INFO[job.name]
+            if operation == "closure":
+                signed, original_deadline = closure_authority.sign(input_original=raw, signing_key=key)
+            elif operation == "verifier-transport":
+                signed, original_deadline = verifier_authority.sign(role, raw, key)
+            else:
+                signed, original_deadline = encrypted_authority.sign(
+                    "delivery" if operation == "encrypted-delivery" else operation, role, raw, key)
             deadline = min(deadline, original_deadline)
             self._process._io_check(deadline)
         elif job.family == "native":

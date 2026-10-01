@@ -53,7 +53,7 @@ PROVENANCE_FIELDS = ("sourceTreeSha256", "dependencyLockSha256", "buildRecipeSha
     "reproducibleBuildRequired", "provenanceSha256")
 
 
-def _guest(value):
+def _guest(value, *, boot, now):
     _, control = c9._original(value["controlOriginal"], 4096)
     p.fields(control, ("apiVersion", "supervisorExecutableSha256", "configurationSha256", "windowSha256"))
     p.require(control["apiVersion"] == "serverware.nativeShadowDriverBootstrapControl/v1")
@@ -66,8 +66,8 @@ def _guest(value):
     cold = delivery.configuration(cold_raw, p.sha(cold_raw))
     p.require(p.sha(config_raw) == control["configurationSha256"]
         and p.sha(window_raw) == control["windowSha256"])
-    window = c9._bridge_owner(cold, cold_raw, config_raw, window_raw, signed_window, observed)
-    now = c9._live(window)
+    window = c9.bridge_owner(cold, cold_raw, config_raw, window_raw, signed_window, observed,
+        boot=boot, now=now)
     driver_authority._observation(observation_raw, control, config, window, now)
     driver._key(config["phaseTwoAuthority"])
     p.require(config["bootstrapAuthority"]["publicKeyBase64url"] != config["phaseTwoAuthority"]["publicKeyBase64url"])
@@ -92,7 +92,7 @@ def _guest(value):
     return config, window, observed, delivery._delivery_guest(payload, signed_raw)
 
 
-def _authority(value, signing_key, now):
+def _authority(value, now):
     trust_raw, _ = c9._original(value["trustOriginal"], 1024 * 1024)
     p.require(p.sha(trust_raw) == p.digest(value["trustSha256"]))
     trust = launch.shape("native-bridge-trust", trust_raw)
@@ -136,14 +136,15 @@ def _authority(value, signing_key, now):
         p.public_key({name: row[name] for name in ("role", "keyId", "keySpkiSha256", "keyMaterialSha256")}
             | {"publicKeyBase64url": key["publicKeyBase64url"]})
     selected = role_keys["custody-supervisor-capability"]
-    public = signing_key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
-    p.require(p.encoded(public) == selected["publicKeyBase64url"])
+    supervisor = {name: binding[name] for name in ("role", "keyId", "keySpkiSha256", "keyMaterialSha256")}
+    supervisor["publicKeyBase64url"] = selected["publicKeyBase64url"]
+    p.public_key(supervisor)
     issued_floor = max(trust["issuedAtUnixNanos"], assignment["issuedAtUnixNanos"],
         trust["assignmentKey"]["notBeforeUnixNanos"], selected["notBeforeUnixNanos"])
     expires_ceiling = min(trust["expiresAtUnixNanos"], assignment["expiresAtUnixNanos"],
         trust["assignmentKey"]["notAfterUnixNanos"], selected["notAfterUnixNanos"],
         checkpoint["asOfUnixNanos"] + 300_000_000_000)
-    return envelope, checkpoint, binding, issued_floor, expires_ceiling
+    return envelope, checkpoint, binding, issued_floor, expires_ceiling, supervisor
 
 
 def _manifest(value, config, observed, assignment):
@@ -188,13 +189,15 @@ def _manifest(value, config, observed, assignment):
     return manifest
 
 
-def _endpoint_guest(value, role):
+def _endpoint_guest(value, role, *, boot, now):
     config_raw, config = c9._original(value["configurationOriginal"], 32768)
     window_raw, signed_window = c9._original(value["windowOriginal"], 32768)
     _, observed = c9._original(value["observationOriginal"], 32768)
     cold_raw, _ = c9._original(value["deliveryConfigurationOriginal"], 65536)
     cold = delivery.configuration(cold_raw, p.sha(cold_raw))
-    window = c9._endpoint_owner(role, cold, cold_raw, config_raw, window_raw, signed_window, observed)
+    window = c9.endpoint_owner(role, cold, cold_raw, config_raw, window_raw, signed_window, observed,
+        boot=boot, now=now)
+    c9.window_at(window, boot=boot, now=now)
     runtime_raw, _ = c9._original(value["runtimeOriginal"], 65536)
     launch.shape("native-runtime-" + role, runtime_raw)
     signed_raw, signed = c9._original(value["deliveryOriginal"], delivery.MAX_DELIVERY)
@@ -216,14 +219,14 @@ def _endpoint_guest(value, role):
     return config, window, observed, delivery._delivery_guest(payload, signed_raw)
 
 
-def sign(*, input_original: bytes, signing_key):
-    """Return a full v2/v3 closure original and its unchanged startup deadline.
+def prepare_input(input_original: bytes, *, boot, now_boottime_ns, now_unix_ns):
+    """Pure existing closure checks and a full unsigned result template.
 
     INPUT_FIELDS is closed; all *Original values are literal canonical ASCII
     strings, not paths. The entire input and explicit trustSha256 need separate
-    authority approval. No authorization is inferred from observations or pins.
+    authority approval. Supplied clocks are data, never a reconstructed owner.
     """
-    p.require(isinstance(signing_key, Ed25519PrivateKey))
+    p.integer(now_boottime_ns, maximum=p.MAX_U64); p.integer(now_unix_ns)
     value = p.document(input_original, MAX_INPUT)
     multi = value.get("apiVersion") == "serverware.nativePilotClosureAuthorityInput/v2"
     role = value.get("guestRole") if multi else "bridge"
@@ -231,9 +234,10 @@ def sign(*, input_original: bytes, signing_key):
     fields = SET_INPUT_FIELDS + (("controlOriginal",) if role == "bridge" else ()) if multi else INPUT_FIELDS
     p.fields(value, fields)
     p.require(value["apiVersion"] == "serverware.nativePilotClosureAuthorityInput/v" + ("2" if multi else "1"))
-    boot, wall = originals._boot(), time.time_ns()
-    config, window, observed, guest = _guest(value) if role == "bridge" else _endpoint_guest(value, role)
-    envelope, checkpoint, binding, issued_floor, expires_ceiling = _authority(value, signing_key, wall)
+    wall = now_unix_ns
+    config, window, observed, guest = (_guest(value, boot=boot, now=now_boottime_ns) if role == "bridge"
+        else _endpoint_guest(value, role, boot=boot, now=now_boottime_ns))
+    envelope, checkpoint, binding, issued_floor, expires_ceiling, supervisor = _authority(value, wall)
     p.require(assignment_profile.version(envelope) == (2 if multi else 1))
     selected = leaf = None
     if multi:
@@ -267,15 +271,6 @@ def sign(*, input_original: bytes, signing_key):
     p.require(issued_floor <= payload["issuedAtUnixNanos"] < payload["expiresAtUnixNanos"] <= expires_ceiling
         and payload["expiresAtUnixNanos"] - payload["issuedAtUnixNanos"] <= p.DAY_NS)
 
-    def check(previous_boot=0, previous_wall=wall):
-        now = c9._live(window, previous_boot)
-        current_wall = time.time_ns()
-        p.require(originals._boot() == boot and previous_wall <= current_wall < expires_ceiling)
-        p.freshness(payload["issuedAtUnixNanos"], payload["expiresAtUnixNanos"], current_wall)
-        return now, current_wall
-
-    before_boot, before_wall = check()
-    message = p.preimage(SET_DOMAIN if multi else DOMAIN, payload)
     result = {"apiVersion": "serverware.nativeCustodyClosure/v" + ("3" if multi else "2"), "manifest": manifest,
         "authorization": {"payload": payload, "signature": ""}}
     if multi:
@@ -283,11 +278,53 @@ def sign(*, input_original: bytes, signing_key):
     # The whole original, not just its member, retains the live 1 MiB cap.
     # Check the exact encoded size before signing (Ed25519 base64url is86).
     p.require(len(p.canonical(result)) + 86 <= MAX_BYTES)
+    return {"payload": payload, "supervisor": supervisor, "window": window,
+        "deadline": p.ns(window["startupDeadlineBoottimeNs"]), "epochLimit": expires_ceiling,
+        "domain": SET_DOMAIN if multi else DOMAIN, "result": result}
+
+
+def checked_result(input_original, result, *, boot, now_boottime_ns, now_unix_ns):
+    """Check the complete existing wrapper and real signature, not provenance."""
+    prepared = prepare_input(input_original, boot=boot,
+        now_boottime_ns=now_boottime_ns, now_unix_ns=now_unix_ns)
+    p.fields(result, ("original", "sha256"))
+    raw, value = c9._original(result["original"], MAX_BYTES)
+    p.require(p.sha(raw) == p.digest(result["sha256"]))
+    role = prepared["payload"].get("guestRole", "bridge")
+    launch.shape("native-" + role + "-closure", raw)
+    signature = value["authorization"]["signature"]
+    expected = prepared["result"]
+    expected["authorization"]["signature"] = signature
+    c9._same(value, expected)
+    p.public_key(prepared["supervisor"]).verify(p.decoded(signature, size=64),
+        p.preimage(prepared["domain"], prepared["payload"]))
+    return raw
+
+
+def sign(*, input_original: bytes, signing_key):
+    """Sign the existing v2/v3 wrapper with the original live key/window checks."""
+    p.require(isinstance(signing_key, Ed25519PrivateKey))
+    boot, now, wall = originals._boot(), originals._clock(), time.time_ns()
+    prepared = prepare_input(input_original, boot=boot, now_boottime_ns=now, now_unix_ns=wall)
+    public = signing_key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+    p.require(p.encoded(public) == prepared["supervisor"]["publicKeyBase64url"])
+    payload, window = prepared["payload"], prepared["window"]
+
+    def check(previous_boot=now, previous_wall=wall):
+        current = c9._live(window, previous_boot)
+        current_wall = time.time_ns()
+        p.require(originals._boot() == boot and previous_wall <= current_wall < prepared["epochLimit"])
+        p.freshness(payload["issuedAtUnixNanos"], payload["expiresAtUnixNanos"], current_wall)
+        return current, current_wall
+
+    before_boot, before_wall = check()
+    message = p.preimage(prepared["domain"], payload)
+    result = prepared["result"]
     signature = signing_key.sign(message)
-    signing_key.public_key().verify(signature, message)
+    p.public_key(prepared["supervisor"]).verify(signature, message)
     result["authorization"]["signature"] = p.encoded(signature)
     raw = p.canonical(result)
     p.require(len(raw) <= MAX_BYTES)
-    launch.shape("native-" + role + "-closure", raw)
+    launch.shape("native-" + payload.get("guestRole", "bridge") + "-closure", raw)
     check(before_boot, before_wall)
-    return raw, p.ns(window["startupDeadlineBoottimeNs"])
+    return raw, prepared["deadline"]

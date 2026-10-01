@@ -4,7 +4,7 @@
 independently selected policy and implements the first `driver-bootstrap`
 decision. The separate precreation composer implements the next two jobs. This
 is not a complete decision service, a runnable pilot supervisor, or
-approval of unimplemented future jobs. Current v10 source composes 85 of 105 jobs;
+approval of unimplemented future jobs. Current v11 source composes 116 of 136 jobs;
 the decision spine refuses startup while the remaining 20 are unimplemented.
 Production acceptance remains 0/6.
 
@@ -122,8 +122,8 @@ complete-pilot verification was performed as part of authoring this source.
 Policy/v4 has the eleven v3 fields plus `ordinaryInitialHistories`. Its purpose
 is `initial-driver-bootstrap-precreation-endpoints-and-ordinary-initial-history`.
 At v4 the coordinator expanded to 57 exact key selectors; v1–v3 kept their old
-42-selector shape. V4–v7 still keep 57 and cannot bind the current v8 inventory
-of 77 selectors. No legacy policy is silently
+42-selector shape. V4–v7 still keep 57; v8–v10 retain 77. None can bind the
+current v11 inventory of 108 selectors. No legacy policy is silently
 upgraded or given new signing authority.
 
 The new fragment is `serverware.nativePilotSupervisorOrdinaryInitialPolicy/v1`
@@ -198,7 +198,7 @@ approved role history-root key. The total 57 selectors and outer 4 MiB bound
 remain unchanged; the literal field does not widen legacy outer integer rules.
 
 `ordinary_generation_policy(process=..., request=...)` is available only to
-explicit v6–v10 with the actual pending owner. Jobs 31–35 form existing complete
+explicit v6–v11 with the actual pending owner. Jobs 31–35 form existing complete
 generation inputs, verify each preceding root-signed result and retain exact
 originals. The next job's handoff is read-only. Native callers use the same
 original installation interval without renewal; no running-service acceptance
@@ -217,7 +217,7 @@ checked during policy admission. No private credential is opened or created.
 The existing 57 selectors and 4 MiB outer bound remain unchanged. The original
 three-role `endpointDeliveries` contract remains separate; no old policy is
 widened. `native_delivery_policy(process=..., request=...)` returns a checked
-copy only under v7–v10 with the actual pending owner. Jobs 36–42 use the same
+copy only under v7–v11 with the actual pending owner. Jobs 36–42 use the same
 independently authenticated measured recipe and signed role-specific closure
 leaves, genuine cohort observations and unchanged windows. Job 43 only obtains
 a verified read-only handoff. V8 separately authorizes the new key decisions
@@ -262,7 +262,7 @@ The outer 4 MiB bound and exact 77 selectors remain unchanged.
 
 `native_service_policy(process=..., request=...)` resolves all eleven native
 service/generation-install purpose keys through the actual retained assignment
-and independent trust. It returns a copied admitted fragment only for v9/v10 and
+and independent trust. It returns a copied admitted fragment only for v9–v11 and
 the real pending owner. No older policy gains these grant decisions.
 Jobs 63–73 revalidate the actual authorization pairs and complete predecessor
 inputs/results. Job 74 is only a read-only verified handoff; earlier installer
@@ -286,9 +286,35 @@ outer 4 MiB bound and 77 selectors remain unchanged; v1–v9 gain no new decisio
 
 The two dispatch selectors and `ordinary-head`, `ordinary-cleanup` and
 `ordinary-current` must match each role's independently approved history-root
-key. `ordinary_transition_policy(process=..., request=...)` is v10-only and
+key. `ordinary_transition_policy(process=..., request=...)` is v10/v11-only and
 returns a checked copy to the genuine pending owner. Service jobs 74–78 use
 actual ordinary and native input/grant originals; Cleanup requires the actual
 signed Head and Current requires the actual signed Head and Cleanup. Completed
 predecessor rechecks extend only to the read-only job79 handoff; no installer
 or launch entry is reopened. See [contracts and limits](native-pilot-ordinary-transitions.md).
+
+## Late-launch-authorization successor: v11
+
+Policy/v11 adds only `nativeLaunchAuthorizationsOriginal` to the eighteen v10
+fields, with purpose
+`initial-driver-bootstrap-precreation-endpoints-generations-and-native-launch-authorizations`.
+The literal `serverware.nativePilotLaunchAuthorizationPolicy/v1` has exactly
+`apiVersion` and ten `endpoints` rows. Each row selects a closure interval,
+encrypted-delivery transport original and interval, and verifier port/interval.
+CommitRequest additionally selects its provisioner's public secret descriptor
+and original HMAC-authorization interval. No private bytes or guest identity are
+accepted in this policy. Transport commitments do not prove ciphertext exists
+or that KMS will release it; actual provisioners and receivers retain those duties.
+
+The 31 new jobs have separate purpose selectors, for 108 total, all pinned to
+the independently authenticated assignment's supervisor key. Old v1–v3 retain
+42, v4–v7 retain 57 and v8–v10 retain 77. `launch_authorization_policy` is v11-only
+and resolves the actual trusted signing authority before returning a checked
+copy. The outer 4 MiB bound is unchanged; the fragment is bounded to 256 KiB.
+
+Jobs 79–109 retain genuine prior inputs/results, produce one signature each,
+and do not publish launch components. CommitRequest's encrypted delivery
+requires the actual preceding signed request-commitment original, with its
+descriptor and interval still equal to the independent policy. The first launch
+job110 receives only a verified read-only handoff; remaining launch composition
+is not authorized implicitly. See [full contracts](native-pilot-launch-authorizations.md).

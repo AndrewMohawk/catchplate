@@ -69,7 +69,6 @@ class _Cold:
 def initialize_from_environment():
     global _state, _owner, _environment_pin
     from serverware import control_plane_custody_startup as startup
-    from serverware import control_plane_custody_client as custody
     with _LOCK:
         profile.require(os.getpid() == _PID and _state == "new")
         _environment_pin = _environment()
@@ -80,6 +79,7 @@ def initialize_from_environment():
             return
         _state = "admitting"
         try:
+            from serverware import control_plane_custody_client as custody
             profile.require(set(dict(_environment_pin[1])) == {CONFIG_ENVIRONMENT})
             actual = startup.require_started(); binding = custody._snapshot(actual)
             fd_text = os.environ[CONFIG_ENVIRONMENT]

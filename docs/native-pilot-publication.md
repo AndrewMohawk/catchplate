@@ -84,9 +84,10 @@ unfinished work.
 
 ## Remaining pilot gates
 
-These consumers do **not** create the first cold-start receipt. A real
-receipt-first commissioning producer must establish and persist the genuine
-baseline before the policy load and grants that reference it are signed. An
+These consumers do **not** create the first cold-start receipt. The separate
+[cold commissioning producer](native-pilot-genesis.md) establishes and persists
+that baseline in source; verified operational adoption and full commissioning
+must precede the policy load and grants that reference it. An
 empty journal only means the independently admitted baseline, never evidence
 of an uninstalled policy or made-up ledger/spool roots.
 

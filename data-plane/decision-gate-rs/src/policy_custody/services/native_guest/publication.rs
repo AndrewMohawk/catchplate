@@ -13,6 +13,7 @@ use crate::policy_shadow::policy_custody::protocol::domain_separated_signature_p
 use guest::retrieval_peer as peer;
 use std::os::fd::OwnedFd;
 #[path="retrieval_scope.rs"] mod scope;
+#[path="publication_genesis.rs"] pub(crate) mod genesis;
 const DOMAIN:&str="serverware.nativePublicationServiceAssignment.signature/v1";
 pub(in crate::policy_shadow::policy_custody::services) const MAX_CONFIGURATION:usize=4*1024*1024;
 const MAX_FINISHED:usize=128;
@@ -96,8 +97,27 @@ impl Configuration {
             && guest::now()?<s.expires_at_boottime_nanos && trust.current_checkpoint()?==checkpoint)
     }
 }
-pub(crate) struct Prepared {original:services::guest_original::Original,configuration:Configuration,listener:OwnedFd,inspection:OwnedFd}
+pub(crate) enum Prepared {Operational(OperationalPrepared),Genesis(genesis::Prepared)}
 impl Prepared {
+    pub(in crate::policy_shadow::policy_custody::services) fn open(pin:&guest::Pin,delivery:&mut PreparedGuestServiceDelivery,
+        inspection:OwnedFd)->Result<Self,ShadowError>{Ok(Self::Operational(OperationalPrepared::open(pin,delivery,inspection)?))}
+    pub(in crate::policy_shadow::policy_custody::services) fn open_genesis(pin:&guest::Pin,delivery:&mut PreparedGuestServiceDelivery,
+        inspection:OwnedFd)->Result<Self,ShadowError>{Ok(Self::Genesis(genesis::Prepared::open(pin,delivery,inspection)?))}
+    pub(in crate::policy_shadow::policy_custody::services) fn bind(self,keys:&AdmittedKeys,delivery:&PreparedGuestServiceDelivery,
+        trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime)->Result<Service,ShadowError>{match self {
+        Self::Operational(value)=>Ok(Service::Operational(value.bind(keys,delivery,trust,time)?)),
+        Self::Genesis(value)=>Ok(Service::Genesis(value.bind(keys,delivery,trust,time)?)),
+    }}
+}
+pub(crate) enum Service {Operational(OperationalService),Genesis(genesis::Service)}
+impl Service {
+    pub(in crate::policy_shadow::policy_custody::services) fn serve(self,keys:&AdmittedKeys,
+        trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime,check:&impl Fn()->Result<(),ShadowError>)->Result<(),ShadowError>{match self {
+        Self::Operational(value)=>value.serve(keys,trust,time,check),Self::Genesis(value)=>value.serve(keys,trust,time,check),
+    }}
+}
+pub(crate) struct OperationalPrepared {original:services::guest_original::Original,configuration:Configuration,listener:OwnedFd,inspection:OwnedFd}
+impl OperationalPrepared {
     pub(in crate::policy_shadow::policy_custody::services) fn open(pin:&guest::Pin,delivery:&mut PreparedGuestServiceDelivery,
         inspection:OwnedFd)->Result<Self,ShadowError>{
         delivery.closure_association().map_err(fail)?.check_preparation().map_err(fail)?;
@@ -110,7 +130,7 @@ impl Prepared {
         Ok(Self{original,configuration,listener,inspection})
     }
     pub(in crate::policy_shadow::policy_custody::services) fn bind(self,keys:&AdmittedKeys,delivery:&PreparedGuestServiceDelivery,
-        trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime)->Result<Service,ShadowError>{
+        trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime)->Result<OperationalService,ShadowError>{
         require(Arc::ptr_eq(&keys.association.owner,&delivery.owner))?;self.configuration.verify(keys,trust,time)?;
         let p=&self.configuration.payload;let s=&p.admission.scope;
         let histories=super::ordinary_histories::admit(&p.ordinary_services,keys,&p.expected_peer,&s.production_configuration_binding_sha256,
@@ -120,13 +140,13 @@ impl Prepared {
         let mut channel=peer::Client::bind_endpoint(self.inspection,self.listener,p.expected_peer.checked().map_err(fail)?,
             delivery,&check,peer::EndpointKind::PublicationReconciliation)?;
         channel.inspect(peer::Phase::Connection,None,None,keys.association.startup(),&check)?;
-        Ok(Service{original:self.original,configuration:self.configuration,histories,channel,flight:None,finished:Vec::new()})
+        Ok(OperationalService{original:self.original,configuration:self.configuration,histories,channel,flight:None,finished:Vec::new()})
     }
 }
 struct Flight {prepared:fixed::Prepared,proposal:Option<fixed::Proposal>}
-pub(crate) struct Service {original:services::guest_original::Original,configuration:Configuration,histories:ProductionServiceHistoricalKeyringsV4,
+pub(crate) struct OperationalService {original:services::guest_original::Original,configuration:Configuration,histories:ProductionServiceHistoricalKeyringsV4,
     channel:peer::Client,flight:Option<Flight>,finished:Vec<ProductionDispatchBindingV4>}
-impl Service {
+impl OperationalService {
     fn check(&self,keys:&AdmittedKeys,trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime)->Result<(),ShadowError>{
         require(self.original.read(MAX_CONFIGURATION).map_err(fail)?.as_slice()==canonical_json_bytes(&self.configuration)?.as_slice())?;
         self.configuration.verify(keys,trust,time)?;self.channel.check()

@@ -90,7 +90,7 @@ impl KeyMembership {
     pub(in crate::policy_shadow) fn require(&self,assignment:&VerifiedAssignment,guest:&GuestClosureBinding,
         manifest:&Sha256Digest)->Result<(),ShadowError>{
         let leaf=self.membership.set.role_binding(self.membership.role)?;
-        let bridge=self.membership.set.role_binding("bridge")?;let a=assignment.payload();
+        let bridge=self.membership.set.role_binding(self.membership.set.authority_role())?;let a=assignment.payload();
         require(&self.assignment_payload_sha256==assignment.payload_sha256() && &self.guest==guest
             && manifest==&self.manifest_sha256 && leaf.manifest_sha256()==manifest
             && leaf.seccomp_policy_sha256()==&self.seccomp_policy_sha256
@@ -110,7 +110,9 @@ impl Configuration {
         require(self.manifest.api_version==(if late{"serverware.nativeCustodyExecutionClosure/v2"}
             else{"serverware.nativeCustodyExecutionClosure/v1"})
             && self.manifest.profile==(if late{BOOTSTRAP_PROFILE}else{PROFILE}))?;
-        if self.api_version!="serverware.nativeCustodyClosure/v3" {
+        let genesis=self.api_version=="serverware.nativeCustodyClosure/v4";
+        if self.api_version!="serverware.nativeCustodyClosure/v3" && !genesis {
+            require(!role.is_some_and(|v|closure_set::GENESIS_ROLES.contains(&v)))?;
             require(self.api_version==(if late{"serverware.nativeCustodyClosure/v2"}else{"serverware.nativeCustodyClosure/v1"})
                 && self.closure_set.is_none() && self.authorization.payload.legacy_fields())?;
             return Ok(None);
@@ -118,18 +120,20 @@ impl Configuration {
         // Live configuration keeps its original one-MiB cap; the larger static
         // preflight grammar does not widen launch, phase or original ceilings.
         require(canonical_json_bytes(self)?.len()<=1024*1024)?;
-        let role=role.ok_or(ShadowError::BindingDrift)?;require((role=="bridge")==late)?;
+        let role=role.ok_or(ShadowError::BindingDrift)?;
+        require((role=="bridge")==late && genesis==closure_set::GENESIS_ROLES.contains(&role) && (!genesis || !late))?;
         let p=&self.authorization.payload;
-        require(p.api_version=="serverware.nativeCustodyClosureAssignment/v3"
-            && p.purpose=="shadow-custody-closure-set-member" && p.profile==SET_PROFILE
+        require(p.api_version==(if genesis{"serverware.nativeCustodyClosureAssignment/v4"}else{"serverware.nativeCustodyClosureAssignment/v3"})
+            && p.purpose=="shadow-custody-closure-set-member"
+            && p.profile==(if genesis{"native-publication-genesis-closure-set-v1"}else{SET_PROFILE})
             && p.guest_role.as_deref()==Some(role))?;
         let commitment=NativeClosureSetCommitment {
             set_root_sha256:p.set_root_sha256.clone().ok_or(ShadowError::BindingDrift)?,
             seccomp_set_root_sha256:p.seccomp_set_root_sha256.clone().ok_or(ShadowError::BindingDrift)?,
         };
-        let set=closure_set::ValidatedSet::from_bytes(
-            &canonical_json_bytes(self.closure_set.as_ref().ok_or(ShadowError::BindingDrift)?)?,
-            &commitment.set_root_sha256,&commitment.seccomp_set_root_sha256)?;
+        let raw=canonical_json_bytes(self.closure_set.as_ref().ok_or(ShadowError::BindingDrift)?)?;
+        let set=if genesis{closure_set::ValidatedSet::from_genesis_bytes(&raw,&commitment.set_root_sha256,&commitment.seccomp_set_root_sha256)?}
+            else{closure_set::ValidatedSet::from_bytes(&raw,&commitment.set_root_sha256,&commitment.seccomp_set_root_sha256)?};
         require(p.leaf_sha256.as_ref()==Some(set.require_member(role,&self.manifest)?.leaf_sha256()))?;
         Ok(Some(Membership{set,commitment,role}))
     }
@@ -162,9 +166,11 @@ fn verify_assignment(wire:&Assignment,manifest:&Manifest,guest:&GuestClosureBind
     let p=&wire.payload;let original=assignment.payload();
     let domain=if let Some(member)=membership {
         let leaf=member.set.require_member(member.role,manifest)?;
-        let bridge=member.set.role_binding("bridge")?;
-        require(p.api_version=="serverware.nativeCustodyClosureAssignment/v3"
-            && p.purpose=="shadow-custody-closure-set-member" && p.profile==SET_PROFILE
+        let bridge=member.set.role_binding(member.set.authority_role())?;
+        let genesis=member.set.genesis();
+        require(p.api_version==(if genesis{"serverware.nativeCustodyClosureAssignment/v4"}else{"serverware.nativeCustodyClosureAssignment/v3"})
+            && p.purpose=="shadow-custody-closure-set-member"
+            && p.profile==(if genesis{"native-publication-genesis-closure-set-v1"}else{SET_PROFILE})
             && p.guest_role.as_deref()==Some(member.role)
             && p.set_root_sha256.as_ref()==Some(member.set.set_root_sha256())
             && p.seccomp_set_root_sha256.as_ref()==Some(member.set.seccomp_set_root_sha256())
@@ -173,7 +179,7 @@ fn verify_assignment(wire:&Assignment,manifest:&Manifest,guest:&GuestClosureBind
             && &original.custody_authority.execution_closure_manifest_sha256==bridge.manifest_sha256()
             && &original.custody_authority.structurally_verified_seccomp_policy_sha256==bridge.seccomp_policy_sha256()
             && (member.role=="bridge" || guest.runtime_configuration_sha256==manifest.runtime_configuration_sha256))?;
-        "serverware.nativeCustodyClosureAssignment.signature/v3"
+        if genesis{"serverware.nativeCustodyClosureAssignment.signature/v4"}else{"serverware.nativeCustodyClosureAssignment.signature/v3"}
     } else if manifest.profile==BOOTSTRAP_PROFILE {
         require(p.api_version=="serverware.nativeCustodyClosureAssignment/v2"
             && p.purpose=="shadow-custody-bootstrap-late-runtime" && p.profile==BOOTSTRAP_PROFILE)?;

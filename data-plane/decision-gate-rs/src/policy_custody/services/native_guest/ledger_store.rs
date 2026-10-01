@@ -5,6 +5,7 @@ use guest::exact;
 use crate::policy_shadow::policy_custody::services::ledger_spool_values as wire;
 use crate::policy_shadow::policy_custody::services::active_effect_values as effect;
 use crate::policy_shadow::policy_custody::services::publication;
+use crate::policy_shadow::policy_custody::services::publication_genesis;
 use std::fs::File;
 use std::io::Write;
 use std::os::fd::{AsRawFd,FromRawFd,OwnedFd};
@@ -63,18 +64,21 @@ struct Held {name:String,file:File,identity:Identity,raw:Vec<u8>,verity:Option<S
 /// unchanged 128-object/32-MiB aggregate ceiling. Old originals keep their bytes.
 #[derive(Serialize,Deserialize)]
 #[serde(untagged)]
-pub(super) enum PreparedOriginal {Ledger(wire::Prepared),Effect(effect::Prepared),Publication(publication::Prepared)}
+pub(super) enum PreparedOriginal {Ledger(wire::Prepared),Effect(effect::Prepared),Publication(publication::Prepared),Genesis(publication_genesis::Prepared)}
 impl PreparedOriginal {
     fn core_bytes(&self)->Result<Vec<u8>,ShadowError>{match self {
         Self::Ledger(v)=>{v.core.validate().map_err(fail)?;canonical_json_bytes(&v.core)},
         Self::Effect(v)=>{v.core.validate().map_err(fail)?;canonical_json_bytes(&v.core)},
         // Full admission/snapshot/signature checks belong to the selected
         // retained Retrieval owner both before put and after opening a chain.
-        Self::Publication(v)=>{v.core.request.validate().map_err(fail)?;canonical_json_bytes(&v.core)}}}
+        Self::Publication(v)=>{v.core.request.validate().map_err(fail)?;canonical_json_bytes(&v.core)},
+        Self::Genesis(v)=>{v.core.genesis.scope.validate().map_err(fail)?;canonical_json_bytes(&v.core)}}}
     fn identity(&self)->Result<Sha256Digest,ShadowError>{match self{Self::Ledger(v)=>v.core.identity(),Self::Effect(v)=>v.core.identity(),
-        Self::Publication(v)=>v.core.identity()}.map_err(fail)}
-    fn request(&self)->&crate::policy_shadow::policy_custody::production_dispatch::ClosedProductionDispatchRequestV4 {
-        match self{Self::Ledger(v)=>&v.core.request,Self::Effect(v)=>&v.core.request,Self::Publication(v)=>&v.core.request}}
+        Self::Publication(v)=>v.core.identity(),Self::Genesis(v)=>v.core.identity()}.map_err(fail)}
+    fn identities(&self)->(Sha256Digest,Sha256Digest) {
+        let request=match self{Self::Ledger(v)=>&v.core.request,Self::Effect(v)=>&v.core.request,Self::Publication(v)=>&v.core.request,
+            Self::Genesis(v)=>return(v.core.genesis.scope.commissioning_id_sha256.clone(),v.core.genesis.scope.commissioning_id_sha256.clone())};
+        (request.binding().operation_id_sha256.clone(),request.binding().replay_id_sha256.clone())}
 }
 pub(super) struct Store {directory:File,identity:Identity,lock:File,held:Vec<Held>,
     originals:Vec<(PreparedOriginal,wire::Stored)>,sequence:u64,head:Sha256Digest,total:usize,poisoned:bool}
@@ -167,12 +171,21 @@ impl Store {
         check:&impl Fn()->Result<(),ShadowError>)->Result<wire::Stored,ShadowError>{
         self.put_original(PreparedOriginal::Publication(prepared),sign,check)
     }
+    pub(super) fn put_genesis(&mut self,prepared:publication_genesis::Prepared,
+        sign:impl FnOnce(u64,Sha256Digest,Sha256Digest)->Result<wire::Stored,ShadowError>,
+        check:&impl Fn()->Result<(),ShadowError>)->Result<wire::Stored,ShadowError>{
+        // Only the actual admitted genesis head can receive this one cold core.
+        // No fabricated Dispatch binding or later operational write is used.
+        require(self.sequence==0 && self.originals.is_empty())?;
+        self.put_original(PreparedOriginal::Genesis(prepared),sign,check)
+    }
     fn put_original(&mut self,prepared:PreparedOriginal,sign:impl FnOnce(u64,Sha256Digest,Sha256Digest)->Result<wire::Stored,ShadowError>,
         check:&impl Fn()->Result<(),ShadowError>)->Result<wire::Stored,ShadowError>{
         self.check()?;check()?;
-        require(self.sequence<LIMIT && self.originals.iter().all(|(prior,_)|
-            prior.request().binding().operation_id_sha256!=prepared.request().binding().operation_id_sha256
-            && prior.request().binding().replay_id_sha256!=prepared.request().binding().replay_id_sha256))?;
+        require(self.sequence<LIMIT)?;
+        let (operation,replay)=prepared.identities();
+        for (prior,_) in &self.originals {let (old_operation,old_replay)=prior.identities();
+            require(old_operation!=operation && old_replay!=replay)?;}
         let raw=prepared.core_bytes()?;
         let preparation=canonical_json_bytes(&prepared)?;
         require(!raw.is_empty() && raw.len()<=wire::MAX_CORE && !preparation.is_empty() && preparation.len()<=wire::MAX_CORE

@@ -164,8 +164,10 @@ after the actual origin handoff, retaining original deadlines and controlled
 shutdown. All 27 focused Python controls pass; live use remains unverified.
 The mandatory [policy-publication path](docs/native-pilot-publication.md) now
 connects native signing, immutable storage and independent durable state in source.
-The native compiler check passes; runtime behavior remains unverified. Cold-start
-receipt commissioning and expanded deployment inputs remain open.
+The native compiler check passes; runtime behavior remains unverified. A separate
+[cold-start receipt producer](docs/native-pilot-genesis.md) now connects durable
+genesis and an independently verified handoff in source; its assembled check,
+adoption into the operational runtime and deployment inputs remain open.
 These counts are not a percentage of
 product readiness or permission to deploy.
 Protected deployment is not provisioned. This is not

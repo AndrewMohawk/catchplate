@@ -594,6 +594,10 @@ pub(super) enum ProductionAuthorityEndpointRequestBodyV4 {
     StoreActiveEffectCore {prepared:super::active_effect_values::Prepared},
     /// Explicit publication successor only; legacy Retrieval refuses this body.
     StoreNativePublicationCore {prepared:super::publication::Prepared},
+    /// Separately selected receipt-first commissioning, never Dispatch.
+    PrepareInitialPublication {genesis:super::publication_genesis::GenesisEvidence},
+    StoreInitialPublicationCore {prepared:super::publication_genesis::Prepared},
+    CompleteInitialPublication {prepared:super::publication_genesis::Prepared,stored:super::ledger_spool_values::Stored},
     PrepareNativePublication {snapshot:super::publication::Snapshot},
     CompleteNativePublication {prepared:super::publication::Prepared,stored:Option<super::ledger_spool_values::Stored>},
     FinishNativePublication {proposal:super::publication::Proposal,result:super::super::production_dispatch::ClosedProductionDispatchResultV4,
@@ -717,6 +721,9 @@ pub(super) enum ProductionAuthorityEndpointResultV4 {
     NativePublicationCoreStored(super::ledger_spool_values::Stored),
     NativePublicationPrepared(super::publication::Prepared),
     NativePublicationProposed(super::publication::Proposal),
+    InitialPublicationPrepared(super::publication_genesis::Prepared),
+    InitialPublicationCoreStored(super::ledger_spool_values::Stored),
+    InitialPublicationCompleted(super::publication_genesis::Completion),
     NativeActiveEffectPrepared(super::active_effect_values::Prepared),
     NativeActiveEffectCompletion(super::active_effect_values::Completion),
     Generation(ClosedProductionGenerationResponseV4),

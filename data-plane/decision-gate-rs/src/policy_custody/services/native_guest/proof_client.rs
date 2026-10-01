@@ -7,7 +7,7 @@ use services::production::{ProductionRpcRuntimeConfigV4,
     ProductionProofEndpointKindV4};
 use super::retrieval_peer::EndpointKind;
 use std::os::fd::{AsFd,OwnedFd};
-#[path="proof_client_peer.rs"] mod inspection;
+#[path="proof_client_peer.rs"] pub(super) mod inspection;
 pub(in crate::policy_shadow::policy_custody::services) use inspection::{Inspector,Session};
 pub(in crate::policy_shadow::policy_custody::services) use inspection::facade::{Acceptor as FacadeAcceptor,Session as FacadeSession};
 const KINDS:[EndpointKind;4]=[EndpointKind::Retrieval,EndpointKind::Persistence,
@@ -64,6 +64,15 @@ pub(super) fn assigned_peers_publication(files:&FileAdmission)->Result<BTreeMap<
         .map(|(kind,endpoint)|(kind,endpoint.expected_peer)).collect())
 }
 impl Selection {
+    fn genesis(raw:&[u8])->Result<Self,ShadowError>{
+        let runtime:services::publication_genesis_client::Configuration=exact(raw)?;
+        runtime.validate().map_err(fail)?;
+        let entries=runtime.native_endpoints.iter().map(|endpoint|Ok((endpoint.kind,Entry{
+            activation_fd_name:endpoint.activation_fd_name.clone(),expected_peer:endpoint.expected_peer.clone(),
+            exact:canonical_json_bytes(endpoint)?,
+        }))).collect::<Result<BTreeMap<_,_>,ShadowError>>()?;
+        Ok(Self{entries,runtime_sha256:Sha256Digest::compute(raw)})
+    }
     fn original(raw:&[u8],commitment:bool,spool:bool,terminal:bool,effects:bool,publication:bool)->Result<Self,ShadowError> {
         let runtime:ProductionRpcRuntimeConfigV4=exact(raw)?;runtime.validate().map_err(fail)?;
         require(runtime.commit_request.is_some()==commitment && runtime.spool.is_some()==spool && (!spool || commitment)

@@ -295,6 +295,14 @@ impl super::publication_service::Owner for TrustedHostNoTeeCurrentSignatureAutho
         input.sign(&self.signer.signing_key)
     }
 }
+impl super::publication_genesis_service::Owner for TrustedHostNoTeeCurrentSignatureAuthorityServer {
+    fn sign_publication_genesis(&self,input:&super::publication_genesis_service::SigningInput)
+        ->Result<super::publication_genesis_service::Reply,ServiceError>{
+        if input.is_durable() {return Err(ServiceError::Invalid("CSA cannot sign DRS genesis evidence"));}
+        self.signer.pin.validate().map_err(|_|ServiceError::Invalid("cold publication current signer changed"))?;
+        input.sign(&self.signer.signing_key)
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum CurrentAuthoritySubjectKey {

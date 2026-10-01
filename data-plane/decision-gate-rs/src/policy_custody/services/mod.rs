@@ -28,6 +28,10 @@ pub(super) mod publication;
 pub(super) mod publication_state;
 pub(super) mod publication_service;
 pub(super) mod publication_client;
+pub(super) mod publication_genesis;
+pub(super) mod publication_genesis_service;
+pub(super) mod publication_genesis_client;
+pub(super) mod publication_genesis_handoff;
 pub(super) mod spool_head_client;
 pub(super) mod active_effect_values;
 pub(super) mod active_effect_cleanup;
@@ -323,6 +327,9 @@ struct RuntimeConfigHeaderV3 {
     #[serde(default, skip_serializing_if="Option::is_none",
         deserialize_with="crate::policy_shadow::deserialize_optional_present")]
     publication_admission:Option<publication_service::Selection>,
+    #[serde(default, skip_serializing_if="Option::is_none",
+        deserialize_with="crate::policy_shadow::deserialize_optional_present")]
+    publication_genesis_admission:Option<publication_genesis_service::Selection>,
 }
 
 impl RuntimeConfigHeaderV3 {
@@ -339,7 +346,11 @@ impl RuntimeConfigHeaderV3 {
         let publication_shape=self.api_version==publication_service::RUNTIME && self.publication_admission.is_some()
             && self.generation_admission.is_some() && self.dispatch_admission.is_some() && self.spool_cleanup.is_none()
             && matches!((self.spool_head.as_ref(),self.spool_current.as_ref()),(Some(_),None)|(None,Some(_)));
-        if !((ordinary_shape && self.spool_cleanup.is_none() || effects_shape) && self.publication_admission.is_none() || publication_shape)
+        let genesis_shape=self.api_version==publication_genesis_service::RUNTIME && self.publication_genesis_admission.is_some()
+            && self.generation_admission.is_none() && self.publication_admission.is_none() && self.dispatch_admission.is_none()
+            && self.spool_head.is_none() && self.spool_current.is_none() && self.spool_cleanup.is_none();
+        if !((((ordinary_shape && self.spool_cleanup.is_none() || effects_shape) && self.publication_admission.is_none() || publication_shape)
+            && self.publication_genesis_admission.is_none()) || genesis_shape)
             || self.startup_timeout_millis == 0
             || self.startup_timeout_millis
                 > MAX_STARTUP_TIMEOUT_MILLIS
@@ -376,7 +387,7 @@ impl RuntimeConfigHeaderV3 {
                 .as_os_str()
                 .as_bytes()
                 .contains(&0)
-            || self.activation_directory_identities.len() > 2+usize::from(self.generation_admission.is_some())+usize::from(self.dispatch_admission.is_some())+usize::from(self.spool_head.is_some())+usize::from(self.spool_current.is_some())+usize::from(self.spool_cleanup.is_some())+usize::from(self.publication_admission.is_some())
+            || self.activation_directory_identities.len() > 2+usize::from(self.generation_admission.is_some())+usize::from(self.dispatch_admission.is_some())+usize::from(self.spool_head.is_some())+usize::from(self.spool_current.is_some())+usize::from(self.spool_cleanup.is_some())+usize::from(self.publication_admission.is_some())+usize::from(self.publication_genesis_admission.is_some())
         {
             return Err(ServiceRunnerError::invalid(
                 "service runtime config header is incomplete or invalid",
@@ -415,6 +426,10 @@ impl RuntimeConfigHeaderV3 {
             if selection.grant_fd_name!=publication_service::GRANT_FD {return Err(ServiceRunnerError::invalid("publication grant descriptor changed"));}
             self.activation_directory_identity(publication_service::DIRECTORY)?;
         }
+        if let Some(selection)=&self.publication_genesis_admission {
+            if selection.grant_fd_name!=publication_genesis_service::GRANT_FD {return Err(ServiceRunnerError::invalid("cold publication grant descriptor changed"));}
+            self.activation_directory_identity(publication_genesis_service::DIRECTORY)?;
+        }
         for (name, identity) in
             &self.activation_directory_identities
         {
@@ -452,7 +467,7 @@ impl RuntimeConfigHeaderV3 {
             &self.authority_history_manifest_credential,
             MAX_CONFIG_BYTES,
         )?;
-        let guest_runtime=matches!(self.api_version.as_str(),generation_service::RUNTIME|dispatch_service::RUNTIME|spool_head::RUNTIME|active_effect_cleanup::RUNTIME|helper_initial::RUNTIME|publication_service::RUNTIME);
+        let guest_runtime=matches!(self.api_version.as_str(),generation_service::RUNTIME|dispatch_service::RUNTIME|spool_head::RUNTIME|active_effect_cleanup::RUNTIME|helper_initial::RUNTIME|publication_service::RUNTIME|publication_genesis_service::RUNTIME);
         let exact_original_pinned_by_guest = guest_runtime
             && matches!(credentials,CredentialDirectory::Guest(_));
         if (guest_runtime && !exact_original_pinned_by_guest)
@@ -1194,6 +1209,8 @@ fn run_durable_recovery_store_loaded(
     let mut spool=spool_head::Gate::open(&loaded,&loaded.value.runtime,&bootstrap,&mut activation)?;
     let mut publication=publication_service::Gate::open(&loaded,&loaded.value.runtime,&bootstrap,&mut activation,
         TrustedHostServiceRoleV3::DurableRecoveryStore)?;
+    let mut publication_genesis=publication_genesis_service::Gate::open(&loaded,&loaded.value.runtime,&bootstrap,&mut activation,
+        TrustedHostServiceRoleV3::DurableRecoveryStore)?;
     let startup_deadline = bootstrap.deadline(
         loaded.value.runtime.startup_timeout_millis,
     )?;
@@ -1355,6 +1372,11 @@ fn run_durable_recovery_store_loaded(
             .runtime
             .maximum_durability_worker_nanos,
         move |request: Vec<u8>| {
+            // Cold commissioning never enters legacy recovery mutation,
+            // configuration-generation, dispatch, or spool handlers.
+            if let Some(gate)=&mut publication_genesis {
+                return gate.handle(&request,&server)?.ok_or(ServiceError::Invalid("cold DRS accepts only publication genesis commands"));
+            }
             if let Some(gate)=&mut generation {
                 if let Some(reply)=gate.handle(&request,&server)? {return Ok(reply);}
             }
@@ -1854,6 +1876,8 @@ fn run_current_signature_authority_loaded(
     let mut spool=spool_current::Gate::open(&loaded,&loaded.value.runtime,&bootstrap,&mut activation)?;
     let mut publication=publication_service::Gate::open(&loaded,&loaded.value.runtime,&bootstrap,&mut activation,
         TrustedHostServiceRoleV3::CurrentSignatureAuthority)?;
+    let mut publication_genesis=publication_genesis_service::Gate::open(&loaded,&loaded.value.runtime,&bootstrap,&mut activation,
+        TrustedHostServiceRoleV3::CurrentSignatureAuthority)?;
     if loaded.value.current_subjects.is_empty()
         || loaded.value.current_subjects.len() > MAX_CURRENT_SUBJECTS
     {
@@ -1980,6 +2004,13 @@ fn run_current_signature_authority_loaded(
             return Err(ServiceRunnerError::invalid(
                 "current-signature request carried SCM_RIGHTS",
             ));
+        }
+        if let Some(gate)=&mut publication_genesis {
+            let reply=gate.handle(&packet.frame,&server)?.ok_or_else(||ServiceRunnerError::invalid("cold CSA accepts only publication genesis commands"))?;
+            let deadline=generation_service::frame_deadline(&packet.frame)?;
+            bootstrap.require_deadline(deadline)?;authenticated.revalidate_peer()?;
+            send_packet_until(connection.as_raw_fd(),&reply,&[],Some(deadline))?;
+            authenticated.revalidate_peer()?;continue;
         }
         if let Some(gate)=&mut generation {
             if let Some(reply)=gate.handle(&packet.frame,&server)? {
@@ -3202,6 +3233,7 @@ fn require_exact_directory_identity_names(
     if runtime.spool_current.is_some() {required_names.insert(spool_current::DIRECTORY);}
     if runtime.spool_cleanup.is_some() {required_names.insert(active_effect_cleanup::DIRECTORY);}
     if runtime.publication_admission.is_some() {required_names.insert(publication_service::DIRECTORY);}
+    if runtime.publication_genesis_admission.is_some() {required_names.insert(publication_genesis_service::DIRECTORY);}
     if !unique
         || runtime
             .activation_directory_identities

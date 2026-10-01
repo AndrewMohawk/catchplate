@@ -16,6 +16,7 @@ use std::os::fd::OwnedFd;
 #[path="retrieval_scope.rs"] mod scope;
 #[path="retrieval_store.rs"] mod legacy;
 #[path="ledger_store.rs"] mod store;
+#[path="genesis_retrieval.rs"] pub(crate) mod genesis;
 const DOMAIN:&str="serverware.nativeLedgerSpoolRetrievalGrant.signature/v1";
 #[derive(Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
@@ -226,9 +227,34 @@ impl Configuration {
         prepared.verify_with_key(&selected.admission,&selected.native,&selected.drs_authority_epoch,&selected.key()?).map_err(fail)
     }
 }
-pub(crate) struct Prepared {original:services::guest_original::Original,configuration:Configuration,
-    scope_raw:Vec<u8>,scope:scope::Scope,store:store::Store,legacy:legacy::Store,listener:OwnedFd,inspection:OwnedFd}
+pub(crate) enum Prepared {Operational(OperationalPrepared),Genesis(genesis::Prepared)}
 impl Prepared {
+    pub(in crate::policy_shadow::policy_custody::services) fn open(pin:&guest::Pin,delivery:&mut PreparedGuestServiceDelivery,
+        inspection:OwnedFd)->Result<Self,ShadowError>{Ok(Self::Operational(OperationalPrepared::open(pin,delivery,inspection)?))}
+    pub(in crate::policy_shadow::policy_custody::services) fn open_completion(pin:&guest::Pin,delivery:&mut PreparedGuestServiceDelivery,
+        inspection:OwnedFd)->Result<Self,ShadowError>{Ok(Self::Operational(OperationalPrepared::open_completion(pin,delivery,inspection)?))}
+    pub(in crate::policy_shadow::policy_custody::services) fn open_effects(pin:&guest::Pin,delivery:&mut PreparedGuestServiceDelivery,
+        inspection:OwnedFd)->Result<Self,ShadowError>{Ok(Self::Operational(OperationalPrepared::open_effects(pin,delivery,inspection)?))}
+    pub(in crate::policy_shadow::policy_custody::services) fn open_publication(pin:&guest::Pin,delivery:&mut PreparedGuestServiceDelivery,
+        inspection:OwnedFd)->Result<Self,ShadowError>{Ok(Self::Operational(OperationalPrepared::open_publication(pin,delivery,inspection)?))}
+    pub(in crate::policy_shadow::policy_custody::services) fn open_genesis(pin:&guest::Pin,delivery:&mut PreparedGuestServiceDelivery,
+        inspection:OwnedFd)->Result<Self,ShadowError>{Ok(Self::Genesis(genesis::Prepared::open(pin,delivery,inspection)?))}
+    pub(in crate::policy_shadow::policy_custody::services) fn bind(self,keys:&AdmittedKeys,delivery:&PreparedGuestServiceDelivery,
+        trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime)->Result<Service,ShadowError>{match self {
+        Self::Operational(value)=>Ok(Service::Operational(value.bind(keys,delivery,trust,time)?)),
+        Self::Genesis(value)=>Ok(Service::Genesis(value.bind(keys,delivery,trust,time)?)),
+    }}
+}
+pub(crate) enum Service {Operational(OperationalService),Genesis(genesis::Service)}
+impl Service {
+    pub(in crate::policy_shadow::policy_custody::services) fn serve(self,keys:&AdmittedKeys,
+        trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime,check:&impl Fn()->Result<(),ShadowError>)->Result<(),ShadowError>{match self {
+        Self::Operational(value)=>value.serve(keys,trust,time,check),Self::Genesis(value)=>value.serve(keys,trust,time,check),
+    }}
+}
+pub(crate) struct OperationalPrepared {original:services::guest_original::Original,configuration:Configuration,
+    scope_raw:Vec<u8>,scope:scope::Scope,store:store::Store,legacy:legacy::Store,listener:OwnedFd,inspection:OwnedFd}
+impl OperationalPrepared {
     pub(in crate::policy_shadow::policy_custody::services) fn open(pin:&guest::Pin,delivery:&mut PreparedGuestServiceDelivery,
         inspection:OwnedFd)->Result<Self,ShadowError>{
         Self::open_selected(pin,delivery,inspection,false,false,false)
@@ -264,7 +290,7 @@ impl Prepared {
         Ok(Self{original,configuration,scope_raw,scope,store,legacy,listener,inspection})
     }
     pub(in crate::policy_shadow::policy_custody::services) fn bind(self,keys:&AdmittedKeys,delivery:&PreparedGuestServiceDelivery,
-        trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime)->Result<Service,ShadowError>{
+        trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime)->Result<OperationalService,ShadowError>{
         require(Arc::ptr_eq(&keys.association.owner,&delivery.owner))?;
         self.configuration.verify(keys,&self.scope,&self.scope_raw,trust,time)?;
         // The prior publication receipt is independently supplied. Opening a
@@ -278,14 +304,14 @@ impl Prepared {
         let check=||keys.check(trust,time);
         let mut channel=peer::Client::bind(self.inspection,self.listener,self.configuration.expected_peer().checked().map_err(fail)?,delivery,&check)?;
         channel.inspect(peer::Phase::Connection,None,None,keys.association.startup(),&check)?;
-        let value=Service{original:self.original,configuration:self.configuration,scope_raw:self.scope_raw,scope:self.scope,
+        let value=OperationalService{original:self.original,configuration:self.configuration,scope_raw:self.scope_raw,scope:self.scope,
             store:self.store,legacy:self.legacy,baseline,channel,replays:BTreeSet::new()};
         value.check(keys,trust,time)?;Ok(value)
     }
 }
-pub(crate) struct Service {original:services::guest_original::Original,configuration:Configuration,scope_raw:Vec<u8>,scope:scope::Scope,
+pub(crate) struct OperationalService {original:services::guest_original::Original,configuration:Configuration,scope_raw:Vec<u8>,scope:scope::Scope,
     store:store::Store,legacy:legacy::Store,baseline:Option<legacy::Read>,channel:peer::Client,replays:BTreeSet<Sha256Digest>}
-impl Service {
+impl OperationalService {
     fn check(&self,keys:&AdmittedKeys,trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime)->Result<(),ShadowError>{
         require(self.original.read(65536).map_err(fail)?.as_slice()==canonical_json_bytes(&self.configuration)?.as_slice())?;
         let ledger=self.configuration.verify(keys,&self.scope,&self.scope_raw,trust,time)?;
@@ -304,6 +330,7 @@ impl Service {
                     let selected=self.configuration.payload.publication.as_ref().ok_or(ShadowError::BindingDrift)?;
                     publication::stored_verify(stored,prepared,&selected.admission,&self.retrieval_key(keys)?).map_err(fail)?;
                 },
+                store::PreparedOriginal::Genesis(_)=>return Err(ShadowError::BindingDrift),
             }
             require(stored.payload.guest==self.configuration.payload.guest
                 && stored.payload.grant_sha256==Sha256Digest::compute(&canonical_json_bytes(&self.configuration)?)
@@ -410,11 +437,13 @@ impl Service {
                     require(proof_scope_canonical_bytes==&self.scope_raw)?;
                     if let Some((prepared,stored))=self.store.originals().iter().find(|(_,s)|&s.payload.retrieval_id_sha256==retrieval_id_sha256){
                         let role=match prepared{store::PreparedOriginal::Ledger(p)=>p.core.role(),store::PreparedOriginal::Effect(p)=>p.core.role(),
-                            store::PreparedOriginal::Publication(_)=>PolicyShadowCustodySignerRole::PublicationReconciliation};
+                            store::PreparedOriginal::Publication(_)=>PolicyShadowCustodySignerRole::PublicationReconciliation,
+                            store::PreparedOriginal::Genesis(_)=>return Err(ShadowError::BindingDrift)};
                         require(*signer_role==role && &stored.payload.retrieval_proof_sha256==retrieval_proof_sha256)?;
                         match prepared{store::PreparedOriginal::Ledger(p)=>wire::require_final_payload(&p.core,stored,canonical_receipt_payload).map_err(fail)?,
                             store::PreparedOriginal::Effect(p)=>require(p.core.payload(stored).map_err(fail)?==*canonical_receipt_payload)?,
-                            store::PreparedOriginal::Publication(p)=>require(p.core.payload(stored).map_err(fail)?==*canonical_receipt_payload)?,}
+                            store::PreparedOriginal::Publication(p)=>require(p.core.payload(stored).map_err(fail)?==*canonical_receipt_payload)?,
+                            store::PreparedOriginal::Genesis(_)=>return Err(ShadowError::BindingDrift),}
                         self.scope.require_payload(*signer_role,canonical_receipt_payload,signed_authority_payload)?;
                     }else{
                         // Fresh-ledger admission authorizes only genuine cores

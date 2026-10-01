@@ -1226,6 +1226,13 @@ impl super::publication_service::Owner for TrustedHostNoTeeDurableRecoveryStoreS
     fn sign_publication_witness(&self,input:&super::publication_service::WitnessInput)
         ->Result<super::publication_service::Witness,ServiceError>{input.sign(&self.signer.signing_key)}
 }
+impl super::publication_genesis_service::Owner for TrustedHostNoTeeDurableRecoveryStoreServer {
+    fn sign_publication_genesis(&self,input:&super::publication_genesis_service::SigningInput)
+        ->Result<super::publication_genesis_service::Reply,ServiceError>{
+        if !input.is_durable() {return Err(ServiceError::Invalid("DRS cannot sign a CSA genesis mirror"));}
+        input.sign(&self.signer.signing_key)
+    }
+}
 
 impl TrustedHostNoTeeDurableRecoveryStoreServer {
     pub(super) fn from_seed(

@@ -491,6 +491,28 @@ fn assigned_peers(service:&SelectedService,files:&FileAdmission)
 pub(super) fn prepare_inspection(service:SelectedService,files:&FileAdmission,activation:&BTreeMap<String,OwnedFd>)
     ->Result<(Inspection,OwnedFd),ShadowError> {
     match service {
+        SelectedService::PublicationGenesis(pin)=>{
+            let original=pin.open(admission::publication::MAX_CONFIGURATION)?;
+            let grant:admission::publication::genesis::Configuration=exact(&original.read(admission::publication::MAX_CONFIGURATION).map_err(fail)?)?;
+            grant.validate_shape()?;
+            let endpoint=retrieval_peer::EndpointKind::PublicationReconciliation;
+            require(activation.len()==1)?;
+            let socket=activation.get(endpoint.listener_name()).ok_or(ShadowError::BindingDrift)?;
+            let (owner,remote)=retrieval_peer::Inspector::prepare_history_endpoint(original,
+                grant.expected_peer().checked().map_err(fail)?,grant.guest_uid(),socket,endpoint)?;
+            Ok((Inspection::Server(owner),remote))
+        }
+        SelectedService::PublicationGenesisRetrieval(pin)=>{
+            require(activation.len()==4 && activation.contains_key("ledger-spool-store") && activation.contains_key("ledger-spool-lock")
+                && activation.contains_key("retrieval-objects"))?;
+            let original=pin.open(65536)?;
+            let grant:admission::ledger_retrieval::genesis::Configuration=exact(&original.read(65536).map_err(fail)?)?;
+            grant.validate_shape()?;
+            let socket=activation.get("retrieval-listener").ok_or(ShadowError::BindingDrift)?;
+            let (owner,remote)=retrieval_peer::Inspector::prepare_endpoint(original,
+                grant.expected_peer().checked().map_err(fail)?,grant.guest_uid(),socket,retrieval_peer::EndpointKind::Retrieval)?;
+            Ok((Inspection::Server(owner),remote))
+        }
         SelectedService::Publication(pin)=>{
             let original=pin.open(admission::publication::MAX_CONFIGURATION)?;
             let grant:admission::publication::Configuration=exact(&original.read(admission::publication::MAX_CONFIGURATION).map_err(fail)?)?;

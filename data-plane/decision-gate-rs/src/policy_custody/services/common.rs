@@ -1393,6 +1393,7 @@ enum PeerInspection {
     Direct(DirectPeerInspection),
     Retained(std::sync::Arc<super::guest::ordinary_inspection::client::Session>),
     NativeFacade(std::sync::Arc<super::guest::native_guest::proof_client::FacadeSession>),
+    NativeGenesis(std::sync::Arc<super::guest::native_guest::genesis_client::Session>),
     NativeReceiver(std::sync::Arc<super::native_facade_lifecycle::facade::Session>),
 }
 
@@ -1405,6 +1406,20 @@ struct DirectPeerInspection {
 }
 
 impl AuthenticatedInheritedSeqpacket {
+    /// Closed cold-coordinator owner, with actual retained root inspections.
+    pub(super) fn from_native_genesis(socket:OwnedFd,expected:ExpectedPeerCredentials,
+        inspection:std::sync::Arc<super::guest::native_guest::genesis_client::Session>)->Result<Self,ServiceError>{
+        validate_connected_unix_seqpacket(socket.as_raw_fd())?;set_nonblocking_cloexec(socket.as_raw_fd())?;
+        enable_passcred(socket.as_raw_fd())?;
+        let peer_credentials=read_peer_credentials(socket.as_raw_fd())?;expected.validate(peer_credentials)?;
+        let peer_pidfd=peer_pidfd(socket.as_raw_fd())?;require_live_pidfd(peer_pidfd.as_raw_fd(),peer_credentials.pid)?;
+        inspection.require_expected(&expected).map_err(|_|ServiceError::Invalid("native genesis scope differs"))?;
+        let owner=Self{socket,peer_credentials,peer_pidfd,peer_start_time_ticks:expected.start_time_ticks,
+            peer_process_identity_sha256:expected.process_identity_sha256,
+            peer_configuration_generation_sha256:expected.configuration_generation_sha256,
+            inspection:PeerInspection::NativeGenesis(inspection)};
+        owner.revalidate_peer()?;Ok(owner)
+    }
     pub(super) fn from_native_receiver(socket:OwnedFd,expected:ExpectedPeerCredentials,
         inspection:std::sync::Arc<super::native_facade_lifecycle::facade::Session>)->Result<Self,ServiceError>{
         validate_connected_unix_seqpacket(socket.as_raw_fd())?;set_nonblocking_cloexec(socket.as_raw_fd())?;
@@ -1657,7 +1672,7 @@ impl AuthenticatedInheritedSeqpacket {
     ) -> Result<(), ServiceError> {
         self.revalidate_peer()?;
         require_live_pidfd(sender.as_raw_fd(), self.peer_credentials.pid)?;
-        if matches!(&self.inspection,PeerInspection::NativeFacade(_)|PeerInspection::NativeReceiver(_)) {
+        if matches!(&self.inspection,PeerInspection::NativeFacade(_)|PeerInspection::NativeReceiver(_)|PeerInspection::NativeGenesis(_)) {
             return self.revalidate_peer();
         }
         if process_start_time_ticks(self.peer_credentials.pid)? != self.peer_start_time_ticks {
@@ -1686,6 +1701,10 @@ impl AuthenticatedInheritedSeqpacket {
             return session.revalidate(self.socket.as_fd(),self.peer_pidfd.as_fd())
                 .map_err(|_|ServiceError::Invalid("native facade retained inspection refused"));
         }
+        if let PeerInspection::NativeGenesis(session)=&self.inspection {
+            return session.revalidate(self.socket.as_fd(),self.peer_pidfd.as_fd())
+                .map_err(|_|ServiceError::Invalid("native genesis retained inspection refused"));
+        }
         if let PeerInspection::NativeReceiver(session)=&self.inspection {
             return session.revalidate(self.socket.as_fd(),self.peer_pidfd.as_fd())
                 .map_err(|_|ServiceError::Invalid("native receiver retained inspection refused"));
@@ -1701,7 +1720,7 @@ impl AuthenticatedInheritedSeqpacket {
             PeerInspection::Retained(session) => return session.revalidate(
                 self.socket.as_fd(), self.peer_pidfd.as_fd()),
             PeerInspection::Direct(direct) => direct,
-            PeerInspection::NativeFacade(_)|PeerInspection::NativeReceiver(_) => return Err(ServiceError::Invalid("native facade inspection state differs")),
+            PeerInspection::NativeFacade(_)|PeerInspection::NativeReceiver(_)|PeerInspection::NativeGenesis(_) => return Err(ServiceError::Invalid("native facade inspection state differs")),
         };
         let retained = peer_executable_identity(
             direct.peer_executable.as_raw_fd(),

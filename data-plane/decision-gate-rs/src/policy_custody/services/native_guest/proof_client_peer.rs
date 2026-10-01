@@ -22,9 +22,9 @@ fn pathname(path:&str)->Result<Identity,ShadowError> {
     let m=std::fs::symlink_metadata(path).map_err(fail)?;
     Ok(Identity{dev:m.dev(),ino:m.ino(),mode:m.mode(),uid:m.uid(),gid:m.gid()})
 }
-pub(super) struct Directory {fd:OwnedFd,identity:Identity,socket:Identity,endpoint:EndpointKind}
+pub(in crate::policy_shadow::policy_custody::services) struct Directory {fd:OwnedFd,identity:Identity,socket:Identity,endpoint:EndpointKind}
 impl Directory {
-    pub(super) fn open(fd:OwnedFd,server_uid:u32,client_gid:u32,endpoint:EndpointKind)->Result<Self,ShadowError> {
+    pub(in crate::policy_shadow::policy_custody::services) fn open(fd:OwnedFd,server_uid:u32,client_gid:u32,endpoint:EndpointKind)->Result<Self,ShadowError> {
         let identity=stat(fd.as_fd())?;
         let flags=unsafe{libc::fcntl(fd.as_raw_fd(),libc::F_GETFL)};
         require(identity.mode&libc::S_IFMT==libc::S_IFDIR && identity.mode&0o7777==0o711
@@ -53,7 +53,7 @@ impl Directory {
         Ok(values)
     }
 }
-pub(super) fn unconnected(socket:BorrowedFd<'_>)->Result<(),ShadowError> {
+pub(in crate::policy_shadow::policy_custody::services) fn unconnected(socket:BorrowedFd<'_>)->Result<(),ShadowError> {
     packet::configure(socket)?;
     let mut address:libc::sockaddr_un=unsafe{zeroed()};let mut length=size_of::<libc::sockaddr_un>() as _;
     require(unsafe{libc::getsockname(socket.as_raw_fd(),(&mut address as *mut libc::sockaddr_un).cast(),&mut length)}==0
@@ -78,9 +78,15 @@ struct InspectedEndpoint {
 pub(in crate::policy_shadow::policy_custody::services) struct Inspector {
     channel:OwnedFd,entries:BTreeMap<EndpointKind,InspectedEndpoint>,runtime_sha256:Sha256Digest,
     sequence:u64,pending:Option<(EndpointKind,Vec<u8>,u64,packet::Packet)>,
-    facade:Option<facade::Inspector>,
+    facade:Option<facade::Inspector>,genesis:Option<super::super::genesis_client::Inspector>,
 }
 impl Inspector {
+    pub(in crate::policy_shadow::policy_custody::services) fn genesis_deadline(&self)->Result<u64,ShadowError>{
+        Ok(self.genesis.as_ref().ok_or(ShadowError::BindingDrift)?.deadline())
+    }
+    pub(in crate::policy_shadow::policy_custody::services) fn take_genesis_result(&mut self)->Result<Option<Vec<u8>>,ShadowError>{
+        self.genesis.as_mut().ok_or(ShadowError::BindingDrift)?.take_result()
+    }
     pub(in crate::policy_shadow::policy_custody::services) fn prepare(files:&FileAdmission,
         activation:&BTreeMap<String,OwnedFd>)->Result<(Self,OwnedFd),ShadowError> {
         Self::prepare_selected(files,activation,false)
@@ -111,9 +117,19 @@ impl Inspector {
         if publication{check_publication_runtime(files)?;}
         Self::prepare_inner(files,activation,commitment,spool,terminal,effects,publication,true)
     }
+    pub(in crate::policy_shadow::policy_custody::services) fn prepare_genesis(files:&FileAdmission,
+        activation:&BTreeMap<String,OwnedFd>)->Result<(Self,OwnedFd),ShadowError>{
+        let selected=Selection::genesis(&files.retrieval_client_runtime().map_err(fail)?)?;
+        let genesis=super::super::genesis_client::Inspector::prepare(files,activation)?;
+        Self::prepare_transport(files,activation,selected,false,Some(genesis))
+    }
     fn prepare_inner(files:&FileAdmission,activation:&BTreeMap<String,OwnedFd>,commitment:bool,spool:bool,terminal:bool,effects:bool,publication:bool,native_facade:bool)
         ->Result<(Self,OwnedFd),ShadowError> {
         let selected=Selection::original(&files.retrieval_client_runtime().map_err(fail)?,commitment,spool,terminal,effects,publication)?;
+        Self::prepare_transport(files,activation,selected,native_facade,None)
+    }
+    fn prepare_transport(files:&FileAdmission,activation:&BTreeMap<String,OwnedFd>,selected:Selection,
+        native_facade:bool,genesis:Option<super::super::genesis_client::Inspector>)->Result<(Self,OwnedFd),ShadowError>{
         let mut entries=BTreeMap::new();
         for (kind,endpoint) in &selected.entries {
             let expected=endpoint.expected_peer.checked().map_err(fail)?;
@@ -131,12 +147,15 @@ impl Inspector {
         packet::configure(channel.as_fd())?;packet::configure(child.as_fd())?;
         let native_names=selected.entries.values().map(|v|v.activation_fd_name.clone()).collect();
         let facade=if native_facade {Some(facade::Inspector::prepare(files,activation,&native_names)?)} else {None};
-        Ok((Self{channel,entries,runtime_sha256:selected.runtime_sha256,sequence:0,pending:None,facade},child))
+        Ok((Self{channel,entries,runtime_sha256:selected.runtime_sha256,sequence:0,pending:None,facade,genesis},child))
     }
     pub(in crate::policy_shadow::policy_custody::services) fn progress(&mut self,
         child:&super::super::parent::child::Child,files:&FileAdmission)->Result<(),ShadowError> {
         files.check().map_err(fail)?;require(files.runtime_sha256()==&self.runtime_sha256)?;
         for entry in self.entries.values() {require(entry.directory.path_originals()?==entry.paths)?;}
+        if let Some(genesis)=self.genesis.as_mut(){
+            if genesis.progress(self.channel.as_fd(),child,files)?{return Ok(());}
+        }
         if let Some(facade)=self.facade.as_mut() {
             if facade.progress(self.channel.as_fd(),child,files)? {return Ok(());}
         }
@@ -151,6 +170,13 @@ impl Inspector {
         let Some(original)=packet::receive(self.channel.as_fd(),MAX_IPC,1)? else {return Ok(());};
         child.require_inspection_sender(&original,files.payload.uid,files.payload.gid)?;
         let header:serde_json::Value=exact(&original.bytes)?;
+        if header.get("apiVersion").and_then(|v|v.as_str())==Some(super::super::genesis_client::INSPECTION_API){
+            require(self.pending.is_none())?;
+            let genesis=self.genesis.as_mut().ok_or(ShadowError::BindingDrift)?;
+            let sequence=self.sequence.checked_add(1).ok_or(ShadowError::CounterOverflow)?;
+            genesis.receive(original,sequence,child,files)?;self.sequence=sequence;
+            genesis.progress(self.channel.as_fd(),child,files)?;return Ok(());
+        }
         if header.get("apiVersion").and_then(|v|v.as_str()).is_some_and(facade::is_api) {
             require(self.pending.is_none())?;
             let facade=self.facade.as_mut().ok_or(ShadowError::BindingDrift)?;
@@ -161,6 +187,7 @@ impl Inspector {
             return Ok(());
         }
         let request:Request=exact(&original.bytes)?;let deadline=decimal(&request.deadline_boottime_ns)?;
+        if let Some(genesis)=&self.genesis{require(deadline<=genesis.deadline())?;}
         let entry=self.entries.get_mut(&request.endpoint).ok_or(ShadowError::BindingDrift)?;
         require(request.api_version==API && request.sequence==self.sequence.checked_add(1).ok_or(ShadowError::CounterOverflow)?
             && now()?<deadline && deadline<=files.lifetime()
@@ -182,12 +209,15 @@ impl Inspector {
         Ok(())
     }
 }
-struct State {sequence:u64}
-pub(super) struct Channel {
-    fd:OwnedFd,parent:libc::ucred,parent_pidfd:OwnedFd,state:Mutex<State>,
+pub(in crate::policy_shadow::policy_custody::services) struct State {pub(in crate::policy_shadow::policy_custody::services) sequence:u64}
+pub(in crate::policy_shadow::policy_custody::services) struct Channel {
+    pub(in crate::policy_shadow::policy_custody::services) fd:OwnedFd,
+    pub(in crate::policy_shadow::policy_custody::services) parent:libc::ucred,
+    pub(in crate::policy_shadow::policy_custody::services) parent_pidfd:OwnedFd,
+    pub(in crate::policy_shadow::policy_custody::services) state:Mutex<State>,
 }
 impl Channel {
-    pub(super) fn bind(fd:OwnedFd,owner:&AdmittedGuest)->Result<Arc<Self>,ShadowError> {
+    pub(in crate::policy_shadow::policy_custody::services) fn bind(fd:OwnedFd,owner:&AdmittedGuest)->Result<Arc<Self>,ShadowError> {
         owner.check()?;owner.delivery().check_startup().map_err(fail)?;
         packet::configure(fd.as_fd())?;
         let parent=packet::credentials(fd.as_fd())?;
@@ -200,19 +230,30 @@ impl Channel {
 pub(in crate::policy_shadow::policy_custody::services) struct Session {
     channel:Arc<Channel>,endpoint:EndpointKind,
     socket:OwnedFd,peer:libc::ucred,peer_pidfd:OwnedFd,directory:Directory,
-    expected:ExpectedPeerCredentials,owner:Arc<AdmittedGuest>,
+    expected:ExpectedPeerCredentials,owner:Arc<AdmittedGuest>,maximum_deadline:u64,
 }
 impl Session {
-    pub(super) fn connect(channel:Arc<Channel>,directory:Directory,socket:OwnedFd,
+    pub(in crate::policy_shadow::policy_custody::services) fn connect(channel:Arc<Channel>,directory:Directory,socket:OwnedFd,
         expected:ExpectedPeerCredentials,owner:Arc<AdmittedGuest>,endpoint:EndpointKind)->Result<Self,ShadowError> {
+        let maximum=owner.delivery().lifetime;
+        Self::connect_limited(channel,directory,socket,expected,owner,endpoint,maximum)
+    }
+    pub(in crate::policy_shadow::policy_custody::services) fn connect_genesis(channel:Arc<Channel>,directory:Directory,socket:OwnedFd,
+        expected:ExpectedPeerCredentials,owner:Arc<AdmittedGuest>,endpoint:EndpointKind,maximum:u64)->Result<Self,ShadowError>{
+        require(owner.genesis_coordinator_selected())?;
+        Self::connect_limited(channel,directory,socket,expected,owner,endpoint,maximum)
+    }
+    fn connect_limited(channel:Arc<Channel>,directory:Directory,socket:OwnedFd,
+        expected:ExpectedPeerCredentials,owner:Arc<AdmittedGuest>,endpoint:EndpointKind,maximum_deadline:u64)->Result<Self,ShadowError>{
         owner.check()?;owner.delivery().check_startup().map_err(fail)?;
+        require(now()?<maximum_deadline && maximum_deadline<=owner.delivery().lifetime)?;
         unconnected(socket.as_fd())?;directory.check()?;
         let path=format!("/proc/self/fd/{}/listener.sock",directory.fd.as_raw_fd());
         let mut address:libc::sockaddr_un=unsafe{zeroed()};address.sun_family=libc::AF_UNIX as _;
         require(path.len()<address.sun_path.len())?;
         for (to,from) in address.sun_path.iter_mut().zip(path.bytes()){*to=from as _;}
         loop {
-            owner.check()?;owner.delivery().check_startup().map_err(fail)?;directory.check()?;
+            owner.check()?;owner.delivery().check_startup().map_err(fail)?;directory.check()?;require(now()?<maximum_deadline)?;
             packet::same_process(channel.parent_pidfd.as_fd(),channel.parent.pid)?;
             if unsafe{libc::connect(socket.as_raw_fd(),(&address as *const libc::sockaddr_un).cast(),
                 (size_of::<libc::sa_family_t>()+path.len()+1) as _)}==0 {break;}
@@ -226,12 +267,12 @@ impl Session {
         require(peer.pid==expected.pid && peer.uid==expected.uid && peer.gid==expected.gid
             && peer.uid!=0 && peer.uid!=unsafe{libc::geteuid()})?;
         packet::same_process(peer_pidfd.as_fd(),peer.pid)?;
-        let session=Self{channel,endpoint,socket,peer,peer_pidfd,directory,expected,owner};
-        session.inspect(Phase::Connection,None,None,session.owner.delivery().startup)?;
+        let session=Self{channel,endpoint,socket,peer,peer_pidfd,directory,expected,owner,maximum_deadline};
+        session.inspect(Phase::Connection,None,None,session.owner.delivery().startup.min(maximum_deadline))?;
         session.check()?;Ok(session)
     }
     pub(in crate::policy_shadow::policy_custody::services) fn check(&self)->Result<(),ShadowError> {
-        self.owner.check()?;self.directory.check()?;
+        self.owner.check()?;self.directory.check()?;require(now()?<self.maximum_deadline)?;
         packet::same_process(self.channel.parent_pidfd.as_fd(),self.channel.parent.pid)?;
         packet::same_process(self.peer_pidfd.as_fd(),self.peer.pid)?;
         require(self.channel.parent.pid==unsafe{libc::getppid()}
@@ -240,7 +281,7 @@ impl Session {
         validate_exact_peer_path(self.socket.as_raw_fd(),std::path::Path::new(self.endpoint.socket_path())).map_err(fail)
     }
     fn inspect(&self,phase:Phase,frame:Option<&[u8]>,original:Option<&packet::Packet>,deadline:u64)->Result<(),ShadowError> {
-        self.check()?;require(now()?<deadline && deadline<=self.owner.delivery().lifetime)?;
+        self.check()?;require(now()?<deadline && deadline<=self.maximum_deadline)?;
         let mut state=self.channel.state.lock().map_err(fail)?;
         state.sequence=state.sequence.checked_add(1).ok_or(ShadowError::CounterOverflow)?;
         let raw=canonical_json_bytes(&Request{api_version:API.into(),endpoint:self.endpoint,sequence:state.sequence,phase,
@@ -275,7 +316,7 @@ impl Session {
         let sent=packet::send(self.socket.as_fd(),raw,&[])?;self.check()?;Ok(sent)
     }
     pub(in crate::policy_shadow::policy_custody::services) fn receive(&self,deadline:u64)->Result<Option<packet::Packet>,ShadowError> {
-        self.check()?;require(now()?<deadline && deadline<=self.owner.delivery().lifetime)?;
+        self.check()?;require(now()?<deadline && deadline<=self.maximum_deadline)?;
         let value=packet::receive(self.socket.as_fd(),services::common::MAX_SERVICE_FRAME_BYTES,0)?;
         if let Some(original)=&value {
             self.inspect(Phase::AfterReceive,Some(&original.bytes),Some(original),deadline)?;

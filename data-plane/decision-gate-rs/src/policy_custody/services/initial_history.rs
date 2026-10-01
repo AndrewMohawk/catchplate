@@ -12,6 +12,8 @@ use std::os::unix::fs::FileExt;
 
 const API: &str = "serverware.custodyOrdinaryInitialHistory/v1";
 const STATE_API: &str = "serverware.custodyOrdinaryInitialState/v1";
+const GENESIS_API: &str = "serverware.custodyOrdinaryInitialHistory/v2";
+const GENESIS_STATE_API: &str = "serverware.custodyOrdinaryInitialState/v2";
 const PREDECESSOR: &[u8] = b"serverware.custodyOrdinaryInitialCheckpointPredecessor/v1";
 const HISTORY_ROOT: &[u8] = b"serverware.custodyOrdinaryInitialHistoryRoot/v1";
 const DURABLE_HEAD: &[u8] = b"serverware.custodyOrdinaryInitialDurableHead/v1";
@@ -86,7 +88,9 @@ impl State {
     }
     fn validate(&self, runtime: &RuntimeConfigHeaderV3, role: TrustedHostServiceRoleV3)
         -> Result<(), ServiceRunnerError> {
-        require(self.api_version == STATE_API && self.service_role == role
+        let cold = runtime.api_version == super::publication_genesis_service::RUNTIME;
+        require(self.api_version == (if cold { GENESIS_STATE_API } else { STATE_API })
+            && self.service_role == role
             && self.endpoint_generation > 0 && self.service_generation > 0
             && self.operation_generation > 0 && self.durable_epoch > 0
             && self.service_generation == runtime.service_restart_epoch
@@ -104,7 +108,14 @@ impl State {
         let lifetime = ns(&self.lifetime_deadline_boottime_ns)?;
         require(issued < startup && startup <= lifetime && startup - issued <= 30_000_000_000)?;
         self.domain()?;
-        let required: BTreeSet<_> = directory_names(role).iter().copied().collect();
+        let names = if cold {
+            match role {
+                TrustedHostServiceRoleV3::DurableRecoveryStore => &["journal", "publication-genesis-journal"][..],
+                TrustedHostServiceRoleV3::CurrentSignatureAuthority => &["publication-genesis-journal"][..],
+                _ => return Err(error("cold publication history requires DRS or CSA")),
+            }
+        } else { directory_names(role) };
+        let required: BTreeSet<_> = names.iter().copied().collect();
         require(self.directories.keys().map(String::as_str).collect::<BTreeSet<_>>() == required
             && runtime.activation_directory_identities.keys().map(String::as_str).collect::<BTreeSet<_>>() == required)?;
         let mut identities = BTreeSet::new();
@@ -130,7 +141,7 @@ impl State {
 
 pub(super) fn selected(raw: &[u8]) -> Result<bool, ServiceRunnerError> {
     let value: serde_json::Value = decode_canonical_frame(raw)?;
-    Ok(value.get("apiVersion").and_then(serde_json::Value::as_str) == Some(API))
+    Ok(matches!(value.get("apiVersion").and_then(serde_json::Value::as_str), Some(API | GENESIS_API)))
 }
 
 fn authenticate(raw: &[u8], runtime: &RuntimeConfigHeaderV3, role: TrustedHostServiceRoleV3)
@@ -141,7 +152,7 @@ fn authenticate(raw: &[u8], runtime: &RuntimeConfigHeaderV3, role: TrustedHostSe
 fn authenticate_window(raw: &[u8], runtime: &RuntimeConfigHeaderV3, role: TrustedHostServiceRoleV3,
     startup_admission: bool) -> Result<Authenticated, ServiceRunnerError> {
     let wrapper: Wrapper = decode_canonical_frame(raw)?;
-    require(wrapper.api_version == API)?;
+    require(wrapper.api_version == if runtime.api_version == super::publication_genesis_service::RUNTIME { GENESIS_API } else { API })?;
     let state = wrapper.initial_state;
     state.validate(runtime, role)?;
     let manifest = wrapper.history;
@@ -322,6 +333,53 @@ pub(super) fn require_remote_guest(raw: &[u8], runtime: &RuntimeConfigHeaderV3,
     if !selected(raw)? { return Ok(()); }
     let owner = authenticate(raw, runtime, role)?;
     require_remote_guest_owner(&owner, grant)
+}
+
+/// Public-data association for a root-verified cold genesis grant. This does
+/// not create the local owner or infer currentness from a checkpoint; actual
+/// startup still performs executable/process/empty-directory admission below.
+pub(super) fn require_genesis_guest(raw: &[u8], runtime: &RuntimeConfigHeaderV3,
+    role: TrustedHostServiceRoleV3, binding: &guest::GuestClosureBinding) -> Result<(), ServiceRunnerError> {
+    require(runtime.api_version == super::publication_genesis_service::RUNTIME && selected(raw)?)?;
+    let owner = authenticate(raw, runtime, role)?;
+    require_genesis_guest_owner(&owner, role, binding)
+}
+
+fn require_genesis_guest_owner(owner: &Authenticated, role: TrustedHostServiceRoleV3,
+    binding: &guest::GuestClosureBinding) -> Result<(), ServiceRunnerError> {
+    let state = &owner.state;
+    let identity = &owner.history.current_epoch().map_err(error)?.statement().endpoint_process_identity;
+    require(binding.service_role == role_name(role) && binding.uid == identity.endpoint_uid && binding.gid == identity.endpoint_gid
+        && binding.boot_id_base64url == state.boot_id_base64url
+        && binding.time_namespace_device == state.time_namespace_device && binding.time_namespace_inode == state.time_namespace_inode
+        && binding.invocation_id == state.invocation_id && binding.startup_deadline_boottime_ns == state.startup_deadline_boottime_ns
+        && binding.lifetime_deadline_boottime_ns == state.lifetime_deadline_boottime_ns
+        && ns(&state.issued_at_boottime_ns)? <= ns(&binding.issued_at_boottime_ns)?)
+}
+
+pub(super) fn require_genesis_window(raw: &[u8], runtime: &RuntimeConfigHeaderV3,
+    role: TrustedHostServiceRoleV3, issued: u64, expires: u64) -> Result<(), ServiceRunnerError> {
+    require(runtime.api_version == super::publication_genesis_service::RUNTIME && selected(raw)?)?;
+    let owner = authenticate(raw, runtime, role)?;
+    require_genesis_window_owner(&owner, issued, expires)
+}
+
+fn require_genesis_window_owner(owner: &Authenticated, issued: u64, expires: u64) -> Result<(), ServiceRunnerError> {
+    require(issued < expires && issued >= owner.checkpoint.payload.valid_from_boottime.absolute_boottime_nanos()
+        && expires <= owner.checkpoint.payload.valid_until_boottime.absolute_boottime_nanos()
+        && expires <= ns(&owner.state.lifetime_deadline_boottime_ns)?)
+}
+
+/// Only validation of a retained cold result after startup; not startup,
+/// directory admission, renewed currentness, or permission to create a gate.
+pub(super) fn load_retained_genesis_witness(raw: &[u8], runtime: &RuntimeConfigHeaderV3,
+    role: TrustedHostServiceRoleV3, binding: &guest::GuestClosureBinding, issued: u64, expires: u64)
+    -> Result<RuntimeAuthorityHistory, ServiceRunnerError> {
+    require(runtime.api_version == super::publication_genesis_service::RUNTIME && selected(raw)?)?;
+    let owner = authenticate_window(raw, runtime, role, false)?;
+    require_genesis_guest_owner(&owner, role, binding)?;
+    require_genesis_window_owner(&owner, issued, expires)?;
+    Ok(owner.history)
 }
 
 pub(super) fn require_retained_completed_guest(raw: &[u8], runtime: &RuntimeConfigHeaderV3,

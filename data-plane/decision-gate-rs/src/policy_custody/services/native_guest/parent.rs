@@ -100,10 +100,14 @@ impl Inspection {
 }
 impl Running {
     fn start()->Result<Self,ShadowError> {
+        Self::start_selected(false)
+    }
+    fn start_selected(require_genesis:bool)->Result<Self,ShadowError>{
         let inherited=inherited()?;
         let launch=Original::native_launch().map_err(fail)?;
         let launch_bytes=launch.read(32768).map_err(fail)?.to_vec();
         let (selected,service_selection)=selection(&launch_bytes)?;
+        require(!require_genesis || matches!(&service_selection,SelectedService::PublicationGenesisCoordinator))?;
         let files=admit_files(&selected.delivery_configuration.path,selected.delivery_configuration.sha256,
             &selected.delivery.path,selected.delivery.sha256).map_err(fail)?;
         require(inherited.iter().filter(|fd|**fd>=6).copied().eq(6..6+files.payload.activation.len() as i32)
@@ -115,18 +119,29 @@ impl Running {
         }
         let native_lock=match &service_selection {
             SelectedService::PersistenceLocked(_)=>Some(super::super::NativeLock::Persistence),
-            SelectedService::LedgerRetrieval(_)|SelectedService::CompletionRetrieval(_)|SelectedService::EffectRetrieval(_)|SelectedService::PublicationRetrieval(_)=>Some(super::super::NativeLock::Ledger),
+            SelectedService::LedgerRetrieval(_)|SelectedService::CompletionRetrieval(_)|SelectedService::EffectRetrieval(_)|SelectedService::PublicationRetrieval(_)|SelectedService::PublicationGenesisRetrieval(_)=>Some(super::super::NativeLock::Ledger),
             _=>None,
         };
-        let (activation,_)=take_activation(&files.payload.activation,false,false,false,false,native_lock).map_err(fail)?;
+        let (activation,_)=take_activation(&files.payload.activation,false,false,false,false,false,native_lock).map_err(fail)?;
+        let genesis_coordinator=matches!(&service_selection,SelectedService::PublicationGenesisCoordinator);
+        if genesis_coordinator{
+            require(files.payload.activation.len()==10
+                && files.payload.activation[9].name==super::super::super::publication_genesis_client::RESULT_PARENT_FD
+                && files.payload.activation[9].fd==15)?;
+        }
         process::isolate_mounts()?;
         let image=image::Image::prepare(&selected.closure,&files,service_selection.closure_set_role())?;
         let (inspector,inspection)=match service_selection {
+            SelectedService::PublicationGenesisCoordinator=>{
+                let (owner,channel)=proof_client::Inspector::prepare_genesis(&files,&activation)?;
+                (Some(Inspection::ProofClient(owner)),Some(channel))
+            }
             service @ (SelectedService::LedgerRetrieval(_)|SelectedService::LedgerSpool(_)|SelectedService::Ingress(_)|SelectedService::SpoolBridge(_)
                 |SelectedService::CompletionRetrieval(_)|SelectedService::CompletionLedgerSpool(_)|SelectedService::TerminalSpool(_)|SelectedService::TerminalBridge(_)
                 |SelectedService::EffectRetrieval(_)|SelectedService::ActiveEffectBridge(_)|SelectedService::InitialHistoryBridge(..)|SelectedService::DispatchSpool(_)
                 |SelectedService::ActiveEffectBarrier(_)|SelectedService::ActiveEffectCommit(_)
-                |SelectedService::Publication(_)|SelectedService::PublicationRetrieval(_)|SelectedService::PublicationBridge(_))=>{
+                |SelectedService::Publication(_)|SelectedService::PublicationRetrieval(_)|SelectedService::PublicationBridge(_)
+                |SelectedService::PublicationGenesis(_)|SelectedService::PublicationGenesisRetrieval(_))=>{
                 let (owner,channel)=proof_cohort::prepare_inspection(service,&files,&activation)?;
                 (Some(owner),Some(channel))
             }
@@ -208,7 +223,8 @@ impl Running {
                 (None,None)
             }
         };
-        let ordered=files.payload.activation.iter().map(|entry| {
+        let child_entries=if genesis_coordinator{&files.payload.activation[..9]}else{files.payload.activation.as_slice()};
+        let ordered=child_entries.iter().map(|entry| {
             activation.get(&entry.name).map(AsFd::as_fd).ok_or(ShadowError::BindingDrift)
         }).collect::<Result<Vec<_>,_>>()?;
         files.check_preparation().map_err(fail)?;
@@ -244,6 +260,32 @@ impl Running {
         self.child.stop_and_reap()?;
         // No ready/result/success frame exists. This only retires an actually
         // reaped child; loop autoclear/root-FD release is not claimed verified.
+        Ok(())
+    }
+}
+/// Callable cold parent handoff, deliberately separate from the ordinary
+/// no-result entrypoint. Receiving evidence does not install a policy or retire
+/// any peer. The caller must keep this owner and invoke its bounded close.
+pub(in crate::policy_shadow::policy_custody::services) struct GenesisParent {running:Option<Running>}
+impl GenesisParent {
+    pub(in crate::policy_shadow::policy_custody::services) fn start()->Result<Self,ShadowError>{
+        Ok(Self{running:Some(Running::start_selected(true)?)})
+    }
+    pub(in crate::policy_shadow::policy_custody::services) fn run_until_genesis_handoff(&mut self)->Result<Vec<u8>,ShadowError>{
+        let running=self.running.as_mut().ok_or(ShadowError::BindingDrift)?;
+        loop {
+            running.check_originals()?;require(running.child.check()?)?;
+            let Some(Inspection::ProofClient(inspector))=running.inspector.as_mut() else{return Err(ShadowError::BindingDrift);};
+            require(now()?<inspector.genesis_deadline()?
+                && now()?.checked_add(REAP_RESERVE_NS).ok_or(ShadowError::CounterOverflow)?<running.files.lifetime())?;
+            inspector.progress(&running.child,&running.files)?;
+            if let Some(bundle)=inspector.take_genesis_result()?{return Ok(bundle);}
+            let result=unsafe{libc::poll(std::ptr::null_mut(),0,1)};
+            require(result==0 || (result<0 && std::io::Error::last_os_error().raw_os_error()==Some(libc::EINTR)))?;
+        }
+    }
+    pub(in crate::policy_shadow::policy_custody::services) fn close(&mut self)->Result<(),ShadowError>{
+        if let Some(mut running)=self.running.take(){running.child.stop_and_reap()?;}
         Ok(())
     }
 }

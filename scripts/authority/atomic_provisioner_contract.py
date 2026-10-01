@@ -30,6 +30,10 @@ VERIFICATION_RECEIPT_SCHEMA = (
     "serverware.authorityArtifactVerificationReceipt/v1"
 )
 PROVISIONING_PLAN_SCHEMA = "serverware.authorityAtomicProvisioningPlan/v1"
+LOCAL_PROVISIONING_PLAN_SCHEMA = "serverware.authorityTrustedHostLocalProvisioningPlan/v1"
+LOCAL_PROVISIONING_RECEIPT_SCHEMA = "serverware.authorityTrustedHostLocalProvisioningReceipt/v1"
+LOCAL_PROVISIONING_RECEIPT_SIGNATURE_DOMAIN = "serverware.authorityTrustedHostLocalProvisioningReceiptSignature/v1"
+LOCAL_PROVISIONING_RECEIPT_DIGEST_DOMAIN = "serverware.authorityTrustedHostLocalProvisioningReceiptDigest/v1"
 PROVISIONING_RECEIPT_SCHEMA = (
     "serverware.authorityAtomicProvisioningReceipt/v2"
 )
@@ -84,6 +88,14 @@ ATOMIC_PROVISIONING_STEPS = (
     "fsync-generations-directory",
     "write-sign-fsync-terminal-receipt",
     "release-generation-lock",
+)
+LOCAL_PROVISIONING_STEPS = (
+    *ATOMIC_PROVISIONING_STEPS[:10],
+    "set-generation-descendants-immutable",
+    "renameat2-generation-noreplace",
+    "set-published-generation-root-immutable",
+    "fsync-generations-directory",
+    "write-sign-fsync-terminal-receipt",
 )
 
 
@@ -271,7 +283,8 @@ def provisioning_plan_digest(plan: Mapping[str, Any]) -> str:
 
 def provisioning_receipt_digest(receipt: Mapping[str, Any]) -> str:
     validate_provisioning_receipt(receipt)
-    return _document_digest(PROVISIONING_RECEIPT_DIGEST_DOMAIN, receipt)
+    return _document_digest(LOCAL_PROVISIONING_RECEIPT_DIGEST_DOMAIN
+        if receipt["schema"] == LOCAL_PROVISIONING_RECEIPT_SCHEMA else PROVISIONING_RECEIPT_DIGEST_DOMAIN, receipt)
 
 
 def _validate_verified_signature(
@@ -623,12 +636,19 @@ def build_provisioning_plan(
     destination_root: str,
     owner_uid: int,
     owner_gid: int,
+    trusted_host_local: bool = False,
 ) -> dict[str, Any]:
     if not isinstance(verified_package, VerifiedArtifactPackage):
         raise ProvisioningContractError(
             "planning requires a cryptographically verified package"
         )
     package = verified_package.package
+    if type(trusted_host_local) is not bool or trusted_host_local and (
+            verified_package.trust_mode != "trusted-host-local" or
+            verified_package.stage_zero_contract != LOCAL_STAGE_ZERO_INTERFACE_SCHEMA):
+        raise ProvisioningContractError("local provisioning requires the explicit local package")
+    if not trusted_host_local and verified_package.stage_zero_contract == LOCAL_STAGE_ZERO_INTERFACE_SCHEMA:
+        raise ProvisioningContractError("local Python package requires explicit local provisioning selection")
     verify_verification_receipt(
         receipt,
         verified_package=verified_package,
@@ -669,14 +689,14 @@ def build_provisioning_plan(
     ]
     steps = [
         {"ordinal": index, "step": step}
-        for index, step in enumerate(ATOMIC_PROVISIONING_STEPS, start=1)
+        for index, step in enumerate(LOCAL_PROVISIONING_STEPS if trusted_host_local else ATOMIC_PROVISIONING_STEPS, start=1)
     ]
     step_contract_digest = domain_digest(
         PROVISIONING_STEP_CONTRACT_DOMAIN,
         canonical_json_bytes(steps),
     )
     plan_without_id = {
-        "schema": PROVISIONING_PLAN_SCHEMA,
+        "schema": LOCAL_PROVISIONING_PLAN_SCHEMA if trusted_host_local else PROVISIONING_PLAN_SCHEMA,
         "packageDigest": signed_package_digest(package),
         "artifactBundleDigest": artifact_bundle_digest(bundle),
         "generationDigest": generation_digest,
@@ -687,7 +707,7 @@ def build_provisioning_plan(
         "verificationReceiptDigest": verification_receipt_digest(receipt),
         "sourceRoot": {
             "fd": source_fd,
-            "fdCustody": "retained-by-native-parent-through-publish",
+            "fdCustody": "retained-by-local-installer-through-publish" if trusted_host_local else "retained-by-native-parent-through-publish",
             **dict(
                 bundle["stableSnapshotReceipt"]["payload"]["rootIdentity"]
             ),
@@ -737,6 +757,10 @@ def build_provisioning_plan(
             ],
         },
     }
+    if trusted_host_local:
+        executor = plan_without_id.pop("nativeExecutor")
+        executor.update(pythonExecutionAuthorized=True)
+        plan_without_id["localExecutor"] = executor
     plan = {
         **plan_without_id,
         "planId": domain_digest(
@@ -749,6 +773,7 @@ def build_provisioning_plan(
 
 
 def validate_provisioning_plan(plan: Mapping[str, Any]) -> None:
+    local = isinstance(plan, Mapping) and plan.get("schema") == LOCAL_PROVISIONING_PLAN_SCHEMA
     value = _closed(
         plan,
         name="provisioning plan",
@@ -767,10 +792,10 @@ def validate_provisioning_plan(plan: Mapping[str, Any]) -> None:
             "steps",
             "stepContractDigest",
             "activation",
-            "nativeExecutor",
+            "localExecutor" if local else "nativeExecutor",
         },
     )
-    if value["schema"] != PROVISIONING_PLAN_SCHEMA:
+    if value["schema"] not in {PROVISIONING_PLAN_SCHEMA, LOCAL_PROVISIONING_PLAN_SCHEMA}:
         raise ProvisioningContractError("provisioning plan schema changed")
     for field in (
         "planId",
@@ -819,9 +844,8 @@ def validate_provisioning_plan(plan: Mapping[str, Any]) -> None:
         minimum=3,
         maximum=2**31 - 1,
     )
-    if source_root["fdCustody"] != (
-        "retained-by-native-parent-through-publish"
-    ):
+    if source_root["fdCustody"] != ("retained-by-local-installer-through-publish" if local
+            else "retained-by-native-parent-through-publish"):
         raise ProvisioningContractError(
             "source-root descriptor custody contract changed"
         )
@@ -961,12 +985,12 @@ def validate_provisioning_plan(plan: Mapping[str, Any]) -> None:
     steps = _bounded_list(
         value["steps"],
         name="provisioning steps",
-        minimum=len(ATOMIC_PROVISIONING_STEPS),
-        maximum=len(ATOMIC_PROVISIONING_STEPS),
+        minimum=len(LOCAL_PROVISIONING_STEPS if local else ATOMIC_PROVISIONING_STEPS),
+        maximum=len(LOCAL_PROVISIONING_STEPS if local else ATOMIC_PROVISIONING_STEPS),
     )
     expected_steps = [
         {"ordinal": index, "step": step}
-        for index, step in enumerate(ATOMIC_PROVISIONING_STEPS, start=1)
+        for index, step in enumerate(LOCAL_PROVISIONING_STEPS if local else ATOMIC_PROVISIONING_STEPS, start=1)
     ]
     if list(steps) != expected_steps:
         raise ProvisioningContractError(
@@ -1000,7 +1024,7 @@ def validate_provisioning_plan(plan: Mapping[str, Any]) -> None:
         raise ProvisioningContractError("activation policy changed")
 
     executor = _closed(
-        value["nativeExecutor"],
+        value["localExecutor" if local else "nativeExecutor"],
         name="native executor policy",
         keys={
             "required",
@@ -1012,7 +1036,7 @@ def validate_provisioning_plan(plan: Mapping[str, Any]) -> None:
     )
     if (
         executor["required"] is not True
-        or executor["pythonExecutionAuthorized"] is not False
+        or executor["pythonExecutionAuthorized"] is not local
         or executor["requiredCapabilities"]
         != [
             "CAP_CHOWN",
@@ -1042,6 +1066,7 @@ def validate_provisioning_receipt(
     *,
     plan: Mapping[str, Any] | None = None,
 ) -> None:
+    local = isinstance(receipt, Mapping) and receipt.get("schema") == LOCAL_PROVISIONING_RECEIPT_SCHEMA
     value = _closed(
         receipt,
         name="provisioning receipt",
@@ -1066,7 +1091,7 @@ def validate_provisioning_receipt(
             "signatureBase64Url",
         },
     )
-    if value["schema"] != PROVISIONING_RECEIPT_SCHEMA:
+    if value["schema"] not in {PROVISIONING_RECEIPT_SCHEMA, LOCAL_PROVISIONING_RECEIPT_SCHEMA}:
         raise ProvisioningContractError(
             "provisioning receipt schema changed"
         )
@@ -1161,10 +1186,10 @@ def validate_provisioning_receipt(
     completed_steps = _bounded_list(
         value["completedSteps"],
         name="completed steps",
-        minimum=len(ATOMIC_PROVISIONING_STEPS),
-        maximum=len(ATOMIC_PROVISIONING_STEPS),
+        minimum=len(LOCAL_PROVISIONING_STEPS if local else ATOMIC_PROVISIONING_STEPS),
+        maximum=len(LOCAL_PROVISIONING_STEPS if local else ATOMIC_PROVISIONING_STEPS),
     )
-    if list(completed_steps) != list(ATOMIC_PROVISIONING_STEPS):
+    if list(completed_steps) != list(LOCAL_PROVISIONING_STEPS if local else ATOMIC_PROVISIONING_STEPS):
         raise ProvisioningContractError(
             "provisioning receipt is not terminal"
         )
@@ -1192,6 +1217,8 @@ def validate_provisioning_receipt(
     if plan is not None:
         validate_provisioning_plan(plan)
         if (
+            local != (plan["schema"] == LOCAL_PROVISIONING_PLAN_SCHEMA)
+            or
             value["planDigest"] != provisioning_plan_digest(plan)
             or value["planId"] != plan["planId"]
             or value["generationDigest"] != plan["generationDigest"]
@@ -1235,7 +1262,8 @@ def provisioning_receipt_signature_message(
         )
     payload.pop("signatureBase64Url")
     return domain_digest(
-        PROVISIONING_RECEIPT_SIGNATURE_DOMAIN,
+        LOCAL_PROVISIONING_RECEIPT_SIGNATURE_DOMAIN if receipt.get("schema") == LOCAL_PROVISIONING_RECEIPT_SCHEMA
+        else PROVISIONING_RECEIPT_SIGNATURE_DOMAIN,
         canonical_json_bytes(payload),
     ).encode("ascii")
 
@@ -1349,6 +1377,12 @@ def verify_provisioning_receipt(
     exact_retry_digest: str | None = None,
 ) -> str:
     validate_provisioning_receipt(receipt, plan=plan)
+    if plan["schema"] == LOCAL_PROVISIONING_PLAN_SCHEMA and (
+            verified_package.trust_mode != "trusted-host-local" or
+            verified_package.stage_zero_contract != LOCAL_STAGE_ZERO_INTERFACE_SCHEMA):
+        raise ProvisioningContractError("local provisioning cannot admit a native or production package")
+    if plan["schema"] != LOCAL_PROVISIONING_PLAN_SCHEMA and verified_package.stage_zero_contract == LOCAL_STAGE_ZERO_INTERFACE_SCHEMA:
+        raise ProvisioningContractError("local package cannot claim native provisioning")
     if _timestamp(receipt["completedAt"], name="completedAt") > _timestamp(
         validation_time,
         name="provisioning receipt validation time",

@@ -123,6 +123,8 @@ class AdoptedServiceIntakeControls(unittest.TestCase):
         with self.assertRaises(ValueError): material.prepare_bundle(canonical(value), **clocks)
         # Selecting v2 is necessary, never sufficient. No authentic full
         # adoption transcript is supplied or fabricated in this test.
+        value["serviceContexts"]["persistence"]["inputOriginal"] = canonical({
+            "apiVersion": material.adopted_services.INPUT_API, "operation": "persistence"}).decode("ascii")
         with self.assertRaises(ValueError): material.prepare_bundle(canonical(value), adopted=True, **clocks)
         value["apiVersion"] = material.API
         with self.assertRaises(ValueError): material.prepare_bundle(canonical(value), adopted=True, **clocks)

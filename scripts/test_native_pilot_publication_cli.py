@@ -29,7 +29,11 @@ class PublicationCliTests(unittest.TestCase):
             "--sign-genesis-ordinary-checkpoint", "--sign-genesis-ordinary-root-anchor",
             "--sign-genesis-ordinary-checkpoint-anchor", "--sign-genesis-ordinary-service-anchor",
             "--assemble-genesis-ordinary-history", "--sign-genesis-ordinary-delivery",
-            "--sign-genesis-ordinary-grant", "--sign-genesis-endpoints-release", "--sign-publication-adoption"}
+            "--sign-genesis-ordinary-grant", "--sign-genesis-endpoints-release", "--sign-publication-adoption",
+            "--sign-adopted-bridge-delivery", "--sign-adopted-bridge-role-keys",
+            "--sign-adopted-bridge-admission", "--sign-adopted-bridge-closure",
+            "--sign-adopted-bridge-encrypted-delivery", "--sign-adopted-bridge-verifier-transport",
+            "--assemble-adopted-bridge-launch", "--sign-adopted-current-head"}
             | set(entry.NATIVE_MODES) | set(entry.SERVICE_MODES) | set(entry.TRANSPORT_MODES) | set(entry.LAUNCH_MODES)
             | set(entry.ADOPTED_MODES) | set(entry.ADOPTED_LAUNCH_MODES) | set(entry.ADOPTED_COHORT_MODES)
             | set(entry.ADOPTED_INITIAL_MODES) | set(entry.ADOPTED_PUBLICATION_MODES) | set(entry.ADOPTED_SERVICE_MODES))

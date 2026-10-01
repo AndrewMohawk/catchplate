@@ -96,8 +96,10 @@ def validate_policy(fragment):
 def _context(operation, fragment, pair_context, *, boot, now_boottime_ns, now_unix_ns):
     role = ENDPOINT_ROLES[operation]
     p.fields(pair_context, PAIR_FIELDS)
-    pair_raw = {name: ordinary._original(pair_context[name], key_profile.MAX_INPUT
-        if "Input" in name else key_profile.MAX_OUTPUT) for name in PAIR_FIELDS}
+    # These are native key-protocol originals (32 MiB inputs), not ordinary
+    # u64 history documents whose parser has an unconditional 4 MiB ceiling.
+    pair_raw = {name: c9._original(pair_context[name], key_profile.MAX_INPUT
+        if "Input" in name else key_profile.MAX_OUTPUT)[0] for name in PAIR_FIELDS}
     pair = key_profile.admitted_pair(role, pair_raw["roleKeyInputOriginal"], pair_raw["roleKeyOriginal"],
         pair_raw["admissionInputOriginal"], pair_raw["admissionOriginal"], boot=boot,
         now_boottime_ns=now_boottime_ns, now_unix_ns=now_unix_ns)

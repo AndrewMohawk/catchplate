@@ -10,6 +10,8 @@ from __future__ import annotations
 from serverware import custody_commitment_inputs as commitment
 from serverware import custody_generation_grants as generation
 from serverware import custody_spool_inputs as spool
+from serverware import custody_publication_inputs as publication
+from serverware import native_pilot_adopted_service_authority as adopted_authority
 from serverware import native_pilot_native_service_authority as native_authority
 from serverware import native_shadow_guest_delivery as delivery
 from serverware import native_shadow_nitro_profile as p
@@ -23,6 +25,8 @@ FIELDS = (
     "persistence", "generationJournal",
 )
 ENDPOINT_INPUT_ROLES = ("retrieval", "persistence", "trustedTime")
+ADOPTED_ENDPOINT_INPUT_ROLES = ENDPOINT_INPUT_ROLES + ("publicationReconciliation",)
+ADOPTED_FIELDS = FIELDS + ("publicationGrants", "nativePublicationGrant", "persistenceServiceInput")
 SPOOL_LISTENER_ROLES = (
     "ingressAdmission", "terminalAppend", "dispatchBarrier", "activeEffectBarrier", "activeEffectCommit",
 )
@@ -41,8 +45,43 @@ def _pins(value, roles):
         _pin(pin)
 
 
+def input_shape(inputs, *, adopted=False):
+    """Closed public reply pins, not signatures or live owner admission."""
+    p.require(type(adopted) is bool)
+    roles = cohort_profile.ADOPTED_ENDPOINT_ROLES if adopted else cohort_profile.ENDPOINT_ROLES
+    p.fields(inputs, ADOPTED_FIELDS if adopted else FIELDS)
+    _pins(inputs["ordinaryDeliveries"], generation.ROLES)
+    _pins(inputs["ordinaryGrants"], generation.ROLES)
+    _pins(inputs["dispatchGrants"], commitment.ROLES)
+    _pin(inputs["dispatchNativeGrant"])
+    _pins(inputs["spoolGrants"], spool.EFFECT_ROLES)
+    _pins(inputs["nativeSpoolGrants"], spool.EFFECT_NATIVE)
+    _pins(inputs["endpointLaunches"], roles)
+    _pins(inputs["persistence"], ("configuration", "genesis", "journal"))
+    journal = p.fields(inputs["generationJournal"], ("genesis", "records"))
+    _pin(journal["genesis"])
+    p.require(type(journal["records"]) is list and len(journal["records"]) <= MAX_RECORDS)
+    for pin in journal["records"]:
+        _pin(pin)
+    if adopted:
+        _pins(inputs["publicationGrants"], publication.ROLES)
+        _pin(inputs["nativePublicationGrant"])
+        _pin(inputs["persistenceServiceInput"])
+    return inputs
+
+
 def admit_services(pilot, *, endpoints, originals: PublicInputs, inputs: dict):
-    """Consume one closed reply and return the exact ten real endpoint owners.
+    """Consume the legacy closed reply; never infer an adopted lane from data."""
+    return _admit_services(pilot, endpoints=endpoints, originals=originals, inputs=inputs, adopted=False)
+
+
+def admit_adopted_services(pilot, *, endpoints, originals: PublicInputs, inputs: dict):
+    """Seal adopted publications and return all eleven genuine endpoint owners."""
+    return _admit_services(pilot, endpoints=endpoints, originals=originals, inputs=inputs, adopted=True)
+
+
+def _admit_services(pilot, *, endpoints, originals, inputs, adopted):
+    """Consume one closed reply on the explicitly selected actual owner lane.
 
     A failure leaves the pilot attempt fenced and all actual partial owners
     retained for its cleanup. In particular, the endpoint composite retains
@@ -65,28 +104,21 @@ def admit_services(pilot, *, endpoints, originals: PublicInputs, inputs: dict):
     # intake and physically initialized the actual spool. Never re-admit here
     # or accept a caller's observation in place of that retained owner state.
     p.require(endpoints._delivery_attempted and not endpoints._retain_attempted)
-    p.fields(endpoints._deliveries, ENDPOINT_INPUT_ROLES)
-    p.fields(endpoints._guests, ENDPOINT_INPUT_ROLES)
+    endpoint_roles = ADOPTED_ENDPOINT_INPUT_ROLES if adopted else ENDPOINT_INPUT_ROLES
+    p.require(endpoints._adopted == adopted and endpoints._roles == endpoint_roles)
+    p.fields(endpoints._deliveries, endpoint_roles)
+    p.fields(endpoints._guests, endpoint_roles)
     p.fields(endpoints._spool_journal, ("genesisSha256", "sequence", "headSha256"))
     originals.check()
     cohort = pilot.cohort
     p.require(cohort.endpoint_driver_selected() and cohort.effects_selected()
-        and tuple(cohort._roles) == cohort_profile.ENDPOINT_ROLES)
+        and cohort.adoption_selected() == adopted
+        and tuple(cohort._roles) == (cohort_profile.ADOPTED_ENDPOINT_ROLES if adopted else cohort_profile.ENDPOINT_ROLES)
+        and pilot.generation_inputs._adoption == adopted
+        and (pilot._received_core is not None) == adopted)
 
-    p.fields(inputs, FIELDS)
-    _pins(inputs["ordinaryDeliveries"], generation.ROLES)
-    _pins(inputs["ordinaryGrants"], generation.ROLES)
-    _pins(inputs["dispatchGrants"], commitment.ROLES)
-    _pin(inputs["dispatchNativeGrant"])
-    _pins(inputs["spoolGrants"], spool.EFFECT_ROLES)
-    _pins(inputs["nativeSpoolGrants"], spool.EFFECT_NATIVE)
-    _pins(inputs["endpointLaunches"], cohort._roles)
-    _pins(inputs["persistence"], ("configuration", "genesis", "journal"))
-    journal = p.fields(inputs["generationJournal"], ("genesis", "records"))
-    _pin(journal["genesis"])
-    p.require(type(journal["records"]) is list and len(journal["records"]) <= MAX_RECORDS)
-    for pin in journal["records"]:
-        _pin(pin)
+    input_shape(inputs, adopted=adopted)
+    journal = inputs["generationJournal"]
 
     ordinary = pilot.generation_inputs
     for role in generation.ROLES:
@@ -102,7 +134,8 @@ def admit_services(pilot, *, endpoints, originals: PublicInputs, inputs: dict):
         ordinary.seal_dispatch_grant(role, approved_grant_original=originals.read(
             inputs["dispatchGrants"][role], maximum=MAX_SIGNED_ORIGINAL),
             native_grant_original=dispatch_native)
-    native_spool = {name: originals.read(pin, maximum=native_authority.MAX_OUTPUT)
+    native_spool = {name: originals.read(pin, maximum=adopted_authority.PROFILES["retrieval"][3]
+        if adopted and name == "retrieval" else native_authority.MAX_OUTPUT)
         for name, pin in inputs["nativeSpoolGrants"].items()}
     for name, raw in native_spool.items():
         native_authority.grant_original(name, raw)
@@ -112,6 +145,18 @@ def admit_services(pilot, *, endpoints, originals: PublicInputs, inputs: dict):
         ordinary.seal_spool_grant(role, approved_grant_original=originals.read(
             inputs["spoolGrants"][role], maximum=MAX_SIGNED_ORIGINAL if role == generation.ROLES[0] else 131072),
             native_originals=native_spool)
+
+    if adopted:
+        native_publication = originals.read(inputs["nativePublicationGrant"],
+            maximum=adopted_authority.PROFILES["publication"][3])
+        adopted_authority.grant_original("publication", native_publication)
+        # DRS must be sealed first: CSA's genuine receiver joins its retained
+        # durable predecessor, literal native/retrieval grants and original caps.
+        for role in publication.ROLES:
+            pilot.seal_publication_grant(role, approved_grant_original=originals.read(
+                inputs["publicationGrants"][role], maximum=publication.MAX_GRANT),
+                native_original=native_publication, retrieval_original=native_spool["retrieval"])
+        publication.release_current(ordinary)
 
     launch_pins = inputs["endpointLaunches"]
     for role in cohort._roles:
@@ -127,13 +172,17 @@ def admit_services(pilot, *, endpoints, originals: PublicInputs, inputs: dict):
 
     persistence = inputs["persistence"]
     transfers.update(endpoints.retain(
-        launch_pins={role: launch_pins[role] for role in ENDPOINT_INPUT_ROLES},
+        launch_pins={role: launch_pins[role] for role in endpoint_roles},
         persistence_configuration_original=originals.read(persistence["configuration"], maximum=p.MAX_CONFIG),
         persistence_configuration_sha256=persistence["configuration"]["sha256"],
         genesis_original=originals.read(persistence["genesis"], maximum=16384),
         genesis_sha256=persistence["genesis"]["sha256"],
         journal_original=originals.read(persistence["journal"], maximum=1024),
-        journal_sha256=persistence["journal"]["sha256"]))
+        journal_sha256=persistence["journal"]["sha256"],
+        **({"persistence_service_input_original": originals.read(inputs["persistenceServiceInput"],
+            maximum=adopted_authority.MAX_INPUT)} if adopted else {})))
+    if adopted:
+        p.require(transfers["publicationReconciliation"]._grant_bytes == native_publication)
     for role in SPOOL_LISTENER_ROLES:
         additions = pilot.spool_inputs.additions(role)
         transfers[role] = cohort.retain_activation_fds(role=role, launch_pin=launch_pins[role],

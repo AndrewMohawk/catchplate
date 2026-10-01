@@ -23,6 +23,7 @@ from serverware import native_shadow_guest_delivery as delivery
 
 p = delivery.p
 API = "serverware.nativePilotBridgeKeyAuthorityInput/v1"
+ADOPTED_API = "serverware.nativePilotBridgeKeyAuthorityInput/v2"
 OPERATIONS = ("role-keys", "admission")
 MAX_INPUT = 32 * 1024 * 1024
 MAX_OUTPUT = 65536
@@ -44,10 +45,12 @@ def validate_policy(value):
     return copy.deepcopy(value)
 
 
-def _context(value, *, boot, now_boottime_ns, now_unix_ns):
+def _context(value, *, boot, now_boottime_ns, now_unix_ns, adopted=False):
+    p.require(type(adopted) is bool)
     delivery_input, _ = c9._original(value["deliveryInputOriginal"], c9.MAX_BRIDGE_INPUT)
     source = c9.input_document(delivery_input)
-    p.require(source["role"] == "bridge")
+    p.require(source["role"] == "bridge" and source["apiVersion"] ==
+        ("serverware.nativePilotDeliverySigningInput/v3" if adopted else "serverware.nativePilotDeliverySigningInput/v1"))
     delivery_raw, signed = c9._original(value["deliveryOriginal"], delivery.MAX_DELIVERY)
     p.fields(signed, ("apiVersion", "payload", "signatureBase64url"))
     payload_raw, payload = c9._original(source["payloadOriginal"], delivery.MAX_DELIVERY)
@@ -62,14 +65,18 @@ def _context(value, *, boot, now_boottime_ns, now_unix_ns):
         "windowOriginal": source["windowOriginal"], "observationOriginal": source["observationOriginal"],
         "deliveryConfigurationOriginal": source["configurationOriginal"],
         "deliveryOriginal": value["deliveryOriginal"], "runtimeOriginal": source["runtimeOriginal"], **originals}
-    config, window, observed, guest = closure._guest(bridge, boot=boot, now=now_boottime_ns)
+    if adopted:
+        bridge["deliveryInputOriginal"] = value["deliveryInputOriginal"]
+        config, window, observed, guest = closure._adopted_bridge_guest(bridge, boot=boot, now=now_boottime_ns)
+    else:
+        config, window, observed, guest = closure._guest(bridge, boot=boot, now=now_boottime_ns)
     runtime_raw, _ = runtime.original(source["runtimeOriginal"])
     c9._same(payload["runtimeConfig"], {"path": publication.DESTINATIONS["bridge-runtime"], "sha256": p.sha(runtime_raw)})
 
     # Existing authenticated assignment/trust derivation, including all 18
     # independent authority records. No key declared by the candidate self-pins.
     envelope, bindings, key_root = measured_profile._assignment(
-        {"apiVersion": "serverware.nativePilotMeasuredConfigurationRecipe/v2", **originals}, now_unix_ns)
+        {"apiVersion": measured_profile.ADOPTED_API if adopted else measured_profile.SET_API, **originals}, now_unix_ns)
     p.require(assignments.version(envelope) == 2)
     _, trust = c9._original(originals["trustOriginal"], 1024 * 1024)
     public = {row["role"]: row["key"]["publicKeyBase64url"] for row in trust["roleKeys"]}
@@ -78,9 +85,10 @@ def _context(value, *, boot, now_boottime_ns, now_unix_ns):
         p.require(len({key[field] for key in keys}) == 18)
     p.require(p.key_root(keys) == key_root)
     set_raw, _ = c9._original(originals["closureSetOriginal"], closure_set.MAX_BYTES)
-    selected = closure_set.validate(set_raw)
+    set_api = closure_set.PUBLICATION_API if adopted else closure_set.API
+    selected = closure_set.validate(set_raw, api_version=set_api)
     manifest = selected["members"][-1]["manifest"]
-    assignments.closure_binding(envelope, set_raw, "bridge")
+    assignments.closure_binding(envelope, set_raw, "bridge", set_api_version=set_api)
     bridge["manifestOriginal"] = p.canonical(manifest).decode("ascii")
     closure._manifest(bridge, config, observed, envelope["payload"])
     p.fields(measured["production"], scope.PRODUCTION_FIELDS)
@@ -108,11 +116,12 @@ def prepare_input(operation, input_raw, *, boot, now_boottime_ns, now_unix_ns):
     p.require(type(operation) is str and operation in OPERATIONS)
     value = p.fields(p.document(input_raw, MAX_INPUT),
         INPUT_FIELDS + (("roleKeyOriginal",) if operation == "admission" else ()))
-    p.require(value["apiVersion"] == API and value["operation"] == operation)
+    adopted = value["apiVersion"] == ADOPTED_API
+    p.require(value["apiVersion"] in (API, ADOPTED_API) and value["operation"] == operation)
     row = validate_policy(value["policy"])
     p.integer(now_unix_ns)
     envelope, keys, trust, manifest, config, window, guest, delivered = _context(value,
-        boot=boot, now_boottime_ns=now_boottime_ns, now_unix_ns=now_unix_ns)
+        boot=boot, now_boottime_ns=now_boottime_ns, now_unix_ns=now_unix_ns, adopted=adopted)
     assignment, checkpoint = envelope["payload"], trust["checkpoint"]
     issued, expires = row["issuedAtUnixNanos"], row["expiresAtUnixNanos"]
     p.freshness(issued, expires, now_unix_ns)
@@ -145,17 +154,20 @@ def prepare_input(operation, input_raw, *, boot, now_boottime_ns, now_unix_ns):
         p.fields(payload, admission.ADMISSION_FIELDS)
     result = {"payload": payload, "signature": ""}
     p.require(len(p.canonical(result)) + 86 <= MAX_OUTPUT)
+    epoch_limit = min(expires, trust["issuedAtUnixNanos"] + p.DAY_NS + 1,
+        assignment["issuedAtUnixNanos"] + p.DAY_NS + 1) if adopted else expires
+    p.require(now_unix_ns < epoch_limit)
     return copy.deepcopy({"payload": payload, "supervisor": keys[-1], "window": window,
-        "deadline": p.ns(window["startupDeadlineBoottimeNs"]), "epochLimit": expires,
+        "deadline": p.ns(window["startupDeadlineBoottimeNs"]), "epochLimit": epoch_limit,
         "domain": DOMAINS[operation], "result": result, "authorityKeys": keys, "trustCheckpoint": checkpoint,
-        "manifest": manifest, "configuration": config, "delivery": delivered})
+        "manifest": manifest, "configuration": config, "delivery": delivered, "adopted": adopted})
 
 
 def build(operation, *, control_original, delivery_input_raw, delivery_raw, recipe_originals,
-          measured, policy, boot, now_boottime_ns, now_unix_ns, role_key_raw=None):
-    p.require(operation in OPERATIONS and ((type(role_key_raw) is bytes)
+          measured, policy, boot, now_boottime_ns, now_unix_ns, role_key_raw=None, adopted=False):
+    p.require(type(adopted) is bool and operation in OPERATIONS and ((type(role_key_raw) is bytes)
         if operation == "admission" else role_key_raw is None))
-    value = {"apiVersion": API, "operation": operation, "controlOriginal": control_original.decode("ascii"),
+    value = {"apiVersion": ADOPTED_API if adopted else API, "operation": operation, "controlOriginal": control_original.decode("ascii"),
         "deliveryInputOriginal": delivery_input_raw.decode("ascii"), "deliveryOriginal": delivery_raw.decode("ascii"),
         "recipeOriginals": recipe_originals, "measured": measured, "policy": policy}
     if operation == "admission":
@@ -176,11 +188,12 @@ def checked_result(operation, input_raw, result, *, boot, now_boottime_ns, now_u
 
 
 def admitted_pair(role_key_input_raw, role_key_raw, admission_input_raw, admission_raw,
-                  *, boot, now_boottime_ns, now_unix_ns):
+                  *, boot, now_boottime_ns, now_unix_ns, adopted=False):
     """Verified bridge scope only; no fabricated native context or attestation."""
     clocks = dict(boot=boot, now_boottime_ns=now_boottime_ns, now_unix_ns=now_unix_ns)
     first = p.document(role_key_input_raw, MAX_INPUT)
     second = p.document(admission_input_raw, MAX_INPUT)
+    p.require(type(adopted) is bool and first["apiVersion"] == second["apiVersion"] == (ADOPTED_API if adopted else API))
     for name in INPUT_FIELDS:
         if name != "operation":
             c9._same(first[name], second[name])
@@ -203,3 +216,9 @@ def admitted_pair(role_key_input_raw, role_key_raw, admission_input_raw, admissi
     p.fields(expected, admission.SCOPE_FIELDS)
     return copy.deepcopy({"authorization": authorization, "admissionAuthorization": admitted, "expectedScope": expected,
         "authorityKeys": context["authorityKeys"], "trustCheckpoint": context["trustCheckpoint"]})
+
+
+def admitted_adopted_pair(role_key_input_raw, role_key_raw, admission_input_raw, admission_raw, **clocks):
+    """Explicit hot12 bridge scope; never selected from a result's shape."""
+    return admitted_pair(role_key_input_raw, role_key_raw, admission_input_raw, admission_raw,
+        adopted=True, **clocks)

@@ -353,7 +353,7 @@ def prepare(*, fragment, current_context, heads, bootstrap_originals, driver_obs
         current_heads._prepared_input(job, row["inputOriginal"],
             context=checked, boot=boot, now_boottime_ns=now_boottime_ns)
         head.checked_result(row["inputOriginal"], _result(row["headOriginal"]),
-            boot=boot, now_boottime_ns=now_boottime_ns)
+            boot=boot, now_boottime_ns=now_boottime_ns, adopted=adopted)
     operations = native_profile.OPERATIONS + (("publication",) if adopted else ())
     _records(native_context, operations, "grantOriginal", native_profile.MAX_INPUT, native_profile.MAX_OUTPUT)
     _records(native_delivery_context, peers.ADOPTED_NATIVE_ROLES if adopted else peers.NATIVE_ROLES,

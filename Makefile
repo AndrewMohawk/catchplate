@@ -1735,6 +1735,11 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	scripts/test_native_pilot_adopted_keys.py \
 	scripts/test_native_pilot_adopted_services.py \
 	scripts/test_custody_adopted_inputs.py \
+	scripts/test_native_pilot_adopted_bridge_keys.py \
+	scripts/test_native_pilot_adopted_bridge_chain.py \
+	scripts/test_native_pilot_adopted_current_head.py \
+	scripts/test_native_pilot_adopted_service_intake.py \
+	scripts/test_native_pilot_adopted_operator.py \
 	scripts/test_native_pilot_adopted_bridge.py \
 	scripts/test_native_pilot_adopted_endpoints.py \
 	scripts/test_native_pilot_adopted_ordinary.py \
@@ -4648,6 +4653,11 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				scripts/test_native_pilot_adopted_keys.py \
 				scripts/test_native_pilot_adopted_services.py \
 				scripts/test_custody_adopted_inputs.py \
+				scripts/test_native_pilot_adopted_bridge_keys.py \
+				scripts/test_native_pilot_adopted_bridge_chain.py \
+				scripts/test_native_pilot_adopted_current_head.py \
+				scripts/test_native_pilot_adopted_service_intake.py \
+				scripts/test_native_pilot_adopted_operator.py \
 				scripts/test_native_pilot_adopted_bridge.py \
 				scripts/test_native_pilot_adopted_endpoints.py \
 				scripts/test_native_pilot_adopted_ordinary.py \

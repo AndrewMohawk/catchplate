@@ -19,13 +19,17 @@ def prepare_bridge_bundle(bundle_original: bytes, *, pair_context, service_grant
         boot, now_boottime_ns, now_unix_ns) -> dict:
     """Return checked fixed public bytes/pins, not installation or admission."""
     value = p.fields(p.document(bundle_original, launch.MAX_INPUT), launch.FIELDS)
-    p.require(value["apiVersion"] == "serverware.nativePilotLaunchBundle/v1" and value["role"] == "bridge")
+    adopted = value["apiVersion"] == "serverware.nativePilotLaunchBundle/v3"
+    p.require(value["apiVersion"] in ("serverware.nativePilotLaunchBundle/v1", "serverware.nativePilotLaunchBundle/v3")
+        and value["role"] == "bridge")
     p.fields(pair_context, authority.PAIR_FIELDS)
     raw = {name: launch.c9._original(pair_context[name],
         keys.MAX_INPUT if name.endswith("InputOriginal") else keys.MAX_OUTPUT)[0]
         for name in authority.PAIR_FIELDS}
     pair = keys.admitted_pair(*(raw[name] for name in authority.PAIR_FIELDS),
-        boot=boot, now_boottime_ns=now_boottime_ns, now_unix_ns=now_unix_ns)
+        boot=boot, now_boottime_ns=now_boottime_ns, now_unix_ns=now_unix_ns, adopted=adopted)
+    contexts = [keys.prepare_input(operation, raw[name], boot=boot, now_boottime_ns=now_boottime_ns,
+        now_unix_ns=now_unix_ns) for operation, name in (("role-keys", "roleKeyInputOriginal"), ("admission", "admissionInputOriginal"))]
     first = p.document(raw["roleKeyInputOriginal"], keys.MAX_INPUT)
     delivered_raw, _ = launch.c9._original(first["deliveryInputOriginal"], launch.c9.MAX_BRIDGE_INPUT)
     delivered = launch.c9.input_document(delivered_raw)
@@ -59,12 +63,13 @@ def prepare_bridge_bundle(bundle_original: bytes, *, pair_context, service_grant
         "authorization": pair["authorization"]}).decode("ascii"))
     p.require(originals["admission"] == raw["admissionOriginal"].decode("ascii"))
     closure_raw, _ = launch.c9._original(originals["closure"], launch.COMPONENTS["closure"][1])
-    closure = launch.shape("native-bridge-closure", closure_raw)
-    p.require(closure["apiVersion"] == "serverware.nativeCustodyClosure/v3"
+    closure = (launch.shape_adopted_bridge if adopted else launch.shape)("native-bridge-closure", closure_raw)
+    p.require(closure["apiVersion"] == ("serverware.nativeCustodyClosure/v5" if adopted else "serverware.nativeCustodyClosure/v3")
         and p.canonical(closure["closureSet"]).decode("ascii") == recipe["closureSetOriginal"])
     prepared, pins, expiry = launch._prepare_public(value, payload=signed["payload"],
         guest=pair["expectedScope"]["guest"], runtime_raw=runtime_raw, grant_raw=service_grant_original,
-        companion_raw=None, observed=observed, config=config, now=now_unix_ns)
+        companion_raw=None, observed=observed, config=config, now=now_unix_ns, adopted_bridge=adopted)
+    expiry = min(expiry, *(context["epochLimit"] for context in contexts))
     p.require(now_unix_ns < expiry)
     return {"role": "bridge", "window": window, "deadline": p.ns(window["startupDeadlineBoottimeNs"]),
         "epochLimit": expiry, "prepared": prepared, "pins": pins, "launch": pins["native-launch-bridge"]}
@@ -77,6 +82,8 @@ def checked_bridge_result(bundle_original: bytes, result, *, pair_context, servi
         service_grant_original=service_grant_original, boot=boot,
         now_boottime_ns=now_boottime_ns, now_unix_ns=now_unix_ns)
     expected = launch._installation_result("bridge", p.sha(bundle_original), context["window"], context["pins"])
+    if p.document(bundle_original, launch.MAX_INPUT)["apiVersion"] == "serverware.nativePilotLaunchBundle/v3":
+        expected["apiVersion"] = "serverware.nativePilotLaunchInstallation/v3"
     p.fields(result, tuple(expected))
     launch.c9._same(result, expected)
     return p.document(p.canonical(result), 32768)

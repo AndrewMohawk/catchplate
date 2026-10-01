@@ -206,10 +206,16 @@ class PublicPublisher:
         """Separate source-fixed adopted slots; never widens legacy publish."""
         return self._publish(purpose=purpose, raw=raw, expected_sha256=expected_sha256, adopted=True)
 
-    def _publish(self, *, purpose, raw, expected_sha256, adopted):
+    def publish_adopted_bridge(self, *, purpose, raw, expected_sha256):
+        """Only the separately admitted hot12 bridge's fixed public slots."""
+        return self._publish(purpose=purpose, raw=raw, expected_sha256=expected_sha256,
+            adopted=False, adopted_bridge=True)
+
+    def _publish(self, *, purpose, raw, expected_sha256, adopted, adopted_bridge=False):
         from serverware import native_pilot_launch_publication as launch
-        destinations = launch.ADOPTED_DESTINATIONS if adopted else DESTINATIONS
-        limits = launch.ADOPTED_PURPOSES if adopted else LIMITS
+        p.require(not (adopted and adopted_bridge))
+        destinations = launch.ADOPTED_BRIDGE_DESTINATIONS if adopted_bridge else launch.ADOPTED_DESTINATIONS if adopted else DESTINATIONS
+        limits = launch.ADOPTED_BRIDGE_PURPOSES if adopted_bridge else launch.ADOPTED_PURPOSES if adopted else LIMITS
         self.check()
         p.require(type(purpose) is str and purpose in destinations and purpose not in self._attempted)
         self._attempted.add(purpose)  # Consumed before validation or any write.
@@ -218,7 +224,7 @@ class PublicPublisher:
             p.require(type(raw) is bytes and 0 < len(raw) <= maximum
                 and len(self._files) < MAX_ORIGINALS and self._bytes + len(raw) <= MAX_PUBLIC_BYTES)
             p.require(p.sha(raw) == p.digest(expected_sha256))
-            (launch.shape_adopted if adopted else _shape)(purpose, raw)
+            (launch.shape_adopted_bridge if adopted_bridge else launch.shape_adopted if adopted else _shape)(purpose, raw)
             self.check()
             path = destinations[purpose]
             parent, name = path.rsplit("/", 1)
@@ -275,9 +281,13 @@ class PublicPublisher:
     def require_absent_adopted(self, purposes):
         return self._require_absent(purposes, adopted=True)
 
-    def _require_absent(self, purposes, *, adopted):
+    def require_absent_adopted_bridge(self, purposes):
+        return self._require_absent(purposes, adopted=False, adopted_bridge=True)
+
+    def _require_absent(self, purposes, *, adopted, adopted_bridge=False):
         from serverware import native_pilot_launch_publication as launch
-        destinations = launch.ADOPTED_DESTINATIONS if adopted else DESTINATIONS
+        p.require(not (adopted and adopted_bridge))
+        destinations = launch.ADOPTED_BRIDGE_DESTINATIONS if adopted_bridge else launch.ADOPTED_DESTINATIONS if adopted else DESTINATIONS
         self.check()
         p.require(type(purposes) is tuple and 0 < len(purposes) <= MAX_ORIGINALS
             and all(type(purpose) is str and purpose in destinations for purpose in purposes)

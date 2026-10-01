@@ -16,6 +16,7 @@ from serverware import native_shadow_key_contract as contract
 
 p = c9.p
 API = "serverware.nativePilotSupervisorBridgeCommissioningPolicy/v1"
+ADOPTED_API = "serverware.nativePilotSupervisorBridgeCommissioningPolicy/v2"
 MAX_POLICY = 256 * 1024
 FIELDS = ("apiVersion", "deliveryCredentials", "keyAuthorization", "launchAuthorizations", "timeBootstrap")
 WINDOW_FIELDS = ("issuedAtUnixNanos", "expiresAtUnixNanos")
@@ -24,7 +25,8 @@ CIPHERTEXT = "shadow-encrypted-role-inventory"
 
 def validate_policy(fragment, *, bootstrap_configuration, cold_original, runtime_policy=None):
     p.fields(fragment, FIELDS)
-    p.require(fragment["apiVersion"] == API and len(p.canonical(fragment)) <= MAX_POLICY)
+    p.require(fragment["apiVersion"] in (API, ADOPTED_API) and len(p.canonical(fragment)) <= MAX_POLICY)
+    adopted = fragment["apiVersion"] == ADOPTED_API
     cold = delivery.configuration(cold_original, p.sha(cold_original))
     p.require(bootstrap_configuration["deliveryConfiguration"]["sha256"] == p.sha(cold_original)
         and (bootstrap_configuration["uid"], bootstrap_configuration["gid"]) == (cold["uid"], cold["gid"]))
@@ -41,6 +43,7 @@ def validate_policy(fragment, *, bootstrap_configuration, cold_original, runtime
         and rows[CIPHERTEXT]["original"]["sha256"] == transport["encryptedInventorySha256"])
     if runtime_policy is not None:
         selected = runtime_policy_profile.validate_policy(runtime_policy)
+        p.require((selected["apiVersion"] == "serverware.nativePilotSupervisorBridgeRuntimePolicy/v3") == adopted)
         names = set(selected["historyCredentials"].values()) | {row["authorityBindingCredential"]
             for row in selected["authorityBindings"].values()} | {CIPHERTEXT}
         p.require(len(names) == 20 and set(rows) == names)

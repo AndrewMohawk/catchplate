@@ -143,8 +143,10 @@ The [adopted operational cohort](docs/native-pilot-adopted-cohort.md) now connec
 received-core ownership and the three special adopted endpoint launch producers
 in source. The [adopted release assembly](docs/native-pilot-adopted-release.md)
 adds the remaining endpoint producers, ordinary publication resources and bridge
-runtime. The adopted current-head signer, bridge authorization and independent
-supervisor orchestration still need integration; this is not a runnable pilot claim.
+runtime. The [adopted authorization path](docs/native-pilot-adopted-authorizations.md)
+now connects current-head/bridge issuers and actual receiving methods in source.
+The independently selected supervisor catalogue and packaged received-core
+entrypoint still need integration; this is not a runnable pilot claim.
 The operational inventory
 includes service histories, delivery/generation grants, endpoint authorizations,
 launch bundles and public material. Explicit policy/v15 connects eight

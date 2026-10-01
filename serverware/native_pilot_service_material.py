@@ -15,6 +15,7 @@ import threading
 import time
 
 from serverware import native_pilot_delivery_authority as c9
+from serverware import native_pilot_adopted_service_authority as adopted_services
 from serverware import native_pilot_launch_publication as launch
 from serverware import native_pilot_native_service_profile as services
 from serverware import native_pilot_publication as publication
@@ -26,23 +27,30 @@ p = services.p
 POLICY_API = "serverware.nativePilotServiceMaterialPolicy/v1"
 API = "serverware.nativePilotServiceMaterialBundle/v1"
 RESULT_API = "serverware.nativePilotServiceMaterialInstallation/v1"
+ADOPTED_POLICY_API = "serverware.nativePilotServiceMaterialPolicy/v2"
+ADOPTED_API = "serverware.nativePilotServiceMaterialBundle/v2"
+ADOPTED_RESULT_API = "serverware.nativePilotServiceMaterialInstallation/v2"
 ROLES = ("persistence", "generationInstall")
 MAX_POLICY = 4096
 MAX_INPUT = 64 * 1024 * 1024
 SLOTS = {"native-persistence-configuration": p.MAX_CONFIG, "native-persistence-genesis": 16384,
     "native-persistence-journal": 1024, "native-generation-install-genesis": 512 * 1024}
+ADOPTED_SLOTS = SLOTS | {"native-persistence-service-input": adopted_services.MAX_INPUT}
 _ATTEMPTED = False
 
 
-def validate_policy(fragment):
+def validate_policy(fragment, *, adopted=False):
     p.fields(fragment, ("apiVersion", "initialization"))
-    p.require(fragment["apiVersion"] == POLICY_API and fragment["initialization"] == "fresh-persistence-and-generation"
+    p.require(type(adopted) is bool and fragment["apiVersion"] == (ADOPTED_POLICY_API if adopted else POLICY_API)
+        and fragment["initialization"] == ("adopted-persistence-and-generation" if adopted else "fresh-persistence-and-generation")
         and len(p.canonical(fragment)) <= MAX_POLICY)
     return copy.deepcopy(fragment)
 
 
 def shape(purpose, raw):
     """Closed existing public grammars; neither keys nor approvals are trusted."""
+    if purpose == "native-persistence-service-input":
+        return adopted_services.input_document("persistence", raw)
     p.require(purpose in SLOTS)
     value = p.document(raw, SLOTS[purpose])
     if purpose == "native-persistence-configuration":
@@ -115,9 +123,9 @@ def _materials(values):
     return prepared, pins, material
 
 
-def prepare_bundle(bundle_original, *, boot, now_boottime_ns, now_unix_ns):
+def prepare_bundle(bundle_original, *, boot, now_boottime_ns, now_unix_ns, adopted=False):
     value = p.fields(p.document(bundle_original, MAX_INPUT), ("apiVersion", "serviceContexts", "endpointLaunches"))
-    p.require(value["apiVersion"] == API)
+    p.require(type(adopted) is bool and value["apiVersion"] == (ADOPTED_API if adopted else API))
     p.fields(value["serviceContexts"], ROLES); p.fields(value["endpointLaunches"], ROLES)
     clocks = dict(boot=boot, now_boottime_ns=now_boottime_ns, now_unix_ns=now_unix_ns)
     contexts, inputs, native, retained, launches = {}, {}, {}, {}, {}
@@ -125,8 +133,10 @@ def prepare_bundle(bundle_original, *, boot, now_boottime_ns, now_unix_ns):
         row = p.fields(value["serviceContexts"][role], ("inputOriginal", "grantOriginal"))
         input_raw, inputs[role] = c9._original(row["inputOriginal"], services.MAX_INPUT)
         grant_raw, _ = c9._original(row["grantOriginal"], services.MAX_OUTPUT)
-        services.checked_result(role, input_raw, {"original": row["grantOriginal"], "sha256": p.sha(grant_raw)}, **clocks)
-        contexts[role] = services.prepare_input(role, input_raw, **clocks)
+        checked = services.checked_adopted_result if adopted else services.checked_result
+        prepare = services.prepare_adopted_input if adopted else services.prepare_input
+        checked(role, input_raw, {"original": row["grantOriginal"], "sha256": p.sha(grant_raw)}, **clocks)
+        contexts[role] = prepare(role, input_raw, **clocks)
         item = inputs[role]
         _, native[role] = c9._original(item["configurationOriginal" if role == "persistence" else "nativeConfigurationOriginal"], p.MAX_CONFIG)
         grant_purpose = launch._grant_purpose(role)
@@ -151,6 +161,14 @@ def prepare_bundle(bundle_original, *, boot, now_boottime_ns, now_unix_ns):
     window = contexts["persistence"]["window"]
     _same(window, contexts["generationInstall"]["window"])
     prepared, pins, material = _materials(inputs)
+    if adopted:
+        # The actual Persistence owner rechecks this complete issuer input.
+        # Publish its authenticated literal bytes, not a reconstructed recipe.
+        purpose = "native-persistence-service-input"
+        raw = value["serviceContexts"]["persistence"]["inputOriginal"].encode("ascii")
+        shape(purpose, raw)
+        prepared[purpose], pins[purpose] = raw, _pin(purpose, raw)
+        material["persistenceServiceInput"] = pins[purpose]
     deadline = min(item["deadline"] for item in contexts.values())
     expiry = min(min(item["epochLimit"], item["payload"]["expiresAtUnixNanos"]) for item in contexts.values())
     p.require(now_boottime_ns < deadline and now_unix_ns < expiry)
@@ -158,8 +176,8 @@ def prepare_bundle(bundle_original, *, boot, now_boottime_ns, now_unix_ns):
         "pins": pins, "material": material, "retained": retained, "launches": launches}
 
 
-def build(*, fragment, service_contexts, endpoint_launches, boot, now_boottime_ns, now_unix_ns):
-    validate_policy(fragment)
+def build(*, fragment, service_contexts, endpoint_launches, boot, now_boottime_ns, now_unix_ns, adopted=False):
+    validate_policy(fragment, adopted=adopted)
     p.fields(service_contexts, ROLES); p.fields(endpoint_launches, ROLES)
     contexts = {}
     for role, item in service_contexts.items():
@@ -169,26 +187,35 @@ def build(*, fragment, service_contexts, endpoint_launches, boot, now_boottime_n
             raw = item[name]
             p.require(type(raw) is bytes and 0 < len(raw) <= maximum)
             contexts[role][name] = raw.decode("ascii")
-    raw = p.canonical({"apiVersion": API, "serviceContexts": contexts, "endpointLaunches": endpoint_launches})
-    prepare_bundle(raw, boot=boot, now_boottime_ns=now_boottime_ns, now_unix_ns=now_unix_ns)
+    raw = p.canonical({"apiVersion": ADOPTED_API if adopted else API, "serviceContexts": contexts, "endpointLaunches": endpoint_launches})
+    prepare_bundle(raw, boot=boot, now_boottime_ns=now_boottime_ns, now_unix_ns=now_unix_ns, adopted=adopted)
     return raw
 
 
-def _result(raw, context):
-    return {"apiVersion": RESULT_API, "bundleSha256": p.sha(raw),
+def _result(raw, context, *, adopted=False):
+    return {"apiVersion": ADOPTED_RESULT_API if adopted else RESULT_API, "bundleSha256": p.sha(raw),
         **{name: context["window"][name] for name in ("startupDeadlineBoottimeNs", "lifetimeDeadlineBoottimeNs")},
         "material": context["material"], "pins": context["pins"]}
 
 
-def checked_result(bundle_original, result, *, boot, now_boottime_ns, now_unix_ns):
-    context = prepare_bundle(bundle_original, boot=boot, now_boottime_ns=now_boottime_ns, now_unix_ns=now_unix_ns)
-    expected = _result(bundle_original, context)
+def checked_result(bundle_original, result, *, boot, now_boottime_ns, now_unix_ns, adopted=False):
+    context = prepare_bundle(bundle_original, boot=boot, now_boottime_ns=now_boottime_ns, now_unix_ns=now_unix_ns, adopted=adopted)
+    expected = _result(bundle_original, context, adopted=adopted)
     p.fields(result, tuple(expected)); _same(result, expected)
     return copy.deepcopy(expected)
 
 
 def install(bundle_original, *, expected_sha256):
     """One approved four-file attempt; complete and partial paths remain."""
+    return _install(bundle_original, expected_sha256=expected_sha256, adopted=False)
+
+
+def install_adopted(bundle_original, *, expected_sha256):
+    """One selected five-file attempt, including retained persistence input."""
+    return _install(bundle_original, expected_sha256=expected_sha256, adopted=True)
+
+
+def _install(bundle_original, *, expected_sha256, adopted):
     global _ATTEMPTED
     p.require(not _ATTEMPTED and threading.current_thread() is threading.main_thread()
         and os.getresuid() == (0, 0, 0) and os.getresgid() == (0, 0, 0))
@@ -198,7 +225,7 @@ def install(bundle_original, *, expected_sha256):
         p.require(type(bundle_original) is bytes and 0 < len(bundle_original) <= MAX_INPUT
             and p.sha(bundle_original) == p.digest(expected_sha256))
         boot, before, wall = originals._boot(), originals._clock(), time.time_ns()
-        context = prepare_bundle(bundle_original, boot=boot, now_boottime_ns=before, now_unix_ns=wall)
+        context = prepare_bundle(bundle_original, boot=boot, now_boottime_ns=before, now_unix_ns=wall, adopted=adopted)
 
         def retain(pin, maximum):
             original = _Original(pin["path"], maximum, pin["sha256"])
@@ -206,10 +233,10 @@ def install(bundle_original, *, expected_sha256):
             return original.raw
 
         for purpose, raw in context["retained"].items():
-            p.require(retain(_pin(purpose, raw), publication.LIMITS[purpose]) == raw)
+            p.require(retain(_pin(purpose, raw), (launch.ADOPTED_PURPOSES if adopted else publication.LIMITS)[purpose]) == raw)
         for role, row in context["launches"].items():
             raw = retain(row["pin"], launch.PURPOSES["native-launch-" + role])
-            value = launch.shape("native-launch-" + role, raw)
+            value = (launch.shape_adopted if adopted else launch.shape)("native-launch-" + role, raw)
             for name, pin in row["inner"].items():
                 _same(value["keyAdmission"][name], pin)
             _same(value[launch.LAUNCHES[role][1]], row["grant"])
@@ -217,27 +244,33 @@ def install(bundle_original, *, expected_sha256):
         def check(previous, previous_wall):
             for original in held:
                 original.check()
-            now, current_wall = c9._live(context["window"], previous), time.time_ns()
-            p.require(originals._boot() == boot and now < context["deadline"]
-                and previous_wall <= current_wall < context["epochLimit"])
             if publisher is not None:
                 publisher.check()
-            return now, current_wall
+            p.require(originals._boot() == boot)
+            now, current_wall = c9._live(context["window"], previous), time.time_ns()
+            final = originals._clock()
+            p.require(now <= final < context["deadline"]
+                and previous_wall <= current_wall < context["epochLimit"])
+            return final, current_wall
 
         before, wall = check(before, wall)
         publisher = publication.PublicPublisher.open()
-        publisher.require_absent(tuple(SLOTS))
+        publisher.require_absent(tuple(ADOPTED_SLOTS if adopted else SLOTS))
         before, wall = check(before, wall)
         for purpose, raw in context["prepared"].items():
             before, wall = check(before, wall)
             _same(publisher.publish(purpose=purpose, raw=raw, expected_sha256=p.sha(raw)), context["pins"][purpose])
             before, wall = check(before, wall)
-        result = checked_result(bundle_original, _result(bundle_original, context),
-            boot=boot, now_boottime_ns=before, now_unix_ns=wall)
-        check(before, wall)
-        return result
+        result = checked_result(bundle_original, _result(bundle_original, context, adopted=adopted),
+            boot=boot, now_boottime_ns=before, now_unix_ns=wall, adopted=adopted)
+        before, wall = check(before, wall)
     finally:
         if publisher is not None:
             publisher.close()
         for original in reversed(held):
             original.close()
+    # Successful close consumes the same original installation window too.
+    p.require(originals._boot() == boot)
+    final, final_wall = c9._live(context["window"], before), time.time_ns()
+    p.require(final <= originals._clock() < context["deadline"] and wall <= final_wall < context["epochLimit"])
+    return result

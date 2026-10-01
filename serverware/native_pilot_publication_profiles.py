@@ -37,6 +37,7 @@ PROFILES = {
     "native-persistence-configuration": ("service-material", "persistence", p.MAX_CONFIG),
     "native-persistence-genesis": ("service-material", "persistence", 16384),
     "native-persistence-journal": ("service-material", "persistence", 1024),
+    "native-persistence-service-input": ("service-material", "persistence", 32 * 1024 * 1024),
     "native-generation-install-genesis": ("service-material", "generationInstall", 512 * 1024),
     **{"native-service-" + operation: ("native-service", operation,
         4 * 1024 * 1024 if operation in _NATIVE_OPERATIONS[:6] + ("commitRequest",) else 65536)

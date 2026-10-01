@@ -37,8 +37,11 @@ def _selection(fragment, delivery_input_raw):
     _, config = keys.c9._original(source["ownerConfigurationOriginal"], 65536)
     cold_raw, _ = keys.c9._original(source["configurationOriginal"], 65536)
     _, operational = runtime.original(source["runtimeOriginal"])
-    p.require(runtime.version(operational) in (11, 12))
     selected = policy.validate_policy(fragment, bootstrap_configuration=config, cold_original=cold_raw)
+    adopted = selected["apiVersion"] == policy.ADOPTED_API
+    p.require(runtime.version(operational) in ((14,) if adopted else (11, 12))
+        and source["apiVersion"] == ("serverware.nativePilotDeliverySigningInput/v3" if adopted
+            else "serverware.nativePilotDeliverySigningInput/v1"))
     _, payload = keys.c9._original(source["payloadOriginal"], keys.delivery.MAX_DELIVERY)
     keys.c9._same(payload["credentials"], selected["deliveryCredentials"])
     return selected, source
@@ -52,22 +55,25 @@ def _pair_context(records):
 
 
 def _closure_input(selected, source, common, records, contexts):
+    adopted = selected["apiVersion"] == policy.ADOPTED_API
     prepared = contexts["admission"]
     role = contexts["role-keys"]["payload"]
     recipe = common["recipe_originals"]
     set_raw, _ = keys.c9._original(recipe["closureSetOriginal"], closure.MAX_BYTES)
     _, envelope = keys.c9._original(recipe["assignmentOriginal"], 4 * 1024 * 1024)
-    leaf = assignment.closure_binding(envelope, set_raw, "bridge")
+    leaf = assignment.closure_binding(envelope, set_raw, "bridge",
+        set_api_version=closure.closure_set.PUBLICATION_API if adopted else closure.closure_set.API)
     checkpoint, supervisor = prepared["trustCheckpoint"], prepared["authorityKeys"][-1]
-    payload = {"apiVersion": "serverware.nativeCustodyClosureAssignment/v3",
-        "purpose": "shadow-custody-closure-set-member", "profile": closure.SET_PROFILE,
+    payload = {"apiVersion": "serverware.nativeCustodyClosureAssignment/v5" if adopted else "serverware.nativeCustodyClosureAssignment/v3",
+        "purpose": "shadow-custody-closure-set-member", "profile": "native-multi-guest-closure-set-v2" if adopted else closure.SET_PROFILE,
         **{name: role[name] for name in ("assignmentId", "assignmentPayloadSha256", "assignmentRevision", "guest")},
         "manifestSha256": prepared["manifest"]["manifestSha256"],
         "trustCheckpointId": checkpoint["checkpointId"], "revocationGeneration": checkpoint["revocationGeneration"],
         "revocationRootSha256": checkpoint["revocationRootSha256"], **selected["launchAuthorizations"]["closure"],
         "signingKeyId": supervisor["keyId"], "signingKeySpkiSha256": supervisor["keySpkiSha256"],
         "guestRole": "bridge", **{name: leaf[name] for name in ("setRootSha256", "seccompSetRootSha256", "leafSha256")}}
-    return {"apiVersion": "serverware.nativePilotClosureAuthorityInput/v2", "guestRole": "bridge",
+    return {"apiVersion": closure.ADOPTED_BRIDGE_API if adopted else "serverware.nativePilotClosureAuthorityInput/v2", "guestRole": "bridge",
+        **({"deliveryInputOriginal": common["delivery_input_raw"].decode("ascii")} if adopted else {}),
         "controlOriginal": common["control_original"].decode("ascii"),
         "configurationOriginal": source["ownerConfigurationOriginal"], "windowOriginal": source["windowOriginal"],
         "observationOriginal": source["observationOriginal"], "deliveryConfigurationOriginal": source["configurationOriginal"],
@@ -77,8 +83,9 @@ def _closure_input(selected, source, common, records, contexts):
 
 
 def _input(operation, selected, source, common, records, contexts):
+    adopted = selected["apiVersion"] == policy.ADOPTED_API
     if operation in keys.OPERATIONS:
-        value = {"apiVersion": keys.API, "operation": operation,
+        value = {"apiVersion": keys.ADOPTED_API if adopted else keys.API, "operation": operation,
             "controlOriginal": _bytes(common["control_original"], 4096).decode("ascii"),
             "deliveryInputOriginal": common["delivery_input_raw"].decode("ascii"),
             "deliveryOriginal": _bytes(common["delivery_raw"], keys.delivery.MAX_DELIVERY).decode("ascii"),
@@ -89,7 +96,7 @@ def _input(operation, selected, source, common, records, contexts):
     elif operation == "closure":
         value = _closure_input(selected, source, common, records, contexts)
     else:
-        value = {"apiVersion": authority.API, "operation": operation, **_pair_context(records),
+        value = {"apiVersion": authority.ADOPTED_API if adopted else authority.API, "operation": operation, **_pair_context(records),
             **selected["launchAuthorizations"][_SETTINGS[operation]]}
     raw = p.canonical(value)
     _bytes(raw, closure.MAX_BRIDGE_INPUT if operation == "closure" else MAX_INPUT)
@@ -163,3 +170,15 @@ def prepare(operation, *, fragment, control_original, delivery_input_raw, delive
 
 def build(operation, **kwargs):
     return prepare(operation, **kwargs)["inputOriginal"]
+
+
+def prepare_adopted_input(operation, input_raw, *, boot, now_boottime_ns, now_unix_ns):
+    """Fixed packaged-purpose gate; legacy inputs never select this profile."""
+    p.require(operation in (*OPERATIONS, "delivery"))
+    if operation == "delivery":
+        from serverware import native_pilot_bridge_delivery_profile as delivery
+        return delivery.prepare_signing_input(input_raw, boot=boot, now_boottime_ns=now_boottime_ns)
+    value = p.document(input_raw, MAX_INPUT)
+    expected = keys.ADOPTED_API if operation in keys.OPERATIONS else closure.ADOPTED_BRIDGE_API if operation == "closure" else authority.ADOPTED_API
+    p.require(value["apiVersion"] == expected)
+    return prepare_input(operation, input_raw, boot=boot, now_boottime_ns=now_boottime_ns, now_unix_ns=now_unix_ns)

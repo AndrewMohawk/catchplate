@@ -31,6 +31,13 @@ _CODES = frozenset(("channel-open", "channel-owner", "channel-closed", "channel-
     "channel-future-frame", "request-invalid", "reply-invalid", "channel-interrupted", "channel-close"))
 
 
+def wire_versions(*, adopted=False):
+    """Explicit protocol separation; not permission to acquire any resource."""
+    p.require(type(adopted) is bool)
+    suffix = "2" if adopted else "1"
+    return "serverware.nativePilotOperatorRequest/v" + suffix, "serverware.nativePilotOperatorReply/v" + suffix
+
+
 class OperatorChannelError(ValueError):
     """A fixed local code, never a supplied original or an exception dump."""
 
@@ -61,10 +68,21 @@ class Channel:
         self._pid = os.getpid()
         self._sequence = self._total = 0
         self._closed = self._poisoned = self._active = False
+        self._adopted = False
         self._last_clock = _clock()
+        self._expiry = None
+        self._last_wall = time.time_ns()
 
     @classmethod
     def open(cls):
+        return cls._open(adopted=False)
+
+    @classmethod
+    def open_adopted(cls):
+        return cls._open(adopted=True)
+
+    @classmethod
+    def _open(cls, *, adopted):
         """Claim exclusive pipe ownership once in this real root process.
 
         Duplication shares the operator's open-file descriptions: NONBLOCK is
@@ -76,6 +94,8 @@ class Channel:
         _require(cls is Channel and not _OPENED, "channel-open")
         _OPENED = True
         owner = cls(_TOKEN)
+        wire_versions(adopted=adopted)
+        owner._adopted = adopted
         try:
             owner._process()
             for original, access in ((0, os.O_RDONLY), (1, os.O_WRONLY)):
@@ -125,6 +145,10 @@ class Channel:
         self._last_clock = now
         if deadline is not None:
             _require(now < deadline, "channel-deadline")
+        if self._expiry is not None:
+            wall = time.time_ns()
+            _require(self._last_wall <= wall < self._expiry, "channel-deadline")
+            self._last_wall = wall
         return now
 
     def _pending(self):
@@ -138,6 +162,8 @@ class Channel:
         while True:
             now = self._check(deadline)
             duration = min(0.05, (deadline - now) / 1_000_000_000)
+            if self._expiry is not None:
+                duration = min(duration, (self._expiry - self._last_wall) / 1_000_000_000)
             try:
                 ready, writable, _ = select.select([self._fds[0]] if reading else [],
                     [] if reading else [self._fds[1]], [], duration)
@@ -191,7 +217,7 @@ class Channel:
                 _require(part[0] < 128 and len(raw) + 1 < MAX_FRAME, "reply-invalid")
                 raw.extend(part)
 
-    def exchange(self, phase, payload, *, deadline_boottime_ns):
+    def exchange(self, phase, payload, *, deadline_boottime_ns, expires_at_unix_ns=None):
         """One ordered request/reply under the supplied original deadline.
 
         Positive short I/O completes the same frame; interruption/failure after
@@ -204,15 +230,26 @@ class Channel:
                 and type(phase) is str and phase == STAGES[self._sequence], "channel-phase")
             _require(type(deadline_boottime_ns) is int and 0 < deadline_boottime_ns <= p.MAX_U64,
                 "channel-deadline")
+            if self._adopted:
+                _require(type(expires_at_unix_ns) is int and 0 < expires_at_unix_ns < 2**63,
+                    "channel-deadline")
+                _require(self._expiry is None or self._expiry == expires_at_unix_ns,
+                    "channel-deadline")
+                self._expiry = expires_at_unix_ns
+            else:
+                _require(expires_at_unix_ns is None, "channel-deadline")
             self._check(deadline_boottime_ns)
             self._active = True
             _require(type(payload) is dict, "request-invalid")
             _require(self._pending() == 0, "channel-future-frame")
             sequence = self._sequence + 1
             try:
-                original = p.canonical({"apiVersion": "serverware.nativePilotOperatorRequest/v1",
+                request = {"apiVersion": wire_versions(adopted=self._adopted)[0],
                     "sequence": sequence, "phase": phase, "payload": payload,
-                    "deadlineBoottimeNs": str(deadline_boottime_ns)})
+                    "deadlineBoottimeNs": str(deadline_boottime_ns)}
+                if self._adopted:
+                    request["expiresAtUnixNanos"] = str(self._expiry)
+                original = p.canonical(request)
             except Exception:
                 raise OperatorChannelError("request-invalid") from None
             _require(len(original) + 1 <= MAX_FRAME, "channel-budget")
@@ -223,7 +260,7 @@ class Channel:
             try:
                 reply = p.fields(p.document(raw, MAX_FRAME - 1),
                     ("apiVersion", "sequence", "phase", "requestSha256", "inputs"))
-                p.require(reply["apiVersion"] == "serverware.nativePilotOperatorReply/v1"
+                p.require(reply["apiVersion"] == wire_versions(adopted=self._adopted)[1]
                     and type(reply["sequence"]) is int and reply["sequence"] == sequence
                     and reply["phase"] == phase and reply["requestSha256"] == request_sha
                     and type(reply["inputs"]) is dict)

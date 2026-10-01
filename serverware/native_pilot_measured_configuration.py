@@ -5,6 +5,9 @@ Only the real coordinator's bootstrap observation supplies process-dependent
 values. Legacy v1 preserves its single bridge closure; recipe v2 additionally
 authenticates the complete closure set under assignment v2. It emits unsigned derived data,
 never a receipt, object store, authorization, native admission or readiness.
+Explicit recipe v3 selects the twelve-member adopted set. Its native binding,
+proof scope and derived data remain v2; the independently approved recipe
+original, not a guessed process or changed runtime tag, selects that set.
 """
 from __future__ import annotations
 
@@ -31,6 +34,9 @@ from serverware import native_shadow_retrieval_artifacts as retrieval
 
 p = driver.p
 MAX_RECIPE = 8 * 1024 * 1024
+LEGACY_API = "serverware.nativePilotMeasuredConfigurationRecipe/v1"
+SET_API = "serverware.nativePilotMeasuredConfigurationRecipe/v2"
+ADOPTED_API = "serverware.nativePilotMeasuredConfigurationRecipe/v3"
 FIELDS = ("apiVersion", "source", "conductorInventorySha256", "authorityInventorySha256",
     "bootstrapOriginals", "assignmentOriginal", "trustOriginal", "trustSha256",
     "closureManifestOriginal", "production")
@@ -83,7 +89,8 @@ def _assignment(value, now):
     p.require(set(p.ROLES).issubset(keys))
     raw, _ = scope._original(value["assignmentOriginal"], 4 * 1024 * 1024)
     envelope = launch.shape("native-bridge-assignment", raw)
-    selected = 2 if value["apiVersion"] == "serverware.nativePilotMeasuredConfigurationRecipe/v2" else 1
+    p.require(value["apiVersion"] in (LEGACY_API, SET_API, ADOPTED_API))
+    selected = 1 if value["apiVersion"] == LEGACY_API else 2
     p.require(assignments.version(envelope) == selected)
     assignment = opening.assignment_payload(envelope["payload"], version=selected)
     p.require(envelope["signingKeyId"] == trust["assignmentKey"]["keyId"]
@@ -113,8 +120,10 @@ def _closure_set(value, envelope, manifest):
     text = value["closureSetOriginal"]
     p.require(type(text) is str and text.isascii() and 0 < len(text) <= closure_set.MAX_BYTES)
     raw = text.encode("ascii")
-    selected = closure_set.validate(raw)
-    binding = assignments.closure_binding(envelope, raw, "bridge")
+    p.require(value["apiVersion"] in (SET_API, ADOPTED_API))
+    set_api = closure_set.PUBLICATION_API if value["apiVersion"] == ADOPTED_API else closure_set.API
+    selected = closure_set.validate(raw, api_version=set_api)
+    binding = assignments.closure_binding(envelope, raw, "bridge", set_api_version=set_api)
     p.require(p.canonical(selected["members"][-1]["manifest"]) == p.canonical(manifest)
         and binding["manifestSha256"] == manifest["manifestSha256"])
     return envelope["payload"]["nativeClosureSet"]
@@ -215,9 +224,8 @@ class MeasuredConfigurationRecipe:
             owner._sha = p.digest(recipe_sha256)
             p.require(p.sha(owner._raw) == owner._sha)
             value = p.document(owner._raw, MAX_RECIPE)
-            p.require(type(value) is dict and value.get("apiVersion") in
-                ("serverware.nativePilotMeasuredConfigurationRecipe/v1", "serverware.nativePilotMeasuredConfigurationRecipe/v2"))
-            successor = value["apiVersion"] == "serverware.nativePilotMeasuredConfigurationRecipe/v2"
+            p.require(type(value) is dict and value.get("apiVersion") in (LEGACY_API, SET_API, ADOPTED_API))
+            successor = value["apiVersion"] != LEGACY_API
             p.fields(value, SET_FIELDS if successor else FIELDS)
             owner._source = artifact._source(p.fields(value["source"], artifact.SOURCE_FIELDS))
             for name in ("conductorInventorySha256", "authorityInventorySha256"):
@@ -276,14 +284,14 @@ class MeasuredConfigurationRecipe:
             self._failed = True
             raise
 
-    def require_original(self, expected_sha256: str):
+    def require_original(self, expected_sha256: str, *, adopted=False):
         """Check the actual v2 original against a separately admitted policy pin.
 
         The calling policy owns approval of this digest. This method neither
         selects that policy nor infers approval from a self-computed hash.
         """
         self.check()
-        p.require(self._value["apiVersion"] == "serverware.nativePilotMeasuredConfigurationRecipe/v2"
+        p.require(type(adopted) is bool and self._value["apiVersion"] == (ADOPTED_API if adopted else SET_API)
             and self._sha == p.digest(expected_sha256))
 
     def derive(self, *, process, request) -> dict:
@@ -328,7 +336,7 @@ class MeasuredConfigurationRecipe:
             envelope, keys, key_root = _assignment(self._value, time.time_ns())
             manifest = closure._manifest({"manifestOriginal": self._value["closureManifestOriginal"]},
                 self._config, observed, envelope["payload"])
-            if self._value["apiVersion"] == "serverware.nativePilotMeasuredConfigurationRecipe/v2":
+            if self._value["apiVersion"] != LEGACY_API:
                 _closure_set(self._value, envelope, manifest)
             result = self._derive(envelope, keys, key_root, manifest, observed)
             self.check()
@@ -342,7 +350,7 @@ class MeasuredConfigurationRecipe:
             self._failed = True
             raise
 
-    def result(self, *, process, request) -> dict:
+    def result(self, *, process, request, adopted=False) -> dict:
         """Read the once-derived v2 data for the same actual pending startup job.
 
         No result is recreated, and no new window is opened. This accessor is
@@ -350,9 +358,9 @@ class MeasuredConfigurationRecipe:
         """
         from serverware.native_pilot_supervisor_process import AuthorityCoordinatorProcess, JobRequest
         self.check()
-        p.require(type(process) is AuthorityCoordinatorProcess and process is self._process
+        p.require(type(adopted) is bool and type(process) is AuthorityCoordinatorProcess and process is self._process
             and type(request) is JobRequest and self._result is not None
-            and self._value["apiVersion"] == "serverware.nativePilotMeasuredConfigurationRecipe/v2"
+            and self._value["apiVersion"] == (ADOPTED_API if adopted else SET_API)
             and request.phase in RESULT_PHASES and request.sequence >= self._derived_sequence
             and request.deadline_boottime_ns <= p.ns(self._window["startupDeadlineBoottimeNs"]))
         process.check_request(request)
@@ -362,14 +370,14 @@ class MeasuredConfigurationRecipe:
         process.check_request(request)
         return value
 
-    def public_originals(self, *, process, request) -> dict:
+    def public_originals(self, *, process, request, adopted=False) -> dict:
         """Return four literal v2 originals under the existing result guards.
 
         The same retained recipe, actual pending request, original startup
         window, assignment signature and trust currentness are rechecked. This
         neither changes the six-field result nor admits a caller-provided DTO.
         """
-        self.result(process=process, request=request)
+        self.result(process=process, request=request, adopted=adopted)
         value = {name: self._value[name] for name in
             ("assignmentOriginal", "trustOriginal", "trustSha256", "closureSetOriginal")}
         self.check()
@@ -380,7 +388,7 @@ class MeasuredConfigurationRecipe:
         return derive_configuration(envelope=envelope, keys=keys, key_root=key_root,
             manifest=manifest, observed=observed, production=self._value["production"],
             window=self._window, recipe_sha=self._sha,
-            successor=self._value["apiVersion"] == "serverware.nativePilotMeasuredConfigurationRecipe/v2")
+            successor=self._value["apiVersion"] != LEGACY_API)
 
     def close(self):
         """Release only this public descriptor after the actual bound owner retires."""

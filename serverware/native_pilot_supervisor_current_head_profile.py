@@ -210,6 +210,14 @@ def _refresh(context, *, boot, now_boottime_ns):
     return checked
 
 
+def adoption_selected(context):
+    """Read the explicit retained-source selection, never infer from a head."""
+    from serverware import native_pilot_bridge_preparation as bridge
+    p.fields(context, _CONTEXT_FIELDS)
+    p.fields(context["sources"], _SOURCE_FIELDS)
+    return bridge.shape(context["sources"]["bridge_preparation_raw"])["apiVersion"] == bridge.ADOPTED_API
+
+
 def observed_original(job_name, context):
     """Export existing evidence only: no currentness, approval or input template."""
     p.require(job_name in JOB_NAMES)
@@ -254,9 +262,10 @@ def _prepared_input(job_name, input_raw, *, context, boot, now_boottime_ns):
         and key._uint(context["validatedAtBoottimeNanos"]) == key._uint(now_boottime_ns))
     sources, target = context["sources"], context["targets"][job_name]
     helper = target["serviceRole"] == g.ROLES[-1]
+    adopted = adoption_selected(context)
     value = p.fields(p.document(input_raw, MAX_INPUT), head.INPUT_FIELDS
-        + (("endpointRole", "runtimeOriginal") if helper else ()))
-    p.require(value["apiVersion"] == (head.HELPER_API if helper else head.API)
+        + (("endpointRole", "runtimeOriginal") if helper or adopted else ()))
+    p.require(value["apiVersion"] == (head.ADOPTED_API if adopted else head.HELPER_API if helper else head.API)
         and value["serviceRole"] == target["serviceRole"])
     for name, source in (("driverConfigurationOriginal", "driver_configuration_raw"),
             ("driverWindowOriginal", "driver_window_raw"), ("launchOriginal", "launch_raw"),
@@ -267,9 +276,9 @@ def _prepared_input(job_name, input_raw, *, context, boot, now_boottime_ns):
         and value["initialHistoryOriginal"] == row["historyOriginal"]
         and value["rootAuthority"] == target["rootAuthority"]
         and value["requestOriginal"] == target["request"]["requestOriginal"])
-    if helper:
+    if helper or adopted:
         p.require(value["endpointRole"] == target["endpointRole"] and value["runtimeOriginal"] == row["runtimeOriginal"])
-    prepared = head.prepare_input(input_raw, boot=boot, now_boottime_ns=now_boottime_ns)
+    prepared = head.prepare_input(input_raw, boot=boot, now_boottime_ns=now_boottime_ns, adopted=adopted)
     _same(prepared["authority"], target["checkpointAuthority"])
     p.require(prepared["deadline"] == target["deadline"] and now_boottime_ns < context["deadline"])
     return prepared
@@ -284,4 +293,5 @@ def prepare_input(job_name, input_raw, *, context, boot, now_boottime_ns):
 
 def checked_result(job_name, input_raw, result, *, context, boot, now_boottime_ns):
     prepare_input(job_name, input_raw, context=context, boot=boot, now_boottime_ns=now_boottime_ns)
-    return head.checked_result(input_raw, result, boot=boot, now_boottime_ns=now_boottime_ns)
+    return head.checked_result(input_raw, result, boot=boot, now_boottime_ns=now_boottime_ns,
+        adopted=adoption_selected(context))

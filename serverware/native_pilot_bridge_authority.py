@@ -22,6 +22,7 @@ from serverware import native_shadow_nitro_originals as originals
 p = keys.p
 OPERATIONS = (*keys.OPERATIONS, "encrypted-delivery", "verifier-transport")
 API = "serverware.nativePilotBridgeLateAuthorityInput/v1"
+ADOPTED_API = "serverware.nativePilotBridgeLateAuthorityInput/v2"
 MAX_INPUT = keys.MAX_INPUT
 MAX_OUTPUT = keys.MAX_OUTPUT
 PAIR_FIELDS = ("roleKeyInputOriginal", "roleKeyOriginal", "admissionInputOriginal", "admissionOriginal")
@@ -38,11 +39,13 @@ def prepare_input(operation, input_raw, *, boot, now_boottime_ns, now_unix_ns):
         return keys.prepare_input(operation, input_raw, **clocks)
     value = p.fields(p.document(input_raw, MAX_INPUT),
         INPUT_FIELDS + (("parentPort",) if operation == "verifier-transport" else ()))
-    p.require(value["apiVersion"] == API and value["operation"] == operation)
+    p.require(value["apiVersion"] in (API, ADOPTED_API) and value["operation"] == operation)
+    adopted = value["apiVersion"] == ADOPTED_API
     raw = {name: keys.c9._original(value[name], MAX_INPUT if name.endswith("InputOriginal") else MAX_OUTPUT)[0]
         for name in PAIR_FIELDS}
-    pair = keys.admitted_pair(*(raw[name] for name in PAIR_FIELDS), **clocks)
+    pair = keys.admitted_pair(*(raw[name] for name in PAIR_FIELDS), adopted=adopted, **clocks)
     context = keys.prepare_input("admission", raw["admissionInputOriginal"], **clocks)
+    role_context = keys.prepare_input("role-keys", raw["roleKeyInputOriginal"], **clocks)
     scope, supervisor = pair["expectedScope"], pair["authorityKeys"][-1]
     issued, expires = value["issuedAtUnixNanos"], value["expiresAtUnixNanos"]
     # Reuse the existing exact authenticated-pair time/checkpoint projection;
@@ -80,13 +83,16 @@ def prepare_input(operation, input_raw, *, boot, now_boottime_ns, now_unix_ns):
     maximum = 32768 if operation == "verifier-transport" else MAX_OUTPUT
     p.require(len(p.canonical(result)) + 86 <= maximum)
     return {"payload": payload, "supervisor": supervisor, "window": context["window"],
-        "deadline": context["deadline"], "epochLimit": expires, "domain": DOMAINS[operation], "result": result}
+        "deadline": min(context["deadline"], role_context["deadline"]),
+        "epochLimit": min(expires, context["epochLimit"], role_context["epochLimit"]),
+        "domain": DOMAINS[operation], "result": result, "adopted": adopted}
 
 
-def build(operation, *, pair_context, issued_at, expires_at, boot, now_boottime_ns, now_unix_ns, parent_port=None):
+def build(operation, *, pair_context, issued_at, expires_at, boot, now_boottime_ns, now_unix_ns, parent_port=None, adopted=False):
     p.require(operation in ("encrypted-delivery", "verifier-transport"))
     p.fields(pair_context, PAIR_FIELDS)
-    value = {"apiVersion": API, "operation": operation, **pair_context,
+    p.require(type(adopted) is bool)
+    value = {"apiVersion": ADOPTED_API if adopted else API, "operation": operation, **pair_context,
         "issuedAtUnixNanos": issued_at, "expiresAtUnixNanos": expires_at}
     if operation == "verifier-transport":
         value["parentPort"] = parent_port
@@ -122,9 +128,10 @@ def checked_result(operation, input_raw, result, *, boot, now_boottime_ns, now_u
 
 
 def _current(context, boot, previous, previous_wall):
+    p.require(originals._boot() == boot)
     now = keys.c9._live(context["window"], previous)
     wall = time.time_ns()
-    p.require(originals._boot() == boot and previous_wall <= wall < context["epochLimit"]
+    p.require(previous_wall <= wall < context["epochLimit"]
         and now < context["deadline"])
     p.freshness(context["payload"]["issuedAtUnixNanos"], context["payload"]["expiresAtUnixNanos"], wall)
     return now, wall

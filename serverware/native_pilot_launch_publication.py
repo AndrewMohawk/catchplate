@@ -90,6 +90,9 @@ ADOPTED_PURPOSES = {**{"native-launch-" + role: 32768 for role in ADOPTED_ROLES}
     **{"native-service-" + operation: services.MAX_OUTPUT for operation in services.ADOPTED_OPERATIONS},
     "native-generation-install-grant": generation.MAX_BYTES}
 ADOPTED_DESTINATIONS = {purpose: "/etc/serverware/native-pilot-inputs/" + purpose + ".json" for purpose in ADOPTED_PURPOSES}
+ADOPTED_BRIDGE_PURPOSES = {"native-launch-bridge": 32768,
+    **{"native-bridge-" + suffix: maximum for suffix, maximum in COMPONENTS.values()}}
+ADOPTED_BRIDGE_DESTINATIONS = {purpose: DESTINATIONS[purpose] for purpose in ADOPTED_BRIDGE_PURPOSES}
 INNER_FIELDS = ("apiVersion", "deliveryConfiguration", "delivery") + tuple(COMPONENTS)
 _ENVELOPE = ("apiVersion", "kind", "canonicalProfile", "signatureDomain", "payload", "payloadSha256",
     "signatureAlgorithm", "signingKeyId", "signingKeySpkiSha256", "signature")
@@ -328,8 +331,39 @@ def _key(value, now):
     return key
 
 
-def _public_joins(role, documents, guest, runtime_raw, grant, observed, config, companion, now):
+def shape_adopted_bridge(purpose: str, raw: bytes) -> dict:
+    """Closed bridge Launch10/Closure5 slots, not an admission decision."""
+    p.require(purpose in ADOPTED_BRIDGE_PURPOSES)
+    if purpose not in ("native-launch-bridge", "native-bridge-closure"):
+        return shape(purpose, raw)  # These native grammars did not change.
+    value = p.document(raw, ADOPTED_BRIDGE_PURPOSES[purpose])
+    if purpose == "native-launch-bridge":
+        p.fields(value, ("apiVersion", "keyAdmission", "trustedTime"))
+        p.require(value["apiVersion"] == bridge_runtime.ADOPTED_LAUNCH)
+        _inner(value["keyAdmission"], "bridge")
+        delivery._pin(value["trustedTime"])
+        p.require(value["trustedTime"]["path"] == publication.DESTINATIONS["native-service-trustedTime"])
+        return value
+    p.fields(value, ("apiVersion", "manifest", "authorization", "closureSet"))
+    p.require(value["apiVersion"] == "serverware.nativeCustodyClosure/v5")
+    selected = closure_set.validate(p.canonical(value["closureSet"]), api_version=closure_set.PUBLICATION_API)
+    leaf = closure_set.leaf_binding(selected, "bridge", api_version=closure_set.PUBLICATION_API)
+    manifest = p.fields(value["manifest"], _MANIFEST)
+    payload = _signed(value["authorization"], _CLOSURE_SET)
+    p.require(manifest == selected["members"][-1]["manifest"]
+        and manifest["apiVersion"] == "serverware.nativeCustodyExecutionClosure/v2"
+        and manifest["profile"] == "measured-bootstrap-late-runtime-static-amd64-v1"
+        and payload["apiVersion"] == "serverware.nativeCustodyClosureAssignment/v5"
+        and payload["purpose"] == "shadow-custody-closure-set-member"
+        and payload["profile"] == "native-multi-guest-closure-set-v2" and payload["guestRole"] == "bridge")
+    for name in ("setRootSha256", "seccompSetRootSha256", "leafSha256", "manifestSha256"):
+        p.require(payload[name] == leaf[name])
+    return value
+
+
+def _public_joins(role, documents, guest, runtime_raw, grant, observed, config, companion, now, *, adopted_bridge=False):
     """Check exact public byte associations; never substitute for native admission."""
+    p.require(type(adopted_bridge) is bool and (not adopted_bridge or role == "bridge"))
     trust, assignment = documents["trust"], documents["assignment"]
     p.freshness(trust["issuedAtUnixNanos"], trust["expiresAtUnixNanos"], now)
     checkpoint = trust["checkpoint"]
@@ -401,13 +435,17 @@ def _public_joins(role, documents, guest, runtime_raw, grant, observed, config, 
     c = closure["authorization"]["payload"]
     version = "2" if role == "bridge" else "1"
     multi = assignment_profile.version(assignment) == 2
-    p.require(closure["apiVersion"] == "serverware.nativeCustodyClosure/v" + ("3" if multi else version))
+    p.require(not adopted_bridge or multi)
+    closure_version = "5" if adopted_bridge else "3" if multi else version
+    p.require(closure["apiVersion"] == "serverware.nativeCustodyClosure/v" + closure_version)
     p.require(c["manifestSha256"] == manifest["manifestSha256"] == k["executionClosureManifestSha256"])
     if multi:
-        leaf = assignment_profile.closure_binding(assignment, p.canonical(closure["closureSet"]), role)
-        p.require(c["apiVersion"] == "serverware.nativeCustodyClosureAssignment/v3"
+        leaf = assignment_profile.closure_binding(assignment, p.canonical(closure["closureSet"]), role,
+            set_api_version=closure_set.PUBLICATION_API if adopted_bridge else closure_set.API)
+        p.require(c["apiVersion"] == "serverware.nativeCustodyClosureAssignment/v" + closure_version
             and c["purpose"] == "shadow-custody-closure-set-member"
-            and c["profile"] == "native-multi-guest-closure-set-v1" and c["guestRole"] == role)
+            and c["profile"] == ("native-multi-guest-closure-set-v2" if adopted_bridge else "native-multi-guest-closure-set-v1")
+            and c["guestRole"] == role)
         for name in ("setRootSha256", "seccompSetRootSha256", "leafSha256", "manifestSha256"):
             p.require(c[name] == leaf[name])
         p.require(manifest["seccompPolicy"]["structurallyVerifiedPolicySha256"] == leaf["structurallyVerifiedPolicySha256"])
@@ -433,7 +471,7 @@ def _public_joins(role, documents, guest, runtime_raw, grant, observed, config, 
         c9._same(documents["encryptedKeys"]["authorization"]["payload"]["transport"], config["continuation"]["keyTransport"])
     else:
         p.require(manifest["runtimeConfigurationSha256"] == guest["runtimeConfigurationSha256"] == p.sha(runtime_raw))
-    verify(closure["authorization"], "serverware.nativeCustodyClosureAssignment.signature/v" + ("3" if multi else version))
+    verify(closure["authorization"], "serverware.nativeCustodyClosureAssignment.signature/v" + closure_version)
     common["executionClosureManifestSha256"] = manifest["manifestSha256"]
     profile = bridge_admission if role == "bridge" else admission
     verify(documents["admission"], profile.ADMISSION_DOMAIN)
@@ -492,9 +530,13 @@ def _grant_value(role, raw):
     return generation.grant_original(raw) if operation is None else services.grant_original(operation, raw)
 
 
-def _prepare_public(value, *, payload, guest, runtime_raw, grant_raw, companion_raw, observed, config, now):
+def _prepare_public(value, *, payload, guest, runtime_raw, grant_raw, companion_raw, observed, config, now, adopted_bridge=False):
     """Shared existing public joins; no files, live owner or secret access."""
     role, inner = value["role"], value["keyAdmission"]
+    p.require(type(adopted_bridge) is bool and (not adopted_bridge or (role == "bridge"
+        and value["apiVersion"] == "serverware.nativePilotLaunchBundle/v3"
+        and bridge_runtime.runtime_version(runtime_raw) == 14)))
+    selected_shape = shape_adopted_bridge if adopted_bridge else shape
     _inner(inner, role)
     p.fields(value["originals"], COMPONENTS)
     prepared, documents = {}, {}
@@ -506,7 +548,7 @@ def _prepare_public(value, *, payload, guest, runtime_raw, grant_raw, companion_
         raw, _ = c9._original(value["originals"][name], maximum)
         purpose = "native-" + role + "-" + suffix
         c9._same(inner[name], {"path": DESTINATIONS[purpose], "sha256": p.sha(raw)})
-        documents[name] = shape(purpose, raw)
+        documents[name] = selected_shape(purpose, raw)
         prepared[purpose] = raw
     grant_pin = value["serviceGrant"]
     delivery._pin(grant_pin)
@@ -525,7 +567,8 @@ def _prepare_public(value, *, payload, guest, runtime_raw, grant_raw, companion_
         companion = services.grant_original("commitRequest", companion_raw)
     else:
         p.require(companion_raw is None)
-    expiry = _public_joins(role, documents, guest, runtime_raw, grant, observed, config, companion, now)
+    expiry = _public_joins(role, documents, guest, runtime_raw, grant, observed, config, companion, now,
+        adopted_bridge=adopted_bridge)
     if companion is not None:
         expiry = min(expiry, companion["payload"]["expiresAtUnixNanos"])
     # Metadata binds an independently provisioned ciphertext; no credential
@@ -540,7 +583,7 @@ def _prepare_public(value, *, payload, guest, runtime_raw, grant_raw, companion_
         api = bridge_runtime.launch_for_runtime(runtime_raw).removeprefix("serverware.")
     launch_raw = p.canonical({"apiVersion": "serverware." + api, "keyAdmission": inner, field: grant_pin})
     launch_purpose = "native-launch-" + role
-    shape(launch_purpose, launch_raw)
+    selected_shape(launch_purpose, launch_raw)
     prepared[launch_purpose] = launch_raw  # Fixed final publication point.
     for purpose in prepared:
         p.require(publication.DESTINATIONS[purpose] == DESTINATIONS[purpose]
@@ -739,6 +782,74 @@ def install(bundle_original: bytes, *, expected_sha256: str) -> dict:
 def prepare_adopted_endpoint_bundle(role, input_original, **clocks):
     from serverware import native_pilot_adopted_launch_profile as adopted
     return adopted.prepare_input(role, input_original, **clocks)
+
+
+def install_adopted_bridge(input_original: bytes, *, expected_sha256: str) -> dict:
+    """Exclusive Launch10 publication from the complete approved source graph.
+
+    The actual existing driver control, cold configuration, C9, Runtime14 and
+    TrustedTime grant are retained unchanged. Ciphertext/keys are never opened;
+    publication does not release the driver or establish native readiness.
+    """
+    from serverware import native_pilot_bridge_launch_profile as adopted
+    from serverware import native_shadow_nitro_originals as originals
+    global _FAILED, _COUNT, _BYTES
+    p.require(not _FAILED and threading.current_thread() is threading.main_thread()
+        and os.getresuid() == (0, 0, 0) and os.getresgid() == (0, 0, 0))
+    held, publisher = [], None
+    try:
+        p.require(type(input_original) is bytes and p.sha(input_original) == p.digest(expected_sha256))
+        adopted.input_document(input_original)
+        p.require("bridge" not in _ATTEMPTED); _ATTEMPTED.add("bridge")
+        owner = (os.getpid(), originals._start(), originals._boot())
+        before, wall = originals._clock(), time.time_ns()
+        context = adopted.prepare_input(input_original, boot=owner[2], now_boottime_ns=before, now_unix_ns=wall)
+        bundle = p.document(context["bundleOriginal"], MAX_INPUT)
+        paths = {"control": driver.CONTROL, "owner": driver.CONFIGURATION, "window": driver.WINDOW,
+            "configuration": bundle["keyAdmission"]["deliveryConfiguration"]["path"],
+            "delivery": publication.DESTINATIONS["native-delivery-bridge"],
+            "runtime": publication.DESTINATIONS["bridge-runtime"],
+            "grant": publication.DESTINATIONS["native-service-trustedTime"]}
+        for name, raw in context["prerequisites"]:
+            retained = control._Original(paths[name], 4 * 1024 * 1024 if name == "runtime" else 65536, p.sha(raw))
+            held.append(retained); p.require(retained.raw == raw)
+        prepared = context["prepared"]
+        count, total = len(prepared), sum(len(raw) for raw in prepared.values())
+        p.require(_COUNT + count <= 128 and _BYTES + total <= 32 * 1024 * 1024)
+        _COUNT += count; _BYTES += total
+
+        def check():
+            nonlocal before, wall
+            for original in held: original.check()
+            p.require(owner == (os.getpid(), originals._start(), originals._boot()))
+            now, epoch = originals._clock(), time.time_ns()
+            p.require(before <= now < context["deadline"] and wall <= epoch < context["epochLimit"])
+            before, wall = now, epoch
+
+        check(); publisher = publication.PublicPublisher.open()
+        publisher.require_absent_adopted_bridge(tuple(prepared))
+        pins = {}
+        for purpose, raw in prepared.items():
+            check()
+            pins[purpose] = publisher.publish_adopted_bridge(purpose=purpose, raw=raw, expected_sha256=p.sha(raw))
+            check()
+        publisher.check(); check(); c9._same(pins, context["pins"])
+        result = _installation_result("bridge", p.sha(context["bundleOriginal"]), context["window"], pins)
+        result["apiVersion"] = "serverware.nativePilotLaunchInstallation/v3"
+    except BaseException:
+        _FAILED = True
+        raise
+    finally:
+        if publisher is not None: publisher.close()
+        for original in reversed(held): original.close()
+    try:
+        p.require(owner == (os.getpid(), originals._start(), originals._boot()))
+        now, epoch = originals._clock(), time.time_ns()
+        p.require(before <= now < context["deadline"] and wall <= epoch < context["epochLimit"])
+        return result
+    except BaseException:
+        _FAILED = True
+        raise
 
 
 def install_adopted(input_original: bytes, *, expected_sha256: str) -> dict:

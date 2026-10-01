@@ -98,6 +98,7 @@ class CurrentHeadIntake:
         self._attempted = set()
         self._failed = self._closed = self._close_attempted = False
         self._runtime_handoff_attempted = False
+        self._adopted = False
         self._last, self._last_wall = originals._clock(), time.time_ns()
 
     def _reserve(self, count):
@@ -126,10 +127,6 @@ class CurrentHeadIntake:
         material_raw, material_result = self._remember("service-originals", "service-material", result=True)
         p.require(material_raw == self._material["inputOriginal"])
         _same(material_result, self._material["result"])
-        now, wall = originals._clock(), time.time_ns()
-        admitted = material_profile.prepare_bundle(material_raw, boot=self._boot,
-            now_boottime_ns=now, now_unix_ns=wall)
-        self._deadline, self._epoch_limit = admitted["deadline"], admitted["epochLimit"]
         self._fragment = profile.validate_policy(policy.current_head_policy(process=process, request=request))
         self._initial_policy = policy.ordinary_initial_policy(process=process, request=request)
         self._bootstrap = policy.bootstrap_originals()
@@ -141,7 +138,13 @@ class CurrentHeadIntake:
         observed = p.document(self._service_phase_raw, 32 * 1024 * 1024)["payload"]
         bootstrap_observed = p.document(self._bootstrap_phase_raw, 32 * 1024 * 1024)["payload"]
         bridge_raw = phase["payload"]["bridgePreparationOriginal"].encode("ascii")
-        bridge = p.document(bridge_raw, 1024 * 1024)
+        from serverware import native_pilot_bridge_preparation as bridge_profile
+        bridge = bridge_profile.shape(bridge_raw)
+        self._adopted = bridge["apiVersion"] == bridge_profile.ADOPTED_API
+        now, wall = originals._clock(), time.time_ns()
+        admitted = material_profile.prepare_bundle(material_raw, boot=self._boot,
+            now_boottime_ns=now, now_unix_ns=wall, adopted=self._adopted)
+        self._deadline, self._epoch_limit = admitted["deadline"], admitted["epochLimit"]
         p.require(bridge["driverObservationSha256"]
             == p.sha(bootstrap_observed["bootstrapObservationOriginal"].encode("ascii")))
         grant_pins = p.fields(phase["payload"]["ordinaryGenerationGrants"], generation.ROLES)
@@ -153,7 +156,9 @@ class CurrentHeadIntake:
         for role in generation.ROLES:
             raw, result = self._remember("service-originals", "ordinary-generation-" + role, result=True)
             value = p.fields(p.document(raw, service.MAX_INPUT_BYTES), grants.INPUT_FIELDS)
-            p.require(value["serviceRole"] == role and value["launchOriginal"] == installed["ordinaryLaunchOriginal"])
+            p.require(value["apiVersion"] == (service.ADOPTED_INPUT_API if self._adopted
+                else "serverware.nativePilotServiceAuthorityInput/v1") and value["operation"] == "generation"
+                and value["serviceRole"] == role and value["launchOriginal"] == installed["ordinaryLaunchOriginal"])
             row = copy.deepcopy(p.fields(p.fields(value["services"], (role,))[role], grants.SERVICE_FIELDS))
             p.require(row["configurationOriginal"] == installed["ordinaryColdOriginals"][role])
             p.fields(result, ("original", "sha256", "pin"))
@@ -202,10 +207,10 @@ class CurrentHeadIntake:
         return values
 
     def _clock(self):
+        p.require(os.getpid() == self._pid and originals._boot() == self._boot)
         now, wall = originals._clock(), time.time_ns()
-        p.require(os.getpid() == self._pid and originals._boot() == self._boot
-            and self._last <= now < min(self._deadline, self._request.deadline_boottime_ns)
-            and self._last_wall <= wall < self._epoch_limit)
+        p.require(self._last <= now < min(self._deadline, self._request.deadline_boottime_ns)
+            and self._last_wall <= wall and (self._epoch_limit is None or wall < self._epoch_limit))
         self._last, self._last_wall = now, wall
         return now
 
@@ -248,7 +253,7 @@ class CurrentHeadIntake:
             for fd, identity, raw, maximum in self._fds:
                 p.require(io._input(fd, maximum) == identity and io.read_public(fd, maximum) == raw)
             self._prior(self._index)
-            self._clock(); _owners(self._policy, self._process, self._request)
+            _owners(self._policy, self._process, self._request); self._clock()
         except BaseException:
             self._failed = True
             raise

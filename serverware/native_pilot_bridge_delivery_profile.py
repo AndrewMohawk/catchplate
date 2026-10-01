@@ -40,14 +40,14 @@ def _same(first, second):
     p.require(generation.canonical(first) == generation.canonical(second))
 
 
-def _installed(bundle_raw, result, bootstrap, *, boot, now):
+def _installed(bundle_raw, result, bootstrap, *, boot, now, adopted=False):
     bundle = p.fields(p.document(bundle_raw, install.MAX_BRIDGE_INPUT), install.FIELDS)
-    p.require(bundle["apiVersion"] == runtime_builder.API
+    p.require(type(adopted) is bool and bundle["apiVersion"] == (runtime_builder.ADOPTED_API if adopted else runtime_builder.API)
         and bundle["driverControlSha256"] == p.sha(bootstrap["control"]))
     observation_raw, _ = c9._original(bundle["driverObservationOriginal"], 65536)
     config, cold, window, observed = runtime_builder._bootstrap(bootstrap, observation_raw, boot=boot, now=now)
     raw, runtime = runtime_profile.original(bundle["runtimeOriginal"])
-    p.require(runtime_profile.version(runtime) in (11, 12))
+    p.require(runtime_profile.version(runtime) in ((14,) if adopted else (11, 12)))
     install.shape("bridge-runtime", raw)
     selected_raw, _ = c9._original(bundle["outgoingOriginal"], 8192)
     selected = install.shape("bridge-outgoing", selected_raw)
@@ -57,7 +57,7 @@ def _installed(bundle_raw, result, bootstrap, *, boot, now):
         "invocationId": window["invocationId"], "deliveryConfiguration": config["deliveryConfiguration"],
         "runtime": {"path": install.RUNTIME_DESTINATION, "sha256": p.sha(raw)},
         "bridgeLaunchVersion": runtime_profile.launch_for_runtime(raw)})
-    expected = {"apiVersion": "serverware.nativePilotBridgeRuntimeInstallation/v1",
+    expected = {"apiVersion": "serverware.nativePilotBridgeRuntimeInstallation/v2" if adopted else "serverware.nativePilotBridgeRuntimeInstallation/v1",
         "bundleSha256": p.sha(bundle_raw), "configurationSha256": p.sha(bootstrap["configuration"]),
         "windowSha256": p.sha(bootstrap["window"]), "observationSha256": p.sha(observation_raw),
         "invocationId": window["invocationId"], "startupDeadlineBoottimeNs": window["startupDeadlineBoottimeNs"],
@@ -68,14 +68,15 @@ def _installed(bundle_raw, result, bootstrap, *, boot, now):
     return config, cold, window, observed, observation_raw, raw, runtime
 
 
-def _assignment(recipe, measured, config, observed, window, now):
+def _assignment(recipe, measured, config, observed, window, now, *, adopted=False):
     p.fields(recipe, native.RECIPE_FIELDS); p.fields(measured, native.MEASURED_FIELDS)
     envelope, bindings, key_root = measured_profile._assignment(
-        {"apiVersion": "serverware.nativePilotMeasuredConfigurationRecipe/v2", **recipe}, now)
+        {"apiVersion": measured_profile.ADOPTED_API if adopted else measured_profile.SET_API, **recipe}, now)
     p.require(assignment.version(envelope) == 2)
     set_raw, _ = c9._original(recipe["closureSetOriginal"], closure_set.MAX_BYTES)
-    assignment.closure_binding(envelope, set_raw, "bridge")
-    manifest = closure_set.validate(set_raw)["members"][-1]["manifest"]
+    set_api = closure_set.PUBLICATION_API if adopted else closure_set.API
+    assignment.closure_binding(envelope, set_raw, "bridge", set_api_version=set_api)
+    manifest = closure_set.validate(set_raw, api_version=set_api)["members"][-1]["manifest"]
     closure._manifest({"manifestOriginal": p.canonical(manifest).decode("ascii")},
         config, observed, envelope["payload"])
     production = p.fields(measured["production"], scope.PRODUCTION_FIELDS)
@@ -108,7 +109,7 @@ def _metadata(credentials, runtime, history_originals, keys):
         raw = history_originals[role]
         p.require(type(raw) is bytes and 0 < len(raw) <= generation.MAX_BYTES)
         generation.document(raw, generation.MAX_BYTES)
-        if runtime_profile.version(runtime) == 12:
+        if runtime_profile.version(runtime) in (12, 14):
             p.require(runtime["ordinaryInitialHistories"][role]["historyOriginal"].encode("ascii") == raw)
         row = rows[name]
         p.require(row["original"]["sha256"] == p.sha(raw) and row["length"] == len(raw) and row["signing"] is None)
@@ -133,13 +134,15 @@ def prepare(*, fragment, runtime_bundle_raw, runtime_result, bootstrap_originals
             recipe_originals, measured, history_originals, boot, now_boottime_ns, now_unix_ns):
     runtime_builder._size((fragment, runtime_bundle_raw, runtime_result, bootstrap_originals, activation,
         recipe_originals, measured, history_originals))
+    p.fields(fragment, policy.FIELDS)
+    adopted = fragment["apiVersion"] == policy.ADOPTED_API
     config, cold, window, observed, observation_raw, runtime_raw, runtime = _installed(
-        runtime_bundle_raw, runtime_result, bootstrap_originals, boot=boot, now=now_boottime_ns)
+        runtime_bundle_raw, runtime_result, bootstrap_originals, boot=boot, now=now_boottime_ns, adopted=adopted)
     selected = policy.validate_policy(fragment, bootstrap_configuration=config,
         cold_original=bootstrap_originals["deliveryConfiguration"])
-    keys, expiry = _assignment(recipe_originals, measured, config, observed, window, now_unix_ns)
+    keys, expiry = _assignment(recipe_originals, measured, config, observed, window, now_unix_ns, adopted=adopted)
     _metadata(selected["deliveryCredentials"], runtime, history_originals, keys)
-    expected, _ = c9._bridge_inventory(runtime_raw, cold)
+    expected, _ = c9._bridge_inventory(runtime_raw, cold, adopted=adopted)
     c9._activation(activation, expected)
     journal = next(row for row in activation if row["name"] == "production-journal")
     identity = runtime["journalDirectoryIdentity"]
@@ -157,7 +160,7 @@ def prepare(*, fragment, runtime_bundle_raw, runtime_result, bootstrap_originals
     p.fields(payload, delivery.FIELDS)
     payload_raw, activation_raw = p.canonical(payload), p.canonical(activation)
     p.require(len(payload_raw) <= delivery.MAX_DELIVERY and len(activation_raw) <= 32768)
-    value = {"apiVersion": "serverware.nativePilotDeliverySigningInput/v1", "role": "bridge",
+    value = {"apiVersion": "serverware.nativePilotDeliverySigningInput/v3" if adopted else "serverware.nativePilotDeliverySigningInput/v1", "role": "bridge",
         "configurationOriginal": bootstrap_originals["deliveryConfiguration"].decode("ascii"),
         "ownerConfigurationOriginal": bootstrap_originals["configuration"].decode("ascii"),
         "windowOriginal": bootstrap_originals["window"].decode("ascii"),
@@ -189,3 +192,42 @@ def checked_result(input_raw, result, **kwargs):
     driver._key(cold["authority"]).verify(p.decoded(signed["signatureBase64url"], size=64), delivery.DOMAIN + payload_raw)
     delivery._delivery_guest(signed["payload"], raw)
     return raw
+
+
+def prepare_signing_input(input_raw, *, boot, now_boottime_ns):
+    """Full public C9Input3 checks before the fixed C9 key can be read.
+
+    This is the C9 authority's original contract, not measured assignment or
+    runtime-business admission. Those require the subsequent bridge issuers.
+    """
+    value = c9.input_document(input_raw)
+    p.require(value["apiVersion"] == "serverware.nativePilotDeliverySigningInput/v3" and value["role"] == "bridge")
+    cold_raw, _ = c9._original(value["configurationOriginal"], 65536)
+    cold = delivery.configuration(cold_raw, p.sha(cold_raw))
+    config_raw, _ = c9._original(value["ownerConfigurationOriginal"], 65536)
+    window_raw, signed_window = c9._original(value["windowOriginal"], 32768)
+    _, observed = c9._original(value["observationOriginal"], 65536)
+    runtime_raw, runtime = runtime_profile.original(value["runtimeOriginal"])
+    payload_raw, payload = c9._original(value["payloadOriginal"], delivery.MAX_DELIVERY)
+    _, activation = c9._original(value["activationOriginal"], 32768, array=True)
+    p.fields(payload, delivery.FIELDS)
+    window = c9.bridge_owner(cold, cold_raw, config_raw, window_raw, signed_window, observed,
+        boot=boot, now=now_boottime_ns)
+    expected, _ = c9._bridge_inventory(runtime_raw, cold, adopted=True)
+    p.require(payload["configurationSha256"] == p.sha(cold_raw)
+        and payload["authorityKeyId"] == cold["authority"]["keyId"])
+    for name in ("serviceRole", "uid", "gid"): _same(payload[name], cold[name])
+    for name in c9.WINDOW_FIELDS: _same(payload[name], window[name])
+    _same(payload["runtimeConfig"], {"path": install.RUNTIME_DESTINATION, "sha256": p.sha(runtime_raw)})
+    _same(payload["activation"], activation)
+    c9._activation(activation, expected); c9._credentials(payload["credentials"], cold["authority"])
+    journal = next(row for row in activation if row["name"] == "production-journal")
+    identity = p.fields(runtime["journalDirectoryIdentity"],
+        ("mountId", "deviceMajor", "deviceMinor", "inode", "uid", "gid", "mode"))
+    p.integer(identity["mountId"], maximum=p.MAX_U64)
+    _same({name: identity[name] for name in ("inode", "uid", "gid", "mode")},
+        {name: journal[name] for name in ("inode", "uid", "gid", "mode")})
+    _same([identity["deviceMajor"], identity["deviceMinor"]], [os.major(journal["device"]), os.minor(journal["device"])])
+    p.require(stat.S_IMODE(journal["mode"]) == 0o700 and (journal["uid"], journal["gid"]) == (cold["uid"], cold["gid"]))
+    p.require(payload_raw == p.canonical(payload))  # Native signed-i64 codec before key access.
+    return {"window": window, "deadline": p.ns(window["startupDeadlineBoottimeNs"]), "epochLimit": None}

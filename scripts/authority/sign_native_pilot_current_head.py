@@ -39,6 +39,7 @@ def main():
         parser.add_argument("--input-fd", type=int, required=True)
         parser.add_argument("--input-sha256", required=True)
         parser.add_argument("--authority-key-fd", type=int, required=True)
+        parser.add_argument("--adopted", action="store_true")
         args = parser.parse_args()
         p = authority.p
         p.require(args.input_fd >= 3 and args.authority_key_fd >= 3
@@ -61,18 +62,18 @@ def main():
             before = now
             return now
 
-        prepared = profile.prepare_input(raw, boot=boot, now_boottime_ns=before)
+        prepared = profile.prepare_input(raw, boot=boot, now_boottime_ns=before, adopted=args.adopted)
         check(prepared["deadline"])
         key = io.signing_key(args.authority_key_fd)
         try:
             check(prepared["deadline"])
-            output, deadline = authority.sign(input_original=raw, signing_key=key)
+            output, deadline = authority.sign(input_original=raw, signing_key=key, adopted=args.adopted)
         finally:
             del key
         p.require(deadline == prepared["deadline"] and len(output) <= authority.MAX_OUTPUT)
         result = {"original": output.decode("ascii"), "sha256": p.sha(output)}
         now = check(deadline)
-        p.require(profile.checked_result(raw, result, boot=boot, now_boottime_ns=now) == output)
+        p.require(profile.checked_result(raw, result, boot=boot, now_boottime_ns=now, adopted=args.adopted) == output)
         check(deadline)
         io.write_public(output, deadline_boottime_ns=deadline)
         check(deadline)

@@ -23,6 +23,7 @@ from serverware import native_shadow_driver_bootstrap as driver
 p = g.p
 API = "serverware.nativePilotCurrentHeadAuthorityInput/v1"
 HELPER_API = "serverware.nativePilotCurrentHeadAuthorityInput/v2"
+ADOPTED_API = "serverware.nativePilotCurrentHeadAuthorityInput/v3"
 PROTOCOL_API = "serverware.policyCustodyProtocol/v3"
 CURRENTNESS_PROFILE = "initial-checkpoint-current-for-exact-request-v1"
 DOMAIN = b"serverware.policyCustodyTrustedHostCurrentHeadAttestation/v3"
@@ -126,13 +127,14 @@ def binding(value: dict) -> dict:
     return {"signedCurrentHead": checked, "exactAttestationSha256": p.sha(p.canonical(checked))}
 
 
-def prepare_input(input_original: bytes, *, boot: tuple, now_boottime_ns: int) -> dict:
+def prepare_input(input_original: bytes, *, boot: tuple, now_boottime_ns: int, adopted=False) -> dict:
     """Check independently approved exact originals; never decide currentness."""
     value = p.document(input_original, MAX_INPUT)
-    helper = value.get("apiVersion") == HELPER_API
-    p.fields(value, INPUT_FIELDS + (("endpointRole", "runtimeOriginal") if helper else ()))
+    p.require(type(adopted) is bool)
+    helper = value.get("serviceRole") == g.ROLES[-1] if adopted else value.get("apiVersion") == HELPER_API
+    p.fields(value, INPUT_FIELDS + (("endpointRole", "runtimeOriginal") if helper or adopted else ()))
     role = value["serviceRole"]
-    p.require(value["apiVersion"] in (API, HELPER_API) and role in g.ROLES
+    p.require(value["apiVersion"] in ((ADOPTED_API,) if adopted else (API, HELPER_API)) and role in g.ROLES
         and (not helper or role == g.ROLES[-1]))
     now = key._uint(now_boottime_ns)
     configuration_raw, _ = _original(value["driverConfigurationOriginal"], 65536)
@@ -145,7 +147,7 @@ def prepare_input(input_original: bytes, *, boot: tuple, now_boottime_ns: int) -
         driver.WINDOW_DOMAIN + p.canonical(window))
     window_authority.validate_window(window, configuration_raw, configuration, boot=boot, now=now)
     launch_raw, _ = _original(value["launchOriginal"], 65536)
-    launch, startup, lifetime = service._launch(launch_raw, boot, now)
+    launch, startup, lifetime = service._launch(launch_raw, boot, now, adopted=adopted)
     p.require(startup == p.ns(window["startupDeadlineBoottimeNs"])
         and lifetime == p.ns(window["lifetimeDeadlineBoottimeNs"])
         and launch["invocationId"] == window["invocationId"])
@@ -155,26 +157,56 @@ def prepare_input(input_original: bytes, *, boot: tuple, now_boottime_ns: int) -
     resources_raw, _ = _original(value["resourcesOriginal"], initial.MAX_STATE)
     history_raw, wrapper = _original(value["initialHistoryOriginal"], g.MAX_BYTES)
     p.fields(wrapper, initial.WRAPPER_FIELDS)
-    p.require(wrapper["apiVersion"] == initial.WRAPPER_API)
+    p.require(wrapper["apiVersion"] == (initial.ADOPTED_WRAPPER_API
+        if adopted and role in initial.ADOPTED_ROLES else initial.WRAPPER_API))
     root = p.fields(value["rootAuthority"], ("keyId", "keySpkiSha256"))
-    if helper:
+    if helper or adopted:
         from serverware import native_pilot_ordinary_runtime_profile as runtime_profile
         runtime_raw, _ = _original(value["runtimeOriginal"], g.MAX_BYTES)
-        runtime = runtime_profile.validate_runtime(role, runtime_raw)
-        p.require(runtime["runtime"]["apiVersion"] == initial.HELPER_RUNTIME_API
-            and root == {"keyId": runtime["runtime"]["authorityHistoryRootKeyId"],
+        runtime = runtime_profile.validate_runtime(role, runtime_raw, adopted=adopted)
+        p.require(root == {"keyId": runtime["runtime"]["authorityHistoryRootKeyId"],
                 "keySpkiSha256": runtime["runtime"]["authorityHistoryRootKeySpkiSha256"]})
+    if helper:
+        p.require(runtime["runtime"]["apiVersion"] == initial.HELPER_RUNTIME_API)
         members = initial.helper_endpoint_histories(history_raw, runtime=runtime)
         p.require(value["endpointRole"] in initial.HELPER_ENDPOINT_ROLES)
         selected = members[value["endpointRole"]]
         history_raw, wrapper = selected["original"], selected["wrapper"]
-    history = initial.manifest(history_raw, role=role, root_pin=root)
+    history = initial.manifest(history_raw, role=role, root_pin=root, adopted=adopted)
     epoch = history["firstRetainedEpoch"]["retainedEpoch"]
     state, checkpoint = wrapper["initialState"], wrapper["initialCheckpoint"]
     payload = checkpoint["payload"]
     identity = initial.prepared_state(state, preparation_raw=preparation_raw, resources_raw=resources_raw,
-        launch_raw=launch_raw, configuration=cold, window=window, endpoint_role=payload["endpointRole"], now=now)
+        launch_raw=launch_raw, configuration=cold, window=window, endpoint_role=payload["endpointRole"], now=now,
+        adopted=adopted)
     key.validate_payload(payload, identity=identity, window=window, now=now)
+    if adopted:
+        # Authenticate the selected runtime's own history/state association;
+        # these are public originals, not a reconstructed C9 guest or owner.
+        header = runtime["runtime"]
+        primary = g.document(value["initialHistoryOriginal"].encode("ascii"), g.MAX_BYTES)
+        p.require(header["authorityHistoryManifestSha256"] == primary["history"]["manifestSha256"]
+            and header["operationGeneration"] == state["operationGeneration"]
+            and header["serviceRestartEpoch"] == state["serviceGeneration"]
+            and header["deploymentGenerationSha256"] == state["deploymentGenerationSha256"]
+            and header["activationDirectoryIdentities"] == {
+                name: row["identity"] for name, row in state["directories"].items()})
+        if not helper:
+            p.require(epoch["endpointProcessIdentity"] == identity)
+            if role in (g.ROLES[0], g.ROLES[1]):
+                p.require(runtime["endpointProcessIdentity"] == identity
+                    and runtime["currentKeyAuthorizationCheckpointSha256"] == checkpoint["checkpointSha256"]
+                    and runtime["signingKeyId"] == epoch["serviceSigningKey"]["keyId"]
+                    and runtime["currentHeadAuthorityKeyId"] == epoch["checkpointAuthority"]["keyId"])
+                for target, source in (("endpointGeneration", "exactEndpointGeneration"),
+                        ("checkpointSequence", "checkpointSequence"),
+                        ("revocationGeneration", "revocationGenerationHighWater"),
+                        ("revocationRootSha256", "revocationRootSha256")):
+                    p.require(runtime[target] == payload[source])
+            else:
+                pin = runtime["serviceSigningPin"]
+                p.require(pin["endpointProcessIdentity"] == identity
+                    and pin["signedCurrentKeyAuthorization"] == checkpoint)
     excluded = (cold["authority"], configuration["bootstrapAuthority"], configuration["phaseTwoAuthority"],
         configuration["lifecycle"]["constructedAdmissionAuthority"])
     for selected in (history["rootAuthority"], epoch["checkpointAuthority"], epoch["serviceSigningKey"]):
@@ -184,10 +216,12 @@ def prepare_input(input_original: bytes, *, boot: tuple, now_boottime_ns: int) -
                 and history_authority._raw_key(public) != p.decoded(other["publicKeyBase64url"], size=32))
     request_raw, _ = _original(value["requestOriginal"], MAX_REQUEST)
     pending = request(request_raw)
-    p.require(not helper or pending["endpointRole"] == value["endpointRole"])
+    p.require(not (helper or adopted) or pending["endpointRole"] == value["endpointRole"])
     floor = pending["operation"]["body"]["accepted_floor"]
     if helper:
         p.require(floor["consumeCursor"] == runtime["initialEndpointPins"][value["endpointRole"]]["consumeCursor"])
+    elif adopted and role in (g.ROLES[2], g.ROLES[3]):
+        p.require(floor["consumeCursor"] == runtime["serviceSigningPin"]["consumeCursor"])
     p.require(pending["endpointRole"] == payload["endpointRole"]
         and floor["checkpointSequence"] == payload["checkpointSequence"]
         and floor["checkpointSha256"] == checkpoint["checkpointSha256"])
@@ -214,8 +248,8 @@ def prepare_input(input_original: bytes, *, boot: tuple, now_boottime_ns: int) -
         "window": copy.deepcopy(window), "deadline": deadline}
 
 
-def checked_result(input_original: bytes, result: dict, *, boot: tuple, now_boottime_ns: int) -> bytes:
-    prepared = prepare_input(input_original, boot=boot, now_boottime_ns=now_boottime_ns)
+def checked_result(input_original: bytes, result: dict, *, boot: tuple, now_boottime_ns: int, adopted=False) -> bytes:
+    prepared = prepare_input(input_original, boot=boot, now_boottime_ns=now_boottime_ns, adopted=adopted)
     p.fields(result, ("original", "sha256"))
     raw, value = _original(result["original"], MAX_OUTPUT)
     checked = validate_envelope(value)

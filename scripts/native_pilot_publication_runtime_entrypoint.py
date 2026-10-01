@@ -65,11 +65,15 @@ ADOPTED_SERVICE_MODES.update({"--sign-adopted-ordinary-" + role + "-dispatch": (
 ADOPTED_SERVICE_MODES.update({"--sign-adopted-ordinary-" + role + "-" + operation: (operation, role)
     for operation, role in (("head", "durable-recovery-store"), ("cleanup", "cleanup-authorization-consumer"),
         ("current", "current-signature-authority"))})
+ADOPTED_BRIDGE_MODES = {"--sign-adopted-bridge-" + operation: operation for operation in
+    ("delivery", "role-keys", "admission", "closure", "encrypted-delivery", "verifier-transport")}
+ADOPTED_BRIDGE_LAUNCH_MODE = "--assemble-adopted-bridge-launch"
+ADOPTED_CURRENT_HEAD_MODE = "--sign-adopted-current-head"
 SIGNING_MODES = ("--sign-assignment", "--sign-genesis-precreation", "--sign-genesis-release", "--sign-genesis-endpoints-release") + tuple(ORDINARY_MODES) + tuple(
     mode for mode, operation in INITIAL_MODES.items() if operation != "assemble") + tuple(NATIVE_MODES) + tuple(SERVICE_MODES) + tuple(TRANSPORT_MODES) + tuple(ADOPTED_MODES) + tuple(ADOPTED_COHORT_MODES) + tuple(
-    mode for mode, operation in ADOPTED_INITIAL_MODES.items() if operation != "assemble") + tuple(ADOPTED_PUBLICATION_MODES) + tuple(ADOPTED_SERVICE_MODES)
+    mode for mode, operation in ADOPTED_INITIAL_MODES.items() if operation != "assemble") + tuple(ADOPTED_PUBLICATION_MODES) + tuple(ADOPTED_SERVICE_MODES) + tuple(ADOPTED_BRIDGE_MODES) + (ADOPTED_CURRENT_HEAD_MODE,)
 ADOPTION_MODE = "--sign-publication-adoption"
-MODES = ("--prepare-closure-set", "--prepare-genesis-binding", "--assemble-genesis-ordinary-history", "--assemble-adopted-ordinary-history", ADOPTION_MODE) + SIGNING_MODES + tuple(LAUNCH_MODES) + tuple(ADOPTED_LAUNCH_MODES)
+MODES = ("--prepare-closure-set", "--prepare-genesis-binding", "--assemble-genesis-ordinary-history", "--assemble-adopted-ordinary-history", ADOPTION_MODE, ADOPTED_BRIDGE_LAUNCH_MODE) + SIGNING_MODES + tuple(LAUNCH_MODES) + tuple(ADOPTED_LAUNCH_MODES)
 
 
 def valid_arguments(arguments):
@@ -202,6 +206,10 @@ def main():
     from serverware import native_pilot_ordinary_initial_authority as adopted_initial
     from serverware import native_pilot_ordinary_publication_authority as adopted_publication
     from serverware import native_pilot_service_authority as adopted_service
+    from serverware import native_pilot_bridge_authorization_profile as adopted_bridge
+    from serverware import native_pilot_bridge_launch_profile as adopted_bridge_launch
+    from serverware import native_pilot_current_head_profile as adopted_head
+    from serverware import native_pilot_current_head_authority as adopted_head_authority
     from serverware import native_shadow_nitro_originals as originals
 
     runtime = None
@@ -225,8 +233,12 @@ def main():
         adopted_initial_purpose = ADOPTED_INITIAL_MODES.get(mode)
         adopted_publication_role = ADOPTED_PUBLICATION_MODES.get(mode)
         adopted_service_purpose = ADOPTED_SERVICE_MODES.get(mode)
+        adopted_bridge_purpose = ADOPTED_BRIDGE_MODES.get(mode)
         transport = (encrypted if transport_purpose[1] == "encrypted-delivery" else verifier) if transport_purpose else None
-        maximum = (adopted_service.MAX_INPUT_BYTES if adopted_service_purpose is not None else
+        maximum = (adopted_bridge_launch.MAX_ADOPTED_INPUT if mode == ADOPTED_BRIDGE_LAUNCH_MODE else
+            adopted_bridge.MAX_INPUT if adopted_bridge_purpose is not None else
+            adopted_head.MAX_INPUT if mode == ADOPTED_CURRENT_HEAD_MODE else
+            adopted_service.MAX_INPUT_BYTES if adopted_service_purpose is not None else
             adopted_initial.MAX_INPUT if adopted_initial_purpose is not None else
             adopted_publication.MAX_INPUT if adopted_publication_role is not None else
             adopted_cohort.MAX_INPUT if adopted_cohort_purpose is not None else adopted.MAX_INPUT if adopted_purpose is not None else transport.MAX_INPUT if transport is not None else launch.MAX_INPUT if launch_role is not None else
@@ -284,7 +296,49 @@ def main():
                 p.freshness(payload["issuedAtUnixNanos"], payload["expiresAtUnixNanos"], current_wall)
             previous_boot, previous_wall = current_boot, current_wall
 
-        if adopted_service_purpose is not None:
+        if adopted_bridge_purpose is not None:
+            approved = adopted_bridge.prepare_adopted_input(adopted_bridge_purpose, raw, boot=owner[2],
+                now_boottime_ns=originals._clock(), now_unix_ns=time.time_ns())
+            deadline, epoch_limit = approved["deadline"], approved["epochLimit"]
+            key_identity = io._input(key_fd, 32, private=True)
+            check()  # Full selected bridge sources precede any private bytes.
+            key = io.signing_key(key_fd)
+            try:
+                if adopted_bridge_purpose == "delivery":
+                    result = adopted_bridge.keys.c9.sign(raw, key)
+                    result_deadline = deadline
+                elif adopted_bridge_purpose == "closure":
+                    result, result_deadline = adopted_bridge.closure.sign(input_original=raw, signing_key=key)
+                else:
+                    result, result_deadline = adopted_bridge.authority.sign(adopted_bridge_purpose, raw, key)
+            finally:
+                del key
+            p.require(result_deadline == deadline)
+            check()
+            final = adopted_bridge.prepare_adopted_input(adopted_bridge_purpose, raw, boot=owner[2],
+                now_boottime_ns=originals._clock(), now_unix_ns=time.time_ns())
+            p.require((final["deadline"], final["epochLimit"]) == (deadline, epoch_limit))
+        elif mode == ADOPTED_BRIDGE_LAUNCH_MODE:
+            approved = adopted_bridge_launch.prepare_input(raw, boot=owner[2],
+                now_boottime_ns=originals._clock(), now_unix_ns=time.time_ns())
+            deadline, epoch_limit = approved["deadline"], approved["epochLimit"]
+            check()
+            result, result_deadline = adopted_bridge_launch.assemble(input_original=raw)
+            p.require(result_deadline == deadline and result == approved["bundleOriginal"])
+            check()
+            final = adopted_bridge_launch.prepare_input(raw, boot=owner[2],
+                now_boottime_ns=originals._clock(), now_unix_ns=time.time_ns())
+            p.require(result == final["bundleOriginal"] and (final["deadline"], final["epochLimit"]) == (deadline, epoch_limit))
+        elif mode == ADOPTED_CURRENT_HEAD_MODE:
+            approved = adopted_head.prepare_input(raw, boot=owner[2], now_boottime_ns=originals._clock(), adopted=True)
+            deadline = approved["deadline"]
+            key_identity = io._input(key_fd, 32, private=True)
+            check()
+            result, result_deadline = adopted_head_authority.sign(input_original=raw,
+                signing_key=io.signing_key(key_fd), adopted=True)
+            p.require(result_deadline == deadline)
+            check()
+        elif adopted_service_purpose is not None:
             operation, role = adopted_service_purpose
             approved = adopted_service.prepare_input(operation, role, raw, boot=owner[2],
                 now_boottime_ns=originals._clock(), now_unix_ns=time.time_ns(), adopted=True)

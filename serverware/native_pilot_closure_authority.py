@@ -22,7 +22,9 @@ The complete live closure remains bounded at 1 MiB in every profile.
 Input/v3 explicitly selects hot12 closure-set/v2 and native closure/assignment
 v5. It is endpoint-only, requires the complete C9 Input/v2 as an additional
 literal deliveryInputOriginal, and keeps the 8 MiB bound. The separate bridge
-runtime/v14 intake is not offered here; relabelling old bridge data refuses.
+runtime/v14 intake uses separate bridge-only Input/v4, its complete C9 Input/v3,
+and the same hot12 set. The measured manifest still commits bootstrap runtime;
+only genuine late C9 commits the distinct complete operational runtime.
 Source readers may preserve u64 metadata, but the native policy-shadow closure
 signature/output codec is signed-i64. Unrepresentable payloads refuse during
 preparation, before the caller obtains a key-ready context.
@@ -59,7 +61,9 @@ SET_INPUT_FIELDS = tuple(name for name in INPUT_FIELDS if name != "controlOrigin
 SET_DOMAIN = "serverware.nativeCustodyClosureAssignment.signature/v3"
 SET_PROFILE = "native-multi-guest-closure-set-v1"
 ADOPTED_API = "serverware.nativePilotClosureAuthorityInput/v3"
+ADOPTED_BRIDGE_API = "serverware.nativePilotClosureAuthorityInput/v4"
 ADOPTED_INPUT_FIELDS = SET_INPUT_FIELDS + ("deliveryInputOriginal",)
+ADOPTED_BRIDGE_INPUT_FIELDS = ADOPTED_INPUT_FIELDS + ("controlOriginal",)
 ADOPTED_ROLES = closure_set.PUBLICATION_ROLES[:-1]
 ADOPTED_DOMAIN = "serverware.nativeCustodyClosureAssignment.signature/v5"
 ADOPTED_PROFILE = "native-multi-guest-closure-set-v2"
@@ -70,7 +74,8 @@ PROVENANCE_FIELDS = ("sourceTreeSha256", "dependencyLockSha256", "buildRecipeSha
     "reproducibleBuildRequired", "provenanceSha256")
 
 
-def _guest(value, *, boot, now):
+def _guest(value, *, boot, now, adopted=False):
+    p.require(type(adopted) is bool)
     _, control = c9._original(value["controlOriginal"], 4096)
     p.fields(control, ("apiVersion", "supervisorExecutableSha256", "configurationSha256", "windowSha256"))
     p.require(control["apiVersion"] == "serverware.nativeShadowDriverBootstrapControl/v1")
@@ -89,7 +94,7 @@ def _guest(value, *, boot, now):
     driver._key(config["phaseTwoAuthority"])
     p.require(config["bootstrapAuthority"]["publicKeyBase64url"] != config["phaseTwoAuthority"]["publicKeyBase64url"])
     runtime_raw, _ = bridge_runtime.original(value["runtimeOriginal"])
-    inventory, _ = c9._bridge_inventory(runtime_raw, cold)
+    inventory, _ = c9._bridge_inventory(runtime_raw, cold, adopted=adopted)
     signed_raw, signed = c9._original(value["deliveryOriginal"], delivery.MAX_DELIVERY)
     p.fields(signed, ("apiVersion", "payload", "signatureBase64url"))
     payload = p.fields(signed["payload"], delivery.FIELDS)
@@ -107,6 +112,24 @@ def _guest(value, *, boot, now):
     driver._key(cold["authority"]).verify(p.decoded(signed["signatureBase64url"], size=64),
         delivery.DOMAIN + p.canonical(payload))
     return config, window, observed, delivery._delivery_guest(payload, signed_raw)
+
+
+def _adopted_bridge_guest(value, *, boot, now):
+    """Authenticate the exact late input and signature, not just its payload."""
+    raw, _ = c9._original(value["deliveryInputOriginal"], c9.MAX_BRIDGE_INPUT)
+    supplied = c9.input_document(raw)
+    p.require(supplied["apiVersion"] == "serverware.nativePilotDeliverySigningInput/v3"
+        and supplied["role"] == "bridge")
+    for outer, inner in (("configurationOriginal", "ownerConfigurationOriginal"),
+            ("deliveryConfigurationOriginal", "configurationOriginal"),
+            ("windowOriginal", "windowOriginal"), ("observationOriginal", "observationOriginal"),
+            ("runtimeOriginal", "runtimeOriginal")):
+        p.require(value[outer] == supplied[inner])
+    _, signed = c9._original(value["deliveryOriginal"], delivery.MAX_DELIVERY)
+    p.require(p.canonical(signed["payload"]).decode("ascii") == supplied["payloadOriginal"])
+    _, activation = c9._original(supplied["activationOriginal"], 32768, array=True)
+    c9._same(activation, signed["payload"]["activation"])
+    return _guest(value, boot=boot, now=now, adopted=True)
 
 
 def _authority(value, now):
@@ -272,6 +295,10 @@ def input_document(input_original: bytes):
     if value.get("apiVersion") == ADOPTED_API:
         p.require(len(input_original) <= MAX_INPUT and value.get("guestRole") in ADOPTED_ROLES)
         return value
+    if value.get("apiVersion") == ADOPTED_BRIDGE_API:
+        p.require(value.get("guestRole") == "bridge"
+            and bridge_runtime.version(bridge_runtime.original(value["runtimeOriginal"])[1]) == 14)
+        return value
     bridge = value.get("apiVersion") == "serverware.nativePilotClosureAuthorityInput/v1" or (
         value.get("apiVersion") == "serverware.nativePilotClosureAuthorityInput/v2" and value.get("guestRole") == "bridge")
     successor = bridge and bridge_runtime.version(bridge_runtime.original(value["runtimeOriginal"])[1]) in (10, 11, 12)
@@ -288,18 +315,21 @@ def prepare_input(input_original: bytes, *, boot, now_boottime_ns, now_unix_ns):
     """
     p.integer(now_boottime_ns, maximum=p.MAX_U64); p.integer(now_unix_ns)
     value = input_document(input_original)
-    adopted = value.get("apiVersion") == ADOPTED_API
+    adopted_bridge = value.get("apiVersion") == ADOPTED_BRIDGE_API
+    adopted = adopted_bridge or value.get("apiVersion") == ADOPTED_API
     multi = adopted or value.get("apiVersion") == "serverware.nativePilotClosureAuthorityInput/v2"
     role = value.get("guestRole") if multi else "bridge"
-    roles = ADOPTED_ROLES if adopted else closure_set.ROLES
+    roles = closure_set.PUBLICATION_ROLES if adopted_bridge else ADOPTED_ROLES if adopted else closure_set.ROLES
     p.require(type(role) is str and role in roles)
-    fields = (ADOPTED_INPUT_FIELDS if adopted else
+    fields = (ADOPTED_BRIDGE_INPUT_FIELDS if adopted_bridge else ADOPTED_INPUT_FIELDS if adopted else
         SET_INPUT_FIELDS + (("controlOriginal",) if role == "bridge" else ()) if multi else INPUT_FIELDS)
     p.fields(value, fields)
-    p.require(value["apiVersion"] == "serverware.nativePilotClosureAuthorityInput/v" + ("3" if adopted else "2" if multi else "1"))
+    p.require(value["apiVersion"] == "serverware.nativePilotClosureAuthorityInput/v" + ("4" if adopted_bridge else "3" if adopted else "2" if multi else "1"))
     wall = now_unix_ns
     delivery_context = None
-    if adopted:
+    if adopted_bridge:
+        config, window, observed, guest = _adopted_bridge_guest(value, boot=boot, now=now_boottime_ns)
+    elif adopted:
         config, window, observed, guest, delivery_context = _adopted_endpoint_guest(value, role,
             boot=boot, now=now_boottime_ns, wall=wall)
     else:

@@ -19,7 +19,8 @@ from serverware.native_pilot_endpoint_inputs import PilotEndpointInputs
 from serverware.native_pilot_launch import NativePilotLaunch, PilotStartError
 from serverware.native_pilot_operator_channel import Channel, STAGES
 from serverware.native_pilot_public_inputs import PublicInputs
-from serverware.native_pilot_service_inputs import ENDPOINT_INPUT_ROLES, SPOOL_LISTENER_ROLES, admit_services
+from serverware.native_pilot_service_inputs import (ENDPOINT_INPUT_ROLES, ADOPTED_ENDPOINT_INPUT_ROLES,
+    SPOOL_LISTENER_ROLES, admit_services, admit_adopted_services)
 
 _TOKEN = object()
 _LIVE = None
@@ -38,6 +39,8 @@ class Operator:
         p.require(token is _TOKEN)
         self._pid = os.getpid()
         self._pilot = self._channel = self._public = None
+        self._received_core = None
+        self._adopted = False
         self._production = None
         self._transfers = None
         self._bridge_preparation = None
@@ -58,9 +61,13 @@ class Operator:
     def _deadline(self, *, live=False):
         pilot = self._pilot
         pilot._origin()
+        if self._received_core is not None:
+            self._received_core.check()
         owners = tuple(owner for owner in (pilot._driver, pilot._cohort, pilot._five) if owner is not None)
         p.require(bool(owners))
         deadline = min(owner._lifetime if live else owner._startup for owner in owners)
+        if self._received_core is not None:
+            deadline = min(deadline, self._received_core.deadline_boottime_ns)
         if live:
             p.require(self._production is not None)
             reserve = max(pilot._driver._config["lifecycle"]["cleanupReserveNanos"],
@@ -73,14 +80,21 @@ class Operator:
         p.require(phase in STAGES and not self._cleanup_attempted and os.getpid() == self._pid)
         self._phase = phase
         self._public.check()
+        if self._received_core is not None:
+            self._received_core.check()
         if self._bridge_preparation is not None and not self._bridge_preparation._consumed:
             self._bridge_preparation.check()
-        reply = self._channel.exchange(phase, payload, deadline_boottime_ns=self._deadline(live=live))
+        bounds = {"deadline_boottime_ns": self._deadline(live=live)}
+        if self._received_core is not None:
+            bounds["expires_at_unix_ns"] = self._received_core.expires_at_unix_ns
+        reply = self._channel.exchange(phase, payload, **bounds)
         if phase == "shutdown" and reply.get("action") == "run-interactive":
             interactive.validate_action(reply, origin_handoff=payload["originHandoff"])
         else:
             p.fields(reply, fields)
         self._public.check()
+        if self._received_core is not None:
+            self._received_core.check()
         if self._bridge_preparation is not None and not self._bridge_preparation._consumed:
             self._bridge_preparation.check()
         return reply
@@ -93,7 +107,7 @@ class Operator:
         for role in SPOOL_LISTENER_ROLES:
             native[role] = [originals.activation(name, target, fd) for target, (name, fd)
                 in enumerate(pilot.spool_inputs.additions(role), 6)]
-        return {
+        result = {
             "cohortObservationOriginal": _text(pilot.cohort.original_bytes()),
             "ordinaryParked": pilot.ordinary_services.parked_originals(),
             "ordinaryActivations": {role: pilot.generation_inputs.activation(role) for role in generation.ROLES},
@@ -101,9 +115,19 @@ class Operator:
             "nativeActivations": native,
             "bridgeJournal": pilot.bridge_resources.journal_identity(),
         }
+        if self._adopted:
+            observed, bundle = self._received_core.originals()
+            result["adoptedCore"] = {"observationOriginal": _text(observed), "bundleOriginal": _text(bundle)}
+            # Target histories/runtime must be approved from these actual
+            # ordinary resources before the endpoint adoption authorization.
+            # No endpoint C9, future grant pin or adoption approval is invented.
+            result["ordinaryPreparationOriginal"] = _text(pilot.ordinary_services.preparation_original())
+            result["ordinaryInitialResourcesOriginal"] = _text(pilot.generation_inputs.initial_resources_original())
+        return result
 
     def _prepare_endpoints(self, inputs):
-        p.fields(inputs["coldOriginals"], ("retrieval", "persistence", "trustedTime"))
+        roles = ADOPTED_ENDPOINT_INPUT_ROLES if self._adopted else ENDPOINT_INPUT_ROLES
+        p.fields(inputs["coldOriginals"], roles)
         cold = {role: self._public.read(pin, maximum=p.MAX_CONFIG)
                 for role, pin in inputs["coldOriginals"].items()}
         peer = self._public.read(inputs["peer"], maximum=16384)
@@ -119,11 +143,18 @@ class Operator:
         p.require(type(path) is str and len(path) <= 4096 and "\0" not in path)
         directory = originals.directory(path)
         try:
-            endpoints = PilotEndpointInputs.prepare(self._pilot, cold_originals=cold,
+            extra = {}
+            prepare = PilotEndpointInputs.prepare
+            if self._adopted:
+                from serverware import native_pilot_publication_adoption_profile as adoption
+                extra = {"received_core": self._received_core,
+                    "adoption_original": self._public.read(inputs["adoptionAuthorization"], maximum=adoption.MAX_AUTHORIZATION)}
+                prepare = PilotEndpointInputs.prepare_adopted
+            endpoints = prepare(self._pilot, cold_originals=cold,
                 peer_original=peer, peer_sha256=inputs["peer"]["sha256"],
                 proof_scope_original=scope, proof_scope_sha256=inputs["proofScope"]["sha256"],
                 retrieval_manifest_original=manifest, retrieval_manifest_sha256=inputs["retrievalManifest"]["sha256"],
-                object_directory_fd=directory, assignment_original=assignment)
+                object_directory_fd=directory, assignment_original=assignment, **extra)
         finally:
             # The composite claims/duplicates the genuine directory before any
             # resource side effects. Only this caller's extra FD closes here.
@@ -131,13 +162,27 @@ class Operator:
         return endpoints, recipe
 
     def run(self):
+        return self._run(received_core=None)
+
+    def run_adopted(self, *, received_core):
+        """Retain genuine received custody; no supplied FD or observation can substitute."""
+        from serverware.native_pilot_genesis_core_channel import ReceivedGenesisCore
+        p.require(type(received_core) is ReceivedGenesisCore)
+        return self._run(received_core=received_core)
+
+    def _run(self, *, received_core):
         """Start once and leave owners held until explicit close, including errors."""
         p.require(_LIVE is self and self._phase == "open" and not self._cleanup_attempted)
         self._phase = "starting"
-        self._channel = Channel.open()
+        self._received_core = received_core
+        self._adopted = received_core is not None
+        if self._adopted:
+            received_core.check()
+        self._channel = Channel.open_adopted() if self._adopted else Channel.open()
         self._public = PublicInputs.open()
         try:
-            self._pilot = NativePilotLaunch.start()
+            self._pilot = (NativePilotLaunch.start_adopted(received_core=received_core)
+                if self._adopted else NativePilotLaunch.start())
         except PilotStartError as failure:
             self._pilot = failure.pilot
             raise
@@ -161,15 +206,17 @@ class Operator:
         pilot.prepare_resources()
 
         inputs = self._exchange("endpoint-inputs", self._resource_observations(),
-            ("coldOriginals", "peer", "proofScope", "retrievalManifest", "objectDirectory", "assignment", "production"))
+            ("coldOriginals", "peer", "proofScope", "retrievalManifest", "objectDirectory", "assignment", "production")
+            + (("adoptionAuthorization",) if self._adopted else ()))
         endpoints, recipe = self._prepare_endpoints(inputs)
         observations = self._resource_observations()
         observations["nativeActivations"].update(endpoints.activations())
         observations["driverGenerationRecipe"] = recipe
         endpoint_reply = self._exchange("endpoint-deliveries", observations, ("endpointDeliveries",))
-        endpoint_pins = p.fields(endpoint_reply["endpointDeliveries"], ENDPOINT_INPUT_ROLES)
+        roles = ADOPTED_ENDPOINT_INPUT_ROLES if self._adopted else ENDPOINT_INPUT_ROLES
+        endpoint_pins = p.fields(endpoint_reply["endpointDeliveries"], roles)
         endpoint_result = endpoints.admit_deliveries(originals={role: self._public.read(
-            endpoint_pins[role], maximum=delivery.MAX_DELIVERY) for role in ENDPOINT_INPUT_ROLES})
+            endpoint_pins[role], maximum=delivery.MAX_DELIVERY) for role in roles})
         # The real retained owner has now fsynced/read back its empty store.
         # Only this actual result is presented for later Retrieval/v3 or the
         # explicitly selected fresh-ledger/v4 signing;
@@ -184,9 +231,10 @@ class Operator:
         # identity or independently signed current-key authorization.
         observations["ordinaryPreparationOriginal"] = _text(pilot.ordinary_services.preparation_original())
         observations["ordinaryInitialResourcesOriginal"] = _text(pilot.generation_inputs.initial_resources_original())
-        from serverware.native_pilot_service_inputs import FIELDS
-        service_inputs = self._exchange("service-originals", observations, FIELDS)
-        self._transfers = admit_services(pilot, endpoints=endpoints, originals=self._public, inputs=service_inputs)
+        from serverware.native_pilot_service_inputs import FIELDS, ADOPTED_FIELDS
+        service_inputs = self._exchange("service-originals", observations, ADOPTED_FIELDS if self._adopted else FIELDS)
+        admit = admit_adopted_services if self._adopted else admit_services
+        self._transfers = admit(pilot, endpoints=endpoints, originals=self._public, inputs=service_inputs)
 
         # Configuration and nested credential descriptors retain their existing
         # fixed-path loaders; no private bytes are copied to the pipe channel.
@@ -210,7 +258,7 @@ class Operator:
         release = self._exchange("release", {"operationOriginal": _text(operation.operation_original())},
             ("endpointRelease", "phaseTwoScope", "phaseTwoPublic"))
         from serverware import native_pilot_bridge_runtime as bridge_runtime
-        public_maximum = (bridge_runtime.MAX_BRIDGE_INPUT if bridge_runtime.runtime_version(operation._runtime_raw) in (10, 11, 12)
+        public_maximum = (bridge_runtime.MAX_BRIDGE_INPUT if bridge_runtime.runtime_version(operation._runtime_raw) in bridge_runtime.LARGE_VERSIONS
             else 1024 * 1024)
         self._bridge_preparation.consume()
         continuation = pilot.release(operational_inputs=operation,
@@ -253,6 +301,12 @@ class Operator:
                 if self._pilot._cleanup_attempted and not self._pilot._closed:
                     raise ValueError("native pilot cleanup previously attempted")
                 self._pilot.close()
+            if self._received_core is not None:
+                # Startup may fail before the pilot claims custody. Closing
+                # the real core requires no adopted cohort or its full reap;
+                # unknown pilot cleanup above never reaches this branch.
+                self._received_core.close()
+                self._received_core._channel.close()
             if self._bridge_preparation is not None:
                 self._bridge_preparation.close()
             if self._public is not None:

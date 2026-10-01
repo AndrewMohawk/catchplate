@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import errno
 import fcntl
+import hashlib
 import json
 import os
 import socket
@@ -149,6 +150,21 @@ TRUSTED_HOST_LOCAL_WITNESS_STATE_FD_MAX = 1023
 BOOTSTRAP_LAUNCHER_PATH = (
     "/runtime/authority-bootstrap/authority_launcher.py"
 )
+LOCAL_ADMISSION_SCHEMA = "serverware.authorityTrustedHostLocalAdmission/v1"
+LOCAL_ADMISSION_MAX_BYTES = 1024 * 1024
+LOCAL_LATE_DESCRIPTORS = {
+    "SERVERWARE_POLICY_AUTHORITY_LAUNCH_MANIFEST_FD": 256,
+    "SERVERWARE_POLICY_AUTHORITY_ATTESTATION_FD": 258,
+}
+# Kept equal to the stage-zero interface without importing application code
+# before the isolated launcher admits its measured import closure.
+LOCAL_EXEC_ENVIRONMENT = frozenset({
+    "LANG", "LC_ALL", "PATH", "PYTHONDONTWRITEBYTECODE", "PYTHONHASHSEED",
+    "SERVERWARE_ARTIFACT_BUNDLE_DIGEST", "SERVERWARE_AUTHORITY_GENERATION_DIGEST",
+    "SERVERWARE_AUTHORITY_LAUNCH_CERTIFICATE_FD",
+    "SERVERWARE_AUTHORITY_LAUNCH_PRIVATE_KEY_FD", "SERVERWARE_AUTHORITY_ROLE",
+    "SERVERWARE_OPERATION_MANIFEST_DIGEST", *LOCAL_LATE_DESCRIPTORS, "TZ",
+})
 ROLE_IDENTITIES = {
     "control-plane": (65532, 65532),
     "runtime": (65524, 65524),
@@ -2717,8 +2733,99 @@ def _control_plane_health() -> int:
     return 1
 
 
+def _local_admission_sources(role: str, selection: tuple[int, str, int]) -> tuple[int, ...]:
+    """Preserve a parent's explicit empty slots, not provisional authority.
+
+    The final same-PID launcher independently admits the full setup, producer,
+    original clocks and signed late documents. This check only makes descriptor
+    delivery safe before static credentials are opened; it issues no trust.
+    """
+    setup_fd, expected_digest, channel_fd = selection
+    if (role == "control-plane" or role not in ROLE_SOURCES
+            or any(type(fd) is not int or not 4 <= fd <= 1023 for fd in (setup_fd, channel_fd))
+            or setup_fd == channel_fd or type(expected_digest) is not str
+            or len(expected_digest) != 71 or not expected_digest.startswith("sha256:")
+            or any(c not in "0123456789abcdef" for c in expected_digest[7:])):
+        raise RuntimeError("local admission selection is not exact")
+    seals = fcntl.F_SEAL_SEAL | fcntl.F_SEAL_SHRINK | fcntl.F_SEAL_GROW | fcntl.F_SEAL_WRITE
+    metadata = os.fstat(setup_fd)
+    if (not stat.S_ISREG(metadata.st_mode) or (metadata.st_uid, metadata.st_gid) != (0, 0)
+            or stat.S_IMODE(metadata.st_mode) != 0o400
+            or not 1 <= metadata.st_size <= LOCAL_ADMISSION_MAX_BYTES
+            or fcntl.fcntl(setup_fd, fcntl.F_GET_SEALS) & seals != seals):
+        raise RuntimeError("local admission setup is not protected")
+    raw = _read_exact_source(setup_fd, metadata.st_size)
+    if "sha256:" + hashlib.sha256(raw).hexdigest() != expected_digest:
+        raise RuntimeError("local admission setup digest differs")
+    setup = json.loads(raw)
+    if (type(setup) is not dict or setup.get("schema") != LOCAL_ADMISSION_SCHEMA
+            or setup.get("role") != role
+            or json.dumps(setup, ensure_ascii=True, allow_nan=False,
+                          separators=(",", ":"), sort_keys=True).encode("ascii") != raw):
+        raise RuntimeError("local admission setup selection differs")
+    expected_slots = {"manifest": 256, "certificate": 257}
+    if role not in {"runtime", "witness"}:
+        expected_slots["evidence"] = 258
+    reservations = setup.get("reservations")
+    if type(reservations) is not dict or set(reservations) != set(expected_slots):
+        raise RuntimeError("local admission late slots differ")
+    inherited = [setup_fd, channel_fd]
+    for purpose, target in expected_slots.items():
+        item = reservations[purpose]
+        if (type(item) is not dict or set(item) != {"fd", "device", "inode"}
+                or type(item["fd"]) is not int or item["fd"] != target
+                or type(item["device"]) is not int or item["device"] < 0
+                or type(item["inode"]) is not int or item["inode"] < 1):
+            raise RuntimeError("local admission reservation differs")
+        observed = os.fstat(target)
+        if (not stat.S_ISREG(observed.st_mode) or observed.st_size != 0
+                or (observed.st_uid, observed.st_gid) != (0, 0)
+                or stat.S_IMODE(observed.st_mode) != 0o400
+                or (observed.st_dev, observed.st_ino) != (item["device"], item["inode"])
+                or fcntl.fcntl(target, fcntl.F_GET_SEALS) & seals != seals):
+            raise RuntimeError("local admission reservation is not the original empty slot")
+        inherited.append(target)
+    for name, regular in (("retainedFiles", True), ("retainedDirectories", False)):
+        entries = setup.get(name)
+        if (type(entries) is not list or len(entries) > 1020
+                or any(type(fd) is not int or not 4 <= fd <= 1023 for fd in entries)
+                or entries != sorted(set(entries))):
+            raise RuntimeError("local admission retained inventory differs")
+        for descriptor in entries:
+            observed = os.fstat(descriptor)
+            if not (stat.S_ISREG(observed.st_mode) if regular else stat.S_ISDIR(observed.st_mode)):
+                raise RuntimeError("local admission retained resource type differs")
+            inherited.append(descriptor)
+    states = setup.get("mutableStateDescriptors")
+    if type(states) is not list or len(states) != (1 if role == "witness" else 0):
+        raise RuntimeError("local admission mutable inventory differs")
+    for state in states:
+        descriptor = state.get("fd") if type(state) is dict else None
+        if type(descriptor) is not int or not 32 <= descriptor <= 1023:
+            raise RuntimeError("local admission witness descriptor differs")
+        observed = os.fstat(descriptor)
+        if (not stat.S_ISDIR(observed.st_mode) or stat.S_IMODE(observed.st_mode) != 0o700
+                or (observed.st_uid, observed.st_gid) != ROLE_IDENTITIES["witness"]
+                or (observed.st_dev, observed.st_ino) != (state.get("device"), state.get("inode"))):
+            raise RuntimeError("local admission witness directory differs")
+        inherited.append(descriptor)
+    if len(inherited) != len(set(inherited)) or 3 in inherited:
+        raise RuntimeError("local admission inherited descriptors overlap")
+    channel = socket.fromfd(channel_fd, socket.AF_UNIX, socket.SOCK_SEQPACKET)
+    try:
+        if (channel.getsockopt(socket.SOL_SOCKET, socket.SO_DOMAIN) != socket.AF_UNIX
+                or channel.getsockopt(socket.SOL_SOCKET, socket.SO_TYPE) != socket.SOCK_SEQPACKET):
+            raise RuntimeError("local admission channel type differs")
+        channel.getpeername()
+    finally:
+        channel.close()
+    for descriptor in inherited:
+        os.set_inheritable(descriptor, True)
+    return tuple(inherited)
+
+
 def _normal_main(role: str, *, public_revocation: bool = False, genesis_maintenance: bool = False, policy_canary_intake: bool = False,
-        setup_native_observation: bool = False) -> int:
+        setup_native_observation: bool = False, local_admission: tuple[int, str, int] | None = None) -> int:
     if type(public_revocation) is not bool or public_revocation and role not in {"verifier", "issuer", "executor"}:
         raise RuntimeError("public revocation cold selection requires its fixed measured roles")
     if type(genesis_maintenance) is not bool or genesis_maintenance and (role != "control-plane" or public_revocation):
@@ -2731,6 +2838,9 @@ def _normal_main(role: str, *, public_revocation: bool = False, genesis_maintena
         os.environ.get("SERVERWARE_AUTHORITY_TRUST_MODE")
         == "trusted-host-local"
     )
+    if local_admission is not None and (not trusted_host_local or role == "control-plane"
+            or public_revocation or genesis_maintenance or policy_canary_intake or setup_native_observation):
+        raise RuntimeError("late local admission requires its fixed authority selection")
     if role != "control-plane" and not trusted_host_local:
         raise RuntimeError(
             "native-stage-zero-required: authority roles must be entered "
@@ -2739,7 +2849,10 @@ def _normal_main(role: str, *, public_revocation: bool = False, genesis_maintena
         )
     if os.geteuid() != 0 or os.getegid() != 0:
         raise RuntimeError("authority descriptor bootstrap must start as root")
-    environment = dict(os.environ)
+    environment = (dict(os.environ) if local_admission is None else
+                   {name: value for name, value in os.environ.items() if name in LOCAL_EXEC_ENVIRONMENT})
+    if local_admission is not None:
+        environment["SERVERWARE_AUTHORITY_ROLE"] = role
     environment.pop("SERVERWARE_PUBLIC_WEBAUTHN_REVOCATION_BOOTSTRAP_FD", None)
     environment.pop("SERVERWARE_PUBLIC_WEBAUTHN_REVOCATION_BOOTSTRAP_PATH", None)
     if any(
@@ -2749,21 +2862,19 @@ def _normal_main(role: str, *, public_revocation: bool = False, genesis_maintena
         raise RuntimeError(
             "static release-consumer credentials are forbidden in .19"
         )
-    inherited_descriptors: list[int] = []
+    inherited_descriptors: list[int] = ([] if local_admission is None else
+                                       list(_local_admission_sources(role, local_admission)))
     if role != "control-plane":
         listener_descriptor = _consume_socket_activation(role)
         inherited_descriptors.append(listener_descriptor)
         launch_private_descriptor = _open_systemd_credential(
             "serverware-authority-launch-private-key"
         )
-        launch_certificate_descriptor = _open_systemd_credential(
-            "serverware-authority-launch-certificate"
-        )
+        launch_certificate_descriptor = (257 if local_admission is not None else
+            _open_systemd_credential("serverware-authority-launch-certificate"))
         inherited_descriptors.extend(
-            (
-                launch_private_descriptor,
-                launch_certificate_descriptor,
-            )
+            (launch_private_descriptor,) if local_admission is not None else
+            (launch_private_descriptor, launch_certificate_descriptor)
         )
         environment[
             "SERVERWARE_AUTHORITY_LAUNCH_PRIVATE_KEY_FD"
@@ -2824,6 +2935,9 @@ def _normal_main(role: str, *, public_revocation: bool = False, genesis_maintena
     }
     try:
         for environment_name, path in ROLE_SOURCES[role]:
+            if local_admission is not None and environment_name in LOCAL_LATE_DESCRIPTORS:
+                descriptor_assignments.append((environment_name, LOCAL_LATE_DESCRIPTORS[environment_name]))
+                continue
             descriptor = (
                 _open_source(path, expected_owner_uid=0,
                     maximum_bytes=control_plane_source_limits.get(environment_name, MAX_SOURCE_BYTES))
@@ -2878,7 +2992,7 @@ def _normal_main(role: str, *, public_revocation: bool = False, genesis_maintena
                 os.set_inheritable(target, True)
             descriptors.append(target)
             descriptor_assignments.append(("SERVERWARE_PUBLIC_WEBAUTHN_REVOCATION_BOOTSTRAP_FD", target))
-        if role == "witness":
+        if role == "witness" and local_admission is None:
             if launch_manifest_descriptor is None:
                 raise RuntimeError(
                     "trusted-host-local witness launch manifest is unavailable"
@@ -2992,6 +3106,11 @@ def _normal_main(role: str, *, public_revocation: bool = False, genesis_maintena
             str(launcher_descriptor),
             "--trusted-host-local",
         ]
+        if local_admission is not None:
+            setup_fd, setup_digest, channel_fd = local_admission
+            launcher_arguments.extend(["--local-admission-fd", str(setup_fd),
+                "--local-admission-sha256", setup_digest,
+                "--local-admission-channel-fd", str(channel_fd)])
         for environment_name, descriptor in descriptor_assignments:
             launcher_arguments.extend(
                 [
@@ -3014,6 +3133,15 @@ def _normal_main(role: str, *, public_revocation: bool = False, genesis_maintena
 
 
 def main() -> int:
+    if (len(sys.argv) == 8 and sys.argv[1] in ROLE_SOURCES
+            and sys.argv[2::2] == ["--local-admission-fd", "--local-admission-sha256", "--local-admission-channel-fd"]):
+        try:
+            setup_fd, channel_fd = int(sys.argv[3]), int(sys.argv[7])
+        except ValueError as exc:
+            raise RuntimeError("local admission descriptor is invalid") from exc
+        if str(setup_fd) != sys.argv[3] or str(channel_fd) != sys.argv[7]:
+            raise RuntimeError("local admission descriptor is not canonical")
+        return _normal_main(sys.argv[1], local_admission=(setup_fd, sys.argv[5], channel_fd))
     if sys.argv[1:] in (["control-plane", "--setup-native-observation"],
             ["control-plane", "--policy-canary-intake", "--setup-native-observation"]):
         return _normal_main("control-plane", setup_native_observation=True, policy_canary_intake=len(sys.argv) == 4)

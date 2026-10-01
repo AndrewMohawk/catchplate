@@ -58,6 +58,12 @@ Runtime14/Launch10 scope and constructed-driver validation, Closure5 admission,
 and the existing phase-two public publisher. Legacy defaults stay closed.
 
 Focused verification results are recorded in [production progress](production-status.md).
+Frozen `3811b8e8` ran 111 controls in 65.704 seconds. A missing explicit adopted
+identity selector caused nine error entries. Corrected `6b6963d0` passes all 13
+controls in the affected suite in 8.763 seconds; 99 unaffected controls passed
+earlier and were not rerun. This is 112 distinct controls across two snapshots,
+not a full corrected-tree run. Grammar/both Make inventories cover 21 changed
+Python files, and all eight new modules import.
 The authored controls include real deterministic test signatures and explicit
 synthetic observations. They do **not** constitute a complete positive 176-job
 ceremony: full native adoption, operational grants, bridge business state and

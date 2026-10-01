@@ -5,6 +5,11 @@ independently approved pair installation and the existing adopted supervisor. Th
 decisions, provision keys, install a runtime or claim an accepted pilot. The
 existing 66 cold jobs, 176 adopted jobs and approval wire formats stay unchanged.
 
+The [cold](native-pilot-genesis-inputs.md) and
+[operational](native-pilot-adopted-inputs.md) compilers fill candidate inputs from
+the retained actual transcript. They do not replace the independent provider,
+protected public-original publication or deployed lifecycle verification.
+
 ## Ownership and ordering
 
 `serverware.native_pilot_lifecycle` exposes a staged owner for an independently

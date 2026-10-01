@@ -144,7 +144,8 @@ Focused checks pass; live pause/resume remains unverified. The earlier
 checks and native compilation, but live initialization remains unverified.
 
 Policy/v16 adds [complete bridge runtime composition](docs/native-pilot-bridge-composition.md)
-from actual signed heads and service originals; its focused checks are pending.
+from actual signed heads and service originals. Focused checks pass; complete
+authenticated/live execution remains unverified.
 Startup still refuses until the remaining eight current jobs, beginning with
 bridge credential delivery, are connected. Five additional bridge authorization
 prerequisites are not yet included in that inventory;

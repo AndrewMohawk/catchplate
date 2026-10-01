@@ -6,8 +6,10 @@ under explicit policy/v16. Actual current-head, peer, C9 and service originals
 feed the complete runtime/outgoing bundle and retained installation handoff.
 **151/159** jobs are handled: 143 fixed composition decisions and eight late
 intakes, with **108** signing selectors and **eight current missing slots**.
-Five additional bridge authorization jobs remain omitted. Focused verification
-is pending; startup still refuses before child creation. Complete positive
+Five additional bridge authorization jobs remain omitted. Source `131b2bbb`
+passed 97/99 controls; fixture-only `50f9d190` passed all nine targeted rechecks.
+[Evidence and limits](native-pilot-bridge-composition.md#focused-verification).
+Startup still refuses before child creation. Complete positive
 multi-service authentication and live owner execution remain unverified.
 
 The preceding `.388` source connects [protected current-head intake](native-pilot-current-head-intake.md)

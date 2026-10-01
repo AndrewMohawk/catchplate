@@ -1,9 +1,12 @@
+> Publication note: deployment-specific addresses, identities and paths in this document are example placeholders, not a public service or release-verification evidence.
+
 # Bridge runtime composition
 
 The `.389` source connects complete bridge runtime/v11 and outgoing-input
 composition to the actual `install-bridge-runtime` job. This is a source
-connection, not a deployed bridge or accepted pilot. Focused verification is
-pending; complete startup still refuses while later jobs are unimplemented.
+connection, not a deployed bridge or accepted pilot. Focused checks pass after
+a test-fixture timing correction; complete startup still refuses while later
+jobs are unimplemented.
 
 ## Explicit policy and actual originals
 
@@ -91,5 +94,24 @@ for this source batch.
 
 ## Focused verification
 
-Pending one assembled frozen-source Python pass. Native code and dependencies
-are unchanged, so their previously successful builds are not repeated.
+Exact source `131b2bbb05a6275ddd8987047869468e241ae2e7` passed **97 of 99
+controls in 12 suites**, **13-file Python 3.11.15 grammar/both Make inventories**
+and **50 relative links** in one isolated pass (30.629 seconds). Two new positive
+projection controls failed at the unchanged C9 lifetime margin: their inherited
+9-millisecond fixture could not satisfy a 250-millisecond safety allowance.
+
+Fixture-only `50f9d190c910a62608d31651d5ebd88f9dcd6342` preserves old defaults
+and creates complete, consistently signed 500-millisecond originals for the
+projection fixture. No production guard or live deadline changed. Its targeted
+recheck passed **all nine controls**: the seven new controls and two relevant
+default-fixture checks, with **15-file grammar/both inventories**, in 12.562
+seconds (exit **0**). The full 99-control pass was not repeated.
+
+Both source archives, exact commands/harnesses, logs, result and verified
+fifteen-file checksum manifest are retained locally at
+`/home/catchplate/codex-offload/serverware/engineering-builds/50f9d190-bridge-composition-GBktjq/`.
+Runs used one CPU, a private network namespace and a cleared environment.
+No protected owner, signing entrypoint, publisher, service, provider, hardware,
+cloud or paid operation ran. Native code/dependencies are unchanged and were
+not rebuilt. Complete build-authentication/installation/live-owner transcripts
+and startup performance remain unverified; these are not pilot-acceptance checks.

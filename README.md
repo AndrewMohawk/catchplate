@@ -139,7 +139,7 @@ includes service histories, delivery/generation grants, endpoint authorizations,
 launch bundles and public material. Explicit policy/v15 connects eight
 [request-bound approval intake jobs](docs/native-pilot-current-head-intake.md),
 which await independent decisions instead of generating their own approval.
-Focused verification of this batch is pending. The earlier
+Focused checks pass; live pause/resume remains unverified. The earlier
 [fresh-helper startup path](docs/native-pilot-helper-initial.md) passes focused
 checks and native compilation, but live initialization remains unverified.
 

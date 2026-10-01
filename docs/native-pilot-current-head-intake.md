@@ -1,9 +1,12 @@
+> Publication note: deployment-specific addresses, identities and paths in this document are example placeholders, not a public service or release-verification evidence.
+
 # Request-bound current-head approval intake
 
 The `.388` source connects eight late approval jobs between service material
 and bridge-runtime installation. These are **independent decisions over actual
-requests**, not automatically composed approvals. Source verification is pending
-at freeze. Startup remains closed while the rest of the job graph is incomplete.
+requests**, not automatically composed approvals. Source `65744b94` passes 107
+focused controls; the `9dbdb9f5` refinement passes its one new targeted control.
+Startup remains closed while the rest of the job graph is incomplete.
 
 ## Order and authority
 
@@ -51,6 +54,13 @@ boot/domain, startup, checkpoint, grant and request ceilings remain in force
 through validation and publication. Waiting for approval never extends them.
 Protected resources stay retained until genuine terminal cleanup is known.
 
+Each actual signed result is fully authenticated on first receipt. Later
+rechecks compare its exact approved input/pin and result bytes under the same
+immutable source and original lifetime guards; they do not repeat the entire
+five-service signature-validation graph for every earlier result. This avoids
+unnecessary startup work without extending a deadline or accepting a changed
+statement. Live startup performance has not been measured.
+
 At the following job, the retained owner authenticates all eight actual signed
 results before exposing them to the future bridge composer. The phase executor
 already requires the runtime's eight handshakes to equal the authenticated
@@ -77,7 +87,26 @@ No deployment, live signer or pilot is supplied by this source connection.
 
 ## Focused verification
 
-Pending source freeze. One assembled Python pass will cover the changed
-contracts and their adjacent public consumers. Unchanged native/dependency
-builds are not repeated. No protected owner, signer entrypoint, service, cloud
-or paid operation has run for this batch.
+Exact source `65744b94554f81809d8b2b9913fc69315a1444e9` passed all **107 controls
+in 13 suites** in one Python 3.11.15 run (exit **0**, about **27 seconds**).
+Ten changed Python files passed grammar and both Make inventories;
+**47 relative documentation links** resolved. Eight new pure/synthetic controls
+cover all eight signed input/result associations, chronology and substitutions,
+evidence-only observations, and exact bridge-handshake result binding.
+
+Two-file refinement `9dbdb9f537036d16e244d0a6e5e1b1be9aa81b62` changes only
+retained-result reuse and its ninth control. That one new control passed in
+**1.630 seconds**, with two-file grammar/both Make inventories. The 107 passing
+controls were not repeated. The unbound inner phase/cache checks use explicit
+synthetic namespaces and clocks; they do not construct a real owner or prove
+protected FD intake. Native source/dependencies are unchanged and were not rebuilt.
+
+Both exact archives, harnesses, commands, logs, result and verified thirteen-file
+checksum manifest are retained locally at
+`/home/catchplate/codex-offload/serverware/engineering-builds/9dbdb9f5-current-head-intake-9IeiSE/`.
+Archive SHA-256 values are recorded in that manifest and `RESULTS.md`.
+
+No protected supervisor/policy/intake owner, signing entrypoint, publisher,
+native service, provider, hardware, cloud or paid operation ran. Live
+pause/resume, independent approval provenance and startup performance remain
+unverified. These checks are not pilot or production acceptance.

@@ -8,7 +8,10 @@ keys and never enter the static approval serializer. **150/159** current jobs
 are handled: 142 composers and eight late-intake jobs. There are **108** signing
 selectors, nine current missing slots and five further bridge prerequisites
 not yet in that inventory. Full coverage still refuses before child creation.
-Verification of this batch is pending. Source **36/46** and production **0/6**
+Source `65744b94` passes 107 focused controls; `9dbdb9f5` passes the one new
+retained-result reuse control without rerunning those 107.
+[Verification and limits](native-pilot-current-head-intake.md#focused-verification).
+Source **36/46** and production **0/6**
 remain unchanged; neither connected installation nor pilot acceptance is proven.
 
 The preceding `.387` source connects [supplemental helper ceremonies](native-pilot-helper-ceremonies.md)

@@ -68,15 +68,22 @@ def _scope(raw, proof_raw, admitted, guest, *, assignment_payload_original=None)
     return value
 
 
-def _input(configuration_original, configuration_sha256, assignment_payload_original, role, now, signing_key):
+def _input_values(configuration_original, configuration_sha256, assignment_payload_original, role, now):
+    """Shared public admission recipe; no clock sampling, key or signing."""
     p.require(p.sha(configuration_original) == p.digest(configuration_sha256))
     config = p.document(configuration_original, p.MAX_CONFIG)
     admitted, keys = admission.authorization(config, now)
     assignment = p.document(assignment_payload_original, p.MAX_CONFIG)
     p.require(config["authorization"]["payload"]["localRoles"] == [role]
         and p.sha(assignment_payload_original) == admitted["assignmentPayloadSha256"]
-        and assignment["assignmentRevision"] == admitted["assignmentRevision"]
-        and isinstance(signing_key, Ed25519PrivateKey))
+        and assignment["assignmentRevision"] == admitted["assignmentRevision"])
+    return config, admitted, keys
+
+
+def _input(configuration_original, configuration_sha256, assignment_payload_original, role, now, signing_key):
+    config, admitted, keys = _input_values(configuration_original, configuration_sha256,
+        assignment_payload_original, role, now)
+    p.require(isinstance(signing_key, Ed25519PrivateKey))
     public = signing_key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
     p.require(p.encoded(public) == keys[-1]["publicKeyBase64url"])
     return config, admitted, keys
@@ -143,13 +150,18 @@ def sign_active_effect_commit_service(**values):
     return _sign_signer(**values, companion_pin=None, ingress=False, effect="activeEffectCommit")
 
 
-def _sign_retrieval_service(*, configuration_original, configuration_sha256, assignment_payload_original, scope_original,
+def _retrieval_service_payload(*, configuration_original, configuration_sha256, assignment_payload_original, scope_original,
                            proof_scope_original, peer_original, ingress_key, ledger_key, store_admission,
-                           issued_at, expires_at, now, signing_key, terminal_key=None, completion=False, effects=None,
+                           issued_at, expires_at, now, terminal_key=None, completion=False, effects=None,
                            fresh_ledger=False):
+    """The fixed existing retrieval payload, shared by signer and supervisor.
+
+    Caller clocks and originals are data; this does not prove a live owner or
+    authorize signing. All previous closed profile and signature joins remain.
+    """
     p.require(type(fresh_ledger) is bool and (not fresh_ledger or completion and effects is not None))
-    config, admitted, keys = _input(configuration_original, configuration_sha256, assignment_payload_original,
-        "custody-retrieval-response", now, signing_key)
+    config, admitted, keys = _input_values(configuration_original, configuration_sha256, assignment_payload_original,
+        "custody-retrieval-response", now)
     scope = _scope(scope_original, proof_scope_original, admitted, admitted["guest"],
         assignment_payload_original=assignment_payload_original)
     p.require(completion == (terminal_key is not None) and (effects is None or completion))
@@ -183,7 +195,23 @@ def _sign_retrieval_service(*, configuration_original, configuration_sha256, ass
         value["effects"] = dict(effects)
     if fresh_ledger:
         value["initialization"] = retrieval.FRESH_INITIALIZATION
-    return old._signed(value, "serverware.nativeLedgerSpoolRetrievalGrant.signature/v" + version, signing_key)
+    return value, keys[-1], "serverware.nativeLedgerSpoolRetrievalGrant.signature/v" + version
+
+
+def _sign_retrieval_service(*, configuration_original, configuration_sha256, assignment_payload_original, scope_original,
+                           proof_scope_original, peer_original, ingress_key, ledger_key, store_admission,
+                           issued_at, expires_at, now, signing_key, terminal_key=None, completion=False, effects=None,
+                           fresh_ledger=False):
+    payload, supervisor, domain = _retrieval_service_payload(configuration_original=configuration_original,
+        configuration_sha256=configuration_sha256, assignment_payload_original=assignment_payload_original,
+        scope_original=scope_original, proof_scope_original=proof_scope_original, peer_original=peer_original,
+        ingress_key=ingress_key, ledger_key=ledger_key, store_admission=store_admission,
+        issued_at=issued_at, expires_at=expires_at, now=now, terminal_key=terminal_key,
+        completion=completion, effects=effects, fresh_ledger=fresh_ledger)
+    p.require(isinstance(signing_key, Ed25519PrivateKey))
+    public = signing_key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+    p.require(p.encoded(public) == supervisor["publicKeyBase64url"])
+    return old._signed(payload, domain, signing_key)
 
 
 def sign_retrieval_service(**values):

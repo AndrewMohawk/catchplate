@@ -324,14 +324,14 @@ def _sign_delivery(*, configuration_raw, configuration_sha256, payload_raw, sign
 GRANT_DOMAIN = "serverware.nativeShadowTrustedTimeServiceAssignment.signature/v1"
 
 
-def sign_service_grant(*, configuration_original, configuration_sha256,
+def _service_grant_payload(*, configuration_original, configuration_sha256,
                        bootstrap_original, bootstrap_sha256, peer_original, peer_sha256,
-                       issued_at, expires_at, now, signing_key):
-    """Sign independently approved originals with the existing supervisor key.
+                       issued_at, expires_at, now):
+    """Shared pure validation of independently approved time-service originals.
 
-    The signer checks actual independently pinned full18 authorization. The
+    This checks actual independently pinned full18 authorization. The
     native service independently repeats authority/currentness and clock checks.
-    These bytes are not a measured runtime owner or an attestation result.
+    Caller clocks are data, not a measured runtime owner or an attestation result.
     """
     p.require(type(configuration_original) is bytes and 1 <= len(configuration_original) <= p.MAX_CONFIG
         and type(bootstrap_original) is bytes and 1 <= len(bootstrap_original) <= 65536
@@ -360,10 +360,7 @@ def sign_service_grant(*, configuration_original, configuration_sha256,
     p.require(expires_at <= min(configuration[name]["payload"]["expiresAtUnixNanos"]
         for name in ("authorization", "admissionAuthorization")))
     supervisor = keys[-1]
-    p.require(isinstance(signing_key, Ed25519PrivateKey))
-    public = signing_key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
-    p.require(p.encoded(public) == supervisor["publicKeyBase64url"]
-        and bootstrap["signingKeyId"] not in {key["keyId"] for key in keys})
+    p.require(bootstrap["signingKeyId"] not in {key["keyId"] for key in keys})
     checkpoint = configuration["trustCheckpoint"]
     payload = {"apiVersion": "serverware.nativeShadowTrustedTimeServiceAssignment/v1",
         "purpose": "native-shadow-trusted-time-response", "guest": guest,
@@ -374,6 +371,20 @@ def sign_service_grant(*, configuration_original, configuration_sha256,
         "revocationRootSha256": checkpoint["revocationRootSha256"], "issuedAtUnixNanos": issued_at,
         "expiresAtUnixNanos": expires_at, "signingKeyId": supervisor["keyId"],
         "signingKeySpkiSha256": supervisor["keySpkiSha256"]}
+    return payload, supervisor
+
+
+def sign_service_grant(*, configuration_original, configuration_sha256,
+                       bootstrap_original, bootstrap_sha256, peer_original, peer_sha256,
+                       issued_at, expires_at, now, signing_key):
+    """Sign one independently approved original with its matching supervisor."""
+    payload, supervisor = _service_grant_payload(configuration_original=configuration_original,
+        configuration_sha256=configuration_sha256, bootstrap_original=bootstrap_original,
+        bootstrap_sha256=bootstrap_sha256, peer_original=peer_original, peer_sha256=peer_sha256,
+        issued_at=issued_at, expires_at=expires_at, now=now)
+    p.require(isinstance(signing_key, Ed25519PrivateKey))
+    public = signing_key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+    p.require(p.encoded(public) == supervisor["publicKeyBase64url"])
     signature = signing_key.sign(p.preimage(GRANT_DOMAIN, payload))
     p.public_key(supervisor).verify(signature, p.preimage(GRANT_DOMAIN, payload))
     result = p.canonical({"payload": payload, "signature": p.encoded(signature)})

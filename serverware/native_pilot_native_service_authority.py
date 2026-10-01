@@ -30,6 +30,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from serverware import native_pilot_delivery_authority as c9
 from serverware import native_pilot_scope_authority as originals
+from serverware import native_shadow_nitro_originals as host_originals
 from serverware import native_shadow_driver_bootstrap as driver
 from serverware import native_shadow_guest_delivery as delivery
 from serverware import native_shadow_key_admission_profile as admission
@@ -387,7 +388,8 @@ def prepare_service_input(operation, input_original, *, boot, now_boottime_ns, n
         "deadline": deadline, "epochLimit": epoch_limit, "domain": domain}
 
 
-def _retrieval_inputs(value, guest, keys, admitted, checkpoint, scope_raw, proof_raw, peer, now):
+def _retrieval_inputs(value, guest, keys, admitted, checkpoint, scope_raw, proof_raw, peer, now,
+                      *, boot=None, now_boottime_ns=None):
     _, result = _original(value["endpointDeliveryResultOriginal"], 65536)
     p.fields(result, ("guests", "spoolJournal"))
     guests = p.fields(result["guests"], ("retrieval", "persistence", "trustedTime"))
@@ -407,7 +409,8 @@ def _retrieval_inputs(value, guest, keys, admitted, checkpoint, scope_raw, proof
     roles, expiries, history_bundle = {}, [], None
     for operation in SIGNERS:
         raw, _ = _original(raw_grants[operation], MAX_OUTPUT)
-        grant = _verified_grant(raw, operation, keys, admitted, checkpoint, now)
+        grant = _verified_grant(raw, operation, keys, admitted, checkpoint, now,
+            boot=boot, now_boottime_ns=now_boottime_ns)
         expected_api = (HISTORY_PROFILES if value["apiVersion"] == HISTORY_RETRIEVAL_INPUT_API else PROFILES)[operation][0]
         p.require(grant["apiVersion"] == expected_api)
         if value["apiVersion"] == HISTORY_RETRIEVAL_INPUT_API:
@@ -427,21 +430,27 @@ def _retrieval_inputs(value, guest, keys, admitted, checkpoint, scope_raw, proof
     return store, roles, min(expiries)
 
 
-def sign(operation: str, input_original: bytes, signing_key: Ed25519PrivateKey) -> bytes:
-    """Sign exactly one selected existing native service envelope."""
-    p.require(operation in OPERATIONS and isinstance(signing_key, Ed25519PrivateKey))
+def prepare_input(operation, input_original, *, boot, now_boottime_ns, now_unix_ns):
+    """Pure fixed-operation preparation over complete approved public originals.
+
+    Shares the real issuers' validation, not a second payload implementation.
+    Supplied clocks are data; the caller must establish provenance and current
+    owner lifetime. This creates no receipt, state, signing or approval owner.
+    """
+    p.require(operation in OPERATIONS)
+    if operation in HISTORY_OPERATIONS:
+        return prepare_service_input(operation, input_original, boot=boot,
+            now_boottime_ns=now_boottime_ns, now_unix_ns=now_unix_ns)
+    p.integer(now_boottime_ns, maximum=p.MAX_U64); p.integer(now_unix_ns)
     value, fresh_ledger = input_shape(operation, input_original)
-    guest, window, observed = _endpoint(value, operation)
-    before = c9._live(window)
-    now = time.time_ns()
+    guest, window, observed = _endpoint(value, operation, boot=boot, now_boottime_ns=now_boottime_ns)
+    now = now_unix_ns
     config_raw, config = _original(value["configurationOriginal"], p.MAX_CONFIG)
     p.require(p.sha(config_raw) == p.digest(value["configurationSha256"]))
     admitted, keys = admission.authorization(config, now)
     checkpoint = config["trustCheckpoint"]
     _same(admitted["guest"], guest)
     p.require(_LOCAL_ROLE[operation] in config["authorization"]["payload"]["localRoles"])
-    public = signing_key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
-    p.require(p.encoded(public) == keys[-1]["publicKeyBase64url"])
     assignment_raw, assignment = _original(value["assignmentPayloadOriginal"], p.MAX_CONFIG)
     p.require(p.sha(assignment_raw) == admitted["assignmentPayloadSha256"]
         and assignment["assignmentRevision"] == admitted["assignmentRevision"])
@@ -450,61 +459,79 @@ def sign(operation: str, input_original: bytes, signing_key: Ed25519PrivateKey) 
     p.freshness(issued, expires, now)
     p.require(config["authorization"]["payload"]["issuedAtUnixNanos"] <= issued)
 
-    prepared = None
-    if operation in HISTORY_OPERATIONS:
-        prepared = prepare_service_input(operation, input_original, boot=originals._boot(),
-            now_boottime_ns=before, now_unix_ns=now)
-        p.require(prepared["supervisor"] == keys[-1])
-        latest = time.time_ns()
-        p.require(now <= latest < prepared["epochLimit"]
-            and c9._live(window, before) < prepared["deadline"])
-        signature = signing_key.sign(p.preimage(prepared["domain"], prepared["payload"]))
-        raw = p.canonical({"payload": prepared["payload"], "signature": p.encoded(signature)})
-        grant_original(operation, raw)
-    elif operation == "retrieval":
+    if operation == "retrieval":
         scope_raw, _ = _original(value["spoolScopeOriginal"], 16384)
         proof_raw, _ = _original(value["proofScopeOriginal"], 16384)
-        store, role_keys, grant_expiry = _retrieval_inputs(value, guest, keys, admitted, checkpoint, scope_raw, proof_raw, peer, now)
+        store, role_keys, grant_expiry = _retrieval_inputs(value, guest, keys, admitted, checkpoint,
+            scope_raw, proof_raw, peer, now, boot=boot, now_boottime_ns=now_boottime_ns)
         p.require(expires <= grant_expiry)
-        producer = spool.sign_fresh_ledger_retrieval_service if fresh_ledger else spool.sign_effects_retrieval_service
-        raw = producer(configuration_original=config_raw,
+        payload, supervisor, domain = spool._retrieval_service_payload(configuration_original=config_raw,
             configuration_sha256=value["configurationSha256"], assignment_payload_original=assignment_raw,
             scope_original=scope_raw, proof_scope_original=proof_raw, peer_original=peer_raw,
             ingress_key=role_keys["ingress"], ledger_key=role_keys["ledger"], terminal_key=role_keys["terminal"],
             effects={name: role_keys[name] for name in spool_values.EFFECT_KEYS}, store_admission=store,
-            issued_at=issued, expires_at=expires, now=now, signing_key=signing_key)
+            issued_at=issued, expires_at=expires, now=now, completion=True, fresh_ledger=fresh_ledger)
     elif operation == "persistence":
         proof_raw, _ = _original(value["proofScopeOriginal"], 16384)
         genesis_raw, _ = _original(value["genesisOriginal"], 16384)
         journal_raw, _ = _original(value["journalOriginal"], 1024)
         persistence.fresh_originals(genesis_original=genesis_raw, genesis_sha256=p.sha(genesis_raw),
             journal_original=journal_raw, journal_sha256=p.sha(journal_raw), scope_original=proof_raw, guest=guest)
-        raw = persistence.sign_service_grant(configuration_original=config_raw,
+        payload, supervisor = persistence._service_grant_payload(configuration_original=config_raw,
             configuration_sha256=value["configurationSha256"], scope_original=proof_raw, scope_sha256=p.sha(proof_raw),
             peer_original=peer_raw, peer_sha256=value["peerSha256"], guest=guest,
             journal_original=journal_raw, journal_sha256=p.sha(journal_raw), permissions=value["permissions"],
-            issued_at=issued, expires_at=expires, now=now, signing_key=signing_key,
+            issued_at=issued, expires_at=expires, now=now,
             assignment_payload_original=assignment_raw)
+        domain = persistence.GRANT_DOMAIN
     else:
         p.require(operation == "trustedTime")
         bootstrap_raw, _ = _original(value["bootstrapOriginal"], 65536)
-        raw = trusted_time.sign_service_grant(configuration_original=config_raw,
+        payload, supervisor = trusted_time._service_grant_payload(configuration_original=config_raw,
             configuration_sha256=value["configurationSha256"], bootstrap_original=bootstrap_raw,
             bootstrap_sha256=p.sha(bootstrap_raw), peer_original=peer_raw, peer_sha256=value["peerSha256"],
-            issued_at=issued, expires_at=expires, now=now, signing_key=signing_key)
+            issued_at=issued, expires_at=expires, now=now)
+        domain = trusted_time.GRANT_DOMAIN
+
+    _same(supervisor, keys[-1]); _same(payload["guest"], guest)
+    deadline = p.ns(window["startupDeadlineBoottimeNs"])
+    p.require(now_boottime_ns < deadline and now < expires
+        and grant_shape(operation, payload) == domain
+        and len(p.canonical(payload)) <= MAX_LEGACY_OUTPUT)
+    return {"payload": payload, "supervisor": supervisor, "window": window,
+        "deadline": deadline, "epochLimit": expires, "domain": domain}
+
+
+def sign(operation: str, input_original: bytes, signing_key: Ed25519PrivateKey) -> bytes:
+    """Sign exactly one selected existing envelope with live pre/post checks."""
+    p.require(operation in OPERATIONS and isinstance(signing_key, Ed25519PrivateKey))
+    boot, before, now = host_originals._boot(), host_originals._clock(), time.time_ns()
+    prepared = prepare_input(operation, input_original, boot=boot,
+        now_boottime_ns=before, now_unix_ns=now)
+    value, fresh_ledger = input_shape(operation, input_original)
+    config_raw, config = _original(value["configurationOriginal"], p.MAX_CONFIG)
+    p.require(p.sha(config_raw) == p.digest(value["configurationSha256"]))
+    admitted, keys = admission.authorization(config, now)
+    _same(prepared["supervisor"], keys[-1])
+    public = signing_key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+    p.require(p.encoded(public) == prepared["supervisor"]["publicKeyBase64url"])
+    window, payload = prepared["window"], prepared["payload"]
+    latest = time.time_ns()
+    p.require(host_originals._boot() == boot and now <= latest < prepared["epochLimit"]
+        and c9._live(window, before) < prepared["deadline"])
+    admission.authorization(config, latest)
+    signature = signing_key.sign(p.preimage(prepared["domain"], payload))
+    raw = p.canonical({"payload": payload, "signature": p.encoded(signature)})
+    grant_original(operation, raw)
 
     after = time.time_ns()
-    p.require(now <= after)
-    c9._live(window, before)
+    p.require(latest <= after < prepared["epochLimit"] and host_originals._boot() == boot
+        and c9._live(window, before) < prepared["deadline"])
     admission.authorization(config, after)
-    signed = _verified_grant(raw, operation, keys, admitted, checkpoint, after, fresh_ledger=fresh_ledger)
-    if prepared is not None:
-        p.require(after < prepared["epochLimit"] and c9._live(window, before) < prepared["deadline"])
-        _same(signed, prepared["payload"])
-    _same(signed["guest"], guest)
-    p.require(signed["issuedAtUnixNanos"] == issued and signed["expiresAtUnixNanos"] == expires)
+    signed = _verified_grant(raw, operation, keys, admitted, config["trustCheckpoint"], after, fresh_ledger=fresh_ledger)
+    _same(signed, payload)
     final_wall = time.time_ns()
-    p.require(after <= final_wall)
-    p.freshness(issued, expires, final_wall)
-    p.require(c9._live(window, before) < (prepared["deadline"] if prepared is not None else p.ns(window["startupDeadlineBoottimeNs"])))
+    p.require(after <= final_wall < prepared["epochLimit"])
+    p.freshness(payload["issuedAtUnixNanos"], payload["expiresAtUnixNanos"], final_wall)
+    p.require(c9._live(window, before) < prepared["deadline"])
     return raw

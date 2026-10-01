@@ -41,7 +41,9 @@ struct Configuration {api_version:String,authority:Authority,executable_sha256:S
     #[serde(default,skip_serializing_if="Option::is_none")]
     active_effect_barrier_configuration:Option<Pin>,
     #[serde(default,skip_serializing_if="Option::is_none")]
-    active_effect_commit_configuration:Option<Pin>}
+    active_effect_commit_configuration:Option<Pin>,
+    #[serde(default,skip_serializing_if="Option::is_none")]
+    publication_reconciliation_configuration:Option<Pin>}
 #[derive(Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 struct Window {configuration_sha256:Sha256Digest,authority_key_id:Sha256Digest,boot_id_base64url:String,
@@ -73,7 +75,9 @@ struct ReleasePayload {api_version:String,configuration_sha256:Sha256Digest,prec
     #[serde(default,skip_serializing_if="Option::is_none")]
     active_effect_barrier:Option<RoleRelease>,
     #[serde(default,skip_serializing_if="Option::is_none")]
-    active_effect_commit:Option<RoleRelease>}
+    active_effect_commit:Option<RoleRelease>,
+    #[serde(default,skip_serializing_if="Option::is_none")]
+    publication_reconciliation:Option<RoleRelease>}
 #[derive(Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 struct Release {payload:ReleasePayload,signature_base64url:String}
@@ -99,9 +103,11 @@ impl Admission {
         let configuration=Original::proof_cohort_configuration().map_err(fail)?;
         let configuration_bytes=configuration.read(32768).map_err(fail)?.to_vec();
         let config:Configuration=exact(&configuration_bytes)?;
-        let endpoint_only=config.api_version==external_driver::CONFIG_API;
+        let adopted=config.api_version==adoption::CONFIG_API;
+        let endpoint_only=config.api_version==external_driver::CONFIG_API || adopted;
         require(config.bridge_configuration.is_some()!=endpoint_only
-            && config.external_driver.is_some()==endpoint_only)?;
+            && config.external_driver.is_some()==endpoint_only
+            && config.publication_reconciliation_configuration.is_some()==adopted)?;
         let effects=config.api_version=="serverware.nativeShadowProofCohortConfiguration/v6" || endpoint_only;
         require([&config.dispatch_barrier_configuration,&config.active_effect_barrier_configuration,
             &config.active_effect_commit_configuration].iter().all(|pin|pin.is_some()==effects))?;
@@ -117,7 +123,7 @@ impl Admission {
                 value.validate(&config.authority.public_key_base64url)?;true},
             ("serverware.nativeShadowProofCohortConfiguration/v6",Some(value),Some(_),Some(_),Some(_))=>{
                 value.validate(&config.authority.public_key_base64url)?;true},
-            (external_driver::CONFIG_API,Some(value),Some(_),Some(_),Some(_))=>{
+            (external_driver::CONFIG_API|adoption::CONFIG_API,Some(value),Some(_),Some(_),Some(_))=>{
                 value.validate(&config.authority.public_key_base64url)?;true},
             _=>false,
         })?;
@@ -132,6 +138,7 @@ impl Admission {
         if let Some(pin)=&config.terminal_append_configuration {cold.push(pin.open(65536)?);}
         for pin in [&config.dispatch_barrier_configuration,&config.active_effect_barrier_configuration,
             &config.active_effect_commit_configuration].into_iter().flatten(){cold.push(pin.open(65536)?);}
+        if let Some(pin)=&config.publication_reconciliation_configuration {cold.push(pin.open(65536)?);}
         let count=cold.len();
         let mut identities=vec![(0,0);count];
         for (i,original) in cold.iter().enumerate() {
@@ -182,7 +189,8 @@ impl Admission {
     pub(super) fn seven(&self)->bool {matches!(self.config.api_version.as_str(),"serverware.nativeShadowProofCohortConfiguration/v4"|"serverware.nativeShadowProofCohortConfiguration/v5"|"serverware.nativeShadowProofCohortConfiguration/v6")}
     pub(super) fn eight(&self)->bool {matches!(self.config.api_version.as_str(),"serverware.nativeShadowProofCohortConfiguration/v5"|"serverware.nativeShadowProofCohortConfiguration/v6")}
     pub(super) fn eleven(&self)->bool {self.config.api_version=="serverware.nativeShadowProofCohortConfiguration/v6"}
-    pub(super) fn endpoint_only(&self)->bool {self.config.api_version==external_driver::CONFIG_API}
+    pub(super) fn endpoint_only(&self)->bool {self.config.api_version==external_driver::CONFIG_API || self.adoption_selected()}
+    pub(super) fn adoption_selected(&self)->bool {self.config.api_version==adoption::CONFIG_API}
     pub(super) fn external_driver(&self)->Option<&external_driver::Configuration> {self.config.external_driver.as_ref()}
     pub(super) fn window_binding(&self)->Result<Vec<u8>,ShadowError> {
         self.check_startup()?;canonical_json_bytes(&self.window)
@@ -201,7 +209,8 @@ impl Admission {
         self.check_startup()
     }
     pub(super) fn roles(&self)->&'static [&'static str] {
-        if self.endpoint_only(){external_driver::ROLES}
+        if self.adoption_selected(){adoption::ROLES}
+        else if self.endpoint_only(){external_driver::ROLES}
         else if self.eleven(){&["retrieval","persistence","trustedTime","generationInstall","bridge","commitRequest","ingressAdmission","terminalAppend",
             "dispatchBarrier","activeEffectBarrier","activeEffectCommit"]}
         else if self.eight(){&["retrieval","persistence","trustedTime","generationInstall","bridge","commitRequest","ingressAdmission","terminalAppend"]}
@@ -226,9 +235,9 @@ impl Admission {
         self.check_startup()?;let endpoint_only=self.endpoint_only();
         require(external_driver_sha256.is_some()==endpoint_only)?;
         let release:Release=exact(bytes)?;
-        verify(&self.key,if endpoint_only{external_driver::RELEASE_DOMAIN}else if self.eleven(){ELEVEN_RELEASE_DOMAIN}else if self.eight(){EIGHT_RELEASE_DOMAIN}else if self.seven(){SEVEN_RELEASE_DOMAIN}else if self.six(){SIX_RELEASE_DOMAIN}else{RELEASE_DOMAIN},&release.payload,&release.signature_base64url)?;
+        verify(&self.key,if self.adoption_selected(){adoption::RELEASE_DOMAIN}else if endpoint_only{external_driver::RELEASE_DOMAIN}else if self.eleven(){ELEVEN_RELEASE_DOMAIN}else if self.eight(){EIGHT_RELEASE_DOMAIN}else if self.seven(){SEVEN_RELEASE_DOMAIN}else if self.six(){SIX_RELEASE_DOMAIN}else{RELEASE_DOMAIN},&release.payload,&release.signature_base64url)?;
         let p=release.payload;
-        require(p.api_version==(if endpoint_only{external_driver::RELEASE_API}else if self.eleven(){"serverware.nativeShadowProofCohortRelease/v5"}else if self.eight(){"serverware.nativeShadowProofCohortRelease/v4"}else if self.seven(){"serverware.nativeShadowProofCohortRelease/v3"}else if self.six(){"serverware.nativeShadowProofCohortRelease/v2"}else{"serverware.nativeShadowProofCohortRelease/v1"})
+        require(p.api_version==(if self.adoption_selected(){adoption::RELEASE_API}else if endpoint_only{external_driver::RELEASE_API}else if self.eleven(){"serverware.nativeShadowProofCohortRelease/v5"}else if self.eight(){"serverware.nativeShadowProofCohortRelease/v4"}else if self.seven(){"serverware.nativeShadowProofCohortRelease/v3"}else if self.six(){"serverware.nativeShadowProofCohortRelease/v2"}else{"serverware.nativeShadowProofCohortRelease/v1"})
             && p.bridge.is_some()!=endpoint_only && p.external_driver_sha256.as_ref()==external_driver_sha256
             && p.commit_request.is_some()==(self.six()||endpoint_only)
             && p.ingress_admission.is_some()==(self.seven()||endpoint_only)
@@ -236,6 +245,7 @@ impl Admission {
             && p.dispatch_barrier.is_some()==(self.eleven()||endpoint_only)
             && p.active_effect_barrier.is_some()==(self.eleven()||endpoint_only)
             && p.active_effect_commit.is_some()==(self.eleven()||endpoint_only)
+            && p.publication_reconciliation.is_some()==self.adoption_selected()
             && p.configuration_sha256==self.configuration_sha256() && p.precreation_sha256==self.precreation_sha256()
             && p.observation_sha256==Sha256Digest::compute(observed) && p.invocation_id==self.window.invocation_id
             && p.signing_key_id==self.config.authority.key_id)?;
@@ -245,6 +255,7 @@ impl Admission {
         if let Some(role)=p.ingress_admission {roles.push(role);}
         if let Some(role)=p.terminal_append {roles.push(role);}
         for role in [p.dispatch_barrier,p.active_effect_barrier,p.active_effect_commit].into_iter().flatten(){roles.push(role);}
+        if let Some(role)=p.publication_reconciliation {roles.push(role);}
         require(roles.len()==self.roles().len())?;self.check_startup()?;Ok(roles)
     }
     pub(in crate::policy_shadow::policy_custody::services::guest::native_guest::parent) fn join(&self,index:usize,launch:&Launch,files:&FileAdmission)->Result<(),ShadowError> {
@@ -259,6 +270,7 @@ impl Admission {
             "dispatchBarrier"=>self.config.dispatch_barrier_configuration.as_ref().ok_or(ShadowError::BindingDrift)?,
             "activeEffectBarrier"=>self.config.active_effect_barrier_configuration.as_ref().ok_or(ShadowError::BindingDrift)?,
             "activeEffectCommit"=>self.config.active_effect_commit_configuration.as_ref().ok_or(ShadowError::BindingDrift)?,
+            "publicationReconciliation"=>self.config.publication_reconciliation_configuration.as_ref().ok_or(ShadowError::BindingDrift)?,
             _=>return Err(ShadowError::BindingDrift)};
         let p=&files.payload;
         require(canonical_json_bytes(&launch.delivery_configuration)?==canonical_json_bytes(expected)?

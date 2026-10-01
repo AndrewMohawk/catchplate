@@ -27,6 +27,7 @@ import time
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
+from serverware import custody_generation_grants as generation_codec
 from serverware import native_pilot_delivery_authority as c9
 from serverware import native_pilot_bridge_runtime as bridge_runtime
 from serverware import native_pilot_assignment as assignment_profile
@@ -73,6 +74,20 @@ PURPOSES = {**{"native-launch-" + role: 32768 for role in ROLES},
     **{"native-runtime-" + role: 65536 for role in cohort.ENDPOINT_ROLES},
     **{"native-" + role + "-" + suffix: maximum for role in ROLES for suffix, maximum in COMPONENTS.values()}}
 DESTINATIONS = {purpose: "/etc/serverware/native-pilot-inputs/" + purpose + ".json" for purpose in PURPOSES}
+ADOPTED_ROLES = closure_set.PUBLICATION_ROLES[:-1]
+ADOPTED_LAUNCHES = {role: LAUNCHES[role] for role in cohort.ENDPOINT_ROLES} | {
+    "retrieval": ("nativeShadowRetrievalGuestLaunch/v6", "retrieval", "retrieval"),
+    "persistence": ("nativeShadowPersistenceGuestLaunch/v3", "persistence", "persistence"),
+    "publicationReconciliation": ("nativeShadowPublicationGuestLaunch/v2", "publication", "publication"),
+}
+ADOPTED_PURPOSES = {**{"native-launch-" + role: 32768 for role in ADOPTED_ROLES},
+    **{"native-runtime-" + role: 65536 for role in ADOPTED_ROLES},
+    **{"native-cold-" + role: 65536 for role in ADOPTED_ROLES},
+    **{"native-delivery-" + role: 65536 for role in ADOPTED_ROLES},
+    **{"native-" + role + "-" + suffix: maximum for role in ADOPTED_ROLES for suffix, maximum in COMPONENTS.values()},
+    "native-service-retrieval": 3 * 1024 * 1024, "native-service-persistence": 3 * 1024 * 1024,
+    "native-service-publication": 4 * 1024 * 1024}
+ADOPTED_DESTINATIONS = {purpose: "/etc/serverware/native-pilot-inputs/" + purpose + ".json" for purpose in ADOPTED_PURPOSES}
 INNER_FIELDS = ("apiVersion", "deliveryConfiguration", "delivery") + tuple(COMPONENTS)
 _ENVELOPE = ("apiVersion", "kind", "canonicalProfile", "signatureDomain", "payload", "payloadSha256",
     "signatureAlgorithm", "signingKeyId", "signingKeySpkiSha256", "signature")
@@ -230,6 +245,64 @@ def shape(purpose: str, raw: bytes) -> dict:
         p.require(auth["apiVersion"] == "serverware.nativeShadowVerifierTransportAssignment/v1"
             and auth["purpose"] == "public-shadow-nitro-verification")
         p.integer(auth["parentPort"], minimum=1024, maximum=(1 << 32) - 2)
+    return value
+
+
+def shape_adopted(purpose: str, raw: bytes) -> dict:
+    """Explicit hot12 publication slots; legacy ``shape`` stays closed."""
+    p.require(purpose in ADOPTED_PURPOSES)
+    value = (generation_codec.document(raw, ADOPTED_PURPOSES[purpose]) if purpose.startswith("native-delivery-")
+        else p.document(raw, ADOPTED_PURPOSES[purpose]))
+    if purpose.startswith("native-service-"):
+        from serverware import native_pilot_adopted_service_authority as adopted
+        return adopted.grant_original(purpose.removeprefix("native-service-"), raw)
+    if purpose.startswith("native-cold-"):
+        return delivery.configuration(raw, p.sha(raw))
+    if purpose.startswith("native-delivery-"):
+        p.fields(value, ("apiVersion", "payload", "signatureBase64url"))
+        p.require(value["apiVersion"] == "serverware.policyCustodyGuestDelivery/v1")
+        p.fields(value["payload"], delivery.FIELDS); p.decoded(value["signatureBase64url"], size=64)
+        return value
+    if purpose.startswith("native-runtime-"):
+        role = purpose.removeprefix("native-runtime-")
+        p.require(value == {"apiVersion": "serverware.nativePilotEndpointRuntime/v1", "role": role})
+        return value
+    if purpose.startswith("native-launch-"):
+        role = purpose.removeprefix("native-launch-")
+        api, field, operation = ADOPTED_LAUNCHES[role]
+        p.fields(value, ("apiVersion", "keyAdmission", field))
+        p.require(value["apiVersion"] == "serverware." + api)
+        inner = p.fields(value["keyAdmission"], INNER_FIELDS)
+        p.require(inner["apiVersion"] == "serverware.nativeShadowGuestLaunch/v1")
+        for name in INNER_FIELDS[1:]: delivery._pin(inner[name])
+        for name, suffix in (("deliveryConfiguration", "cold"), ("delivery", "delivery")):
+            p.require(inner[name]["path"] == ADOPTED_DESTINATIONS["native-" + suffix + "-" + role])
+        for name, (suffix, _) in COMPONENTS.items():
+            p.require(inner[name]["path"] == ADOPTED_DESTINATIONS["native-" + role + "-" + suffix])
+        delivery._pin(value[field])
+        expected = "native-generation-install-grant" if operation is None else "native-service-" + operation
+        p.require(value[field]["path"] == "/etc/serverware/native-pilot-inputs/" + expected + ".json")
+        return value
+    matched = [(role, name) for role in ADOPTED_ROLES for name, (suffix, _) in COMPONENTS.items()
+        if purpose == "native-" + role + "-" + suffix]
+    p.require(len(matched) == 1)
+    role, name = matched[0]
+    if name != "closure":
+        # These wire grammars are unchanged; the caller-selected profile and
+        # issuer input still authenticate the actual role and fixed pathname.
+        legacy_role = "retrieval" if role == "publicationReconciliation" else role
+        return shape("native-" + legacy_role + "-" + COMPONENTS[name][0], raw)
+    p.fields(value, ("apiVersion", "manifest", "authorization", "closureSet"))
+    p.require(value["apiVersion"] == "serverware.nativeCustodyClosure/v5")
+    selected = closure_set.validate(p.canonical(value["closureSet"]), api_version=closure_set.PUBLICATION_API)
+    leaf = closure_set.leaf_binding(selected, role, api_version=closure_set.PUBLICATION_API)
+    payload = _signed(value["authorization"], _CLOSURE_SET)
+    manifest = next(row["manifest"] for row in selected["members"] if row["role"] == role)
+    p.require(value["manifest"] == manifest and payload["apiVersion"] == "serverware.nativeCustodyClosureAssignment/v5"
+        and payload["purpose"] == "shadow-custody-closure-set-member" and payload["profile"] == "native-multi-guest-closure-set-v2"
+        and payload["guestRole"] == role and payload["leafSha256"] == leaf["leafSha256"]
+        and payload["manifestSha256"] == leaf["manifestSha256"]
+        and payload["setRootSha256"] == leaf["setRootSha256"] and payload["seccompSetRootSha256"] == leaf["seccompSetRootSha256"])
     return value
 
 
@@ -650,3 +723,75 @@ def install(bundle_original: bytes, *, expected_sha256: str) -> dict:
             publisher.close()  # Only FDs. Complete/partial installed paths remain.
         for original in reversed(held):
             original.close()
+
+
+def prepare_adopted_endpoint_bundle(role, input_original, **clocks):
+    from serverware import native_pilot_adopted_launch_profile as adopted
+    return adopted.prepare_input(role, input_original, **clocks)
+
+
+def install_adopted(input_original: bytes, *, expected_sha256: str) -> dict:
+    """Actual exclusive adopted publication; requires complete issuer sources.
+
+    Cold configuration, signed C9 and service grant must already be installed.
+    This does not open credentials, release a service, or infer readiness.
+    """
+    from serverware import native_pilot_adopted_launch_profile as adopted
+    from serverware import native_shadow_nitro_originals as originals
+    global _FAILED, _COUNT, _BYTES
+    p.require(not _FAILED and threading.current_thread() is threading.main_thread()
+        and os.getresuid() == (0, 0, 0) and os.getresgid() == (0, 0, 0))
+    held, publisher = [], None
+    try:
+        p.require(type(input_original) is bytes and p.sha(input_original) == p.digest(expected_sha256))
+        source = p.document(input_original, adopted.MAX_INPUT)
+        role = source["role"]
+        adopted.input_document(role, input_original)
+        p.require(role not in _ATTEMPTED); _ATTEMPTED.add(role)
+        boot, before, wall = originals._boot(), originals._clock(), time.time_ns()
+        context = adopted.prepare_input(role, input_original, boot=boot, now_boottime_ns=before, now_unix_ns=wall)
+        bundle = p.document(context["bundleOriginal"], MAX_INPUT)
+        paths = {"owner": control.CONFIGURATION, "window": control.PRECREATION,
+            "configuration": bundle["keyAdmission"]["deliveryConfiguration"]["path"],
+            "delivery": bundle["keyAdmission"]["delivery"]["path"], "grant": bundle["serviceGrant"]["path"]}
+        for name, raw in context["prerequisites"]:
+            maximum = 4 * 1024 * 1024 if name == "grant" else 65536
+            retained = control._Original(paths[name], maximum, p.sha(raw))
+            held.append(retained); p.require(retained.raw == raw)
+        prepared = context["prepared"]
+        count, total = len(prepared), sum(len(raw) for raw in prepared.values())
+        p.require(_COUNT + count <= 128 and _BYTES + total <= 32 * 1024 * 1024)
+        _COUNT += count; _BYTES += total
+
+        def check():
+            nonlocal before, wall
+            for original in held: original.check()
+            p.require(originals._boot() == boot)
+            now, epoch = originals._clock(), time.time_ns()
+            p.require(before <= now < context["deadline"] and wall <= epoch < context["epochLimit"])
+            before, wall = now, epoch
+
+        check(); publisher = publication.PublicPublisher.open()
+        publisher.require_absent_adopted(tuple(prepared))
+        pins = {}
+        for purpose, raw in prepared.items():
+            check()
+            pins[purpose] = publisher.publish_adopted(purpose=purpose, raw=raw, expected_sha256=p.sha(raw))
+            check()
+        publisher.check(); check(); p.require(pins == context["pins"])
+        result = _installation_result(role, p.sha(context["bundleOriginal"]), context["window"], pins)
+        result["apiVersion"] = "serverware.nativePilotLaunchInstallation/v2"
+    except BaseException:
+        _FAILED = True
+        raise
+    finally:
+        if publisher is not None: publisher.close()
+        for original in reversed(held): original.close()
+    try:
+        p.require(originals._boot() == boot)
+        now, epoch = originals._clock(), time.time_ns()
+        p.require(before <= now < context["deadline"] and wall <= epoch < context["epochLimit"])
+        return result
+    except BaseException:
+        _FAILED = True
+        raise

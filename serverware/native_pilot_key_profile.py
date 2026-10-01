@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import copy
 
+from serverware import custody_generation_grants as generation
+
 from serverware import native_pilot_assignment as assignments
 from serverware import native_pilot_closure_set as closure_set
 from serverware import native_pilot_delivery_authority as c9
@@ -27,6 +29,8 @@ p = delivery.p
 ROLES = cohort.ENDPOINT_ROLES
 OPERATIONS = ("role-keys", "admission")
 API = "serverware.nativePilotKeyAuthorityInput/v1"
+ADOPTED_API = "serverware.nativePilotKeyAuthorityInput/v2"
+ADOPTED_ROLES = cohort.ADOPTED_ENDPOINT_ROLES
 MAX_INPUT = 32 * 1024 * 1024
 MAX_OUTPUT = 65536
 MAX_POLICY = 65536
@@ -42,28 +46,65 @@ REQUIRED_ROLES = {"retrieval": "custody-retrieval-response", "persistence": "cus
     "activeEffectBarrier": "custody-active-effect-barrier", "activeEffectCommit": "custody-active-effect-commit"}
 
 
-def _policy(role, row):
-    p.require(role in ROLES)
+def input_document(raw):
+    value = generation.document(raw, MAX_INPUT)
+    return value if value.get("apiVersion") == ADOPTED_API else p.document(raw, MAX_INPUT)
+
+
+def canonical(value, *, adopted=False):
+    return generation.canonical(value) if adopted else p.canonical(value)
+
+
+def original(text, maximum, *, adopted=False):
+    if not adopted:
+        return c9._original(text, maximum)
+    p.require(type(text) is str and text.isascii())
+    raw = text.encode("ascii")
+    return raw, generation.document(raw, maximum)
+
+
+def preimage(domain, payload, *, adopted=False):
+    # Native policy_shadow::canonical_json_bytes remains signed-i64 even
+    # when an unsigned original or C9 source can describe full-u64 metadata.
+    # Reject unsupported signed payloads, never issue unusable authority.
+    return p.preimage(domain, payload)
+
+
+def _policy(role, row, *, adopted=False):
+    p.require(role in (ADOPTED_ROLES if adopted else ROLES))
     p.fields(row, POLICY_FIELDS)
     local = row["localRoles"]
     p.require(type(local) is list and 1 <= len(local) <= 16
         and all(type(name) is str and name in p.ROLES[:16] for name in local)
-        and local == sorted(set(local), key=p.ROLES.index) and REQUIRED_ROLES[role] in local)
+        and local == sorted(set(local), key=p.ROLES.index)
+        and ("custody-publication-reconciliation" if role == "publicationReconciliation" else REQUIRED_ROLES[role]) in local)
     p.require(p.decoded(row["challengeBase64url"], size=32) != bytes(32))
     p.require(p.integer(row["issuedAtUnixNanos"]) < p.integer(row["expiresAtUnixNanos"]))
     return row
 
 
-def validate_policy(fragment) -> dict:
-    p.fields(fragment, ROLES)
-    for role in ROLES:
-        _policy(role, fragment[role])
+def validate_policy(fragment, *, adopted=False) -> dict:
+    roles = ADOPTED_ROLES if adopted else ROLES
+    p.fields(fragment, roles)
+    for role in roles:
+        _policy(role, fragment[role], adopted=adopted)
     p.require(len(p.canonical(fragment)) <= MAX_POLICY)
     return copy.deepcopy(fragment)
 
 
-def _delivery(role, input_raw, raw, *, boot, now):
+def _delivery(role, input_raw, raw, *, boot, now, adopted=False, now_unix_ns=None):
     """The existing input9 is common to the earlier three and later seven."""
+    if adopted:
+        from serverware import native_pilot_adopted_delivery as successor
+        context = successor.verify_delivery(input_raw, raw, boot=boot,
+            now_boottime_ns=now, now_unix_ns=now_unix_ns)
+        p.require(context["role"] == role)
+        configuration = cohort.configuration(context["owner_configuration_raw"])
+        c9._same(configuration[role + "Configuration"],
+            {"path": launch.ADOPTED_DESTINATIONS["native-cold-" + role], "sha256": p.sha(context["configuration_raw"])})
+        c9._same(context["payload"]["runtimeConfig"],
+            {"path": launch.ADOPTED_DESTINATIONS["native-runtime-" + role], "sha256": p.sha(context["runtime_raw"])})
+        return context["guest"], context["window"], context["observed"], context["runtime_raw"], context["cold"]
     value = p.fields(p.document(input_raw, c9.MAX_INPUT), c9.INPUT_FIELDS)
     p.require(value["apiVersion"] == "serverware.nativePilotDeliverySigningInput/v1" and value["role"] == role)
     cold_raw, _ = c9._original(value["configurationOriginal"], 65536)
@@ -95,7 +136,7 @@ def _delivery(role, input_raw, raw, *, boot, now):
     return delivery._delivery_guest(payload, raw), window, observed, runtime_raw, cold
 
 
-def _recipe(role, originals, measured, runtime_raw, observed, now):
+def _recipe(role, originals, measured, runtime_raw, observed, now, *, adopted=False):
     p.fields(originals, native_delivery.RECIPE_FIELDS)
     p.fields(measured, native_delivery.MEASURED_FIELDS)
     p.require(measured["apiVersion"] == "serverware.nativePilotMeasuredConfiguration/v2")
@@ -112,9 +153,10 @@ def _recipe(role, originals, measured, runtime_raw, observed, now):
     text = originals["closureSetOriginal"]
     p.require(type(text) is str and text.isascii() and 0 < len(text) <= closure_set.MAX_BYTES)
     raw = text.encode("ascii")
-    leaf = assignments.closure_binding(envelope, raw, role)
-    selected = closure_set.validate(raw)
-    manifest = selected["members"][ROLES.index(role)]["manifest"]
+    set_api = closure_set.PUBLICATION_API if adopted else closure_set.API
+    leaf = assignments.closure_binding(envelope, raw, role, set_api_version=set_api)
+    selected = closure_set.validate(raw, api_version=set_api)
+    manifest = selected["members"][(ADOPTED_ROLES if adopted else ROLES).index(role)]["manifest"]
     p.require(manifest["manifestSha256"] == leaf["manifestSha256"]
         and manifest["runtimeConfigurationSha256"] == p.sha(runtime_raw)
         and manifest["workerExecutableSha256"] == observed[role]["executable"]["sha256"])
@@ -139,32 +181,39 @@ def _recipe(role, originals, measured, runtime_raw, observed, now):
     return envelope, keys, trust, manifest
 
 
-def _verify(raw, operation, expected, key):
-    signed = p.fields(p.document(raw, MAX_OUTPUT), ("payload", "signature"))
+def _verify(raw, operation, expected, key, *, adopted=False):
+    signed = p.fields((generation.document if adopted else p.document)(raw, MAX_OUTPUT), ("payload", "signature"))
     p.fields(signed["payload"], p.AUTH_FIELDS if operation == "role-keys" else admission.ADMISSION_FIELDS)
-    c9._same(signed["payload"], expected)
-    p.public_key(key).verify(p.decoded(signed["signature"], size=64), p.preimage(DOMAINS[operation], expected))
+    p.require(canonical(signed["payload"], adopted=adopted) == canonical(expected, adopted=adopted))
+    p.public_key(key).verify(p.decoded(signed["signature"], size=64), preimage(DOMAINS[operation], expected, adopted=adopted))
     return signed
 
 
 def prepare_input(operation, role, input_raw, *, boot, now_boottime_ns, now_unix_ns) -> dict:
     """Derive the sole permitted payload and verified public signing context."""
-    p.require(operation in OPERATIONS and role in ROLES)
-    value = p.fields(p.document(input_raw, MAX_INPUT),
+    p.require(operation in OPERATIONS)
+    value = p.fields(input_document(input_raw),
         INPUT_FIELDS + (("roleKeyOriginal",) if operation == "admission" else ()))
-    p.require(value["apiVersion"] == API and value["operation"] == operation and value["role"] == role)
-    row = _policy(role, value["policy"])
+    adopted = value["apiVersion"] == ADOPTED_API
+    p.require(value["apiVersion"] in (API, ADOPTED_API) and role in (ADOPTED_ROLES if adopted else ROLES)
+        and value["operation"] == operation and value["role"] == role)
+    row = _policy(role, value["policy"], adopted=adopted)
     p.integer(now_unix_ns)
-    delivery_input, _ = c9._original(value["deliveryInputOriginal"], c9.MAX_INPUT)
-    delivery_raw, _ = c9._original(value["deliveryOriginal"], delivery.MAX_DELIVERY)
+    delivery_input, _ = original(value["deliveryInputOriginal"], generation.MAX_BYTES if adopted else c9.MAX_INPUT, adopted=adopted)
+    delivery_raw, _ = original(value["deliveryOriginal"], delivery.MAX_DELIVERY, adopted=adopted)
     guest, window, observed, runtime_raw, cold = _delivery(role, delivery_input, delivery_raw,
-        boot=boot, now=now_boottime_ns)
+        boot=boot, now=now_boottime_ns, adopted=adopted, now_unix_ns=now_unix_ns)
     envelope, keys, trust, manifest = _recipe(role, value["recipeOriginals"], value["measured"],
-        runtime_raw, observed, now_unix_ns)
+        runtime_raw, observed, now_unix_ns, adopted=adopted)
     p.require(keys[-1]["publicKeyBase64url"] != cold["authority"]["publicKeyBase64url"]
         and keys[-1]["keyId"] != cold["authority"]["keyId"])
     assignment, checkpoint = envelope["payload"], trust["checkpoint"]
     issued, expires = row["issuedAtUnixNanos"], row["expiresAtUnixNanos"]
+    if adopted and role == "retrieval":
+        from serverware import native_pilot_adopted_delivery as successor
+        source = generation.document(delivery_input, successor.MAX_INPUT)
+        _, core_observed = successor._original(source["coreObservationOriginal"], successor.core.MAX_OBSERVATION)
+        p.require(core_observed["issuedAtUnixNanos"] <= issued < expires <= core_observed["expiresAtUnixNanos"])
     p.freshness(issued, expires, now_unix_ns)
     p.require(assignment["issuedAtUnixNanos"] <= issued < expires <= assignment["expiresAtUnixNanos"]
         and trust["issuedAtUnixNanos"] <= issued < expires <= trust["expiresAtUnixNanos"]
@@ -186,8 +235,8 @@ def prepare_input(operation, role, input_raw, *, boot, now_boottime_ns, now_unix
     p.fields(role_payload, p.AUTH_FIELDS)
     payload = role_payload
     if operation == "admission":
-        role_raw, _ = c9._original(value["roleKeyOriginal"], MAX_OUTPUT)
-        _verify(role_raw, "role-keys", role_payload, keys[-1])
+        role_raw, _ = original(value["roleKeyOriginal"], MAX_OUTPUT, adopted=adopted)
+        _verify(role_raw, "role-keys", role_payload, keys[-1], adopted=adopted)
         local = [key for key in keys if key["role"] in row["localRoles"]]
         payload = {"apiVersion": "serverware.nativeShadowKeyAdmissionAssignment/v1",
             "purpose": "native-shadow-key-admission", **common,
@@ -199,16 +248,16 @@ def prepare_input(operation, role, input_raw, *, boot, now_boottime_ns, now_unix
 
 
 def build(operation, role, *, fragment, delivery_input_raw, delivery_raw, measured, recipe_originals,
-          boot, now_boottime_ns, now_unix_ns, role_key_raw=None) -> bytes:
-    p.require(operation in OPERATIONS and role in ROLES)
-    fragment = validate_policy(fragment)
+          boot, now_boottime_ns, now_unix_ns, role_key_raw=None, adopted=False) -> bytes:
+    p.require(type(adopted) is bool and operation in OPERATIONS and role in (ADOPTED_ROLES if adopted else ROLES))
+    fragment = validate_policy(fragment, adopted=adopted)
     p.require((type(role_key_raw) is bytes) if operation == "admission" else role_key_raw is None)
-    value = {"apiVersion": API, "operation": operation, "role": role,
+    value = {"apiVersion": ADOPTED_API if adopted else API, "operation": operation, "role": role,
         "deliveryInputOriginal": delivery_input_raw.decode("ascii"), "deliveryOriginal": delivery_raw.decode("ascii"),
         "recipeOriginals": recipe_originals, "measured": measured, "policy": fragment[role]}
     if operation == "admission":
         value["roleKeyOriginal"] = role_key_raw.decode("ascii")
-    raw = p.canonical(value)
+    raw = canonical(value, adopted=adopted)
     p.require(len(raw) <= MAX_INPUT)
     prepare_input(operation, role, raw, boot=boot, now_boottime_ns=now_boottime_ns, now_unix_ns=now_unix_ns)
     return raw
@@ -217,29 +266,44 @@ def build(operation, role, *, fragment, delivery_input_raw, delivery_raw, measur
 def checked_result(operation, role, input_raw, result, *, boot, now_boottime_ns, now_unix_ns) -> bytes:
     context = prepare_input(operation, role, input_raw,
         boot=boot, now_boottime_ns=now_boottime_ns, now_unix_ns=now_unix_ns)
+    adopted = input_document(input_raw)["apiVersion"] == ADOPTED_API
     p.fields(result, ("original", "sha256"))
-    raw, _ = c9._original(result["original"], MAX_OUTPUT)
+    raw, _ = original(result["original"], MAX_OUTPUT, adopted=adopted)
     p.require(p.sha(raw) == p.digest(result["sha256"]))
-    _verify(raw, operation, context["payload"], context["authorityKeys"][-1])
+    _verify(raw, operation, context["payload"], context["authorityKeys"][-1], adopted=adopted)
     return raw
 
 
 def admitted_pair(role, role_key_input_raw, role_key_raw, admission_input_raw, admission_raw,
                   *, boot, now_boottime_ns, now_unix_ns) -> dict:
     """Verified public pair/scope only; no Nitro, collateral or evidence defaults."""
+    return _admitted_pair(role, role_key_input_raw, role_key_raw, admission_input_raw, admission_raw,
+        boot=boot, now_boottime_ns=now_boottime_ns, now_unix_ns=now_unix_ns, adopted=False)
+
+
+def admitted_adopted_pair(role, role_key_input_raw, role_key_raw, admission_input_raw, admission_raw,
+                         *, boot, now_boottime_ns, now_unix_ns) -> dict:
+    """Explicit hot12/C9-v2 pair; never accepts a relabeled legacy input."""
+    return _admitted_pair(role, role_key_input_raw, role_key_raw, admission_input_raw, admission_raw,
+        boot=boot, now_boottime_ns=now_boottime_ns, now_unix_ns=now_unix_ns, adopted=True)
+
+
+def _admitted_pair(role, role_key_input_raw, role_key_raw, admission_input_raw, admission_raw,
+                   *, boot, now_boottime_ns, now_unix_ns, adopted):
     options = dict(boot=boot, now_boottime_ns=now_boottime_ns, now_unix_ns=now_unix_ns)
-    first = p.document(role_key_input_raw, MAX_INPUT)
-    second = p.document(admission_input_raw, MAX_INPUT)
+    first = input_document(role_key_input_raw)
+    second = input_document(admission_input_raw)
+    p.require(first["apiVersion"] == second["apiVersion"] == (ADOPTED_API if adopted else API))
     for name in INPUT_FIELDS:
         if name != "operation":
-            c9._same(first[name], second[name])
+            p.require(canonical(first[name], adopted=adopted) == canonical(second[name], adopted=adopted))
     p.require(second["roleKeyOriginal"] == role_key_raw.decode("ascii"))
     for operation, input_raw, raw in (("role-keys", role_key_input_raw, role_key_raw),
             ("admission", admission_input_raw, admission_raw)):
         checked_result(operation, role, input_raw, {"original": raw.decode("ascii"), "sha256": p.sha(raw)}, **options)
     context = prepare_input("admission", role, admission_input_raw, **options)
-    authorization = p.document(role_key_raw, MAX_OUTPUT)
-    admitted = p.document(admission_raw, MAX_OUTPUT)
+    authorization = (generation.document if adopted else p.document)(role_key_raw, MAX_OUTPUT)
+    admitted = (generation.document if adopted else p.document)(admission_raw, MAX_OUTPUT)
     key_payload, payload = authorization["payload"], admitted["payload"]
     local = [key for key in context["authorityKeys"] if key["role"] in key_payload["localRoles"]]
     expected = {"apiVersion": "serverware.nativeShadowKeyAdmissionScope/v1", "purpose": "native-shadow-key-admission",

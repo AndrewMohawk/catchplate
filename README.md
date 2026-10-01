@@ -139,7 +139,10 @@ counts exclude [cold commissioning and adoption](docs/native-pilot-genesis-assem
 which are still being assembled. They remain separate from the new
 [cold commissioning mode](docs/native-pilot-genesis-commissioning.md),
 now extended with [real core custody and native-validated adoption signing](docs/native-pilot-core-handoff.md).
-The independent supervisor and receiving operational launch still need integration.
+The [adopted operational cohort](docs/native-pilot-adopted-cohort.md) now connects
+received-core ownership and the three special adopted endpoint launch producers
+in source. Remaining endpoint/bridge producers and independent supervisor
+orchestration still need integration; this is not a runnable pilot claim.
 The operational inventory
 includes service histories, delivery/generation grants, endpoint authorizations,
 launch bundles and public material. Explicit policy/v15 connects eight

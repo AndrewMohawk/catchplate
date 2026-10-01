@@ -11,12 +11,14 @@ from serverware import custody_generation_grants as g
 
 p = g.p
 API = "serverware.nativePilotPeerPreparation/v1"
+ADOPTED_API = "serverware.nativePilotPeerPreparation/v2"
 PROFILE = "retain-observed-cgroup"
 MAX_BYTES = 65536
 NATIVE_ROLES = ("retrieval", "persistence", "trustedTime", "generationInstall",
     "commitRequest", "ingressAdmission", "terminalAppend", "dispatchBarrier",
     "activeEffectBarrier", "activeEffectCommit")
 ROLES = {"ordinary-services": g.ROLES, "native-endpoints": NATIVE_ROLES, "gate": ("gate",)}
+ADOPTED_NATIVE_ROLES = NATIVE_ROLES + ("publicationReconciliation",)
 FIELDS = ("apiVersion", "profile", "ownerKind", "phase", "configurationSha256",
     "sourceOriginalSha256", "bootIdBase64url", "timeNamespaceDevice", "timeNamespaceInode",
     "issuedAtBoottimeNs", "observedAtBoottimeNs", "startupDeadlineBoottimeNs",
@@ -70,7 +72,8 @@ def require_same_cgroup(expected, actual):
 def shape(raw):
     value = p.fields(g.document(raw, MAX_BYTES), FIELDS)
     kind = value["ownerKind"]
-    p.require(value["apiVersion"] == API and value["profile"] == PROFILE and kind in ROLES
+    adopted = value["apiVersion"] == ADOPTED_API
+    p.require((adopted and kind == "native-endpoints" or value["apiVersion"] == API) and value["profile"] == PROFILE and kind in ROLES
         and value["phase"] == ("executing-gate" if kind == "gate" else "parked-pre-exec"))
     for field in ("configurationSha256", "sourceOriginalSha256"):
         p.digest(value[field])
@@ -82,9 +85,10 @@ def shape(raw):
     p.require(issued <= observed < startup <= lifetime and type(value["invocationId"]) is str
         and 0 < len(value["invocationId"]) <= 128 and value["invocationId"].isascii()
         and "\0" not in value["invocationId"])
-    peers = p.fields(value["peers"], ROLES[kind])
+    roles = ADOPTED_NATIVE_ROLES if adopted else ROLES[kind]
+    peers = p.fields(value["peers"], roles)
     identities, pidfds = set(), set()
-    for role in ROLES[kind]:
+    for role in roles:
         item = p.fields(peers[role], PEER_FIELDS)
         pid = p.integer(item["processId"], minimum=2, maximum=(1 << 31) - 1)
         p.integer(item["startTimeTicks"], maximum=U64)

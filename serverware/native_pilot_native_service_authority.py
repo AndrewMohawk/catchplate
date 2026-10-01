@@ -139,6 +139,9 @@ def input_shape(operation, input_original):
 
 def grant_shape(operation, payload):
     """Closed fields and signature domain; never a signature/admission verdict."""
+    from serverware import native_pilot_adopted_service_authority as adopted
+    if operation in adopted.PROFILES and type(payload) is dict and payload.get("apiVersion") == adopted.PROFILES[operation][0]:
+        return adopted.grant_shape(operation, payload)
     p.require(operation in OPERATIONS and type(payload) is dict)
     fresh = operation == "retrieval" and payload.get("apiVersion") == FRESH_RETRIEVAL_PROFILE[0]
     history = operation in HISTORY_PROFILES and payload.get("apiVersion") == HISTORY_PROFILES[operation][0]
@@ -172,6 +175,11 @@ def grant_shape(operation, payload):
 
 def grant_original(operation, raw):
     """Closed version-specific bytes/fields only; callers verify authority."""
+    from serverware import native_pilot_adopted_service_authority as adopted
+    if operation in adopted.PROFILES:
+        candidate = p.document(raw, adopted.PROFILES[operation][3])
+        if type(candidate) is dict and type(candidate.get("payload")) is dict and candidate["payload"].get("apiVersion") == adopted.PROFILES[operation][0]:
+            return adopted.grant_original(operation, raw)
     signed = p.fields(p.document(raw, MAX_OUTPUT), ("payload", "signature"))
     grant_shape(operation, signed["payload"])
     history = operation in HISTORY_PROFILES and signed["payload"]["apiVersion"] == HISTORY_PROFILES[operation][0]
@@ -447,6 +455,9 @@ def prepare_input(operation, input_original, *, boot, now_boottime_ns, now_unix_
     Supplied clocks are data; the caller must establish provenance and current
     owner lifetime. This creates no receipt, state, signing or approval owner.
     """
+    from serverware import native_pilot_adopted_service_authority as adopted
+    if p.document(input_original, MAX_INPUT).get("apiVersion") == adopted.INPUT_API:
+        return adopted.prepare_input(operation, input_original, boot=boot, now_boottime_ns=now_boottime_ns, now_unix_ns=now_unix_ns)
     p.require(operation in OPERATIONS)
     if operation in HISTORY_OPERATIONS:
         return prepare_service_input(operation, input_original, boot=boot,
@@ -515,6 +526,9 @@ def prepare_input(operation, input_original, *, boot, now_boottime_ns, now_unix_
 
 def sign(operation: str, input_original: bytes, signing_key: Ed25519PrivateKey) -> bytes:
     """Sign exactly one selected existing envelope with live pre/post checks."""
+    from serverware import native_pilot_adopted_service_authority as adopted
+    if p.document(input_original, MAX_INPUT).get("apiVersion") == adopted.INPUT_API:
+        return adopted.sign(operation, input_original, signing_key)
     p.require(operation in OPERATIONS and isinstance(signing_key, Ed25519PrivateKey))
     boot, before, now = host_originals._boot(), host_originals._clock(), time.time_ns()
     prepared = prepare_input(operation, input_original, boot=boot,

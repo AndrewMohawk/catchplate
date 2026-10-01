@@ -40,11 +40,12 @@ def sign(operation, role, input_original: bytes, signing_key) -> tuple[bytes, in
     public = signing_key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
     p.require(p.encoded(public) == context["authorityKeys"][-1]["publicKeyBase64url"])
     payload = context["payload"]
-    message = p.preimage(profile.DOMAINS[operation], payload)
+    adopted = profile.input_document(input_original)["apiVersion"] == profile.ADOPTED_API
+    message = profile.preimage(profile.DOMAINS[operation], payload, adopted=adopted)
     before, wall = _current(context, boot, before, wall)
     signature = signing_key.sign(message)
     signing_key.public_key().verify(signature, message)
-    raw = p.canonical({"payload": payload, "signature": p.encoded(signature)})
+    raw = profile.canonical({"payload": payload, "signature": p.encoded(signature)}, adopted=adopted)
     p.require(len(raw) <= MAX_OUTPUT)
     after, later = _current(context, boot, before, wall)
     profile.checked_result(operation, role, input_original,

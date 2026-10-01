@@ -300,3 +300,18 @@ def sign(input_original: bytes, signing_key: Ed25519PrivateKey) -> bytes:
     delivery._delivery_guest(payload, result)
     _live(window, before)
     return result
+
+
+def prepare_adopted_input(input_original, *, boot, now_boottime_ns, now_unix_ns=None):
+    from serverware.native_pilot_adopted_delivery import prepare_input
+    return prepare_input(input_original, boot=boot, now_boottime_ns=now_boottime_ns, now_unix_ns=now_unix_ns)
+
+
+def verify_adopted_delivery(input_original, signed_original, *, boot, now_boottime_ns, now_unix_ns=None):
+    from serverware.native_pilot_adopted_delivery import verify_delivery
+    return verify_delivery(input_original, signed_original, boot=boot, now_boottime_ns=now_boottime_ns, now_unix_ns=now_unix_ns)
+
+
+def sign_adopted(input_original, signing_key):
+    from serverware.native_pilot_adopted_delivery import sign as selected_sign
+    return selected_sign(input_original, signing_key)

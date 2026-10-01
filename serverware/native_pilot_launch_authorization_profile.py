@@ -161,3 +161,25 @@ def checked_result(operation, role, input_raw, result, *, boot, now_boottime_ns,
         return verifier.checked_result(role, input_raw, result, **clocks)
     return encrypted.checked_result("delivery" if operation == "encrypted-delivery" else operation,
         role, input_raw, result, **clocks)
+
+
+def prepare_adopted_input(operation, role, input_raw, *, boot, now_boottime_ns, now_unix_ns):
+    """Only the explicitly approved hot12 issuer versions, never old fallback."""
+    from serverware import native_pilot_launch_publication as launch
+    p.require(role in launch.ADOPTED_ROLES and operation in ("closure", "encrypted-delivery", "verifier-transport"))
+    clocks = dict(boot=boot, now_boottime_ns=now_boottime_ns, now_unix_ns=now_unix_ns)
+    selected = p.document(input_raw, 32 * 1024 * 1024)
+    expected = {"closure": "serverware.nativePilotClosureAuthorityInput/v3",
+        "encrypted-delivery": "serverware.nativePilotEncryptedAuthorityInput/v2",
+        "verifier-transport": "serverware.nativePilotVerifierAuthorityInput/v2"}[operation]
+    p.require(selected["apiVersion"] == expected and selected["guestRole" if operation == "closure" else "role"] == role)
+    if operation == "closure": return closure.prepare_input(input_raw, **clocks)
+    if operation == "verifier-transport": return verifier.prepare_input(role, input_raw, **clocks)
+    return encrypted.prepare_input("delivery", role, input_raw, **clocks)
+
+
+def checked_adopted_result(operation, role, input_raw, result, **clocks):
+    prepare_adopted_input(operation, role, input_raw, **clocks)
+    if operation == "closure": return closure.checked_result(input_raw, result, **clocks)
+    if operation == "verifier-transport": return verifier.checked_result(role, input_raw, result, **clocks)
+    return encrypted.checked_result("delivery", role, input_raw, result, **clocks)

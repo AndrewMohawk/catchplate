@@ -26,6 +26,8 @@ EIGHT_ROLES = SEVEN_ROLES + ("terminalAppend",)
 EFFECT_ROLES = ("dispatchBarrier", "activeEffectBarrier", "activeEffectCommit")
 ELEVEN_ROLES = EIGHT_ROLES + EFFECT_ROLES
 ENDPOINT_ROLES = tuple(role for role in ELEVEN_ROLES if role != "bridge")
+ADOPTED_CONFIGURATION_API = "serverware.nativeShadowProofCohortConfiguration/v8"
+ADOPTED_ENDPOINT_ROLES = ENDPOINT_ROLES + ("publicationReconciliation",)
 COLD_NAMES = tuple(role + "Configuration" for role in ROLES)
 CONFIG_FIELDS = ("apiVersion", "authority", "executableSha256") + COLD_NAMES
 WINDOW_FIELDS = ("configurationSha256", "authorityKeyId", "bootIdBase64url", "timeNamespaceDevice",
@@ -50,9 +52,10 @@ def configuration(raw):
         p.fields(value, CONFIG_FIELDS + ("cleanup", "commitRequestConfiguration", "ingressAdmissionConfiguration"))
     elif value.get("apiVersion") == "serverware.nativeShadowProofCohortConfiguration/v5":
         p.fields(value, CONFIG_FIELDS + ("cleanup", "commitRequestConfiguration", "ingressAdmissionConfiguration", "terminalAppendConfiguration"))
-    elif value.get("apiVersion") == "serverware.nativeShadowProofCohortConfiguration/v7":
+    elif value.get("apiVersion") in ("serverware.nativeShadowProofCohortConfiguration/v7", ADOPTED_CONFIGURATION_API):
         p.fields(value, ("apiVersion", "authority", "executableSha256", "cleanup", "externalDriver")
-            + tuple(role + "Configuration" for role in ENDPOINT_ROLES))
+            + tuple(role + "Configuration" for role in
+                (ADOPTED_ENDPOINT_ROLES if adoption_selected(value) else ENDPOINT_ROLES)))
         from serverware.native_shadow_endpoint_driver import configuration as external_configuration
         external_configuration(value["externalDriver"])
     else:
@@ -69,7 +72,9 @@ def roles(config):
     p.require(config["apiVersion"] in ("serverware.nativeShadowProofCohortConfiguration/v1",
         "serverware.nativeShadowProofCohortConfiguration/v2", "serverware.nativeShadowProofCohortConfiguration/v3",
         "serverware.nativeShadowProofCohortConfiguration/v4", "serverware.nativeShadowProofCohortConfiguration/v5",
-        "serverware.nativeShadowProofCohortConfiguration/v6", "serverware.nativeShadowProofCohortConfiguration/v7"))
+        "serverware.nativeShadowProofCohortConfiguration/v6", "serverware.nativeShadowProofCohortConfiguration/v7", ADOPTED_CONFIGURATION_API))
+    if adoption_selected(config):
+        return ADOPTED_ENDPOINT_ROLES
     if endpoint_driver_selected(config):
         return ENDPOINT_ROLES
     if config["apiVersion"] == "serverware.nativeShadowProofCohortConfiguration/v6":
@@ -92,7 +97,11 @@ def release_fields(config):
 
 
 def endpoint_driver_selected(config):
-    return config["apiVersion"] == "serverware.nativeShadowProofCohortConfiguration/v7"
+    return config["apiVersion"] in ("serverware.nativeShadowProofCohortConfiguration/v7", ADOPTED_CONFIGURATION_API)
+
+
+def adoption_selected(config):
+    return config["apiVersion"] == ADOPTED_CONFIGURATION_API
 
 
 def external_driver_sha256(config, observed):
@@ -102,6 +111,8 @@ def external_driver_sha256(config, observed):
 
 
 def originals_api(config):
+    if adoption_selected(config):
+        return "serverware.nativeShadowProofCohortOriginals/v7"
     if endpoint_driver_selected(config):
         return "serverware.nativeShadowProofCohortOriginals/v6"
     if roles(config) == ELEVEN_ROLES:
@@ -114,6 +125,8 @@ def originals_api(config):
 
 
 def release_api(config):
+    if adoption_selected(config):
+        return "serverware.nativeShadowProofCohortRelease/v7"
     if endpoint_driver_selected(config):
         return "serverware.nativeShadowProofCohortRelease/v6"
     if roles(config) == ELEVEN_ROLES:
@@ -126,6 +139,8 @@ def release_api(config):
 
 
 def release_domain(config):
+    if adoption_selected(config):
+        return b"serverware.nativeShadowProofCohortRelease.signature/v7\0"
     if endpoint_driver_selected(config):
         return b"serverware.nativeShadowProofCohortRelease.signature/v6\0"
     if roles(config) == ELEVEN_ROLES:
@@ -150,7 +165,8 @@ def _key(signing_key, authority):
 
 
 def _configuration_public(raw, expected_sha256, originals, commit_request_original, ingress_admission_original,
-                   terminal_append_original, dispatch_barrier_original, active_effect_barrier_original, active_effect_commit_original):
+                   terminal_append_original, dispatch_barrier_original, active_effect_barrier_original, active_effect_commit_original,
+                   publication_reconciliation_original=None):
     config = configuration(raw)
     p.require(p.sha(raw) == p.digest(expected_sha256))
     p.digest(config["executableSha256"])
@@ -162,9 +178,9 @@ def _configuration_public(raw, expected_sha256, originals, commit_request_origin
     if endpoint_driver_selected(config):
         p.require(originals[-1] is None)  # the measured driver is not a parked child
         originals = originals[:-1]
-    p.require((commit_request_original is not None) == (selected in (SIX_ROLES, SEVEN_ROLES, EIGHT_ROLES, ELEVEN_ROLES, ENDPOINT_ROLES)))
-    p.require((ingress_admission_original is not None) == (selected in (SEVEN_ROLES, EIGHT_ROLES, ELEVEN_ROLES, ENDPOINT_ROLES)))
-    p.require((terminal_append_original is not None) == (selected in (EIGHT_ROLES, ELEVEN_ROLES, ENDPOINT_ROLES)))
+    p.require((commit_request_original is not None) == (selected in (SIX_ROLES, SEVEN_ROLES, EIGHT_ROLES, ELEVEN_ROLES, ENDPOINT_ROLES, ADOPTED_ENDPOINT_ROLES)))
+    p.require((ingress_admission_original is not None) == (selected in (SEVEN_ROLES, EIGHT_ROLES, ELEVEN_ROLES, ENDPOINT_ROLES, ADOPTED_ENDPOINT_ROLES)))
+    p.require((terminal_append_original is not None) == (selected in (EIGHT_ROLES, ELEVEN_ROLES, ENDPOINT_ROLES, ADOPTED_ENDPOINT_ROLES)))
     if commit_request_original is not None:
         originals += (commit_request_original,)
     if ingress_admission_original is not None:
@@ -172,9 +188,12 @@ def _configuration_public(raw, expected_sha256, originals, commit_request_origin
     if terminal_append_original is not None:
         originals += (terminal_append_original,)
     for original in (dispatch_barrier_original, active_effect_barrier_original, active_effect_commit_original):
-        p.require((original is not None) == (selected in (ELEVEN_ROLES, ENDPOINT_ROLES)))
+        p.require((original is not None) == (selected in (ELEVEN_ROLES, ENDPOINT_ROLES, ADOPTED_ENDPOINT_ROLES)))
         if original is not None:
             originals += (original,)
+    p.require((publication_reconciliation_original is not None) == adoption_selected(config))
+    if publication_reconciliation_original is not None:
+        originals += (publication_reconciliation_original,)
     cold_names = tuple(role + "Configuration" for role in selected)
     cold = []
     for name, original in zip(cold_names, originals, strict=True):
@@ -189,10 +208,11 @@ def _configuration_public(raw, expected_sha256, originals, commit_request_origin
 
 
 def _configuration(raw, expected_sha256, originals, signing_key, commit_request_original, ingress_admission_original,
-                   terminal_append_original, dispatch_barrier_original, active_effect_barrier_original, active_effect_commit_original):
+                   terminal_append_original, dispatch_barrier_original, active_effect_barrier_original, active_effect_commit_original,
+                   publication_reconciliation_original=None):
     config = _configuration_public(raw, expected_sha256, originals, commit_request_original,
         ingress_admission_original, terminal_append_original, dispatch_barrier_original,
-        active_effect_barrier_original, active_effect_commit_original)
+        active_effect_barrier_original, active_effect_commit_original, publication_reconciliation_original)
     _key(signing_key, config["authority"])
     return config
 
@@ -224,13 +244,14 @@ def sign_precreation(*, configuration_raw, configuration_sha256, retrieval_confi
                      persistence_configuration_raw, trusted_time_configuration_raw, generation_install_configuration_raw,
                      bridge_configuration_raw, payload_raw, boot, now, signing_key,
                      commit_request_configuration_raw=None, ingress_admission_configuration_raw=None, terminal_append_configuration_raw=None,
-                     dispatch_barrier_configuration_raw=None, active_effect_barrier_configuration_raw=None, active_effect_commit_configuration_raw=None):
+                     dispatch_barrier_configuration_raw=None, active_effect_barrier_configuration_raw=None, active_effect_commit_configuration_raw=None,
+                     publication_reconciliation_configuration_raw=None):
     """Authorize only bounded cohort resource preparation, not any service."""
     config = _configuration(configuration_raw, configuration_sha256,
         (retrieval_configuration_raw, persistence_configuration_raw, trusted_time_configuration_raw,
          generation_install_configuration_raw, bridge_configuration_raw), signing_key, commit_request_configuration_raw,
          ingress_admission_configuration_raw, terminal_append_configuration_raw, dispatch_barrier_configuration_raw,
-         active_effect_barrier_configuration_raw, active_effect_commit_configuration_raw)
+         active_effect_barrier_configuration_raw, active_effect_commit_configuration_raw, publication_reconciliation_configuration_raw)
     payload = p.document(payload_raw, MAX_BYTES)
     _window(payload, config, configuration_sha256, boot, now)
     result = p.canonical({"apiVersion": "serverware.nativeShadowProofCohortPrecreation/v1",
@@ -243,7 +264,8 @@ def prepare_release(*, configuration_raw, configuration_sha256, retrieval_config
                  persistence_configuration_raw, trusted_time_configuration_raw, generation_install_configuration_raw,
                  bridge_configuration_raw, precreation_raw, observations_raw, payload_raw,
                  boot, now, commit_request_configuration_raw=None, ingress_admission_configuration_raw=None, terminal_append_configuration_raw=None,
-                 dispatch_barrier_configuration_raw=None, active_effect_barrier_configuration_raw=None, active_effect_commit_configuration_raw=None):
+                 dispatch_barrier_configuration_raw=None, active_effect_barrier_configuration_raw=None, active_effect_commit_configuration_raw=None,
+                 publication_reconciliation_configuration_raw=None):
     """Validate exact public originals at supplied clocks; no release authority.
 
     observations_raw must come from the retained actual cohort's one observation
@@ -255,7 +277,7 @@ def prepare_release(*, configuration_raw, configuration_sha256, retrieval_config
         (retrieval_configuration_raw, persistence_configuration_raw, trusted_time_configuration_raw,
          generation_install_configuration_raw, bridge_configuration_raw), commit_request_configuration_raw,
          ingress_admission_configuration_raw, terminal_append_configuration_raw, dispatch_barrier_configuration_raw,
-         active_effect_barrier_configuration_raw, active_effect_commit_configuration_raw)
+         active_effect_barrier_configuration_raw, active_effect_commit_configuration_raw, publication_reconciliation_configuration_raw)
     key = Ed25519PublicKey.from_public_bytes(p.decoded(config["authority"]["publicKeyBase64url"], size=32))
     precreation = p.fields(p.document(precreation_raw, MAX_BYTES), ("apiVersion", "payload", "signatureBase64url"))
     p.require(precreation["apiVersion"] == "serverware.nativeShadowProofCohortPrecreation/v1")
@@ -303,7 +325,8 @@ def sign_release(*, configuration_raw, configuration_sha256, retrieval_configura
                  bridge_configuration_raw, precreation_raw, observations_raw, payload_raw,
                  boot, now, signing_key, commit_request_configuration_raw=None, ingress_admission_configuration_raw=None,
                  terminal_append_configuration_raw=None, dispatch_barrier_configuration_raw=None,
-                 active_effect_barrier_configuration_raw=None, active_effect_commit_configuration_raw=None):
+                 active_effect_barrier_configuration_raw=None, active_effect_commit_configuration_raw=None,
+                 publication_reconciliation_configuration_raw=None):
     """One unchanged release signature under the independently supplied key."""
     context = prepare_release(configuration_raw=configuration_raw, configuration_sha256=configuration_sha256,
         retrieval_configuration_raw=retrieval_configuration_raw, persistence_configuration_raw=persistence_configuration_raw,
@@ -316,7 +339,8 @@ def sign_release(*, configuration_raw, configuration_sha256, retrieval_configura
         terminal_append_configuration_raw=terminal_append_configuration_raw,
         dispatch_barrier_configuration_raw=dispatch_barrier_configuration_raw,
         active_effect_barrier_configuration_raw=active_effect_barrier_configuration_raw,
-        active_effect_commit_configuration_raw=active_effect_commit_configuration_raw)
+        active_effect_commit_configuration_raw=active_effect_commit_configuration_raw,
+        publication_reconciliation_configuration_raw=publication_reconciliation_configuration_raw)
     _key(signing_key, configuration(configuration_raw)["authority"])
     result = p.canonical({"payload": context["payload"],
         "signatureBase64url": _signed(signing_key, context["domain"], context["payload"])})

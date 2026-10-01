@@ -11,6 +11,8 @@ pub(super) mod inputs;
 mod cleanup;
 #[path="proof_cohort_driver.rs"]
 mod external_driver;
+#[path="proof_cohort_adoption.rs"]
+mod adoption;
 const MAX_WIRE:usize=32768;
 const LAUNCH_PATH:&str="/etc/serverware/native-shadow-guest-launch.json";
 const IMAGE_PATH:&str="/opt/serverware/native-shadow-custody-runtime.squashfs";
@@ -237,7 +239,9 @@ struct Observations {api_version:&'static str,configuration_sha256:Sha256Digest,
     #[serde(skip_serializing_if="Option::is_none")]
     active_effect_barrier:Option<ChildOriginal>,
     #[serde(skip_serializing_if="Option::is_none")]
-    active_effect_commit:Option<ChildOriginal>}
+    active_effect_commit:Option<ChildOriginal>,
+    #[serde(skip_serializing_if="Option::is_none")]
+    publication_reconciliation:Option<ChildOriginal>}
 struct Program {launch:Original,launch_bytes:Vec<u8>,image_original:Original,image:image::Image,
     files:FileAdmission,activation:BTreeMap<String,OwnedFd>,inspection:Inspection,remote:OwnedFd}
 struct Cohort {
@@ -307,12 +311,12 @@ impl Cohort {
     fn observations(&self)->Result<Vec<u8>,ShadowError> {
         self.check_startup()?;require(self.children.len()==self.admission.roles().len() && self.programs.is_empty())?;
         let child=|index:usize|->Result<ChildOriginal,ShadowError> {
-            let index=if self.admission.endpoint_only(){external_driver::owned_index(index).ok_or(ShadowError::BindingDrift)?}else{index};
+            let index=if self.admission.endpoint_only(){external_driver::owned_index(index,self.admission.adoption_selected()).ok_or(ShadowError::BindingDrift)?}else{index};
             let identity=self.children[index].parked_identity()?;
             Ok(ChildOriginal{process_id:identity.0,start_time_ticks:identity.1,executable:self.executables[index].observation()?})
         };
         let endpoint=self.admission.endpoint_only();
-        let original=Observations{api_version:if endpoint{"serverware.nativeShadowProofCohortOriginals/v6"}else if self.admission.eleven(){"serverware.nativeShadowProofCohortOriginals/v5"}else if self.admission.eight(){"serverware.nativeShadowProofCohortOriginals/v4"}else if self.admission.seven(){"serverware.nativeShadowProofCohortOriginals/v3"}else if self.admission.six(){"serverware.nativeShadowProofCohortOriginals/v2"}else{SOURCE_API},configuration_sha256:self.admission.configuration_sha256(),
+        let original=Observations{api_version:if self.admission.adoption_selected(){adoption::ORIGINALS_API}else if endpoint{"serverware.nativeShadowProofCohortOriginals/v6"}else if self.admission.eleven(){"serverware.nativeShadowProofCohortOriginals/v5"}else if self.admission.eight(){"serverware.nativeShadowProofCohortOriginals/v4"}else if self.admission.seven(){"serverware.nativeShadowProofCohortOriginals/v3"}else if self.admission.six(){"serverware.nativeShadowProofCohortOriginals/v2"}else{SOURCE_API},configuration_sha256:self.admission.configuration_sha256(),
             precreation_sha256:self.admission.precreation_sha256(),invocation_id:self.admission.invocation_id().into(),
             retrieval:child(0)?,persistence:child(1)?,trusted_time:child(2)?,generation_install:child(3)?,bridge:if endpoint{None}else{Some(child(4)?)},
             external_driver:self.external_driver.as_ref().map(external_driver::Owner::original).transpose()?,
@@ -321,7 +325,8 @@ impl Cohort {
             terminal_append:if endpoint||self.admission.eight(){Some(child(7)?)}else{None},
             dispatch_barrier:if endpoint||self.admission.eleven(){Some(child(8)?)}else{None},
             active_effect_barrier:if endpoint||self.admission.eleven(){Some(child(9)?)}else{None},
-            active_effect_commit:if endpoint||self.admission.eleven(){Some(child(10)?)}else{None}};
+            active_effect_commit:if endpoint||self.admission.eleven(){Some(child(10)?)}else{None},
+            publication_reconciliation:if self.admission.adoption_selected(){Some(child(11)?)}else{None}};
         let bytes=canonical_json_bytes(&original)?;self.check_startup()?;Ok(bytes)
     }
     fn release(&mut self,bytes:&[u8],observed:&[u8],rights:Vec<OwnedFd>)->Result<(),ShadowError> {
@@ -337,8 +342,8 @@ impl Cohort {
                 &selected.delivery.path,selected.delivery.sha256.clone()).map_err(fail)?;
             self.admission.join(index,&selected,&files)?;
             let endpoint=self.admission.endpoint_only();
-            let logical=if endpoint{external_driver::logical_index(index)?}else{index};
-            require_role(logical,&service,endpoint||self.admission.six(),endpoint||self.admission.seven(),endpoint||self.admission.eight(),endpoint||self.admission.eleven())?;
+            let logical=if endpoint{external_driver::logical_index(index,self.admission.adoption_selected())?}else{index};
+            require_role(logical,&service,endpoint||self.admission.six(),endpoint||self.admission.seven(),endpoint||self.admission.eight(),endpoint||self.admission.eleven(),self.admission.adoption_selected())?;
             if service.endpoint_runtime_role().is_some(){
                 service.check_endpoint_runtime(&files.retrieval_client_runtime().map_err(fail)?)?;
             }
@@ -347,13 +352,20 @@ impl Cohort {
                 require(entry.fd==6+slot as i32)?;
                 let fd=rights.next().ok_or(ShadowError::BindingDrift)?;
                 let mut stat:libc::stat=unsafe{zeroed()};
-                require(unsafe{libc::fstat(fd.as_raw_fd(),&mut stat)}==0
-                    && (stat.st_dev,stat.st_ino,stat.st_mode,stat.st_uid,stat.st_gid)==(entry.device,entry.inode,entry.mode,entry.uid,entry.gid)
+                require(unsafe{libc::fstat(fd.as_raw_fd(),&mut stat)}==0)?;
+                let adopted_core=matches!(&service,SelectedService::AdoptedPublicationRetrieval(_)) && slot==4;
+                if adopted_core {
+                    require(entry.name=="publication-genesis-core" && stat.st_mode==(libc::S_IFREG|0o400)
+                        && stat.st_uid>0 && stat.st_gid>0 && stat.st_nlink==1
+                        && stat.st_size>0 && stat.st_size<=512*1024 && readonly_core(fd.as_fd())?)?;
+                }
+                require((stat.st_dev,stat.st_ino,stat.st_mode,stat.st_uid,stat.st_gid)==(entry.device,entry.inode,entry.mode,entry.uid,entry.gid)
                     && ([libc::S_IFDIR,libc::S_IFSOCK].contains(&(stat.st_mode&libc::S_IFMT))
-                        || (matches!(&service,SelectedService::PersistenceLocked(_)) && slot==2
+                        || (matches!(&service,SelectedService::PersistenceLocked(_)|SelectedService::AdoptedPersistence(_)) && slot==2
                             && entry.name=="persistence-lock" && stat.st_mode&libc::S_IFMT==libc::S_IFREG)
-                        || (matches!(&service,SelectedService::LedgerRetrieval(_)|SelectedService::CompletionRetrieval(_)|SelectedService::EffectRetrieval(_)) && slot==3
-                            && entry.name=="ledger-spool-lock" && stat.st_mode&libc::S_IFMT==libc::S_IFREG))
+                        || (matches!(&service,SelectedService::LedgerRetrieval(_)|SelectedService::CompletionRetrieval(_)|SelectedService::EffectRetrieval(_)|SelectedService::AdoptedPublicationRetrieval(_)) && slot==3
+                            && entry.name=="ledger-spool-lock" && stat.st_mode&libc::S_IFMT==libc::S_IFREG)
+                        || adopted_core)
                     && all.insert((stat.st_dev,stat.st_ino))
                     && activation.insert(entry.name.clone(),fd).is_none())?;
             }
@@ -363,7 +375,7 @@ impl Cohort {
                     self.external_driver.as_ref().ok_or(ShadowError::BindingDrift)?.require_peer(&peer)?;
                     continue;
                 }
-                let other=if endpoint{external_driver::owned_index(other).ok_or(ShadowError::BindingDrift)?}else{other};
+                let other=if endpoint{external_driver::owned_index(other,self.admission.adoption_selected()).ok_or(ShadowError::BindingDrift)?}else{other};
                 let actual=self.children[other].parked_identity()?;
                 require((peer.pid,peer.start_time_ticks)==actual)?;
                 self.executables[other].require_peer(&peer)?;
@@ -372,6 +384,15 @@ impl Cohort {
                 require((peer.uid,peer.gid)==self.admission.role_identity(other)?)?;
             }
             let closure_set_role=service.closure_set_role();
+            if self.admission.adoption_selected(){
+                // This is only explicit profile selection. The existing image
+                // and child admission below still check the exact full set,
+                // member, signed assignment, C9, measured image and runtime.
+                let original=selected.closure.open(1024*1024)?;
+                let value:serde_json::Value=exact(&original.read(1024*1024).map_err(fail)?)?;
+                require(value.get("apiVersion").and_then(serde_json::Value::as_str)
+                    ==Some("serverware.nativeCustodyClosure/v5"))?;
+            }
             let (inspection,remote)=prepare_inspection(service,&files,&activation)?;
             let image_original=release.image.open(512*1024*1024)?;
             image_original.read(512*1024*1024).map_err(fail)?;
@@ -417,7 +438,17 @@ impl Cohort {
 }
 // The exact slot does not create a service. Unknown or not-yet-connected
 // selectors refuse before ANY child is released.
-fn require_role(index:usize,service:&SelectedService,six:bool,seven:bool,eight:bool,eleven:bool)->Result<(),ShadowError> {
+fn require_role(index:usize,service:&SelectedService,six:bool,seven:bool,eight:bool,eleven:bool,adopted:bool)->Result<(),ShadowError> {
+    if adopted {
+        return require(matches!((index,service),
+            (0,SelectedService::AdoptedPublicationRetrieval(_))|
+            (1,SelectedService::AdoptedPersistence(_))|
+            (2,SelectedService::TrustedTime(_))|(3,SelectedService::Generation(_))|
+            (5,SelectedService::CompletionLedgerSpool(_))|(6,SelectedService::Ingress(_))|
+            (7,SelectedService::TerminalSpool(_))|(8,SelectedService::DispatchSpool(_))|
+            (9,SelectedService::ActiveEffectBarrier(_))|(10,SelectedService::ActiveEffectCommit(_))|
+            (11,SelectedService::AdoptedPublication(_))));
+    }
     require(match (index,service) {
         (0,SelectedService::Retrieval(_))=>!seven,
         (0,SelectedService::LedgerRetrieval(_))=>seven&&!eight,
@@ -435,6 +466,11 @@ fn require_role(index:usize,service:&SelectedService,six:bool,seven:bool,eight:b
         (9,SelectedService::ActiveEffectBarrier(_))|(10,SelectedService::ActiveEffectCommit(_))=>eleven,
         _=>false,
     })
+}
+fn readonly_core(fd:BorrowedFd<'_>)->Result<bool,ShadowError>{
+    let flags=unsafe{libc::fcntl(fd.as_raw_fd(),libc::F_GETFL)};
+    require(flags>=0)?;
+    Ok(flags&libc::O_ACCMODE==libc::O_RDONLY && flags&libc::O_PATH==0)
 }
 fn assigned_peers(service:&SelectedService,files:&FileAdmission)
     ->Result<Vec<(usize,super::super::super::super::ExpectedPeerCredentialV3)>,ShadowError> {
@@ -459,6 +495,19 @@ fn assigned_peers(service:&SelectedService,files:&FileAdmission)
                 && grant.effects_selected()==matches!(service,SelectedService::EffectRetrieval(_)) && !grant.publication_selected())?;
             grant.validate_shape()?;Ok(vec![(4,grant.expected_peer().clone())])
         }
+        SelectedService::AdoptedPublicationRetrieval(pin)=>{
+            let original=pin.open(admission::ledger_retrieval::MAX_ADOPTED_CONFIGURATION)?;
+            let grant:admission::ledger_retrieval::Configuration=exact(&original.read(admission::ledger_retrieval::MAX_ADOPTED_CONFIGURATION).map_err(fail)?)?;
+            require(grant.completion_selected() && grant.effects_selected()
+                && grant.publication_selected() && grant.adoption_selected())?;
+            grant.validate_shape()?;Ok(vec![(4,grant.expected_peer().clone())])
+        }
+        SelectedService::AdoptedPublication(pin)=>{
+            let original=pin.open(admission::publication::MAX_CONFIGURATION)?;
+            let grant:admission::publication::Configuration=exact(&original.read(admission::publication::MAX_CONFIGURATION).map_err(fail)?)?;
+            require(grant.adoption_selected())?;
+            grant.validate_shape()?;Ok(vec![(4,grant.expected_peer().clone())])
+        }
         SelectedService::CommitRequest(pin)=>{
             let original=pin.open(admission::commit_request::MAX_CONFIGURATION)?;
             let grant:admission::commit_request::Configuration=exact(&original.read(admission::commit_request::MAX_CONFIGURATION).map_err(fail)?)?;
@@ -477,6 +526,12 @@ fn assigned_peers(service:&SelectedService,files:&FileAdmission)
         SelectedService::Persistence(pin)|SelectedService::PersistenceLocked(pin)=>{
             let original=pin.open(65536)?;
             let grant:admission::persistence::Configuration=exact(&original.read(65536).map_err(fail)?)?;
+            grant.validate_shape()?;Ok(vec![(4,grant.expected_peer().clone())])
+        }
+        SelectedService::AdoptedPersistence(pin)=>{
+            let original=pin.open(3*1024*1024)?;
+            let grant:admission::persistence::Configuration=exact(&original.read(3*1024*1024).map_err(fail)?)?;
+            require(grant.adoption_selected())?;
             grant.validate_shape()?;Ok(vec![(4,grant.expected_peer().clone())])
         }
         SelectedService::TrustedTime(pin)=>{

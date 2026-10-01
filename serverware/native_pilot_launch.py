@@ -51,6 +51,7 @@ class NativePilotLaunch:
         self._commit_request = self._generation_install = self._bridge = self._outgoing = None
         self._operation = None
         self._endpoint_inputs = None
+        self._received_core = None
         self._service_inputs_attempted = False
         self._five_cleanup_failure = None
         self._connections_attempted = self._operation_attempted = False
@@ -62,11 +63,25 @@ class NativePilotLaunch:
 
     @classmethod
     def start(cls):
+        return cls._start(received_core=None)
+
+    @classmethod
+    def start_adopted(cls, *, received_core):
+        """Retain actual acknowledged custody, not a public core observation."""
+        from serverware.native_pilot_genesis_core_channel import ReceivedGenesisCore
+        _require(type(received_core) is ReceivedGenesisCore)
+        received_core.check()
+        _require(received_core._adopted_cohort is None)
+        return cls._start(received_core=received_core)
+
+    @classmethod
+    def _start(cls, *, received_core):
         global _LIVE
         _require(cls is NativePilotLaunch and _LIVE is None
                  and threading.current_thread() is threading.main_thread()
                  and os.getresuid() == (0, 0, 0) and os.getresgid() == (0, 0, 0))
         owner = cls(_TOKEN)
+        owner._received_core = received_core
         _LIVE = owner
         try:
             owner._driver = DriverBootstrap.start()
@@ -109,6 +124,8 @@ class NativePilotLaunch:
             self._outgoing.check()
         if self._endpoint_inputs is not None:
             self._endpoint_inputs.check()
+        if self._received_core is not None:
+            self._received_core.check()
 
     def start_endpoints(self):
         """Use independently installed originals bound to this actual driver."""
@@ -120,6 +137,12 @@ class NativePilotLaunch:
         # five start creates its lifetime watcher, so it must follow both.
         try:
             self._cohort = ParkedProofCohort.start_for_driver(self._driver)
+            _require(self._cohort.adoption_selected() == (self._received_core is not None))
+            if self._received_core is not None:
+                # The transport's single-threaded intake finishes before the
+                # ordinary-service lifetime watcher exists. Custody remains
+                # tied to this actual cohort through its terminal cleanup.
+                self._received_core.claim_adopted_cohort(cohort=self._cohort)
         except EndpointStartError as failure:
             # Retain the actual partial owner, not public observations. Driver
             # cleanup must happen before shared endpoint resources may close.
@@ -351,6 +374,9 @@ resources. There is no cleanup retry or deadline renewal in this wrapper.
                     self._business.close()
                 if self._endpoint_inputs is not None:
                     self._endpoint_inputs.close()
+                if self._received_core is not None:
+                    self._received_core.close()
+                    self._received_core._channel.close()
             except BaseException as error:
                 failures.append(error)
         if failures:

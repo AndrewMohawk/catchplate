@@ -31,7 +31,7 @@ def configuration(value):
     p.require(value["apiVersion"] in ("serverware.nativeShadowProofCohortConfiguration/v2",
         "serverware.nativeShadowProofCohortConfiguration/v3", "serverware.nativeShadowProofCohortConfiguration/v4",
         "serverware.nativeShadowProofCohortConfiguration/v5", "serverware.nativeShadowProofCohortConfiguration/v6",
-        "serverware.nativeShadowProofCohortConfiguration/v7"))
+        "serverware.nativeShadowProofCohortConfiguration/v7", "serverware.nativeShadowProofCohortConfiguration/v8"))
     selected = p.fields(value["cleanup"], ("authority", "scopeId", "journal", "genesisSha256"))
     authority = p.fields(selected["authority"], ("publicKeyBase64url", "keyId"))
     raw = p.decoded(authority["publicKeyBase64url"], size=32)
@@ -59,7 +59,8 @@ def _api(kind, config):
                "serverware.nativeShadowProofCohortConfiguration/v4": 3,
                "serverware.nativeShadowProofCohortConfiguration/v5": 4,
                "serverware.nativeShadowProofCohortConfiguration/v6": 5,
-               "serverware.nativeShadowProofCohortConfiguration/v7": 6}[config["apiVersion"]]
+               "serverware.nativeShadowProofCohortConfiguration/v7": 6,
+               "serverware.nativeShadowProofCohortConfiguration/v8": 7}[config["apiVersion"]]
     p.require(kind in ("Cleanup", "CleanupResult", "Terminal"))
     return "serverware.nativeShadowProofCohort" + kind + "/v" + str(version)
 
@@ -70,12 +71,13 @@ def _domain(config):
             "serverware.nativeShadowProofCohortCleanup/v3": b"serverware.nativeShadowProofCohortCleanup.signature/v3\0",
             "serverware.nativeShadowProofCohortCleanup/v4": b"serverware.nativeShadowProofCohortCleanup.signature/v4\0",
             "serverware.nativeShadowProofCohortCleanup/v5": b"serverware.nativeShadowProofCohortCleanup.signature/v5\0",
-            "serverware.nativeShadowProofCohortCleanup/v6": b"serverware.nativeShadowProofCohortCleanup.signature/v6\0"}[_api("Cleanup", config)]
+            "serverware.nativeShadowProofCohortCleanup/v6": b"serverware.nativeShadowProofCohortCleanup.signature/v6\0",
+            "serverware.nativeShadowProofCohortCleanup/v7": b"serverware.nativeShadowProofCohortCleanup.signature/v7\0"}[_api("Cleanup", config)]
 
 
 def _fields(fields, config):
     return fields + (("externalDriverSha256",) if config is not None
-        and config["apiVersion"] == "serverware.nativeShadowProofCohortConfiguration/v7" else ())
+        and config["apiVersion"] in ("serverware.nativeShadowProofCohortConfiguration/v7", "serverware.nativeShadowProofCohortConfiguration/v8") else ())
 
 
 def authorize(*, configuration_raw, precreation_raw, observations_raw, release_raw, payload_raw,
@@ -257,7 +259,7 @@ def recover(config, authorization_raw):
         result = {"apiVersion": _api("CleanupResult", config),
             "authorizationSha256": p.sha(authorization_raw), "intentRecordSha256": p.sha(originals["intent.json"]),
             "terminalOriginal": terminal["original"], "terminalRecordSha256": p.sha(originals["terminal.json"])}
-        if config["apiVersion"] == "serverware.nativeShadowProofCohortConfiguration/v7":
+        if profile.endpoint_driver_selected(config):
             result["externalDriverSha256"] = p.document(authorization_raw, MAX_BYTES)["payload"]["externalDriverSha256"]
         return p.canonical(result)
     finally:

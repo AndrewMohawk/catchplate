@@ -13,13 +13,12 @@ pub(super) const CLEANUP_API:&str="serverware.nativeShadowProofCohortCleanup/v6"
 pub(super) const CLEANUP_DOMAIN:&[u8]=b"serverware.nativeShadowProofCohortCleanup.signature/v6\0";
 pub(super) const TERMINAL_API:&str="serverware.nativeShadowProofCohortTerminal/v6";
 pub(super) const CLEANUP_RESULT_API:&str="serverware.nativeShadowProofCohortCleanupResult/v6";
-const INDEX:[usize;10]=[0,1,2,3,5,6,7,8,9,10];
 const MAX_EXECUTABLE:usize=64*1024*1024;
 const SEALS:i32=libc::F_SEAL_WRITE|libc::F_SEAL_GROW|libc::F_SEAL_SHRINK|libc::F_SEAL_SEAL;
-pub(super) fn logical_index(index:usize)->Result<usize,ShadowError>{
-    INDEX.get(index).copied().ok_or(ShadowError::BindingDrift)
+pub(super) fn logical_index(index:usize,adopted:bool)->Result<usize,ShadowError>{
+    adoption::logical_index(index,adopted).ok_or(ShadowError::BindingDrift)
 }
-pub(super) fn owned_index(logical:usize)->Option<usize>{INDEX.iter().position(|v|*v==logical)}
+pub(super) fn owned_index(logical:usize,adopted:bool)->Option<usize>{adoption::owned_index(logical,adopted)}
 
 #[derive(Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]

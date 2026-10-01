@@ -40,10 +40,20 @@ LAUNCH_MODES = {"--assemble-genesis-native-" + label + "-launch": role
         ("coordinator", "publicationGenesisCoordinator"))}
 SERVICE_MODES = {"--sign-genesis-native-publication-grant": "publication",
     "--sign-genesis-native-retrieval-grant": "retrieval"}
+ADOPTED_ROLES = ("retrieval", "persistence", "trustedTime", "generationInstall", "commitRequest",
+    "ingressAdmission", "terminalAppend", "dispatchBarrier", "activeEffectBarrier", "activeEffectCommit", "publicationReconciliation")
+ADOPTED_MODES = {"--sign-adopted-native-" + role + "-" + operation: (role, operation)
+    for role in ADOPTED_ROLES for operation in ("delivery", "role-keys", "admission", "closure", "encrypted-delivery", "verifier")}
+ADOPTED_MODES.update({"--sign-adopted-native-" + role + "-grant": (role, "grant")
+    for role in ("retrieval", "persistence", "publicationReconciliation")})
+ADOPTED_MODES["--sign-adopted-native-commitRequest-request-commitment"] = ("commitRequest", "request-commitment")
+ADOPTED_LAUNCH_MODES = {"--assemble-adopted-native-" + role + "-launch": (role, "launch")
+    for role in ("retrieval", "persistence", "publicationReconciliation")}
+ADOPTED_COHORT_MODES = {"--sign-adopted-precreation": "precreation", "--sign-adopted-release": "release"}
 SIGNING_MODES = ("--sign-assignment", "--sign-genesis-precreation", "--sign-genesis-release", "--sign-genesis-endpoints-release") + tuple(ORDINARY_MODES) + tuple(
-    mode for mode, operation in INITIAL_MODES.items() if operation != "assemble") + tuple(NATIVE_MODES) + tuple(SERVICE_MODES) + tuple(TRANSPORT_MODES)
+    mode for mode, operation in INITIAL_MODES.items() if operation != "assemble") + tuple(NATIVE_MODES) + tuple(SERVICE_MODES) + tuple(TRANSPORT_MODES) + tuple(ADOPTED_MODES) + tuple(ADOPTED_COHORT_MODES)
 ADOPTION_MODE = "--sign-publication-adoption"
-MODES = ("--prepare-closure-set", "--prepare-genesis-binding", "--assemble-genesis-ordinary-history", ADOPTION_MODE) + SIGNING_MODES + tuple(LAUNCH_MODES)
+MODES = ("--prepare-closure-set", "--prepare-genesis-binding", "--assemble-genesis-ordinary-history", ADOPTION_MODE) + SIGNING_MODES + tuple(LAUNCH_MODES) + tuple(ADOPTED_LAUNCH_MODES)
 
 
 def valid_arguments(arguments):
@@ -171,6 +181,8 @@ def main():
     from serverware import native_pilot_genesis_verifier_authority as verifier
     from serverware import native_pilot_genesis_launch_profile as launch
     from serverware import native_pilot_publication_cold_binding as cold_binding
+    from serverware import native_pilot_adopted_commands as adopted
+    from serverware import native_pilot_adopted_cohort_authority as adopted_cohort
     from serverware import native_shadow_nitro_originals as originals
 
     runtime = None
@@ -189,8 +201,10 @@ def main():
         ordinary_purpose = ORDINARY_MODES.get(mode)
         native_purpose, service_purpose = NATIVE_MODES.get(mode), SERVICE_MODES.get(mode)
         transport_purpose, launch_role = TRANSPORT_MODES.get(mode), LAUNCH_MODES.get(mode)
+        adopted_purpose = ADOPTED_MODES.get(mode) or ADOPTED_LAUNCH_MODES.get(mode)
+        adopted_cohort_purpose = ADOPTED_COHORT_MODES.get(mode)
         transport = (encrypted if transport_purpose[1] == "encrypted-delivery" else verifier) if transport_purpose else None
-        maximum = (transport.MAX_INPUT if transport is not None else launch.MAX_INPUT if launch_role is not None else
+        maximum = (adopted_cohort.MAX_INPUT if adopted_cohort_purpose is not None else adopted.MAX_INPUT if adopted_purpose is not None else transport.MAX_INPUT if transport is not None else launch.MAX_INPUT if launch_role is not None else
             endpoint_release.MAX_INPUT if mode == "--sign-genesis-endpoints-release" else
             delivery.MAX_INPUT if native_purpose is not None else
             service.MAX_INPUT if service_purpose is not None else ordinary.MAX_INPUT if ordinary_purpose is not None else
@@ -231,7 +245,30 @@ def main():
             if payload is not None:
                 p.freshness(payload["issuedAtUnixNanos"], payload["expiresAtUnixNanos"], after_wall)
 
-        if transport_purpose is not None:
+        if adopted_cohort_purpose is not None:
+            approved = adopted_cohort.prepare_input(adopted_cohort_purpose, raw, boot=owner[2],
+                now_boottime_ns=originals._clock(), now_unix_ns=time.time_ns())
+            deadline = approved["deadline"]
+            key_identity = io._input(key_fd, 32, private=True)
+            check()
+            result, result_deadline = adopted_cohort.sign(adopted_cohort_purpose,
+                input_original=raw, signing_key=io.signing_key(key_fd))
+            p.require(result_deadline == deadline)
+        elif adopted_purpose is not None:
+            role, operation = adopted_purpose
+            approved = adopted.prepare_input(role, operation, raw, boot=owner[2],
+                now_boottime_ns=originals._clock(), now_unix_ns=time.time_ns())
+            deadline, epoch_limit = approved["deadline"], approved.get("epochLimit")
+            if signing:
+                key_identity = io._input(key_fd, 32, private=True)
+            check()  # Exact adopted version, role and purpose before key bytes.
+            result = adopted.execute(role, operation, raw,
+                signing_key=io.signing_key(key_fd) if signing else None)
+            check()
+            final = adopted.prepare_input(role, operation, raw, boot=owner[2],
+                now_boottime_ns=originals._clock(), now_unix_ns=time.time_ns())
+            p.require((final["deadline"], final.get("epochLimit")) == (deadline, epoch_limit))
+        elif transport_purpose is not None:
             role, _ = transport_purpose
             approved = transport.prepare_input(role, raw, boot=originals._boot(),
                 now_boottime_ns=originals._clock(), now_unix_ns=time.time_ns())

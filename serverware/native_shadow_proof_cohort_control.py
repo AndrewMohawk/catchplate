@@ -42,7 +42,8 @@ _APIS = {"retrieval": ("serverware.nativeShadowRetrievalGuestLaunch/v1", "retrie
     "terminalAppend": ("serverware.nativeShadowTerminalSpoolGuestLaunch/v1", "terminalSpool"),
     "dispatchBarrier": ("serverware.nativeShadowDispatchBarrierGuestLaunch/v1", "dispatchBarrier"),
     "activeEffectBarrier": ("serverware.nativeShadowActiveEffectBarrierGuestLaunch/v1", "activeEffectBarrier"),
-    "activeEffectCommit": ("serverware.nativeShadowActiveEffectCommitGuestLaunch/v1", "activeEffectCommit")}
+    "activeEffectCommit": ("serverware.nativeShadowActiveEffectCommitGuestLaunch/v1", "activeEffectCommit"),
+    "publicationReconciliation": ("serverware.nativeShadowPublicationGuestLaunch/v2", "publication")}
 
 
 def _clock():
@@ -142,6 +143,7 @@ class RetainedActivationFds:
         self._begun = self._closed = False
         self._retrieval_owner = None
         self._trusted_time_owner = None
+        self._publication_owner = None
         self._commit_request_owner = self._generation_install_owner = None
 
     def check(self):
@@ -151,6 +153,8 @@ class RetainedActivationFds:
             self._retrieval_owner.check()
         if self._trusted_time_owner is not None:
             self._trusted_time_owner.check()
+        if self._publication_owner is not None:
+            self._publication_owner.check()
         if self._commit_request_owner is not None:
             self._commit_request_owner.check()
         if self._generation_install_owner is not None:
@@ -482,6 +486,11 @@ class ParkedProofCohort:
         self.check()
         return profile.endpoint_driver_selected(self._config)
 
+    def adoption_selected(self):
+        """Explicit source profile, not adoption authority or readiness."""
+        self.check()
+        return profile.adoption_selected(self._config)
+
     def startup_deadline_boottime_ns(self):
         self.check()
         return self._startup
@@ -491,24 +500,24 @@ class ParkedProofCohort:
         self.check()
         return self._config["apiVersion"] in ("serverware.nativeShadowProofCohortConfiguration/v3", "serverware.nativeShadowProofCohortConfiguration/v4",
             "serverware.nativeShadowProofCohortConfiguration/v5", "serverware.nativeShadowProofCohortConfiguration/v6",
-            "serverware.nativeShadowProofCohortConfiguration/v7")
+            "serverware.nativeShadowProofCohortConfiguration/v7", profile.ADOPTED_CONFIGURATION_API)
 
     def spool_selected(self):
         """Explicit native-spool selection, not service or generation readiness."""
         self.check()
         return self._config["apiVersion"] in ("serverware.nativeShadowProofCohortConfiguration/v4", "serverware.nativeShadowProofCohortConfiguration/v5",
-            "serverware.nativeShadowProofCohortConfiguration/v6", "serverware.nativeShadowProofCohortConfiguration/v7")
+            "serverware.nativeShadowProofCohortConfiguration/v6", "serverware.nativeShadowProofCohortConfiguration/v7", profile.ADOPTED_CONFIGURATION_API)
 
     def terminal_selected(self):
         """A separately authorized terminal owner, not terminal success."""
         self.check()
         return self._config["apiVersion"] in ("serverware.nativeShadowProofCohortConfiguration/v5", "serverware.nativeShadowProofCohortConfiguration/v6",
-            "serverware.nativeShadowProofCohortConfiguration/v7")
+            "serverware.nativeShadowProofCohortConfiguration/v7", profile.ADOPTED_CONFIGURATION_API)
 
     def effects_selected(self):
         """Fixed effects inventory, not an effect or dispatch permit."""
         self.check()
-        return self._config["apiVersion"] in ("serverware.nativeShadowProofCohortConfiguration/v6", "serverware.nativeShadowProofCohortConfiguration/v7")
+        return self._config["apiVersion"] in ("serverware.nativeShadowProofCohortConfiguration/v6", "serverware.nativeShadowProofCohortConfiguration/v7", profile.ADOPTED_CONFIGURATION_API)
 
     def prepare_spool_inputs(self):
         """New physical resources under this exact parked cohort owner."""
@@ -544,6 +553,9 @@ class ParkedProofCohort:
                    "retrieval": "serverware.nativeShadowRetrievalGuestLaunch/v3"}.get(role, api)
         if self.effects_selected():
             api = {"bridge": "serverware.nativeProofBridgeLaunch/v5", "retrieval": "serverware.nativeShadowRetrievalGuestLaunch/v4"}.get(role, api)
+        if self.adoption_selected():
+            api = {"retrieval": "serverware.nativeShadowRetrievalGuestLaunch/v6",
+                "persistence": "serverware.nativeShadowPersistenceGuestLaunch/v3"}.get(role, api)
         launch = p.fields(p.document(launch_original.raw, profile.MAX_BYTES), ("apiVersion", "keyAdmission", field))
         p.require(launch["apiVersion"] == api)
         nested = launch["keyAdmission"]
@@ -565,8 +577,18 @@ class ParkedProofCohort:
             "ingressAdmission": "ingress", "terminalAppend": "terminal", "dispatchBarrier": "dispatchBarrier",
             "activeEffectBarrier": "activeEffectBarrier", "activeEffectCommit": "activeEffectCommit"}
         maximum = 4 * 1024 * 1024 if role in history_operations or role == "generationInstall" else 65536
+        adopted_grant = self.adoption_selected() and role in ("retrieval", "persistence", "publicationReconciliation")
+        if adopted_grant:
+            maximum = (4 if role == "publicationReconciliation" else 3) * 1024 * 1024
         grant = self._open(launch[field]["path"], maximum, launch[field]["sha256"])
-        if len(grant.raw) > 65536:
+        if adopted_grant:
+            from serverware import custody_generation_grants as grants
+            envelope = p.fields(grants.document(grant.raw, maximum), ("payload", "signature"))
+            expected_api = {"retrieval": "serverware.nativeLedgerSpoolRetrievalGrant/v6",
+                "persistence": "serverware.nativeShadowPersistenceServiceAssignment/v4",
+                "publicationReconciliation": "serverware.nativePublicationServiceAssignment/v2"}[role]
+            p.require(envelope["payload"]["apiVersion"] == expected_api)
+        elif len(grant.raw) > 65536:
             # Earlier cohort profiles retain their existing small-original
             # grammar. Only closed successor grants may use the larger bound;
             # parsing here is still not native signature/history admission.
@@ -621,18 +643,31 @@ class ParkedProofCohort:
         descriptors = activation.cohort_descriptors(self._spool_resources)
         owner = self.retain_activation_fds(role="retrieval", launch_pin=launch_pin, descriptors=descriptors)
         owner._retrieval_owner = activation
+        names = delivery.SPOOL_RETRIEVAL_NAMES + (("publication-genesis-core",) if self.adoption_selected() else ())
         p.require(owner._delivery_bytes == activation.signed_original()
-            and tuple(entry["name"] for entry in owner._entries) == delivery.SPOOL_RETRIEVAL_NAMES)
+            and tuple(entry["name"] for entry in owner._entries) == names)
         owner.check()
         return owner
 
     def retain_activation_fds(self, *, role, launch_pin, descriptors,
                               commit_request_owner=None, generation_install_owner=None,
-                              trusted_time_owner=None):
+                              trusted_time_owner=None, publication_owner=None):
         """Retain real already-created non-Persistence FDs; never create service authority."""
         self.check()
         p.require(role in self._roles and role != "persistence")
         p.require(all(value._role != role for value in self._retained))
+        if role == "publicationReconciliation":
+            from serverware.native_shadow_publication_inputs import PublicationActivation
+            from serverware.native_pilot_endpoint_inputs import PilotEndpointInputs
+            p.require(self.adoption_selected() and type(publication_owner) is PublicationActivation
+                and type(publication_owner._inputs) is PilotEndpointInputs
+                and publication_owner._inputs._pilot._endpoint_inputs is publication_owner._inputs
+                and publication_owner._inputs._cohort is self
+                and publication_owner._inputs._publication is publication_owner
+                and publication_owner._taken and descriptors == publication_owner._descriptors)
+            publication_owner.check()
+        else:
+            p.require(publication_owner is None)
         if trusted_time_owner is not None:
             from serverware.native_shadow_trusted_time_inputs import TrustedTimeActivation
             p.require(role == "trustedTime" and type(trusted_time_owner) is TrustedTimeActivation
@@ -662,6 +697,8 @@ class ParkedProofCohort:
         launch, signed, grant, entries = self._role_files(role, launch_pin)
         if trusted_time_owner is not None:
             p.require(signed.raw == trusted_time_owner._signed)
+        if publication_owner is not None:
+            p.require(signed.raw == publication_owner._signed)
         if generation_install_owner is not None:
             p.require((launch.raw, signed.raw, grant.raw) == generation_install_owner._originals)
         p.require(type(descriptors) is tuple and len(descriptors) == len(entries))
@@ -669,6 +706,7 @@ class ParkedProofCohort:
         owner._cohort, owner._role, owner._entries = self, role, entries
         owner._commit_request_owner, owner._generation_install_owner = commit_request_owner, generation_install_owner
         owner._trusted_time_owner = trusted_time_owner
+        owner._publication_owner = publication_owner
         owner._launch_sha, owner._delivery_bytes, owner._grant_bytes = p.sha(launch.raw), signed.raw, grant.raw
         try:
             for pair, entry in zip(descriptors, entries, strict=True):
@@ -781,7 +819,7 @@ class ParkedProofCohort:
         p.require(self._release_sent and not self._cleanup_attempted
                   and self._config["apiVersion"] in ("serverware.nativeShadowProofCohortConfiguration/v2",
                 "serverware.nativeShadowProofCohortConfiguration/v3", "serverware.nativeShadowProofCohortConfiguration/v4", "serverware.nativeShadowProofCohortConfiguration/v5", "serverware.nativeShadowProofCohortConfiguration/v6",
-                "serverware.nativeShadowProofCohortConfiguration/v7"))
+                "serverware.nativeShadowProofCohortConfiguration/v7", profile.ADOPTED_CONFIGURATION_API))
         command = cleanup_profile.authorization(authorization_original, self._config_original.raw,
             self._precreate_original.raw, self._observation_bytes, self._release_original, self._boot, _clock())
         for fd, pid, start in self._parked:
@@ -913,7 +951,7 @@ class ParkedProofCohort:
             cleanup_end = _clock() + 250_000_000
             if self._config["apiVersion"] in ("serverware.nativeShadowProofCohortConfiguration/v2",
                 "serverware.nativeShadowProofCohortConfiguration/v3", "serverware.nativeShadowProofCohortConfiguration/v4", "serverware.nativeShadowProofCohortConfiguration/v5", "serverware.nativeShadowProofCohortConfiguration/v6",
-                "serverware.nativeShadowProofCohortConfiguration/v7"):
+                "serverware.nativeShadowProofCohortConfiguration/v7", profile.ADOPTED_CONFIGURATION_API):
                 cleanup_end = min(cleanup_end, self._cleanup_deadline or self._lifetime, self._lifetime)
             while not _terminal(self._pidfd) and _clock() < cleanup_end:
                 select.select([self._pidfd], [], [], 0.01)
@@ -925,7 +963,7 @@ class ParkedProofCohort:
             cleanup_end = _clock() + 250_000_000
             if self._config["apiVersion"] in ("serverware.nativeShadowProofCohortConfiguration/v2",
                 "serverware.nativeShadowProofCohortConfiguration/v3", "serverware.nativeShadowProofCohortConfiguration/v4", "serverware.nativeShadowProofCohortConfiguration/v5", "serverware.nativeShadowProofCohortConfiguration/v6",
-                "serverware.nativeShadowProofCohortConfiguration/v7"):
+                "serverware.nativeShadowProofCohortConfiguration/v7", profile.ADOPTED_CONFIGURATION_API):
                 cleanup_end = min(cleanup_end, self._cleanup_deadline or self._lifetime, self._lifetime)
             while (not _terminal(self._pidfd) or any(not _terminal(fd) for fd, _, _ in self._parked)) and _clock() < cleanup_end:
                 select.select([], [], [], 0.01)

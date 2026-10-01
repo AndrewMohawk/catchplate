@@ -23,6 +23,7 @@ from serverware import native_shadow_nitro_originals as originals
 
 p = keys.p
 API = "serverware.nativePilotEncryptedAuthorityInput/v1"
+ADOPTED_API = "serverware.nativePilotEncryptedAuthorityInput/v2"
 ROLES = keys.ROLES
 OPERATIONS = ("request-commitment", "delivery")
 PAIR_FIELDS = ("roleKeyInputOriginal", "roleKeyOriginal", "admissionInputOriginal", "admissionOriginal")
@@ -41,7 +42,8 @@ def _original(value, maximum):
 def _pair(role, value, clocks):
     raw = {name: _original(value[name], keys.MAX_INPUT if "Input" in name else keys.MAX_OUTPUT)
         for name in PAIR_FIELDS}
-    pair = keys.admitted_pair(role, raw["roleKeyInputOriginal"], raw["roleKeyOriginal"],
+    admit = keys.admitted_adopted_pair if value["apiVersion"] == ADOPTED_API else keys.admitted_pair
+    pair = admit(role, raw["roleKeyInputOriginal"], raw["roleKeyOriginal"],
         raw["admissionInputOriginal"], raw["admissionOriginal"], **clocks)
     first = p.document(raw["roleKeyInputOriginal"], keys.MAX_INPUT)
     signed_assignment = p.document(_original(first["recipeOriginals"]["assignmentOriginal"], p.MAX_CONFIG), p.MAX_CONFIG)
@@ -82,13 +84,15 @@ def _request_payload(pair, assignment, descriptor, issued, expires, now):
 
 def prepare_input(operation, role, input_raw, *, boot, now_boottime_ns, now_unix_ns):
     """Authenticate complete public input; return no key or live owner."""
-    p.require(operation in OPERATIONS and role in ROLES
+    p.require(operation in OPERATIONS
         and (operation != "request-commitment" or role == "commitRequest"))
     extra = ("requestCommitmentOriginal",) if operation == "request-commitment" else ("transportOriginal",)
     if operation == "delivery" and role == "commitRequest":
         extra += ("requestCommitmentOriginal",)
     value = p.fields(p.document(input_raw, MAX_INPUT), INPUT_FIELDS + extra)
-    p.require(value["apiVersion"] == API and value["operation"] == operation and value["role"] == role)
+    adopted = value["apiVersion"] == ADOPTED_API
+    p.require(value["apiVersion"] in (API, ADOPTED_API) and role in (keys.ADOPTED_ROLES if adopted else ROLES)
+        and value["operation"] == operation and value["role"] == role)
     p.integer(now_boottime_ns, maximum=p.MAX_U64); p.integer(now_unix_ns)
     clocks = dict(boot=boot, now_boottime_ns=now_boottime_ns, now_unix_ns=now_unix_ns)
     pair, assignment, delivery = _pair(role, value, clocks)
@@ -160,7 +164,8 @@ def checked_result(operation, role, input_raw, result, *, boot, now_boottime_ns,
     p.require(p.sha(raw) == p.digest(result["sha256"]))
     value = p.document(raw, MAX_OUTPUT)
     if operation == "delivery":
-        launch.shape("native-" + role + "-encrypted-keys", raw)
+        selected = p.document(input_raw, MAX_INPUT)["apiVersion"] == ADOPTED_API
+        (launch.shape_adopted if selected else launch.shape)("native-" + role + "-encrypted-keys", raw)
         signed = value["authorization"]
     else:
         signed = p.fields(value, ("payload", "signature"))

@@ -415,16 +415,62 @@ class ReceivedGenesisCore:
         self._observation, self._bundle = observation_raw, bundle_raw
         self._core_identity, self._public_identity = file_metadata(fd), file_metadata(public_fd)
         self._closed = self._close_attempted = False
+        self._adopted_cohort = None
+
+    def claim_adopted_cohort(self, *, cohort):
+        """One actual post-ACK claim before the operational watcher starts.
+
+        The transport itself stays single-thread-only. After capture, readonly
+        local custody checks may coexist with that cohort's lifetime watcher;
+        no receiving, signing, clock renewal or public owner construction occurs.
+        """
+        from serverware.native_shadow_proof_cohort_control import ParkedProofCohort
+        self.check()
+        p.require(type(self) is ReceivedGenesisCore and type(cohort) is ParkedProofCohort
+            and self._channel._received is self and self._channel._acked and self._adopted_cohort is None
+            and cohort.adoption_selected())
+        p.require(cohort._boot == self._channel._boot)
+        p.require(cohort.lifetime_deadline_boottime_ns() <= self._channel._deadline)
+        self._adopted_cohort = cohort
+        self.check()
+        return self
+
+    @property
+    def deadline_boottime_ns(self):
+        return self._channel._deadline
+
+    @property
+    def expires_at_unix_ns(self):
+        return self._channel._expiry
+
+    def _retained_origin(self):
+        channel = self._channel
+        p.require(self._adopted_cohort is not None and channel._received is self and channel._acked
+            and not channel._closed and os.getpid() == channel._pid and originals._start() == channel._start
+            and originals._boot() == channel._boot and threading.current_thread() is threading.main_thread()
+            and os.getresuid() == (0, 0, 0) and os.getresgid() == (0, 0, 0))
+
+    def _guard(self):
+        if self._adopted_cohort is None:
+            self._channel.check()
+            return
+        self._retained_origin()
+        channel = self._channel
+        p.require(not channel._failed)
+        now, wall = originals._clock(), time.time_ns()
+        p.require(channel._issued <= channel._last <= now < channel._deadline
+            and channel._epoch_floor <= channel._wall <= wall < channel._expiry)
+        channel._last, channel._wall = now, wall
 
     def check(self):
         try:
             p.require(not self._closed)
-            self._channel.check()
+            self._guard()
             observed = profile.observation(self._observation, self._bundle)
             _core(self._fd, observed, self._bundle)
             public = pack_originals(self._observation, self._bundle)
             p.require(_read_public(self._public_fd, _pin(public)) == public)
-            self._channel.check()
+            self._guard()
         except BaseException as error:
             self._channel._failed = True
             raise GenesisCoreChannelError(self._channel) from error
@@ -441,7 +487,11 @@ class ReceivedGenesisCore:
     def close(self):
         if self._closed:
             return
-        self._channel._origin()
+        if self._adopted_cohort is None:
+            self._channel._origin()
+        else:
+            self._retained_origin()
+            p.require(self._adopted_cohort._closed and self._adopted_cohort._parent_reaped)
         p.require(not self._close_attempted)
         self._close_attempted = True
         with io.owning():

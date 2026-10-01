@@ -30,7 +30,8 @@ class PublicationCliTests(unittest.TestCase):
             "--sign-genesis-ordinary-checkpoint-anchor", "--sign-genesis-ordinary-service-anchor",
             "--assemble-genesis-ordinary-history", "--sign-genesis-ordinary-delivery",
             "--sign-genesis-ordinary-grant", "--sign-genesis-endpoints-release", "--sign-publication-adoption"}
-            | set(entry.NATIVE_MODES) | set(entry.SERVICE_MODES) | set(entry.TRANSPORT_MODES) | set(entry.LAUNCH_MODES))
+            | set(entry.NATIVE_MODES) | set(entry.SERVICE_MODES) | set(entry.TRANSPORT_MODES) | set(entry.LAUNCH_MODES)
+            | set(entry.ADOPTED_MODES) | set(entry.ADOPTED_LAUNCH_MODES) | set(entry.ADOPTED_COHORT_MODES))
         for mode, purpose in (("--sign-genesis-precreation", "precreation"),
                               ("--sign-genesis-release", "release")):
             values = arguments(True)
@@ -51,6 +52,21 @@ class PublicationCliTests(unittest.TestCase):
         self.assertFalse(entry.valid_arguments(values[:-2]))
         values[0] = "--prepare-closure-set"
         self.assertFalse(entry.valid_arguments(values))
+
+    def test_adopted_roles_are_fixed_and_assembly_never_accepts_key(self):
+        self.assertEqual(len(entry.ADOPTED_ROLES), 11)
+        self.assertNotIn("bridge", entry.ADOPTED_ROLES)
+        self.assertEqual(len(entry.ADOPTED_MODES), 70)
+        self.assertEqual(len(entry.ADOPTED_LAUNCH_MODES), 3)
+        self.assertEqual(set(entry.ADOPTED_COHORT_MODES.values()), {"precreation", "release"})
+        for mode in (*entry.ADOPTED_MODES, *entry.ADOPTED_COHORT_MODES):
+            values = arguments(True); values[0] = mode
+            self.assertTrue(entry.valid_arguments(values))
+            self.assertFalse(entry.valid_arguments(values[:-2]))
+        for mode in entry.ADOPTED_LAUNCH_MODES:
+            values = arguments(); values[0] = mode
+            self.assertTrue(entry.valid_arguments(values))
+            self.assertFalse(entry.valid_arguments(values + ["--authority-key-fd", "5"]))
 
     def test_initial_history_modes_are_fixed_and_assembly_is_keyless(self):
         self.assertEqual(set(entry.INITIAL_MODES.values()),

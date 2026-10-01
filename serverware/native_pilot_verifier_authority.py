@@ -20,6 +20,7 @@ from serverware import native_shadow_nitro_originals as originals
 p = keys.p
 ROLES = keys.ROLES
 API = "serverware.nativePilotVerifierAuthorityInput/v1"
+ADOPTED_API = "serverware.nativePilotVerifierAuthorityInput/v2"
 DOMAIN = "serverware.nativeShadowVerifierTransport.signature/v1"
 MAX_INPUT = 32 * 1024 * 1024
 MAX_OUTPUT = 32768
@@ -29,13 +30,15 @@ INPUT_FIELDS = ("apiVersion", "role", *PAIR_FIELDS, "parentPort", "issuedAtUnixN
 
 def prepare_input(role, input_raw, *, boot, now_boottime_ns, now_unix_ns) -> dict:
     """Authenticate the complete pair and derive the sole permitted payload."""
-    p.require(role in ROLES)
     value = p.fields(p.document(input_raw, MAX_INPUT), INPUT_FIELDS)
-    p.require(value["apiVersion"] == API and value["role"] == role)
+    adopted = value["apiVersion"] == ADOPTED_API
+    p.require(value["apiVersion"] in (API, ADOPTED_API) and value["role"] == role
+        and role in (keys.ADOPTED_ROLES if adopted else ROLES))
     options = dict(boot=boot, now_boottime_ns=now_boottime_ns, now_unix_ns=now_unix_ns)
     pair = [keys.c9._original(value[name], keys.MAX_INPUT if name.endswith("InputOriginal")
         else keys.MAX_OUTPUT)[0] for name in PAIR_FIELDS]
-    admitted = keys.admitted_pair(role, *pair, **options)
+    admit = keys.admitted_adopted_pair if adopted else keys.admitted_pair
+    admitted = admit(role, *pair, **options)
     context = keys.prepare_input("admission", role, pair[2], **options)
     authorization = admitted["authorization"]["payload"]
     admission = admitted["admissionAuthorization"]["payload"]
@@ -69,7 +72,8 @@ def checked_result(role, input_raw, result, *, boot, now_boottime_ns, now_unix_n
     p.fields(result, ("original", "sha256"))
     raw, value = keys.c9._original(result["original"], MAX_OUTPUT)
     p.require(p.sha(raw) == p.digest(result["sha256"]))
-    launch.shape("native-" + role + "-verifier", raw)
+    selected = p.document(input_raw, MAX_INPUT)["apiVersion"] == ADOPTED_API
+    (launch.shape_adopted if selected else launch.shape)("native-" + role + "-verifier", raw)
     signed = value["authorization"]
     keys.c9._same(signed["payload"], context["payload"])
     p.public_key(context["supervisor"]).verify(p.decoded(signed["signature"], size=64),

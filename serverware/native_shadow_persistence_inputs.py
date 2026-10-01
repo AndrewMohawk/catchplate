@@ -372,6 +372,41 @@ class PersistenceInputs:
         self._grant = raw
         return raw
 
+    def admit_adopted_service_grant(self, *, signed_grant_original, service_input_original,
+            configuration_original, configuration_sha256, assignment_payload_original=None):
+        """Explicit v4 authority, joined to this owner's actual C9 and genesis."""
+        from serverware import native_pilot_adopted_service_authority as adopted
+        self.check()
+        p.require(self._cohort.adoption_selected() and self._genesis is not None
+            and not self._grant_attempted and not self._taken)
+        self._grant_attempted = True
+        before, wall = _clock(), time.time_ns()
+        value = adopted.input_document("persistence", service_input_original)
+        p.require(value["configurationOriginal"].encode("ascii") == configuration_original
+            and value["configurationSha256"] == configuration_sha256
+            and value["deliveryOriginal"].encode("ascii") == self._signed
+            and value["genesisOriginal"].encode("ascii") == self._genesis
+            and value["journalOriginal"].encode("ascii") == self._journal_raw
+            and value["peerOriginal"].encode("ascii") == self._peer_raw and value["peerSha256"] == self._peer_sha)
+        validation = p.document(value["adoptionValidationInputOriginal"].encode("ascii"), adopted.MAX_INPUT)
+        assignment = p.document(validation["currentAssignmentOriginal"].encode("ascii"), 1024 * 1024)
+        p.require(type(assignment_payload_original) is bytes and p.canonical(assignment["payload"]) == assignment_payload_original)
+        prepared = adopted.prepare_input("persistence", service_input_original, boot=self._boot,
+            now_boottime_ns=before, now_unix_ns=wall)
+        signed = adopted.grant_original("persistence", signed_grant_original)
+        p.require(signed["payload"] == prepared["payload"] and signed["payload"]["guest"] == self._guest
+            and p.decoded(signed["payload"]["proofScopeOriginalBase64url"], maximum=16384) == self._scope_raw)
+        supervisor = prepared["supervisor"]
+        cold = delivery.configuration(self._configuration_raw, self._configuration_sha)
+        p.require(supervisor["publicKeyBase64url"] != cold["authority"]["publicKeyBase64url"]
+            and supervisor["keyId"] != cold["authority"]["keyId"])
+        p.public_key(supervisor).verify(p.decoded(signed["signature"], size=64), p.preimage(prepared["domain"], signed["payload"]))
+        self.check()
+        now, epoch = _clock(), time.time_ns()
+        p.require(before <= now < prepared["deadline"] and wall <= epoch < prepared["epochLimit"])
+        self._grant = bytes(signed_grant_original)
+        return self._grant
+
     def close(self):
         if self._closed:
             return

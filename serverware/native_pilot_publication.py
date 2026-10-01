@@ -99,13 +99,15 @@ def _shape(purpose, raw):
             ("issuedAtBoottimeNs", "startupDeadlineBoottimeNs", "lifetimeDeadlineBoottimeNs"))
         p.require(issued < startup <= lifetime and startup - issued <= 30_000_000_000)
     elif purpose == "cohort-release":
+        adopted = value.get("apiVersion") == "serverware.nativeShadowProofCohortRelease/v7"
+        roles = cohort.ADOPTED_ENDPOINT_ROLES if adopted else cohort.ENDPOINT_ROLES
         p.fields(value, ("apiVersion", "configurationSha256", "precreationSha256", "observationSha256",
-            "invocationId", "signingKeyId", "externalDriverSha256") + cohort.ENDPOINT_ROLES)
-        p.require(value["apiVersion"] == "serverware.nativeShadowProofCohortRelease/v6")
+            "invocationId", "signingKeyId", "externalDriverSha256") + roles)
+        p.require(adopted or value["apiVersion"] == "serverware.nativeShadowProofCohortRelease/v6")
         for field in ("configurationSha256", "precreationSha256", "observationSha256",
                       "signingKeyId", "externalDriverSha256"):
             p.digest(value[field])
-        for role in cohort.ENDPOINT_ROLES:
+        for role in roles:
             row = p.fields(value[role], ("launch", "image"))
             delivery._pin(row["launch"])
             delivery._pin(row["image"])
@@ -198,17 +200,27 @@ class PublicPublisher:
             original.check()
 
     def publish(self, *, purpose, raw, expected_sha256):
+        return self._publish(purpose=purpose, raw=raw, expected_sha256=expected_sha256, adopted=False)
+
+    def publish_adopted(self, *, purpose, raw, expected_sha256):
+        """Separate source-fixed adopted slots; never widens legacy publish."""
+        return self._publish(purpose=purpose, raw=raw, expected_sha256=expected_sha256, adopted=True)
+
+    def _publish(self, *, purpose, raw, expected_sha256, adopted):
+        from serverware import native_pilot_launch_publication as launch
+        destinations = launch.ADOPTED_DESTINATIONS if adopted else DESTINATIONS
+        limits = launch.ADOPTED_PURPOSES if adopted else LIMITS
         self.check()
-        p.require(type(purpose) is str and purpose in DESTINATIONS and purpose not in self._attempted)
+        p.require(type(purpose) is str and purpose in destinations and purpose not in self._attempted)
         self._attempted.add(purpose)  # Consumed before validation or any write.
         try:
-            maximum = LIMITS[purpose]
+            maximum = limits[purpose]
             p.require(type(raw) is bytes and 0 < len(raw) <= maximum
                 and len(self._files) < MAX_ORIGINALS and self._bytes + len(raw) <= MAX_PUBLIC_BYTES)
             p.require(p.sha(raw) == p.digest(expected_sha256))
-            _shape(purpose, raw)
+            (launch.shape_adopted if adopted else _shape)(purpose, raw)
             self.check()
-            path = DESTINATIONS[purpose]
+            path = destinations[purpose]
             parent, name = path.rsplit("/", 1)
             parent_fd = self._roots[parent][0]
             descriptor = os.open(name, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC
@@ -258,13 +270,21 @@ class PublicPublisher:
         can still leave a partial bundle, which must never be retried or rolled
         back automatically. Existing objects are neither read nor adopted.
         """
+        return self._require_absent(purposes, adopted=False)
+
+    def require_absent_adopted(self, purposes):
+        return self._require_absent(purposes, adopted=True)
+
+    def _require_absent(self, purposes, *, adopted):
+        from serverware import native_pilot_launch_publication as launch
+        destinations = launch.ADOPTED_DESTINATIONS if adopted else DESTINATIONS
         self.check()
         p.require(type(purposes) is tuple and 0 < len(purposes) <= MAX_ORIGINALS
-            and all(type(purpose) is str and purpose in DESTINATIONS for purpose in purposes)
+            and all(type(purpose) is str and purpose in destinations for purpose in purposes)
             and len(set(purposes)) == len(purposes)
             and not self._attempted.intersection(purposes))
         for purpose in purposes:
-            parent, name = DESTINATIONS[purpose].rsplit("/", 1)
+            parent, name = destinations[purpose].rsplit("/", 1)
             try:
                 os.stat(name, dir_fd=self._roots[parent][0], follow_symlinks=False)
             except FileNotFoundError:

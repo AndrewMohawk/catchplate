@@ -41,6 +41,7 @@ class RetrievalActivation:
         self._signed = None
         self._spool, self._spool_fds = None, ()
         self._cohort_handoff = False
+        self._received_core = self._core_fd = self._core_identity = None
 
     @classmethod
     def prepare(cls, *, configuration_raw, configuration_sha256, peer_raw, peer_sha256,
@@ -126,6 +127,12 @@ class RetrievalActivation:
                 p.require(name == source_name and _structural(os.fstat(fd)) == _structural(os.fstat(source_fd))
                     and not os.get_inheritable(fd)
                     and fcntl.fcntl(fd, fcntl.F_GETFL) == fcntl.fcntl(source_fd, fcntl.F_GETFL))
+        if self._received_core is not None:
+            self._received_core.check()
+            source = self._received_core.borrowed_core_fd()
+            p.require(_identity(os.fstat(self._core_fd)) == self._core_identity == _identity(os.fstat(source))
+                and not os.get_inheritable(self._core_fd)
+                and fcntl.fcntl(self._core_fd, fcntl.F_GETFL) & (os.O_ACCMODE | os.O_PATH) == os.O_RDONLY)
 
     def bind_spool(self, spool_inputs):
         """Only SpoolInputs.prepare_retrieval may select the real full4 owner.
@@ -148,8 +155,27 @@ class RetrievalActivation:
         self._spool_fds = tuple(held)
         self.check()
 
+    def bind_received_core(self, spool_inputs, received_core):
+        """The exact ACK-gated inode, never a caller FD number or path."""
+        from serverware.native_pilot_genesis_core_channel import ReceivedGenesisCore
+        from serverware import native_pilot_genesis_parent_control_io as io
+        self.check()
+        p.require(self._spool is spool_inputs and spool_inputs._cohort.adoption_selected()
+            and type(received_core) is ReceivedGenesisCore and received_core._adopted_cohort is spool_inputs._cohort
+            and self._received_core is None and not self._taken and not self._sign_attempted)
+        received_core.check()
+        self._received_core = received_core  # Retain before any descriptor acquisition.
+        source = received_core.borrowed_core_fd()
+        with io.owning():
+            self._core_fd = fcntl.fcntl(source, fcntl.F_DUPFD_CLOEXEC, 128)
+            self._fds.append(self._core_fd)
+        self._core_identity = _identity(os.fstat(source))
+        p.require(self._deadline <= received_core.deadline_boottime_ns)
+        self.check()
+
     def _descriptors(self):
-        return (("retrieval-listener", self._socket.fileno()), ("retrieval-objects", self._objects)) + self._spool_fds
+        core = () if self._received_core is None else (("publication-genesis-core", self._core_fd),)
+        return (("retrieval-listener", self._socket.fileno()), ("retrieval-objects", self._objects)) + self._spool_fds + core
 
     def activation(self):
         self.check()
@@ -177,9 +203,16 @@ class RetrievalActivation:
         self.check()
         p.require(self._spool is not None and not self._sign_attempted and not self._taken)
         self._sign_attempted = True
-        signed = delivery.verify_spool_retrieval_delivery(configuration_raw=self._configuration_raw,
+        verify = delivery.verify_spool_retrieval_delivery
+        extra = {}
+        if self._received_core is not None:
+            p.require(self._spool._cohort.adoption_selected())
+            observed, bundle = self._received_core.originals()
+            extra = dict(core_observation_raw=observed, core_bundle_raw=bundle)
+            verify = delivery.verify_adopted_retrieval_delivery
+        signed = verify(configuration_raw=self._configuration_raw,
             configuration_sha256=self._configuration_sha256, signed_delivery_original=signed_delivery_original,
-            activation=self.activation(), boot=self._boot, startup_deadline=self._deadline, now=_clock())
+            activation=self.activation(), boot=self._boot, startup_deadline=self._deadline, now=_clock(), **extra)
         self._spool.require_retrieval_delivery(self, signed)
         self.check()
         self._signed = signed
@@ -246,6 +279,8 @@ class RetrievalActivation:
         for fd in reversed(self._fds):
             os.close(fd)
         self._fds.clear()
+        # The actual received owner remains with the pilot until the cohort
+        # itself is closed; closing these duplicate OFDs is not that custody.
         # Intentionally no unlink/rmdir, including failed preparation.
 
     def __enter__(self):

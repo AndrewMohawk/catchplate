@@ -1,4 +1,4 @@
-"""Fixed legacy bridge v2 and multi-guest v3 closure issuers.
+"""Fixed legacy bridge, multi-guest and explicit adopted endpoint closure issuers.
 
 Runs after genuine driver observation and operational C9 delivery, before bridge
 launch installation. C9 signing does not consume a closure. This producer neither
@@ -18,6 +18,14 @@ configuration, signed precreation, and originals/v6. Every input is separately
 approved; no arbitrary JSON is treated as a kernel owner. Legacy and endpoint
 inputs retain 8 MiB; only explicit bridge runtime/v10-v12 permits 16 MiB input.
 The complete live closure remains bounded at 1 MiB in every profile.
+
+Input/v3 explicitly selects hot12 closure-set/v2 and native closure/assignment
+v5. It is endpoint-only, requires the complete C9 Input/v2 as an additional
+literal deliveryInputOriginal, and keeps the 8 MiB bound. The separate bridge
+runtime/v14 intake is not offered here; relabelling old bridge data refuses.
+Source readers may preserve u64 metadata, but the native policy-shadow closure
+signature/output codec is signed-i64. Unrepresentable payloads refuse during
+preparation, before the caller obtains a key-ready context.
 """
 from __future__ import annotations
 
@@ -27,6 +35,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from serverware import authority_policy_canary_native_opening as opening
+from serverware import custody_generation_grants as generation
 from serverware import native_pilot_assignment as assignment_profile
 from serverware import native_pilot_closure_set as closure_set
 from serverware import native_pilot_bridge_runtime as bridge_runtime
@@ -49,6 +58,11 @@ INPUT_FIELDS = ("apiVersion", "controlOriginal", "configurationOriginal", "windo
 SET_INPUT_FIELDS = tuple(name for name in INPUT_FIELDS if name != "controlOriginal") + ("guestRole", "closureSetOriginal")
 SET_DOMAIN = "serverware.nativeCustodyClosureAssignment.signature/v3"
 SET_PROFILE = "native-multi-guest-closure-set-v1"
+ADOPTED_API = "serverware.nativePilotClosureAuthorityInput/v3"
+ADOPTED_INPUT_FIELDS = SET_INPUT_FIELDS + ("deliveryInputOriginal",)
+ADOPTED_ROLES = closure_set.PUBLICATION_ROLES[:-1]
+ADOPTED_DOMAIN = "serverware.nativeCustodyClosureAssignment.signature/v5"
+ADOPTED_PROFILE = "native-multi-guest-closure-set-v2"
 PAYLOAD_FIELDS = launch._CLOSURE
 MANIFEST_FIELDS = launch._MANIFEST
 PROVENANCE_FIELDS = ("sourceTreeSha256", "dependencyLockSha256", "buildRecipeSha256",
@@ -222,9 +236,42 @@ def _endpoint_guest(value, role, *, boot, now):
     return config, window, observed, delivery._delivery_guest(payload, signed_raw)
 
 
+def _adopted_endpoint_guest(value, role, *, boot, now, wall):
+    p.require(role in ADOPTED_ROLES)
+    input_raw, supplied = c9._original(value["deliveryInputOriginal"], generation.MAX_BYTES)
+    raw, _ = _selected_original(value["deliveryOriginal"], delivery.MAX_DELIVERY, True)
+    context = c9.verify_adopted_delivery(input_raw, raw, boot=boot,
+        now_boottime_ns=now, now_unix_ns=wall)
+    p.require(context["role"] == role)
+    for outer, inner in (("configurationOriginal", "ownerConfigurationOriginal"),
+            ("deliveryConfigurationOriginal", "configurationOriginal"),
+            ("windowOriginal", "windowOriginal"), ("observationOriginal", "observationOriginal"),
+            ("runtimeOriginal", "runtimeOriginal")):
+        p.require(value[outer] == supplied[inner])
+    config = generation.document(context["owner_configuration_raw"], 32768)
+    p.require(config[role + "Configuration"] == {
+        "path": "/etc/serverware/native-pilot-inputs/native-cold-" + role + ".json",
+        "sha256": p.sha(context["configuration_raw"])})
+    p.require(context["payload"]["runtimeConfig"] == {
+        "path": "/etc/serverware/native-pilot-inputs/native-runtime-" + role + ".json",
+        "sha256": p.sha(context["runtime_raw"])})
+    return config, context["window"], context["observed"], context["guest"], context
+
+
+def _selected_original(text, maximum, adopted):
+    if not adopted:
+        return c9._original(text, maximum)
+    p.require(type(text) is str and text.isascii())
+    raw = text.encode("ascii")
+    return raw, generation.document(raw, maximum)
+
+
 def input_document(input_original: bytes):
     """Explicit v10-v12 bridge bound; old bridge and endpoint inputs stay 8 MiB."""
     value = p.document(input_original, MAX_BRIDGE_INPUT)
+    if value.get("apiVersion") == ADOPTED_API:
+        p.require(len(input_original) <= MAX_INPUT and value.get("guestRole") in ADOPTED_ROLES)
+        return value
     bridge = value.get("apiVersion") == "serverware.nativePilotClosureAuthorityInput/v1" or (
         value.get("apiVersion") == "serverware.nativePilotClosureAuthorityInput/v2" and value.get("guestRole") == "bridge")
     successor = bridge and bridge_runtime.version(bridge_runtime.original(value["runtimeOriginal"])[1]) in (10, 11, 12)
@@ -241,24 +288,43 @@ def prepare_input(input_original: bytes, *, boot, now_boottime_ns, now_unix_ns):
     """
     p.integer(now_boottime_ns, maximum=p.MAX_U64); p.integer(now_unix_ns)
     value = input_document(input_original)
-    multi = value.get("apiVersion") == "serverware.nativePilotClosureAuthorityInput/v2"
+    adopted = value.get("apiVersion") == ADOPTED_API
+    multi = adopted or value.get("apiVersion") == "serverware.nativePilotClosureAuthorityInput/v2"
     role = value.get("guestRole") if multi else "bridge"
-    p.require(type(role) is str and role in closure_set.ROLES)
-    fields = SET_INPUT_FIELDS + (("controlOriginal",) if role == "bridge" else ()) if multi else INPUT_FIELDS
+    roles = ADOPTED_ROLES if adopted else closure_set.ROLES
+    p.require(type(role) is str and role in roles)
+    fields = (ADOPTED_INPUT_FIELDS if adopted else
+        SET_INPUT_FIELDS + (("controlOriginal",) if role == "bridge" else ()) if multi else INPUT_FIELDS)
     p.fields(value, fields)
-    p.require(value["apiVersion"] == "serverware.nativePilotClosureAuthorityInput/v" + ("2" if multi else "1"))
+    p.require(value["apiVersion"] == "serverware.nativePilotClosureAuthorityInput/v" + ("3" if adopted else "2" if multi else "1"))
     wall = now_unix_ns
-    config, window, observed, guest = (_guest(value, boot=boot, now=now_boottime_ns) if role == "bridge"
-        else _endpoint_guest(value, role, boot=boot, now=now_boottime_ns))
+    delivery_context = None
+    if adopted:
+        config, window, observed, guest, delivery_context = _adopted_endpoint_guest(value, role,
+            boot=boot, now=now_boottime_ns, wall=wall)
+    else:
+        config, window, observed, guest = (_guest(value, boot=boot, now=now_boottime_ns) if role == "bridge"
+            else _endpoint_guest(value, role, boot=boot, now=now_boottime_ns))
     envelope, checkpoint, binding, issued_floor, expires_ceiling, supervisor = _authority(value, wall)
+    if adopted:
+        _, trust = c9._original(value["trustOriginal"], MAX_BYTES)
+        expires_ceiling = min(expires_ceiling, trust["issuedAtUnixNanos"] + p.DAY_NS + 1,
+            envelope["payload"]["issuedAtUnixNanos"] + p.DAY_NS + 1,
+            trust["timeKey"]["notAfterUnixNanos"],
+            *(row["key"]["notAfterUnixNanos"] for row in trust["roleKeys"]))
+        if role == "retrieval":
+            core = delivery_context["core_observation"]
+            issued_floor = max(issued_floor, core["issuedAtUnixNanos"])
+            expires_ceiling = min(expires_ceiling, core["expiresAtUnixNanos"])
     p.require(assignment_profile.version(envelope) == (2 if multi else 1))
     selected = leaf = None
     if multi:
         set_raw, _ = c9._original(value["closureSetOriginal"], MAX_BYTES)
-        leaf = assignment_profile.closure_binding(envelope, set_raw, role)
-        selected = closure_set.validate(set_raw)
+        set_api = closure_set.PUBLICATION_API if adopted else closure_set.API
+        leaf = assignment_profile.closure_binding(envelope, set_raw, role, set_api_version=set_api)
+        selected = closure_set.validate(set_raw, api_version=set_api)
         _, manifest = c9._original(value["manifestOriginal"], MAX_BYTES)
-        c9._same(manifest, selected["members"][closure_set.ROLES.index(role)]["manifest"])
+        c9._same(manifest, selected["members"][roles.index(role)]["manifest"])
         if role == "bridge":
             _manifest(value, config, observed, envelope["payload"])
         else:
@@ -266,11 +332,11 @@ def prepare_input(input_original: bytes, *, boot, now_boottime_ns, now_unix_ns):
                 and manifest["runtimeConfigurationSha256"] == guest["runtimeConfigurationSha256"])
     else:
         manifest = _manifest(value, config, observed, envelope["payload"])
-    _, payload = c9._original(value["payloadOriginal"], 65536)
+    _, payload = _selected_original(value["payloadOriginal"], 65536, adopted)
     p.fields(payload, launch._CLOSURE_SET if multi else PAYLOAD_FIELDS)
-    expected = {"apiVersion": "serverware.nativeCustodyClosureAssignment/v" + ("3" if multi else "2"),
+    expected = {"apiVersion": "serverware.nativeCustodyClosureAssignment/v" + ("5" if adopted else "3" if multi else "2"),
         "purpose": "shadow-custody-closure-set-member" if multi else "shadow-custody-bootstrap-late-runtime",
-        "profile": SET_PROFILE if multi else PROFILE,
+        "profile": ADOPTED_PROFILE if adopted else SET_PROFILE if multi else PROFILE,
         "assignmentId": envelope["payload"]["assignmentId"], "assignmentPayloadSha256": envelope["payloadSha256"],
         "assignmentRevision": envelope["payload"]["assignmentRevision"], "manifestSha256": manifest["manifestSha256"],
         "guest": guest, "trustCheckpointId": checkpoint["checkpointId"],
@@ -279,21 +345,26 @@ def prepare_input(input_original: bytes, *, boot, now_boottime_ns, now_unix_ns):
         "signingKeyId": binding["keyId"], "signingKeySpkiSha256": binding["keySpkiSha256"]}
     if multi:
         expected.update(guestRole=role, **{name: leaf[name] for name in ("setRootSha256", "seccompSetRootSha256", "leafSha256")})
-    c9._same(payload, expected)
+    # native_closure::verify_assignment uses policy_shadow::canonical_json_bytes,
+    # which refuses every integer above signed-i64 even in the v5 successor.
+    p.require(p.canonical(payload) == p.canonical(expected))
     p.freshness(payload["issuedAtUnixNanos"], payload["expiresAtUnixNanos"], wall)
     p.require(issued_floor <= payload["issuedAtUnixNanos"] < payload["expiresAtUnixNanos"] <= expires_ceiling
         and payload["expiresAtUnixNanos"] - payload["issuedAtUnixNanos"] <= p.DAY_NS)
 
-    result = {"apiVersion": "serverware.nativeCustodyClosure/v" + ("3" if multi else "2"), "manifest": manifest,
+    result = {"apiVersion": "serverware.nativeCustodyClosure/v" + ("5" if adopted else "3" if multi else "2"), "manifest": manifest,
         "authorization": {"payload": payload, "signature": ""}}
     if multi:
         result["closureSet"] = selected
     # The whole original, not just its member, retains the live 1 MiB cap.
     # Check the exact encoded size before signing (Ed25519 base64url is86).
     p.require(len(p.canonical(result)) + 86 <= MAX_BYTES)
+    if adopted:
+        expires_ceiling = min(expires_ceiling, payload["expiresAtUnixNanos"], payload["issuedAtUnixNanos"] + p.DAY_NS + 1)
     return {"payload": payload, "supervisor": supervisor, "window": window,
         "deadline": p.ns(window["startupDeadlineBoottimeNs"]), "epochLimit": expires_ceiling,
-        "domain": SET_DOMAIN if multi else DOMAIN, "result": result}
+        "domain": ADOPTED_DOMAIN if adopted else SET_DOMAIN if multi else DOMAIN, "result": result,
+        **({"adopted": True, "delivery_context": delivery_context} if adopted else {})}
 
 
 def checked_result(input_original, result, *, boot, now_boottime_ns, now_unix_ns):
@@ -301,27 +372,33 @@ def checked_result(input_original, result, *, boot, now_boottime_ns, now_unix_ns
     prepared = prepare_input(input_original, boot=boot,
         now_boottime_ns=now_boottime_ns, now_unix_ns=now_unix_ns)
     p.fields(result, ("original", "sha256"))
-    raw, value = c9._original(result["original"], MAX_BYTES)
+    adopted = prepared.get("adopted", False)
+    raw, value = _selected_original(result["original"], MAX_BYTES, adopted)
     p.require(p.sha(raw) == p.digest(result["sha256"]))
     role = prepared["payload"].get("guestRole", "bridge")
-    launch.shape("native-" + role + "-closure", raw)
+    if not adopted:
+        launch.shape("native-" + role + "-closure", raw)
+    else:
+        p.fields(value, ("apiVersion", "manifest", "authorization", "closureSet"))
+        p.fields(value["authorization"], ("payload", "signature"))
     signature = value["authorization"]["signature"]
     expected = prepared["result"]
     expected["authorization"]["signature"] = signature
-    c9._same(value, expected)
+    p.require(p.canonical(value) == p.canonical(expected))
     p.public_key(prepared["supervisor"]).verify(p.decoded(signature, size=64),
         p.preimage(prepared["domain"], prepared["payload"]))
     return raw
 
 
 def sign(*, input_original: bytes, signing_key):
-    """Sign the existing v2/v3 wrapper with the original live key/window checks."""
+    """Sign the selected wrapper with original live key/window checks."""
     p.require(isinstance(signing_key, Ed25519PrivateKey))
     boot, now, wall = originals._boot(), originals._clock(), time.time_ns()
     prepared = prepare_input(input_original, boot=boot, now_boottime_ns=now, now_unix_ns=wall)
     public = signing_key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
     p.require(p.encoded(public) == prepared["supervisor"]["publicKeyBase64url"])
     payload, window = prepared["payload"], prepared["window"]
+    adopted = prepared.get("adopted", False)
 
     def check(previous_boot=now, previous_wall=wall):
         current = c9._live(window, previous_boot)
@@ -338,6 +415,11 @@ def sign(*, input_original: bytes, signing_key):
     result["authorization"]["signature"] = p.encoded(signature)
     raw = p.canonical(result)
     p.require(len(raw) <= MAX_BYTES)
-    launch.shape("native-" + payload.get("guestRole", "bridge") + "-closure", raw)
-    check(before_boot, before_wall)
+    if not adopted:
+        launch.shape("native-" + payload.get("guestRole", "bridge") + "-closure", raw)
+    after_boot, after_wall = check(before_boot, before_wall)
+    if adopted:
+        checked_result(input_original, {"original": raw.decode("ascii"), "sha256": p.sha(raw)},
+            boot=boot, now_boottime_ns=after_boot, now_unix_ns=after_wall)
+        check(after_boot, after_wall)
     return raw, prepared["deadline"]

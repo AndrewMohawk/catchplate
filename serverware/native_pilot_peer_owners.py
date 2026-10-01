@@ -32,6 +32,7 @@ def _source(owner, kind):
     owner.check()
     p.require(not owner._attempted and threading.current_thread() is threading.main_thread())
     rows = []
+    api = wire.API
     if kind == "ordinary-services":
         p.require(tuple(owner._children) == g.ROLES and not owner._stop.is_set()
             and all(item["phase"] == "parked" and not item["reaped"] for item in owner._children.values()))
@@ -46,8 +47,10 @@ def _source(owner, kind):
             expected = dict(device=info.st_dev, inode=info.st_ino, length=info.st_size, sha256=executable.sha)
             rows.append((role, child["pidfd"], child["pid"], child["start"], owner._pid, executable.fd, expected))
     elif kind == "native-endpoints":
-        p.require(owner._external_driver is not None and tuple(owner._roles) == wire.NATIVE_ROLES
-            and len(owner._parked) == len(wire.NATIVE_ROLES))
+        roles = wire.ADOPTED_NATIVE_ROLES if owner.adoption_selected() else wire.NATIVE_ROLES
+        api = wire.ADOPTED_API if owner.adoption_selected() else wire.API
+        p.require(owner._external_driver is not None and tuple(owner._roles) == roles
+            and len(owner._parked) == len(roles))
         source = owner.original_bytes()
         config_sha = p.sha(owner._config_original.raw)
         issued, invocation = p.ns(owner._window["issuedAtBoottimeNs"]), owner._window["invocationId"]
@@ -68,7 +71,7 @@ def _source(owner, kind):
         p.require(current_start == start)
         rows.append(("gate", owner._gate_pidfd, pid, start, parent, None,
             {"sha256": owner._config["lifecycle"]["gate"]["executableSha256"]}))
-    metadata = dict(apiVersion=wire.API, profile=wire.PROFILE, ownerKind=kind,
+    metadata = dict(apiVersion=api, profile=wire.PROFILE, ownerKind=kind,
         phase="executing-gate" if kind == "gate" else "parked-pre-exec",
         configurationSha256=config_sha, sourceOriginalSha256=p.sha(source),
         bootIdBase64url=owner._boot[0], timeNamespaceDevice=owner._boot[1], timeNamespaceInode=owner._boot[2],

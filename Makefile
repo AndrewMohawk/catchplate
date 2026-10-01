@@ -1729,6 +1729,18 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/native_pilot_genesis_authority.py \
 	serverware/native_pilot_genesis_core_profile.py \
 	serverware/native_pilot_genesis_core.py \
+	scripts/test_native_pilot_adopted_closure.py \
+	scripts/test_native_pilot_adopted_cohort_authority.py \
+	scripts/test_native_pilot_adopted_delivery.py \
+	scripts/test_native_pilot_adopted_keys.py \
+	scripts/test_native_pilot_adopted_services.py \
+	serverware/native_pilot_adopted_cohort_authority.py \
+	serverware/native_pilot_adopted_commands.py \
+	serverware/native_pilot_adopted_delivery.py \
+	serverware/native_pilot_adopted_launch_profile.py \
+	serverware/native_pilot_adopted_ordinary.py \
+	serverware/native_pilot_adopted_service_authority.py \
+	serverware/native_shadow_publication_inputs.py \
 	serverware/native_pilot_genesis_core_channel.py \
 	serverware/native_pilot_publication_adoption_profile.py \
 	serverware/native_pilot_publication_adoption_authority.py \
@@ -4622,6 +4634,18 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/native_pilot_genesis_authority.py \
 				serverware/native_pilot_genesis_core_profile.py \
 				serverware/native_pilot_genesis_core.py \
+				scripts/test_native_pilot_adopted_closure.py \
+				scripts/test_native_pilot_adopted_cohort_authority.py \
+				scripts/test_native_pilot_adopted_delivery.py \
+				scripts/test_native_pilot_adopted_keys.py \
+				scripts/test_native_pilot_adopted_services.py \
+				serverware/native_pilot_adopted_cohort_authority.py \
+				serverware/native_pilot_adopted_commands.py \
+				serverware/native_pilot_adopted_delivery.py \
+				serverware/native_pilot_adopted_launch_profile.py \
+				serverware/native_pilot_adopted_ordinary.py \
+				serverware/native_pilot_adopted_service_authority.py \
+				serverware/native_shadow_publication_inputs.py \
 				serverware/native_pilot_genesis_core_channel.py \
 				serverware/native_pilot_publication_adoption_profile.py \
 				serverware/native_pilot_publication_adoption_authority.py \

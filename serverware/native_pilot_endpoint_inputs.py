@@ -19,8 +19,11 @@ import copy
 import fcntl
 import os
 import stat
+import time
 
+from serverware import custody_generation_grants as g
 from serverware import custody_generation_originals as o
+from serverware import native_pilot_genesis_parent_control_io as io
 from serverware import native_shadow_guest_delivery as delivery
 from serverware import native_shadow_nitro_originals as originals
 from serverware import native_shadow_retrieval_artifacts as artifacts
@@ -58,11 +61,36 @@ class PilotEndpointInputs:
         self._deliveries = self._guests = self._spool_journal = None
         self._assignment_raw = self._assignment_payload = None
         self._transfers = {}
+        self._adopted = False
+        self._publication = self._received_core = self._adoption_raw = None
+        self._roles = _ROLES
 
     @classmethod
     def prepare(cls, pilot, *, cold_originals, peer_original, peer_sha256,
                 proof_scope_original, proof_scope_sha256, retrieval_manifest_original,
                 retrieval_manifest_sha256, object_directory_fd, assignment_original=None):
+        return cls._prepare(pilot, cold_originals=cold_originals, peer_original=peer_original, peer_sha256=peer_sha256,
+            proof_scope_original=proof_scope_original, proof_scope_sha256=proof_scope_sha256,
+            retrieval_manifest_original=retrieval_manifest_original, retrieval_manifest_sha256=retrieval_manifest_sha256,
+            object_directory_fd=object_directory_fd, assignment_original=assignment_original, received_core=None, adoption_original=None)
+
+    @classmethod
+    def prepare_adopted(cls, pilot, *, received_core, adoption_original, cold_originals, peer_original, peer_sha256,
+                        proof_scope_original, proof_scope_sha256, retrieval_manifest_original,
+                        retrieval_manifest_sha256, object_directory_fd, assignment_original):
+        from serverware.native_pilot_genesis_core_channel import ReceivedGenesisCore
+        p.require(type(received_core) is ReceivedGenesisCore and received_core._adopted_cohort is pilot._cohort)
+        received_core.check()
+        return cls._prepare(pilot, cold_originals=cold_originals, peer_original=peer_original, peer_sha256=peer_sha256,
+            proof_scope_original=proof_scope_original, proof_scope_sha256=proof_scope_sha256,
+            retrieval_manifest_original=retrieval_manifest_original, retrieval_manifest_sha256=retrieval_manifest_sha256,
+            object_directory_fd=object_directory_fd, assignment_original=assignment_original,
+            received_core=received_core, adoption_original=adoption_original)
+
+    @classmethod
+    def _prepare(cls, pilot, *, cold_originals, peer_original, peer_sha256, proof_scope_original, proof_scope_sha256,
+                 retrieval_manifest_original, retrieval_manifest_sha256, object_directory_fd, assignment_original,
+                 received_core, adoption_original):
         from serverware.native_pilot_launch import NativePilotLaunch
         from serverware.native_shadow_proof_cohort_control import ParkedProofCohort
         from serverware.native_shadow_spool_inputs import SpoolInputs
@@ -72,13 +100,17 @@ class PilotEndpointInputs:
             and type(pilot._spool) is SpoolInputs and pilot._cohort.endpoint_driver_selected()
             and pilot._cohort.effects_selected() and pilot._spool is pilot._cohort._spool_resources
             and pilot._cohort._external_driver.driver is pilot._driver)
-        p.fields(cold_originals, _ROLES)
+        adopted = received_core is not None
+        p.require(pilot._cohort.adoption_selected() == adopted and (adoption_original is not None) == adopted)
+        roles = _ROLES + (("publicationReconciliation",) if adopted else ())
+        p.fields(cold_originals, roles)
         value = cls(_TOKEN)
+        value._adopted, value._received_core, value._roles = adopted, received_core, roles
         value._pilot, value._cohort, value._spool = pilot, pilot._cohort, pilot._spool
         value._pid, value._start, value._boot = os.getpid(), originals._start(), originals._boot()
         value._deadline = value._cohort.startup_deadline_boottime_ns()
         value._cold = dict(cold_originals)
-        for role in _ROLES:
+        for role in roles:
             cold = delivery.configuration(value._cold[role], value._cohort._config[role + "Configuration"]["sha256"])
             p.require(p.canonical(cold) == p.canonical(value._cohort._cold[role]))
         p.require(p.sha(peer_original) == p.digest(peer_sha256)
@@ -87,6 +119,18 @@ class PilotEndpointInputs:
         value._peer_raw, value._peer_sha = peer_original, peer_sha256
         value._scope = artifacts.scope_original(proof_scope_original)
         value._scope_raw, value._scope_sha = proof_scope_original, proof_scope_sha256
+        if adopted:
+            from serverware import native_pilot_publication_adoption_profile as adoption
+            envelope = p.fields(g.document(adoption_original, adoption.MAX_AUTHORIZATION), ("payload", "signature"))
+            payload = p.fields(envelope["payload"], adoption.PAYLOAD_FIELDS)
+            observed_raw, bundle_raw = received_core.originals()
+            p.require(payload["apiVersion"] == "serverware.nativePublicationAdoptionAuthorization/v2"
+                and payload["coldBundleOriginal"].encode("ascii") == bundle_raw
+                and payload["proofScopeOriginal"].encode("ascii") == proof_scope_original)
+            p.require(payload["issuedAtBoottimeNanos"] <= o.clock() < payload["expiresAtBoottimeNanos"] <= received_core.deadline_boottime_ns
+                and payload["issuedAtUnixNanos"] <= time.time_ns() < payload["expiresAtUnixNanos"] <= received_core.expires_at_unix_ns)
+            value._adoption_raw = bytes(adoption_original)
+            value._adoption_payload = payload
         if value._scope.get("api_version") == artifacts.SCOPE_SET_API:
             from serverware import native_pilot_assignment as assignment_profile
             p.require(type(assignment_original) is bytes and 0 < len(assignment_original) <= assignment_profile.MAX_BYTES)
@@ -101,6 +145,7 @@ class PilotEndpointInputs:
         value._objects = artifacts.manifest_objects(retrieval_manifest_original, retrieval_manifest_sha256)
         value._retrieval_initialization = artifacts.manifest_initialization(
             retrieval_manifest_original, retrieval_manifest_sha256)
+        p.require(not adopted or value._retrieval_initialization == artifacts.FRESH_INITIALIZATION)
         manifest = p.document(retrieval_manifest_original, artifacts.MAX_MANIFEST)
         p.require(p.decoded(manifest["proofScopeOriginalBase64url"], maximum=16384) == proof_scope_original)
         value._manifest_raw, value._manifest_sha = retrieval_manifest_original, retrieval_manifest_sha256
@@ -110,8 +155,9 @@ class PilotEndpointInputs:
         try:
             value._origin()
             p.require(type(object_directory_fd) is int and object_directory_fd >= 0)
-            value._object_directory = fcntl.fcntl(object_directory_fd, fcntl.F_DUPFD_CLOEXEC, 128)
-            value._fds.append(value._object_directory)
+            with io.owning():
+                value._object_directory = fcntl.fcntl(object_directory_fd, fcntl.F_DUPFD_CLOEXEC, 128)
+                value._fds.append(value._object_directory)
             info = os.fstat(value._object_directory)
             p.require(stat.S_ISDIR(info.st_mode) and info.st_uid == info.st_gid == 0
                 and stat.S_IMODE(info.st_mode) == 0o555
@@ -120,8 +166,9 @@ class PilotEndpointInputs:
             for locator, raw in value._objects:
                 value._origin()
                 observation = store._observe(value._object_directory, locator, raw)
-                fd = os.open(locator["filename"], o.FLAGS, dir_fd=value._object_directory)
-                value._fds.append(fd)
+                with io.owning():
+                    fd = os.open(locator["filename"], o.FLAGS, dir_fd=value._object_directory)
+                    value._fds.append(fd)
                 identity = o.identity(store._file(fd, len(raw)))
                 p.require((identity[0], identity[1]) == (observation["device"], observation["inode"])
                     and store._measure(fd) == observation["fsVeritySha256"]
@@ -138,10 +185,14 @@ class PilotEndpointInputs:
                 configuration_sha256=value._cohort._config["trustedTimeConfiguration"]["sha256"],
                 peer_raw=peer_original, peer_sha256=peer_sha256,
                 startup_deadline_boottime_ns=str(value._deadline), pilot_inputs=value)
-            value._retrieval = value._spool.prepare_retrieval(configuration_raw=value._cold["retrieval"],
+            retrieval_prepare = value._spool.prepare_adopted_retrieval if adopted else value._spool.prepare_retrieval
+            value._retrieval = retrieval_prepare(configuration_raw=value._cold["retrieval"],
                 configuration_sha256=value._cohort._config["retrievalConfiguration"]["sha256"],
                 peer_raw=peer_original, peer_sha256=peer_sha256, object_directory_fd=value._object_directory,
-                startup_deadline_boottime_ns=str(value._deadline))
+                startup_deadline_boottime_ns=str(value._deadline), **({"received_core": received_core} if adopted else {}))
+            if adopted:
+                from serverware.native_shadow_publication_inputs import PublicationActivation
+                PublicationActivation.prepare(value)
             value.check()
             return value
         except BaseException:
@@ -158,6 +209,11 @@ class PilotEndpointInputs:
             and not self._pilot._cleanup_attempted and self._cohort._external_driver.driver is self._pilot._driver)
         self._cohort.check()
         self._spool.check()
+        if self._adopted:
+            self._received_core.check()
+            p.require(self._received_core._adopted_cohort is self._cohort
+                and self._adoption_payload["issuedAtBoottimeNanos"] <= o.clock() < self._adoption_payload["expiresAtBoottimeNanos"]
+                and self._adoption_payload["issuedAtUnixNanos"] <= time.time_ns() < self._adoption_payload["expiresAtUnixNanos"])
         child = self._cohort._external_driver.value
         process = child["driver"]
         p.require((self._peer["uid"], self._peer["gid"]) ==
@@ -190,24 +246,35 @@ class PilotEndpointInputs:
         self._persistence.check()
         self._trusted_time.check()
         self._retrieval.check()
+        if self._adopted:
+            p.require(self._publication is not None)
+            self._publication.check()
         self._origin()
 
     def activations(self):
-        """Actual FD metadata for three independent C9 signatures, not readiness."""
+        """Actual FD metadata for the selected C9 inventory, not readiness."""
         self.check()
-        return {"retrieval": self._retrieval.activation(), "persistence": self._persistence.activation(),
+        result = {"retrieval": self._retrieval.activation(), "persistence": self._persistence.activation(),
             "trustedTime": self._trusted_time.activation()}
+        if self._adopted:
+            result["publicationReconciliation"] = self._publication.activation()
+        return result
+
+    def adopted_core_originals(self):
+        self.check(); p.require(self._adopted)
+        return self._received_core.originals()
 
     def _delivery(self, role, raw):
-        signed = p.fields(p.document(raw, delivery.MAX_DELIVERY), ("apiVersion", "payload", "signatureBase64url"))
+        codec = g if self._adopted else p
+        signed = p.fields(codec.document(raw, delivery.MAX_DELIVERY), ("apiVersion", "payload", "signatureBase64url"))
         p.require(signed["apiVersion"] == "serverware.policyCustodyGuestDelivery/v1")
         payload = p.fields(signed["payload"], delivery.FIELDS)
         p.require(payload["configurationSha256"] == self._cohort._config[role + "Configuration"]["sha256"])
         for name in _WINDOW:
-            p.require(p.canonical(payload[name]) == p.canonical(self._cohort._window[name]))
+            p.require(codec.canonical(payload[name]) == codec.canonical(self._cohort._window[name]))
         for name in ("serviceRole", "uid", "gid"):
-            p.require(p.canonical(payload[name]) == p.canonical(self._cohort._cold[role][name]))
-        return delivery._delivery_guest(payload, raw)
+            p.require(codec.canonical(payload[name]) == codec.canonical(self._cohort._cold[role][name]))
+        return (delivery.adopted_delivery_guest if self._adopted else delivery._delivery_guest)(payload, raw)
 
     def admit_deliveries(self, *, originals):
         """One intake of actual C9 originals; no signing or startup renewal."""
@@ -215,11 +282,13 @@ class PilotEndpointInputs:
         p.require(not self._delivery_attempted and not self._retain_attempted)
         self._delivery_attempted = True
         try:
-            p.fields(originals, _ROLES)
-            guests = {role: self._delivery(role, originals[role]) for role in _ROLES}
+            p.fields(originals, self._roles)
+            guests = {role: self._delivery(role, originals[role]) for role in self._roles}
             self._persistence.admit_delivery(signed_delivery_original=originals["persistence"])
             self._trusted_time.admit_delivery(signed_delivery_original=originals["trustedTime"])
             self._retrieval.admit_delivery(signed_delivery_original=originals["retrieval"])
+            if self._adopted:
+                self._publication.admit_delivery(signed_delivery_original=originals["publicationReconciliation"])
             self._spool_journal = self._spool.initialize_store(
                 retrieval_delivery_original=originals["retrieval"], proof_scope_original=self._scope_raw)
             self._deliveries, self._guests = dict(originals), guests
@@ -233,14 +302,22 @@ class PilotEndpointInputs:
         launch_raw, signed_raw, grant_raw = self._cohort.activation_originals(role=role, launch_pin=launch_pin)
         p.require(signed_raw == self._deliveries[role])
         launch = p.document(launch_raw, 32768)
-        envelope = p.fields(p.document(grant_raw, 65536), ("payload", "signature"))
+        maximum = (4 * 1024 * 1024 if role == "publicationReconciliation" else 3 * 1024 * 1024) if self._adopted else 65536
+        envelope = p.fields(g.document(grant_raw, maximum), ("payload", "signature"))
         grant = envelope["payload"]
-        p.require(type(grant) is dict and p.canonical(grant["guest"]) == p.canonical(self._guests[role])
-            and p.canonical(grant["expectedPeer"]) == self._peer_raw)
+        codec = g if self._adopted else p
+        p.require(type(grant) is dict and codec.canonical(grant["guest"]) == codec.canonical(self._guests[role])
+            and codec.canonical(grant["expectedPeer"]) == self._peer_raw)
         if role == "trustedTime":
             p.require(grant["apiVersion"] == "serverware.nativeShadowTrustedTimeServiceAssignment/v1"
                 and grant["purpose"] == "native-shadow-trusted-time-response"
                 and grant["clockBootstrapSha256"] == launch["keyAdmission"]["timeBootstrap"]["sha256"])
+        elif self._adopted:
+            from serverware import native_pilot_adopted_service_authority as adopted
+            operation = "publication" if role == "publicationReconciliation" else role
+            adopted.require_adopted_grant(operation, grant_raw, adoption_original=self._adoption_raw,
+                guest=self._guests[role], proof_scope_original=self._scope_raw,
+                store=self._spool_journal if role == "retrieval" else None)
         elif role == "retrieval":
             from serverware import native_pilot_native_service_authority as services
             services.grant_shape("retrieval", grant)
@@ -255,26 +332,31 @@ class PilotEndpointInputs:
 
     def retain(self, *, launch_pins, persistence_configuration_original,
                persistence_configuration_sha256, genesis_original, genesis_sha256,
-               journal_original, journal_sha256):
-        """Return exactly three genuine transfers; partial failure keeps all owners."""
+               journal_original, journal_sha256, persistence_service_input_original=None):
+        """Return the selected genuine transfers; partial failure keeps all owners."""
         self.check()
         p.require(self._deliveries is not None and not self._retain_attempted)
+        p.require((persistence_service_input_original is not None) == self._adopted)
         self._retain_attempted = True
         try:
-            p.fields(launch_pins, _ROLES)
-            grants = {role: self._grant(role, launch_pins[role]) for role in _ROLES}
+            p.fields(launch_pins, self._roles)
+            grants = {role: self._grant(role, launch_pins[role]) for role in self._roles}
             self._persistence.install_genesis(genesis_original=genesis_original, genesis_sha256=genesis_sha256,
                 journal_original=journal_original, journal_sha256=journal_sha256)
-            self._persistence.admit_service_grant(signed_grant_original=grants["persistence"],
+            admit = self._persistence.admit_adopted_service_grant if self._adopted else self._persistence.admit_service_grant
+            admit(signed_grant_original=grants["persistence"],
                 configuration_original=persistence_configuration_original,
                 configuration_sha256=persistence_configuration_sha256,
-                assignment_payload_original=self._assignment_payload)
+                assignment_payload_original=self._assignment_payload,
+                **({"service_input_original": persistence_service_input_original} if self._adopted else {}))
             self._transfers["persistence"] = self._persistence.take_for_launch(
                 signed_delivery_sha256=p.sha(self._deliveries["persistence"]),
                 service_grant_sha256=p.sha(grants["persistence"]))
             self._transfers["trustedTime"] = self._trusted_time.take_for_cohort(
                 cohort=self._cohort, launch_pin=launch_pins["trustedTime"])
             self._transfers["retrieval"] = self._retrieval.take_for_cohort(launch_pin=launch_pins["retrieval"])
+            if self._adopted:
+                self._transfers["publicationReconciliation"] = self._publication.take_for_cohort(launch_pin=launch_pins["publicationReconciliation"])
             self.check()
             return dict(self._transfers)
         except BaseException:
@@ -306,6 +388,8 @@ class PilotEndpointInputs:
             self._persistence.close()
         if self._trusted_time is not None:
             self._trusted_time.close()
+        if self._publication is not None:
+            self._publication.close()
         # Retrieval is owned/closed by the spool, including partial handoffs.
         p.require(self._spool._closed)
         for fd in reversed(self._fds):

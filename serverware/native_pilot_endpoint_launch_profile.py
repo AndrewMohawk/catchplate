@@ -25,6 +25,18 @@ MAX_POLICY = 16384
 MAX_INPUT = launch.MAX_INPUT
 
 
+def build_adopted(role, *, input_original, boot, now_boottime_ns, now_unix_ns):
+    """Explicit complete adopted-input assembly; old Policy/v1 is unchanged."""
+    from serverware import native_pilot_adopted_launch_profile as adopted
+    return adopted.prepare_input(role, input_original, boot=boot, now_boottime_ns=now_boottime_ns,
+        now_unix_ns=now_unix_ns)["bundleOriginal"]
+
+
+def checked_adopted_result(role, input_raw, result, **clocks):
+    from serverware import native_pilot_adopted_launch_profile as adopted
+    return adopted.checked_result(role, input_raw, result, **clocks)
+
+
 def validate_policy(fragment):
     p.fields(fragment, ("apiVersion", "endpoints"))
     p.require(fragment["apiVersion"] == API and len(p.canonical(fragment)) <= MAX_POLICY)

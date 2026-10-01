@@ -186,3 +186,27 @@ def checked_result(role, input_raw, result) -> bytes:
     driver._key(cold["authority"]).verify(p.decoded(signed["signatureBase64url"], size=64), delivery.DOMAIN + payload_raw)
     delivery._delivery_guest(signed["payload"], raw)
     return raw
+
+
+def build_adopted(role, *, configuration_raw, owner_configuration_raw, window_raw, observation_raw,
+                  runtime_raw, payload_raw, activation, boot, now_boottime_ns, now_unix_ns,
+                  core_observation_raw=None, core_bundle_raw=None):
+    """Complete independently approved v8 input; no legacy profile widening."""
+    from serverware import custody_generation_grants as g
+    from serverware import native_pilot_adopted_delivery as adopted
+    p.require(role in adopted.ROLES and (core_observation_raw is not None) == (role == "retrieval")
+        and (core_bundle_raw is not None) == (role == "retrieval"))
+    value = dict(apiVersion=adopted.API, role=role, configurationOriginal=configuration_raw.decode("ascii"),
+        ownerConfigurationOriginal=owner_configuration_raw.decode("ascii"), windowOriginal=window_raw.decode("ascii"),
+        observationOriginal=observation_raw.decode("ascii"), runtimeOriginal=runtime_raw.decode("ascii"),
+        payloadOriginal=payload_raw.decode("ascii"), activationOriginal=g.canonical(activation).decode("ascii"))
+    if role == "retrieval":
+        value.update(coreObservationOriginal=core_observation_raw.decode("ascii"), coreBundleOriginal=core_bundle_raw.decode("ascii"))
+    raw = g.canonical(value)
+    adopted.prepare_input(raw, boot=boot, now_boottime_ns=now_boottime_ns, now_unix_ns=now_unix_ns)
+    return raw
+
+
+def checked_adopted_result(input_raw, signed_original, *, boot, now_boottime_ns, now_unix_ns):
+    return c9.verify_adopted_delivery(input_raw, signed_original, boot=boot,
+        now_boottime_ns=now_boottime_ns, now_unix_ns=now_unix_ns)

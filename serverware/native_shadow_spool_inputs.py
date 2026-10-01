@@ -13,6 +13,7 @@ import socket
 import stat
 
 from serverware import custody_generation_originals as o
+from serverware import custody_generation_grants as g
 from serverware import native_shadow_persistence_inputs as existing
 from serverware import native_shadow_nitro_profile as p
 
@@ -206,6 +207,23 @@ class SpoolInputs:
         before binding its already held store/lock OFDs. Partial preparation
         remains fenced until the cohort's actual cleanup; no old path adoption.
         """
+        p.require(not self._cohort.adoption_selected())
+        return self._prepare_retrieval(configuration_raw=configuration_raw, configuration_sha256=configuration_sha256,
+            peer_raw=peer_raw, peer_sha256=peer_sha256, object_directory_fd=object_directory_fd,
+            startup_deadline_boottime_ns=startup_deadline_boottime_ns, received_core=None)
+
+    def prepare_adopted_retrieval(self, *, received_core, configuration_raw, configuration_sha256,
+                                  peer_raw, peer_sha256, object_directory_fd, startup_deadline_boottime_ns):
+        from serverware.native_pilot_genesis_core_channel import ReceivedGenesisCore
+        p.require(self._cohort.adoption_selected() and type(received_core) is ReceivedGenesisCore
+            and received_core._adopted_cohort is self._cohort)
+        received_core.check()
+        return self._prepare_retrieval(configuration_raw=configuration_raw, configuration_sha256=configuration_sha256,
+            peer_raw=peer_raw, peer_sha256=peer_sha256, object_directory_fd=object_directory_fd,
+            startup_deadline_boottime_ns=startup_deadline_boottime_ns, received_core=received_core)
+
+    def _prepare_retrieval(self, *, configuration_raw, configuration_sha256, peer_raw, peer_sha256,
+                           object_directory_fd, startup_deadline_boottime_ns, received_core):
         from serverware.native_shadow_retrieval_activation import RetrievalActivation
         from serverware import native_shadow_guest_delivery as d
         from serverware import native_shadow_retrieval_artifacts as a
@@ -234,6 +252,8 @@ class SpoolInputs:
             object_directory_fd=object_directory_fd, startup_deadline_boottime_ns=startup_deadline_boottime_ns)
         self._retrieval_activation = owner
         owner.bind_spool(self)
+        if received_core is not None:
+            owner.bind_received_core(self, received_core)
         self.check()
         return owner
 
@@ -249,11 +269,12 @@ class SpoolInputs:
         """Bind the verified full4 original to the exact original cohort window."""
         from serverware import native_shadow_guest_delivery as d
         self.retrieval_additions(owner)
-        payload = p.fields(p.document(original, d.MAX_DELIVERY)["payload"], d.FIELDS)
+        codec = g if self._cohort.adoption_selected() else p
+        payload = p.fields(codec.document(original, d.MAX_DELIVERY)["payload"], d.FIELDS)
         p.require(payload["configurationSha256"] == self._cohort._config["retrievalConfiguration"]["sha256"])
         for name in ("authorityKeyId", "invocationId", "bootIdBase64url", "timeNamespaceDevice",
                      "timeNamespaceInode", "issuedAtBoottimeNs", "startupDeadlineBoottimeNs", "lifetimeDeadlineBoottimeNs"):
-            p.require(p.canonical(payload[name]) == p.canonical(self._cohort._window[name]))
+            p.require(codec.canonical(payload[name]) == codec.canonical(self._cohort._window[name]))
         self.check()
 
     def retain_retrieval_transfer(self, owner, *, launch_pin):
@@ -269,7 +290,9 @@ class SpoolInputs:
     def initialize_store(self, *, retrieval_delivery_original, proof_scope_original):
         """Empty storage identity only; never a fabricated shadow ledger head."""
         self.check(); p.require(not self._seal_attempted); self._seal_attempted = True
-        signed = p.fields(p.document(retrieval_delivery_original, 65536), ("apiVersion", "payload", "signatureBase64url"))
+        adopted = self._cohort.adoption_selected()
+        codec = g if adopted else p
+        signed = p.fields(codec.document(retrieval_delivery_original, 65536), ("apiVersion", "payload", "signatureBase64url"))
         from serverware import native_shadow_guest_delivery as d
         p.require(signed["apiVersion"] == "serverware.policyCustodyGuestDelivery/v1")
         payload = p.fields(signed["payload"], d.FIELDS)
@@ -282,11 +305,15 @@ class SpoolInputs:
         # The cohort's independently pinned C9 root authenticates these
         # originals; final release/native C9 admission additionally binds all
         # executable, boot, credentials, activation and lifetime originals.
-        self._cohort._key.verify(p.decoded(signed["signatureBase64url"], size=64), d.DOMAIN + p.canonical(payload))
+        self._cohort._key.verify(p.decoded(signed["signatureBase64url"], size=64), d.DOMAIN + codec.canonical(payload))
         guest = {name: payload[name] for name in p.GUEST_FIELDS if name not in {"deliverySha256", "runtimeConfigurationSha256"}}
         guest.update(deliverySha256=p.sha(retrieval_delivery_original), runtimeConfigurationSha256=payload["runtimeConfig"]["sha256"])
-        p.guest(guest); p.document(proof_scope_original, 16384)
-        raw = p.canonical({"apiVersion": "serverware.nativeLedgerSpoolStoreGenesis/v1", "guest": guest,
+        if adopted:
+            p.require(guest == d.adopted_delivery_guest(payload, retrieval_delivery_original))
+        else:
+            p.guest(guest)
+        codec.document(proof_scope_original, 16384)
+        raw = codec.canonical({"apiVersion": "serverware.nativeLedgerSpoolStoreGenesis/v1", "guest": guest,
             "proofScopeSha256": p.sha(proof_scope_original)})
         fd = os.open("genesis.json", os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
             0o400, dir_fd=self._store)
@@ -321,7 +348,8 @@ class SpoolInputs:
         head_version = 3 if self._effects_selected else 2 if self._terminal_selected else 1
         p.require(head["apiVersion"] == f"serverware.nativeSpoolHeadGrant/v{head_version}")
         self._scope, self._head = head["scope"], bytes(head_original)
-        retrieval = p.document(transfers["retrieval"]._grant_bytes, 65536)["payload"]
+        adopted = self._cohort.adoption_selected()
+        retrieval = (g if adopted else p).document(transfers["retrieval"]._grant_bytes, 3 * 1024 * 1024 if adopted else 65536)["payload"]
         p.require(transfers["retrieval"]._delivery_bytes == self._retrieval_delivery
             and retrieval["store"] == {"genesisSha256": p.sha(self._genesis), "sequence": 0, "headSha256": p.sha(self._genesis)}
             and retrieval["spoolScope"] == self._scope)

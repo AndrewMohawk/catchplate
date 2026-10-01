@@ -278,10 +278,10 @@ class GenesisAuthorityProcess:
             self._child_check(terminal=self._finished or self._index == len(_JOBS))
         self._clock()
 
-    def check_retained(self):
+    def check_retained(self, *, full=True):
         """Source custody after actual finish/reap, not another admission window."""
-        p.require(self._finished and self._reaped and not self._close_attempted)
-        self._capabilities(full=True); self._child_check(terminal=True); self._origin()
+        p.require(type(full) is bool and self._finished and self._reaped and not self._close_attempted)
+        self._capabilities(full=full); self._child_check(terminal=True); self._origin()
 
     def listener_configuration_original(self):
         self.check_waiting()

@@ -259,7 +259,7 @@ class CommissioningLifecycle:
             (original.check if full else original.check_identity)()
         if self._cold is not None:
             if self._cold.finished:
-                self._cold.check_retained()
+                self._cold.check_retained(full=full)
             else:
                 self._cold.check_waiting()
         if self._process is not None and not self._process._closed:
@@ -280,6 +280,48 @@ class CommissioningLifecycle:
         """Keep genuine current owners without receiving or advancing a job."""
         try:
             self._check()
+        except BaseException as error:
+            self._failed = True
+            raise LifecycleError(self) from error
+
+    def approval_context(self):
+        """Return checked public transport context, never authority or renewal.
+
+        The lifetime ceiling bounds the one inherited approval connection.
+        Each exchange uses the current wait ceiling and still calls
+        check_waiting during I/O. Copies of these values cannot construct a
+        process owner, approve an input, or keep a later wait current.
+        """
+        try:
+            self._check()
+            p.require(not self._active)
+            self._listener.check()
+            lifetime, expiry = self._deadline, self._expiry
+            if self._cold._core_deadline is not None:
+                lifetime = min(lifetime, self._cold._core_deadline)
+            if self._cold._core_expiry is not None:
+                expiry = min(expiry, self._cold._core_expiry)
+            wait = lifetime
+            if not self._cold.finished:
+                wait = min(wait, self._cold._upper())
+            if self._process is not None and not self._process._closed:
+                expiry = min(expiry, self._process._epoch_limit)
+                if self._supervisor is not None and self._supervisor._pending is not None:
+                    wait = min(wait, self._supervisor._pending.deadline_boottime_ns)
+                elif self._process._started and self._process._channel._index < len(self._process._order):
+                    # Match the actual process.receive bound without reading
+                    # its pipe or advancing its selected catalogue.
+                    phase = self._process._order[self._process._channel._index][0]
+                    upper = self._process._lifetime - self._process._reserve if phase in (
+                        "generation-origin", "shutdown") else self._process._startup
+                    wait = min(wait, upper)
+            result = {"stage": self._stage,
+                "listenerConfigurationOriginal": self._listener.raw.decode("ascii"),
+                "startupDeadlineBoottimeNs": min(self._startup, lifetime),
+                "deadlineBoottimeNs": lifetime, "waitDeadlineBoottimeNs": wait,
+                "expiresAtUnixNanos": expiry}
+            self._check(deadline=wait, expiry=expiry)  # Sample after all retained source/identity I/O.
+            return result
         except BaseException as error:
             self._failed = True
             raise LifecycleError(self) from error

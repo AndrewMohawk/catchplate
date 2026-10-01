@@ -13,6 +13,10 @@ import sys
 
 SCRIPT = "/supervisor/app/scripts/native_pilot_supervisor_runtime_entrypoint.py"
 CLI = "/supervisor/app/scripts/run_native_pilot_supervisor.py"
+LIFECYCLE_CLI = "/supervisor/app/scripts/run_native_pilot_lifecycle.py"
+LIFECYCLE_MODE = "--run-native-pilot-lifecycle"
+LIFECYCLE_INPUTS = ("supervisor-inventory", "listener-configuration")
+LIFECYCLE_KEYS = (("cold-authority-key", 36), ("adopted-authority-key", 123))
 PYTHON = "/runtime/python/bin/python3"
 IMPORT_ROOTS = ("/supervisor/app", "/authority/app", "/vendor", "/app")
 INPUTS = ("supervisor-inventory", "policy", "recipe", "conductor-inventory", "authority-inventory")
@@ -24,10 +28,56 @@ def _number(value, minimum, maximum):
             and minimum <= int(value) <= maximum)
 
 
+def _lifecycle_arguments(arguments):
+    """Fixed staged caller syntax; the real CLI checks exact key purposes."""
+    keys_offset = 1 + 4 * len(LIFECYCLE_INPUTS) + 8
+    if len(arguments) != keys_offset + 2 * sum(count for _, count in LIFECYCLE_KEYS):
+        return False
+    descriptors = set()
+    for index, name in enumerate(LIFECYCLE_INPUTS):
+        offset = 1 + 4 * index
+        flag, number, pin_flag, pin = arguments[offset:offset + 4]
+        if (flag != "--" + name + "-fd" or not _number(number, 3, (1 << 31) - 1)
+                or pin_flag != "--" + name + "-sha256"
+                or re.fullmatch(r"sha256:[0-9a-f]{64}", pin) is None
+                or int(number) in descriptors):
+            return False
+        descriptors.add(int(number))
+    approval_offset = 1 + 4 * len(LIFECYCLE_INPUTS)
+    for offset, name, minimum, maximum in (
+            (approval_offset, "approval-fd", 3, (1 << 31) - 1),
+            (approval_offset + 2, "approval-peer-pid", 2, (1 << 31) - 1),
+            (approval_offset + 4, "approval-peer-uid", 0, (1 << 32) - 2),
+            (approval_offset + 6, "approval-peer-gid", 0, (1 << 32) - 2)):
+        if arguments[offset] != "--" + name or not _number(arguments[offset + 1], minimum, maximum):
+            return False
+    channel = int(arguments[approval_offset + 1])
+    if channel in descriptors:
+        return False
+    descriptors.add(channel)
+    offset = keys_offset
+    for flag, count in LIFECYCLE_KEYS:
+        purposes = set()
+        for _ in range(count):
+            literal = arguments[offset + 1]
+            if (arguments[offset] != "--" + flag
+                    or re.fullmatch(r"[A-Za-z][A-Za-z0-9-]{0,127}=[1-9][0-9]{0,9}", literal) is None):
+                return False
+            purpose, number = literal.split("=", 1)
+            if (purpose in purposes or not _number(number, 3, (1 << 31) - 1)
+                    or int(number) in descriptors):
+                return False
+            purposes.add(purpose)
+            offset += 2
+    return True
+
+
 def valid_arguments(arguments):
     """Closed invocation syntax only; actual originals/keys/peer stay CLI-owned."""
     if type(arguments) is not list or not arguments or not all(type(value) is str for value in arguments):
         return False
+    if arguments[0] == LIFECYCLE_MODE:
+        return _lifecycle_arguments(arguments)
     adopted = arguments[0] == "--run-adopted-native-pilot"
     inputs = INPUTS + (("intake-configuration",) if adopted else ())
     keys_offset = 1 + 4 * len(inputs) + 8
@@ -89,7 +139,8 @@ def main():
     # Namespace packages combine only the fixed source-selected script trees;
     # the unchanged shared serverware package remains under /app.
     sys.path[:0] = list(IMPORT_ROOTS)
-    runpy.run_path(CLI, run_name="__main__")
+    selected_cli = LIFECYCLE_CLI if sys.argv[1] == LIFECYCLE_MODE else CLI
+    runpy.run_path(selected_cli, run_name="__main__")
 
 
 if __name__ == "__main__":

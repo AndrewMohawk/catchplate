@@ -8,6 +8,8 @@ actual process identity primitive also used by the connected lifecycle.
 from __future__ import annotations
 
 import copy
+import ast
+import inspect
 import os
 from pathlib import Path
 import select
@@ -123,6 +125,27 @@ class LifecycleSourceControls(unittest.TestCase):
     def test_public_documents_cannot_construct_or_supply_a_lifecycle_owner(self):
         for value in ({"status": "closed", "completed": True}, fixture(), None, object()):
             with self.assertRaises(ValueError): lifecycle.CommissioningLifecycle(value)
+
+    def test_packet_waits_keep_identity_checks_and_operation_boundaries_keep_readback(self):
+        # Source routing control only, not a fabricated admitted cold owner or
+        # a runtime performance claim. Polling must not reread the whole cold
+        # transcript for every 32-KiB adopted transport packet.
+        tree = ast.parse(inspect.getsource(lifecycle))
+        checks = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute) and node.func.attr == "check_retained"]
+        self.assertEqual(len(checks), 1)
+        keyword = next(item for item in checks[0].keywords if item.arg == "full")
+        self.assertIsInstance(keyword.value, ast.Name)
+        self.assertEqual(keyword.value.id, "full")
+        operations = next(node for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef) and node.name == "_operation")
+        full_checks = [node for node in ast.walk(operations) if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute) and node.func.attr == "_check"
+            and any(item.arg == "full" and isinstance(item.value, ast.Constant)
+                and item.value.value is True for item in node.keywords)]
+        self.assertEqual(len(full_checks), 2)
+        self.assertIs(inspect.signature(lifecycle.GenesisAuthorityProcess.check_retained)
+            .parameters["full"].default, True)
 
     def test_public_joins_do_not_mutate_retained_literals(self):
         value = fixture()

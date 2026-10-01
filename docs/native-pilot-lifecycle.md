@@ -53,6 +53,54 @@ destinations come only from the existing catalogue under
 absent; no parent creation, overwrite, rollback or deletion is performed.
 The parent creates seals only for literal public observations, not approvals.
 
+## Fixed executable caller (.415)
+
+The next source batch adds the explicit `--run-native-pilot-lifecycle` mode to
+the existing packaged supervisor entrypoint. It selects only
+`/supervisor/app/scripts/run_native_pilot_lifecycle.py`; legacy operational and
+adopted-only modes keep their own argument contracts. The isolated interpreter
+and fixed import roots remain unchanged.
+
+An operator must supply, in source order, supervisor-inventory and original
+listener-configuration FD/SHA-256 pairs, a preconnected approval socket and its
+expected peer PID/UID/GID, then all 36 `--cold-authority-key purpose=fd` and 123
+`--adopted-authority-key purpose=fd` selectors. These are descriptor numbers,
+not secret values. Public and channel descriptors cannot alias keys. Existing
+runtime and policy admissions still decide whether the actual keys are allowed.
+
+The independent peer uses an explicitly selected lifecycle mode on the existing
+approval channel. Bounded, ordered packets carry actual public originals;
+kernel peer PIDFD and packet credentials authenticate the sender. Every response
+is bound to the exact request and transfers real descriptors with `SCM_RIGHTS`.
+
+| Stage | Actual request | Independently supplied descriptors |
+| --- | --- | --- |
+| Bootstrap | Cold sender observation and original listener configuration | Policy, recipe, intake configuration, conductor inventory, authority inventory: five FD/hash pairs |
+| Rendezvous | Receiver-bound request from the real cold authority | Protected input and approval: two FD/hash pairs |
+| Cold jobs | Each of the 66 genuine cold requests, in order | Protected input and approval for that request |
+| Adopted jobs | Each of the 176 genuine adopted pending requests, in order | Protected input and approval for that request |
+
+The receipt confirms descriptor delivery, not authorization or execution. The
+existing owners admit those originals and drive the fixed installers. The
+caller checks original BOOTTIME/UNIX limits and actual owners while waiting;
+it neither creates approvals nor renews a deadline. Startup requires a prepared
+machine-speed independent peer, not an unbounded manual prompt.
+
+The lifecycle transport has a fixed 384-MiB aggregate wire ceiling: cold's
+separately bounded raw dialogue needs base64/chunk framing in addition to the
+existing adopted transport and bootstrap originals. Legacy modes retain their
+128-MiB wire limit. Peer PID/UID/GID are explicitly selected; the peer need not
+run as root merely to transfer already opened root-owned protected originals.
+The caller itself retains its existing root requirement.
+
+Polling checks retained identities instead of rereading the entire completed
+cold transcript per packet. Both sides of each lifecycle operation still use
+full original-content readback; clock and current-owner checks remain in waits.
+
+Source and focused verification for `.415` are in progress. This command does
+not supply the peer's decision policy, keys, approved runtime installation,
+protected resource parents, external services or production acceptance.
+
 ## Verification and deployment boundary
 
 Frozen source `90e10cbb` passes all **119 checks in twelve focused suites** in
@@ -76,13 +124,11 @@ under the operator's home directory. These remain engineering-only exports,
 not approved packages or installed runtimes. No native rebuild, cloud action,
 paid test or live commissioning occurred.
 
-The staged lifecycle API still needs an independently operated caller supplying
-real late inputs/approvals and installed approved inventories. This batch does
-not supply that operator's policy, a hosted approval service or an interactive
-deployment frontend. The next code deliverable is a fixed executable caller
-for this staged API, carrying actual observations and independent late approval
-descriptors through the existing authenticated transport. It must not approve
-its own requests. The original short startup window needs an independently
+The staged lifecycle API and fixed caller still require independently supplied
+real late inputs/approvals and installed approved inventories. They do not
+supply the operator's decision policy, a hosted approval service or an
+interactive deployment frontend. The caller must not approve its own requests.
+The original short startup window needs an independently
 operated machine-speed provider; a manual approval prompt cannot silently renew
 that window. Immutable dependencies and independently operated release,
 Nitro/KMS, signing and witness infrastructure remain unprovisioned. Live provider,

@@ -19,6 +19,7 @@ API = "serverware.nativeCustodyExecutionClosureSet/v1"
 ROLES = ("retrieval", "persistence", "trustedTime", "generationInstall", "commitRequest",
     "ingressAdmission", "terminalAppend", "dispatchBarrier", "activeEffectBarrier", "activeEffectCommit", "bridge")
 GENESIS_API = "serverware.nativePublicationGenesisClosureSet/v1"
+GENESIS_BOOTSTRAP_API = "serverware.nativePublicationGenesisClosureSet/v2"
 GENESIS_ROLES = ("publicationGenesisRetrieval", "publicationGenesis", "publicationGenesisCoordinator")
 PUBLICATION_API = "serverware.nativeCustodyExecutionClosureSet/v2"
 PUBLICATION_ROLES = ROLES[:-1] + ("publicationReconciliation", "bridge")
@@ -35,6 +36,9 @@ SECCOMP_DOMAIN = b"serverware.nativeCustodySeccompSetRoot/v1"
 GENESIS_LEAF_DOMAIN = b"serverware.nativePublicationGenesisClosureSetLeaf/v1"
 GENESIS_ROOT_DOMAIN = b"serverware.nativePublicationGenesisClosureSetRoot/v1"
 GENESIS_SECCOMP_DOMAIN = b"serverware.nativePublicationGenesisSeccompSetRoot/v1"
+GENESIS_BOOTSTRAP_LEAF_DOMAIN = b"serverware.nativePublicationGenesisClosureSetLeaf/v2"
+GENESIS_BOOTSTRAP_ROOT_DOMAIN = b"serverware.nativePublicationGenesisClosureSetRoot/v2"
+GENESIS_BOOTSTRAP_SECCOMP_DOMAIN = b"serverware.nativePublicationGenesisSeccompSetRoot/v2"
 PUBLICATION_LEAF_DOMAIN = b"serverware.nativeCustodyExecutionClosureSetLeaf/v2"
 PUBLICATION_ROOT_DOMAIN = b"serverware.nativeCustodyExecutionClosureSetRoot/v2"
 PUBLICATION_SECCOMP_DOMAIN = b"serverware.nativeCustodySeccompSetRoot/v2"
@@ -46,6 +50,9 @@ def _profile(api_version):
         return ROLES, LEAF_DOMAIN, ROOT_DOMAIN, SECCOMP_DOMAIN
     if api_version == GENESIS_API:
         return GENESIS_ROLES, GENESIS_LEAF_DOMAIN, GENESIS_ROOT_DOMAIN, GENESIS_SECCOMP_DOMAIN
+    if api_version == GENESIS_BOOTSTRAP_API:
+        return (GENESIS_ROLES, GENESIS_BOOTSTRAP_LEAF_DOMAIN, GENESIS_BOOTSTRAP_ROOT_DOMAIN,
+            GENESIS_BOOTSTRAP_SECCOMP_DOMAIN)
     p.require(api_version == PUBLICATION_API)
     return PUBLICATION_ROLES, PUBLICATION_LEAF_DOMAIN, PUBLICATION_ROOT_DOMAIN, PUBLICATION_SECCOMP_DOMAIN
 
@@ -54,9 +61,11 @@ def _manifest(value, role, *, api_version=API):
     p.fields(value, MANIFEST_FIELDS)
     roles, _, _, _ = _profile(api_version)
     p.require(role in roles)
-    version = "2" if role == "bridge" else "1"
+    late_runtime = role == "bridge" or (
+        api_version == GENESIS_BOOTSTRAP_API and role == "publicationGenesisCoordinator")
+    version = "2" if late_runtime else "1"
     p.require(value["apiVersion"] == "serverware.nativeCustodyExecutionClosure/v" + version
-        and value["profile"] == ("measured-bootstrap-late-runtime-static-amd64-v1" if role == "bridge"
+        and value["profile"] == ("measured-bootstrap-late-runtime-static-amd64-v1" if late_runtime
             else "sealed-memfd-squashfs-static-amd64-v1"))
     for name in ("imageSha256", "workerExecutableSha256", "runtimeConfigurationSha256", "manifestSha256"):
         p.digest(value[name])

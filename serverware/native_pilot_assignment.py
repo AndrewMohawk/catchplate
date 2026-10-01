@@ -15,6 +15,9 @@ or operational twelve-member set. The signed Assignment/v2 wire is unchanged:
 its domain-separated roots commit the selected profile. Legacy Input/v1 and
 binding callers retain the exact eleven-member set. Cold assignments anchor
 custody authority to the coordinator, never a fabricated bridge manifest.
+Authority Input/v3 selects only the explicit cold bootstrap set/v2. Only its
+coordinator manifest commits an immutable bootstrap runtime; independently
+authorized late runtime/C9 admission remains the native owner's responsibility.
 """
 from __future__ import annotations
 
@@ -35,6 +38,7 @@ FIELDS = ("apiVersion", "kind", "canonicalProfile", "signatureDomain", "payload"
     "signatureAlgorithm", "signingKeyId", "signingKeySpkiSha256", "signature")
 INPUT_FIELDS = ("apiVersion", "trustOriginal", "trustSha256", "payloadOriginal", "closureSetOriginal")
 SUCCESSOR_INPUT_FIELDS = INPUT_FIELDS + ("setApiVersion",)
+GENESIS_BOOTSTRAP_INPUT_API = "serverware.nativePilotAssignmentAuthorityInput/v3"
 
 
 def input_document(input_original: bytes) -> tuple[dict, str]:
@@ -44,8 +48,10 @@ def input_document(input_original: bytes) -> tuple[dict, str]:
         p.fields(value, INPUT_FIELDS)
         return value, closure_set.API
     p.fields(value, SUCCESSOR_INPUT_FIELDS)
-    p.require(value["apiVersion"] == "serverware.nativePilotAssignmentAuthorityInput/v2"
+    p.require((value["apiVersion"] == "serverware.nativePilotAssignmentAuthorityInput/v2"
         and value["setApiVersion"] in (closure_set.GENESIS_API, closure_set.PUBLICATION_API))
+        or (value["apiVersion"] == GENESIS_BOOTSTRAP_INPUT_API
+            and value["setApiVersion"] == closure_set.GENESIS_BOOTSTRAP_API))
     return value, value["setApiVersion"]
 
 
@@ -55,7 +61,8 @@ def _closure_selection(payload: dict, set_original: bytes, *, set_api_version: s
     selected = closure_set.require_binding(set_original,
         expected_set_root=pins["setRootSha256"], expected_seccomp_set_root=pins["seccompSetRootSha256"],
         api_version=set_api_version)
-    anchor_role = "publicationGenesisCoordinator" if set_api_version == closure_set.GENESIS_API else "bridge"
+    anchor_role = "publicationGenesisCoordinator" if set_api_version in (
+        closure_set.GENESIS_API, closure_set.GENESIS_BOOTSTRAP_API) else "bridge"
     anchor = closure_set.leaf_binding(selected, anchor_role, api_version=set_api_version)
     p.require(anchor["manifestSha256"] == payload["custodyAuthority"]["executionClosureManifestSha256"]
         and anchor["structurallyVerifiedPolicySha256"]

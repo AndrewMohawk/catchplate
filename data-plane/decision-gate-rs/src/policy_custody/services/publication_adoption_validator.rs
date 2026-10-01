@@ -16,10 +16,34 @@ use std::time::{SystemTime, UNIX_EPOCH};
 mod io;
 const INPUT_API:&str="serverware.nativePublicationAdoptionValidationInput/v1";
 const OUTPUT_API:&str="serverware.nativePublicationAdoptionValidation/v1";
+const BOOTSTRAP_INPUT_API:&str="serverware.nativePublicationAdoptionValidationInput/v2";
+const BOOTSTRAP_OUTPUT_API:&str="serverware.nativePublicationAdoptionValidation/v2";
 const MAX_INPUT:usize=32*1024*1024;
 fn refused(_:impl std::fmt::Display)->ShadowError { ShadowError::BindingDrift }
 fn ensure(value:bool)->Result<(),ShadowError> {
     if value {Ok(())} else {Err(ShadowError::BindingDrift)}
+}
+fn selected_output(input_api:&str,payload_api:&str)->Result<&'static str,ShadowError>{
+    match (input_api,payload_api) {
+        (INPUT_API,super::API)=>Ok(OUTPUT_API),
+        (BOOTSTRAP_INPUT_API,super::BOOTSTRAP_API)=>Ok(BOOTSTRAP_OUTPUT_API),
+        _=>Err(ShadowError::BindingDrift),
+    }
+}
+
+#[cfg(test)]
+mod selection_tests {
+    use super::*;
+
+    #[test]
+    fn validator_never_promotes_legacy_input_or_downgrades_bootstrap_payload() {
+        assert_eq!(selected_output(INPUT_API,super::super::API).unwrap(),OUTPUT_API);
+        assert_eq!(selected_output(BOOTSTRAP_INPUT_API,super::super::BOOTSTRAP_API).unwrap(),BOOTSTRAP_OUTPUT_API);
+        assert!(selected_output(INPUT_API,super::super::BOOTSTRAP_API).is_err());
+        assert!(selected_output(BOOTSTRAP_INPUT_API,super::super::API).is_err());
+        assert!(selected_output("serverware.nativePublicationAdoptionValidationInput/v3",super::super::BOOTSTRAP_API).is_err());
+        assert!(selected_output(BOOTSTRAP_INPUT_API,"serverware.nativePublicationAdoptionAuthorization/v3").is_err());
+    }
 }
 fn exact<T:DeserializeOwned+Serialize>(raw:&[u8],maximum:usize)->Result<T,ShadowError>{
     ensure(!raw.is_empty() && raw.len()<=maximum && raw.is_ascii())?;
@@ -299,9 +323,10 @@ fn execute(fd:i32,expected:Sha256Digest)->Result<(),ShadowError>{
     let protected=io::Input::open(fd,expected.clone())?;
     let output=io::Output::stdout()?;
     let input:Input=exact(protected.bytes(),MAX_INPUT)?;
-    ensure(input.api_version==INPUT_API && Sha256Digest::compute(input.current_trust_original.as_bytes())
+    ensure(Sha256Digest::compute(input.current_trust_original.as_bytes())
         ==input.current_trust_sha256)?;
     let payload:Payload=exact(input.payload_original.as_bytes(),MAX_AUTHORIZATION)?;
+    let output_api=selected_output(&input.api_version,&payload.api_version)?;
     let clock=IssuerClock::open()?;clock.live(&payload)?;
     let trust=IssuerTrust::open(input.current_trust_original.as_bytes(),&clock)?;
     let assignment=trust.assignment(input.current_assignment_original.as_bytes())?;
@@ -314,7 +339,7 @@ fn execute(fd:i32,expected:Sha256Digest)->Result<(),ShadowError>{
         && cold.scope.time_namespace_device==namespace.device() && cold.scope.time_namespace_inode==namespace.inode())?;
     histories(&input,&payload)?;
     protected.check()?;trust.check()?;clock.live(&payload)?;
-    let result=Output{api_version:OUTPUT_API,input_sha256:expected,payload_original:&input.payload_original,
+    let result=Output{api_version:output_api,input_sha256:expected,payload_original:&input.payload_original,
         payload_sha256:Sha256Digest::compute(input.payload_original.as_bytes()),signing_key_id:&payload.authority.key_id,
         signing_key_spki_sha256:&payload.authority.key_spki_sha256,public_key_base64url:&payload.authority.public_key_base64url,
         deadline_boottime_nanos:payload.expires_at_boottime_nanos,expires_at_unix_nanos:payload.expires_at_unix_nanos};

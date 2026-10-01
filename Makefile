@@ -1335,6 +1335,8 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	scripts/authority/prepare_native_pilot_closure_set.py \
 	scripts/test_native_pilot_closure_set.py \
 	scripts/test_native_pilot_assignment_profiles.py \
+	scripts/test_native_pilot_genesis_bootstrap_profiles.py \
+	scripts/test_native_pilot_genesis_closure_schema.py \
 	scripts/test_native_pilot_publication_cli.py \
 	scripts/native_pilot_publication_runtime_entrypoint.py \
 	scripts/test_native_pilot_fresh_ledger.py \
@@ -4161,6 +4163,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				scripts/authority/prepare_native_pilot_closure_set.py \
 				scripts/test_native_pilot_closure_set.py \
 				scripts/test_native_pilot_assignment_profiles.py \
+				scripts/test_native_pilot_genesis_bootstrap_profiles.py \
+				scripts/test_native_pilot_genesis_closure_schema.py \
 				scripts/test_native_pilot_publication_cli.py \
 				scripts/native_pilot_publication_runtime_entrypoint.py \
 				scripts/test_native_pilot_fresh_ledger.py \
@@ -5035,6 +5039,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/policy_shadow_generation_activation.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/guest.rs \
 				data-plane/decision-gate-rs/src/policy_custody/native_closure.rs \
+				data-plane/decision-gate-rs/src/policy_custody/native_closure_genesis.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_keys.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_verifier_result.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_key_delivery.rs \
@@ -5433,14 +5438,18 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-custody-closure.v1.schema.json \
 				schemas/native-custody-closure.v2.schema.json \
 				schemas/native-custody-closure.v3.schema.json \
+				schemas/native-custody-closure.v6.schema.json \
 				schemas/native-pilot-endpoint-runtime.v1.schema.json \
 				schemas/policy-shadow-assignment.v2.schema.json \
 				schemas/native-custody-execution-closure-set.v1.schema.json \
 				schemas/native-pilot-closure-set-preparation.v1.schema.json \
 				schemas/native-pilot-closure-set-preparation.v2.schema.json \
+				schemas/native-pilot-closure-set-preparation.v3.schema.json \
 				schemas/native-custody-execution-closure-set.v2.schema.json \
 				schemas/native-publication-genesis-closure-set.v1.schema.json \
+				schemas/native-publication-genesis-closure-set.v2.schema.json \
 				schemas/native-pilot-assignment-authority-input.v2.schema.json \
+				schemas/native-pilot-assignment-authority-input.v3.schema.json \
 				schemas/native-shadow-role-keys.v1.schema.json \
 				schemas/native-shadow-nitro-verifier.v1.schema.json \
 				schemas/native-shadow-verifier-launch.v1.schema.json \

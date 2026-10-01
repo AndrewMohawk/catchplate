@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/native-custody-closure.v6.schema.json",
+  "description": "Explicit cold-three measured-bootstrap successor. Signature domain serverware.nativeCustodyClosureAssignment.signature/v6. Only publicationGenesisCoordinator uses Manifest/v2; its image contains exact nativePublicationGenesisBootstrapRuntime/v1 while the complete later runtime remains bound by the genuine C9 guest and closure signature. Both endpoints retain static Manifest/v1. Native admission additionally checks exact membership, all digest joins, assignment/trust signatures, runtime separation, original windows and actual retained image/process ownership. This schema proves none of those facts. Complete canonical live original remains at most 1MiB, including the entire set; static set limits do not widen that bound.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "manifest", "authorization", "closureSet"],
+  "properties": {
+    "apiVersion": {"const": "serverware.nativeCustodyClosure/v6"},
+    "manifest": {
+      "oneOf": [
+        {"$ref": "native-custody-closure.v1.schema.json#/$defs/manifest"},
+        {"$ref": "native-custody-closure.v2.schema.json#/$defs/manifest"}
+      ]
+    },
+    "authorization": {
+      "type": "object", "additionalProperties": false, "required": ["payload", "signature"],
+      "properties": {
+        "payload": {"$ref": "#/$defs/assignmentPayload"},
+        "signature": {"$ref": "policy-shadow-assignment.v1.schema.json#/$defs/ed25519Signature"}
+      }
+    },
+    "closureSet": {"$ref": "native-publication-genesis-closure-set.v2.schema.json"}
+  },
+  "allOf": [{
+    "if": {"properties": {"authorization": {"properties": {"payload": {"properties": {
+      "guestRole": {"const": "publicationGenesisCoordinator"}
+    }}}}}},
+    "then": {"properties": {"manifest": {"$ref": "native-custody-closure.v2.schema.json#/$defs/manifest"}}},
+    "else": {"properties": {"manifest": {"$ref": "native-custody-closure.v1.schema.json#/$defs/manifest"}}}
+  }],
+  "$defs": {
+    "digest": {"$ref": "native-custody-execution-closure-set.v1.schema.json#/$defs/digest"},
+    "u64": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615},
+    "positiveU64": {"type": "integer", "minimum": 1, "maximum": 18446744073709551615},
+    "guest": {
+      "type": "object", "additionalProperties": false,
+      "required": ["configurationSha256", "deliverySha256", "runtimeConfigurationSha256", "serviceRole", "uid", "gid", "bootIdBase64url", "timeNamespaceDevice", "timeNamespaceInode", "issuedAtBoottimeNs", "startupDeadlineBoottimeNs", "lifetimeDeadlineBoottimeNs", "invocationId"],
+      "properties": {
+        "configurationSha256": {"$ref": "#/$defs/digest"},
+        "deliverySha256": {"$ref": "#/$defs/digest"},
+        "runtimeConfigurationSha256": {"$ref": "#/$defs/digest"},
+        "serviceRole": {"const": "production-bridge"},
+        "uid": {"$ref": "native-custody-closure.v2.schema.json#/$defs/guest/properties/uid"},
+        "gid": {"$ref": "native-custody-closure.v2.schema.json#/$defs/guest/properties/gid"},
+        "bootIdBase64url": {"$ref": "native-custody-closure.v2.schema.json#/$defs/guest/properties/bootIdBase64url"},
+        "timeNamespaceDevice": {"$ref": "#/$defs/positiveU64"},
+        "timeNamespaceInode": {"$ref": "#/$defs/positiveU64"},
+        "issuedAtBoottimeNs": {"$ref": "policy-custody-guest-delivery.v1.schema.json#/$defs/ns"},
+        "startupDeadlineBoottimeNs": {"$ref": "policy-custody-guest-delivery.v1.schema.json#/$defs/ns"},
+        "lifetimeDeadlineBoottimeNs": {"$ref": "policy-custody-guest-delivery.v1.schema.json#/$defs/ns"},
+        "invocationId": {"$ref": "native-custody-closure.v2.schema.json#/$defs/guest/properties/invocationId"}
+      }
+    },
+    "assignmentPayload": {
+      "type": "object", "additionalProperties": false,
+      "required": ["apiVersion", "purpose", "profile", "assignmentId", "assignmentPayloadSha256", "assignmentRevision", "manifestSha256", "guest", "trustCheckpointId", "revocationGeneration", "revocationRootSha256", "issuedAtUnixNanos", "expiresAtUnixNanos", "signingKeyId", "signingKeySpkiSha256", "guestRole", "setRootSha256", "seccompSetRootSha256", "leafSha256"],
+      "properties": {
+        "apiVersion": {"const": "serverware.nativeCustodyClosureAssignment/v6"},
+        "purpose": {"const": "shadow-custody-closure-set-member"},
+        "profile": {"const": "native-publication-genesis-closure-set-v2"},
+        "assignmentId": {"$ref": "#/$defs/digest"},
+        "assignmentPayloadSha256": {"$ref": "#/$defs/digest"},
+        "assignmentRevision": {"$ref": "#/$defs/positiveU64"},
+        "manifestSha256": {"$ref": "#/$defs/digest"},
+        "guest": {"$ref": "#/$defs/guest"},
+        "trustCheckpointId": {"$ref": "#/$defs/digest"},
+        "revocationGeneration": {"$ref": "#/$defs/u64"},
+        "revocationRootSha256": {"$ref": "#/$defs/digest"},
+        "issuedAtUnixNanos": {"$ref": "policy-shadow-assignment.v1.schema.json#/$defs/positiveI64"},
+        "expiresAtUnixNanos": {"$ref": "policy-shadow-assignment.v1.schema.json#/$defs/positiveI64"},
+        "signingKeyId": {"$ref": "#/$defs/digest"},
+        "signingKeySpkiSha256": {"$ref": "#/$defs/digest"},
+        "guestRole": {"enum": ["publicationGenesisRetrieval", "publicationGenesis", "publicationGenesisCoordinator"]},
+        "setRootSha256": {"$ref": "#/$defs/digest"},
+        "seccompSetRootSha256": {"$ref": "#/$defs/digest"},
+        "leafSha256": {"$ref": "#/$defs/digest"}
+      }
+    }
+  }
+}

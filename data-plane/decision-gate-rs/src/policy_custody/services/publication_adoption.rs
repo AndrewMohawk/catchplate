@@ -16,6 +16,36 @@ use crate::policy_shadow::{AtomicTrustCheckpoint, AuthorityRole, CanonicalEd2551
 
 pub(in crate::policy_shadow) const MAX_AUTHORIZATION: usize = 2 * 1024 * 1024;
 const DOMAIN: &str = "serverware.nativePublicationAdoptionAuthorization.signature/v1";
+const BOOTSTRAP_DOMAIN: &str = "serverware.nativePublicationAdoptionAuthorization.signature/v2";
+const API: &str = "serverware.nativePublicationAdoptionAuthorization/v1";
+const BOOTSTRAP_API: &str = "serverware.nativePublicationAdoptionAuthorization/v2";
+fn profile(api: &str) -> Result<(bool, &'static str), ServiceError> {
+    match api {
+        API => Ok((false, DOMAIN)),
+        BOOTSTRAP_API => Ok((true, BOOTSTRAP_DOMAIN)),
+        _ => Err(invalid()),
+    }
+}
+
+#[cfg(test)]
+mod profile_tests {
+    use super::*;
+
+    #[test]
+    fn bootstrap_adoption_is_an_explicit_separate_signature_domain() {
+        assert_eq!(profile(API).unwrap(), (false, DOMAIN));
+        assert_eq!(profile(BOOTSTRAP_API).unwrap(), (true, BOOTSTRAP_DOMAIN));
+        assert_ne!(DOMAIN, BOOTSTRAP_DOMAIN);
+        for api in ["", "serverware.nativePublicationAdoptionAuthorization/v3", DOMAIN] {
+            assert!(profile(api).is_err());
+        }
+        let key = SigningKey::from_bytes(&[71; 32]);
+        let original = b"same payload bytes";
+        let signature = key.sign(&signature_preimage(DOMAIN, original));
+        assert!(key.verifying_key().verify_strict(&signature_preimage(DOMAIN, original), &signature).is_ok());
+        assert!(key.verifying_key().verify_strict(&signature_preimage(BOOTSTRAP_DOMAIN, original), &signature).is_err());
+    }
+}
 fn shadow(_: impl std::fmt::Display) -> ShadowError { ShadowError::BindingDrift }
 #[path="publication_adoption_validator.rs"]
 pub(in crate::policy_shadow) mod validator;
@@ -92,11 +122,11 @@ impl Payload {
     // consumers additionally verify the real authorization signature below.
     fn verified_cold(&self) -> Result<(Configuration, cold::Bundle), ServiceError> {
         let p = self;
+        let (bootstrap, _) = profile(&p.api_version)?;
         // Exact canonical envelope overhead, including an 86-byte Ed25519
         // signature encoding. No provisional or fabricated signature exists.
         const ENVELOPE_OVERHEAD:usize=b"{\"payload\":,\"signature\":\"\"}".len()+86;
         require(encode_canonical_frame(self)?.len() <= MAX_AUTHORIZATION-ENVELOPE_OVERHEAD
-            && p.api_version == "serverware.nativePublicationAdoptionAuthorization/v1"
             && p.purpose == "cold-publication-to-operational"
             && p.adoption_id_sha256 != Sha256Digest::compute(&[])
             && p.assignment_revision > 0 && p.revocation_generation > 0
@@ -111,6 +141,8 @@ impl Payload {
         }
         let authority = p.authority.material()?;
         let configuration: Configuration = decode_canonical_frame(p.cold_configuration_original.as_bytes())?;
+        // Explicit signed successor, never silently reinterpret v1 evidence.
+        configuration.validate_selected(bootstrap).map_err(|_| invalid())?;
         let handoff = Handoff {
             api_version: "serverware.nativePublicationGenesisHandoff/v1".into(),
             commissioning_id_sha256: configuration.scope.commissioning_id_sha256.clone(),
@@ -167,7 +199,8 @@ impl Authorization {
     // or the independently root-signed grant carrying this exact authorization.
     fn verified_cold(&self)->Result<(Configuration,cold::Bundle),ServiceError>{
         require(encode_canonical_frame(self)?.len()<=MAX_AUTHORIZATION)?;
-        self.payload.authority.material()?.verify_strict(&signature_preimage(DOMAIN,&encode_canonical_frame(&self.payload)?),
+        let (_, domain) = profile(&self.payload.api_version)?;
+        self.payload.authority.material()?.verify_strict(&signature_preimage(domain,&encode_canonical_frame(&self.payload)?),
             &Signature::from_bytes(&self.signature.decode().map_err(|_|invalid())?)).map_err(|_|invalid())?;
         self.payload.verified_cold()
     }

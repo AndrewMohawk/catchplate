@@ -13,6 +13,10 @@ use super::production::{ProductionAuthorityEndpointIdentityV4 as EndpointIdentit
 use crate::policy_shadow::PolicyShadowCustodySignerRole as Signer;
 
 pub(super) const RUNTIME: &str = "serverware.nativePublicationGenesisCoordinatorRuntime/v1";
+/// Full, late-authorized runtime for the explicitly selected measured bootstrap.
+/// This document is still hashed in full by C9 and the closure assignment; it
+/// is not the static bootstrap document stored in the immutable image.
+pub(super) const BOOTSTRAP_RUNTIME: &str = "serverware.nativePublicationGenesisCoordinatorRuntime/v2";
 pub(super) const RESULT_FD: &str = "publication-genesis-result";
 pub(super) const RESULT_PARENT_FD: &str = "publication-genesis-result-parent";
 pub(super) const MAX_CONFIGURATION: usize = 4 * 1024 * 1024;
@@ -67,8 +71,12 @@ pub(super) struct Configuration {
     pub(super) result_peer: ExpectedPeerCredentialV3,
 }
 impl Configuration {
+    pub(super) fn validate_selected(&self, late: bool) -> Result<(), ServiceRunnerError> {
+        require(self.api_version == if late { BOOTSTRAP_RUNTIME } else { RUNTIME })?;
+        self.validate()
+    }
     pub(super) fn validate(&self) -> Result<(), ServiceRunnerError> {
-        require(self.api_version == RUNTIME
+        require(matches!(self.api_version.as_str(), RUNTIME | BOOTSTRAP_RUNTIME)
             && encode_canonical_frame(self)?.len() <= MAX_CONFIGURATION
             && self.histories.len() == 2 && self.service_sessions.len() == 2
             && self.native_endpoints.len() == 2

@@ -11,7 +11,9 @@ const PROFILE:&str="sealed-memfd-squashfs-static-amd64-v1";
 const BOOTSTRAP_PROFILE:&str="measured-bootstrap-late-runtime-static-amd64-v1";
 const SET_PROFILE:&str="native-multi-guest-closure-set-v1";
 const PUBLICATION_SET_PROFILE:&str="native-multi-guest-closure-set-v2";
+const GENESIS_BOOTSTRAP_SET_PROFILE:&str="native-publication-genesis-closure-set-v2";
 #[path="native_closure_late.rs"] mod late;
+#[path="native_closure_genesis.rs"] mod genesis;
 #[path="native_closure_remote.rs"] mod remote;
 #[path="native_closure_set.rs"] pub(in crate::policy_shadow) mod closure_set;
 pub(in crate::policy_shadow) use remote::RemoteNativeCustodyClosure;
@@ -107,11 +109,19 @@ impl AssignmentPayload {
 
 impl Configuration {
     fn require_profile(&self,role:Option<&'static str>,late:bool)->Result<Option<Membership>,ShadowError>{
+        self.require_selected_profile(role,late,false)
+    }
+    fn require_selected_profile(&self,role:Option<&'static str>,late:bool,genesis_bootstrap:bool)
+        ->Result<Option<Membership>,ShadowError>{
         self.manifest.validate()?;
-        require(self.manifest.api_version==(if late{"serverware.nativeCustodyExecutionClosure/v2"}
+        let measured=late||genesis_bootstrap;
+        require(self.manifest.api_version==(if measured{"serverware.nativeCustodyExecutionClosure/v2"}
             else{"serverware.nativeCustodyExecutionClosure/v1"})
-            && self.manifest.profile==(if late{BOOTSTRAP_PROFILE}else{PROFILE}))?;
-        let genesis=self.api_version=="serverware.nativeCustodyClosure/v4";
+            && self.manifest.profile==(if measured{BOOTSTRAP_PROFILE}else{PROFILE}))?;
+        let genesis_successor=self.api_version=="serverware.nativeCustodyClosure/v6";
+        let genesis=self.api_version=="serverware.nativeCustodyClosure/v4"||genesis_successor;
+        require(genesis_bootstrap==(genesis_successor && role==Some("publicationGenesisCoordinator"))
+            && (!genesis_bootstrap || !late))?;
         let publication=self.api_version=="serverware.nativeCustodyClosure/v5";
         if self.api_version!="serverware.nativeCustodyClosure/v3" && !genesis && !publication {
             require(!role.is_some_and(|v|closure_set::GENESIS_ROLES.contains(&v) || v=="publicationReconciliation"))?;
@@ -126,16 +136,17 @@ impl Configuration {
         require((role=="bridge")==late && genesis==closure_set::GENESIS_ROLES.contains(&role) && (!genesis || !late)
             && (role!="publicationReconciliation" || publication))?;
         let p=&self.authorization.payload;
-        require(p.api_version==(if genesis{"serverware.nativeCustodyClosureAssignment/v4"}else if publication{"serverware.nativeCustodyClosureAssignment/v5"}else{"serverware.nativeCustodyClosureAssignment/v3"})
+        require(p.api_version==(if genesis_successor{"serverware.nativeCustodyClosureAssignment/v6"}else if genesis{"serverware.nativeCustodyClosureAssignment/v4"}else if publication{"serverware.nativeCustodyClosureAssignment/v5"}else{"serverware.nativeCustodyClosureAssignment/v3"})
             && p.purpose=="shadow-custody-closure-set-member"
-            && p.profile==(if genesis{"native-publication-genesis-closure-set-v1"}else if publication{PUBLICATION_SET_PROFILE}else{SET_PROFILE})
+            && p.profile==(if genesis_successor{GENESIS_BOOTSTRAP_SET_PROFILE}else if genesis{"native-publication-genesis-closure-set-v1"}else if publication{PUBLICATION_SET_PROFILE}else{SET_PROFILE})
             && p.guest_role.as_deref()==Some(role))?;
         let commitment=NativeClosureSetCommitment {
             set_root_sha256:p.set_root_sha256.clone().ok_or(ShadowError::BindingDrift)?,
             seccomp_set_root_sha256:p.seccomp_set_root_sha256.clone().ok_or(ShadowError::BindingDrift)?,
         };
         let raw=canonical_json_bytes(self.closure_set.as_ref().ok_or(ShadowError::BindingDrift)?)?;
-        let set=if genesis{closure_set::ValidatedSet::from_genesis_bytes(&raw,&commitment.set_root_sha256,&commitment.seccomp_set_root_sha256)?}
+        let set=if genesis_successor{closure_set::ValidatedSet::from_genesis_bootstrap_bytes(&raw,&commitment.set_root_sha256,&commitment.seccomp_set_root_sha256)?}
+            else if genesis{closure_set::ValidatedSet::from_genesis_bytes(&raw,&commitment.set_root_sha256,&commitment.seccomp_set_root_sha256)?}
             else if publication{closure_set::ValidatedSet::from_publication_bytes(&raw,&commitment.set_root_sha256,&commitment.seccomp_set_root_sha256)?}
             else{closure_set::ValidatedSet::from_bytes(&raw,&commitment.set_root_sha256,&commitment.seccomp_set_root_sha256)?};
         require(p.leaf_sha256.as_ref()==Some(set.require_member(role,&self.manifest)?.leaf_sha256()))?;
@@ -172,10 +183,11 @@ fn verify_assignment(wire:&Assignment,manifest:&Manifest,guest:&GuestClosureBind
         let leaf=member.set.require_member(member.role,manifest)?;
         let bridge=member.set.role_binding(member.set.authority_role())?;
         let genesis=member.set.genesis();
+        let genesis_bootstrap=member.set.genesis_bootstrap();
         let publication=member.set.publication();
-        require(p.api_version==(if genesis{"serverware.nativeCustodyClosureAssignment/v4"}else if publication{"serverware.nativeCustodyClosureAssignment/v5"}else{"serverware.nativeCustodyClosureAssignment/v3"})
+        require(p.api_version==(if genesis_bootstrap{"serverware.nativeCustodyClosureAssignment/v6"}else if genesis{"serverware.nativeCustodyClosureAssignment/v4"}else if publication{"serverware.nativeCustodyClosureAssignment/v5"}else{"serverware.nativeCustodyClosureAssignment/v3"})
             && p.purpose=="shadow-custody-closure-set-member"
-            && p.profile==(if genesis{"native-publication-genesis-closure-set-v1"}else if publication{PUBLICATION_SET_PROFILE}else{SET_PROFILE})
+            && p.profile==(if genesis_bootstrap{GENESIS_BOOTSTRAP_SET_PROFILE}else if genesis{"native-publication-genesis-closure-set-v1"}else if publication{PUBLICATION_SET_PROFILE}else{SET_PROFILE})
             && p.guest_role.as_deref()==Some(member.role)
             && p.set_root_sha256.as_ref()==Some(member.set.set_root_sha256())
             && p.seccomp_set_root_sha256.as_ref()==Some(member.set.seccomp_set_root_sha256())
@@ -183,8 +195,9 @@ fn verify_assignment(wire:&Assignment,manifest:&Manifest,guest:&GuestClosureBind
             && original.native_closure_set.as_ref()==Some(&member.commitment)
             && &original.custody_authority.execution_closure_manifest_sha256==bridge.manifest_sha256()
             && &original.custody_authority.structurally_verified_seccomp_policy_sha256==bridge.seccomp_policy_sha256()
-            && (member.role=="bridge" || guest.runtime_configuration_sha256==manifest.runtime_configuration_sha256))?;
-        if genesis{"serverware.nativeCustodyClosureAssignment.signature/v4"}else if publication{"serverware.nativeCustodyClosureAssignment.signature/v5"}else{"serverware.nativeCustodyClosureAssignment.signature/v3"}
+            && (member.role=="bridge" || (genesis_bootstrap && member.role=="publicationGenesisCoordinator")
+                || guest.runtime_configuration_sha256==manifest.runtime_configuration_sha256))?;
+        if genesis_bootstrap{"serverware.nativeCustodyClosureAssignment.signature/v6"}else if genesis{"serverware.nativeCustodyClosureAssignment.signature/v4"}else if publication{"serverware.nativeCustodyClosureAssignment.signature/v5"}else{"serverware.nativeCustodyClosureAssignment.signature/v3"}
     } else if manifest.profile==BOOTSTRAP_PROFILE {
         require(p.api_version=="serverware.nativeCustodyClosureAssignment/v2"
             && p.purpose=="shadow-custody-bootstrap-late-runtime" && p.profile==BOOTSTRAP_PROFILE)?;
@@ -282,10 +295,15 @@ pub(in crate::policy_shadow) struct PrekeyExecutable {
 impl PrekeyExecutable {
     pub(in crate::policy_shadow) fn open(configuration:&Configuration,delivery:&PreparedGuestServiceDelivery,role:Option<&'static str>)
         ->Result<Self,ShadowError> {
+        Self::open_selected(configuration,delivery,role,false)
+    }
+    fn open_selected(configuration:&Configuration,delivery:&PreparedGuestServiceDelivery,role:Option<&'static str>,genesis_bootstrap:bool)
+        ->Result<Self,ShadowError> {
         let association=delivery.closure_association().map_err(unavailable)?;
         association.check_preparation().map_err(unavailable)?;
-        let membership=configuration.require_profile(role,false)?;
-        require(configuration.manifest.runtime_configuration_sha256==association.binding().runtime_configuration_sha256)?;
+        let membership=configuration.require_selected_profile(role,false,genesis_bootstrap)?;
+        if genesis_bootstrap { configuration.require_genesis_guest(&association.binding())?; }
+        else { require(configuration.manifest.runtime_configuration_sha256==association.binding().runtime_configuration_sha256)?; }
         let executable=File::open("/proc/self/exe").map_err(unavailable)?;
         let identity=executable_identity(&executable)?;
         let bytes=read(&executable,128*1024*1024)?;
@@ -323,8 +341,14 @@ impl PreparedNativeCustodyClosure {
     pub(in crate::policy_shadow) fn open(configuration:Configuration,assignment:&VerifiedAssignment,
         trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime,delivery:&PreparedGuestServiceDelivery,
         role:Option<&'static str>)->Result<Self,ShadowError> {
+        Self::open_selected(configuration,assignment,trust,time,delivery,role,false)
+    }
+    fn open_selected(configuration:Configuration,assignment:&VerifiedAssignment,
+        trust:&dyn EnvelopeKeyTrust,time:&dyn TrustedTime,delivery:&PreparedGuestServiceDelivery,
+        role:Option<&'static str>,genesis_bootstrap:bool)->Result<Self,ShadowError> {
         let association=delivery.closure_association().map_err(unavailable)?;association.check_preparation().map_err(unavailable)?;
-        let membership=configuration.require_profile(role,false)?;
+        let membership=configuration.require_selected_profile(role,false,genesis_bootstrap)?;
+        if genesis_bootstrap { configuration.require_genesis_guest(&association.binding())?; }
         revalidate_verified_freshness(assignment,trust,time,MAX_ENVELOPE_AGE_NANOS)?;
         let checkpoint=trust.current_checkpoint()?;let p=&configuration.authorization.payload;
         require(p.trust_checkpoint_id==checkpoint.checkpoint_id && p.revocation_generation==checkpoint.revocation_generation
@@ -337,8 +361,10 @@ impl PreparedNativeCustodyClosure {
             m.seccomp_policy.raw_bpf_sha256().as_str(),m.runtime_configuration_sha256.as_str(),
             b.dependency_lock_sha256.as_str(),b.build_recipe_sha256.as_str(),b.provenance_statement_sha256.as_str()],association.startup()).map_err(unavailable)?;
         require(read(image.seccomp(),32768)?==custody_seccomp_raw_bytes(m.seccomp_policy.exact_instructions()))?;
-        let runtime=read(image.configuration(),4*1024*1024)?;
-        require(Sha256Digest::compute(&runtime)==association.binding().runtime_configuration_sha256)?;
+        let runtime=read(image.configuration(),if genesis_bootstrap{4096}else{4*1024*1024})?;
+        if genesis_bootstrap {
+            genesis::require_bootstrap(&runtime,&m.runtime_configuration_sha256,&association.binding().runtime_configuration_sha256)?;
+        } else { require(Sha256Digest::compute(&runtime)==association.binding().runtime_configuration_sha256)?; }
         let executable=File::open("/proc/self/exe").map_err(unavailable)?;
         let executable_identity=executable_identity(&executable)?;
         let bytes=read(&executable,128*1024*1024)?;

@@ -32,6 +32,7 @@ pub(in crate::policy_shadow) const PUBLICATION_ROLES: [&str; 12] = [
     "activeEffectCommit", "publicationReconciliation", "bridge",
 ];
 const GENESIS_API: &str = "serverware.nativePublicationGenesisClosureSet/v1";
+const GENESIS_BOOTSTRAP_API: &str = "serverware.nativePublicationGenesisClosureSet/v2";
 pub(in crate::policy_shadow) const GENESIS_ROLES: [&str;3] = [
     "publicationGenesisRetrieval", "publicationGenesis", "publicationGenesisCoordinator"];
 const LEAF_DOMAIN: &[u8] = b"serverware.nativeCustodyExecutionClosureSetLeaf/v1";
@@ -39,26 +40,38 @@ const ROOT_DOMAIN: &[u8] = b"serverware.nativeCustodyExecutionClosureSetRoot/v1"
 const SECCOMP_ROOT_DOMAIN: &[u8] = b"serverware.nativeCustodySeccompSetRoot/v1";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SetProfile { Legacy, Genesis, Publication }
+enum SetProfile { Legacy, Genesis, GenesisBootstrap, Publication }
 impl SetProfile {
     fn roles(self) -> &'static [&'static str] { match self {
-        Self::Legacy => &MEMBER_ROLES, Self::Genesis => &GENESIS_ROLES, Self::Publication => &PUBLICATION_ROLES,
+        Self::Legacy => &MEMBER_ROLES, Self::Genesis | Self::GenesisBootstrap => &GENESIS_ROLES,
+        Self::Publication => &PUBLICATION_ROLES,
     } }
     fn api(self) -> &'static str { match self {
-        Self::Legacy => SET_API, Self::Genesis => GENESIS_API, Self::Publication => PUBLICATION_API,
+        Self::Legacy => SET_API, Self::Genesis => GENESIS_API, Self::GenesisBootstrap => GENESIS_BOOTSTRAP_API,
+        Self::Publication => PUBLICATION_API,
     } }
     fn leaf_domain(self) -> &'static [u8] { match self {
         Self::Legacy => LEAF_DOMAIN, Self::Genesis => b"serverware.nativePublicationGenesisClosureSetLeaf/v1",
+        Self::GenesisBootstrap => b"serverware.nativePublicationGenesisClosureSetLeaf/v2",
         Self::Publication => b"serverware.nativeCustodyExecutionClosureSetLeaf/v2",
     } }
     fn root_domain(self) -> &'static [u8] { match self {
         Self::Legacy => ROOT_DOMAIN, Self::Genesis => b"serverware.nativePublicationGenesisClosureSetRoot/v1",
+        Self::GenesisBootstrap => b"serverware.nativePublicationGenesisClosureSetRoot/v2",
         Self::Publication => b"serverware.nativeCustodyExecutionClosureSetRoot/v2",
     } }
     fn seccomp_domain(self) -> &'static [u8] { match self {
         Self::Legacy => SECCOMP_ROOT_DOMAIN, Self::Genesis => b"serverware.nativePublicationGenesisSeccompSetRoot/v1",
+        Self::GenesisBootstrap => b"serverware.nativePublicationGenesisSeccompSetRoot/v2",
         Self::Publication => b"serverware.nativeCustodySeccompSetRoot/v2",
     } }
+    fn manifest_profile(self, role: &str) -> (&'static str, &'static str) {
+        if role == "bridge" || (self == Self::GenesisBootstrap && role == "publicationGenesisCoordinator") {
+            ("serverware.nativeCustodyExecutionClosure/v2", BOOTSTRAP_PROFILE)
+        } else {
+            ("serverware.nativeCustodyExecutionClosure/v1", PROFILE)
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -105,6 +118,10 @@ impl ValidatedSet {
         expected_seccomp_set_root:&Sha256Digest)->Result<Self,ShadowError>{
         Self::selected(raw,expected_set_root,expected_seccomp_set_root,SetProfile::Genesis)
     }
+    pub(in crate::policy_shadow) fn from_genesis_bootstrap_bytes(raw:&[u8],expected_set_root:&Sha256Digest,
+        expected_seccomp_set_root:&Sha256Digest)->Result<Self,ShadowError>{
+        Self::selected(raw,expected_set_root,expected_seccomp_set_root,SetProfile::GenesisBootstrap)
+    }
     pub(in crate::policy_shadow) fn from_publication_bytes(raw:&[u8],expected_set_root:&Sha256Digest,
         expected_seccomp_set_root:&Sha256Digest)->Result<Self,ShadowError>{
         Self::selected(raw,expected_set_root,expected_seccomp_set_root,SetProfile::Publication)
@@ -127,14 +144,7 @@ impl ValidatedSet {
             require(member.role == role)?;
             let manifest = &member.manifest;
             require(canonical_json_bytes(manifest)?.len() <= MAX_MANIFEST_BYTES)?;
-            let (api, manifest_profile) = if role == "bridge" {
-                (
-                    "serverware.nativeCustodyExecutionClosure/v2",
-                    BOOTSTRAP_PROFILE,
-                )
-            } else {
-                ("serverware.nativeCustodyExecutionClosure/v1", PROFILE)
-            };
+            let (api, manifest_profile) = profile.manifest_profile(role);
             require(manifest.api_version == api && manifest.profile == manifest_profile)?;
             // The existing validator compiles/checks the exact seccomp policy,
             // validates build provenance and recomputes the original manifest.
@@ -159,7 +169,10 @@ impl ValidatedSet {
         require(canonical_json_bytes(&wire)? == raw)?;
         Ok(Self { wire, leaves, profile })
     }
-    pub(in crate::policy_shadow) fn genesis(&self)->bool{self.profile==SetProfile::Genesis}
+    pub(in crate::policy_shadow) fn genesis(&self)->bool{
+        matches!(self.profile,SetProfile::Genesis|SetProfile::GenesisBootstrap)
+    }
+    pub(in crate::policy_shadow) fn genesis_bootstrap(&self)->bool{self.profile==SetProfile::GenesisBootstrap}
     pub(in crate::policy_shadow) fn publication(&self)->bool{self.profile==SetProfile::Publication}
     pub(in crate::policy_shadow) fn authority_role(&self)->&'static str{
         if self.genesis(){"publicationGenesisCoordinator"}else{"bridge"}
@@ -229,5 +242,35 @@ impl RoleBinding<'_> {
 
     pub(in crate::policy_shadow) fn seccomp_policy_sha256(&self) -> &Sha256Digest {
         self.manifest().seccomp_policy.policy_sha256()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn genesis_bootstrap_has_distinct_commitment_domains(){
+        let old=SetProfile::Genesis;let new=SetProfile::GenesisBootstrap;
+        assert_eq!(old.roles(),new.roles());
+        assert_ne!(old.api(),new.api());
+        assert_ne!(old.leaf_domain(),new.leaf_domain());
+        assert_ne!(old.root_domain(),new.root_domain());
+        assert_ne!(old.seccomp_domain(),new.seccomp_domain());
+        let frames=[b"same-independent-static-data".as_slice()];
+        assert_ne!(hash_domain_frames(old.root_domain(),&frames),hash_domain_frames(new.root_domain(),&frames));
+    }
+    #[test]
+    fn only_successor_coordinator_uses_measured_bootstrap(){
+        let immutable=("serverware.nativeCustodyExecutionClosure/v1",PROFILE);
+        let measured=("serverware.nativeCustodyExecutionClosure/v2",BOOTSTRAP_PROFILE);
+        for role in GENESIS_ROLES {
+            assert_eq!(SetProfile::Genesis.manifest_profile(role),immutable);
+            assert_eq!(SetProfile::GenesisBootstrap.manifest_profile(role),
+                if role=="publicationGenesisCoordinator"{measured}else{immutable});
+        }
+        assert_eq!(SetProfile::Legacy.manifest_profile("bridge"),measured);
+        assert_eq!(SetProfile::Publication.manifest_profile("bridge"),measured);
+        assert_eq!(SetProfile::Publication.manifest_profile("publicationReconciliation"),immutable);
     }
 }

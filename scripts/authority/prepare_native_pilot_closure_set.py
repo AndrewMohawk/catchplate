@@ -26,6 +26,7 @@ from serverware import native_pilot_closure_set as closure_set
 p = closure_set.p
 INPUT_API = "serverware.nativePilotClosureSetPreparation/v1"
 SUCCESSOR_INPUT_API = "serverware.nativePilotClosureSetPreparation/v2"
+GENESIS_BOOTSTRAP_INPUT_API = "serverware.nativePilotClosureSetPreparation/v3"
 
 
 class Parser(argparse.ArgumentParser):
@@ -45,8 +46,10 @@ def prepare(input_original: bytes, expected_sha256: str) -> bytes:
         set_api = closure_set.API
     else:
         p.fields(value, ("apiVersion", "setApiVersion", "members"))
-        p.require(value["apiVersion"] == SUCCESSOR_INPUT_API
+        p.require((value["apiVersion"] == SUCCESSOR_INPUT_API
             and value["setApiVersion"] in (closure_set.GENESIS_API, closure_set.PUBLICATION_API))
+            or (value["apiVersion"] == GENESIS_BOOTSTRAP_INPUT_API
+                and value["setApiVersion"] == closure_set.GENESIS_BOOTSTRAP_API))
         set_api = value["setApiVersion"]
     result = closure_set.set_original(value["members"], api_version=set_api)
     # The producer validates each manifest under its own existing node bound.

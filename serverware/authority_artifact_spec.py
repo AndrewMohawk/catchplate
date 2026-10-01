@@ -3014,14 +3014,14 @@ def validate_artifact_bundle(bundle: Mapping[str, Any]) -> None:
             )
 
 
-def validate_generation_statement(
+def validate_generation_core(
     statement: Mapping[str, Any],
     *,
     expected_bundle_digest: str | None = None,
 ) -> None:
     value = _require_mapping(
         statement,
-        name="generation statement",
+        name="generation core",
         keys={
             "schema",
             "sequence",
@@ -3046,7 +3046,6 @@ def validate_generation_statement(
             "configurationPayloadBindings",
             "keyAuthorizationsDigest",
             "keyRevocationsDigest",
-            "witnessCheckpoint",
             "trustMode",
         },
     )
@@ -3130,6 +3129,24 @@ def validate_generation_statement(
     _require_digest(
         value["keyRevocationsDigest"], name="key revocations digest"
     )
+    _validate_trust_mode(value["trustMode"])
+
+
+def validate_generation_statement(
+    statement: Mapping[str, Any],
+    *,
+    expected_bundle_digest: str | None = None,
+) -> None:
+    # Validate the same closed core without manufacturing a checkpoint. The
+    # witness issuer uses this pre-checkpoint boundary; full admission below
+    # continues to require and validate the actual checkpoint.
+    if not isinstance(statement, Mapping) or "witnessCheckpoint" not in statement:
+        raise ArtifactContractError("generation statement lacks its checkpoint")
+    value = dict(statement)
+    core = dict(value)
+    del core["witnessCheckpoint"]
+    validate_generation_core(core, expected_bundle_digest=expected_bundle_digest)
+    sequence = value["sequence"]
     checkpoint = _require_mapping(
         value["witnessCheckpoint"],
         name="witness checkpoint",
@@ -4728,6 +4745,7 @@ __all__ = [
     "strict_base64url_encode",
     "validate_artifact_bundle",
     "validate_generation_statement",
+    "validate_generation_core",
     "validate_configuration_payload_bindings",
     "validate_role_reference",
     "validate_closure_receipt",

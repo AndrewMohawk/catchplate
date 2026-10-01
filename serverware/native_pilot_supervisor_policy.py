@@ -57,6 +57,9 @@ image pins and static verifier/assignment-trust selections. It or explicit v19
 is required before the full supervisor can start; graph coverage alone grants
 no authority. V19 selects the completed-invocation persistence grant and the
 v12 bridge/v8 launch through versioned inner policies, retaining all 113 keys.
+Explicit v20 retains that native settlement selection and permits the last
+stop decision to select one absolute, approved interactive interval via inner
+continuation/v2. V18/v19 retain immediate stop; no new jobs or keys are added.
 
 Only the actual AuthorityCoordinatorProcess and its current opaque JobRequest
 can enter bootstrap(). No signing, publication, process launch, arbitrary
@@ -142,7 +145,9 @@ CONTINUATION_FIELDS = BRIDGE_COMMISSIONING_FIELDS + ("continuationOriginal",)
 NATIVE_TERMINAL_POLICY_API = "serverware.nativePilotSupervisorCommissioningPolicy/v19"
 NATIVE_TERMINAL_PURPOSE = "initial-driver-bootstrap-through-native-completed-invocation-shutdown"
 NATIVE_TERMINAL_FIELDS = CONTINUATION_FIELDS
-CONTINUATION_POLICY_APIS = (CONTINUATION_POLICY_API, NATIVE_TERMINAL_POLICY_API)
+INTERACTIVE_POLICY_API = "serverware.nativePilotSupervisorCommissioningPolicy/v20"
+INTERACTIVE_PURPOSE = "initial-driver-bootstrap-through-bounded-interactive-native-shutdown"
+CONTINUATION_POLICY_APIS = (CONTINUATION_POLICY_API, NATIVE_TERMINAL_POLICY_API, INTERACTIVE_POLICY_API)
 BRIDGE_COMMISSIONING_POLICY_APIS = (BRIDGE_COMMISSIONING_POLICY_API,) + CONTINUATION_POLICY_APIS
 BRIDGE_RUNTIME_POLICY_APIS = (BRIDGE_RUNTIME_POLICY_API,) + BRIDGE_COMMISSIONING_POLICY_APIS
 CURRENT_HEAD_POLICY_APIS = (CURRENT_HEAD_POLICY_API,) + BRIDGE_RUNTIME_POLICY_APIS
@@ -269,7 +274,8 @@ class SupervisorPolicy:
             value = _policy_document(owner._raw)
             p.require(type(value) is dict and value.get("apiVersion") in
                 (POLICY_API,) + MEASURED_POLICY_APIS)
-            native_terminal = value["apiVersion"] == NATIVE_TERMINAL_POLICY_API
+            interactive = value["apiVersion"] == INTERACTIVE_POLICY_API
+            native_terminal = value["apiVersion"] in (NATIVE_TERMINAL_POLICY_API, INTERACTIVE_POLICY_API)
             continuation = value["apiVersion"] in CONTINUATION_POLICY_APIS
             bridge_commissioning = value["apiVersion"] in BRIDGE_COMMISSIONING_POLICY_APIS
             bridge_runtime = value["apiVersion"] in BRIDGE_RUNTIME_POLICY_APIS
@@ -289,7 +295,7 @@ class SupervisorPolicy:
             measured = value["apiVersion"] in MEASURED_POLICY_APIS
             p.fields(value, CONTINUATION_FIELDS if continuation else BRIDGE_COMMISSIONING_FIELDS if bridge_commissioning else BRIDGE_RUNTIME_FIELDS if bridge_runtime else CURRENT_HEAD_FIELDS if current_head_intake else HELPER_INITIAL_FIELDS if helper_initial else SERVICE_MATERIAL_FIELDS if service_material else ENDPOINT_LAUNCH_FIELDS if endpoint_launch else LAUNCH_AUTHORIZATION_FIELDS if launch_authorization else ORDINARY_TRANSITION_FIELDS if ordinary_transition else NATIVE_SERVICE_FIELDS if native_service else KEY_AUTHORIZATION_FIELDS if key_authorization else NATIVE_DELIVERY_FIELDS if native_delivery else GENERATION_FIELDS if ordinary_generation else DELIVERY_FIELDS if ordinary_delivery else INITIAL_FIELDS if initial else
                 ENDPOINT_FIELDS if endpoint else MEASURED_FIELDS if measured else FIELDS)
-            p.require(value["purpose"] == (NATIVE_TERMINAL_PURPOSE if native_terminal else CONTINUATION_PURPOSE if continuation else BRIDGE_COMMISSIONING_PURPOSE if bridge_commissioning else BRIDGE_RUNTIME_PURPOSE if bridge_runtime else CURRENT_HEAD_PURPOSE if current_head_intake else HELPER_INITIAL_PURPOSE if helper_initial else SERVICE_MATERIAL_PURPOSE if service_material else ENDPOINT_LAUNCH_PURPOSE if endpoint_launch else LAUNCH_AUTHORIZATION_PURPOSE if launch_authorization else ORDINARY_TRANSITION_PURPOSE if ordinary_transition else NATIVE_SERVICE_PURPOSE if native_service else KEY_AUTHORIZATION_PURPOSE if key_authorization else NATIVE_DELIVERY_PURPOSE if native_delivery else GENERATION_PURPOSE if ordinary_generation else DELIVERY_PURPOSE if ordinary_delivery else INITIAL_PURPOSE if initial else
+            p.require(value["purpose"] == (INTERACTIVE_PURPOSE if interactive else NATIVE_TERMINAL_PURPOSE if native_terminal else CONTINUATION_PURPOSE if continuation else BRIDGE_COMMISSIONING_PURPOSE if bridge_commissioning else BRIDGE_RUNTIME_PURPOSE if bridge_runtime else CURRENT_HEAD_PURPOSE if current_head_intake else HELPER_INITIAL_PURPOSE if helper_initial else SERVICE_MATERIAL_PURPOSE if service_material else ENDPOINT_LAUNCH_PURPOSE if endpoint_launch else LAUNCH_AUTHORIZATION_PURPOSE if launch_authorization else ORDINARY_TRANSITION_PURPOSE if ordinary_transition else NATIVE_SERVICE_PURPOSE if native_service else KEY_AUTHORIZATION_PURPOSE if key_authorization else NATIVE_DELIVERY_PURPOSE if native_delivery else GENERATION_PURPOSE if ordinary_generation else DELIVERY_PURPOSE if ordinary_delivery else INITIAL_PURPOSE if initial else
                 ENDPOINT_PURPOSE if endpoint else MEASURED_PURPOSE if measured else PURPOSE))
             if measured:
                 p.digest(value["measuredRecipeSha256"])
@@ -388,6 +394,8 @@ class SupervisorPolicy:
                 p.require(type(policy_text) is str and policy_text.isascii())
                 continuation_fragment = continuation_policy.validate_policy(
                     generation.document(policy_text.encode("ascii"), continuation_policy.MAX_POLICY))
+                p.require(continuation_fragment["apiVersion"] ==
+                    (continuation_policy.INTERACTIVE_API if interactive else continuation_policy.API))
             if native_delivery:
                 from serverware import native_pilot_native_delivery_profile as native
                 policy_text = value["nativeDeliveriesOriginal"]

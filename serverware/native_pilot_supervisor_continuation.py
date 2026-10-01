@@ -17,6 +17,7 @@ import time
 
 from serverware import custody_generation_grants as generation
 from serverware import native_pilot_continuation_profile as continuation
+from serverware import native_pilot_interactive as interactive
 from serverware import native_pilot_phase_two_publication as phase_two
 from serverware import native_pilot_precreation_install as precreation
 from serverware import native_pilot_publication as publication
@@ -124,6 +125,10 @@ def _lifetime(owner):
         p.integer(production["cleanupReserveNanos"], maximum=5_000_000_000))
     owner.startup_deadline = min(owner.startup_deadline, *(p.ns(value["startupDeadlineBoottimeNs"]) for value in windows))
     owner.live_deadline = min(p.ns(value["lifetimeDeadlineBoottimeNs"]) for value in windows) - reserve
+    if "interactive" in owner.fragment:
+        # Same fixed reap reserve as native_guest/parent.rs; not a new lease.
+        owner.live_deadline = min(owner.live_deadline,
+            p.ns(cohort_window["lifetimeDeadlineBoottimeNs"]) - 250_000_000)
     p.require(owner.live_deadline > 0)
 
 
@@ -301,6 +306,20 @@ def compose(policy, *, process, request) -> bytes:
                 commissioning_context=owner.handoff, scope_context=_scope_context(owner), observed=observed,
                 prior_context=prior, deadline_boottime_ns=(owner.live_deadline if index >= 4 else owner.startup_deadline),
                 **clocks)
+            if index == 5 and "interactive" in owner.fragment:
+                # The ordinary stop preparation above still verifies the real
+                # origin handoff and every inherited clock/ownership bound.
+                # Only explicitly selected policy/v20 permits this action.
+                selected = interactive.validate_policy(owner.fragment["interactive"])
+                stop_at, expires = selected["stopAtBoottimeNanos"], selected["expiresAtUnixNanos"]
+                p.require(now < stop_at < min(prepared["deadline"], owner.live_deadline, request.deadline_boottime_ns)
+                    and epoch < expires <= min(owner.epoch_limit, prepared["epochLimit"])
+                    and stop_at - now < expires - epoch)
+                action = interactive.validate_action({"action": "run-interactive",
+                    "originHandoffSha256": p.sha(p.canonical(observed["originHandoff"])),
+                    "stopAtBoottimeNanos": stop_at, "expiresAtUnixNanos": expires},
+                    origin_handoff=observed["originHandoff"])
+                prepared["inputOriginal"] = p.canonical(action)
         p.fields(prepared, ("inputOriginal", "window", "deadline", "epochLimit"))
         _same(prepared["window"], owner.window)
         raw = prepared["inputOriginal"]

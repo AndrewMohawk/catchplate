@@ -14,6 +14,7 @@ from serverware import custody_generation_originals as originals
 from serverware import native_shadow_guest_delivery as delivery
 from serverware import native_shadow_nitro_profile as p
 from serverware import native_shadow_retrieval_artifacts as retrieval
+from serverware import native_pilot_interactive as interactive
 from serverware.native_pilot_endpoint_inputs import PilotEndpointInputs
 from serverware.native_pilot_launch import NativePilotLaunch, PilotStartError
 from serverware.native_pilot_operator_channel import Channel, STAGES
@@ -43,6 +44,7 @@ class Operator:
         self._phase = "open"
         self._cleanup_attempted = self._closed = self._finished = False
         self._failure = self._cleanup_failure = None
+        self._interactive_result = None
 
     @classmethod
     def claim(cls):
@@ -74,7 +76,10 @@ class Operator:
         if self._bridge_preparation is not None and not self._bridge_preparation._consumed:
             self._bridge_preparation.check()
         reply = self._channel.exchange(phase, payload, deadline_boottime_ns=self._deadline(live=live))
-        p.fields(reply, fields)
+        if phase == "shutdown" and reply.get("action") == "run-interactive":
+            interactive.validate_action(reply, origin_handoff=payload["originHandoff"])
+        else:
+            p.fields(reply, fields)
         self._public.check()
         if self._bridge_preparation is not None and not self._bridge_preparation._consumed:
             self._bridge_preparation.check()
@@ -225,9 +230,13 @@ class Operator:
         # The reply requests an observation, not a supplied installed verdict.
         # Only the existing actual management/independent issuer relay can
         # establish the origin handoff. It gets no new lifetime or cleanup time.
-        handoff = pilot.cohort.deliver_generation_origin(deadline_boottime_ns=self._deadline(live=True))
+        handoff = pilot.deliver_generation_origin(deadline_boottime_ns=self._deadline(live=True))
         stop = self._exchange("shutdown", {"originHandoff": handoff}, ("action",), live=True)
-        p.require(stop["action"] == "stop")
+        if stop["action"] == "run-interactive":
+            self._interactive_result = pilot.run_interactive(stop, origin_handoff=handoff,
+                deadline_boottime_ns=min(self._deadline(live=True), pilot.running_deadline_boottime_ns()))
+        else:
+            p.require(stop["action"] == "stop")
         self._finished = True
 
     def close(self):

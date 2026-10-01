@@ -6,6 +6,7 @@ import copy
 import fcntl
 import os
 import select
+import signal
 import stat
 import termios
 import time
@@ -71,6 +72,7 @@ class PipeChannel:
         self._index = self._total = 0
         self._pending = None
         self._poisoned = False
+        self._interactive_action = self._interactive_origin = None
 
     def _check(self, deadline, *, allow_terminal=False):
         _require(not self._poisoned)
@@ -141,22 +143,41 @@ class PipeChannel:
             _require(type(request) is Request and self._pending is request and type(inputs) is dict)
             deadline = request.deadline_boottime_ns
             self._check(deadline)
+            action = handoff = None
             if request.phase == "shutdown":
-                p.fields(inputs, ("action",)); _require(inputs["action"] == "stop")
+                if inputs.get("action") == "run-interactive":
+                    from serverware import native_pilot_interactive as interactive
+                    handoff = request.payload["originHandoff"]
+                    action = interactive.validate_action(inputs, origin_handoff=handoff)
+                    now, epoch = time.clock_gettime_ns(time.CLOCK_BOOTTIME), time.time_ns()
+                    _require(now < action["stopAtBoottimeNanos"] < deadline
+                        <= self._owner._lifetime - self._owner._reserve
+                        and epoch < action["expiresAtUnixNanos"]
+                        and action["stopAtBoottimeNanos"] - now < action["expiresAtUnixNanos"] - epoch)
+                else:
+                    p.fields(inputs, ("action",)); _require(inputs["action"] == "stop")
             wire = p.canonical({"apiVersion": "serverware.nativePilotOperatorReply/v1", "sequence": request.sequence,
                 "phase": request.phase, "requestSha256": p.sha(request.raw), "inputs": inputs}) + b"\n"
             _require(len(wire) <= MAX_FRAME and len(wire) <= MAX_TOTAL - self._total)
             offset = 0
             while offset < len(wire):
                 self._wait(False, deadline)
+                mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT, signal.SIGTERM})
                 try:
-                    count = os.write(self._writer, memoryview(wire)[offset:offset + 65536])
-                except (InterruptedError, BlockingIOError):
-                    continue
-                self._count(count); offset += count
-                self._check(deadline, allow_terminal=(offset == len(wire) and request.phase == STAGES[-1]))
-            self._pending = None
-            self._index += 1
+                    try:
+                        count = os.write(self._writer, memoryview(wire)[offset:offset + 65536])
+                    except (InterruptedError, BlockingIOError):
+                        continue
+                    self._count(count); offset += count
+                    self._check(deadline, allow_terminal=(offset == len(wire) and request.phase == STAGES[-1]))
+                    if offset == len(wire):
+                        # Retain the selected interval atomically with its
+                        # positive final write; blocking waits stay cancellable.
+                        self._interactive_action, self._interactive_origin = action, copy.deepcopy(handoff)
+                        self._pending = None
+                        self._index += 1
+                finally:
+                    signal.pthread_sigmask(signal.SIG_SETMASK, mask)
         except BaseException:
             self._poisoned = True
             raise

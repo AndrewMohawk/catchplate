@@ -56,6 +56,8 @@ class NativePilotLaunch:
         self._connections_attempted = self._operation_attempted = False
         self._release_attempted = self._cleanup_attempted = self._closed = False
         self._continuation = None
+        self._origin_attempted = self._interactive_attempted = self._interactive_failed = False
+        self._origin_handoff = self._interactive_result = None
         self._stage = "starting"
 
     @classmethod
@@ -255,6 +257,55 @@ recreates them. No user callback or arbitrary executable runs between releases.
             inputs=operational_inputs, signed_scope_original=phase_two_scope_original,
             public_originals=phase_two_public_originals)
         return dict(self._continuation)
+
+    def check_running(self):
+        """Check retained live owners, never reopen their preparation phases."""
+        self._origin()
+        _require(self._release_attempted and self._continuation is not None
+            and not self._cleanup_attempted and not self._interactive_failed
+            and self._driver._constructed and self._operation is self._driver._operational_inputs)
+        self._driver.check()
+        self._cohort.check_running()
+        self._five.check()
+        _require(self._five._attempted and self._five._thread is not None
+            and self._five._thread.is_alive() and not self._five._stop.is_set()
+            and all(item["phase"] == "constructed" for item in self._five._children.values()))
+        self._generation.check()
+        self._spool.check(preparation=False)
+
+    def running_deadline_boottime_ns(self):
+        """The original three lifetimes minus the original maximum reserve."""
+        self.check_running()
+        from serverware import native_shadow_nitro_profile as p
+        from serverware.native_pilot_interactive import COHORT_REAP_RESERVE_NS
+        production = p.document(self._operation._operation, 65536)["production"]
+        reserve = max(self._driver._config["lifecycle"]["cleanupReserveNanos"], production["cleanupReserveNanos"])
+        return min(min(self._driver._lifetime, self._cohort._lifetime, self._five._lifetime) - reserve,
+            self._cohort._lifetime - COHORT_REAP_RESERVE_NS)
+
+    def running_pidfds(self):
+        """Borrow only PIDFDs already retained by this actual owner graph."""
+        self.check_running()
+        _require(self._driver._driver_pidfd is not None and self._driver._gate_pidfd is not None)
+        return (self._driver._pidfd, self._driver._driver_pidfd, self._driver._gate_pidfd,
+            self._cohort._pidfd, *(item[0] for item in self._cohort._parked),
+            *(item["pidfd"] for item in self._five._children.values()))
+
+    def deliver_generation_origin(self, *, deadline_boottime_ns):
+        """Retain only the actual existing relay's one returned handoff."""
+        from serverware import native_pilot_interactive as interactive
+        self._origin()
+        _require(self._release_attempted and self._continuation is not None
+            and not self._cleanup_attempted and not self._origin_attempted)
+        self._origin_attempted = True
+        handoff = self._cohort.deliver_generation_origin(deadline_boottime_ns=deadline_boottime_ns)
+        self._origin_handoff = interactive._handoff(handoff)
+        return handoff
+
+    def run_interactive(self, action, *, origin_handoff, deadline_boottime_ns):
+        from serverware import native_pilot_interactive as interactive
+        return interactive.run(self, action, origin_handoff=origin_handoff,
+            deadline_boottime_ns=deadline_boottime_ns)
 
     def close(self):
         """Retire each actual owner without crediting unknown cleanup.

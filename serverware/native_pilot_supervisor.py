@@ -241,11 +241,11 @@ class CommissioningSupervisor:
             "inputSha256": input_sha, "approvalSha256": approval_sha,
             "status": "approval-installed-and-replied"}
 
-    def close(self):
+    def close(self, *, cancel=False):
         """Unknown cleanup retains both process and policy; no rollback or retry."""
         self._origin()
         self._failed = True
-        result = self._process.close()
+        result = self._process.close(cancel=cancel)
         if result["status"] == "cleanup-unknown-owner-retained":
             return result
         p.require(result["status"] in ("not-started", "stopped-cleanup-complete", "failed-cleanup-complete"))

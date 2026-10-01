@@ -159,6 +159,9 @@ connects stored final replies to an explicitly selected verifier, without
 claiming process termination or upstream business success. Compilation and 42
 focused Python controls pass; live settlement remains unverified. Uncertain-operation
 cleanup, external signer paths and connected runtime verification remain open.
+Explicit policy/v20 adds a [bounded interactive interval](docs/native-pilot-interactive.md)
+after the actual origin handoff, retaining original deadlines and controlled
+shutdown. Source verification is pending; this does not yet provide a runnable pilot.
 These counts are not a percentage of
 product readiness or permission to deploy.
 Protected deployment is not provisioned. This is not

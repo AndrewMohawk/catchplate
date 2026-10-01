@@ -23,6 +23,7 @@ from scripts import native_pilot_runtime_artifacts as artifact
 from scripts.authority import native_pilot_authority_io as public_io
 from serverware import native_shadow_driver_bootstrap as bootstrap
 from serverware import native_pilot_scope_authority as scope
+from serverware import native_pilot_interactive as interactive
 from serverware import native_shadow_nitro_originals as originals
 from serverware.native_shadow_proof_cohort_control import _Original
 from serverware.native_pilot_coordinator_channel import PipeChannel
@@ -237,6 +238,8 @@ class ConductorProcess:
         self._last_clock = _clock()
         self._stderr = bytearray(); self._stderr_eof = False
         self._phase = "open"
+        self._interval_wait_attempted = self._interval_wait_done = False
+        self._interactive_deadline = None
 
     @classmethod
     def prepare(cls, *, runtime_inventory_fd, runtime_inventory_sha256):
@@ -347,7 +350,21 @@ class ConductorProcess:
             production = p.fields(inputs["production"], scope.PRODUCTION_FIELDS)
             reserve = p.integer(production["cleanupReserveNanos"], maximum=5_000_000_000)
             self._reserve = max(self._reserve, reserve)
+        if request.phase == "shutdown" and inputs.get("action") == "run-interactive":
+            # Data only until PipeChannel's signal-atomic positive-write commit
+            # retains the actual action. A cancelled/failed send cannot wait.
+            self._interactive_deadline = request.deadline_boottime_ns
         self._channel.reply(request, inputs)
+
+    def wait_interactive(self):
+        """Keep the real child and original runtime live before cleanup starts."""
+        self._boundary()
+        _require(self._channel is not None and self._channel._index == len(STAGES)
+            and not self._channel._poisoned)
+        action = self._channel._interactive_action
+        if action is not None:
+            interactive.wait_for_child(self, action=action, origin_handoff=self._channel._interactive_origin,
+                deadline_boottime_ns=self._interactive_deadline)
 
     def _read_stderr(self):
         fd = self._child.stderr.fileno()
@@ -365,12 +382,14 @@ class ConductorProcess:
             self._stderr.extend(raw)
             _require(len(self._stderr) <= _RESULT_MAX)
 
-    def close(self):
+    def close(self, *, cancel=False):
         """One bounded cleanup attempt; unknown retains this actual owner."""
         global _LIVE
         if self._closed:
             return copy.deepcopy(self._result)
-        self._origin(); _require(not self._close_attempted)
+        self._origin(); _require(not self._close_attempted and type(cancel) is bool)
+        action = None if self._channel is None else self._channel._interactive_action
+        _require(action is None or cancel or self._interval_wait_done)
         self._close_attempted = True
         if self._child is None:
             self._result = {"apiVersion": "serverware.nativePilotCoordinatorNotStarted/v1", "status": "not-started",
@@ -380,7 +399,7 @@ class ConductorProcess:
             complete = self._channel is not None and self._channel._index == len(STAGES) and not self._channel._poisoned
             now = _clock(); deadline = min(self._lifetime, now + self._reserve)
             _require(now < deadline)
-            if not complete and not select.select([self._pidfd], [], [], 0)[0]:
+            if (cancel or not complete) and not select.select([self._pidfd], [], [], 0)[0]:
                 self._signaled = True
                 try:
                     signal.pidfd_send_signal(self._pidfd, signal.SIGTERM, None, 0)
@@ -394,8 +413,10 @@ class ConductorProcess:
                     _require(observed is not None and observed.si_pid == self._child.pid)
                     self._read_stderr()
                     _require(self._stderr_eof and self._stderr.endswith(b"\n") and self._stderr.count(b"\n") == 1)
-                    result = p.fields(p.document(bytes(self._stderr[:-1]), _RESULT_MAX),
-                        ("apiVersion", "status", "phase", "pilotAcceptanceVerified", "productionReleaseEligible"))
+                    result = interactive.check_terminal(p.document(bytes(self._stderr[:-1]), _RESULT_MAX),
+                        action=action, origin_handoff=None if action is None else self._channel._interactive_origin,
+                        deadline_boottime_ns=self._interactive_deadline, now_boottime_ns=_clock(),
+                        now_unix_ns=time.time_ns())
                     _require(result["apiVersion"] == "serverware.nativePilotOperatorResult/v1"
                         and result["pilotAcceptanceVerified"] is False and result["productionReleaseEligible"] is False
                         and result["phase"] in ("open", "starting", *STAGES) and observed.si_code == os.CLD_EXITED)

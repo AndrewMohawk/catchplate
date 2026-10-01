@@ -27,9 +27,12 @@ def _stop(_signum, _frame):
     raise KeyboardInterrupt
 
 
-def _result(status, phase):
-    raw = json.dumps({"apiVersion": "serverware.nativePilotAuthorityCoordinatorResult/v1", "status": status,
-        "phase": phase, "pilotAcceptanceVerified": False, "productionReleaseEligible": False},
+def _result(status, phase, interactive_result=None):
+    value = {"apiVersion": "serverware.nativePilotAuthorityCoordinatorResult/v1", "status": status,
+        "phase": phase, "pilotAcceptanceVerified": False, "productionReleaseEligible": False}
+    if status == "stopped-cleanup-complete" and interactive_result is not None:
+        value["interactiveResult"] = interactive_result
+    raw = json.dumps(value,
         sort_keys=True, separators=(",", ":")).encode("ascii") + b"\n"
     try:
         fcntl.fcntl(2, fcntl.F_SETFL, fcntl.fcntl(2, fcntl.F_GETFL) | os.O_NONBLOCK)
@@ -90,6 +93,7 @@ def main():
                 reply = channel.exchange(executor)
                 executor.execute(reply)
             executor.complete()  # Reply is built from real publications/reads.
+        owner.wait_interactive()  # Original approved interval; signals still cancel.
     except BaseException:
         failed = True
 
@@ -98,7 +102,7 @@ def main():
     terminal = None
     try:
         if owner is not None:
-            terminal = owner.close()
+            terminal = owner.close(cancel=failed)
         # Never release authority originals/capabilities before the actual
         # child cleanup result and reap, or proof it was never spawned.
         if executor is not None:
@@ -111,7 +115,7 @@ def main():
             signal.pause()
     stopped = terminal is not None and terminal.get("status") == "stopped-cleanup-complete"
     if not failed and stopped:
-        _result("stopped-cleanup-complete", phase)
+        _result("stopped-cleanup-complete", phase, terminal.get("interactiveResult"))
         return 0
     cleaned = terminal is not None and terminal.get("status") in ("stopped-cleanup-complete", "failed-cleanup-complete")
     _result("failed-cleanup-complete" if cleaned else "not-started", phase)

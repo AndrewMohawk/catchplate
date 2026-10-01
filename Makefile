@@ -1362,6 +1362,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	scripts/test_native_pilot_bridge_commissioning.py \
 	scripts/test_native_pilot_release_profile.py \
 	scripts/test_native_pilot_continuation_profile.py \
+	scripts/test_native_pilot_interactive.py \
 	scripts/test_native_pilot_final_inventory.py \
 	scripts/test_native_pilot_service_handshakes.py \
 	scripts/test_native_pilot_initial_requests.py \
@@ -1720,6 +1721,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/native_pilot_supervisor_bridge_commissioning.py \
 	serverware/native_pilot_supervisor_continuation.py \
 	serverware/native_pilot_supervisor_continuation_policy.py \
+	serverware/native_pilot_interactive.py \
 	serverware/native_pilot_release_profile.py \
 	serverware/native_pilot_continuation_profile.py \
 	serverware/native_pilot_phase_two_publication.py \
@@ -4183,6 +4185,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				scripts/test_native_pilot_bridge_commissioning.py \
 				scripts/test_native_pilot_release_profile.py \
 				scripts/test_native_pilot_continuation_profile.py \
+				scripts/test_native_pilot_interactive.py \
 				scripts/test_native_pilot_final_inventory.py \
 				scripts/test_native_pilot_service_handshakes.py \
 				scripts/test_native_pilot_initial_requests.py \
@@ -4535,6 +4538,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/native_pilot_supervisor_bridge_commissioning.py \
 				serverware/native_pilot_supervisor_continuation.py \
 				serverware/native_pilot_supervisor_continuation_policy.py \
+				serverware/native_pilot_interactive.py \
 				serverware/native_pilot_release_profile.py \
 				serverware/native_pilot_continuation_profile.py \
 				serverware/native_pilot_phase_two_publication.py \

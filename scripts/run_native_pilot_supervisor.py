@@ -131,10 +131,13 @@ def _stop(_signum, _frame):
     raise KeyboardInterrupt
 
 
-def _result(status, phase, completed):
-    raw = json.dumps({"apiVersion": "serverware.nativePilotSupervisorResult/v1", "status": status,
+def _result(status, phase, completed, interactive_result=None):
+    value = {"apiVersion": "serverware.nativePilotSupervisorResult/v1", "status": status,
         "phase": phase, "jobsCompleted": completed, "pilotAcceptanceVerified": False,
-        "productionReleaseEligible": False}, sort_keys=True, separators=(",", ":")).encode("ascii") + b"\n"
+        "productionReleaseEligible": False}
+    if status == "stopped-cleanup-complete" and interactive_result is not None:
+        value["interactiveResult"] = interactive_result
+    raw = json.dumps(value, sort_keys=True, separators=(",", ":")).encode("ascii") + b"\n"
     try:
         fcntl.fcntl(2, fcntl.F_SETFL, fcntl.fcntl(2, fcntl.F_GETFL) | os.O_NONBLOCK)
         os.write(2, raw)
@@ -200,6 +203,7 @@ def main():
             completed += 1
             runtime.check()
         p.require(completed == len(SUPPORTED_JOBS))
+        process.wait_interactive()  # Keep cancellation live throughout the approved interval.
     except BaseException:
         failed = True
 
@@ -208,11 +212,11 @@ def main():
     terminal = None
     try:
         if supervisor is not None:
-            terminal = supervisor.close()
+            terminal = supervisor.close(cancel=failed)
         elif process is not None:
             # A failed Supervisor.prepare retains its canonical owner, but the
             # separately held actual process/policy suffice for terminal cleanup.
-            terminal = process.close()
+            terminal = process.close(cancel=failed)
         if terminal is not None:
             _require(terminal.get("status") in ("not-started", "stopped-cleanup-complete", "failed-cleanup-complete"))
         if policy is not None:
@@ -233,7 +237,7 @@ def main():
             signal.pause()
     stopped = terminal is not None and terminal.get("status") == "stopped-cleanup-complete"
     if not failed and stopped:
-        _result("stopped-cleanup-complete", phase, completed)
+        _result("stopped-cleanup-complete", phase, completed, terminal.get("interactiveResult"))
         return 0
     cleaned = terminal is not None and terminal.get("status") in ("stopped-cleanup-complete", "failed-cleanup-complete")
     _result("failed-cleanup-complete" if cleaned else "not-started", phase, completed)

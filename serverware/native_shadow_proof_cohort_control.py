@@ -391,6 +391,21 @@ class ParkedProofCohort:
         # Do NOT call transfer.check here: persistence owns this same cohort
         # and checks it before release. No recursive ownership approximation.
 
+    def check_running(self):
+        """Post-release liveness without granting another preparation attempt."""
+        self._origin()
+        p.require(self._attempted and self._release_sent and self._driver_attempted
+            and not self._cleanup_attempted and self._external_driver is not None
+            and self._endpoint_five is not None and self._endpoint_inputs is not None)
+        self._child_live()
+        self._external_driver.check(live=True)
+        self._endpoint_five.check()
+        self._endpoint_inputs.check()
+        for fd, pid, start in self._parked:
+            p.require(not _terminal(fd) and _pidfd_pid(fd) == pid and _process(pid) == (self._child_pid, start))
+        if self._peer_preparation is not None:
+            self._peer_preparation.check_resources()
+
     def _receive_originals(self):
         while True:
             self.check()

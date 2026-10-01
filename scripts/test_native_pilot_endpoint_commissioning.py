@@ -117,16 +117,17 @@ class EndpointCommissioningGrammarTests(unittest.TestCase):
             policy.ORDINARY_TRANSITION_POLICY_API, policy.LAUNCH_AUTHORIZATION_POLICY_API,
             policy.ENDPOINT_LAUNCH_POLICY_API, policy.SERVICE_MATERIAL_POLICY_API, policy.HELPER_INITIAL_POLICY_API,
             policy.CURRENT_HEAD_POLICY_API, policy.BRIDGE_RUNTIME_POLICY_API, policy.BRIDGE_COMMISSIONING_POLICY_API,
-            policy.CONTINUATION_POLICY_API, policy.NATIVE_TERMINAL_POLICY_API}), 19)
+            policy.CONTINUATION_POLICY_API, policy.NATIVE_TERMINAL_POLICY_API, policy.INTERACTIVE_POLICY_API}), 20)
         self.assertEqual(policy.HELPER_INITIAL_POLICY_API, "serverware.nativePilotSupervisorCommissioningPolicy/v14")
         self.assertEqual(policy.CURRENT_HEAD_POLICY_API, "serverware.nativePilotSupervisorCommissioningPolicy/v15")
         self.assertEqual(policy.BRIDGE_RUNTIME_POLICY_API, "serverware.nativePilotSupervisorCommissioningPolicy/v16")
         self.assertEqual(policy.BRIDGE_COMMISSIONING_POLICY_API, "serverware.nativePilotSupervisorCommissioningPolicy/v17")
         self.assertEqual(policy.CONTINUATION_POLICY_API, "serverware.nativePilotSupervisorCommissioningPolicy/v18")
         self.assertEqual(policy.NATIVE_TERMINAL_POLICY_API, "serverware.nativePilotSupervisorCommissioningPolicy/v19")
+        self.assertEqual(policy.INTERACTIVE_POLICY_API, "serverware.nativePilotSupervisorCommissioningPolicy/v20")
         self.assertEqual(policy.NATIVE_TERMINAL_FIELDS, policy.CONTINUATION_FIELDS)
         self.assertEqual(policy.CONTINUATION_POLICY_APIS,
-            (policy.CONTINUATION_POLICY_API, policy.NATIVE_TERMINAL_POLICY_API))
+            (policy.CONTINUATION_POLICY_API, policy.NATIVE_TERMINAL_POLICY_API, policy.INTERACTIVE_POLICY_API))
         self.assertEqual(policy.BRIDGE_COMMISSIONING_POLICY_APIS,
             (policy.BRIDGE_COMMISSIONING_POLICY_API,) + policy.CONTINUATION_POLICY_APIS)
         self.assertEqual(policy.BRIDGE_RUNTIME_POLICY_APIS, (policy.BRIDGE_RUNTIME_POLICY_API,) + policy.BRIDGE_COMMISSIONING_POLICY_APIS)

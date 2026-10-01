@@ -23,10 +23,13 @@ class _Parser(argparse.ArgumentParser):
         raise ValueError("native pilot coordinator invocation refused")
 
 
-def _result(status, phase):
-    raw = json.dumps({"apiVersion": "serverware.nativePilotCoordinatorResult/v1",
+def _result(status, phase, interactive_result=None):
+    value = {"apiVersion": "serverware.nativePilotCoordinatorResult/v1",
         "status": status, "phase": phase, "pilotAcceptanceVerified": False,
-        "productionReleaseEligible": False}, sort_keys=True, separators=(",", ":")).encode("ascii") + b"\n"
+        "productionReleaseEligible": False}
+    if status == "stopped-cleanup-complete" and interactive_result is not None:
+        value["interactiveResult"] = interactive_result
+    raw = json.dumps(value, sort_keys=True, separators=(",", ":")).encode("ascii") + b"\n"
     try:
         flags = fcntl.fcntl(2, fcntl.F_GETFL)
         fcntl.fcntl(2, fcntl.F_SETFL, flags | os.O_NONBLOCK)
@@ -80,6 +83,7 @@ def main():
             inputs = channel.exchange(expected_phase, payload,
                 deadline_boottime_ns=request.deadline_boottime_ns)
             owner.reply(request, inputs)
+        owner.wait_interactive()  # Retain the same child before bounded cleanup.
     except BaseException:
         failed = True
 
@@ -90,7 +94,7 @@ def main():
     terminal = None
     try:
         if owner is not None:
-            terminal = owner.close()
+            terminal = owner.close(cancel=failed)
     except BaseException:
         _result("cleanup-unknown-owner-retained", phase)
         while True:
@@ -102,7 +106,7 @@ def main():
             failed = True
     stopped = terminal is not None and terminal.get("status") == "stopped-cleanup-complete"
     if not failed and stopped:
-        _result("stopped-cleanup-complete", phase)
+        _result("stopped-cleanup-complete", phase, terminal.get("interactiveResult"))
         return 0
     # A failed startup/no child is not evidence of completed workload cleanup.
     cleaned = terminal is not None and terminal.get("status") in (

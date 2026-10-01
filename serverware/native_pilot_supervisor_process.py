@@ -17,6 +17,7 @@ import stat
 import subprocess
 import termios
 import threading
+import time
 
 from cryptography.hazmat.primitives import serialization
 
@@ -24,6 +25,7 @@ from scripts import native_pilot_runtime_artifacts as artifact
 from scripts.authority import native_pilot_authority_io as io
 from serverware import native_pilot_coordinator_channel as pipe
 from serverware import native_pilot_window_authority as window_authority
+from serverware import native_pilot_interactive as interactive
 from serverware import native_shadow_driver_bootstrap as bootstrap
 from serverware import native_shadow_nitro_originals as originals
 from serverware.native_pilot_coordinator_process import _Runtime, _clock, _structural
@@ -159,15 +161,27 @@ class _JobChannel(pipe.PipeChannel):
             offset = 0
             while offset < len(wire):
                 self._wait(False, deadline)
+                mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM, signal.SIGINT})
                 try:
-                    count = os.write(self._writer, memoryview(wire)[offset:offset + 65536])
-                except (InterruptedError, BlockingIOError):
-                    continue
-                self._count(count); offset += count
-                self._check(deadline, allow_terminal=(offset == len(wire) and self._index == len(_ORDER) - 1))
-            self._owner._replies[(request.phase, request.job)] = copy.deepcopy(value)
-            self._pending = None
-            self._index += 1
+                    try:
+                        count = os.write(self._writer, memoryview(wire)[offset:offset + 65536])
+                    except (InterruptedError, BlockingIOError):
+                        continue
+                    self._count(count); offset += count
+                    self._check(deadline, allow_terminal=(offset == len(wire) and self._index == len(_ORDER) - 1))
+                    if offset == len(wire):
+                        self._owner._replies[(request.phase, request.job)] = copy.deepcopy(value)
+                        if self._owner._interactive_pending is not None:
+                            _require((request.phase, request.job) == ("shutdown", "stop"))
+                            action, handoff, selected_deadline = self._owner._interactive_pending
+                            self._owner._interactive_action = action
+                            self._owner._interactive_origin = handoff
+                            self._owner._interactive_deadline = selected_deadline
+                            self._owner._interactive_pending = None
+                        self._pending = None
+                        self._index += 1
+                finally:
+                    signal.pthread_sigmask(signal.SIG_SETMASK, mask)
         except BaseException:
             self._poisoned = True
             raise
@@ -187,6 +201,9 @@ class AuthorityCoordinatorProcess:
         self._last_clock = _clock()
         self._stderr, self._stderr_eof = bytearray(), False
         self._result = self._bindings = None
+        self._interactive_action = self._interactive_origin = self._interactive_deadline = None
+        self._interactive_pending = None
+        self._interval_wait_attempted = self._interval_wait_done = False
 
     @classmethod
     def prepare(cls, *, conductor_inventory_fd, conductor_inventory_sha256,
@@ -450,6 +467,12 @@ class AuthorityCoordinatorProcess:
                 production = p.fields(p.document(raw, 65536)["production"], PRODUCTION_FIELDS)
                 self._reserve = max(self._reserve,
                     p.integer(production["cleanupReserveNanos"], maximum=5_000_000_000))
+            if slot == ("shutdown", "stop"):
+                action = p.document(raw, job.maximum)
+                if action.get("action") == "run-interactive":
+                    handoff = self._conductors["shutdown"]["payload"]["originHandoff"]
+                    self._interactive_pending = (interactive.validate_action(action, origin_handoff=handoff),
+                        copy.deepcopy(handoff), request.deadline_boottime_ns)
             self._channel.reply(request, reply)
         except BaseException:
             self._channel._poisoned = True
@@ -471,6 +494,15 @@ class AuthorityCoordinatorProcess:
             self._stderr.extend(raw)
             _require(len(self._stderr) <= _RESULT_MAX)
 
+    def wait_interactive(self):
+        """Retain the actual authority child while its approved pilot runs."""
+        self._capabilities()
+        _require(self._channel is not None and self._channel._index == len(_ORDER)
+            and not self._channel._poisoned)
+        if self._interactive_action is not None:
+            interactive.wait_for_child(self, action=self._interactive_action,
+                origin_handoff=self._interactive_origin, deadline_boottime_ns=self._interactive_deadline)
+
     def _release_handles(self):
         for original in reversed(self._originals):
             original.close()
@@ -481,12 +513,13 @@ class AuthorityCoordinatorProcess:
         for runtime in self._runtimes:
             runtime.close()
 
-    def close(self):
+    def close(self, *, cancel=False):
         """One SIGTERM at most; require real terminal cleanup, exit and reap."""
         global _LIVE
         if self._closed:
             return copy.deepcopy(self._result)
-        self._origin(); _require(not self._close_attempted)
+        self._origin(); _require(not self._close_attempted and type(cancel) is bool)
+        _require(self._interactive_action is None or cancel or self._interval_wait_done)
         self._close_attempted = True
         if self._child is None:
             self._result = {"apiVersion": "serverware.nativePilotSupervisorNotStarted/v1", "status": "not-started",
@@ -496,7 +529,7 @@ class AuthorityCoordinatorProcess:
             complete = self._channel is not None and self._channel._index == len(_ORDER) and not self._channel._poisoned
             now = _clock(); deadline = min(self._lifetime, now + self._reserve)
             _require(now < deadline)
-            if not complete and not select.select([self._pidfd], [], [], 0)[0]:
+            if (cancel or not complete) and not select.select([self._pidfd], [], [], 0)[0]:
                 self._signaled = True
                 try:
                     signal.pidfd_send_signal(self._pidfd, signal.SIGTERM, None, 0)
@@ -509,8 +542,10 @@ class AuthorityCoordinatorProcess:
                     _require(observed is not None and observed.si_pid == self._child.pid and observed.si_code == os.CLD_EXITED)
                     self._read_stderr()
                     _require(self._stderr_eof and self._stderr.endswith(b"\n") and self._stderr.count(b"\n") == 1)
-                    result = p.fields(p.document(bytes(self._stderr[:-1]), _RESULT_MAX),
-                        ("apiVersion", "status", "phase", "pilotAcceptanceVerified", "productionReleaseEligible"))
+                    result = interactive.check_terminal(p.document(bytes(self._stderr[:-1]), _RESULT_MAX),
+                        action=self._interactive_action, origin_handoff=self._interactive_origin,
+                        deadline_boottime_ns=self._interactive_deadline, now_boottime_ns=_clock(),
+                        now_unix_ns=time.time_ns())
                     _require(result["apiVersion"] == "serverware.nativePilotAuthorityCoordinatorResult/v1"
                         and result["pilotAcceptanceVerified"] is False and result["productionReleaseEligible"] is False
                         and result["phase"] in ("open", "starting", *STAGES))

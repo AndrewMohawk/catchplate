@@ -1071,8 +1071,16 @@ class PhaseExecution:
             result = {"pin": self._public_bundle_pin}
         else:
             p.require(job.family in ("origin", "stop"))
-            p.fields(value, ("action",))
-            p.require(value["action"] == ("observe-installed-generation" if job.family == "origin" else "stop"))
+            if job.family == "stop" and value.get("action") == "run-interactive":
+                from serverware import native_pilot_interactive as interactive
+                interactive.validate_action(value, origin_handoff=self._request.payload["originHandoff"])
+                now, epoch = time.clock_gettime_ns(time.CLOCK_BOOTTIME), time.time_ns()
+                p.require(now < value["stopAtBoottimeNanos"] < deadline
+                    and epoch < value["expiresAtUnixNanos"]
+                    and value["stopAtBoottimeNanos"] - now < value["expiresAtUnixNanos"] - epoch)
+            else:
+                p.fields(value, ("action",))
+                p.require(value["action"] == ("observe-installed-generation" if job.family == "origin" else "stop"))
             result = dict(value)  # A requested action, never an installed verdict.
         self._installations[job.name] = result
         return result
@@ -1107,7 +1115,8 @@ class PhaseExecution:
         elif phase == "constructed-admission":
             reply = {"constructedAdmission": self._pins["driver-constructed"]}
         else:
-            reply = {"action": "observe-installed-generation" if phase == "generation-origin" else "stop"}
+            p.require(phase in ("generation-origin", "shutdown"))
+            reply = self._installations["observe-generation-origin" if phase == "generation-origin" else "stop"]
         self._failed = True
         self._process.reply(self._request, copy.deepcopy(reply))
         self._request = None

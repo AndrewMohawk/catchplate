@@ -13,13 +13,16 @@ import signal
 import sys
 
 
-def _result(status, phase):
+def _result(status, phase, interactive_result=None):
     # Bounded nonblocking best-effort status; diagnostics must never prevent
     # cleanup or dump original contents, paths, keys or exception tracebacks.
     import json
-    raw = json.dumps({"apiVersion": "serverware.nativePilotOperatorResult/v1",
+    value = {"apiVersion": "serverware.nativePilotOperatorResult/v1",
         "status": status, "phase": phase, "pilotAcceptanceVerified": False,
-        "productionReleaseEligible": False}, sort_keys=True, separators=(",", ":")).encode("ascii") + b"\n"
+        "productionReleaseEligible": False}
+    if status == "stopped-cleanup-complete" and interactive_result is not None:
+        value["interactiveResult"] = interactive_result
+    raw = json.dumps(value, sort_keys=True, separators=(",", ":")).encode("ascii") + b"\n"
     try:
         flags = fcntl.fcntl(2, fcntl.F_GETFL)
         fcntl.fcntl(2, fcntl.F_SETFL, flags | os.O_NONBLOCK)
@@ -71,7 +74,8 @@ def main():
         while True:
             signal.pause()
     _result("failed-cleanup-complete" if failed else "stopped-cleanup-complete",
-            "open" if owner is None else owner._phase)
+            "open" if owner is None else owner._phase,
+            None if failed or owner is None or not owner._finished else owner._interactive_result)
     return 1 if failed else 0
 
 

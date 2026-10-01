@@ -127,7 +127,7 @@ Checkpoint: **2026-10-01 — pre-production, pilot assembly.**
 
 **36/46 source checkpoints landed · 10 active · 0 todo.**
 
-**Production acceptance: 0/6 verified.** The changed supervisor export from `508ea68e` passes build and exact-source checks. Conductor and authority exports from `90e10cbb` remain historical, not matching-source approved packages. Earlier service-image, operator-tool and sidecar builds remain recorded in the [build results](docs/native-pilot-build.md#current-engineering-assembly). These are engineering builds using the unpublished dependency candidate, not approved release packages or a deployed pilot.
+**Production acceptance: 0/6 verified.** Focused checks and engineering builds are recorded in [production progress](docs/production-status.md) and [build results](docs/native-pilot-build.md#current-engineering-assembly). Those builds use an unpublished dependency candidate; they are not approved release packages or a deployed pilot.
 
 [![Project checkpoints, one segment per task: 36 of 46 source-landed; 10 active and 0 todo. Evidence handoff 10/10; historical recovery 4/5; permissions and grants 10/10; finalization and sessions 8/8; workloads and native 3/6; providers and operations 1/7. H05, N04, N05, N06 and O01 through O06 are in progress. Production acceptance remains 0/6. Engineering assembly is not an accepted pilot or production deployment.](docs/images/project-progress.svg)](docs/production-status.md#next-source-milestones)
 

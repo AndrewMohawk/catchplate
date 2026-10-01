@@ -147,7 +147,25 @@ that independent provider remain required.
 Explicit adopted policy/v2 additionally selects a
 [bounded interactive interval](native-pilot-interactive.md#adopted-lifecycle-selection-416).
 Policy/v1 remains stop-only; the existing lifecycle already waits for actual
-interval completion before cleanup. Focused verification of this batch is pending.
+interval completion before cleanup.
+
+Frozen `aa4547c5` passes all **81 controls across eight focused suites** in
+**5.595 seconds**, with no failures, errors, skips or corrective reruns. Five
+changed Python files pass grammar/both Make inventories and four modules import
+from the exact source archive. The 22 new controls cover the real compiler with
+deterministic synthetic signatures and tiny non-executable inventory trees,
+plus policy/action selection and literal predecessor clock reductions. No
+validator is mocked; no test proves a complete protected ceremony or application
+result. Native and runtime-artifact builds were not repeated.
+Source/harness/log evidence is at
+`codex-offload/serverware/engineering-builds/aa4547c5-lifecycle-inputs-iZure4/`
+under the operator's home directory.
+
+A metadata-only check on 2026-10-01 found no installed runtime roots,
+`/etc/serverware`, `/opt/serverware`, or any of the 30 adopted-cold resource
+parents in the canonical host namespace. This does not inspect a remote guest
+or establish cloud resource absence. Kernel verity feature markers are present,
+but actual backing-store and protected-runtime acceptance remain unverified.
 
 ## Verification and deployment boundary
 

@@ -67,8 +67,13 @@ existing executor and actual parent/conductor wait paths; no new owner, job,
 key selector, retry or duration-based renewal is introduced. The catalogue stays
 176 jobs and 123 selectors.
 
-This closes a source integration gap, not a live-session demonstration. Focused
-verification is pending; deployment and an application allow/deny run remain open.
+This closes a source integration gap, not a live-session demonstration. Exact
+`aa4547c5` passes all 81 focused checks in eight suites in 5.595 seconds,
+including ten new pure adopted-interval controls. The actual multi-source clock
+reduction is exercised with explicitly synthetic public records; it is not
+signature admission or proof of a running owner. There were no failures, skips
+or corrective reruns. [Batch evidence](native-pilot-lifecycle.md#observed-startup-input-composition-416).
+Deployment and an application allow/deny run remain open.
 
 ## Result and remaining work
 

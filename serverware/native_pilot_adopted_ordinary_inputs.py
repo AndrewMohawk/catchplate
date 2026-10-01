@@ -4,8 +4,9 @@ Selections contain independent public policy, never identity overrides or
 approvals. Preparation, resources, installed metadata and signed predecessor
 originals remain byte-bound to the existing 176-job profile. This pure compiler
 does not observe processes, sign, install, acquire owners or renew a window.
-The independently observed peer original is still required: the early cohort
-observation does not contain its complete cgroup/label identity.
+The driver's actual identity comes from retained bootstrap/cohort observations.
+Only cgroup-path, socket-label and configuration-generation expectations remain
+independently selected policy; they are not claimed as observed socket facts.
 """
 from __future__ import annotations
 
@@ -14,6 +15,7 @@ import copy
 from serverware import custody_generation_grants as g
 from serverware import native_pilot_adopted_phase_profile as profile
 from serverware import native_pilot_adopted_ordinary_install as installation
+from serverware import native_pilot_bridge_preparation as bridge
 from serverware import native_pilot_ordinary_delivery_profile as delivery
 from serverware import native_pilot_ordinary_generation_profile as generation
 from serverware import native_pilot_ordinary_initial_authority as initial_authority
@@ -25,6 +27,7 @@ from serverware import native_pilot_ordinary_transition_profile as transition
 from serverware import native_pilot_publication as public_paths
 from serverware import native_pilot_service_authority as service
 from serverware import native_pilot_supervisor_initial_history as initial_policy
+from serverware import native_pilot_supervisor_endpoint_policy as endpoint_policy
 from serverware import native_shadow_endpoint_driver as endpoint_driver
 from serverware import native_shadow_proof_cohort_assignment as cohort
 from serverware import native_shadow_retrieval_artifacts as retrieval
@@ -51,7 +54,7 @@ def selection_fields(selected):
     if selected.family == "helper-initial":
         return ()
     if selected.family == "ordinary-installation":
-        return ("runtimePolicy", "peerOriginal", "peerSha256")
+        return ("runtimePolicy", "peerExpectations")
     if selected.family == "ordinary-delivery":
         return ("credentials",)
     if selected.family == "ordinary-generation":
@@ -143,9 +146,10 @@ def _initial(selected, selection, prior, observed, now):
 
 
 def _peer(selection, first, observed, observations):
-    raw = _raw(selection["peerOriginal"], 4096)
-    peer = retrieval._peer(raw)
-    p.require(raw == g.canonical(peer) and p.sha(raw) == p.digest(selection["peerSha256"]))
+    """Actual driver identity plus independent expectations, not predicted PIDs."""
+    expected = p.fields(selection["peerExpectations"], endpoint_policy.PEER_FIELDS)
+    for digest in expected.values():
+        p.require(p.digest(digest) != p.sha(b""))
     config = cohort.configuration(_raw(first["cohortConfigurationOriginal"], cohort.MAX_BYTES))
     p.require(cohort.adoption_selected(config))
     cohort_raw = _raw(observed["cohortObservationOriginal"], cohort.MAX_BYTES)
@@ -159,13 +163,18 @@ def _peer(selection, first, observed, observations):
     p.require(external["observationSha256"] == p.sha(bootstrap_raw)
         and external["configurationSha256"] == p.sha(_raw(first["driverConfigurationOriginal"], 65536))
         and external["windowSha256"] == p.sha(_raw(first["driverWindowOriginal"], 32768))
-        and (peer["uid"], peer["gid"]) == (bootstrap["uid"], bootstrap["gid"])
-        and (peer["pid"], peer["startTimeTicks"]) == (external["driver"]["processId"], external["driver"]["startTimeTicks"]))
+        and external["driver"]["processId"] == bootstrap["processId"]
+        and external["driver"]["startTimeTicks"] == bootstrap["driver"]["processStartTimeTicks"])
+    child, executable, kernel = external["driver"], external["executable"], bootstrap["driver"]
+    peer = {"uid": bootstrap["uid"], "gid": bootstrap["gid"], "pid": child["processId"],
+        "startTimeTicks": child["startTimeTicks"], "cgroupMountId": kernel["cgroupMountId"],
+        "cgroupInode": kernel["cgroupInode"], **copy.deepcopy(expected)}
     for target, source in (("executableDevice", "device"), ("executableInode", "inode"),
             ("executableLength", "length"), ("executableSha256", "sha256")):
-        p.require(peer[target] == external["executable"][source])
+        peer[target] = executable[source]
     p.require(peer["executableSha256"] == bootstrap["driver"]["driverExecutableSha256"])
-    return peer
+    peer["processIdentitySha256"] = bridge.peer_identity(peer)
+    return retrieval._peer(g.canonical(peer))
 
 
 def _installation(selection, prior, observed, observations):

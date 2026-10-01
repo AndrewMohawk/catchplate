@@ -1786,6 +1786,12 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	scripts/test_native_pilot_lifecycle_inputs.py \
 	scripts/test_native_pilot_adopted_interactive.py \
 	scripts/run_native_pilot_lifecycle.py \
+	scripts/run_native_pilot_approval_provider.py \
+	scripts/test_native_pilot_approval_transcript.py \
+	scripts/test_native_pilot_approval_current_heads.py \
+	scripts/test_native_pilot_approval_current_head_channel.py \
+	scripts/test_native_pilot_approval_policy.py \
+	scripts/test_native_pilot_approval_provider.py \
 	scripts/test_native_pilot_lifecycle_cli.py \
 	scripts/test_native_pilot_lifecycle_approval_channel.py \
 	scripts/test_native_pilot_lifecycle_entrypoint.py \
@@ -1878,6 +1884,10 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/native_pilot_phase_execution.py \
 	serverware/native_pilot_authority_channel.py \
 	serverware/native_pilot_approval_install.py \
+	serverware/native_pilot_approval_transcript.py \
+	serverware/native_pilot_approval_policy.py \
+	serverware/native_pilot_approval_current_heads.py \
+	serverware/native_pilot_approval_provider.py \
 	serverware/native_pilot_bootstrap_install.py \
 	serverware/native_pilot_supervisor.py \
 	serverware/native_pilot_supervisor_approval_channel.py \
@@ -4773,6 +4783,12 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				scripts/test_native_pilot_lifecycle_inputs.py \
 				scripts/test_native_pilot_adopted_interactive.py \
 				scripts/run_native_pilot_lifecycle.py \
+				scripts/run_native_pilot_approval_provider.py \
+				scripts/test_native_pilot_approval_transcript.py \
+				scripts/test_native_pilot_approval_current_heads.py \
+				scripts/test_native_pilot_approval_current_head_channel.py \
+				scripts/test_native_pilot_approval_policy.py \
+				scripts/test_native_pilot_approval_provider.py \
 				scripts/test_native_pilot_lifecycle_cli.py \
 				scripts/test_native_pilot_lifecycle_approval_channel.py \
 				scripts/test_native_pilot_lifecycle_entrypoint.py \
@@ -4865,6 +4881,10 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/native_pilot_phase_execution.py \
 				serverware/native_pilot_authority_channel.py \
 				serverware/native_pilot_approval_install.py \
+				serverware/native_pilot_approval_transcript.py \
+				serverware/native_pilot_approval_policy.py \
+				serverware/native_pilot_approval_current_heads.py \
+				serverware/native_pilot_approval_provider.py \
 				serverware/native_pilot_bootstrap_install.py \
 				serverware/native_pilot_supervisor.py \
 				serverware/native_pilot_supervisor_approval_channel.py \

@@ -269,7 +269,25 @@ class ReceivedApproval:
                 _close(self._fds)
 
 
+def _current_head_index(index):
+    from serverware import native_pilot_adopted_phase_profile as adopted
+    order = tuple((phase, job) for phase, rows in adopted.JOBS.items() for job in rows)
+    slots = tuple(i for i, (phase, job) in enumerate(order) if phase == "bridge-runtime" and job.family == "current-head")
+    _require(len(slots) == 8 and tuple(order[i][1].name for i in slots) == heads.JOB_NAMES)
+    return slots[p.integer(index, minimum=0, maximum=7)]
+
+
 class _Connection:
+    @classmethod
+    def open_current_heads(cls, fd, *, peer_pid, peer_uid, peer_gid,
+                           deadline_boottime_ns, expires_at_unix_ns, check):
+        """Only the eight independently decided adopted jobs, existing v2 wire."""
+        _require(callable(check))
+        p.integer(deadline_boottime_ns, maximum=p.MAX_U64)
+        p.integer(expires_at_unix_ns, maximum=p.MAX_I64)
+        return cls._open(fd, peer_pid=peer_pid, peer_uid=peer_uid, peer_gid=peer_gid,
+            lifecycle=(deadline_boottime_ns, expires_at_unix_ns, check, False), current_heads=True)
+
     @classmethod
     def open_lifecycle(cls, fd, *, peer_pid, peer_uid, peer_gid,
                        deadline_boottime_ns, expires_at_unix_ns, check, completions=False):
@@ -290,7 +308,7 @@ class _Connection:
         return cls._open(fd, peer_pid=peer_pid, peer_uid=peer_uid, peer_gid=peer_gid)
 
     @classmethod
-    def _open(cls, fd, *, peer_pid, peer_uid, peer_gid, lifecycle=None):
+    def _open(cls, fd, *, peer_pid, peer_uid, peer_gid, lifecycle=None, current_heads=False):
         _require(cls in (ApprovalChannel, ApprovalPeer) and type(fd) is int and fd >= 3)
         p.integer(peer_pid, minimum=2, maximum=(1 << 31) - 1)
         p.integer(peer_uid, minimum=0, maximum=(1 << 32) - 2)
@@ -318,6 +336,7 @@ class _Connection:
         owner._incoming, owner._loose = [], []
         owner._close_attempted = owner._close_uncertain = owner._receipt_committed = False
         owner._context, owner._lifecycle_header = {}, None
+        owner._current_heads, owner._head_header = current_heads, None
         owner._completions, owner._completion_count, owner._completion_header = False, 0, None
         owner._callback = owner._lifecycle_deadline = None
         if owner._lifecycle:
@@ -360,6 +379,15 @@ class _Connection:
 
     def check(self):
         return self._check(peer_live=True)
+
+    def peer_identity(self):
+        """Current kernel peer and process start, not a claim of its authority."""
+        from serverware import native_shadow_proof_cohort_control as mechanics
+        self.check()
+        _, start = mechanics._process(self._peer[0])
+        result = dict(zip(("pid", "uid", "gid"), self._peer, strict=True), startTimeTicks=start)
+        self.check()
+        return result
 
     def _check(self, *, peer_live):
         try:
@@ -410,30 +438,30 @@ class _Connection:
 
     def _lifecycle_exchange_ready(self):
         from serverware import native_pilot_lifecycle_approval_wire as wire
-        _require(self._lifecycle and self._completion_header is None)
+        _require(self._lifecycle and not self._current_heads and self._completion_header is None)
         wire.stage_at(self._index)
         if self._completions:
             _require(self._completion_count == (0 if self._index < 2 + len(wire.COLD) else 1))
 
-    def _send_lifecycle_originals(self, header, raws):
+    def _send_lifecycle_originals(self, header, raws, *, chunk_api=None):
         from serverware import native_pilot_lifecycle_approval_wire as wire
         binding = p.sha(p.canonical(header))
         self._send(header)
         for name, raw in raws.items():
             for offset in range(0, len(raw), CHUNK_BYTES):
-                self._send(dict(apiVersion=wire.CHUNK_API, requestBindingSha256=binding,
+                self._send(dict(apiVersion=wire.CHUNK_API if chunk_api is None else chunk_api, requestBindingSha256=binding,
                     field=name, offset=offset, dataBase64url=p.encoded(raw[offset:offset + CHUNK_BYTES])))
 
-    def _receive_lifecycle_originals(self, header, names):
+    def _receive_lifecycle_originals(self, header, names, *, chunk_api=None, metadata=None):
         from serverware import native_pilot_lifecycle_approval_wire as wire
         binding, raws = p.sha(p.canonical(header)), {}
         for name in names:
-            meta = header["originals"][name]
+            meta = (header["originals"] if metadata is None else metadata)[name]
             raw, size = bytearray(), meta["length"]
             while len(raw) < size:
                 chunk, _ = self._receive(0)
                 p.fields(chunk, wire.CHUNK_FIELDS)
-                _require(chunk["apiVersion"] == wire.CHUNK_API
+                _require(chunk["apiVersion"] == (wire.CHUNK_API if chunk_api is None else chunk_api)
                     and chunk["requestBindingSha256"] == binding and chunk["field"] == name
                     and type(chunk["offset"]) is int and chunk["offset"] == len(raw))
                 value = p.decoded(chunk["dataBase64url"], maximum=CHUNK_BYTES)
@@ -458,7 +486,7 @@ class _Connection:
                 return
 
     def _count(self, size):
-        maximum = LIFECYCLE_MAX_TOTAL if self._lifecycle else MAX_TOTAL
+        maximum = LIFECYCLE_MAX_TOTAL if self._lifecycle and not self._current_heads else MAX_TOTAL
         _require(0 < size <= maximum - self._total)
         self._total += size
 
@@ -576,6 +604,51 @@ class _Connection:
 
 
 class ApprovalChannel(_Connection):
+    def exchange_current_head(self, pending, *, deadline_boottime_ns, expires_at_unix_ns, check):
+        """Request an independent complete input/Approval2 for one of eight jobs."""
+        acquired = self._lock.acquire(blocking=False)
+        try:
+            _require(acquired and self._lifecycle and self._current_heads and not self._incoming)
+            index = _current_head_index(self._index)
+            self._lifecycle_begin(deadline_boottime_ns=deadline_boottime_ns,
+                expires_at_unix_ns=expires_at_unix_ns, check=check)
+            header, raws, deadline = _pending_adopted(pending, index)
+            from serverware import native_pilot_approval_current_heads as current_heads
+            bounds = current_heads.pending_bounds(pending)
+            # Preserve the original outer header while waiting only within the
+            # selected inner trust request and independently supplied limits.
+            self._active = min(self._active, deadline, bounds["deadline"])
+            self._epoch_limit = min(self._epoch_limit, p.ns(header["expiresAtUnixNanos"]), bounds["epochLimit"])
+            self.check()
+            _require(not select.select([self._socket], [], [], 0)[0])
+            self._send_lifecycle_originals(header, raws, chunk_api=ADOPTED_CHUNK_API)
+            reply, fds = self._receive(2, received=self._incoming)
+            p.fields(reply, REPLY_FIELDS)
+            _require(reply["apiVersion"] == ADOPTED_REPLY_API
+                and reply["requestBindingSha256"] == p.sha(p.canonical(header)))
+            from serverware import native_pilot_adopted_phase_profile as adopted
+            limits = (adopted.BY_NAME[pending["job"]][1].maximum, MAX_APPROVAL)
+            pins = {name: p.digest(reply[name + "Sha256"]) for name in ("input", "approval")}
+            identities = [_protected_descriptor(fd, maximum, pins[name], self.check)
+                for fd, maximum, name in zip(fds, limits, ("input", "approval"), strict=True)]
+            _require(identities[0][:2] != identities[1][:2]
+                and not select.select([self._socket], [], [], 0)[0])
+            with _owning_lifecycle():
+                accepted = ReceivedApproval(_TOKEN, fds, {"pins": pins}, lifecycle=True,
+                    names=("input", "approval"), identities=identities, owner=self)
+                self._received.append(accepted)
+                fds.clear()
+            self._send(dict(apiVersion=ADOPTED_RECEIPT_API, requestBindingSha256=p.sha(p.canonical(header)),
+                replySha256=p.sha(p.canonical(reply))), receipt=True)
+            self._index += 1
+            self._active = None
+            return accepted
+        except BaseException as error:
+            self._failed = True
+            raise ApprovalChannelError(self) from error
+        finally:
+            if acquired: self._lock.release()
+
     def exchange_lifecycle(self, stage, pending, *, deadline_boottime_ns, expires_at_unix_ns, check):
         """Carry one actual pending observation; never decide or install it."""
         from serverware import native_pilot_lifecycle_approval_wire as lifecycle
@@ -706,6 +779,70 @@ class ApprovalChannel(_Connection):
 
 class ApprovalPeer(_Connection):
     """Independent operator adapter; supplied FDs must already be approved."""
+    def receive_current_head(self, *, deadline_boottime_ns, expires_at_unix_ns, check):
+        acquired = self._lock.acquire(blocking=False)
+        try:
+            _require(acquired and self._lifecycle and self._current_heads and self._head_header is None)
+            index = _current_head_index(self._index)
+            self._lifecycle_begin(deadline_boottime_ns=deadline_boottime_ns,
+                expires_at_unix_ns=expires_at_unix_ns, check=check)
+            header, _ = self._receive(0)
+            p.fields(header, REQUEST_FIELDS + ("expiresAtUnixNanos",))
+            _require(header["apiVersion"] == ADOPTED_REQUEST_API
+                and type(header["exchangeSequence"]) is int and header["exchangeSequence"] == index + 1)
+            deadline, expiry = p.ns(header["deadlineBoottimeNs"]), p.ns(header["expiresAtUnixNanos"])
+            self._active, self._epoch_limit = min(self._active, deadline), min(self._epoch_limit, expiry)
+            for name in ("request", "observation"):
+                meta = p.fields(header[name], ("length", "sha256"))
+                p.integer(meta["length"], maximum=MAX_REQUEST); p.digest(meta["sha256"])
+            raws = self._receive_lifecycle_originals(header, ("request", "observation"),
+                chunk_api=ADOPTED_CHUNK_API, metadata=header)
+            from serverware import native_pilot_lifecycle_approval_wire as wire
+            pending = wire.pending("adopted", raws)
+            expected, checked, _ = _pending_adopted(pending, index)
+            _require(expected == header and checked == raws and not select.select([self._socket], [], [], 0)[0])
+            from serverware import native_pilot_approval_current_heads as current_heads
+            bounds = current_heads.pending_bounds(pending)
+            self._active = min(self._active, bounds["deadline"])
+            self._epoch_limit = min(self._epoch_limit, bounds["epochLimit"])
+            self.check()
+            self._head_header, self._head_job = header, pending["job"]
+            return pending
+        except BaseException as error:
+            self._failed = True
+            raise ApprovalChannelError(self) from error
+        finally:
+            if acquired: self._lock.release()
+
+    def respond_current_head(self, *, input_fd, input_sha256, approval_fd, approval_sha256):
+        acquired = self._lock.acquire(blocking=False)
+        try:
+            _require(acquired and self._lifecycle and self._current_heads and self._head_header is not None)
+            _current_head_index(self._index)
+            self.check()
+            from serverware import native_pilot_adopted_phase_profile as adopted
+            fds = (input_fd, approval_fd)
+            limits = (adopted.BY_NAME[self._head_job][1].maximum, MAX_APPROVAL)
+            _require(all(type(fd) is int and fd >= 3 for fd in fds) and input_fd != approval_fd)
+            identities = [_protected_descriptor(fd, maximum, digest, self.check)
+                for fd, maximum, digest in zip(fds, limits, (input_sha256, approval_sha256), strict=True)]
+            _require(identities[0][:2] != identities[1][:2])
+            binding = p.sha(p.canonical(self._head_header))
+            reply = dict(apiVersion=ADOPTED_REPLY_API, requestBindingSha256=binding,
+                inputSha256=p.digest(input_sha256), approvalSha256=p.digest(approval_sha256))
+            self._send(reply, fds)
+            self._receive(0, receipt_expected=dict(apiVersion=ADOPTED_RECEIPT_API,
+                requestBindingSha256=binding, replySha256=p.sha(p.canonical(reply))))
+            self._check(peer_live=False)
+            self._head_header = None
+            self._index += 1
+            self._active = None
+        except BaseException as error:
+            self._failed = True
+            raise ApprovalChannelError(self) from error
+        finally:
+            if acquired: self._lock.release()
+
     def receive_lifecycle(self, *, deadline_boottime_ns, expires_at_unix_ns, check):
         from serverware import native_pilot_lifecycle_approval_wire as lifecycle
         acquired = self._lock.acquire(blocking=False)

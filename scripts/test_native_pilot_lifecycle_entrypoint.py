@@ -26,7 +26,44 @@ def arguments():
     return values
 
 
+def provider_arguments():
+    values = [entrypoint.PROVIDER_MODE]
+    for index, name in enumerate(entrypoint.PROVIDER_INPUTS):
+        values += ["--" + name + "-fd", str(20 + index),
+            "--" + name + "-sha256", "sha256:" + str(index + 1) * 64]
+    return values + ["--approval-socket-fd", "25", "--current-head-socket-fd", "26"]
+
+
 class LifecycleEntrypointControls(unittest.TestCase):
+    def test_provider_exact_public_arguments_and_supervisor_only_namespace(self):
+        values = provider_arguments()
+        self.assertEqual(len(values), 25)
+        self.assertTrue(entrypoint.valid_arguments(values))
+        self.assertEqual(entrypoint.PROVIDER_MODE, "approval-provider")
+        self.assertEqual(entrypoint.PROVIDER_CLI,
+            "/supervisor/app/scripts/run_native_pilot_approval_provider.py")
+        name = entrypoint.PROVIDER_CLI.removeprefix("/supervisor/app/")
+        self.assertIn(name, artifacts.SUPERVISOR_FILES)
+        self.assertNotIn(name, artifacts.AUTHORITY_FILES)
+        self.assertEqual(artifacts.SUPERVISOR_COMMAND[-1], "--run-native-pilot")
+
+    def test_provider_requires_all_seven_distinct_descriptors_and_exact_pin_syntax(self):
+        for index, replacement in ((2, "2"), (2, "020"), (2, "2147483648"), (6, "20"),
+                (22, "20"), (24, "25"), (24, "2"), (4, "sha256:" + "A" * 64),
+                (8, "1" * 64), (1, "--recipe-fd"), (21, "--approval-fd")):
+            changed = provider_arguments(); changed[index] = replacement
+            with self.subTest(index=index, replacement=replacement):
+                self.assertFalse(entrypoint.valid_arguments(changed))
+        self.assertFalse(entrypoint.valid_arguments(provider_arguments()[:-2]))
+        self.assertFalse(entrypoint.valid_arguments(provider_arguments() + ["--authority-key", "synthetic=30"]))
+
+    def test_provider_never_reinterprets_legacy_lifecycle_or_arbitrary_mode(self):
+        for mode in ("--run-native-pilot", "--run-adopted-native-pilot", entrypoint.LIFECYCLE_MODE,
+                "--approval-provider", "/tmp/provider.py", "--approve-all"):
+            with self.subTest(mode=mode):
+                self.assertFalse(entrypoint.valid_arguments([mode, *provider_arguments()[1:]]))
+        self.assertFalse(entrypoint.valid_arguments([entrypoint.PROVIDER_MODE, *arguments()[1:]]))
+
     def test_source_catalogue_counts_match_fixed_syntax_and_packaged_path(self):
         self.assertEqual((len(COLD), len(ADOPTED)), (36, 123))
         self.assertTrue(entrypoint.valid_arguments(arguments()))

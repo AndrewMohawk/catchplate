@@ -100,8 +100,9 @@ def fixture():
     # This early public source is structurally complete synthetic observation
     # data, not the later independently signed generation fixture's admission.
     bootstrap = json.loads(scope_source()[1]["driver_observation_original"])
-    bootstrap.update(uid=peer["uid"], gid=peer["gid"])
-    bootstrap["driver"]["driverExecutableSha256"] = peer["executableSha256"]
+    bootstrap.update(uid=peer["uid"], gid=peer["gid"], processId=peer["pid"])
+    bootstrap["driver"].update(driverExecutableSha256=peer["executableSha256"],
+        processStartTimeTicks=peer["startTimeTicks"], cgroupMountId=peer["cgroupMountId"], cgroupInode=peer["cgroupInode"])
     config["externalDriver"].update(configurationSha256=sha(args["driver_configuration_raw"]),
         windowSha256=sha(args["driver_window_raw"]), observationSha256=sha(canonical(bootstrap)))
     external = observed["externalDriver"]
@@ -176,7 +177,7 @@ def fixture():
     records["install-ordinary-runtime"] = dict(input=canonical(installed), result=dict(
         apiVersion=compiler.installation.RESULT_API, inputSha256=sha(canonical(installed)), pins=pins, services=metadata))
     selections["install-ordinary-runtime"] = dict(runtimePolicy=copy.deepcopy(f["fragment"]),
-        peerOriginal=canonical(peer).decode("ascii"), peerSha256=sha(canonical(peer)))
+        peerExpectations={name: peer[name] for name in compiler.endpoint_policy.PEER_FIELDS})
     for role in g.ROLES:
         delivery_raw = args["ordinary_context"][role]["deliveryOriginal"].encode("ascii")
         envelope = json.loads(delivery_raw)
@@ -317,9 +318,9 @@ class AdoptedOrdinaryInputControls(unittest.TestCase):
         observations["endpoint-inputs"]["ordinaryInitialResourcesOriginal"] = canonical(value).decode("ascii")
         with self.assertRaises(FAILURES): compose(f, "ordinary-initial-checkpoint-" + g.ROLES[0], observations=observations)
 
-    def test_peer_requires_independent_pin_actual_driver_join_and_later_literal_pin(self):
+    def test_peer_uses_static_expectations_actual_driver_join_and_later_literal_pin(self):
         f = self.value; selection = copy.deepcopy(f["selections"]["install-ordinary-runtime"])
-        selection["peerSha256"] = labelled("wrong peer pin")
+        selection["peerOriginal"] = "{}"
         with self.assertRaises(FAILURES): compose(f, "install-ordinary-runtime", selection=selection)
         observed = copy.deepcopy(f["observations"])
         value = json.loads(observed["endpoint-inputs"]["cohortObservationOriginal"])
@@ -329,6 +330,26 @@ class AdoptedOrdinaryInputControls(unittest.TestCase):
         records = copy.deepcopy(f["records"])
         records["endpoint-inputs"]["input"] = canonical(dict(peer=dict(path=paths.DESTINATIONS["endpoint-peer"], sha256=labelled("another peer"))))
         with self.assertRaises(FAILURES): compose(f, "ordinary-generation-" + g.ROLES[0], records=records)
+
+    def test_runtime_peer_selection_contains_no_future_identity_and_no_inferred_labels(self):
+        f = self.value; name = "install-ordinary-runtime"
+        self.assertEqual(compiler.selection_fields(profile.BY_NAME[name][1]), ("runtimePolicy", "peerExpectations"))
+        selected = copy.deepcopy(f["selections"][name])
+        self.assertEqual(set(selected["peerExpectations"]), set(compiler.endpoint_policy.PEER_FIELDS))
+        for field in ("pid", "startTimeTicks", "executableInode", "cgroupMountId"):
+            changed = copy.deepcopy(selected); changed["peerExpectations"][field] = 123
+            with self.subTest(field=field), self.assertRaises(FAILURES): compose(f, name, selection=changed)
+        for field in compiler.endpoint_policy.PEER_FIELDS:
+            changed = copy.deepcopy(selected); changed["peerExpectations"][field] = sha(b"")
+            with self.subTest(field=field), self.assertRaises(FAILURES): compose(f, name, selection=changed)
+        # A different independently selected expectation is retained as policy,
+        # not represented as a successful kernel label observation.
+        selected["peerExpectations"]["securityLabelSha256"] = labelled("independently selected socket label")
+        value = json.loads(compose(f, name, selection=selected))
+        for role in g.ROLES:
+            peer = compiler.service._runtime(value["runtimeOriginals"][role].encode("ascii"), role, adopted=True)["expectedPeer"]
+            self.assertEqual(peer["securityLabelSha256"], selected["peerExpectations"]["securityLabelSha256"])
+            self.assertEqual(peer["pid"], json.loads(f["observations"]["bootstrap-admission"]["bootstrapObservationOriginal"])["processId"])
 
     def test_activation_is_literal_list_and_installed_credentials_are_not_selected(self):
         f = self.value; name = "ordinary-delivery-" + g.ROLES[0]

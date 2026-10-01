@@ -97,8 +97,14 @@ def kwargs(rows, names):
 
 
 @contextmanager
-def session(value, action, *, completions=False):
+def session(value, action, *, completions=False, current_heads=False):
     """One real child peer, actual accepted SO_PEERCRED and consuming reap."""
+    if current_heads and completions: raise ValueError("distinct fixed channel selections")
+    def opened(kind, fd, pid):
+        arguments = dict(peer_pid=pid, peer_uid=0, peer_gid=0,
+            deadline_boottime_ns=value["lifetime"], expires_at_unix_ns=value["expiry"], check=lambda: None)
+        if current_heads: return kind.open_current_heads(fd, **arguments)
+        return kind.open_lifecycle(fd, **arguments, completions=completions)
     listener = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
     address = b"\0native-pilot-lifecycle-control-" + str(os.getpid()).encode("ascii") + b"-" + os.urandom(8).hex().encode("ascii")
     listener.bind(address); listener.listen(1)
@@ -115,9 +121,7 @@ def session(value, action, *, completions=False):
             connected = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
             connected.connect(address)
             try:
-                peer = channel.ApprovalPeer.open_lifecycle(connected.fileno(), peer_pid=parent_pid,
-                    peer_uid=0, peer_gid=0, deadline_boottime_ns=value["lifetime"],
-                    expires_at_unix_ns=value["expiry"], check=lambda: None, completions=completions)
+                peer = opened(channel.ApprovalPeer, connected.fileno(), parent_pid)
             except channel.ApprovalChannelError as error:
                 peer = error.owner
                 raise
@@ -148,9 +152,7 @@ def session(value, action, *, completions=False):
             raise RuntimeError("peer did not connect")
         accepted, _ = listener.accept()
         try:
-            client = channel.ApprovalChannel.open_lifecycle(accepted.fileno(), peer_pid=pid,
-                peer_uid=0, peer_gid=0, deadline_boottime_ns=value["lifetime"],
-                expires_at_unix_ns=value["expiry"], check=lambda: None, completions=completions)
+            client = opened(channel.ApprovalChannel, accepted.fileno(), pid)
         except channel.ApprovalChannelError as error:
             client = error.owner
             raise

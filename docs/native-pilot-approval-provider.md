@@ -34,6 +34,12 @@ the existing root-owned, protected-file or sealed-memory-file admission. The
 policy names both expected peer PID/UID/GID/start identities; actual kernel peer
 credentials, PIDFDs, per-message credentials and process starts must match.
 
+The [three-process startup launcher](native-pilot-startup.md) now supplies that
+connection path: actual children create the sockets before independently
+authorized late files bind their observed identities. It resumes this same
+provider CLI in the observed process; it does not generate its delegation policy
+or the independent fresh-head decisions.
+
 ## Where permission comes from
 
 The independently provisioned `nativePilotApprovalDelegationPolicy/v1` pins the

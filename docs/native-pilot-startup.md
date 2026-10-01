@@ -95,6 +95,14 @@ not erase them or silently reset the directory for another invocation.
 
 ## Pilot boundary
 
+Frozen `32d2bafc` passes 125 controls across twelve focused suites in one
+16.472-second run, without failures/errors/skips/reruns. Fourteen changed Python
+files pass grammar and both Make inventories; eleven modules import. The controls
+include actual child-created sockets, kernel credentials/PIDFDs and retained
+public descriptors, signed synthetic role joins and exact CLI/terminal grammar.
+Provisioning tests redirect filesystem roots to private temporary directories.
+They do not run the installed three-role owner or the whole commissioning flow.
+
 The startup source and its focused controls do not establish protected installed
 execution. Matching approved packages, provisioning of independent policies and
 fresh decisions, the protected deployment, and a real credential-replacement

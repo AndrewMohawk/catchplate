@@ -134,8 +134,10 @@ Checkpoint: **2026-10-01 — pre-production, pilot assembly.**
 The [fixed lifecycle runner](docs/native-pilot-lifecycle.md) connects startup,
 independently approved input delivery and controlled shutdown. The
 [workload sidecar](docs/native-workload-sidecar.md) supports ordinary HTTPS
-libraries without giving applications provider credentials. These components
-are implemented in source; they are not a demonstrated deployed workflow.
+libraries without giving applications provider credentials. The new
+[three-process launcher](docs/native-pilot-startup.md) connects the real peers
+before accepting identity-bound configuration. These are source implementations,
+not a demonstrated deployed workflow.
 
 [Cold-start input composition](docs/native-pilot-genesis-inputs.md) connects the
 66 existing startup jobs to their actual observations and previous results.
@@ -158,7 +160,7 @@ Before a pilot is ready to try, four milestones remain:
 
 1. Publish the reviewed dependency snapshot, then build and install approved
    matching runtime packages.
-2. Provision the fresh-state decision backend and configure the
+2. Implement and provision the fresh-state decision backend, then configure the
    [independent approval services](docs/native-pilot-approval-provider.md).
 3. Configure the protected test deployment and its required services.
 4. Demonstrate one real application flow: credential replacement, allowed and

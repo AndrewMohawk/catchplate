@@ -39,8 +39,9 @@ engineering overrides, and every report has `productionReleaseEligible=false`.
 No strict inventory, approved package, protected install, application execution,
 native target build, cloud action or paid test was produced.
 
-The subsequent `.422` [fixed-eight evidence handoff and receiving service](native-pilot-approval-provider.md)
-are source changes not included in these `.421` exports. New matching approved
+The subsequent `.422` [evidence handoff and receiving service](native-pilot-approval-provider.md)
+and `.423` [three-process startup](native-pilot-startup.md) are source changes
+not included in these `.421` exports. New matching approved
 packages and protected installation remain required; no new runtime build is
 claimed by the source integration.
 The [dependency audit](production-dependency-snapshot.md) confirms that current

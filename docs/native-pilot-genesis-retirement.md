@@ -50,10 +50,36 @@ descriptor inventories across partial close failures.
 
 ## Verification and remaining work
 
-Implementation verification is pending the frozen-source batch. This change
-does not establish protected provisioning, a running cold ceremony, native
-key custody or production acceptance. Source checkpoints remain **36/46** and
-production acceptance **0/6** until the broader requirements have evidence.
+Frozen source `84207f6c066fb2c9a738f411caf866da15db3663` passes:
+
+- **24 Python controls**, with no failures or skips, in **0.685 seconds**;
+  five changed Python files also pass grammar and both Make inventories.
+  One control uses a real socketpair, fork, kernel sender credentials, PIDFD and
+  consuming child wait. The remaining controls check public protocol and
+  assembly inputs, not live service owners.
+- **Five real-child Rust controls** against the exact production retirement
+  module: consuming stop/reap, repeat refusal, actual nonzero exit, `ECHILD`
+  refusal and partial-startup destructor cleanup. A tiny offline harness imports
+  the same source module and uses the project's existing pinned libc; it does
+  not substitute a copied algorithm or successful validation stubs.
+- The cached offline Rust 1.88 check of the gate, DRS, CSA, genesis controller
+  and adoption validator, completed in **2m53s**. Compiler warnings remain;
+  this is not a warning-free release build.
+
+Python and real-child execution used one CPU and private user/network
+namespaces. Rust compilation used the pinned network-disabled, resource-bounded
+toolchain container. The native test executable was then run outside Docker's
+default clone3 filter, with one CPU, a 1 GiB virtual-memory limit and a 45-second
+outer timeout; each test child retained its own two-second absolute kill timer.
+No full runtime-artifact build, cloud operation or paid test was performed.
+
+The frozen archive, test executable, commands and logs are retained at
+`codex-offload/serverware/engineering-builds/84207f6c-genesis-retirement-QAvxG3/`.
+These checks execute the real reap primitive, not the privileged inspection
+helper or complete C9 stop/terminal ceremony. Actual protected provisioning,
+service construction, event-woken shutdown under live traffic and end-to-end
+cleanup remain unverified. Source checkpoints remain **36/46** and production
+acceptance **0/6**; this result is not a running-pilot or native key-custody claim.
 
 The complete independently operated commissioning graph and public
 installation, retained cold-core transfer, adoption-validator/signing ownership,
@@ -61,3 +87,22 @@ operational recovery and authority transitions still need integration.
 Independently approved dependency/release artifacts, Nitro/KMS/signing/witness
 services and connected application allow/deny, provider, hardware and lifecycle
 acceptance remain required.
+
+The next connected implementation should extend the existing authority
+coordinator with a separately selected cold job profile and protected installer.
+The current hot job/approval profiles and publication destinations do not accept
+these three cold launches. Producing a launch bundle does not install it.
+
+Preserve the dependency order: actual parked owners and resources, ordinary
+histories/runtime/C9 and static endpoint C9, retained Retrieval initialization,
+Publication then Retrieval grants, ordinary grants, endpoint launches/releases,
+then complete coordinator Runtime/v2 and its C9/key/launch inputs. The existing
+assembly needs the actual services released before that coordinator runtime
+can be approved. Install components before their launch file, with exclusive
+fixed destinations and exact readback; public root-owned originals and
+role-owned credential/runtime files have distinct ownership requirements.
+
+Before endpoint cleanup, a separate retained owner must acquire and transfer
+the actual fs-verity cold-core descriptor for operational adoption. A public
+Bundle cannot substitute for that descriptor. None of this may renew the
+original startup window or self-approve independently provisioned inputs.

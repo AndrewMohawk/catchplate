@@ -146,11 +146,15 @@ connects approved configuration to its runtime files. Independent decisions,
 approved installation, deployment and a complete live run remain open.
 The lifecycle also returns actual startup/shutdown results after verified child
 exit; input-delivery receipts alone are not treated as completed work.
+The [approval-provider executable](docs/native-pilot-approval-provider.md) now
+connects the fixed transcript to an explicit delegation policy and a separate
+fresh-decision peer. It still needs independent configuration and installation.
 
 Before a pilot is ready to try, four milestones remain:
 
 1. Assemble and install compatible, approved runtime packages.
-2. Connect the independent input/approval provider.
+2. Install and configure the [independent approval provider](docs/native-pilot-approval-provider.md)
+   and its separately operated fresh-decision service.
 3. Configure the protected test deployment and its required services.
 4. Demonstrate one real application flow: credential replacement, allowed and
    denied requests, and clean shutdown.

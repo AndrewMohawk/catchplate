@@ -40,6 +40,12 @@ selected signed assignment and trust. The native validator must still admit
 the complete candidate before the independently operated authority signs it.
 
 Endpoint pins preserve the common peer identity in all five ordinary runtimes.
+The ordinary installation selection supplies `runtimePolicy` and three static
+`peerExpectations`: cgroup-path, security-label and configuration-generation
+hashes. Actual driver PID/start, credentials, executable and cgroup mount/inode
+come from the authenticated bootstrap/cohort observations. No future PID or
+complete peer original must be predicted, and static expectations are not
+misrepresented as observed facts.
 The `.419` [protected publication job](native-pilot-adopted-endpoint-publication.md)
 publishes the peer, measured proof scope, assignment and exact fresh retrieval
 manifest only after independent approval. The empty object directory remains

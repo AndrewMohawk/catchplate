@@ -11,6 +11,13 @@ performed when this source was authored.
 
 ## Current engineering assembly
 
+The `.421` [approval provider](native-pilot-approval-provider.md) is now in the
+supervisor source roster and fixed entrypoint grammar. Frozen `bb54b76a` passes
+107 focused source/transport/package controls, but this turn did not rebuild
+runtime artifacts. The exports below therefore remain historical. Next is one
+matching-source export of all three runtimes; the unpublished dependency candidate
+still cannot produce a strict approved release package.
+
 The `.415` [fixed lifecycle caller](native-pilot-lifecycle.md#fixed-executable-caller-415)
 refreshes **only the supervisor** from exact source
 `508ea68e8c7b500c4eae818e1260c1fcabe7e2e6`. Its 95 focused checks pass in

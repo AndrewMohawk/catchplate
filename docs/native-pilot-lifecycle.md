@@ -11,6 +11,12 @@ The [cold](native-pilot-genesis-inputs.md) and
 the retained actual transcript. They do not replace the independent provider,
 protected public-original publication or deployed lifecycle verification.
 
+The `.421` [fixed approval provider](native-pilot-approval-provider.md) supplies
+the executable peer under a separately provisioned delegation policy, with a
+distinct protected channel for the eight fresh current-head decisions. Its
+source implementation does not provision either independent operator or establish
+an approved installation or live pilot.
+
 ## Ownership and ordering
 
 `serverware.native_pilot_lifecycle` exposes a staged owner for an independently

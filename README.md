@@ -161,7 +161,7 @@ focused Python controls pass; live settlement remains unverified. Uncertain-oper
 cleanup, external signer paths and connected runtime verification remain open.
 Explicit policy/v20 adds a [bounded interactive interval](docs/native-pilot-interactive.md)
 after the actual origin handoff, retaining original deadlines and controlled
-shutdown. Source verification is pending; this does not yet provide a runnable pilot.
+shutdown. All 27 focused Python controls pass; live use remains unverified.
 These counts are not a percentage of
 product readiness or permission to deploy.
 Protected deployment is not provisioned. This is not

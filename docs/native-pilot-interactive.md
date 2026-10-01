@@ -70,7 +70,18 @@ full pilot/production acceptance remain required. Source checkpoints stay
 
 ## Focused verification
 
-Pending the assembled focused Python check. No cloud or paid action, running
-pilot, signal fault injection, native/artifact rebuild or full owner transcript
-has been performed for this source slice. Pure public policy/action/result
-controls do not manufacture owners or claim integration acceptance.
+Exact source `6e53feaefdc20f482973455f3fbd4a12c9d75ece` passed all **27 focused
+Python controls** in **3.899 seconds**: interactive, continuation-profile,
+final-inventory and endpoint-commissioning suites. The eight new controls cover
+closed policies, distinct continuation versions, exact handoff/action binding,
+integer/clock/result bounds and forbidden acceptance assertions. All eighteen
+changed Python files passed grammar checks and exact membership in both Make
+inventories. This was one frozen run; no failed or repeated test batch.
+
+Archive, harness, log, changed-file inventory and hashes are retained in
+`codex-offload/serverware/engineering-builds/6e53feae-interactive-l3QQso/`
+outside the repository. No cloud or paid action, running pilot, signal fault
+injection, native/artifact rebuild or full owner transcript has been performed
+for this source slice. Pure public policy/action/result controls do not
+manufacture owners or claim integration acceptance. Publication Rust work is a
+separate in-flight slice and is not covered by this result.

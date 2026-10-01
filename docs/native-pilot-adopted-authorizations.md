@@ -61,12 +61,31 @@ independent conductor.
 
 ## Verification
 
-Source is being assembled before one focused frozen Python batch. New controls
-cover selected bridge/key chains, all eight synthetic signed current heads,
-service-intake/material bounds and real isolated public-pipe framing. Results,
-exact commits and all unsuccessful attempts will be recorded here. Native
-source and dependency locks are unchanged; no native or artifact rebuild is
-planned. No real credentials, cloud or paid actions are part of this slice.
+Frozen `c5c9a15c` passes 187 of 189 focused Python controls in 101.601 seconds.
+Two fixture mismatches remained: the exact CLI inventory omitted eight new
+selectors, and an empty negative-test input raised a missing-selector error
+before the intended missing-evidence check. Fixture-only `ee8d9961` supplies
+the exact inventory and a minimal explicitly selected input; all 20 controls
+in those two affected suites pass in 0.042 seconds. The other 169 controls were
+unchanged and not repeated. These are 189 distinct successful controls across
+two snapshots, not one complete run of the final snapshot.
+
+Both snapshots pass changed-file grammar and both Make inventories (28 files,
+then two fixture files), plus six actual module imports. Eight documents resolve
+632 local file targets; anchors and external URLs were not checked. The new
+controls cover selected signed bridge/key chains, eight synthetic signed current
+heads, service-intake/material bounds and real isolated public-pipe framing,
+including a silent peer stopped by the original UNIX expiry. Nested Runtime14
+business receipts in these fixtures remain structural, not native acceptance.
+
+Both source archives, unchanged first harness/log, affected-only harness/log and
+results are retained with checksums at
+`codex-offload/serverware/engineering-builds/ee8d9961-adopted-authorizations-IDvPsv/`.
+The runner used Python 3.11.15, one CPU and private user/network namespaces.
+Native source and dependency locks were unchanged; no native or artifact rebuild,
+actual protected owner/signer installation, cloud or paid action occurred. Passing
+synthetic and local-pipe controls do not establish the complete privileged core,
+publication, service or independently operated pilot ceremony.
 
 ## Remaining complete-pilot integration
 

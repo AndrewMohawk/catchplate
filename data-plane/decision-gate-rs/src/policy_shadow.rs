@@ -109,6 +109,8 @@ pub(crate) fn run_spool_custody_guest(role:&str)->! {policy_custody::services::g
 #[cfg(target_os="linux")]
 pub(crate) fn run_effects_custody_guest(role:&str)->! {policy_custody::services::guest::ordinary::run_effects(role)}
 #[cfg(target_os="linux")]
+pub(crate) fn run_genesis_custody_guest(role:&str)->! {policy_custody::services::guest::ordinary::run_genesis(role)}
+#[cfg(target_os="linux")]
 pub(crate) fn run_native_shadow_retrieval_pair()->! {
     policy_custody::services::guest::native_guest::run_retrieval_pair()
 }

@@ -38,8 +38,9 @@ assembles the explicit wrapper without a private key. Typed INITIAL commitments
 are not past receipts. Native opt-in admission checks the actual process and
 empty directories before gates write; legacy raw history remains unchanged.
 Supervisor history/runtime/delivery wiring has since landed, followed by
-generation, native-delivery, key-authorization and native-service decisions. Current coverage is
-80/105 fixed jobs, 25 unsupported and 0/6 production acceptance; these commands
+generation, native-delivery, key-authorization, native-service and
+[ordinary-transition decisions](native-pilot-ordinary-transitions.md). Current coverage is
+85/105 fixed jobs, 20 unsupported and 0/6 production acceptance; these commands
 do not bypass the startup guard. See [current supervisor scope](native-pilot-supervisor.md).
 
 The [driver-window issuer](native-pilot-window-authority.md) handles the existing

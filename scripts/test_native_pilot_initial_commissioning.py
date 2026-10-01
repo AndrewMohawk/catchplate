@@ -147,7 +147,10 @@ class SyntheticInitialCommissioningControls(unittest.TestCase):
             "terminal", "dispatchBarrier", "activeEffectBarrier", "activeEffectCommit", "retrieval", "persistence", "trustedTime"))
         native_names += ("native-generation-install-grant",)
         self.assertEqual(supervisor.SUPPORTED_JOBS[69:80], tuple(("service-originals", name) for name in native_names))
-        self.assertEqual((len(supervisor._ORDER), len(supervisor.missing_jobs())), (105, 25))
+        transition_names = ("ordinary-dispatch-durable-recovery-store", "ordinary-dispatch-current-signature-authority",
+            "ordinary-head", "ordinary-cleanup", "ordinary-current")
+        self.assertEqual(supervisor.SUPPORTED_JOBS[80:85], tuple(("service-originals", name) for name in transition_names))
+        self.assertEqual((len(supervisor._ORDER), len(supervisor.missing_jobs())), (105, 20))
         with self.assertRaises(ValueError):
             supervisor.require_complete_coverage()
 

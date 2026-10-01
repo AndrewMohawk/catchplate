@@ -5,7 +5,7 @@ generated, read from a path, derived from a signing seed, or returned here.
 Native admission and both services still verify their actual retained owners.
 """
 from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 from serverware import native_shadow_key_admission_profile as admission
 from serverware import native_shadow_key_contract as delivery
 from serverware import native_shadow_nitro_profile as p
@@ -168,6 +168,32 @@ def _sign_service_transition_grant(*, payload_original, native_grant_original, r
                                   history_original, delivery_original, signing_key, now,
                                   native_configuration_original, native_configuration_sha256, native_now, spool, effects=False):
     """Independent history-root signature; never the LedgerAppend/HMAC key."""
+    payload, root = _service_transition_payload(payload_original=payload_original,
+        native_grant_original=native_grant_original, runtime_original=runtime_original,
+        history_original=history_original, delivery_original=delivery_original, now=now,
+        native_configuration_original=native_configuration_original,
+        native_configuration_sha256=native_configuration_sha256, native_now=native_now,
+        spool=spool, effects=effects)
+    p.require(isinstance(signing_key, Ed25519PrivateKey)
+        and signing_key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+            == root.public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw))
+    message = b"serverware-signature-v1\0"+len(SERVICE_DOMAIN).to_bytes(8,"big")+SERVICE_DOMAIN+len(payload_original).to_bytes(8,"big")+payload_original
+    signature = signing_key.sign(message)
+    root.verify(signature, message)
+    result = g.canonical({"payload":payload,"signatureBase64url":p.encoded(signature)})
+    p.require(len(result) <= 65536)
+    return result
+
+
+def _service_transition_payload(*, payload_original, native_grant_original, runtime_original,
+                                history_original, delivery_original, now,
+                                native_configuration_original, native_configuration_sha256,
+                                native_now, spool, effects=False):
+    """Shared pure transition checks and the authenticated history-root key.
+
+    Supplied clocks are data, not proof of a retained live owner. No private
+    key, signature, file write or authority approval is produced here.
+    """
     from serverware import native_pilot_native_service_authority as native_authority
     from serverware import native_pilot_ordinary_initial_profile as initial
     payload = p.fields(g.document(payload_original, 65536), SERVICE_FIELDS)
@@ -225,23 +251,20 @@ def _sign_service_transition_grant(*, payload_original, native_grant_original, r
     p.require(len(retained) == 1 and retained[0]["original"]["sha256"] == p.sha(history_original)
         and retained[0]["length"] == len(history_original) and retained[0]["signing"] is None)
     root = p.fields(history["rootAuthority"], ("keyId", "keySpkiSha256", "publicKeySpkiBase64"))
-    p.require(isinstance(signing_key, Ed25519PrivateKey))
-    spki = signing_key.public_key().public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
-    p.require(p.encoded(spki) == root["publicKeySpkiBase64"] and p.sha(spki) == root["keySpkiSha256"]
+    spki = p.decoded(root["publicKeySpkiBase64"], size=44)
+    root_key = serialization.load_der_public_key(spki)
+    p.require(isinstance(root_key, Ed25519PublicKey)
+        and root_key.public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo) == spki
+        and p.sha(spki) == root["keySpkiSha256"]
         == runtime["authorityHistoryRootKeySpkiSha256"] and root["keyId"] == runtime["authorityHistoryRootKeyId"])
     public = p.decoded(payload["nativeLedgerPublicKeyBase64url"], size=32)
     native_spki = bytes.fromhex("302a300506032b6570032100")+public
     p.require(payload["nativeLedgerKeySpkiSha256"] == p.sha(native_spki)
-        and public != signing_key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+        and public != root_key.public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
         and p.digest(payload["initialHeadSha256"]) != p.sha(b"")
         and p.ns(guest["issuedAtBoottimeNs"]) <= scope["issuedAtBoottimeNanos"] <= now
         < scope["expiresAtBoottimeNanos"] <= p.ns(guest["lifetimeDeadlineBoottimeNs"]))
-    message = b"serverware-signature-v1\0"+len(SERVICE_DOMAIN).to_bytes(8,"big")+SERVICE_DOMAIN+len(payload_original).to_bytes(8,"big")+payload_original
-    signature = signing_key.sign(message)
-    signing_key.public_key().verify(signature, message)
-    result = g.canonical({"payload":payload,"signatureBase64url":p.encoded(signature)})
-    p.require(len(result) <= 65536)
-    return result
+    return payload, root_key
 
 
 def sign_service_delivery(*, cold_raw, cold_sha, role, payload_raw, activation, boot, startup, lifetime, now, signing_key):

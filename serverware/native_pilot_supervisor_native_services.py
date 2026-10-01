@@ -16,6 +16,7 @@ from serverware import native_pilot_key_profile as key_profile
 from serverware import native_pilot_native_service_authority as authority
 from serverware import native_pilot_native_service_profile as profile
 from serverware import native_pilot_ordinary_generation_profile as ordinary_profile
+from serverware import native_pilot_ordinary_install as installation
 from serverware import native_pilot_precreation_install as precreation
 from serverware import native_pilot_publication as publication
 from serverware import native_pilot_service_authority as ordinary_authority
@@ -31,6 +32,7 @@ p = generation.p
 OPERATIONS = profile.OPERATIONS
 FIRST_INDEX = 63
 NEXT_JOB = "ordinary-dispatch-durable-recovery-store"
+_TRANSITION_LAST_INDEX = 79
 JOB_NAMES = tuple("native-generation-install-grant" if operation == "generationInstall"
     else "native-service-" + operation for operation in OPERATIONS)
 _LIVE = None
@@ -77,6 +79,7 @@ class _Attempt:
         self.next = self.retained_bytes = 0
         self.inflight = self.peer = self.manifest = None
         self.failed = self.closed = self.close_attempted = False
+        self.transition_boundary_open = False
         self.inputs, self.outputs, self.results = {}, {}, {}
         self.pairs, self.pair_contexts, self.key_inputs = {}, {}, {}
         self.ordinary_inputs, self.ordinary_results = {}, {}
@@ -276,12 +279,23 @@ def compose(policy, *, process, request) -> bytes:
 
 def require_services(policy, *, process, request) -> dict:
     """Verified literal input/grant pairs only at the actual next fixed job74."""
+    return _verified_services(policy, process=process, request=request, first=True)
+
+
+def recheck_services(policy, *, process, request) -> dict:
+    """Recheck an opened boundary through fixed transition jobs and handoff79."""
+    return _verified_services(policy, process=process, request=request, first=False)
+
+
+def _verified_services(policy, *, process, request, first):
     _owners(policy, process, request)
     owner = _LIVE
     p.require(owner is not None and owner.policy is policy and owner.process is process
         and not owner.failed and not owner.closed and owner.inflight is None and owner.next == len(OPERATIONS)
-        and request.phase == "service-originals" and request.job_index == FIRST_INDEX + len(OPERATIONS)
-        and request.job == NEXT_JOB and JOBS["service-originals"][request.job_index - 1].name == NEXT_JOB)
+        and installation.native_completed_boundary(request)
+        and FIRST_INDEX + len(OPERATIONS) <= request.job_index <= _TRANSITION_LAST_INDEX
+        and (request.job_index == FIRST_INDEX + len(OPERATIONS) and request.job == NEXT_JOB
+             if first else owner.transition_boundary_open))
     owner.inflight = request
     try:
         now, epoch = _current(owner, request)
@@ -290,6 +304,7 @@ def require_services(policy, *, process, request) -> dict:
         p.require(tuple(owner.outputs) == OPERATIONS)
         result = {operation: {"inputOriginal": owner.inputs[operation], "grantOriginal": owner.outputs[operation]}
             for operation in OPERATIONS}
+        owner.transition_boundary_open = True
         owner.inflight = None
         return result
     except BaseException:

@@ -2,8 +2,8 @@
 
 No GenerationInputs, descriptor owner, history, peer or authority is invented.
 The operator approves the complete input and supplies an existing matching key.
-Delivery/generation/dispatch use their existing byte producers. Head/Cleanup/
-Current reproduce the existing public joins without calling a live memfd writer.
+Delivery/generation use their existing byte producers. Dispatch and Head/Cleanup/
+Current share pure issuer checks without calling a live memfd writer.
 Full history currentness, native admission and real resource identity remain
 with the receiving services; a checked public bundle is not a live owner.
 """
@@ -19,7 +19,6 @@ from serverware import custody_generation_grants as g
 from serverware import custody_commitment_inputs as commitment
 from serverware import custody_spool_inputs as spool
 from serverware import native_shadow_commitment_artifacts as dispatch
-from serverware import native_shadow_spool_artifacts as artifacts
 from serverware import native_shadow_nitro_originals as originals
 from serverware import native_shadow_retrieval_artifacts as retrieval
 from serverware.native_shadow_time_profile import key_live
@@ -27,6 +26,7 @@ from serverware.native_shadow_time_profile import key_live
 p = g.p
 MAX_INPUT_BYTES = 32 * 1024 * 1024
 OPERATIONS = ("delivery", "generation", "dispatch", "head", "cleanup", "current")
+TRANSITION_OPERATIONS = ("dispatch", "head", "cleanup", "current")
 ROLES = g.ROLES
 HEAD_FIELDS = spool.HEAD + ("completion", "effects")
 CLEANUP_FIELDS = CURRENT_FIELDS = spool.CURRENT
@@ -235,6 +235,116 @@ def _followup(operation, value, item, head, head_raw, services, now, cleanup=Non
     return scope
 
 
+def prepare_input(operation, role, input_original, *, boot, now_boottime_ns, now_unix_ns):
+    """Pure preparation shared by the four existing transition signers.
+
+    Complete approved originals and caller-supplied clocks are checked data,
+    not a reconstructed live owner or authority. Delivery and generation retain
+    their separate existing closed producers. Native spool originals remain
+    exact independently approved pins; their full native admission is not
+    inferred from the head/cleanup/current shape checks.
+    """
+    p.require(operation in TRANSITION_OPERATIONS and role in ROLES)
+    p.integer(now_boottime_ns, maximum=p.MAX_U64); p.integer(now_unix_ns)
+    extra = ("services",)
+    if operation == "dispatch":
+        p.require(role in commitment.ROLES)
+        extra += ("nativeGrantOriginal", "nativeConfigurationOriginal", "nativeConfigurationSha256")
+    else:
+        p.require(role == _SPOOL[operation][0])
+        extra += ("nativeOriginals",)
+        if operation != "head":
+            extra += ("headGrantOriginal",)
+        if operation == "current":
+            extra += ("cleanupGrantOriginal",)
+    value = p.fields(p.document(input_original, MAX_INPUT_BYTES), _COMMON + extra)
+    p.require(value["apiVersion"] == "serverware.nativePilotServiceAuthorityInput/v1"
+        and value["operation"] == operation and value["serviceRole"] == role)
+    launch_raw = _original(value["launchOriginal"], 65536)
+    launch, startup, lifetime = _launch(launch_raw, boot, now_boottime_ns)
+    maximum = 131072 if operation in ("cleanup", "current") else 65536
+    payload_raw = _original(value["payloadOriginal"], maximum)
+    selected = ((role,) if operation == "dispatch" else
+        (_DRS, _CLEANUP, _CURRENT) if operation == "current" else (_DRS, _CLEANUP))
+    supplied = p.fields(value["services"], selected)
+    services = {name: _service(supplied[name], name, launch, boot, startup, lifetime,
+        now_boottime_ns, granted=True) for name in selected}
+    p.require(len({item["cold"]["uid"] for item in services.values()}) == len(services)
+        and len({item["cold"]["gid"] for item in services.values()}) == len(services))
+    item = services[role]
+    from serverware import native_pilot_native_service_authority as native_authority
+    if operation == "dispatch":
+        payload = p.fields(g.document(payload_raw, maximum), dispatch.SERVICE_FIELDS)
+        p.require(payload["guest"] == item["guest"] and payload["serviceRole"] == role)
+        _scope(payload["scope"], item, now_boottime_ns)
+        native_raw = _original(value["nativeGrantOriginal"], native_authority.MAX_OUTPUT)
+        native_payload = native_authority.grant_original("commitRequest", native_raw)["payload"]
+        p.require(native_payload["expectedPeer"] == item["header"]["expectedPeer"])
+        native_authority.require_ordinary_member(native_payload, role, runtime_raw=item["runtime_raw"],
+            history_raw=item["history_raw"], generation_raw=item["grant_raw"])
+        payload, root = dispatch._service_transition_payload(payload_original=payload_raw,
+            native_grant_original=native_raw, runtime_original=item["runtime_raw"],
+            history_original=item["history_raw"], delivery_original=item["delivery_raw"],
+            now=now_boottime_ns, native_configuration_original=_original(value["nativeConfigurationOriginal"], p.MAX_CONFIG),
+            native_configuration_sha256=p.digest(value["nativeConfigurationSha256"]),
+            native_now=now_unix_ns, spool=True, effects=True)
+        p.require(_public(root) == _public(item["root"]))
+        scope = payload["scope"]
+        domain = dispatch.SERVICE_DOMAIN.decode("ascii")
+        message = b"serverware-signature-v1\0" + len(dispatch.SERVICE_DOMAIN).to_bytes(8, "big") \
+            + dispatch.SERVICE_DOMAIN + len(payload_raw).to_bytes(8, "big") + payload_raw
+    else:
+        native = {name: _original(raw, native_authority.MAX_OUTPUT)
+            for name, raw in p.fields(value["nativeOriginals"], spool.EFFECT_NATIVE).items()}
+        payload = _spool_payload(operation, payload_raw, item)
+        root = item["root"]
+        if operation == "head":
+            scope = _head(payload, services, native, now_boottime_ns, now_unix_ns)
+        else:
+            head_raw = _original(value["headGrantOriginal"], 65536)
+            head = _signed_spool("head", head_raw, services[_DRS])
+            _head(head, services, native, now_boottime_ns, now_unix_ns)
+            cleanup = None
+            if operation == "current":
+                cleanup_raw = _original(value["cleanupGrantOriginal"], 131072)
+                cleanup = _signed_spool("cleanup", cleanup_raw, services[_CLEANUP])
+                _followup("cleanup", cleanup, services[_CLEANUP], head, head_raw, services, now_boottime_ns)
+            scope = _followup(operation, payload, item, head, head_raw, services, now_boottime_ns, cleanup)
+        _, stem, version, *_ = _SPOOL[operation]
+        domain = "serverware." + stem + ".signature/v" + version
+        message = _message(operation, payload_raw)
+    deadline = min(startup, scope["expiresAtBoottimeNanos"])
+    p.require(now_boottime_ns < deadline)
+    return {"payload": payload, "payloadOriginal": payload_raw, "root": root, "domain": domain,
+        "message": message, "window": launch, "deadline": deadline, "maximum": maximum}
+
+
+def _sign_transition(operation, role, input_original, signing_key):
+    boot, now, epoch = originals._boot(), originals._clock(), time.time_ns()
+    prepared = prepare_input(operation, role, input_original, boot=boot,
+        now_boottime_ns=now, now_unix_ns=epoch)
+    p.require(_public(signing_key.public_key()) == _public(prepared["root"]))
+    before, before_epoch = originals._clock(), time.time_ns()
+    p.require(originals._boot() == boot and now <= before < prepared["deadline"] and epoch <= before_epoch)
+    checked = prepare_input(operation, role, input_original, boot=boot,
+        now_boottime_ns=before, now_unix_ns=before_epoch)
+    p.require(checked["message"] == prepared["message"] and checked["deadline"] == prepared["deadline"]
+        and _public(checked["root"]) == _public(signing_key.public_key()))
+    signature = signing_key.sign(prepared["message"])
+    prepared["root"].verify(signature, prepared["message"])
+    signed = g.canonical({"payload": prepared["payload"], "signatureBase64url": p.encoded(signature)})
+    p.require(len(signed) <= prepared["maximum"])
+    after, after_epoch = originals._clock(), time.time_ns()
+    p.require(originals._boot() == boot and before <= after < prepared["deadline"] and before_epoch <= after_epoch)
+    checked = prepare_input(operation, role, input_original, boot=boot,
+        now_boottime_ns=after, now_unix_ns=after_epoch)
+    p.require(checked["message"] == prepared["message"] and checked["deadline"] == prepared["deadline"]
+        and _public(checked["root"]) == _public(signing_key.public_key())
+        and originals._boot() == boot and after <= originals._clock() < prepared["deadline"]
+        and after_epoch <= time.time_ns())
+    return signed, prepared["deadline"]
+
+
 def sign(*, operation, role, input_original, signing_key):
     """Return (existing signed original, original output deadline), no new wire.
 
@@ -250,17 +360,9 @@ def sign(*, operation, role, input_original, signing_key):
     All Original values are literal canonical ASCII strings, not summaries.
     """
     p.require(operation in OPERATIONS and role in ROLES and isinstance(signing_key, Ed25519PrivateKey))
+    if operation in TRANSITION_OPERATIONS:
+        return _sign_transition(operation, role, input_original, signing_key)
     extra = ("configurationOriginal", "configurationSha256", "runtimeOriginal", "activation") if operation == "delivery" else ("services",)
-    if operation == "dispatch":
-        p.require(role in commitment.ROLES)
-        extra += ("nativeGrantOriginal", "nativeConfigurationOriginal", "nativeConfigurationSha256")
-    elif operation in _SPOOL:
-        p.require(role == _SPOOL[operation][0])
-        extra += ("nativeOriginals",)
-        if operation != "head":
-            extra += ("headGrantOriginal",)
-        if operation == "current":
-            extra += ("cleanupGrantOriginal",)
     value = p.fields(p.document(input_original, MAX_INPUT_BYTES), _COMMON + extra)
     p.require(value["apiVersion"] == "serverware.nativePilotServiceAuthorityInput/v1"
         and value["operation"] == operation and value["serviceRole"] == role)
@@ -280,57 +382,18 @@ def sign(*, operation, role, input_original, signing_key):
         signed, _ = producer(cold_raw=cold_raw, cold_sha=cold_sha, role=role, payload_raw=payload_raw,
             activation=value["activation"], boot=boot, startup=startup, lifetime=lifetime, now=now, signing_key=signing_key)
     else:
-        selected = ((_DRS, _CLEANUP, _CURRENT) if operation == "current" else (_DRS, _CLEANUP)) if operation in _SPOOL else (role,)
+        p.require(operation == "generation")
+        selected = (role,)
         supplied = p.fields(value["services"], selected)
         services = {name: _service(supplied[name], name, launch, boot, startup, lifetime, now,
                                   granted=operation != "generation") for name in selected}
         p.require(len({item["cold"]["uid"] for item in services.values()}) == len(services)
                   and len({item["cold"]["gid"] for item in services.values()}) == len(services))
         item = services[role]
-        if operation == "generation":
-            producer = spool.sign_effects_generation_grant if role in spool.EFFECT_ROLES else g.sign_grant
-            signed = producer(payload_raw=payload_raw, guest=item["guest"], runtime_raw=item["runtime_raw"],
-                history_raw=item["history_raw"], delivery_raw=item["delivery_raw"], signing_key=signing_key, now=now)
-            deadline = min(deadline, g.document(payload_raw, 65536)["expiresAtBoottimeNanos"])
-        elif operation == "dispatch":
-            from serverware import native_pilot_native_service_authority as native_authority
-            payload = p.fields(g.document(payload_raw, 65536), dispatch.SERVICE_FIELDS)
-            p.require(payload["guest"] == item["guest"] and payload["serviceRole"] == role)
-            _scope(payload["scope"], item, now)
-            native_raw = _original(value["nativeGrantOriginal"], native_authority.MAX_OUTPUT)
-            native_payload = native_authority.grant_original("commitRequest", native_raw)["payload"]
-            p.require(native_payload["expectedPeer"] == item["header"]["expectedPeer"])
-            native_authority.require_ordinary_member(native_payload, role, runtime_raw=item["runtime_raw"],
-                history_raw=item["history_raw"], generation_raw=item["grant_raw"])
-            signed = artifacts.sign_effects_transition_grant(payload_original=payload_raw, native_grant_original=native_raw,
-                runtime_original=item["runtime_raw"], history_original=item["history_raw"], delivery_original=item["delivery_raw"],
-                signing_key=signing_key, now=now,
-                native_configuration_original=_original(value["nativeConfigurationOriginal"], p.MAX_CONFIG),
-                native_configuration_sha256=p.digest(value["nativeConfigurationSha256"]), native_now=time.time_ns())
-            deadline = min(deadline, payload["scope"]["expiresAtBoottimeNanos"])
-        else:
-            from serverware import native_pilot_native_service_authority as native_authority
-            native = {name: _original(raw, native_authority.MAX_OUTPUT)
-                for name, raw in p.fields(value["nativeOriginals"], spool.EFFECT_NATIVE).items()}
-            payload = _spool_payload(operation, payload_raw, item)
-            p.require(_public(signing_key.public_key()) == _public(item["root"]))
-            if operation == "head":
-                scope = _head(payload, services, native, now, time.time_ns())
-            else:
-                head_raw = _original(value["headGrantOriginal"], 65536)
-                head = _signed_spool("head", head_raw, services[_DRS])
-                _head(head, services, native, now, time.time_ns())
-                cleanup = None
-                if operation == "current":
-                    cleanup_raw = _original(value["cleanupGrantOriginal"], 131072)
-                    cleanup = _signed_spool("cleanup", cleanup_raw, services[_CLEANUP])
-                    _followup("cleanup", cleanup, services[_CLEANUP], head, head_raw, services, now)
-                scope = _followup(operation, payload, item, head, head_raw, services, now, cleanup)
-            deadline = min(deadline, scope["expiresAtBoottimeNanos"])
-            message = _message(operation, payload_raw)
-            signature = signing_key.sign(message)
-            signing_key.public_key().verify(signature, message)
-            signed = g.canonical({"payload": payload, "signatureBase64url": p.encoded(signature)})
+        producer = spool.sign_effects_generation_grant if role in spool.EFFECT_ROLES else g.sign_grant
+        signed = producer(payload_raw=payload_raw, guest=item["guest"], runtime_raw=item["runtime_raw"],
+            history_raw=item["history_raw"], delivery_raw=item["delivery_raw"], signing_key=signing_key, now=now)
+        deadline = min(deadline, g.document(payload_raw, 65536)["expiresAtBoottimeNanos"])
     p.require(len(signed) <= (131072 if operation in ("cleanup", "current") else 65536)
         and originals._boot() == boot and now <= originals._clock() < deadline)
     _launch(launch_raw, boot, originals._clock())

@@ -4,8 +4,8 @@
 independently selected policy and implements the first `driver-bootstrap`
 decision. The separate precreation composer implements the next two jobs. This
 is not a complete decision service, a runnable pilot supervisor, or
-approval of unimplemented future jobs. Current v9 source composes 80 of 105 jobs;
-the decision spine refuses startup while the remaining 25 are unimplemented.
+approval of unimplemented future jobs. Current v10 source composes 85 of 105 jobs;
+the decision spine refuses startup while the remaining 20 are unimplemented.
 Production acceptance remains 0/6.
 
 ## External approval boundary
@@ -198,7 +198,7 @@ approved role history-root key. The total 57 selectors and outer 4 MiB bound
 remain unchanged; the literal field does not widen legacy outer integer rules.
 
 `ordinary_generation_policy(process=..., request=...)` is available only to
-explicit v6/v7/v8 with the actual pending owner. Jobs 31–35 form existing complete
+explicit v6–v10 with the actual pending owner. Jobs 31–35 form existing complete
 generation inputs, verify each preceding root-signed result and retain exact
 originals. The next job's handoff is read-only. Native callers use the same
 original installation interval without renewal; no running-service acceptance
@@ -217,7 +217,7 @@ checked during policy admission. No private credential is opened or created.
 The existing 57 selectors and 4 MiB outer bound remain unchanged. The original
 three-role `endpointDeliveries` contract remains separate; no old policy is
 widened. `native_delivery_policy(process=..., request=...)` returns a checked
-copy only under v7/v8 with the actual pending owner. Jobs 36–42 use the same
+copy only under v7–v10 with the actual pending owner. Jobs 36–42 use the same
 independently authenticated measured recipe and signed role-specific closure
 leaves, genuine cohort observations and unchanged windows. Job 43 only obtains
 a verified read-only handoff. V8 separately authorizes the new key decisions
@@ -262,7 +262,7 @@ The outer 4 MiB bound and exact 77 selectors remain unchanged.
 
 `native_service_policy(process=..., request=...)` resolves all eleven native
 service/generation-install purpose keys through the actual retained assignment
-and independent trust. It returns a copied admitted fragment only for v9 and
+and independent trust. It returns a copied admitted fragment only for v9/v10 and
 the real pending owner. No older policy gains these grant decisions.
 Jobs 63–73 revalidate the actual authorization pairs and complete predecessor
 inputs/results. Job 74 is only a read-only verified handoff; earlier installer
@@ -273,3 +273,22 @@ Actual receiving owners still enforce empty directories, retained identities
 and exclusive creation. The verifier configuration is not a Nitro verdict,
 and the runtime-receipt verifier is not the independent receipt producer.
 See [contracts and remaining acceptance](native-pilot-native-services.md).
+
+## Ordinary-transition successor: v10
+
+Policy/v10 retains v9's seventeen fields and adds only
+`ordinaryTransitionsOriginal`, with purpose
+`initial-driver-bootstrap-precreation-endpoints-generations-and-ordinary-transitions`.
+Its literal canonical fragment selects two dispatch starting heads, three
+spool starting heads and an append capacity of 1–32. These are approved initial
+chain values, not proof of previous actions, receipts or empty storage. The
+outer 4 MiB bound and 77 selectors remain unchanged; v1–v9 gain no new decisions.
+
+The two dispatch selectors and `ordinary-head`, `ordinary-cleanup` and
+`ordinary-current` must match each role's independently approved history-root
+key. `ordinary_transition_policy(process=..., request=...)` is v10-only and
+returns a checked copy to the genuine pending owner. Service jobs 74–78 use
+actual ordinary and native input/grant originals; Cleanup requires the actual
+signed Head and Current requires the actual signed Head and Cleanup. Completed
+predecessor rechecks extend only to the read-only job79 handoff; no installer
+or launch entry is reopened. See [contracts and limits](native-pilot-ordinary-transitions.md).

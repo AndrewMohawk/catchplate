@@ -41,7 +41,9 @@ _NATIVE_COMPLETED_JOBS = tuple("native-delivery-" + role for role in ENDPOINT_RO
         job.name for job in KEY_AUTHORIZATION_JOBS) + tuple("native-service-" + operation for operation in
             ("commitRequest", "ingress", "ledger", "terminal", "dispatchBarrier", "activeEffectBarrier",
              "activeEffectCommit", "retrieval", "persistence", "trustedTime")) + (
-                "native-generation-install-grant", "ordinary-dispatch-durable-recovery-store")
+                "native-generation-install-grant", "ordinary-dispatch-durable-recovery-store",
+                "ordinary-dispatch-current-signature-authority", "ordinary-head", "ordinary-cleanup",
+                "ordinary-current", "install-launch-retrieval")
 
 
 def native_completed_boundary(request):

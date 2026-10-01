@@ -236,13 +236,13 @@ class OrdinaryKeyProfileTests(unittest.TestCase):
             with self.subTest(changed=changed), self.assertRaises(ValueError):
                 profile.validate_payload(changed, identity=identity_fixture(), window=window, now=now)
 
-    def test_eighty_of_one_hundred_five_coverage_still_refuses_full_startup(self):
-        self.assertEqual(len(supervisor.SUPPORTED_JOBS), 80)
-        self.assertEqual(supervisor._ORDER[:80], supervisor.SUPPORTED_JOBS)
+    def test_eighty_five_of_one_hundred_five_coverage_still_refuses_full_startup(self):
+        self.assertEqual(len(supervisor.SUPPORTED_JOBS), 85)
+        self.assertEqual(supervisor._ORDER[:85], supervisor.SUPPORTED_JOBS)
         self.assertEqual(len(supervisor._ORDER), 105)
-        self.assertEqual(len(supervisor.missing_jobs()), 25)
+        self.assertEqual(len(supervisor.missing_jobs()), 20)
         self.assertEqual(supervisor.missing_jobs()[0],
-            ("service-originals", "ordinary-dispatch-durable-recovery-store"))
+            ("service-originals", "install-launch-retrieval"))
         with self.assertRaises(ValueError):
             supervisor.require_complete_coverage()
 

@@ -8,8 +8,9 @@ signing/history/versioned-reader paths. The `.385`
 acquisition, conductor binding and bridge-specific authorization producers.
 The `.386` [fresh-helper path](native-pilot-helper-initial.md) adds role-complete
 request/history validation, durable native initialization before handshakes,
-runtime/v11 with launch/v7, and pure bridge-launch preparation. Its verification
-is pending at source freeze. No bridge composer coverage, service
+runtime/v11 with launch/v7, and pure bridge-launch preparation. Its focused
+checks pass after a v11 selection correction and its native compile passes;
+neither proves live initialization. No bridge composer coverage, service
 availability or successful launch follows from this document.
 
 ## Existing phase and installer

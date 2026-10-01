@@ -1,9 +1,10 @@
 # Fresh helper initialization and bridge launch preparation
 
 The `.386` source adds an explicit fresh-helper startup path and a pure
-bridge-launch adapter. Verification is **pending** at this freeze: no focused
-test, native compile, protected initialization or connected pilot result is
-claimed here. Supervisor coverage stays **127/136** in the current inventory,
+bridge-launch adapter. Focused checks pass after a v11 selection correction,
+and the native compile passes; neither proves protected initialization or a
+connected pilot. [Exact results](#focused-verification) distinguish the two
+snapshots and unexecuted paths. Supervisor coverage stays **127/136** in the current inventory,
 with **108 selectors**, source checkpoints **36/46**, and production acceptance
 **0/6**. The inventory still omits prerequisite ceremonies; it is not a readiness
 percentage or a complete count of remaining work.
@@ -130,6 +131,50 @@ gates remain separate requirements.
 
 ### Focused verification
 
-Pending at source freeze. Authored synthetic controls and source review are not
-executed test results, compilation, journal durability evidence or live pilot
-acceptance. Exact measured results will be recorded after the assembled pass.
+Exact source `4633ab7f27916f549e2d9b9dfefa0a3395335afe` ran **217 controls in
+26 suites**: 216 passed and one errored when the new v11 launch reached an
+outgoing-selection map missing that version. Corrected source
+`ddf64ac096b2ba3823294b70c3840b6ff8dbc43a` changes only the outgoing signer/count
+maps and adjacent phase-scope guard. All **eight targeted launch rechecks passed**
+in 5.079 seconds; the other successful suites were not repeated. Both passes
+checked 31 changed Python files against Python 3.11.15 grammar and both Make
+inventories, plus 62 relative links, without importing DB/app/authority-store
+modules. The retained-owner phase-scope guard itself received source/grammar
+checking, not live-owner execution.
+
+The first source passed the cached, pinned, offline/frozen Rust binary check:
+exit 0, compiler-reported **1m 00s**, with 312 library and 2,423 binary warnings
+including duplicates. Native source, schemas and dependencies are unchanged in
+the correction, so compilation was not repeated. Four authored inline Rust
+tests were **not typechecked or executed** in this pass.
+
+Both exact archives, commands, complete logs, results and verified checksums
+are retained at
+`codex-offload/serverware/engineering-builds/ddf64ac0-helper-startup-aOHhDb/`.
+These are synthetic signature/byte-association/refusal checks and compilation,
+not real helper socket exchange, journal durability, protected owner/signing
+entrypoint, KMS/provider/hardware or live-pilot evidence. No cloud or paid
+operation occurred. All six production acceptance gates remain open.
+
+### Next connected source work
+
+Preserve the approved helper primary ceremony and add three supplemental role
+ceremonies, each with checkpoint, three anchor signatures and assembly. The
+approved roles must be exactly the native-ordered complement of the primary;
+reuse its already approved keys and retain the four actual wrapper originals.
+The additional 15 jobs require replacing downstream literal job indices with
+shared source-derived boundaries before inserting the new prefix.
+
+Eight current-head jobs then belong before bridge-runtime installation, after
+the actual conductor has captured its requests. A protected late decision
+intake is required: immutable pre-spawn policy cannot approve future entropy-
+derived hashes. Each decision must match its actual retained request and use
+the authenticated checkpoint authority, not the history-root or supervisor key.
+
+Fresh `ReapWorker` additionally needs genuine cleanup-intent production and
+compatible worker ownership. The helper's proof requires successful
+`waitid(P_PIDFD)` and subreaper status; passing a sibling's PIDFD does not make
+the helper its parent. A helper-owned spawn/ancestor path and single reap owner
+must be connected before post-seal registration can succeed. Existing native
+termination/settlement routing also refuses cleanup without a retained lifetime
+owner; do not replace those missing capabilities with a policy-only intent.

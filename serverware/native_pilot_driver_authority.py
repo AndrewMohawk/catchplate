@@ -28,6 +28,7 @@ import re
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 from serverware import native_pilot_assignment as assignment_profile
+from serverware import native_pilot_bridge_runtime as bridge_runtime
 from serverware import native_pilot_scope_authority as scope_authority
 from serverware import native_shadow_bridge_admission_profile as bridge
 from serverware import native_shadow_constructed_driver as admission
@@ -171,6 +172,16 @@ def _bootstrap(payload, observation_raw, control, window, authority):
     _same(payload, expected)
 
 
+def _phase_bundle(original):
+    """Public grammar and version-selected bounds, not signed scope admission."""
+    raw, bundle = _original(original, bridge_runtime.MAX_BRIDGE_INPUT)
+    p.fields(bundle, ("runtimeOriginal", "deliveryOriginal", "generationOriginals"))
+    runtime_raw, runtime = bridge_runtime.original(bundle["runtimeOriginal"])
+    version = bridge_runtime.version(runtime)
+    p.require(version in (9, 10) and (version == 10 or len(raw) <= 1024 * 1024))
+    return raw, bundle, runtime_raw, runtime
+
+
 def _phase(value, exported, control, config, cold, window, observed):
     scope_raw, signed = _original(exported["phaseScopeOriginal"], 32768)
     p.fields(signed, ("payload", "signatureBase64url"))
@@ -187,12 +198,9 @@ def _phase(value, exported, control, config, cold, window, observed):
         p.require(phase[field] == window[field])
     p.require(phase["observationSha256"] == p.sha(exported["bootstrapObservationOriginal"].encode("ascii"))
         and phase["kernelDriverIdentitySha256"] == observed["driver"]["identitySha256"])
-    bundle_raw, bundle = _original(exported["phaseBundleOriginal"], 1024 * 1024)
+    bundle_raw, bundle, runtime_raw, runtime = _phase_bundle(exported["phaseBundleOriginal"])
     p.require(phase["publicBundleSha256"] == p.sha(bundle_raw))
-    p.fields(bundle, ("runtimeOriginal", "deliveryOriginal", "generationOriginals"))
-    runtime_raw, runtime = _original(bundle["runtimeOriginal"], 65536)
     delivery_raw, signed_delivery = _original(bundle["deliveryOriginal"], 65536)
-    p.require(runtime.get("apiVersion") == "serverware.policyCustodyProductionRpcRuntime/v9")
     p.fields(signed_delivery, ("apiVersion", "payload", "signatureBase64url"))
     c9 = p.fields(signed_delivery["payload"], delivery.FIELDS)
     p.require(signed_delivery["apiVersion"] == "serverware.policyCustodyGuestDelivery/v1"
@@ -211,7 +219,7 @@ def _phase(value, exported, control, config, cold, window, observed):
         "generationGrants": {role: p.sha(_original(grants[role], 65536)[0]) for role in driver.ROLES}})
     launch_raw, launch = _original(value["launchOriginal"], 32768)
     p.fields(launch, ("apiVersion", "keyAdmission", "trustedTime"))
-    p.require(launch["apiVersion"] == "serverware.nativeProofBridgeLaunch/v5")
+    p.require(launch["apiVersion"] == bridge_runtime.launch_for_runtime(runtime_raw))
     inner = p.fields(launch["keyAdmission"], ("apiVersion", "deliveryConfiguration", "delivery", "trust", "timeBootstrap",
         "assignment", "closure", "keys", "encryptedKeys", "admission", "verifierTransport"))
     p.require(inner["apiVersion"] == "serverware.nativeShadowGuestLaunch/v1"

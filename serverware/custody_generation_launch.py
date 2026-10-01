@@ -133,6 +133,8 @@ class FiveServiceLaunch:
         self._listening = threading.Event(); self._bridge_attempted = False
         self._preparation_attempted = False
         self._preparation = None
+        self._peer_preparation_attempted = False
+        self._peer_preparation = None
 
     @classmethod
     def start(cls):
@@ -269,6 +271,8 @@ class FiveServiceLaunch:
             o.live(item["pidfd"], item["pid"], item["start"], self._pid)
             if item["phase"] != "constructed":
                 p.require(o.clock() < self._startup)
+        if self._peer_preparation is not None:
+            self._peer_preparation.check_resources()
 
     def parked_originals(self):
         self.check(); p.require(not self._attempted)
@@ -284,6 +288,11 @@ class FiveServiceLaunch:
         """Actual parked/pre-exec target measurements, never final-role proof."""
         from serverware.custody_generation_measurements import preparation_original
         return preparation_original(self)
+
+    def peer_preparation_original(self, *, profile="retain-observed-cgroup"):
+        """Held target/cgroup facts only; not the future executed service."""
+        from serverware.native_pilot_peer_owners import original
+        return original(self, profile=profile)
 
     def release(self, transfer):
         from serverware.custody_generation_inputs import GenerationTransfer
@@ -469,6 +478,8 @@ class FiveServiceLaunch:
         p.require(all(item["reaped"] for item in self._children.values()))
         if self._preparation is not None:
             self._preparation.close()
+        if self._peer_preparation is not None:
+            self._peer_preparation.close()
         self._closed = True
         for item in self._children.values():
             item["channel"].close(); os.close(item["pidfd"])

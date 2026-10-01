@@ -204,6 +204,8 @@ class ParkedProofCohort:
         self._cleanup_deadline = None
         self._external_driver = self._endpoint_inputs = self._endpoint_five = None
         self._driver_attempted = self._stop_attempted = False
+        self._peer_preparation_attempted = False
+        self._peer_preparation = None
 
     def _open(self, path, bound, digest=None, mode=0o400):
         p.require(len(self._originals) < 96)
@@ -384,6 +386,8 @@ class ParkedProofCohort:
             self._external_driver.check(live=True)
         for fd, pid, start in self._parked:
             p.require(not _terminal(fd) and _pidfd_pid(fd) == pid and _process(pid) == (self._child_pid, start))
+        if self._peer_preparation is not None:
+            self._peer_preparation.check_resources()
         # Do NOT call transfer.check here: persistence owns this same cohort
         # and checks it before release. No recursive ownership approximation.
 
@@ -448,6 +452,11 @@ class ParkedProofCohort:
         self.check()
         p.require(self._observed is not None)
         return self._observation_bytes
+
+    def peer_preparation_original(self, *, profile="retain-observed-cgroup"):
+        """Actual parked target FD and cgroup retention, not post-exec proof."""
+        from serverware.native_pilot_peer_owners import original
+        return original(self, profile=profile)
 
     def bridge_original(self):
         self.check()
@@ -931,6 +940,8 @@ class ParkedProofCohort:
             self._commit_request_resources.close()
         if self._generation_install_resources is not None:
             self._generation_install_resources.close()
+        if self._peer_preparation is not None:
+            self._peer_preparation.close()
         for fd, _, _ in self._parked:
             os.close(fd)
         for fd in (self._pidfd, self._exec):

@@ -1345,6 +1345,10 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	scripts/test_native_pilot_service_material.py \
 	scripts/test_native_pilot_current_head.py \
 	scripts/test_native_pilot_bridge_runtime.py \
+	scripts/test_native_pilot_bridge_authorizations.py \
+	scripts/test_native_pilot_bridge_preparation.py \
+	scripts/test_native_pilot_initial_requests.py \
+	scripts/test_native_pilot_peer_preparation.py \
 	scripts/authority/sign_native_pilot_key_authorization.py \
 	scripts/authority/sign_native_pilot_encrypted_delivery.py \
 	scripts/authority/sign_native_pilot_verifier_transport.py \
@@ -1353,6 +1357,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	scripts/authority/sign_native_pilot_ordinary_key.py \
 	scripts/authority/sign_native_pilot_ordinary_initial.py \
 	scripts/authority/sign_native_pilot_current_head.py \
+	scripts/authority/sign_native_pilot_bridge_authorization.py \
 	scripts/authority/sign_native_pilot_generation_install.py \
 	scripts/authority/sign_native_pilot_native_service.py \
 	scripts/install_native_pilot_public_original.py \
@@ -1653,6 +1658,14 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/native_pilot_precreation_install.py \
 	serverware/native_pilot_bridge_install.py \
 	serverware/native_pilot_bridge_runtime.py \
+	serverware/native_pilot_bridge_authority.py \
+	serverware/native_pilot_bridge_key_profile.py \
+	serverware/native_pilot_bridge_preparation.py \
+	serverware/native_pilot_initial_requests.py \
+	serverware/native_pilot_initial_requests_profile.py \
+	serverware/native_pilot_peer_owners.py \
+	serverware/native_pilot_peer_preparation.py \
+	serverware/native_pilot_peer_resources.py \
 	serverware/native_pilot_current_head_profile.py \
 	serverware/native_pilot_current_head_authority.py \
 	serverware/native_pilot_generation_install_authority.py \
@@ -4116,6 +4129,10 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				scripts/test_native_pilot_service_material.py \
 				scripts/test_native_pilot_current_head.py \
 				scripts/test_native_pilot_bridge_runtime.py \
+				scripts/test_native_pilot_bridge_authorizations.py \
+				scripts/test_native_pilot_bridge_preparation.py \
+				scripts/test_native_pilot_initial_requests.py \
+				scripts/test_native_pilot_peer_preparation.py \
 				scripts/authority/sign_native_pilot_key_authorization.py \
 				scripts/authority/sign_native_pilot_encrypted_delivery.py \
 				scripts/authority/sign_native_pilot_verifier_transport.py \
@@ -4124,6 +4141,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				scripts/authority/sign_native_pilot_ordinary_key.py \
 				scripts/authority/sign_native_pilot_ordinary_initial.py \
 				scripts/authority/sign_native_pilot_current_head.py \
+				scripts/authority/sign_native_pilot_bridge_authorization.py \
 				scripts/authority/sign_native_pilot_generation_install.py \
 				scripts/authority/sign_native_pilot_native_service.py \
 				scripts/install_native_pilot_public_original.py \
@@ -4418,6 +4436,14 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/native_pilot_precreation_install.py \
 				serverware/native_pilot_bridge_install.py \
 				serverware/native_pilot_bridge_runtime.py \
+				serverware/native_pilot_bridge_authority.py \
+				serverware/native_pilot_bridge_key_profile.py \
+				serverware/native_pilot_bridge_preparation.py \
+				serverware/native_pilot_initial_requests.py \
+				serverware/native_pilot_initial_requests_profile.py \
+				serverware/native_pilot_peer_owners.py \
+				serverware/native_pilot_peer_preparation.py \
+				serverware/native_pilot_peer_resources.py \
 				serverware/native_pilot_current_head_profile.py \
 				serverware/native_pilot_current_head_authority.py \
 				serverware/native_pilot_generation_install_authority.py \

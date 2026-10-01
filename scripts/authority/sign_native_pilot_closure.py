@@ -44,7 +44,8 @@ def main():
         p.require(args.input_fd >= 3 and args.authority_key_fd >= 3 and args.input_fd != args.authority_key_fd)
         input_identity = originals._identity(os.fstat(args.input_fd))
         key_identity = originals._identity(os.fstat(args.authority_key_fd))
-        raw = io.read_public(args.input_fd, authority.MAX_INPUT)
+        raw = io.read_public(args.input_fd, authority.MAX_BRIDGE_INPUT)
+        authority.input_document(raw)  # Version-selected bound, not approval.
         boot, wall = originals._boot(), time.time_ns()
         payload = None
         deadline = None
@@ -52,7 +53,7 @@ def main():
         def check():
             p.require(originals._identity(os.fstat(args.input_fd)) == input_identity
                 and originals._identity(os.fstat(args.authority_key_fd)) == key_identity
-                and io.read_public(args.input_fd, authority.MAX_INPUT) == raw
+                and io.read_public(args.input_fd, authority.MAX_BRIDGE_INPUT) == raw
                 and originals._boot() == boot and wall <= time.time_ns())
             if payload is not None:
                 p.freshness(payload["issuedAtUnixNanos"], payload["expiresAtUnixNanos"], time.time_ns())

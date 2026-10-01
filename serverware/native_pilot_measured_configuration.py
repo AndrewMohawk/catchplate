@@ -128,6 +128,64 @@ def _phase(process, phase):
     return value
 
 
+def derive_configuration(*, envelope, keys, key_root, manifest, observed,
+                         production, window, recipe_sha, successor):
+    """Pure native hash recipe over already authenticated public originals.
+
+    This is data derivation, not recipe approval, a live observation or an owner.
+    The retained recipe and bridge issuer each authenticate their own inputs.
+    """
+    p.require(type(successor) is bool)
+    p.digest(recipe_sha)
+    _production(production)
+    assignment = envelope["payload"]
+    authority = assignment["custodyAuthority"]
+    binding = {"assignmentId": assignment["assignmentId"], "assignmentPayloadSha256": envelope["payloadSha256"],
+        "assignmentRevision": assignment["assignmentRevision"], "authorityId": authority["authorityId"],
+        "storageRealmSha256": authority["storageRealmSha256"], "retrievalNamespaceSha256": authority["retrievalNamespaceSha256"],
+        "authorityKeyIndependenceSha256": assignment["authorityKeyIndependence"]["independenceRootSha256"],
+        "attestationMode": authority["attestationMode"],
+        "supervisorInstanceSha256": p.sha(window["invocationId"].encode("ascii")),
+        "supervisorBootIdSha256": p.sha(p.decoded(window["bootIdBase64url"], size=16)),
+        "executionClosureManifestSha256": manifest["manifestSha256"],
+        "structurallyVerifiedSeccompPolicySha256": manifest["seccompPolicy"]["structurallyVerifiedPolicySha256"],
+        "workerExecutableSha256": manifest["workerExecutableSha256"], **production,
+        "operationCoverageRootSha256": p.framed(b"serverware.policyShadowCustodyOperationCoverage/v1", (p.canonical(OPERATIONS),)),
+        "kernelRetainedDriverIdentitySha256": observed["driver"]["identitySha256"],
+        "assertedCustodyKeySetRootSha256": key_root}
+    p.require(len(binding) == 24)
+    version = "2" if successor else "1"
+    if successor:
+        binding["nativeClosureSet"] = copy.deepcopy(assignment["nativeClosureSet"])
+        p.require(len(binding) == 25)
+    binding_raw = p.canonical(binding)
+    binding_sha = p.framed(("serverware.policyShadowProductionCustodyConfiguration/v" + version).encode("ascii"), (binding_raw,))
+    proof_values = (assignment["assignmentId"], envelope["payloadSha256"], assignment["assignmentRevision"],
+        authority["authorityId"], authority["storageRealmSha256"], authority["retrievalNamespaceSha256"],
+        assignment["authorityKeyIndependence"]["independenceRootSha256"], binding_sha, key_root,
+        manifest["manifestSha256"], manifest["seccompPolicy"]["structurallyVerifiedPolicySha256"])
+    proof = dict(zip(retrieval.SCOPE_VALUES, proof_values, strict=True))
+    if successor:
+        roots = assignment["nativeClosureSet"]
+        proof["api_version"] = retrieval.SCOPE_SET_API
+        proof.update(zip(retrieval.SCOPE_SET_VALUES, (roots["setRootSha256"], roots["seccompSetRootSha256"]), strict=True))
+        proof_values += (roots["setRootSha256"], roots["seccompSetRootSha256"])
+    proof["store_response_authority"] = {name: keys["custody-store-response"][source] for name, source in
+        (("role", "role"), ("key_id", "keyId"), ("key_spki_sha256", "keySpkiSha256"), ("key_material_sha256", "keyMaterialSha256"))}
+    proof["retrieval_response_authority"] = {name: keys["custody-retrieval-response"][source] for name, source in
+        (("role", "role"), ("key_id", "keyId"), ("key_spki_sha256", "keySpkiSha256"), ("key_material_sha256", "keyMaterialSha256"))}
+    proof["binding_sha256"] = p.framed(("serverware.policyShadowProductionCustodyProofScope/v" + version).encode("ascii"),
+        (p.canonical(proof_values),))
+    proof_raw = p.canonical(proof)
+    retrieval.scope_original(proof_raw)
+    if successor:
+        retrieval.require_assignment_scope(proof, p.canonical(assignment))
+    return {"apiVersion": "serverware.nativePilotMeasuredConfiguration/v" + version, "recipeSha256": recipe_sha,
+        "configurationBindingOriginal": binding_raw.decode("ascii"), "configurationBindingSha256": binding_sha,
+        "proofScopeOriginal": proof_raw.decode("ascii"),
+        "production": {**production, "expectedConfigurationBindingSha256": binding_sha}}
+
+
 class MeasuredConfigurationRecipe:
     """One retained independently approved recipe, one actual prebound process."""
 
@@ -319,56 +377,10 @@ class MeasuredConfigurationRecipe:
         return value
 
     def _derive(self, envelope, keys, key_root, manifest, observed):
-        assignment = envelope["payload"]
-        authority = assignment["custodyAuthority"]
-        production = self._value["production"]
-        # Exact ConfigurationBinding serde camelCase fields and framed domain
-        # from policy_shadow.rs, not a hash of an illustrative policy object.
-        binding = {"assignmentId": assignment["assignmentId"], "assignmentPayloadSha256": envelope["payloadSha256"],
-            "assignmentRevision": assignment["assignmentRevision"], "authorityId": authority["authorityId"],
-            "storageRealmSha256": authority["storageRealmSha256"], "retrievalNamespaceSha256": authority["retrievalNamespaceSha256"],
-            "authorityKeyIndependenceSha256": assignment["authorityKeyIndependence"]["independenceRootSha256"],
-            "attestationMode": authority["attestationMode"],
-            "supervisorInstanceSha256": p.sha(self._window["invocationId"].encode("ascii")),
-            "supervisorBootIdSha256": p.sha(p.decoded(self._window["bootIdBase64url"], size=16)),
-            "executionClosureManifestSha256": manifest["manifestSha256"],
-            "structurallyVerifiedSeccompPolicySha256": manifest["seccompPolicy"]["structurallyVerifiedPolicySha256"],
-            "workerExecutableSha256": manifest["workerExecutableSha256"], **production,
-            "operationCoverageRootSha256": p.framed(b"serverware.policyShadowCustodyOperationCoverage/v1", (p.canonical(OPERATIONS),)),
-            "kernelRetainedDriverIdentitySha256": observed["driver"]["identitySha256"],
-            "assertedCustodyKeySetRootSha256": key_root}
-        p.require(len(binding) == 24)
-        successor = self._value["apiVersion"] == "serverware.nativePilotMeasuredConfigurationRecipe/v2"
-        version = "2" if successor else "1"
-        if successor:
-            binding["nativeClosureSet"] = copy.deepcopy(assignment["nativeClosureSet"])
-            p.require(len(binding) == 25)
-        binding_raw = p.canonical(binding)
-        binding_sha = p.framed(("serverware.policyShadowProductionCustodyConfiguration/v" + version).encode("ascii"), (binding_raw,))
-        proof_values = (assignment["assignmentId"], envelope["payloadSha256"], assignment["assignmentRevision"],
-            authority["authorityId"], authority["storageRealmSha256"], authority["retrievalNamespaceSha256"],
-            assignment["authorityKeyIndependence"]["independenceRootSha256"], binding_sha, key_root,
-            manifest["manifestSha256"], manifest["seccompPolicy"]["structurallyVerifiedPolicySha256"])
-        proof = dict(zip(retrieval.SCOPE_VALUES, proof_values, strict=True))
-        if successor:
-            roots = assignment["nativeClosureSet"]
-            proof["api_version"] = retrieval.SCOPE_SET_API
-            proof.update(zip(retrieval.SCOPE_SET_VALUES, (roots["setRootSha256"], roots["seccompSetRootSha256"]), strict=True))
-            proof_values += (roots["setRootSha256"], roots["seccompSetRootSha256"])
-        proof["store_response_authority"] = {name: keys["custody-store-response"][source] for name, source in
-            (("role", "role"), ("key_id", "keyId"), ("key_spki_sha256", "keySpkiSha256"), ("key_material_sha256", "keyMaterialSha256"))}
-        proof["retrieval_response_authority"] = {name: keys["custody-retrieval-response"][source] for name, source in
-            (("role", "role"), ("key_id", "keyId"), ("key_spki_sha256", "keySpkiSha256"), ("key_material_sha256", "keyMaterialSha256"))}
-        proof["binding_sha256"] = p.framed(("serverware.policyShadowProductionCustodyProofScope/v" + version).encode("ascii"),
-            (p.canonical(proof_values),))
-        proof_raw = p.canonical(proof)
-        retrieval.scope_original(proof_raw)
-        if successor:
-            retrieval.require_assignment_scope(proof, p.canonical(assignment))
-        return {"apiVersion": "serverware.nativePilotMeasuredConfiguration/v" + version, "recipeSha256": self._sha,
-            "configurationBindingOriginal": binding_raw.decode("ascii"), "configurationBindingSha256": binding_sha,
-            "proofScopeOriginal": proof_raw.decode("ascii"),
-            "production": {**production, "expectedConfigurationBindingSha256": binding_sha}}
+        return derive_configuration(envelope=envelope, keys=keys, key_root=key_root,
+            manifest=manifest, observed=observed, production=self._value["production"],
+            window=self._window, recipe_sha=self._sha,
+            successor=self._value["apiVersion"] == "serverware.nativePilotMeasuredConfigurationRecipe/v2")
 
     def close(self):
         """Release only this public descriptor after the actual bound owner retires."""

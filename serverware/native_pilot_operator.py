@@ -39,6 +39,7 @@ class Operator:
         self._pilot = self._channel = self._public = None
         self._production = None
         self._transfers = None
+        self._bridge_preparation = None
         self._phase = "open"
         self._cleanup_attempted = self._closed = self._finished = False
         self._failure = self._cleanup_failure = None
@@ -70,9 +71,13 @@ class Operator:
         p.require(phase in STAGES and not self._cleanup_attempted and os.getpid() == self._pid)
         self._phase = phase
         self._public.check()
+        if self._bridge_preparation is not None and not self._bridge_preparation._consumed:
+            self._bridge_preparation.check()
         reply = self._channel.exchange(phase, payload, deadline_boottime_ns=self._deadline(live=live))
         p.fields(reply, fields)
         self._public.check()
+        if self._bridge_preparation is not None and not self._bridge_preparation._consumed:
+            self._bridge_preparation.check()
         return reply
 
     def _resource_observations(self):
@@ -180,7 +185,11 @@ class Operator:
 
         # Configuration and nested credential descriptors retain their existing
         # fixed-path loaders; no private bytes are copied to the pipe channel.
+        from serverware.native_pilot_bridge_preparation import BridgePreparation
+        self._bridge_preparation = BridgePreparation.claim(pilot)
+        preparation_raw = self._bridge_preparation.prepare()
         self._exchange("bridge-runtime", {
+            "bridgePreparationOriginal": _text(preparation_raw),
             "ordinaryGenerationGrants": pilot.generation_inputs.grant_sha256s(),
             "endpointLaunches": service_inputs["endpointLaunches"],
             "nativeGrantSha256s": {role: p.sha(transfer.signed_originals()[1] if role == "persistence"
@@ -198,6 +207,7 @@ class Operator:
         from serverware import native_pilot_bridge_runtime as bridge_runtime
         public_maximum = (bridge_runtime.MAX_BRIDGE_INPUT if bridge_runtime.runtime_version(operation._runtime_raw) == 10
             else 1024 * 1024)
+        self._bridge_preparation.consume()
         continuation = pilot.release(operational_inputs=operation,
             endpoint_release_original=self._public.read(release["endpointRelease"], maximum=32768),
             endpoint_transfers=self._transfers,
@@ -234,6 +244,8 @@ class Operator:
                 if self._pilot._cleanup_attempted and not self._pilot._closed:
                     raise ValueError("native pilot cleanup previously attempted")
                 self._pilot.close()
+            if self._bridge_preparation is not None:
+                self._bridge_preparation.close()
             if self._public is not None:
                 self._public.close()
             if self._channel is not None:

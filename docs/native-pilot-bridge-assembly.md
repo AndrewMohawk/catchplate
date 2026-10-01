@@ -3,14 +3,17 @@
 This is the source-supported bridge assembly map, not completed composition or
 runtime evidence. Service material is connected; the `.384`
 [prerequisite batch](native-pilot-bridge-prerequisites.md) implements selected
-signing/history/versioned-reader paths. No bridge composer coverage, service
+signing/history/versioned-reader paths. The `.385`
+[preparation batch](native-pilot-bridge-preparation.md) adds genuine request/peer
+acquisition, conductor binding and bridge-specific authorization producers.
+No bridge composer coverage, service
 availability or successful launch follows from this document.
 
 ## Existing phase and installer
 
 After service-material, the actual [operator](../serverware/native_pilot_operator.py)
 admits the ordinary grants and endpoint transfers. Its `bridge-runtime` request
-then carries exactly `ordinaryGenerationGrants`, `endpointLaunches`,
+then carries `bridgePreparationOriginal`, `ordinaryGenerationGrants`, `endpointLaunches`,
 `nativeGrantSha256s`, `bridgeJournal`, `cohortObservationOriginal` and
 `ordinaryParked`. The last contains parked PID/start/PIDFD-inode and retained
 target-executable facts, not final-role cgroup, security label or readiness.
@@ -101,11 +104,11 @@ authenticated signed consume head with a positive sequence. Fresh ordinary
 runtime recipes instead select a zero-consumed cursor. The initial wrapper is
 not a consume receipt, and the four service-material originals do not produce
 one. Exporting the old pending request alone therefore cannot unlock fresh
-native startup. Add an explicit initial-only retained request owner, bound to
-the actual authenticated wrapper, approved runtime cursor and original window;
-keep request preparation separate from transmission and independent currentness
-approval. Do not weaken the legacy floor or relabel an initial predecessor as a
-signed receipt.
+native startup. The `.385` initial-only retained request owner binds the actual
+authenticated wrapper, approved runtime cursor and original window. Preparation
+remains separate from transmission and independent currentness approval; the
+supervisor composer/currentness wiring is still missing. The legacy floor stays
+unchanged and an initial predecessor is never relabeled as a signed receipt.
 
 ## Peer, history and external-service gaps
 
@@ -119,12 +122,13 @@ unchecked observations. Connect a genuine owner-derived measurement or an
 explicit independently approved expected-final-state contract with the exact
 receiver recipe. Do not invent cgroup/label facts or claim final exec happened.
 
-The next owner extension can retain the parked PID/start and intended executable
+The `.385` owner extension retains parked PID/start and intended executable
 alongside actual cgroup path hash/mount/inode, requiring that observed cgroup to
 remain unchanged. Ordinary `FiveServiceLaunch`, native `proof_cohort`, and the
 actual gate's `driver_lifecycle` provide the distinct retained-owner entrypoints.
-Final cold UID/GID, socket security label and configuration-generation selection
-must be explicitly approved expectations where they are not yet observations.
+Cold UID/GID bind the actual prior admitted originals. Socket security label
+and configuration-generation selections remain independently approved final
+expectations, not kernel observations.
 Existing kernel-facing peer inspectors still check the actual connection after
 execution; configuration generation remains a protocol pin, not a kernel
 measurement. The four external signers need independent identities rather than
@@ -156,11 +160,12 @@ supports `bridge`; use that observation, original driver window/cold and actual
 runtime bytes. Do not predict activation records in the runtime phase.
 
 The existing closure issuer also supports the bridge leaf after actual C9.
-However, the new endpoint key/admission, encrypted-delivery and verifier
+The endpoint key/admission, encrypted-delivery and verifier
 producers select exactly ten endpoint roles. They cannot silently accept
-`bridge`. A bridge-specific authorization path must preserve
-`nativeShadowBridgeAdmissionAssignment/v1`, its production-binding field and
-the original bootstrap `continuation.keyTransport`. Bridge launch also needs
+`bridge`. The `.385` separate bridge authorization producers preserve
+`nativeShadowBridgeAdmissionAssignment/v1`, rederive its production binding and
+retain the original bootstrap `continuation.keyTransport`. They are not yet
+connected supervisor composers. Bridge launch also needs
 its approved time-bootstrap settings and the actual TrustedTime service grant.
 The existing bridge launch installer is not a producer for these signatures.
 
@@ -172,9 +177,9 @@ or actual predecessor results.
 
 | Job, in execution order | Missing connection |
 | --- | --- |
-| `install-bridge-runtime` | Full retained bridge context, genuine initial trust requests/currentness, complete peer expectations, credential bindings and four external signer selections. |
+| `install-bridge-runtime` | Compose from retained request/peer preparation, independent currentness, complete final peer expectations, credential bindings and four external signer selections. |
 | `native-delivery-bridge` | Compose the existing issuer input from the installed runtime and actual activation observation. |
-| `install-launch-bridge` | Bridge-specific key/admission/encrypted-delivery/verifier producers and retained installation composition. |
+| `install-launch-bridge` | Connect the bridge-specific key/admission/encrypted-delivery/verifier producers and retained installation composition. |
 | `cohort-release` | Explicit policy and retained composition from actual precreation/cohort/bridge originals. |
 | `driver-scope` | Compose the existing issuer input from the genuine operation and retained bootstrap/launch/runtime/C9/generation originals. |
 | `phase-two-public` | Add a fixed exclusive publisher; the current executor only opens a supplied pin and compares it with the approved scope bundle. |

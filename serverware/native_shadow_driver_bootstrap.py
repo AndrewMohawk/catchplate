@@ -79,6 +79,9 @@ class DriverBootstrap:
         self._constructed = False
         self._operational_inputs = None
         self._gate_binding = None
+        self._gate_binding_raw = None
+        self._peer_preparation_attempted = False
+        self._peer_preparation = None
         self._gate_attempted = False
         self._cleanup_attempted = False
         self._subtree_terminal_original = None
@@ -259,6 +262,8 @@ class DriverBootstrap:
             p.require(not mechanics._terminal(self._gate_pidfd)
                 and mechanics._pidfd_pid(self._gate_pidfd) == gate["gateProcessId"]
                 and mechanics._process(gate["gateProcessId"])[1] == gate["gateStartTimeTicks"])
+        if self._peer_preparation is not None:
+            self._peer_preparation.check_resources()
 
     def _receive(self, maximum):
         raw, rights = self._receive_rights(maximum, 0)
@@ -378,8 +383,14 @@ class DriverBootstrap:
         p.require(mechanics._pidfd_pid(self._gate_pidfd) == pid and not mechanics._terminal(self._gate_pidfd)
             and mechanics._process(pid)[1] == start)
         self._gate_binding = notice
+        self._gate_binding_raw = bytes(raw)
         self.check()
         return bytes(raw)
+
+    def peer_preparation_original(self, *, profile="retain-observed-cgroup"):
+        """Already executing gate facts; no label, readiness, or new window."""
+        from serverware.native_pilot_peer_owners import original
+        return original(self, profile=profile)
 
     def retain_scope(self, *, signed_scope_original, public_originals):
         """One signed-public-original handoff, not permission to operate/retry."""
@@ -606,6 +617,8 @@ class DriverBootstrap:
         bridge_resources = getattr(self, "_bridge_resources", None)
         if bridge_resources is not None:
             bridge_resources._close_after_driver_exit(self)
+        if self._peer_preparation is not None:
+            self._peer_preparation.close()
         for fd in (self._driver_pidfd, self._pidfd, self._exec, self._bundle, self._gate_pidfd, self._constructed_public_fd, self._admission_namespace_fd):
             if fd is not None:
                 os.close(fd)

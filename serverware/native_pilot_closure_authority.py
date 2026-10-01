@@ -15,8 +15,9 @@ Input/v1 remains exact and bridge-only. Explicit Input/v2 has the same fields,
 plus guestRole and closureSetOriginal; controlOriginal is present only for
 bridge. Endpoint configuration/window/observation are the actual v7 cohort
 configuration, signed precreation, and originals/v6. Every input is separately
-approved; no arbitrary JSON is treated as a kernel owner. Both profiles retain
-the same 8 MiB input and 1 MiB complete live closure bounds.
+approved; no arbitrary JSON is treated as a kernel owner. Legacy and endpoint
+inputs retain 8 MiB; only explicit bridge runtime/v10 permits 16 MiB input.
+The complete live closure remains bounded at 1 MiB in every profile.
 """
 from __future__ import annotations
 
@@ -28,6 +29,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from serverware import authority_policy_canary_native_opening as opening
 from serverware import native_pilot_assignment as assignment_profile
 from serverware import native_pilot_closure_set as closure_set
+from serverware import native_pilot_bridge_runtime as bridge_runtime
 from serverware import native_pilot_delivery_authority as c9
 from serverware import native_pilot_driver_authority as driver_authority
 from serverware import native_pilot_launch_publication as launch
@@ -37,6 +39,7 @@ from serverware import native_shadow_nitro_originals as originals
 
 p = delivery.p
 MAX_INPUT = 8 * 1024 * 1024
+MAX_BRIDGE_INPUT = bridge_runtime.MAX_BRIDGE_INPUT
 MAX_BYTES = 1024 * 1024
 PROFILE = "measured-bootstrap-late-runtime-static-amd64-v1"
 DOMAIN = "serverware.nativeCustodyClosureAssignment.signature/v2"
@@ -71,7 +74,7 @@ def _guest(value, *, boot, now):
     driver_authority._observation(observation_raw, control, config, window, now)
     driver._key(config["phaseTwoAuthority"])
     p.require(config["bootstrapAuthority"]["publicKeyBase64url"] != config["phaseTwoAuthority"]["publicKeyBase64url"])
-    runtime_raw, _ = c9._original(value["runtimeOriginal"], 65536)
+    runtime_raw, _ = bridge_runtime.original(value["runtimeOriginal"])
     inventory, _ = c9._bridge_inventory(runtime_raw, cold)
     signed_raw, signed = c9._original(value["deliveryOriginal"], delivery.MAX_DELIVERY)
     p.fields(signed, ("apiVersion", "payload", "signatureBase64url"))
@@ -219,6 +222,16 @@ def _endpoint_guest(value, role, *, boot, now):
     return config, window, observed, delivery._delivery_guest(payload, signed_raw)
 
 
+def input_document(input_original: bytes):
+    """Explicit v10 bridge bound; old bridge and endpoint inputs stay 8 MiB."""
+    value = p.document(input_original, MAX_BRIDGE_INPUT)
+    bridge = value.get("apiVersion") == "serverware.nativePilotClosureAuthorityInput/v1" or (
+        value.get("apiVersion") == "serverware.nativePilotClosureAuthorityInput/v2" and value.get("guestRole") == "bridge")
+    successor = bridge and bridge_runtime.version(bridge_runtime.original(value["runtimeOriginal"])[1]) == 10
+    p.require(successor or len(input_original) <= MAX_INPUT)
+    return value
+
+
 def prepare_input(input_original: bytes, *, boot, now_boottime_ns, now_unix_ns):
     """Pure existing closure checks and a full unsigned result template.
 
@@ -227,7 +240,7 @@ def prepare_input(input_original: bytes, *, boot, now_boottime_ns, now_unix_ns):
     authority approval. Supplied clocks are data, never a reconstructed owner.
     """
     p.integer(now_boottime_ns, maximum=p.MAX_U64); p.integer(now_unix_ns)
-    value = p.document(input_original, MAX_INPUT)
+    value = input_document(input_original)
     multi = value.get("apiVersion") == "serverware.nativePilotClosureAuthorityInput/v2"
     role = value.get("guestRole") if multi else "bridge"
     p.require(type(role) is str and role in closure_set.ROLES)

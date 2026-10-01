@@ -592,6 +592,38 @@ class PhaseExecution:
         elif job.family == "bridge-runtime":
             _same(value["driverObservationOriginal"], self._observations["bootstrap-admission"]["bootstrapObservationOriginal"])
             runtime_raw, runtime = bridge_runtime.original(value["runtimeOriginal"])
+            if "bridgePreparationOriginal" in observed:
+                from serverware import native_pilot_bridge_preparation as preparation
+                ids = {"ordinary-services": {}, "native-endpoints": {}, "gate": {}}
+                for role in generation.ROLES:
+                    guest = generation.document(self._outputs["ordinary-generation-" + role], 65536)["payload"]["guest"]
+                    ids["ordinary-services"][role] = {field: guest[field] for field in ("uid", "gid")}
+                for role in cohort.ENDPOINT_ROLES:
+                    guest = p.document(self._outputs["native-delivery-" + role], delivery_authority.MAX_DELIVERY)["payload"]
+                    ids["native-endpoints"][role] = {field: guest[field] for field in ("uid", "gid")}
+                gate_raw = _raw(self._observations["endpoint-precreation"]["gateBindingOriginal"], 8192)
+                gate = p.document(gate_raw, 8192)["binding"]
+                ids["gate"]["gate"] = {field: gate[field] for field in ("uid", "gid")}
+                prep_raw = _raw(observed["bridgePreparationOriginal"], preparation.MAX_BYTES)
+                prep = preparation.shape(prep_raw)
+                initial_requests, prepared_peers = preparation._parts(prep)
+                prior_observed = self._observations["service-originals"]
+                p.require(initial_requests["preparationSha256"] == p.sha(
+                    _raw(prior_observed["ordinaryPreparationOriginal"], 65536))
+                    and initial_requests["resourcesSha256"] == p.sha(
+                    _raw(prior_observed["ordinaryInitialResourcesOriginal"], 65536)))
+                gate_peer = prepared_peers["gate"]["peers"]["gate"]
+                p.require(prepared_peers["gate"]["sourceOriginalSha256"] == p.sha(gate_raw)
+                    and (gate_peer["processId"], gate_peer["startTimeTicks"])
+                        == (gate["gateProcessId"], gate["gateStartTimeTicks"]))
+                for role, row in initial_requests["requests"].items():
+                    prior = p.document(self._inputs["ordinary-generation-" + role], service_authority.MAX_INPUT_BYTES)
+                    p.require(initial_requests["launchSha256"] == p.sha(_raw(prior["launchOriginal"], 65536))
+                        and row["initialHistorySha256"] == p.sha(
+                            _raw(prior["services"][role]["historyOriginal"], generation.MAX_BYTES)))
+                preparation.require_runtime(prep_raw,
+                    runtime_raw, driver_observation_raw=_raw(value["driverObservationOriginal"], 65536),
+                    cohort_observation_raw=_raw(observed["cohortObservationOriginal"], cohort.MAX_BYTES), peer_ids=ids)
             p.require(bridge_runtime.version(runtime) == 10 or len(p.canonical(value)) <= bridge_install.MAX_INPUT)
             _same(runtime["generationAdmission"]["grants"], observed["ordinaryGenerationGrants"])
             _same(observed["ordinaryGenerationGrants"], {role: self._pins["ordinary-generation-" + role]["sha256"]

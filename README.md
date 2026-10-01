@@ -143,8 +143,8 @@ plus ten [endpoint-launch bundles](docs/native-pilot-endpoint-launches.md)
 and [service-material publication](docs/native-pilot-service-material.md) at job 120.
 Explicit policy/v13 adds that material decision without changing the 108 key
 selectors. It refuses startup until the remaining nine jobs, beginning with
-`bridge-runtime / install-bridge-runtime`, are implemented. The new material
-connection is source-only; its focused verification is pending.
+`bridge-runtime / install-bridge-runtime`, are implemented. Its focused local
+checks pass; live material installation and connected acceptance remain unverified.
 The total includes 20 key/admission and 31 late launch prerequisites missing from
 the earlier 85-job inventory; it is not a percentage of product readiness.
 The [native history handoff repair](docs/native-pilot-operational-histories.md)

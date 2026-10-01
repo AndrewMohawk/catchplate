@@ -73,13 +73,23 @@ checkpoint, generation, revocation and deadline.
 
 The existing Python initial-history and ordinary-key issuers do not produce
 this signed current-head wire. Reusing their signatures under this domain is
-invalid. The next concrete issuer can consume the actual authenticated initial
-checkpoint and independently approved request/deadline selections under the
-already selected checkpoint authority. This does not inherently require a
-post-service handshake result: the request must exist before that handshake.
-Its exact request-binding preimage and live clock checks still need a fixed
-producer and explicit purpose/job wiring. Real replies and readiness remain
-native runtime results, never composer-generated values.
+invalid. The next issuer needs the actual authenticated checkpoint, its
+independently selected checkpoint authority, and the genuine original prior
+`TrustedHostNoTeeTrustRequestWire`. A retained signed checkpoint alone is not
+evidence that no newer checkpoint exists. Currentness and the original request's
+issue/deadline bounds need explicit authority and live checks, not caller-chosen
+digest placeholders. Real replies and readiness remain native runtime results.
+
+The trust request and service handshake have **different digests**. The
+[trust-exchange receiver](../data-plane/decision-gate-rs/src/policy_custody/endpoint_clients.rs)
+matches the head statement's nonce/digest to the pending trust request, which
+contains no head. The later handshake hashes its complete signed-head binding.
+Equating the head's `requestSha256` with that final handshake digest would create
+a hash/signature cycle; current handshake validators do not require that
+equality. Preserve an explicit genuine prior-trust-request binding rather than
+inventing a headless-handshake digest. This does not inherently require a
+post-service handshake result, but still needs fixed producer/purpose wiring
+and authenticated currentness before the unsigned handshake can be composed.
 
 ## Peer, history and external-service gaps
 

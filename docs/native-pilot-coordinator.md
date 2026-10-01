@@ -40,8 +40,8 @@ Ten endpoint-launch composers now consume those actual authorizations. Explicit
 policy/v13 adds `serviceMaterialOriginal` for service-material job 120, retaining
 the same 108 signing selectors. Its four fixed public originals are published
 only after approval; the next phase receives revalidated immutable public data,
-not reconstructed live predecessor owners. Focused verification of this new
-connection is pending.
+not reconstructed live predecessor owners. The assembled focused check passed
+141 controls; live installation and connected acceptance remain unverified.
 The full-run owner refuses before spawn because the other nine jobs, beginning
 with `bridge-runtime / install-bridge-runtime`, remain unimplemented. This
 is not yet a runnable or admitted supervisor; its executable packaging and

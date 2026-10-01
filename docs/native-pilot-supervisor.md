@@ -11,9 +11,9 @@ jobs now have fixed policy/input composers. Source coverage is not production
 acceptance, which remains **0/6**. The automated
 owner refuses startup **before spawning** while any job is unimplemented. There
 is no CLI, generic template renderer, approval callback or implicit approval of
-future inputs. Focused verification of the new service-material connection is
-pending. Source checkpoints remain **36/46**; independent production acceptance
-remains separate.
+future inputs. The assembled focused check passed **141 controls**; live
+installation and connected acceptance remain unverified. Source checkpoints
+remain **36/46**; independent production acceptance remains separate.
 
 ## Decision and process ownership
 

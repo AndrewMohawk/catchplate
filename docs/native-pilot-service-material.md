@@ -3,7 +3,7 @@
 The `.383` source connects the final `service-originals` job, `service-material`
 (job120), to publication of four existing public originals. It does not initialize
 a service journal, create a receipt, sign a grant, release a child or compose the
-bridge. Verification for this batch is pending.
+bridge. The focused local check passed; live installation remains unverified.
 
 ## Exact sources and fixed destinations
 
@@ -113,6 +113,26 @@ prerequisites. Four material files do not satisfy them.
 
 ## Focused verification
 
-Pending the assembled batch check. No tests, signing entrypoints, protected
-owners, journal initialization, services, hardware or cloud operations were run
-to establish the claims in this source-only guide.
+Exact source `2e7cc269151b376a3f54c5a02dcdaa730aa870e6` passed **141 focused
+controls** in seventeen suites, eleven-file Python 3.11 grammar and both Make
+inventories, and **76 relative documentation links** in one isolated CPU-0 run
+(exit **0**, Python **3.11.15**). It ran from
+`2026-10-01T01:19:45.077854555Z` to `2026-10-01T01:20:35.326885826Z`.
+
+The eight new controls use a signed synthetic Persistence fixture for exact
+material/grant commitments. Generation genesis and the result are explicitly
+limited grammar/projection fixtures; refusal checks cover missing complete
+services, unsupported policy, records, versions and fields. They do **not**
+prove full positive two-service bundle admission, actual retained-owner
+continuation, exclusive publication or journal initialization.
+
+The exact source archive, harness, command, log, source revision, structured
+result and checksums are retained at
+`codex-offload/serverware/engineering-builds/2e7cc269-service-material-u0LH6H/`.
+The source archive is **85,524,480 bytes**, SHA-256
+`8358d5e485144b91a0ccbb722e56fc1ea6cce5281aee7abb6d77d9da02c3978f`.
+No DB/app/authority-store modules, signing entrypoints, protected owners,
+installers, services, hardware or cloud operations were invoked. Native source,
+schemas and the dependency lock are unchanged from `03d4075d`; no native compile
+or artifact rebuild ran. No paid action ran. Supervisor coverage is **127/136**
+with **9 missing**, source checkpoints **36/46**, production acceptance **0/6**.

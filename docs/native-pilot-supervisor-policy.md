@@ -6,9 +6,9 @@ decision. The separate precreation composer implements the next two jobs. This
 is not a complete decision service, a runnable pilot supervisor, or
 approval of unimplemented future jobs. Current v13 source composes 127 of 136 jobs;
 the decision spine refuses startup while the remaining nine are unimplemented,
-beginning with `bridge-runtime / install-bridge-runtime`. Focused verification of
-the new service-material connection is pending. Source checkpoints remain 36/46
-and production acceptance remains 0/6.
+beginning with `bridge-runtime / install-bridge-runtime`. The assembled focused
+check passed 141 controls; live installation and connected acceptance remain
+unverified. Source checkpoints remain 36/46 and production acceptance remains 0/6.
 
 ## External approval boundary
 

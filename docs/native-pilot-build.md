@@ -14,8 +14,10 @@ performed when this source was authored.
 The `.392` source adds a separate
 [commissioning supervisor package and executable](native-pilot-supervisor-executable.md).
 It preserves the conductor/authority layouts and requires three independent
-inventories plus real late approvals. Its new engineering export is pending;
-the older results below are not evidence for the current supervisor source.
+inventories plus real late approvals. Its `bd69e925` engineering export built and
+materialized; the corrected read-only observer verified 1,310 source files.
+[Exact evidence and boundaries](native-pilot-supervisor-executable.md#engineering-artifact-result).
+The older results below are not evidence for the current supervisor source.
 
 Actual local results as of **2026-09-30 18:23 UTC**:
 

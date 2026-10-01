@@ -147,7 +147,7 @@ Policy/v18 connects the [final release, publication and shutdown decisions](docs
 All current jobs are now connected in source; this batch passed all 25 focused
 controls ([evidence and limits](docs/native-pilot-final-continuations.md#focused-verification)). The new
 [supervisor executable and package](docs/native-pilot-supervisor-executable.md)
-are awaiting focused verification. Real cleanup ownership and connected
+passed 29 focused controls and an engineering artifact build. Real cleanup ownership and connected
 runtime verification are still needed. These counts are not a percentage of
 product readiness or permission to deploy.
 Protected deployment is not provisioned. This is not

@@ -5,7 +5,8 @@
 The `.392` source adds the missing outer executable and a separate runtime
 package around the existing 164 commissioning jobs. It is not a self-provisioning
 demo: protected policy, keys, resources and independent currentness decisions
-must already exist. Focused verification and a new engineering export are pending.
+must already exist. All 29 focused controls passed; the engineering artifact
+built, materialized and passed exact source-byte observation.
 Source checkpoints remain **36/46** and independent production acceptance **0/6**.
 
 ## Three distinct runtimes
@@ -95,3 +96,63 @@ observations into cleanup receipts.
 Complete constructed Nitro/census authentication, startup performance, actual
 connected allow/deny/cleanup execution, dependency publication, protected
 provisioning and all independent production gates remain unverified.
+
+## Focused verification
+
+Exact source `bd69e925f1fd1adb15cc8cef0e0476a8caf00053` passed **29/29 controls
+in five selected suites**, **12-file Python 3.11.15 grammar/both Make inventories**
+and **59 relative documentation links**, in **1.831 seconds** (exit **0**).
+The run used an exact Git archive, an empty environment, one CPU, a separate
+network namespace and a 240-second cap. Database/app/authority-store modules
+were not imported.
+
+Eight controls use real local Unix sockets, kernel credentials, PIDFDs and
+descriptor transfer: all eight ordered exchanges, multi-packet originals,
+request/reply refusals, expired deadlines, extra/truncated descriptor cleanup,
+retained reply ownership and final peer retirement after a receipt. Their
+observations and descriptor contents are synthetic, not genuine currentness
+approvals. The packaging controls use a small synthetic ELF/source tree, not a
+running installed interpreter. CLI ordering checks are source assertions, not
+a privileged 164-job execution. Signal-ownership guards were source reviewed;
+no asynchronous termination fault-injection campaign was run.
+
+Two initial preflights stopped before any controls: the harness first counted
+Make command uses as inventory entries, and the corrected exact-entry check
+then exposed the shared image builder missing from both inventories. Commit
+`bd69e925` adds that registration; no authority or runtime guard was weakened.
+The complete focused pass above ran once after that correction.
+
+Exact source archives, commands, harnesses, logs and checksums are retained at
+`codex-offload/serverware/engineering-builds/bd69e925-supervisor-executable-Qj6hRl/`.
+The tested Git archive SHA-256 is
+`cc1534255c99a846d90fd1b2b66b8bd7e641d778e0e57c663b3ff95cf5ca0ed9`.
+
+## Engineering artifact result
+
+One raw supervisor build from frozen base `bd69e925` exited **0** in **29.682
+seconds**. It reused the unchanged unpublished dependency candidate in an
+isolated checkout: exactly three manifest substitutions and six cache artifacts,
+all nine byte/hash checked. The canonical dependency pins were not changed.
+The existing fixed bounds were eight CPUs, 24 GiB and zero swap per RUN, not an
+aggregate worker cap. Build steps used `network=none`; the BuildKit daemon also
+performed pinned base-image registry metadata/auth requests.
+
+The **169,449,472-byte** archive materialized successfully into **6,150 entries**
+with **164,894,893 regular-file bytes**. Archive SHA-256:
+`4ab79a5629877e65ca38d38ea2cce088f59978c70698e0ea24b9db258882b86f`.
+The corrected read-only observer then verified **1,310 exact source files**:
+1,303 in `/app`, five in `/authority`, and two in `/supervisor` (exit **0**, **1.163
+seconds**). All source files were 0444; `/app` was 0755 and the other ten source
+namespace directories 0555.
+
+The original combined harness exited **1** after successful materialization
+because its extra observer incorrectly required `/app` to be 0555. That was
+stricter than the existing runtime profile. Its failure remains preserved;
+only the read-only observer was corrected, with no rebuild, rematerialization
+or production-validator change.
+
+These remain engineering bytes with `production_release_eligible=false`.
+No strict-source inventory/package, installed runtime, dynamic-loader execution,
+164-job supervisor, native service, signing, provider or paid cloud acceptance
+was produced. The raw artifact, both observer outcomes and checksums are retained
+beside the focused-check evidence above.

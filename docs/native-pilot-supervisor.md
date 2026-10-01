@@ -1,8 +1,10 @@
 # Native pilot commissioning supervisor
 
 The `.392` source adds the [fixed executable, approval descriptor channel and
-separate runtime package](native-pilot-supervisor-executable.md). Verification is
-pending; this is not a provisioned or deployed supervisor.
+separate runtime package](native-pilot-supervisor-executable.md). All 29 focused
+controls and the engineering artifact build/materialization passed; an
+observer-only mode correction passed without rebuilding. [Evidence and limits](native-pilot-supervisor-executable.md#focused-verification).
+This is not a provisioned or deployed supervisor.
 
 The `.391` source connects the [six final decisions](native-pilot-final-continuations.md)
 under explicit policy/v18: **164/164** jobs, **113** selectors and no missing

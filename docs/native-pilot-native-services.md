@@ -3,7 +3,8 @@
 The `.379` source batch connects the eleven native operational-grant decisions
 after the actual C9 and key/admission results. It does not launch these services
 or prove native/hardware acceptance. The startup guard remains in place until
-the entire fixed supervisor graph is implemented.
+the entire fixed supervisor graph is implemented. Source coverage is **80/105**,
+with **25 remaining**; production acceptance stays **0/6**.
 
 ## Independently selected policy
 
@@ -86,6 +87,31 @@ producer. Subsequent ordinary dispatch/spool, launch, bridge/release and other
 remaining decisions, the executable supervisor package, approved immutable
 dependencies, provisioning and full connected acceptance remain required.
 
-Focused verification of the assembled batch is pending. No cloud or paid action
-is part of this work. Native source is unchanged, so its earlier compiler result
-is not rerun or represented as runtime acceptance.
+The next implementation group is the five existing jobs 74–78: two ordinary
+dispatch grants, then Head, Cleanup and Current. They can reuse existing issuers
+and selectors; independently approved starting-chain anchors and append capacity
+are configuration, not invented historical receipts. Later launch jobs remain
+separate, and this prospective group is not included in current coverage.
+
+### Focused verification
+
+Exact source `04647c81` passed **107 focused Python 3.11.15 controls**, sixteen
+changed-file grammar/both Make inventories, two source-level package-export joins
+and **59 relative documentation links** (exit **0**). The environment-cleared,
+CPU-0 private-network run took approximately eleven seconds. The first run on
+`7e9b3df7` passed 106/107: one old test still expected 69 composers. Only that
+test's count/next-job expectations changed; startup refusal remains required.
+Both snapshots and both complete logs are retained.
+
+The eight new controls cover closed policy/verifier grammar, currentness,
+unsigned projection and incomplete-input refusal. They do **not** execute
+eleven complete positive authenticated-history build transcripts or actual
+retained owners. Test keys, CA and startup receipts are synthetic; no issuer
+entrypoint, native service, hardware, cloud or paid action ran. No DB/app/
+authority-store module was imported. Native/schema/lock inputs remain identical
+to the previously compiled `03d4075d`; no native rebuild or artifact rebuild
+was performed. The package joins are static checks, not packaged execution.
+
+Exact archives, commands, failure and success logs, `result.json` and verified
+`SHA256SUMS` are retained at
+`codex-offload/serverware/engineering-builds/04647c81-native-services-jPcuPf/`.

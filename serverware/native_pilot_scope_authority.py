@@ -7,6 +7,7 @@ admission still checks real descriptors, service signatures and currentness.
 """
 from __future__ import annotations
 
+import os
 import re
 import stat
 import time
@@ -149,12 +150,39 @@ def _operation(operation, launch, c9, raw_files):
     delivery._pin(launch["trustedTime"])
 
 
-def prepare_input(input_original: bytes, *, boot, now_boottime_ns, now_unix_ns) -> dict:
+def _adopted_bundle(bundle, runtime_raw, runtime):
+    """Successor public grammar/literal joins, never native grant admission."""
+    from serverware import native_pilot_bridge_install as bridge_install
+    p.require(bridge_runtime.version(runtime) == 14)
+    bridge_install.shape("bridge-runtime", runtime_raw)
+    grants = p.fields(bundle["generationOriginals"], driver.ROLES)
+    _same(runtime["generationAdmission"]["grants"], {
+        role: p.sha(_generation_original(text)[0]) for role, text in grants.items()})
+    for role, text in grants.items():
+        p.require(runtime["ordinaryInitialHistories"][role]["generationGrantOriginal"] == text)
+
+
+def _adopted_delivery(c9, runtime_raw, runtime, cold):
+    from serverware import native_pilot_delivery_authority as c9_profile
+    expected, _ = c9_profile._bridge_inventory(runtime_raw, cold, adopted=True)
+    c9_profile._activation(c9["activation"], expected)
+    c9_profile._credentials(c9["credentials"], cold["authority"])
+    journal = next(row for row in c9["activation"] if row["name"] == "production-journal")
+    _same({"deviceMajor": os.major(journal["device"]), "deviceMinor": os.minor(journal["device"]),
+        **{name: journal[name] for name in ("inode", "uid", "gid", "mode")}},
+        {name: runtime["journalDirectoryIdentity"][name]
+            for name in ("deviceMajor", "deviceMinor", "inode", "uid", "gid", "mode")})
+    p.require(stat.S_IMODE(journal["mode"]) == 0o700
+        and (journal["uid"], journal["gid"]) == (cold["uid"], cold["gid"]))
+
+
+def prepare_input(input_original: bytes, *, boot, now_boottime_ns, now_unix_ns, adopted=False) -> dict:
     """Derive the unchanged Scope/v4 from complete public originals only.
 
     Explicit clocks and supplied observations are checked data, not provenance,
     permission to release, a process owner or proof of native admission.
     """
+    p.require(type(adopted) is bool)
     value = p.fields(p.document(input_original, MAX_BRIDGE_INPUT), INPUT_FIELDS)
     p.require(value["apiVersion"] == "serverware.nativePilotScopeSigningInput/v1")
     config_raw, config = _original(value["configurationOriginal"], 65536)
@@ -163,7 +191,13 @@ def prepare_input(input_original: bytes, *, boot, now_boottime_ns, now_unix_ns) 
     operation_raw, operation = _original(value["operationOriginal"], 65536)
     bundle_raw, bundle = _original(value["publicBundleOriginal"], MAX_BRIDGE_INPUT)
     runtime_raw, runtime = bridge_runtime.original(bundle["runtimeOriginal"])
-    p.require(bridge_runtime.version(runtime) in (10, 11, 12) or (len(input_original) <= MAX_INPUT and len(bundle_raw) <= 1024 * 1024))
+    version = bridge_runtime.version(runtime)
+    p.require(version in ((14,) if adopted else (9, 10, 11, 12)))
+    p.require(version in (10, 11, 12, 14) or (len(input_original) <= MAX_INPUT and len(bundle_raw) <= 1024 * 1024))
+    if adopted:
+        # Runtime14's publication, Runtime12 target histories and helper fields
+        # stay mandatory. This is public grammar, not native service admission.
+        _adopted_bundle(bundle, runtime_raw, runtime)
     cold_raw, _ = _original(value["deliveryConfigurationOriginal"], 65536)
     launch_raw, launch = _original(value["launchOriginal"], 32768)
     _, signed_bootstrap = _original(value["bootstrapAdmissionOriginal"], 8192)
@@ -223,7 +257,7 @@ def prepare_input(input_original: bytes, *, boot, now_boottime_ns, now_unix_ns) 
         and identity["supervisorBootIdSha256"] == p.sha(p.decoded(window["bootIdBase64url"], size=16))
         and issued <= identity["verifiedAtBoottimeNanos"] <= now < startup)
     p.fields(bundle, ("runtimeOriginal", "deliveryOriginal", "generationOriginals"))
-    p.require(bridge_runtime.version(runtime) in (9, 10, 11, 12))
+    p.require(bridge_runtime.version(runtime) == version)
     delivery_raw, signed_delivery = _original(bundle["deliveryOriginal"], 65536)
     p.fields(signed_delivery, ("apiVersion", "payload", "signatureBase64url"))
     c9 = p.fields(signed_delivery["payload"], delivery.FIELDS)
@@ -238,6 +272,10 @@ def prepare_input(input_original: bytes, *, boot, now_boottime_ns, now_unix_ns) 
         _same(c9[name], window[name])
     delivery._pin(c9["runtimeConfig"])
     p.require(c9["runtimeConfig"]["sha256"] == p.sha(runtime_raw))
+    if adopted:
+        # Authenticate the signed C9's actual selected 41-slot inventory. Do
+        # not admit a Runtime14 label over the legacy activation partition.
+        _adopted_delivery(c9, runtime_raw, runtime, cold)
     p.fields(launch, ("apiVersion", "keyAdmission", "trustedTime"))
     p.require(launch["apiVersion"] == bridge_runtime.launch_for_runtime(runtime_raw))
     inner = p.fields(launch["keyAdmission"], ("apiVersion", "deliveryConfiguration", "delivery", "trust", "timeBootstrap",
@@ -265,9 +303,9 @@ def prepare_input(input_original: bytes, *, boot, now_boottime_ns, now_unix_ns) 
         "deadline": startup, "epochLimit": early["expiresAtUnixNanos"], "message": message}
 
 
-def checked_result(input_original, result, *, boot, now_boottime_ns, now_unix_ns) -> bytes:
+def checked_result(input_original, result, *, boot, now_boottime_ns, now_unix_ns, adopted=False) -> bytes:
     context = prepare_input(input_original, boot=boot,
-        now_boottime_ns=now_boottime_ns, now_unix_ns=now_unix_ns)
+        now_boottime_ns=now_boottime_ns, now_unix_ns=now_unix_ns, adopted=adopted)
     p.fields(result, ("original", "sha256"))
     raw, signed = _original(result["original"], MAX_SCOPE)
     p.fields(signed, ("payload", "signatureBase64url"))
@@ -277,11 +315,11 @@ def checked_result(input_original, result, *, boot, now_boottime_ns, now_unix_ns
     return raw
 
 
-def sign(input_original: bytes, signing_key: Ed25519PrivateKey) -> bytes:
+def sign(input_original: bytes, signing_key: Ed25519PrivateKey, *, adopted=False) -> bytes:
     """Sign only the derived existing Scope/v4 under actual pre/post clocks."""
     p.require(isinstance(signing_key, Ed25519PrivateKey))
     boot, now, wall = originals._boot(), originals._clock(), time.time_ns()
-    context = prepare_input(input_original, boot=boot, now_boottime_ns=now, now_unix_ns=wall)
+    context = prepare_input(input_original, boot=boot, now_boottime_ns=now, now_unix_ns=wall, adopted=adopted)
     public = signing_key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
     expected = context["key"].public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
     p.require(public == expected)

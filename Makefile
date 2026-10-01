@@ -1759,6 +1759,19 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/native_pilot_genesis_ordinary_inputs.py \
 	serverware/native_pilot_genesis_native_inputs.py \
 	serverware/native_pilot_genesis_owner_inputs.py \
+	serverware/native_pilot_adopted_inputs.py \
+	serverware/native_pilot_adopted_input_context.py \
+	serverware/native_pilot_adopted_foundation_inputs.py \
+	serverware/native_pilot_adopted_handoff_inputs.py \
+	serverware/native_pilot_adopted_ordinary_inputs.py \
+	serverware/native_pilot_adopted_native_inputs.py \
+	serverware/native_pilot_adopted_bridge_inputs.py \
+	serverware/native_pilot_adopted_constructed_inputs.py \
+	scripts/test_native_pilot_adopted_inputs.py \
+	scripts/test_native_pilot_adopted_ordinary_inputs.py \
+	scripts/test_native_pilot_adopted_native_inputs.py \
+	scripts/test_native_pilot_adopted_bridge_inputs.py \
+	scripts/test_native_pilot_adopted_constructed_inputs.py \
 	scripts/test_native_pilot_genesis_inputs.py \
 	scripts/test_native_pilot_genesis_ordinary_inputs.py \
 	scripts/test_native_pilot_genesis_native_inputs.py \
@@ -4726,6 +4739,19 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/native_pilot_genesis_ordinary_inputs.py \
 				serverware/native_pilot_genesis_native_inputs.py \
 				serverware/native_pilot_genesis_owner_inputs.py \
+				serverware/native_pilot_adopted_inputs.py \
+				serverware/native_pilot_adopted_input_context.py \
+				serverware/native_pilot_adopted_foundation_inputs.py \
+				serverware/native_pilot_adopted_handoff_inputs.py \
+				serverware/native_pilot_adopted_ordinary_inputs.py \
+				serverware/native_pilot_adopted_native_inputs.py \
+				serverware/native_pilot_adopted_bridge_inputs.py \
+				serverware/native_pilot_adopted_constructed_inputs.py \
+				scripts/test_native_pilot_adopted_inputs.py \
+				scripts/test_native_pilot_adopted_ordinary_inputs.py \
+				scripts/test_native_pilot_adopted_native_inputs.py \
+				scripts/test_native_pilot_adopted_bridge_inputs.py \
+				scripts/test_native_pilot_adopted_constructed_inputs.py \
 				scripts/test_native_pilot_genesis_inputs.py \
 				scripts/test_native_pilot_genesis_ordinary_inputs.py \
 				scripts/test_native_pilot_genesis_native_inputs.py \

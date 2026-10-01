@@ -123,12 +123,23 @@ def _materials(values):
     return prepared, pins, material
 
 
+def _adopted_persistence_sources(item):
+    """Project only after the caller authenticates the complete v6 input."""
+    _, delivered = c9._original(item["deliveryInputOriginal"], adopted_services.adopted_c9.MAX_INPUT)
+    _, adoption = c9._original(item["adoptionValidationInputOriginal"], adopted_services.MAX_INPUT)
+    _, assignment = c9._original(adoption["currentAssignmentOriginal"], 1024 * 1024)
+    return {"coldConfigurationOriginal": delivered["configurationOriginal"],
+        "cohortConfigurationOriginal": delivered["ownerConfigurationOriginal"],
+        "precreationOriginal": delivered["windowOriginal"], "observationOriginal": delivered["observationOriginal"],
+        "assignmentPayloadOriginal": p.canonical(assignment["payload"]).decode("ascii")}
+
+
 def prepare_bundle(bundle_original, *, boot, now_boottime_ns, now_unix_ns, adopted=False):
     value = p.fields(p.document(bundle_original, MAX_INPUT), ("apiVersion", "serviceContexts", "endpointLaunches"))
     p.require(type(adopted) is bool and value["apiVersion"] == (ADOPTED_API if adopted else API))
     p.fields(value["serviceContexts"], ROLES); p.fields(value["endpointLaunches"], ROLES)
     clocks = dict(boot=boot, now_boottime_ns=now_boottime_ns, now_unix_ns=now_unix_ns)
-    contexts, inputs, native, retained, launches = {}, {}, {}, {}, {}
+    contexts, inputs, native, retained, launches, sources = {}, {}, {}, {}, {}, {}
     for role in ROLES:
         row = p.fields(value["serviceContexts"][role], ("inputOriginal", "grantOriginal"))
         input_raw, inputs[role] = c9._original(row["inputOriginal"], services.MAX_INPUT)
@@ -138,13 +149,20 @@ def prepare_bundle(bundle_original, *, boot, now_boottime_ns, now_unix_ns, adopt
         checked(role, input_raw, {"original": row["grantOriginal"], "sha256": p.sha(grant_raw)}, **clocks)
         contexts[role] = prepare(role, input_raw, **clocks)
         item = inputs[role]
+        sources[role] = item
+        if adopted and role == "persistence":
+            # The complete selected service input and signature were just
+            # authenticated above. Its v6 schema carries these sources only
+            # inside the literal C9/adoption inputs; it does not have the old
+            # duplicated outer fields. Preserve the original issuer input.
+            sources[role] = _adopted_persistence_sources(item)
         _, native[role] = c9._original(item["configurationOriginal" if role == "persistence" else "nativeConfigurationOriginal"], p.MAX_CONFIG)
         grant_purpose = launch._grant_purpose(role)
         retained[grant_purpose] = grant_raw
         pin = value["endpointLaunches"][role]
         launch.delivery._pin(pin)
         p.require(pin["path"] == launch.DESTINATIONS["native-launch-" + role])
-        cold = item["coldConfigurationOriginal" if role == "persistence" else "coordinatorConfigurationOriginal"].encode("ascii")
+        cold = sources[role]["coldConfigurationOriginal" if role == "persistence" else "coordinatorConfigurationOriginal"].encode("ascii")
         delivery = item["deliveryOriginal" if role == "persistence" else "coordinatorDeliveryOriginal"].encode("ascii")
         key_raw = p.canonical({"apiVersion": "serverware.nativeShadowRoleKeys/v2", "authorization": native[role]["authorization"]})
         launches[role] = {"pin": copy.deepcopy(pin), "grant": _pin(grant_purpose, grant_raw),
@@ -153,7 +171,7 @@ def prepare_bundle(bundle_original, *, boot, now_boottime_ns, now_unix_ns, adopt
                 "keys": _pin("native-" + role + "-keys", key_raw),
                 "admission": _pin("native-" + role + "-admission", p.canonical(native[role]["admissionAuthorization"]))}}
     for name in ("cohortConfigurationOriginal", "precreationOriginal", "observationOriginal", "assignmentPayloadOriginal"):
-        p.require(inputs["persistence"][name] == inputs["generationInstall"][name])
+        p.require(sources["persistence"][name] == sources["generationInstall"][name])
     for name in ("authorityKeys", "trustCheckpoint"):
         _same(native["persistence"][name], native["generationInstall"][name])
     for name in ("assignmentId", "assignmentPayloadSha256", "assignmentRevision", "fullKeySetRootSha256"):

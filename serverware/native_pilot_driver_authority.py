@@ -173,17 +173,21 @@ def _bootstrap(payload, observation_raw, control, window, authority):
     _same(payload, expected)
 
 
-def _phase_bundle(original):
+def _phase_bundle(original, *, adopted=False):
     """Public grammar and version-selected bounds, not signed scope admission."""
+    p.require(type(adopted) is bool)
     raw, bundle = _original(original, bridge_runtime.MAX_BRIDGE_INPUT)
     p.fields(bundle, ("runtimeOriginal", "deliveryOriginal", "generationOriginals"))
     runtime_raw, runtime = bridge_runtime.original(bundle["runtimeOriginal"])
     version = bridge_runtime.version(runtime)
-    p.require(version in (9, 10, 11, 12) and (version in (10, 11, 12) or len(raw) <= 1024 * 1024))
+    p.require(version in ((14,) if adopted else (9, 10, 11, 12))
+        and (version in (10, 11, 12, 14) or len(raw) <= 1024 * 1024))
+    if adopted:
+        scope_authority._adopted_bundle(bundle, runtime_raw, runtime)
     return raw, bundle, runtime_raw, runtime
 
 
-def _phase(value, exported, control, config, cold, window, observed):
+def _phase(value, exported, control, config, cold, window, observed, *, adopted=False):
     scope_raw, signed = _original(exported["phaseScopeOriginal"], 32768)
     p.fields(signed, ("payload", "signatureBase64url"))
     phase = p.fields(signed["payload"], ("apiVersion", "configurationSha256", "windowSha256", "observationSha256",
@@ -199,7 +203,7 @@ def _phase(value, exported, control, config, cold, window, observed):
         p.require(phase[field] == window[field])
     p.require(phase["observationSha256"] == p.sha(exported["bootstrapObservationOriginal"].encode("ascii"))
         and phase["kernelDriverIdentitySha256"] == observed["driver"]["identitySha256"])
-    bundle_raw, bundle, runtime_raw, runtime = _phase_bundle(exported["phaseBundleOriginal"])
+    bundle_raw, bundle, runtime_raw, runtime = _phase_bundle(exported["phaseBundleOriginal"], adopted=adopted)
     p.require(phase["publicBundleSha256"] == p.sha(bundle_raw))
     delivery_raw, signed_delivery = _original(bundle["deliveryOriginal"], 65536)
     p.fields(signed_delivery, ("apiVersion", "payload", "signatureBase64url"))
@@ -215,6 +219,8 @@ def _phase(value, exported, control, config, cold, window, observed):
         _same(c9[name], window[name])
     delivery._pin(c9["runtimeConfig"])
     p.require(c9["runtimeConfig"]["sha256"] == p.sha(runtime_raw))
+    if adopted:
+        scope_authority._adopted_delivery(c9, runtime_raw, runtime, cold)
     grants = p.fields(bundle["generationOriginals"], driver.ROLES)
     _same(phase["originals"], {"runtimeSha256": p.sha(runtime_raw), "deliverySha256": p.sha(delivery_raw),
         "generationGrants": {role: p.sha(scope_authority._generation_original(grants[role])[0]) for role in driver.ROLES}})
@@ -271,12 +277,16 @@ def _assignment(value, exported, verifier, keys, now):
     return envelope
 
 
-def _closure(exported, config, verifier, scope, key, now, assignment):
+def _closure(exported, config, verifier, scope, key, now, assignment, *, adopted=False):
     from serverware import native_pilot_launch_publication as launch
+    from serverware import native_pilot_closure_set as closure_set
+    p.require(type(adopted) is bool)
     _, closure = _original(exported["closureOriginal"], 1024 * 1024)
     multi = assignment_profile.version(assignment) == 2
-    launch.shape("native-bridge-closure", p.canonical(closure))
-    p.require(closure["apiVersion"] == "serverware.nativeCustodyClosure/v" + ("3" if multi else "2"))
+    p.require(not adopted or multi)
+    (launch.shape_adopted_bridge if adopted else launch.shape)("native-bridge-closure", p.canonical(closure))
+    closure_version = "5" if adopted else "3" if multi else "2"
+    p.require(closure["apiVersion"] == "serverware.nativeCustodyClosure/v" + closure_version)
     fields = ("apiVersion", "profile", "imageSha256", "workerExecutableSha256", "seccompPolicy",
               "runtimeConfigurationSha256", "buildProvenance", "manifestSha256")
     manifest = p.fields(closure["manifest"], fields)
@@ -302,7 +312,8 @@ def _closure(exported, config, verifier, scope, key, now, assignment):
     payload = p.fields(signed["payload"], launch._CLOSURE_SET if multi else launch._CLOSURE)
     p.require(payload["manifestSha256"] == manifest["manifestSha256"])
     if multi:
-        leaf = assignment_profile.closure_binding(assignment, p.canonical(closure["closureSet"]), "bridge")
+        leaf = assignment_profile.closure_binding(assignment, p.canonical(closure["closureSet"]), "bridge",
+            set_api_version=closure_set.PUBLICATION_API if adopted else closure_set.API)
         p.require(payload["guestRole"] == "bridge")
         for name in ("setRootSha256", "seccompSetRootSha256", "leafSha256", "manifestSha256"):
             p.require(payload[name] == leaf[name])
@@ -315,8 +326,8 @@ def _closure(exported, config, verifier, scope, key, now, assignment):
         _same(payload[name], auth[name])
     p.freshness(payload["issuedAtUnixNanos"], payload["expiresAtUnixNanos"], now)
     key.verify(p.decoded(signed["signature"], size=64),
-        p.preimage("serverware.nativeCustodyClosureAssignment.signature/v" + ("3" if multi else "2"), payload))
-    return payload["expiresAtUnixNanos"]
+        p.preimage("serverware.nativeCustodyClosureAssignment.signature/v" + closure_version, payload))
+    return min(payload["expiresAtUnixNanos"], payload["issuedAtUnixNanos"] + p.DAY_NS + 1) if adopted else payload["expiresAtUnixNanos"]
 
 
 def _evidence(exported, verifier, scope, keys, now):
@@ -428,7 +439,7 @@ def _census(raw, early, observed, control, window, scope_raw, statement, now):
         and p.ns(context["observedAtBoottimeNs"]) <= now)
 
 
-def prepare_input(operation: str, input_original: bytes, *, boot, now_boottime_ns, now_unix_ns):
+def prepare_input(operation: str, input_original: bytes, *, boot, now_boottime_ns, now_unix_ns, adopted=False):
     """Validate the real issuer input at explicit clocks, without signing.
 
     These data checks do not establish the provenance of an observation. The
@@ -436,7 +447,7 @@ def prepare_input(operation: str, input_original: bytes, *, boot, now_boottime_n
     Preparation always requires the original startup window, including when
     an already signed result will later be consumed during the lifetime phase.
     """
-    p.require(operation in ("bootstrap", "constructed"))
+    p.require(type(adopted) is bool and operation in ("bootstrap", "constructed"))
     extra = ("observationOriginal",) if operation == "bootstrap" else CONSTRUCTED_INPUTS
     value = p.fields(p.document(input_original, MAX_INPUT), INPUT_FIELDS + extra)
     p.require(value["apiVersion"] == "serverware.nativePilotDriverAuthorityInput/v1" and value["operation"] == operation)
@@ -466,7 +477,7 @@ def prepare_input(operation: str, input_original: bytes, *, boot, now_boottime_n
     expiries = [early["expiresAtUnixNanos"]]
     if operation == "constructed":
         p.fields(payload, CONSTRUCTED_FIELDS)
-        scope_raw, guest = _phase(value, exported, control, config, cold, window, observed)
+        scope_raw, guest = _phase(value, exported, control, config, cold, window, observed, adopted=adopted)
         verifier_raw, verifier = _original(value["verifierConfigurationOriginal"], p.MAX_CONFIG)
         p.require(p.sha(verifier_raw) == p.digest(value["verifierConfigurationSha256"]))
         scope, keys = bridge.authorization(verifier, wall)
@@ -485,10 +496,12 @@ def prepare_input(operation: str, input_original: bytes, *, boot, now_boottime_n
             and custody["structurallyVerifiedSeccompPolicySha256"] == scope["structurallyVerifiedSeccompPolicySha256"])
         mode = custody["attestationMode"]
         _same({name: mode[name] for name in verifier["expectedAttestation"]}, verifier["expectedAttestation"])
-        expiries.append(_closure(exported, config, verifier, scope, public, wall, assignment_envelope))
+        expiries.append(_closure(exported, config, verifier, scope, public, wall, assignment_envelope, adopted=adopted))
         statement, result_expiry = _evidence(exported, verifier, scope, keys, wall)
         expiries.extend((result_expiry, assignment["expiresAtUnixNanos"], verifier["authorization"]["payload"]["expiresAtUnixNanos"],
             verifier["admissionAuthorization"]["payload"]["expiresAtUnixNanos"]))
+        if adopted:
+            expiries.append(assignment["issuedAtUnixNanos"] + p.DAY_NS + 1)
         census_raw, _ = _original(value["censusOriginal"], 48 * 1024)
         _census(census_raw, early, observed, control, window, scope_raw, statement, now)
         authorized = verifier["authorization"]["payload"]
@@ -514,10 +527,10 @@ def prepare_input(operation: str, input_original: bytes, *, boot, now_boottime_n
         "epochLimit": min(payload["expiresAtUnixNanos"], *expiries), "domain": domain})
 
 
-def checked_result(operation, input_original, result, *, boot, now_boottime_ns, now_unix_ns):
+def checked_result(operation, input_original, result, *, boot, now_boottime_ns, now_unix_ns, adopted=False):
     """Check an existing result's exact bytes/signature, not publication."""
     prepared = prepare_input(operation, input_original, boot=boot,
-        now_boottime_ns=now_boottime_ns, now_unix_ns=now_unix_ns)
+        now_boottime_ns=now_boottime_ns, now_unix_ns=now_unix_ns, adopted=adopted)
     return _checked_result(operation, input_original, result, prepared)
 
 
@@ -539,12 +552,12 @@ def _checked_result(operation, input_original, result, prepared):
     return raw
 
 
-def sign(operation: str, input_original: bytes, signing_key: Ed25519PrivateKey) -> bytes:
+def sign(operation: str, input_original: bytes, signing_key: Ed25519PrivateKey, *, adopted=False) -> bytes:
     """Return only the selected existing envelope, never a live owner/verdict."""
     boot = originals._boot()
     now, wall = time.clock_gettime_ns(time.CLOCK_BOOTTIME), time.time_ns()
     prepared = prepare_input(operation, input_original, boot=boot,
-        now_boottime_ns=now, now_unix_ns=wall)
+        now_boottime_ns=now, now_unix_ns=wall, adopted=adopted)
     value = p.document(input_original, MAX_INPUT)
     payload, window, domain = prepared["payload"], prepared["window"], prepared["domain"]
     public = admission.authority(prepared["authority"])

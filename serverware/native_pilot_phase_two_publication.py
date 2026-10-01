@@ -21,10 +21,10 @@ PURPOSE = "driver-phase-two-public"
 MAX_INPUT = runtime.MAX_BRIDGE_INPUT
 
 
-def shape(raw):
+def shape(raw, *, adopted=False):
     """Existing version-selected public bundle with all literal source pins."""
     p.require(type(raw) is bytes and 0 < len(raw) <= MAX_INPUT)
-    _, bundle, runtime_raw, operational = driver_authority._phase_bundle(raw.decode("ascii"))
+    _, bundle, runtime_raw, operational = driver_authority._phase_bundle(raw.decode("ascii"), adopted=adopted)
     bridge_install.shape("bridge-runtime", runtime_raw)
     delivered_raw, delivered = scope._original(bundle["deliveryOriginal"], 65536)
     profiles.shape("native-delivery-bridge", delivered_raw)
@@ -37,23 +37,23 @@ def shape(raw):
     return bundle
 
 
-def prepare_input(input_raw):
+def prepare_input(input_raw, *, adopted=False):
     value = p.fields(p.document(input_raw, MAX_INPUT), FIELDS)
     p.require(value["apiVersion"] == API)
     raw, _ = scope._original(value["publicBundleOriginal"], MAX_INPUT)
-    shape(raw)
+    shape(raw, adopted=adopted)
     return raw
 
 
-def build(bundle_raw):
-    shape(bundle_raw)
+def build(bundle_raw, *, adopted=False):
+    shape(bundle_raw, adopted=adopted)
     raw = p.canonical({"apiVersion": API, "publicBundleOriginal": bundle_raw.decode("ascii")})
     p.require(len(raw) <= MAX_INPUT)
     return raw
 
 
-def checked_result(input_raw, result):
-    raw = prepare_input(input_raw)
+def checked_result(input_raw, result, *, adopted=False):
+    raw = prepare_input(input_raw, adopted=adopted)
     p.fields(result, ("pin",))
     expected = {"pin": {"path": publication.DESTINATIONS[PURPOSE], "sha256": p.sha(raw)}}
     scope._same(result, expected)

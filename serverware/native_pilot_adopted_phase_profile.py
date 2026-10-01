@@ -309,7 +309,7 @@ def _native(job, value, prior, observed):
         if op == "publication":
             _literal(value, "retrievalDeliveryInputOriginal", prior, "native-delivery-retrieval", output=False)
             _literal(value, "retrievalDeliveryOriginal", prior, "native-delivery-retrieval")
-            for member, row in p.fields(value["ordinaryServices"], PUBLICATION_ROLES).items():
+            for member, row in p.fields(value["ordinaryServices"], g.ROLES).items():
                 source = _input(prior, "ordinary-generation-" + member)["services"][member]
                 for field in ("runtimeOriginal", "historyOriginal"):
                     _same(row[field], source[field])
@@ -488,7 +488,7 @@ def prepare_input(name, raw, *, phase, prior, observations, boot, now_boottime_n
         else:
             for field, literal in observed.items(): _same(value[field], literal)
             _literal(value, "bootstrapAdmissionOriginal", prior, "driver-bootstrap")
-        context = legacy.driver_authority.prepare_input(job.role, raw, **clocks)
+        context = legacy.driver_authority.prepare_input(job.role, raw, **clocks, adopted=True)
     elif family == "cohort":
         if job.role == "precreation":
             config = p.document(_raw(value["configurationOriginal"]), legacy.cohort.MAX_BYTES)
@@ -650,9 +650,9 @@ def prepare_input(name, raw, *, phase, prior, observations, boot, now_boottime_n
         _literal(bundle, "deliveryOriginal", prior, "native-delivery-bridge")
         for role, literal in p.fields(bundle["generationOriginals"], g.ROLES).items():
             p.require(_raw(literal) == _output(prior, "ordinary-generation-" + role))
-        context = legacy.scope_authority.prepare_input(raw, **clocks)
+        context = legacy.scope_authority.prepare_input(raw, **clocks, adopted=True)
     elif family == "phase-two-public":
-        selected = legacy.phase_two.prepare_input(raw)
+        selected = legacy.phase_two.prepare_input(raw, adopted=True)
         p.require(selected == _raw(_input(prior, "driver-scope")["publicBundleOriginal"]))
     elif family == "endpoint-inputs":
         p.fields(value, ("coldOriginals", "peer", "proofScope", "retrievalManifest", "objectDirectory", "assignment", "production", "adoptionAuthorization"))
@@ -697,7 +697,7 @@ def checked_result(name, input_raw, result, *, phase, prior, observations, boot,
             legacy.service_material.checked_result(input_raw, result, **clocks, adopted=True)
         elif job.family == "endpoint-inputs": _same(result, {"publicPinsOpened": True})
         elif job.family in ("origin", "stop"): _same(result, value)
-        elif job.family == "phase-two-public": legacy.phase_two.checked_result(input_raw, result)
+        elif job.family == "phase-two-public": legacy.phase_two.checked_result(input_raw, result, adopted=True)
         elif job.family == "ordinary-installation":
             from serverware import native_pilot_adopted_ordinary_install as install
             p.require(result["apiVersion"] == install.RESULT_API and result["inputSha256"] == p.sha(input_raw))
@@ -722,7 +722,7 @@ def checked_result(name, input_raw, result, *, phase, prior, observations, boot,
             else legacy.launch_install.publication.DESTINATIONS)
         _same(result["pin"], {"path": destinations[job.purpose], "sha256": p.sha(raw)})
     family = job.family
-    if family == "driver": legacy.driver_authority.checked_result(job.role, input_raw, pair, **clocks)
+    if family == "driver": legacy.driver_authority.checked_result(job.role, input_raw, pair, **clocks, adopted=True)
     elif family == "current-head":
         legacy.current_head_authority.profile.checked_result(input_raw, pair, boot=boot,
             now_boottime_ns=now_boottime_ns, adopted=True)
@@ -756,7 +756,7 @@ def checked_result(name, input_raw, result, *, phase, prior, observations, boot,
     elif family in ("native", "generation-install"):
         from serverware import native_pilot_native_service_profile as native
         native.checked_adopted_result("generationInstall" if family == "generation-install" else job.role, input_raw, pair, **clocks)
-    elif family == "scope": legacy.scope_authority.checked_result(input_raw, pair, **clocks)
+    elif family == "scope": legacy.scope_authority.checked_result(input_raw, pair, **clocks, adopted=True)
     elif family == "adoption":
         _adoption_result(raw, prepared)
     elif family == "cohort":

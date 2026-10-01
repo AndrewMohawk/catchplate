@@ -11,6 +11,7 @@ import copy
 
 from serverware import custody_generation_grants as g
 from serverware import native_pilot_assignment as assignments
+from serverware import native_pilot_closure_set as closure_set
 from serverware import native_pilot_driver_authority as driver_authority
 from serverware import native_pilot_measured_configuration as measured_profile
 from serverware import native_pilot_ordinary_initial_profile as initial
@@ -101,21 +102,23 @@ def _recipe(bootstrap_raw, configuration_raw, observation_raw, binding, producti
 
 
 def derive_scope(fragment, *, measured, recipe_originals, driver_generation_recipe, bootstrap_original,
-                 bootstrap_configuration_original, driver_observation_original, now_unix_ns):
+                 bootstrap_configuration_original, driver_observation_original, now_unix_ns, adopted=False):
     """Authenticate exact earlier originals; no conversion between clock domains."""
+    p.require(type(adopted) is bool)
     fragment = validate_policy(fragment)
     p.fields(measured, MEASURED_FIELDS); p.fields(recipe_originals, ORIGINAL_FIELDS)
     p.fields(driver_generation_recipe, RECIPE_FIELDS)
     p.require(measured["apiVersion"] == "serverware.nativePilotMeasuredConfiguration/v2")
     p.digest(measured["recipeSha256"]); p.integer(now_unix_ns)
-    value = {"apiVersion": "serverware.nativePilotMeasuredConfigurationRecipe/v2", **recipe_originals}
+    value = {"apiVersion": measured_profile.ADOPTED_API if adopted else measured_profile.SET_API, **recipe_originals}
     envelope, _, key_root = measured_profile._assignment(value, now_unix_ns)
     assignment = envelope["payload"]
     trust_raw = service._original(recipe_originals["trustOriginal"], 1024 * 1024)
     trust = p.document(trust_raw, 1024 * 1024)
     checkpoint = trust["checkpoint"]
     closure_raw = recipe_originals["closureSetOriginal"].encode("ascii")
-    bridge = assignments.closure_binding(envelope, closure_raw, "bridge")
+    bridge = assignments.closure_binding(envelope, closure_raw, "bridge",
+        set_api_version=closure_set.PUBLICATION_API if adopted else closure_set.API)
     binding_raw = service._original(measured["configurationBindingOriginal"], 65536)
     binding = p.document(binding_raw, 65536)
     p.require(p.framed(b"serverware.policyShadowProductionCustodyConfiguration/v2", (binding_raw,))
@@ -140,6 +143,11 @@ def derive_scope(fragment, *, measured, recipe_originals, driver_generation_reci
         binding, production, assignment, now_unix_ns)
     _same(driver_generation_recipe, expected)
     issued, expires = (fragment[name] for name in POLICY_FIELDS[1:])
+    if adopted:
+        # _recipe authenticated this exact retained admission above. A new
+        # adopted grant cannot extend its original UNIX authority interval.
+        early = p.document(bootstrap_original, 8192)["payload"]
+        p.require(early["issuedAtUnixNanos"] <= issued < expires <= early["expiresAtUnixNanos"])
     maximum_age = p.integer(assignment["observationWindow"]["maximumEvidenceAgeNanos"])
     p.require(issued <= now_unix_ns < expires and expires - issued <= maximum_age
         and assignment["issuedAtUnixNanos"] <= issued < expires <= assignment["expiresAtUnixNanos"]

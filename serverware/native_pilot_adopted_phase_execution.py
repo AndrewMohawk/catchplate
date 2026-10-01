@@ -190,7 +190,7 @@ class AdoptedPhaseExecution(base.PhaseExecution):
 
     def _perform(self, job, raw, value, key):
         family, signed = job.family, None
-        if family == "driver": signed = base.driver_authority.sign(job.role, raw, key)
+        if family == "driver": signed = base.driver_authority.sign(job.role, raw, key, adopted=True)
         elif family == "cohort": signed = profile.cohort_authority.sign(job.role, input_original=raw, signing_key=key)[0]
         elif family == "adoption":
             p.require(key is None)
@@ -224,7 +224,7 @@ class AdoptedPhaseExecution(base.PhaseExecution):
             operation = base.BRIDGE_AUTHORIZATION_JOB_INFO[job.name]
             signed = (base.closure_authority.sign(input_original=raw, signing_key=key)[0] if operation == "closure"
                 else base.bridge_authority.sign(operation, raw, key)[0])
-        elif family == "scope": signed = base.scope_authority.sign(raw, key)
+        elif family == "scope": signed = base.scope_authority.sign(raw, key, adopted=True)
         if signed is not None:
             return self._signed(job, signed)
         p.require(key is None)
@@ -256,8 +256,9 @@ class AdoptedPhaseExecution(base.PhaseExecution):
             self._endpoint_inputs = copy.deepcopy(value)
             result = {"publicPinsOpened": True}
         elif family == "phase-two-public":
-            selected = base.phase_two.prepare_input(raw)
-            pin = self._publisher.publish(purpose=base.phase_two.PURPOSE, raw=selected, expected_sha256=p.sha(selected))
+            selected = base.phase_two.prepare_input(raw, adopted=True)
+            pin = self._publisher.publish_adopted_ordinary(purpose=base.phase_two.PURPOSE,
+                raw=selected, expected_sha256=p.sha(selected))
             p.require(self._public.read(pin, maximum=base.bridge_runtime.MAX_BRIDGE_INPUT) == selected)
             self._public_bundle_pin = pin
             result = {"pin": pin}

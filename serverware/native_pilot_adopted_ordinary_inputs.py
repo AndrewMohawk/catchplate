@@ -114,7 +114,7 @@ def _initial(selected, selection, prior, observed, now):
     prepared, resources = key.preparation(preparation_raw), initial.resources(resources_raw, adopted=True)
     window = g.document(_raw(first["driverWindowOriginal"], 32768), 32768)["payload"]
     identity = key.prepared_identity(prepared, role=role, endpoint_role=row["endpointRole"],
-        launch=launch, configuration=cold, window=window, now=now)
+        launch=launch, configuration=cold, window=window, now=now, adopted=True)
     state = {"apiVersion": initial.ADOPTED_STATE_API if role in initial.ADOPTED_ROLES else initial.STATE_API,
         "serviceRole": role, "preparationSha256": p.sha(preparation_raw), "resourcesSha256": p.sha(resources_raw),
         "launchSha256": p.sha(launch_raw), "endpointProcessIdentitySha256": identity["identitySha256"],

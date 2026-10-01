@@ -284,6 +284,25 @@ class AdoptedOrdinaryInputControls(unittest.TestCase):
                 with self.assertRaises(FAILURES): compose(f, name, clocks=f["clocks"] | {"now_boottime_ns": 5000})
                 with self.assertRaises(FAILURES): compose(f, name, clocks=f["clocks"] | {"boot": ("wrong", 1, 2)})
 
+    def test_checkpoint_compiler_explicitly_refuses_legacy_launch_six(self):
+        f = self.value
+        records, observations = copy.deepcopy(f["records"]), copy.deepcopy(f["observations"])
+        first = json.loads(records["install-precreation"]["input"])
+        launch = json.loads(first["ordinaryLaunchOriginal"])
+        launch["apiVersion"] = "serverware.custodyFiveServiceLaunch/v6"
+        first["ordinaryLaunchOriginal"] = canonical(launch).decode("ascii")
+        records["install-precreation"]["input"] = canonical(first)
+        # Rejoin the public source hashes so this is not merely a stale hash.
+        early = observations["endpoint-inputs"]
+        prepared = json.loads(early["ordinaryPreparationOriginal"])
+        prepared["configurationSha256"] = sha(canonical(launch))
+        early["ordinaryPreparationOriginal"] = canonical(prepared).decode("ascii")
+        resources = json.loads(early["ordinaryInitialResourcesOriginal"])
+        resources["preparationSha256"] = sha(canonical(prepared))
+        early["ordinaryInitialResourcesOriginal"] = canonical(resources).decode("ascii")
+        with self.assertRaises(FAILURES): compose(f, "ordinary-initial-checkpoint-" + g.ROLES[0],
+            records=records, observations=observations)
+
     def test_history_signatures_and_resource_identity_cannot_be_replaced(self):
         f = self.value; name = "ordinary-initial-root-anchor-" + g.ROLES[0]
         records = copy.deepcopy(f["records"])

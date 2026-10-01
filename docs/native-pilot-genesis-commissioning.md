@@ -145,11 +145,29 @@ also remain open.
 
 ## Verification
 
-The assembled source is awaiting its focused post-freeze check batch. No
-protected installation, private-key entrypoint, live owner, native service,
-cloud resource or paid test has been run for this slice. Unchanged native code
-and full runtime artifacts are not being rebuilt during wiring. Earlier
-engineering artifacts do not contain these new modules.
+Frozen source `90e62b3dadc9adf2b09444fdcff2debf28b9069b` passes **70 focused
+Python 3.11.15 controls** across nine suites, with no failures, errors or skips,
+in **17.154 seconds**. Eighteen changed Python files pass grammar and both Make
+inventories; the real executor/authority/channel modules import from that exact
+snapshot. Six edited documents have 628 resolving local file targets; external
+URLs and anchors were not checked. There was no corrective rerun.
+
+The controls authenticate synthetic three-role native installation plans,
+ordinary/precreation predecessor plans and public input before key loading.
+They also cover the writer's closed path/ownership/codec contract, CLI and
+approval grammar, and nearby assignment/publication/ordinary-control and
+synthetic supervisor-package compatibility. They do **not** execute a complete
+64-job commissioning ceremony or turn test observation data into live owners.
+
+The exact archive, harnesses, commands and logs are retained at
+`codex-offload/serverware/engineering-builds/90e62b3d-genesis-commissioning-EEzb6G/`.
+The test batch used one CPU, an empty environment, a private user/network
+namespace and a 240-second outer bound. No protected installation, private-key
+entrypoint, live owner, native service, cloud resource or paid test ran.
+Unchanged native code and full runtime artifacts were not rebuilt; earlier
+engineering artifacts do not contain these new modules. Actual exclusive-file
+durability, service readiness, cancellation/cleanup and connected execution
+remain unverified.
 
 Source checkpoints remain **36/46**, production acceptance **0/6**. Neither the
 job count nor a successful public-input control is a product-readiness percentage.

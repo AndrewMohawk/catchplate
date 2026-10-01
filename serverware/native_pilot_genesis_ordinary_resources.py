@@ -210,10 +210,14 @@ class GenesisOrdinaryResources:
     def close_after_reap(self):
         p.require(not self.closed and not self.owner._native_may_run
             and all(item["pid"] is None or item["reaped"] for item in self.owner._children.values()))
-        self.closed = True
-        for value in self.sockets:
-            value.close()
-        for fd in reversed(self.fds):
-            os.close(fd)
-        self.fds.clear()
+        # Keep the remaining capabilities accurate if cancellation or a close
+        # error interrupts retirement after the actual process reaps.
+        with io.owning():
+            while self.sockets:
+                self.sockets[-1].close()
+                self.sockets.pop()
+            while self.fds:
+                os.close(self.fds[-1])
+                self.fds.pop()
+            self.closed = True
         # Created directory/socket names remain evidence; never unlink state.

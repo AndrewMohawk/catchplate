@@ -245,12 +245,13 @@ class GenesisCoordinatorAssembly:
                 owner.close()
             except BaseException as error:
                 failures.append(error)
-        # The ordinary inspected wrapper still has no authenticated helper
-        # reap acknowledgment. Preserve that real limitation and every handle;
-        # a completed coordinator Bundle cannot stand in for service cleanup.
+        # Each owner must establish its own retirement. In particular ordinary
+        # cleanup requires the native helper notice and the direct-child reap;
+        # a completed coordinator Bundle cannot stand in for either of them.
         if failures:
             raise AssemblyError(self, cleanup_unknown=True) from failures[0]
         try:
+            self._clock(cleanup=True)
             if self._resources is not None:
                 self._resources.close_after_coordinator()
             with io.owning():
@@ -258,6 +259,7 @@ class GenesisCoordinatorAssembly:
                     self._owned_peers[-1].close(); self._owned_peers.pop()
                 while self._inputs:
                     self._inputs[-1].close(); self._inputs.pop()
+                self._clock(cleanup=True)
                 self._closed = True
             return {"status": "closed", "coordinatorCompleted": self._result is not None}
         except BaseException as error:

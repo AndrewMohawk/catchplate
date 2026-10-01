@@ -1,5 +1,9 @@
 # Cold launch and coordinator assembly
 
+The follow-on [ordinary-service retirement](native-pilot-genesis-retirement.md)
+connects the helper stop/reap path described below; neither source slice alone
+establishes a running commissioning ceremony.
+
 This continues the [cold endpoint and authority work](native-pilot-genesis-endpoints.md).
 The new connections cover encrypted-key delivery, verifier authorization, public
 launch bundles and the retained coordinator's actual outgoing resources. They

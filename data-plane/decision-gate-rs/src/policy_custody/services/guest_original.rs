@@ -261,16 +261,53 @@ impl Parent {
         Ok(value)
     }
     pub(super) fn check(&self) -> Result<(), Error> {
+        self.check_identity()?;
+        let mut poll = libc::pollfd { fd:self.socket.as_raw_fd(),events:libc::POLLIN,revents:0 };
+        if unsafe { libc::poll(&mut poll,1,0) } != 0 { return Err(fail("guest parent channel closed or sent unexpected data")); }
+        Ok(())
+    }
+    fn check_identity(&self) -> Result<(), Error> {
         live(self.pidfd.as_fd())?;
         let stat = super::descriptor_stat(self.socket.as_fd())?;
         if self.pid != unsafe { libc::getppid() } || pidfd_pid(self.pidfd.as_fd())? != self.pid
             || start(self.pid)? != self.start || (stat.st_dev,stat.st_ino) != self.stat {
             return Err(fail("guest parent original changed"));
         }
-        let mut poll = libc::pollfd { fd:self.socket.as_raw_fd(),events:libc::POLLIN,revents:0 };
-        if unsafe { libc::poll(&mut poll,1,0) } != 0 { return Err(fail("guest parent channel closed or sent unexpected data")); }
         Ok(())
     }
+    /// Only the explicit cold ordinary entry selects this parent-control
+    /// receive path. All existing check()/send() callers still reject input.
+    pub(super) fn configure_genesis_stop(&self) -> Result<(), Error> {
+        self.check()?;
+        for (option,value) in [(libc::SO_PASSCRED,1i32),(76,0i32)] {
+            if unsafe{libc::setsockopt(self.socket.as_raw_fd(),libc::SOL_SOCKET,option,
+                (&value as *const i32).cast(),std::mem::size_of_val(&value) as _)}!=0 {
+                return Err(std::io::Error::last_os_error().into());
+            }
+        }
+        self.check()
+    }
+    pub(super) fn genesis_stop_pending(&self) -> Result<bool, Error> {
+        self.check_identity()?;
+        let mut poll=libc::pollfd{fd:self.socket.as_raw_fd(),events:libc::POLLIN,revents:0};
+        let count=unsafe{libc::poll(&mut poll,1,0)};
+        if count<0 {return Err(std::io::Error::last_os_error().into());}
+        if count==0 {return Ok(false);}
+        if poll.revents!=libc::POLLIN {return Err(fail("cold ordinary parent channel failed"));}
+        Ok(true)
+    }
+    pub(super) fn receive_genesis_stop(&self) -> Result<Option<Vec<u8>>, Error> {
+        if !self.genesis_stop_pending()? {return Ok(None);}
+        let Some(packet)=super::try_receive_packet(self.socket.as_raw_fd(),(self.pid,0,0))? else {return Ok(None)};
+        if !packet.rights.is_empty() || packet.frame.len()>4096 {
+            return Err(fail("cold ordinary stop violates its descriptor-free bound"));
+        }
+        // A second queued request is not a retry or a new cleanup authority.
+        self.check()?;
+        Ok(Some(packet.frame))
+    }
+    pub(super) fn check_genesis_parent(&self) -> Result<(), Error> {self.check_identity()}
+    pub(super) fn genesis_stop_descriptor(&self)->BorrowedFd<'_> {self.socket.as_fd()}
     pub(super) fn identity(&self) -> (u64,u64) { self.stat }
     pub(super) fn native_binding(&self) -> Result<(i32,u64,u64), Error> {
         self.check()?;

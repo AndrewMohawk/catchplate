@@ -1343,6 +1343,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	scripts/test_native_pilot_genesis_coordinator_peer.py \
 	scripts/test_native_pilot_genesis_ordinary_initial.py \
 	scripts/test_native_pilot_genesis_ordinary_control.py \
+	scripts/test_native_pilot_genesis_ordinary_retirement.py \
 	scripts/test_native_pilot_genesis_ordinary_runtime.py \
 	scripts/test_native_pilot_genesis_delivery.py \
 	scripts/test_native_pilot_genesis_coordinator_runtime.py \
@@ -1688,6 +1689,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/native_pilot_genesis_ordinary_initial_authority.py \
 	serverware/native_pilot_genesis_ordinary_control.py \
 	serverware/native_pilot_genesis_ordinary_control_process.py \
+	serverware/native_pilot_genesis_ordinary_retirement.py \
 	serverware/native_pilot_genesis_ordinary_resources.py \
 	serverware/native_pilot_genesis_ordinary_runtime.py \
 	serverware/native_pilot_genesis_ordinary_authority.py \
@@ -4218,6 +4220,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				scripts/test_native_pilot_genesis_coordinator_peer.py \
 				scripts/test_native_pilot_genesis_ordinary_initial.py \
 				scripts/test_native_pilot_genesis_ordinary_control.py \
+				scripts/test_native_pilot_genesis_ordinary_retirement.py \
 				scripts/test_native_pilot_genesis_ordinary_runtime.py \
 				scripts/test_native_pilot_genesis_delivery.py \
 				scripts/test_native_pilot_genesis_coordinator_runtime.py \
@@ -4557,6 +4560,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/native_pilot_genesis_ordinary_initial_authority.py \
 				serverware/native_pilot_genesis_ordinary_control.py \
 				serverware/native_pilot_genesis_ordinary_control_process.py \
+				serverware/native_pilot_genesis_ordinary_retirement.py \
 				serverware/native_pilot_genesis_ordinary_resources.py \
 				serverware/native_pilot_genesis_ordinary_runtime.py \
 				serverware/native_pilot_genesis_ordinary_authority.py \

@@ -3424,6 +3424,7 @@ fn accept_peer(
     deadline: u64,
 ) -> Result<OwnedFd, ServiceRunnerError> {
     loop {
+        guest::ordinary::genesis_stop::check_wait()?;
         let raw = unsafe {
             libc::accept4(
                 listener.as_raw_fd(),
@@ -3492,6 +3493,7 @@ fn receive_packet(
     let expected_credentials =
         socket_peer_credentials(socket_fd)?;
     loop {
+        guest::ordinary::genesis_stop::check_wait()?;
         if let Some(packet) = try_receive_packet(
             socket_fd,
             expected_credentials,
@@ -3818,6 +3820,7 @@ fn wait_for_fd(
     deadline: Option<u64>,
 ) -> Result<(), ServiceRunnerError> {
     loop {
+        guest::ordinary::genesis_stop::check_wait()?;
         let timeout = match deadline {
             None => POLL_SLICE_MILLIS,
             Some(deadline) => {
@@ -3837,21 +3840,24 @@ fn wait_for_fd(
                     .min(POLL_SLICE_MILLIS)
             }
         };
-        let mut poll = libc::pollfd {
+        let parent = guest::ordinary::genesis_stop::wait_descriptor();
+        let mut poll = [libc::pollfd {
             fd,
             events,
             revents: 0,
-        };
+        },libc::pollfd{fd:parent.unwrap_or(-1),events:libc::POLLIN,revents:0}];
         let ready = unsafe {
-            libc::poll(&mut poll, 1, timeout)
+            libc::poll(poll.as_mut_ptr(), if parent.is_some(){2}else{1}, timeout)
         };
+        let poll_error = if ready < 0 {Some(io::Error::last_os_error())} else {None};
+        guest::ordinary::genesis_stop::check_wait()?;
         if ready > 0 {
-            if poll.revents & libc::POLLNVAL != 0 {
+            if poll[0].revents & libc::POLLNVAL != 0 {
                 return Err(ServiceRunnerError::invalid(
                     "service poll observed an invalid descriptor",
                 ));
             }
-            if poll.revents
+            if poll[0].revents
                 & (events | libc::POLLERR | libc::POLLHUP)
                 != 0
             {
@@ -3864,7 +3870,7 @@ fn wait_for_fd(
         if ready == 0 {
             continue;
         }
-        let error = io::Error::last_os_error();
+        let error = poll_error.ok_or_else(||ServiceRunnerError::invalid("negative poll lacks retained errno"))?;
         if error.raw_os_error() != Some(libc::EINTR) {
             return Err(error.into());
         }

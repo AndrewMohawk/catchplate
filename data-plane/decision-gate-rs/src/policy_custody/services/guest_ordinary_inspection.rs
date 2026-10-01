@@ -12,6 +12,9 @@ use std::os::unix::ffi::OsStrExt;
 pub(in crate::policy_shadow::policy_custody::services) mod client;
 #[path="guest_ordinary_inspection_wire.rs"]
 pub(in crate::policy_shadow::policy_custody::services) mod wire;
+#[path="guest_ordinary_inspection_reap.rs"]
+mod reap;
+pub(super) use reap::ReapedWorker;
 
 pub(super) const CREDENTIAL: &str = "peer-inspection-policy";
 const POLICY: &str = "serverware.custodyOrdinaryPeerInspection/v1";
@@ -81,30 +84,17 @@ struct CloneArgs { flags:u64,pidfd:u64,child_tid:u64,parent_tid:u64,exit_signal:
 /// Independent stop capability is required: after drop the service cannot
 /// signal its root child. Closing it wakes the helper, then the actual child is
 /// reaped by PIDFD. Parent death and the original absolute timer also kill it.
-pub(super) struct Worker { pid:i32, start:u64, pidfd:OwnedFd, stop:Option<OwnedFd>, parent:i32, lifetime:u64 }
+pub(super) struct Worker { child:reap::Child }
 impl Worker {
     pub(super) fn check(&self) -> Result<(), ServiceRunnerError> {
-        require(unsafe { libc::getpid() } == self.parent && now()? < self.lifetime)?;
-        measured(packet::same_process(self.pidfd.as_fd(), self.pid))?;
-        require(process_start(self.pid)? == self.start)
+        require(self.child.available() && unsafe { libc::getpid() } == self.child.parent
+            && now()? < self.child.lifetime)?;
+        measured(packet::same_process(self.child.pidfd.as_fd(), self.child.pid))?;
+        require(process_start(self.child.pid)? == self.child.start)
     }
-}
-impl Drop for Worker {
-    fn drop(&mut self) {
-        if unsafe { libc::getpid() } != self.parent { return; }
-        self.stop.take();
-        loop {
-            let mut status: libc::siginfo_t = unsafe { std::mem::zeroed() };
-            let result = unsafe { libc::waitid(libc::P_PIDFD, self.pidfd.as_raw_fd() as _, &mut status, libc::WEXITED | libc::WNOHANG) };
-            if result == 0 && unsafe { status.si_pid() } == self.pid { break; }
-            if (result < 0 && std::io::Error::last_os_error().raw_os_error() != Some(libc::EINTR))
-                || (result == 0 && unsafe { status.si_pid() } != 0) { unsafe { libc::_exit(1) } }
-            // No renewed cleanup window. The service and helper retain their
-            // original kernel kill timers throughout this same-child wait.
-            if now().map_or(true, |time| time >= self.lifetime) { unsafe { libc::_exit(1) } }
-            let mut poll = libc::pollfd { fd:self.pidfd.as_raw_fd(), events:libc::POLLIN, revents:0 };
-            unsafe { libc::poll(&mut poll, 1, 1); }
-        }
+
+    pub(super) fn stop_and_reap(&mut self) -> Result<ReapedWorker, ServiceRunnerError> {
+        self.child.stop_and_reap().map_err(Into::into)
     }
 }
 
@@ -168,10 +158,10 @@ pub(super) fn prepare(delivery: &PreparedGuestServiceDelivery) -> Result<Worker,
     require(pid > 1)?;
     if child_pidfd < 0 { unsafe { libc::_exit(1) } }
     let pidfd = unsafe { OwnedFd::from_raw_fd(child_pidfd) };
-    let mut guard = Worker { pid:pid as i32,start:0,pidfd,stop:Some(stop_write),parent:service_pid,lifetime:delivery.owner.lifetime };
-    guard.start = process_start(guard.pid)?;
+    let mut guard = Worker { child:reap::Child::new(pid as i32,pidfd,stop_write,service_pid,delivery.owner.lifetime) };
+    guard.child.start = process_start(guard.child.pid)?;
     drop(child_channel); drop(stop_read); guard.check()?;
-    client::install(parent_channel, measured(packet::duplicate(guard.pidfd.as_fd()))?, guard.pid, expected, Arc::clone(&delivery.owner))?;
+    client::install(parent_channel, measured(packet::duplicate(guard.child.pidfd.as_fd()))?, guard.child.pid, expected, Arc::clone(&delivery.owner))?;
     guard.check()?; Ok(guard)
 }
 

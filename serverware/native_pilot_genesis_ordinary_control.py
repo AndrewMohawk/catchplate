@@ -2,9 +2,10 @@
 
 Only actual owned children/resources produce observations. This owner signs
 nothing, has no parent watcher thread, and preserves the coordinator's original
-signed window. A listening notice is not constructed readiness. After release,
-direct-child reap alone is not proof that the native inspection helper was
-reaped: that cleanup remains explicitly unknown and retains all capabilities.
+signed window. A listening notice is not constructed readiness. Retirement
+requires a request-bound native helper-reap notice and consuming same-service
+PIDFD wait; neither alone is cleanup proof. An error service result can retire
+resources without implying any successful business operation.
 """
 from __future__ import annotations
 
@@ -27,6 +28,7 @@ from serverware import native_pilot_genesis_parent_authority as parent_authority
 from serverware import native_pilot_genesis_parent_control_io as io
 from serverware import native_pilot_genesis_ordinary_control_process as process
 from serverware import native_pilot_genesis_ordinary_resources as resources
+from serverware import native_pilot_genesis_ordinary_retirement as retirement
 from serverware.native_shadow_proof_cohort_control import _Original
 
 p = g.p
@@ -222,7 +224,8 @@ class GenesisOrdinaryControl:
     def _spawn(self, role):
         self._clock(startup=True)
         p.require(len(os.listdir("/proc/self/task")) == 1)
-        item = dict(pid=None, pidfd=None, start=None, channel=None, phase="parked", reaped=False)
+        item = dict(pid=None, pidfd=None, start=None, channel=None, phase="parked", reaped=False,
+            stop_raw=None, stop_sent=False, terminal=None, reap_result=None, forced=False)
         self._children[role] = item
         child = None
         try:
@@ -469,6 +472,143 @@ class GenesisOrdinaryControl:
     def constructed(self):
         return all(value == "constructed" for value in self.poll().values())
 
+    def _retained_child(self, item):
+        """Same unreaped child, including a zombie with its final packet queued.
+
+        This uses the already retained PIDFD plus packet SCM_CREDENTIALS, not
+        per-packet SCM_PIDFD. An unreaped direct child's PID cannot be reused.
+        """
+        p.require(item["pidfd"] is not None and not item["reaped"]
+            and o.structural(os.fstat(item["pidfd"])) == item["pidfd_identity"]
+            and io.pidfd_pid(item["pidfd"]) == item["pid"])
+        channel = item["channel"]
+        p.require(o.structural(os.fstat(channel.fileno())) == item["channel_identity"]
+            and channel.family == socket.AF_UNIX and channel.getsockopt(socket.SOL_SOCKET, socket.SO_TYPE) == socket.SOCK_SEQPACKET
+            and channel.getsockopt(socket.SOL_SOCKET, socket.SO_PASSCRED) == 1
+            and fcntl.fcntl(channel.fileno(), fcntl.F_GETFL) & os.O_NONBLOCK)
+        fd = os.open("/proc/" + str(item["pid"]) + "/stat", o.FLAGS)
+        try:
+            raw = os.read(fd, 16385)
+            p.require(0 < len(raw) <= 16384)
+        finally:
+            os.close(fd)
+        tail = raw.rsplit(b") ", 1)[1].split()
+        p.require(len(tail) >= 20 and int(tail[1]) == self._pid and int(tail[19]) == item["start"])
+
+    def _retirement_check(self):
+        self._clock(startup=False)
+        self._sources()
+        for item in self._children.values():
+            if not item["reaped"]:
+                self._retained_child(item)
+        if self._resources is not None:
+            self._resources.check()
+        return self._clock(startup=False)
+
+    def _stop_services(self):
+        p.require(not self._failed and self._released and tuple(self._children) == ROLES
+            and all(item["phase"] == "constructed" for item in self._children.values()))
+        self._retirement_check()
+        for role, item in self._children.items():
+            p.require(item["stop_raw"] is None and not item["forced"])
+            raw = retirement.stop_original(delivery_sha256=p.sha(self._roles[role]["delivery"].raw),
+                role=role, invocation=self._invocation, deadline=self._lifetime)
+            self._retained_child(item)
+            with io.owning():
+                # Even a failed/uncertain send consumes this attempt. No retry
+                # or new deadline is authorized by a writable channel.
+                item["stop_raw"], item["stop_sent_at"] = raw, self._clock(startup=False)
+                count = item["channel"].send(raw)
+                item["stop_sent"] = count == len(raw)
+                p.require(item["stop_sent"])
+            self._retirement_check()
+
+    def _reap_services(self):
+        while True:
+            self._retirement_check()
+            for role, item in self._children.items():
+                if item["reaped"]:
+                    continue
+                self._retained_child(item)
+                if item["terminal"] is None:
+                    packet = process.packet(item["channel"], 0, self._received)
+                    if packet is None:
+                        continue
+                    raw, _, credentials = packet
+                    cold = self._roles[role]["cold"]
+                    p.require(item["stop_sent"] and credentials == (item["pid"], cold["uid"], cold["gid"]))
+                    self._retained_child(item)
+                    now = self._clock(startup=False)
+                    item["terminal"] = retirement.terminal(raw, stop_raw=item["stop_raw"],
+                        stop_sent_at=item["stop_sent_at"], now=now, service_pid=item["pid"])
+                    item["terminal_raw"] = raw
+                self._retained_child(item)
+                self._clock(startup=False)
+                with io.owning():
+                    result = os.waitid(os.P_PIDFD, item["pidfd"], os.WEXITED | os.WNOHANG)
+                    if result is not None:
+                        # Retain consumed kernel evidence before restoring the
+                        # signal mask, even if status validation will refuse.
+                        item["reap_result"], item["reaped"] = result, True
+                if result is not None:
+                    retirement.require_reap(result, pid=item["pid"], uid=self._roles[role]["cold"]["uid"],
+                        status=item["terminal"]["serviceExitStatus"])
+                    item["retired"] = True
+                self._clock(startup=False)
+            if all(item.get("retired") is True for item in self._children.values()):
+                self._retirement_check()
+                return
+            pending = [item for item in self._children.values() if not item["reaped"]]
+            now = self._clock(startup=False)
+            select.select([fd for item in pending for fd in (item["channel"], item["pidfd"])], [], [],
+                min(0.01, (self._lifetime - now) / 1_000_000_000))
+
+    def _abort_children(self):
+        """Bounded safety stop only. It can never certify helper retirement."""
+        for item in self._children.values():
+            try:
+                self._clock(startup=False)
+                if item["pid"] is None or item["reaped"]:
+                    continue
+                if item["pidfd"] is None:
+                    # Actual fork return only; no numeric-PID signal fallback.
+                    p.require(o.structural(os.fstat(item["channel"].fileno())) == item["channel_identity"])
+                    item["channel"].shutdown(socket.SHUT_RDWR)
+                else:
+                    self._retained_child(item)
+                    with io.owning():
+                        item["forced"] = True
+                        try:
+                            signal.pidfd_send_signal(item["pidfd"], signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+            except BaseException:
+                pass
+        while any(item["pid"] is not None and not item["reaped"] for item in self._children.values()):
+            try:
+                self._clock(startup=False)
+                for item in self._children.values():
+                    if item["pid"] is None or item["reaped"]:
+                        continue
+                    with io.owning():
+                        if item["pidfd"] is None:
+                            pid, status = os.waitpid(item["pid"], os.WNOHANG)
+                            if pid == item["pid"]:
+                                item["reap_result"], item["reaped"] = (pid, status), True
+                        else:
+                            self._retained_child(item)
+                            result = os.waitid(os.P_PIDFD, item["pidfd"], os.WEXITED | os.WNOHANG)
+                            if result is not None:
+                                item["reap_result"], item["reaped"] = result, True
+                now = self._clock(startup=False)
+                pending = [item for item in self._children.values() if item["pid"] is not None and not item["reaped"]]
+                if not pending:
+                    return
+                select.select([item["pidfd"] for item in pending if item["pidfd"] is not None], [], [],
+                    min(0.001, (self._lifetime - now) / 1_000_000_000))
+            except BaseException:
+                return
+
     def close(self):
         global _LIVE
         if self._closed:
@@ -477,64 +617,41 @@ class GenesisOrdinaryControl:
         p.require(not self._close_attempted)
         self._close_attempted = True
         try:
-            for item in self._children.values():
-                if item["pid"] is None or item["reaped"]:
-                    continue
-                if item["pidfd"] is None:
-                    # No PID signal fallback. Closing the real channel wakes
-                    # the parked same child; its original kernel timer remains.
-                    p.require(o.structural(os.fstat(item["channel"].fileno())) == item["channel_identity"])
-                    item["channel"].shutdown(2)
-                else:
-                    p.require(o.structural(os.fstat(item["pidfd"])) == item["pidfd_identity"]
-                        and io.pidfd_pid(item["pidfd"]) == item["pid"])
-                    try:
-                        signal.pidfd_send_signal(item["pidfd"], signal.SIGKILL)
-                    except ProcessLookupError:
-                        pass
-            while True:
-                pending = []
+            if self._native_may_run:
+                self._stop_services()
+                self._reap_services()
+                self._retirement_check()
+            else:
+                # No release can have reached exec or created a native helper.
+                # Actual parked-child reap is sufficient only in this branch.
+                self._abort_children()
+                p.require(all(item["pid"] is None or item["reaped"] for item in self._children.values()))
+                if self._children:
+                    self._clock(startup=False)
+            with io.owning():
+                self._native_may_run = False
+                if self._resources is not None:
+                    self._resources.close_after_reap()
                 for item in self._children.values():
-                    if item["pid"] is None or item["reaped"]:
-                        continue
-                    # waitpid here is only for the actual fork return when
-                    # pidfd acquisition failed, never a caller-selected PID.
-                    if item["pidfd"] is None:
-                        pid, _ = os.waitpid(item["pid"], os.WNOHANG)
-                        if pid == item["pid"]:
-                            item["reaped"] = True
-                    else:
-                        result = os.waitid(os.P_PIDFD, item["pidfd"], os.WEXITED | os.WNOHANG)
-                        if result is not None:
-                            p.require(result.si_pid == item["pid"])
-                            item["reaped"] = True
-                    if not item["reaped"]:
-                        pending.append(item)
-                if not pending:
-                    break
-                p.require(o.clock() < self._lifetime)
-                select.select([item["pidfd"] for item in pending if item["pidfd"] is not None], [], [], 0.001)
-            # The selected inspected native wrapper owns a helper, but its
-            # existing protocol exports no terminal helper-reap evidence.
-            # Never free its possible live resources based on direct exit.
-            p.require(not self._native_may_run)
-            if self._resources is not None:
-                self._resources.close_after_reap()
-            for item in self._children.values():
-                if item["channel"] is not None:
-                    item["channel"].close()
-                if item["pidfd"] is not None:
-                    os.close(item["pidfd"])
-            for fd in self._received:
-                os.close(fd)
-            for item in reversed(self._role_originals):
-                item.close()
-            for item in reversed(self._originals):
-                item.close()
-            for item in self._inputs:
-                item.close()
-            self._closed = True
-            _LIVE = None
+                    if item["channel"] is not None:
+                        item["channel"].close()
+                    if item["pidfd"] is not None:
+                        os.close(item["pidfd"])
+                        item["pidfd"] = None
+                while self._received:
+                    os.close(self._received[-1])
+                    self._received.pop()
+                for item in reversed(self._role_originals):
+                    item.close()
+                for item in reversed(self._originals):
+                    item.close()
+                for item in self._inputs:
+                    item.close()
+                if self._children:
+                    self._clock(startup=False)
+                self._closed = True
+                _LIVE = None
         except BaseException as error:
             self._failed = True
+            self._abort_children()
             raise GenesisOrdinaryError(self, cleanup_unknown=True) from error

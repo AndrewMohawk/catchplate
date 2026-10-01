@@ -2,6 +2,9 @@
 //! The actual signed Guest owner survives drop into the existing serving loop.
 use super::*;
 
+#[path="guest_ordinary_genesis_stop.rs"]
+pub(in crate::policy_shadow::policy_custody::services) mod genesis_stop;
+
 fn now()->Result<u64,ServiceRunnerError> {
     boottime_now_nanos().map_err(|e|fail(&e.to_string()))
 }
@@ -167,7 +170,7 @@ fn entry(role:&str,profile:EntryProfile)->Result<(),ServiceRunnerError> {
     *delivery.owner.ordinary_lifetime.lock().map_err(|_|fail("ordinary lifetime owner poisoned"))?=Some(lifetime);
     // The only fork is before service threads, private key reads and role drop.
     // Keep its stop/reap owner on this stack across the actual serving loop.
-    let worker=if profile.inspected() {Some(super::ordinary_inspection::prepare(&delivery)?)} else {None};
+    let mut worker=if profile.inspected() {Some(super::ordinary_inspection::prepare(&delivery)?)} else {None};
     require(unsafe{libc::prctl(libc::PR_SET_NO_NEW_PRIVS,1,0,0,0)}==0 && unsafe{libc::prctl(47,4,0,0,0)}==0)?;
     for capability in 0..64 {
         let present=unsafe{libc::prctl(libc::PR_CAPBSET_READ,capability,0,0,0)};
@@ -188,6 +191,9 @@ fn entry(role:&str,profile:EntryProfile)->Result<(),ServiceRunnerError> {
     if let Some(worker)=worker.as_ref() {super::ordinary_inspection::final_role_listening(&delivery,worker)?;}
     // The real software serving owner constructs, journals and signs through
     // its existing keys. No native-key admission or NSM proof is synthesized.
+    if matches!(profile,EntryProfile::InspectedGenesis) {
+        return genesis_stop::run(delivery,worker.as_mut().ok_or_else(||fail("cold inspection owner missing"))?);
+    }
     delivery.run_after_drop()
 }
 pub(crate) fn run(role:&str)->! {
@@ -205,4 +211,9 @@ pub(crate) fn run_commitment(role:&str,inspected:bool)->! {
 }
 pub(crate) fn run_spool(role:&str)->!{let _=entry(role,EntryProfile::InspectedSpool);unsafe{libc::_exit(1)}}
 pub(crate) fn run_effects(role:&str)->!{let _=entry(role,EntryProfile::InspectedEffects);unsafe{libc::_exit(1)}}
-pub(crate) fn run_genesis(role:&str)->!{let _=entry(role,EntryProfile::InspectedGenesis);unsafe{libc::_exit(1)}}
+pub(crate) fn run_genesis(role:&str)->! {
+    // A terminal notice reports only actual serving status 0/1. Any failed
+    // cleanup/protocol check, including after its send, must not match it.
+    let _=entry(role,EntryProfile::InspectedGenesis);
+    unsafe{libc::_exit(2)}
+}

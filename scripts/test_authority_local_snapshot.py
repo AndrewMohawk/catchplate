@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from scripts.authority import local_snapshot as cli
+from scripts.authority.generate_artifact_bundle import GeneratorError
 from serverware import authority_local_snapshot as local
 
 NOW = int(datetime(2026, 10, 1, tzinfo=timezone.utc).timestamp()) * 1_000_000_000
@@ -137,7 +138,7 @@ class LocalSnapshotTests(unittest.TestCase):
         owner.trust["revokedKeyIds"] = frozenset({"local-snapshot-test"})
         with patch.object(local.measure, "measure_tree", return_value=measured), \
              patch.object(local.io, "signing_key", return_value=private) as key:
-            with self.assertRaises(ValueError):
+            with self.assertRaises(GeneratorError):
                 owner.issue()
             key.assert_not_called()
         owner, _, measured = synthetic_owner()

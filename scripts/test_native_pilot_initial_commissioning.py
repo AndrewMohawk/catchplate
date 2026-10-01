@@ -183,8 +183,9 @@ class SyntheticInitialCommissioningControls(unittest.TestCase):
             + key_names + native_names + transition_names + launch_names
             + tuple("install-launch-" + role for role in endpoints) + ("service-material",))
         self.assertEqual(tuple(job.name for job in execution.JOBS[phase]), service_names)
-        self.assertEqual(supervisor.SUPPORTED_JOBS[7:], tuple((phase, name) for name in service_names))
-        self.assertEqual((len(supervisor.SUPPORTED_JOBS), len(supervisor._ORDER), len(supervisor.missing_jobs())), (142, 151, 9))
+        self.assertEqual(tuple(slot for slot in supervisor.SUPPORTED_JOBS if slot[0] == phase),
+            tuple((phase, name) for name in service_names))
+        self.assertEqual((len(supervisor.SUPPORTED_JOBS), len(supervisor._ORDER), len(supervisor.missing_jobs())), (150, 159, 9))
         with self.assertRaises(ValueError):
             supervisor.require_complete_coverage()
 

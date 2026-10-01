@@ -26,6 +26,7 @@ from serverware import custody_spool_inputs as spool
 from serverware import native_pilot_bridge_install as bridge_install
 from serverware import native_pilot_bridge_runtime as bridge_runtime
 from serverware import native_pilot_closure_authority as closure_authority
+from serverware import native_pilot_current_head_authority as current_head_authority
 from serverware import native_pilot_delivery_authority as delivery_authority
 from serverware import native_pilot_driver_authority as driver_authority
 from serverware import native_pilot_encrypted_authority as encrypted_authority
@@ -108,6 +109,14 @@ HELPER_INITIAL_JOBS = tuple(_Job(
 HELPER_INITIAL_JOB_INFO = {job.name: selected for job, selected in zip(HELPER_INITIAL_JOBS,
     ((slot, operation) for slot in range(1, 4) for operation in initial_authority.OPERATIONS), strict=True)}
 
+_CURRENT_HEAD_TARGETS = tuple((role, None) for role in generation.ROLES[:-1]) + tuple(
+    (generation.ROLES[-1], endpoint_role) for endpoint_role in initial_profile.HELPER_ENDPOINT_ROLES)
+CURRENT_HEAD_JOBS = tuple(_Job("current-head-" + role + ("-" + endpoint_role if endpoint_role else ""),
+    "current-head", role, current_head_authority.MAX_INPUT, None,
+    "ordinary-initial-checkpoint-" + role) for role, endpoint_role in _CURRENT_HEAD_TARGETS)
+CURRENT_HEAD_JOB_INFO = {job.name: selected for job, selected in
+    zip(CURRENT_HEAD_JOBS, _CURRENT_HEAD_TARGETS, strict=True)}
+
 KEY_AUTHORIZATION_JOBS = tuple(_signed(
     ("native-role-keys-" if operation == "role-keys" else "native-key-admission-") + role,
     "native-key", role, key_authority.MAX_INPUT)
@@ -162,7 +171,8 @@ JOBS = {
         *(_plain("install-launch-" + role, "launch", launch_install.MAX_INPUT, role) for role in cohort.ENDPOINT_ROLES),
         _plain("service-material", "service-material", service_material.MAX_INPUT),
     ),
-    "bridge-runtime": (_plain("install-bridge-runtime", "bridge-runtime", bridge_install.MAX_BRIDGE_INPUT),),
+    "bridge-runtime": (*CURRENT_HEAD_JOBS,
+        _plain("install-bridge-runtime", "bridge-runtime", bridge_install.MAX_BRIDGE_INPUT)),
     "bridge-delivery": (_signed("native-delivery-bridge", "delivery", "bridge", delivery_authority.MAX_BRIDGE_INPUT,
                                 "native-delivery-bridge"),
         _plain("install-launch-bridge", "launch", launch_install.MAX_INPUT, "bridge")),
@@ -507,6 +517,85 @@ class PhaseExecution:
             _same(runtime["initialEndpointHistories"], expected)
             initial_profile.helper_endpoint_histories(history_raw, runtime=runtime)
 
+    def _bind_current_head(self, job, value):
+        """Bind the independently approved decision to this attempt's real request."""
+        from serverware import native_pilot_bridge_preparation as preparation
+
+        role, endpoint_role = CURRENT_HEAD_JOB_INFO[job.name]
+        bootstrap = p.document(self._inputs["driver-bootstrap"], driver_authority.MAX_INPUT)
+        prior = p.document(self._inputs["ordinary-generation-" + role], service_authority.MAX_INPUT_BYTES)
+        service = prior["services"][role]
+        observed = self._observations["service-originals"]
+        bridge = self._request.payload
+        prep = preparation.shape(_raw(bridge["bridgePreparationOriginal"], preparation.MAX_BYTES))
+        requests, _ = preparation._parts(prep)
+        p.require(prep["apiVersion"] == preparation.HELPER_API and value["serviceRole"] == role)
+        rows = [(endpoint, row) for selected, endpoint, row in preparation.requests_profile.iter_requests(requests)
+            if selected == role and (endpoint_role is None or endpoint == endpoint_role)]
+        p.require(len(rows) == 1)
+        selected_endpoint, row = rows[0]
+        expected = {"driverConfigurationOriginal": bootstrap["configurationOriginal"],
+            "driverWindowOriginal": bootstrap["windowOriginal"], "launchOriginal": prior["launchOriginal"],
+            "configurationOriginal": service["configurationOriginal"],
+            "preparationOriginal": observed["ordinaryPreparationOriginal"],
+            "resourcesOriginal": observed["ordinaryInitialResourcesOriginal"],
+            "initialHistoryOriginal": service["historyOriginal"], "requestOriginal": row["requestOriginal"]}
+        for field, original in expected.items():
+            _same(value[field], original)
+        p.require(requests["launchSha256"] == p.sha(_raw(value["launchOriginal"], 65536))
+            and requests["preparationSha256"] == p.sha(_raw(value["preparationOriginal"], 65536))
+            and requests["resourcesSha256"] == p.sha(_raw(value["resourcesOriginal"], 65536))
+            and prep["driverObservationSha256"] == p.sha(_raw(
+                self._observations["bootstrap-admission"]["bootstrapObservationOriginal"], 65536)))
+        runtime_raw = _raw(service["runtimeOriginal"], generation.MAX_BYTES)
+        runtime = generation.document(runtime_raw, generation.MAX_BYTES)
+        header = runtime["runtime"]
+        _same(value["rootAuthority"], {"keyId": header["authorityHistoryRootKeyId"],
+            "keySpkiSha256": header["authorityHistoryRootKeySpkiSha256"]})
+        history_raw = _raw(service["historyOriginal"], generation.MAX_BYTES)
+        p.require(history_raw == self._outputs["ordinary-initial-assemble-" + role]
+            and row["runtimeConfigurationSha256"] == p.sha(runtime_raw))
+        if endpoint_role is not None:
+            p.require(value["apiVersion"] == current_head_authority.profile.HELPER_API
+                and value["endpointRole"] == endpoint_role)
+            _same(value["runtimeOriginal"], service["runtimeOriginal"])
+            members = initial_profile.helper_endpoint_histories(history_raw, runtime=runtime)
+            history_raw = members[endpoint_role]["original"]
+            actual = {self._outputs[name] for name in ("ordinary-initial-assemble-" + role,) + tuple(
+                "ordinary-helper-initial-assemble-slot" + str(slot) for slot in range(1, 4))}
+            p.require({item["original"] for item in members.values()} == actual)
+        else:
+            p.require(value["apiVersion"] == current_head_authority.profile.API)
+        p.require(row["initialHistorySha256"] == p.sha(history_raw))
+        checked = current_head_authority.profile.prepare_input(p.canonical(value),
+            boot=self._boot, now_boottime_ns=originals._clock())
+        p.require(checked["statement"]["endpointRole"] == selected_endpoint
+            and checked["statement"]["requestSha256"] == row["requestSha256"]
+            and checked["statement"]["checkpointSha256"] == row["checkpointSha256"])
+
+    def _bind_bridge_heads(self, runtime):
+        """The runtime must use these eight actual signatures, not substitutes."""
+        from serverware import native_pilot_service_handshakes as handshakes
+
+        p.require(bridge_runtime.version(runtime) == 11)
+        jobs = {target: name for name, target in CURRENT_HEAD_JOB_INFO.items()}
+        seen = set()
+        for session in runtime["serviceSessions"]:
+            role = session["serviceRole"]
+            for item in session["handshakes"]:
+                target = (role, item["endpointRole"] if role == generation.ROLES[-1] else None)
+                p.require(target in jobs and jobs[target] not in seen)
+                name = jobs[target]
+                seen.add(name)
+                signed = self._outputs[name]
+                expected = handshakes.build(self._inputs[name],
+                    {"original": signed.decode("ascii"), "sha256": p.sha(signed)},
+                    boot=self._boot, now_boottime_ns=originals._clock(),
+                    client_process_identity_sha256=runtime["expectedDriverProcessIdentitySha256"],
+                    client_configuration_generation_sha256=runtime["expectedDriverConfigurationGenerationSha256"])
+                p.require(p.canonical(item["request"]) == expected)
+        p.require(seen == set(CURRENT_HEAD_JOB_INFO))
+
     def _bind(self, job, value):
         """Join approved input originals to this actual request and prior outputs."""
         observed = self._request.payload
@@ -545,6 +634,8 @@ class PhaseExecution:
                 p.require(pin["sha256"] == p.sha(runtime_raw))
         elif job.family in ("ordinary-initial", "helper-initial"):
             self._bind_initial(job, value)
+        elif job.family == "current-head":
+            self._bind_current_head(job, value)
         elif job.family.startswith("ordinary-"):
             operation = job.family.removeprefix("ordinary-")
             _same(value["serviceRole"], job.role)
@@ -652,6 +743,7 @@ class PhaseExecution:
         elif job.family == "bridge-runtime":
             _same(value["driverObservationOriginal"], self._observations["bootstrap-admission"]["bootstrapObservationOriginal"])
             runtime_raw, runtime = bridge_runtime.original(value["runtimeOriginal"])
+            self._bind_bridge_heads(runtime)
             if "bridgePreparationOriginal" in observed:
                 from serverware import native_pilot_bridge_preparation as preparation
                 ids = {"ordinary-services": {}, "native-endpoints": {}, "gate": {}}
@@ -775,6 +867,10 @@ class PhaseExecution:
             self._process._io_check(deadline)
         elif job.family == "native":
             signed = native_authority.sign(job.role, raw, key)
+        elif job.family == "current-head":
+            signed, original_deadline = current_head_authority.sign(input_original=raw, signing_key=key)
+            deadline = min(deadline, original_deadline)
+            self._process._io_check(deadline)
         elif job.family == "generation-install":
             signed, _ = generation_authority.sign(input_original=raw, signing_key=key)
         elif job.family in ("ordinary-initial", "helper-initial"):

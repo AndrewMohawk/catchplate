@@ -1,6 +1,6 @@
 """Fixed commissioning decisions joined to their real process and installer.
 
-The initial 142 of 151 job composers exist. The complete-coverage check refuses
+The initial 150 of 159 jobs have fixed composers or protected late intake. The complete-coverage check refuses
 startup before spawning a child, not after a live attempt reaches a missing job.
 There is no executable entrypoint, configurable dispatcher, approval callback,
 signer, new deadline or source of deployment approval in this module.
@@ -23,11 +23,12 @@ from serverware import native_pilot_supervisor_ordinary_transitions as ordinary_
 from serverware import native_pilot_supervisor_launch_authorizations as launch_authorizations
 from serverware import native_pilot_supervisor_endpoint_launches as endpoint_launches
 from serverware import native_pilot_supervisor_service_material as service_material
+from serverware import native_pilot_supervisor_current_heads as current_heads
 from serverware import custody_generation_grants as generation
 from serverware import native_shadow_nitro_originals as originals
 from serverware import native_shadow_nitro_profile as p
 from serverware.native_pilot_operator_channel import STAGES
-from serverware.native_pilot_phase_execution import INITIAL_JOBS, HELPER_INITIAL_JOBS, JOBS, KEY_AUTHORIZATION_JOBS, MAX_APPROVAL
+from serverware.native_pilot_phase_execution import CURRENT_HEAD_JOBS, INITIAL_JOBS, HELPER_INITIAL_JOBS, JOBS, KEY_AUTHORIZATION_JOBS, MAX_APPROVAL
 from serverware.native_pilot_supervisor_policy import SupervisorPolicy
 from serverware.native_pilot_supervisor_process import AuthorityCoordinatorProcess
 
@@ -48,7 +49,9 @@ SUPPORTED_JOBS = (("bootstrap-admission", "driver-bootstrap"),
     *(("service-originals", name) for name in ordinary_transitions.JOB_NAMES),
     *(("service-originals", name) for name in launch_authorizations.JOB_NAMES),
     *(("service-originals", name) for name in endpoint_launches.JOB_NAMES),
-    (service_material.PHASE, service_material.JOB))
+    (service_material.PHASE, service_material.JOB),
+    *(("bridge-runtime", job.name) for job in CURRENT_HEAD_JOBS))
+_LATE_JOBS = tuple(("bridge-runtime", job.name) for job in CURRENT_HEAD_JOBS)
 _COMPOSER_GROUPS = (
     ("endpoint-inputs", ("endpoint-inputs",), endpoint_inputs.compose),
     ("endpoint-deliveries", tuple("native-delivery-" + role for role in endpoint_deliveries.ROLES), endpoint_deliveries.compose),
@@ -73,7 +76,8 @@ _LIVE = None
 def missing_jobs():
     """Source coverage only, never acceptance or a percentage of remaining effort."""
     p.require(tuple(JOBS) == STAGES and _ORDER[:len(SUPPORTED_JOBS)] == SUPPORTED_JOBS)
-    p.require(tuple(_COMPOSERS) == SUPPORTED_JOBS[3:]
+    p.require(tuple(_COMPOSERS) + _LATE_JOBS == SUPPORTED_JOBS[3:]
+        and not set(_COMPOSERS).intersection(_LATE_JOBS)
         and len(_COMPOSERS) == sum(len(names) for _, names, _ in _COMPOSER_GROUPS))
     return tuple(item for item in _ORDER if item not in SUPPORTED_JOBS)
 
@@ -102,6 +106,7 @@ class CommissioningSupervisor:
         self._policy, self._process = policy, process
         self._pid, self._boot = os.getpid(), originals._boot()
         self._index = 0
+        self._pending_head = self._pending_request = None
         self._started = self._closed = self._failed = False
 
     @classmethod
@@ -142,9 +147,9 @@ class CommissioningSupervisor:
         self._failed = False
 
     def step(self):
-        """Approve/install/reply once; a reply is not proof that the job succeeded."""
+        """Compose a fixed job or pause for an independent late approval."""
         self._check()
-        p.require(self._started and self._index < len(_ORDER))
+        p.require(self._started and self._index < len(_ORDER) and self._pending_head is None)
         self._failed = True
         request = self._process.receive()
         self._process.check_request(request)
@@ -152,6 +157,19 @@ class CommissioningSupervisor:
         slot = (request.phase, request.job)
         p.require(slot == _ORDER[self._index] and slot in SUPPORTED_JOBS
             and request.sequence == self._index + 1)
+        if slot in _LATE_JOBS:
+            # Static commissioning policy permits this intake, but is not a
+            # currentness decision over entropy acquired after child startup.
+            self._pending_request = request
+            self._pending_head = current_heads.claim(self._policy, process=self._process, request=request)
+            observation = self._pending_head.observed_original()
+            p.require(type(observation) is bytes)
+            self._pending_head.check()
+            self._failed = False
+            return {"phase": request.phase, "job": request.job, "sequence": request.sequence,
+                "status": "awaiting-independent-current-head-approval",
+                "requestOriginal": request.raw.decode("ascii"), "requestSha256": p.sha(request.raw),
+                "observationOriginal": observation.decode("ascii"), "observationSha256": p.sha(observation)}
         if slot == SUPPORTED_JOBS[0]:
             input_raw, approval_raw = self._policy.bootstrap(self._process, request)
         elif slot in SUPPORTED_JOBS[1:3]:
@@ -165,6 +183,26 @@ class CommissioningSupervisor:
             p.require(slot in _COMPOSERS)
             input_raw = _COMPOSERS[slot](self._policy, process=self._process, request=request)
             approval_raw = _approval(request.raw, input_raw)
+        return self._install_and_reply(request, input_raw, approval_raw)
+
+    def resume_current_head(self, *, input_fd, input_sha256, approval_fd, approval_sha256):
+        """Consume protected independently approved originals; never decide or retry."""
+        self._check()
+        p.require(self._started and self._pending_head is not None and self._pending_request is not None)
+        self._failed = True
+        request = self._pending_request
+        p.require((request.phase, request.job) == _ORDER[self._index]
+            and (request.phase, request.job) in _LATE_JOBS)
+        self._pending_head.check()
+        input_raw, approval_raw = self._pending_head.admit(input_fd=input_fd, input_sha256=input_sha256,
+            approval_fd=approval_fd, approval_sha256=approval_sha256)
+        return self._install_and_reply(request, input_raw, approval_raw, late=self._pending_head)
+
+    def _install_and_reply(self, request, input_raw, approval_raw, *, late=None):
+        """Only the original pending request may reach the exclusive installer."""
+        p.require(self._failed and self._started and (request.phase, request.job) == _ORDER[self._index])
+        p.require(((request.phase, request.job) in _LATE_JOBS) == (late is not None)
+            and (late is None or (late is self._pending_head and request is self._pending_request)))
         p.require(type(input_raw) is bytes and type(approval_raw) is bytes)
         p.document(approval_raw, MAX_APPROVAL)
         input_sha, approval_sha = p.sha(input_raw), p.sha(approval_raw)
@@ -173,12 +211,17 @@ class CommissioningSupervisor:
         installation._prepare(request.raw, approval_raw, input_raw, approval_sha, input_sha)
         self._process.check_request(request)
         self._policy.check(self._process)
+        if late is not None:
+            late.check()
         reply = installation.install(request.raw, approval_raw, input_raw,
             approval_sha256=approval_sha, input_sha256=input_sha)
         self._process.check_request(request)
         self._policy.check(self._process)
+        if late is not None:
+            late.check()
         self._process.reply(request, reply)
         self._index += 1
+        self._pending_head = self._pending_request = None
         self._policy.check(self._process)
         self._failed = False
         return {"phase": request.phase, "job": request.job, "sequence": request.sequence,

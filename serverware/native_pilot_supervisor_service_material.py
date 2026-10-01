@@ -17,13 +17,13 @@ from serverware import native_pilot_supervisor_native_services as services
 from serverware import native_shadow_nitro_originals as originals
 from serverware import native_shadow_nitro_profile as p
 from serverware.native_pilot_operator_channel import STAGES
-from serverware.native_pilot_phase_execution import JOBS, MAX_RETAINED_BYTES, job_index
+from serverware.native_pilot_phase_execution import CURRENT_HEAD_JOBS, JOBS, MAX_RETAINED_BYTES, job_index
 
 PHASE = "service-originals"
 JOB = "service-material"
 INDEX = job_index(PHASE, JOB)
 NEXT_PHASE = "bridge-runtime"
-NEXT_JOB = "install-bridge-runtime"
+NEXT_JOB = CURRENT_HEAD_JOBS[0].name
 NEXT_INDEX = job_index(NEXT_PHASE, NEXT_JOB)
 ROLES = ("persistence", "generationInstall")
 SERVICE_JOBS = {"persistence": "native-service-persistence", "generationInstall": "native-generation-install-grant"}

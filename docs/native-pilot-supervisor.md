@@ -1,12 +1,22 @@
 # Native pilot commissioning supervisor
 
 This is a partial source implementation, not a runnable or deployed supervisor.
-The `.387` source connects [supplemental helper ceremonies](native-pilot-helper-ceremonies.md)
+The `.388` source connects [protected current-head intake](native-pilot-current-head-intake.md)
+under explicit policy/v15. Eight fixed jobs pause for independently approved
+complete inputs after actual request acquisition. They reuse existing checkpoint
+keys and never enter the static approval serializer. **150/159** current jobs
+are handled: 142 composers and eight late-intake jobs. There are **108** signing
+selectors, nine current missing slots and five further bridge prerequisites
+not yet in that inventory. Full coverage still refuses before child creation.
+Verification of this batch is pending. Source **36/46** and production **0/6**
+remain unchanged; neither connected installation nor pilot acceptance is proven.
+
+The preceding `.387` source connects [supplemental helper ceremonies](native-pilot-helper-ceremonies.md)
 under explicit policy/v14, preserving the existing primary and supplying the
 four-role runtime with actual signed histories. Source-derived boundaries keep
 the downstream delivery/grant/launch sequence aligned; service material is now
-job 135. **142 of 151**
-jobs now have fixed policy/input composers. Source coverage is not production
+job 135. At that checkpoint, **142 of 151**
+jobs had fixed policy/input composers. Source coverage is not production
 acceptance, which remains **0/6**. The automated
 owner refuses startup **before spawning** while any job is unimplemented. There
 is no CLI, generic template renderer, approval callback or implicit approval of
@@ -17,7 +27,7 @@ Source checkpoints
 remain **36/46**; independent production acceptance remains separate.
 Older numbered examples below describe their original source batches; use the
 current [sequencing table](native-pilot-helper-ceremonies.md#source-derived-sequencing)
-for current job positions. Currentness and remaining bridge prerequisites are
+for current service-originals job positions. Remaining bridge prerequisites are
 not yet fully represented in the inventory.
 
 ## Decision and process ownership

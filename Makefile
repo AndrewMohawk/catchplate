@@ -1350,6 +1350,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	scripts/test_native_pilot_bridge_launches.py \
 	scripts/test_native_pilot_helper_initial.py \
 	scripts/test_native_pilot_helper_ceremonies.py \
+	scripts/test_native_pilot_current_head_intake.py \
 	scripts/test_native_pilot_service_handshakes.py \
 	scripts/test_native_pilot_initial_requests.py \
 	scripts/test_native_pilot_peer_preparation.py \
@@ -1694,6 +1695,8 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/native_pilot_supervisor_policy.py \
 	serverware/native_pilot_supervisor_initial_history.py \
 	serverware/native_pilot_supervisor_helper_initial_profile.py \
+	serverware/native_pilot_supervisor_current_head_profile.py \
+	serverware/native_pilot_supervisor_current_heads.py \
 	serverware/native_pilot_supervisor_ordinary_deliveries.py \
 	serverware/native_pilot_supervisor_ordinary_generations.py \
 	serverware/native_pilot_supervisor_native_deliveries.py \
@@ -4142,6 +4145,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				scripts/test_native_pilot_bridge_launches.py \
 				scripts/test_native_pilot_helper_initial.py \
 				scripts/test_native_pilot_helper_ceremonies.py \
+				scripts/test_native_pilot_current_head_intake.py \
 				scripts/test_native_pilot_service_handshakes.py \
 				scripts/test_native_pilot_initial_requests.py \
 				scripts/test_native_pilot_peer_preparation.py \
@@ -4480,6 +4484,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/native_pilot_supervisor_policy.py \
 				serverware/native_pilot_supervisor_initial_history.py \
 				serverware/native_pilot_supervisor_helper_initial_profile.py \
+				serverware/native_pilot_supervisor_current_head_profile.py \
+				serverware/native_pilot_supervisor_current_heads.py \
 				serverware/native_pilot_supervisor_ordinary_deliveries.py \
 				serverware/native_pilot_supervisor_ordinary_generations.py \
 				serverware/native_pilot_supervisor_native_deliveries.py \

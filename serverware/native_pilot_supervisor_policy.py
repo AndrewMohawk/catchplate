@@ -41,6 +41,9 @@ journal-initialization authority; bridge and release remain separate.
 Explicit v14 adds three supplemental helper initial-history ceremonies under
 its existing approved root/checkpoint/service keys. Their exact outputs enter
 the four-role runtime; they do not approve currentness, launch or cleanup.
+Explicit v15 permits protected late intake for eight actual current-head
+requests. The independent authority still supplies each complete input and
+approval after request acquisition; static policy never decides currentness.
 
 Only the actual AuthorityCoordinatorProcess and its current opaque JobRequest
 can enter bootstrap(). No signing, publication, process launch, arbitrary
@@ -111,7 +114,11 @@ SERVICE_MATERIAL_FIELDS = ENDPOINT_LAUNCH_FIELDS + ("serviceMaterialOriginal",)
 HELPER_INITIAL_POLICY_API = "serverware.nativePilotSupervisorCommissioningPolicy/v14"
 HELPER_INITIAL_PURPOSE = "initial-driver-bootstrap-precreation-endpoints-generations-and-helper-histories"
 HELPER_INITIAL_FIELDS = SERVICE_MATERIAL_FIELDS + ("helperInitialHistoriesOriginal",)
-SERVICE_MATERIAL_POLICY_APIS = (SERVICE_MATERIAL_POLICY_API, HELPER_INITIAL_POLICY_API)
+CURRENT_HEAD_POLICY_API = "serverware.nativePilotSupervisorCommissioningPolicy/v15"
+CURRENT_HEAD_PURPOSE = "initial-driver-bootstrap-precreation-endpoints-generations-and-current-head-intake"
+CURRENT_HEAD_FIELDS = HELPER_INITIAL_FIELDS + ("currentHeadIntakeOriginal",)
+HELPER_INITIAL_POLICY_APIS = (HELPER_INITIAL_POLICY_API, CURRENT_HEAD_POLICY_API)
+SERVICE_MATERIAL_POLICY_APIS = (SERVICE_MATERIAL_POLICY_API,) + HELPER_INITIAL_POLICY_APIS
 ENDPOINT_LAUNCH_POLICY_APIS = (ENDPOINT_LAUNCH_POLICY_API,) + SERVICE_MATERIAL_POLICY_APIS
 LAUNCH_AUTHORIZATION_POLICY_APIS = (LAUNCH_AUTHORIZATION_POLICY_API,) + ENDPOINT_LAUNCH_POLICY_APIS
 ORDINARY_TRANSITION_POLICY_APIS = (ORDINARY_TRANSITION_POLICY_API,) + LAUNCH_AUTHORIZATION_POLICY_APIS
@@ -207,6 +214,7 @@ class SupervisorPolicy:
         self._endpoint_launches = None
         self._service_material = None
         self._helper_initial = None
+        self._current_head_intake = None
         self._recipe_attempted = self._measured_attempted = False
 
     @classmethod
@@ -227,7 +235,8 @@ class SupervisorPolicy:
             value = _policy_document(owner._raw)
             p.require(type(value) is dict and value.get("apiVersion") in
                 (POLICY_API,) + MEASURED_POLICY_APIS)
-            helper_initial = value["apiVersion"] == HELPER_INITIAL_POLICY_API
+            current_head_intake = value["apiVersion"] == CURRENT_HEAD_POLICY_API
+            helper_initial = value["apiVersion"] in HELPER_INITIAL_POLICY_APIS
             service_material = value["apiVersion"] in SERVICE_MATERIAL_POLICY_APIS
             endpoint_launch = value["apiVersion"] in ENDPOINT_LAUNCH_POLICY_APIS
             launch_authorization = value["apiVersion"] in LAUNCH_AUTHORIZATION_POLICY_APIS
@@ -240,9 +249,9 @@ class SupervisorPolicy:
             initial = value["apiVersion"] in INITIAL_POLICY_APIS
             endpoint = value["apiVersion"] in ENDPOINT_POLICY_APIS
             measured = value["apiVersion"] in MEASURED_POLICY_APIS
-            p.fields(value, HELPER_INITIAL_FIELDS if helper_initial else SERVICE_MATERIAL_FIELDS if service_material else ENDPOINT_LAUNCH_FIELDS if endpoint_launch else LAUNCH_AUTHORIZATION_FIELDS if launch_authorization else ORDINARY_TRANSITION_FIELDS if ordinary_transition else NATIVE_SERVICE_FIELDS if native_service else KEY_AUTHORIZATION_FIELDS if key_authorization else NATIVE_DELIVERY_FIELDS if native_delivery else GENERATION_FIELDS if ordinary_generation else DELIVERY_FIELDS if ordinary_delivery else INITIAL_FIELDS if initial else
+            p.fields(value, CURRENT_HEAD_FIELDS if current_head_intake else HELPER_INITIAL_FIELDS if helper_initial else SERVICE_MATERIAL_FIELDS if service_material else ENDPOINT_LAUNCH_FIELDS if endpoint_launch else LAUNCH_AUTHORIZATION_FIELDS if launch_authorization else ORDINARY_TRANSITION_FIELDS if ordinary_transition else NATIVE_SERVICE_FIELDS if native_service else KEY_AUTHORIZATION_FIELDS if key_authorization else NATIVE_DELIVERY_FIELDS if native_delivery else GENERATION_FIELDS if ordinary_generation else DELIVERY_FIELDS if ordinary_delivery else INITIAL_FIELDS if initial else
                 ENDPOINT_FIELDS if endpoint else MEASURED_FIELDS if measured else FIELDS)
-            p.require(value["purpose"] == (HELPER_INITIAL_PURPOSE if helper_initial else SERVICE_MATERIAL_PURPOSE if service_material else ENDPOINT_LAUNCH_PURPOSE if endpoint_launch else LAUNCH_AUTHORIZATION_PURPOSE if launch_authorization else ORDINARY_TRANSITION_PURPOSE if ordinary_transition else NATIVE_SERVICE_PURPOSE if native_service else KEY_AUTHORIZATION_PURPOSE if key_authorization else NATIVE_DELIVERY_PURPOSE if native_delivery else GENERATION_PURPOSE if ordinary_generation else DELIVERY_PURPOSE if ordinary_delivery else INITIAL_PURPOSE if initial else
+            p.require(value["purpose"] == (CURRENT_HEAD_PURPOSE if current_head_intake else HELPER_INITIAL_PURPOSE if helper_initial else SERVICE_MATERIAL_PURPOSE if service_material else ENDPOINT_LAUNCH_PURPOSE if endpoint_launch else LAUNCH_AUTHORIZATION_PURPOSE if launch_authorization else ORDINARY_TRANSITION_PURPOSE if ordinary_transition else NATIVE_SERVICE_PURPOSE if native_service else KEY_AUTHORIZATION_PURPOSE if key_authorization else NATIVE_DELIVERY_PURPOSE if native_delivery else GENERATION_PURPOSE if ordinary_generation else DELIVERY_PURPOSE if ordinary_delivery else INITIAL_PURPOSE if initial else
                 ENDPOINT_PURPOSE if endpoint else MEASURED_PURPOSE if measured else PURPOSE))
             if measured:
                 p.digest(value["measuredRecipeSha256"])
@@ -313,6 +322,12 @@ class SupervisorPolicy:
                     and ordinary_deliveries["apiVersion"] == "serverware.nativePilotOrdinaryRuntimePolicy/v2")
                 helper_initial_policy = helper.validate_policy(
                     generation.document(policy_text.encode("ascii"), helper.MAX_POLICY), initial_policy=ordinary_initial)
+            if current_head_intake:
+                from serverware import native_pilot_supervisor_current_head_profile as current_heads
+                policy_text = value["currentHeadIntakeOriginal"]
+                p.require(type(policy_text) is str and policy_text.isascii())
+                current_head_policy = current_heads.validate_policy(
+                    p.document(policy_text.encode("ascii"), current_heads.MAX_POLICY))
             if native_delivery:
                 from serverware import native_pilot_native_delivery_profile as native
                 policy_text = value["nativeDeliveriesOriginal"]
@@ -393,6 +408,8 @@ class SupervisorPolicy:
                 owner._service_material = service_material_policy
             if helper_initial:
                 owner._helper_initial = helper_initial_policy
+            if current_head_intake:
+                owner._current_head_intake = current_head_policy
             owner._bootstrap, owner._control, owner._config, owner._window = raw, control, config, window
             owner._bindings = {"apiVersion": "serverware.nativePilotSupervisorBindings/v1",
                 "conductorInventorySha256": value["conductorInventorySha256"],
@@ -542,10 +559,18 @@ class SupervisorPolicy:
         """Only explicit v14 supplies supplementary roles; never infer them."""
         self.check(process)
         process.check_request(request)
-        if self._value["apiVersion"] != HELPER_INITIAL_POLICY_API:
+        if self._value["apiVersion"] not in HELPER_INITIAL_POLICY_APIS:
             return None
         p.require(self._helper_initial is not None)
         return copy.deepcopy(self._helper_initial)
+
+    def current_head_policy(self, *, process, request) -> dict:
+        """Permit only late intake; never approve a request's currentness."""
+        self.check(process)
+        process.check_request(request)
+        p.require(self._value["apiVersion"] == CURRENT_HEAD_POLICY_API
+            and self._current_head_intake is not None)
+        return copy.deepcopy(self._current_head_intake)
 
     def ordinary_generation_policy(self, *, process, request) -> dict:
         """Only v6+ delegate the five fixed ordinary generation decisions."""
@@ -708,6 +733,9 @@ class SupervisorPolicy:
             from serverware.native_pilot_supervisor_process import AuthorityCoordinatorProcess
             p.require(type(self._process) is AuthorityCoordinatorProcess and self._process._closed
                 and self._process._result["status"] in ("not-started", "stopped-cleanup-complete", "failed-cleanup-complete"))
+            if self._value["apiVersion"] == CURRENT_HEAD_POLICY_API:
+                from serverware import native_pilot_supervisor_current_heads as current_heads
+                current_heads.close(self._process)
             if self._value["apiVersion"] in SERVICE_MATERIAL_POLICY_APIS:
                 from serverware import native_pilot_supervisor_service_material as service_material
                 service_material.close(self._process)

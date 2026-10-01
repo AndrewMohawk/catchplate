@@ -68,10 +68,21 @@ be retained and handed to operational retrieval, independently of these bytes.
 
 ## Verification and remaining integration
 
-Source assembly is complete; one focused frozen Python check follows. This
-slice does not change native code, so the preceding corrected native check is
-retained without rebuilding it. Pure controls do not prove protected process
-launch, descriptor transfer, signature authority, a live ceremony or cleanup.
+Exact `e9711b168b33658f3f92951aa5f4fce5be774644` passes all 28 controls in four
+focused suites (0.500 seconds), ten-file Python 3.11.15 grammar and exact
+membership in both Make inventories. The run used one CPU, an empty environment
+and an isolated network namespace. Eight issuer controls use deterministic
+synthetic signatures, seven caller controls cover pure framing/ELF checks,
+eight cold-binding controls cover authenticated synthetic assignment/scope and
+schema joins, and five command controls cover fixed syntax/purpose selection.
+No privileged entrypoint, actual process owner or production signing key ran.
+
+This slice does not change native code, so the preceding corrected native
+check is retained without rebuilding it. Pure controls do not prove protected
+process launch, descriptor transfer, independent signature authority, a live
+ceremony or cleanup. No image rebuild, cloud resource or paid test was used.
+Source archive, exact harness, logs and checksums are retained at
+`codex-offload/serverware/engineering-builds/e9711b16-genesis-authorities-GTtQV0/`.
 Review corrected the valid-export EOF race: a controller exit observed after
 a nonblocking read does not imply that EOF has already been consumed. The
 caller must drain again under the same original deadline before acceptance.
@@ -84,5 +95,16 @@ composition, provisioning and connected allow/deny/cleanup acceptance remain
 required. In particular, existing ordinary issuers still select five hot
 services with generation admission; cold DRS/CSA need their distinct v11
 runtimes, v2 initial histories and actual genesis journals. The historical
-164-job/113-selector graph excludes this ceremony;
-source checkpoints remain 36/46 and production acceptance remains 0/6.
+164-job/113-selector graph excludes this ceremony; source checkpoints remain
+36/46 and production acceptance remains 0/6.
+
+The next connected source slice starts with the two ordinary cold services:
+real retained DRS/CSA preparation and journal resources, independently signed
+initial Wrapper/v2, runtime/v11, and exact cold C9/grant issuance. The current
+[`native_pilot_ordinary_initial_authority.py`](../serverware/native_pilot_ordinary_initial_authority.py)
+selects the hot driver/five-service profile, and
+[`native_pilot_service_authority.py`](../serverware/native_pilot_service_authority.py)
+requires generation admission. These cannot be relabeled as cold owners. The
+later [`native_pilot_closure_authority.py`](../serverware/native_pilot_closure_authority.py)
+also needs explicit cold roles/v6; its existing eleven-member selector is not
+permission to issue those originals.

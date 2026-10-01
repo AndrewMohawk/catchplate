@@ -137,6 +137,10 @@ independently approved input delivery and controlled shutdown. The
 libraries without giving applications provider credentials. These components
 are implemented in source; they are not a demonstrated deployed workflow.
 
+[Cold-start input composition](docs/native-pilot-genesis-inputs.md) connects the
+66 existing startup jobs to their actual observations and previous results.
+Independent decisions, adopted-stage inputs and deployment remain open.
+
 Before a pilot is ready to try, four milestones remain:
 
 1. Assemble and install compatible, approved runtime packages.

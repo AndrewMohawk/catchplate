@@ -141,8 +141,9 @@ request's original window and expiry and emits no rendezvous approval.
 Both functions are pure candidate compilers, not an approval provider. Their
 caller must independently authorize the resulting bytes before delivering
 protected descriptors. No signing keys, owners, files, approvals or services
-are created. Complete cold66/adopted176 per-job composition and operation of
-that independent provider remain required.
+are created. The later [cold66 candidate compiler](native-pilot-genesis-inputs.md)
+supplies the cold per-job inputs; adopted176 composition and operation of the
+independent decision provider remain required.
 
 Explicit adopted policy/v2 additionally selects a
 [bounded interactive interval](native-pilot-interactive.md#adopted-lifecycle-selection-416).

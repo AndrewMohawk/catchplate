@@ -1754,6 +1754,15 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	scripts/test_native_pilot_lifecycle.py \
 	serverware/native_pilot_lifecycle_approval_wire.py \
 	serverware/native_pilot_lifecycle_inputs.py \
+	serverware/native_pilot_genesis_inputs.py \
+	serverware/native_pilot_genesis_foundation_inputs.py \
+	serverware/native_pilot_genesis_ordinary_inputs.py \
+	serverware/native_pilot_genesis_native_inputs.py \
+	serverware/native_pilot_genesis_owner_inputs.py \
+	scripts/test_native_pilot_genesis_inputs.py \
+	scripts/test_native_pilot_genesis_ordinary_inputs.py \
+	scripts/test_native_pilot_genesis_native_inputs.py \
+	scripts/test_native_pilot_genesis_owner_inputs.py \
 	scripts/test_native_pilot_lifecycle_inputs.py \
 	scripts/test_native_pilot_adopted_interactive.py \
 	scripts/run_native_pilot_lifecycle.py \
@@ -4712,6 +4721,15 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				scripts/test_native_pilot_lifecycle.py \
 				serverware/native_pilot_lifecycle_approval_wire.py \
 				serverware/native_pilot_lifecycle_inputs.py \
+				serverware/native_pilot_genesis_inputs.py \
+				serverware/native_pilot_genesis_foundation_inputs.py \
+				serverware/native_pilot_genesis_ordinary_inputs.py \
+				serverware/native_pilot_genesis_native_inputs.py \
+				serverware/native_pilot_genesis_owner_inputs.py \
+				scripts/test_native_pilot_genesis_inputs.py \
+				scripts/test_native_pilot_genesis_ordinary_inputs.py \
+				scripts/test_native_pilot_genesis_native_inputs.py \
+				scripts/test_native_pilot_genesis_owner_inputs.py \
 				scripts/test_native_pilot_lifecycle_inputs.py \
 				scripts/test_native_pilot_adopted_interactive.py \
 				scripts/run_native_pilot_lifecycle.py \

@@ -220,6 +220,17 @@ but actual backing-store and protected-runtime acceptance remain unverified.
 
 ## Verification and deployment boundary
 
+Frozen `.420` source `0a10a3a2` passes all **120 controls in twelve focused suites**
+in **8.523 seconds**, with no failures, errors, skips or corrective reruns.
+All sixteen changed Python files pass grammar and both Make inventories; eleven
+modules import. This includes a real local kernel transport of all 244 ordered
+exchanges and both completion receipts, plus skip/repeat/premature/legacy refusal
+controls. Payloads are explicitly synthetic: this is not native receipt
+admission, genuine commissioning, independent approval or an executed business
+flow. Exact source, bounded harness and logs are retained under
+`codex-offload/serverware/engineering-builds/0a10a3a2-completion-transport-JnCBzd/`
+in the operator's home directory. No runtime package rebuild or cloud action ran.
+
 The preceding `.414` source `90e10cbb` passes all **119 checks in twelve focused suites** in
 **3.827 seconds**, with no failures, errors or skips. All sixteen changed Python
 files pass syntax and both Make inventories; six new modules import from the

@@ -11,22 +11,26 @@ performed when this source was authored.
 
 ## Current engineering assembly
 
-The `.413` [observation-first rendezvous](native-pilot-genesis-rendezvous.md)
-refreshes all three Python runtime exports from exact source `fc466a0c`:
+The `.414` [connected lifecycle](native-pilot-lifecycle.md) refreshes all three
+Python runtime exports from exact source `90e10cbb`:
 
 | Runtime | Materialized entries | Exact source files | Build / source observation |
 | --- | ---: | ---: | --- |
-| Conductor | 6,202 | 1,369 | Passed |
-| Authority | 6,212 | 1,375 | Passed |
-| Supervisor | 6,218 | 1,378 | Passed |
+| Conductor | 6,206 | 1,373 | Passed |
+| Authority | 6,216 | 1,379 | Passed |
+| Supervisor | 6,225 | 1,385 | Passed |
 
 All three share the same complete source manifest and unchanged unpublished
 dependency candidate; every export remains `production_release_eligible=false`.
 These are inert raw exports, not installed or independently approved packages.
-No unchanged native compilation was repeated. The next connected lifecycle
-runner and fixed installer invocation are not present in these exports.
+No unchanged native compilation was repeated. These exports contain the staged
+lifecycle and both fixed installer commands, but not an executable lifecycle
+caller or independently provisioned approval service. The sequential build and
+source-observation run completed in 156.890 seconds with no retry.
 Exact archives, logs and checksums are retained at
-`codex-offload/serverware/engineering-builds/fc466a0c-genesis-rendezvous-omGm4r/`.
+`codex-offload/serverware/engineering-builds/90e10cbb-connected-lifecycle-FdUpzn/`.
+The preceding `.413` evidence remains in its original
+`fc466a0c-genesis-rendezvous-omGm4r/` directory.
 
 The `.392` source adds a separate
 [commissioning supervisor package and executable](native-pilot-supervisor-executable.md).

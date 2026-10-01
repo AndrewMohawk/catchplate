@@ -127,7 +127,7 @@ Checkpoint: **2026-10-01 — pre-production, pilot assembly.**
 
 **36/46 source checkpoints landed · 10 active · 0 todo.**
 
-**Production acceptance: 0/6 verified.** Both service images and the operator tool build from `04cf155a`; the corrected sidecar export builds from `facdb895`. Both Python runtime artifacts build from `7193b2a1`. All four exported prerequisites pass file staging. These are engineering builds using the unpublished dependency candidate, not approved release packages or a deployed pilot. [Build results](docs/native-pilot-build.md#current-engineering-assembly).
+**Production acceptance: 0/6 verified.** The current Python conductor, authority and supervisor exports build from `90e10cbb` and pass exact-source checks. Earlier service-image, operator-tool and sidecar builds remain recorded in the [build results](docs/native-pilot-build.md#current-engineering-assembly). These are engineering builds using the unpublished dependency candidate, not approved release packages or a deployed pilot.
 
 [![Project checkpoints, one segment per task: 36 of 46 source-landed; 10 active and 0 todo. Evidence handoff 10/10; historical recovery 4/5; permissions and grants 10/10; finalization and sessions 8/8; workloads and native 3/6; providers and operations 1/7. H05, N04, N05, N06 and O01 through O06 are in progress. Production acceptance remains 0/6. Engineering assembly is not an accepted pilot or production deployment.](docs/images/project-progress.svg)](docs/production-status.md#next-source-milestones)
 
@@ -149,8 +149,10 @@ The [adopted orchestration path](docs/native-pilot-adopted-orchestration.md)
 adds a separate catalogue, packaged core intake and independent per-job approval
 exchange. [Observation-first rendezvous](docs/native-pilot-genesis-rendezvous.md)
 connects actual receiver identification before approval and core transfer.
-The actual lifecycle and independently operated approvals still need
-verification and provisioning; this is not a runnable pilot claim.
+The [connected lifecycle](docs/native-pilot-lifecycle.md) now joins cold and
+adopted process ownership with installer completion checks. Its 119 focused
+checks pass; the executable caller, independent approval provisioning and
+complete live verification remain open. This is not a runnable pilot claim.
 The operational inventory
 includes service histories, delivery/generation grants, endpoint authorizations,
 launch bundles and public material. Explicit policy/v15 connects eight

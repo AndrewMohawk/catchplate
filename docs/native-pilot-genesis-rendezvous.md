@@ -109,17 +109,11 @@ observation logs and checksums are retained at
 under the operator's home directory. Full source checkpoints remain **36/46**,
 independent production acceptance **0/6**.
 
-The next executable integration is one retained cross-ceremony runner: launch
-the real cold authority and adopted receiver, relay observations to the
-independent approver, wait for the approved-pair installer's actual exit/reap
-before forwarding its reply, and drive the 66 cold jobs alongside the waiting
-receiver before the 176 adopted jobs. Existing separate executables do not yet
-own that complete lifecycle. Complete independent inputs are sufficient; an
-automatic approval generator is neither required nor an acceptable substitute.
-Reuse the existing adopted supervisor and process owner directly. The missing
-pieces are the fixed cold-process owner, the installer-child exit gate, and a
-cold-job approved-pair installer using the existing cold request/approval/reply
-formats. The rendezvous installer currently exists as a repository CLI, not a
-registered script in the packaged supervisor inventory; the connected runner
-must add its fixed admitted invocation before launching it there. No catalogue
-or wire-version expansion is needed for this connection.
+The successor [connected lifecycle](native-pilot-lifecycle.md) implements the
+retained cold-process owner, installer-child exit/reap gate and cold-job
+approved-pair writer, reusing the existing adopted supervisor. Both installer
+CLIs and their fixed admitted entrypoint are now in the supervisor inventory.
+The staged owner drives cold66 before adopted176 without catalogue or approval-
+wire expansion. A fixed executable caller, independent live input/approval
+delivery, approved runtime installations and full protected execution remain
+open; source integration is not a successful commissioning ceremony.

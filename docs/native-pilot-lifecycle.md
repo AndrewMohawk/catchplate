@@ -55,15 +55,36 @@ The parent creates seals only for literal public observations, not approvals.
 
 ## Verification and deployment boundary
 
-This source batch is being assembled before one focused frozen check run.
+Frozen source `90e10cbb` passes all **119 checks in twelve focused suites** in
+**3.827 seconds**, with no failures, errors or skips. All sixteen changed Python
+files pass syntax and both Make inventories; six new modules import from the
+exact archived source. There was one run, with no corrective rerun. The four new
+suites cover literal joins, catalogue/order/bounds, fixed installer arguments,
+actual sealed public memory files and one bounded real child/PIDFD identity
+check. They do not exercise the complete protected installer or lifecycle.
+
 Pure association/argument controls and real local descriptor controls are not
 evidence of the full protected listener, installer, fs-verity custody, signer
-or service lifecycle. The preceding `.413` raw exports do not contain this code.
+or service lifecycle. Current runtime export verification is recorded in the
+[build results](native-pilot-build.md#current-engineering-assembly).
+All three current Python exports built and passed exact-source observation in
+156.890 seconds, with identical source manifests and no retry. They contain
+6,206 / 6,216 / 6,225 entries respectively. The exact source archive, focused
+log, export archives, observation logs and checksums are retained at
+`codex-offload/serverware/engineering-builds/90e10cbb-connected-lifecycle-FdUpzn/`
+under the operator's home directory. These remain engineering-only exports,
+not approved packages or installed runtimes. No native rebuild, cloud action,
+paid test or live commissioning occurred.
 
 The staged lifecycle API still needs an independently operated caller supplying
 real late inputs/approvals and installed approved inventories. This batch does
 not supply that operator's policy, a hosted approval service or an interactive
-deployment frontend. Immutable dependencies and independently operated release,
+deployment frontend. The next code deliverable is a fixed executable caller
+for this staged API, carrying actual observations and independent late approval
+descriptors through the existing authenticated transport. It must not approve
+its own requests. The original short startup window needs an independently
+operated machine-speed provider; a manual approval prompt cannot silently renew
+that window. Immutable dependencies and independently operated release,
 Nitro/KMS, signing and witness infrastructure remain unprovisioned. Live provider,
 YubiKey, ordinary application allow/deny and recovery acceptance remain open.
 Source checkpoints remain **36/46** and production acceptance **0/6**.

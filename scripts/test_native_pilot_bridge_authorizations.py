@@ -33,7 +33,8 @@ from test_native_pilot_closure_set import canonical, sha, synthetic
 from test_native_pilot_generation_scope import fixture as scope_fixture, key_fixture, signed_message, encoded, NOW
 from test_native_pilot_key_authorizations import public_keys, key_root
 
-SERVICES = ("durable-recovery-store", "recovery-target", "cleanup-authority", "current-signature-authority", "bounded-cleanup-helper")
+SERVICES = ("durable-recovery-store", "cleanup-authorization-consumer", "recovery-target-provider",
+    "current-signature-authority", "bounded-cleanup-helper")
 NATIVE_SIGNERS = {
     "ledger-append": ("commit-request", "commit-request-peer-directory"),
     "ingress-admission": ("ingress-admission", "ingress-admission-peer-directory"),

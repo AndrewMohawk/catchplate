@@ -162,9 +162,10 @@ cleanup, external signer paths and connected runtime verification remain open.
 Explicit policy/v20 adds a [bounded interactive interval](docs/native-pilot-interactive.md)
 after the actual origin handoff, retaining original deadlines and controlled
 shutdown. All 27 focused Python controls pass; live use remains unverified.
-The mandatory [policy-publication path](docs/native-pilot-publication.md) is
-being connected across native signing, immutable storage and independent durable
-state. Cold-start receipt commissioning and expanded deployment inputs remain open.
+The mandatory [policy-publication path](docs/native-pilot-publication.md) now
+connects native signing, immutable storage and independent durable state in source.
+The native compiler check passes; runtime behavior remains unverified. Cold-start
+receipt commissioning and expanded deployment inputs remain open.
 These counts are not a percentage of
 product readiness or permission to deploy.
 Protected deployment is not provisioned. This is not

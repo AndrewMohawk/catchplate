@@ -100,10 +100,41 @@ protected provisioning, approved dependencies and connected application
 allow/deny/cleanup acceptance remain open. Source checkpoints **36/46** and
 production acceptance **0/6** are unchanged.
 
+### Next connected build slice
+
+Cold commissioning needs a separate, generation-independent grant and core.
+The recovery store must durably establish explicitly approved genesis; retrieval
+must persist the immutable core before the native signer can issue the literal
+`Uninstalled` receipt. The recovery store must finalize that exact receipt and
+the independent witness must verify and durably mirror it before release.
+Only afterward may the policy load and operational grants reference it. Storage-directory
+genesis proves storage ownership, not policy state. Keep the existing
+Published/Commit-only baseline closed; add an explicit cold-baseline successor
+and durable one-use authorization rather than sentinel generation hashes.
+
+Commissioning must then join the actual publication endpoint, keys and grants
+to retrieval/v5, ordinary/v10, bridge/v13 and persistence/v3 in one connected
+successor. This requires an explicitly approved eleven-endpoint/twelve-member
+closure, not an expansion of the old ten-endpoint profile. The initial mapping
+finds at least ten new jobs and nine signing selectors; these are planning
+minimums, not implemented inventory or readiness counts. Preserve genuine
+preceding observations, original lifetimes and retained cleanup ownership.
+
 ## Verification
 
-Assembled native compilation is pending. Pure state/snapshot and terminal query
-controls are authored, not yet executed. No actual journal/service transcript,
-native guest, cold-baseline commissioning, provider, cloud or paid test has run
-for this slice. The previous interactive-interval Python checks do not cover
-these new Rust paths.
+Exact source `72d967916e4a1f8c07c61289e4981f4279a84c2c` passes
+`cargo check --offline --locked --frozen -j1 --bin serverware-decision-gate`
+under the pinned Rust 1.88 image, with no network and one CPU. Cargo reports
+1 minute 3 seconds, with 312 library and 2,387 binary warnings including
+duplicates. The initial `5130d297` snapshot failed with five integration errors;
+the corrected snapshot fixes one missing selection argument, three error-type
+conversions and an unsupported nineteen-element serialization tuple. Both
+archives and actual logs are retained, not just the successful result.
+
+Four documents pass 436 local file targets; anchors and external links are not
+checked. Nine new pure state/snapshot and terminal-query controls are authored,
+not test-compiled or executed. No actual journal/service transcript, native
+guest, cold-baseline commissioning, provider, cloud or paid test has run for this
+slice. The previous interactive-interval Python checks do not cover these new
+Rust paths. Archives, commands, logs and checksums are retained at
+`codex-offload/serverware/engineering-builds/72d96791-publication-2Ip2Sj/`.

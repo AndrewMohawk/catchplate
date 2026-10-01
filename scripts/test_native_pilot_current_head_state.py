@@ -9,6 +9,7 @@ checkpoint key, independent freshness or completed pilot is claimed.
 from __future__ import annotations
 
 import copy
+import ctypes
 import fcntl
 import os
 from pathlib import Path
@@ -55,12 +56,27 @@ def _isolated(source, action):
         for path in (profile.STATE_DIRECTORY, profile.DECISION_DIRECTORY):
             (root / path.lstrip("/")).mkdir(parents=True, mode=0o700)
             os.chmod(root / path.lstrip("/"), 0o700)
+        (root / "proc").mkdir(mode=0o700)
         reader, writer = os.pipe2(os.O_CLOEXEC)
         child = os.fork()
         if child == 0:
             os.close(reader); signal.alarm(12)
             status = 1
             try:
+                # Actual procfs, never fixture files or injected descriptor
+                # owners. Unshare succeeds before any mount operation, so the
+                # recursive bind and its submounts are private to this child.
+                libc = ctypes.CDLL(None, use_errno=True)
+                libc.unshare.argtypes, libc.unshare.restype = (ctypes.c_int,), ctypes.c_int
+                libc.mount.argtypes = (ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p,
+                    ctypes.c_ulong, ctypes.c_void_p)
+                libc.mount.restype = ctypes.c_int
+                if libc.unshare(0x00020000) != 0:
+                    code = ctypes.get_errno(); raise OSError(code, os.strerror(code))
+                if libc.mount(None, b"/", None, 0x00004000 | 0x00040000, None) != 0:
+                    code = ctypes.get_errno(); raise OSError(code, os.strerror(code))
+                if libc.mount(b"/proc", os.fsencode(root / "proc"), None, 0x00001000 | 0x00004000, None) != 0:
+                    code = ctypes.get_errno(); raise OSError(code, os.strerror(code))
                 os.chroot(root); os.chdir("/")
                 action(copy.deepcopy(source))
                 os.write(writer, b"ok"); status = 0

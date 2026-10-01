@@ -57,7 +57,15 @@ inputs and approvals likewise become visible only after complete writes,
 readback and fsync, with no replacement of existing output names. An incomplete
 file is never used as the readiness signal. The selected Linux filesystem must
 support the actual anonymous-file and atomic-link operations; no weaker
-publication fallback is selected.
+publication fallback is selected. Publication uses `O_TMPFILE` and one
+`linkat(AT_SYMLINK_FOLLOW)` through a retained genuine procfs directory for the
+publisher's own PID/FD table. The process/start identity and source inode are
+checked; the FD number is not independent authority. This avoids
+`AT_EMPTY_PATH`'s initial-user-namespace capability requirement while retaining
+complete-write-before-visibility and no replacement. Procfs must be available
+in the publisher's namespace. Filesystem controls bind the real `/proc` into a
+child-private mount namespace/chroot, not synthetic proc entries; this is not
+an off-host or hostile-root isolation claim.
 
 ## Fixed entrypoints
 

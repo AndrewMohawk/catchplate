@@ -27,6 +27,8 @@ _TOKEN = object()
 _LIBC = ctypes.CDLL(None, use_errno=True)
 _LIBC.linkat.argtypes = (ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_int)
 _LIBC.linkat.restype = ctypes.c_int
+_LIBC.fstatfs.argtypes = (ctypes.c_int, ctypes.c_void_p)
+_LIBC.fstatfs.restype = ctypes.c_int
 
 
 class StateStoreError(ValueError):
@@ -48,6 +50,7 @@ class _Directory:
         self._attempted = set()
         self._closed = self._closing = self._uncertain = self._failed = False
         self._path = None
+        self._proc, self._proc_start = {}, None
 
     def _origin(self):
         p.require(not self._closed and self._pid == os.getpid()
@@ -74,6 +77,7 @@ class _Directory:
         self._origin(); self._outer()
         p.require(path in (profile.STATE_DIRECTORY, profile.DECISION_DIRECTORY))
         if pin is not None: profile._directory(pin)
+        self._open_proc()
         self._path = path
         for name in ("/", "/etc", "/etc/serverware", path):
             with ownership.owning():
@@ -92,7 +96,51 @@ class _Directory:
     def fd(self):
         return self._roots[self._path][0][0]
 
+    def _process_start(self):
+        raw = os.pread(self._proc["stat"][0], 4097, 0)
+        p.require(0 < len(raw) <= 4096)
+        prefix, tail = raw.rsplit(b") ", 1)
+        p.require(prefix.split(b" ", 1)[0] == str(self._pid).encode("ascii"))
+        return p.integer(int(tail.split()[19]))
+
+    def _open_proc(self):
+        # Resolve our own actual PID once on genuine procfs, then hold its FD
+        # directory. The caller never supplies a pathname, PID or proc handle.
+        with ownership.owning():
+            self._proc["root"] = self._hold(os.open("/proc", _READ | os.O_DIRECTORY))
+        root = self._proc["root"][0]
+        buffer = ctypes.create_string_buffer(256)
+        p.require(_LIBC.fstatfs(root, ctypes.byref(buffer)) == 0
+            and ctypes.c_long.from_buffer(buffer).value & 0xffffffff == 0x9fa0
+            and os.readlink("self", dir_fd=root) == str(self._pid))
+        with ownership.owning():
+            self._proc["pid"] = self._hold(os.open(str(self._pid), _READ | os.O_DIRECTORY, dir_fd=root))
+            self._proc["fd"] = self._hold(os.open("fd", _READ | os.O_DIRECTORY, dir_fd=self._proc["pid"][0]))
+            self._proc["stat"] = self._hold(os.open("stat", _READ, dir_fd=self._proc["pid"][0]))
+        self._proc_start = self._process_start()
+        self._check_proc()
+
+    def _check_proc(self):
+        if not self._proc: return
+        for name, row in self._proc.items():
+            actual = os.fstat(row[0])
+            if name == "root": named = os.stat("/proc", follow_symlinks=False)
+            else:
+                parent, leaf = ("root", str(self._pid)) if name == "pid" else ("pid", name)
+                named = os.stat(leaf, dir_fd=self._proc[parent][0], follow_symlinks=False)
+            p.require(not os.get_inheritable(row[0]) and (actual.st_dev, actual.st_ino) == row[1]
+                == (named.st_dev, named.st_ino) and (stat.S_ISREG(actual.st_mode) if name == "stat"
+                else stat.S_ISDIR(actual.st_mode)))
+        p.require(self._pid == os.getpid() and self._process_start() == self._proc_start
+            and os.readlink("self", dir_fd=self._proc["root"][0]) == str(self._pid))
+        # Prove this proc directory addresses this process's actual FD table,
+        # not a numerically matching descriptor in another process/namespace.
+        row = self._proc["fd"]
+        link = os.stat(str(row[0]), dir_fd=row[0], follow_symlinks=True)
+        p.require((link.st_dev, link.st_ino) == row[1])
+
     def _retained(self):
+        self._check_proc()
         for path, (row, expected) in self._roots.items():
             parent, leaf = path.rsplit("/", 1)
             named = os.stat(path, follow_symlinks=False) if path == "/" else os.stat(leaf,
@@ -150,7 +198,15 @@ class _Directory:
         os.fsync(row[0]); self.check()
         p.require(os.pread(row[0], len(raw) + 1, 0) == raw)
         with ownership.owning():
-            if _LIBC.linkat(row[0], b"", self.fd, name.encode("ascii"), 0x1000) != 0:
+            self._check_proc()
+            source = str(row[0]).encode("ascii")
+            linked = os.stat(source, dir_fd=self._proc["fd"][0], follow_symlinks=True)
+            p.require(publication._file_identity(linked) == publication._file_identity(os.fstat(row[0]))
+                and (linked.st_dev, linked.st_ino) == row[1] and linked.st_nlink == 0)
+            # Following this validated kernel proc magic link does not require
+            # AT_EMPTY_PATH's initial-namespace CAP_DAC_READ_SEARCH. This is the
+            # only publication primitive, not an error-dependent fallback.
+            if _LIBC.linkat(self._proc["fd"][0], source, self.fd, name.encode("ascii"), 0x400) != 0:
                 code = ctypes.get_errno(); raise OSError(code, os.strerror(code))
         written = publication._file_identity(os.fstat(row[0]))
         p.require(written[5:7] == (1, len(raw)))

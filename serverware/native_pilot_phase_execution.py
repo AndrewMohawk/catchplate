@@ -539,6 +539,19 @@ class PhaseExecution:
         elif job.family == "launch":
             _same(value["role"], job.role)
             if job.role != "bridge":
+                prior_key = p.document(self._inputs["native-role-keys-" + job.role], key_authority.MAX_INPUT)
+                prior_delivery = p.document(_raw(prior_key["deliveryInputOriginal"], delivery_authority.MAX_INPUT),
+                    delivery_authority.MAX_INPUT)
+                for target, source in (("ownerConfigurationSha256", "ownerConfigurationOriginal"),
+                        ("windowSha256", "windowOriginal")):
+                    p.require(value[target] == p.sha(_raw(prior_delivery[source], 32768)))
+                for name in ("runtimeOriginal", "observationOriginal"):
+                    _same(value[name], prior_delivery[name])
+                for name in ("trust", "assignment"):
+                    _same(value["originals"][name], prior_key["recipeOriginals"][name + "Original"])
+                if job.role == "trustedTime":
+                    service_input = p.document(self._inputs["native-service-trustedTime"], native_authority.MAX_INPUT)
+                    _same(value["originals"]["timeBootstrap"], service_input["bootstrapOriginal"])
                 keys = p.document(_raw(value["originals"]["keys"], 65536), 65536)
                 p.require(p.canonical(keys["authorization"]) == self._outputs["native-role-keys-" + job.role])
                 self._known("admission", value["originals"], "native-key-admission-" + job.role)

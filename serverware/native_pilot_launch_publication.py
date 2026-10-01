@@ -410,6 +410,130 @@ def _public_joins(role, documents, guest, runtime_raw, grant, observed, config, 
     return min(deadlines)
 
 
+def _grant_value(role, raw):
+    purpose = _grant_purpose(role)
+    publication._shape(purpose, raw)
+    operation = LAUNCHES[role][2]
+    return generation.grant_original(raw) if operation is None else services.grant_original(operation, raw)
+
+
+def _prepare_public(value, *, payload, guest, runtime_raw, grant_raw, companion_raw, observed, config, now):
+    """Shared existing public joins; no files, live owner or secret access."""
+    role, inner = value["role"], value["keyAdmission"]
+    _inner(inner, role)
+    p.fields(value["originals"], COMPONENTS)
+    prepared, documents = {}, {}
+    if role != "bridge":
+        runtime_purpose = "native-runtime-" + role
+        shape(runtime_purpose, runtime_raw)
+        prepared[runtime_purpose] = runtime_raw
+    for name, (suffix, maximum) in COMPONENTS.items():
+        raw, _ = c9._original(value["originals"][name], maximum)
+        purpose = "native-" + role + "-" + suffix
+        c9._same(inner[name], {"path": DESTINATIONS[purpose], "sha256": p.sha(raw)})
+        documents[name] = shape(purpose, raw)
+        prepared[purpose] = raw
+    grant_pin = value["serviceGrant"]
+    delivery._pin(grant_pin)
+    p.require(type(grant_raw) is bytes and 0 < len(grant_raw) <= publication.LIMITS[_grant_purpose(role)])
+    p.require(grant_pin == {"path": publication.DESTINATIONS[_grant_purpose(role)], "sha256": p.sha(grant_raw)})
+    grant = _grant_value(role, grant_raw)
+    companion = None
+    if role == "commitRequest":
+        p.require(type(companion_raw) is bytes
+            and 0 < len(companion_raw) <= publication.LIMITS["native-service-commitRequest"])
+        pin = grant["payload"]["commitRequest"]
+        delivery._pin(pin)
+        p.require(pin == {"path": publication.DESTINATIONS["native-service-commitRequest"],
+            "sha256": p.sha(companion_raw)})
+        publication._shape("native-service-commitRequest", companion_raw)
+        companion = services.grant_original("commitRequest", companion_raw)
+    else:
+        p.require(companion_raw is None)
+    expiry = _public_joins(role, documents, guest, runtime_raw, grant, observed, config, companion, now)
+    if companion is not None:
+        expiry = min(expiry, companion["payload"]["expiresAtUnixNanos"])
+    # Metadata binds an independently provisioned ciphertext; no credential
+    # original is read, and neither existence nor successful KMS is inferred.
+    transport = documents["encryptedKeys"]["authorization"]["payload"]["transport"]
+    ciphertext = [entry for entry in payload["credentials"] if entry["name"] == "shadow-encrypted-role-inventory"]
+    p.require(len(ciphertext) == 1 and ciphertext[0]["signing"] is None and 0 < ciphertext[0]["length"] <= 32768
+        and ciphertext[0]["original"]["sha256"] == transport["encryptedInventorySha256"]
+        and all(not entry["name"].startswith("shadow-key-custody-") for entry in payload["credentials"]))
+    api, field, _ = LAUNCHES[role]
+    launch_raw = p.canonical({"apiVersion": "serverware." + api, "keyAdmission": inner, field: grant_pin})
+    launch_purpose = "native-launch-" + role
+    shape(launch_purpose, launch_raw)
+    prepared[launch_purpose] = launch_raw  # Fixed final publication point.
+    for purpose in prepared:
+        p.require(publication.DESTINATIONS[purpose] == DESTINATIONS[purpose]
+            and publication.LIMITS[purpose] == PURPOSES[purpose])
+    pins = {purpose: {"path": DESTINATIONS[purpose], "sha256": p.sha(raw)} for purpose, raw in prepared.items()}
+    return prepared, pins, expiry
+
+
+def prepare_endpoint_bundle(bundle_original: bytes, *, delivery_input_original: bytes,
+        delivery_original: bytes, service_grant_original: bytes, commit_request_original: bytes | None,
+        boot, now_boottime_ns, now_unix_ns) -> dict:
+    """Pure endpoint public validation, not approval, installation or admission.
+
+    The caller retains the provenance of every complete original and clock.
+    Bridge bundles cannot enter this API. No prepared path is opened here.
+    """
+    # Local import: key_profile itself uses this module's pure wire shapes.
+    from serverware import native_pilot_key_profile as keys
+    value = p.fields(p.document(bundle_original, MAX_INPUT), FIELDS)
+    role = value["role"]
+    p.require(value["apiVersion"] == "serverware.nativePilotLaunchBundle/v1"
+        and type(role) is str and role in cohort.ENDPOINT_ROLES)
+    p.integer(now_boottime_ns, maximum=p.MAX_U64); p.integer(now_unix_ns)
+    guest, window, observed, runtime_raw, _ = keys._delivery(role, delivery_input_original,
+        delivery_original, boot=boot, now=now_boottime_ns)
+    c9.window_at(window, boot=boot, now=now_boottime_ns)
+    delivered = p.fields(p.document(delivery_input_original, c9.MAX_INPUT), c9.INPUT_FIELDS)
+    config_raw, config = c9._original(delivered["ownerConfigurationOriginal"], cohort.MAX_BYTES)
+    window_raw, _ = c9._original(delivered["windowOriginal"], 32768)
+    cold_raw, _ = c9._original(delivered["configurationOriginal"], 65536)
+    p.require(p.digest(value["ownerConfigurationSha256"]) == p.sha(config_raw)
+        and p.digest(value["windowSha256"]) == p.sha(window_raw))
+    c9._same(value["observationOriginal"], delivered["observationOriginal"])
+    c9._same(value["runtimeOriginal"], delivered["runtimeOriginal"])
+    inner = value["keyAdmission"]
+    _inner(inner, role)
+    c9._same(inner["deliveryConfiguration"], {"path": publication.DESTINATIONS["native-cold-" + role],
+        "sha256": p.sha(cold_raw)})
+    c9._same(inner["delivery"], {"path": publication.DESTINATIONS["native-delivery-" + role],
+        "sha256": p.sha(delivery_original)})
+    payload = p.document(delivery_original, delivery.MAX_DELIVERY)["payload"]
+    prepared, pins, expiry = _prepare_public(value, payload=payload, guest=guest,
+        runtime_raw=runtime_raw, grant_raw=service_grant_original, companion_raw=commit_request_original,
+        observed=observed, config=config, now=now_unix_ns)
+    p.require(now_unix_ns < expiry)
+    return {"role": role, "window": window, "deadline": p.ns(window["startupDeadlineBoottimeNs"]),
+        "epochLimit": expiry, "prepared": prepared, "pins": pins, "launch": pins["native-launch-" + role]}
+
+
+def _installation_result(role, bundle_sha256, window, pins):
+    return {"apiVersion": "serverware.nativePilotLaunchInstallation/v1", "role": role,
+        "bundleSha256": bundle_sha256, "startupDeadlineBoottimeNs": window["startupDeadlineBoottimeNs"],
+        "lifetimeDeadlineBoottimeNs": window["lifetimeDeadlineBoottimeNs"],
+        "launch": pins["native-launch-" + role], "pins": pins}
+
+
+def checked_endpoint_result(bundle_original: bytes, result, *, delivery_input_original: bytes,
+        delivery_original: bytes, service_grant_original: bytes, commit_request_original: bytes | None,
+        boot, now_boottime_ns, now_unix_ns) -> dict:
+    """Check the exact public result; actual installation provenance is external."""
+    context = prepare_endpoint_bundle(bundle_original, delivery_input_original=delivery_input_original,
+        delivery_original=delivery_original, service_grant_original=service_grant_original,
+        commit_request_original=commit_request_original, boot=boot,
+        now_boottime_ns=now_boottime_ns, now_unix_ns=now_unix_ns)
+    expected = _installation_result(context["role"], p.sha(bundle_original), context["window"], context["pins"])
+    p.fields(result, tuple(expected))
+    c9._same(result, expected)
+    return p.document(p.canonical(result), 32768)
+
+
 def install(bundle_original: bytes, *, expected_sha256: str) -> dict:
     """Install one fixed role; return exact pins only, never launch/readiness."""
     global _FAILED, _COUNT, _BYTES
@@ -467,59 +591,25 @@ def install(bundle_original: bytes, *, expected_sha256: str) -> dict:
         c9._activation(payload["activation"], expected)
         c9._credentials(payload["credentials"], cold["authority"])
         guest = delivery._delivery_guest(payload, delivery_raw)
-        p.fields(value["originals"], COMPONENTS)
-        prepared, documents = {}, {}
-        if role != "bridge":
-            prepared[runtime_purpose] = runtime_raw
-        for name, (suffix, maximum) in COMPONENTS.items():
-            raw, _ = c9._original(value["originals"][name], maximum)
-            purpose = "native-" + role + "-" + suffix
-            c9._same(inner[name], {"path": DESTINATIONS[purpose], "sha256": p.sha(raw)})
-            documents[name] = shape(purpose, raw)
-            prepared[purpose] = raw
         grant_pin = value["serviceGrant"]
         delivery._pin(grant_pin)
         grant_purpose = _grant_purpose(role)
         p.require(grant_pin["path"] == publication.DESTINATIONS[grant_purpose])
         grant_raw = retain(grant_pin, publication.LIMITS[grant_purpose])
-        publication._shape(grant_purpose, grant_raw)
-        operation = LAUNCHES[role][2]
-        if operation is None:
-            grant = generation.grant_original(grant_raw)
-        else:
-            # Publication has checked the envelope; select the exact domain
-            # from its closed versioned payload, then authenticate below.
-            grant = services.grant_original(operation, grant_raw)
-        companion = None
+        grant = _grant_value(role, grant_raw)
+        companion_raw = None
         if role == "commitRequest":
             pin = grant["payload"]["commitRequest"]
             delivery._pin(pin)
             p.require(pin["path"] == publication.DESTINATIONS["native-service-commitRequest"])
-            raw = retain(pin, publication.LIMITS["native-service-commitRequest"])
-            publication._shape("native-service-commitRequest", raw)
-            companion = services.grant_original("commitRequest", raw)
+            companion_raw = retain(pin, publication.LIMITS["native-service-commitRequest"])
         now = time.time_ns()
-        expiry = _public_joins(role, documents, guest, runtime_raw, grant, observed, config, companion, now)
-        if companion is not None:
-            expiry = min(expiry, companion["payload"]["expiresAtUnixNanos"])
-        # Never read the ciphertext credential (or any credential). Bind only
-        # its already independently approved public pin to encrypted metadata.
-        transport = documents["encryptedKeys"]["authorization"]["payload"]["transport"]
-        ciphertext = [entry for entry in payload["credentials"] if entry["name"] == "shadow-encrypted-role-inventory"]
-        p.require(len(ciphertext) == 1 and ciphertext[0]["signing"] is None and 0 < ciphertext[0]["length"] <= 32768
-            and ciphertext[0]["original"]["sha256"] == transport["encryptedInventorySha256"]
-            and all(not entry["name"].startswith("shadow-key-custody-") for entry in payload["credentials"]))
-        api, field, _ = LAUNCHES[role]
-        launch_raw = p.canonical({"apiVersion": "serverware." + api, "keyAdmission": inner, field: grant_pin})
-        launch_purpose = "native-launch-" + role
-        shape(launch_purpose, launch_raw)
-        prepared[launch_purpose] = launch_raw  # Fixed final publication point.
+        prepared, expected_pins, expiry = _prepare_public(value, payload=payload, guest=guest,
+            runtime_raw=runtime_raw, grant_raw=grant_raw, companion_raw=companion_raw,
+            observed=observed, config=config, now=now)
         count, total = len(prepared), sum(len(raw) for raw in prepared.values())
         p.require(_COUNT + count <= 128 and _BYTES + total <= 32 * 1024 * 1024)
         _COUNT += count; _BYTES += total  # Failure cannot restore the budget.
-        for purpose in prepared:
-            p.require(publication.DESTINATIONS[purpose] == DESTINATIONS[purpose]
-                and publication.LIMITS[purpose] == PURPOSES[purpose])
 
         def check(previous=0, previous_wall=now):
             for original in held:
@@ -537,9 +627,8 @@ def install(bundle_original: bytes, *, expected_sha256: str) -> dict:
             pins[purpose] = publisher.publish(purpose=purpose, raw=raw, expected_sha256=p.sha(raw))
             previous, wall = check(previous, wall)
         publisher.check(); check(previous, wall)
-        return {"apiVersion": "serverware.nativePilotLaunchInstallation/v1", "role": role,
-            "bundleSha256": expected_sha256, "startupDeadlineBoottimeNs": window["startupDeadlineBoottimeNs"],
-            "lifetimeDeadlineBoottimeNs": window["lifetimeDeadlineBoottimeNs"], "launch": pins[launch_purpose], "pins": pins}
+        c9._same(pins, expected_pins)
+        return _installation_result(role, expected_sha256, window, pins)
     except BaseException:
         _FAILED = True
         raise

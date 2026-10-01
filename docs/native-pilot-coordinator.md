@@ -33,10 +33,11 @@ or success flags can replace those checks. The original per-job protocol remains
 valid; commissioning policy is not approval of arbitrary future JSON.
 
 The current [supervisor source](native-pilot-supervisor.md) implements the actual
-authority-process owner, pinned commissioning policy, and the first 116 fixed
+authority-process owner, pinned commissioning policy, and the first 126 fixed
 job composers, including prior-signature verification. Twenty native key/admission
 and 31 late launch authorizations were added to the previous 85-job inventory.
-The full-run owner refuses before spawn because the other 20 jobs remain unimplemented. This
+Ten endpoint-launch composers now consume those actual authorizations.
+The full-run owner refuses before spawn because the other 10 jobs remain unimplemented. This
 is not yet a runnable or admitted supervisor; its executable packaging and
 connected verification also remain open. Independent policy selection,
 dependency approval, private key/service provisioning and actual hardware remain

@@ -32,6 +32,9 @@ Explicit v11 delegates the 31 late closure, encrypted-delivery and verifier
 authorizations required before endpoint launch, including CommitRequest's
 separate HMAC assignment. It adds 31 fixed supervisor capabilities; legacy
 42/57/77-selector policies remain closed and cannot bind the expanded owner.
+Explicit v12 delegates the ten endpoint launch bundles using actual earlier
+authorizations and separately approved clock-bootstrap settings. It retains
+108 signing selectors; service material, bridge and release remain separate.
 
 Only the actual AuthorityCoordinatorProcess and its current opaque JobRequest
 can enter bootstrap(). No signing, publication, process launch, arbitrary
@@ -93,7 +96,11 @@ ORDINARY_TRANSITION_FIELDS = NATIVE_SERVICE_FIELDS + ("ordinaryTransitionsOrigin
 LAUNCH_AUTHORIZATION_POLICY_API = "serverware.nativePilotSupervisorCommissioningPolicy/v11"
 LAUNCH_AUTHORIZATION_PURPOSE = "initial-driver-bootstrap-precreation-endpoints-generations-and-native-launch-authorizations"
 LAUNCH_AUTHORIZATION_FIELDS = ORDINARY_TRANSITION_FIELDS + ("nativeLaunchAuthorizationsOriginal",)
-ORDINARY_TRANSITION_POLICY_APIS = (ORDINARY_TRANSITION_POLICY_API, LAUNCH_AUTHORIZATION_POLICY_API)
+ENDPOINT_LAUNCH_POLICY_API = "serverware.nativePilotSupervisorCommissioningPolicy/v12"
+ENDPOINT_LAUNCH_PURPOSE = "initial-driver-bootstrap-precreation-endpoints-generations-and-endpoint-launches"
+ENDPOINT_LAUNCH_FIELDS = LAUNCH_AUTHORIZATION_FIELDS + ("endpointLaunchesOriginal",)
+LAUNCH_AUTHORIZATION_POLICY_APIS = (LAUNCH_AUTHORIZATION_POLICY_API, ENDPOINT_LAUNCH_POLICY_API)
+ORDINARY_TRANSITION_POLICY_APIS = (ORDINARY_TRANSITION_POLICY_API,) + LAUNCH_AUTHORIZATION_POLICY_APIS
 NATIVE_SERVICE_POLICY_APIS = (NATIVE_SERVICE_POLICY_API,) + ORDINARY_TRANSITION_POLICY_APIS
 KEY_AUTHORIZATION_POLICY_APIS = (KEY_AUTHORIZATION_POLICY_API,) + NATIVE_SERVICE_POLICY_APIS
 NATIVE_DELIVERY_POLICY_APIS = (NATIVE_DELIVERY_POLICY_API,) + KEY_AUTHORIZATION_POLICY_APIS
@@ -183,6 +190,7 @@ class SupervisorPolicy:
         self._native_services = None
         self._ordinary_transitions = None
         self._launch_authorizations = None
+        self._endpoint_launches = None
         self._recipe_attempted = self._measured_attempted = False
 
     @classmethod
@@ -203,7 +211,8 @@ class SupervisorPolicy:
             value = _policy_document(owner._raw)
             p.require(type(value) is dict and value.get("apiVersion") in
                 (POLICY_API,) + MEASURED_POLICY_APIS)
-            launch_authorization = value["apiVersion"] == LAUNCH_AUTHORIZATION_POLICY_API
+            endpoint_launch = value["apiVersion"] == ENDPOINT_LAUNCH_POLICY_API
+            launch_authorization = value["apiVersion"] in LAUNCH_AUTHORIZATION_POLICY_APIS
             ordinary_transition = value["apiVersion"] in ORDINARY_TRANSITION_POLICY_APIS
             native_service = value["apiVersion"] in NATIVE_SERVICE_POLICY_APIS
             key_authorization = value["apiVersion"] in KEY_AUTHORIZATION_POLICY_APIS
@@ -213,9 +222,9 @@ class SupervisorPolicy:
             initial = value["apiVersion"] in INITIAL_POLICY_APIS
             endpoint = value["apiVersion"] in ENDPOINT_POLICY_APIS
             measured = value["apiVersion"] in MEASURED_POLICY_APIS
-            p.fields(value, LAUNCH_AUTHORIZATION_FIELDS if launch_authorization else ORDINARY_TRANSITION_FIELDS if ordinary_transition else NATIVE_SERVICE_FIELDS if native_service else KEY_AUTHORIZATION_FIELDS if key_authorization else NATIVE_DELIVERY_FIELDS if native_delivery else GENERATION_FIELDS if ordinary_generation else DELIVERY_FIELDS if ordinary_delivery else INITIAL_FIELDS if initial else
+            p.fields(value, ENDPOINT_LAUNCH_FIELDS if endpoint_launch else LAUNCH_AUTHORIZATION_FIELDS if launch_authorization else ORDINARY_TRANSITION_FIELDS if ordinary_transition else NATIVE_SERVICE_FIELDS if native_service else KEY_AUTHORIZATION_FIELDS if key_authorization else NATIVE_DELIVERY_FIELDS if native_delivery else GENERATION_FIELDS if ordinary_generation else DELIVERY_FIELDS if ordinary_delivery else INITIAL_FIELDS if initial else
                 ENDPOINT_FIELDS if endpoint else MEASURED_FIELDS if measured else FIELDS)
-            p.require(value["purpose"] == (LAUNCH_AUTHORIZATION_PURPOSE if launch_authorization else ORDINARY_TRANSITION_PURPOSE if ordinary_transition else NATIVE_SERVICE_PURPOSE if native_service else KEY_AUTHORIZATION_PURPOSE if key_authorization else NATIVE_DELIVERY_PURPOSE if native_delivery else GENERATION_PURPOSE if ordinary_generation else DELIVERY_PURPOSE if ordinary_delivery else INITIAL_PURPOSE if initial else
+            p.require(value["purpose"] == (ENDPOINT_LAUNCH_PURPOSE if endpoint_launch else LAUNCH_AUTHORIZATION_PURPOSE if launch_authorization else ORDINARY_TRANSITION_PURPOSE if ordinary_transition else NATIVE_SERVICE_PURPOSE if native_service else KEY_AUTHORIZATION_PURPOSE if key_authorization else NATIVE_DELIVERY_PURPOSE if native_delivery else GENERATION_PURPOSE if ordinary_generation else DELIVERY_PURPOSE if ordinary_delivery else INITIAL_PURPOSE if initial else
                 ENDPOINT_PURPOSE if endpoint else MEASURED_PURPOSE if measured else PURPOSE))
             if measured:
                 p.digest(value["measuredRecipeSha256"])
@@ -319,6 +328,13 @@ class SupervisorPolicy:
                 p.require(type(policy_text) is str and policy_text.isascii())
                 launch_authorizations = authorizations.validate_policy(
                     p.document(policy_text.encode("ascii"), MAX_POLICY))
+            if endpoint_launch:
+                from serverware import native_pilot_endpoint_launch_profile as launches
+                policy_text = value["endpointLaunchesOriginal"]
+                p.require(type(policy_text) is str and policy_text.isascii())
+                endpoint_launches = launches.validate_policy(
+                    p.document(policy_text.encode("ascii"), MAX_POLICY))
+                _same(endpoint_launches["endpoints"]["trustedTime"], native_services["trustedTime"])
             owner._value = copy.deepcopy(value)
             owner._value["precreation"] = precreation
             if endpoint:
@@ -340,6 +356,8 @@ class SupervisorPolicy:
                 owner._ordinary_transitions = ordinary_transitions
             if launch_authorization:
                 owner._launch_authorizations = launch_authorizations
+            if endpoint_launch:
+                owner._endpoint_launches = endpoint_launches
             owner._bootstrap, owner._control, owner._config, owner._window = raw, control, config, window
             owner._bindings = {"apiVersion": "serverware.nativePilotSupervisorBindings/v1",
                 "conductorInventorySha256": value["conductorInventorySha256"],
@@ -376,7 +394,7 @@ class SupervisorPolicy:
     def retain_measured_recipe(self, recipe):
         """Retain only the source-selected real recipe before process setup.
 
-        Legacy policy forbids a recipe. v2-v11 require the already independently
+        Legacy policy forbids a recipe. v2-v12 require the already independently
         approved original pin, not future process-dependent configuration data.
         """
         from serverware.native_pilot_measured_configuration import MeasuredConfigurationRecipe
@@ -523,12 +541,19 @@ class SupervisorPolicy:
         return copy.deepcopy(self._ordinary_transitions)
 
     def launch_authorization_policy(self, *, process, request) -> dict:
-        """Only v11 delegates the 31 supervisor-authorized late launch inputs."""
+        """V11+ delegate the 31 supervisor-authorized late launch inputs."""
         self.check(process)
         process.check_request(request)
-        p.require(self._value["apiVersion"] == LAUNCH_AUTHORIZATION_POLICY_API)
+        p.require(self._value["apiVersion"] in LAUNCH_AUTHORIZATION_POLICY_APIS)
         self._require_native_signers(process, request, LAUNCH_AUTHORIZATION_JOBS)
         return copy.deepcopy(self._launch_authorizations)
+
+    def endpoint_launch_policy(self, *, process, request) -> dict:
+        """Only v12 delegates ten fixed launch bundles, not bridge or release."""
+        self.check(process)
+        process.check_request(request)
+        p.require(self._value["apiVersion"] == ENDPOINT_LAUNCH_POLICY_API)
+        return copy.deepcopy(self._endpoint_launches)
 
     def _require_native_signers(self, process, request, jobs):
         """Check source-selected purposes against independent assignment trust."""
@@ -632,7 +657,10 @@ class SupervisorPolicy:
             from serverware.native_pilot_supervisor_process import AuthorityCoordinatorProcess
             p.require(type(self._process) is AuthorityCoordinatorProcess and self._process._closed
                 and self._process._result["status"] in ("not-started", "stopped-cleanup-complete", "failed-cleanup-complete"))
-            if self._value["apiVersion"] == LAUNCH_AUTHORIZATION_POLICY_API:
+            if self._value["apiVersion"] == ENDPOINT_LAUNCH_POLICY_API:
+                from serverware import native_pilot_supervisor_endpoint_launches as endpoint_launches
+                endpoint_launches.close(self._process)
+            if self._value["apiVersion"] in LAUNCH_AUTHORIZATION_POLICY_APIS:
                 from serverware import native_pilot_supervisor_launch_authorizations as launch_authorizations
                 launch_authorizations.close(self._process)
             if self._value["apiVersion"] in ORDINARY_TRANSITION_POLICY_APIS:

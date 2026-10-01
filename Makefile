@@ -1341,6 +1341,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	scripts/test_native_pilot_native_services.py \
 	scripts/test_native_pilot_ordinary_transitions.py \
 	scripts/test_native_pilot_launch_authorizations.py \
+	scripts/test_native_pilot_endpoint_launches.py \
 	scripts/authority/sign_native_pilot_key_authorization.py \
 	scripts/authority/sign_native_pilot_encrypted_delivery.py \
 	scripts/authority/sign_native_pilot_verifier_transport.py \
@@ -1652,6 +1653,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/native_pilot_native_service_profile.py \
 	serverware/native_pilot_ordinary_transition_profile.py \
 	serverware/native_pilot_launch_authorization_profile.py \
+	serverware/native_pilot_endpoint_launch_profile.py \
 	serverware/native_pilot_launch_publication.py \
 	serverware/native_pilot_coordinator_process.py \
 	serverware/native_pilot_coordinator_channel.py \
@@ -1675,6 +1677,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/native_pilot_supervisor_native_services.py \
 	serverware/native_pilot_supervisor_ordinary_transitions.py \
 	serverware/native_pilot_supervisor_launch_authorizations.py \
+	serverware/native_pilot_supervisor_endpoint_launches.py \
 	serverware/native_pilot_supervisor_precreation.py \
 	serverware/native_pilot_supervisor_endpoint_policy.py \
 	serverware/native_pilot_supervisor_endpoint_inputs.py \
@@ -4099,6 +4102,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				scripts/test_native_pilot_native_services.py \
 				scripts/test_native_pilot_ordinary_transitions.py \
 				scripts/test_native_pilot_launch_authorizations.py \
+				scripts/test_native_pilot_endpoint_launches.py \
 				scripts/authority/sign_native_pilot_key_authorization.py \
 				scripts/authority/sign_native_pilot_encrypted_delivery.py \
 				scripts/authority/sign_native_pilot_verifier_transport.py \
@@ -4404,6 +4408,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/native_pilot_native_service_profile.py \
 				serverware/native_pilot_ordinary_transition_profile.py \
 				serverware/native_pilot_launch_authorization_profile.py \
+				serverware/native_pilot_endpoint_launch_profile.py \
 				serverware/native_pilot_launch_publication.py \
 				serverware/native_pilot_coordinator_process.py \
 				serverware/native_pilot_coordinator_channel.py \
@@ -4427,6 +4432,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/native_pilot_supervisor_native_services.py \
 				serverware/native_pilot_supervisor_ordinary_transitions.py \
 				serverware/native_pilot_supervisor_launch_authorizations.py \
+				serverware/native_pilot_supervisor_endpoint_launches.py \
 				serverware/native_pilot_supervisor_precreation.py \
 				serverware/native_pilot_supervisor_endpoint_policy.py \
 				serverware/native_pilot_supervisor_endpoint_inputs.py \

@@ -22,12 +22,13 @@ from serverware import native_pilot_supervisor_endpoint_deliveries as endpoints
 from serverware import native_pilot_supervisor_native_services as native
 from serverware import native_shadow_nitro_originals as originals
 from serverware.native_pilot_phase_execution import JOBS, LAUNCH_AUTHORIZATION_JOBS, MAX_RETAINED_BYTES
+from serverware.native_shadow_proof_cohort_assignment import ENDPOINT_ROLES
 
 p = generation.p
 TRANSITIONS = profile.JOBS
 FIRST_INDEX = 74
 NEXT_JOB = "native-closure-retrieval"
-_AUTHORIZATION_LAST_INDEX = FIRST_INDEX + len(TRANSITIONS) + len(LAUNCH_AUTHORIZATION_JOBS)
+_AUTHORIZATION_LAST_INDEX = FIRST_INDEX + len(TRANSITIONS) + len(LAUNCH_AUTHORIZATION_JOBS) + len(ENDPOINT_ROLES)
 JOB_NAMES = tuple("ordinary-" + operation + ("-" + role if operation == "dispatch" else "")
     for operation, role in TRANSITIONS)
 _LIVE = None
@@ -224,7 +225,7 @@ def require_transitions(policy, *, process, request) -> dict:
 
 
 def recheck_transitions(policy, *, process, request) -> dict:
-    """Recheck an opened boundary through the exact thirty-one jobs/handoff110."""
+    """Recheck the opened boundary through late authorizations/launches to120."""
     return _verified_transitions(policy, process=process, request=request, first=False)
 
 

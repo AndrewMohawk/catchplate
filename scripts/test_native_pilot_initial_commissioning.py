@@ -162,7 +162,14 @@ class SyntheticInitialCommissioningControls(unittest.TestCase):
             self.assertEqual(execution.LAUNCH_AUTHORIZATION_JOB_INFO[job.name], pair)
             self.assertEqual((job.family, job.purpose, job.key), ("native-launch-authorization", None, job.name))
         self.assertEqual(execution.JOBS["service-originals"][109].name, "install-launch-retrieval")
-        self.assertEqual((len(supervisor._ORDER), len(supervisor.missing_jobs())), (136, 20))
+        endpoint_jobs = execution.JOBS["service-originals"][109:119]
+        self.assertEqual(tuple(job.name for job in endpoint_jobs), tuple("install-launch-" + role for role in endpoints))
+        self.assertEqual(supervisor.SUPPORTED_JOBS[116:126],
+            tuple(("service-originals", job.name) for job in endpoint_jobs))
+        for job, role in zip(endpoint_jobs, endpoints, strict=True):
+            self.assertEqual((job.family, job.role, job.purpose, job.key), ("launch", role, None, None))
+        self.assertEqual(execution.JOBS["service-originals"][119].name, "service-material")
+        self.assertEqual((len(supervisor._ORDER), len(supervisor.missing_jobs())), (136, 10))
         with self.assertRaises(ValueError):
             supervisor.require_complete_coverage()
 

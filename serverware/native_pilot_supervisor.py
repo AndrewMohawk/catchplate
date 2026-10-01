@@ -1,6 +1,6 @@
 """Fixed commissioning decisions joined to their real process and installer.
 
-The initial 116 of 136 job composers exist. The complete-coverage check refuses
+The initial 126 of 136 job composers exist. The complete-coverage check refuses
 startup before spawning a child, not after a live attempt reaches a missing job.
 There is no executable entrypoint, configurable dispatcher, approval callback,
 signer, new deadline or source of deployment approval in this module.
@@ -21,6 +21,7 @@ from serverware import native_pilot_supervisor_key_authorizations as key_authori
 from serverware import native_pilot_supervisor_native_services as native_services
 from serverware import native_pilot_supervisor_ordinary_transitions as ordinary_transitions
 from serverware import native_pilot_supervisor_launch_authorizations as launch_authorizations
+from serverware import native_pilot_supervisor_endpoint_launches as endpoint_launches
 from serverware import custody_generation_grants as generation
 from serverware import native_shadow_nitro_originals as originals
 from serverware import native_shadow_nitro_profile as p
@@ -43,7 +44,8 @@ SUPPORTED_JOBS = (("bootstrap-admission", "driver-bootstrap"),
     *(("service-originals", job.name) for job in KEY_AUTHORIZATION_JOBS),
     *(("service-originals", name) for name in native_services.JOB_NAMES),
     *(("service-originals", name) for name in ordinary_transitions.JOB_NAMES),
-    *(("service-originals", name) for name in launch_authorizations.JOB_NAMES))
+    *(("service-originals", name) for name in launch_authorizations.JOB_NAMES),
+    *(("service-originals", name) for name in endpoint_launches.JOB_NAMES))
 _ORDER = tuple((phase, job.name) for phase in STAGES for job in JOBS[phase])
 _TOKEN = object()
 _USED = False
@@ -166,9 +168,12 @@ class CommissioningSupervisor:
         elif slot in SUPPORTED_JOBS[80:85]:
             input_raw = ordinary_transitions.compose(self._policy, process=self._process, request=request)
             approval_raw = _approval(request.raw, input_raw)
-        else:
-            p.require(slot in SUPPORTED_JOBS[85:116])
+        elif slot in SUPPORTED_JOBS[85:116]:
             input_raw = launch_authorizations.compose(self._policy, process=self._process, request=request)
+            approval_raw = _approval(request.raw, input_raw)
+        else:
+            p.require(slot in SUPPORTED_JOBS[116:126])
+            input_raw = endpoint_launches.compose(self._policy, process=self._process, request=request)
             approval_raw = _approval(request.raw, input_raw)
         p.require(type(input_raw) is bytes and type(approval_raw) is bytes)
         p.document(approval_raw, MAX_APPROVAL)

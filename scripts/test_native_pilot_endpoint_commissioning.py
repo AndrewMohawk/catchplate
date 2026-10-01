@@ -70,12 +70,12 @@ class EndpointCommissioningGrammarTests(unittest.TestCase):
             ("endpoint-deliveries", "native-delivery-trustedTime"))
         self.assertEqual(supervisor.SUPPORTED_JOBS[:7], expected)
         self.assertEqual(supervisor._ORDER[:7], expected)
-        self.assertEqual(len(supervisor.SUPPORTED_JOBS), 116)
-        self.assertEqual(supervisor._ORDER[:116], supervisor.SUPPORTED_JOBS)
+        self.assertEqual(len(supervisor.SUPPORTED_JOBS), 126)
+        self.assertEqual(supervisor._ORDER[:126], supervisor.SUPPORTED_JOBS)
         self.assertEqual(len(supervisor._ORDER), 136)
-        self.assertEqual(len(supervisor.missing_jobs()), 20)
+        self.assertEqual(len(supervisor.missing_jobs()), 10)
         self.assertEqual(supervisor.missing_jobs()[0],
-            ("service-originals", "install-launch-retrieval"))
+            ("service-originals", "service-material"))
         with self.assertRaises(ValueError):
             supervisor.require_complete_coverage()
 
@@ -83,8 +83,9 @@ class EndpointCommissioningGrammarTests(unittest.TestCase):
         self.assertEqual((len(policy.FIELDS), len(policy.MEASURED_FIELDS), len(policy.ENDPOINT_FIELDS),
             len(policy.INITIAL_FIELDS), len(policy.DELIVERY_FIELDS), len(policy.GENERATION_FIELDS),
             len(policy.NATIVE_DELIVERY_FIELDS), len(policy.KEY_AUTHORIZATION_FIELDS), len(policy.NATIVE_SERVICE_FIELDS),
-            len(policy.ORDINARY_TRANSITION_FIELDS), len(policy.LAUNCH_AUTHORIZATION_FIELDS)),
-            (8, 9, 11, 12, 13, 14, 15, 16, 17, 18, 19))
+            len(policy.ORDINARY_TRANSITION_FIELDS), len(policy.LAUNCH_AUTHORIZATION_FIELDS),
+            len(policy.ENDPOINT_LAUNCH_FIELDS)),
+            (8, 9, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20))
         self.assertEqual(set(policy.MEASURED_FIELDS) - set(policy.FIELDS), {"measuredRecipeSha256"})
         self.assertEqual(set(policy.ENDPOINT_FIELDS) - set(policy.MEASURED_FIELDS),
             {"endpointPreparation", "endpointDeliveries"})
@@ -97,17 +98,21 @@ class EndpointCommissioningGrammarTests(unittest.TestCase):
         self.assertEqual(set(policy.ORDINARY_TRANSITION_FIELDS) - set(policy.NATIVE_SERVICE_FIELDS), {"ordinaryTransitionsOriginal"})
         self.assertEqual(set(policy.LAUNCH_AUTHORIZATION_FIELDS) - set(policy.ORDINARY_TRANSITION_FIELDS),
             {"nativeLaunchAuthorizationsOriginal"})
+        self.assertEqual(set(policy.ENDPOINT_LAUNCH_FIELDS) - set(policy.LAUNCH_AUTHORIZATION_FIELDS),
+            {"endpointLaunchesOriginal"})
         self.assertEqual(len({policy.POLICY_API, policy.MEASURED_POLICY_API, policy.ENDPOINT_POLICY_API,
             policy.INITIAL_POLICY_API, policy.DELIVERY_POLICY_API, policy.GENERATION_POLICY_API,
             policy.NATIVE_DELIVERY_POLICY_API, policy.KEY_AUTHORIZATION_POLICY_API, policy.NATIVE_SERVICE_POLICY_API,
-            policy.ORDINARY_TRANSITION_POLICY_API, policy.LAUNCH_AUTHORIZATION_POLICY_API}), 11)
+            policy.ORDINARY_TRANSITION_POLICY_API, policy.LAUNCH_AUTHORIZATION_POLICY_API,
+            policy.ENDPOINT_LAUNCH_POLICY_API}), 12)
+        self.assertEqual(policy.LAUNCH_AUTHORIZATION_POLICY_APIS,
+            (policy.LAUNCH_AUTHORIZATION_POLICY_API, policy.ENDPOINT_LAUNCH_POLICY_API))
         self.assertEqual(policy.ORDINARY_TRANSITION_POLICY_APIS,
-            (policy.ORDINARY_TRANSITION_POLICY_API, policy.LAUNCH_AUTHORIZATION_POLICY_API))
+            (policy.ORDINARY_TRANSITION_POLICY_API,) + policy.LAUNCH_AUTHORIZATION_POLICY_APIS)
         self.assertEqual(policy.NATIVE_SERVICE_POLICY_APIS,
-            (policy.NATIVE_SERVICE_POLICY_API, policy.ORDINARY_TRANSITION_POLICY_API, policy.LAUNCH_AUTHORIZATION_POLICY_API))
+            (policy.NATIVE_SERVICE_POLICY_API,) + policy.ORDINARY_TRANSITION_POLICY_APIS)
         self.assertEqual(policy.KEY_AUTHORIZATION_POLICY_APIS,
-            (policy.KEY_AUTHORIZATION_POLICY_API, policy.NATIVE_SERVICE_POLICY_API, policy.ORDINARY_TRANSITION_POLICY_API,
-                policy.LAUNCH_AUTHORIZATION_POLICY_API))
+            (policy.KEY_AUTHORIZATION_POLICY_API,) + policy.NATIVE_SERVICE_POLICY_APIS)
         self.assertEqual(tuple(job.key for job in policy.NATIVE_SERVICE_JOBS), tuple(
             "native-service-" + operation for operation in ("commitRequest", "ingress", "ledger", "terminal",
                 "dispatchBarrier", "activeEffectBarrier", "activeEffectCommit", "retrieval", "persistence", "trustedTime"))

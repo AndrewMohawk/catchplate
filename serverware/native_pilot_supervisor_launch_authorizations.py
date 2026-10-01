@@ -12,6 +12,7 @@ import time
 from serverware import custody_generation_grants as generation
 from serverware import native_pilot_key_profile as key_profile
 from serverware import native_pilot_launch_authorization_profile as profile
+from serverware import native_pilot_ordinary_install as installation
 from serverware import native_pilot_supervisor_endpoint_deliveries as endpoints
 from serverware import native_pilot_supervisor_key_authorizations as keys
 from serverware import native_pilot_supervisor_ordinary_transitions as transitions
@@ -22,6 +23,7 @@ p = key_profile.p
 AUTHORIZATIONS = profile.JOBS
 FIRST_INDEX = 79
 NEXT_JOB = "install-launch-retrieval"
+_LAUNCH_LAST_INDEX = FIRST_INDEX + len(AUTHORIZATIONS) + len(key_profile.ROLES)
 JOB_NAMES = tuple(profile.job_name(operation, role) for operation, role in AUTHORIZATIONS)
 _LIVE = None
 _USED = False
@@ -56,6 +58,7 @@ class _Attempt:
         self.next = self.retained_bytes = 0
         self.inflight = None
         self.failed = self.closed = self.close_attempted = False
+        self.launch_boundary_open = False
         self.inputs, self.outputs, self.results = {}, {}, {}
         self.key_inputs, self.key_results, self.pair_contexts, self.pair_digests = {}, {}, {}, {}
         self.transitions = self.fragment = self.phase_raw = None
@@ -193,12 +196,23 @@ def compose(policy, *, process, request) -> bytes:
 
 def require_authorizations(policy, *, process, request) -> dict:
     """Read-only actual thirty-one-result handoff at first launch job110."""
+    return _verified_authorizations(policy, process=process, request=request, first=True)
+
+
+def recheck_authorizations(policy, *, process, request) -> dict:
+    """Recheck the opened boundary through fixed launches and handoff120."""
+    return _verified_authorizations(policy, process=process, request=request, first=False)
+
+
+def _verified_authorizations(policy, *, process, request, first):
     _owners(policy, process, request)
     owner = _LIVE
     p.require(owner is not None and owner.policy is policy and owner.process is process
         and not owner.failed and not owner.closed and owner.inflight is None and owner.next == len(AUTHORIZATIONS)
-        and request.phase == "service-originals" and request.job_index == FIRST_INDEX + len(AUTHORIZATIONS)
-        and request.job == NEXT_JOB and JOBS["service-originals"][request.job_index - 1].name == NEXT_JOB)
+        and installation.native_completed_boundary(request)
+        and FIRST_INDEX + len(AUTHORIZATIONS) <= request.job_index <= _LAUNCH_LAST_INDEX
+        and (request.job_index == FIRST_INDEX + len(AUTHORIZATIONS) and request.job == NEXT_JOB
+             if first else owner.launch_boundary_open))
     owner.inflight = request
     try:
         now, epoch = _current(owner, request)
@@ -206,6 +220,7 @@ def require_authorizations(policy, *, process, request) -> dict:
         _current(owner, request)
         p.require(tuple(owner.outputs) == JOB_NAMES)
         result = {job: {"inputOriginal": owner.inputs[job], "authorizationOriginal": owner.outputs[job]} for job in JOB_NAMES}
+        owner.launch_boundary_open = True
         owner.inflight = None
         return result
     except BaseException:

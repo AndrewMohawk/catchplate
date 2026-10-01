@@ -350,6 +350,9 @@ RUN --network=none set -eu; \
     install -m 0444 /source/scripts/native_pilot_supervisor_runtime_entrypoint.py /supervisor-runtime-root/supervisor/app/scripts/native_pilot_supervisor_runtime_entrypoint.py; \
     install -m 0444 /source/scripts/run_native_pilot_supervisor.py /supervisor-runtime-root/supervisor/app/scripts/run_native_pilot_supervisor.py; \
     install -m 0444 /source/scripts/native_pilot_publication_runtime_entrypoint.py /supervisor-runtime-root/supervisor/app/scripts/native_pilot_publication_runtime_entrypoint.py; \
+    install -m 0444 /source/scripts/native_pilot_genesis_install_runtime_entrypoint.py /supervisor-runtime-root/supervisor/app/scripts/native_pilot_genesis_install_runtime_entrypoint.py; \
+    install -m 0444 /source/scripts/install_native_pilot_genesis_rendezvous.py /supervisor-runtime-root/supervisor/app/scripts/install_native_pilot_genesis_rendezvous.py; \
+    install -m 0444 /source/scripts/install_native_pilot_genesis_job.py /supervisor-runtime-root/supervisor/app/scripts/install_native_pilot_genesis_job.py; \
     test -z "$(find /supervisor-runtime-root -type l -print -quit)"; \
     find /supervisor-runtime-root -type d -exec chmod 0555 {} +; \
     find /supervisor-runtime-root -type f -exec chmod 0444 {} +; \

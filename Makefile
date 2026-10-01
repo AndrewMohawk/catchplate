@@ -1748,6 +1748,12 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	scripts/test_native_pilot_genesis_rendezvous.py \
 	scripts/test_native_pilot_genesis_receiver_observation.py \
 	scripts/test_native_pilot_genesis_rendezvous_install.py \
+	scripts/test_native_pilot_genesis_job_install.py \
+	scripts/test_native_pilot_genesis_installer_process.py \
+	scripts/test_native_pilot_genesis_process.py \
+	scripts/test_native_pilot_lifecycle.py \
+	scripts/install_native_pilot_genesis_job.py \
+	scripts/native_pilot_genesis_install_runtime_entrypoint.py \
 	scripts/test_native_pilot_resource_roots.py \
 	scripts/install_native_pilot_genesis_rendezvous.py \
 	scripts/prepare_native_pilot_resource_roots.py \
@@ -1821,6 +1827,10 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/native_pilot_genesis_receiver_observation.py \
 	serverware/native_pilot_genesis_rendezvous_profile.py \
 	serverware/native_pilot_genesis_rendezvous_install.py \
+	serverware/native_pilot_genesis_job_install.py \
+	serverware/native_pilot_genesis_installer_process.py \
+	serverware/native_pilot_genesis_process.py \
+	serverware/native_pilot_lifecycle.py \
 	serverware/native_pilot_adopted_phase_profile.py \
 	serverware/native_pilot_adopted_phase_execution.py \
 	serverware/native_pilot_adopted_publication.py \
@@ -4688,6 +4698,12 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				scripts/test_native_pilot_genesis_rendezvous.py \
 				scripts/test_native_pilot_genesis_receiver_observation.py \
 				scripts/test_native_pilot_genesis_rendezvous_install.py \
+				scripts/test_native_pilot_genesis_job_install.py \
+				scripts/test_native_pilot_genesis_installer_process.py \
+				scripts/test_native_pilot_genesis_process.py \
+				scripts/test_native_pilot_lifecycle.py \
+				scripts/install_native_pilot_genesis_job.py \
+				scripts/native_pilot_genesis_install_runtime_entrypoint.py \
 				scripts/test_native_pilot_resource_roots.py \
 				scripts/install_native_pilot_genesis_rendezvous.py \
 				scripts/prepare_native_pilot_resource_roots.py \
@@ -4761,6 +4777,10 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/native_pilot_genesis_receiver_observation.py \
 				serverware/native_pilot_genesis_rendezvous_profile.py \
 				serverware/native_pilot_genesis_rendezvous_install.py \
+				serverware/native_pilot_genesis_job_install.py \
+				serverware/native_pilot_genesis_installer_process.py \
+				serverware/native_pilot_genesis_process.py \
+				serverware/native_pilot_lifecycle.py \
 				serverware/native_pilot_adopted_phase_profile.py \
 				serverware/native_pilot_adopted_phase_execution.py \
 				serverware/native_pilot_adopted_publication.py \

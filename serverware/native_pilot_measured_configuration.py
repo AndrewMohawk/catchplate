@@ -200,6 +200,12 @@ def derive_configuration(*, envelope, keys, key_root, manifest, observed,
         "production": {**production, "expectedConfigurationBindingSha256": binding_sha}}
 
 
+class RecipeError(ValueError):
+    def __init__(self, owner):
+        super().__init__("measured recipe cleanup unknown; actual owner retained")
+        self.owner = owner
+
+
 class MeasuredConfigurationRecipe:
     """One retained independently approved recipe, one actual prebound process."""
 
@@ -212,6 +218,7 @@ class MeasuredConfigurationRecipe:
         self._derived_sequence = self._derived_phase_sha256 = None
         self._last, self._wall = originals._clock(), time.time_ns()
         self._failed = self._closed = self._bind_attempted = self._derive_attempted = False
+        self._close_uncertain = False
 
     @classmethod
     def open(cls, *, recipe_fd: int, recipe_sha256: str):
@@ -251,8 +258,10 @@ class MeasuredConfigurationRecipe:
             return owner
         except BaseException:
             owner._failed = True
-            if owner._fd is not None:
-                os.close(owner._fd)
+            try:
+                owner._retire_descriptor()
+            except BaseException as error:
+                raise RecipeError(owner) from error
             owner._closed = True
             _LIVE = None
             raise
@@ -408,11 +417,31 @@ class MeasuredConfigurationRecipe:
         global _LIVE
         if self._closed:
             return
+        if self._close_uncertain:
+            raise RecipeError(self)
         p.require(_LIVE is self and not self._closed
             and (self._pid, self._start, self._boot) == (os.getpid(), originals._start(), originals._boot()))
         if self._process is not None:
             p.require(self._process._closed and self._process._result["status"] in
                 ("not-started", "stopped-cleanup-complete", "failed-cleanup-complete"))
-        os.close(self._fd)
+        try:
+            self._retire_descriptor()
+        except BaseException as error:
+            raise RecipeError(self) from error
         self._closed = True
         _LIVE = None
+
+    def _retire_descriptor(self):
+        # A close error cannot leave a recycled descriptor available for retry.
+        from serverware import native_pilot_genesis_parent_control_io as ownership
+        p.require(not self._close_uncertain)
+        try:
+            with ownership.owning():
+                fd, self._fd = self._fd, None
+                if fd is not None:
+                    self._close_uncertain = True
+                    os.close(fd)
+                    self._close_uncertain = False
+        except BaseException:
+            self._close_uncertain = True
+            raise

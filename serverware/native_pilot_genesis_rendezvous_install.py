@@ -56,6 +56,7 @@ class GenesisRendezvousInstallation(publication._Pair):
         p.require(token is _TOKEN)
         super().__init__("", None)
         self._paths = _ROOTS
+        self._publication_paths = _PATHS
         self._start, self._wall = originals._start(), time.time_ns()
         self._sources, self._reply = [], None
         self._expiry = None
@@ -134,7 +135,7 @@ class GenesisRendezvousInstallation(publication._Pair):
     def _publish(self, path, raw, maximum, digest):
         # The same exclusive publisher protection, with a sticky close fence:
         # a close error must not be relabeled known cleanup on a later call.
-        p.require(path in _PATHS and path == _PATHS[len(self._files)])
+        p.require(path in self._publication_paths and path == self._publication_paths[len(self._files)])
         self.check()
         parent, name = self._roots[_ROOTS[-1]][0], path.rsplit("/", 1)[1]
         with io.owning():

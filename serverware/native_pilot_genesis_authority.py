@@ -72,11 +72,18 @@ class _SelfRuntime:
         self._runtime, self._input = _Runtime(), None
         self._pid, self._start, self._boot = os.getpid(), originals._start(), originals._boot()
         self._closed = False
+        self._close_attempted = self._close_uncertain = False
 
     def admit(self, fd, digest):
         p.require(self._input is None and not self._closed)
         with io.owning():
-            self._input = io.PublicInput(fd, artifacts.MAX_MANIFEST_BYTES, digest)
+            self._input = io.PublicInput.__new__(io.PublicInput)
+            self._input.fd = None
+            try:
+                io.PublicInput.__init__(self._input, fd, artifacts.MAX_MANIFEST_BYTES, digest)
+            except BaseException:
+                self._close_uncertain = self._input.fd is not None
+                raise
         # The larger supervisor package actually contains the cold producer
         # commands as well as the fixed authority entrypoint. Do not pretend
         # its manifest is the separate operational authority inventory.
@@ -84,7 +91,8 @@ class _SelfRuntime:
         self.check(installed=True)
 
     def check(self, *, installed=False):
-        p.require(not self._closed and self._pid == os.getpid() and self._start == originals._start()
+        p.require(not self._closed and not self._close_attempted and not self._close_uncertain
+            and self._pid == os.getpid() and self._start == originals._start()
             and self._boot == originals._boot() and self._input is not None)
         self._input.check_identity()
         if installed:
@@ -93,7 +101,9 @@ class _SelfRuntime:
     def close(self):
         if self._closed:
             return
-        p.require(self._pid == os.getpid() and self._start == originals._start())
+        p.require(self._pid == os.getpid() and self._start == originals._start()
+            and not self._close_attempted and not self._close_uncertain)
+        self._close_attempted = True
         # Retire slots with their actual close so later interruption cannot
         # close a newly reused descriptor number during partial cleanup.
         with io.owning():

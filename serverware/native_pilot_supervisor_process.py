@@ -496,6 +496,27 @@ class AuthorityCoordinatorProcess:
             and type(request) is JobRequest and self._channel._pending is request)
         self._channel._check(request.deadline_boottime_ns)
 
+    def check_waiting(self):
+        """Keep the actual adopted authority while its conductor waits for core.
+
+        No pipe is read and no request or phase is advanced by this check.
+        Only the original pre-request startup interval remains admissible.
+        """
+        self._capabilities()
+        _require(self._adopted and self._started and self._bootstrap_prepared
+            and not self._close_attempted and self._channel is not None
+            and not self._channel._poisoned and self._channel._index == 0
+            and self._channel._pending is None and self._pidfd is not None)
+        self._channel._check(self._startup)
+        _require(bootstrap.mechanics._pidfd_pid(self._pidfd) == self._child.pid
+            and bootstrap.mechanics._process(self._child.pid) == (self._pid, self._child_start))
+        fd = self._child.stderr.fileno()
+        flags = fcntl.fcntl(fd, fcntl.F_GETFL)
+        _require(_structural(os.fstat(fd)) == self._stderr_identity
+            and flags & os.O_ACCMODE == os.O_RDONLY and flags & os.O_NONBLOCK
+            and not flags & os.O_PATH and not os.get_inheritable(fd))
+        self._channel._check(self._startup)
+
     def _admit_request(self, value, index, upper_deadline):
         phase, job_index, job = self._order[index]
         _require(value["apiVersion"] == ("serverware.nativePilotAuthorityJobRequest/v2" if self._adopted else

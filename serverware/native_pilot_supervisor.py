@@ -1,7 +1,8 @@
 """Fixed commissioning decisions joined to their real process and installer.
 
-The initial 158 of 164 jobs have fixed composers or protected late intake. The complete-coverage check refuses
-startup before spawning a child, not after a live attempt reaches a missing job.
+All 164 jobs have fixed composers or protected late intake. Coverage is not
+deployment acceptance: explicit v18 approval and actual resource owners remain
+mandatory. Missing coverage or final policy scope refuses before child creation.
 There is no executable entrypoint, configurable dispatcher, approval callback,
 signer, new deadline or source of deployment approval in this module.
 """
@@ -26,6 +27,7 @@ from serverware import native_pilot_supervisor_service_material as service_mater
 from serverware import native_pilot_supervisor_current_heads as current_heads
 from serverware import native_pilot_supervisor_bridge_runtime as bridge_runtime
 from serverware import native_pilot_supervisor_bridge_commissioning as bridge_commissioning
+from serverware import native_pilot_supervisor_continuation as continuation
 from serverware import custody_generation_grants as generation
 from serverware import native_shadow_nitro_originals as originals
 from serverware import native_shadow_nitro_profile as p
@@ -54,7 +56,8 @@ SUPPORTED_JOBS = (("bootstrap-admission", "driver-bootstrap"),
     (service_material.PHASE, service_material.JOB),
     *(("bridge-runtime", job.name) for job in CURRENT_HEAD_JOBS),
     (bridge_runtime.PHASE, bridge_runtime.JOB),
-    *((bridge_commissioning.PHASE, name) for name in bridge_commissioning.JOB_NAMES))
+    *((bridge_commissioning.PHASE, name) for name in bridge_commissioning.JOB_NAMES),
+    *continuation.JOB_SLOTS)
 _LATE_JOBS = tuple(("bridge-runtime", job.name) for job in CURRENT_HEAD_JOBS)
 _COMPOSER_GROUPS = (
     ("endpoint-inputs", ("endpoint-inputs",), endpoint_inputs.compose),
@@ -71,6 +74,8 @@ _COMPOSER_GROUPS = (
     (service_material.PHASE, (service_material.JOB,), service_material.compose),
     (bridge_runtime.PHASE, (bridge_runtime.JOB,), bridge_runtime.compose),
     (bridge_commissioning.PHASE, bridge_commissioning.JOB_NAMES, bridge_commissioning.compose),
+    *((phase, tuple(name for selected, name in continuation.JOB_SLOTS if selected == phase), continuation.compose)
+        for phase in ("release", "constructed-admission", "generation-origin", "shutdown")),
 )
 _COMPOSERS = {(phase, name): composer for phase, names, composer in _COMPOSER_GROUPS for name in names}
 _ORDER = tuple((phase, job.name) for phase in STAGES for job in JOBS[phase])
@@ -147,7 +152,8 @@ class CommissioningSupervisor:
         self._check()
         p.require(not self._started and self._index == 0)
         self._failed = True
-        require_complete_coverage()  # Currently refuses, with no child or files.
+        require_complete_coverage()
+        self._policy.require_final_scope(self._process)  # V17 has the same keys, not the final decision scope.
         self._process.start()
         self._started = True
         self._policy.check(self._process)

@@ -185,9 +185,8 @@ class SyntheticInitialCommissioningControls(unittest.TestCase):
         self.assertEqual(tuple(job.name for job in execution.JOBS[phase]), service_names)
         self.assertEqual(tuple(slot for slot in supervisor.SUPPORTED_JOBS if slot[0] == phase),
             tuple((phase, name) for name in service_names))
-        self.assertEqual((len(supervisor.SUPPORTED_JOBS), len(supervisor._ORDER), len(supervisor.missing_jobs())), (158, 164, 6))
-        with self.assertRaises(ValueError):
-            supervisor.require_complete_coverage()
+        self.assertEqual((len(supervisor.SUPPORTED_JOBS), len(supervisor._ORDER), len(supervisor.missing_jobs())), (164, 164, 0))
+        self.assertIsNone(supervisor.require_complete_coverage())
 
     def test_static_policy_is_closed_copied_and_not_future_observation(self):
         value, cold, driver = policy_fixture()

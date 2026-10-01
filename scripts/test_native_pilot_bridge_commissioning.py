@@ -163,9 +163,8 @@ class BridgeCommissioningControls(unittest.TestCase):
         self.assertEqual(outer_policy.p.fields(legacy, outer_policy.LAUNCH_KEY_PURPOSES), legacy)
         with self.assertRaises(ValueError):
             outer_policy.p.fields(legacy | {names[1]: "not-legacy-authority"}, outer_policy.LAUNCH_KEY_PURPOSES)
-        self.assertEqual((len(supervisor.SUPPORTED_JOBS), len(supervisor._ORDER), len(supervisor.missing_jobs())), (158, 164, 6))
-        self.assertEqual(supervisor.missing_jobs()[0], ("release", "cohort-release"))
-        with self.assertRaises(ValueError): supervisor.require_complete_coverage()
+        self.assertEqual((len(supervisor.SUPPORTED_JOBS), len(supervisor._ORDER), len(supervisor.missing_jobs())), (164, 164, 0))
+        self.assertIsNone(supervisor.require_complete_coverage())
 
     def test_policy_is_closed_and_preserves_twenty_non_signing_credential_selections(self):
         f = fixture(); fragment = f["common"]["fragment"]

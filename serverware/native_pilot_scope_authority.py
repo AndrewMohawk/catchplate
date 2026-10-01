@@ -13,6 +13,7 @@ import time
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from serverware import custody_generation_grants as generation
 from serverware import native_shadow_constructed_driver as admission
 from serverware import native_shadow_driver_bootstrap as driver
 from serverware import native_shadow_guest_delivery as delivery
@@ -47,6 +48,13 @@ def _original(value, maximum):
     return raw, p.document(raw, maximum)
 
 
+def _generation_original(value):
+    """The existing ordinary grant codec admits u64, under its fixed 64KiB cap."""
+    p.require(type(value) is str and value.isascii() and 0 < len(value) <= 65536)
+    raw = value.encode("ascii")
+    return raw, generation.document(raw, 65536)
+
+
 def _same(first, second):
     p.require(p.canonical(first) == p.canonical(second))
 
@@ -59,6 +67,17 @@ def _live(window, bootstrap, previous_boot=0, previous_wall=0):
         and p.ns(window["issuedAtBoottimeNs"]) <= now < p.ns(window["startupDeadlineBoottimeNs"]))
     p.freshness(bootstrap["issuedAtUnixNanos"], bootstrap["expiresAtUnixNanos"], wall)
     return now, wall
+
+
+def _at(window, bootstrap, *, boot, now_boottime_ns, now_unix_ns):
+    """Explicit-clock counterpart of _live; no owner or clock is created."""
+    p.require(boot == (window["bootIdBase64url"], window["timeNamespaceDevice"], window["timeNamespaceInode"]))
+    p.integer(now_boottime_ns, minimum=0, maximum=p.MAX_U64)
+    p.integer(now_unix_ns, minimum=0)
+    p.require(p.ns(window["issuedAtBoottimeNs"]) <= now_boottime_ns
+        < p.ns(window["startupDeadlineBoottimeNs"]))
+    p.freshness(bootstrap["issuedAtUnixNanos"], bootstrap["expiresAtUnixNanos"], now_unix_ns)
+    return now_boottime_ns, now_unix_ns
 
 
 def _operation(operation, launch, c9, raw_files):
@@ -130,8 +149,12 @@ def _operation(operation, launch, c9, raw_files):
     delivery._pin(launch["trustedTime"])
 
 
-def sign(input_original: bytes, signing_key: Ed25519PrivateKey) -> bytes:
-    """Sign only the derived existing Scope/v4; never accept a scope to sign."""
+def prepare_input(input_original: bytes, *, boot, now_boottime_ns, now_unix_ns) -> dict:
+    """Derive the unchanged Scope/v4 from complete public originals only.
+
+    Explicit clocks and supplied observations are checked data, not provenance,
+    permission to release, a process owner or proof of native admission.
+    """
     value = p.fields(p.document(input_original, MAX_BRIDGE_INPUT), INPUT_FIELDS)
     p.require(value["apiVersion"] == "serverware.nativePilotScopeSigningInput/v1")
     config_raw, config = _original(value["configurationOriginal"], 65536)
@@ -148,10 +171,7 @@ def sign(input_original: bytes, signing_key: Ed25519PrivateKey) -> bytes:
         "uid", "gid", "image", "continuation", "lifecycle"))
     p.require(config["apiVersion"] == "serverware.nativeShadowDriverBootstrapConfiguration/v4")
     bootstrap_key, phase_key = driver._key(config["bootstrapAuthority"]), driver._key(config["phaseTwoAuthority"])
-    p.require(isinstance(signing_key, Ed25519PrivateKey))
-    public = signing_key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
-    p.require(p.encoded(public) == config["phaseTwoAuthority"]["publicKeyBase64url"]
-        and config["bootstrapAuthority"]["keyId"] != config["phaseTwoAuthority"]["keyId"])
+    p.require(config["bootstrapAuthority"]["keyId"] != config["phaseTwoAuthority"]["keyId"])
     delivery._pin(config["deliveryConfiguration"])
     cold = delivery.configuration(cold_raw, config["deliveryConfiguration"]["sha256"])
     _same([config["uid"], config["gid"]], [cold["uid"], cold["gid"]])
@@ -184,7 +204,7 @@ def sign(input_original: bytes, signing_key: Ed25519PrivateKey) -> bytes:
         and early["expiresAtUnixNanos"] - early["issuedAtUnixNanos"] <= 30_000_000_000)
     for name in ("startupDeadlineBoottimeNs", "lifetimeDeadlineBoottimeNs"):
         p.require(early[name] == window[name])
-    now, wall = _live(window, early)
+    now, _ = _at(window, early, boot=boot, now_boottime_ns=now_boottime_ns, now_unix_ns=now_unix_ns)
     p.fields(observation, ("apiVersion", "configurationSha256", "windowSha256", "invocationId", "processId",
         "uid", "gid", "cgroupOriginalSha256", "root", "seccompFilterCount", "descriptors", "driver"))
     p.require(observation["apiVersion"] == "serverware.nativeShadowDriverObservation/v1"
@@ -228,7 +248,7 @@ def sign(input_original: bytes, signing_key: Ed25519PrivateKey) -> bytes:
     _operation(operation, launch, c9, {"launch": launch_raw, "c9-configuration": cold_raw,
         "c9-delivery": delivery_raw, "c9-runtime": runtime_raw})
     grants = p.fields(bundle["generationOriginals"], driver.ROLES)
-    grant_pins = {role: p.sha(_original(grants[role], 65536)[0]) for role in driver.ROLES}
+    grant_pins = {role: p.sha(_generation_original(grants[role])[0]) for role in driver.ROLES}
     # As in PhaseTwo::retain, these are exact retained public originals, not
     # a replacement for each service's history/signature/currentness checks.
     scope = {"apiVersion": "serverware.nativeShadowDriverScope/v4", "configurationSha256": p.sha(config_raw),
@@ -239,11 +259,37 @@ def sign(input_original: bytes, signing_key: Ed25519PrivateKey) -> bytes:
         "originals": {"runtimeSha256": p.sha(runtime_raw), "deliverySha256": p.sha(delivery_raw), "generationGrants": grant_pins},
         "publicBundleSha256": p.sha(bundle_raw), "signingKeyId": config["phaseTwoAuthority"]["keyId"], "operation": operation}
     p.require(p.canonical(operation) == operation_raw)
-    _live(window, early, now, wall)
     message = DOMAIN + p.canonical(scope)
+    p.require(len(p.canonical({"payload": scope, "signatureBase64url": ""})) + 86 <= MAX_SCOPE)
+    return {"payload": scope, "key": phase_key, "window": window, "bootstrap": early,
+        "deadline": startup, "epochLimit": early["expiresAtUnixNanos"], "message": message}
+
+
+def checked_result(input_original, result, *, boot, now_boottime_ns, now_unix_ns) -> bytes:
+    context = prepare_input(input_original, boot=boot,
+        now_boottime_ns=now_boottime_ns, now_unix_ns=now_unix_ns)
+    p.fields(result, ("original", "sha256"))
+    raw, signed = _original(result["original"], MAX_SCOPE)
+    p.fields(signed, ("payload", "signatureBase64url"))
+    p.require(p.sha(raw) == p.digest(result["sha256"]))
+    _same(signed["payload"], context["payload"])
+    context["key"].verify(p.decoded(signed["signatureBase64url"], size=64), context["message"])
+    return raw
+
+
+def sign(input_original: bytes, signing_key: Ed25519PrivateKey) -> bytes:
+    """Sign only the derived existing Scope/v4 under actual pre/post clocks."""
+    p.require(isinstance(signing_key, Ed25519PrivateKey))
+    boot, now, wall = originals._boot(), originals._clock(), time.time_ns()
+    context = prepare_input(input_original, boot=boot, now_boottime_ns=now, now_unix_ns=wall)
+    public = signing_key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+    expected = context["key"].public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+    p.require(public == expected)
+    now, wall = _live(context["window"], context["bootstrap"], now, wall)
+    message = context["message"]
     signature = signing_key.sign(message)
-    phase_key.verify(signature, message)
-    result = p.canonical({"payload": scope, "signatureBase64url": p.encoded(signature)})
+    context["key"].verify(signature, message)
+    result = p.canonical({"payload": context["payload"], "signatureBase64url": p.encoded(signature)})
     p.require(len(result) <= MAX_SCOPE)
-    _live(window, early, now, wall)
+    _live(context["window"], context["bootstrap"], now, wall)
     return result

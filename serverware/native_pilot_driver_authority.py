@@ -23,7 +23,9 @@ accepted as approved observations; there is no new timestamp or renewed window.
 """
 from __future__ import annotations
 
+import copy
 import re
+import time
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
@@ -35,6 +37,7 @@ from serverware import native_shadow_constructed_driver as admission
 from serverware import native_shadow_driver_bootstrap as driver
 from serverware import native_shadow_guest_delivery as delivery
 from serverware import native_shadow_nitro_profile as p
+from serverware import native_shadow_nitro_originals as originals
 
 MAX_INPUT = 24 * 1024 * 1024
 BOOTSTRAP_FIELDS = scope_authority.BOOTSTRAP_FIELDS
@@ -68,7 +71,7 @@ def _process(value):
     p.require(value["processId"] > 1 and value["processId"] != value["parentId"])
 
 
-def _common(value, signing_key):
+def _common(value):
     _, control = _original(value["controlOriginal"], 4096)
     p.fields(control, ("apiVersion", "supervisorExecutableSha256", "configurationSha256", "windowSha256"))
     p.require(control["apiVersion"] == "serverware.nativeShadowDriverBootstrapControl/v1")
@@ -91,9 +94,7 @@ def _common(value, signing_key):
     authority = policy["constructedAdmissionAuthority"]
     public = admission.authority(authority)
     p.require(authority["publicKeyBase64url"] not in (config["bootstrapAuthority"]["publicKeyBase64url"],
-        config["phaseTwoAuthority"]["publicKeyBase64url"]) and isinstance(signing_key, Ed25519PrivateKey))
-    p.require(signing_key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
-        == public.public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw))
+        config["phaseTwoAuthority"]["publicKeyBase64url"]))
     continuation = p.fields(config["continuation"], ("apiVersion", "keyTransport"))
     p.require(continuation["apiVersion"] == "serverware.nativeShadowDriverContinuationPreparation/v3")
     p.fields(config["image"], ("imageSha256", "executableSha256", "seccompPolicy", "bootstrapRuntimeSha256",
@@ -216,7 +217,7 @@ def _phase(value, exported, control, config, cold, window, observed):
     p.require(c9["runtimeConfig"]["sha256"] == p.sha(runtime_raw))
     grants = p.fields(bundle["generationOriginals"], driver.ROLES)
     _same(phase["originals"], {"runtimeSha256": p.sha(runtime_raw), "deliverySha256": p.sha(delivery_raw),
-        "generationGrants": {role: p.sha(_original(grants[role], 65536)[0]) for role in driver.ROLES}})
+        "generationGrants": {role: p.sha(scope_authority._generation_original(grants[role])[0]) for role in driver.ROLES}})
     launch_raw, launch = _original(value["launchOriginal"], 32768)
     p.fields(launch, ("apiVersion", "keyAdmission", "trustedTime"))
     p.require(launch["apiVersion"] == bridge_runtime.launch_for_runtime(runtime_raw))
@@ -427,13 +428,19 @@ def _census(raw, early, observed, control, window, scope_raw, statement, now):
         and p.ns(context["observedAtBoottimeNs"]) <= now)
 
 
-def sign(operation: str, input_original: bytes, signing_key: Ed25519PrivateKey) -> bytes:
-    """Return only the selected existing envelope, never a live owner/verdict."""
+def prepare_input(operation: str, input_original: bytes, *, boot, now_boottime_ns, now_unix_ns):
+    """Validate the real issuer input at explicit clocks, without signing.
+
+    These data checks do not establish the provenance of an observation. The
+    protected producer and retained supervisor separately own that boundary.
+    Preparation always requires the original startup window, including when
+    an already signed result will later be consumed during the lifetime phase.
+    """
     p.require(operation in ("bootstrap", "constructed"))
     extra = ("observationOriginal",) if operation == "bootstrap" else CONSTRUCTED_INPUTS
     value = p.fields(p.document(input_original, MAX_INPUT), INPUT_FIELDS + extra)
     p.require(value["apiVersion"] == "serverware.nativePilotDriverAuthorityInput/v1" and value["operation"] == operation)
-    control, config, cold, window, authority, public = _common(value, signing_key)
+    control, config, cold, window, authority, public = _common(value)
     maximum = 8192 if operation == "bootstrap" else 16384
     payload_raw, payload = _original(value["payloadOriginal"], maximum)
     if operation == "bootstrap":
@@ -449,7 +456,11 @@ def sign(operation: str, input_original: bytes, signing_key: Ed25519PrivateKey) 
         p.require(exported["apiVersion"] == "serverware.nativeShadowDriverPublicAdmission/v1")
         observation_raw, _ = _original(exported["bootstrapObservationOriginal"], 65536)
     _bootstrap(early, observation_raw, control, window, authority)
-    now, wall = scope_authority._live(window, early)
+    now, wall = p.integer(now_boottime_ns, maximum=p.MAX_U64), p.integer(now_unix_ns)
+    p.require(type(boot) is tuple and boot == (window["bootIdBase64url"],
+        window["timeNamespaceDevice"], window["timeNamespaceInode"])
+        and p.ns(window["issuedAtBoottimeNs"]) <= now < p.ns(window["startupDeadlineBoottimeNs"]))
+    p.freshness(early["issuedAtUnixNanos"], early["expiresAtUnixNanos"], wall)
     observed = _observation(observation_raw, control, config, window, now)
     p.require(early["parent"]["processId"] != observed["processId"])
     expiries = [early["expiresAtUnixNanos"]]
@@ -495,18 +506,63 @@ def sign(operation: str, input_original: bytes, signing_key: Ed25519PrivateKey) 
         _same(payload, expected)
         p.require(early["issuedAtUnixNanos"] <= payload["issuedAtUnixNanos"])
     p.require(p.canonical(payload) == payload_raw)
+    p.freshness(payload["issuedAtUnixNanos"], payload["expiresAtUnixNanos"], wall, 30_000_000_000)
+    p.require(wall < min(expiries))
+    domain = admission.BOOTSTRAP_DOMAIN if operation == "bootstrap" else admission.DOMAIN
+    return copy.deepcopy({"payload": payload, "authority": authority, "window": window,
+        "deadline": p.ns(window["startupDeadlineBoottimeNs"]),
+        "epochLimit": min(payload["expiresAtUnixNanos"], *expiries), "domain": domain})
+
+
+def checked_result(operation, input_original, result, *, boot, now_boottime_ns, now_unix_ns):
+    """Check an existing result's exact bytes/signature, not publication."""
+    prepared = prepare_input(operation, input_original, boot=boot,
+        now_boottime_ns=now_boottime_ns, now_unix_ns=now_unix_ns)
+    return _checked_result(operation, input_original, result, prepared)
+
+
+def _checked_result(operation, input_original, result, prepared):
+    # Internal same-call continuation after complete preparation, not an
+    # alternate public admission route accepting a caller's expected payload.
+    p.fields(result, ("original", "sha256"))
+    maximum = 8192 if operation == "bootstrap" else 16384
+    raw, signed = _original(result["original"], maximum)
+    p.require(p.sha(raw) == p.digest(result["sha256"]))
+    extra = () if operation == "bootstrap" else ("bootstrapAdmissionOriginal",)
+    p.fields(signed, ("payload", "signature") + extra)
+    _same(signed["payload"], prepared["payload"])
+    if extra:
+        value = p.document(input_original, MAX_INPUT)
+        p.require(signed["bootstrapAdmissionOriginal"] == value["bootstrapAdmissionOriginal"])
+    admission.authority(prepared["authority"]).verify(p.decoded(signed["signature"], size=64),
+        p.preimage(prepared["domain"], prepared["payload"]))
+    return raw
+
+
+def sign(operation: str, input_original: bytes, signing_key: Ed25519PrivateKey) -> bytes:
+    """Return only the selected existing envelope, never a live owner/verdict."""
+    boot = originals._boot()
+    now, wall = time.clock_gettime_ns(time.CLOCK_BOOTTIME), time.time_ns()
+    prepared = prepare_input(operation, input_original, boot=boot,
+        now_boottime_ns=now, now_unix_ns=wall)
+    value = p.document(input_original, MAX_INPUT)
+    payload, window, domain = prepared["payload"], prepared["window"], prepared["domain"]
+    public = admission.authority(prepared["authority"])
+    p.require(isinstance(signing_key, Ed25519PrivateKey)
+        and signing_key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+        == public.public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw))
+    early = payload if operation == "bootstrap" else _original(value["bootstrapAdmissionOriginal"], 8192)[1]["payload"]
     current_boot, current_wall = scope_authority._live(window, early, now, wall)
     p.freshness(payload["issuedAtUnixNanos"], payload["expiresAtUnixNanos"], current_wall, 30_000_000_000)
-    p.require(current_wall < min(expiries))
-    domain = admission.BOOTSTRAP_DOMAIN if operation == "bootstrap" else admission.DOMAIN
+    p.require(current_wall < prepared["epochLimit"])
     signature = signing_key.sign(p.preimage(domain, payload))
     public.verify(signature, p.preimage(domain, payload))
     result = {"payload": payload, "signature": p.encoded(signature)}
     if operation == "constructed":
         result["bootstrapAdmissionOriginal"] = value["bootstrapAdmissionOriginal"]
     raw = p.canonical(result)
-    p.require(len(raw) <= maximum)
+    p.require(len(raw) <= (8192 if operation == "bootstrap" else 16384))
     _, after = scope_authority._live(window, early, current_boot, current_wall)
     p.freshness(payload["issuedAtUnixNanos"], payload["expiresAtUnixNanos"], after, 30_000_000_000)
-    p.require(after < min(expiries))
+    p.require(after < prepared["epochLimit"])
     return raw

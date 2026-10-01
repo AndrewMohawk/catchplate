@@ -236,15 +236,12 @@ class OrdinaryKeyProfileTests(unittest.TestCase):
             with self.subTest(changed=changed), self.assertRaises(ValueError):
                 profile.validate_payload(changed, identity=identity_fixture(), window=window, now=now)
 
-    def test_current_coverage_still_refuses_full_startup(self):
-        self.assertEqual(len(supervisor.SUPPORTED_JOBS), 158)
-        self.assertEqual(supervisor._ORDER[:158], supervisor.SUPPORTED_JOBS)
+    def test_current_coverage_is_complete_not_live_acceptance(self):
+        self.assertEqual(len(supervisor.SUPPORTED_JOBS), 164)
+        self.assertEqual(supervisor._ORDER, supervisor.SUPPORTED_JOBS)
         self.assertEqual(len(supervisor._ORDER), 164)
-        self.assertEqual(len(supervisor.missing_jobs()), 6)
-        self.assertEqual(supervisor.missing_jobs()[0],
-            ("release", "cohort-release"))
-        with self.assertRaises(ValueError):
-            supervisor.require_complete_coverage()
+        self.assertEqual(supervisor.missing_jobs(), ())
+        self.assertIsNone(supervisor.require_complete_coverage())
 
 
 if __name__ == "__main__":

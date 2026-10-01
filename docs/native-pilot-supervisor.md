@@ -1,7 +1,15 @@
 # Native pilot commissioning supervisor
 
 This is a partial source implementation, not a runnable or deployed supervisor.
-The `.390` source connects [bridge delivery and launch commissioning](native-pilot-bridge-commissioning.md)
+The `.391` source connects the [six final decisions](native-pilot-final-continuations.md)
+under explicit policy/v18: **164/164** jobs, **113** selectors and no missing
+source routes. The source coverage check now passes; a separate pre-child v18
+scope guard prevents legacy v17 from inheriting final-decision authority.
+The future phase-two bundle now has a fixed exclusive publication path.
+Focused verification is pending. Executable packaging, real cleanup ownership,
+full positive admission transcripts and connected runtime acceptance remain open.
+
+The preceding `.390` source connects [bridge delivery and launch commissioning](native-pilot-bridge-commissioning.md)
 under explicit policy/v17. Seven decisions use the actual runtime-owner handoff,
 five newly represented signing jobs and complete existing producer validators.
 Coverage is **158/164** handled jobs, **113** selectors and **six** missing slots

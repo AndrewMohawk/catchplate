@@ -134,7 +134,7 @@ Checkpoint: **2026-10-01 — pre-production, pilot assembly.**
 The [startup coordinator](docs/native-pilot-coordinator.md), separately approved
 input installation and runtime packaging are connected in source. Signing keys
 stay outside the conductor. The [independent approval supervisor](docs/native-pilot-supervisor.md)
-has **158 of 164 current jobs handled** and **113 signing selectors**. This
+has **164 of 164 current jobs handled** and **113 signing selectors**. This
 includes service histories, delivery/generation grants, endpoint authorizations,
 launch bundles and public material. Explicit policy/v15 connects eight
 [request-bound approval intake jobs](docs/native-pilot-current-head-intake.md),
@@ -143,14 +143,11 @@ Focused checks pass; live pause/resume remains unverified. The earlier
 [fresh-helper startup path](docs/native-pilot-helper-initial.md) passes focused
 checks and native compilation, but live initialization remains unverified.
 
-Policy/v16 adds [complete bridge runtime composition](docs/native-pilot-bridge-composition.md)
-from actual signed heads and service originals. Focused checks pass; complete
-authenticated/live execution remains unverified.
-Policy/v17 connects [bridge credential delivery, five authorizations and launch](docs/native-pilot-bridge-commissioning.md).
-Those five prerequisites are now included in the inventory; focused checks pass
-with [documented limits](docs/native-pilot-bridge-commissioning.md#focused-verification). Startup still refuses until the remaining
-six jobs, beginning with cohort release, are connected;
-these counts are not a percentage of product readiness.
+Policy/v18 connects the [final release, publication and shutdown decisions](docs/native-pilot-final-continuations.md).
+All current jobs are now connected in source; focused verification of this
+batch is pending. Executable packaging, real cleanup ownership and connected
+runtime verification are still needed. These counts are not a percentage of
+product readiness or permission to deploy.
 Protected deployment is not provisioned. This is not
 yet an interactive quickstart or running pilot.
 The [persistent workload sidecar](docs/native-workload-sidecar.md) supports ordinary

@@ -28,6 +28,7 @@ PROFILES = {
     "ordinary-launch": ("ordinary-launch", None, 65536),
     "bridge-runtime": ("bridge-runtime", None, 4 * 1024 * 1024),
     "bridge-outgoing": ("bridge-outgoing", None, 8192),
+    "driver-phase-two-public": ("phase-two-public", None, 16 * 1024 * 1024),
     "endpoint-peer": ("endpoint-input", "peer", 4096),
     "endpoint-proof-scope": ("endpoint-input", "proof-scope", 16384),
     "endpoint-retrieval-manifest": ("endpoint-input", "retrieval-manifest", 32768),
@@ -218,6 +219,10 @@ def shape(purpose, raw):
     """Validate the selected public envelope, never authenticate its authority."""
     p.require(type(purpose) is str and purpose in PROFILES)
     family, role, maximum = PROFILES[purpose]
+    if family == "phase-two-public":
+        from serverware import native_pilot_phase_two_publication as phase_two
+        phase_two.shape(raw)
+        return
     if family == "service-material":
         from serverware import native_pilot_service_material as material
         material.shape(purpose, raw)

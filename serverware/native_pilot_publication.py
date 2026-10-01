@@ -19,7 +19,7 @@ from serverware import native_shadow_proof_cohort_assignment as cohort
 from serverware import native_pilot_publication_profiles as profiles
 from serverware.native_shadow_proof_cohort_control import _Original
 
-MAX_BYTES = 4 * 1024 * 1024  # Largest fixed public assignment; per-purpose bounds remain authoritative.
+MAX_BYTES = 16 * 1024 * 1024  # Largest versioned public bundle; other per-purpose bounds are unchanged.
 MAX_ORIGINALS = 128
 MAX_PUBLIC_BYTES = 32 * 1024 * 1024
 DESTINATIONS = {

@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 
 from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 from serverware import native_shadow_guest_delivery as delivery
 
 p = delivery.p
@@ -149,12 +149,15 @@ def _key(signing_key, authority):
               and authority["keyId"] == p.sha(raw))
 
 
-def _configuration(raw, expected_sha256, originals, signing_key, commit_request_original, ingress_admission_original,
+def _configuration_public(raw, expected_sha256, originals, commit_request_original, ingress_admission_original,
                    terminal_append_original, dispatch_barrier_original, active_effect_barrier_original, active_effect_commit_original):
     config = configuration(raw)
     p.require(p.sha(raw) == p.digest(expected_sha256))
     p.digest(config["executableSha256"])
-    _key(signing_key, config["authority"])
+    authority = p.fields(config["authority"], ("publicKeyBase64url", "keyId"))
+    public = p.decoded(authority["publicKeyBase64url"], size=32)
+    p.require(public != bytes(32) and authority["keyId"] == p.sha(public))
+    Ed25519PublicKey.from_public_bytes(public)
     selected = roles(config)
     if endpoint_driver_selected(config):
         p.require(originals[-1] is None)  # the measured driver is not a parked child
@@ -182,6 +185,15 @@ def _configuration(raw, expected_sha256, originals, signing_key, commit_request_
     p.require(len(cold) == len(selected) and len({v["uid"] for v in cold}) == len(selected)
         and len({v["gid"] for v in cold}) == len(selected)
         and len({config[name]["path"] for name in cold_names}) == len(selected))
+    return config
+
+
+def _configuration(raw, expected_sha256, originals, signing_key, commit_request_original, ingress_admission_original,
+                   terminal_append_original, dispatch_barrier_original, active_effect_barrier_original, active_effect_commit_original):
+    config = _configuration_public(raw, expected_sha256, originals, commit_request_original,
+        ingress_admission_original, terminal_append_original, dispatch_barrier_original,
+        active_effect_barrier_original, active_effect_commit_original)
+    _key(signing_key, config["authority"])
     return config
 
 
@@ -227,28 +239,29 @@ def sign_precreation(*, configuration_raw, configuration_sha256, retrieval_confi
     return result
 
 
-def sign_release(*, configuration_raw, configuration_sha256, retrieval_configuration_raw,
+def prepare_release(*, configuration_raw, configuration_sha256, retrieval_configuration_raw,
                  persistence_configuration_raw, trusted_time_configuration_raw, generation_install_configuration_raw,
                  bridge_configuration_raw, precreation_raw, observations_raw, payload_raw,
-                 boot, now, signing_key, commit_request_configuration_raw=None, ingress_admission_configuration_raw=None, terminal_append_configuration_raw=None,
+                 boot, now, commit_request_configuration_raw=None, ingress_admission_configuration_raw=None, terminal_append_configuration_raw=None,
                  dispatch_barrier_configuration_raw=None, active_effect_barrier_configuration_raw=None, active_effect_commit_configuration_raw=None):
-    """Sign exact separately approved originals; never synthesize peer14.
+    """Validate exact public originals at supplied clocks; no release authority.
 
     observations_raw must come from the retained actual cohort's one observation
     frame. This data/signature API alone does not authenticate such provenance.
     Rust rechecks the same children, executable originals and complete signed
     C9 files before consuming the actual activation descriptors and gates.
     """
-    config = _configuration(configuration_raw, configuration_sha256,
+    config = _configuration_public(configuration_raw, configuration_sha256,
         (retrieval_configuration_raw, persistence_configuration_raw, trusted_time_configuration_raw,
-         generation_install_configuration_raw, bridge_configuration_raw), signing_key, commit_request_configuration_raw,
+         generation_install_configuration_raw, bridge_configuration_raw), commit_request_configuration_raw,
          ingress_admission_configuration_raw, terminal_append_configuration_raw, dispatch_barrier_configuration_raw,
          active_effect_barrier_configuration_raw, active_effect_commit_configuration_raw)
+    key = Ed25519PublicKey.from_public_bytes(p.decoded(config["authority"]["publicKeyBase64url"], size=32))
     precreation = p.fields(p.document(precreation_raw, MAX_BYTES), ("apiVersion", "payload", "signatureBase64url"))
     p.require(precreation["apiVersion"] == "serverware.nativeShadowProofCohortPrecreation/v1")
     _window(precreation["payload"], config, configuration_sha256, boot, now)
-    signing_key.public_key().verify(p.decoded(precreation["signatureBase64url"], size=64),
-                                   PRECREATE_DOMAIN + p.canonical(precreation["payload"]))
+    key.verify(p.decoded(precreation["signatureBase64url"], size=64),
+               PRECREATE_DOMAIN + p.canonical(precreation["payload"]))
     observed = p.fields(p.document(observations_raw, MAX_BYTES), originals_fields(config))
     p.require(observed["apiVersion"] == originals_api(config)
               and observed["configurationSha256"] == configuration_sha256
@@ -278,6 +291,34 @@ def sign_release(*, configuration_raw, configuration_sha256, retrieval_configura
     for name in roles(config):
         role = p.fields(payload[name], ("launch", "image"))
         delivery._pin(role["launch"]); delivery._pin(role["image"])
-    result = p.canonical({"payload": payload, "signatureBase64url": _signed(signing_key, release_domain(config), payload)})
+    domain = release_domain(config)
+    p.require(len(p.canonical({"payload": payload, "signatureBase64url": ""})) + 86 <= MAX_BYTES)
+    return {"payload": payload, "key": key, "window": precreation["payload"],
+        "deadline": p.ns(precreation["payload"]["startupDeadlineBoottimeNs"]),
+        "domain": domain, "message": domain + p.canonical(payload)}
+
+
+def sign_release(*, configuration_raw, configuration_sha256, retrieval_configuration_raw,
+                 persistence_configuration_raw, trusted_time_configuration_raw, generation_install_configuration_raw,
+                 bridge_configuration_raw, precreation_raw, observations_raw, payload_raw,
+                 boot, now, signing_key, commit_request_configuration_raw=None, ingress_admission_configuration_raw=None,
+                 terminal_append_configuration_raw=None, dispatch_barrier_configuration_raw=None,
+                 active_effect_barrier_configuration_raw=None, active_effect_commit_configuration_raw=None):
+    """One unchanged release signature under the independently supplied key."""
+    context = prepare_release(configuration_raw=configuration_raw, configuration_sha256=configuration_sha256,
+        retrieval_configuration_raw=retrieval_configuration_raw, persistence_configuration_raw=persistence_configuration_raw,
+        trusted_time_configuration_raw=trusted_time_configuration_raw,
+        generation_install_configuration_raw=generation_install_configuration_raw,
+        bridge_configuration_raw=bridge_configuration_raw, precreation_raw=precreation_raw,
+        observations_raw=observations_raw, payload_raw=payload_raw, boot=boot, now=now,
+        commit_request_configuration_raw=commit_request_configuration_raw,
+        ingress_admission_configuration_raw=ingress_admission_configuration_raw,
+        terminal_append_configuration_raw=terminal_append_configuration_raw,
+        dispatch_barrier_configuration_raw=dispatch_barrier_configuration_raw,
+        active_effect_barrier_configuration_raw=active_effect_barrier_configuration_raw,
+        active_effect_commit_configuration_raw=active_effect_commit_configuration_raw)
+    _key(signing_key, configuration(configuration_raw)["authority"])
+    result = p.canonical({"payload": context["payload"],
+        "signatureBase64url": _signed(signing_key, context["domain"], context["payload"])})
     p.require(len(result) <= MAX_BYTES)
     return result

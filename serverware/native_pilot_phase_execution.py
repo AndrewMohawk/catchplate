@@ -40,6 +40,7 @@ from serverware import native_pilot_launch_publication as launch_install
 from serverware import native_pilot_native_service_authority as native_authority
 from serverware import native_pilot_ordinary_initial_authority as initial_authority
 from serverware import native_pilot_ordinary_initial_profile as initial_profile
+from serverware import native_pilot_phase_two_publication as phase_two
 from serverware import native_pilot_precreation_install as precreation_install
 from serverware import native_pilot_scope_authority as scope_authority
 from serverware import native_pilot_service_authority as service_authority
@@ -191,7 +192,7 @@ JOBS = {
         _plain("install-launch-bridge", "launch", launch_install.MAX_INPUT, "bridge")),
     "release": (_signed("cohort-release", "cohort", "release", 2 * 1024 * 1024, "cohort-release"),
         _signed("driver-scope", "scope", None, scope_authority.MAX_BRIDGE_INPUT, "driver-scope"),
-        _plain("phase-two-public", "phase-two-public", 1024)),
+        _plain("phase-two-public", "phase-two-public", phase_two.MAX_INPUT)),
     "constructed-admission": (_signed("driver-constructed", "driver", "constructed", driver_authority.MAX_INPUT,
                                       "driver-constructed-admission"),),
     "generation-origin": (_plain("observe-generation-origin", "origin", 1024),),
@@ -899,6 +900,17 @@ class PhaseExecution:
             bundle = p.document(self._scope_bundle, bridge_runtime.MAX_BRIDGE_INPUT)
             _, runtime = bridge_runtime.original(bundle["runtimeOriginal"])
             p.require(bridge_runtime.version(runtime) in (10, 11) or len(self._scope_bundle) <= 1024 * 1024)
+            prior = p.document(self._inputs["native-delivery-bridge"], delivery_authority.MAX_BRIDGE_INPUT)
+            _same(bundle["runtimeOriginal"], prior["runtimeOriginal"])
+            self._known("deliveryOriginal", bundle, "native-delivery-bridge")
+            for role, original in p.fields(bundle["generationOriginals"], generation.ROLES).items():
+                p.require(scope_authority._generation_original(original)[0] == self._outputs["ordinary-generation-" + role])
+        elif job.family == "phase-two-public":
+            if value.get("apiVersion") == phase_two.API:
+                p.require(phase_two.prepare_input(p.canonical(value)) == self._scope_bundle)
+            else:
+                p.require(len(p.canonical(value)) <= 1024)
+                p.fields(value, ("phaseTwoPublic",))
 
     @staticmethod
     def _array_original(value):
@@ -1039,7 +1051,16 @@ class PhaseExecution:
                 self._public.read(pin, maximum=MAX_RECORD)
             self._material = copy.deepcopy(material)
         elif job.family == "phase-two-public":
-            p.fields(value, ("phaseTwoPublic",))
+            if value.get("apiVersion") == phase_two.API:
+                selected = phase_two.prepare_input(raw)
+                p.require(selected == self._scope_bundle)
+                self._process._io_check(deadline)
+                pin = self._publisher.publish(purpose=phase_two.PURPOSE, raw=selected, expected_sha256=p.sha(selected))
+                self._process._io_check(deadline)
+                value = {"phaseTwoPublic": pin}
+            else:
+                p.require(len(raw) <= 1024)
+                p.fields(value, ("phaseTwoPublic",))
             bundle = p.document(self._scope_bundle, bridge_runtime.MAX_BRIDGE_INPUT)
             _, runtime = bridge_runtime.original(bundle["runtimeOriginal"])
             maximum = bridge_runtime.MAX_BRIDGE_INPUT if bridge_runtime.version(runtime) in (10, 11) else 1024 * 1024

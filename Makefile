@@ -1312,6 +1312,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	scripts/package_native_shadow_time_runtime.py \
 	scripts/package_native_shadow_custody_runtime.py \
 	scripts/package_native_setup_issuers_runtime.py \
+	scripts/build_production_images.py \
 	scripts/build_native_pilot_artifacts.py \
 	scripts/native_pilot_runtime_artifacts.py \
 	scripts/native_pilot_tar_export.py \
@@ -4132,6 +4133,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				scripts/package_native_shadow_time_runtime.py \
 				scripts/package_native_shadow_custody_runtime.py \
 				scripts/package_native_setup_issuers_runtime.py \
+				scripts/build_production_images.py \
 				scripts/build_native_pilot_artifacts.py \
 				scripts/native_pilot_runtime_artifacts.py \
 				scripts/native_pilot_tar_export.py \

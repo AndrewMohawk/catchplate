@@ -1,8 +1,9 @@
 """Actual selected adopted phase execution over the retained conductor.
 
-Public originals remain independent inputs. In particular, adoption requires
-the real pinned native validator; neither this executor nor an observation
-stands in for independent approval, received-core custody, or service readiness.
+Endpoint originals are published from authenticated prior inputs only after
+independent job approval. Adoption requires the real pinned native validator;
+neither this executor nor an observation stands in for independent approval,
+received-core custody, or service readiness.
 """
 from __future__ import annotations
 
@@ -15,6 +16,7 @@ from serverware import native_pilot_phase_execution as base
 from serverware import native_pilot_adopted_phase_profile as profile
 from serverware import native_pilot_adopted_publication as public_profile
 from serverware import native_pilot_adopted_ordinary_install as ordinary_install
+from serverware import native_pilot_adopted_endpoint_publication as endpoint_publication
 from serverware import native_pilot_genesis_parent_control_io as owning
 from serverware.native_pilot_publication_adoption_authority import AdoptionAuthority, AdoptionAuthorityError
 
@@ -67,6 +69,7 @@ class AdoptedPhaseExecution(base.PhaseExecution):
         self._request_api, self._reply_api, self._approval_api = profile.API, profile.REPLY_API, profile.APPROVAL_API
         self._prior = {}
         self._ordinary_install = self._adoption_owner = None
+        self._endpoint_publication = None
         self._public_fds = []
         self._prepared = None
         self._job_deadline = self._job_expiry = None
@@ -80,6 +83,7 @@ class AdoptedPhaseExecution(base.PhaseExecution):
         self._process._origin()
         for original in self._held: original.check()
         if self._ordinary_install is not None: self._ordinary_install.check_retained()
+        if self._endpoint_publication is not None: self._endpoint_publication.check()
         if self._publisher is not None: self._publisher.check()
         if self._public is not None: self._public.check()
         for fd, identity, raw in self._public_fds:
@@ -245,14 +249,12 @@ class AdoptedPhaseExecution(base.PhaseExecution):
             result = base.service_material.install_adopted(raw, expected_sha256=p.sha(raw))
             self._material = copy.deepcopy(result["material"])
         elif family == "endpoint-inputs":
-            for role, pin in value["coldOriginals"].items():
-                actual = self._public.read(pin, maximum=p.MAX_CONFIG)
-                p.require(actual == profile._raw(profile._input(self._prior, "install-precreation")["nativeColdOriginals"][role]))
-            for name, maximum in (("peer", 16384), ("proofScope", 16384), ("retrievalManifest", base.retrieval.MAX_MANIFEST),
-                    ("assignment", 4 * 1024 * 1024), ("adoptionAuthorization", profile.adoption.MAX_AUTHORIZATION)):
-                self._public.read(value[name], maximum=maximum)
-            p.require(type(value["objectDirectory"]) is str and value["objectDirectory"].startswith("/")
-                and len(value["objectDirectory"]) <= 4096 and "\0" not in value["objectDirectory"])
+            p.require(self._endpoint_publication is None)
+            # execute() has already retained and authenticated this job's exact
+            # independent Approval2 and input. Retain before any acquisition.
+            self._endpoint_publication = endpoint_publication._Publication(self._publisher, self._public)
+            self._endpoint_publication.publish(value, prior=self._prior,
+                observations=self._observations, check=self._during)
             self._endpoint_inputs = copy.deepcopy(value)
             result = {"publicPinsOpened": True}
         elif family == "phase-two-public":
@@ -300,6 +302,7 @@ class AdoptedPhaseExecution(base.PhaseExecution):
         p.require(not self._close_attempted and self._process._closed
             and self._process._result["status"] in ("not-started", "stopped-cleanup-complete", "failed-cleanup-complete"))
         self._close_attempted = True
+        if self._endpoint_publication is not None: self._endpoint_publication.close()
         if self._adoption_owner is not None: self._adoption_owner.close()
         if self._ordinary_install is not None: self._ordinary_install.close()
         with owning.owning():

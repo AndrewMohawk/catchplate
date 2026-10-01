@@ -123,8 +123,11 @@ def _adoption(selection, prior, cold_prior, observations, supervisor_observation
         "validationInputOriginal": raw.decode("ascii")}
 
 
-def _endpoints(selection, prior, supervisor_observation):
-    p.require(selection["peerPath"] == profile.legacy.launch_install.publication.DESTINATIONS["endpoint-peer"])
+def _endpoints(selection, prior, observations, supervisor_observation):
+    from serverware import native_pilot_adopted_endpoint_plan as plan
+    for field, purpose in (("peerPath", "endpoint-peer"), ("proofScopePath", "endpoint-proof-scope"),
+            ("assignmentPath", "endpoint-assignment")):
+        p.require(selection[field] == plan.publication.DESTINATIONS[purpose])
     installed = profile._input(prior, "install-ordinary-runtime")
     peer = None
     for role in g.ROLES:
@@ -141,18 +144,22 @@ def _endpoints(selection, prior, supervisor_observation):
     cold_inputs = profile._input(prior, "install-precreation")["nativeColdOriginals"]
     directory = selection["objectDirectory"]
     p.require(type(directory) is str and directory.startswith("/") and len(directory) <= 4096 and "\0" not in directory)
-    profile.legacy.delivery_authority.delivery._pin(selection["retrievalManifest"])
-    return {"coldOriginals": {role: pin(profile.legacy.launch_install.ADOPTED_DESTINATIONS["native-cold-" + role],
+    manifest = plan.retrieval.fresh_ledger_manifest_original(measured["proofScopeOriginal"].encode("ascii"))
+    expected_manifest = pin(plan.publication.DESTINATIONS["endpoint-retrieval-manifest"], manifest)
+    profile._same(selection["retrievalManifest"], expected_manifest)
+    value = {"coldOriginals": {role: pin(profile.legacy.launch_install.ADOPTED_DESTINATIONS["native-cold-" + role],
             cold_inputs[role].encode("ascii")) for role in profile.COMPOSITE},
         "peer": pin(selection["peerPath"], peer),
         "proofScope": pin(selection["proofScopePath"], measured["proofScopeOriginal"].encode("ascii")),
         "assignment": pin(selection["assignmentPath"], recipe["assignmentOriginal"].encode("ascii")),
-        "production": copy.deepcopy(measured["production"]), "retrievalManifest": copy.deepcopy(selection["retrievalManifest"]),
+        "production": copy.deepcopy(measured["production"]), "retrievalManifest": expected_manifest,
         "objectDirectory": directory, "adoptionAuthorization": copy.deepcopy(profile._result(prior, "publication-adoption")["pin"])}
+    plan.prepare(value, prior=prior, observations=observations)
+    return value
 
 
 def compose(selected, selection, *, prior, observations, supervisor_observation, cold_prior, boot):
     p.fields(selection, selection_fields(selected))
     value = (_adoption(selection, prior, cold_prior, observations, supervisor_observation, boot)
-        if selected.family == "adoption" else _endpoints(selection, prior, supervisor_observation))
+        if selected.family == "adoption" else _endpoints(selection, prior, observations, supervisor_observation))
     return g.canonical(value)

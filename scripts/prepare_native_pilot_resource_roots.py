@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Inspect, or explicitly create, the fixed native pilot resource parents.
+"""Inspect, or explicitly create, the fixed native pilot resource directories.
 
 Only directory metadata and bounded immediate directory entries are read.
 No project modules, supplied paths, configurations, keys, sockets, journals,
@@ -41,7 +41,7 @@ LEAVES = (
     "/var/lib/serverware/native-pilot-bridge",
 ) + tuple("/var/lib/serverware/custody-generation/" + role for role in ROLES)
 TARGETS = SHARED + LEAVES
-PROFILES = ("legacy", "adopted-cold")
+PROFILES = ("legacy", "adopted-cold", "adopted-operational")
 ADOPTED_SHARED = SHARED + ("/run/serverware",)
 ADOPTED_ADDITIONS = (
     ("/run/serverware-custody-genesis", 0o711),
@@ -50,6 +50,7 @@ ADOPTED_ADDITIONS = (
     ("/run/serverware-shadow-publication-reconciliation", 0o711),
     ("/run/serverware/native-pilot-core-handoff", 0o700),
 )
+OPERATIONAL_OBJECTS = "/var/lib/serverware/native-pilot-retrieval-objects"
 MAX_REPORT_BYTES = 32768
 
 
@@ -86,6 +87,11 @@ def selection(profile):
     leaves = LEAVES + tuple(path for path, _ in ADOPTED_ADDITIONS)
     modes = {path: 0o711 for path in LEAVES}
     modes.update(ADOPTED_ADDITIONS)
+    if profile == "adopted-operational":
+        # A provisioning option only. The independently approved endpoint
+        # input must still explicitly select this path; there is no fallback.
+        leaves += (OPERATIONAL_OBJECTS,)
+        modes[OPERATIONAL_OBJECTS] = 0o700
     return ADOPTED_SHARED, leaves, modes
 
 
@@ -98,9 +104,12 @@ def initial_report(profile, create):
                                "state": "not-inspected"} for path in shared + leaves],
               "releaseAuthority": False, "liveReady": False, "runtimeResourcesCreated": False,
               "filesystemSupportVerified": False}
-    if profile == "adopted-cold":
+    if profile != "legacy":
         report["apiVersion"] = "serverware.nativePilotResourceRoots/v2"
         report["profile"] = profile
+    if profile == "adopted-operational":
+        # This is not the received cold-core directory or a populated store.
+        report["directories"][-1].update(kind="auxiliary-retrieval-objects", expectedMode="0700")
     return report
 
 
@@ -247,9 +256,9 @@ class Roots:
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--create", action="store_true",
-                        help="create only missing fixed parent directories; preserve any partial result")
+                        help="create only missing fixed directories; preserve any partial result")
     parser.add_argument("--profile", choices=PROFILES, default="legacy",
-                        help="select the fixed legacy inventory (default) or cold/adopted parent inventory")
+                        help="select legacy (default), adopted-cold parents, or adopted-operational with empty auxiliary objects")
     args = parser.parse_args()
     report = initial_report(args.profile, args.create)
     owner = Roots(report, profile=args.profile)

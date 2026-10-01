@@ -1763,6 +1763,10 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/native_pilot_adopted_input_context.py \
 	serverware/native_pilot_adopted_foundation_inputs.py \
 	serverware/native_pilot_adopted_handoff_inputs.py \
+	serverware/native_pilot_adopted_endpoint_plan.py \
+	serverware/native_pilot_adopted_endpoint_publication.py \
+	scripts/test_native_pilot_adopted_endpoint_plan.py \
+	scripts/test_native_pilot_adopted_endpoint_publication.py \
 	serverware/native_pilot_adopted_ordinary_inputs.py \
 	serverware/native_pilot_adopted_native_inputs.py \
 	serverware/native_pilot_adopted_bridge_inputs.py \
@@ -4743,6 +4747,10 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/native_pilot_adopted_input_context.py \
 				serverware/native_pilot_adopted_foundation_inputs.py \
 				serverware/native_pilot_adopted_handoff_inputs.py \
+				serverware/native_pilot_adopted_endpoint_plan.py \
+				serverware/native_pilot_adopted_endpoint_publication.py \
+				scripts/test_native_pilot_adopted_endpoint_plan.py \
+				scripts/test_native_pilot_adopted_endpoint_publication.py \
 				serverware/native_pilot_adopted_ordinary_inputs.py \
 				serverware/native_pilot_adopted_native_inputs.py \
 				serverware/native_pilot_adopted_bridge_inputs.py \

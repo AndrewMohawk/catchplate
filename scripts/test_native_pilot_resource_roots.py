@@ -44,6 +44,7 @@ ADDITIONS = {
     "/run/serverware-shadow-publication-reconciliation": 0o711,
     "/run/serverware/native-pilot-core-handoff": 0o700,
 }
+OPERATIONAL_OBJECTS = "/var/lib/serverware/native-pilot-retrieval-objects"
 
 
 class InventoryControls(unittest.TestCase):
@@ -71,10 +72,31 @@ class InventoryControls(unittest.TestCase):
             self.assertNotIn(path, seen)
             seen.add(path)
         report = roots.initial_report("adopted-cold", False)
-        self.assertEqual(report["apiVersion"], "serverware.nativePilotResourceRoots/v2")
-        self.assertEqual(report["profile"], "adopted-cold")
-        self.assertEqual(report["operation"], "inspect")
+        self.assertEqual(report, {
+            "apiVersion": "serverware.nativePilotResourceRoots/v2", "profile": "adopted-cold",
+            "operation": "inspect", "result": "refused",
+            "directories": [{"path": path, "kind": "resource-parent" if path in leaves else "shared-container",
+                "state": "not-inspected"} for path in shared + leaves],
+            "releaseAuthority": False, "liveReady": False, "runtimeResourcesCreated": False,
+            "filesystemSupportVerified": False})
         self.assertLess(len(json.dumps(report).encode("ascii")), roots.MAX_REPORT_BYTES)
+
+    def test_operational_is_explicit_exact_extension_with_no_authority(self):
+        shared, leaves, modes = roots.selection("adopted-operational")
+        cold_shared, cold_leaves, cold_modes = roots.selection("adopted-cold")
+        self.assertEqual(shared, cold_shared)
+        self.assertEqual(leaves, cold_leaves + (OPERATIONAL_OBJECTS,))
+        self.assertEqual(modes, {**cold_modes, OPERATIONAL_OBJECTS: 0o700})
+        self.assertEqual(roots.OPERATIONAL_OBJECTS, OPERATIONAL_OBJECTS)
+        report = roots.initial_report("adopted-operational", False)
+        expected = roots.initial_report("adopted-cold", False)
+        expected["profile"] = "adopted-operational"
+        expected["directories"].append({"path": OPERATIONAL_OBJECTS,
+            "kind": "auxiliary-retrieval-objects", "state": "not-inspected", "expectedMode": "0700"})
+        self.assertEqual(report, expected)
+        self.assertLess(len(json.dumps(report).encode("ascii")), roots.MAX_REPORT_BYTES)
+        for profile in ("legacy", "adopted-cold"):
+            self.assertNotIn(OPERATIONAL_OBJECTS, roots.selection(profile)[1])
 
     def test_profile_and_operation_are_closed(self):
         for value in (None, {}, "adopted", "../adopted-cold", "legacy "):
@@ -149,6 +171,60 @@ class FilesystemControls(unittest.TestCase):
             owner.inspect(); owner.create_missing()
             for path in ("/run/serverware",) + tuple(ADDITIONS):
                 self.assertFalse((tree / path.lstrip("/")).exists())
+
+    def test_operational_inspect_and_explicit_create_empty_auxiliary_directory(self):
+        with sandbox("adopted-operational") as (tree, owner, report):
+            owner.inspect()
+            leaf = tree / OPERATIONAL_OBJECTS.lstrip("/")
+            self.assertFalse(leaf.exists())
+            owner.create_missing(); owner.check_populations()
+            self.assertEqual(set(owner.nodes), set(roots.ANCHORS + owner.targets))
+            self.assertEqual(tuple(leaf.iterdir()), ())
+            info = leaf.stat()
+            self.assertEqual((info.st_uid, info.st_gid, stat.S_IMODE(info.st_mode)), (0, 0, 0o700))
+            self.assertEqual(report["directories"][-1]["mode"], "0700")
+            self.assertEqual(report["directories"][-1]["expectedMode"], "0700")
+            self.assertEqual(tuple((tree / "run/serverware/native-pilot-core-handoff").iterdir()), ())
+
+    def test_cold_create_does_not_create_operational_objects(self):
+        with sandbox("adopted-cold") as (tree, owner, _):
+            owner.inspect(); owner.create_missing()
+            self.assertFalse((tree / OPERATIONAL_OBJECTS.lstrip("/")).exists())
+
+    def test_operational_wrong_mode_refuses_before_creation_without_repair(self):
+        with sandbox("adopted-operational") as (tree, owner, _):
+            leaf = tree / OPERATIONAL_OBJECTS.lstrip("/")
+            leaf.mkdir(parents=True); leaf.chmod(0o555)
+            with self.assertRaises(roots.Refused) as caught:
+                owner.inspect()
+            self.assertEqual(caught.exception.code, "resource-parent-mode-differs")
+            self.assertFalse((tree / "run/serverware").exists())
+            self.assertEqual(stat.S_IMODE(leaf.stat().st_mode), 0o555)
+
+    def test_operational_populated_directory_refuses_before_creation(self):
+        with sandbox("adopted-operational") as (tree, owner, _):
+            leaf = tree / OPERATIONAL_OBJECTS.lstrip("/")
+            leaf.mkdir(parents=True); leaf.chmod(0o700)
+            marker = leaf / "existing"
+            marker.write_bytes(b"preserve")
+            with self.assertRaises(roots.Refused) as caught:
+                owner.inspect()
+            self.assertEqual(caught.exception.code, "resource-parent-not-empty")
+            self.assertFalse((tree / "run/serverware").exists())
+            self.assertEqual(marker.read_bytes(), b"preserve")
+
+    def test_operational_symlink_refuses_without_mutation(self):
+        with sandbox("adopted-operational") as (tree, owner, _):
+            target = tree / "elsewhere"
+            target.mkdir(); target.chmod(0o700)
+            leaf = tree / OPERATIONAL_OBJECTS.lstrip("/")
+            leaf.parent.mkdir(parents=True)
+            leaf.symlink_to(target, target_is_directory=True)
+            with self.assertRaises(OSError):
+                owner.inspect()
+            self.assertFalse((tree / "run/serverware").exists())
+            self.assertEqual(tuple(target.iterdir()), ())
+            self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o700)
 
     def test_wrong_handoff_mode_refuses_before_first_creation(self):
         with sandbox() as (tree, _, _):

@@ -72,6 +72,40 @@ class AdoptedPhaseControls(unittest.TestCase):
         self.assertEqual(len(profile.KEY_INFO), 22)
         self.assertEqual(len(profile.AUTH_INFO), 34)
 
+    def test_shared_publication_census_and_independent_aggregate_byte_bound(self):
+        from serverware import native_pilot_publication as publication
+        from serverware import native_pilot_public_inputs as public_inputs
+        from serverware import native_pilot_adopted_endpoint_plan as endpoints
+
+        # Only purpose-bearing signed outputs use the executor's shared owner.
+        # Precreation, ordinary/runtime/material and each native launch install
+        # have their own actual publishers; authorizations with no purpose stay
+        # in the transcript and are not additional shared publication slots.
+        signed = tuple(job.purpose for rows in profile.JOBS.values() for job in rows if job.purpose is not None)
+        self.assertEqual(len(signed), 51)
+        shared = signed + (old.phase_two.PURPOSE,) + endpoints.PURPOSES
+        self.assertEqual(len(shared), 56)
+        self.assertEqual(len(set(shared)), len(shared))
+        self.assertLessEqual(len(shared), publication.MAX_ORIGINALS)
+        reader = tuple("native-cold-" + role for role in profile.COMPOSITE) + (
+            "publication-adoption",) + endpoints.PURPOSES + (old.phase_two.PURPOSE,)
+        self.assertEqual(len(reader), len(set(reader)))
+        self.assertEqual(len(reader), 10)
+        self.assertLessEqual(len(reader), public_inputs.MAX_ORIGINALS)
+        additional_bound = sum(publication.LIMITS[purpose] for purpose in endpoints.PURPOSES)
+        self.assertEqual(additional_bound, 4 * 1024 * 1024 + 52 * 1024)
+        self.assertLess(additional_bound, publication.MAX_PUBLIC_BYTES)
+        self.assertEqual(publication.MAX_PUBLIC_BYTES, public_inputs.MAX_PUBLIC_BYTES)
+        # Counts do not prove all allowed maxima fit together or a real graph
+        # was admitted. Actual bytes still consume the original aggregate cap.
+        def maximum(purpose):
+            if purpose in execution.public_profile.LIMITS:
+                return execution.public_profile.LIMITS[purpose]
+            if purpose in old.launch_install.ADOPTED_PURPOSES:
+                return old.launch_install.ADOPTED_PURPOSES[purpose]
+            return publication.LIMITS[purpose]
+        self.assertGreater(sum(maximum(purpose) for purpose in shared), publication.MAX_PUBLIC_BYTES)
+
     def test_initial_install_and_adoption_precede_first_endpoint_input(self):
         names = [job.name for job in profile.JOBS["endpoint-inputs"]]
         self.assertEqual(len(names), 48)

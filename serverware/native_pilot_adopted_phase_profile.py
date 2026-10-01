@@ -655,13 +655,8 @@ def prepare_input(name, raw, *, phase, prior, observations, boot, now_boottime_n
         selected = legacy.phase_two.prepare_input(raw, adopted=True)
         p.require(selected == _raw(_input(prior, "driver-scope")["publicBundleOriginal"]))
     elif family == "endpoint-inputs":
-        p.fields(value, ("coldOriginals", "peer", "proofScope", "retrievalManifest", "objectDirectory", "assignment", "production", "adoptionAuthorization"))
-        p.fields(value["coldOriginals"], COMPOSITE)
-        _same(value["adoptionAuthorization"], _result(prior, "publication-adoption")["pin"])
-        native = p.document(_raw(_input(prior, "publication-adoption")["validationInputOriginal"]), adoption.MAX_INPUT)
-        for field, source in (("proofScope", "currentProofScopeOriginal"), ("assignment", "currentAssignmentOriginal")):
-            p.require(value[field]["sha256"] == p.sha(_raw(native[source])))
-        p.fields(value["production"], legacy.scope_authority.PRODUCTION_FIELDS)
+        from serverware import native_pilot_adopted_endpoint_plan as endpoint_plan
+        context = endpoint_plan.prepare_current(value, prior=prior, observations=observations, **clocks)
     else:
         p.require(family in ("origin", "stop"))
         if family == "stop" and value.get("action") == "run-interactive":

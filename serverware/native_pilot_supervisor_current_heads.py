@@ -213,14 +213,19 @@ class CurrentHeadIntake:
             raw = self._process.approved_input_original(PHASE, name)
             p.require(raw == self._inputs[name] and p.sha(raw) == self._process.approved_input_sha256(PHASE, name))
             result = self._process.prior_result(PHASE, name)
-            verified = profile.checked_result(name, raw, result, context=self._context,
-                boot=self._boot, now_boottime_ns=self._clock())
             result_raw = p.canonical(result)
+            now = self._clock()
             if name not in self._outputs:
+                verified = profile.checked_result(name, raw, result, context=self._context,
+                    boot=self._boot, now_boottime_ns=now)
                 self._reserve(len(verified) + len(result_raw))
                 self._outputs[name], self._results[name] = verified, result_raw
             else:
-                p.require(self._outputs[name] == verified and self._results[name] == result_raw)
+                # Reuse only the first authenticated result for this immutable
+                # context. check() rechecks every source literal and original
+                # clock bound; a different statement or signature is refused.
+                p.require(self._results[name] == result_raw
+                    and self._outputs[name] == result["original"].encode("ascii"))
 
     def check(self):
         try:

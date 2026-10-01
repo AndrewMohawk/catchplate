@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Eight pure SYNTHETIC late-intake controls, not independent approval evidence.
+"""Nine pure SYNTHETIC late-intake controls, not independent approval evidence.
 
 Keys, observations, request entropy, clocks and currentness decisions are
 test-only. Existing C9, generation and current-head signatures are framed in
@@ -30,6 +30,7 @@ from serverware import native_pilot_service_authority as services
 from serverware import native_pilot_service_handshakes as handshakes
 from serverware import native_pilot_supervisor as supervisor
 from serverware import native_pilot_supervisor_current_head_profile as profile
+from serverware import native_pilot_supervisor_current_heads as intake
 from serverware import native_pilot_supervisor_policy as policy
 from test_native_pilot_bridge_preparation import fixture as bridge_fixture
 from test_native_pilot_current_head import refresh_decision, refresh_request, signed_result
@@ -307,6 +308,53 @@ class CurrentHeadIntakeControls(unittest.TestCase):
                 client_process_identity_sha256=runtime["expectedDriverProcessIdentitySha256"],
                 client_configuration_generation_sha256=runtime["expectedDriverConfigurationGenerationSha256"]))
             with self.assertRaises(ValueError): execution.PhaseExecution._bind_bridge_heads(data, runtime)
+
+    def test_inner_prior_verifies_once_and_rejects_changed_retained_originals(self):
+        # This is only the inner cache/association method. The namespace below
+        # is NOT a CurrentHeadIntake or coordinator owner; original-source,
+        # lifetime and process guards of check() are neither exercised nor
+        # replaced. The first cryptographic verification is the real helper.
+        f = fixture(); name = profile.JOB_NAMES[0]; role = ROLES[0]
+        raw, result = f["inputs"][name], f["outputs"][name]
+        alternate_input = json.loads(raw)
+        alternate_input["currentness"]["issuedAtBoottimeNanos"] = 1401
+        alternate_raw = canonical(alternate_input)
+        statement = dict(json.loads(result["original"])["statement"], issuedAtBoottimeNanos=1401)
+        public = f["fixture"]["initial_policy"]["services"][role]["authorities"]["checkpoint"]
+        alternate_result = signed_result(statement, public, private(role + "/checkpoint"))
+        self.assertEqual(head.checked_result(alternate_raw, alternate_result,
+            boot=f["clocks"]["boot"], now_boottime_ns=1401), alternate_result["original"].encode("ascii"))
+        observed = dict(input=raw, pin=sha(raw), result=copy.deepcopy(result))
+        def supplied(field, phase, job):
+            self.assertEqual((phase, job), ("bridge-runtime", name))
+            return observed[field]
+        process_data = SimpleNamespace(
+            approved_input_original=lambda phase, job: supplied("input", phase, job),
+            approved_input_sha256=lambda phase, job: supplied("pin", phase, job),
+            prior_result=lambda phase, job: supplied("result", phase, job))
+        reservations = []
+        data = SimpleNamespace(_process=process_data, _inputs={name: raw}, _outputs={}, _results={},
+            _context=f["context"], _boot=f["clocks"]["boot"], _clock=lambda: 1401,
+            _reserve=reservations.append)
+        with patch.object(intake.profile, "checked_result", wraps=profile.checked_result) as verify:
+            self.assertIsNone(intake.CurrentHeadIntake._prior(data, 1))
+            self.assertEqual(verify.call_count, 1)
+            self.assertEqual(data._outputs, {name: result["original"].encode("ascii")})
+            self.assertEqual(data._results, {name: canonical(result)})
+            cached = copy.deepcopy((data._inputs, data._outputs, data._results, reservations))
+            for _ in range(3):
+                self.assertIsNone(intake.CurrentHeadIntake._prior(data, 1))
+            self.assertEqual(verify.call_count, 1)
+            mutations = (
+                dict(input=alternate_raw, pin=sha(alternate_raw), result=copy.deepcopy(result)),
+                dict(input=raw, pin=labelled("substituted retained input pin"), result=copy.deepcopy(result)),
+                dict(input=raw, pin=sha(raw), result=alternate_result),
+            )
+            for changed in mutations:
+                observed.clear(); observed.update(changed)
+                with self.assertRaises(ValueError): intake.CurrentHeadIntake._prior(data, 1)
+                self.assertEqual((data._inputs, data._outputs, data._results, reservations), cached)
+                self.assertEqual(verify.call_count, 1)
 
 
 if __name__ == "__main__":

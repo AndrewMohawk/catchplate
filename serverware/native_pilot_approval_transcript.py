@@ -100,6 +100,35 @@ def _family_budget(prior, observations, *, selected):
     p.require(total + sum(map(len, observations.values())) <= maximum)
 
 
+def _current_head_context(prior, payloads, *, boot, now_boottime_ns):
+    """Project authenticated retained sources, never a fresh decision.
+
+    The caller first authenticates the complete adopted transcript. This
+    separately testable projection makes no claim that a supplied dictionary
+    was accepted or that its processes exist; the lower context authenticates
+    the complete literal history/runtime/grant and observed request joins.
+    """
+    profile, ordinary, heads = adopted.profile, adopted.ordinary, adopted.bridge.current_heads
+    bootstrap = profile._input(prior, "driver-bootstrap")
+    initial_policy = {"apiVersion": ordinary.initial_policy.POLICY_API, "services": {
+        role: ordinary._checkpoint_policy(profile._input(prior, "ordinary-initial-checkpoint-" + role))
+        for role in profile.g.ROLES}}
+    launch = profile._input(prior, "ordinary-generation-" + profile.g.ROLES[0])["launchOriginal"]
+    for role in profile.g.ROLES:
+        p.require(profile._input(prior, "ordinary-generation-" + role)["launchOriginal"] == launch)
+    early = payloads["endpoint-inputs"]
+    return heads.prepare_context(
+        fragment={"apiVersion": heads.API, "targets": list(heads.JOB_NAMES)},
+        bridge_preparation_raw=profile._raw(payloads["bridge-runtime"]["bridgePreparationOriginal"]),
+        driver_configuration_raw=profile._raw(bootstrap["configurationOriginal"]),
+        driver_window_raw=profile._raw(bootstrap["windowOriginal"]),
+        launch_raw=profile._raw(launch),
+        preparation_raw=profile._raw(early["ordinaryPreparationOriginal"]),
+        resources_raw=profile._raw(early["ordinaryInitialResourcesOriginal"]),
+        ordinary_context=adopted.bridge._ordinary(prior), initial_policy=initial_policy,
+        boot=boot, now_boottime_ns=now_boottime_ns)
+
+
 class CandidateTranscript:
     """Mutable public transcript data; never an opaque authority capability."""
     def __init__(self, bootstrap_configuration):
@@ -134,6 +163,66 @@ class CandidateTranscript:
         if state["lifetime"] is not None:
             p.require(now_boottime_ns < state["lifetime"] and now_unix_ns < state["expiry"])
         return dict(boot=boot, now_boottime_ns=now_boottime_ns, now_unix_ns=now_unix_ns)
+
+    def _adopted_pending(self, pending):
+        """Splice only the actual next frame's result of the accepted input."""
+        state = self._data
+        index = state["index"] - COLD_END
+        p.require(0 <= index < len(adopted.context.CATALOGUE) and type(pending) is dict
+            and type(pending["sequence"]) is int and pending["sequence"] == index + 1)
+        request_raw = lifecycle._original(pending["requestOriginal"], adopted.profile.MAX_FRAME)
+        ticket = p.document(request_raw, adopted.profile.MAX_FRAME)
+        prior = dict(state["adoptedPrior"])
+        if index:
+            previous = p.fields(ticket["previousResult"], ("phase", "job", "result"))
+            phase, selected = adopted.context.CATALOGUE[index - 1]
+            last = state["accepted"]
+            p.require(previous["phase"] == phase and previous["job"] == last["job"] == selected.name
+                and type(previous["result"]) is dict)
+            prior[last["job"]] = dict(input=last["input"], result=copy.deepcopy(previous["result"]))
+        _budget(state, pending, prior)
+        return index, request_raw, prior
+
+    def current_head_evidence(self, pending, *, boot, now_boottime_ns, now_unix_ns):
+        """Existing public evidence for the exact next one of eight head jobs.
+
+        No currentness decision is required or inferred. Nothing is accepted,
+        committed or advanced: a later independently supplied decision still
+        passes through ordinary ``prepare`` and byte-exact ``accept``.
+        """
+        p.require(self._candidate is None and self.next_stage == "adopted")
+        clocks = self._clocks(boot, now_boottime_ns, now_unix_ns)
+        index, _, prior = self._adopted_pending(pending)
+        phase, selected = adopted.context.CATALOGUE[index]
+        heads = adopted.bridge.current_heads
+        p.require(phase == "bridge-runtime" and selected.family == "current-head"
+            and selected.name in heads.JOB_NAMES)
+        state, originals = self._data, self._data["bootstrap"]
+        policy_sha = p.sha(originals["policy"])
+        policy, recipe, control, config, window, intake = adopted.context.configuration(
+            originals["policy"], policy_sha, originals["recipe"], p.sha(originals["recipe"]), clocks)
+        ticket, checked, observed, payloads, snapshot = adopted.context.transcript(
+            pending, prior, state["adoptedObservations"], policy, policy_sha, clocks)
+        p.require(checked is selected)
+        reserve = max(adopted.policy.interactive.COHORT_REAP_RESERVE_NS, config["lifecycle"]["cleanupReserveNanos"])
+        ceiling = min(p.ns(window["startupDeadlineBoottimeNs"]), p.ns(intake["startupDeadlineBoottimeNs"]),
+            min(p.ns(window["lifetimeDeadlineBoottimeNs"]), p.ns(intake["lifetimeDeadlineBoottimeNs"])) - reserve)
+        deadline, expiry = p.ns(ticket["deadlineBoottimeNs"]), p.ns(ticket["expiresAtUnixNanos"])
+        p.require(now_boottime_ns < deadline <= ceiling and now_unix_ns < expiry <= intake["expiresAtUnixNanos"])
+        expected = adopted.foundation.compose(adopted.profile.BY_NAME["driver-bootstrap"][1], {},
+            prior={}, observations=payloads, bootstrap_originals=policy["bootstrapOriginals"])
+        p.require(prior["driver-bootstrap"]["input"] == expected
+            and payloads["endpoint-precreation"]["bootstrapAdmissionOriginal"]
+                == adopted.profile._result(prior, "driver-bootstrap")["original"])
+        adopted.context.measured_originals(observed, recipe, control, config, window, payloads, clocks)
+        context = _current_head_context(prior, payloads, boot=boot, now_boottime_ns=now_boottime_ns)
+        p.require(heads.adoption_selected(context)
+            and now_boottime_ns < min(deadline, context["deadline"], state["lifetime"])
+            and now_unix_ns < min(expiry, state["expiry"]))
+        raw = heads.observed_original(selected.name, context)
+        _family_budget(prior, snapshot, selected="adopted")
+        _budget(state, pending, prior, snapshot, raw)
+        return raw
 
     def prepare(self, stage, pending, selection, *, boot, now_boottime_ns, now_unix_ns):
         """Compose once; no caller-supplied prior rows or future observations."""
@@ -179,18 +268,7 @@ class CandidateTranscript:
             next_state.update(coldPrior=prior, coldObservations=result["observations"], coldExpiry=result["epochLimit"])
             accepted = dict(job=cold.CATALOGUE[index].name, input=supplied["input"], request=pending)
         else:
-            index = state["index"] - COLD_END
-            p.require(type(pending) is dict and type(pending["sequence"]) is int and pending["sequence"] == index + 1)
-            request_raw = lifecycle._original(pending["requestOriginal"], adopted.profile.MAX_FRAME)
-            ticket = p.document(request_raw, adopted.profile.MAX_FRAME)
-            prior = dict(state["adoptedPrior"])
-            if index:
-                previous = p.fields(ticket["previousResult"], ("phase", "job", "result"))
-                phase, selected = adopted.context.CATALOGUE[index - 1]
-                last = state["accepted"]
-                p.require(previous["phase"] == phase and previous["job"] == last["job"] == selected.name
-                    and type(previous["result"]) is dict)
-                prior[last["job"]] = dict(input=last["input"], result=copy.deepcopy(previous["result"]))
+            index, request_raw, prior = self._adopted_pending(pending)
             originals = state["bootstrap"]
             result = adopted.compose(pending, selection, policy_original=originals["policy"],
                 policy_sha256=p.sha(originals["policy"]), recipe_original=originals["recipe"],

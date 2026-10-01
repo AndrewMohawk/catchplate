@@ -6,6 +6,8 @@ and cold-binding sources. Tiny public inventory fixtures use temporary trees.
 No live owner, protected file, approval, signer endpoint or complete66/176
 ceremony is fabricated. The exercised prefix is bootstrap/rendezvous/cold3;
 late result semantics remain covered by the separate completion codec suites.
+The current-head evidence controls authenticate the signed five-service source
+projection and all eight requests, not a fabricated complete adopted prefix.
 """
 from __future__ import annotations
 
@@ -22,6 +24,7 @@ sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "scripts"))
 
 from scripts import test_native_pilot_lifecycle_inputs as bootstrap_fixture
 from scripts.test_native_pilot_publication_cold_binding import fixture as cold_fixture
+from scripts.test_native_pilot_adopted_current_head import fixture as head_fixture
 from serverware import native_pilot_approval_transcript as transcript
 
 p = transcript.p
@@ -60,6 +63,41 @@ def request(value, index, results):
         sequence=index + 1, job=transcript.cold.CATALOGUE[index].name,
         deadlineBoottimeNs=value["listener"]["window"]["startupDeadlineBoottimeNs"],
         observation={}, previousResult=previous))
+
+
+def head_sources():
+    """Real-format signed source subgraph, deliberately not a complete prefix."""
+    source = head_fixture()
+    args = source["args"]
+    def record(raw, output=None):
+        return dict(input=raw, result={} if output is None else
+            dict(original=output.decode("ascii"), sha256=p.sha(output)))
+    prior = {"driver-bootstrap": record(p.canonical({
+        "configurationOriginal": args["driver_configuration_raw"].decode("ascii"),
+        "windowOriginal": args["driver_window_raw"].decode("ascii")}))}
+    initial = transcript.adopted.ordinary.initial_authority
+    for role, row in args["ordinary_context"].items():
+        wrapper = p.document(row["historyOriginal"].encode("ascii"), transcript.adopted.profile.g.MAX_BYTES)
+        # These complete checkpoint inputs preserve the earlier selected policy
+        # fields; actual signatures remain in the history and checkpoint bytes.
+        checkpoint = dict(apiVersion=initial.ADOPTED_INPUT_API, operation="checkpoint",
+            driverConfigurationOriginal=args["driver_configuration_raw"].decode("ascii"),
+            driverWindowOriginal=args["driver_window_raw"].decode("ascii"),
+            launchOriginal=args["launch_raw"].decode("ascii"), configurationOriginal=row["configurationOriginal"],
+            preparationOriginal=args["preparation_raw"].decode("ascii"),
+            resourcesOriginal=args["resources_raw"].decode("ascii"),
+            initialStateOriginal=p.canonical(wrapper["initialState"]).decode("ascii"),
+            authorities=copy.deepcopy(args["initial_policy"]["services"][role]["authorities"]),
+            payloadOriginal=p.canonical(wrapper["initialCheckpoint"]["payload"]).decode("ascii"))
+        prior["ordinary-initial-checkpoint-" + role] = record(p.canonical(checkpoint), p.canonical(wrapper["initialCheckpoint"]))
+        prior["ordinary-generation-" + role] = record(p.canonical({
+            "launchOriginal": args["launch_raw"].decode("ascii"),
+            "services": {role: {name: value for name, value in row.items() if name != "generationGrantOriginal"}}}),
+            row["generationGrantOriginal"].encode("ascii"))
+    payloads = {"endpoint-inputs": dict(ordinaryPreparationOriginal=args["preparation_raw"].decode("ascii"),
+        ordinaryInitialResourcesOriginal=args["resources_raw"].decode("ascii")),
+        "bridge-runtime": dict(bridgePreparationOriginal=args["bridge_preparation_raw"].decode("ascii"))}
+    return dict(source=source, prior=prior, payloads=payloads, clocks=copy.deepcopy(source["clocks"]))
 
 
 class ApprovalTranscriptControls(unittest.TestCase):
@@ -208,6 +246,29 @@ class ApprovalTranscriptControls(unittest.TestCase):
         with self.assertRaises(FAILURES): retained.prepare("bootstrap", self.value["pending"], {}, **self.value["clocks"])
         self.assertEqual(retained.next_stage, "cold")
 
+    def test_public_evidence_cannot_skip_acceptance_or_cold_completion_or_supply_sources(self):
+        retained = self.new()
+        pending = {"sequence": 1, "job": transcript.adopted.bridge.current_heads.JOB_NAMES[0]}
+        for stage in ("bootstrap", "rendezvous", "cold"):
+            if stage == "rendezvous":
+                candidate = retained.prepare("bootstrap", self.value["pending"], {}, **self.value["clocks"])
+                before = copy.deepcopy((retained._data, retained._candidate))
+                with self.assertRaises(FAILURES): retained.current_head_evidence(pending, **self.value["clocks"])
+                self.assertEqual((retained._data, retained._candidate), before)
+                retained.accept(candidate["originals"])
+            elif stage == "cold":
+                candidate = retained.prepare("rendezvous", self.value["request_raw"],
+                    rendezvous_selection(self.value), **self.value["clocks"])
+                retained.accept(candidate["originals"])
+            before = copy.deepcopy((retained._data, retained._candidate))
+            with self.assertRaises(FAILURES): retained.current_head_evidence(pending, **self.value["clocks"])
+            for name in ("prior", "observations", "currentness"):
+                with self.subTest(source=name), self.assertRaises(TypeError):
+                    retained.current_head_evidence(pending, **self.value["clocks"], **{name: {}})
+            self.assertEqual((retained._data, retained._candidate), before)
+            self.assertEqual(retained.next_stage, stage)
+            self.assertFalse(retained.done)
+
     def test_retained_boot_and_both_original_clocks_cannot_be_rewound_or_renewed(self):
         retained = self.ready()
         clocks = self.value["clocks"]
@@ -226,6 +287,83 @@ class ApprovalTranscriptControls(unittest.TestCase):
         for count in (-1, True, transcript.MAX_RETAINED_BYTES + 1):
             with self.assertRaises(ValueError): transcript._retained(count)
         with self.assertRaises(ValueError): transcript._budget(object())
+
+
+class CurrentHeadEvidenceProjectionControls(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.value = head_sources()
+
+    def context(self, value):
+        return transcript._current_head_context(value["prior"], value["payloads"], **value["clocks"])
+
+    def test_all_eight_exports_equal_existing_signed_source_evidence_without_decision(self):
+        value = copy.deepcopy(self.value)
+        before = copy.deepcopy(value)
+        context = self.context(value)
+        heads = transcript.adopted.bridge.current_heads
+        self.assertTrue(heads.adoption_selected(context))
+        self.assertEqual(context["sources"]["initial_policy"], value["source"]["args"]["initial_policy"])
+        for name in heads.JOB_NAMES:
+            raw = heads.observed_original(name, context)
+            self.assertEqual(raw, heads.observed_original(name, value["source"]["context"]))
+            observed = p.document(raw, heads.MAX_OBSERVED)
+            self.assertEqual(observed["apiVersion"], heads.OBSERVED_API)
+            self.assertEqual(observed["jobName"], name)
+            self.assertNotIn("currentness", observed)
+            self.assertNotIn("approval", observed)
+            self.assertNotIn("currentness", observed["originals"])
+        self.assertEqual(value, before)
+
+    def test_checkpoint_policy_is_derived_from_prior_selection_not_observed_history(self):
+        role = transcript.adopted.profile.g.ROLES[0]
+        name = "ordinary-initial-checkpoint-" + role
+        for field in ("authorities", "initialStateOriginal", "payloadOriginal"):
+            value = copy.deepcopy(self.value)
+            raw = p.document(value["prior"][name]["input"], transcript.adopted.profile.MAX_FRAME)
+            if field == "authorities":
+                other = transcript.adopted.profile.g.ROLES[1]
+                raw[field] = copy.deepcopy(value["source"]["args"]["initial_policy"]["services"][other]["authorities"])
+            else:
+                item = p.document(raw[field].encode("ascii"), 65536)
+                item["endpointGeneration" if field == "initialStateOriginal" else "revocationGenerationHighWater"] += 1
+                raw[field] = p.canonical(item).decode("ascii")
+            value["prior"][name]["input"] = p.canonical(raw)
+            with self.subTest(field=field), self.assertRaises(FAILURES): self.context(value)
+
+    def test_generation_result_hash_does_not_substitute_for_signature_or_literal_source(self):
+        role = transcript.adopted.profile.g.ROLES[0]
+        name = "ordinary-generation-" + role
+        for mistake in ("result-pin", "signature", "history", "launch"):
+            value = copy.deepcopy(self.value)
+            row = value["prior"][name]
+            if mistake == "result-pin": row["result"]["sha256"] = p.sha(b"other generation")
+            elif mistake == "signature":
+                result = p.document(row["result"]["original"].encode("ascii"), transcript.adopted.profile.MAX_FRAME)
+                result["signatureBase64url"] = p.encoded(bytes(64))
+                raw = p.canonical(result)
+                row["result"].update(original=raw.decode("ascii"), sha256=p.sha(raw))
+            else:
+                source = p.document(row["input"], transcript.adopted.profile.MAX_FRAME)
+                if mistake == "history":
+                    other = transcript.adopted.profile.g.ROLES[1]
+                    source["services"][role]["historyOriginal"] = value["source"]["args"]["ordinary_context"][other]["historyOriginal"]
+                else: source["launchOriginal"] = "{}"
+                row["input"] = p.canonical(source)
+            with self.subTest(mistake=mistake), self.assertRaises(FAILURES): self.context(value)
+
+    def test_evidence_preserves_original_boot_deadline_and_requires_every_source(self):
+        for mistake in ("boot", "deadline", "checkpoint", "generation", "preparation"):
+            value = copy.deepcopy(self.value)
+            if mistake == "boot":
+                original = value["clocks"]["boot"]
+                value["clocks"]["boot"] = original[:2] + (original[2] + 1,)
+            elif mistake == "deadline": value["clocks"]["now_boottime_ns"] = value["source"]["context"]["deadline"]
+            elif mistake in ("checkpoint", "generation"):
+                prefix = "ordinary-initial-checkpoint-" if mistake == "checkpoint" else "ordinary-generation-"
+                del value["prior"][prefix + transcript.adopted.profile.g.ROLES[-1]]
+            else: del value["payloads"]["bridge-runtime"]["bridgePreparationOriginal"]
+            with self.subTest(mistake=mistake), self.assertRaises(FAILURES): self.context(value)
 
 
 if __name__ == "__main__": unittest.main(verbosity=2)

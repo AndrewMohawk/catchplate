@@ -20,6 +20,9 @@ LIFECYCLE_KEYS = (("cold-authority-key", 36), ("adopted-authority-key", 123))
 PROVIDER_CLI = "/supervisor/app/scripts/run_native_pilot_approval_provider.py"
 PROVIDER_MODE = "approval-provider"
 PROVIDER_INPUTS = ("policy", "supervisor-inventory", "recipe", "conductor-inventory", "authority-inventory")
+DECISION_CLI = "/supervisor/app/scripts/run_native_pilot_current_head_decisions.py"
+DECISION_MODE = "current-head-decision-service"
+DECISION_INPUTS = ("supervisor-inventory", "configuration")
 PYTHON = "/runtime/python/bin/python3"
 IMPORT_ROOTS = ("/supervisor/app", "/authority/app", "/vendor", "/app")
 INPUTS = ("supervisor-inventory", "policy", "recipe", "conductor-inventory", "authority-inventory")
@@ -31,12 +34,12 @@ def _number(value, minimum, maximum):
             and minimum <= int(value) <= maximum)
 
 
-def _provider_arguments(arguments):
-    """Exactly five protected public pairs and two distinct authenticated sockets."""
-    if len(arguments) != 25:
+def _public_peer_arguments(arguments, inputs, sockets):
+    """Fixed protected public pairs and distinct authenticated socket descriptors."""
+    if len(arguments) != 1 + 4 * len(inputs) + 2 * len(sockets):
         return False
     descriptors = set()
-    for index, name in enumerate(PROVIDER_INPUTS):
+    for index, name in enumerate(inputs):
         offset = 1 + 4 * index
         flag, number, pin_flag, pin = arguments[offset:offset + 4]
         if (flag != "--" + name + "-fd" or not _number(number, 3, (1 << 31) - 1)
@@ -45,7 +48,8 @@ def _provider_arguments(arguments):
                 or int(number) in descriptors):
             return False
         descriptors.add(int(number))
-    for offset, name in ((21, "approval-socket"), (23, "current-head-socket")):
+    for index, name in enumerate(sockets):
+        offset = 1 + 4 * len(inputs) + 2 * index
         flag, number = arguments[offset:offset + 2]
         if (flag != "--" + name + "-fd" or not _number(number, 3, (1 << 31) - 1)
                 or int(number) in descriptors):
@@ -105,7 +109,9 @@ def valid_arguments(arguments):
     if arguments[0] == LIFECYCLE_MODE:
         return _lifecycle_arguments(arguments)
     if arguments[0] == PROVIDER_MODE:
-        return _provider_arguments(arguments)
+        return _public_peer_arguments(arguments, PROVIDER_INPUTS, ("approval-socket", "current-head-socket"))
+    if arguments[0] == DECISION_MODE:
+        return _public_peer_arguments(arguments, DECISION_INPUTS, ("approval-socket",))
     adopted = arguments[0] == "--run-adopted-native-pilot"
     inputs = INPUTS + (("intake-configuration",) if adopted else ())
     keys_offset = 1 + 4 * len(inputs) + 8
@@ -167,7 +173,8 @@ def main():
     # Namespace packages combine only the fixed source-selected script trees;
     # the unchanged shared serverware package remains under /app.
     sys.path[:0] = list(IMPORT_ROOTS)
-    selected_cli = {LIFECYCLE_MODE: LIFECYCLE_CLI, PROVIDER_MODE: PROVIDER_CLI}.get(sys.argv[1], CLI)
+    selected_cli = {LIFECYCLE_MODE: LIFECYCLE_CLI, PROVIDER_MODE: PROVIDER_CLI,
+        DECISION_MODE: DECISION_CLI}.get(sys.argv[1], CLI)
     runpy.run_path(selected_cli, run_name="__main__")
 
 

@@ -130,7 +130,7 @@ class ApprovalProvider:
                 owner._acquire(slot, factory, fd=supplied[name],
                     **{"peer_" + field: expected[field] for field in ("pid", "uid", "gid")},
                     deadline_boottime_ns=transport["deadline"], expires_at_unix_ns=transport["epochLimit"],
-                    check=owner.check, **({"completions": True} if kind is ApprovalPeer else {}))
+                    check=owner.check, **({"completions": True} if kind is ApprovalPeer else {"evidence": True}))
                 p.require(getattr(owner, slot).peer_identity() == expected)
             owner.check(full=True)
             return owner
@@ -179,7 +179,14 @@ class ApprovalProvider:
         inner = heads.pending_bounds(pending)
         self._active_caps = {name: min(caps[name], inner[name]) for name in ("deadline", "epochLimit")}
         p.require(self._heads.peer_identity() == self._prepared["currentHeadPeer"])
-        received = self._heads.exchange_current_head(pending,
+        # The external operator needs original runtime/history sources, not
+        # hashes alone. This projection neither advances the transcript nor
+        # supplies a currentness decision; the protected pair must come back
+        # from the independently configured peer before candidate admission.
+        evidence = self._transcript.current_head_evidence(pending, **self._clocks())
+        self._authorize("adopted", pending)
+        self.check(full=True)
+        received = self._heads.exchange_current_head(pending, evidence_original=evidence,
             deadline_boottime_ns=self._active_caps["deadline"],
             expires_at_unix_ns=self._active_caps["epochLimit"], check=self.check)
         # The channel owns incoming originals even if acquisition is interrupted.

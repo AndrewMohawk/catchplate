@@ -39,7 +39,10 @@ engineering overrides, and every report has `productionReleaseEligible=false`.
 No strict inventory, approved package, protected install, application execution,
 native target build, cloud action or paid test was produced.
 
-Next source work is the [fixed-eight evidence handoff](native-pilot-approval-provider.md#remaining-deployment-boundary).
+The subsequent `.422` [fixed-eight evidence handoff and receiving service](native-pilot-approval-provider.md)
+are source changes not included in these `.421` exports. New matching approved
+packages and protected installation remain required; no new runtime build is
+claimed by the source integration.
 The [dependency audit](production-dependency-snapshot.md) confirms that current
 locks still match the retained candidate; review/publication and all-three-manifest
 promotion, not regeneration, are the remaining dependency handoff.

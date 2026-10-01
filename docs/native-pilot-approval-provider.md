@@ -56,13 +56,74 @@ independent expectations, still matched by the downstream native runtime.
 Interactive stop derives only the observed origin-handoff hash; its stop time
 and expiry are fixed by the independently selected bootstrap policy.
 
-Eight current-head jobs are **not delegated**. For each, the provider forwards
-the actual request and observation to the separately pinned decision peer. That
-peer must return complete protected Input/v3 and Approval/v2 originals. The
-provider validates the exact request/currentness associations and requires the
-input to equal the candidate derived from its retained transcript. It forwards
-the original pair unchanged and never manufactures currentness from signed
-history. Waiting is bounded by the inner trust request as well as the outer job.
+Eight current-head jobs are **not delegated**. For each, the provider calls
+[`CandidateTranscript.current_head_evidence`](../serverware/native_pilot_approval_transcript.py)
+over accepted predecessors and the actual current request's result/observation
+delta. It returns the existing `nativePilotCurrentHeadObservedRequest/v1`, with
+literal runtime/history/request sources, without advancing the transcript or
+supplying currentness. The provider explicitly selects the `evidence=True`
+current-head transport and sends that evidence with the actual pending request
+to the separately pinned decision peer; the old mode is not silently upgraded.
+
+That peer must return complete protected Input/v3 and Approval/v2 originals.
+The provider validates their exact request/currentness associations and requires
+the input to equal the candidate derived from its retained transcript. It
+forwards the original pair unchanged and never manufactures currentness from
+signed history. Waiting is bounded by the inner trust request as well as the
+outer job and both original clocks.
+
+## Independent decision-service workflow
+
+The selected packaged receiver is
+[`native_pilot_current_head_decision_service`](../serverware/native_pilot_current_head_decision_service.py).
+Its supervisor entrypoint argument contract is:
+
+```text
+current-head-decision-service
+  --supervisor-inventory-fd FD --supervisor-inventory-sha256 sha256:HEX
+  --configuration-fd FD --configuration-sha256 sha256:HEX
+  --approval-socket-fd FD
+```
+
+All three descriptors must be distinct. The service admits the actual installed
+supervisor inventory, retains the protected configuration, and authenticates the
+connected provider through kernel credentials, PIDFD and process-start identity.
+Its closed `nativePilotCurrentHeadDecisionService/v1` configuration pins the
+inventory SHA, actual provider PID/UID/GID/start, directory device/inode, boot and
+time namespace, and original BOOTTIME and UNIX validity intervals.
+
+Before starting, the operator must provision the empty fixed directory
+`/etc/serverware/native-pilot-current-head-decisions`, owned by root:root with
+mode `0700`, and independently approve its identity and configuration pin.
+The service does not create or clear this directory. The independent backend
+and its fresh-state policy must already be ready before commissioning starts:
+the signed driver window allows at most **30 seconds for the entire startup**,
+not 30 seconds for each decision. This is an automation handoff, not a manual
+file-editing workflow during the run.
+
+For each of the fixed eight jobs, in source-defined order:
+
+1. The service exclusively creates `<job>.request.json` and
+   `<job>.evidence.json` as root:root `0400` files. These contain the literal
+   AuthorityJobRequest/v2 from `pending.requestOriginal` (not the transport
+   envelope) and transcript-derived public originals, respectively.
+2. The independently operated backend reads the complete originals, establishes
+   fresh state under its own approved policy, and supplies a complete Input/v3
+   plus its independent Approval/v2. It atomically publishes
+   `<job>.input.json` first and `<job>.approval.json` last, without replacing
+   existing paths. Both must be root:root `0400`, regular, single-link files;
+   stage temporary files outside the watched directory. Extra or future-job
+   files are refused.
+3. The service validates the complete pair, including literal evidence/input
+   joins and the request's original limits, then sends the retained descriptors
+   to the provider. The provider still performs its own full candidate equality
+   and approval checks. A descriptor receipt is not successful job execution.
+
+There is no fresh-head backend, signing engine, generated currentness or approval
+in this service. Same-host root permissions do not establish independent
+organizational custody. No restart, overwrite, deadline extension or automatic
+cleanup repairs a failed exchange; existing and partial files remain for
+diagnosis, and uncertain resource cleanup remains explicit.
 
 ## Ordering and cleanup
 
@@ -84,23 +145,17 @@ successful exit. Successful public-transcript completion still reports
 
 ## Remaining deployment boundary
 
-Frozen `bb54b76a` passes 107 focused controls in ten suites, including real local
-socket/PIDFD/descriptor exchanges with synthetic public payloads. Provider
+The earlier frozen `bb54b76a` passed 107 focused controls in ten suites, including
+real local socket/PIDFD/descriptor exchanges with synthetic public payloads. Provider
 invocation/serializer and source-order checks are not an executed protected
 provider process. No complete valid cold66/adopted176 ceremony is claimed.
 
-The next fixed-eight connection needs an explicitly selected, bounded public
-evidence attachment: its current request/observation frames carry runtime and
-history hashes, not all originals needed to prepare complete Input/v3. Reuse
-[`prepare_context` and `observed_original`](../serverware/native_pilot_supervisor_current_head_profile.py)
-over the provider's retained predecessors, which supply the sources used by
-[`_current_head`](../serverware/native_pilot_adopted_bridge_inputs.py), and connect
-an independent decision-service caller to the existing
-[`receive_current_head`/`respond_current_head`](../serverware/native_pilot_supervisor_approval_channel.py)
-route. This is a missing source handoff, not permission to widen the current wire
-silently or relay all 244 jobs. The attachment must contain no inferred
-currentness; fresh decisions and the protected Input/v3 + Approval/v2 pair remain
-independently supplied.
+The `.422` evidence projection, explicitly selected transport and protected-file
+receiver described above are implemented in source, **pending the frozen
+verification pass**. They replace the missing public-source handoff; they do not
+implement the external fresh-head state backend or establish a deployed
+independent decision service. No new test result, installed-package admission or
+live-pilot success is implied by this source integration.
 
 The source does not provision independent policy/current-head operators, issue
 their decisions, approve dependency publication, install compatible packages,

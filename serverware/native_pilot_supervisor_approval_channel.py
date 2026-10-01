@@ -7,6 +7,9 @@ root:root0400/sealed ownership, exact request association and live owners.
 
 Linux SO_PEERPIDFD and per-message SCM_CREDENTIALS are mandatory. Request and
 observation originals use bounded ordered packets, not one oversized seqpacket.
+The separately selected fixed-eight evidence mode also carries the existing
+public observed-current-head original. It supplies no currentness decision;
+its attachment and framing count toward the unchanged 128 MiB session limit.
 Every failure consumes this channel; no reconnect, resend or new deadline exists.
 """
 from __future__ import annotations
@@ -53,6 +56,10 @@ ADOPTED_REQUEST_API = "serverware.nativePilotAdoptedApprovalRequest/v1"
 ADOPTED_CHUNK_API = "serverware.nativePilotAdoptedApprovalChunk/v1"
 ADOPTED_REPLY_API = "serverware.nativePilotAdoptedApprovalReply/v1"
 ADOPTED_RECEIPT_API = "serverware.nativePilotAdoptedApprovalReceipt/v1"
+EVIDENCE_REQUEST_API = "serverware.nativePilotCurrentHeadEvidenceApprovalRequest/v1"
+EVIDENCE_CHUNK_API = "serverware.nativePilotCurrentHeadEvidenceApprovalChunk/v1"
+EVIDENCE_REPLY_API = "serverware.nativePilotCurrentHeadEvidenceApprovalReply/v1"
+EVIDENCE_RECEIPT_API = "serverware.nativePilotCurrentHeadEvidenceApprovalReceipt/v1"
 _TOKEN = object()
 _CLAIMED = set()
 _SEQUENCES = {job.name: sum(len(jobs) for phase, jobs in JOBS.items()
@@ -277,16 +284,55 @@ def _current_head_index(index):
     return slots[p.integer(index, minimum=0, maximum=7)]
 
 
+def current_head_evidence(pending, raw):
+    """Bind an existing public evidence original, never decide currentness.
+
+    This is a pure framing/source-association check. The independent recipient
+    still authenticates complete issuer inputs and supplies its own decision.
+    No process, source custody or independent authority is claimed here.
+    """
+    from serverware import native_pilot_approval_current_heads as current_heads
+    _, _, role, endpoint, row, _, _ = current_heads._pending(pending)
+    value = p.fields(p.document(raw, heads.MAX_OBSERVED), ("apiVersion", "jobName", "serviceRole",
+        "endpointRole", "originals", "rootAuthority", "checkpointAuthority", "checkpointSha256",
+        "requestSha256", "requestNonceSha256", "deadlineBoottimeNanos"))
+    _require(value["apiVersion"] == heads.OBSERVED_API and value["jobName"] == pending["job"]
+        and value["serviceRole"] == role and value["endpointRole"] == endpoint)
+    evidence = p.fields(value["originals"], ("bridgePreparation", "driverConfiguration", "driverWindow",
+        "launch", "preparation", "resources", "configuration", "runtime", "primaryInitialHistory",
+        "selectedInitialHistory", "generationGrant", "request"))
+    _require(all(type(original) is str and original.isascii() and original for original in evidence.values()))
+    observed = p.document(pending["observationOriginal"].encode("ascii"), MAX_REQUEST)
+    conductor = p.document(observed["conductorRequestOriginal"].encode("ascii"), MAX_REQUEST)
+    _require(evidence["bridgePreparation"] == conductor["payload"]["bridgePreparationOriginal"]
+        and evidence["request"] == row["requestOriginal"]
+        and p.sha(evidence["runtime"].encode("ascii")) == row["runtimeConfigurationSha256"]
+        and p.sha(evidence["selectedInitialHistory"].encode("ascii")) == row["initialHistorySha256"])
+    request = heads.head.request(evidence["request"].encode("ascii"))
+    _require(p.digest(value["requestSha256"]) == row["requestSha256"]
+        == heads.head.request_sha256(evidence["request"].encode("ascii"))
+        and p.digest(value["requestNonceSha256"]) == request["requestNonceSha256"]
+        and p.digest(value["checkpointSha256"]) == row["checkpointSha256"]
+        == request["operation"]["body"]["accepted_floor"]["checkpointSha256"]
+        and p.integer(value["deadlineBoottimeNanos"], maximum=p.MAX_U64)
+        == request["deadline"]["absoluteBoottimeNanos"])
+    root = p.fields(value["rootAuthority"], ("keyId", "keySpkiSha256"))
+    for digest in root.values(): p.digest(digest)
+    heads.history._key(value["checkpointAuthority"])
+    return value
+
+
 class _Connection:
     @classmethod
     def open_current_heads(cls, fd, *, peer_pid, peer_uid, peer_gid,
-                           deadline_boottime_ns, expires_at_unix_ns, check):
-        """Only the eight independently decided adopted jobs, existing v2 wire."""
-        _require(callable(check))
+                           deadline_boottime_ns, expires_at_unix_ns, check, evidence=False):
+        """Only eight jobs; public evidence requires explicit selection at both ends."""
+        _require(callable(check) and type(evidence) is bool)
         p.integer(deadline_boottime_ns, maximum=p.MAX_U64)
         p.integer(expires_at_unix_ns, maximum=p.MAX_I64)
         return cls._open(fd, peer_pid=peer_pid, peer_uid=peer_uid, peer_gid=peer_gid,
-            lifecycle=(deadline_boottime_ns, expires_at_unix_ns, check, False), current_heads=True)
+            lifecycle=(deadline_boottime_ns, expires_at_unix_ns, check, False),
+            current_heads=True, head_evidence=evidence)
 
     @classmethod
     def open_lifecycle(cls, fd, *, peer_pid, peer_uid, peer_gid,
@@ -308,7 +354,7 @@ class _Connection:
         return cls._open(fd, peer_pid=peer_pid, peer_uid=peer_uid, peer_gid=peer_gid)
 
     @classmethod
-    def _open(cls, fd, *, peer_pid, peer_uid, peer_gid, lifecycle=None, current_heads=False):
+    def _open(cls, fd, *, peer_pid, peer_uid, peer_gid, lifecycle=None, current_heads=False, head_evidence=False):
         _require(cls in (ApprovalChannel, ApprovalPeer) and type(fd) is int and fd >= 3)
         p.integer(peer_pid, minimum=2, maximum=(1 << 31) - 1)
         p.integer(peer_uid, minimum=0, maximum=(1 << 32) - 2)
@@ -337,6 +383,7 @@ class _Connection:
         owner._close_attempted = owner._close_uncertain = owner._receipt_committed = False
         owner._context, owner._lifecycle_header = {}, None
         owner._current_heads, owner._head_header = current_heads, None
+        owner._head_evidence = head_evidence
         owner._completions, owner._completion_count, owner._completion_header = False, 0, None
         owner._callback = owner._lifecycle_deadline = None
         if owner._lifecycle:
@@ -604,7 +651,8 @@ class _Connection:
 
 
 class ApprovalChannel(_Connection):
-    def exchange_current_head(self, pending, *, deadline_boottime_ns, expires_at_unix_ns, check):
+    def exchange_current_head(self, pending, *, deadline_boottime_ns, expires_at_unix_ns, check,
+                              evidence_original=None):
         """Request an independent complete input/Approval2 for one of eight jobs."""
         acquired = self._lock.acquire(blocking=False)
         try:
@@ -613,6 +661,14 @@ class ApprovalChannel(_Connection):
             self._lifecycle_begin(deadline_boottime_ns=deadline_boottime_ns,
                 expires_at_unix_ns=expires_at_unix_ns, check=check)
             header, raws, deadline = _pending_adopted(pending, index)
+            if self._head_evidence:
+                evidence = current_head_evidence(pending, evidence_original)
+                header.update(apiVersion=EVIDENCE_REQUEST_API,
+                    evidence=dict(length=len(evidence_original), sha256=p.sha(evidence_original)))
+                raws["evidence"] = evidence_original
+                deadline = min(deadline, evidence["deadlineBoottimeNanos"])
+            else:
+                _require(evidence_original is None)
             from serverware import native_pilot_approval_current_heads as current_heads
             bounds = current_heads.pending_bounds(pending)
             # Preserve the original outer header while waiting only within the
@@ -621,10 +677,11 @@ class ApprovalChannel(_Connection):
             self._epoch_limit = min(self._epoch_limit, p.ns(header["expiresAtUnixNanos"]), bounds["epochLimit"])
             self.check()
             _require(not select.select([self._socket], [], [], 0)[0])
-            self._send_lifecycle_originals(header, raws, chunk_api=ADOPTED_CHUNK_API)
+            self._send_lifecycle_originals(header, raws,
+                chunk_api=EVIDENCE_CHUNK_API if self._head_evidence else ADOPTED_CHUNK_API)
             reply, fds = self._receive(2, received=self._incoming)
             p.fields(reply, REPLY_FIELDS)
-            _require(reply["apiVersion"] == ADOPTED_REPLY_API
+            _require(reply["apiVersion"] == (EVIDENCE_REPLY_API if self._head_evidence else ADOPTED_REPLY_API)
                 and reply["requestBindingSha256"] == p.sha(p.canonical(header)))
             from serverware import native_pilot_adopted_phase_profile as adopted
             limits = (adopted.BY_NAME[pending["job"]][1].maximum, MAX_APPROVAL)
@@ -638,7 +695,8 @@ class ApprovalChannel(_Connection):
                     names=("input", "approval"), identities=identities, owner=self)
                 self._received.append(accepted)
                 fds.clear()
-            self._send(dict(apiVersion=ADOPTED_RECEIPT_API, requestBindingSha256=p.sha(p.canonical(header)),
+            self._send(dict(apiVersion=EVIDENCE_RECEIPT_API if self._head_evidence else ADOPTED_RECEIPT_API,
+                requestBindingSha256=p.sha(p.canonical(header)),
                 replySha256=p.sha(p.canonical(reply))), receipt=True)
             self._index += 1
             self._active = None
@@ -787,27 +845,43 @@ class ApprovalPeer(_Connection):
             self._lifecycle_begin(deadline_boottime_ns=deadline_boottime_ns,
                 expires_at_unix_ns=expires_at_unix_ns, check=check)
             header, _ = self._receive(0)
-            p.fields(header, REQUEST_FIELDS + ("expiresAtUnixNanos",))
-            _require(header["apiVersion"] == ADOPTED_REQUEST_API
+            p.fields(header, REQUEST_FIELDS + ("expiresAtUnixNanos",) + (("evidence",) if self._head_evidence else ()))
+            _require(header["apiVersion"] == (EVIDENCE_REQUEST_API if self._head_evidence else ADOPTED_REQUEST_API)
                 and type(header["exchangeSequence"]) is int and header["exchangeSequence"] == index + 1)
             deadline, expiry = p.ns(header["deadlineBoottimeNs"]), p.ns(header["expiresAtUnixNanos"])
             self._active, self._epoch_limit = min(self._active, deadline), min(self._epoch_limit, expiry)
-            for name in ("request", "observation"):
+            names = ("request", "observation", "evidence") if self._head_evidence else ("request", "observation")
+            for name in names:
                 meta = p.fields(header[name], ("length", "sha256"))
-                p.integer(meta["length"], maximum=MAX_REQUEST); p.digest(meta["sha256"])
+                p.integer(meta["length"], maximum=heads.MAX_OBSERVED if name == "evidence" else MAX_REQUEST)
+                p.digest(meta["sha256"])
             raws = self._receive_lifecycle_originals(header, ("request", "observation"),
-                chunk_api=ADOPTED_CHUNK_API, metadata=header)
+                chunk_api=EVIDENCE_CHUNK_API if self._head_evidence else ADOPTED_CHUNK_API, metadata=header)
             from serverware import native_pilot_lifecycle_approval_wire as wire
             pending = wire.pending("adopted", raws)
             expected, checked, _ = _pending_adopted(pending, index)
-            _require(expected == header and checked == raws and not select.select([self._socket], [], [], 0)[0])
+            if self._head_evidence:
+                expected.update(apiVersion=EVIDENCE_REQUEST_API, evidence=header["evidence"])
+            _require(expected == header and checked == raws)
             from serverware import native_pilot_approval_current_heads as current_heads
             bounds = current_heads.pending_bounds(pending)
             self._active = min(self._active, bounds["deadline"])
             self._epoch_limit = min(self._epoch_limit, bounds["epochLimit"])
             self.check()
+            if self._head_evidence:
+                # A slow attachment cannot spend the broader outer window:
+                # the authenticated nested request is available before it.
+                raws.update(self._receive_lifecycle_originals(header, ("evidence",),
+                    chunk_api=EVIDENCE_CHUNK_API, metadata=header))
+                evidence = current_head_evidence(pending, raws["evidence"])
+                self._active = min(self._active, evidence["deadlineBoottimeNanos"])
+                expected.update(apiVersion=EVIDENCE_REQUEST_API,
+                    evidence=dict(length=len(raws["evidence"]), sha256=p.sha(raws["evidence"])))
+                checked["evidence"] = raws["evidence"]
+            _require(expected == header and checked == raws and not select.select([self._socket], [], [], 0)[0])
+            self.check()
             self._head_header, self._head_job = header, pending["job"]
-            return pending
+            return dict(pending=pending, evidenceOriginal=raws["evidence"].decode("ascii")) if self._head_evidence else pending
         except BaseException as error:
             self._failed = True
             raise ApprovalChannelError(self) from error
@@ -828,10 +902,10 @@ class ApprovalPeer(_Connection):
                 for fd, maximum, digest in zip(fds, limits, (input_sha256, approval_sha256), strict=True)]
             _require(identities[0][:2] != identities[1][:2])
             binding = p.sha(p.canonical(self._head_header))
-            reply = dict(apiVersion=ADOPTED_REPLY_API, requestBindingSha256=binding,
+            reply = dict(apiVersion=EVIDENCE_REPLY_API if self._head_evidence else ADOPTED_REPLY_API, requestBindingSha256=binding,
                 inputSha256=p.digest(input_sha256), approvalSha256=p.digest(approval_sha256))
             self._send(reply, fds)
-            self._receive(0, receipt_expected=dict(apiVersion=ADOPTED_RECEIPT_API,
+            self._receive(0, receipt_expected=dict(apiVersion=EVIDENCE_RECEIPT_API if self._head_evidence else ADOPTED_RECEIPT_API,
                 requestBindingSha256=binding, replySha256=p.sha(p.canonical(reply))))
             self._check(peer_live=False)
             self._head_header = None

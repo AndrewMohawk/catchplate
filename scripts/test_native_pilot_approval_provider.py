@@ -161,8 +161,15 @@ class ApprovalProviderControls(unittest.TestCase):
         external = selected["_head_pair"]
         self.assertFalse(calls(external, "_approval"))
         sequence = [calls(external, name)[0] for name in
-            ("exchange_current_head", "selection", "prepare", "require_candidate")]
+            ("current_head_evidence", "exchange_current_head", "selection", "prepare", "require_candidate")]
         self.assertEqual(sequence, sorted(sequence))
+        exchange = next(node for node in ast.walk(external) if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute) and node.func.attr == "exchange_current_head")
+        evidence = next(item.value for item in exchange.keywords if item.arg == "evidence_original")
+        self.assertEqual(ast.unparse(evidence), "evidence")
+        self.assertLess(calls(external, "_authorize")[0], sequence[0])
+        self.assertLess(sequence[0], calls(external, "_authorize")[1])
+        self.assertLess(calls(external, "_authorize")[1], sequence[1])
         for name in ("signing_key", "from_private_bytes", "Popen", "execve", "system"):
             self.assertFalse(any(calls(node, name) for node in selected.values()))
 

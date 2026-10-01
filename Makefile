@@ -1787,6 +1787,12 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	scripts/test_native_pilot_adopted_interactive.py \
 	scripts/run_native_pilot_lifecycle.py \
 	scripts/run_native_pilot_approval_provider.py \
+	serverware/native_pilot_current_head_decision_service.py \
+	serverware/native_pilot_current_head_decision_service_profile.py \
+	scripts/run_native_pilot_current_head_decisions.py \
+	scripts/test_native_pilot_current_head_decision_service.py \
+	scripts/test_native_pilot_current_head_decision_entrypoint.py \
+	scripts/test_native_pilot_current_head_evidence_channel.py \
 	scripts/test_native_pilot_approval_transcript.py \
 	scripts/test_native_pilot_approval_current_heads.py \
 	scripts/test_native_pilot_approval_current_head_channel.py \
@@ -4784,6 +4790,12 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				scripts/test_native_pilot_adopted_interactive.py \
 				scripts/run_native_pilot_lifecycle.py \
 				scripts/run_native_pilot_approval_provider.py \
+				serverware/native_pilot_current_head_decision_service.py \
+				serverware/native_pilot_current_head_decision_service_profile.py \
+				scripts/run_native_pilot_current_head_decisions.py \
+				scripts/test_native_pilot_current_head_decision_service.py \
+				scripts/test_native_pilot_current_head_decision_entrypoint.py \
+				scripts/test_native_pilot_current_head_evidence_channel.py \
 				scripts/test_native_pilot_approval_transcript.py \
 				scripts/test_native_pilot_approval_current_heads.py \
 				scripts/test_native_pilot_approval_current_head_channel.py \

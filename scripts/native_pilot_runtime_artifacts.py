@@ -54,6 +54,7 @@ SUPERVISOR_FILES = (
     "scripts/install_native_pilot_genesis_job.py",
     "scripts/run_native_pilot_lifecycle.py",
     "scripts/run_native_pilot_approval_provider.py",
+    "scripts/run_native_pilot_current_head_decisions.py",
 )
 SUPERVISOR_COMMAND = ["/" + INTERPRETER, "-I", "-B", "/" + SUPERVISOR_ENTRYPOINT, "--run-native-pilot"]
 SUPERVISOR_REQUIRED_ARGUMENTS = {

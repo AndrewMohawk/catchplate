@@ -134,6 +134,16 @@ class LocalInstallTests(unittest.TestCase):
         finally:
             os.close(read); os.close(write)
 
+    @unittest.skipUnless(sys.platform == "linux", "actual per-descriptor frozen-state check")
+    def test_actual_writable_descriptor_cannot_inherit_a_readonly_ancestor_claim(self):
+        with tempfile.TemporaryDirectory(prefix="authority-install-frozen-") as directory:
+            fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+            try:
+                with self.assertRaises((OSError, ValueError)):
+                    install._frozen(fd)
+            finally:
+                os.close(fd)
+
 
 if __name__ == "__main__":
     unittest.main()

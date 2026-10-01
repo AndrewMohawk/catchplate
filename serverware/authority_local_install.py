@@ -135,6 +135,11 @@ def _immutable(fd):
     _require(_flags(fd) & _IMMUTABLE)
 
 
+def _frozen(fd):
+    # A readonly ancestor mount does not imply a same-device bind child is readonly.
+    _require(os.fstatvfs(fd).f_flag & os.ST_RDONLY or _flags(fd) & _IMMUTABLE)
+
+
 def _verity(fd):
     # Linux fsverity_enable_arg: SHA256, 4096-byte blocks, no salt/signature.
     enable = struct.pack("=IIIIQIIQ11Q", 1, 1, 4096, 0, 0, 0, 0, 0, *([0] * 11))
@@ -257,8 +262,8 @@ class LocalAuthorityInstaller:
             _require((info.st_dev, info.st_ino) == identity == (actual.st_dev, actual.st_ino)
                 and actual.st_uid == actual.st_gid == 0 and not actual.st_mode & 0o022)
         if getattr(self, "source_identity", None) is not None:
-            _require(_identity(self.source_root) == self.source_identity
-                and (os.fstatvfs(self.source_root).f_flag & os.ST_RDONLY or _flags(self.source_root) & _IMMUTABLE))
+            _require(_identity(self.source_root) == self.source_identity)
+            _frozen(self.source_root)
 
     def _destination(self):
         with _owning(): current = self._hold(os.open("/", _READ | os.O_DIRECTORY))
@@ -355,7 +360,6 @@ class LocalAuthorityInstaller:
         _require((os.stat(root["runtimePath"], follow_symlinks=False).st_dev,
             os.stat(root["runtimePath"], follow_symlinks=False).st_ino) == (root["device"], root["inode"]))
         self.source_identity = _identity(self.source_root)
-        self.source_readonly = bool(os.fstatvfs(self.source_root).f_flag & os.ST_RDONLY)
         self._source_tree()
         self.plan = contract.build_provisioning_plan(self.verified, self.verification,
             validation_time=_timestamp(), source_root_fd=self.source_root,
@@ -391,15 +395,15 @@ class LocalAuthorityInstaller:
         seen_files, seen_directories = set(), set()
         def visit(fd, prefix):
             self.check()
-            _require(self.source_readonly or _flags(fd) & _IMMUTABLE)
+            _frozen(fd)
             with os.scandir(fd) as entries:
                 for entry in entries:
                     self.check(); path = prefix + entry.name
                     _require(path in files or path in directories)
                     with _owning(): child = self._hold(_open_beneath(fd, entry.name, _READ))
                     info = os.fstat(child)
-                    _require(info.st_dev == self.source_identity["device"] and
-                        (self.source_readonly or _flags(child) & _IMMUTABLE))
+                    _require(info.st_dev == self.source_identity["device"])
+                    _frozen(child)
                     if path in files:
                         _require(stat.S_ISREG(info.st_mode)); seen_files.add(path)
                     else:
@@ -423,12 +427,14 @@ class LocalAuthorityInstaller:
         before = os.fstat(source)
         _require(stat.S_ISREG(before.st_mode) and before.st_nlink == 1 and before.st_size == entry["size"]
             and (stat.S_IMODE(before.st_mode), before.st_uid, before.st_gid) == (entry["mode"], entry["uid"], entry["gid"]))
+        _frozen(source)
         digest = hashlib.sha256(); offset = 0
         while offset < before.st_size:
             self.check(); raw = os.pread(source, min(1024 * 1024, before.st_size - offset), offset)
             _require(bool(raw)); digest.update(raw); self._write(target, raw); offset += len(raw)
         _require("sha256:" + digest.hexdigest() == entry["sourceSha256"]
             and protected._identity(os.fstat(source)) == protected._identity(before))
+        _frozen(source)
         os.fchown(target, entry["uid"], entry["gid"]); os.fchmod(target, entry["mode"]); os.fsync(target)
         self._drop(target); self._drop(source)
         with _owning(): target = self._hold(_open_beneath(parent, leaf, _READ))

@@ -93,11 +93,25 @@ This is a Python/OpenSSL signing authority, not demonstrated hardware custody.
 
 ## Verification
 
-Focused frozen verification is pending for this source slice. The intended
-batch covers the new framing/signature controls, real local kernel primitives,
-closed CLI/protocol compatibility and package inventories. It does not run the
-complete protected cold ceremony or claim live fs-verity acquisition, native
-adoption signing, operational launch, Nitro/KMS or independent approval.
+Exact source `8fb767acd9f8c49bf40023539dd99d1f718a00bd` passed **all 80 controls
+in nine suites**, with zero failures, errors or skips, in **2.510 seconds**.
+The single frozen batch also passed 21-file Python grammar and both Make
+inventories; the actual six new/updated owner and executor modules imported
+from that snapshot. Six documents resolve 629 local file targets (not URLs
+or anchors). No corrective rerun was required.
+
+The run used cached Python 3.11.15, an empty environment, private user/network
+namespaces, one CPU and a 240-second bound. Exact source archive, harnesses,
+commands, logs, file hashes and results are retained under
+`codex-offload/serverware/engineering-builds/8fb767ac-core-handoff-2p5pkO/`.
+
+Controls cover synthetic framing/signatures, closed CLI/protocol compatibility,
+package fixtures, and real anonymous pipe/memfd/socket/PIDFD primitives. The
+narrow packet tests use explicitly synthetic context, not successful core
+owners. They do not run the complete protected cold ceremony or prove live
+fs-verity acquisition/transfer, native adoption validation/signing, operational
+launch, Nitro/KMS or independent approval. No native/full-artifact rebuild,
+dependency change, cloud call or paid operation occurred.
 
 ## Remaining pilot and production work
 

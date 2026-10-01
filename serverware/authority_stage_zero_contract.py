@@ -382,7 +382,7 @@ def _validate_stat_identity(
         _digest(value["sha256"], name=f"{name} digest")
 
 
-def _validate_retained_directory(value: object) -> None:
+def _validate_retained_directory(value: object, *, local: bool = False) -> None:
     entry = _mapping(
         value,
         name="retained directory",
@@ -411,9 +411,11 @@ def _validate_retained_directory(value: object) -> None:
         raise StageZeroContractError(
             "retained directory surviveExec is not boolean"
         )
+    if local and entry["surviveExec"] is not True:
+        raise StageZeroContractError("local retained directory must remain open at admission")
 
 
-def _validate_retained_file(value: object) -> None:
+def _validate_retained_file(value: object, *, local: bool = False) -> None:
     entry = _mapping(
         value,
         name="retained file",
@@ -445,6 +447,8 @@ def _validate_retained_file(value: object) -> None:
         raise StageZeroContractError(
             "retained file surviveExec is not boolean"
         )
+    if local and entry["surviveExec"] is not True:
+        raise StageZeroContractError("local retained file must remain open at admission")
 
 
 def _validate_listener(
@@ -1287,9 +1291,9 @@ def validate_stage_zero_request(
         maximum=MAX_MUTABLE_STATE_DESCRIPTORS,
     )
     for entry in directories:
-        _validate_retained_directory(entry)
+        _validate_retained_directory(entry, local=local)
     for entry in files:
-        _validate_retained_file(entry)
+        _validate_retained_file(entry, local=local)
     for entry in credentials:
         _validate_credential(entry)
         if entry["ownerRole"] != role_name:
@@ -3358,6 +3362,8 @@ LOCAL_STAGE_ZERO_REQUEST_JSON_SCHEMA["properties"].update({
         "descriptorBoundary": {"const": "post-local-admission"},
     }),
 })
+for _local_static_field in ("retainedFiles", "retainedDirectories"):
+    LOCAL_STAGE_ZERO_REQUEST_JSON_SCHEMA["properties"][_local_static_field]["items"]["properties"]["surviveExec"] = {"const": True}
 LOCAL_LAUNCH_IDENTITY_PAYLOAD_JSON_SCHEMA = deepcopy(LAUNCH_IDENTITY_PAYLOAD_JSON_SCHEMA)
 LOCAL_LAUNCH_IDENTITY_PAYLOAD_JSON_SCHEMA["properties"].update({
     "schema": {"const": LOCAL_LAUNCH_IDENTITY_PAYLOAD_SCHEMA},

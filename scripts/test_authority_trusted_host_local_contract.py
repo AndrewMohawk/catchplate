@@ -117,7 +117,7 @@ class TrustedHostLocalContractTests(unittest.TestCase):
     def test_local_schema_copies_final_native_shared_constraints(self):
         for native, local, changed in (
             (stage.STAGE_ZERO_REQUEST_JSON_SCHEMA, stage.LOCAL_STAGE_ZERO_REQUEST_JSON_SCHEMA,
-             {"schema", "trustMode", "stageZero", "execution", "role", "startupDescriptors"}),
+             {"schema", "trustMode", "stageZero", "execution", "role", "startupDescriptors", "retainedFiles", "retainedDirectories"}),
             (stage.LAUNCH_IDENTITY_PAYLOAD_JSON_SCHEMA, stage.LOCAL_LAUNCH_IDENTITY_PAYLOAD_JSON_SCHEMA,
              {"schema", "stageZeroContract", "trustMode", "coLocated", "hardwareBacked"}),
             (stage.SIGNED_LAUNCH_IDENTITY_JSON_SCHEMA, stage.LOCAL_SIGNED_LAUNCH_IDENTITY_JSON_SCHEMA,
@@ -176,6 +176,27 @@ class TrustedHostLocalContractTests(unittest.TestCase):
             change(changed)
             with self.assertRaises(stage.StageZeroContractError):
                 stage._validate_local_startup(changed, process)
+
+    def test_local_static_descriptors_cannot_claim_closed_at_admission(self):
+        directory = dict(name="generation", fd=60, purpose="artifact-generation-root", runtimePath="/runtime/generation",
+                         device=1, inode=2, generation=1, mode=0o555, uid=0, gid=0, surviveExec=True)
+        file = dict(directory, name="source", purpose="python-import", runtimePath="/runtime/generation/source.py",
+                    size=20, sha256="sha256:" + "9" * 64, fsVerityDigest=None)
+        for field, row, validate in (("retainedDirectories", directory, stage._validate_retained_directory),
+                                     ("retainedFiles", file, stage._validate_retained_file)):
+            local = stage.LOCAL_STAGE_ZERO_REQUEST_JSON_SCHEMA["properties"][field]["items"]
+            native = stage.STAGE_ZERO_REQUEST_JSON_SCHEMA["properties"][field]["items"]
+            validate(row, local=True)
+            Draft202012Validator(local).validate(row)
+            changed = dict(row, surviveExec=False)
+            validate(changed)
+            Draft202012Validator(native).validate(changed)
+            with self.assertRaises(stage.StageZeroContractError):
+                validate(changed, local=True)
+            with self.assertRaises(ValidationError):
+                Draft202012Validator(local).validate(changed)
+            for key in set(native["properties"]) - {"surviveExec"}:
+                self.assertEqual(local["properties"][key], native["properties"][key])
 
     def test_native_handoff_refuses_local_request_before_package_admission(self):
         with self.assertRaises(stage.StageZeroContractError):

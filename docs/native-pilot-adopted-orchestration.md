@@ -32,6 +32,8 @@ owners reachable; it does not authorize a retry or deletion of existing paths.
 ## Selected operational sequence
 
 The legacy catalogue and its approvals remain separate. The adopted catalogue
+contains **176 jobs and 123 key purposes**; the legacy profile remains 164/113.
+Executable handler coverage is checked before child startup. The adopted path
 uses OperatorRequest/Reply v2, AuthorityJobRequest/Reply v2 and Approval v2 under
 `/etc/serverware/native-pilot-adopted-authority`. Request2 and Approval2 carry the
 original UNIX expiry as a canonical decimal string. The independently approved
@@ -68,12 +70,31 @@ of the approval operator and actual protected rendezvous are not claimed here.
 
 ## Verification and remaining work
 
-Source is being assembled before one focused frozen Python batch. New controls
-cover selected protocol/CLI boundaries, fixed publication slots, intake and
-listener framing and exact catalogue/source binding. Actual protected services,
-signers, native validator ceremonies and full core-to-operational lifecycle
-remain to be exercised. No native/dependency changes or unchanged native/artifact
-rebuild is planned; no cloud or paid operation is included in this batch.
+Exact source `b384291b46be24513253ef33559472008c48f3d5` passes all **142 checks
+in sixteen focused Python suites**, in 5.598 seconds with no failures, errors,
+skips or corrective reruns. The same frozen archive passes syntax checks for
+all 35 changed Python files, membership in both Make inventories and six actual
+module imports. Nine documents resolve 633 local file targets; anchors were not
+checked. The imported selected catalogue confirms 176 jobs and 123 key purposes.
+
+The batch includes 45 new controls, synthetic signed input/history/installation
+plans and real local descriptor/pipe exchanges. It ran under Python 3.11.15 in a
+private user/network namespace on one CPU, without launching protected services,
+signers or native validation. Source review also corrected partial-owner cleanup,
+pre-key-read intake clock checks and the adoption result's exact three-field
+authority parser. These results do not prove the actual protected listener,
+fs-verity core transfer, complete native validation/signing or operational cohort.
+
+The exact source archive, harness, logs and checksums are retained at
+`codex-offload/serverware/engineering-builds/b384291b-adopted-orchestration-MSsjda/`
+under the operator's home directory. No native/dependency source changed, so no
+unchanged native or artifact build was repeated. No cloud or paid action occurred.
+
+Next is a real protected cold-to-operational lifecycle with independently
+operated rendezvous and approval input delivery. Automatic policy-fragment
+composition remains unimplemented; requiring complete independent inputs is
+explicit, not a claim that those services or inputs already exist. Partial-close
+fault injection and lifecycle/error/recovery evidence also remain open.
 
 Full completion still needs immutable reviewed dependencies, independent signing
 and witnesses, Nitro/KMS custody, release provenance, provider/YubiKey ceremonies,

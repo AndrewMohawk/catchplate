@@ -85,6 +85,10 @@ impl RemoteNativeCustodyClosure {
         let raw=bundle.get("runtimeOriginal").and_then(serde_json::Value::as_str).ok_or(ShadowError::BindingDrift)?;
         require(Sha256Digest::compute(raw.as_bytes())==self.0.guest.runtime_configuration_sha256)?;
         let runtime:serde_json::Value=exact(raw.as_bytes())?;
+        if runtime.get("apiVersion").and_then(serde_json::Value::as_str)==Some("serverware.policyCustodyProductionRpcRuntime/v10") {
+            policy_custody::native_remote_factory::require_runtime(&runtime)?;
+            return Ok(true);
+        }
         Ok(runtime.get("apiVersion").and_then(serde_json::Value::as_str)==Some("serverware.policyCustodyProductionRpcRuntime/v9"))
     }
 }

@@ -26,7 +26,7 @@ PROFILES = {
     "cohort-configuration": ("cohort-config", None, 32768),
     "cohort-control": ("cohort-control", None, 4096),
     "ordinary-launch": ("ordinary-launch", None, 65536),
-    "bridge-runtime": ("bridge-runtime", None, 65536),
+    "bridge-runtime": ("bridge-runtime", None, 4 * 1024 * 1024),
     "bridge-outgoing": ("bridge-outgoing", None, 8192),
     "endpoint-peer": ("endpoint-input", "peer", 4096),
     "endpoint-proof-scope": ("endpoint-input", "proof-scope", 16384),

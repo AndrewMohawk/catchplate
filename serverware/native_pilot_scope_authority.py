@@ -18,8 +18,10 @@ from serverware import native_shadow_driver_bootstrap as driver
 from serverware import native_shadow_guest_delivery as delivery
 from serverware import native_shadow_nitro_originals as originals
 from serverware import native_shadow_nitro_profile as p
+from serverware import native_pilot_bridge_runtime as bridge_runtime
 
 MAX_INPUT = 4 * 1024 * 1024
+MAX_BRIDGE_INPUT = bridge_runtime.MAX_BRIDGE_INPUT
 MAX_SCOPE = 32768
 DOMAIN = b"serverware.nativeShadowDriverScope.signature/v4\0"
 INPUT_FIELDS = ("apiVersion", "configurationOriginal", "windowOriginal", "observationOriginal",
@@ -130,13 +132,15 @@ def _operation(operation, launch, c9, raw_files):
 
 def sign(input_original: bytes, signing_key: Ed25519PrivateKey) -> bytes:
     """Sign only the derived existing Scope/v4; never accept a scope to sign."""
-    value = p.fields(p.document(input_original, MAX_INPUT), INPUT_FIELDS)
+    value = p.fields(p.document(input_original, MAX_BRIDGE_INPUT), INPUT_FIELDS)
     p.require(value["apiVersion"] == "serverware.nativePilotScopeSigningInput/v1")
     config_raw, config = _original(value["configurationOriginal"], 65536)
     window_raw, signed_window = _original(value["windowOriginal"], 32768)
     observation_raw, observation = _original(value["observationOriginal"], 65536)
     operation_raw, operation = _original(value["operationOriginal"], 65536)
-    bundle_raw, bundle = _original(value["publicBundleOriginal"], 1024 * 1024)
+    bundle_raw, bundle = _original(value["publicBundleOriginal"], MAX_BRIDGE_INPUT)
+    runtime_raw, runtime = bridge_runtime.original(bundle["runtimeOriginal"])
+    p.require(bridge_runtime.version(runtime) == 10 or (len(input_original) <= MAX_INPUT and len(bundle_raw) <= 1024 * 1024))
     cold_raw, _ = _original(value["deliveryConfigurationOriginal"], 65536)
     launch_raw, launch = _original(value["launchOriginal"], 32768)
     _, signed_bootstrap = _original(value["bootstrapAdmissionOriginal"], 8192)
@@ -199,8 +203,7 @@ def sign(input_original: bytes, signing_key: Ed25519PrivateKey) -> bytes:
         and identity["supervisorBootIdSha256"] == p.sha(p.decoded(window["bootIdBase64url"], size=16))
         and issued <= identity["verifiedAtBoottimeNanos"] <= now < startup)
     p.fields(bundle, ("runtimeOriginal", "deliveryOriginal", "generationOriginals"))
-    runtime_raw, runtime = _original(bundle["runtimeOriginal"], 65536)
-    p.require(type(runtime) is dict and runtime.get("apiVersion") == "serverware.policyCustodyProductionRpcRuntime/v9")
+    p.require(bridge_runtime.version(runtime) in (9, 10))
     delivery_raw, signed_delivery = _original(bundle["deliveryOriginal"], 65536)
     p.fields(signed_delivery, ("apiVersion", "payload", "signatureBase64url"))
     c9 = p.fields(signed_delivery["payload"], delivery.FIELDS)
@@ -216,7 +219,7 @@ def sign(input_original: bytes, signing_key: Ed25519PrivateKey) -> bytes:
     delivery._pin(c9["runtimeConfig"])
     p.require(c9["runtimeConfig"]["sha256"] == p.sha(runtime_raw))
     p.fields(launch, ("apiVersion", "keyAdmission", "trustedTime"))
-    p.require(launch["apiVersion"] == "serverware.nativeProofBridgeLaunch/v5")
+    p.require(launch["apiVersion"] == bridge_runtime.launch_for_runtime(runtime_raw))
     inner = p.fields(launch["keyAdmission"], ("apiVersion", "deliveryConfiguration", "delivery", "trust", "timeBootstrap",
         "assignment", "closure", "keys", "encryptedKeys", "admission", "verifierTransport"))
     p.require(inner["apiVersion"] == "serverware.nativeShadowGuestLaunch/v1"

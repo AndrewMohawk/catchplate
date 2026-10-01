@@ -16,6 +16,7 @@ import stat
 import threading
 
 from serverware import native_shadow_driver_bootstrap as bootstrap
+from serverware import native_pilot_bridge_runtime as bridge_runtime
 
 p = bootstrap.p
 _TOKEN = object()
@@ -86,12 +87,9 @@ def _peer(value, bridge_uid):
 
 def _selection(raw, launch_version, bridge_uid):
     """Closed native purpose selection, not a substitute for Rust admission."""
-    suffix = {"serverware.nativeProofBridgeLaunch/v1": 5, "serverware.nativeProofBridgeLaunch/v2": 6,
-        "serverware.nativeProofBridgeLaunch/v3": 7, "serverware.nativeProofBridgeLaunch/v4": 8,
-        "serverware.nativeProofBridgeLaunch/v5": 9}.get(launch_version)
+    suffix = bridge_runtime.LAUNCH_RUNTIME.get(launch_version)
     p.require(suffix is not None)
-    fields = _RUNTIME_FIELDS + (("commitRequest",) if suffix >= 6 else ()) + (("spool",) if suffix >= 7 else ())
-    runtime = p.fields(p.document(raw, 65536), fields)
+    runtime = bridge_runtime.shape(raw)
     p.require(runtime["apiVersion"] == f"serverware.policyCustodyProductionRpcRuntime/v{suffix}"
         and 0 < p.integer(runtime["startupTimeoutMillis"]) <= 30000)
     generation = p.fields(runtime["generationAdmission"], ("apiVersion", "grants"))
@@ -107,12 +105,13 @@ def _selection(raw, launch_version, bridge_uid):
             p.require(type(value) is str and value.isascii()); p.document(value.encode("ascii"), 65536)
     if suffix >= 7:
         spool = p.fields(runtime["spool"], ("apiVersion", "headGrantOriginal", "currentGrantOriginal", "originFdName")
-            + (("cleanupGrantOriginal",) if suffix == 9 else ()))
-        spool_version = 3 if suffix == 9 else 2 if suffix == 8 else 1
+            + (("cleanupGrantOriginal",) if suffix >= 9 else ()))
+        spool_version = 3 if suffix >= 9 else 2 if suffix == 8 else 1
         p.require(spool["apiVersion"] == f"serverware.nativeSpoolServices/v{spool_version}"
             and spool["originFdName"] == "generation-origin")
-        for key in ("headGrantOriginal", "currentGrantOriginal") + (("cleanupGrantOriginal",) if suffix == 9 else ()):
-            p.require(type(spool[key]) is str and spool[key].isascii()); p.document(spool[key].encode("ascii"), 65536)
+        for key in ("headGrantOriginal", "currentGrantOriginal") + (("cleanupGrantOriginal",) if suffix >= 9 else ()):
+            p.require(type(spool[key]) is str and spool[key].isascii())
+            p.document(spool[key].encode("ascii"), 131072 if suffix == 10 and key != "headGrantOriginal" else 65536)
     outgoing, names, roles, excluded = {}, {"production-listener", "production-journal", "generation-origin"}, set(), set()
     sessions = runtime["serviceSessions"]
     p.require(type(sessions) is list and len(sessions) == 5)
@@ -127,7 +126,7 @@ def _selection(raw, launch_version, bridge_uid):
     p.require(type(signers) is list and len(signers) == 10)
     selected_signers = {5: set(), 6: {"ledger-append"}, 7: {"ledger-append", "ingress-admission"},
         8: {"ledger-append", "ingress-admission", "terminal-append"},
-        9: {"ledger-append", "ingress-admission", "terminal-append", "dispatch-barrier", "active-effect-barrier", "active-effect-commit"}}[suffix]
+            9: set(_NATIVE_SIGNERS), 10: set(_NATIVE_SIGNERS)}[suffix]
     for entry in signers:
         p.fields(entry, ("signerRole", "authorityBindingCredential", "activationFdName", "expectedSocketPath", "expectedPeer", "authorityKeyId", "authorityKeySpkiSha256"))
         role, name = entry["signerRole"], _name(entry["activationFdName"])
@@ -151,7 +150,7 @@ def _selection(raw, launch_version, bridge_uid):
         roles.add(role); names.add(name); names.add(directory_name); excluded.add(name)
         _peer(entry["expectedPeer"], bridge_uid)
         _name(entry["authorityBindingCredential"]); p.digest(entry["authorityKeyId"]); p.digest(entry["authorityKeySpkiSha256"])
-    p.require(len(outgoing) == {5: 15, 6: 14, 7: 13, 8: 12, 9: 9}[suffix])
+    p.require(len(outgoing) == {5: 15, 6: 14, 7: 13, 8: 12, 9: 9, 10: 9}[suffix])
     for ordinal in range(len(outgoing)):
         p.require(_DIRECTORY_PREFIX + str(ordinal) not in names)
     return runtime, tuple((name, outgoing[name]) for name in sorted(outgoing)), frozenset(excluded)
@@ -235,7 +234,8 @@ class OutgoingResources:
             cold = p.document(cold_original.raw, 65536)
             p.require(cold["apiVersion"] == "serverware.policyCustodyGuestConfiguration/v1" and cold["serviceRole"] == "production-bridge"
                 and (cold["uid"], cold["gid"]) == (driver._config["uid"], driver._config["gid"]))
-            runtime_original = bootstrap.mechanics._Original(runtime_pin["path"], 65536, runtime_pin["sha256"])
+            runtime_original = bootstrap.mechanics._Original(runtime_pin["path"],
+                bridge_runtime.maximum_for_launch(selected["bridgeLaunchVersion"]), runtime_pin["sha256"])
             owner._originals.append(runtime_original)
             owner._runtime_raw, owner._launch_version = runtime_original.raw, selected["bridgeLaunchVersion"]
             owner._delivery_pin = copy.deepcopy(cold_pin)

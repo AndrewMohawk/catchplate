@@ -24,6 +24,7 @@ from serverware import custody_generation_grants as generation
 from serverware import custody_generation_originals as generation_originals
 from serverware import custody_spool_inputs as spool
 from serverware import native_pilot_bridge_install as bridge_install
+from serverware import native_pilot_bridge_runtime as bridge_runtime
 from serverware import native_pilot_closure_authority as closure_authority
 from serverware import native_pilot_delivery_authority as delivery_authority
 from serverware import native_pilot_driver_authority as driver_authority
@@ -148,12 +149,12 @@ JOBS = {
         *(_plain("install-launch-" + role, "launch", launch_install.MAX_INPUT, role) for role in cohort.ENDPOINT_ROLES),
         _plain("service-material", "service-material", service_material.MAX_INPUT),
     ),
-    "bridge-runtime": (_plain("install-bridge-runtime", "bridge-runtime", bridge_install.MAX_INPUT),),
-    "bridge-delivery": (_signed("native-delivery-bridge", "delivery", "bridge", delivery_authority.MAX_INPUT,
+    "bridge-runtime": (_plain("install-bridge-runtime", "bridge-runtime", bridge_install.MAX_BRIDGE_INPUT),),
+    "bridge-delivery": (_signed("native-delivery-bridge", "delivery", "bridge", delivery_authority.MAX_BRIDGE_INPUT,
                                 "native-delivery-bridge"),
         _plain("install-launch-bridge", "launch", launch_install.MAX_INPUT, "bridge")),
     "release": (_signed("cohort-release", "cohort", "release", 2 * 1024 * 1024, "cohort-release"),
-        _signed("driver-scope", "scope", None, scope_authority.MAX_INPUT, "driver-scope"),
+        _signed("driver-scope", "scope", None, scope_authority.MAX_BRIDGE_INPUT, "driver-scope"),
         _plain("phase-two-public", "phase-two-public", 1024)),
     "constructed-admission": (_signed("driver-constructed", "driver", "constructed", driver_authority.MAX_INPUT,
                                       "driver-constructed-admission"),),
@@ -475,6 +476,13 @@ class PhaseExecution:
             _same(value["role"], job.role)
             _same(value["observationOriginal"], self._observations["bootstrap-admission"]["bootstrapObservationOriginal"]
                 if job.role == "bridge" else observed["cohortObservationOriginal"])
+            if job.role == "bridge":
+                prior = p.document(self._inputs["install-bridge-runtime"], bridge_install.MAX_BRIDGE_INPUT)
+                _same(value["runtimeOriginal"], prior["runtimeOriginal"])
+                runtime_raw, runtime = bridge_runtime.original(value["runtimeOriginal"])
+                p.require(bridge_runtime.version(runtime) == 10 or len(p.canonical(value)) <= delivery_authority.MAX_INPUT)
+                pin = self._installations["install-bridge-runtime"]["pins"]["bridge-runtime"]
+                p.require(pin["sha256"] == p.sha(runtime_raw))
         elif job.family == "ordinary-initial":
             self._bind_initial(job, value)
         elif job.family.startswith("ordinary-"):
@@ -539,7 +547,12 @@ class PhaseExecution:
                     self._outputs["ordinary-generation-" + role].decode("ascii")})
         elif job.family == "launch":
             _same(value["role"], job.role)
-            if job.role != "bridge":
+            if job.role == "bridge":
+                prior_delivery = p.document(self._inputs["native-delivery-bridge"], delivery_authority.MAX_BRIDGE_INPUT)
+                _same(value["runtimeOriginal"], prior_delivery["runtimeOriginal"])
+                for target, source in (("ownerConfigurationSha256", "ownerConfigurationOriginal"), ("windowSha256", "windowOriginal")):
+                    p.require(value[target] == p.sha(_raw(prior_delivery[source], 65536)))
+            else:
                 prior_key = p.document(self._inputs["native-role-keys-" + job.role], key_authority.MAX_INPUT)
                 prior_delivery = p.document(_raw(prior_key["deliveryInputOriginal"], delivery_authority.MAX_INPUT),
                     delivery_authority.MAX_INPUT)
@@ -578,7 +591,8 @@ class PhaseExecution:
                 _same(value["endpointLaunches"][role], self._installations["install-launch-" + role]["launch"])
         elif job.family == "bridge-runtime":
             _same(value["driverObservationOriginal"], self._observations["bootstrap-admission"]["bootstrapObservationOriginal"])
-            runtime = p.document(_raw(value["runtimeOriginal"], 65536), 65536)
+            runtime_raw, runtime = bridge_runtime.original(value["runtimeOriginal"])
+            p.require(bridge_runtime.version(runtime) == 10 or len(p.canonical(value)) <= bridge_install.MAX_INPUT)
             _same(runtime["generationAdmission"]["grants"], observed["ordinaryGenerationGrants"])
             _same(observed["ordinaryGenerationGrants"], {role: self._pins["ordinary-generation-" + role]["sha256"]
                 for role in generation.ROLES})
@@ -589,12 +603,20 @@ class PhaseExecution:
             for field, output in (("headGrantOriginal", "ordinary-head"), ("cleanupGrantOriginal", "ordinary-cleanup"),
                                   ("currentGrantOriginal", "ordinary-current")):
                 self._known(field, runtime["spool"], output)
+            if bridge_runtime.version(runtime) == 10:
+                for role, row in runtime["ordinaryInitialHistories"].items():
+                    prior = p.document(self._inputs["ordinary-generation-" + role], service_authority.MAX_INPUT_BYTES)
+                    _same(row["runtimeOriginal"], prior["services"][role]["runtimeOriginal"])
+                    p.require(_raw(row["generationGrantOriginal"], 65536) == self._outputs["ordinary-generation-" + role])
         elif job.family == "scope":
             _same(value["operationOriginal"], observed["operationOriginal"])
             self._known("bootstrapAdmissionOriginal", value, "driver-bootstrap")
             p.require(_raw(value["launchOriginal"], 32768) == self._public.read(
                 self._installations["install-launch-bridge"]["launch"], maximum=32768))
-            self._scope_bundle = _raw(value["publicBundleOriginal"], 1024 * 1024)
+            self._scope_bundle = _raw(value["publicBundleOriginal"], bridge_runtime.MAX_BRIDGE_INPUT)
+            bundle = p.document(self._scope_bundle, bridge_runtime.MAX_BRIDGE_INPUT)
+            _, runtime = bridge_runtime.original(bundle["runtimeOriginal"])
+            p.require(bridge_runtime.version(runtime) == 10 or len(self._scope_bundle) <= 1024 * 1024)
 
     @staticmethod
     def _array_original(value):
@@ -724,7 +746,10 @@ class PhaseExecution:
             self._material = copy.deepcopy(material)
         elif job.family == "phase-two-public":
             p.fields(value, ("phaseTwoPublic",))
-            p.require(self._public.read(value["phaseTwoPublic"], maximum=1024 * 1024) == self._scope_bundle)
+            bundle = p.document(self._scope_bundle, bridge_runtime.MAX_BRIDGE_INPUT)
+            _, runtime = bridge_runtime.original(bundle["runtimeOriginal"])
+            maximum = bridge_runtime.MAX_BRIDGE_INPUT if bridge_runtime.version(runtime) == 10 else 1024 * 1024
+            p.require(self._public.read(value["phaseTwoPublic"], maximum=maximum) == self._scope_bundle)
             self._public_bundle_pin = copy.deepcopy(value["phaseTwoPublic"])
             result = {"pin": self._public_bundle_pin}
         else:

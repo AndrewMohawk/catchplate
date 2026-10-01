@@ -9,7 +9,8 @@ const WINDOW_DOMAIN:&[u8]=b"serverware.nativeShadowDriverBootstrapWindow.signatu
 const SCOPE_DOMAIN:&[u8]=b"serverware.nativeShadowDriverScope.signature/v1\0";
 #[path="driver_continuation.rs"]
 pub(in crate::policy_shadow) mod continuation;
-pub(super) const MAX_BUNDLE:usize=1024*1024;
+pub(super) const MAX_BUNDLE:usize=16*1024*1024;
+const MAX_LEGACY_BUNDLE:usize=1024*1024;
 pub(super) const SEALS:i32=libc::F_SEAL_WRITE|libc::F_SEAL_GROW|libc::F_SEAL_SHRINK|libc::F_SEAL_SEAL;
 
 #[derive(Serialize,Deserialize)]
@@ -238,7 +239,7 @@ struct SignedScope{payload:Scope,signature_base64url:String}
 struct Originals {runtime_original:String,delivery_original:String,generation_originals:BTreeMap<String,String>}
 /// Does not implement service admission or expose caller-ready authority.
 /// The post-drop continuation must consume this retained owner, not its JSON.
-pub(super) struct PhaseTwo {scope:Vec<u8>,bundle:File,bundle_identity:(u64,u64,u64),bundle_sha256:Sha256Digest}
+pub(super) struct PhaseTwo {scope:Vec<u8>,bundle:File,bundle_identity:(u64,u64,u64),bundle_sha256:Sha256Digest,bundle_bound:usize}
 impl PhaseTwo {
     pub(super) fn retain(cold:&Cold,observation:&driver_identity::Observation,scope:&[u8],fd:OwnedFd)->Result<Self,ShadowError> {
         cold.check_observation(observation)?;require(scope.len()<=32768)?;
@@ -262,12 +263,26 @@ impl PhaseTwo {
             && unsafe{libc::fcntl(bundle.as_raw_fd(),libc::F_GET_SEALS)}==SEALS)?;
         let raw=read_file(&bundle,MAX_BUNDLE)?;require(Sha256Digest::compute(&raw)==s.public_bundle_sha256)?;
         let originals:Originals=exact(&raw)?;
-        require(originals.runtime_original.len()<=65536 && originals.runtime_original.is_ascii()
+        require(originals.runtime_original.len()<=4*1024*1024 && originals.runtime_original.is_ascii()
             && originals.delivery_original.len()<=65536 && originals.delivery_original.is_ascii())?;
         let runtime:serde_json::Value=exact(originals.runtime_original.as_bytes())?;
         require(runtime.is_object()
             && Sha256Digest::compute(originals.runtime_original.as_bytes())==s.originals.runtime_sha256
             && Sha256Digest::compute(originals.delivery_original.as_bytes())==s.originals.delivery_sha256)?;
+        let initial_history=runtime.get("apiVersion").and_then(serde_json::Value::as_str)
+            ==Some("serverware.policyCustodyProductionRpcRuntime/v10");
+        let bundle_bound=if initial_history {
+            require(s.api_version=="serverware.nativeShadowDriverScope/v4"
+                && cold.config.api_version=="serverware.nativeShadowDriverBootstrapConfiguration/v4")?;
+            let selected:crate::policy_shadow::policy_custody::services::production::ProductionRpcRuntimeConfigV4=
+                exact(originals.runtime_original.as_bytes())?;
+            selected.validate().map_err(fail)?;
+            require(selected.initial_history_selected())?;
+            MAX_BUNDLE
+        } else {
+            require(originals.runtime_original.len()<=65536 && raw.len()<=MAX_LEGACY_BUNDLE)?;
+            MAX_LEGACY_BUNDLE
+        };
         // Actual C9 signature and original boot/lifetime are independently
         // checked; the retained bundle does not adopt activation FDs or keys.
         let delivery:super::super::Envelope=exact(originals.delivery_original.as_bytes())?;
@@ -296,20 +311,20 @@ impl PhaseTwo {
         // Grant signatures/history/current assignment and complete operational
         // runtime are deliberately NOT relabeled as admitted here. The fixed
         // phase-two purpose authorizes retention of these exact originals.
-        let owner=Self{scope:scope.to_vec(),bundle,bundle_identity:(stat.dev(),stat.ino(),stat.len()),bundle_sha256:s.public_bundle_sha256.clone()};
+        let owner=Self{scope:scope.to_vec(),bundle,bundle_identity:(stat.dev(),stat.ino(),stat.len()),bundle_sha256:s.public_bundle_sha256.clone(),bundle_bound};
         owner.check()?;cold.check()?;Ok(owner)
     }
     pub(super) fn check(&self)->Result<(),ShadowError> {
         let m=self.bundle.metadata().map_err(fail)?;
         require((m.dev(),m.ino(),m.len())==self.bundle_identity
             && unsafe{libc::fcntl(self.bundle.as_raw_fd(),libc::F_GET_SEALS)}==SEALS
-            && Sha256Digest::compute(&read_file(&self.bundle,MAX_BUNDLE)?)==self.bundle_sha256)
+            && Sha256Digest::compute(&read_file(&self.bundle,self.bundle_bound)?)==self.bundle_sha256)
     }
     pub(super) fn descriptor(&self)->BorrowedFd<'_>{self.bundle.as_fd()}
     pub(super) fn scope(&self)->&[u8]{&self.scope}
-    pub(super) fn public_bundle_original(&self)->Result<Vec<u8>,ShadowError>{self.check()?;read_file(&self.bundle,MAX_BUNDLE)}
+    pub(super) fn public_bundle_original(&self)->Result<Vec<u8>,ShadowError>{self.check()?;read_file(&self.bundle,self.bundle_bound)}
     pub(super) fn runtime_original(&self)->Result<Vec<u8>,ShadowError>{
-        self.check()?;let originals:Originals=exact(&read_file(&self.bundle,MAX_BUNDLE)?)?;
+        self.check()?;let originals:Originals=exact(&read_file(&self.bundle,self.bundle_bound)?)?;
         Ok(originals.runtime_original.into_bytes())
     }
 }

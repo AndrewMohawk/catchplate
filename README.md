@@ -145,6 +145,8 @@ Explicit policy/v13 adds that material decision without changing the 108 key
 selectors. It refuses startup until the remaining nine jobs, beginning with
 `bridge-runtime / install-bridge-runtime`, are implemented. Its focused local
 checks pass; live material installation and connected acceptance remain unverified.
+The next [bridge prerequisite batch](docs/native-pilot-bridge-prerequisites.md)
+adds current-head authority and initial-history compatibility; it is not yet a pilot.
 The total includes 20 key/admission and 31 late launch prerequisites missing from
 the earlier 85-job inventory; it is not a percentage of product readiness.
 The [native history handoff repair](docs/native-pilot-operational-histories.md)

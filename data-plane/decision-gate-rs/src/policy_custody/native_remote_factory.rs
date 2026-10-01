@@ -24,11 +24,17 @@ fn digest(value:&serde_json::Value,name:&str)->Result<Sha256Digest,ShadowError>{
 struct EffectsSelection {
     api_version:String,head_grant_original:String,current_grant_original:String,origin_fd_name:String,cleanup_grant_original:String,
 }
-fn require_runtime(runtime:&serde_json::Value)->Result<(),ShadowError>{
+pub(in crate::policy_shadow) fn require_runtime(runtime:&serde_json::Value)->Result<(),ShadowError>{
     match runtime.get("apiVersion").and_then(serde_json::Value::as_str) {
         Some("serverware.policyCustodyProductionRpcRuntime/v5"|"serverware.policyCustodyProductionRpcRuntime/v6"
             |"serverware.policyCustodyProductionRpcRuntime/v7"|"serverware.policyCustodyProductionRpcRuntime/v8")=>Ok(()),
-        Some("serverware.policyCustodyProductionRpcRuntime/v9")=>{
+        Some("serverware.policyCustodyProductionRpcRuntime/v9"|"serverware.policyCustodyProductionRpcRuntime/v10")=>{
+            if runtime.get("apiVersion").and_then(serde_json::Value::as_str)==Some("serverware.policyCustodyProductionRpcRuntime/v10") {
+                super::services::production::validate_initial_history_runtime(&canonical_json_bytes(runtime)?)
+                    .map_err(|_|ShadowError::BindingDrift)?;
+            } else {
+                ensure(runtime.get("ordinaryInitialHistories").is_none())?;
+            }
             // The actual measured bridge validates these independently signed
             // ordinary history grants. The receiving factory additionally pins
             // this exact successor, never a cleanup-less v3 projection.

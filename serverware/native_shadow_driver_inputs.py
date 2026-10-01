@@ -10,6 +10,7 @@ import fcntl
 import os
 import stat
 from serverware import native_shadow_driver_bootstrap as bootstrap
+from serverware import native_pilot_bridge_runtime as bridge_runtime
 
 p = bootstrap.p
 _TOKEN = object()
@@ -153,7 +154,7 @@ class OperationalInputs:
             allowed = ("serverware.nativeProofBridgeLaunch/v1", "serverware.nativeProofBridgeLaunch/v2")
             p.require(launch["apiVersion"] in allowed
                 or (outgoing is not None and launch["apiVersion"] in ("serverware.nativeProofBridgeLaunch/v3",
-                    "serverware.nativeProofBridgeLaunch/v4", "serverware.nativeProofBridgeLaunch/v5")))
+                    "serverware.nativeProofBridgeLaunch/v4", "serverware.nativeProofBridgeLaunch/v5", "serverware.nativeProofBridgeLaunch/v6")))
             inner = p.fields(launch["keyAdmission"], ("apiVersion", "deliveryConfiguration", "delivery", "trust", "timeBootstrap",
                 "assignment", "closure", "keys", "encryptedKeys", "admission", "verifierTransport"))
             p.require(inner["apiVersion"] == "serverware.nativeShadowGuestLaunch/v1"
@@ -173,7 +174,9 @@ class OperationalInputs:
             for name in ("bootIdBase64url", "timeNamespaceDevice", "timeNamespaceInode", "issuedAtBoottimeNs",
                     "startupDeadlineBoottimeNs", "lifetimeDeadlineBoottimeNs", "invocationId"):
                 p.require(payload[name] == driver._window[name])
-            owner._runtime_raw = owner._public("c9-runtime", payload["runtimeConfig"], 65536)
+            owner._runtime_raw = owner._public("c9-runtime", payload["runtimeConfig"],
+                bridge_runtime.maximum_for_launch(launch["apiVersion"]))
+            p.require(bridge_runtime.launch_for_runtime(owner._runtime_raw) == launch["apiVersion"])
             if outgoing is not None:
                 outgoing._associate(owner, driver, owner._runtime_raw, launch, payload)
             if resources is not None:
@@ -181,7 +184,7 @@ class OperationalInputs:
             if driver._config["apiVersion"] == "serverware.nativeShadowDriverBootstrapConfiguration/v4":
                 p.require(driver._gate_binding is not None)
                 gate = driver._gate_binding["binding"]
-                expected = p.document(owner._runtime_raw, 65536)["expectedFacadePeer"]
+                expected = bridge_runtime.shape(owner._runtime_raw)["expectedFacadePeer"]
                 p.require((expected["pid"], expected["startTimeTicks"], expected["uid"], expected["gid"])
                     == (gate["gateProcessId"], gate["gateStartTimeTicks"], gate["uid"], gate["gid"])
                     and expected["executableSha256"] == driver._gate_binding["gateExecutableSha256"])
@@ -191,7 +194,7 @@ class OperationalInputs:
                     ("verifier", "verifierTransport", 32768)):
                 owner._public(name, inner[field], bound)
             verifier_paths = ("/etc/serverware/native-shadow-public-exchange.json",)
-            if launch["apiVersion"] == "serverware.nativeProofBridgeLaunch/v5":
+            if launch["apiVersion"] in ("serverware.nativeProofBridgeLaunch/v5", "serverware.nativeProofBridgeLaunch/v6"):
                 verifier_paths += ("/etc/serverware/native-pilot-inputs/native-bridge-verifier.json",)
             p.require(inner["verifierTransport"]["path"] in verifier_paths)
             owner._public("time-grant", launch["trustedTime"], 65536)

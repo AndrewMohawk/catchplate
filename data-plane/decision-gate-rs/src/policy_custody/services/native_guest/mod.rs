@@ -93,7 +93,7 @@ struct EndpointRuntime {api_version:String,role:String}
 enum SelectedService {None,Retrieval(Pin),LedgerRetrieval(Pin),RetrievalBridge,Activation(Pin),Persistence(Pin),PersistenceLocked(Pin),
     TrustedTime(Pin),ProofBridge(Pin),Generation(Pin),CommitmentBridge(Pin),SpoolBridge(Pin),CommitRequest(Pin),LedgerSpool(Pin),Ingress(Pin),
     TerminalSpool(Pin),CompletionLedgerSpool(Pin),CompletionRetrieval(Pin),TerminalBridge(Pin),
-    DispatchSpool(Pin),ActiveEffectBarrier(Pin),ActiveEffectCommit(Pin),EffectRetrieval(Pin),ActiveEffectBridge(Pin)}
+    DispatchSpool(Pin),ActiveEffectBarrier(Pin),ActiveEffectCommit(Pin),EffectRetrieval(Pin),ActiveEffectBridge(Pin),InitialHistoryBridge(Pin)}
 impl SelectedService {
     fn endpoint_runtime_role(&self)->Option<&'static str>{
         self.closure_set_role().filter(|role|*role!="bridge")
@@ -126,7 +126,7 @@ impl SelectedService {
             Self::DispatchSpool(_)=>Some(Role::DispatchBarrier),
             Self::ActiveEffectBarrier(_)=>Some(Role::ActiveEffectBarrier),
             Self::ActiveEffectCommit(_)=>Some(Role::ActiveEffectCommit),
-            Self::ActiveEffectBridge(_)=>Some(Role::Bridge),
+            Self::ActiveEffectBridge(_)|Self::InitialHistoryBridge(_)=>Some(Role::Bridge),
             _=>None,
         }
     }
@@ -175,6 +175,8 @@ fn selection(raw:&[u8])->Result<(Launch,SelectedService),ShadowError> {
                 (value.key_admission,SelectedService::TerminalBridge(value.trusted_time))
             } else if value.api_version=="serverware.nativeProofBridgeLaunch/v5" {
                 (value.key_admission,SelectedService::ActiveEffectBridge(value.trusted_time))
+            } else if value.api_version=="serverware.nativeProofBridgeLaunch/v6" {
+                (value.key_admission,SelectedService::InitialHistoryBridge(value.trusted_time))
             } else {
                 require(value.api_version=="serverware.nativeShadowTrustedTimeGuestLaunch/v1")?;
                 (value.key_admission,SelectedService::TrustedTime(value.trusted_time))
@@ -254,14 +256,14 @@ impl AdmittedGuest {
         let closure_set_role=service_selection.closure_set_role();
         let commitment_selected=matches!(&service_selection,SelectedService::CommitRequest(_)|SelectedService::LedgerSpool(_)|SelectedService::CompletionLedgerSpool(_));
         let sampling_selected=matches!(&service_selection,SelectedService::LedgerSpool(_)|SelectedService::CompletionLedgerSpool(_));
-        let commitment_bridge=matches!(&service_selection,SelectedService::CommitmentBridge(_)|SelectedService::SpoolBridge(_)|SelectedService::TerminalBridge(_)|SelectedService::ActiveEffectBridge(_));
-        let spool_bridge=matches!(&service_selection,SelectedService::SpoolBridge(_)|SelectedService::TerminalBridge(_)|SelectedService::ActiveEffectBridge(_));
+        let commitment_bridge=matches!(&service_selection,SelectedService::CommitmentBridge(_)|SelectedService::SpoolBridge(_)|SelectedService::TerminalBridge(_)|SelectedService::ActiveEffectBridge(_)|SelectedService::InitialHistoryBridge(_));
+        let spool_bridge=matches!(&service_selection,SelectedService::SpoolBridge(_)|SelectedService::TerminalBridge(_)|SelectedService::ActiveEffectBridge(_)|SelectedService::InitialHistoryBridge(_));
         require(inspection.is_some()==matches!(&service_selection,SelectedService::Retrieval(_)|SelectedService::LedgerRetrieval(_)|SelectedService::RetrievalBridge
             |SelectedService::Persistence(_)|SelectedService::PersistenceLocked(_)|SelectedService::TrustedTime(_)|SelectedService::ProofBridge(_)
             |SelectedService::Generation(_)|SelectedService::CommitRequest(_)|SelectedService::CommitmentBridge(_)
             |SelectedService::LedgerSpool(_)|SelectedService::Ingress(_)|SelectedService::SpoolBridge(_)
             |SelectedService::TerminalSpool(_)|SelectedService::CompletionLedgerSpool(_)|SelectedService::CompletionRetrieval(_)|SelectedService::TerminalBridge(_)
-            |SelectedService::DispatchSpool(_)|SelectedService::ActiveEffectBarrier(_)|SelectedService::ActiveEffectCommit(_)|SelectedService::EffectRetrieval(_)|SelectedService::ActiveEffectBridge(_)))?;
+            |SelectedService::DispatchSpool(_)|SelectedService::ActiveEffectBarrier(_)|SelectedService::ActiveEffectCommit(_)|SelectedService::EffectRetrieval(_)|SelectedService::ActiveEffectBridge(_)|SelectedService::InitialHistoryBridge(_)))?;
         let native_lock=match &service_selection {
             SelectedService::PersistenceLocked(_)=>Some(super::NativeLock::Persistence),
             SelectedService::LedgerRetrieval(_)|SelectedService::CompletionRetrieval(_)|SelectedService::EffectRetrieval(_)=>Some(super::NativeLock::Ledger),
@@ -327,6 +329,10 @@ impl AdmittedGuest {
             }
             (SelectedService::ActiveEffectBridge(pin),Some(channel))=>{
                 let (prepared,grant)=proof_client::Prepared::open_effects(&mut delivery,channel,&pin)?;
+                (None,None,None,None,None,Some(prepared),Some(grant),None,None)
+            }
+            (SelectedService::InitialHistoryBridge(pin),Some(channel))=>{
+                let (prepared,grant)=proof_client::Prepared::open_initial_history(&mut delivery,channel,&pin)?;
                 (None,None,None,None,None,Some(prepared),Some(grant),None,None)
             }
             (SelectedService::CommitRequest(pin),Some(channel))=>(None,None,None,None,None,None,None,None,

@@ -195,11 +195,14 @@ class Operator:
         operation = pilot.prepare_operational_inputs(launch_pin=bridge["launch"], production=self._production)
         release = self._exchange("release", {"operationOriginal": _text(operation.operation_original())},
             ("endpointRelease", "phaseTwoScope", "phaseTwoPublic"))
+        from serverware import native_pilot_bridge_runtime as bridge_runtime
+        public_maximum = (bridge_runtime.MAX_BRIDGE_INPUT if bridge_runtime.runtime_version(operation._runtime_raw) == 10
+            else 1024 * 1024)
         continuation = pilot.release(operational_inputs=operation,
             endpoint_release_original=self._public.read(release["endpointRelease"], maximum=32768),
             endpoint_transfers=self._transfers,
             phase_two_scope_original=self._public.read(release["phaseTwoScope"], maximum=32768),
-            phase_two_public_originals=self._public.read(release["phaseTwoPublic"], maximum=1024 * 1024))
+            phase_two_public_originals=self._public.read(release["phaseTwoPublic"], maximum=public_maximum))
 
         exported = driver.prepare_constructed_driver_admission()
         constructed = self._exchange("constructed-admission", {key: _text(raw) for key, raw in exported.items()},

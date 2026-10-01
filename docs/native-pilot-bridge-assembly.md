@@ -1,9 +1,10 @@
 # Bridge assembly: next source connections
 
-This is a source-supported plan, not implemented bridge composition or runtime
-evidence. Service-material publication is a separate prerequisite. No bridge
-coverage, new authority, service availability or successful launch follows from
-this document.
+This is the source-supported bridge assembly map, not completed composition or
+runtime evidence. Service material is connected; the `.384`
+[prerequisite batch](native-pilot-bridge-prerequisites.md) implements selected
+signing/history/versioned-reader paths. No bridge composer coverage, service
+availability or successful launch follows from this document.
 
 ## Existing phase and installer
 
@@ -19,15 +20,17 @@ accepts a closed `nativePilotBridgeRuntimeBundle/v1`: `apiVersion`,
 `driverControlSha256`, `driverObservationOriginal`, `runtimeOriginal` and
 `outgoingOriginal`. It retains the real bootstrap control/configuration/window
 and cold original, then exclusively publishes runtime followed by outgoing
-configuration. Runtime is fixed `policyCustodyProductionRpcRuntime/v9`, at
+configuration. Runtime is fixed at
 `/etc/serverware/native-pilot-inputs/bridge-runtime.json`; outgoing configuration
-is `/etc/serverware/native-shadow-driver-outgoing.json`. Bounds remain 64 KiB
-and 8 KiB respectively, with a 512 KiB complete bundle. Large embedded prior
-grants may exceed these existing limits; no limit increase is implied.
+is `/etc/serverware/native-shadow-driver-outgoing.json`. The legacy v9 runtime
+keeps its 64 KiB bound and launch/v5. Explicit runtime/v10 uses launch/v6 and a
+4 MiB ceiling, with a 16 MiB bridge bundle; outgoing remains 8 KiB. The successor
+is needed because valid Current/Cleanup originals may each exceed the legacy
+runtime's entire 64 KiB budget. Version-specific branches retain old refusals.
 
 The outgoing original is completely derivable: configuration/window/observation
 hashes, original invocation, actual cold pin, runtime pin and fixed
-`nativeProofBridgeLaunch/v5`. The exact driver observation is the retained
+`nativeProofBridgeLaunch/v5` or the explicit v10-selected `/v6`. The exact driver observation is the retained
 bootstrap original, not a new sample or a renewed window.
 
 ## Runtime sources, not a literal template
@@ -71,9 +74,9 @@ revocation generation/root, actual issue BOOTTIME and the exact deadline.
 verifies the checkpoint-authority signature and matches the configured current
 checkpoint, generation, revocation and deadline.
 
-The existing Python initial-history and ordinary-key issuers do not produce
-this signed current-head wire. Reusing their signatures under this domain is
-invalid. The next issuer needs the actual authenticated checkpoint, its
+The separate [current-head issuer](native-pilot-bridge-prerequisites.md)
+implements this existing signed wire. Reusing initial-history or ordinary-key
+signatures under this domain remains invalid. The issuer needs the authenticated checkpoint, its
 independently selected checkpoint authority, and the genuine original prior
 `TrustedHostNoTeeTrustRequestWire`. A retained signed checkpoint alone is not
 evidence that no newer checkpoint exists. Currentness and the original request's
@@ -88,8 +91,8 @@ Equating the head's `requestSha256` with that final handshake digest would creat
 a hash/signature cycle; current handshake validators do not require that
 equality. Preserve an explicit genuine prior-trust-request binding rather than
 inventing a headless-handshake digest. This does not inherently require a
-post-service handshake result, but still needs fixed producer/purpose wiring
-and authenticated currentness before the unsigned handshake can be composed.
+post-service handshake result, but still needs genuine request/currentness
+acquisition and fixed supervisor wiring before the unsigned handshake can be composed.
 
 ## Peer, history and external-service gaps
 
@@ -103,14 +106,15 @@ unchecked observations. Connect a genuine owner-derived measurement or an
 explicit independently approved expected-final-state contract with the exact
 receiver recipe. Do not invent cgroup/label facts or claim final exec happened.
 
-There is also a concrete history receiver mismatch:
+The legacy history receiver has a concrete format mismatch:
 [`load_production_histories`](../data-plane/decision-gate-rs/src/policy_custody/services/production.rs)
 directly decodes credential bytes as `AuthorityHistoryManifestV3`. Current fresh
-history results are explicit initial-history wrappers. An authenticated bridge
-adapter must retain their initial-state/checkpoint/three-authority semantics;
-neither passing the wrapper as a raw manifest nor silently stripping it is a
-connected repair. Existing [initial-history admission](../data-plane/decision-gate-rs/src/policy_custody/services/initial_history.rs)
-and authenticated ordinary grant/history bundles are reusable sources.
+history results are explicit initial-history wrappers. The `.384` explicit v10
+adapter reuses [initial-history admission](../data-plane/decision-gate-rs/src/policy_custody/services/initial_history.rs)
+with actual ordinary runtime/grant originals and the admitted bridge context,
+retaining initial-state/checkpoint/three-authority semantics. Legacy raw history
+remains separate. Complete supervisor composition and live receiver acceptance
+are still required; a successful public shape check does not establish them.
 
 The four non-native signers are `unavailable-ingress`, `spool-compaction`,
 `publication-reconciliation` and `activation-publication`. Their endpoint and

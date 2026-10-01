@@ -16,6 +16,7 @@ import time
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 from serverware import native_pilot_scope_authority as scope
+from serverware import native_pilot_bridge_runtime as bridge_runtime
 from serverware import native_shadow_driver_bootstrap as driver
 from serverware import native_shadow_driver_outgoing as outgoing
 from serverware import native_shadow_guest_delivery as delivery
@@ -24,6 +25,7 @@ from serverware import native_shadow_proof_cohort_assignment as cohort
 
 p = delivery.p
 MAX_INPUT = 1024 * 1024
+MAX_BRIDGE_INPUT = bridge_runtime.MAX_BRIDGE_INPUT
 MAX_DELIVERY = delivery.MAX_DELIVERY
 INPUT_FIELDS = ("apiVersion", "role", "configurationOriginal", "ownerConfigurationOriginal",
     "windowOriginal", "observationOriginal", "runtimeOriginal", "payloadOriginal", "activationOriginal")
@@ -175,7 +177,8 @@ def bridge_owner(cold, cold_raw, config_raw, window_raw, signed, observed, *, bo
 
 
 def _bridge_inventory(runtime_raw, cold):
-    runtime, other, native = outgoing._selection(runtime_raw, "serverware.nativeProofBridgeLaunch/v5", cold["uid"])
+    p.require(bridge_runtime.runtime_version(runtime_raw) in (9, 10))
+    runtime, other, native = outgoing._selection(runtime_raw, bridge_runtime.launch_for_runtime(runtime_raw), cold["uid"])
     p.require(runtime["listenerSocketPath"] == "/run/serverware-native-pilot-bridge/listener.sock"
         and len(other) == 9 and len(native) == 10)
     inventory = {"production-listener": stat.S_IFSOCK, "production-journal": stat.S_IFDIR,
@@ -232,18 +235,28 @@ def _credentials(entries, authority):
     p.require(total <= 16 * 1024 * 1024)
 
 
-def sign(input_original: bytes, signing_key: Ed25519PrivateKey) -> bytes:
-    """Sign one fixed native delivery, never a supplied role or FD extension."""
-    value = p.fields(p.document(input_original, MAX_INPUT), INPUT_FIELDS)
+def input_document(input_original: bytes) -> dict:
+    """Version-selected input bounds only; not original/signature admission."""
+    value = p.fields(p.document(input_original, MAX_BRIDGE_INPUT), INPUT_FIELDS)
     role = value["role"]
     p.require(value["apiVersion"] == "serverware.nativePilotDeliverySigningInput/v1"
         and type(role) is str and role in (*ENDPOINTS, "bridge"))
+    successor = role == "bridge" and bridge_runtime.version(bridge_runtime.original(value["runtimeOriginal"])[1]) == 10
+    p.require(successor or len(input_original) <= MAX_INPUT)
+    return value
+
+
+def sign(input_original: bytes, signing_key: Ed25519PrivateKey) -> bytes:
+    """Sign one fixed native delivery, never a supplied role or FD extension."""
+    value = input_document(input_original)
+    role = value["role"]
     cold_raw, _ = _original(value["configurationOriginal"], 65536)
     cold = delivery.configuration(cold_raw, p.sha(cold_raw))
     config_raw, _ = _original(value["ownerConfigurationOriginal"], 65536 if role == "bridge" else cohort.MAX_BYTES)
     window_raw, signed_window = _original(value["windowOriginal"], 32768)
     _, observed = _original(value["observationOriginal"], 65536 if role == "bridge" else cohort.MAX_BYTES)
-    runtime_raw, _ = _original(value["runtimeOriginal"], 65536)
+    runtime_raw, _ = (bridge_runtime.original(value["runtimeOriginal"]) if role == "bridge"
+        else _original(value["runtimeOriginal"], 65536))
     payload_raw, payload = _original(value["payloadOriginal"], MAX_DELIVERY)
     _, activation = _original(value["activationOriginal"], 32768, array=True)
     p.fields(payload, delivery.FIELDS)

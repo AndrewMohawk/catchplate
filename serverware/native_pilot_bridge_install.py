@@ -19,6 +19,7 @@ no rollback/retry/adoption. An external supervisor must bound filesystem stalls.
 from __future__ import annotations
 
 from serverware import native_pilot_delivery_authority as native_delivery
+from serverware import native_pilot_bridge_runtime as bridge_runtime
 from serverware import native_pilot_precreation_install as precreation
 from serverware import native_pilot_publication as publication
 from serverware import native_pilot_scope_authority as scope
@@ -30,6 +31,7 @@ from serverware.native_shadow_proof_cohort_control import _Original
 
 p = delivery.p
 MAX_INPUT = 512 * 1024
+MAX_BRIDGE_INPUT = bridge_runtime.MAX_BRIDGE_INPUT
 FIELDS = ("apiVersion", "driverControlSha256", "driverObservationOriginal", "runtimeOriginal", "outgoingOriginal")
 OUTGOING_FIELDS = ("apiVersion", "driverConfigurationSha256", "driverWindowSha256", "driverObservationSha256",
     "invocationId", "deliveryConfiguration", "runtime", "bridgeLaunchVersion")
@@ -48,7 +50,7 @@ def shape(purpose: str, raw: bytes) -> dict:
     if purpose == "bridge-outgoing":
         value = p.fields(p.document(raw, 8192), OUTGOING_FIELDS)
         p.require(value["apiVersion"] == "serverware.nativeShadowDriverOutgoingInputs/v1"
-            and value["bridgeLaunchVersion"] == "serverware.nativeProofBridgeLaunch/v5")
+            and value["bridgeLaunchVersion"] in ("serverware.nativeProofBridgeLaunch/v5", "serverware.nativeProofBridgeLaunch/v6"))
         for name in ("driverConfigurationSha256", "driverWindowSha256", "driverObservationSha256"):
             p.digest(value[name])
         delivery._pin(value["deliveryConfiguration"])
@@ -56,8 +58,8 @@ def shape(purpose: str, raw: bytes) -> dict:
         p.require(value["runtime"]["path"] == RUNTIME_DESTINATION)
         publication._invocation(value["invocationId"])
         return value
-    value = p.fields(p.document(raw, 65536), outgoing._RUNTIME_FIELDS + ("commitRequest", "spool"))
-    p.require(value["apiVersion"] == "serverware.policyCustodyProductionRpcRuntime/v9"
+    value = bridge_runtime.shape(raw)
+    p.require(bridge_runtime.version(value) in (9, 10)
         and value["listenerSocketPath"] == resources.LISTENER_PATH)
     p.integer(value["startupTimeoutMillis"], maximum=30000)
     generation = p.fields(value["generationAdmission"], ("apiVersion", "grants"))
@@ -72,7 +74,7 @@ def shape(purpose: str, raw: bytes) -> dict:
     spool = p.fields(value["spool"], ("apiVersion", "headGrantOriginal", "currentGrantOriginal", "originFdName", "cleanupGrantOriginal"))
     p.require(spool["apiVersion"] == "serverware.nativeSpoolServices/v3" and spool["originFdName"] == "generation-origin")
     for name in ("headGrantOriginal", "currentGrantOriginal", "cleanupGrantOriginal"):
-        scope._original(spool[name], 65536)  # Same complete runtime consumer bound.
+        scope._original(spool[name], 131072 if bridge_runtime.version(value) == 10 and name != "headGrantOriginal" else 65536)
     histories = value["histories"]
     p.require(type(histories) is list and len(histories) == 5)
     roles = []
@@ -96,9 +98,9 @@ def install(bundle_original: bytes, *, expected_sha256: str) -> dict:
     global _USED
     p.require(not _USED)
     _USED = True
-    p.require(type(bundle_original) is bytes and 0 < len(bundle_original) <= MAX_INPUT
+    p.require(type(bundle_original) is bytes and 0 < len(bundle_original) <= MAX_BRIDGE_INPUT
         and p.sha(bundle_original) == p.digest(expected_sha256))
-    value = p.fields(p.document(bundle_original, MAX_INPUT), FIELDS)
+    value = p.fields(p.document(bundle_original, MAX_BRIDGE_INPUT), FIELDS)
     p.require(value["apiVersion"] == "serverware.nativePilotBridgeRuntimeBundle/v1")
     held, publisher = [], None
 
@@ -121,20 +123,21 @@ def install(bundle_original: bytes, *, expected_sha256: str) -> dict:
         cold_raw = retain(cold_pin["path"], 65536, cold_pin["sha256"])
         cold = delivery.configuration(cold_raw, cold_pin["sha256"])
         scope._same([cold["uid"], cold["gid"]], [config["uid"], config["gid"]])
-        runtime_raw, _ = scope._original(value["runtimeOriginal"], 65536)
+        runtime_raw, _ = bridge_runtime.original(value["runtimeOriginal"])
         outgoing_raw, _ = scope._original(value["outgoingOriginal"], 8192)
         runtime = shape("bridge-runtime", runtime_raw)
+        p.require(bridge_runtime.version(runtime) == 10 or len(bundle_original) <= MAX_INPUT)
         selected = shape("bridge-outgoing", outgoing_raw)
         scope._same(selected, {"apiVersion": "serverware.nativeShadowDriverOutgoingInputs/v1",
             "driverConfigurationSha256": p.sha(config_raw), "driverWindowSha256": p.sha(window_raw),
             "driverObservationSha256": p.sha(observation_raw), "invocationId": window["invocationId"],
             "deliveryConfiguration": cold_pin, "runtime": {"path": RUNTIME_DESTINATION, "sha256": p.sha(runtime_raw)},
-            "bridgeLaunchVersion": "serverware.nativeProofBridgeLaunch/v5"})
+            "bridgeLaunchVersion": bridge_runtime.launch_for_runtime(runtime_raw)})
         outgoing._selection(runtime_raw, selected["bridgeLaunchVersion"], cold["uid"])
         outgoing._peer(runtime["expectedFacadePeer"], cold["uid"])
         p.require(publication.DESTINATIONS["bridge-runtime"] == RUNTIME_DESTINATION
             and publication.DESTINATIONS["bridge-outgoing"] == outgoing.CONFIGURATION
-            and publication.LIMITS["bridge-runtime"] == 65536 and publication.LIMITS["bridge-outgoing"] == 8192)
+            and publication.LIMITS["bridge-runtime"] == bridge_runtime.MAX_RUNTIME and publication.LIMITS["bridge-outgoing"] == 8192)
 
         def check(previous=0):
             for original in held:

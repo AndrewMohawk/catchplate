@@ -28,6 +28,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 from serverware import native_pilot_delivery_authority as c9
+from serverware import native_pilot_bridge_runtime as bridge_runtime
 from serverware import native_pilot_assignment as assignment_profile
 from serverware import native_pilot_closure_set as closure_set
 from serverware import native_pilot_generation_install_authority as generation
@@ -131,7 +132,8 @@ def shape(purpose: str, raw: bytes) -> dict:
         role = purpose[len("native-launch-"):]
         api, field, _ = LAUNCHES[role]
         p.fields(value, ("apiVersion", "keyAdmission", field))
-        p.require(value["apiVersion"] == "serverware." + api)
+        p.require(value["apiVersion"] in (("serverware." + api, "serverware.nativeProofBridgeLaunch/v6")
+            if role == "bridge" else ("serverware." + api,)))
         _inner(value["keyAdmission"], role)
         delivery._pin(value[field])
         p.require(value[field]["path"] == publication.DESTINATIONS[_grant_purpose(role)])
@@ -146,18 +148,7 @@ def shape(purpose: str, raw: bytes) -> dict:
                 and value["role"] == role)
             return value
         # The bridge still requires its complete operational RPC configuration.
-        extra = {4: (), 5: ("generationAdmission",), 6: ("generationAdmission", "commitRequest"),
-            7: ("generationAdmission", "commitRequest", "spool"),
-            8: ("generationAdmission", "commitRequest", "spool"),
-            9: ("generationAdmission", "commitRequest", "spool")}
-        versions = {"serverware.policyCustodyProductionRpcRuntime/v" + str(version): fields
-            for version, fields in extra.items()}
-        p.require(value.get("apiVersion") in versions)
-        p.fields(value, outgoing._RUNTIME_FIELDS[:-1] + versions[value["apiVersion"]])
-        for name in versions[value["apiVersion"]]:
-            p.require(type(value[name]) is dict)
-        p.integer(value["startupTimeoutMillis"], maximum=30000)
-        return value
+        return bridge_runtime.shape(raw)
     matches = [(role, name) for role in ROLES for name, (suffix, _) in COMPONENTS.items()
         if purpose == "native-" + role + "-" + suffix]
     p.require(len(matches) == 1)
@@ -388,7 +379,7 @@ def _public_joins(role, documents, guest, runtime_raw, grant, observed, config, 
         peer = grant["payload"]["expectedPeer"]
         p.require((peer["uid"], peer["gid"], peer["pid"], peer["startTimeTicks"])
             == (guest["uid"], guest["gid"], observed["processId"], observed["driver"]["processStartTimeTicks"]))
-        runtime = p.document(runtime_raw, 65536)
+        runtime = bridge_runtime.shape(runtime_raw)
         endpoints = [entry for entry in runtime["proofEndpoints"] if entry["endpointKind"] == "trusted-time"]
         p.require(len(endpoints) == 1)
         endpoint = endpoints[0]
@@ -461,6 +452,8 @@ def _prepare_public(value, *, payload, guest, runtime_raw, grant_raw, companion_
         and ciphertext[0]["original"]["sha256"] == transport["encryptedInventorySha256"]
         and all(not entry["name"].startswith("shadow-key-custody-") for entry in payload["credentials"]))
     api, field, _ = LAUNCHES[role]
+    if role == "bridge":
+        api = bridge_runtime.launch_for_runtime(runtime_raw).removeprefix("serverware.")
     launch_raw = p.canonical({"apiVersion": "serverware." + api, "keyAdmission": inner, field: grant_pin})
     launch_purpose = "native-launch-" + role
     shape(launch_purpose, launch_raw)
@@ -579,11 +572,13 @@ def install(bundle_original: bytes, *, expected_sha256: str) -> dict:
         for name in c9.WINDOW_FIELDS:
             c9._same(payload[name], window[name])
         driver._key(cold["authority"]).verify(p.decoded(signed["signatureBase64url"], size=64), delivery.DOMAIN + p.canonical(payload))
-        runtime_raw, _ = c9._original(value["runtimeOriginal"], 65536)
+        runtime_raw, _ = (bridge_runtime.original(value["runtimeOriginal"]) if role == "bridge"
+            else c9._original(value["runtimeOriginal"], 65536))
         runtime_purpose = "bridge-runtime" if role == "bridge" else "native-runtime-" + role
         c9._same(payload["runtimeConfig"], {"path": publication.DESTINATIONS[runtime_purpose], "sha256": p.sha(runtime_raw)})
         if role == "bridge":
-            p.require(retain(payload["runtimeConfig"], 65536) == runtime_raw)
+            p.require(retain(payload["runtimeConfig"], bridge_runtime.maximum_for_version(
+                bridge_runtime.runtime_version(runtime_raw))) == runtime_raw)
             expected, _ = c9._bridge_inventory(runtime_raw, cold)
         else:
             shape(runtime_purpose, runtime_raw)

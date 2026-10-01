@@ -56,6 +56,8 @@ use std::sync::mpsc::{
 use std::sync::{Arc, Mutex};
 use std::thread;
 use super::guest::native_guest::{self, retrieval_client};
+#[path = "production_initial_history.rs"]
+mod initial_history;
 
 const PRODUCTION_RPC_SESSION_COUNT: usize = 4;
 const PRODUCTION_RPC_WORKER_COUNT: usize = 4;
@@ -312,9 +314,15 @@ pub(super) struct ProductionRpcRuntimeConfigV4 {
     pub(super) commit_request:Option<super::dispatch_service::client::Selection>,
     #[serde(default,skip_serializing_if="Option::is_none")]
     pub(super) spool:Option<super::spool_head_client::Selection>,
+    #[serde(default, skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::policy_shadow::deserialize_optional_present")]
+    ordinary_initial_histories: Option<initial_history::Members>,
 }
 
 impl ProductionRpcRuntimeConfigV4 {
+    pub(super) fn initial_history_selected(&self) -> bool {
+        self.api_version == super::spool_head_client::INITIAL_HISTORY_RUNTIME
+    }
     pub(super) fn native_driver_selection(&self)->Result<(super::super::super::Sha256Digest,super::super::super::Sha256Digest),ServiceRunnerError>{
         self.validate()?;Ok((self.expected_driver_process_identity_sha256.clone(),
             self.expected_driver_configuration_generation_sha256.clone()))
@@ -361,10 +369,13 @@ impl ProductionRpcRuntimeConfigV4 {
             |(super::dispatch_service::client::BRIDGE_RUNTIME,Some(_),Some(_),None)
             |(super::spool_head_client::RUNTIME,Some(_),Some(_),Some(_))
             |(super::spool_head_client::COMPLETION_RUNTIME,Some(_),Some(_),Some(_))
-            |(super::spool_head_client::EFFECTS_RUNTIME,Some(_),Some(_),Some(_)))
+            |(super::spool_head_client::EFFECTS_RUNTIME,Some(_),Some(_),Some(_))
+            |(super::spool_head_client::INITIAL_HISTORY_RUNTIME,Some(_),Some(_),Some(_)))
             || self.spool.as_ref().is_some_and(|value|value.completion_selected())
-                != matches!(self.api_version.as_str(),super::spool_head_client::COMPLETION_RUNTIME|super::spool_head_client::EFFECTS_RUNTIME)
-            || self.spool.as_ref().is_some_and(|value|value.effects_selected())!=(self.api_version==super::spool_head_client::EFFECTS_RUNTIME)
+                != matches!(self.api_version.as_str(),super::spool_head_client::COMPLETION_RUNTIME
+                    |super::spool_head_client::EFFECTS_RUNTIME|super::spool_head_client::INITIAL_HISTORY_RUNTIME)
+            || self.spool.as_ref().is_some_and(|value|value.effects_selected())
+                != matches!(self.api_version.as_str(),super::spool_head_client::EFFECTS_RUNTIME|super::spool_head_client::INITIAL_HISTORY_RUNTIME)
             || self.startup_timeout_millis == 0
             || self.startup_timeout_millis > 30_000
             || !self.listener_socket_path.is_absolute()
@@ -394,6 +405,7 @@ impl ProductionRpcRuntimeConfigV4 {
                 "production RPC runtime config is incomplete or outside its fixed bounds",
             ));
         }
+        initial_history::validate(self)?;
         self.expected_facade_peer.checked()?;
         if let Some(selection)=&self.generation_admission {selection.validate()?;}
         self.journal_directory_identity.validate()?;
@@ -500,6 +512,18 @@ impl ProductionRpcRuntimeConfigV4 {
         }
         Ok(())
     }
+}
+
+/// Pure successor shape check for the receiving gate. Actual history admission
+/// still requires the retained NativeRetrieval owner in load_bridge_histories.
+pub(in crate::policy_shadow::policy_custody) fn validate_initial_history_runtime(
+    raw: &[u8],
+) -> Result<(), ServiceRunnerError> {
+    let runtime: ProductionRpcRuntimeConfigV4 = decode_canonical_frame(raw)?;
+    if !runtime.initial_history_selected() {
+        return Err(ServiceRunnerError::invalid("initial history runtime version differs"));
+    }
+    runtime.validate()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -2647,9 +2671,10 @@ fn run_production_rpc_service_loaded_inner(
         loaded.value.expected_maximum_durability_worker_nanos,
     )?;
 
-    let histories = load_production_histories(
+    let histories = load_bridge_histories(
         &loaded.value,
         &loaded.credentials,
+        &bootstrap,
     )?;
     let mut parent_signer_endpoints = Vec::with_capacity(10);
     for configured in &loaded.value.parent_signer_endpoints {
@@ -2746,21 +2771,22 @@ fn run_production_rpc_service_loaded_inner(
     if let Some(owner)=native_proof_owner {
         if let Some(selection)=loaded.value.spool.clone(){
             authority.spool=Some(std::sync::Mutex::new(super::spool_head_client::Client::new(selection,
-                load_production_histories(&loaded.value,&loaded.credentials)?,Arc::clone(&owner),
+                load_bridge_histories(&loaded.value,&loaded.credentials,&bootstrap)?,Arc::clone(&owner),
                 origin_channel.ok_or_else(||ServiceRunnerError::invalid("native generation origin channel absent"))?,
                 &loaded.value.expected_service_configuration_sha256)?));
         }
         if let Some(selection)=loaded.value.commit_request.clone() {
             if !owner.commitment_bridge_selected() {return Err(ServiceRunnerError::invalid("CommitRequest bridge purpose differs"));}
             authority.commit_request=Some(std::sync::Mutex::new(super::dispatch_service::client::Client::new(selection,
-                load_production_histories(&loaded.value,&loaded.credentials)?,Arc::clone(&owner),&loaded.value.expected_service_configuration_sha256,
-                loaded.value.api_version=="serverware.policyCustodyProductionRpcRuntime/v9")?));
+                load_bridge_histories(&loaded.value,&loaded.credentials,&bootstrap)?,Arc::clone(&owner),&loaded.value.expected_service_configuration_sha256,
+                matches!(loaded.value.api_version.as_str(),super::spool_head_client::EFFECTS_RUNTIME
+                    |super::spool_head_client::INITIAL_HISTORY_RUNTIME))?));
         }
         authority.enable_native_proofs(owner)?;
     }
     if let Some(selection)=loaded.value.generation_admission.clone() {
         authority.generation_admission=Some(std::sync::Mutex::new(super::generation_service_client::Client::new(
-            selection,load_production_histories(&loaded.value,&loaded.credentials)?,bootstrap.clone())?));
+            selection,load_bridge_histories(&loaded.value,&loaded.credentials,&bootstrap)?,bootstrap.clone())?));
     }
     let bridge = ProductionRpcServiceBridgeV4::recover(
         authority,
@@ -2840,6 +2866,11 @@ pub(super) fn load_production_histories(
     runtime: &ProductionRpcRuntimeConfigV4,
     credentials: &super::CredentialDirectory,
 ) -> Result<ProductionServiceHistoricalKeyringsV4, ServiceRunnerError> {
+    if runtime.initial_history_selected() || runtime.ordinary_initial_histories.is_some() {
+        return Err(ServiceRunnerError::invalid(
+            "initial bridge histories require the actual admitted native bridge owner",
+        ));
+    }
     let mut histories = BTreeMap::new();
     for configured in &runtime.histories {
         let exact = credentials.read(
@@ -2897,6 +2928,18 @@ pub(super) fn load_production_histories(
             HistoricalServiceRoleV3::BoundedCleanupHelper,
         )?,
     )
+}
+
+fn load_bridge_histories(
+    runtime: &ProductionRpcRuntimeConfigV4,
+    credentials: &super::CredentialDirectory,
+    bootstrap: &super::Bootstrap,
+) -> Result<ProductionServiceHistoricalKeyringsV4, ServiceRunnerError> {
+    if runtime.initial_history_selected() {
+        initial_history::load(runtime, credentials, bootstrap)
+    } else {
+        load_production_histories(runtime, credentials)
+    }
 }
 
 fn expected_history_manifest_sha256(

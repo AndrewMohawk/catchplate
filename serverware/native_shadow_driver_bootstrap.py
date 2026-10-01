@@ -423,6 +423,7 @@ class DriverBootstrap:
         activation, READY, generation installation, or a retry capability.
         """
         from serverware.native_shadow_driver_inputs import OperationalInputs
+        from serverware import native_pilot_bridge_runtime as bridge_runtime
         self.check()
         p.require(type(inputs) is OperationalInputs and inputs._driver is self
             and self._config["apiVersion"] in ("serverware.nativeShadowDriverBootstrapConfiguration/v2", "serverware.nativeShadowDriverBootstrapConfiguration/v3", "serverware.nativeShadowDriverBootstrapConfiguration/v4")
@@ -448,12 +449,16 @@ class DriverBootstrap:
             and scope["signingKeyId"] == self._config["phaseTwoAuthority"]["keyId"]
             and scope["publicBundleSha256"] == p.sha(public_originals)
             and p.canonical(scope["operation"]) == inputs._operation)
-        bundle = p.fields(p.document(public_originals, 1024 * 1024), ("runtimeOriginal", "deliveryOriginal", "generationOriginals"))
+        runtime = bridge_runtime.shape(inputs._runtime_raw)
+        p.require(bridge_runtime.version(runtime) != 10 or suffix == "v4")
+        maximum = bridge_runtime.MAX_BRIDGE_INPUT if bridge_runtime.version(runtime) == 10 else 1024 * 1024
+        bundle = p.fields(p.document(public_originals, maximum), ("runtimeOriginal", "deliveryOriginal", "generationOriginals"))
         pins = p.fields(scope["originals"], ("runtimeSha256", "deliverySha256", "generationGrants"))
         p.fields(bundle["generationOriginals"], ROLES); p.fields(pins["generationGrants"], ROLES)
         p.require(bundle["runtimeOriginal"].encode("ascii") == inputs._runtime_raw
             and bundle["deliveryOriginal"].encode("ascii") == inputs._delivery_raw)
-        for text, digest in [(bundle["runtimeOriginal"], pins["runtimeSha256"]), (bundle["deliveryOriginal"], pins["deliverySha256"]),
+        p.require(p.sha(inputs._runtime_raw) == p.digest(pins["runtimeSha256"]))
+        for text, digest in [(bundle["deliveryOriginal"], pins["deliverySha256"]),
                 *((bundle["generationOriginals"][role], pins["generationGrants"][role]) for role in ROLES)]:
             p.require(type(text) is str and text.isascii()); raw = text.encode("ascii")
             p.document(raw, 65536); p.require(p.sha(raw) == p.digest(digest))

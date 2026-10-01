@@ -29,9 +29,9 @@ def main():
         args = parser.parse_args()
         authority.p.require(args.input_fd >= 3 and args.authority_key_fd >= 3
             and args.input_fd != args.authority_key_fd)
-        raw = io.read_public(args.input_fd, authority.MAX_INPUT)
+        raw = io.read_public(args.input_fd, authority.MAX_BRIDGE_INPUT)
         result = authority.sign(raw, io.signing_key(args.authority_key_fd))
-        authority.p.require(io.read_public(args.input_fd, authority.MAX_INPUT) == raw)
+        authority.p.require(io.read_public(args.input_fd, authority.MAX_BRIDGE_INPUT) == raw)
         scope = authority.p.document(result, authority.MAX_SCOPE)["payload"]
         io.write_public(result, deadline_boottime_ns=authority.p.ns(scope["startupDeadlineBoottimeNs"]))
         return 0

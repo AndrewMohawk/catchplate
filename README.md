@@ -140,8 +140,10 @@ are implemented in source; they are not a demonstrated deployed workflow.
 [Cold-start input composition](docs/native-pilot-genesis-inputs.md) connects the
 66 existing startup jobs to their actual observations and previous results.
 [Operational input composition](docs/native-pilot-adopted-inputs.md) extends
-that source path through the 176 operational jobs. Independent decisions,
-protected publication, deployment and a complete live run remain open.
+that source path through the 176 operational jobs.
+[Protected endpoint publication](docs/native-pilot-adopted-endpoint-publication.md)
+connects approved configuration to its runtime files. Independent decisions,
+approved installation, deployment and a complete live run remain open.
 
 Before a pilot is ready to try, four milestones remain:
 

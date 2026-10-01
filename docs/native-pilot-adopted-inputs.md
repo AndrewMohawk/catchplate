@@ -40,9 +40,12 @@ selected signed assignment and trust. The native validator must still admit
 the complete candidate before the independently operated authority signs it.
 
 Endpoint pins preserve the common peer identity in all five ordinary runtimes.
-The peer, measured proof scope, assignment and retrieval manifest must actually
-be published and the object directory provisioned separately. Computing their
-hashes is not publication or installation evidence.
+The `.419` [protected publication job](native-pilot-adopted-endpoint-publication.md)
+publishes the peer, measured proof scope, assignment and exact fresh retrieval
+manifest only after independent approval. The empty object directory remains
+an explicit provisioning prerequisite. Compiler selections must match the fixed
+destinations and generated manifest pin. Computing their hashes is not
+publication or installation evidence.
 
 Cohort release requires explicit image pins matched to prior closure manifests.
 Constructed-driver admission requires the existing independent continuation

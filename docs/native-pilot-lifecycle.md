@@ -91,6 +91,12 @@ caller checks original BOOTTIME/UNIX limits and actual owners while waiting;
 it neither creates approvals nor renews a deadline. Startup requires a prepared
 machine-speed independent peer, not an unbounded manual prompt.
 
+The `.419` [endpoint publication connection](native-pilot-adopted-endpoint-publication.md)
+publishes the four fixed operational originals inside the already approved
+`endpoint-inputs` job. The opt-in `adopted-operational` resource-root inventory
+adds the empty auxiliary object directory; neither publication nor provisioning
+replaces the genuine transferred core or supplies an independent decision.
+
 The lifecycle transport has a fixed 384-MiB aggregate wire ceiling: cold's
 separately bounded raw dialogue needs base64/chunk framing in addition to the
 existing adopted transport and bootstrap originals. Legacy modes retain their

@@ -15,7 +15,9 @@ review.
 The current lock pins `cryptography==50.0.0`; the Python manifest still refers
 to the old lock and archive. The committed Cargo inputs also differ from the
 reviewed Rust manifest, so the current source requires `--refresh-rust` and a
-new reviewed vendor archive before an offline build. The v2 snapshot identity reserves the additional
+new reviewed vendor archive if preparing replacement bytes. The retained candidate
+below already contains the refreshed bytes; publication and review remain open.
+The v2 snapshot identity reserves the additional
 broker packaging inputs; it is not evidence that a v2 snapshot exists. Updating
 the identity or manifest without producing and reviewing new wheel bytes does
 not resolve the handoff requirement.
@@ -51,6 +53,34 @@ preparation checks, **not a project test suite or production acceptance**.
 This candidate may be staged for an engineering-only build in an isolated dirty
 worktree. Such staging never authorizes a production build, publication, or
 reviewed-pin installation; those still require the dependency-owner handoff.
+
+### Dependency gate audit at `f13b0dd2`
+
+A bounded read-only audit rehashed the retained report, three proposed manifests,
+three captured source inputs and all six cache artifacts. They still match the
+candidate's recorded pins; its `requirements.lock`, `Cargo.toml` and `Cargo.lock`
+also exactly match this checkout. **No candidate regeneration is needed for these
+inputs.** This does not rebind the original preparation report to the newer source.
+
+The retained candidate is under the operator's home directory at
+`codex-offload/serverware/dependency-candidates/serverware-production-dependencies-linux-amd64-v3-candidate-cba01916/`.
+Canonical `production-dependencies/*.sha256` still select the older snapshot;
+Python/Rust source and archive pins are stale, while musl/Debian hashes are unchanged.
+The checkout's `production-dependencies/cache/` currently contains only
+`source-contract/`, not the six artifacts.
+
+The next handoff is dependency-owner review, an authorized credential-free
+immutable HTTPS prefix ending in the selected snapshot ID, publication and exact
+remote-byte readback, then separately authorized promotion of **all three**
+manifests. Publish only the nine files under `snapshot/`: three manifests plus six
+cache artifacts. The existing fetcher downloads the six artifacts, requires direct
+HTTP 200 responses without redirects, and verifies their committed hashes.
+
+The dependency consumer has no KMS or signed-approval-envelope gate: its trust
+anchor is the reviewed committed manifests. That does not replace independent
+review, nor the later SLSA, Cosign/KMS, reproduction, EIF/Nitro and witness gates
+in the [release workflow](release-stages.md). This audit published nothing and
+changed no dependency pins or cache bytes.
 
 A later engineering build may reuse these exact candidate bytes after the
 reviewed Dockerfile changes for bounded Cargo diagnostics, staged offline

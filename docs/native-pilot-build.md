@@ -11,12 +11,47 @@ performed when this source was authored.
 
 ## Current engineering assembly
 
+All three Python runtimes now have exports from exact frozen source
+`f13b0dd22acbf68930186fb5bd60aea7ffe86ca7`, including the `.421` provider integration.
+One sequential attempt completed in **195.185 seconds** with all three build and
+all three source-observer exits **0**, without retries or a repeated unit suite.
+
+| Runtime | Materialized entries | Exact source files | Build / inspection seconds |
+| --- | ---: | ---: | ---: |
+| Conductor | 6,227 | 1,394 | 27.686 / 53.037 |
+| Authority | 6,237 | 1,400 | 10.642 / 47.454 |
+| Supervisor | 6,248 | 1,408 | 11.347 / 39.975 |
+
+All three contain the same actual source manifest, SHA-256
+`b6b27cc80dd8134a159bd1757c06558d294e8d0f4544e98e8a9510040e2b4eec`.
+The observer compared exported source bytes with exact Git blobs and verified
+the per-role namespaces. The supervisor contains eight fixed scripts, including
+`run_native_pilot_approval_provider.py`; its shared application tree contains the
+provider, policy, transcript and fresh-head adapter modules. Raw TAR sizes are
+170,291,712 / 171,024,384 / 171,113,984 bytes respectively.
+
+The three archives, logs, observer/harness, frozen source and candidate-manifest
+diff are retained under the operator's home directory at
+`codex-offload/serverware/engineering-builds/f13b0dd2-matched-runtimes-s2CpTj/`.
+This removes the mixed-source engineering-export gap, not release or deployment
+requirements: the unchanged candidate remains unpublished, manifests remain
+engineering overrides, and every report has `productionReleaseEligible=false`.
+No strict inventory, approved package, protected install, application execution,
+native target build, cloud action or paid test was produced.
+
+Next source work is the [fixed-eight evidence handoff](native-pilot-approval-provider.md#remaining-deployment-boundary).
+The [dependency audit](production-dependency-snapshot.md) confirms that current
+locks still match the retained candidate; review/publication and all-three-manifest
+promotion, not regeneration, are the remaining dependency handoff.
+
+### Previous engineering exports
+
 The `.421` [approval provider](native-pilot-approval-provider.md) is now in the
 supervisor source roster and fixed entrypoint grammar. Frozen `bb54b76a` passes
-107 focused source/transport/package controls, but this turn did not rebuild
-runtime artifacts. The exports below therefore remain historical. Next is one
-matching-source export of all three runtimes; the unpublished dependency candidate
-still cannot produce a strict approved release package.
+107 focused source/transport/package controls, but that turn did not rebuild
+runtime artifacts. The exports below therefore remain historical. A matching-source
+export was required and is now recorded above; the unpublished
+dependency candidate still cannot produce a strict approved release package.
 
 The `.415` [fixed lifecycle caller](native-pilot-lifecycle.md#fixed-executable-caller-415)
 refreshes **only the supervisor** from exact source

@@ -89,6 +89,19 @@ socket/PIDFD/descriptor exchanges with synthetic public payloads. Provider
 invocation/serializer and source-order checks are not an executed protected
 provider process. No complete valid cold66/adopted176 ceremony is claimed.
 
+The next fixed-eight connection needs an explicitly selected, bounded public
+evidence attachment: its current request/observation frames carry runtime and
+history hashes, not all originals needed to prepare complete Input/v3. Reuse
+[`prepare_context` and `observed_original`](../serverware/native_pilot_supervisor_current_head_profile.py)
+over the provider's retained predecessors, which supply the sources used by
+[`_current_head`](../serverware/native_pilot_adopted_bridge_inputs.py), and connect
+an independent decision-service caller to the existing
+[`receive_current_head`/`respond_current_head`](../serverware/native_pilot_supervisor_approval_channel.py)
+route. This is a missing source handoff, not permission to widen the current wire
+silently or relay all 244 jobs. The attachment must contain no inferred
+currentness; fresh decisions and the protected Input/v3 + Approval/v2 pair remain
+independently supplied.
+
 The source does not provision independent policy/current-head operators, issue
 their decisions, approve dependency publication, install compatible packages,
 configure Nitro/KMS/signing/witness services, or demonstrate application traffic.

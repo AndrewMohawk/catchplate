@@ -148,13 +148,17 @@ The lifecycle also returns actual startup/shutdown results after verified child
 exit; input-delivery receipts alone are not treated as completed work.
 The [approval-provider executable](docs/native-pilot-approval-provider.md) now
 connects the fixed transcript to an explicit delegation policy and a separate
-fresh-decision peer. It still needs independent configuration and installation.
+fresh-decision peer. The remaining public-evidence handoff to that peer still
+needs implementation, alongside independent configuration and installation.
+All three Python runtimes now have matching-source engineering exports; these
+are not approved packages or a running deployment.
 
 Before a pilot is ready to try, four milestones remain:
 
-1. Assemble and install compatible, approved runtime packages.
-2. Install and configure the [independent approval provider](docs/native-pilot-approval-provider.md)
-   and its separately operated fresh-decision service.
+1. Publish the reviewed dependency snapshot, then build and install approved
+   matching runtime packages.
+2. Complete the fresh-decision evidence handoff and configure the
+   [independent approval services](docs/native-pilot-approval-provider.md).
 3. Configure the protected test deployment and its required services.
 4. Demonstrate one real application flow: credential replacement, allowed and
    denied requests, and clean shutdown.

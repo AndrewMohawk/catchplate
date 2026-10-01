@@ -133,8 +133,9 @@ Checkpoint: **2026-10-01 — pre-production, pilot assembly.**
 
 **Development pilot — current focus:** a local control UI, Rust proxy and
 synthetic upstream, with a [one-command allow/deny walkthrough](docs/development-pilot.md).
-Python and Rust images are built and supporting services are healthy. A slow
-startup path is fixed; database and authority provisioning plus
+Python and Rust images are built, supporting services are healthy, and the
+isolated database has its 13 restricted role identities. Authentication,
+schema bootstrap, local authority launch integration and
 [policy commissioning](docs/pilot-commissioning.md) remain. **There is not yet a working pilot.** The planned
 walkthrough is non-TEE, non-production and uses no real provider credentials.
 Its current authority requirements cannot be replaced by a SQLite shortcut.

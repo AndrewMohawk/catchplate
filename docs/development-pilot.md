@@ -1,15 +1,19 @@
 # Local development pilot
 
 Status: **not yet a working pilot; walkthrough pending commissioning**. The
-Rust image is built from `17ab194b`; Python `9efad924` includes the subsequent
-startup, bootstrap and demo-admission fixes. The isolated Compose project is
+Rust image is built from `17ab194b`; the last attempted Python app is `9efad924`.
+The newer `d863e3d7` Python image includes the offline policy installer and demo
+schema repair but has not replaced that app. The isolated Compose project is
 `serverware-pilot-17ab194b`. Database, audit sink and synthetic upstream run,
 but the control plane has not started successfully. No demo seed, verified CA
 handoff, browser acceptance or proxy request has completed.
 
-Current startup reaches the missing PostgreSQL runtime-role configuration gate.
-The required [commissioning sequence](pilot-commissioning.md) covers provisioned
-roles/services, explicit offline bootstrap and genuine policy genesis. The
+The last startup reached the missing PostgreSQL runtime-role configuration gate.
+The 13 restricted role identities have since been created and verified, without
+passwords or schema grants; the app has not been reconfigured or restarted.
+The required [commissioning sequence](pilot-commissioning.md) also includes
+unfinished local-authority launch integration, actual authentication/schema
+bootstrap, genuine policy genesis and its offline development file install. The
 repaired demo seed reuses an already committed policy; it cannot publish one.
 SQLite/non-atomic
 settings do **not** provide a supported substitute. The addresses and commands

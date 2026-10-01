@@ -11,6 +11,23 @@ performed when this source was authored.
 
 ## Current engineering assembly
 
+The `.413` [observation-first rendezvous](native-pilot-genesis-rendezvous.md)
+refreshes all three Python runtime exports from exact source `fc466a0c`:
+
+| Runtime | Materialized entries | Exact source files | Build / source observation |
+| --- | ---: | ---: | --- |
+| Conductor | 6,202 | 1,369 | Passed |
+| Authority | 6,212 | 1,375 | Passed |
+| Supervisor | 6,218 | 1,378 | Passed |
+
+All three share the same complete source manifest and unchanged unpublished
+dependency candidate; every export remains `production_release_eligible=false`.
+These are inert raw exports, not installed or independently approved packages.
+No unchanged native compilation was repeated. The next connected lifecycle
+runner and fixed installer invocation are not present in these exports.
+Exact archives, logs and checksums are retained at
+`codex-offload/serverware/engineering-builds/fc466a0c-genesis-rendezvous-omGm4r/`.
+
 The `.392` source adds a separate
 [commissioning supervisor package and executable](native-pilot-supervisor-executable.md).
 It preserves the conductor/authority layouts and requires three independent
@@ -19,7 +36,7 @@ materialized; the corrected read-only observer verified 1,310 source files.
 [Exact evidence and boundaries](native-pilot-supervisor-executable.md#engineering-artifact-result).
 The older results below are not evidence for the current supervisor source.
 
-Actual local results as of **2026-09-30 18:23 UTC**:
+Earlier local results as of **2026-09-30 18:23 UTC**:
 
 | Artifacts | Frozen source | Verified assembly result |
 | --- | --- | --- |

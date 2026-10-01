@@ -80,13 +80,46 @@ independent operator remain deployment work.
 
 ## Verification
 
-Source is assembled before one focused frozen check batch. New controls cover
-the closed all-original transcript and installer association, genuine local
-child/socket/PIDFD observation, and real FD-relative directory operations in a
-redirected temporary tree. These do not prove protected full-listener execution,
-fs-verity core transfer, signing, an operational cohort or production acceptance.
+Frozen `fc466a0c35a7a8ff8a463ca0813577b76b823bcc` passes **94/94 checks in ten
+focused Python suites**, in 1.080 seconds with no failures, errors or skips.
+All fourteen changed Python files pass syntax and both Make inventories; six
+modules import from that exact archive. The initial `b52df6ed` preflight stopped
+on a missing closing parenthesis before importing modules or running tests.
+That syntax-only correction preceded the single full focused test run; both
+attempts are retained.
 
-Current Python-only engineering exports are being prepared separately from
-native compilation and runtime execution. Their unpublished dependency candidate
-cannot become approved release material through a successful build. Full source
-checkpoints remain **36/46**, independent production acceptance **0/6**.
+The controls cover the closed all-original transcript and installer association,
+genuine local child/socket/PIDFD observation, and real FD-relative directory
+operations in a redirected temporary tree. They do not prove protected
+full-listener execution, fs-verity core transfer, signing, an operational cohort
+or production acceptance.
+
+All three Python-only engineering exports from that frozen commit built and
+passed inert materialization/source-content observation. Conductor, authority
+and supervisor contain 6,202 / 6,212 / 6,218 entries and respectively
+1,369 / 1,375 / 1,378 exact source files. Their complete source manifests are
+identical. No native compilation or runtime execution was performed. The same
+unpublished nine-file dependency candidate was byte/hash checked in the detached
+build checkout; canonical dependency pins were not changed. A successful build
+does not approve that candidate or create a strict-source package.
+
+Exact source archives, both preflight outcomes, all three raw exports, complete
+observation logs and checksums are retained at
+`codex-offload/serverware/engineering-builds/fc466a0c-genesis-rendezvous-omGm4r/`
+under the operator's home directory. Full source checkpoints remain **36/46**,
+independent production acceptance **0/6**.
+
+The next executable integration is one retained cross-ceremony runner: launch
+the real cold authority and adopted receiver, relay observations to the
+independent approver, wait for the approved-pair installer's actual exit/reap
+before forwarding its reply, and drive the 66 cold jobs alongside the waiting
+receiver before the 176 adopted jobs. Existing separate executables do not yet
+own that complete lifecycle. Complete independent inputs are sufficient; an
+automatic approval generator is neither required nor an acceptable substitute.
+Reuse the existing adopted supervisor and process owner directly. The missing
+pieces are the fixed cold-process owner, the installer-child exit gate, and a
+cold-job approved-pair installer using the existing cold request/approval/reply
+formats. The rendezvous installer currently exists as a repository CLI, not a
+registered script in the packaged supervisor inventory; the connected runner
+must add its fixed admitted invocation before launching it there. No catalogue
+or wire-version expansion is needed for this connection.

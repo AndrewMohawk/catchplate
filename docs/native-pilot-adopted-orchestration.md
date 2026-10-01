@@ -24,6 +24,12 @@ transfers the original fs-verity descriptor after its cold services retire;
 the existing receiver checks and retains it before acknowledging custody.
 Only that real `ReceivedGenesisCore` enters `Operator.run_adopted`.
 
+The [observation-first successor](native-pilot-genesis-rendezvous.md) resolves
+the pre-core receiver-PID dependency in this original sequence. Its explicit
+mode accepts and observes the actual receiver before independent approval,
+then promotes that same held socket. The old mode does not gain this behavior
+implicitly.
+
 The independent rendezvous operator remains a deployment prerequisite. The new
 source does not provision it, synthesize its approval, guess a future PID or
 reconstruct the core from the public observation. Unknown cleanup keeps actual

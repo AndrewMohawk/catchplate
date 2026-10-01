@@ -151,25 +151,27 @@ exit; input-delivery receipts alone are not treated as completed work.
 The [approval-provider executable](docs/native-pilot-approval-provider.md) now
 connects the fixed transcript to an explicit delegation policy and a separate
 fresh-decision peer. The public-evidence handoff and an operator-controlled
-receiving service connect in source to the [.424 fresh-state worker](docs/native-pilot-current-head-worker.md).
-Independent state provisioning and automatic late configuration remain unfinished;
-historical signatures cannot establish freshness. The latest runtime exports predate
-these source changes and are not approved packages or a deployment.
+receiving service connect in source to the [fresh-state worker](docs/native-pilot-current-head-worker.md).
+The [startup provisioner](docs/native-pilot-startup-provisioning.md) now automates
+late public-file preparation. The initial live-state commit and worker launch
+still need connection before the first head request; signed history is not
+freshness. Current exports predate these changes and are not approved packages
+or a deployment.
 
 Before a pilot is ready to try, four milestones remain:
 
 1. Publish the reviewed dependency snapshot, then build and install approved
    matching runtime packages.
-2. Provision independent current state and automate late configuration of the
-   [independent approval services](docs/native-pilot-approval-provider.md).
+2. Connect the initial live-state registry commit and launch the
+   [independent fresh-state worker](docs/native-pilot-current-head-worker.md) before the first head request.
 3. Configure the protected test deployment and its required services.
 4. Demonstrate one real application flow: credential replacement, allowed and
    denied requests, and clean shutdown.
 
-Full production certification is separate from that limited pilot. Current
-AWS provisioning is unverified and setup access has expired; see
-[the access record](docs/aws-test-access.md). Detailed implementation history
-and verification limits are in [production progress](docs/production-status.md).
+Full production certification is separate from that limited pilot. The
+[last AWS access check](docs/aws-test-access.md) found expired setup credentials;
+provisioning remains unverified. No AWS recheck ran for this update. Implementation
+history and verification limits are in [production progress](docs/production-status.md).
 
 The bar shows **committed source, not tested readiness or remaining effort**.
 Green means source-landed; amber means partial implementation. No current pilot

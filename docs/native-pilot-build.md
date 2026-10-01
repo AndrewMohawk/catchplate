@@ -41,10 +41,15 @@ native target build, cloud action or paid test was produced.
 
 The subsequent `.422` [evidence handoff and receiving service](native-pilot-approval-provider.md)
 and `.423` [three-process startup](native-pilot-startup.md), plus the `.424`
-[fresh-state worker and state store](native-pilot-current-head-worker.md), are source
-changes not included in these `.421` exports. New matching approved
+[fresh-state worker and state store](native-pilot-current-head-worker.md) and `.425`
+[late startup public-file provisioner](native-pilot-startup-provisioning.md), are
+source changes not included in these `.421` exports. New matching approved
 packages and protected installation remain required; no new runtime build is
 claimed by the source integration.
+The provisioner closes late public-file preparation in source, not initial
+live-state registry commitment or worker launch before the first head request;
+that connection remains outstanding. Its [focused controls](native-pilot-startup-provisioning.md#verification-boundary)
+do not rebuild these packages or establish installed execution.
 The [dependency audit](production-dependency-snapshot.md) confirms that current
 locks still match the retained candidate; review/publication and all-three-manifest
 promotion, not regeneration, are the remaining dependency handoff.

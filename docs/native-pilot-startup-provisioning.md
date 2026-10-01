@@ -84,3 +84,16 @@ approved packages, protected installation, independent policy/state ownership
 and a real credential-replacement allow/deny/cleanup flow remain required.
 Same-host root protection is not independent organizational custody, hostile-root
 rollback protection or the production off-host witness.
+
+## Verification boundary
+
+Frozen `eb59c21d` passes 73 controls in nine focused suites in 7.171 seconds,
+with zero failures/errors/skips/reruns. Eleven changed Python files parse and
+appear in both Make inventories; seven production/entrypoint modules import
+from the frozen source. Real isolated filesystem controls exercise complete
+visibility, exact startup names, existing-file refusal and post-link failure
+cleanup. Companion child tests use actual sockets and PIDFDs. Pure profiles use
+signed synthetic sources and declared placeholder selections for unreached jobs;
+they do not establish a full valid 244-job transcript. Source/CLI checks do not
+execute the installed provisioner or launch a pilot. No runtime rebuild,
+protected deployment, cloud action or paid test ran.

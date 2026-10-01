@@ -5,6 +5,12 @@ lifecycle, approval provider and current-head decision receiver. It removes the
 need to predict their PIDs before supplying the policies that bind those PIDs.
 This is startup integration, not a deployed pilot or an approval backend.
 
+The `.425` [separate late-provisioning executable](native-pilot-startup-provisioning.md)
+now implements the independently delegated peer projections and protected-file
+publication described below. It does not initialize current state or launch the
+fresh-head worker. Its [focused verification](native-pilot-startup-provisioning.md#verification-boundary)
+is separate from the historical `.423` results below.
+
 ## What runs
 
 1. The launcher admits its installed supervisor inventory and protected startup
@@ -13,9 +19,10 @@ This is startup integration, not a deployed pilot or an approval backend.
    the decision receiver listens for the provider. Kernel peer credentials,
    PIDFDs, process start times and parent identities bind the actual connections.
    A socketpair created in the launcher cannot stand in for child identity.
-3. The launcher publishes literal process/socket observations. An independently
-   authorized provisioner uses those observations to supply the six public role
-   inputs and one admission file below. Observation alone grants no permission.
+3. The launcher atomically publishes literal process/socket observations. The
+   separately operated `startup-provisioning` executable uses independently
+   predelegated rules to fill only the three peer fields, then atomically publishes
+   six public role inputs and admission last. Observation alone grants no permission.
 4. The launcher validates the complete existing provider policy, listener and
    decision configuration against the actual peers. It resumes the receiver,
    then provider, then lifecycle. Only the lifecycle receives authority-key FDs.
@@ -57,9 +64,10 @@ fixed directories after preflight; it never empties, repairs or replaces an
 existing leaf. Inspection alone does not create anything. The shared
 `/etc/serverware` directory may contain unrelated protected state.
 
-Publish complete immutable files, not files that are still being written. The
-launcher validates full originals and their hashes before passing them on; it
-does not author or rewrite them. The decision receiver still needs its separate
+The startup-only publisher exposes final filenames only after complete writes,
+fsync and readback; existing names cannot be overwritten or retried. The launcher
+validates full originals and their hashes before passing them on; it does not
+author or rewrite them. The decision receiver still needs its separate
 initially empty `/etc/serverware/native-pilot-current-head-decisions` directory
 and the [fresh-decision backend](native-pilot-approval-provider.md).
 
@@ -67,6 +75,8 @@ Each role's actual original lifetime must fit inside admission, and admission
 must fit inside the original setup lifetime. Startup does not extend or reissue
 the listener/driver window. In particular, the existing 30-second driver startup
 window requires automated provisioning, not manual editing during execution.
+The provisioner's shorter startup publication wait does not replace the admitted
+roles' original lifetime bounds.
 
 The parent accepts the same **36 cold and 123 adopted purpose slots** as the
 lifecycle CLI. They are already provisioned, sealed 32-byte key descriptors,
@@ -93,7 +103,7 @@ allows normal cleanup to be collected; it grants no further workflow execution.
 Published public files remain available for operator inspection; startup does
 not erase them or silently reset the directory for another invocation.
 
-## Pilot boundary
+## Historical .423 verification and pilot boundary
 
 Frozen `32d2bafc` passes 125 controls across twelve focused suites in one
 16.472-second run, without failures/errors/skips/reruns. Fourteen changed Python

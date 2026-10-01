@@ -92,7 +92,10 @@ The worker is independently launched alongside the
 [three-process commissioning startup](native-pilot-startup.md); it is not an
 implicit fourth child with borrowed provider authority. Its policy/state must
 be provisioned from real checkpoint issuance before the original 30-second
-driver startup window expires. This still needs automated late provisioning.
+driver startup window expires. The separate
+[startup provisioner](native-pilot-startup-provisioning.md) now supplies the three
+existing roles' late inputs. Initial state, worker policy and worker lifetime
+still need their connected automated path.
 
 ## Pilot boundary
 

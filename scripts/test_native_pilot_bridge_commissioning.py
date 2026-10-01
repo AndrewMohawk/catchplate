@@ -131,7 +131,7 @@ def delivery_options(f):
         "observationSha256": outgoing["driverObservationSha256"], "invocationId": window["invocationId"],
         "startupDeadlineBoottimeNs": window["startupDeadlineBoottimeNs"],
         "lifetimeDeadlineBoottimeNs": window["lifetimeDeadlineBoottimeNs"], "pins": {
-            name: {"path": "/etc/serverware/native-pilot-inputs/" + name + ".json", "sha256": sha(raw)}
+            name: {"path": delivery.publication.DESTINATIONS[name], "sha256": sha(raw)}
             for name, raw in (("bridge-runtime", runtime_raw), ("bridge-outgoing", outgoing_raw))}}
     return dict(fragment=common["fragment"], runtime_bundle_raw=bundle, runtime_result=installed,
         bootstrap_originals={"control": common["control_original"], "configuration": source["ownerConfigurationOriginal"].encode("ascii"),
@@ -189,6 +189,8 @@ class BridgeCommissioningControls(unittest.TestCase):
 
     def test_c9_binds_exact_public_metadata_bytes_and_signed_result_not_semantic_hashes(self):
         f = fixture(); options = delivery_options(f)
+        self.assertEqual(options["runtime_result"]["pins"]["bridge-outgoing"]["path"],
+            "/etc/serverware/native-shadow-driver-outgoing.json")
         raw = delivery.build(**options)
         self.assertEqual(raw, f["common"]["delivery_input_raw"])
         reported = result(f["common"]["delivery_raw"])

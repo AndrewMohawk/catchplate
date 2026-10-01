@@ -92,6 +92,66 @@ def committed_schema_literals() -> str:
 
 
 class AuthorityPrimaryContractTests(unittest.TestCase):
+    def test_handler_digest_projects_only_the_selected_operation(self) -> None:
+        expected = authority_contract.operation_manifest()
+        project = authority_contract._operation_manifest_entry
+        with patch.object(authority_contract, "_operation_manifest_entry", wraps=project) as calls:
+            with patch.object(authority_contract, "operation_manifest", side_effect=AssertionError(
+                "a selected handler must not rebuild the whole manifest"
+            )):
+                for operation, entry in expected.items():
+                    self.assertEqual(authority_contract.handler_contract_digest(operation),
+                                     entry["handlerDigest"])
+                with self.assertRaises(KeyError):
+                    authority_contract.handler_contract_digest("unknown.operation")
+        self.assertEqual([call.args[0] for call in calls.call_args_list], list(expected))
+
+    def test_handler_digest_preserves_the_exact_framed_preimage(self) -> None:
+        for operation, entry in authority_contract.operation_manifest().items():
+            preimage = {
+                field: value for field, value in entry.items()
+                if field not in {"handlerDigest", "predicateClosure", "selectorClosure", "proofKind"}
+            }
+            preimage.update(sourceRevision=authority_contract.SOURCE_REVISION, operation=operation)
+            self.assertEqual(entry["handlerDigest"], independent_digest(
+                "serverware.policyAuthorityHandlerContract/v1", preimage
+            ), operation)
+
+    def test_returned_manifests_do_not_alias_later_projections(self) -> None:
+        manifest = authority_contract.operation_manifest()
+        expected = json.dumps(manifest, sort_keys=True)
+        entry = next(iter(manifest.values()))
+        entry["businessReads"].append("untrusted")
+        entry["selectors"]["untrusted"] = [["untrusted"]]
+        entry["mutationTemplates"].append({"templateId": "untrusted"})
+        self.assertEqual(json.dumps(authority_contract.operation_manifest(), sort_keys=True), expected)
+        queries = primary.source_query_manifest()
+        expected_queries = json.dumps(queries, sort_keys=True)
+        queries[0]["keyColumns"].append("untrusted")
+        queries[0]["selectorPaths"].append(["untrusted"])
+        self.assertEqual(json.dumps(primary.source_query_manifest(), sort_keys=True), expected_queries)
+
+    def test_query_manifest_hashes_each_operation_only_once(self) -> None:
+        digest = authority_contract.handler_contract_digest
+        with patch.object(authority_contract, "handler_contract_digest", wraps=digest) as calls:
+            entries = primary.source_query_manifest()
+        self.assertTrue(entries)
+        self.assertEqual([call.args[0] for call in calls.call_args_list],
+                         list(authority_contract.OPERATIONS))
+
+    def test_handler_digest_does_not_cache_changed_source_values(self) -> None:
+        operation = next(iter(authority_contract.OPERATIONS))
+        expected = authority_contract.handler_contract_digest(operation)
+        spec = dict(authority_contract.OPERATIONS[operation])
+        spec["planningMode"] += "-changed"
+        changed = dict(authority_contract.OPERATIONS)
+        changed[operation] = MappingProxyType(spec)
+        with patch.object(authority_contract, "OPERATIONS", MappingProxyType(changed)):
+            observed = authority_contract.handler_contract_digest(operation)
+            self.assertNotEqual(observed, expected)
+            self.assertEqual(observed, authority_contract.operation_manifest()[operation]["handlerDigest"])
+        self.assertEqual(authority_contract.handler_contract_digest(operation), expected)
+
     def test_inventory_exactly_covers_source_operation_relations(self) -> None:
         required = {
             table for spec in authority_contract.OPERATIONS.values()

@@ -218,12 +218,13 @@ def source_query_manifest() -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
     for operation, spec in authority_contract.OPERATIONS.items():
         tables = sorted(set(spec["businessReads"]) | set(spec["businessWrites"]))
+        handler_digest = authority_contract.handler_contract_digest(operation)
         for ordinal, table in enumerate(tables, start=1):
             result.append({
                 "ordinal": ordinal,
                 "predicateId": f"serverware.policyAuthorityQuery/{operation}/{ordinal}/{table}/v3",
                 "table": table,
-                "handlerDigest": authority_contract.handler_contract_digest(operation),
+                "handlerDigest": handler_digest,
                 "indexContract": "incremental-authenticated-relation-root-v3",
                 "predicateKind": "relation-root-and-explicit-key-set",
                 "selectorSource": "closed-operation-argument-path-v1",

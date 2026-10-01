@@ -3377,120 +3377,129 @@ SQL_GRANT_MANIFEST = MappingProxyType(
 )
 
 
+def _operation_manifest_entry(operation: str, spec: Mapping[str, Any]) -> dict[str, Any]:
+    """Project one source entry without constructing unrelated operations.
+
+    Every call returns fresh containers; neither manifests nor mutable source
+    projections are cached across callers.
+    """
+    return {
+        "handler": spec["handler"],
+        "transitionProgramId": spec["transitionProgramId"],
+        "planningMode": spec["planningMode"],
+        "businessReads": list(spec["businessReads"]),
+        "businessWrites": list(spec["businessWrites"]),
+        "businessReadBeforeWrite":
+            list(spec["businessReadBeforeWrite"]),
+        "authorizationReads": list(spec["authorizationReads"]),
+        "frameworkPreconditions":
+            list(spec["frameworkPreconditions"]),
+        "frameworkWrites": list(spec["frameworkWrites"]),
+        "frameworkReadBeforeWrite":
+            list(spec["frameworkReadBeforeWrite"]),
+        "mutationTemplates": [
+            dict(template)
+            for template in spec["mutationTemplates"]
+        ],
+        "executorFunction":
+            SQL_GRANT_MANIFEST[operation]["executorHandler"],
+        "executorIdentityArguments":
+            list(EXECUTOR_ARGUMENT_TYPES),
+        "reads": list(spec["reads"]),
+        "writes": list(spec["writes"]),
+        "selectors": {
+            table: [list(path) for path in paths]
+            for table, paths in spec["selectors"].items()
+        },
+        "webauthn": spec["webauthn"],
+        "assertionRequired": spec["assertionRequired"],
+        "approverPolicyRequired":
+            spec["approverPolicyRequired"],
+        "predicateClosure": spec["predicateClosure"],
+        "selectorClosure": spec["selectorClosure"],
+        "proofKind": spec["proofKind"],
+        "proofPrimitives": list(spec["proofPrimitives"]),
+        "completeIndexQueryRoles": authority_complete_query.role_manifest(operation),
+        "globalAuditCapacity": spec["globalAuditCapacity"],
+        "auditCapacityCounterSlotsReplaced": spec["auditCapacityCounterSlotsReplaced"],
+        "auditCapacityAddsAggregateRoot": spec["auditCapacityAddsAggregateRoot"],
+        "maximumBusinessQueryRows": spec["maximumBusinessQueryRows"],
+        "maximumBusinessMutations": spec["maximumBusinessMutations"],
+        "maximumBusinessWorkUnits": spec["maximumBusinessWorkUnits"],
+        "maximumQueryRows": spec["maximumQueryRows"],
+        "maximumMutations": spec["maximumMutations"],
+        "maximumWorkUnits": spec["maximumWorkUnits"],
+        "externalEvidenceTypes":
+            list(spec["externalEvidenceTypes"]),
+        "opaqueValueKinds": list(spec["opaqueValueKinds"]),
+        "handlerDigest": _digest(
+            "serverware.policyAuthorityHandlerContract/v1",
+            {
+                "sourceRevision": SOURCE_REVISION,
+                "operation": operation,
+                "handler": spec["handler"],
+                "transitionProgramId": spec["transitionProgramId"],
+                "planningMode": spec["planningMode"],
+                "businessReads": list(spec["businessReads"]),
+                "businessWrites": list(spec["businessWrites"]),
+                "businessReadBeforeWrite":
+                    list(spec["businessReadBeforeWrite"]),
+                "authorizationReads":
+                    list(spec["authorizationReads"]),
+                "frameworkPreconditions":
+                    list(spec["frameworkPreconditions"]),
+                "frameworkWrites":
+                    list(spec["frameworkWrites"]),
+                "frameworkReadBeforeWrite":
+                    list(spec["frameworkReadBeforeWrite"]),
+                "mutationTemplates": [
+                    dict(template)
+                    for template in spec["mutationTemplates"]
+                ],
+                "executorFunction":
+                    SQL_GRANT_MANIFEST[operation][
+                        "executorHandler"
+                    ],
+                "executorIdentityArguments":
+                    list(EXECUTOR_ARGUMENT_TYPES),
+                "reads": list(spec["reads"]),
+                "writes": list(spec["writes"]),
+                "selectors": {
+                    table: [list(path) for path in paths]
+                    for table, paths in spec["selectors"].items()
+                },
+                "webauthn": spec["webauthn"],
+                "assertionRequired":
+                    spec["assertionRequired"],
+                "approverPolicyRequired":
+                    spec["approverPolicyRequired"],
+                "proofPrimitives":
+                    list(spec["proofPrimitives"]),
+                "completeIndexQueryRoles": authority_complete_query.role_manifest(operation),
+                "globalAuditCapacity": spec["globalAuditCapacity"],
+                "auditCapacityCounterSlotsReplaced": spec["auditCapacityCounterSlotsReplaced"],
+                "auditCapacityAddsAggregateRoot": spec["auditCapacityAddsAggregateRoot"],
+                "maximumBusinessQueryRows": spec["maximumBusinessQueryRows"],
+                "maximumBusinessMutations": spec["maximumBusinessMutations"],
+                "maximumBusinessWorkUnits": spec["maximumBusinessWorkUnits"],
+                "maximumQueryRows":
+                    spec["maximumQueryRows"],
+                "maximumMutations":
+                    spec["maximumMutations"],
+                "maximumWorkUnits":
+                    spec["maximumWorkUnits"],
+                "externalEvidenceTypes":
+                    list(spec["externalEvidenceTypes"]),
+                "opaqueValueKinds":
+                    list(spec["opaqueValueKinds"]),
+            },
+        ),
+    }
+
+
 def operation_manifest() -> dict[str, Any]:
     return {
-        operation: {
-            "handler": spec["handler"],
-            "transitionProgramId": spec["transitionProgramId"],
-            "planningMode": spec["planningMode"],
-            "businessReads": list(spec["businessReads"]),
-            "businessWrites": list(spec["businessWrites"]),
-            "businessReadBeforeWrite":
-                list(spec["businessReadBeforeWrite"]),
-            "authorizationReads": list(spec["authorizationReads"]),
-            "frameworkPreconditions":
-                list(spec["frameworkPreconditions"]),
-            "frameworkWrites": list(spec["frameworkWrites"]),
-            "frameworkReadBeforeWrite":
-                list(spec["frameworkReadBeforeWrite"]),
-            "mutationTemplates": [
-                dict(template)
-                for template in spec["mutationTemplates"]
-            ],
-            "executorFunction":
-                SQL_GRANT_MANIFEST[operation]["executorHandler"],
-            "executorIdentityArguments":
-                list(EXECUTOR_ARGUMENT_TYPES),
-            "reads": list(spec["reads"]),
-            "writes": list(spec["writes"]),
-            "selectors": {
-                table: [list(path) for path in paths]
-                for table, paths in spec["selectors"].items()
-            },
-            "webauthn": spec["webauthn"],
-            "assertionRequired": spec["assertionRequired"],
-            "approverPolicyRequired":
-                spec["approverPolicyRequired"],
-            "predicateClosure": spec["predicateClosure"],
-            "selectorClosure": spec["selectorClosure"],
-            "proofKind": spec["proofKind"],
-            "proofPrimitives": list(spec["proofPrimitives"]),
-            "completeIndexQueryRoles": authority_complete_query.role_manifest(operation),
-            "globalAuditCapacity": spec["globalAuditCapacity"],
-            "auditCapacityCounterSlotsReplaced": spec["auditCapacityCounterSlotsReplaced"],
-            "auditCapacityAddsAggregateRoot": spec["auditCapacityAddsAggregateRoot"],
-            "maximumBusinessQueryRows": spec["maximumBusinessQueryRows"],
-            "maximumBusinessMutations": spec["maximumBusinessMutations"],
-            "maximumBusinessWorkUnits": spec["maximumBusinessWorkUnits"],
-            "maximumQueryRows": spec["maximumQueryRows"],
-            "maximumMutations": spec["maximumMutations"],
-            "maximumWorkUnits": spec["maximumWorkUnits"],
-            "externalEvidenceTypes":
-                list(spec["externalEvidenceTypes"]),
-            "opaqueValueKinds": list(spec["opaqueValueKinds"]),
-            "handlerDigest": _digest(
-                "serverware.policyAuthorityHandlerContract/v1",
-                {
-                    "sourceRevision": SOURCE_REVISION,
-                    "operation": operation,
-                    "handler": spec["handler"],
-                    "transitionProgramId": spec["transitionProgramId"],
-                    "planningMode": spec["planningMode"],
-                    "businessReads": list(spec["businessReads"]),
-                    "businessWrites": list(spec["businessWrites"]),
-                    "businessReadBeforeWrite":
-                        list(spec["businessReadBeforeWrite"]),
-                    "authorizationReads":
-                        list(spec["authorizationReads"]),
-                    "frameworkPreconditions":
-                        list(spec["frameworkPreconditions"]),
-                    "frameworkWrites":
-                        list(spec["frameworkWrites"]),
-                    "frameworkReadBeforeWrite":
-                        list(spec["frameworkReadBeforeWrite"]),
-                    "mutationTemplates": [
-                        dict(template)
-                        for template in spec["mutationTemplates"]
-                    ],
-                    "executorFunction":
-                        SQL_GRANT_MANIFEST[operation][
-                            "executorHandler"
-                        ],
-                    "executorIdentityArguments":
-                        list(EXECUTOR_ARGUMENT_TYPES),
-                    "reads": list(spec["reads"]),
-                    "writes": list(spec["writes"]),
-                    "selectors": {
-                        table: [list(path) for path in paths]
-                        for table, paths in spec["selectors"].items()
-                    },
-                    "webauthn": spec["webauthn"],
-                    "assertionRequired":
-                        spec["assertionRequired"],
-                    "approverPolicyRequired":
-                        spec["approverPolicyRequired"],
-                    "proofPrimitives":
-                        list(spec["proofPrimitives"]),
-                    "completeIndexQueryRoles": authority_complete_query.role_manifest(operation),
-                    "globalAuditCapacity": spec["globalAuditCapacity"],
-                    "auditCapacityCounterSlotsReplaced": spec["auditCapacityCounterSlotsReplaced"],
-                    "auditCapacityAddsAggregateRoot": spec["auditCapacityAddsAggregateRoot"],
-                    "maximumBusinessQueryRows": spec["maximumBusinessQueryRows"],
-                    "maximumBusinessMutations": spec["maximumBusinessMutations"],
-                    "maximumBusinessWorkUnits": spec["maximumBusinessWorkUnits"],
-                    "maximumQueryRows":
-                        spec["maximumQueryRows"],
-                    "maximumMutations":
-                        spec["maximumMutations"],
-                    "maximumWorkUnits":
-                        spec["maximumWorkUnits"],
-                    "externalEvidenceTypes":
-                        list(spec["externalEvidenceTypes"]),
-                    "opaqueValueKinds":
-                        list(spec["opaqueValueKinds"]),
-                },
-            ),
-        }
+        operation: _operation_manifest_entry(operation, spec)
         for operation, spec in sorted(OPERATIONS.items())
     }
 
@@ -3695,7 +3704,7 @@ def _synthesize_business_intent(
 
 
 def handler_contract_digest(operation: str) -> str:
-    return operation_manifest()[operation]["handlerDigest"]
+    return _operation_manifest_entry(operation, OPERATIONS[operation])["handlerDigest"]
 
 
 def mutation_template(

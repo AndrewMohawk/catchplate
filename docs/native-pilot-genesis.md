@@ -1,9 +1,10 @@
 # Cold publication commissioning
 
-**Current integration blocker:** the cold v1 coordinator's immutable runtime
+**Legacy integration blocker:** the cold v1 coordinator's immutable runtime
 hash depends on the assignment that commits that same runtime through its
-closure set. This profile cannot yet be commissioned coherently. An explicit
-acyclic bootstrap/late-runtime successor is required; the acyclic stored core
+closure set. This profile cannot be commissioned coherently. The explicit
+[bootstrap/late-runtime successor](native-pilot-genesis-bootstrap.md) is being
+integrated separately; the acyclic stored core
 does not remove this separate configuration cycle. See the
 [confirmed dependency analysis](native-pilot-publication-commissioning.md#remaining-integration).
 

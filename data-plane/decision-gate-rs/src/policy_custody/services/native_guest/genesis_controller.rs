@@ -10,7 +10,7 @@ static INTERRUPTED:AtomicBool=AtomicBool::new(false);
 const CANCELLATION_SIGNALS:[libc::c_int;3]=[libc::SIGINT,libc::SIGTERM,libc::SIGHUP];
 
 extern "C" fn interrupted(_:libc::c_int){INTERRUPTED.store(true,Ordering::Relaxed);}
-fn check_interruption()->Result<(),ShadowError>{require(!INTERRUPTED.load(Ordering::Relaxed))}
+pub(super) fn check_interruption()->Result<(),ShadowError>{require(!INTERRUPTED.load(Ordering::Relaxed))}
 fn unblock_cancellation_signals()->Result<(),ShadowError>{
     let mut mask:libc::sigset_t=unsafe{std::mem::zeroed()};
     require(unsafe{libc::sigemptyset(&mut mask)}==0)?;
@@ -45,7 +45,7 @@ impl GenesisParent {
 
 #[derive(PartialEq,Eq)]
 struct PipeIdentity {device:u64,inode:u64,mode:u32,uid:u32,gid:u32,flags:i32}
-struct Output {fd:OwnedFd,identity:PipeIdentity}
+pub(super) struct Output {fd:OwnedFd,identity:PipeIdentity}
 impl Output {
     fn identity(fd:i32)->Result<PipeIdentity,ShadowError>{
         let mut stat:libc::stat=unsafe{std::mem::zeroed()};
@@ -70,7 +70,7 @@ impl Output {
         Ok(Self{fd:unsafe{OwnedFd::from_raw_fd(libc::STDOUT_FILENO)},identity})
     }
     fn check(&self)->Result<(),ShadowError>{require(Self::identity(self.fd.as_raw_fd())?==self.identity)}
-    fn write(&self,raw:&[u8],deadline:u64,mut check:impl FnMut()->Result<(),ShadowError>)->Result<(),ShadowError>{
+    pub(super) fn write(&self,raw:&[u8],deadline:u64,mut check:impl FnMut()->Result<(),ShadowError>)->Result<(),ShadowError>{
         require(!raw.is_empty() && raw.len()<=MAX_OUTPUT)?;
         let mut offset=0;
         while offset<raw.len() {
@@ -101,6 +101,10 @@ pub(super) fn run()->! {
     let output=signals().and_then(|()|check_interruption())
         .and_then(|()|Output::stdout());
     let Ok(output)=output else{unsafe{libc::_exit(1)}};
+    if std::env::args_os().count()==2
+        && std::env::args_os().nth(1).as_deref()==Some(std::ffi::OsStr::new("--parked-genesis")){
+        return super::genesis_parked::run(output);
+    }
     // start admits the unchanged fixed protected launch, exact actual C9 FDs,
     // root/one-thread/no-args/empty-environment contract and original lifetime.
     let mut owner=match GenesisParent::start(){Ok(owner)=>owner,Err(_)=>unsafe{libc::_exit(1)}};

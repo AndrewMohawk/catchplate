@@ -12,11 +12,25 @@ mod pair;
 mod proof_cohort;
 #[path="genesis_controller.rs"]
 mod genesis_controller;
+#[path="genesis_parked.rs"]
+mod genesis_parked;
 
 // Cleanup is a narrowing of the signed lifetime, never a fresh interval.
 const REAP_RESERVE_NS:u64=250_000_000;
 struct Watchdog(libc::timer_t);
 impl Watchdog {
+    fn arm_genesis(admission:&genesis_parked::Admission)->Result<Self,ShadowError>{
+        admission.check_startup()?;
+        let mut event:libc::sigevent=unsafe{std::mem::zeroed()};
+        event.sigev_notify=libc::SIGEV_SIGNAL;event.sigev_signo=libc::SIGKILL;
+        let mut timer=std::ptr::null_mut();
+        require(unsafe{libc::timer_create(libc::CLOCK_BOOTTIME,&mut event,&mut timer)}==0)?;
+        let owner=Self(timer);let deadline=admission.lifetime();
+        let value=libc::itimerspec{it_interval:libc::timespec{tv_sec:0,tv_nsec:0},
+            it_value:libc::timespec{tv_sec:(deadline/1_000_000_000) as _,tv_nsec:(deadline%1_000_000_000) as _}};
+        require(unsafe{libc::timer_settime(timer,libc::TIMER_ABSTIME,&value,std::ptr::null_mut())}==0)?;
+        admission.check_startup()?;Ok(owner)
+    }
     fn arm_proof_cohort(admission:&proof_cohort::inputs::Admission)->Result<Self,ShadowError> {
         admission.check_startup()?;
         let mut event:libc::sigevent=unsafe{std::mem::zeroed()};
@@ -109,7 +123,9 @@ impl Running {
         let launch=Original::native_launch().map_err(fail)?;
         let launch_bytes=launch.read(32768).map_err(fail)?.to_vec();
         let (selected,service_selection)=selection(&launch_bytes)?;
-        require(!require_genesis || matches!(&service_selection,SelectedService::PublicationGenesisCoordinator))?;
+        require(!require_genesis || matches!(&service_selection,SelectedService::PublicationGenesisCoordinator(false)))?;
+        // The successor requires a genuine precreated child and late originals.
+        require(!matches!(&service_selection,SelectedService::PublicationGenesisCoordinator(true)))?;
         let files=admit_files(&selected.delivery_configuration.path,selected.delivery_configuration.sha256,
             &selected.delivery.path,selected.delivery.sha256).map_err(fail)?;
         require(inherited.iter().filter(|fd|**fd>=6).copied().eq(6..6+files.payload.activation.len() as i32)
@@ -126,7 +142,7 @@ impl Running {
             _=>None,
         };
         let (activation,_)=take_activation(&files.payload.activation,false,false,false,false,false,false,native_lock).map_err(fail)?;
-        let genesis_coordinator=matches!(&service_selection,SelectedService::PublicationGenesisCoordinator);
+        let genesis_coordinator=matches!(&service_selection,SelectedService::PublicationGenesisCoordinator(_));
         if genesis_coordinator{
             require(files.payload.activation.len()==10
                 && files.payload.activation[9].name==super::super::super::publication_genesis_client::RESULT_PARENT_FD
@@ -135,8 +151,8 @@ impl Running {
         process::isolate_mounts()?;
         let image=image::Image::prepare(&selected.closure,&files,service_selection.closure_set_role())?;
         let (inspector,inspection)=match service_selection {
-            SelectedService::PublicationGenesisCoordinator=>{
-                let (owner,channel)=proof_client::Inspector::prepare_genesis(&files,&activation)?;
+            SelectedService::PublicationGenesisCoordinator(late)=>{
+                let (owner,channel)=proof_client::Inspector::prepare_genesis(&files,&activation,late)?;
                 (Some(Inspection::ProofClient(owner)),Some(channel))
             }
             service @ (SelectedService::LedgerRetrieval(_)|SelectedService::LedgerSpool(_)|SelectedService::Ingress(_)|SelectedService::SpoolBridge(_)

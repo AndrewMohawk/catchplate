@@ -191,6 +191,14 @@ impl Child {
         // The private lifetime channel has no message/readiness protocol.
         require(poll.revents==0)?;Ok(true)
     }
+    /// Only a caller holding an authenticated completed handoff may stop
+    /// requiring liveness. The original unreaped child still owns its PID and
+    /// is checked through our retained clone PIDFD, start time and parent.
+    pub(in crate::policy_shadow::policy_custody::services::guest::native_guest) fn check_retained_identity(&self)->Result<(),ShadowError>{
+        require(self.gate.is_none() && self.start.is_some() && now()?<self.deadline)?;
+        self.terminal(false)?;
+        require(Some(self.identity()?)==self.start)
+    }
     pub(in crate::policy_shadow::policy_custody::services::guest::native_guest) fn request_stop(&mut self)->Result<(),ShadowError> {
         require(unsafe{libc::getpid()}==self.parent)?;if self.reaped{return Ok(());}
         unsafe{libc::shutdown(self.channel.as_raw_fd(),libc::SHUT_RDWR);}
@@ -236,6 +244,9 @@ impl Child {
     }
     pub(super) fn precreate(executable:BorrowedFd<'_>,launch_target:BorrowedFd<'_>,image_target:BorrowedFd<'_>,
         startup:u64,deadline:u64)->Result<Self,ShadowError> {parked::spawn(executable,launch_target,image_target,startup,deadline)}
+    pub(super) fn precreate_genesis(executable:BorrowedFd<'_>,launch_target:BorrowedFd<'_>,image_target:BorrowedFd<'_>,
+        startup:u64,deadline:u64)->Result<Self,ShadowError>{parked::spawn_genesis(executable,launch_target,image_target,startup,deadline)}
+    pub(super) fn parked_pidfd(&self)->Result<BorrowedFd<'_>,ShadowError>{self.parked_identity()?;Ok(self.pidfd.as_fd())}
     pub(super) fn parked_identity(&self)->Result<(i32,u64),ShadowError> {
         require(self.pair_mode && self.gate.is_some() && self.check()?)?;
         Ok((self.pid,self.identity()?))

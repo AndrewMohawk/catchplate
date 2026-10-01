@@ -312,11 +312,13 @@ impl PreparedGuestServiceDelivery {
     /// local original open could reuse that number; descriptor 15 is not tested
     /// later as if a newly opened original were an inherited capability.
     pub(super) fn admit_genesis_coordinator(configuration_path:&Path,expected_configuration_sha256:Sha256Digest,
-        delivery_path:&Path,expected_delivery_sha256:Sha256Digest,inherited:&BTreeSet<i32>)->Result<Self,ServiceRunnerError>{
+        delivery_path:&Path,expected_delivery_sha256:Sha256Digest,inherited:&BTreeSet<i32>,late:bool)->Result<Self,ServiceRunnerError>{
         if !inherited.iter().filter(|fd|**fd>=6).copied().eq(6..15) || !inherited.contains(&4){
             return Err(fail("cold coordinator inherited activation differs"));
         }
-        Self::admit_selected_inner(configuration_path,expected_configuration_sha256,delivery_path,expected_delivery_sha256,None,Some(inherited))
+        let owner=Self::admit_selected_inner(configuration_path,expected_configuration_sha256,delivery_path,expected_delivery_sha256,None,Some(inherited))?;
+        let cold:super::publication_genesis_client::Configuration=decode_canonical_frame(&owner.retrieval_client_runtime()?)?;
+        cold.validate_selected(late)?;Ok(owner)
     }
     fn admit_selected_inner(configuration_path:&Path,expected_configuration_sha256:Sha256Digest,
         delivery_path:&Path,expected_delivery_sha256:Sha256Digest,native_lock:Option<NativeLock>,

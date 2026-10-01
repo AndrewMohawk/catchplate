@@ -9,6 +9,12 @@ This source slice connects an explicitly authorized adoption of that one
 literal baseline. It does not deploy a pilot or grant authority to renew an
 expired ceremony.
 
+The [cold bootstrap successor](native-pilot-genesis-bootstrap.md) uses explicit
+adoption Authorization/v2 and signature/v2, and requires coordinator Runtime/v2.
+Legacy authorization/v1 remains paired only with runtime/v1. The keyless
+validator likewise requires matching input/payload versions and emits the
+corresponding result version; it does not sign or admit a live owner.
+
 ## One authorization, exact old and current contexts
 
 The current assignment's independently selected supervisor signs an adoption

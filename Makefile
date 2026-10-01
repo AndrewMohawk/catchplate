@@ -4919,6 +4919,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/mod.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/parent.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/genesis_controller.rs \
+				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/genesis_parked.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/publication_adoption_validator.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/publication_adoption_validator_io.rs \
 				data-plane/decision-gate-rs/src/policy_custody/services/native_guest/driver_bootstrap.rs \

@@ -147,9 +147,9 @@ fn wait(fd:BorrowedFd<'_>,events:i16)->Result<(),ShadowError> {
 
 // The two fixed mount targets are empty or old protected files, never an
 // admitted configuration. Only genuine held post-create originals cover them.
-struct Target {file:File,path:&'static str,identity:(u64,u64,u32,u32,u32)}
+pub(super) struct Target {pub(super) file:File,path:&'static str,identity:(u64,u64,u32,u32,u32)}
 impl Target {
-    fn open(path:&'static str)->Result<Self,ShadowError> {
+    pub(super) fn open(path:&'static str)->Result<Self,ShadowError> {
         let mut file=File::open("/").map_err(fail)?;
         for component in path[1..].split('/') {
             let m=file.metadata().map_err(fail)?;
@@ -162,25 +162,43 @@ impl Target {
         require(m.is_file() && m.uid()==0 && m.gid()==0 && m.mode()&0o7777==0o400 && m.nlink()==1)?;
         Ok(Self{file,path,identity:(m.dev(),m.ino(),m.mode(),m.uid(),m.gid())})
     }
-    fn check(&self)->Result<(),ShadowError> {
+    pub(super) fn check(&self)->Result<(),ShadowError> {
         let m=self.file.metadata().map_err(fail)?;let current=std::fs::symlink_metadata(self.path).map_err(fail)?;
         require((m.dev(),m.ino(),m.mode(),m.uid(),m.gid())==self.identity
             && (current.dev(),current.ino(),current.mode(),current.uid(),current.gid())==self.identity)
     }
 }
-struct View<'a>{target:&'a Target,mounted:bool}
+pub(super) struct View<'a>{target:&'a Target,mounted:bool,retain_on_uncertainty:bool}
 impl<'a> View<'a> {
-    fn bind(target:&'a Target,source:&Original)->Result<Self,ShadowError> {
+    pub(super) fn bind(target:&'a Target,source:&Original)->Result<Self,ShadowError> {
+        Self::bind_selected(target,source,false)
+    }
+    pub(super) fn bind_genesis(target:&'a Target,source:&Original)->Result<Self,ShadowError>{
+        Self::bind_selected(target,source,true)
+    }
+    fn bind_selected(target:&'a Target,source:&Original,retain_on_uncertainty:bool)->Result<Self,ShadowError>{
         target.check()?;source.check().map_err(fail)?;
         let src=std::ffi::CString::new(format!("/proc/self/fd/{}",source.descriptor().as_raw_fd())).map_err(fail)?;
         let dst=std::ffi::CString::new(target.path).map_err(fail)?;
         require(unsafe{libc::mount(src.as_ptr(),dst.as_ptr(),std::ptr::null(),libc::MS_BIND,std::ptr::null())}==0)?;
-        let owner=Self{target,mounted:true};
+        let owner=Self{target,mounted:true,retain_on_uncertainty};
         require(unsafe{libc::mount(std::ptr::null(),dst.as_ptr(),std::ptr::null(),
             libc::MS_BIND|libc::MS_REMOUNT|libc::MS_RDONLY|libc::MS_NOSUID|libc::MS_NODEV|libc::MS_NOEXEC,std::ptr::null())}==0)?;
         source.check().map_err(fail)?;Ok(owner)
     }
-    fn retire(mut self)->Result<(),ShadowError> {self.unmount()?;self.target.check()}
+    pub(super) fn retire(mut self)->Result<(),ShadowError> {
+        if let Err(error)=self.unmount(){
+            if self.retain_on_uncertainty{self.retain_uncertain();}
+            return Err(error);
+        }
+        self.target.check()
+    }
+    fn retain_uncertain(&self)->!{
+        // The cold controller's actual child, image and original absolute
+        // watchdog remain on the caller's stack. Never report cleanup or
+        // drop that owner because detaching this private view was uncertain.
+        loop{unsafe{libc::pause();}}
+    }
     fn unmount(&mut self)->Result<(),ShadowError> {
         if self.mounted {
             let dst=std::ffi::CString::new(self.target.path).map_err(fail)?;
@@ -191,7 +209,10 @@ impl<'a> View<'a> {
         }Ok(())
     }
 }
-impl Drop for View<'_>{fn drop(&mut self){if self.unmount().is_err(){unsafe{libc::_exit(1);}}}}
+impl Drop for View<'_>{fn drop(&mut self){if self.unmount().is_err(){
+    if self.retain_on_uncertainty{self.retain_uncertain();}
+    unsafe{libc::_exit(1);}
+}}}
 
 #[derive(Serialize)]
 #[serde(rename_all="camelCase")]

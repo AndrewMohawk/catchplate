@@ -119,9 +119,9 @@ impl Inspector {
         Self::prepare_inner(files,activation,commitment,spool,terminal,effects,publication,true)
     }
     pub(in crate::policy_shadow::policy_custody::services) fn prepare_genesis(files:&FileAdmission,
-        activation:&BTreeMap<String,OwnedFd>)->Result<(Self,OwnedFd),ShadowError>{
+        activation:&BTreeMap<String,OwnedFd>,late:bool)->Result<(Self,OwnedFd),ShadowError>{
         let selected=Selection::genesis(&files.retrieval_client_runtime().map_err(fail)?)?;
-        let genesis=super::super::genesis_client::Inspector::prepare(files,activation)?;
+        let genesis=super::super::genesis_client::Inspector::prepare(files,activation,late)?;
         Self::prepare_transport(files,activation,selected,false,Some(genesis))
     }
     fn prepare_inner(files:&FileAdmission,activation:&BTreeMap<String,OwnedFd>,commitment:bool,spool:bool,terminal:bool,effects:bool,publication:bool,native_facade:bool)

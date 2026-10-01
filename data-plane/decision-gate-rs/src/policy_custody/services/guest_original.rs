@@ -45,6 +45,12 @@ impl Original {
     pub(super) fn native_launch() -> Result<Self, Error> {
         Self::fixed_native("native-shadow-guest-launch.json",32768)
     }
+    pub(super) fn publication_genesis_parent() -> Result<Self,Error> {
+        Self::fixed_native("native-publication-genesis-parent.json",32768)
+    }
+    pub(super) fn publication_genesis_precreation() -> Result<Self,Error> {
+        Self::fixed_native("native-publication-genesis-precreation.json",32768)
+    }
     pub(super) fn driver_bootstrap_configuration() -> Result<Self, Error> {
         Self::fixed_native("native-shadow-driver-bootstrap.json",65536)
     }

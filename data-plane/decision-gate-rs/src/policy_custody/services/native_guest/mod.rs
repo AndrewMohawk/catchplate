@@ -101,7 +101,7 @@ enum SelectedService {None,Retrieval(Pin),LedgerRetrieval(Pin),RetrievalBridge,A
     DispatchSpool(Pin),ActiveEffectBarrier(Pin),ActiveEffectCommit(Pin),EffectRetrieval(Pin),ActiveEffectBridge(Pin),InitialHistoryBridge(Pin,bool,bool),
     Publication(Pin),PublicationRetrieval(Pin),PublicationBridge(Pin,bool),
     AdoptedPublication(Pin),AdoptedPublicationRetrieval(Pin),AdoptedPersistence(Pin),
-    PublicationGenesis(Pin),PublicationGenesisRetrieval(Pin),PublicationGenesisCoordinator}
+    PublicationGenesis(Pin),PublicationGenesisRetrieval(Pin),PublicationGenesisCoordinator(bool)}
 impl SelectedService {
     fn endpoint_runtime_role(&self)->Option<&'static str>{
         if matches!(self,Self::Publication(_)|Self::AdoptedPublication(_)){return Some("publicationReconciliation");}
@@ -132,7 +132,7 @@ impl SelectedService {
             Self::EffectRetrieval(_)|Self::PublicationRetrieval(_)|Self::AdoptedPublicationRetrieval(_)=>Some(Role::Retrieval),
             Self::PublicationGenesisRetrieval(_)=>Some(Role::PublicationGenesisRetrieval),
             Self::PublicationGenesis(_)=>Some(Role::PublicationGenesis),
-            Self::PublicationGenesisCoordinator=>Some(Role::PublicationGenesisCoordinator),
+            Self::PublicationGenesisCoordinator(_)=>Some(Role::PublicationGenesisCoordinator),
             Self::AdoptedPublication(_)=>Some(Role::PublicationReconciliation),
             Self::PersistenceLocked(_)|Self::AdoptedPersistence(_)=>Some(Role::Persistence),
             Self::TrustedTime(_)=>Some(Role::TrustedTime),
@@ -172,7 +172,8 @@ fn selection(raw:&[u8])->Result<(Launch,SelectedService),ShadowError> {
         Selection::RetrievalBridge(value)=>{
             let service=match value.api_version.as_str(){
                 "serverware.nativeShadowRetrievalBridgeLaunch/v1"=>SelectedService::RetrievalBridge,
-                "serverware.nativeShadowPublicationGenesisCoordinatorGuestLaunch/v1"=>SelectedService::PublicationGenesisCoordinator,
+                "serverware.nativeShadowPublicationGenesisCoordinatorGuestLaunch/v1"=>SelectedService::PublicationGenesisCoordinator(false),
+                "serverware.nativeShadowPublicationGenesisCoordinatorGuestLaunch/v2"=>SelectedService::PublicationGenesisCoordinator(true),
                 _=>return Err(ShadowError::BindingDrift),
             };
             (value.key_admission,service)
@@ -258,7 +259,7 @@ pub(in crate::policy_shadow::policy_custody::services) struct AdmittedGuest {
     ledger_retrieval:Option<admission::ledger_retrieval::Service>,
     spool_signer:Option<admission::spool_endpoint::Service>,
     publication:Option<admission::publication::Service>,
-    genesis_client:Option<genesis_client::Prepared>,genesis_coordinator:bool,
+    genesis_client:Option<genesis_client::Prepared>,genesis_coordinator:bool,genesis_late_runtime:bool,
     activation:Option<admission::activation::Service>,
     persistence:Option<admission::persistence::Service>,
     retrieval_client:Option<retrieval_client::Prepared>,bridge_selected:bool,
@@ -302,7 +303,8 @@ impl AdmittedGuest {
         let spool_bridge=matches!(&service_selection,SelectedService::SpoolBridge(_)|SelectedService::TerminalBridge(_)|SelectedService::ActiveEffectBridge(_)|SelectedService::InitialHistoryBridge(..)|SelectedService::PublicationBridge(..));
         let publication_bridge=matches!(&service_selection,SelectedService::PublicationBridge(..));
         let publication_adoption_bridge=matches!(&service_selection,SelectedService::PublicationBridge(_,true));
-        let genesis_coordinator=matches!(&service_selection,SelectedService::PublicationGenesisCoordinator);
+        let genesis_coordinator=matches!(&service_selection,SelectedService::PublicationGenesisCoordinator(_));
+        let genesis_late_runtime=matches!(&service_selection,SelectedService::PublicationGenesisCoordinator(true));
         require(inspection.is_some()==matches!(&service_selection,SelectedService::Retrieval(_)|SelectedService::LedgerRetrieval(_)|SelectedService::RetrievalBridge
             |SelectedService::Persistence(_)|SelectedService::PersistenceLocked(_)|SelectedService::TrustedTime(_)|SelectedService::ProofBridge(_)
             |SelectedService::Generation(_)|SelectedService::CommitRequest(_)|SelectedService::CommitmentBridge(_)
@@ -311,7 +313,7 @@ impl AdmittedGuest {
             |SelectedService::DispatchSpool(_)|SelectedService::ActiveEffectBarrier(_)|SelectedService::ActiveEffectCommit(_)|SelectedService::EffectRetrieval(_)|SelectedService::ActiveEffectBridge(_)|SelectedService::InitialHistoryBridge(..)
             |SelectedService::Publication(_)|SelectedService::PublicationRetrieval(_)|SelectedService::PublicationBridge(..)
             |SelectedService::AdoptedPublication(_)|SelectedService::AdoptedPublicationRetrieval(_)|SelectedService::AdoptedPersistence(_)
-            |SelectedService::PublicationGenesis(_)|SelectedService::PublicationGenesisRetrieval(_)|SelectedService::PublicationGenesisCoordinator))?;
+            |SelectedService::PublicationGenesis(_)|SelectedService::PublicationGenesisRetrieval(_)|SelectedService::PublicationGenesisCoordinator(_)))?;
         let native_lock=match &service_selection {
             SelectedService::PersistenceLocked(_)|SelectedService::AdoptedPersistence(_)=>Some(super::NativeLock::Persistence),
             SelectedService::AdoptedPublicationRetrieval(_)=>Some(super::NativeLock::AdoptedLedger),
@@ -320,7 +322,7 @@ impl AdmittedGuest {
         };
         let mut delivery=if genesis_coordinator{
             PreparedGuestServiceDelivery::admit_genesis_coordinator(&selected.delivery_configuration.path,selected.delivery_configuration.sha256,
-                &selected.delivery.path,selected.delivery.sha256,&inherited)
+                &selected.delivery.path,selected.delivery.sha256,&inherited,genesis_late_runtime)
         }else{PreparedGuestServiceDelivery::admit_selected(&selected.delivery_configuration.path,selected.delivery_configuration.sha256,
             &selected.delivery.path,selected.delivery.sha256,native_lock)}.map_err(fail)?;
         require(inherited.iter().filter(|fd|**fd>=6).copied().eq(6..6+delivery.activation.len() as i32))?;
@@ -329,7 +331,7 @@ impl AdmittedGuest {
             service_selection.check_endpoint_runtime(&delivery.retrieval_client_runtime().map_err(fail)?)?;
         }
         let (genesis_client,service_selection,inspection)=match (service_selection,inspection){
-            (SelectedService::PublicationGenesisCoordinator,Some(channel))=>(Some(genesis_client::Prepared::open(&mut delivery,channel)?),SelectedService::None,None),
+            (SelectedService::PublicationGenesisCoordinator(late),Some(channel))=>(Some(genesis_client::Prepared::open(&mut delivery,channel,late)?),SelectedService::None,None),
             (service,channel)=>(None,service,channel),
         };
         let (spool_signer,service_selection,inspection)=match (service_selection,inspection){
@@ -412,7 +414,9 @@ impl AdmittedGuest {
         };
         let closure_original=selected.closure.open(1024*1024)?;
         let closure_configuration:ClosureConfiguration=exact(&closure_original.read(1024*1024).map_err(fail)?)?;
-        let prekey=PrekeyExecutable::open(&closure_configuration,&delivery,closure_set_role)?;
+        if genesis_coordinator{closure_configuration.require_genesis_selection(genesis_late_runtime)?;}
+        let prekey=if genesis_late_runtime{PrekeyExecutable::open_genesis(&closure_configuration,&delivery)?}
+            else{PrekeyExecutable::open(&closure_configuration,&delivery,closure_set_role)?};
         let (trust,time)=authority::Trust::open(selected.trust.open(1024*1024)?,selected.time_bootstrap.open(65536)?,&delivery,&prekey)?;
         let assignment_original=selected.assignment.open(4*1024*1024)?;
         let assignment=trust.verify_assignment(&assignment_original.read(4*1024*1024).map_err(fail)?)?;
@@ -425,7 +429,8 @@ impl AdmittedGuest {
         let admission_original=selected.admission.open(65536)?;
         let admission_configuration:admission::Authorization=exact(&admission_original.read(65536).map_err(fail)?)?;
         process::isolate_mounts()?;
-        let closure=PreparedNativeCustodyClosure::open(closure_configuration,&assignment,&trust,time.as_ref(),&delivery,closure_set_role)?;
+        let closure=if genesis_late_runtime{PreparedNativeCustodyClosure::open_genesis(closure_configuration,&assignment,&trust,time.as_ref(),&delivery)?}
+            else{PreparedNativeCustodyClosure::open(closure_configuration,&assignment,&trust,time.as_ref(),&delivery,closure_set_role)?};
         closure.require_prekey(&prekey)?;drop(prekey);
         keys_configuration.bind_prepared_closure(&closure)?;
         let mut keys=PreparedNativeCustodyKeys::open_encrypted(keys_configuration,encrypted_configuration,&assignment,&trust,time.as_ref(),&delivery)?;
@@ -458,7 +463,7 @@ impl AdmittedGuest {
             originals:vec![assignment_original,closure_original,keys_original,encrypted_original,admission_original],
             retrieval,activation,persistence,retrieval_client,bridge_selected,bridge_activation,trusted_time,proof_client,time_grant,proof_bridge,generation,
             commit_request,commitment_bridge,spool_bridge,publication_bridge,publication_adoption_bridge,ledger_retrieval,spool_signer,publication,
-            genesis_client,genesis_coordinator,native_configuration:None};
+            genesis_client,genesis_coordinator,genesis_late_runtime,native_configuration:None};
         owner.check()?;
         if owner.proof_bridge {
             owner.time_grant.as_ref().ok_or(ShadowError::BindingDrift)?.check(&owner.keys,
@@ -523,6 +528,7 @@ impl AdmittedGuest {
     pub(in crate::policy_shadow::policy_custody::services) fn publication_bridge_selected(&self)->bool {self.publication_bridge}
     pub(in crate::policy_shadow::policy_custody::services) fn publication_adoption_bridge_selected(&self)->bool {self.publication_adoption_bridge}
     pub(in crate::policy_shadow::policy_custody::services) fn genesis_coordinator_selected(&self)->bool {self.genesis_coordinator}
+    pub(in crate::policy_shadow::policy_custody::services) fn genesis_late_runtime_selected(&self)->bool {self.genesis_late_runtime}
     pub(in crate::policy_shadow::policy_custody::services) fn guest_binding(&self)->GuestClosureBinding {self.keys.guest_binding()}
     pub(in crate::policy_shadow::policy_custody::services) fn delivery(&self)->&Arc<super::Delivery> {
         &self._delivery.owner

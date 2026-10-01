@@ -1,4 +1,5 @@
-//! Fixed no-argument cold commissioning controller; public Bundle bytes only.
+//! Purpose-fixed cold controller: legacy no-args or explicit parked successor.
+//! Stdout is the literal public Bundle only, never an installation result.
 #[cfg(target_os="linux")]
 #[path="../policy_shadow.rs"]
 mod policy_shadow;

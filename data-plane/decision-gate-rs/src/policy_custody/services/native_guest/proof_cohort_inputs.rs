@@ -277,7 +277,11 @@ pub(in crate::policy_shadow::policy_custody::services::guest::native_guest::pare
 impl Executable {
     pub(in crate::policy_shadow::policy_custody::services::guest::native_guest::parent) fn create(admission:&Admission)->Result<Self,ShadowError> {
         admission.check_startup()?;
-        let source=Original::open(std::path::Path::new(SOURCE),0,0,MAX_EXECUTABLE,admission.executable_sha256().clone()).map_err(fail)?;
+        let owner=Self::create_pinned(admission.executable_sha256())?;
+        admission.check_startup()?;Ok(owner)
+    }
+    pub(in crate::policy_shadow::policy_custody::services::guest::native_guest::parent) fn create_pinned(sha256:&Sha256Digest)->Result<Self,ShadowError> {
+        let source=Original::open(std::path::Path::new(SOURCE),0,0,MAX_EXECUTABLE,sha256.clone()).map_err(fail)?;
         let bytes=source.read(MAX_EXECUTABLE).map_err(fail)?;
         serverware_decision_gate::native_shadow_workers::validate_static_amd64_elf_verifier(&bytes).map_err(fail)?;
         let raw=unsafe{libc::syscall(libc::SYS_memfd_create,c"native-shadow-proof-cohort-executable".as_ptr(),
@@ -288,8 +292,8 @@ impl Executable {
             && unsafe{libc::fcntl(file.as_raw_fd(),libc::F_ADD_SEALS,SEALS)}==0)?;
         let stat=file.metadata().map_err(fail)?;let mut copied=vec![0;bytes.len()];
         file.read_exact_at(&mut copied,0).map_err(fail)?;require(copied.as_slice()==bytes.as_slice())?;
-        let owner=Self{source,file,identity:(stat.dev(),stat.ino(),stat.len()),sha256:admission.executable_sha256().clone()};
-        owner.check()?;admission.check_startup()?;Ok(owner)
+        let owner=Self{source,file,identity:(stat.dev(),stat.ino(),stat.len()),sha256:sha256.clone()};
+        owner.check()?;Ok(owner)
     }
     pub(in crate::policy_shadow::policy_custody::services::guest::native_guest::parent) fn check(&self)->Result<(),ShadowError> {
         self.source.check().map_err(fail)?;let s=self.file.metadata().map_err(fail)?;

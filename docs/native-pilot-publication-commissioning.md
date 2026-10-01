@@ -5,6 +5,11 @@ isolated packaged command, exposes the actual retained cold-result controller,
 and reuses native cold-chain verification before an adoption can be signed.
 These tools are not a provisioned pilot or the complete commissioning graph.
 
+The [explicit cold bootstrap successor](native-pilot-genesis-bootstrap.md)
+separates the measured image from the complete late runtime and introduces a
+real parked coordinator owner. Its integration and verification are tracked
+separately from the original checks below.
+
 ## Explicit profiles, unchanged assignment wire
 
 The preparation command accepts the existing preparation/v1 input for exactly
@@ -89,7 +94,7 @@ an artifact build, protected installation or actual ceremony execution.
 
 ## Remaining integration
 
-**First resolve the cold runtime dependency cycle.** Source review after this
+**The old cold profile has a runtime dependency cycle.** Source review after this
 checkpoint found that the immutable cold v1 coordinator profile cannot be
 issued coherently. `Configuration.scope` directly contains the assignment
 payload hash, while the signed assignment commits the three-member set whose
@@ -104,11 +109,13 @@ Embedding ordinary grants in the runtime adds the same dependency again.
 Static fixture/schema/compile success does not resolve this cycle. There is
 no valid producer ordering for the existing profile without a hash fixed point.
 
-The next implementation must explicitly separate the measured static bootstrap
-from later independently authorized runtime input, while retaining the exact
-late runtime, assignment, owner and original-window checks. Do not omit hashes,
-use placeholder originals or silently reinterpret the old profile. This is an
-internal source-design blocker; provisioning external services cannot fix it.
+The [explicit successor](native-pilot-genesis-bootstrap.md) separates the measured
+static bootstrap from later independently authorized runtime input, while
+retaining exact late runtime, assignment, owner and original-window checks.
+It also addresses the actual-child-PID dependency in the ordinary histories by
+parking that real child before accepting late originals. Neither the original
+compiler result nor external provisioning proves the successor ceremony works;
+its source integration and connected runtime acceptance must be checked separately.
 
 Complete cold grants/closures and provisioning, the expanded commissioning
 graph, validator-to-signer handoff, operational grant composition and retained

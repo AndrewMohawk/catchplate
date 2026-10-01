@@ -104,6 +104,14 @@ impl Prepared {
 }
 pub(super) fn spawn(executable:BorrowedFd<'_>,launch_target:BorrowedFd<'_>,image_target:BorrowedFd<'_>,
     startup:u64,deadline:u64)->Result<Child,ShadowError> {
+    spawn_selected(executable,launch_target,image_target,startup,deadline,false)
+}
+pub(super) fn spawn_genesis(executable:BorrowedFd<'_>,launch_target:BorrowedFd<'_>,image_target:BorrowedFd<'_>,
+    startup:u64,deadline:u64)->Result<Child,ShadowError>{
+    spawn_selected(executable,launch_target,image_target,startup,deadline,true)
+}
+fn spawn_selected(executable:BorrowedFd<'_>,launch_target:BorrowedFd<'_>,image_target:BorrowedFd<'_>,
+    startup:u64,deadline:u64,genesis:bool)->Result<Child,ShadowError>{
     require(cfg!(target_arch="x86_64") && now()?<startup && startup<=deadline)?;
     let mut disposition:libc::sigaction=unsafe{zeroed()};
     require(unsafe{libc::sigaction(libc::SIGCHLD,std::ptr::null(),&mut disposition)}==0
@@ -133,8 +141,10 @@ pub(super) fn spawn(executable:BorrowedFd<'_>,launch_target:BorrowedFd<'_>,image
     require(pid>0 && pidfd>=0)?;
     let mut child=Child{channel,pidfd:unsafe{OwnedFd::from_raw_fd(pidfd)},gate:Some(gate),pid:pid as i32,
         parent,start:None,deadline,reaped:false,pair_mode:true};
+    let admitted=(||{
     child.start=Some(child.identity()?);
     loop {
+        if genesis{super::super::genesis_controller::check_interruption()?;}
         require(now()?<startup && child.check()?)?;
         if let Some(packet)=retrieval_peer::receive(child.gate.as_ref().ok_or(ShadowError::BindingDrift)?.as_fd(),1,0)? {
             child.require_inspection_sender(&packet,0,0)?;
@@ -147,6 +157,16 @@ pub(super) fn spawn(executable:BorrowedFd<'_>,launch_target:BorrowedFd<'_>,image
         }
         let result=unsafe{libc::poll(std::ptr::null_mut(),0,1)};
         require(result==0 || (result<0 && std::io::Error::last_os_error().raw_os_error()==Some(libc::EINTR)))?;
+    }
+    Ok(())})();
+    if let Err(error)=admitted {
+        if genesis && child.stop_and_reap().is_err(){
+            // The caller's original absolute watchdog and held image remain
+            // alive on its stack. No retry or numeric-PID fallback is allowed.
+            let _retained=std::mem::ManuallyDrop::new(child);
+            loop{unsafe{libc::pause();}}
+        }
+        return Err(error);
     }
     Ok(child)
 }

@@ -82,9 +82,9 @@ struct ResultOwner {socket:OwnedFd,identity:(u64,u64),configuration:Configuratio
     acknowledged:bool,post_ack_inspected:bool,released:bool}
 pub(super) struct Inspector {targets:Vec<Target>,runtime:Sha256Digest,pending:Option<Pending>,result:ResultOwner}
 impl Inspector {
-    pub(super) fn prepare(files:&super::super::FileAdmission,activation:&BTreeMap<String,OwnedFd>)->Result<Self,ShadowError>{
+    pub(super) fn prepare(files:&super::super::FileAdmission,activation:&BTreeMap<String,OwnedFd>,late:bool)->Result<Self,ShadowError>{
         files.check_preparation().map_err(fail)?;
-        let raw=files.retrieval_client_runtime().map_err(fail)?;let config:Configuration=exact(&raw)?;config.validate().map_err(fail)?;
+        let raw=files.retrieval_client_runtime().map_err(fail)?;let config:Configuration=exact(&raw)?;config.validate_selected(late).map_err(fail)?;
         config.scope.live(now()?).map_err(fail)?;
         require(config.scope.expires_at_boottime_nanos<=files.lifetime())?;
         let mut targets=Vec::new();
@@ -220,7 +220,14 @@ impl Inspector {
         target.peer.as_ref().ok_or(ShadowError::BindingDrift)?.revalidate_packet_pidfd(
             packet::peer_pidfd(pending.original.rights[0].as_fd())?.as_fd()).map_err(fail)?;
         if packet::send(channel,&pending.raw,&[])?{
-            child.require_inspection_sender(&pending.original,files.payload.uid,files.payload.gid)?;
+            if pending.releases_result {
+                // This exact sender was checked live immediately before the
+                // final reply. Receiving it permits the genuine child to
+                // exit; retain its original unreaped identity, not liveness.
+                child.check_retained_identity()?;
+            } else {
+                child.require_inspection_sender(&pending.original,files.payload.uid,files.payload.gid)?;
+            }
             self.check(files)?;require(now()?<pending.deadline && now()?<self.deadline())?;
             if pending.releases_result{self.result.post_ack_inspected=true;}
             self.pending=None;
@@ -322,19 +329,19 @@ impl ResultChannel {
         require(now()?<deadline)?;Ok(Some(original.bytes))
     }
 }
-pub(super) struct Prepared {configuration:Configuration,channel:OwnedFd,activation:BTreeMap<String,OwnedFd>}
+pub(super) struct Prepared {configuration:Configuration,channel:OwnedFd,activation:BTreeMap<String,OwnedFd>,late:bool}
 impl Prepared {
-    pub(super) fn open(delivery:&mut PreparedGuestServiceDelivery,channel:OwnedFd)->Result<Self,ShadowError>{
+    pub(super) fn open(delivery:&mut PreparedGuestServiceDelivery,channel:OwnedFd,late:bool)->Result<Self,ShadowError>{
         let raw=delivery.retrieval_client_runtime().map_err(fail)?;let configuration:Configuration=exact(&raw)?;
-        configuration.validate().map_err(fail)?;
+        configuration.validate_selected(late).map_err(fail)?;
         configuration.scope.live(now()?).map_err(fail)?;
         require(delivery.activation.len()==9 && Sha256Digest::compute(&raw)==delivery.owner.payload.runtime_config.sha256)?;
         packet::configure(channel.as_fd())?;
-        Ok(Self{configuration,channel,activation:std::mem::take(&mut delivery.activation)})
+        Ok(Self{configuration,channel,activation:std::mem::take(&mut delivery.activation),late})
     }
     pub(super) fn run(mut self,owner:Arc<AdmittedGuest>)->Result<(),ShadowError>{
         owner.check()?;owner.delivery().check_startup().map_err(fail)?;
-        require(owner.genesis_coordinator_selected()
+        require(owner.genesis_coordinator_selected() && owner.genesis_late_runtime_selected()==self.late
             && Sha256Digest::compute(&canonical_json_bytes(&self.configuration)?)==owner.delivery().payload.runtime_config.sha256)?;
         let channel=Channel::bind(self.channel,&owner)?;
         let deadline=self.configuration.scope.expires_at_boottime_nanos.min(owner.delivery().lifetime);

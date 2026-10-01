@@ -75,7 +75,8 @@ class _Directory:
 
     def _open(self, path, pin):
         self._origin(); self._outer()
-        p.require(path in (profile.STATE_DIRECTORY, profile.DECISION_DIRECTORY))
+        from serverware import native_pilot_startup_profile as startup
+        p.require(path in (profile.STATE_DIRECTORY, profile.DECISION_DIRECTORY, startup.DIRECTORY))
         if pin is not None: profile._directory(pin)
         self._open_proc()
         self._path = path
@@ -247,6 +248,59 @@ class AtomicPublisher(_Directory):
                 profile.MAX_EVIDENCE if suffix == "evidence" else profile.MAX_REQUEST if suffix == "request"
                 else profile.intake.MAX_INPUT) for job in profile.JOB_NAMES
                 for suffix, file in profile.delivery.filenames(job).items()}
+            p.require(name in limits)
+            self._publish(name, raw, limits[name])
+        except BaseException as error:
+            self._failed = True
+            raise StateStoreError(self) from error
+
+
+class StartupAtomicPublisher(_Directory):
+    """Only the eight fixed startup public names; no admission is authored."""
+    @classmethod
+    def open(cls, *, directory, check):
+        from serverware import native_pilot_startup_profile as startup
+        p.require(cls is StartupAtomicPublisher)
+        owner = cls(_TOKEN, check)
+        try:
+            owner._open(startup.DIRECTORY, directory)
+            owner.names()
+            return owner
+        except BaseException as error:
+            owner._failed = True
+            raise StateStoreError(owner) from error
+
+    @staticmethod
+    def _limits():
+        from serverware import native_pilot_startup_profile as startup
+        return {startup.OBSERVATION_NAME: startup.MAX_OBSERVATION,
+            startup.ADMISSION_NAME: startup.MAX_ADMISSION,
+            **{startup.SOURCE_FILENAMES[name]: maximum for name, maximum in startup.SOURCE_LIMITS.items()}}
+
+    def names(self):
+        self.check()
+        names, limits = set(), self._limits()
+        with os.scandir(self.fd) as entries:
+            for entry in entries:
+                p.require(len(names) < len(limits) and entry.name in limits)
+                names.add(entry.name)
+        self.check()
+        return names
+
+    def preflight_inputs(self):
+        from serverware import native_pilot_startup_profile as startup
+        self.names()
+        for name in (*startup.SOURCE_FILENAMES.values(), startup.ADMISSION_NAME): self._absent(name)
+        self.check()
+
+    def observation_original(self):
+        from serverware import native_pilot_startup_profile as startup
+        p.require(startup.OBSERVATION_NAME not in self._files)
+        return self._read(startup.OBSERVATION_NAME, startup.MAX_OBSERVATION)
+
+    def publish(self, name, raw):
+        try:
+            limits = self._limits()
             p.require(name in limits)
             self._publish(name, raw, limits[name])
         except BaseException as error:

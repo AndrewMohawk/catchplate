@@ -1796,6 +1796,12 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	scripts/test_native_pilot_startup_child.py \
 	scripts/test_native_pilot_startup_profile.py \
 	scripts/test_native_pilot_startup_entrypoint.py \
+	serverware/native_pilot_startup_provisioning.py \
+	serverware/native_pilot_startup_provisioning_profile.py \
+	scripts/run_native_pilot_startup_provisioning.py \
+	scripts/test_native_pilot_startup_provisioning.py \
+	scripts/test_native_pilot_startup_provisioning_profile.py \
+	scripts/test_native_pilot_startup_provisioning_entrypoint.py \
 	serverware/native_pilot_current_head_decision_service.py \
 	serverware/native_pilot_current_head_decision_service_profile.py \
 	scripts/run_native_pilot_current_head_decisions.py \
@@ -4816,6 +4822,12 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				scripts/test_native_pilot_startup_child.py \
 				scripts/test_native_pilot_startup_profile.py \
 				scripts/test_native_pilot_startup_entrypoint.py \
+				serverware/native_pilot_startup_provisioning.py \
+				serverware/native_pilot_startup_provisioning_profile.py \
+				scripts/run_native_pilot_startup_provisioning.py \
+				scripts/test_native_pilot_startup_provisioning.py \
+				scripts/test_native_pilot_startup_provisioning_profile.py \
+				scripts/test_native_pilot_startup_provisioning_entrypoint.py \
 				serverware/native_pilot_current_head_decision_service.py \
 				serverware/native_pilot_current_head_decision_service_profile.py \
 				scripts/run_native_pilot_current_head_decisions.py \

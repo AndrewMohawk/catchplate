@@ -359,6 +359,7 @@ RUN --network=none set -eu; \
     install -m 0444 /source/scripts/run_native_pilot_current_head_worker.py /supervisor-runtime-root/supervisor/app/scripts/run_native_pilot_current_head_worker.py; \
     install -m 0444 /source/scripts/run_native_pilot_startup.py /supervisor-runtime-root/supervisor/app/scripts/run_native_pilot_startup.py; \
     install -m 0444 /source/scripts/run_native_pilot_startup_child.py /supervisor-runtime-root/supervisor/app/scripts/run_native_pilot_startup_child.py; \
+    install -m 0444 /source/scripts/run_native_pilot_startup_provisioning.py /supervisor-runtime-root/supervisor/app/scripts/run_native_pilot_startup_provisioning.py; \
     test -z "$(find /supervisor-runtime-root -type l -print -quit)"; \
     find /supervisor-runtime-root -type d -exec chmod 0555 {} +; \
     find /supervisor-runtime-root -type f -exec chmod 0444 {} +; \

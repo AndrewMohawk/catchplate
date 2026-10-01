@@ -34,6 +34,10 @@ STARTUP_CHILD_CLI = "/supervisor/app/scripts/run_native_pilot_startup_child.py"
 STARTUP_CHILD_MODE = "commissioning-startup-child"
 STARTUP_INPUTS = ("configuration", "supervisor-inventory")
 STARTUP_ROLES = ("lifecycle", "provider", "decisions")
+PROVISIONING_CLI = "/supervisor/app/scripts/run_native_pilot_startup_provisioning.py"
+PROVISIONING_MODE = "startup-provisioning"
+PROVISIONING_INPUTS = ("supervisor-inventory", "delegation", "configuration", "recipe",
+    "conductor-inventory", "authority-inventory")
 PYTHON = "/runtime/python/bin/python3"
 IMPORT_ROOTS = ("/supervisor/app", "/authority/app", "/vendor", "/app")
 INPUTS = ("supervisor-inventory", "policy", "recipe", "conductor-inventory", "authority-inventory")
@@ -141,6 +145,8 @@ def valid_arguments(arguments):
         return _public_peer_arguments(arguments, HEAD_WORKER_INPUTS, ())
     if arguments[0] == HEAD_UPDATE_MODE:
         return _public_peer_arguments(arguments, HEAD_UPDATE_INPUTS, ())
+    if arguments[0] == PROVISIONING_MODE:
+        return _public_peer_arguments(arguments, PROVISIONING_INPUTS, ())
     adopted = arguments[0] == "--run-adopted-native-pilot"
     inputs = INPUTS + (("intake-configuration",) if adopted else ())
     keys_offset = 1 + 4 * len(inputs) + 8
@@ -205,7 +211,7 @@ def main():
     selected_cli = {LIFECYCLE_MODE: LIFECYCLE_CLI, PROVIDER_MODE: PROVIDER_CLI,
         DECISION_MODE: DECISION_CLI, STARTUP_MODE: STARTUP_CLI,
         HEAD_WORKER_MODE: HEAD_WORKER_CLI, HEAD_UPDATE_MODE: HEAD_WORKER_CLI,
-        STARTUP_CHILD_MODE: STARTUP_CHILD_CLI}.get(sys.argv[1], CLI)
+        STARTUP_CHILD_MODE: STARTUP_CHILD_CLI, PROVISIONING_MODE: PROVISIONING_CLI}.get(sys.argv[1], CLI)
     runpy.run_path(selected_cli, run_name="__main__")
 
 

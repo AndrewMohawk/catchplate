@@ -26,6 +26,7 @@ from serverware import native_pilot_startup_profile as profile
 from serverware import native_shadow_nitro_originals as originals
 from serverware import native_shadow_proof_cohort_control as mechanics
 from serverware.native_pilot_coordinator_process import _Runtime
+from serverware.native_pilot_current_head_state import StartupAtomicPublisher, StateStoreError
 from serverware.native_pilot_lifecycle import _Protected
 from serverware.native_pilot_startup_child import _Control, _ControlError
 
@@ -112,6 +113,7 @@ class Startup:
         self._roots, self._files, self._children = {}, {}, {}
         self._configuration = self._inventory = self._prepared = self._accepted = None
         self._listener = self._listener_identity = self._observation = None
+        self._atomic = None
         self._hello, self._ready, self._results = {}, {}, {}
         self._allowed, self._input_fds = set(), set()
         self._started = self._admission_attempted = self._admitted = self._completed = False
@@ -205,6 +207,9 @@ class Startup:
         self._origin()
         for source in self._sources: (source.check if full else source.check_identity)()
         self._runtime.check()
+        # Publication checks cannot prevent terminal observation of children
+        # during cleanup; its actual partial owner is closed only afterwards.
+        if self._atomic is not None and not self._closing: self._atomic._retained()
         for path, (row, identity) in self._roots.items():
             parent, name = path.rsplit("/", 1)
             info = os.fstat(row[0]); publication._protected(info)
@@ -360,21 +365,19 @@ class Startup:
 
     def _publish(self, name, raw):
         self.check(); p.require(name not in self._allowed and type(raw) is bytes and len(raw) <= profile.MAX_OBSERVATION)
-        directory = self._roots[profile.DIRECTORY][0][0]
+        p.require(name == profile.OBSERVATION_NAME and self._atomic is None)
         with io.owning():
-            fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW, 0o400, dir_fd=directory)
-            row = self._handle(fd); self._allowed.add(name)
-        os.fchmod(fd, 0o400)
-        offset = 0
-        while offset < len(raw):
-            self.check()
-            count = os.write(fd, raw[offset:offset + 65536]); p.require(count > 0)
-            offset += count
-        os.fsync(fd); written = originals._identity(os.fstat(fd))
-        self._drop(row)
+            try:
+                self._atomic = StartupAtomicPublisher.open(directory=self._prepared["value"]["directory"], check=self.check)
+            except StateStoreError as error:
+                p.require(type(error.owner) is StartupAtomicPublisher)
+                self._atomic = error.owner
+                raise
+        self._allowed.add(name)
+        self._atomic.publish(name, raw)
         opened = self._read(name, len(raw))
-        p.require(opened[2] == written and opened[3] == raw)
-        os.fsync(directory); self.check()
+        p.require(opened[3] == raw)
+        self.check()
 
     def wait_admission(self, *, cold_authority_key_fds, adopted_authority_key_fds):
         try:
@@ -507,6 +510,7 @@ class Startup:
                 # Only each existing CLI's exact cleanup result can pass.
                 self._collect(cancel=True, cleanup_deadline=cleanup_deadline)
             with io.owning():
+                if self._atomic is not None: self._atomic.close()
                 for row in self._children.values():
                     if row["control"] is not None: row["control"].close()
                     if row["child"] is not None:

@@ -11,26 +11,39 @@ performed when this source was authored.
 
 ## Current engineering assembly
 
-The `.414` [connected lifecycle](native-pilot-lifecycle.md) refreshes all three
-Python runtime exports from exact source `90e10cbb`:
+The `.415` [fixed lifecycle caller](native-pilot-lifecycle.md#fixed-executable-caller-415)
+refreshes **only the supervisor** from exact source
+`508ea68e8c7b500c4eae818e1260c1fcabe7e2e6`. Its 95 focused checks pass in
+3.399 seconds, alongside twelve-file syntax/both Make inventories and five
+actual imports; no errors, skips or corrective reruns occurred.
 
-| Runtime | Materialized entries | Exact source files | Build / source observation |
-| --- | ---: | ---: | --- |
-| Conductor | 6,206 | 1,373 | Passed |
-| Authority | 6,216 | 1,379 | Passed |
-| Supervisor | 6,225 | 1,385 | Passed |
+| Runtime | Frozen source | Materialized entries | Exact source files | Build / source observation |
+| --- | --- | ---: | ---: | --- |
+| Supervisor | `508ea68e` | 6,227 | 1,387 | Passed |
+| Conductor, historical | `90e10cbb` | 6,206 | 1,373 | Passed at that snapshot |
+| Authority, historical | `90e10cbb` | 6,216 | 1,379 | Passed at that snapshot |
 
-All three share the same complete source manifest and unchanged unpublished
-dependency candidate; every export remains `production_release_eligible=false`.
-These are inert raw exports, not installed or independently approved packages.
-No unchanged native compilation was repeated. These exports contain the staged
-lifecycle and both fixed installer commands, but not an executable lifecycle
-caller or independently provisioned approval service. The sequential build and
-source-observation run completed in 156.890 seconds with no retry.
-Exact archives, logs and checksums are retained at
-`codex-offload/serverware/engineering-builds/90e10cbb-connected-lifecycle-FdUpzn/`.
-The preceding `.413` evidence remains in its original
-`fc466a0c-genesis-rendezvous-omGm4r/` directory.
+The supervisor build and observer both exited **0**: **24.995891030 seconds**
+for the build and **34.507501628 seconds** for observation, **62.244210958 seconds**
+overall. The raw archive is **170,777,088 bytes**. Exact source files comprise
+1,374 in `/app`, six in `/authority` and seven in `/supervisor`; the observed
+source-manifest SHA-256 is
+`821b86e647d2492b7c1f6d36456bd186257b59a54c497efce4ce976c085a1c37`.
+Archive hash from the retained build receipt, not a repeated TAR hash:
+`a96631dd6aae995f617a6c8e2b4c69380a3a6edd3c047a92f1a62024d3719fed`.
+The durable evidence destination is
+`codex-offload/serverware/engineering-builds/508ea68e-lifecycle-cli-hLUp5a/`
+under the operator's home directory; preservation is part of the result handoff.
+
+This export includes the fixed lifecycle caller and installer commands, but
+does not provision their independent decision provider. It uses the unchanged
+unpublished dependency candidate and remains `production_release_eligible=false`:
+no strict inventory/package, installed runtime or live application flow was
+produced. No native compilation, conductor/authority rebuild, cloud action or
+paid test was repeated. The historical conductor/authority exports are **not**
+matching-source approved packages for this supervisor. Their `.414` evidence
+remains at `90e10cbb-connected-lifecycle-FdUpzn/`; `.413` evidence remains at
+`fc466a0c-genesis-rendezvous-omGm4r/` under the same engineering-builds directory.
 
 The `.392` source adds a separate
 [commissioning supervisor package and executable](native-pilot-supervisor-executable.md).

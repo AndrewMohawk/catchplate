@@ -129,12 +129,14 @@ The tested Git archive SHA-256 is
 
 ## Engineering artifact result
 
-The `.414` refresh from `90e10cbb` supersedes the Python export below: all three
-runtime targets built and passed exact-source observation with identical source
-manifests. The supervisor has 6,225 entries and 1,385 exact source files
-(1,373 in `/app`, six in `/authority`, six in `/supervisor`). This includes both
-cold installer CLIs and their fixed admitted entrypoint. It remains an inert
-engineering export, not an installed runtime or executable lifecycle caller.
+The `.415` refresh from `508ea68e` supersedes the supervisor exports below.
+Only that target was rebuilt: build and exact-source observation exited **0**
+in **62.244210958 seconds** overall. The supervisor has 6,227 entries and 1,387
+exact source files (1,374 in `/app`, six in `/authority`, seven in `/supervisor`).
+It includes the fixed lifecycle caller as well as both cold installer CLIs.
+The `.414` conductor/authority exports from `90e10cbb` remain historical, not a
+matching-source approved package set. This is an inert engineering export,
+not an installed runtime, independently provisioned operator or accepted pilot.
 See [current assembly and retained evidence](native-pilot-build.md#current-engineering-assembly).
 
 One raw supervisor build from frozen base `bd69e925` exited **0** in **29.682

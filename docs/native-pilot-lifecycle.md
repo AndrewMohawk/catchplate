@@ -1,7 +1,7 @@
 # Connected cold-to-adopted lifecycle
 
-The `.414` batch connects actual cold-process ownership, independently approved
-pair installation and the existing adopted supervisor. It does not generate
+The `.414` owner and `.415` fixed executable connect actual cold-process ownership,
+independently approved pair installation and the existing adopted supervisor. They do not generate
 decisions, provision keys, install a runtime or claim an accepted pilot. The
 existing 66 cold jobs, 176 adopted jobs and approval wire formats stay unchanged.
 
@@ -55,7 +55,7 @@ The parent creates seals only for literal public observations, not approvals.
 
 ## Fixed executable caller (.415)
 
-The next source batch adds the explicit `--run-native-pilot-lifecycle` mode to
+The completed source batch adds the explicit `--run-native-pilot-lifecycle` mode to
 the existing packaged supervisor entrypoint. It selects only
 `/supervisor/app/scripts/run_native_pilot_lifecycle.py`; legacy operational and
 adopted-only modes keep their own argument contracts. The isolated interpreter
@@ -97,13 +97,30 @@ Polling checks retained identities instead of rereading the entire completed
 cold transcript per packet. Both sides of each lifecycle operation still use
 full original-content readback; clock and current-owner checks remain in waits.
 
-Source and focused verification for `.415` are in progress. This command does
-not supply the peer's decision policy, keys, approved runtime installation,
-protected resource parents, external services or production acceptance.
+Frozen `.415` source `508ea68e` passes all **95 checks in ten focused suites** in
+**3.399 seconds**, with no failures, errors, skips or corrective rerun. All
+twelve changed Python files pass syntax and both Make inventories; five actual
+modules import from the exact archive. Real local controls cover a forked peer,
+five-descriptor bootstrap, rendezvous pair, chunked cold request, malformed
+rights, original BOOTTIME/UNIX refusal and observed child cleanup. These use
+synthetic public observations, not independent production approvals or the full
+244-exchange commissioning ceremony.
+
+Only the changed supervisor export was rebuilt: build and exact-source
+observation exited **0** in **62.244210958 seconds** overall. Its 6,227 entries
+contain 1,387 exact source files: 1,374 in `/app`, six in `/authority` and seven
+in `/supervisor`. This is an inert engineering export, not an installed or
+independently approved package. The older conductor/authority exports remain
+historical and do not form a matching-source package set with this supervisor.
+Exact receipt details and the evidence destination are in the
+[build results](native-pilot-build.md#current-engineering-assembly).
+
+This command does not supply the peer's decision policy, keys, approved runtime
+installation, protected resource parents, external services or production acceptance.
 
 ## Verification and deployment boundary
 
-Frozen source `90e10cbb` passes all **119 checks in twelve focused suites** in
+The preceding `.414` source `90e10cbb` passes all **119 checks in twelve focused suites** in
 **3.827 seconds**, with no failures, errors or skips. All sixteen changed Python
 files pass syntax and both Make inventories; six new modules import from the
 exact archived source. There was one run, with no corrective rerun. The four new
@@ -115,14 +132,15 @@ Pure association/argument controls and real local descriptor controls are not
 evidence of the full protected listener, installer, fs-verity custody, signer
 or service lifecycle. Current runtime export verification is recorded in the
 [build results](native-pilot-build.md#current-engineering-assembly).
-All three current Python exports built and passed exact-source observation in
+All three historical `.414` Python exports built and passed exact-source observation in
 156.890 seconds, with identical source manifests and no retry. They contain
 6,206 / 6,216 / 6,225 entries respectively. The exact source archive, focused
 log, export archives, observation logs and checksums are retained at
 `codex-offload/serverware/engineering-builds/90e10cbb-connected-lifecycle-FdUpzn/`
 under the operator's home directory. These remain engineering-only exports,
-not approved packages or installed runtimes. No native rebuild, cloud action,
-paid test or live commissioning occurred.
+not approved packages or installed runtimes. The `.415` supervisor-only refresh
+above supersedes that supervisor export, not the conductor/authority snapshots.
+No native rebuild, cloud action, paid test or live commissioning occurred.
 
 The staged lifecycle API and fixed caller still require independently supplied
 real late inputs/approvals and installed approved inventories. They do not

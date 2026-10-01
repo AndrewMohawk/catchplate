@@ -70,6 +70,17 @@ def observation(raw):
     return copy.deepcopy(value)
 
 
+def _result_peer(expected, observed):
+    """Only this cold native-controller peer is root; hot peers stay closed."""
+    runtime.peer(expected, root=True)
+    p.require(expected["pid"] == observed["processId"]
+        and expected["startTimeTicks"] == observed["startTimeTicks"])
+    for name in ("device", "inode", "length", "sha256"):
+        p.require(expected["executable" + name[0].upper() + name[1:]] == observed["targetExecutable"][name])
+    for target, source in (("cgroupPathSha256", "pathSha256"), ("cgroupMountId", "mountId"), ("cgroupInode", "inode")):
+        p.require(expected[target] == observed["cgroup"][source])
+
+
 def build(*, approval_raw, observation_raw, ordinary_records, native_records, cold, coordinator, boot,
           now_boottime_ns, now_unix_ns):
     approved, observed = approval(approval_raw), observation(observation_raw)
@@ -113,9 +124,9 @@ def build(*, approval_raw, observation_raw, ordinary_records, native_records, co
         epoch_limits.append(p.integer(payload["authorization"]["expiresAtUnixNanos"]))
         epoch_floors.append(p.integer(payload["authorization"]["issuedAtUnixNanos"]))
     p.require(native_payloads[endpoints.ROLES[0]]["native"]["grantSha256"] == grants[0]["native"]["grantSha256"])
-    ids["resultPeer"] = {"uid": 0, "gid": 0}
-    for role in ROLES:
+    for role in ROLES[:-1]:
         binding._peer(approved["peers"][role], observed["peers"][role], ids[role])
+    _result_peer(approved["peers"]["resultPeer"], observed["peers"]["resultPeer"])
     value = {"apiVersion": runtime.API, "scope": scope,
         "durableGrantOriginal": ordinary_records[runtime.ROLES[0]]["grantOriginal"],
         "currentGrantOriginal": ordinary_records[runtime.ROLES[1]]["grantOriginal"], "histories": histories,

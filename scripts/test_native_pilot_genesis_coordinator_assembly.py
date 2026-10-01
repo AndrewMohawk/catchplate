@@ -139,6 +139,19 @@ class GenesisCoordinatorAssemblyTests(unittest.TestCase):
             value["approval_raw"] = g.canonical(approved)
             with self.subTest(field=name): self.refused(value)
 
+    def test_root_result_peer_requires_the_exact_observed_native_controller(self):
+        result = assembly.build(**self.value())
+        actual = g.document(result["runtimeOriginal"], g.MAX_BYTES)["resultPeer"]
+        self.assertEqual((actual["uid"], actual["gid"]), (0, 0))
+        self.assertEqual(actual, g.document(self.f["approval_raw"], 65536)["peers"]["resultPeer"])
+        for name in ("pid", "startTimeTicks", "executableInode", "cgroupInode", "uid", "gid"):
+            value = self.value(); approved = g.document(value["approval_raw"], 65536)
+            replacement = approved["peers"]["resultPeer"]
+            replacement[name] += 1
+            runtime_tests.rehash_peer(replacement)
+            value["approval_raw"] = g.canonical(approved)
+            with self.subTest(field=name): self.refused(value)
+
     def test_native_originals_are_pinned_by_both_ordinary_grants(self):
         for role in assembly.endpoints.ROLES:
             value = self.value(); row = value["native_records"][role]

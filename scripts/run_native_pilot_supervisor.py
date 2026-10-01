@@ -39,14 +39,16 @@ def _number(value, *, minimum, maximum):
     return number
 
 
-def _arguments(arguments, purposes):
+def _arguments(arguments, purposes, *, adopted=False):
     """Closed, source-ordered syntax only; no descriptor is opened here."""
-    _require(type(arguments) is list and type(purposes) is tuple and 0 < len(purposes) <= 128
+    _require(type(adopted) is bool and type(arguments) is list and type(purposes) is tuple and 0 < len(purposes) <= 128
         and len(set(purposes)) == len(purposes) and all(type(name) is str for name in purposes))
-    _require(len(arguments) == 1 + 2 * (len(_PREFIX) + len(purposes))
-        and arguments[0] == "--run-native-pilot")
+    prefix = (_PREFIX[:10] + (("intake-configuration-fd", "fd"), ("intake-configuration-sha256", "sha"))
+        + _PREFIX[10:]) if adopted else _PREFIX
+    _require(len(arguments) == 1 + 2 * (len(prefix) + len(purposes))
+        and arguments[0] == ("--run-adopted-native-pilot" if adopted else "--run-native-pilot"))
     selected, descriptors = {}, set()
-    for index, (name, kind) in enumerate(_PREFIX):
+    for index, (name, kind) in enumerate(prefix):
         flag, value = arguments[1 + 2 * index:3 + 2 * index]
         _require(flag == "--" + name)
         if kind == "sha":
@@ -59,7 +61,7 @@ def _arguments(arguments, purposes):
                 descriptors.add(value)
         selected[name.replace("-", "_")] = value
     keys = {}
-    offset = 1 + 2 * len(_PREFIX)
+    offset = 1 + 2 * len(prefix)
     for index, purpose in enumerate(purposes):
         flag, literal = arguments[offset + 2 * index:offset + 2 * index + 2]
         _require(flag == "--authority-key" and type(literal) is str
@@ -163,24 +165,61 @@ def main():
         from serverware.native_pilot_supervisor_approval_channel import ApprovalChannel
         from serverware.native_pilot_supervisor_policy import SupervisorPolicy
         from serverware.native_pilot_supervisor_process import AuthorityCoordinatorProcess
+        from serverware.native_pilot_coordinator_process import ProcessPreparationError
 
-        selected = _arguments(sys.argv[1:], KEY_PURPOSES)
+        adopted = len(sys.argv) > 1 and sys.argv[1] == "--run-adopted-native-pilot"
+        if adopted:
+            from serverware.native_pilot_adopted_phase_profile import KEY_PURPOSES
+            from serverware.native_pilot_adopted_supervisor import (
+                AdoptedCommissioningSupervisor as CommissioningSupervisor, SUPPORTED_JOBS,
+                SupervisorError as AdoptedSupervisorError, require_complete_coverage)
+            from serverware.native_pilot_adopted_supervisor_policy import (
+                AdoptedSupervisorPolicy as SupervisorPolicy, PolicyError as AdoptedPolicyError)
+        selected = _arguments(sys.argv[1:], KEY_PURPOSES, adopted=adopted)
         runtime = _SelfRuntime()  # Keep partial descriptor admission reachable.
         runtime.admit(selected["supervisor_inventory_fd"], selected["supervisor_inventory_sha256"])
         runtime.require_inventory_sources(selected)
         require_complete_coverage()
-        policy = SupervisorPolicy.open(policy_fd=selected["policy_fd"], policy_sha256=selected["policy_sha256"])
+        if adopted:
+            try:
+                policy = SupervisorPolicy.open(policy_fd=selected["policy_fd"], policy_sha256=selected["policy_sha256"])
+            except AdoptedPolicyError as error:
+                p.require(type(error.owner) is SupervisorPolicy)
+                policy = error.owner
+                raise
+        else:
+            policy = SupervisorPolicy.open(policy_fd=selected["policy_fd"], policy_sha256=selected["policy_sha256"])
         recipe = MeasuredConfigurationRecipe.open(recipe_fd=selected["recipe_fd"], recipe_sha256=selected["recipe_sha256"])
-        channel = ApprovalChannel.open(selected["approval_fd"], peer_pid=selected["approval_peer_pid"],
+        channel = (ApprovalChannel.open_adopted if adopted else ApprovalChannel.open)(selected["approval_fd"], peer_pid=selected["approval_peer_pid"],
             peer_uid=selected["approval_peer_uid"], peer_gid=selected["approval_peer_gid"])
         runtime.check(installed=True)
-        process = AuthorityCoordinatorProcess.prepare(
+        process_arguments = dict(
             conductor_inventory_fd=selected["conductor_inventory_fd"],
             conductor_inventory_sha256=selected["conductor_inventory_sha256"],
             authority_inventory_fd=selected["authority_inventory_fd"],
             authority_inventory_sha256=selected["authority_inventory_sha256"],
             authority_key_fds=selected["authority_key_fds"])
-        supervisor = CommissioningSupervisor.prepare(policy=policy, process=process, measured_recipe=recipe)
+        if adopted:
+            process_arguments.update(intake_configuration_fd=selected["intake_configuration_fd"],
+                intake_configuration_sha256=selected["intake_configuration_sha256"])
+        try:
+            if adopted:
+                process = AuthorityCoordinatorProcess.prepare_adopted(**process_arguments)
+            else:
+                process = AuthorityCoordinatorProcess.prepare(**process_arguments)
+        except ProcessPreparationError as error:
+            p.require(type(error.owner) is AuthorityCoordinatorProcess)
+            process = error.owner
+            raise
+        if adopted:
+            try:
+                supervisor = CommissioningSupervisor.prepare(policy=policy, process=process, measured_recipe=recipe)
+            except AdoptedSupervisorError as error:
+                p.require(type(error.owner) is CommissioningSupervisor)
+                supervisor = error.owner
+                raise
+        else:
+            supervisor = CommissioningSupervisor.prepare(policy=policy, process=process, measured_recipe=recipe)
         policy.require_final_scope(process)
         runtime.check(installed=True)
         channel.check()
@@ -190,12 +229,16 @@ def main():
             runtime.check()
             result = supervisor.step()
             p.require((result["phase"], result["job"], result["sequence"]) == (phase, job, completed + 1))
-            if (phase, job) in _LATE_JOBS:
-                p.require(result["status"] == "awaiting-independent-current-head-approval")
+            if adopted or (phase, job) in _LATE_JOBS:
+                p.require(result["status"] == ("awaiting-independent-job-approval" if adopted
+                    else "awaiting-independent-current-head-approval"))
                 approval = channel.exchange(result)
                 received.append(approval)  # Keep transferred originals until known terminal cleanup.
                 runtime.check()
-                result = supervisor.resume_current_head(**approval.resume_kwargs())
+                if adopted:
+                    result = supervisor.submit(**approval.resume_kwargs())
+                else:
+                    result = supervisor.resume_current_head(**approval.resume_kwargs())
                 # The peer may retire after its final reply. Only active late
                 # exchanges require its liveness; owned originals remain held.
             p.require((result["phase"], result["job"], result["sequence"], result["status"])

@@ -11,11 +11,13 @@ from __future__ import annotations
 
 import os
 import stat
+import time
 
 from scripts.authority import native_pilot_authority_io as io
 from serverware import native_pilot_publication as publication
 from serverware import native_shadow_nitro_originals as originals
 from serverware import native_shadow_nitro_profile as p
+from serverware.native_pilot_genesis_parent_control_io import owning
 from serverware.native_pilot_operator_channel import MAX_FRAME, STAGES
 from serverware.native_pilot_phase_execution import APPROVAL_ROOT, JOBS, MAX_APPROVAL, MAX_RETAINED_BYTES
 from serverware.native_shadow_proof_cohort_control import _Original
@@ -91,17 +93,18 @@ class _Pair:
     def open(self):
         io._process()
         for path in self._paths:
-            if path == "/":
-                fd = os.open(path, publication._FLAGS | os.O_DIRECTORY)
-            else:
-                parent, name = path.rsplit("/", 1)
-                fd = os.open(name, publication._FLAGS | os.O_DIRECTORY,
-                    dir_fd=self._roots[parent or "/"][0])
-            self._pending.append(fd)
-            info = os.fstat(fd)
-            publication._protected(info)
-            self._roots[path] = (fd, publication._structural(info))
-            self._pending.remove(fd)
+            with owning():
+                if path == "/":
+                    fd = os.open(path, publication._FLAGS | os.O_DIRECTORY)
+                else:
+                    parent, name = path.rsplit("/", 1)
+                    fd = os.open(name, publication._FLAGS | os.O_DIRECTORY,
+                        dir_fd=self._roots[parent or "/"][0])
+                self._pending.append(fd)
+                info = os.fstat(fd)
+                publication._protected(info)
+                self._roots[path] = (fd, publication._structural(info))
+                self._pending.remove(fd)
         self.check()
 
     def check(self):
@@ -136,9 +139,10 @@ class _Pair:
     def publish(self, name, raw, maximum, digest):
         self.check()
         parent = self._roots[self._paths[-1]][0]
-        fd = os.open(name, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW,
-            0o400, dir_fd=parent)
-        self._pending.append(fd)
+        with owning():
+            fd = os.open(name, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW,
+                0o400, dir_fd=parent)
+            self._pending.append(fd)
         info = os.fstat(fd)
         p.require(stat.S_ISREG(info.st_mode) and info.st_uid == info.st_gid == 0
             and info.st_nlink == 1 and info.st_size == 0)
@@ -156,11 +160,13 @@ class _Pair:
         p.require(stat.S_IMODE(written.st_mode) == 0o400 and written.st_nlink == 1
             and written.st_size == len(raw) and publication._file_identity(written)
             == publication._file_identity(os.stat(name, dir_fd=parent, follow_symlinks=False)))
-        os.close(fd)
-        self._pending.remove(fd)
+        with owning():
+            self._pending.remove(fd)
+            os.close(fd)
         os.fsync(parent)
-        original = _Original(self._paths[-1] + "/" + name, maximum, digest, mode=0o400)
-        self._files.append(original)
+        with owning():
+            original = _Original(self._paths[-1] + "/" + name, maximum, digest, mode=0o400)
+            self._files.append(original)
         p.require(original.raw == raw and publication._file_identity(os.fstat(original.fd))
             == publication._file_identity(written))
         self.check()
@@ -211,3 +217,131 @@ def install(request_original: bytes, approval_original: bytes, input_original: b
         owner.close()
     _FAILED = False
     return reply
+
+
+# Separate namespace/state: legacy Approval1 never selects this catalogue.
+_ADOPTED_ATTEMPTED, _ADOPTED_OWNERS = set(), []
+_ADOPTED_BYTES = 0
+_ADOPTED_FAILED = False
+
+
+def _prepare_adopted(request_raw, approval_raw, input_raw, approval_sha256, input_sha256,
+                     *, now_boottime_ns=None, now_unix_ns=None):
+    from serverware import native_pilot_adopted_phase_profile as selected
+    request = p.fields(p.document(request_raw, MAX_REQUEST), selected.REQUEST_FIELDS)
+    p.require(request["apiVersion"] == selected.API and request["phase"] in selected.JOBS)
+    phases, phase = tuple(selected.JOBS), request["phase"]
+    phase_index = phases.index(phase)
+    index = p.integer(request["jobIndex"], maximum=len(selected.JOBS[phase])) - 1
+    job = selected.JOBS[phase][index]
+    sequence = sum(len(selected.JOBS[name]) for name in phases[:phase_index]) + index + 1
+    p.require(request["conductorSequence"] == phase_index + 1
+        and type(request["sequence"]) is int and request["sequence"] == sequence
+        and request["job"] == job.name)
+    p.digest(request["conductorRequestSha256"])
+    deadline, expiry = p.ns(request["deadlineBoottimeNs"]), p.ns(request["expiresAtUnixNanos"])
+    p.integer(expiry, maximum=p.MAX_I64)
+    if index == 0:
+        conductor = p.fields(request["conductorRequest"], ("apiVersion", "sequence", "phase", "payload",
+            "deadlineBoottimeNs", "expiresAtUnixNanos"))
+        p.require(conductor["apiVersion"] == "serverware.nativePilotOperatorRequest/v2"
+            and type(conductor["payload"]) is dict and p.sha(p.canonical(conductor)) == request["conductorRequestSha256"])
+        for target, source in (("sequence", "conductorSequence"), ("phase", "phase"),
+                ("deadlineBoottimeNs", "deadlineBoottimeNs"), ("expiresAtUnixNanos", "expiresAtUnixNanos")):
+            _same(conductor[target], request[source])
+    else:
+        p.require(request["conductorRequest"] is None)
+    if sequence == 1:
+        p.require(request["previousResult"] is None)
+    else:
+        order = tuple((name, row.name) for name, rows in selected.JOBS.items() for row in rows)
+        previous = p.fields(request["previousResult"], ("phase", "job", "result"))
+        p.require((previous["phase"], previous["job"]) == order[sequence - 2]
+            and type(previous["result"]) is dict)
+    p.document(input_raw, job.maximum)
+    approval = p.fields(p.document(approval_raw, selected.MAX_APPROVAL), selected.APPROVAL_FIELDS)
+    p.require(approval["apiVersion"] == selected.APPROVAL_API
+        and p.sha(approval_raw) == p.digest(approval_sha256)
+        and p.sha(input_raw) == p.digest(input_sha256) == approval["inputSha256"])
+    for name in selected.APPROVAL_FIELDS[1:-1]:
+        _same(approval[name], request[name])
+    now = originals._clock() if now_boottime_ns is None else now_boottime_ns
+    epoch = time.time_ns() if now_unix_ns is None else now_unix_ns
+    p.require(now < deadline and epoch < expiry)
+    return request, job, deadline, expiry
+
+
+class AdoptedInstallationError(ValueError):
+    def __init__(self, owner):
+        super().__init__("adopted approval installation refused; partial public files retained")
+        self.owner = owner
+
+
+class _AdoptedPair(_Pair):
+    def __init__(self, phase, deadline, expiry, check):
+        from serverware import native_pilot_adopted_phase_profile as selected
+        super().__init__(phase, deadline)
+        self._paths = ("/", "/etc", "/etc/serverware", selected.APPROVAL_ROOT,
+            selected.APPROVAL_ROOT + "/" + phase)
+        self._expiry, self._wall, self._outer = expiry, time.time_ns(), check
+        self._closed = False
+
+    def check(self):
+        p.require(not self._closed)
+        self._outer()
+        super().check()
+        now, epoch = originals._clock(), time.time_ns()
+        p.require(self._previous <= now < self._deadline and self._wall <= epoch < self._expiry)
+        self._previous, self._wall = now, epoch
+
+    def close(self):
+        from serverware.native_pilot_genesis_parent_control_io import owning
+        p.require(os.getpid() == self._pid and originals._boot() == self._boot)
+        if self._closed:
+            return
+        with owning():
+            while self._files:
+                original = self._files.pop()
+                while original.fds:
+                    os.close(original.fds.pop())
+                original.fd = -1
+            while self._pending:
+                os.close(self._pending.pop())
+            while self._roots:
+                path = next(reversed(self._roots))
+                os.close(self._roots.pop(path)[0])
+            self._closed = True
+
+
+def install_adopted(request_original, approval_original, input_original, *,
+                    approval_sha256, input_sha256, check):
+    """Only install supplied independent Approval2; this never makes one."""
+    from serverware import native_pilot_adopted_phase_profile as selected
+    global _ADOPTED_BYTES, _ADOPTED_FAILED
+    p.require(not _ADOPTED_FAILED and callable(check))
+    _ADOPTED_FAILED = True
+    io._process(); check()
+    request, job, deadline, expiry = _prepare_adopted(request_original, approval_original,
+        input_original, approval_sha256, input_sha256)
+    slot = (request["phase"], job.name)
+    p.require(slot not in _ADOPTED_ATTEMPTED
+        and _ADOPTED_BYTES + len(input_original) + len(approval_original) <= selected.MAX_RETAINED_BYTES)
+    _ADOPTED_ATTEMPTED.add(slot)
+    _ADOPTED_BYTES += len(input_original) + len(approval_original)
+    owner = _AdoptedPair(request["phase"], deadline, expiry, check)
+    _ADOPTED_OWNERS.append(owner)
+    try:
+        owner.open(); owner.require_absent(job)
+        owner.publish(job.name + ".input.json", input_original, job.maximum, input_sha256)
+        owner.publish(job.name + ".approval.json", approval_original, selected.MAX_APPROVAL, approval_sha256)
+        owner.check()
+        reply = {"apiVersion": selected.REPLY_API, **{name: request[name] for name in
+            ("sequence", "conductorSequence", "conductorRequestSha256", "phase", "jobIndex", "job")},
+            "requestSha256": p.sha(request_original), "approvalSha256": approval_sha256,
+            "inputSha256": input_sha256}
+        owner.close(); check()
+        p.require(originals._clock() < deadline and time.time_ns() < expiry)
+        _ADOPTED_FAILED = False
+        return reply
+    except BaseException as error:
+        raise AdoptedInstallationError(owner) from error

@@ -1740,6 +1740,11 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	scripts/test_native_pilot_adopted_current_head.py \
 	scripts/test_native_pilot_adopted_service_intake.py \
 	scripts/test_native_pilot_adopted_operator.py \
+	scripts/test_native_pilot_adopted_intake.py \
+	scripts/test_native_pilot_adopted_orchestration.py \
+	scripts/test_native_pilot_adopted_phase_execution.py \
+	scripts/test_native_pilot_adopted_supervisor.py \
+	scripts/test_native_pilot_genesis_handoff_listener.py \
 	scripts/test_native_pilot_adopted_bridge.py \
 	scripts/test_native_pilot_adopted_endpoints.py \
 	scripts/test_native_pilot_adopted_ordinary.py \
@@ -1805,6 +1810,14 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/native_pilot_service_material.py \
 	serverware/native_pilot_launch_publication.py \
 	serverware/native_pilot_coordinator_process.py \
+	serverware/native_pilot_adopted_intake.py \
+	serverware/native_pilot_genesis_handoff_listener.py \
+	serverware/native_pilot_adopted_phase_profile.py \
+	serverware/native_pilot_adopted_phase_execution.py \
+	serverware/native_pilot_adopted_publication.py \
+	serverware/native_pilot_adopted_ordinary_install.py \
+	serverware/native_pilot_adopted_supervisor.py \
+	serverware/native_pilot_adopted_supervisor_policy.py \
 	serverware/native_pilot_coordinator_channel.py \
 	serverware/native_pilot_phase_execution.py \
 	serverware/native_pilot_authority_channel.py \
@@ -4658,6 +4671,11 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				scripts/test_native_pilot_adopted_current_head.py \
 				scripts/test_native_pilot_adopted_service_intake.py \
 				scripts/test_native_pilot_adopted_operator.py \
+				scripts/test_native_pilot_adopted_intake.py \
+				scripts/test_native_pilot_adopted_orchestration.py \
+				scripts/test_native_pilot_adopted_phase_execution.py \
+				scripts/test_native_pilot_adopted_supervisor.py \
+				scripts/test_native_pilot_genesis_handoff_listener.py \
 				scripts/test_native_pilot_adopted_bridge.py \
 				scripts/test_native_pilot_adopted_endpoints.py \
 				scripts/test_native_pilot_adopted_ordinary.py \
@@ -4723,6 +4741,14 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/native_pilot_service_material.py \
 				serverware/native_pilot_launch_publication.py \
 				serverware/native_pilot_coordinator_process.py \
+				serverware/native_pilot_adopted_intake.py \
+				serverware/native_pilot_genesis_handoff_listener.py \
+				serverware/native_pilot_adopted_phase_profile.py \
+				serverware/native_pilot_adopted_phase_execution.py \
+				serverware/native_pilot_adopted_publication.py \
+				serverware/native_pilot_adopted_ordinary_install.py \
+				serverware/native_pilot_adopted_supervisor.py \
+				serverware/native_pilot_adopted_supervisor_policy.py \
 				serverware/native_pilot_coordinator_channel.py \
 				serverware/native_pilot_phase_execution.py \
 				serverware/native_pilot_authority_channel.py \

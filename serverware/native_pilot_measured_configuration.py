@@ -130,9 +130,14 @@ def _closure_set(value, envelope, manifest):
 
 
 def _phase(process, phase):
+    adopted = process.adoption_selected()
     value = p.fields(process.conductor_request(phase),
-        ("apiVersion", "sequence", "phase", "payload", "deadlineBoottimeNs"))
-    p.require(value["apiVersion"] == "serverware.nativePilotOperatorRequest/v1" and value["phase"] == phase)
+        ("apiVersion", "sequence", "phase", "payload", "deadlineBoottimeNs")
+        + (("expiresAtUnixNanos",) if adopted else ()))
+    p.require(value["apiVersion"] == "serverware.nativePilotOperatorRequest/v" + ("2" if adopted else "1")
+        and value["phase"] == phase)
+    if adopted:
+        p.require(time.time_ns() < p.ns(value["expiresAtUnixNanos"]))
     p.ns(value["deadlineBoottimeNs"])
     return value
 
@@ -278,6 +283,7 @@ class MeasuredConfigurationRecipe:
         self._bind_attempted = True
         try:
             p.require(type(process) is AuthorityCoordinatorProcess and not process._started)
+            p.require(process.adoption_selected() == (self._value["apiVersion"] == ADOPTED_API))
             self._process = process
             self.check()
         except BaseException:
@@ -309,9 +315,16 @@ class MeasuredConfigurationRecipe:
             p.fields(early["payload"], ("bootstrapObservationOriginal", "admissionPayloadOriginal"))
             current = _phase(process, "endpoint-precreation")
             p.fields(current["payload"], ("bootstrapObservationOriginal", "bootstrapAdmissionOriginal", "gateBindingOriginal"))
-            p.require(early["deadlineBoottimeNs"] == current["deadlineBoottimeNs"] == self._window["startupDeadlineBoottimeNs"]
-                and request.deadline_boottime_ns == p.ns(self._window["startupDeadlineBoottimeNs"])
+            p.require(early["deadlineBoottimeNs"] == current["deadlineBoottimeNs"]
+                and request.deadline_boottime_ns == p.ns(current["deadlineBoottimeNs"])
                 and p.sha(p.canonical(current)) == request.value["conductorRequestSha256"])
+            if self._value["apiVersion"] == ADOPTED_API:
+                # The real receiver can narrow this original driver interval;
+                # it may never replace or extend the signed window itself.
+                p.require(request.deadline_boottime_ns <= p.ns(self._window["startupDeadlineBoottimeNs"])
+                    and early["expiresAtUnixNanos"] == current["expiresAtUnixNanos"])
+            else:
+                p.require(current["deadlineBoottimeNs"] == self._window["startupDeadlineBoottimeNs"])
             observed_raw, _ = scope._original(early["payload"]["bootstrapObservationOriginal"], 65536)
             p.require(current["payload"]["bootstrapObservationOriginal"] == observed_raw.decode("ascii"))
             observed = driver_authority._observation(observed_raw, self._control, self._config, self._window, originals._clock())

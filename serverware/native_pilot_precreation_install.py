@@ -32,9 +32,20 @@ def _same(first, second):
     p.require(p.canonical(first) == p.canonical(second))
 
 
-def _pin(purpose, pin, raw):
+def _publication(purpose, *, adopted):
+    if adopted and purpose.startswith("native-cold-"):
+        from serverware import native_pilot_launch_publication as launch
+        return launch.ADOPTED_DESTINATIONS, launch.ADOPTED_PURPOSES, launch.shape_adopted, "adopted"
+    if adopted and purpose in ("ordinary-launch", "cohort-configuration"):
+        from serverware import native_pilot_adopted_publication as ordinary
+        return ordinary.DESTINATIONS, ordinary.LIMITS, ordinary.shape, "adopted_ordinary"
+    return publication.DESTINATIONS, publication.LIMITS, publication._shape, "legacy"
+
+
+def _pin(purpose, pin, raw, *, adopted=False):
     delivery._pin(pin)
-    p.require(pin["path"] == publication.DESTINATIONS[purpose] and pin["sha256"] == p.sha(raw))
+    destinations, _, _, _ = _publication(purpose, adopted=adopted)
+    p.require(pin["path"] == destinations[purpose] and pin["sha256"] == p.sha(raw))
 
 
 def _driver(config_raw, window_raw, observed_raw):
@@ -96,18 +107,21 @@ def _check(window, ordinary, previous=0):
     return now
 
 
-def _prepare(raw, expected_sha256):
+def _prepare(raw, expected_sha256, *, adopted=False):
+    p.require(type(adopted) is bool)
     p.require(type(raw) is bytes and 0 < len(raw) <= MAX_INPUT
         and p.sha(raw) == p.digest(expected_sha256))
     value = p.fields(p.document(raw, MAX_INPUT), FIELDS)
-    p.require(value["apiVersion"] == "serverware.nativePilotPrecreationBundle/v1")
+    p.require(value["apiVersion"] == ("serverware.nativePilotPrecreationBundle/v2" if adopted
+        else "serverware.nativePilotPrecreationBundle/v1"))
     config_raw, _ = scope._original(value["driverConfigurationOriginal"], 65536)
     window_raw, _ = scope._original(value["driverWindowOriginal"], 32768)
     observed_raw, _ = scope._original(value["driverObservationOriginal"], 65536)
     driver_config, window = _driver(config_raw, window_raw, observed_raw)
     cohort_raw, _ = scope._original(value["cohortConfigurationOriginal"], cohort.MAX_BYTES)
     config = cohort.configuration(cohort_raw)
-    p.require(cohort.endpoint_driver_selected(config))
+    p.require(cohort.endpoint_driver_selected(config) and cohort.adoption_selected(config) is adopted)
+    roles = cohort.ADOPTED_ENDPOINT_ROLES if adopted else cohort.ENDPOINT_ROLES
     selected = config["externalDriver"]
     p.require(selected["configurationSha256"] == p.sha(config_raw)
         and selected["windowSha256"] == p.sha(window_raw)
@@ -131,19 +145,20 @@ def _prepare(raw, expected_sha256):
     launch_raw, ordinary = scope._original(value["ordinaryLaunchOriginal"], 65536)
     p.fields(ordinary, ("apiVersion", "bootIdBase64url", "timeNamespaceDevice", "timeNamespaceInode",
         "startupDeadlineBoottimeNs", "lifetimeDeadlineBoottimeNs", "invocationId", "services"))
-    p.require(ordinary["apiVersion"] == "serverware.custodyFiveServiceLaunch/v6")
+    p.require(ordinary["apiVersion"] == ("serverware.custodyFiveServiceLaunch/v7" if adopted
+        else "serverware.custodyFiveServiceLaunch/v6"))
     for name in ("timeNamespaceDevice", "timeNamespaceInode"):
         p.integer(ordinary[name], maximum=p.MAX_U64)
     cohort._invocation(ordinary["invocationId"])
     _check(window, ordinary)
     services = p.fields(ordinary["services"], generation.ROLES)
-    native_cold = p.fields(value["nativeColdOriginals"], cohort.ENDPOINT_ROLES)
+    native_cold = p.fields(value["nativeColdOriginals"], roles)
     ordinary_cold = p.fields(value["ordinaryColdOriginals"], generation.ROLES)
     planned, native_uids, native_gids = [], set(), set()
-    for role in cohort.ENDPOINT_ROLES:
+    for role in roles:
         original, _ = scope._original(native_cold[role], 65536)
         purpose = "native-cold-" + role
-        _pin(purpose, config[role + "Configuration"], original)
+        _pin(purpose, config[role + "Configuration"], original, adopted=adopted)
         cold = delivery.configuration(original, p.sha(original))
         _same(cold["authority"], config["authority"])
         p.require(cold["uid"] not in native_uids and cold["gid"] not in native_gids
@@ -163,33 +178,53 @@ def _prepare(raw, expected_sha256):
         planned.append((purpose, original))
     planned += [("cohort-configuration", cohort_raw), ("cohort-precreation", precreation_raw),
         ("ordinary-launch", launch_raw), ("cohort-control", control_raw)]
-    p.require(len(planned) == 19 and len({purpose for purpose, _ in planned}) == 19)
+    p.require(len(planned) == len(roles) + 9 and len({purpose for purpose, _ in planned}) == len(planned))
     # Run every publisher shape check before the first file creation as well.
     for purpose, original in planned:
-        p.require(purpose in publication.DESTINATIONS and len(original) <= publication.LIMITS[purpose])
-        publication._shape(purpose, original)
+        destinations, limits, shape, _ = _publication(purpose, adopted=adopted)
+        p.require(purpose in destinations and len(original) <= limits[purpose])
+        shape(purpose, original)
     _check(window, ordinary)
     return tuple(planned), window, ordinary
 
 
 def install(bundle_original: bytes, *, expected_sha256: str) -> dict:
+    return _install(bundle_original, expected_sha256=expected_sha256, adopted=False)
+
+
+def install_adopted(bundle_original: bytes, *, expected_sha256: str) -> dict:
+    return _install(bundle_original, expected_sha256=expected_sha256, adopted=True)
+
+
+def _install(bundle_original, *, expected_sha256, adopted):
     """Publish exact originals once; returned pins are observations, not launch."""
     global _USED
     p.require(not _USED)
     _USED = True  # Refusal or partial publication never enables an in-process retry.
-    planned, window, ordinary = _prepare(bundle_original, expected_sha256)
+    planned, window, ordinary = _prepare(bundle_original, expected_sha256, adopted=adopted)
     publisher = publication.PublicPublisher.open()
     try:
-        publisher.require_absent(tuple(purpose for purpose, _ in planned))
+        absent = {"legacy": publisher.require_absent, "adopted": publisher.require_absent_adopted,
+            "adopted_ordinary": publisher.require_absent_adopted_ordinary}
+        publish = {"legacy": publisher.publish, "adopted": publisher.publish_adopted,
+            "adopted_ordinary": publisher.publish_adopted_ordinary}
+        for mode, check in absent.items():
+            purposes = tuple(purpose for purpose, _ in planned if _publication(purpose, adopted=adopted)[3] == mode)
+            if purposes:
+                check(purposes)
         previous = _check(window, ordinary)
         pins = {}
         for purpose, raw in planned:
             previous = _check(window, ordinary, previous)
-            pins[purpose] = publisher.publish(purpose=purpose, raw=raw, expected_sha256=p.sha(raw))
+            mode = _publication(purpose, adopted=adopted)[3]
+            pins[purpose] = publish[mode](purpose=purpose, raw=raw, expected_sha256=p.sha(raw))
             previous = _check(window, ordinary, previous)
         publisher.check()
         deadline = min(p.ns(window["startupDeadlineBoottimeNs"]), p.ns(ordinary["startupDeadlineBoottimeNs"]))
-        return {"apiVersion": "serverware.nativePilotPrecreationPublication/v1", "bundleSha256": expected_sha256,
+        result = {"apiVersion": ("serverware.nativePilotPrecreationPublication/v2" if adopted else
+            "serverware.nativePilotPrecreationPublication/v1"), "bundleSha256": expected_sha256,
             "startupDeadlineBoottimeNs": str(deadline), "pins": pins}
     finally:
         publisher.close()  # Descriptor cleanup only; published/partial files remain.
+    _check(window, ordinary, previous)
+    return result

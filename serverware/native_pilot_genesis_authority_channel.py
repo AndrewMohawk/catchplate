@@ -57,6 +57,7 @@ class GenesisApprovalChannel:
         self._sequence = self._retained = 0
         self._deadline = None
         self._failed = self._complete = self._closed = False
+        self._listener_attempted = False
 
     @classmethod
     def open(cls, *, handoff=False):
@@ -76,6 +77,39 @@ class GenesisApprovalChannel:
         self._retained += len(original.raw)
         p.require(self._retained <= MAX_RETAINED)
         return original
+
+    def admit_listener(self, listener):
+        """One pre-job independent approval after real sender observation.
+
+        The named v2 execution input is created by the external authority only
+        after the recipient exists. This handshake neither signs nor invents it,
+        and does not advance or widen the existing 66-job catalogue.
+        """
+        from serverware import native_pilot_genesis_handoff_listener as handoff
+        p.require(type(listener) is handoff.CoreHandoffListener and self._handoff
+            and not self._failed and not self._closed and not self._complete
+            and self._sequence == 0 and not self._listener_attempted)
+        self._listener_attempted = True
+        try:
+            request_raw = listener.request_original()
+            deadline = listener.startup_deadline_boottime_ns
+            pipe = self._pipe
+            p.require(pipe._expiry is None and pipe._pending() == 0)
+            pipe._expiry = listener.expires_at_unix_ns  # Original cap inside every blocking pipe wait.
+            pipe._check(deadline); listener.check(startup=True)
+            pipe._write(request_raw + b"\n", deadline)
+            accepted = handoff.reply(pipe._read(deadline), request_raw)
+            listener.check(startup=True)
+            source = self._open(handoff.INPUT_PATH, 4096, accepted["inputSha256"])
+            approval = self._open(handoff.APPROVAL_PATH, 4096, accepted["approvalSha256"])
+            handoff.approval(approval.raw, request_raw=request_raw, input_sha256=accepted["inputSha256"])
+            listener.require_execution(source.raw)
+            source.check(); approval.check(); listener.check(startup=True); pipe._check(deadline)
+            p.require(pipe._pending() == 0)
+            return dict(configuration_fd=source.fd, configuration_sha256=accepted["inputSha256"])
+        except BaseException:
+            self._failed = self._pipe._poisoned = True
+            raise ValueError("cold listener approval failed; actual owners retained") from None
 
     def exchange(self, executor):
         from serverware.native_pilot_genesis_execution import GenesisExecution

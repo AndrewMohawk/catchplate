@@ -42,7 +42,7 @@ def _result(status, phase, interactive_result=None):
 
 
 def main():
-    if sys.argv[1:2] in (["--run-native-genesis"], ["--run-native-genesis-handoff"]):
+    if sys.argv[1:2] in (["--run-native-genesis"], ["--run-native-genesis-handoff"], ["--run-native-genesis-listener"]):
         # A separate cold profile in the supervisor package. It neither feeds
         # cold jobs into the old conductor nor derives its operational inventory.
         if not (sys.flags.isolated and sys.flags.dont_write_bytecode
@@ -64,17 +64,34 @@ def main():
                 and os.getresuid() == (0, 0, 0) and os.getresgid() == (0, 0, 0)):
             raise ValueError("isolated privileged authority coordinator required")
         parser = _Parser(description=__doc__, allow_abbrev=False, add_help=False)
-        parser.add_argument("--run-native-pilot", required=True, action="store_true")
+        selection = parser.add_mutually_exclusive_group(required=True)
+        selection.add_argument("--run-native-pilot", action="store_true")
+        selection.add_argument("--run-adopted-native-pilot", action="store_true")
         parser.add_argument("--runtime-inventory-fd", required=True, type=int)
         parser.add_argument("--runtime-inventory-sha256", required=True)
+        parser.add_argument("--intake-configuration-fd", type=int)
+        parser.add_argument("--intake-configuration-sha256")
         parser.add_argument("--authority-key", required=True, action="append")
         args = parser.parse_args()
         sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
         from serverware import native_shadow_nitro_profile as p
         from serverware.native_pilot_authority_channel import ApprovalChannel
-        from serverware.native_pilot_coordinator_process import ConductorProcess
+        from serverware.native_pilot_coordinator_process import ConductorProcess, ProcessPreparationError
         from serverware.native_pilot_operator_channel import STAGES
         from serverware.native_pilot_phase_execution import KEY_PURPOSES, PhaseExecution
+
+        adopted = args.run_adopted_native_pilot
+        if adopted:
+            from serverware.native_pilot_adopted_phase_profile import KEY_PURPOSES
+            from serverware.native_pilot_adopted_phase_execution import AdoptedPhaseExecution, require_complete_coverage
+            p.require(args.intake_configuration_fd is not None and args.intake_configuration_sha256 is not None
+                and args.intake_configuration_fd != args.runtime_inventory_fd)
+            p.digest(args.intake_configuration_sha256)
+            require_complete_coverage()
+            executor_type = AdoptedPhaseExecution
+        else:
+            p.require(args.intake_configuration_fd is None and args.intake_configuration_sha256 is None)
+            executor_type = PhaseExecution
 
         p.require(len(args.authority_key) == len(KEY_PURPOSES))
         declared = {}
@@ -84,12 +101,22 @@ def main():
             p.require(purpose in KEY_PURPOSES and purpose not in declared and number.isascii()
                 and number.isdecimal() and len(number) <= 10)
             fd = int(number)
-            p.require(str(fd) == number and 3 <= fd < (1 << 31) and fd != args.runtime_inventory_fd)
+            p.require(str(fd) == number and 3 <= fd < (1 << 31) and fd != args.runtime_inventory_fd
+                and fd != args.intake_configuration_fd)
             declared[purpose] = fd
-        channel = ApprovalChannel.open()
-        owner = ConductorProcess.prepare(runtime_inventory_fd=args.runtime_inventory_fd,
-            runtime_inventory_sha256=args.runtime_inventory_sha256)
-        executor = PhaseExecution.open(owner)
+        channel = ApprovalChannel.open_adopted() if adopted else ApprovalChannel.open()
+        try:
+            owner = (ConductorProcess.prepare_adopted(runtime_inventory_fd=args.runtime_inventory_fd,
+                runtime_inventory_sha256=args.runtime_inventory_sha256,
+                intake_configuration_fd=args.intake_configuration_fd,
+                intake_configuration_sha256=args.intake_configuration_sha256) if adopted else
+                ConductorProcess.prepare(runtime_inventory_fd=args.runtime_inventory_fd,
+                    runtime_inventory_sha256=args.runtime_inventory_sha256))
+        except ProcessPreparationError as error:
+            p.require(type(error.owner) is ConductorProcess)
+            owner = error.owner
+            raise
+        executor = executor_type.open(owner)
         executor.prepare_keys(declared)
         phase = "starting"
         owner.start()

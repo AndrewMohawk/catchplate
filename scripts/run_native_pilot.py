@@ -6,7 +6,6 @@ generates authority, runs supplied commands, retries, or claims test success.
 """
 from __future__ import annotations
 
-import argparse
 import fcntl
 import os
 import signal
@@ -36,14 +35,16 @@ def _stop(signum, frame):
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--run-native-pilot", required=True, action="store_true",
-                        help="explicitly start the fixed pilot with independently provisioned originals")
-    parser.parse_args()
     # Use only the sibling installed/checked-out package, never a path supplied
     # over the operator pipe. The installation must be protected by its operator.
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
-    owner = None
+    from serverware.native_pilot_adopted_intake import AdoptedIntake, IntakeError, invocation
+    from serverware.native_pilot_genesis_parent_control_io import owning
+    try:
+        selected = invocation(sys.argv[1:])
+    except (ValueError, TypeError):
+        raise SystemExit("native pilot invocation refused") from None
+    owner = intake = None
     failed = False
     signal.signal(signal.SIGTERM, _stop)
     signal.signal(signal.SIGINT, _stop)
@@ -53,8 +54,20 @@ def main():
         # until pending termination has had a chance to run the normal cleanup.
         signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGTERM, signal.SIGINT})
         from serverware.native_pilot_operator import Operator
+        core = None
+        if selected is not None:
+            with owning():
+                try:
+                    intake = AdoptedIntake.prepare(**selected)
+                except IntakeError as failure:
+                    intake = failure.owner
+                    raise
+            core = intake.receive()
         owner = Operator.claim()
-        owner.run()
+        if selected is None:
+            owner.run()
+        else:
+            owner.run_adopted(received_core=core)
     except BaseException as failure:
         failed = True
         if owner is not None:
@@ -65,8 +78,10 @@ def main():
     try:
         if owner is not None:
             owner.close()
+        if intake is not None:
+            intake.close()
     except BaseException:
-        _result("cleanup-unknown-owner-retained", owner._phase)
+        _result("cleanup-unknown-owner-retained", "core-intake" if owner is None else owner._phase)
         # Exiting would drop held resources without proving retirement. The
         # external supervisor must investigate; there is no retry or extra
         # authority window. SIGKILL can terminate the holder, but cannot turn

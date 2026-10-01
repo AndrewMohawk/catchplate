@@ -26,12 +26,16 @@ def _number(value, minimum, maximum):
 
 def valid_arguments(arguments):
     """Closed invocation syntax only; actual originals/keys/peer stay CLI-owned."""
-    if (type(arguments) is not list or not all(type(value) is str for value in arguments)
-            or not 31 <= len(arguments) <= 29 + 2 * MAX_KEYS or len(arguments) % 2 != 1
-            or arguments[0] != "--run-native-pilot"):
+    if type(arguments) is not list or not arguments or not all(type(value) is str for value in arguments):
+        return False
+    adopted = arguments[0] == "--run-adopted-native-pilot"
+    inputs = INPUTS + (("intake-configuration",) if adopted else ())
+    keys_offset = 1 + 4 * len(inputs) + 8
+    if (arguments[0] not in ("--run-native-pilot", "--run-adopted-native-pilot")
+            or not keys_offset + 2 <= len(arguments) <= keys_offset + 2 * MAX_KEYS or len(arguments) % 2 != 1):
         return False
     descriptors = set()
-    for index, name in enumerate(INPUTS):
+    for index, name in enumerate(inputs):
         offset = 1 + 4 * index
         flag, number, pin_flag, pin = arguments[offset:offset + 4]
         if (flag != "--" + name + "-fd" or not _number(number, 3, (1 << 31) - 1)
@@ -40,19 +44,20 @@ def valid_arguments(arguments):
                 or int(number) in descriptors):
             return False
         descriptors.add(int(number))
+    approval_offset = 1 + 4 * len(inputs)
     for offset, name, minimum, maximum in (
-            (21, "approval-fd", 3, (1 << 31) - 1),
-            (23, "approval-peer-pid", 2, (1 << 31) - 1),
-            (25, "approval-peer-uid", 0, (1 << 32) - 2),
-            (27, "approval-peer-gid", 0, (1 << 32) - 2)):
+            (approval_offset, "approval-fd", 3, (1 << 31) - 1),
+            (approval_offset + 2, "approval-peer-pid", 2, (1 << 31) - 1),
+            (approval_offset + 4, "approval-peer-uid", 0, (1 << 32) - 2),
+            (approval_offset + 6, "approval-peer-gid", 0, (1 << 32) - 2)):
         if arguments[offset] != "--" + name or not _number(arguments[offset + 1], minimum, maximum):
             return False
-    channel = int(arguments[22])
+    channel = int(arguments[approval_offset + 1])
     if channel in descriptors:
         return False
     descriptors.add(channel)
     purposes = set()
-    for offset in range(29, len(arguments), 2):
+    for offset in range(keys_offset, len(arguments), 2):
         literal = arguments[offset + 1]
         if (arguments[offset] != "--authority-key"
                 or re.fullmatch(r"[A-Za-z][A-Za-z0-9-]{0,127}=[1-9][0-9]{0,9}", literal) is None):

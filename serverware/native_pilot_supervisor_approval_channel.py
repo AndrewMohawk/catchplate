@@ -44,6 +44,10 @@ PENDING_FIELDS = ("phase", "job", "sequence", "status", "requestOriginal", "requ
 REQUEST_FIELDS = ("apiVersion", "exchangeSequence", "phase", "job", "sequence", "deadlineBoottimeNs", "request", "observation")
 CHUNK_FIELDS = ("apiVersion", "requestBindingSha256", "field", "offset", "dataBase64url")
 REPLY_FIELDS = ("apiVersion", "requestBindingSha256", "inputSha256", "approvalSha256")
+ADOPTED_REQUEST_API = "serverware.nativePilotAdoptedApprovalRequest/v1"
+ADOPTED_CHUNK_API = "serverware.nativePilotAdoptedApprovalChunk/v1"
+ADOPTED_REPLY_API = "serverware.nativePilotAdoptedApprovalReply/v1"
+ADOPTED_RECEIPT_API = "serverware.nativePilotAdoptedApprovalReceipt/v1"
 _TOKEN = object()
 _CLAIMED = set()
 _SEQUENCES = {job.name: sum(len(jobs) for phase, jobs in JOBS.items()
@@ -125,6 +129,51 @@ def _pending(value, index):
     return header, raws, deadline
 
 
+def _pending_adopted(value, index):
+    from serverware import native_pilot_adopted_phase_profile as adopted
+    from serverware.native_pilot_adopted_supervisor_policy import catalogue_original
+    p.fields(value, PENDING_FIELDS)
+    order = tuple((phase, job.name) for phase, rows in adopted.JOBS.items() for job in rows)
+    _require(type(index) is int and 0 <= index < len(order)
+        and (value["phase"], value["job"]) == order[index]
+        and type(value["sequence"]) is int and value["sequence"] == index + 1
+        and value["status"] == "awaiting-independent-job-approval")
+    raws = {}
+    for name in ("request", "observation"):
+        text = value[name + "Original"]
+        _require(type(text) is str and text.isascii() and 0 < len(text) <= MAX_REQUEST)
+        raws[name] = text.encode("ascii")
+        _require(p.sha(raws[name]) == p.digest(value[name + "Sha256"]))
+    request = p.fields(p.document(raws["request"], MAX_REQUEST), adopted.REQUEST_FIELDS)
+    _require(request["apiVersion"] == adopted.API and request["sequence"] == index + 1
+        and (request["phase"], request["job"]) == order[index]
+        and request["jobIndex"] == adopted.job_index(value["phase"], value["job"]))
+    observation = p.fields(p.document(raws["observation"], MAX_REQUEST), ("apiVersion", "policySha256",
+        "catalogueSha256", "intakeConfigurationSha256", "conductorRequestOriginal",
+        "measuredConfiguration", "recipeOriginals"))
+    _require(observation["apiVersion"] == "serverware.nativePilotAdoptedSupervisorObservation/v1"
+        and observation["catalogueSha256"] == p.sha(catalogue_original()))
+    for name in ("policySha256", "intakeConfigurationSha256"):
+        p.digest(observation[name])
+    text = observation["conductorRequestOriginal"]
+    _require(type(text) is str and text.isascii() and 0 < len(text) <= MAX_REQUEST)
+    conductor_raw = text.encode("ascii")
+    conductor = p.fields(p.document(conductor_raw, MAX_REQUEST), ("apiVersion", "sequence", "phase", "payload",
+        "deadlineBoottimeNs", "expiresAtUnixNanos"))
+    _require(conductor["apiVersion"] == "serverware.nativePilotOperatorRequest/v2"
+        and p.sha(conductor_raw) == request["conductorRequestSha256"]
+        and conductor["sequence"] == request["conductorSequence"] and conductor["phase"] == request["phase"]
+        and conductor["deadlineBoottimeNs"] == request["deadlineBoottimeNs"]
+        and conductor["expiresAtUnixNanos"] == request["expiresAtUnixNanos"])
+    deadline, expiry = p.ns(request["deadlineBoottimeNs"]), p.ns(request["expiresAtUnixNanos"])
+    p.integer(expiry, maximum=p.MAX_I64)
+    header = {"apiVersion": ADOPTED_REQUEST_API, "exchangeSequence": index + 1,
+        "phase": value["phase"], "job": value["job"], "sequence": value["sequence"],
+        "deadlineBoottimeNs": str(deadline), "expiresAtUnixNanos": str(expiry),
+        **{name: {"length": len(raw), "sha256": p.sha(raw)} for name, raw in raws.items()}}
+    return header, raws, deadline
+
+
 class ReceivedApproval:
     """Actual descriptors also retained by the channel until terminal cleanup."""
     def __init__(self, token, fds, reply):
@@ -147,6 +196,12 @@ class ReceivedApproval:
 
 class _Connection:
     @classmethod
+    def open_adopted(cls, fd, *, peer_pid, peer_uid, peer_gid):
+        owner = cls.open(fd, peer_pid=peer_pid, peer_uid=peer_uid, peer_gid=peer_gid)
+        owner._adopted = True
+        return owner
+
+    @classmethod
     def open(cls, fd, *, peer_pid, peer_uid, peer_gid):
         _require(cls in (ApprovalChannel, ApprovalPeer) and type(fd) is int and fd >= 3)
         p.integer(peer_pid, minimum=2, maximum=(1 << 31) - 1)
@@ -165,6 +220,8 @@ class _Connection:
         owner._closed = owner._failed = False
         owner._received = []
         owner._active = None
+        owner._adopted, owner._epoch_limit = False, None
+        owner._wall = time.time_ns()
         owner._index = owner._total = 0
         owner._last = _clock()
         owner._lock = threading.Lock()
@@ -209,6 +266,10 @@ class _Connection:
                 and (not peer_live or not select.select([self._peer_fd], [], [], 0)[0]))
             now = _clock()
             _require(now >= self._last and (self._active is None or now < self._active))
+            if self._adopted:
+                epoch = time.time_ns()
+                _require(self._wall <= epoch and (self._epoch_limit is None or epoch < self._epoch_limit))
+                self._wall = epoch
             self._last = now
             return now
         except BaseException:
@@ -319,20 +380,30 @@ class ApprovalChannel(_Connection):
         try:
             _require(acquired and self._active is None)
             self.check()
-            header, originals_raw, self._active = _pending(pending, self._index)
+            header, originals_raw, self._active = (_pending_adopted if self._adopted else _pending)(pending, self._index)
+            if self._adopted:
+                expiry = p.ns(header["expiresAtUnixNanos"])
+                _require(self._epoch_limit is None or self._epoch_limit == expiry)
+                self._epoch_limit = expiry
             self.check()
             _require(not select.select([self._socket], [], [], 0)[0])
             binding = p.sha(p.canonical(header))
             self._send(header)
             for name, raw in originals_raw.items():
                 for offset in range(0, len(raw), CHUNK_BYTES):
-                    self._send({"apiVersion": CHUNK_API, "requestBindingSha256": binding,
+                    self._send({"apiVersion": ADOPTED_CHUNK_API if self._adopted else CHUNK_API, "requestBindingSha256": binding,
                         "field": name, "offset": offset, "dataBase64url": p.encoded(raw[offset:offset + CHUNK_BYTES])})
             reply, _ = self._receive(2, received=fds)
             p.fields(reply, REPLY_FIELDS)
-            _require(reply["apiVersion"] == REPLY_API and reply["requestBindingSha256"] == binding)
+            _require(reply["apiVersion"] == (ADOPTED_REPLY_API if self._adopted else REPLY_API)
+                and reply["requestBindingSha256"] == binding)
             p.digest(reply["inputSha256"]); p.digest(reply["approvalSha256"])
-            identities = [_descriptor(fd, bound) for fd, bound in zip(fds, (heads.MAX_INPUT, MAX_APPROVAL), strict=True)]
+            if self._adopted:
+                from serverware import native_pilot_adopted_phase_profile as adopted
+                maximum = adopted.BY_NAME[pending["job"]][1].maximum
+            else:
+                maximum = heads.MAX_INPUT
+            identities = [_descriptor(fd, bound) for fd, bound in zip(fds, (maximum, MAX_APPROVAL), strict=True)]
             _require(identities[0][:2] != identities[1][:2])
             self.check()
             _require(not select.select([self._socket], [], [], 0)[0])
@@ -341,7 +412,7 @@ class ApprovalChannel(_Connection):
                 self._received.append(accepted)
                 fds.clear()
                 result = accepted
-            self._send({"apiVersion": RECEIPT_API, "requestBindingSha256": binding,
+            self._send({"apiVersion": ADOPTED_RECEIPT_API if self._adopted else RECEIPT_API, "requestBindingSha256": binding,
                 "replySha256": p.sha(p.canonical(reply))}, receipt=True)
             self._index += 1
             self._active = None
@@ -359,24 +430,38 @@ class ApprovalChannel(_Connection):
 
 class ApprovalPeer(_Connection):
     """Independent operator adapter; supplied FDs must already be approved."""
-    def receive(self, *, deadline_boottime_ns):
+    def receive(self, *, deadline_boottime_ns, expires_at_unix_ns=None):
         acquired = self._lock.acquire(blocking=False)
         try:
-            _require(acquired and self._active is None and self._index < len(heads.JOB_NAMES))
+            if self._adopted:
+                from serverware import native_pilot_adopted_phase_profile as adopted
+                order = tuple((phase, job.name) for phase, rows in adopted.JOBS.items() for job in rows)
+                expiry = p.integer(expires_at_unix_ns, maximum=p.MAX_I64)
+                _require(self._epoch_limit is None or expiry == self._epoch_limit)
+                self._epoch_limit = expiry
+            else:
+                _require(expires_at_unix_ns is None)
+                order = tuple(("bridge-runtime", name) for name in heads.JOB_NAMES)
+            _require(acquired and self._active is None and self._index < len(order))
             self.check()
             self._active = p.integer(deadline_boottime_ns, maximum=p.MAX_U64)
             self.check()
             header, _ = self._receive(0)
-            p.fields(header, REQUEST_FIELDS)
-            _require(header["apiVersion"] == REQUEST_API and type(header["exchangeSequence"]) is int
-                and header["exchangeSequence"] == self._index + 1 and header["phase"] == "bridge-runtime"
-                and header["job"] == heads.JOB_NAMES[self._index]
-                and type(header["sequence"]) is int and header["sequence"] == _SEQUENCES[header["job"]])
+            p.fields(header, REQUEST_FIELDS + (("expiresAtUnixNanos",) if self._adopted else ()))
+            _require(header["apiVersion"] == (ADOPTED_REQUEST_API if self._adopted else REQUEST_API)
+                and type(header["exchangeSequence"]) is int and header["exchangeSequence"] == self._index + 1
+                and (header["phase"], header["job"]) == order[self._index]
+                and type(header["sequence"]) is int
+                and header["sequence"] == (self._index + 1 if self._adopted else _SEQUENCES[header["job"]]))
+            if self._adopted:
+                expiry = p.ns(header["expiresAtUnixNanos"])
+                _require(expiry <= self._epoch_limit and (self._index == 0 or expiry == self._epoch_limit))
+                self._epoch_limit = expiry
             selected_deadline = p.ns(header["deadlineBoottimeNs"])
             _require(selected_deadline <= self._active)
             self._active = selected_deadline
             binding, values = p.sha(p.canonical(header)), {}
-            for name, maximum in (("request", MAX_REQUEST), ("observation", heads.MAX_OBSERVED)):
+            for name, maximum in (("request", MAX_REQUEST), ("observation", MAX_REQUEST if self._adopted else heads.MAX_OBSERVED)):
                 meta = p.fields(header[name], ("length", "sha256"))
                 size = p.integer(meta["length"], maximum=maximum)
                 p.digest(meta["sha256"])
@@ -384,7 +469,8 @@ class ApprovalPeer(_Connection):
                 while len(raw) < size:
                     part, _ = self._receive(0)
                     p.fields(part, CHUNK_FIELDS)
-                    _require(part["apiVersion"] == CHUNK_API and part["requestBindingSha256"] == binding
+                    _require(part["apiVersion"] == (ADOPTED_CHUNK_API if self._adopted else CHUNK_API)
+                        and part["requestBindingSha256"] == binding
                         and part["field"] == name and type(part["offset"]) is int and part["offset"] == len(raw))
                     chunk = p.decoded(part["dataBase64url"], maximum=CHUNK_BYTES)
                     _require(len(chunk) == min(CHUNK_BYTES, size - len(raw)))
@@ -392,13 +478,15 @@ class ApprovalPeer(_Connection):
                 _require(p.sha(raw) == meta["sha256"])
                 values[name] = bytes(raw).decode("ascii")
             pending = {"phase": header["phase"], "job": header["job"], "sequence": header["sequence"],
-                "status": "awaiting-independent-current-head-approval", "requestOriginal": values["request"],
+                "status": "awaiting-independent-job-approval" if self._adopted else "awaiting-independent-current-head-approval",
+                "requestOriginal": values["request"],
                 "requestSha256": header["request"]["sha256"], "observationOriginal": values["observation"],
                 "observationSha256": header["observation"]["sha256"]}
-            expected, _, deadline = _pending(pending, self._index)
+            expected, _, deadline = (_pending_adopted if self._adopted else _pending)(pending, self._index)
             _require(p.canonical(expected) == p.canonical(header) and deadline == self._active)
             self.check()
             self._binding = binding
+            self._job = header["job"]
             return pending  # Public observation data; never an approved input template.
         except BaseException:
             self._failed = True
@@ -412,15 +500,20 @@ class ApprovalPeer(_Connection):
         try:
             _require(acquired and self._active is not None and hasattr(self, "_binding"))
             self.check()
-            first, second = _descriptor(input_fd, heads.MAX_INPUT), _descriptor(approval_fd, MAX_APPROVAL)
+            if self._adopted:
+                from serverware import native_pilot_adopted_phase_profile as adopted
+                maximum = adopted.BY_NAME[self._job][1].maximum
+            else:
+                maximum = heads.MAX_INPUT
+            first, second = _descriptor(input_fd, maximum), _descriptor(approval_fd, MAX_APPROVAL)
             _require(first[:2] != second[:2])
             p.digest(input_sha256); p.digest(approval_sha256)
-            reply = {"apiVersion": REPLY_API, "requestBindingSha256": self._binding,
+            reply = {"apiVersion": ADOPTED_REPLY_API if self._adopted else REPLY_API, "requestBindingSha256": self._binding,
                 "inputSha256": input_sha256, "approvalSha256": approval_sha256}
             self._send(reply, (input_fd, approval_fd))
             receipt, _ = self._receive(0)
             p.fields(receipt, ("apiVersion", "requestBindingSha256", "replySha256"))
-            _require(receipt == {"apiVersion": RECEIPT_API, "requestBindingSha256": self._binding,
+            _require(receipt == {"apiVersion": ADOPTED_RECEIPT_API if self._adopted else RECEIPT_API, "requestBindingSha256": self._binding,
                 "replySha256": p.sha(p.canonical(reply))})
             self.check()
             del self._binding

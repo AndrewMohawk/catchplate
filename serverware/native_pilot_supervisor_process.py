@@ -28,7 +28,7 @@ from serverware import native_pilot_window_authority as window_authority
 from serverware import native_pilot_interactive as interactive
 from serverware import native_shadow_driver_bootstrap as bootstrap
 from serverware import native_shadow_nitro_originals as originals
-from serverware.native_pilot_coordinator_process import _Runtime, _clock, _structural
+from serverware.native_pilot_coordinator_process import _Runtime, _clock, _structural, ProcessPreparationError
 from serverware.native_pilot_operator_channel import MAX_FRAME, MAX_TOTAL, STAGES
 from serverware.native_pilot_phase_execution import APPROVAL_ROOT, JOBS, KEY_PURPOSES, MAX_RETAINED_BYTES
 from serverware.native_pilot_scope_authority import PRODUCTION_FIELDS
@@ -90,6 +90,10 @@ class JobRequest:
     def deadline_boottime_ns(self):
         return p.ns(self._value["deadlineBoottimeNs"])
 
+    @property
+    def expires_at_unix_ns(self):
+        return p.ns(self._value["expiresAtUnixNanos"]) if "expiresAtUnixNanos" in self._value else None
+
 
 class _JobChannel(pipe.PipeChannel):
     """Reuse bounded pipe mechanics, not the distinct conductor protocol."""
@@ -111,7 +115,7 @@ class _JobChannel(pipe.PipeChannel):
 
     def receive(self, upper_deadline):
         try:
-            _require(self._pending is None and self._index < len(_ORDER))
+            _require(self._pending is None and self._index < len(self._owner._order))
             raw = bytearray()
             while True:
                 self._wait(True, upper_deadline)
@@ -130,7 +134,8 @@ class _JobChannel(pipe.PipeChannel):
                         pending = array.array("i", [0])
                         fcntl.ioctl(self._reader, termios.FIONREAD, pending, True)
                         _require(bool(raw) and pending[0] == 0)
-                        value = p.fields(p.document(bytes(raw), MAX_FRAME - 1), _REQUEST_FIELDS)
+                        value = p.fields(p.document(bytes(raw), MAX_FRAME - 1), _REQUEST_FIELDS +
+                            (("expiresAtUnixNanos",) if self._owner._adopted else ()))
                         self._owner._admit_request(value, self._index, upper_deadline)
                         self._check(p.ns(value["deadlineBoottimeNs"]))
                         self._pending = JobRequest(_TOKEN, bytes(raw), value)
@@ -144,7 +149,8 @@ class _JobChannel(pipe.PipeChannel):
     def _reply_value(self, request, reply):
         _require(type(request) is JobRequest and self._pending is request)
         value = p.fields(reply, _REPLY_FIELDS)
-        _require(value["apiVersion"] == "serverware.nativePilotAuthorityJobReply/v1"
+        _require(value["apiVersion"] == ("serverware.nativePilotAuthorityJobReply/v2" if self._owner._adopted else
+            "serverware.nativePilotAuthorityJobReply/v1")
             and value["requestSha256"] == p.sha(request.raw))
         for name in ("sequence", "conductorSequence", "conductorRequestSha256", "phase", "jobIndex", "job"):
             _same(value[name], request._value[name])
@@ -168,7 +174,7 @@ class _JobChannel(pipe.PipeChannel):
                     except (InterruptedError, BlockingIOError):
                         continue
                     self._count(count); offset += count
-                    self._check(deadline, allow_terminal=(offset == len(wire) and self._index == len(_ORDER) - 1))
+                    self._check(deadline, allow_terminal=(offset == len(wire) and self._index == len(self._owner._order) - 1))
                     if offset == len(wire):
                         self._owner._replies[(request.phase, request.job)] = copy.deepcopy(value)
                         if self._owner._interactive_pending is not None:
@@ -204,10 +210,31 @@ class AuthorityCoordinatorProcess:
         self._interactive_action = self._interactive_origin = self._interactive_deadline = None
         self._interactive_pending = None
         self._interval_wait_attempted = self._interval_wait_done = False
+        self._adopted = False
+        self._intake = self._epoch_limit = self._core_expiry = None
+        self._last_wall = time.time_ns()
+        self._jobs, self._order, self._key_purposes, self._approval_root = JOBS, _ORDER, KEY_PURPOSES, APPROVAL_ROOT
 
     @classmethod
     def prepare(cls, *, conductor_inventory_fd, conductor_inventory_sha256,
                 authority_inventory_fd, authority_inventory_sha256, authority_key_fds):
+        return cls._prepare(conductor_inventory_fd=conductor_inventory_fd,
+            conductor_inventory_sha256=conductor_inventory_sha256, authority_inventory_fd=authority_inventory_fd,
+            authority_inventory_sha256=authority_inventory_sha256, authority_key_fds=authority_key_fds, adopted=False)
+
+    @classmethod
+    def prepare_adopted(cls, *, conductor_inventory_fd, conductor_inventory_sha256,
+                        authority_inventory_fd, authority_inventory_sha256, authority_key_fds,
+                        intake_configuration_fd, intake_configuration_sha256):
+        return cls._prepare(conductor_inventory_fd=conductor_inventory_fd,
+            conductor_inventory_sha256=conductor_inventory_sha256, authority_inventory_fd=authority_inventory_fd,
+            authority_inventory_sha256=authority_inventory_sha256, authority_key_fds=authority_key_fds, adopted=True,
+            intake_configuration_fd=intake_configuration_fd, intake_configuration_sha256=intake_configuration_sha256)
+
+    @classmethod
+    def _prepare(cls, *, conductor_inventory_fd, conductor_inventory_sha256,
+                 authority_inventory_fd, authority_inventory_sha256, authority_key_fds, adopted,
+                 intake_configuration_fd=None, intake_configuration_sha256=None):
         """Admit installed originals before startup; borrow, then retain FD copies.
 
         Source FDs stay caller-owned and become CLOEXEC. Only retained copies of
@@ -219,6 +246,22 @@ class AuthorityCoordinatorProcess:
         _USED = True
         owner = cls(_TOKEN); _LIVE = owner
         try:
+            owner._adopted = adopted
+            if adopted:
+                from serverware import native_pilot_adopted_phase_profile as selected
+                from serverware.native_pilot_adopted_intake import IntakeConfiguration, IntakeError
+                owner._jobs, owner._key_purposes, owner._approval_root = selected.JOBS, selected.KEY_PURPOSES, selected.APPROVAL_ROOT
+                owner._order = tuple((phase, index + 1, job) for phase in STAGES
+                    for index, job in enumerate(owner._jobs[phase]))
+                _require(intake_configuration_fd not in (conductor_inventory_fd, authority_inventory_fd))
+                try:
+                    owner._intake = IntakeConfiguration.open(intake_configuration_fd, intake_configuration_sha256)
+                except IntakeError as error:
+                    _require(type(error.owner) is IntakeConfiguration)
+                    owner._intake = error.owner
+                    raise
+                owner._epoch_limit = owner._intake.expires_at_unix_ns
+                owner._intake_sha256 = intake_configuration_sha256
             owner._origin()
             _require(conductor_inventory_fd != authority_inventory_fd)
             inventories = []
@@ -238,30 +281,43 @@ class AuthorityCoordinatorProcess:
             authority_records = owner._runtimes[1].records
             _require({path: row for path, row in authority_records.items()
                 if path != "authority" and not path.startswith("authority/")} == common)
-            p.fields(authority_key_fds, KEY_PURPOSES)
+            if owner._intake is not None:
+                owner._intake.check(startup=True)
+            p.fields(authority_key_fds, owner._key_purposes)
             bindings = {}
-            for purpose in KEY_PURPOSES:
+            for purpose in owner._key_purposes:
                 fd = authority_key_fds[purpose]
-                _require(type(fd) is int and fd not in (conductor_inventory_fd, authority_inventory_fd))
+                _require(type(fd) is int and fd not in (conductor_inventory_fd, authority_inventory_fd, intake_configuration_fd))
                 identity = io._input(fd, 32, private=True)
                 _require(identity[6] == 32)
                 held = fcntl.fcntl(fd, fcntl.F_DUPFD_CLOEXEC, 3)
                 owner._keys[purpose] = (held, identity)
                 _require(io._input(held, 32, private=True) == identity)
+                if owner._intake is not None:
+                    owner._intake.check(startup=True)
                 key = io.signing_key(held)
                 try:
                     bindings[purpose] = p.sha(key.public_key().public_bytes(
                         serialization.Encoding.Raw, serialization.PublicFormat.Raw))
                 finally:
                     del key  # Software key copies are not guaranteed erased.
-            owner._bindings = {"apiVersion": "serverware.nativePilotSupervisorBindings/v1",
+                if owner._intake is not None:
+                    owner._intake.check(startup=True)
+            owner._bindings = {"apiVersion": ("serverware.nativePilotSupervisorBindings/v2" if adopted else
+                "serverware.nativePilotSupervisorBindings/v1"),
                 "conductorInventorySha256": conductor_inventory_sha256,
                 "authorityInventorySha256": authority_inventory_sha256,
                 "source": copy.deepcopy(inventories[0]["source"]), "keyBindings": bindings}
+            if adopted:
+                owner._bindings["intakeConfigurationSha256"] = intake_configuration_sha256
             owner._capabilities()
             return owner
         except BaseException:
-            owner._release_handles()
+            try:
+                owner._release_handles()
+            except BaseException as error:
+                owner._close_attempted = True
+                raise ProcessPreparationError(owner) from error
             owner._closed = True; _LIVE = None
             raise
 
@@ -273,17 +329,30 @@ class AuthorityCoordinatorProcess:
 
     def _capabilities(self):
         self._origin()
+        if self._intake is not None:
+            self._intake.check()
         for fd, identity, _ in self._inventories:
             _require(io._input(fd, artifact.MAX_MANIFEST_BYTES) == identity)
         for fd, identity in self._keys.values():
             _require(io._input(fd, 32, private=True) == identity)
         for original in self._originals:
             original.check()
+        if self._intake is not None:
+            self._intake.check()
 
     def policy_bindings(self):
         self._capabilities()
         _require(self._bindings is not None)
         return copy.deepcopy(self._bindings)
+
+    def adoption_selected(self):
+        self._origin()
+        return self._adopted
+
+    def intake_configuration_original(self):
+        self._capabilities()
+        _require(self._adopted and self._intake is not None)
+        return bytes(self._intake.raw)
 
     def runtime_originals(self):
         self._capabilities()
@@ -350,6 +419,11 @@ class AuthorityCoordinatorProcess:
             deliveryConfiguration=cold_raw)
         self._startup, self._lifetime = p.ns(window["startupDeadlineBoottimeNs"]), p.ns(window["lifetimeDeadlineBoottimeNs"])
         self._reserve = config["lifecycle"]["cleanupReserveNanos"]
+        if self._intake is not None:
+            self._intake.check(startup=True)
+            self._startup = min(self._startup, self._intake.startup_deadline_boottime_ns)
+            self._lifetime = min(self._lifetime, self._intake.deadline_boottime_ns)
+            _require(_clock() < self._startup < self._lifetime - self._reserve)
         self._capabilities()
         window_authority.validate_window(window, config_raw, config, boot=self._boot, now=_clock())
         self._bootstrap_prepared = True
@@ -368,9 +442,21 @@ class AuthorityCoordinatorProcess:
         inventory_fd = self._inventories[0][0]
         command = artifact.AUTHORITY_COMMAND + ["--runtime-inventory-fd", str(inventory_fd),
             "--runtime-inventory-sha256", self._bindings["conductorInventorySha256"]]
-        for purpose in KEY_PURPOSES:
+        if self._adopted:
+            self._intake.check()
+            self._startup = min(self._startup, self._intake.startup_deadline_boottime_ns)
+            self._lifetime = min(self._lifetime, self._intake.deadline_boottime_ns)
+            _require(_clock() < self._startup < self._lifetime - self._reserve)
+            command = artifact.AUTHORITY_COMMAND[:-1] + ["--run-adopted-native-pilot",
+                "--runtime-inventory-fd", str(inventory_fd),
+                "--runtime-inventory-sha256", self._bindings["conductorInventorySha256"],
+                "--intake-configuration-fd", str(self._intake.borrowed_fd()),
+                "--intake-configuration-sha256", self._intake_sha256]
+        for purpose in self._key_purposes:
             command += ["--authority-key", purpose + "=" + str(self._keys[purpose][0])]
-        inherited = (inventory_fd,) + tuple(self._keys[purpose][0] for purpose in KEY_PURPOSES)
+        inherited = (inventory_fd,) + tuple(self._keys[purpose][0] for purpose in self._key_purposes)
+        if self._adopted:
+            inherited += (self._intake.borrowed_fd(),)
         self._spawn_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM, signal.SIGINT})
         retained = False
         try:
@@ -398,6 +484,10 @@ class AuthorityCoordinatorProcess:
         _require(self._child is not None and self._pidfd is not None and not self._close_attempted
             and type(deadline) is int and 0 < deadline <= self._lifetime)
         now = _clock(); _require(self._last_clock <= now < deadline); self._last_clock = now
+        if self._adopted:
+            wall = time.time_ns()
+            _require(self._last_wall <= wall < self._epoch_limit)
+            self._last_wall = wall
         _require(allow_terminal or not select.select([self._pidfd], [], [], 0)[0])
 
     def check_request(self, request):
@@ -407,23 +497,32 @@ class AuthorityCoordinatorProcess:
         self._channel._check(request.deadline_boottime_ns)
 
     def _admit_request(self, value, index, upper_deadline):
-        phase, job_index, job = _ORDER[index]
-        _require(value["apiVersion"] == "serverware.nativePilotAuthorityJobRequest/v1"
-            and p.integer(value["sequence"], maximum=len(_ORDER)) == index + 1
+        phase, job_index, job = self._order[index]
+        _require(value["apiVersion"] == ("serverware.nativePilotAuthorityJobRequest/v2" if self._adopted else
+            "serverware.nativePilotAuthorityJobRequest/v1")
+            and p.integer(value["sequence"], maximum=len(self._order)) == index + 1
             and p.integer(value["conductorSequence"], maximum=len(STAGES)) == STAGES.index(phase) + 1
             and value["phase"] == phase and value["job"] == job.name
-            and p.integer(value["jobIndex"], maximum=len(JOBS[phase])) == job_index
+            and p.integer(value["jobIndex"], maximum=len(self._jobs[phase])) == job_index
             and p.ns(value["deadlineBoottimeNs"]) <= upper_deadline)
         p.digest(value["conductorRequestSha256"])
+        if self._adopted:
+            expiry = p.ns(value["expiresAtUnixNanos"])
+            _require(0 < expiry <= self._epoch_limit and (self._core_expiry is None or self._core_expiry == expiry))
+            self._core_expiry = self._epoch_limit = expiry
         if job_index == 1:
-            conductor = p.fields(value["conductorRequest"],
-                ("apiVersion", "sequence", "phase", "payload", "deadlineBoottimeNs"))
-            _require(conductor["apiVersion"] == "serverware.nativePilotOperatorRequest/v1"
+            conductor = pipe.request_value(p.canonical(value["conductorRequest"]), sequence=STAGES.index(phase) + 1,
+                phase=phase, upper_deadline=upper_deadline, adopted=self._adopted,
+                expires_at_unix_ns=self._epoch_limit if self._adopted else None)
+            _require(conductor["apiVersion"] == ("serverware.nativePilotOperatorRequest/v2" if self._adopted else
+                "serverware.nativePilotOperatorRequest/v1")
                 and type(conductor["payload"]) is dict
                 and p.sha(p.canonical(conductor)) == value["conductorRequestSha256"])
             for first, second in (("sequence", "conductorSequence"), ("phase", "phase"),
                                    ("deadlineBoottimeNs", "deadlineBoottimeNs")):
                 _same(conductor[first], value[second])
+            if self._adopted:
+                _same(conductor["expiresAtUnixNanos"], value["expiresAtUnixNanos"])
             _require(phase not in self._conductors)
             self._conductors[phase] = copy.deepcopy(conductor)
         else:
@@ -434,7 +533,7 @@ class AuthorityCoordinatorProcess:
         if index == 0:
             _require(value["previousResult"] is None)
         else:
-            prior_phase, _, prior_job = _ORDER[index - 1]
+            prior_phase, _, prior_job = self._order[index - 1]
             previous = p.fields(value["previousResult"], ("phase", "job", "result"))
             _require(previous["phase"] == prior_phase and previous["job"] == prior_job.name
                 and type(previous["result"]) is dict and (prior_phase, prior_job.name) in self._replies)
@@ -442,8 +541,8 @@ class AuthorityCoordinatorProcess:
 
     def receive(self):
         self._capabilities()
-        _require(self._channel is not None and self._channel._index < len(_ORDER))
-        phase, job_index, _ = _ORDER[self._channel._index]
+        _require(self._channel is not None and self._channel._index < len(self._order))
+        phase, job_index, _ = self._order[self._channel._index]
         if job_index == 1:
             for runtime in self._runtimes:
                 runtime.check()
@@ -454,14 +553,14 @@ class AuthorityCoordinatorProcess:
         self.check_request(request)
         try:
             self._channel._reply_value(request, reply)
-            phase, _, job = _ORDER[self._channel._index]
+            phase, _, job = self._order[self._channel._index]
             slot = (phase, job.name)
             _require(slot not in self._approved_inputs and self._approved_bytes < MAX_RETAINED_BYTES)
-            raw = self._open(APPROVAL_ROOT + "/" + phase + "/" + job.name + ".input.json",
+            raw = self._open(self._approval_root + "/" + phase + "/" + job.name + ".input.json",
                 min(job.maximum, MAX_RETAINED_BYTES - self._approved_bytes), p.digest(reply["inputSha256"]))
             self._approved_bytes += len(raw)
             self._approved_inputs[slot] = raw
-            if request.phase == "endpoint-inputs":
+            if slot == ("endpoint-inputs", "endpoint-inputs"):
                 # This approved fixed input supplies the actual production
                 # cleanup reserve. It cannot extend any original deadline.
                 production = p.fields(p.document(raw, 65536)["production"], PRODUCTION_FIELDS)
@@ -497,7 +596,7 @@ class AuthorityCoordinatorProcess:
     def wait_interactive(self):
         """Retain the actual authority child while its approved pilot runs."""
         self._capabilities()
-        _require(self._channel is not None and self._channel._index == len(_ORDER)
+        _require(self._channel is not None and self._channel._index == len(self._order)
             and not self._channel._poisoned)
         if self._interactive_action is not None:
             interactive.wait_for_child(self, action=self._interactive_action,
@@ -512,6 +611,8 @@ class AuthorityCoordinatorProcess:
             os.close(fd)
         for runtime in self._runtimes:
             runtime.close()
+        if self._intake is not None:
+            self._intake.close()
 
     def close(self, *, cancel=False):
         """One SIGTERM at most; require real terminal cleanup, exit and reap."""
@@ -526,7 +627,7 @@ class AuthorityCoordinatorProcess:
                 "pilotAcceptanceVerified": False, "productionReleaseEligible": False}
         else:
             _require(self._pidfd is not None)
-            complete = self._channel is not None and self._channel._index == len(_ORDER) and not self._channel._poisoned
+            complete = self._channel is not None and self._channel._index == len(self._order) and not self._channel._poisoned
             now = _clock(); deadline = min(self._lifetime, now + self._reserve)
             _require(now < deadline)
             if (cancel or not complete) and not select.select([self._pidfd], [], [], 0)[0]:

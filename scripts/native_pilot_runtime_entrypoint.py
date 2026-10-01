@@ -14,7 +14,7 @@ def main():
     script = "/app/scripts/native_pilot_runtime_entrypoint.py"
     python = "/runtime/python/bin/python3"
     if not (
-        sys.argv == [script, "--run-native-pilot"]
+        sys.argv[0] == script
         and __file__ == script and os.path.realpath(__file__) == script
         and sys.executable == python and os.path.realpath(sys.executable) == python
         and sys.prefix == sys.base_prefix == "/runtime/python"
@@ -27,6 +27,11 @@ def main():
     # -I intentionally ignores PYTHONPATH and the script directory. Only these
     # fixed, packaged roots are added; no caller module or path is accepted.
     sys.path[:0] = ["/vendor", "/app"]
+    from serverware.native_pilot_adopted_intake import invocation
+    try:
+        invocation(sys.argv[1:])  # Exact legacy flag or explicit fixed adopted intake.
+    except (ValueError, TypeError):
+        raise SystemExit("native pilot runtime invocation refused") from None
     runpy.run_path("/app/scripts/run_native_pilot.py", run_name="__main__")
 
 

@@ -11,7 +11,7 @@ import stat
 import termios
 import time
 
-from serverware.native_pilot_operator_channel import STAGES, MAX_FRAME, MAX_TOTAL
+from serverware.native_pilot_operator_channel import STAGES, MAX_FRAME, MAX_TOTAL, wire_versions
 from serverware import native_shadow_nitro_profile as p
 
 _TOKEN = object()
@@ -26,6 +26,24 @@ def _identity(fd):
     info = os.fstat(fd)
     _require(stat.S_ISFIFO(info.st_mode) and info.st_uid == info.st_gid == 0)
     return info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid, info.st_nlink
+
+
+def request_value(raw, *, sequence, phase, upper_deadline, adopted=False, expires_at_unix_ns=None):
+    """Closed framing only; independently retained owners supply every bound."""
+    _require(type(adopted) is bool and type(sequence) is int and 1 <= sequence <= len(STAGES)
+        and STAGES[sequence - 1] == phase and type(upper_deadline) is int and 0 < upper_deadline <= p.MAX_U64)
+    fields = ("apiVersion", "sequence", "phase", "payload", "deadlineBoottimeNs")
+    value = p.fields(p.document(raw, MAX_FRAME - 1), fields + (("expiresAtUnixNanos",) if adopted else ()))
+    _require(value["apiVersion"] == wire_versions(adopted=adopted)[0]
+        and type(value["sequence"]) is int and value["sequence"] == sequence
+        and value["phase"] == phase and phase in STAGES and type(value["payload"]) is dict
+        and p.ns(value["deadlineBoottimeNs"]) <= upper_deadline)
+    if adopted:
+        expiry = p.ns(value["expiresAtUnixNanos"])
+        _require(type(expires_at_unix_ns) is int and 0 < expiry <= expires_at_unix_ns <= p.MAX_I64)
+    else:
+        _require(expires_at_unix_ns is None)
+    return value
 
 
 class Request:
@@ -53,6 +71,10 @@ class Request:
     @property
     def deadline_boottime_ns(self):
         return p.ns(self._value["deadlineBoottimeNs"])
+
+    @property
+    def expires_at_unix_ns(self):
+        return p.ns(self._value["expiresAtUnixNanos"]) if "expiresAtUnixNanos" in self._value else None
 
 
 class PipeChannel:
@@ -87,6 +109,8 @@ class PipeChannel:
         while True:
             self._check(deadline)
             duration = min(0.05, (deadline - time.clock_gettime_ns(time.CLOCK_BOOTTIME)) / 1_000_000_000)
+            if self._owner._adopted:
+                duration = min(duration, (self._owner._epoch_limit - time.time_ns()) / 1_000_000_000)
             _require(duration > 0)
             try:
                 ready, writable, _ = select.select([self._reader] if reading else [],
@@ -122,11 +146,11 @@ class PipeChannel:
                         pending = array.array("i", [0])
                         fcntl.ioctl(self._reader, termios.FIONREAD, pending, True)
                         _require(bool(raw) and pending[0] == 0)
-                        value = p.fields(p.document(bytes(raw), MAX_FRAME - 1),
-                            ("apiVersion", "sequence", "phase", "payload", "deadlineBoottimeNs"))
-                        _require(value["apiVersion"] == "serverware.nativePilotOperatorRequest/v1"
-                            and type(value["sequence"]) is int and value["sequence"] == self._index + 1
-                            and value["phase"] == STAGES[self._index] and type(value["payload"]) is dict)
+                        value = request_value(bytes(raw), sequence=self._index + 1, phase=STAGES[self._index],
+                            upper_deadline=upper_deadline, adopted=self._owner._adopted,
+                            expires_at_unix_ns=self._owner._epoch_limit if self._owner._adopted else None)
+                        if self._owner._adopted:
+                            self._owner._retain_core_expiry(p.ns(value["expiresAtUnixNanos"]))
                         deadline = p.ns(value["deadlineBoottimeNs"])
                         _require(deadline <= upper_deadline)
                         self._check(deadline)
@@ -156,7 +180,7 @@ class PipeChannel:
                         and action["stopAtBoottimeNanos"] - now < action["expiresAtUnixNanos"] - epoch)
                 else:
                     p.fields(inputs, ("action",)); _require(inputs["action"] == "stop")
-            wire = p.canonical({"apiVersion": "serverware.nativePilotOperatorReply/v1", "sequence": request.sequence,
+            wire = p.canonical({"apiVersion": wire_versions(adopted=self._owner._adopted)[1], "sequence": request.sequence,
                 "phase": request.phase, "requestSha256": p.sha(request.raw), "inputs": inputs}) + b"\n"
             _require(len(wire) <= MAX_FRAME and len(wire) <= MAX_TOTAL - self._total)
             offset = 0

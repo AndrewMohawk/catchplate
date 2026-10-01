@@ -236,13 +236,19 @@ class PhaseExecution:
         self._inputs = {}  # References to the same bounded, retained original bytes.
         self._previous = None
         self._material = self._endpoint_inputs = self._public_bundle_pin = self._scope_bundle = None
+        self._jobs, self._key_purposes = JOBS, KEY_PURPOSES
+        self._approval_root = APPROVAL_ROOT
+        self._request_api = "serverware.nativePilotAuthorityJobRequest/v1"
+        self._reply_api = "serverware.nativePilotAuthorityJobReply/v1"
+        self._approval_api = "serverware.nativePilotAuthorityJobApproval/v1"
+        self._adopted = False
 
     @classmethod
     def open(cls, process):
         global _USED, _LIVE
         p.require(cls is PhaseExecution and not _USED and type(process) is ConductorProcess)
         process._origin()
-        p.require(not process._started and tuple(JOBS) == STAGES)
+        p.require(not process._started and not process.adoption_selected() and tuple(JOBS) == STAGES)
         _USED = True
         owner = cls(_TOKEN, process)
         _LIVE = owner
@@ -253,8 +259,8 @@ class PhaseExecution:
         p.require(not self._keys_attempted and not self._process._started)
         self._keys_attempted = True
         try:
-            p.fields(declared, KEY_PURPOSES)
-            for purpose in KEY_PURPOSES:
+            p.fields(declared, self._key_purposes)
+            for purpose in self._key_purposes:
                 source = declared[purpose]
                 identity = io._input(source, 32, private=True)
                 p.require(identity[6] == 32)
@@ -298,19 +304,21 @@ class PhaseExecution:
 
     def has_job(self):
         self._check(pending=True)
-        return self._job_index < len(JOBS[self._request.phase])
+        return self._job_index < len(self._jobs[self._request.phase])
 
     def job_request(self):
         self._check(pending=True)
         p.require(self.has_job() and self._ticket is None)
         request = self._request
-        job = JOBS[request.phase][self._job_index]
-        value = {"apiVersion": "serverware.nativePilotAuthorityJobRequest/v1", "sequence": self._exchange + 1,
+        job = self._jobs[request.phase][self._job_index]
+        value = {"apiVersion": self._request_api, "sequence": self._exchange + 1,
             "conductorSequence": request.sequence, "conductorRequestSha256": p.sha(request.raw),
             "phase": request.phase, "jobIndex": self._job_index + 1, "job": job.name,
             "deadlineBoottimeNs": str(request.deadline_boottime_ns),
             "conductorRequest": p.document(request.raw, 32 * 1024 * 1024) if self._job_index == 0 else None,
             "previousResult": copy.deepcopy(self._previous)}
+        if self._adopted:
+            value["expiresAtUnixNanos"] = str(request.expires_at_unix_ns)
         self._ticket = p.canonical(value)
         return value
 
@@ -327,21 +335,23 @@ class PhaseExecution:
         self._check(pending=True)
         p.require(self._ticket is not None and self.has_job())
         request = self._request
-        job = JOBS[request.phase][self._job_index]
+        job = self._jobs[request.phase][self._job_index]
         self._failed = True  # Only definite completion releases this attempt fence.
         ticket = p.document(self._ticket, 32 * 1024 * 1024)
         p.fields(reply, ("apiVersion", "sequence", "conductorSequence", "conductorRequestSha256", "phase",
             "jobIndex", "job", "requestSha256", "approvalSha256", "inputSha256"))
-        p.require(reply["apiVersion"] == "serverware.nativePilotAuthorityJobReply/v1"
+        p.require(reply["apiVersion"] == self._reply_api
             and reply["requestSha256"] == p.sha(self._ticket))
         for field in ("sequence", "conductorSequence", "conductorRequestSha256", "phase", "jobIndex", "job"):
             _same(reply[field], ticket[field])
-        stem = APPROVAL_ROOT + "/" + request.phase + "/" + job.name
+        stem = self._approval_root + "/" + request.phase + "/" + job.name
         approval_raw = self._retain(stem + ".approval.json", p.digest(reply["approvalSha256"]), MAX_APPROVAL)
         approval = p.fields(p.document(approval_raw, MAX_APPROVAL), ("apiVersion", "conductorSequence",
-            "conductorRequestSha256", "phase", "jobIndex", "job", "deadlineBoottimeNs", "inputSha256"))
-        p.require(approval["apiVersion"] == "serverware.nativePilotAuthorityJobApproval/v1")
-        for field in ("conductorSequence", "conductorRequestSha256", "phase", "jobIndex", "job", "deadlineBoottimeNs"):
+            "conductorRequestSha256", "phase", "jobIndex", "job", "deadlineBoottimeNs", "inputSha256")
+            + (("expiresAtUnixNanos",) if self._adopted else ()))
+        p.require(approval["apiVersion"] == self._approval_api)
+        for field in ("conductorSequence", "conductorRequestSha256", "phase", "jobIndex", "job", "deadlineBoottimeNs") + (
+                ("expiresAtUnixNanos",) if self._adopted else ()):
             _same(approval[field], ticket[field])
         p.require(p.digest(approval["inputSha256"]) == p.digest(reply["inputSha256"]))
         raw = self._retain(stem + ".input.json", approval["inputSha256"], job.maximum)
@@ -350,13 +360,13 @@ class PhaseExecution:
         self._process._io_check(request.deadline_boottime_ns)
         self._bind(job, value)
         key = None
-        if job.key is not None:
+        if job.key is not None and not (self._adopted and job.family == "adoption"):
             fd, identity = self._keys[job.key]
             p.require(io._input(fd, 32, private=True) == identity)
             key = io.signing_key(fd)
         result = self._perform(job, raw, value, key)
         del key  # Not a hardware/non-exportable or guaranteed-zeroization claim.
-        if job.key is not None:
+        if job.key is not None and not (self._adopted and job.family == "adoption"):
             p.require(io._input(fd, 32, private=True) == identity)
         for original in self._held:
             original.check()

@@ -45,6 +45,13 @@ def _require(value):
         raise ValueError("native pilot coordinator process refused")
 
 
+class ProcessPreparationError(ValueError):
+    """Uncertain no-child cleanup still owns its actual retained capabilities."""
+    def __init__(self, owner):
+        super().__init__("pilot process preparation cleanup unknown; actual owner retained")
+        self.owner = owner
+
+
 def _clock():
     return time.clock_gettime_ns(time.CLOCK_BOOTTIME)
 
@@ -240,22 +247,58 @@ class ConductorProcess:
         self._phase = "open"
         self._interval_wait_attempted = self._interval_wait_done = False
         self._interactive_deadline = None
+        self._adopted = False
+        self._intake = self._epoch_limit = self._core_expiry = None
+        self._last_wall = time.time_ns()
 
     @classmethod
     def prepare(cls, *, runtime_inventory_fd, runtime_inventory_sha256):
+        return cls._prepare(runtime_inventory_fd=runtime_inventory_fd,
+            runtime_inventory_sha256=runtime_inventory_sha256, adopted=False)
+
+    @classmethod
+    def prepare_adopted(cls, *, runtime_inventory_fd, runtime_inventory_sha256,
+                        intake_configuration_fd, intake_configuration_sha256):
+        return cls._prepare(runtime_inventory_fd=runtime_inventory_fd,
+            runtime_inventory_sha256=runtime_inventory_sha256, adopted=True,
+            intake_configuration_fd=intake_configuration_fd,
+            intake_configuration_sha256=intake_configuration_sha256)
+
+    @classmethod
+    def _prepare(cls, *, runtime_inventory_fd, runtime_inventory_sha256, adopted,
+                 intake_configuration_fd=None, intake_configuration_sha256=None):
         global _LIVE, _USED
         _require(cls is ConductorProcess and not _USED and _LIVE is None)
         _USED = True
         owner = cls(_TOKEN); _LIVE = owner
         try:
+            owner._adopted = adopted
             owner._origin()
             raw = public_io.read_public(runtime_inventory_fd, artifact.MAX_MANIFEST_BYTES)
             _require(p.sha(raw) == p.digest(runtime_inventory_sha256))
             owner._runtime.admit(raw)
             _require(public_io.read_public(runtime_inventory_fd, artifact.MAX_MANIFEST_BYTES) == raw)
+            if adopted:
+                from serverware.native_pilot_adopted_intake import IntakeConfiguration, IntakeError
+                _require(intake_configuration_fd != runtime_inventory_fd)
+                try:
+                    owner._intake = IntakeConfiguration.open(intake_configuration_fd, intake_configuration_sha256)
+                except IntakeError as error:
+                    _require(type(error.owner) is IntakeConfiguration)
+                    owner._intake = error.owner
+                    raise
+                owner._epoch_limit = owner._intake.expires_at_unix_ns
+                owner._intake_sha256 = intake_configuration_sha256
             return owner
         except BaseException:
-            owner._runtime.close(); owner._closed = True; _LIVE = None
+            try:
+                if owner._intake is not None:
+                    owner._intake.close()
+                owner._runtime.close()
+            except BaseException as error:
+                owner._close_attempted = True
+                raise ProcessPreparationError(owner) from error
+            owner._closed = True; _LIVE = None
             raise
 
     def _origin(self):
@@ -263,6 +306,10 @@ class ConductorProcess:
             and originals._start() == self._start and originals._boot() == self._boot
             and threading.current_thread() is threading.main_thread()
             and os.getresuid() == (0, 0, 0) and os.getresgid() == (0, 0, 0))
+
+    def adoption_selected(self):
+        self._origin()
+        return self._adopted
 
     def _open(self, path, maximum, digest=None):
         original = _Original(path, maximum, digest)
@@ -297,11 +344,22 @@ class ConductorProcess:
         issued = p.ns(window["issuedAtBoottimeNs"])
         _require(issued <= _clock() < self._startup < self._lifetime - self._reserve
             and self._startup - issued <= 30_000_000_000)
+        command, inherited = artifact.COMMAND, ()
+        if self._adopted:
+            from serverware.native_pilot_adopted_intake import conductor_arguments
+            self._intake.check()
+            self._startup = min(self._startup, self._intake.startup_deadline_boottime_ns)
+            self._lifetime = min(self._lifetime, self._intake.deadline_boottime_ns)
+            _require(_clock() < self._startup < self._lifetime - self._reserve)
+            intake_fd = self._intake.borrowed_fd()
+            command = artifact.COMMAND[:-1] + conductor_arguments(configuration_fd=intake_fd,
+                configuration_sha256=self._intake_sha256)
+            inherited = (intake_fd,)
         self._spawn_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM, signal.SIGINT})
         retained = False
         try:
-            self._child = subprocess.Popen(artifact.COMMAND, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE, bufsize=0, close_fds=True, env={}, cwd="/", restore_signals=True)
+            self._child = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, bufsize=0, close_fds=True, pass_fds=inherited, env={}, cwd="/", restore_signals=True)
             # Both parent signals remain blocked until the real child, PIDFD
             # and pipes are retained. The fixed child unblocks them only after
             # installing its own handlers, before claiming live resources.
@@ -327,10 +385,21 @@ class ConductorProcess:
         _require(self._child is not None and self._pidfd is not None and not self._close_attempted
             and type(deadline) is int and 0 < deadline <= self._lifetime)
         now = _clock(); _require(self._last_clock <= now < deadline); self._last_clock = now
+        if self._adopted:
+            wall = time.time_ns()
+            _require(self._last_wall <= wall < self._epoch_limit)
+            self._last_wall = wall
         _require(allow_terminal or not select.select([self._pidfd], [], [], 0)[0])
+
+    def _retain_core_expiry(self, expiry):
+        _require(self._adopted and type(expiry) is int and 0 < expiry <= self._epoch_limit
+            and (self._core_expiry is None or self._core_expiry == expiry))
+        self._core_expiry = self._epoch_limit = expiry
 
     def _boundary(self):
         self._origin(); self._runtime.check()
+        if self._intake is not None:
+            self._intake.check()
         for original in self._originals:
             original.check()
 
@@ -443,5 +512,7 @@ class ConductorProcess:
         for original in self._originals:
             original.close()
         self._runtime.close()
+        if self._intake is not None:
+            self._intake.close()
         self._closed = True; _LIVE = None
         return copy.deepcopy(self._result)

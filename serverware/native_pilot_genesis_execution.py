@@ -50,6 +50,7 @@ class GenesisExecution:
         self._startup = self._lifetime = self._deadline = self._epoch_limit = None
         self._parent = self._ordinary = self._endpoints = self._assembly = None
         self._core = self._core_channel = None
+        self._handoff_listener = None
         self._handoff = self._handoff_attempted = False
         self._handoff_peer = None
         self._jobs = jobs.JOBS
@@ -112,6 +113,25 @@ class GenesisExecution:
             self._acquire("_core_channel", lambda: GenesisCoreChannel.open(fd=fd,
                 peer_pid=peer["peerPid"], peer_uid=peer["peerUid"], peer_gid=peer["peerGid"],
                 deadline_boottime_ns=self._lifetime, expires_at_unix_ns=self._epoch_limit))
+            self._check()
+        except BaseException as error:
+            self._failed = True
+            raise GenesisExecutionError(self) from error
+
+    def prepare_handoff_listener(self, listener):
+        """Accept one actual recipient after independent observed-PID approval."""
+        from serverware.native_pilot_genesis_handoff_listener import CoreHandoffListener
+        self._check()
+        p.require(type(listener) is CoreHandoffListener and self._handoff
+            and not self._handoff_attempted and not self._keys_attempted)
+        self._handoff_attempted = True
+        self._handoff_listener = listener  # Retain before any accepting work.
+        try:
+            selected = listener.require_execution(self._configuration.raw)
+            p.require(selected["coreHandoff"] == self._handoff_peer)
+            # Listener retains the same actual channel even if cancellation
+            # arrives before this assignment; no descriptor DTO reconstructs it.
+            self._core_channel = listener.accept(self._configuration.raw, self._check)
             self._check()
         except BaseException as error:
             self._failed = True
@@ -194,6 +214,8 @@ class GenesisExecution:
         for original in self._held:
             original.check_identity()
         self._owners_check()
+        if self._handoff_listener is not None:
+            self._handoff_listener.check()
         if self._core_channel is not None:
             self._core_channel.check()
         if self._core is not None:
@@ -517,6 +539,8 @@ class GenesisExecution:
                 self._core.close()
             if self._core_channel is not None:
                 self._core_channel.close()
+            if self._handoff_listener is not None:
+                self._handoff_listener.close()
             with io.owning():
                 while self._installers:
                     self._installers[-1].close(); self._installers.pop()

@@ -136,6 +136,20 @@ def _file_identity(info):
     return _structural(info) + (info.st_nlink, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
 
 
+def _selected_profile(*, adopted, adopted_bridge, adopted_ordinary):
+    from serverware import native_pilot_launch_publication as launch
+    from serverware import native_pilot_adopted_publication as ordinary
+    p.require(all(type(value) is bool for value in (adopted, adopted_bridge, adopted_ordinary))
+        and sum((adopted, adopted_bridge, adopted_ordinary)) <= 1)
+    if adopted_ordinary:
+        return ordinary.DESTINATIONS, ordinary.LIMITS, ordinary.shape
+    if adopted_bridge:
+        return launch.ADOPTED_BRIDGE_DESTINATIONS, launch.ADOPTED_BRIDGE_PURPOSES, launch.shape_adopted_bridge
+    if adopted:
+        return launch.ADOPTED_DESTINATIONS, launch.ADOPTED_PURPOSES, launch.shape_adopted
+    return DESTINATIONS, LIMITS, _shape
+
+
 def _protected(info):
     p.require(stat.S_ISDIR(info.st_mode) and info.st_uid == info.st_gid == 0
               and info.st_mode & 0o022 == 0)
@@ -211,11 +225,13 @@ class PublicPublisher:
         return self._publish(purpose=purpose, raw=raw, expected_sha256=expected_sha256,
             adopted=False, adopted_bridge=True)
 
-    def _publish(self, *, purpose, raw, expected_sha256, adopted, adopted_bridge=False):
-        from serverware import native_pilot_launch_publication as launch
-        p.require(not (adopted and adopted_bridge))
-        destinations = launch.ADOPTED_BRIDGE_DESTINATIONS if adopted_bridge else launch.ADOPTED_DESTINATIONS if adopted else DESTINATIONS
-        limits = launch.ADOPTED_BRIDGE_PURPOSES if adopted_bridge else launch.ADOPTED_PURPOSES if adopted else LIMITS
+    def publish_adopted_ordinary(self, *, purpose, raw, expected_sha256):
+        return self._publish(purpose=purpose, raw=raw, expected_sha256=expected_sha256,
+            adopted=False, adopted_ordinary=True)
+
+    def _publish(self, *, purpose, raw, expected_sha256, adopted, adopted_bridge=False, adopted_ordinary=False):
+        destinations, limits, shape = _selected_profile(adopted=adopted,
+            adopted_bridge=adopted_bridge, adopted_ordinary=adopted_ordinary)
         self.check()
         p.require(type(purpose) is str and purpose in destinations and purpose not in self._attempted)
         self._attempted.add(purpose)  # Consumed before validation or any write.
@@ -224,7 +240,7 @@ class PublicPublisher:
             p.require(type(raw) is bytes and 0 < len(raw) <= maximum
                 and len(self._files) < MAX_ORIGINALS and self._bytes + len(raw) <= MAX_PUBLIC_BYTES)
             p.require(p.sha(raw) == p.digest(expected_sha256))
-            (launch.shape_adopted_bridge if adopted_bridge else launch.shape_adopted if adopted else _shape)(purpose, raw)
+            shape(purpose, raw)
             self.check()
             path = destinations[purpose]
             parent, name = path.rsplit("/", 1)
@@ -284,10 +300,12 @@ class PublicPublisher:
     def require_absent_adopted_bridge(self, purposes):
         return self._require_absent(purposes, adopted=False, adopted_bridge=True)
 
-    def _require_absent(self, purposes, *, adopted, adopted_bridge=False):
-        from serverware import native_pilot_launch_publication as launch
-        p.require(not (adopted and adopted_bridge))
-        destinations = launch.ADOPTED_BRIDGE_DESTINATIONS if adopted_bridge else launch.ADOPTED_DESTINATIONS if adopted else DESTINATIONS
+    def require_absent_adopted_ordinary(self, purposes):
+        return self._require_absent(purposes, adopted=False, adopted_ordinary=True)
+
+    def _require_absent(self, purposes, *, adopted, adopted_bridge=False, adopted_ordinary=False):
+        destinations, _, _ = _selected_profile(adopted=adopted,
+            adopted_bridge=adopted_bridge, adopted_ordinary=adopted_ordinary)
         self.check()
         p.require(type(purposes) is tuple and 0 < len(purposes) <= MAX_ORIGINALS
             and all(type(purpose) is str and purpose in destinations for purpose in purposes)

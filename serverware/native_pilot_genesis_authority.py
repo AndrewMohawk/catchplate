@@ -28,13 +28,17 @@ _PREFIX = (("supervisor-inventory-fd", "fd"), ("supervisor-inventory-sha256", "s
 def arguments(values):
     """Canonical closed syntax, checked before any private descriptor read."""
     p.require(type(values) is list and values and all(type(v) is str for v in values))
-    p.require(values[0] in ("--run-native-genesis", "--run-native-genesis-handoff"))
-    handoff = values[0] == "--run-native-genesis-handoff"
-    prefix = _PREFIX + ((("core-handoff-fd", "fd"),) if handoff else ())
+    p.require(values[0] in ("--run-native-genesis", "--run-native-genesis-handoff", "--run-native-genesis-listener"))
+    listener = values[0] == "--run-native-genesis-listener"
+    handoff = values[0] != "--run-native-genesis"
+    prefix = (_PREFIX[:2] + (("genesis-listener-configuration-fd", "fd"),
+        ("genesis-listener-configuration-sha256", "sha")) if listener else _PREFIX)
+    if handoff and not listener:
+        prefix += (("core-handoff-fd", "fd"),)
     offset = 1 + 2 * len(prefix)
     p.require(type(values) is list and len(values) == offset + 2 * len(jobs.KEY_PURPOSES)
         and all(type(v) is str for v in values))
-    selected, descriptors = {"handoff": handoff}, set()
+    selected, descriptors = {"handoff": handoff, "listener": listener}, set()
     for index, (name, kind) in enumerate(prefix):
         flag, value = values[1 + 2 * index:3 + 2 * index]
         p.require(flag == "--" + name)
@@ -117,7 +121,8 @@ def _result(status, phase, completed, digest):
 def main(values):
     from serverware.native_pilot_genesis_authority_channel import GenesisApprovalChannel
     from serverware.native_pilot_genesis_execution import GenesisExecution, GenesisExecutionError
-    runtime = executor = channel = None
+    from serverware.native_pilot_genesis_handoff_listener import CoreHandoffListener, ListenerError
+    runtime = executor = channel = listener = None
     phase, completed, digest, failed = "open", 0, None, False
     for number in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
         signal.signal(number, _stop)
@@ -130,10 +135,24 @@ def main(values):
         runtime.admit(selected["supervisor_inventory_fd"], selected["supervisor_inventory_sha256"])
         with io.owning():
             channel = GenesisApprovalChannel.open(handoff=selected["handoff"])
+        if selected["listener"]:
+            phase = "listener-approval"
+            with io.owning():
+                try:
+                    listener = CoreHandoffListener.open(selected["genesis_listener_configuration_fd"],
+                        selected["genesis_listener_configuration_sha256"])
+                except ListenerError as error:
+                    listener = error.owner
+                    raise
+            late = channel.admit_listener(listener)
+        else:
+            late = dict(configuration_fd=selected["genesis_configuration_fd"],
+                configuration_sha256=selected["genesis_configuration_sha256"])
         with io.owning():
-            executor = GenesisExecution.open(configuration_fd=selected["genesis_configuration_fd"],
-                configuration_sha256=selected["genesis_configuration_sha256"], handoff=selected["handoff"])
-        if selected["handoff"]:
+            executor = GenesisExecution.open(**late, handoff=selected["handoff"])
+        if selected["listener"]:
+            executor.prepare_handoff_listener(listener)
+        elif selected["handoff"]:
             executor.prepare_handoff(selected["core_handoff_fd"])
         runtime.check(installed=True)
         executor.prepare_keys(selected["authority_key_fds"])
@@ -162,6 +181,8 @@ def main(values):
         if executor is not None:
             terminal = executor.close()
             p.require(terminal["status"] == "closed")
+        if listener is not None:
+            listener.close()
         if channel is not None:
             channel.close()
         if runtime is not None:

@@ -158,6 +158,14 @@ class Channel:
         _require(pending[0] >= 0, "channel-io")
         return pending[0]
 
+    def _retain_expiry(self, expiry):
+        """Bind the selected owner's original UNIX cap once, never renew it."""
+        _require(self._adopted and type(expiry) is int and 0 < expiry <= p.MAX_I64,
+            "channel-deadline")
+        _require(self._expiry is None or self._expiry == expiry, "channel-deadline")
+        self._expiry = expiry
+        self._check()
+
     def _wait(self, reading, deadline):
         while True:
             now = self._check(deadline)
@@ -231,11 +239,7 @@ class Channel:
             _require(type(deadline_boottime_ns) is int and 0 < deadline_boottime_ns <= p.MAX_U64,
                 "channel-deadline")
             if self._adopted:
-                _require(type(expires_at_unix_ns) is int and 0 < expires_at_unix_ns < 2**63,
-                    "channel-deadline")
-                _require(self._expiry is None or self._expiry == expires_at_unix_ns,
-                    "channel-deadline")
-                self._expiry = expires_at_unix_ns
+                self._retain_expiry(expires_at_unix_ns)
             else:
                 _require(expires_at_unix_ns is None, "channel-deadline")
             self._check(deadline_boottime_ns)

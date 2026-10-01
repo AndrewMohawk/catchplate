@@ -80,7 +80,8 @@ DESTINATIONS.update({
 })
 
 
-def _configuration(family, role, raw, maximum):
+def _configuration(family, role, raw, maximum, *, adopted=False):
+    p.require(type(adopted) is bool and (not adopted or family in ("cohort-config", "ordinary-launch")))
     if family == "native-cold":
         delivery.configuration(raw, p.sha(raw))
         return
@@ -89,11 +90,13 @@ def _configuration(family, role, raw, maximum):
         return
     if family == "cohort-config":
         value = cohort.configuration(raw)
-        p.require(cohort.endpoint_driver_selected(value))
-        for endpoint in cohort.ENDPOINT_ROLES:
+        p.require(cohort.endpoint_driver_selected(value) and cohort.adoption_selected(value) is adopted)
+        from serverware import native_pilot_launch_publication as launch
+        destinations = launch.ADOPTED_DESTINATIONS if adopted else DESTINATIONS
+        for endpoint in (cohort.ADOPTED_ENDPOINT_ROLES if adopted else cohort.ENDPOINT_ROLES):
             pin = value[endpoint + "Configuration"]
             delivery._pin(pin)
-            p.require(pin["path"] == DESTINATIONS["native-cold-" + endpoint])
+            p.require(pin["path"] == destinations["native-cold-" + endpoint])
         return
     value = p.document(raw, maximum)
     if family == "cohort-control":
@@ -105,7 +108,8 @@ def _configuration(family, role, raw, maximum):
     p.require(family == "ordinary-launch")
     p.fields(value, ("apiVersion", "bootIdBase64url", "timeNamespaceDevice", "timeNamespaceInode",
         "startupDeadlineBoottimeNs", "lifetimeDeadlineBoottimeNs", "invocationId", "services"))
-    p.require(value["apiVersion"] == "serverware.custodyFiveServiceLaunch/v6")
+    p.require(value["apiVersion"] == ("serverware.custodyFiveServiceLaunch/v7" if adopted
+        else "serverware.custodyFiveServiceLaunch/v6"))
     p.require(p.decoded(value["bootIdBase64url"], size=16) != bytes(16))
     for name in ("timeNamespaceDevice", "timeNamespaceInode"):
         p.integer(value[name], maximum=p.MAX_U64)
@@ -157,7 +161,7 @@ def _driver(family, raw, maximum):
         p.document(observed.encode("ascii"), 65536)
 
 
-def _initial_history(role, raw, maximum):
+def _initial_history(role, raw, maximum, *, adopted=False):
     """Initial-only grammar and commitments, without a selected trust anchor.
 
     Public keys/signature encodings are checked, not authorized here. Only the
@@ -170,8 +174,9 @@ def _initial_history(role, raw, maximum):
     from serverware import native_pilot_ordinary_key_profile as key
 
     value = p.fields(generation.document(raw, maximum), initial.WRAPPER_FIELDS)
-    p.require(value["apiVersion"] == initial.WRAPPER_API)
-    state = initial.validate_state(value["initialState"])
+    p.require(type(adopted) is bool and (not adopted or role in initial.ADOPTED_ROLES))
+    p.require(value["apiVersion"] == (initial.ADOPTED_WRAPPER_API if adopted else initial.WRAPPER_API))
+    state = initial.validate_state(value["initialState"], adopted=adopted)
     p.require(state["serviceRole"] == role)
     history = p.fields(value["history"], generation.HISTORY)
     expected_role = {"authorityKind": "isolated-service", "role": role}
@@ -195,12 +200,12 @@ def _initial_history(role, raw, maximum):
         and len({authority._raw_key(item) for item in public}) == 3)
     checkpoint = key.validate_checkpoint(value["initialCheckpoint"])
     payload = checkpoint["payload"]
-    ceremony._initial_payload(state, payload, authorities)
+    ceremony._initial_payload(state, payload, authorities, adopted=adopted)
     p.require(checkpoint["authorityKeyId"] == authorities["checkpoint"]["keyId"]
         and checkpoint["authorityKeySpkiSha256"] == authorities["checkpoint"]["keySpkiSha256"]
         and payload["endpointRole"] == identity["endpointRole"]
         and payload["validFromBoottime"]["domain"] == payload["validUntilBoottime"]["domain"] == key._boot(state))
-    expected, anchor_raw, _ = ceremony._anchor(state, identity, authorities, checkpoint)
+    expected, anchor_raw, _ = ceremony._anchor(state, identity, authorities, checkpoint, adopted=adopted)
     p.require(generation.canonical({name: anchor[name] for name in authority.ANCHOR_FIELDS[:7]})
         == generation.canonical(expected))
     for field in ceremony.ANCHOR_SIGNATURE_FIELDS:

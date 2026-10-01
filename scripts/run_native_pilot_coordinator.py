@@ -53,20 +53,35 @@ def main():
                 and os.getresuid() == (0, 0, 0) and os.getresgid() == (0, 0, 0)):
             raise ValueError("isolated privileged coordinator required")
         parser = _Parser(description=__doc__, allow_abbrev=False, add_help=False)
-        parser.add_argument("--run-native-pilot", required=True, action="store_true")
+        modes = parser.add_mutually_exclusive_group(required=True)
+        modes.add_argument("--run-native-pilot", action="store_true")
+        modes.add_argument("--run-adopted-native-pilot", action="store_true")
         parser.add_argument("--runtime-inventory-fd", required=True, type=int)
         parser.add_argument("--runtime-inventory-sha256", required=True)
+        parser.add_argument("--intake-configuration-fd", type=int)
+        parser.add_argument("--intake-configuration-sha256")
         args = parser.parse_args()
         # Fixed sibling code only. No module, path or command from the machine
         # channel becomes executable; the operator protects this installation.
         sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
         from serverware import native_shadow_nitro_profile as p
-        from serverware.native_pilot_coordinator_process import ConductorProcess
+        from serverware.native_pilot_coordinator_process import ConductorProcess, ProcessPreparationError
         from serverware.native_pilot_operator_channel import Channel, STAGES
 
-        channel = Channel.open()
-        owner = ConductorProcess.prepare(runtime_inventory_fd=args.runtime_inventory_fd,
+        p.require((args.intake_configuration_fd is not None) is args.run_adopted_native_pilot
+            and (args.intake_configuration_sha256 is not None) is args.run_adopted_native_pilot)
+        selected = dict(runtime_inventory_fd=args.runtime_inventory_fd,
             runtime_inventory_sha256=args.runtime_inventory_sha256)
+        if args.run_adopted_native_pilot:
+            selected.update(intake_configuration_fd=args.intake_configuration_fd,
+                intake_configuration_sha256=args.intake_configuration_sha256)
+        channel = Channel.open_adopted() if args.run_adopted_native_pilot else Channel.open()
+        try:
+            owner = (ConductorProcess.prepare_adopted if args.run_adopted_native_pilot else ConductorProcess.prepare)(**selected)
+        except ProcessPreparationError as error:
+            p.require(type(error.owner) is ConductorProcess)
+            owner = error.owner
+            raise
         phase = "starting"
         owner.start()
         for sequence, expected_phase in enumerate(STAGES, 1):
@@ -76,12 +91,17 @@ def main():
             payload = request.payload
             # Channel.exchange emits this exact envelope, so the supervisor's
             # reply hash binds the child's original, not a lossy projection.
-            expected = p.canonical({"apiVersion": "serverware.nativePilotOperatorRequest/v1",
+            value = {"apiVersion": ("serverware.nativePilotOperatorRequest/v2" if args.run_adopted_native_pilot else
+                "serverware.nativePilotOperatorRequest/v1"),
                 "sequence": sequence, "phase": expected_phase, "payload": payload,
-                "deadlineBoottimeNs": str(request.deadline_boottime_ns)})
+                "deadlineBoottimeNs": str(request.deadline_boottime_ns)}
+            bounds = {"deadline_boottime_ns": request.deadline_boottime_ns}
+            if args.run_adopted_native_pilot:
+                value["expiresAtUnixNanos"] = str(request.expires_at_unix_ns)
+                bounds["expires_at_unix_ns"] = request.expires_at_unix_ns
+            expected = p.canonical(value)
             p.require(expected == request.raw)
-            inputs = channel.exchange(expected_phase, payload,
-                deadline_boottime_ns=request.deadline_boottime_ns)
+            inputs = channel.exchange(expected_phase, payload, **bounds)
             owner.reply(request, inputs)
         owner.wait_interactive()  # Retain the same child before bounded cleanup.
     except BaseException:

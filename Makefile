@@ -1360,6 +1360,10 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	scripts/test_native_pilot_genesis_jobs.py \
 	scripts/test_native_pilot_genesis_execution.py \
 	scripts/test_native_pilot_genesis_authority.py \
+	scripts/test_native_pilot_genesis_core.py \
+	scripts/test_native_pilot_genesis_core_channel.py \
+	scripts/test_native_pilot_publication_adoption_authority.py \
+	scripts/test_native_pilot_authority_output.py \
 	scripts/test_native_pilot_publication_cold_binding.py \
 	scripts/test_native_pilot_publication_cli.py \
 	scripts/native_pilot_publication_runtime_entrypoint.py \
@@ -1723,6 +1727,11 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	serverware/native_pilot_genesis_execution.py \
 	serverware/native_pilot_genesis_authority_channel.py \
 	serverware/native_pilot_genesis_authority.py \
+	serverware/native_pilot_genesis_core_profile.py \
+	serverware/native_pilot_genesis_core.py \
+	serverware/native_pilot_genesis_core_channel.py \
+	serverware/native_pilot_publication_adoption_profile.py \
+	serverware/native_pilot_publication_adoption_authority.py \
 	serverware/native_pilot_publication_cold_binding.py \
 	serverware/policy_shadow_assignment_fields.py \
 	serverware/native_pilot_closure_set.py \
@@ -4250,6 +4259,10 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				scripts/test_native_pilot_genesis_jobs.py \
 				scripts/test_native_pilot_genesis_execution.py \
 				scripts/test_native_pilot_genesis_authority.py \
+				scripts/test_native_pilot_genesis_core.py \
+				scripts/test_native_pilot_genesis_core_channel.py \
+				scripts/test_native_pilot_publication_adoption_authority.py \
+				scripts/test_native_pilot_authority_output.py \
 				scripts/test_native_pilot_publication_cold_binding.py \
 				scripts/test_native_pilot_publication_cli.py \
 				scripts/native_pilot_publication_runtime_entrypoint.py \
@@ -4607,6 +4620,11 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				serverware/native_pilot_genesis_execution.py \
 				serverware/native_pilot_genesis_authority_channel.py \
 				serverware/native_pilot_genesis_authority.py \
+				serverware/native_pilot_genesis_core_profile.py \
+				serverware/native_pilot_genesis_core.py \
+				serverware/native_pilot_genesis_core_channel.py \
+				serverware/native_pilot_publication_adoption_profile.py \
+				serverware/native_pilot_publication_adoption_authority.py \
 				serverware/native_pilot_publication_cold_binding.py \
 				serverware/policy_shadow_assignment_fields.py \
 				serverware/native_pilot_closure_set.py \

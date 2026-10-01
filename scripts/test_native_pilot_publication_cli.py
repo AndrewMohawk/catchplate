@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Pure CLI grammar controls. Never launches a privileged process or signs."""
 from pathlib import Path
+import ast
 import sys
 import unittest
 
@@ -28,7 +29,7 @@ class PublicationCliTests(unittest.TestCase):
             "--sign-genesis-ordinary-checkpoint", "--sign-genesis-ordinary-root-anchor",
             "--sign-genesis-ordinary-checkpoint-anchor", "--sign-genesis-ordinary-service-anchor",
             "--assemble-genesis-ordinary-history", "--sign-genesis-ordinary-delivery",
-            "--sign-genesis-ordinary-grant", "--sign-genesis-endpoints-release"}
+            "--sign-genesis-ordinary-grant", "--sign-genesis-endpoints-release", "--sign-publication-adoption"}
             | set(entry.NATIVE_MODES) | set(entry.SERVICE_MODES) | set(entry.TRANSPORT_MODES) | set(entry.LAUNCH_MODES))
         for mode, purpose in (("--sign-genesis-precreation", "precreation"),
                               ("--sign-genesis-release", "release")):
@@ -80,6 +81,9 @@ class PublicationCliTests(unittest.TestCase):
             values[index] = value
             with self.subTest(index=index, value=value):
                 self.assertFalse(entry.valid_arguments(values))
+        for values in ([], None, tuple(arguments()), arguments() + ["--retry"], [1] * 9):
+            with self.subTest(values=values):
+                self.assertFalse(entry.valid_arguments(values))
 
     def test_cold_native_roles_and_operations_are_fixed_not_payload_selected(self):
         self.assertEqual(len(entry.NATIVE_MODES), 12)
@@ -127,9 +131,35 @@ class PublicationCliTests(unittest.TestCase):
             values[index] = value
             with self.subTest(index=index, value=value):
                 self.assertFalse(entry.valid_arguments(values))
-        for values in ([], None, tuple(arguments()), arguments() + ["--retry"], [1] * 9):
-            with self.subTest(values=values):
-                self.assertFalse(entry.valid_arguments(values))
+
+    def test_adoption_requires_separate_validator_control_and_key(self):
+        values = arguments()
+        values[0] = entry.ADOPTION_MODE
+        values += ["--validator-control-fd", "5", "--validator-control-sha256", "sha256:" + "c" * 64,
+            "--authority-key-fd", "6"]
+        self.assertTrue(entry.valid_arguments(values))
+        for index, value in ((10, "3"), (10, "4"), (14, "3"), (14, "4"), (14, "5"),
+                (10, "05"), (9, "--validator-path"), (12, "sha256:" + "C" * 64), (13, "--key-file")):
+            changed = list(values); changed[index] = value
+            with self.subTest(index=index, value=value):
+                self.assertFalse(entry.valid_arguments(changed))
+        for mode in entry.SIGNING_MODES:
+            changed = list(values); changed[0] = mode
+            self.assertFalse(entry.valid_arguments(changed))
+        self.assertFalse(entry.valid_arguments(values[:-4] + values[-2:]))
+        self.assertFalse(entry.valid_arguments(values[:-2]))
+
+    def test_adoption_entry_keeps_actual_owner_until_after_output(self):
+        tree = ast.parse(Path(entry.__file__).read_text())
+        helper = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "_sign_adoption")
+        calls = {}
+        for node in ast.walk(helper):
+            if isinstance(node, ast.Call): calls.setdefault(ast.unparse(node.func), []).append(node.lineno)
+        for left, right in (("AdoptionAuthority.prepare", "owner.validate"), ("owner.validate", "owner.sign"),
+                ("owner.sign", "io.write_public"), ("io.write_public", "owner.close"), ("owner.close", "runtime.close")):
+            self.assertLess(min(calls[left]), min(calls[right]))
+        self.assertIn("owner.check_identity", calls)
+        self.assertIn("signal.pause", calls)
 
 
 if __name__ == "__main__":

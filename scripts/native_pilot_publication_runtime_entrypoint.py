@@ -4,7 +4,9 @@ Prepare one static closure set or cold binding, or issue one independently
 approved assignment, cold parent, initial history or ordinary service original.
 Cold key-delivery and verifier issuers use their own authenticated cold inputs;
 keyless launch assembly emits a public bundle, never installs or launches it.
-There is no child launch, publisher, provisioning, retry or default key. The
+The explicit adoption command runs only its pinned keyless native validator
+and consumes that actual child before reading the signing key. There is no
+service launch, publisher, provisioning, retry or default key. The
 complete input and installed runtime have separate externally supplied pins.
 Only these fixed commands exist; no caller-selected Python module is executed.
 """
@@ -12,6 +14,7 @@ from __future__ import annotations
 
 import os
 import re
+import signal
 import sys
 import time
 
@@ -39,17 +42,21 @@ SERVICE_MODES = {"--sign-genesis-native-publication-grant": "publication",
     "--sign-genesis-native-retrieval-grant": "retrieval"}
 SIGNING_MODES = ("--sign-assignment", "--sign-genesis-precreation", "--sign-genesis-release", "--sign-genesis-endpoints-release") + tuple(ORDINARY_MODES) + tuple(
     mode for mode, operation in INITIAL_MODES.items() if operation != "assemble") + tuple(NATIVE_MODES) + tuple(SERVICE_MODES) + tuple(TRANSPORT_MODES)
-MODES = ("--prepare-closure-set", "--prepare-genesis-binding", "--assemble-genesis-ordinary-history") + SIGNING_MODES + tuple(LAUNCH_MODES)
+ADOPTION_MODE = "--sign-publication-adoption"
+MODES = ("--prepare-closure-set", "--prepare-genesis-binding", "--assemble-genesis-ordinary-history", ADOPTION_MODE) + SIGNING_MODES + tuple(LAUNCH_MODES)
 
 
 def valid_arguments(arguments):
     """Syntax only. All data, runtime and signing authority is admitted below."""
     if (type(arguments) is not list or not all(type(value) is str for value in arguments)
-            or len(arguments) not in (9, 11) or arguments[0] not in MODES
-            or len(arguments) != (11 if arguments[0] in SIGNING_MODES else 9)):
+            or len(arguments) not in (9, 11, 15) or arguments[0] not in MODES
+            or len(arguments) != (15 if arguments[0] == ADOPTION_MODE else 11 if arguments[0] in SIGNING_MODES else 9)):
         return False
     descriptors = set()
-    for offset, name in ((1, "supervisor-inventory"), (5, "input")):
+    inputs = ((1, "supervisor-inventory"), (5, "input"))
+    if arguments[0] == ADOPTION_MODE:
+        inputs += ((9, "validator-control"),)
+    for offset, name in inputs:
         flag, number, pin_flag, pin = arguments[offset:offset + 4]
         if (flag != "--" + name + "-fd" or not _fd(number)
                 or pin_flag != "--" + name + "-sha256"
@@ -57,8 +64,9 @@ def valid_arguments(arguments):
                 or int(number) in descriptors):
             return False
         descriptors.add(int(number))
-    return (len(arguments) == 9 or (arguments[9] == "--authority-key-fd"
-        and _fd(arguments[10]) and int(arguments[10]) not in descriptors))
+    key_offset = 13 if arguments[0] == ADOPTION_MODE else 9
+    return (len(arguments) == 9 or (arguments[key_offset] == "--authority-key-fd"
+        and _fd(arguments[key_offset + 1]) and int(arguments[key_offset + 1]) not in descriptors))
 
 
 def _fd(value):
@@ -69,6 +77,71 @@ def genesis_operation(mode):
     """Source-fixed signing purpose, never selected by the input payload."""
     return {"--sign-genesis-precreation": "precreation",
             "--sign-genesis-release": "release"}.get(mode)
+
+
+def _sign_adoption(arguments, runtime):
+    """Retain the genuine native validator owner through output and cleanup."""
+    from scripts.authority import native_pilot_authority_io as io
+    from serverware import native_pilot_genesis_parent_control_io as owner_io
+    from serverware.native_pilot_publication_adoption_authority import AdoptionAuthority, AdoptionAuthorityError
+    from serverware import native_shadow_nitro_originals as originals
+
+    owner = None
+
+    def stop(_signum, _frame):
+        raise KeyboardInterrupt
+
+    for number in owner_io.CANCELLATION:
+        signal.signal(number, stop)
+    signal.pthread_sigmask(signal.SIG_UNBLOCK, owner_io.CANCELLATION)
+    try:
+        try:
+            with owner_io.owning():
+                owner = AdoptionAuthority.prepare(control_fd=int(arguments[10]), control_sha256=arguments[12],
+                    input_fd=int(arguments[6]), input_sha256=arguments[8])
+        except AdoptionAuthorityError as error:
+            owner = error.owner
+            raise
+        runtime.check(installed=True)
+        owner.validate()
+        runtime.check(installed=True)
+        result = owner.sign(key_fd=int(arguments[14]))
+        owner.check()
+        deadline, epoch_limit = owner.deadline, owner.epoch_limit
+
+        def output_check():
+            runtime.check()
+            owner.check_identity()
+
+        io.write_public(result, deadline_boottime_ns=deadline, check=output_check)
+        owner.check()
+        runtime.check(installed=True)
+        owner.check_identity()
+        # Keep the owner's monotonic floors, not newly sampled baselines that
+        # could hide a wall-clock rollback during runtime inspection.
+        before_boot, before_wall = owner._last, owner._wall
+        owner.close()
+        runtime.close()
+        after_boot, after_wall = originals._clock(), time.time_ns()
+        io._require(before_boot <= after_boot < deadline and before_wall <= after_wall < epoch_limit)
+        return 0
+    except BaseException:
+        if owner is not None:
+            for number in owner_io.CANCELLATION:
+                signal.signal(number, signal.SIG_IGN)
+            try:
+                owner.close()
+            except BaseException:
+                # Never let the outer handler retire runtime/key capabilities
+                # while this genuine child's cleanup is unresolved.
+                io.fail()
+                try:
+                    os.write(2, b"publication adoption cleanup unknown; actual owner and runtime retained\n")
+                except OSError:
+                    pass
+                while True:
+                    signal.pause()
+        raise
 
 
 def main():
@@ -108,6 +181,8 @@ def main():
         runtime = _SelfRuntime()
         runtime.admit(int(arguments[2]), arguments[4])
         mode = arguments[0]
+        if mode == ADOPTION_MODE:
+            return _sign_adoption(arguments, runtime)
         signing = mode in SIGNING_MODES
         purpose = genesis_operation(mode)
         initial_purpose = INITIAL_MODES.get(mode)

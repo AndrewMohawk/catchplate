@@ -49,6 +49,36 @@ class GenesisAuthorityTests(unittest.TestCase):
         self.assertEqual((value["supervisor_inventory_fd"], value["genesis_configuration_fd"]), (3, 4))
         self.assertTrue(entry.valid_arguments(arguments()))
 
+    def test_handoff_cli_requires_separate_inherited_channel(self):
+        values = arguments()
+        values[0] = "--run-native-genesis-handoff"
+        values[9:9] = ["--core-handoff-fd", "6"]
+        selected = cli.arguments(values)
+        self.assertTrue(selected["handoff"])
+        self.assertEqual(selected["core_handoff_fd"], 6)
+        self.assertTrue(entry.valid_arguments(values))
+        for fd in ("3", "4", "5", "06", "2"):
+            changed = list(values); changed[10] = fd
+            with self.subTest(fd=fd), self.assertRaises(ValueError): cli.arguments(changed)
+        changed = list(values); changed[0] = "--run-native-genesis"
+        self.assertFalse(entry.valid_arguments(changed))
+        with self.assertRaises(ValueError): cli.arguments(changed)
+        changed = arguments(); changed[0] = "--run-native-genesis-handoff"
+        self.assertFalse(entry.valid_arguments(changed))
+        with self.assertRaises(ValueError): cli.arguments(changed)
+
+    def test_handoff_reply_requires_matching_profile_and_fixed_paths(self):
+        value, raw = protocol.request(sequence=66, job="handoff-cold-core", deadline=10_000,
+            observation={}, previous=None, handoff=True)
+        reply = dict(apiVersion=channel.HANDOFF_REPLY_API, sequence=66, job=value["job"], requestSha256=p.sha(raw),
+            inputSha256=p.sha(b"input"), approvalSha256=p.sha(b"approval"))
+        self.assertEqual(channel.reply(p.canonical(reply), raw), reply)
+        with self.assertRaises(ValueError):
+            channel.reply(p.canonical({**reply, "apiVersion": channel.REPLY_API}), raw)
+        for name in ("acquire-cold-core", "handoff-cold-core"):
+            with self.assertRaises(ValueError): channel.paths(name)
+            self.assertEqual(channel.paths(name, handoff=True)[0], channel.APPROVAL_ROOT + "/" + name + ".input.json")
+
     def test_cold_invocation_refuses_alias_missing_extra_or_unknown_purpose(self):
         bad = [arguments()[:-2], arguments() + ["--help"], tuple(arguments()), []]
         for index, value in ((2, "4"), (6, "3"), (10, jobs.KEY_PURPOSES[0] + "=3"),

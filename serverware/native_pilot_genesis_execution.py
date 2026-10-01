@@ -4,7 +4,8 @@ The fixed catalogue, complete public inputs and separately pinned approvals
 authorize each step. Observations never authorize signatures. No caller DTO
 can replace a process owner, no key is generated, and failed work is not
 retried. A returned Bundle requires native completion AND actual cleanup.
-It is not operational adoption: no retained fs-verity core FD is exported.
+The explicit v2 mode additionally transfers the genuine retained fs-verity
+core after cleanup. Acknowledged custody is not operational adoption authority.
 """
 from __future__ import annotations
 
@@ -48,6 +49,10 @@ class GenesisExecution:
         self._configuration = self._window = None
         self._startup = self._lifetime = self._deadline = self._epoch_limit = None
         self._parent = self._ordinary = self._endpoints = self._assembly = None
+        self._core = self._core_channel = None
+        self._handoff = self._handoff_attempted = False
+        self._handoff_peer = None
+        self._jobs = jobs.JOBS
         self._held, self._keys, self._public_fds, self._installers = [], {}, {}, []
         self._prior, self._input_sources, self._observations, self._delta = {}, {}, {}, {}
         self._bytes = self._index = 0
@@ -56,17 +61,19 @@ class GenesisExecution:
         self._close_attempted = self._cleanup_attempted = self._owners_retired = False
 
     @classmethod
-    def open(cls, configuration_fd, configuration_sha256):
+    def open(cls, configuration_fd, configuration_sha256, *, handoff=False):
         global _LIVE, _USED
-        p.require(cls is GenesisExecution and not _USED and _LIVE is None)
+        p.require(cls is GenesisExecution and not _USED and _LIVE is None and type(handoff) is bool)
         key_io._process()
         p.require(threading.current_thread() is threading.main_thread() and len(os.listdir("/proc/self/task")) == 1)
         owner = cls(_TOKEN)
         _LIVE, _USED = owner, True
         try:
+            owner._handoff, owner._jobs = handoff, jobs.catalogue(handoff=handoff)
             source = owner._input(configuration_fd, configuration_sha256, 4096)
             selected = wire.configuration(source.raw, boot=owner._boot,
-                now_boottime_ns=owner._last, now_unix_ns=owner._wall)
+                now_boottime_ns=owner._last, now_unix_ns=owner._wall, handoff=handoff)
+            owner._handoff_peer = copy.deepcopy(selected.get("coreHandoff"))
             owner._configuration, owner._window = source, copy.deepcopy(selected["window"])
             owner._startup, owner._lifetime = (p.ns(owner._window[name]) for name in
                 ("startupDeadlineBoottimeNs", "lifetimeDeadlineBoottimeNs"))
@@ -85,12 +92,30 @@ class GenesisExecution:
             and os.getresuid() == (0, 0, 0) and os.getresgid() == (0, 0, 0))
 
     def _selected(self):
-        p.require(self._index < len(jobs.JOBS))
-        return jobs.JOBS[self._index]
+        p.require(self._index < len(self._jobs))
+        return self._jobs[self._index]
 
     def _ceiling(self):
-        name = jobs.JOBS[self._index].name if self._index < len(jobs.JOBS) else "cleanup"
-        return self._lifetime if name == "cleanup" else self._deadline if name == "coordinator-finish" else min(self._startup, self._deadline)
+        name = self._jobs[self._index].name if self._index < len(self._jobs) else "cleanup"
+        ceiling = (self._lifetime if name in ("cleanup", "handoff-cold-core") else self._deadline
+            if name in ("coordinator-finish", "acquire-cold-core") else min(self._startup, self._deadline))
+        return min(ceiling, self._core.deadline_boottime_ns) if self._core is not None else ceiling
+
+    def prepare_handoff(self, fd):
+        """Retain the separately approved real peer before private key intake."""
+        from serverware.native_pilot_genesis_core_channel import GenesisCoreChannel
+        self._check()
+        p.require(self._handoff and not self._handoff_attempted and not self._keys_attempted)
+        self._handoff_attempted = True
+        try:
+            peer = self._handoff_peer
+            self._acquire("_core_channel", lambda: GenesisCoreChannel.open(fd=fd,
+                peer_pid=peer["peerPid"], peer_uid=peer["peerUid"], peer_gid=peer["peerGid"],
+                deadline_boottime_ns=self._lifetime, expires_at_unix_ns=self._epoch_limit))
+            self._check()
+        except BaseException as error:
+            self._failed = True
+            raise GenesisExecutionError(self) from error
 
     def _clock(self, *, cleanup=False):
         self._origin()
@@ -114,6 +139,7 @@ class GenesisExecution:
     def prepare_keys(self, declared):
         self._check()
         p.require(not self._failed and not self._keys_attempted and self._index == 0)
+        p.require(not self._handoff or self._core_channel is not None)
         self._keys_attempted = True
         try:
             p.fields(declared, jobs.KEY_PURPOSES)
@@ -168,6 +194,10 @@ class GenesisExecution:
         for original in self._held:
             original.check_identity()
         self._owners_check()
+        if self._core_channel is not None:
+            self._core_channel.check()
+        if self._core is not None:
+            self._core.check()
         self._clock()
 
     def _check(self, *, full=False):
@@ -186,18 +216,20 @@ class GenesisExecution:
     def has_job(self):
         p.require(not self._failed and self._keys_ready and not self._closed)
         self._check()
-        return self._index < len(jobs.JOBS)
+        return self._index < len(self._jobs)
 
     def job_request(self):
         p.require(self.has_job())
         if self._ticket is None:
             self._ticket_value, self._ticket = wire.request(sequence=self._index + 1,
-                job=self._selected().name, deadline=self._ceiling(), observation=self._delta, previous=self._previous)
+                job=self._selected().name, deadline=self._ceiling(), observation=self._delta, previous=self._previous,
+                handoff=self._handoff)
         self._clock()
         return copy.deepcopy(self._ticket_value)
 
     def _observe(self, name, raw):
-        p.require(name in jobs.OBSERVATIONS and type(raw) is bytes and 0 < len(raw) <= wire.MAX_REQUEST)
+        p.require((name in jobs.OBSERVATIONS or (self._handoff and name == "core.observation"))
+            and type(raw) is bytes and 0 < len(raw) <= wire.MAX_REQUEST)
         if name in self._observations:
             p.require(self._observations[name] == raw)
             return
@@ -370,9 +402,28 @@ class GenesisExecution:
         elif name == "coordinator-finish":
             self._bundle = self._assembly.finish()
             return self._bundle
+        elif name == "acquire-cold-core":
+            from serverware.native_pilot_genesis_core import ColdCore
+            p.require(self._handoff and self._bundle is not None and not self._owners_retired)
+            owner = self._acquire("_core", lambda: ColdCore.acquire(assembly=self._assembly))
+            self._epoch_limit = min(self._epoch_limit, owner.expires_at_unix_ns)
+            raw = owner.observation_original()
+            self._observe("core.observation", raw)
+            return raw
         elif name == "cleanup":
             self._cleanup_owners()
             return g.canonical({"status": "closed", "coordinatorCompleted": self._bundle is not None})
+        elif name == "handoff-cold-core":
+            p.require(self._handoff and self._owners_retired and self._core is not None)
+            # Earlier approved producer inputs may have tightened this graph's
+            # UNIX cap since the channel was acquired. Keep that ceiling inside
+            # the actual send/ACK wait, not merely in a post-transfer check.
+            self._core_channel.constrain(deadline_boottime_ns=self._ceiling(),
+                expires_at_unix_ns=self._epoch_limit)
+            self._core.transfer(self._core_channel)
+            p.require(self._core.transferred)
+            return g.canonical({"status": "cold-core-custody-acknowledged", "bundleSha256": p.sha(self._bundle),
+                "observationSha256": p.sha(self._core.observation_original()), "operationalAdoptionVerified": False})
         else:
             raise ValueError("fixed cold owner action refused")
         return g.canonical({"apiVersion": "serverware.nativePilotGenesisOwnerResult/v1", "action": name,
@@ -448,8 +499,9 @@ class GenesisExecution:
         self._owners_retired = True
 
     def finish(self):
-        p.require(not self._failed and self._index == len(jobs.JOBS) and self._owners_retired
+        p.require(not self._failed and self._index == len(self._jobs) and self._owners_retired
             and self._bundle is not None and self._assembly._result == self._bundle and self._parent._reaped)
+        p.require(not self._handoff or (self._core is not None and self._core.transferred))
         self._check(full=True)
         return bytes(self._bundle)
 
@@ -461,6 +513,10 @@ class GenesisExecution:
         self._close_attempted = True
         try:
             self._cleanup_owners()
+            if self._core is not None:
+                self._core.close()
+            if self._core_channel is not None:
+                self._core_channel.close()
             with io.owning():
                 while self._installers:
                     self._installers[-1].close(); self._installers.pop()

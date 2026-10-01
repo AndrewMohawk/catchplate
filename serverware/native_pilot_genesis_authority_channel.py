@@ -18,14 +18,16 @@ from serverware.native_shadow_proof_cohort_control import _Original
 p = protocol.p
 APPROVAL_ROOT = "/etc/serverware/native-genesis-authority"
 REPLY_API = "serverware.nativePilotGenesisJobReply/v1"
+HANDOFF_REPLY_API = "serverware.nativePilotGenesisJobReply/v2"
 TERMINAL_API = "serverware.nativePilotGenesisAuthorityTerminal/v1"
+HANDOFF_TERMINAL_API = "serverware.nativePilotGenesisAuthorityTerminal/v2"
 MAX_RETAINED = 128 * 1024 * 1024
 _TOKEN = object()
 _USED = False
 
 
-def paths(name):
-    selected = jobs.job(name)
+def paths(name, *, handoff=False):
+    selected = jobs.job(name, handoff=handoff)
     return tuple(APPROVAL_ROOT + "/" + selected.name + suffix for suffix in (".input.json", ".approval.json"))
 
 
@@ -33,33 +35,37 @@ def reply(raw, request_raw):
     """Framing/literal joins only, never an independent approval verdict."""
     ticket = p.fields(p.document(request_raw, protocol.MAX_REQUEST),
         ("apiVersion", "sequence", "job", "deadlineBoottimeNs", "observation", "previousResult"))
-    p.require(ticket["apiVersion"] == protocol.REQUEST_API)
-    p.integer(ticket["sequence"]); jobs.job(ticket["job"]); p.ns(ticket["deadlineBoottimeNs"])
+    apis = {protocol.REQUEST_API: REPLY_API, protocol.HANDOFF_REQUEST_API: HANDOFF_REPLY_API}
+    p.require(ticket["apiVersion"] in apis)
+    p.integer(ticket["sequence"])
+    jobs.job(ticket["job"], handoff=ticket["apiVersion"] == protocol.HANDOFF_REQUEST_API)
+    p.ns(ticket["deadlineBoottimeNs"])
     value = p.fields(p.document(raw, 4096),
         ("apiVersion", "sequence", "job", "requestSha256", "inputSha256", "approvalSha256"))
     p.integer(value["sequence"])
-    p.require(value["apiVersion"] == REPLY_API and value["sequence"] == ticket["sequence"]
+    p.require(value["apiVersion"] == apis[ticket["apiVersion"]] and value["sequence"] == ticket["sequence"]
         and value["job"] == ticket["job"] and value["requestSha256"] == p.sha(request_raw))
     p.digest(value["inputSha256"]); p.digest(value["approvalSha256"])
     return value
 
 
 class GenesisApprovalChannel:
-    def __init__(self, token, pipe):
+    def __init__(self, token, pipe, handoff):
         p.require(token is _TOKEN)
         self._pipe, self._originals = pipe, []
+        self._handoff, self._jobs = handoff, jobs.catalogue(handoff=handoff)
         self._sequence = self._retained = 0
         self._deadline = None
         self._failed = self._complete = self._closed = False
 
     @classmethod
-    def open(cls):
+    def open(cls, *, handoff=False):
         global _USED
-        p.require(cls is GenesisApprovalChannel and not _USED)
+        p.require(cls is GenesisApprovalChannel and not _USED and type(handoff) is bool)
         _USED = True
         # This is only the bounded byte transport, not its operational phases.
         with io.owning():
-            return cls(_TOKEN, transport.Channel.open())
+            return cls(_TOKEN, transport.Channel.open(), handoff)
 
     def _open(self, path, maximum, digest):
         remaining = MAX_RETAINED - self._retained
@@ -74,12 +80,13 @@ class GenesisApprovalChannel:
     def exchange(self, executor):
         from serverware.native_pilot_genesis_execution import GenesisExecution
         p.require(type(executor) is GenesisExecution and not self._failed and not self._closed and not self._complete)
+        p.require(executor._handoff == self._handoff and executor._jobs == self._jobs)
         try:
             value = executor.job_request()
-            selected = jobs.job(value["job"])
+            selected = jobs.job(value["job"], handoff=self._handoff)
             deadline = p.ns(value["deadlineBoottimeNs"])
             p.require(value["sequence"] == self._sequence + 1
-                and self._sequence < len(jobs.JOBS) and selected == jobs.JOBS[self._sequence])
+                and self._sequence < len(self._jobs) and selected == self._jobs[self._sequence])
             pipe = self._pipe
             pipe._check(deadline)
             p.require(pipe._pending() == 0)
@@ -87,7 +94,7 @@ class GenesisApprovalChannel:
             p.require(len(request_raw) + 1 <= transport.MAX_FRAME)
             pipe._write(request_raw + b"\n", deadline)
             accepted = reply(pipe._read(deadline), request_raw)
-            input_path, approval_path = paths(selected.name)
+            input_path, approval_path = paths(selected.name, handoff=self._handoff)
             source = self._open(input_path, selected.maximum, accepted["inputSha256"])
             approval = self._open(approval_path, 8192, accepted["approvalSha256"])
             protocol.approval(approval.raw, request_raw=request_raw, input_sha256=accepted["inputSha256"])
@@ -106,13 +113,17 @@ class GenesisApprovalChannel:
         """Publish a real executor's terminal Bundle, never caller-made success."""
         from serverware.native_pilot_genesis_execution import GenesisExecution
         p.require(type(executor) is GenesisExecution and not self._failed and not self._closed and not self._complete)
+        p.require(executor._handoff == self._handoff and executor._jobs == self._jobs)
         try:
-            p.require(self._sequence == len(jobs.JOBS) and self._deadline is not None)
+            p.require(self._sequence == len(self._jobs) and self._deadline is not None)
             raw = executor.finish()  # Requires actual cleanup, not just the last request.
             p.require(type(raw) is bytes and 0 < len(raw) <= protocol.MAX_REQUEST)
-            value = dict(apiVersion=TERMINAL_API, status="cold-assembly-cleanup-complete",
+            value = dict(apiVersion=HANDOFF_TERMINAL_API if self._handoff else TERMINAL_API,
+                status="cold-core-custody-acknowledged" if self._handoff else "cold-assembly-cleanup-complete",
                 jobsCompleted=self._sequence, bundleOriginal=raw.decode("ascii"), bundleSha256=p.sha(raw),
                 pilotAcceptanceVerified=False, productionReleaseEligible=False)
+            if self._handoff:
+                value["operationalAdoptionVerified"] = False
             wire = p.canonical(value) + b"\n"
             p.require(len(wire) <= transport.MAX_FRAME and self._pipe._pending() == 0)
             self._pipe._check(self._deadline)

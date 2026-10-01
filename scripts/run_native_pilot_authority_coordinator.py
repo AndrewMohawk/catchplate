@@ -42,7 +42,7 @@ def _result(status, phase, interactive_result=None):
 
 
 def main():
-    if sys.argv[1:2] == ["--run-native-genesis"]:
+    if sys.argv[1:2] in (["--run-native-genesis"], ["--run-native-genesis-handoff"]):
         # A separate cold profile in the supervisor package. It neither feeds
         # cold jobs into the old conductor nor derives its operational inventory.
         if not (sys.flags.isolated and sys.flags.dont_write_bytecode

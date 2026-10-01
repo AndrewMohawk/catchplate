@@ -103,6 +103,10 @@ JOBS = (
 )
 BY_NAME = {job.name: job for job in JOBS}
 KEY_PURPOSES = tuple(job.key for job in JOBS if job.key is not None)
+# Explicit successor: acquisition while endpoints still live, then actual
+# cleanup, then acknowledged descriptor custody. Legacy JOBS remains closed.
+HANDOFF_JOBS = JOBS[:-1] + (_owner("acquire-cold-core"), JOBS[-1], _owner("handoff-cold-core"))
+HANDOFF_BY_NAME = {item.name: item for item in HANDOFF_JOBS}
 PARENTS = dict(zip(delivery.PARENTS, ("parent.configuration", "parent.cold", "parent.precreation", "parent.observation"), strict=True))
 OBSERVATIONS = (*PARENTS.values(), "parent.peer", "ordinary.configuration", "ordinary.preparation", "ordinary.resources",
     *("ordinary.activation." + role for role in ORDINARY), *("ordinary.runtime-inputs." + role for role in ORDINARY),
@@ -111,9 +115,16 @@ OBSERVATIONS = (*PARENTS.values(), "parent.peer", "ordinary.configuration", "ord
     "coordinator.observation", "coordinator.runtime", "coordinator.activation")
 
 
-def job(name):
-    p.require(type(name) is str and name in BY_NAME)
-    return BY_NAME[name]
+def catalogue(*, handoff=False):
+    p.require(type(handoff) is bool)
+    return HANDOFF_JOBS if handoff else JOBS
+
+
+def job(name, *, handoff=False):
+    p.require(type(handoff) is bool)
+    selected = HANDOFF_BY_NAME if handoff else BY_NAME
+    p.require(type(name) is str and name in selected)
+    return selected[name]
 
 
 def _raw(value):

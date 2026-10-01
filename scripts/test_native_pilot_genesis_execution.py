@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from serverware import custody_generation_grants as g
 from serverware import native_pilot_genesis_execution_protocol as wire
+from serverware import native_pilot_genesis_jobs as jobs
 
 p = g.p
 
@@ -23,10 +24,43 @@ def configuration():
 
 
 class ProtocolControls(unittest.TestCase):
-    def read_configuration(self, value, *, now=1500000000, wall=8000000000, boot=None):
+    def read_configuration(self, value, *, now=1500000000, wall=8000000000, boot=None, handoff=False):
         window = value["window"]
         actual = tuple(window[name] for name in wire.endpoints.WINDOW[:3]) if boot is None else boot
-        return wire.configuration(g.canonical(value), boot=actual, now_boottime_ns=now, now_unix_ns=wall)
+        return wire.configuration(g.canonical(value), boot=actual, now_boottime_ns=now, now_unix_ns=wall, handoff=handoff)
+
+    def test_handoff_configuration_is_explicit_and_peer_is_independently_fixed(self):
+        value = configuration()
+        value.update(apiVersion=wire.HANDOFF_CONFIGURATION_API, coreHandoff={"peerPid": 123, "peerUid": 0, "peerGid": 0})
+        self.assertEqual(self.read_configuration(value, handoff=True), value)
+        with self.assertRaises(ValueError): self.read_configuration(value)
+        with self.assertRaises(ValueError): self.read_configuration(configuration(), handoff=True)
+        for peer in ({"peerPid": True, "peerUid": 0, "peerGid": 0},
+                {"peerPid": 123, "peerUid": 1, "peerGid": 0}, {"peerPid": 123, "peerUid": 0, "peerGid": False},
+                {"peerPid": 0, "peerUid": 0, "peerGid": 0}, {"peerPid": 1, "peerUid": 0, "peerGid": 0},
+                {"peerPid": 123, "peerUid": 0, "peerGid": 0, "path": "/tmp/core"}):
+            with self.subTest(peer=peer), self.assertRaises(ValueError):
+                self.read_configuration({**value, "coreHandoff": peer}, handoff=True)
+
+    def test_handoff_graph_acquires_before_cleanup_and_transfers_after(self):
+        self.assertEqual(len(jobs.JOBS), 64)
+        self.assertEqual(len(jobs.HANDOFF_JOBS), 66)
+        self.assertEqual(jobs.HANDOFF_JOBS[:-3], jobs.JOBS[:-1])
+        self.assertEqual(tuple(job.name for job in jobs.HANDOFF_JOBS[-4:]),
+            ("coordinator-finish", "acquire-cold-core", "cleanup", "handoff-cold-core"))
+        self.assertEqual(tuple(job.key for job in jobs.HANDOFF_JOBS if job.key is not None), jobs.KEY_PURPOSES)
+        for name in ("acquire-cold-core", "handoff-cold-core"):
+            with self.assertRaises(ValueError): jobs.job(name)
+            self.assertEqual(jobs.job(name, handoff=True).family, "owner")
+
+    def test_handoff_request_approval_profile_cannot_be_downgraded(self):
+        value, raw = wire.request(sequence=66, job="handoff-cold-core", deadline=3999999999,
+            observation={}, previous=None, handoff=True)
+        approved = dict(apiVersion=wire.HANDOFF_APPROVAL_API, sequence=66, job=value["job"], requestSha256=p.sha(raw),
+            inputSha256=p.sha(b"input"), deadlineBoottimeNs=value["deadlineBoottimeNs"])
+        self.assertEqual(wire.approval(g.canonical(approved), request_raw=raw, input_sha256=p.sha(b"input")), approved)
+        with self.assertRaises(ValueError):
+            wire.approval(g.canonical({**approved, "apiVersion": wire.APPROVAL_API}), request_raw=raw, input_sha256=p.sha(b"input"))
 
     def test_configuration_preserves_full_u64_window(self):
         value = configuration()

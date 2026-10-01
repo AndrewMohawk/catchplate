@@ -1,8 +1,9 @@
 """Explicit cold commissioning CLI inside the existing supervisor package.
 
 This is not the operational supervisor protocol. No key, protected prerequisite,
-approval service or new window is provisioned here. The cold Bundle is not the
-live fs-verity core descriptor needed by operational adoption.
+approval service or new window is provisioned here. The explicit handoff mode
+retains and transfers the real core as well as the Bundle; custody alone does
+not authorize operational adoption.
 """
 from __future__ import annotations
 
@@ -26,11 +27,15 @@ _PREFIX = (("supervisor-inventory-fd", "fd"), ("supervisor-inventory-sha256", "s
 
 def arguments(values):
     """Canonical closed syntax, checked before any private descriptor read."""
-    offset = 1 + 2 * len(_PREFIX)
+    p.require(type(values) is list and values and all(type(v) is str for v in values))
+    p.require(values[0] in ("--run-native-genesis", "--run-native-genesis-handoff"))
+    handoff = values[0] == "--run-native-genesis-handoff"
+    prefix = _PREFIX + ((("core-handoff-fd", "fd"),) if handoff else ())
+    offset = 1 + 2 * len(prefix)
     p.require(type(values) is list and len(values) == offset + 2 * len(jobs.KEY_PURPOSES)
-        and values[0] == "--run-native-genesis" and all(type(v) is str for v in values))
-    selected, descriptors = {}, set()
-    for index, (name, kind) in enumerate(_PREFIX):
+        and all(type(v) is str for v in values))
+    selected, descriptors = {"handoff": handoff}, set()
+    for index, (name, kind) in enumerate(prefix):
         flag, value = values[1 + 2 * index:3 + 2 * index]
         p.require(flag == "--" + name)
         if kind == "sha":
@@ -124,10 +129,12 @@ def main(values):
         runtime = _SelfRuntime()  # Keep partial runtime admission reachable.
         runtime.admit(selected["supervisor_inventory_fd"], selected["supervisor_inventory_sha256"])
         with io.owning():
-            channel = GenesisApprovalChannel.open()
+            channel = GenesisApprovalChannel.open(handoff=selected["handoff"])
         with io.owning():
             executor = GenesisExecution.open(configuration_fd=selected["genesis_configuration_fd"],
-                configuration_sha256=selected["genesis_configuration_sha256"])
+                configuration_sha256=selected["genesis_configuration_sha256"], handoff=selected["handoff"])
+        if selected["handoff"]:
+            executor.prepare_handoff(selected["core_handoff_fd"])
         runtime.check(installed=True)
         executor.prepare_keys(selected["authority_key_fds"])
         while executor.has_job():
@@ -137,7 +144,7 @@ def main(values):
             runtime.check()
             executor.execute(**accepted)
             completed += 1
-        p.require(completed == len(jobs.JOBS))
+        p.require(completed == len(jobs.catalogue(handoff=selected["handoff"])))
         runtime.check(installed=True)
         digest = channel.complete(executor)
     except GenesisExecutionError as error:
@@ -163,6 +170,7 @@ def main(values):
         _result("cleanup-unknown-owner-retained", phase, completed, digest)
         while True:
             signal.pause()
-    status = "cold-assembly-cleanup-complete" if not failed else "failed-cleanup-complete" if executor is not None else "not-started"
+    status = ("cold-core-custody-acknowledged" if selected["handoff"] else "cold-assembly-cleanup-complete") if not failed else (
+        "failed-cleanup-complete" if executor is not None else "not-started")
     _result(status, phase, completed, digest)
     return int(failed)

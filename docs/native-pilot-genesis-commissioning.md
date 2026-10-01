@@ -5,6 +5,11 @@ This connects the [cold launch assembly](native-pilot-genesis-assembly.md) and
 authority-coordinator execution mode. It is source integration, not a provisioned
 approval service, running pilot, or operational adoption of a cold baseline.
 
+The explicit successor [core-handoff mode](native-pilot-core-handoff.md) retains
+the actual immutable file before cleanup and transfers its descriptor afterward.
+It adds two jobs without changing the v1 flow documented below. Custody alone
+is not operational adoption authority.
+
 ## Execution order and ownership
 
 The source-fixed catalogue has **64 cold jobs and 36 signing purposes**, separate

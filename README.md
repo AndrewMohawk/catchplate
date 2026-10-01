@@ -138,7 +138,8 @@ has **164 of 164 operational jobs handled** and **113 signing selectors**. These
 counts exclude [cold commissioning and adoption](docs/native-pilot-genesis-assembly.md),
 which are still being assembled. They remain separate from the new
 [cold commissioning mode](docs/native-pilot-genesis-commissioning.md),
-whose independent supervisor and live adoption handoff still need integration.
+now extended with [real core custody and native-validated adoption signing](docs/native-pilot-core-handoff.md).
+The independent supervisor and receiving operational launch still need integration.
 The operational inventory
 includes service histories, delivery/generation grants, endpoint authorizations,
 launch bundles and public material. Explicit policy/v15 connects eight

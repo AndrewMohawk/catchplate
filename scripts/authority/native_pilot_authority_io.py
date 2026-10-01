@@ -94,7 +94,7 @@ def _clock():
     return time.clock_gettime_ns(time.CLOCK_BOOTTIME)
 
 
-def write_public(raw, *, deadline_boottime_ns=None):
+def write_public(raw, *, deadline_boottime_ns=None, check=None):
     """Write one literal original to the supervisor's pipe, without a newline.
 
     Partial writes continue the same output, never a second signing attempt.
@@ -102,6 +102,9 @@ def write_public(raw, *, deadline_boottime_ns=None):
     The one-second I/O ceiling cannot extend a caller's original deadline.
     """
     _process()
+    _require(check is None or callable(check))
+    if check is not None:
+        check()
     _require(type(raw) is bytes and 0 < len(raw) <= MAX_PUBLIC)
     now = _clock()
     deadline = now + 1_000_000_000
@@ -125,6 +128,8 @@ def write_public(raw, *, deadline_boottime_ns=None):
         _require((current.st_dev, current.st_ino, current.st_mode, current.st_uid, current.st_gid) == identity)
         try:
             _, ready, _ = select.select([], [1], [], min(0.05, (deadline - now) / 1_000_000_000))
+            if check is not None:
+                check()  # Retained source and wall-clock guards consume the same interval.
             _require(previous <= _clock() < deadline)
             if not ready:
                 continue
@@ -133,6 +138,8 @@ def write_public(raw, *, deadline_boottime_ns=None):
             continue
         _require(count > 0)
         offset += count
+    if check is not None:
+        check()
     _require(previous <= _clock() < deadline)
 
 

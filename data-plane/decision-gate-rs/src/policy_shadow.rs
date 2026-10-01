@@ -5474,8 +5474,10 @@ pub(in crate::policy_shadow) fn verify_adopted_production_publication_receipt(
     adoption.verify_current(configuration.assignment_payload_sha256(),configuration.assignment_revision(),
         configuration.production_configuration_binding_sha256(),&scope)?;
     let live=||->Result<(),ShadowError>{
-        if policy_custody::boottime::boottime_now_nanos().map_err(|_|ShadowError::CustodyUnavailable)?
-            >=adoption.deadline_boottime()? {return Err(ShadowError::CustodyUnavailable);}
+        // This accessor reauthenticates the retained originals and checks the
+        // actual BOOTTIME against the original interval before returning it.
+        // Keep the raw custody clock internal to its owning module.
+        adoption.deadline_boottime()?;
         Ok(())
     };
     live()?;

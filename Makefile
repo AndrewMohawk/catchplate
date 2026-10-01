@@ -1705,6 +1705,7 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	scripts/issue_native_setup_final.py \
 	serverware/native_shadow_driver_inputs.py \
 	serverware/native_shadow_driver_outgoing.py \
+	serverware/native_shadow_driver_resources.py \
 	serverware/native_policy_activation_inputs.py \
 	serverware/native_policy_activation_recovery.py \
 	serverware/native_shadow_trusted_time_inputs.py \
@@ -4469,6 +4470,7 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				scripts/issue_native_setup_final.py \
 				serverware/native_shadow_driver_inputs.py \
 				serverware/native_shadow_driver_outgoing.py \
+				serverware/native_shadow_driver_resources.py \
 				serverware/native_policy_activation_inputs.py \
 				serverware/native_policy_activation_recovery.py \
 				serverware/native_shadow_trusted_time_inputs.py \

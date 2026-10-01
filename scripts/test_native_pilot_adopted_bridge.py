@@ -33,6 +33,11 @@ def publication_grant(role):
 def fixture():
     value = legacy_fixture(12)
     value["apiVersion"] = runtime.PREFIX + "14"
+    value["histories"] = [{"serviceRole": role, "manifestCredential": "history-" + role,
+        "manifestSha256": p.sha(("synthetic-manifest/" + role).encode("ascii")),
+        "rootKeyId": p.sha(("synthetic-root/" + role).encode("ascii")),
+        "rootKeySpkiSha256": p.sha(("synthetic-spki/" + role).encode("ascii"))}
+        for role in runtime.generation.ROLES]
     value["publication"] = {"apiVersion": "serverware.nativePublicationServices/v2",
         "durableGrantOriginal": publication_grant(runtime.generation.ROLES[0]),
         "currentGrantOriginal": publication_grant(runtime.generation.ROLES[3])}

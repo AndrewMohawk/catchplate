@@ -257,7 +257,8 @@ class SyntheticInitialHistoryControls(unittest.TestCase):
 
     def test_runtime_guest_original_directory_and_deadline_joins(self):
         f = fixture(); state = f["state"]
-        runtime = {"authorityHistoryRootKeyId": f["root_pin"]["keyId"],
+        runtime = {"apiVersion": "serverware.policyCustodyServiceRuntimeConfig/v5",
+            "authorityHistoryRootKeyId": f["root_pin"]["keyId"],
             "authorityHistoryRootKeySpkiSha256": f["root_pin"]["keySpkiSha256"],
             "operationGeneration": state["operationGeneration"], "serviceRestartEpoch": state["serviceGeneration"],
             "deploymentGenerationSha256": state["deploymentGenerationSha256"],

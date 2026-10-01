@@ -37,6 +37,7 @@ from serverware import native_pilot_ordinary_initial_profile as initial_profile
 from serverware import native_pilot_precreation_install as precreation_install
 from serverware import native_pilot_scope_authority as scope_authority
 from serverware import native_pilot_service_authority as service_authority
+from serverware import native_pilot_service_material as service_material
 from serverware import native_pilot_verifier_authority as verifier_authority
 from serverware import native_shadow_nitro_originals as originals
 from serverware import native_shadow_nitro_profile as p
@@ -145,7 +146,7 @@ JOBS = {
                   "ordinary-" + operation) for operation, role in zip(("head", "cleanup", "current"), spool.EFFECT_ROLES, strict=True)),
         *LAUNCH_AUTHORIZATION_JOBS,
         *(_plain("install-launch-" + role, "launch", launch_install.MAX_INPUT, role) for role in cohort.ENDPOINT_ROLES),
-        _plain("service-material", "service-material", 32768),
+        _plain("service-material", "service-material", service_material.MAX_INPUT),
     ),
     "bridge-runtime": (_plain("install-bridge-runtime", "bridge-runtime", bridge_install.MAX_INPUT),),
     "bridge-delivery": (_signed("native-delivery-bridge", "delivery", "bridge", delivery_authority.MAX_INPUT,
@@ -565,6 +566,16 @@ class PhaseExecution:
             _same(value["serviceGrant"], self._pins[key])
             _same(value["observationOriginal"], self._observations["bootstrap-admission"]["bootstrapObservationOriginal"]
                 if job.role == "bridge" else observed["cohortObservationOriginal"])
+        elif job.family == "service-material" and value.get("apiVersion") == service_material.API:
+            p.fields(value, ("apiVersion", "serviceContexts", "endpointLaunches"))
+            p.fields(value["serviceContexts"], ("persistence", "generationInstall"))
+            p.fields(value["endpointLaunches"], ("persistence", "generationInstall"))
+            for role in ("persistence", "generationInstall"):
+                previous = "native-generation-install-grant" if role == "generationInstall" else "native-service-persistence"
+                row = p.fields(value["serviceContexts"][role], ("inputOriginal", "grantOriginal"))
+                p.require(_raw(row["inputOriginal"], native_authority.MAX_INPUT) == self._inputs[previous])
+                p.require(_raw(row["grantOriginal"], native_authority.MAX_OUTPUT) == self._outputs[previous])
+                _same(value["endpointLaunches"][role], self._installations["install-launch-" + role]["launch"])
         elif job.family == "bridge-runtime":
             _same(value["driverObservationOriginal"], self._observations["bootstrap-admission"]["bootstrapObservationOriginal"])
             runtime = p.document(_raw(value["runtimeOriginal"], 65536), 65536)
@@ -692,17 +703,25 @@ class PhaseExecution:
             self._endpoint_inputs = copy.deepcopy(value)
             result = {"publicPinsOpened": True}
         elif job.family == "service-material":
-            p.fields(value, ("persistence", "generationJournal"))
-            persistence = p.fields(value["persistence"], ("configuration", "genesis", "journal"))
+            if value.get("apiVersion") == service_material.API:
+                result = service_material.install(raw, expected_sha256=p.sha(raw))
+                material = result["material"]
+            else:
+                # Original separately supplied pin-only protocol remains
+                # bounded and does not acquire publication authority.
+                p.require(len(raw) <= 32768)
+                material = value
+                result = {"publicPinsOpened": True}
+            p.fields(material, ("persistence", "generationJournal"))
+            persistence = p.fields(material["persistence"], ("configuration", "genesis", "journal"))
             for name, maximum in (("configuration", p.MAX_CONFIG), ("genesis", 16384), ("journal", 1024)):
                 self._public.read(persistence[name], maximum=maximum)
-            journal = p.fields(value["generationJournal"], ("genesis", "records"))
+            journal = p.fields(material["generationJournal"], ("genesis", "records"))
             self._public.read(journal["genesis"], maximum=MAX_RECORD)
             p.require(type(journal["records"]) is list and len(journal["records"]) <= MAX_RECORDS)
             for pin in journal["records"]:
                 self._public.read(pin, maximum=MAX_RECORD)
-            self._material = copy.deepcopy(value)
-            result = {"publicPinsOpened": True}
+            self._material = copy.deepcopy(material)
         elif job.family == "phase-two-public":
             p.fields(value, ("phaseTwoPublic",))
             p.require(self._public.read(value["phaseTwoPublic"], maximum=1024 * 1024) == self._scope_bundle)

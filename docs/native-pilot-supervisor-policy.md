@@ -4,9 +4,11 @@
 independently selected policy and implements the first `driver-bootstrap`
 decision. The separate precreation composer implements the next two jobs. This
 is not a complete decision service, a runnable pilot supervisor, or
-approval of unimplemented future jobs. Current v12 source composes 126 of 136 jobs;
-the decision spine refuses startup while the remaining 10 are unimplemented.
-Production acceptance remains 0/6.
+approval of unimplemented future jobs. Current v13 source composes 127 of 136 jobs;
+the decision spine refuses startup while the remaining nine are unimplemented,
+beginning with `bridge-runtime / install-bridge-runtime`. Focused verification of
+the new service-material connection is pending. Source checkpoints remain 36/46
+and production acceptance remains 0/6.
 
 ## External approval boundary
 
@@ -123,7 +125,7 @@ Policy/v4 has the eleven v3 fields plus `ordinaryInitialHistories`. Its purpose
 is `initial-driver-bootstrap-precreation-endpoints-and-ordinary-initial-history`.
 At v4 the coordinator expanded to 57 exact key selectors; v1–v3 kept their old
 42-selector shape. V4–v7 still keep 57; v8–v10 retain 77. None can bind the
-current v11/v12 inventory of 108 selectors. No legacy policy is silently
+current v11–v13 inventory of 108 selectors. No legacy policy is silently
 upgraded or given new signing authority.
 
 The new fragment is `serverware.nativePilotSupervisorOrdinaryInitialPolicy/v1`
@@ -140,7 +142,7 @@ each v4 role entry accept positive u64 values. All other integers, older policy
 versions and the original byte/depth/node limits keep their existing grammar.
 
 `ordinary_initial_policy(process=..., request=...)` accepts only the bound actual
-process and pending request under v4 or its explicit v5/v6/v7/v8 successors. The fixed
+process and pending request under v4 or its explicit v5–v13 successors. The fixed
 composers verify every prior signature against its literal approved input. The next job observes the
 actual output; receiving an approval reply alone is not success. The complete
 wrapper is published to one fixed root-owned path per role. Downstream delivery
@@ -170,7 +172,7 @@ Reserved names and all fifteen source-owned public paths cannot be supplied as
 static credentials. No private credential is generated or opened by this policy.
 
 `ordinary_delivery_policy(process=..., request=...)` returns a checked copy only
-for v5/v6/v7/v8 and the actual pending owner. The composer joins its recipes to the five
+for v5–v13 and the actual pending owner. The composer joins its recipes to the five
 verified initial wrappers and actual peer/preparation/directory observations.
 The retained installer writes only its fifteen fixed public files from that
 composer's actual prepared originals; it is not a general root writer. Five
@@ -198,7 +200,7 @@ approved role history-root key. The total 57 selectors and outer 4 MiB bound
 remain unchanged; the literal field does not widen legacy outer integer rules.
 
 `ordinary_generation_policy(process=..., request=...)` is available only to
-explicit v6–v12 with the actual pending owner. Jobs 31–35 form existing complete
+explicit v6–v13 with the actual pending owner. Jobs 31–35 form existing complete
 generation inputs, verify each preceding root-signed result and retain exact
 originals. The next job's handoff is read-only. Native callers use the same
 original installation interval without renewal; no running-service acceptance
@@ -217,7 +219,7 @@ checked during policy admission. No private credential is opened or created.
 The existing 57 selectors and 4 MiB outer bound remain unchanged. The original
 three-role `endpointDeliveries` contract remains separate; no old policy is
 widened. `native_delivery_policy(process=..., request=...)` returns a checked
-copy only under v7–v12 with the actual pending owner. Jobs 36–42 use the same
+copy only under v7–v13 with the actual pending owner. Jobs 36–42 use the same
 independently authenticated measured recipe and signed role-specific closure
 leaves, genuine cohort observations and unchanged windows. Job 43 only obtains
 a verified read-only handoff. V8 separately authorizes the new key decisions
@@ -262,7 +264,7 @@ The outer 4 MiB bound and exact 77 selectors remain unchanged.
 
 `native_service_policy(process=..., request=...)` resolves all eleven native
 service/generation-install purpose keys through the actual retained assignment
-and independent trust. It returns a copied admitted fragment only for v9–v12 and
+and independent trust. It returns a copied admitted fragment only for v9–v13 and
 the real pending owner. No older policy gains these grant decisions.
 Jobs 63–73 revalidate the actual authorization pairs and complete predecessor
 inputs/results. Job 74 is only a read-only verified handoff; earlier installer
@@ -286,12 +288,13 @@ outer 4 MiB bound and 77 selectors remain unchanged; v1–v9 gain no new decisio
 
 The two dispatch selectors and `ordinary-head`, `ordinary-cleanup` and
 `ordinary-current` must match each role's independently approved history-root
-key. `ordinary_transition_policy(process=..., request=...)` requires v10–v12 and
+key. `ordinary_transition_policy(process=..., request=...)` requires v10–v13 and
 returns a checked copy to the genuine pending owner. Service jobs 74–78 use
 actual ordinary and native input/grant originals; Cleanup requires the actual
 signed Head and Current requires the actual signed Head and Cleanup. Completed
-predecessor rechecks extend only to the read-only job79 handoff; no installer
-or launch entry is reopened. See [contracts and limits](native-pilot-ordinary-transitions.md).
+predecessor rechecks require the first read-only job 79 handoff before continuing
+through fixed service job 120; no earlier installer or launch entry is reopened.
+See [contracts and limits](native-pilot-ordinary-transitions.md).
 
 ## Late-launch-authorization successor: v11
 
@@ -308,7 +311,7 @@ or that KMS will release it; actual provisioners and receivers retain those duti
 
 The 31 new jobs have separate purpose selectors, for 108 total, all pinned to
 the independently authenticated assignment's supervisor key. Old v1–v3 retain
-42, v4–v7 retain 57 and v8–v10 retain 77. `launch_authorization_policy` requires v11/v12
+42, v4–v7 retain 57 and v8–v10 retain 77. `launch_authorization_policy` requires v11–v13
 and resolves the actual trusted signing authority before returning a checked
 copy. The outer 4 MiB bound is unchanged; the fragment is bounded to 256 KiB.
 
@@ -332,9 +335,39 @@ These are unsigned time-bootstrap settings, not observations or trusted time.
 The TrustedTime row must equal the already selected native-service settings;
 its launch consumes the exact bootstrap original bound by that prior grant.
 
-`endpoint_launch_policy` returns a copied fragment only for v12 and the actual
+`endpoint_launch_policy` returns a copied fragment only for v12/v13 and the actual
 pending owner. Jobs110–119 derive complete bundles from authenticated literal
 predecessors and call the existing exclusive installer. The supervisor verifies
 actual results and only exposes a read-only handoff at service-material120.
 It does not authorize bridge, release, origin, shutdown or resource provisioning.
 See [contracts and evidence](native-pilot-endpoint-launches.md).
+
+## Service-material successor: v13
+
+Policy/v13 adds only `serviceMaterialOriginal` to v12's twenty fields, with
+purpose `initial-driver-bootstrap-precreation-endpoints-generations-and-service-material`.
+Its 108 signing selectors and outer 4 MiB bound are unchanged. The canonical
+ASCII fragment is bounded to 4 KiB and has exactly:
+
+```json
+{"apiVersion":"serverware.nativePilotServiceMaterialPolicy/v1","initialization":"fresh-persistence-and-generation"}
+```
+
+`service_material_policy(process=..., request=...)` returns a checked copy only
+under v13 for the bound actual pending owner. It selects no new data, path,
+key or timestamp. Job 120 consumes the actual completed Persistence and
+GenerationInstall inputs/grants and endpoint launch pins. The complete bundle,
+bounded to 64 MiB, copies their authenticated public originals. Only the phase
+executor's existing post-approval installer publishes the four fixed outputs;
+the supervisor neither publishes them nor initializes native journals. Fresh
+initialization data is not a receipt or proof of observed storage state.
+
+The actual installation result binds the bundle SHA, original startup/lifetime
+bounds, the existing two-part material handoff and exact public pins. At the
+genuine next `bridge-runtime / install-bridge-runtime` request, the retained
+owner revalidates its literal approved input/result and captured predecessors.
+This is an immutable authenticated public-data handoff, not a reconstructed live
+owner or permission to enter earlier service phases again. Earlier owners remain
+retained until definite terminal cleanup. No older policy gains this decision,
+and the remaining bridge/release/origin/shutdown composers are not supplied by
+it. See [service-material contracts](native-pilot-service-material.md).

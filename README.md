@@ -134,13 +134,17 @@ Checkpoint: **2026-09-30 — pre-production, pilot assembly.**
 The [startup coordinator](docs/native-pilot-coordinator.md), separately approved
 input installation and runtime packaging are connected in source. Signing keys
 stay outside the conductor. The [independent approval supervisor](docs/native-pilot-supervisor.md)
-has 126 of 136 job composers, including initial history, ordinary-service
+has 127 of 136 job composers, including initial history, ordinary-service
 delivery/generation grants, all ten native deliveries and their ordered key
 authorizations, eleven [native operational grants](docs/native-pilot-native-services.md),
 five [ordinary transition grants](docs/native-pilot-ordinary-transitions.md)
 and 31 [late launch authorisations](docs/native-pilot-launch-authorizations.md),
-plus ten [endpoint-launch bundles](docs/native-pilot-endpoint-launches.md);
-it refuses startup until the remaining 10 are implemented.
+plus ten [endpoint-launch bundles](docs/native-pilot-endpoint-launches.md)
+and [service-material publication](docs/native-pilot-service-material.md) at job 120.
+Explicit policy/v13 adds that material decision without changing the 108 key
+selectors. It refuses startup until the remaining nine jobs, beginning with
+`bridge-runtime / install-bridge-runtime`, are implemented. The new material
+connection is source-only; its focused verification is pending.
 The total includes 20 key/admission and 31 late launch prerequisites missing from
 the earlier 85-job inventory; it is not a percentage of product readiness.
 The [native history handoff repair](docs/native-pilot-operational-histories.md)

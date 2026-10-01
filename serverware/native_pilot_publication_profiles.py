@@ -33,6 +33,10 @@ PROFILES = {
     "endpoint-retrieval-manifest": ("endpoint-input", "retrieval-manifest", 32768),
     "endpoint-assignment": ("endpoint-input", "assignment", 4 * 1024 * 1024),
     "native-generation-install-grant": ("generation-install", None, 4 * 1024 * 1024),
+    "native-persistence-configuration": ("service-material", "persistence", p.MAX_CONFIG),
+    "native-persistence-genesis": ("service-material", "persistence", 16384),
+    "native-persistence-journal": ("service-material", "persistence", 1024),
+    "native-generation-install-genesis": ("service-material", "generationInstall", 512 * 1024),
     **{"native-service-" + operation: ("native-service", operation,
         4 * 1024 * 1024 if operation in _NATIVE_OPERATIONS[:6] + ("commitRequest",) else 65536)
        for operation in _NATIVE_OPERATIONS},
@@ -214,6 +218,10 @@ def shape(purpose, raw):
     """Validate the selected public envelope, never authenticate its authority."""
     p.require(type(purpose) is str and purpose in PROFILES)
     family, role, maximum = PROFILES[purpose]
+    if family == "service-material":
+        from serverware import native_pilot_service_material as material
+        material.shape(purpose, raw)
+        return
     if family == "ordinary-initial-history":
         _initial_history(role, raw, maximum)
         return

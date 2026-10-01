@@ -55,6 +55,7 @@ class _Attempt:
         self.next = self.retained_bytes = 0
         self.inflight = None
         self.failed = self.closed = self.close_attempted = False
+        self.material_boundary_open = False
         self.inputs, self.results = {}, {}
         self.key_inputs, self.key_results, self.pairs, self.pair_digests = {}, {}, {}, {}
         self.authorizations = self.services = self.fragment = self.phase_raw = None
@@ -208,12 +209,22 @@ def compose(policy, *, process, request) -> bytes:
 
 def require_launches(policy, *, process, request) -> dict:
     """Read-only actual installation handoff at the service-material job120."""
+    return _verified_launches(policy, process=process, request=request, first=True)
+
+
+def recheck_launches(policy, *, process, request) -> dict:
+    """Recheck the opened handoff at that same service-material job only."""
+    return _verified_launches(policy, process=process, request=request, first=False)
+
+
+def _verified_launches(policy, *, process, request, first):
     _owners(policy, process, request)
     owner = _LIVE
     p.require(owner is not None and owner.policy is policy and owner.process is process
         and not owner.failed and not owner.closed and owner.inflight is None and owner.next == len(ROLES)
         and request.phase == "service-originals" and request.job_index == FIRST_INDEX + len(ROLES)
-        and request.job == NEXT_JOB and JOBS["service-originals"][request.job_index - 1].name == NEXT_JOB)
+        and request.job == NEXT_JOB and JOBS["service-originals"][request.job_index - 1].name == NEXT_JOB
+        and (first or owner.material_boundary_open))
     owner.inflight = request
     try:
         now, epoch = _current(owner, request)
@@ -222,6 +233,7 @@ def require_launches(policy, *, process, request) -> dict:
         p.require(tuple(owner.results) == ROLES)
         result = {role: {"inputOriginal": owner.inputs[role], "result": p.document(owner.results[role], 32768)}
             for role in ROLES}
+        owner.material_boundary_open = True
         owner.inflight = None
         return result
     except BaseException:

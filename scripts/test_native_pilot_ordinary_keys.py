@@ -237,12 +237,12 @@ class OrdinaryKeyProfileTests(unittest.TestCase):
                 profile.validate_payload(changed, identity=identity_fixture(), window=window, now=now)
 
     def test_current_coverage_still_refuses_full_startup(self):
-        self.assertEqual(len(supervisor.SUPPORTED_JOBS), 126)
-        self.assertEqual(supervisor._ORDER[:126], supervisor.SUPPORTED_JOBS)
+        self.assertEqual(len(supervisor.SUPPORTED_JOBS), 127)
+        self.assertEqual(supervisor._ORDER[:127], supervisor.SUPPORTED_JOBS)
         self.assertEqual(len(supervisor._ORDER), 136)
-        self.assertEqual(len(supervisor.missing_jobs()), 10)
+        self.assertEqual(len(supervisor.missing_jobs()), 9)
         self.assertEqual(supervisor.missing_jobs()[0],
-            ("service-originals", "service-material"))
+            ("bridge-runtime", "install-bridge-runtime"))
         with self.assertRaises(ValueError):
             supervisor.require_complete_coverage()
 

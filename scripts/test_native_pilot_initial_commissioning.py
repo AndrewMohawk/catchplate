@@ -169,7 +169,9 @@ class SyntheticInitialCommissioningControls(unittest.TestCase):
         for job, role in zip(endpoint_jobs, endpoints, strict=True):
             self.assertEqual((job.family, job.role, job.purpose, job.key), ("launch", role, None, None))
         self.assertEqual(execution.JOBS["service-originals"][119].name, "service-material")
-        self.assertEqual((len(supervisor._ORDER), len(supervisor.missing_jobs())), (136, 10))
+        self.assertEqual(supervisor.SUPPORTED_JOBS[126], ("service-originals", "service-material"))
+        self.assertEqual(execution.JOBS["service-originals"][119].maximum, 64 * 1024 * 1024)
+        self.assertEqual((len(supervisor._ORDER), len(supervisor.missing_jobs())), (136, 9))
         with self.assertRaises(ValueError):
             supervisor.require_complete_coverage()
 

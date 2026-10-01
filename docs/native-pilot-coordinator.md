@@ -33,11 +33,17 @@ or success flags can replace those checks. The original per-job protocol remains
 valid; commissioning policy is not approval of arbitrary future JSON.
 
 The current [supervisor source](native-pilot-supervisor.md) implements the actual
-authority-process owner, pinned commissioning policy, and the first 126 fixed
+authority-process owner, pinned commissioning policy, and the first 127 fixed
 job composers, including prior-signature verification. Twenty native key/admission
 and 31 late launch authorizations were added to the previous 85-job inventory.
-Ten endpoint-launch composers now consume those actual authorizations.
-The full-run owner refuses before spawn because the other 10 jobs remain unimplemented. This
+Ten endpoint-launch composers now consume those actual authorizations. Explicit
+policy/v13 adds `serviceMaterialOriginal` for service-material job 120, retaining
+the same 108 signing selectors. Its four fixed public originals are published
+only after approval; the next phase receives revalidated immutable public data,
+not reconstructed live predecessor owners. Focused verification of this new
+connection is pending.
+The full-run owner refuses before spawn because the other nine jobs, beginning
+with `bridge-runtime / install-bridge-runtime`, remain unimplemented. This
 is not yet a runnable or admitted supervisor; its executable packaging and
 connected verification also remain open. Independent policy selection,
 dependency approval, private key/service provisioning and actual hardware remain
@@ -128,8 +134,9 @@ the separate purpose-specific producers and restricted public installers.
 
 ## Authority coordinator: separately approved jobs
 
-The authority coordinator runs **60 fixed jobs** across those same eleven phases
-and accepts **42 fixed key-purpose selectors**. Its invocation synopsis is:
+The authority coordinator defines **136 fixed jobs** across those same eleven
+phases and accepts **108 fixed key-purpose selectors**. This executor inventory
+does not mean all supervisor composers are implemented. Its invocation synopsis is:
 
 ```text
 python3 -I -B scripts/run_native_pilot_authority_coordinator.py --run-native-pilot --runtime-inventory-fd N --runtime-inventory-sha256 SHA --authority-key PURPOSE=FD [repeat for every fixed purpose]
@@ -147,6 +154,9 @@ come from independent provisioning. The exact selector inventory is
 | `native-service-<operation>` | `ingress`, `ledger`, `terminal`, `dispatchBarrier`, `activeEffectBarrier`, `activeEffectCommit`, `retrieval`, `commitRequest`, `persistence`, `trustedTime` | 10 |
 | Generation/dispatch | `native-generation-install-grant`; `ordinary-dispatch-durable-recovery-store`; `ordinary-dispatch-current-signature-authority` | 3 |
 | Ordinary spool | `ordinary-head`, `ordinary-cleanup`, `ordinary-current` | 3 |
+| Ordinary initial history | Root, checkpoint and service selectors for each of the five ordinary roles | 15 |
+| Native key authorization | Role-key and admission selectors for each of the ten endpoints | 20 |
+| Late launch authorization | Closure, encrypted-delivery and verifier-transport selectors for each endpoint, plus CommitRequest's request-commitment selector | 31 |
 
 Each supplied key FD is an already provisioned root:root `0400`, sealed 32-byte
 Ed25519 memfd. The existing purpose producer verifies the selected authority;

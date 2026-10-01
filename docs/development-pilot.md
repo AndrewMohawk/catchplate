@@ -12,8 +12,9 @@ The last startup reached the missing PostgreSQL runtime-role configuration gate.
 The 13 restricted role identities have since been created and verified, without
 passwords or schema grants; the app has not been reconfigured or restarted.
 The required [commissioning sequence](pilot-commissioning.md) also includes
-unfinished local-authority launch integration, actual authentication/schema
-bootstrap, genuine policy genesis and its offline development file install. The
+[local-authority startup](trusted-host-local-startup.md), actual signed-package
+installation and authentication/schema bootstrap, genuine policy genesis and
+its offline development file install. The
 repaired demo seed reuses an already committed policy; it cannot publish one.
 SQLite/non-atomic
 settings do **not** provide a supported substitute. The addresses and commands

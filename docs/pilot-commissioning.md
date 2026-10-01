@@ -14,13 +14,16 @@ are not prerequisites for the synthetic flow. That does not make the current
 Compose file a complete launcher: its authority commands lack the real
 per-invocation process observation and signed late-input delivery path.
 
-There is a source integration gap as well as missing configuration. The local
-Python entry reports `nativeStageZero=false`, but shared artifact/request
-contracts still require a reviewed static-ELF bootstrap and describe retained-FD
-execution, whereas that local entry uses pathname execution. Implement explicit
-local-bootstrap evidence for the actual mechanism and same-process launch;
-do not manufacture native observations or merely set more environment flags.
-Native production admission must stay unchanged.
+The [local startup implementation](trusted-host-local-startup.md) separates
+actual Python/pathname execution from native static-ELF/descriptor execution.
+It connects the retained real child, protected static inputs and late signed
+launch documents. This source connection has not commissioned the pilot.
+The remaining prerequisite is a genuinely installed signed local authority
+package, with actual installation evidence and scoped trust inputs; existing
+artifact/provisioning commands produce unsigned packages/plans, not those
+effects. The genuine first-policy prepare/audit/finalize caller must also be
+connected. Do not manufacture observations or receipts to fill these gaps.
+Native production admission remains separate.
 
 Required components, with actual separately scoped identities:
 

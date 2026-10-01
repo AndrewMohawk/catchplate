@@ -118,7 +118,7 @@ impl Running {
             SelectedService::LedgerRetrieval(_)|SelectedService::CompletionRetrieval(_)|SelectedService::EffectRetrieval(_)|SelectedService::PublicationRetrieval(_)=>Some(super::super::NativeLock::Ledger),
             _=>None,
         };
-        let (activation,_)=take_activation(&files.payload.activation,false,false,false,native_lock).map_err(fail)?;
+        let (activation,_)=take_activation(&files.payload.activation,false,false,false,false,native_lock).map_err(fail)?;
         process::isolate_mounts()?;
         let image=image::Image::prepare(&selected.closure,&files,service_selection.closure_set_role())?;
         let (inspector,inspection)=match service_selection {

@@ -71,7 +71,7 @@ impl Grant {
         let raw = URL_SAFE_NO_PAD.decode(&p.durable_public_key_base64url).map_err(|_| invalid())?;
         require(raw.len() == 32 && URL_SAFE_NO_PAD.encode(&raw) == p.durable_public_key_base64url)?;
         let durable = VerifyingKey::from_bytes(&<[u8;32]>::try_from(raw.as_slice()).map_err(|_| invalid())?).map_err(|_| invalid())?;
-        require(verifying_key_spki_sha256(&durable)? == p.durable_authority_epoch.service_signing_key_spki_sha256)?;
+        require(verifying_key_spki_sha256(&durable).map_err(|_|invalid())? == p.durable_authority_epoch.service_signing_key_spki_sha256)?;
         let native = p.native.material()?;
         let retrieval = p.retrieval.material()?;
         let current = history.current_epoch().map_err(|_| invalid())?;

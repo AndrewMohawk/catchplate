@@ -36,7 +36,7 @@ impl RetrievalAuthority {
         let raw=URL_SAFE_NO_PAD.decode(&self.public_key_base64url).map_err(|_|invalid())?;
         require(raw.len()==32 && URL_SAFE_NO_PAD.encode(&raw)==self.public_key_base64url)?;
         let key=VerifyingKey::from_bytes(&<[u8;32]>::try_from(raw.as_slice()).map_err(|_|invalid())?).map_err(|_|invalid())?;
-        require(verifying_key_spki_sha256(&key)?==self.key_spki_sha256 && self.key_id!=Sha256Digest::compute(&[]))?;Ok(key)
+        require(verifying_key_spki_sha256(&key).map_err(|_|invalid())?==self.key_spki_sha256 && self.key_id!=Sha256Digest::compute(&[]))?;Ok(key)
     }
 }
 
@@ -107,7 +107,7 @@ impl Snapshot {
     }
     pub(super) fn verify_with_key(&self,epoch:&AuthorityEpochRefV3,key:&VerifyingKey)->Result<(),ServiceError>{
         self.validate()?;require(&self.authority_epoch==epoch
-            && verifying_key_spki_sha256(key)?==epoch.service_signing_key_spki_sha256)?;
+            && verifying_key_spki_sha256(key).map_err(|_|invalid())?==epoch.service_signing_key_spki_sha256)?;
         let raw=URL_SAFE_NO_PAD.decode(&self.signature_base64url).map_err(|_|invalid())?;
         require(raw.len()==64 && URL_SAFE_NO_PAD.encode(&raw)==self.signature_base64url)?;
         key.verify_strict(&super::super::protocol::domain_separated_signature_preimage(SNAPSHOT_DOMAIN,&self.payload()?)?,
@@ -233,12 +233,12 @@ impl Core {
     pub(super) fn payload(&self,stored:&Stored)->Result<Vec<u8>,ServiceError>{
         let Candidate::Commit{publication_revision,predecessor_generation_sha256,prepared}=&self.candidate else{return Err(invalid());};
         let current:Receipt=original(&self.snapshot.current_receipt_original)?;
-        canonical_json_bytes(&(State::Published,publication_revision,predecessor_generation_sha256,
+        canonical_json_bytes(&serde_json::json!([State::Published,publication_revision,predecessor_generation_sha256,
             Some(&prepared.successor_generation_sha256),Some(&prepared.successor_generation_sha256),
             Some(prepared.first_ingress_sequence),Some(prepared.last_ingress_sequence),current.ledger_event_ordinal,
             &current.ledger_head_sha256,&current.spool_root_sha256,Some(prepared.preparation_receipt_sha256()),
             self.observed_at_unix_nanos,&self.trust_checkpoint_sha256,sha(stored)?,&stored.payload.retrieval_id_sha256,
-            &stored.payload.retrieval_proof_sha256,Role::PublicationReconciliation,&self.signing_key_id,&self.signing_key_spki_sha256))
+            &stored.payload.retrieval_proof_sha256,Role::PublicationReconciliation,&self.signing_key_id,&self.signing_key_spki_sha256]))
             .map_err(|_|invalid())
     }
 }

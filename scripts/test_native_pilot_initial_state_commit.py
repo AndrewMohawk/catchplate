@@ -9,6 +9,7 @@ No completed fifteen-file owner, installed _Runtime, worker or approval is faked
 from __future__ import annotations
 
 import ast
+import codecs
 import fcntl
 import os
 from pathlib import Path
@@ -59,6 +60,9 @@ def _initialized(source):
 class InitialStateCommitControls(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        # Private storage chroots intentionally contain no Python library.
+        # Load the real text codec before entering them; do not stub _boot.
+        codecs.lookup("ascii")
         directory = tempfile.TemporaryDirectory(prefix="initial-state-commit-fixture-", dir=os.environ.get("TMPDIR"))
         cls.addClassCleanup(directory.cleanup)
         cls.addClassCleanup(runtime_fixture.thaw, Path(directory.name))

@@ -66,10 +66,32 @@ later assembly, output or cleanup cannot restart those intervals.
 
 ## Verification and remaining work
 
-Verification for this source batch is pending. No live owner, native service,
-privileged signing entrypoint, KMS call or connected commissioning run has been
-performed in this batch. Source checkpoints remain **36/46** and production
-acceptance **0/6**.
+Initial frozen source `cd06b99cc9fe44cf5bc0bf33c9a11346d3f406cb` passed
+**33 of 35 focused controls** in **17.921 seconds**, thirteen-file Python
+3.11.15 grammar and both Make inventories. Two positive assembly controls
+exposed a real mismatch: the old non-root peer helper refused the native
+controller's required UID/GID zero. The cold-only correction preserves the old
+hot checker and authenticates the exact root peer's digest and measured facts.
+
+Corrected source `e8e6333a290da5ea4ffab9f105f5d18072818a40` passed all
+**nine assembly controls** in **0.682 seconds**, including a new root-peer
+regression, plus two-file grammar and both inventories. The other 27 controls
+passed in the first batch and their source was unchanged; they were not rerun.
+Both frozen archives, harnesses and logs are retained at
+`codex-offload/serverware/engineering-builds/e8e6333a-genesis-assembly-zEYKOM/`.
+Each run used one CPU, an empty environment and a private network namespace.
+Native sources and dependency/build inputs were unchanged. Native compilation
+and full runtime-artifact builds were not repeated; previous runtime artifacts
+do not include this new source.
+
+Source review also corrected partial descriptor acquisition/retirement,
+startup-expiry clipping, final clock sampling and post-release owner checks.
+These tests authenticate synthetic signature transcripts and public joins;
+they do not exercise the actual descriptor owner, protected file installation,
+native key import or service cleanup. The opaque test ciphertext is not a
+working KMS provision. No live owner, privileged signing entrypoint, KMS call,
+cloud resource or connected commissioning run was used. Source checkpoints
+remain **36/46** and production acceptance **0/6**.
 
 The full independently operated commissioning graph, public installation,
 retained cold-core transfer and adoption-signer ownership are still required.
@@ -77,6 +99,16 @@ Ordinary-service cleanup also needs an actual helper-reap protocol: killing the
 direct service bypasses its inspection worker destructor, so direct-child exit
 cannot prove helper retirement. The current owner correctly retains resources
 on that uncertainty; coordinator completion must not claim all-service cleanup.
+
+The next native lifecycle change should reuse the existing inspection worker's
+PIDFD, stop pipe and consuming `waitid`, not introduce a new helper service.
+A cold-only parent stop request must be observed by the actual accept/receive
+waits: the existing parent check rejects unsolicited data, so sending a stop
+packet alone cannot work. Quiesce the serving stack, explicitly stop/reap the
+helper, and emit a request/delivery/role/invocation-bound terminal notice from
+that private reap result. Python must authenticate the notice and consume the
+same service child's own reap before retiring its resources. Forced kill,
+`ECHILD`, missing notice or expired original timers must remain unknown.
 
 Operational recovery and authority transitions, independently approved release
 dependencies, Nitro/KMS/signing/witness provisioning, and connected application

@@ -67,6 +67,8 @@ def fixture(parent, profile="supervisor"):
         "scripts/run_native_pilot_lifecycle.py",
         "scripts/run_native_pilot_approval_provider.py",
         "scripts/run_native_pilot_current_head_decisions.py",
+        "scripts/run_native_pilot_startup.py",
+        "scripts/run_native_pilot_startup_child.py",
     )
     originals = {name: ("# synthetic source original: " + name + "\n").encode("ascii") for name in source_names}
     for name, raw in originals.items():
@@ -143,7 +145,9 @@ class SupervisorRuntimeTests(unittest.TestCase):
             "supervisor/app/scripts/install_native_pilot_genesis_job.py",
             "supervisor/app/scripts/run_native_pilot_lifecycle.py",
             "supervisor/app/scripts/run_native_pilot_approval_provider.py",
-            "supervisor/app/scripts/run_native_pilot_current_head_decisions.py"})
+            "supervisor/app/scripts/run_native_pilot_current_head_decisions.py",
+            "supervisor/app/scripts/run_native_pilot_startup.py",
+            "supervisor/app/scripts/run_native_pilot_startup_child.py"})
         self.assertIn("authority/app/scripts/authority/native_pilot_authority_io.py", files)
         self.assertIn("authority/app/scripts/authority/prepare_native_pilot_closure_set.py", files)
         self.assertIn("authority/app/scripts/verify_nitro_tee.py", files)

@@ -23,6 +23,12 @@ PROVIDER_INPUTS = ("policy", "supervisor-inventory", "recipe", "conductor-invent
 DECISION_CLI = "/supervisor/app/scripts/run_native_pilot_current_head_decisions.py"
 DECISION_MODE = "current-head-decision-service"
 DECISION_INPUTS = ("supervisor-inventory", "configuration")
+STARTUP_CLI = "/supervisor/app/scripts/run_native_pilot_startup.py"
+STARTUP_MODE = "commissioning-startup"
+STARTUP_CHILD_CLI = "/supervisor/app/scripts/run_native_pilot_startup_child.py"
+STARTUP_CHILD_MODE = "commissioning-startup-child"
+STARTUP_INPUTS = ("configuration", "supervisor-inventory")
+STARTUP_ROLES = ("lifecycle", "provider", "decisions")
 PYTHON = "/runtime/python/bin/python3"
 IMPORT_ROOTS = ("/supervisor/app", "/authority/app", "/vendor", "/app")
 INPUTS = ("supervisor-inventory", "policy", "recipe", "conductor-inventory", "authority-inventory")
@@ -58,13 +64,13 @@ def _public_peer_arguments(arguments, inputs, sockets):
     return True
 
 
-def _lifecycle_arguments(arguments):
+def _keyed_arguments(arguments, inputs, *, approval=False):
     """Fixed staged caller syntax; the real CLI checks exact key purposes."""
-    keys_offset = 1 + 4 * len(LIFECYCLE_INPUTS) + 8
+    keys_offset = 1 + 4 * len(inputs) + (8 if approval else 0)
     if len(arguments) != keys_offset + 2 * sum(count for _, count in LIFECYCLE_KEYS):
         return False
     descriptors = set()
-    for index, name in enumerate(LIFECYCLE_INPUTS):
+    for index, name in enumerate(inputs):
         offset = 1 + 4 * index
         flag, number, pin_flag, pin = arguments[offset:offset + 4]
         if (flag != "--" + name + "-fd" or not _number(number, 3, (1 << 31) - 1)
@@ -73,18 +79,19 @@ def _lifecycle_arguments(arguments):
                 or int(number) in descriptors):
             return False
         descriptors.add(int(number))
-    approval_offset = 1 + 4 * len(LIFECYCLE_INPUTS)
-    for offset, name, minimum, maximum in (
-            (approval_offset, "approval-fd", 3, (1 << 31) - 1),
-            (approval_offset + 2, "approval-peer-pid", 2, (1 << 31) - 1),
-            (approval_offset + 4, "approval-peer-uid", 0, (1 << 32) - 2),
-            (approval_offset + 6, "approval-peer-gid", 0, (1 << 32) - 2)):
-        if arguments[offset] != "--" + name or not _number(arguments[offset + 1], minimum, maximum):
+    if approval:
+        approval_offset = 1 + 4 * len(inputs)
+        for offset, name, minimum, maximum in (
+                (approval_offset, "approval-fd", 3, (1 << 31) - 1),
+                (approval_offset + 2, "approval-peer-pid", 2, (1 << 31) - 1),
+                (approval_offset + 4, "approval-peer-uid", 0, (1 << 32) - 2),
+                (approval_offset + 6, "approval-peer-gid", 0, (1 << 32) - 2)):
+            if arguments[offset] != "--" + name or not _number(arguments[offset + 1], minimum, maximum):
+                return False
+        channel = int(arguments[approval_offset + 1])
+        if channel in descriptors:
             return False
-    channel = int(arguments[approval_offset + 1])
-    if channel in descriptors:
-        return False
-    descriptors.add(channel)
+        descriptors.add(channel)
     offset = keys_offset
     for flag, count in LIFECYCLE_KEYS:
         purposes = set()
@@ -102,12 +109,25 @@ def _lifecycle_arguments(arguments):
     return True
 
 
+def _startup_child_arguments(arguments):
+    return (len(arguments) == 14 and arguments[1] in STARTUP_ROLES
+        and _public_peer_arguments([arguments[0], *arguments[2:10]], STARTUP_INPUTS, ())
+        and arguments[10] == "--parent-pid" and _number(arguments[11], 2, (1 << 31) - 1)
+        and arguments[12] == "--parent-start-time-ticks"
+        and re.fullmatch(r"[1-9][0-9]{0,19}", arguments[13]) is not None
+        and 1 <= int(arguments[13]) < (1 << 64))
+
+
 def valid_arguments(arguments):
     """Closed invocation syntax only; actual originals/keys/peer stay CLI-owned."""
     if type(arguments) is not list or not arguments or not all(type(value) is str for value in arguments):
         return False
     if arguments[0] == LIFECYCLE_MODE:
-        return _lifecycle_arguments(arguments)
+        return _keyed_arguments(arguments, LIFECYCLE_INPUTS, approval=True)
+    if arguments[0] == STARTUP_MODE:
+        return _keyed_arguments(arguments, STARTUP_INPUTS)
+    if arguments[0] == STARTUP_CHILD_MODE:
+        return _startup_child_arguments(arguments)
     if arguments[0] == PROVIDER_MODE:
         return _public_peer_arguments(arguments, PROVIDER_INPUTS, ("approval-socket", "current-head-socket"))
     if arguments[0] == DECISION_MODE:
@@ -174,7 +194,8 @@ def main():
     # the unchanged shared serverware package remains under /app.
     sys.path[:0] = list(IMPORT_ROOTS)
     selected_cli = {LIFECYCLE_MODE: LIFECYCLE_CLI, PROVIDER_MODE: PROVIDER_CLI,
-        DECISION_MODE: DECISION_CLI}.get(sys.argv[1], CLI)
+        DECISION_MODE: DECISION_CLI, STARTUP_MODE: STARTUP_CLI,
+        STARTUP_CHILD_MODE: STARTUP_CHILD_CLI}.get(sys.argv[1], CLI)
     runpy.run_path(selected_cli, run_name="__main__")
 
 

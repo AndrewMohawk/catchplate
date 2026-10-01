@@ -45,6 +45,10 @@ ADDITIONS = {
     "/run/serverware/native-pilot-core-handoff": 0o700,
 }
 OPERATIONAL_OBJECTS = "/var/lib/serverware/native-pilot-retrieval-objects"
+STARTUP_DIRECTORIES = (
+    "/etc/serverware/native-pilot-startup",
+    "/etc/serverware/native-pilot-current-head-decisions",
+)
 
 
 class InventoryControls(unittest.TestCase):
@@ -105,6 +109,29 @@ class InventoryControls(unittest.TestCase):
         with self.assertRaises(roots.Refused):
             roots.initial_report("adopted-cold", 1)
 
+    def test_startup_is_explicit_exact_operational_extension(self):
+        shared, leaves, modes = roots.selection("commissioning-startup")
+        old_shared, old_leaves, old_modes = roots.selection("adopted-operational")
+        self.assertEqual(shared, old_shared + ("/etc/serverware",))
+        self.assertEqual(leaves, old_leaves + STARTUP_DIRECTORIES)
+        self.assertEqual(modes, old_modes | dict.fromkeys(STARTUP_DIRECTORIES, 0o700))
+        self.assertEqual(roots.STARTUP_DIRECTORIES, STARTUP_DIRECTORIES)
+        report = roots.initial_report("commissioning-startup", False)
+        self.assertEqual(report["apiVersion"], "serverware.nativePilotResourceRoots/v2")
+        self.assertEqual(report["profile"], "commissioning-startup")
+        self.assertEqual(report["operation"], "inspect")
+        rows = {row["path"]: row for row in report["directories"]}
+        for path, kind in zip(STARTUP_DIRECTORIES,
+                ("startup-public-handoff", "independent-current-head-decisions"), strict=True):
+            self.assertEqual(rows[path], {"path": path, "kind": kind,
+                "state": "not-inspected", "expectedMode": "0700"})
+        self.assertEqual(rows[OPERATIONAL_OBJECTS]["kind"], "auxiliary-retrieval-objects")
+        self.assertTrue(all(report[name] is False for name in
+            ("releaseAuthority", "liveReady", "runtimeResourcesCreated", "filesystemSupportVerified")))
+        self.assertLess(len(json.dumps(report).encode("ascii")), roots.MAX_REPORT_BYTES)
+        for profile in ("legacy", "adopted-cold", "adopted-operational"):
+            self.assertFalse(set(STARTUP_DIRECTORIES) & set(roots.selection(profile)[1]))
+
 
 @contextmanager
 def sandbox(profile="adopted-cold"):
@@ -113,6 +140,8 @@ def sandbox(profile="adopted-cold"):
         for path in (tree / "run", tree / "var", tree / "var/lib"):
             path.mkdir()
             path.chmod(0o755)
+        if profile == "commissioning-startup":
+            (tree / "etc").mkdir(); (tree / "etc").chmod(0o755)
         real_open, real_stat = os.open, os.stat
 
         def opened(path, flags, mode=0o777, *, dir_fd=None):
@@ -190,6 +219,50 @@ class FilesystemControls(unittest.TestCase):
         with sandbox("adopted-cold") as (tree, owner, _):
             owner.inspect(); owner.create_missing()
             self.assertFalse((tree / OPERATIONAL_OBJECTS.lstrip("/")).exists())
+
+    def test_startup_inspection_then_create_exact_empty_leaves_preserves_shared_state(self):
+        with sandbox("commissioning-startup") as (tree, owner, report):
+            shared = tree / "etc/serverware"
+            shared.mkdir(); shared.chmod(0o700)
+            marker = shared / "unrelated"
+            marker.write_bytes(b"preserve")
+            owner.inspect()
+            for path in STARTUP_DIRECTORIES:
+                self.assertFalse((tree / path.lstrip("/")).exists())
+            owner.create_missing(); owner.check_populations()
+            self.assertEqual(set(owner.nodes), set(owner.anchors + owner.targets))
+            self.assertEqual(owner.anchors, roots.ANCHORS + ("/etc",))
+            self.assertEqual(marker.read_bytes(), b"preserve")
+            self.assertEqual(stat.S_IMODE(shared.stat().st_mode), 0o700)
+            rows = {row["path"]: row for row in report["directories"]}
+            for path in STARTUP_DIRECTORIES:
+                leaf = tree / path.lstrip("/"); info = leaf.stat()
+                self.assertEqual(tuple(leaf.iterdir()), ())
+                self.assertEqual((info.st_uid, info.st_gid, stat.S_IMODE(info.st_mode)), (0, 0, 0o700))
+                self.assertEqual((rows[path]["state"], rows[path]["mode"]), ("created", "0700"))
+
+    def test_startup_populated_wrong_mode_and_symlink_refuse_before_creation(self):
+        for path in STARTUP_DIRECTORIES:
+            for fault in ("populated", "mode", "symlink"):
+                with self.subTest(path=path, fault=fault), sandbox("commissioning-startup") as (tree, owner, _):
+                    leaf = tree / path.lstrip("/")
+                    leaf.parent.mkdir(parents=True); leaf.parent.chmod(0o700)
+                    if fault == "symlink":
+                        target = tree / "elsewhere"
+                        target.mkdir(); target.chmod(0o700)
+                        leaf.symlink_to(target, target_is_directory=True)
+                        with self.assertRaises(OSError): owner.inspect()
+                        self.assertEqual(tuple(target.iterdir()), ())
+                    else:
+                        leaf.mkdir(); leaf.chmod(0o755 if fault == "mode" else 0o700)
+                        if fault == "populated": (leaf / "existing").write_bytes(b"preserve")
+                        with self.assertRaises(roots.Refused) as caught: owner.inspect()
+                        self.assertEqual(caught.exception.code,
+                            "resource-parent-mode-differs" if fault == "mode" else "resource-parent-not-empty")
+                        if fault == "populated": self.assertEqual((leaf / "existing").read_bytes(), b"preserve")
+                        self.assertEqual(stat.S_IMODE(leaf.stat().st_mode), 0o755 if fault == "mode" else 0o700)
+                    self.assertFalse((tree / "var/lib/serverware").exists())
+                    self.assertFalse((tree / "run/serverware").exists())
 
     def test_operational_wrong_mode_refuses_before_creation_without_repair(self):
         with sandbox("adopted-operational") as (tree, owner, _):

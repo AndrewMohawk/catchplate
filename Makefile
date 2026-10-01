@@ -1787,6 +1787,15 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	scripts/test_native_pilot_adopted_interactive.py \
 	scripts/run_native_pilot_lifecycle.py \
 	scripts/run_native_pilot_approval_provider.py \
+	serverware/native_pilot_startup.py \
+	serverware/native_pilot_startup_child.py \
+	serverware/native_pilot_startup_profile.py \
+	scripts/run_native_pilot_startup.py \
+	scripts/run_native_pilot_startup_child.py \
+	scripts/test_native_pilot_startup.py \
+	scripts/test_native_pilot_startup_child.py \
+	scripts/test_native_pilot_startup_profile.py \
+	scripts/test_native_pilot_startup_entrypoint.py \
 	serverware/native_pilot_current_head_decision_service.py \
 	serverware/native_pilot_current_head_decision_service_profile.py \
 	scripts/run_native_pilot_current_head_decisions.py \
@@ -4790,6 +4799,15 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				scripts/test_native_pilot_adopted_interactive.py \
 				scripts/run_native_pilot_lifecycle.py \
 				scripts/run_native_pilot_approval_provider.py \
+				serverware/native_pilot_startup.py \
+				serverware/native_pilot_startup_child.py \
+				serverware/native_pilot_startup_profile.py \
+				scripts/run_native_pilot_startup.py \
+				scripts/run_native_pilot_startup_child.py \
+				scripts/test_native_pilot_startup.py \
+				scripts/test_native_pilot_startup_child.py \
+				scripts/test_native_pilot_startup_profile.py \
+				scripts/test_native_pilot_startup_entrypoint.py \
 				serverware/native_pilot_current_head_decision_service.py \
 				serverware/native_pilot_current_head_decision_service_profile.py \
 				scripts/run_native_pilot_current_head_decisions.py \

@@ -142,10 +142,14 @@ def _authorization(value):
 
 def prepare_input(policy_raw, request_raw, *, now_unix_ns):
     from serverware.development_policy_genesis import signed_demo
-    from serverware import authority_transition_policy as kernel
+    from serverware import authority_contract, authority_transition_policy as kernel
     trust, bound = signed_demo(policy_raw)
     request = _authorization(_document(request_raw))
-    record, _, _ = kernel._genesis_prepare_arguments(request["input"])
+    # The kernel consumes internally normalized arguments, not the caller's
+    # runtime envelope. Reuse the genuine normalization solely for preflight;
+    # preserve the original caller-free request for the actual runtime owner.
+    intent = authority_contract.synthesize_business_intent("policy.genesis.prepare", request["input"])
+    record, _, _ = kernel._genesis_prepare_arguments({**request["input"], "businessIntent": intent})
     _require(type(now_unix_ns) is int and record["prepared_at_epoch_ns"] <= now_unix_ns < record["expires_at_epoch_ns"]
         and all(record[key] == bound[source] for key, source in (
             ("policy_id", "policyId"), ("policy_sequence", "sequence"),
@@ -155,9 +159,10 @@ def prepare_input(policy_raw, request_raw, *, now_unix_ns):
 
 def finalize_input(raw, prepared):
     """Only the live owner's actual prepare result reaches this data checker."""
-    from serverware import authority_transition_policy as kernel
+    from serverware import authority_contract, authority_transition_policy as kernel
     value = _authorization(_document(raw))
-    preparation, inclusion, _, store = kernel._genesis_finalize_arguments(value["input"])
+    intent = authority_contract.synthesize_business_intent("policy.genesis.finalize", value["input"])
+    preparation, inclusion, _, store = kernel._genesis_finalize_arguments({**value["input"], "businessIntent": intent})
     _require(preparation == prepared["genesis_preparation_digest"]
         and inclusion.get("transition_digest") == prepared["genesis_transition_digest"]
         and inclusion.get("audit_store_identity_digest") == store)

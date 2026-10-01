@@ -138,6 +138,7 @@ else:
         webauthnAuthorization=authorization)
     parsed, actual, trust = m.prepare_input(policy_raw, m._canonical(request), now_unix_ns=now)
     assert parsed == request and actual == record and trust.signing_key_id == policy['metadata']['signingKeyId']
+    assert 'businessIntent' not in parsed['input'] and m._canonical(parsed) == m._canonical(request)
     if scenario == 'prepare':
         changed = copy.deepcopy(request); changed['input']['record']['policy_hash'] = 'sha256:'+'5'*64
         changed['input']['record']['high_water_digest'] = m._sha(m._canonical(dict(scope='active',
@@ -158,6 +159,9 @@ else:
                 transition_digest=prepared['genesis_transition_digest'], audit_store_identity_digest='sha256:'+'8'*64)),
             webauthnAuthorization=authorization)
         assert m.finalize_input(m._canonical(final), prepared) == final
+        assert 'businessIntent' not in final['input']
+        changed = copy.deepcopy(final); changed['input']['businessIntent'] = {}
+        refuses(lambda: m.finalize_input(m._canonical(changed), prepared))
         for key in ('genesisPreparationDigest', 'auditStoreIdentityDigest'):
             changed = copy.deepcopy(final); changed['input'][key] = 'sha256:'+'a'*64
             refuses(lambda: m.finalize_input(m._canonical(changed), prepared))

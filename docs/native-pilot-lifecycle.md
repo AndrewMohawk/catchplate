@@ -3,7 +3,8 @@
 The `.414` owner and `.415` fixed executable connect actual cold-process ownership,
 independently approved pair installation and the existing adopted supervisor. They do not generate
 decisions, provision keys, install a runtime or claim an accepted pilot. The
-existing 66 cold jobs, 176 adopted jobs and approval wire formats stay unchanged.
+existing 66 cold jobs, 176 adopted jobs and per-job approval formats stay unchanged.
+The `.420` completion-aware transport adds two result notifications, not approvals.
 
 The [cold](native-pilot-genesis-inputs.md) and
 [operational](native-pilot-adopted-inputs.md) compilers fill candidate inputs from
@@ -34,8 +35,11 @@ exist; no future receiver PID, core or successful child result is fabricated.
    exact admitted Execution/v2 original, which supplies the UNIX ceiling absent
    from the old job wire. No job configuration or approval is synthesized.
 6. Accept the literal cold Bundle only after core custody acknowledgment,
-   actual cold-authority cleanup, successful exit and consuming reap. Continue
-   the existing 176 adopted jobs and their normal terminal cleanup.
+   actual cold-authority cleanup, successful exit and consuming reap. Forward
+   the result-bearing terminal before continuing the existing 176 adopted jobs.
+7. After actual adopted terminal cleanup, both pipe EOFs, successful exit and
+   consuming reap, forward the literal stop result. Then close the lifecycle's
+   remaining public-original handles, approval connection and local runtime.
 
 Original boot/time namespace, BOOTTIME and UNIX limits apply across waits,
 publication, reply forwarding and cleanup. Filesystem stalls still require an
@@ -90,6 +94,41 @@ existing owners admit those originals and drive the fixed installers. The
 caller checks original BOOTTIME/UNIX limits and actual owners while waiting;
 it neither creates approvals nor renews a deadline. Startup requires a prepared
 machine-speed independent peer, not an unbounded manual prompt.
+
+### Actual completion results (.420)
+
+The fixed caller explicitly selects `open_lifecycle(..., completions=True)` on
+both ends. Its outer request is `LifecycleApprovalRequest/v2` from the first
+exchange; the default v1 remains closed and cannot accept completion messages.
+The same 244 approval exchanges are followed by two mandatory notifications:
+
+| After exchange | Literal terminal | What the actual process owner checks |
+| --- | --- | --- |
+| 68: bootstrap, rendezvous and cold66 | `GenesisAuthorityTerminal/v3`, including final `handoff-cold-core` input hash and result bytes/hash | Actual core/Bundle/configuration association, original time limits, EOF, exit 0 and consuming same-child reap |
+| 244: adopted176 finished | `AuthorityCoordinatorResult/v2`, including final `stop` input hash and result bytes/hash | Exact approved stop input, actual interval result when selected, both EOFs, exit 0, consuming reap and known child-owner cleanup |
+
+`CommissioningLifecycle.completion_original(stage)` reads only the real
+completed child owner's original. Results are copied from what the executor
+actually retained, not generated from the approved input or a delivery receipt.
+For an interactive stop, public input/result association is replayed at the
+recorded admission clocks; current terminal clocks and the actual ended interval
+are checked separately. This does not reopen the earlier admission window.
+
+The caller sends each original through `ApprovalChannel.send_completion`. The
+independent peer calls `receive_completion`, validates the result against its
+retained transcript, then calls `acknowledge_completion`. Before the cold
+completion receipt, the next adopted approval exchange is refused. Repeated,
+out-of-order, legacy or mismatched-input completions fail closed. Notification
+framing reuses the bounded authenticated socket and original chunks, carries
+no descriptors and never adds a job or extends either clock limit.
+
+The transport checks framing, hashes and the independently delivered last input
+pin. It does not itself prove execution or replace the provider's full transcript
+validation. Final notification certifies neither that the calling CLI has exited
+nor that every peer's handles have closed: the caller still owns its public
+sources until its separate cleanup succeeds. Pilot and production acceptance
+flags remain false. The independent decision service and protected deployment
+remain required.
 
 The `.419` [endpoint publication connection](native-pilot-adopted-endpoint-publication.md)
 publishes the four fixed operational originals inside the already approved

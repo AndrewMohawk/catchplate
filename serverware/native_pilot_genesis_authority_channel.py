@@ -21,6 +21,7 @@ REPLY_API = "serverware.nativePilotGenesisJobReply/v1"
 HANDOFF_REPLY_API = "serverware.nativePilotGenesisJobReply/v2"
 TERMINAL_API = "serverware.nativePilotGenesisAuthorityTerminal/v1"
 HANDOFF_TERMINAL_API = "serverware.nativePilotGenesisAuthorityTerminal/v2"
+RENDEZVOUS_TERMINAL_API = "serverware.nativePilotGenesisAuthorityTerminal/v3"
 MAX_RETAINED = 128 * 1024 * 1024
 _TOKEN = object()
 _USED = False
@@ -58,6 +59,8 @@ class GenesisApprovalChannel:
         self._deadline = None
         self._failed = self._complete = self._closed = False
         self._listener_attempted = False
+        self._rendezvous = False
+        self._listener_owner = None
 
     @classmethod
     def open(cls, *, handoff=False):
@@ -91,6 +94,8 @@ class GenesisApprovalChannel:
             and self._sequence == 0 and not self._listener_attempted)
         p.require(listener.rendezvous_selected() is rendezvous)
         self._listener_attempted = True
+        self._rendezvous = rendezvous
+        self._listener_owner = listener
         try:
             request_raw = listener.request_original()
             deadline = listener.startup_deadline_boottime_ns
@@ -182,12 +187,27 @@ class GenesisApprovalChannel:
                 pilotAcceptanceVerified=False, productionReleaseEligible=False)
             if self._handoff:
                 value["operationalAdoptionVerified"] = False
+            if self._rendezvous:
+                # Only this explicit selected dialogue exports the genuine
+                # final result. Legacy terminal1/2 remain exact and closed.
+                p.require(executor._handoff_listener is self._listener_owner
+                    and self._listener_owner.rendezvous_selected())
+                value.update(apiVersion=RENDEZVOUS_TERMINAL_API,
+                    configurationSha256=p.sha(executor._configuration.raw),
+                    finalResult=executor.final_result(),
+                    deadlineBoottimeNs=str(min(self._deadline, executor._ceiling())),
+                    expiresAtUnixNanos=executor._epoch_limit)
+                self._deadline = min(self._deadline, p.ns(value["deadlineBoottimeNs"]))
+                self._pipe._expiry = (value["expiresAtUnixNanos"] if self._pipe._expiry is None
+                    else min(self._pipe._expiry, value["expiresAtUnixNanos"]))
             wire = p.canonical(value) + b"\n"
             p.require(len(wire) <= transport.MAX_FRAME and self._pipe._pending() == 0)
             self._pipe._check(self._deadline)
             self._pipe._write(wire, self._deadline)
             self._pipe._check(self._deadline)
             p.require(self._pipe._pending() == 0)
+            if self._rendezvous:
+                executor._check(full=True)
             self._complete = True
             return p.sha(raw)
         except BaseException:

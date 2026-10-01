@@ -17,9 +17,12 @@ from serverware import native_pilot_measured_configuration as measured
 
 p = rendezvous.p
 REQUEST_API = "serverware.nativePilotLifecycleApprovalRequest/v1"
+COMPLETION_REQUEST_API = "serverware.nativePilotLifecycleApprovalRequest/v2"
 CHUNK_API = "serverware.nativePilotLifecycleApprovalChunk/v1"
 REPLY_API = "serverware.nativePilotLifecycleApprovalReply/v1"
 RECEIPT_API = "serverware.nativePilotLifecycleApprovalReceipt/v1"
+COMPLETION_API = "serverware.nativePilotLifecycleCompletion/v1"
+COMPLETION_RECEIPT_API = "serverware.nativePilotLifecycleCompletionReceipt/v1"
 MAX_REQUEST = 32 * 1024 * 1024 - 1
 COLD = cold.catalogue(handoff=True)
 ADOPTED = tuple((phase, job) for phase, rows in adopted.JOBS.items() for job in rows)
@@ -29,6 +32,8 @@ CHUNK_FIELDS = ("apiVersion", "requestBindingSha256", "field", "offset", "dataBa
 BOOTSTRAP = ("policy", "recipe", "intake_configuration", "conductor_inventory", "authority_inventory")
 ORIGINALS = {"bootstrap": ("sender", "configuration"), "rendezvous": ("request",),
     "cold": ("request",), "adopted": ("request", "observation")}
+FINAL_FIELDS = ("job", "inputSha256", "resultOriginal", "resultSha256")
+_COLD_END, _ADOPTED_END = 2 + len(COLD), len(ORDER)
 
 
 def stage_at(index):
@@ -77,12 +82,17 @@ def pending(stage, raws):
 
 
 def request(stage, value, index, *, deadline_boottime_ns, expires_at_unix_ns,
-            context, boot, now_boottime_ns):
+            context, boot, now_boottime_ns, completions=False):
     """Reuse existing public validators; clipping never rewrites originals."""
-    p.require(stage == stage_at(index) and type(context) is dict)
+    p.require(type(completions) is bool and stage == stage_at(index) and type(context) is dict)
+    if index == 0:
+        p.require("completionMode" not in context)
+    else:
+        p.require(context.get("completionMode", False) is completions)
     deadline = p.integer(deadline_boottime_ns, maximum=p.MAX_U64)
     expiry = p.integer(expires_at_unix_ns, maximum=p.MAX_I64)
     retained = dict(context)
+    if completions: retained["completionMode"] = True
     if stage == "bootstrap":
         p.fields(value, ("senderRequestOriginal", "listenerConfigurationOriginal"))
         raws = dict(sender=_raw(value["senderRequestOriginal"], rendezvous.MAX_SENDER),
@@ -123,16 +133,23 @@ def request(stage, value, index, *, deadline_boottime_ns, expires_at_unix_ns,
         deadline = min(deadline, limit)
         expiry = min(expiry, p.ns(header["expiresAtUnixNanos"]))
     p.require(now_boottime_ns < deadline)
-    header = dict(apiVersion=REQUEST_API, exchangeSequence=index + 1, stage=stage,
+    header = dict(apiVersion=COMPLETION_REQUEST_API if completions else REQUEST_API,
+        exchangeSequence=index + 1, stage=stage,
         deadlineBoottimeNs=str(deadline), expiresAtUnixNanos=str(expiry),
         originals={name: dict(length=len(raw), sha256=p.sha(raw)) for name, raw in raws.items()})
+    if completions and index in (_COLD_END - 1, _ADOPTED_END - 1):
+        retained["terminalRequest"] = dict(stage=stage, requestOriginal=raws["request"],
+            deadlineBoottimeNs=deadline, expiresAtUnixNanos=expiry)
+        retained.pop("terminalInputSha256", None)
     return header, raws, retained
 
 
-def header(value, index, *, deadline_boottime_ns, expires_at_unix_ns):
+def header(value, index, *, deadline_boottime_ns, expires_at_unix_ns, completions=False):
+    p.require(type(completions) is bool)
     p.fields(value, FIELDS)
     stage = stage_at(index)
-    p.require(value["apiVersion"] == REQUEST_API and type(value["exchangeSequence"]) is int
+    p.require(value["apiVersion"] == (COMPLETION_REQUEST_API if completions else REQUEST_API)
+        and type(value["exchangeSequence"]) is int
         and value["exchangeSequence"] == index + 1 and value["stage"] == stage)
     deadline, expiry = p.ns(value["deadlineBoottimeNs"]), p.ns(value["expiresAtUnixNanos"])
     p.require(deadline <= p.integer(deadline_boottime_ns, maximum=p.MAX_U64)
@@ -157,4 +174,98 @@ def reply(value, request_header, index):
 def committed(context, stage, reply_value):
     result = dict(context)
     if stage == "bootstrap": result["bootstrapPins"] = dict(reply_value["pins"])
+    if context.get("completionMode") is True:
+        if stage == "rendezvous":
+            result["executionConfigurationSha256"] = p.digest(reply_value["pins"]["input"])
+        if context.get("terminalRequest", {}).get("stage") == stage:
+            result["terminalInputSha256"] = p.digest(reply_value["pins"]["input"])
     return result
+
+
+def completion_stage(index, completed):
+    """Two notifications after actual exchanges; never additional approval jobs."""
+    p.require(type(index) is int and type(completed) is int)
+    if (index, completed) == (_COLD_END, 0): return "cold"
+    p.require((index, completed) == (_ADOPTED_END, 1))
+    return "adopted"
+
+
+def completion_header(value, index, completed, *, deadline_boottime_ns, expires_at_unix_ns):
+    stage = completion_stage(index, completed)
+    p.fields(value, FIELDS)
+    p.require(value["apiVersion"] == COMPLETION_API and value["stage"] == stage
+        and type(value["exchangeSequence"]) is int and value["exchangeSequence"] == index)
+    deadline, expiry = p.ns(value["deadlineBoottimeNs"]), p.ns(value["expiresAtUnixNanos"])
+    p.require(deadline <= p.integer(deadline_boottime_ns, maximum=p.MAX_U64)
+        and expiry <= p.integer(expires_at_unix_ns, maximum=p.MAX_I64))
+    original = p.fields(value["originals"], ("terminal",))["terminal"]
+    meta = p.fields(original, ("length", "sha256"))
+    p.integer(meta["length"], maximum=MAX_REQUEST); p.digest(meta["sha256"])
+    return stage, deadline, expiry
+
+
+def completion(raw, index, completed, *, deadline_boottime_ns, expires_at_unix_ns, context):
+    """Bind literal terminal framing to the last accepted input, not its authority.
+
+    The real process accessors must already prove cleanup, EOF, successful exit
+    and consuming reap. The provider separately authenticates the complete
+    producer transcript. Neither this envelope nor its receipt proves those.
+    """
+    stage = completion_stage(index, completed)
+    p.require(type(raw) is bytes and type(context) is dict and context.get("completionMode") is True)
+    held = p.fields(context["terminalRequest"],
+        ("stage", "requestOriginal", "deadlineBoottimeNs", "expiresAtUnixNanos"))
+    p.require(held["stage"] == stage and type(held["requestOriginal"]) is bytes)
+    request_value = p.document(held["requestOriginal"], MAX_REQUEST)
+    expected_job = COLD[-1].name if stage == "cold" else ADOPTED[-1][1].name
+    p.require(request_value["job"] == expected_job
+        and request_value["apiVersion"] == (cold_install.wire.HANDOFF_REQUEST_API if stage == "cold" else adopted.API)
+        and type(request_value["sequence"]) is int
+        and request_value["sequence"] == (len(COLD) if stage == "cold" else len(ADOPTED)))
+    value = p.document(raw, MAX_REQUEST)
+    p.require(p.canonical(value) == raw)
+    shared = ("apiVersion", "status", "pilotAcceptanceVerified", "productionReleaseEligible",
+        "finalResult", "deadlineBoottimeNs", "expiresAtUnixNanos")
+    if stage == "cold":
+        p.fields(value, shared + ("jobsCompleted", "bundleOriginal", "bundleSha256",
+            "operationalAdoptionVerified", "configurationSha256"))
+        p.require(value["apiVersion"] == process.replies.RENDEZVOUS_TERMINAL_API
+            and value["status"] == "cold-core-custody-acknowledged"
+            and type(value["jobsCompleted"]) is int and value["jobsCompleted"] == len(COLD)
+            and value["operationalAdoptionVerified"] is False
+            and p.digest(value["configurationSha256"]) == context["executionConfigurationSha256"])
+        bundle = _raw(value["bundleOriginal"], process.core.MAX_BUNDLE)
+        p.require(p.sha(bundle) == p.digest(value["bundleSha256"]))
+        terminal_expiry = p.integer(value["expiresAtUnixNanos"], maximum=p.MAX_I64)
+    else:
+        extra = ("interactiveResult",) if "interactiveResult" in value else ()
+        p.fields(value, shared + ("phase",) + extra)
+        p.require(value["apiVersion"] == "serverware.nativePilotAuthorityCoordinatorResult/v2"
+            and value["status"] == "stopped-cleanup-complete" and value["phase"] == "shutdown")
+        if extra:
+            from serverware import native_pilot_interactive as interactive
+            interval = p.fields(value["interactiveResult"], interactive.RESULT_FIELDS)
+            p.require(interval["apiVersion"] == interactive.RESULT_API)
+        terminal_expiry = p.ns(value["expiresAtUnixNanos"])
+        p.integer(terminal_expiry, maximum=p.MAX_I64)
+    p.require(value["pilotAcceptanceVerified"] is False and value["productionReleaseEligible"] is False)
+    final = p.fields(value["finalResult"], FINAL_FIELDS)
+    p.require(final["job"] == expected_job and p.digest(final["inputSha256"]) == context["terminalInputSha256"])
+    result_raw = _raw(final["resultOriginal"], 4096)
+    result = p.document(result_raw, 4096)
+    p.require(type(result) is dict and p.canonical(result) == result_raw
+        and p.sha(result_raw) == p.digest(final["resultSha256"]))
+    deadline = min(p.integer(deadline_boottime_ns, maximum=p.MAX_U64), p.ns(value["deadlineBoottimeNs"]),
+        p.integer(held["deadlineBoottimeNs"], maximum=p.MAX_U64), p.ns(request_value["deadlineBoottimeNs"]))
+    expiry = min(p.integer(expires_at_unix_ns, maximum=p.MAX_I64), terminal_expiry,
+        p.integer(held["expiresAtUnixNanos"], maximum=p.MAX_I64))
+    if stage == "adopted":
+        expiry = min(expiry, p.ns(request_value["expiresAtUnixNanos"]))
+        if result.get("action") == "run-interactive":
+            expiry = min(expiry, p.integer(result["expiresAtUnixNanos"], maximum=p.MAX_I64))
+    header_value = dict(apiVersion=COMPLETION_API, exchangeSequence=index, stage=stage,
+        deadlineBoottimeNs=str(deadline), expiresAtUnixNanos=str(expiry),
+        originals={"terminal": {"length": len(raw), "sha256": p.sha(raw)}})
+    completion_header(header_value, index, completed, deadline_boottime_ns=deadline_boottime_ns,
+        expires_at_unix_ns=expires_at_unix_ns)
+    return header_value, {"terminal": raw}

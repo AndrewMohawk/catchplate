@@ -521,6 +521,32 @@ class CommissioningLifecycle:
             p.require(self._adopted_result["status"] == "stopped-cleanup-complete" and self._process._closed)
         return copy.deepcopy(self._adopted_result)
 
+    def completion_original(self, stage):
+        """Actual child result after verified exit, not overall CLI cleanup.
+
+        Public source capabilities stay retained until close. These bytes may
+        complete an independent transcript but confer no execution authority.
+        """
+        try:
+            self._check(full=True)
+            p.require(not self._active and stage in ("cold", "adopted"))
+            if stage == "cold":
+                p.require(self._stage == "cold-finished" and self._bundle is not None)
+                owner = self._cold
+            else:
+                p.require(self._stage == "adopted-finished" and self._adopted_result is not None)
+                owner = self._process
+            raw = owner.completion_original()
+            p.require(type(raw) is bytes)
+            self._check(full=True)
+            # Sample the terminal's potentially tighter caps after all of the
+            # lifecycle's retained-file checks, not merely before that I/O.
+            p.require(owner.completion_original() == raw)
+            return raw
+        except BaseException as error:
+            self._failed = True
+            raise LifecycleError(self) from error
+
     def close(self, *, cancel=False):
         global _LIVE
         if self._closed:

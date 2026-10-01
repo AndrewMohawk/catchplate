@@ -138,7 +138,7 @@ def main():
                 channel = ApprovalChannel.open_lifecycle(selected["approval_fd"],
                     peer_pid=selected["approval_peer_pid"], peer_uid=selected["approval_peer_uid"],
                     peer_gid=selected["approval_peer_gid"], deadline_boottime_ns=limits["deadlineBoottimeNs"],
-                    expires_at_unix_ns=limits["expiresAtUnixNanos"], check=current)
+                    expires_at_unix_ns=limits["expiresAtUnixNanos"], check=current, completions=True)
             except ApprovalChannelError as error:
                 channel = error.owner
                 _require(type(channel) is ApprovalChannel)
@@ -154,6 +154,21 @@ def main():
             received.append(accepted)
             current()  # No peer-live check after the final acknowledged exchange.
             return accepted
+
+        def complete(name):
+            original = lifecycle.completion_original(name)
+
+            def completion_current():
+                current()
+                # Closed child owners can carry tighter final-action limits
+                # than the overall lifecycle. Keep those through receipt too.
+                _require(lifecycle.completion_original(name) == original)
+
+            limits = lifecycle.approval_context()
+            channel.send_completion(name, original,
+                deadline_boottime_ns=limits["waitDeadlineBoottimeNs"],
+                expires_at_unix_ns=limits["expiresAtUnixNanos"], check=completion_current)
+            completion_current()
 
         runtime.check(installed=True)
         stage = "sender"
@@ -182,6 +197,7 @@ def main():
         stage = "cold-finish"
         bundle = lifecycle.finish_cold()
         bundle_sha256 = cold.p.sha(bundle)
+        complete("cold")
         for selected_phase, phase_jobs in adopted.JOBS.items():
             for selected_job in phase_jobs:
                 stage = "adopted:" + selected_job.name
@@ -196,6 +212,7 @@ def main():
         stage = "adopted-finish"
         terminal = lifecycle.finish_adopted()
         _require(terminal["status"] == "stopped-cleanup-complete")
+        complete("adopted")
         runtime.check(installed=True)
         completed = True
     except BaseException:

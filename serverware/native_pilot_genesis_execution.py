@@ -527,6 +527,22 @@ class GenesisExecution:
         self._check(full=True)
         return bytes(self._bundle)
 
+    def final_result(self):
+        """Copy the actual completed last job, never derive success from input."""
+        p.require(type(self) is GenesisExecution and self._handoff)
+        self.finish()  # Actual transfer, retired owners and retained originals.
+        last = self._jobs[-1]
+        p.require(last.name == "handoff-cold-core")
+        row = p.fields(self._prior[last.name], ("input", "result"))
+        wire.owner_action(row["input"], last.name)
+        previous = p.fields(self._previous, ("job", "resultOriginal", "resultSha256"))
+        p.require(previous["job"] == last.name and previous["resultOriginal"].encode("ascii") == row["result"]
+            and previous["resultSha256"] == p.sha(row["result"]))
+        result = copy.deepcopy(previous)
+        result["inputSha256"] = p.sha(row["input"])
+        self._check(full=True)
+        return result
+
     def close(self):
         if self._closed:
             return {"status": "closed", "coordinatorCompleted": self._bundle is not None}

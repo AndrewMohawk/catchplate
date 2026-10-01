@@ -144,6 +144,8 @@ that source path through the 176 operational jobs.
 [Protected endpoint publication](docs/native-pilot-adopted-endpoint-publication.md)
 connects approved configuration to its runtime files. Independent decisions,
 approved installation, deployment and a complete live run remain open.
+The lifecycle also returns actual startup/shutdown results after verified child
+exit; input-delivery receipts alone are not treated as completed work.
 
 Before a pilot is ready to try, four milestones remain:
 

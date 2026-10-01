@@ -78,6 +78,7 @@ class AdoptedCommissioningSupervisor:
         self._pending = None
         self._retained, self._installations = [], []
         self._prior, self._observations = {}, {}
+        self._stop_admission = None
         self._started = self._closed = self._failed = False
 
     @classmethod
@@ -172,9 +173,9 @@ class AdoptedCommissioningSupervisor:
             installation._prepare_adopted(request.raw, approval.raw, inp.raw, approval.sha, inp.sha)
             self._policy.check(self._process); self._process.check_request(request)
             self._policy.require_input(inp.raw, process=self._process, request=request)
+            admission_clocks = dict(boot=self._boot, now_boottime_ns=originals._clock(), now_unix_ns=time.time_ns())
             checked = profile.prepare_input(job.name, inp.raw, phase=request.phase, prior=self._prior,
-                observations=self._observations, boot=self._boot, now_boottime_ns=originals._clock(),
-                now_unix_ns=time.time_ns())
+                observations=self._observations, **admission_clocks)
             deadline = request.deadline_boottime_ns if checked.get("deadline") is None else min(
                 request.deadline_boottime_ns, checked["deadline"])
             expiry = p.ns(request.value["expiresAtUnixNanos"])
@@ -201,6 +202,9 @@ class AdoptedCommissioningSupervisor:
             # originals. Signal masking keeps local one-use bookkeeping joined.
             with ownership.owning():
                 self._process.reply(request, reply)
+                if job.name == "stop":
+                    p.require(request.phase == "shutdown" and self._stop_admission is None)
+                    self._stop_admission = (inp, admission_clocks)
                 self._index += 1
                 self._pending = None
             self._policy.check(self._process)
@@ -219,10 +223,29 @@ class AdoptedCommissioningSupervisor:
         if result["status"] == "cleanup-unknown-owner-retained":
             return result
         p.require(result["status"] in ("not-started", "stopped-cleanup-complete", "failed-cleanup-complete"))
+        transcript_success = result["status"] == "stopped-cleanup-complete" and not cancel
+        if transcript_success:
+            p.require(self._index == len(SUPPORTED_JOBS) and self._pending is None
+                and self._stop_admission is not None)
+            source, admitted = self._stop_admission
+            source.check()
+            terminal = p.document(self._process.completion_original(), 4096)
+            final = terminal["finalResult"]
+            p.require(final["inputSha256"] == source.sha)
+            actual = p.document(final["resultOriginal"].encode("ascii"), profile.BY_NAME["stop"][1].maximum)
+            # Replay the exact full public admission at its recorded actual
+            # clocks. Re-admitting now would wrongly demand now < an already
+            # ended interactive stop time. Current terminal caps/interval facts
+            # are separately enforced by the actual process completion owner.
+            profile.checked_result("stop", source.raw, actual, phase="shutdown", prior=self._prior,
+                observations=self._observations, **admitted)
+            self._prior["stop"] = {"input": source.raw, "result": actual}
+            self._process.completion_original()  # Final current original-clock check.
         for owner in self._installations:
             owner.close()
         for original in self._retained:
             original.close()
         self._policy.close()
         self._closed = True
+        if transcript_success: self._process.completion_original()
         return result

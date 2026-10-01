@@ -85,11 +85,16 @@ def job_value(raw, *, index, upper_deadline):
     return value
 
 
-def terminal_value(raw, *, observation_raw):
-    value = p.fields(p.document(raw, wire.MAX_REQUEST - 1), ("apiVersion", "status", "jobsCompleted",
+def terminal_value(raw, *, observation_raw, final_input_raw=None):
+    """Closed public association; passing the last input explicitly selects v3."""
+    selected = final_input_raw is not None
+    fields = ("apiVersion", "status", "jobsCompleted",
         "bundleOriginal", "bundleSha256", "pilotAcceptanceVerified", "productionReleaseEligible",
-        "operationalAdoptionVerified"))
-    p.require(p.canonical(value) == raw and value["apiVersion"] == replies.HANDOFF_TERMINAL_API
+        "operationalAdoptionVerified") + (("configurationSha256", "finalResult",
+            "deadlineBoottimeNs", "expiresAtUnixNanos") if selected else ())
+    value = p.fields(p.document(raw, wire.MAX_REQUEST - 1), fields)
+    p.require(p.canonical(value) == raw and value["apiVersion"] == (
+        replies.RENDEZVOUS_TERMINAL_API if selected else replies.HANDOFF_TERMINAL_API)
         and value["status"] == "cold-core-custody-acknowledged"
         and type(value["jobsCompleted"]) is int and value["jobsCompleted"] == len(_JOBS)
         and value["pilotAcceptanceVerified"] is False and value["productionReleaseEligible"] is False
@@ -99,6 +104,42 @@ def terminal_value(raw, *, observation_raw):
     bundle = text.encode("ascii")
     p.require(p.sha(bundle) == p.digest(value["bundleSha256"]))
     core.observation(observation_raw, bundle)
+    if selected:
+        p.digest(value["configurationSha256"])
+        p.ns(value["deadlineBoottimeNs"]); p.integer(value["expiresAtUnixNanos"], maximum=p.MAX_I64)
+        p.require(type(final_input_raw) is bytes and 0 < len(final_input_raw) <= _JOBS[-1].maximum)
+        wire.owner_action(final_input_raw, _JOBS[-1].name)
+        final = p.fields(value["finalResult"], ("job", "inputSha256", "resultOriginal", "resultSha256"))
+        p.require(final["job"] == _JOBS[-1].name == "handoff-cold-core"
+            and final["inputSha256"] == p.sha(final_input_raw))
+        text = final["resultOriginal"]
+        p.require(type(text) is str and text.isascii() and 0 < len(text) <= 4096)
+        result_raw = text.encode("ascii")
+        p.require(p.sha(result_raw) == p.digest(final["resultSha256"]))
+        result = p.fields(p.document(result_raw, 4096),
+            ("status", "bundleSha256", "observationSha256", "operationalAdoptionVerified"))
+        p.require(result == dict(status="cold-core-custody-acknowledged", bundleSha256=p.sha(bundle),
+            observationSha256=p.sha(observation_raw), operationalAdoptionVerified=False)
+            and result["operationalAdoptionVerified"] is False)
+    return value, bundle
+
+
+def completion_value(raw, *, observation_raw, final_input_raw, configuration_raw,
+                     boot, now_boottime_ns, now_unix_ns):
+    """Selected terminal3 data checks, not child completion or receipt custody."""
+    from serverware import native_pilot_genesis_job_install as install
+    p.require(type(final_input_raw) is bytes)
+    configuration = install.context(configuration_raw, boot=boot,
+        now_boottime_ns=now_boottime_ns, now_unix_ns=now_unix_ns)
+    value, bundle = terminal_value(raw, observation_raw=observation_raw, final_input_raw=final_input_raw)
+    p.require(value["configurationSha256"] == p.sha(configuration_raw))
+    observed = core.observation(observation_raw, bundle)
+    scope = core.g.document(bundle, core.MAX_BUNDLE)["completion"]["prepared"]["core"]["genesis"]["scope"]
+    p.require(tuple(scope[name] for name in ("bootIdBase64url", "timeNamespaceDevice", "timeNamespaceInode")) == boot
+        and p.ns(observed["issuedAtBoottimeNs"]) <= now_boottime_ns < p.ns(value["deadlineBoottimeNs"])
+        <= min(p.ns(observed["deadlineBoottimeNs"]), p.ns(configuration["window"]["lifetimeDeadlineBoottimeNs"]))
+        and observed["issuedAtUnixNanos"] <= now_unix_ns < value["expiresAtUnixNanos"]
+        <= min(observed["expiresAtUnixNanos"], configuration["expiresAtUnixNanos"]))
     return value, bundle
 
 
@@ -144,6 +185,8 @@ class GenesisAuthorityProcess:
         self._stderr, self._stdout_extra = bytearray(), bytearray()
         self._stderr_eof = self._stdout_eof = False
         self._bundle = self._terminal = self._result = None
+        self._completion_raw = self._final_input = None
+        self._final_deadline = self._terminal_expiry = None
         self._core_deadline = self._core_expiry = None
         self._prepared = self._started = self._rendezvous_replied = self._failed = False
         self._finished = self._finish_attempted = self._reaped = self._reap_attempted = False
@@ -223,6 +266,8 @@ class GenesisAuthorityProcess:
             result = lifetime
         if self._pending is not None:
             result = min(result, self._pending.deadline_boottime_ns)
+        if self._final_deadline is not None:
+            result = min(result, self._final_deadline)
         return min(result, self._core_deadline) if self._core_deadline is not None else result
 
     def _clock(self, deadline=None):
@@ -231,10 +276,12 @@ class GenesisAuthorityProcess:
         p.require(self._last <= now and self._wall <= wall)
         if self._value is not None:
             upper = self._upper() if deadline is None else min(deadline, self.deadline_boottime_ns)
+            if self._final_deadline is not None: upper = min(upper, self._final_deadline)
             if self._core_deadline is not None: upper = min(upper, self._core_deadline)
             if self._pending is not None: upper = min(upper, self._pending.deadline_boottime_ns)
             expiry = self.expires_at_unix_ns
             if self._core_expiry is not None: expiry = min(expiry, self._core_expiry)
+            if self._terminal_expiry is not None: expiry = min(expiry, self._terminal_expiry)
             p.require(p.ns(self._value["window"]["issuedAtBoottimeNs"]) <= now < upper and wall < expiry)
         self._last, self._wall = now, wall
         return now
@@ -306,6 +353,14 @@ class GenesisAuthorityProcess:
     @property
     def finished(self): return self._finished
 
+    def completion_original(self):
+        """Literal terminal3 only after EOF, exit0 and consuming same-child reap."""
+        p.require(self._finished and self._reaped and self._completion_raw is not None)
+        self.check_waiting()
+        self._final_input.check(); self._execution.check()
+        self.check_waiting()
+        return bytes(self._completion_raw)
+
     def identity(self):
         self.check_waiting(); p.require(self._child is not None)
         return dict(pid=self._child.pid, uid=0, gid=0, startTimeTicks=self._child_start, parentPid=self._pid)
@@ -372,6 +427,7 @@ class GenesisAuthorityProcess:
         while True:
             self._io_check(deadline, terminal=terminal)
             expiry = self.expires_at_unix_ns if self._core_expiry is None else min(self.expires_at_unix_ns, self._core_expiry)
+            if self._terminal_expiry is not None: expiry = min(expiry, self._terminal_expiry)
             duration = min(0.05, (deadline - self._last) / 1_000_000_000, (expiry - self._wall) / 1_000_000_000)
             p.require(duration > 0)
             watched = [self._pidfd, self._pipes["stderr"][0]]
@@ -503,6 +559,10 @@ class GenesisAuthorityProcess:
             deadline = self._pending.deadline_boottime_ns
 
             def committed():
+                if selected.name == "handoff-cold-core":
+                    p.require(self._final_input is None and self._index == len(_JOBS) - 1)
+                    self._final_input = source
+                    self._final_deadline = deadline
                 self._index += 1
                 self._pending = None
 
@@ -528,6 +588,7 @@ class GenesisAuthorityProcess:
                 if self._stdout_eof and self._stderr_eof: return observed
             self._clock(deadline)
             expiry = self.expires_at_unix_ns if self._core_expiry is None else min(self.expires_at_unix_ns, self._core_expiry)
+            if self._terminal_expiry is not None: expiry = min(expiry, self._terminal_expiry)
             ceiling = deadline if self._core_deadline is None else min(deadline, self._core_deadline)
             if self._pending is not None: ceiling = min(ceiling, self._pending.deadline_boottime_ns)
             remaining = min(ceiling - self._last, expiry - self._wall)
@@ -576,11 +637,23 @@ class GenesisAuthorityProcess:
             self._finish_attempted = True
             deadline = self._upper()
             raw = self._read_frame(wire.MAX_REQUEST - 1, deadline, terminal=True)
-            self._terminal, self._bundle = terminal_value(raw, observation_raw=self._observations["core.observation"])
+            p.require(self._final_input is not None and self._execution is not None)
+            self._final_input.check(); self._execution.check(); self._clock(deadline)
+            self._terminal, self._bundle = completion_value(raw, observation_raw=self._observations["core.observation"],
+                final_input_raw=self._final_input.raw, configuration_raw=self._execution.raw,
+                boot=self._boot, now_boottime_ns=self._last, now_unix_ns=self._wall)
+            p.require(p.ns(self._terminal["deadlineBoottimeNs"]) <= self._final_deadline)
+            # These bound this terminal exchange/reap, not the transferred
+            # core's operational lifetime consumed by CommissioningLifecycle.
+            self._final_deadline = min(self._final_deadline, p.ns(self._terminal["deadlineBoottimeNs"]))
+            self._terminal_expiry = self._terminal["expiresAtUnixNanos"]
+            deadline = min(deadline, self._final_deadline)
+            self._clock(deadline)
             observed = self._wait_exit(deadline)
             self._result = self._status(observed, successful=True)
             self._runtime.check(); self._io_check(deadline, terminal=True)
             self._reap(observed, deadline)
+            self._completion_raw = bytes(raw)
             self._finished = True
             return bytes(self._bundle)
         except BaseException as error:

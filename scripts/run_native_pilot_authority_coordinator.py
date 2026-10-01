@@ -16,6 +16,7 @@ import os
 from pathlib import Path
 import signal
 import sys
+import time
 
 
 class _Parser(argparse.ArgumentParser):
@@ -27,18 +28,35 @@ def _stop(_signum, _frame):
     raise KeyboardInterrupt
 
 
-def _result(status, phase, interactive_result=None):
+def _result(status, phase, interactive_result=None, completion=None):
     value = {"apiVersion": "serverware.nativePilotAuthorityCoordinatorResult/v1", "status": status,
         "phase": phase, "pilotAcceptanceVerified": False, "productionReleaseEligible": False}
     if status == "stopped-cleanup-complete" and interactive_result is not None:
         value["interactiveResult"] = interactive_result
+    if completion is not None:
+        if status != "stopped-cleanup-complete" or phase != "shutdown":
+            return False
+        value.update(completion)
+        value["apiVersion"] = "serverware.nativePilotAuthorityCoordinatorResult/v2"
     raw = json.dumps(value,
         sort_keys=True, separators=(",", ":")).encode("ascii") + b"\n"
     try:
+        if completion is not None:
+            now, wall = time.clock_gettime_ns(time.CLOCK_BOOTTIME), time.time_ns()
+            expiry = int(completion["expiresAtUnixNanos"])
+            action = json.loads(completion["finalResult"]["resultOriginal"])
+            if action.get("action") == "run-interactive": expiry = min(expiry, action["expiresAtUnixNanos"])
+            if not (len(raw) <= 4096 and now < int(completion["deadlineBoottimeNs"])
+                    and wall < expiry):
+                return False
         fcntl.fcntl(2, fcntl.F_SETFL, fcntl.fcntl(2, fcntl.F_GETFL) | os.O_NONBLOCK)
-        os.write(2, raw)
+        written = os.write(2, raw)
+        if completion is not None:
+            return written == len(raw) and now <= time.clock_gettime_ns(time.CLOCK_BOOTTIME) < int(completion["deadlineBoottimeNs"]) \
+                and wall <= time.time_ns() < expiry
+        return written == len(raw)
     except OSError:
-        pass
+        return False
 
 
 def main():
@@ -54,7 +72,7 @@ def main():
         from serverware.native_pilot_genesis_authority import main as cold_main
         return cold_main(sys.argv[1:])
     owner = executor = channel = None
-    phase, failed = "open", False
+    phase, failed, adopted = "open", False, False
     signal.signal(signal.SIGTERM, _stop)
     signal.signal(signal.SIGINT, _stop)
     try:
@@ -137,10 +155,12 @@ def main():
 
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
     signal.signal(signal.SIGINT, signal.SIG_IGN)
-    terminal = None
+    terminal = completion = None
     try:
         if owner is not None:
             terminal = owner.close(cancel=failed)
+        if adopted and not failed and terminal is not None and terminal.get("status") == "stopped-cleanup-complete":
+            completion = executor.final_result()
         # Never release authority originals/capabilities before the actual
         # child cleanup result and reap, or proof it was never spawned.
         if executor is not None:
@@ -153,8 +173,8 @@ def main():
             signal.pause()
     stopped = terminal is not None and terminal.get("status") == "stopped-cleanup-complete"
     if not failed and stopped:
-        _result("stopped-cleanup-complete", phase, terminal.get("interactiveResult"))
-        return 0
+        reported = _result("stopped-cleanup-complete", phase, terminal.get("interactiveResult"), completion)
+        return 0 if not adopted or reported else 1
     cleaned = terminal is not None and terminal.get("status") in ("stopped-cleanup-complete", "failed-cleanup-complete")
     _result("failed-cleanup-complete" if cleaned else "not-started", phase)
     return 1

@@ -135,6 +135,26 @@ class LifecycleCliControls(unittest.TestCase):
                     "waitDeadlineBoottimeNs" if node.func.attr == "exchange_lifecycle" else "deadlineBoottimeNs")
         self.assertFalse(calls(tree, "channel", "check"))  # Final receipt permits real peer retirement.
 
+    def test_selected_completion_transport_follows_actual_finish_before_continuing(self):
+        tree = source()
+        opened = next(node for node in ast.walk(tree) if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute) and node.func.attr == "open_lifecycle")
+        self.assertIs(next(item.value.value for item in opened.keywords if item.arg == "completions"), True)
+        completed = {node.args[0].value: node.lineno for node in ast.walk(tree)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "complete"}
+        self.assertEqual(set(completed), {"cold", "adopted"})
+        self.assertLess(calls(tree, "lifecycle", "finish_cold")[0], completed["cold"])
+        self.assertLess(completed["cold"], calls(tree, "lifecycle", "adopted_step")[0])
+        self.assertLess(calls(tree, "lifecycle", "finish_adopted")[0], completed["adopted"])
+        self.assertLess(completed["adopted"], calls(tree, "lifecycle", "close")[0])
+        self.assertLess(calls(tree, "lifecycle", "completion_original")[0], calls(tree, "channel", "send_completion")[0])
+        sent = next(node for node in ast.walk(tree) if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute) and node.func.attr == "send_completion")
+        kwargs = {item.arg: item.value for item in sent.keywords}
+        self.assertEqual(kwargs["check"].id, "completion_current")
+        self.assertEqual(kwargs["deadline_boottime_ns"].slice.value, "waitDeadlineBoottimeNs")
+        self.assertEqual(kwargs["expires_at_unix_ns"].slice.value, "expiresAtUnixNanos")
+
     def test_partial_error_owners_are_retained_inside_signal_ownership_guards(self):
         tree = source()
         guarded = set()

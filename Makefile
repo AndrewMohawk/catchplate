@@ -1751,6 +1751,9 @@ override CODER_COUNTED_NATIVE_SOURCE_DEPENDENCIES := \
 	scripts/test_native_pilot_genesis_job_install.py \
 	scripts/test_native_pilot_genesis_installer_process.py \
 	scripts/test_native_pilot_genesis_process.py \
+	scripts/test_native_pilot_genesis_completion.py \
+	scripts/test_native_pilot_adopted_completion.py \
+	scripts/test_native_pilot_lifecycle_completion_wire.py \
 	scripts/test_native_pilot_lifecycle.py \
 	serverware/native_pilot_lifecycle_approval_wire.py \
 	serverware/native_pilot_lifecycle_inputs.py \
@@ -4735,6 +4738,9 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				scripts/test_native_pilot_genesis_job_install.py \
 				scripts/test_native_pilot_genesis_installer_process.py \
 				scripts/test_native_pilot_genesis_process.py \
+				scripts/test_native_pilot_genesis_completion.py \
+				scripts/test_native_pilot_adopted_completion.py \
+				scripts/test_native_pilot_lifecycle_completion_wire.py \
 				scripts/test_native_pilot_lifecycle.py \
 				serverware/native_pilot_lifecycle_approval_wire.py \
 				serverware/native_pilot_lifecycle_inputs.py \

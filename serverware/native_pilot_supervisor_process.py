@@ -44,6 +44,59 @@ _REQUEST_FIELDS = ("apiVersion", "sequence", "conductorSequence", "conductorRequ
 _REPLY_FIELDS = ("apiVersion", "sequence", "conductorSequence", "conductorRequestSha256", "phase",
     "jobIndex", "job", "requestSha256", "approvalSha256", "inputSha256")
 _RESULT_MAX = 4096
+ADOPTED_RESULT_API = "serverware.nativePilotAuthorityCoordinatorResult/v2"
+_RESULT_FIELDS = ("apiVersion", "status", "phase", "pilotAcceptanceVerified", "productionReleaseEligible")
+_COMPLETION_FIELDS = ("finalResult", "deadlineBoottimeNs", "expiresAtUnixNanos")
+
+
+def completion_value(raw, *, request_raw, input_raw, input_sha256, now_boottime_ns, now_unix_ns):
+    """Pure last-result association; the real owner separately proves EOF/reap."""
+    from serverware import native_pilot_adopted_phase_profile as selected
+    request = p.fields(p.document(request_raw, MAX_FRAME - 1), selected.REQUEST_FIELDS)
+    _require(request["apiVersion"] == selected.API and request["phase"] == "shutdown"
+        and request["job"] == "stop" and type(request["sequence"]) is int
+        and request["sequence"] == len(selected.BY_NAME) and type(request["jobIndex"]) is int and request["jobIndex"] == 1
+        and type(request["conductorSequence"]) is int and request["conductorSequence"] == len(STAGES))
+    conductor = p.fields(request["conductorRequest"], ("apiVersion", "sequence", "phase", "payload",
+        "deadlineBoottimeNs", "expiresAtUnixNanos"))
+    _require(conductor["apiVersion"] == "serverware.nativePilotOperatorRequest/v2"
+        and type(conductor["sequence"]) is int and conductor["sequence"] == len(STAGES) and conductor["phase"] == "shutdown"
+        and p.sha(p.canonical(conductor)) == p.digest(request["conductorRequestSha256"]))
+    for name in ("deadlineBoottimeNs", "expiresAtUnixNanos"):
+        _same(conductor[name], request[name])
+    p.fields(conductor["payload"], ("originHandoff",))
+    interactive._handoff(conductor["payload"]["originHandoff"])
+    previous = p.fields(request["previousResult"], ("phase", "job", "result"))
+    _require(previous["phase"] == "generation-origin" and previous["job"] == "observe-generation-origin"
+        and type(previous["result"]) is dict)
+    _require(type(input_raw) is bytes and p.sha(input_raw) == p.digest(input_sha256))
+    action = p.document(input_raw, selected.BY_NAME["stop"][1].maximum)
+    run = action.get("action") == "run-interactive"
+    if run:
+        interactive.validate_action(action, origin_handoff=conductor["payload"]["originHandoff"])
+    else:
+        p.fields(action, ("action",)); _require(action["action"] == "stop")
+    value = p.fields(p.document(raw, _RESULT_MAX), _RESULT_FIELDS + _COMPLETION_FIELDS
+        + (("interactiveResult",) if run else ()))
+    _require(value["apiVersion"] == ADOPTED_RESULT_API and value["status"] == "stopped-cleanup-complete"
+        and value["phase"] == "shutdown" and value["pilotAcceptanceVerified"] is False
+        and value["productionReleaseEligible"] is False)
+    for name in ("deadlineBoottimeNs", "expiresAtUnixNanos"):
+        _same(value[name], request[name])
+    deadline, expiry = p.ns(value["deadlineBoottimeNs"]), p.ns(value["expiresAtUnixNanos"])
+    if run: expiry = min(expiry, action["expiresAtUnixNanos"])
+    _require(p.integer(now_boottime_ns, maximum=p.MAX_U64) < deadline and p.integer(now_unix_ns) < expiry)
+    final = p.fields(value["finalResult"], ("job", "inputSha256", "resultOriginal", "resultSha256"))
+    _require(final["job"] == "stop" and final["inputSha256"] == input_sha256
+        and type(final["resultOriginal"]) is str and final["resultOriginal"].isascii())
+    result_raw = final["resultOriginal"].encode("ascii")
+    result = p.document(result_raw, selected.BY_NAME["stop"][1].maximum)
+    _require(p.sha(result_raw) == p.digest(final["resultSha256"]))
+    _same(result, action)  # Compare the literal actual result, never reconstruct it.
+    interactive.check_terminal({name: value[name] for name in _RESULT_FIELDS + (("interactiveResult",) if run else ())},
+        action=action if run else None, origin_handoff=conductor["payload"].get("originHandoff"),
+        deadline_boottime_ns=deadline, now_boottime_ns=now_boottime_ns, now_unix_ns=now_unix_ns)
+    return copy.deepcopy(value)
 
 
 def _require(value):
@@ -207,6 +260,8 @@ class AuthorityCoordinatorProcess:
         self._last_clock = _clock()
         self._stderr, self._stderr_eof = bytearray(), False
         self._result = self._bindings = None
+        self._completion = self._final_request_raw = None
+        self._stdout_eof = False
         self._interactive_action = self._interactive_origin = self._interactive_deadline = None
         self._interactive_pending = None
         self._interval_wait_attempted = self._interval_wait_done = False
@@ -588,6 +643,7 @@ class AuthorityCoordinatorProcess:
                 self._reserve = max(self._reserve,
                     p.integer(production["cleanupReserveNanos"], maximum=5_000_000_000))
             if slot == ("shutdown", "stop"):
+                if self._adopted: self._final_request_raw = request.raw
                 action = p.document(raw, job.maximum)
                 if action.get("action") == "run-interactive":
                     handoff = self._conductors["shutdown"]["payload"]["originHandoff"]
@@ -613,6 +669,33 @@ class AuthorityCoordinatorProcess:
                 return
             self._stderr.extend(raw)
             _require(len(self._stderr) <= _RESULT_MAX)
+
+    def _terminal_clock(self, deadline):
+        now, wall = _clock(), time.time_ns()
+        _require(self._last_clock <= now < deadline)
+        if self._adopted:
+            expiry = self._epoch_limit
+            if self._interactive_action is not None: expiry = min(expiry, self._interactive_action["expiresAtUnixNanos"])
+            _require(self._last_wall <= wall < expiry)
+        self._last_clock, self._last_wall = now, wall
+        return now, wall
+
+    def completion_original(self):
+        """Literal adopted success only after EOF, exit0, consuming reap and close."""
+        _require(type(self) is AuthorityCoordinatorProcess and self._adopted and self._closed
+            and self._completion is not None and self._stderr_eof and self._stdout_eof
+            and self._child is not None and self._child.returncode == 0
+            and threading.current_thread() is threading.main_thread()
+            and os.getresuid() == (0, 0, 0) and os.getresgid() == (0, 0, 0)
+            and (os.getpid(), originals._start(), originals._boot()) == (self._pid, self._start, self._boot))
+        request = p.document(self._final_request_raw, MAX_FRAME - 1)
+        now, wall = self._terminal_clock(p.ns(request["deadlineBoottimeNs"]))
+        completion_value(self._completion, request_raw=self._final_request_raw,
+            input_raw=self._approved_inputs[("shutdown", "stop")],
+            input_sha256=self._replies[("shutdown", "stop")]["inputSha256"],
+            now_boottime_ns=now, now_unix_ns=wall)
+        self._terminal_clock(p.ns(request["deadlineBoottimeNs"]))
+        return self._completion
 
     def wait_interactive(self):
         """Retain the actual authority child while its approved pilot runs."""
@@ -650,6 +733,8 @@ class AuthorityCoordinatorProcess:
             _require(self._pidfd is not None)
             complete = self._channel is not None and self._channel._index == len(self._order) and not self._channel._poisoned
             now = _clock(); deadline = min(self._lifetime, now + self._reserve)
+            if self._adopted and self._final_request_raw is not None:
+                deadline = min(deadline, p.ns(p.document(self._final_request_raw, MAX_FRAME - 1)["deadlineBoottimeNs"]))
             _require(now < deadline)
             if (cancel or not complete) and not select.select([self._pidfd], [], [], 0)[0]:
                 self._signaled = True
@@ -658,17 +743,26 @@ class AuthorityCoordinatorProcess:
                 except ProcessLookupError:
                     pass  # Actual terminal/result/reap checks below decide.
             while True:
-                self._origin(); self._read_stderr()
+                self._origin(); self._terminal_clock(deadline); self._read_stderr()
                 if select.select([self._pidfd], [], [], 0)[0]:
                     observed = os.waitid(os.P_PIDFD, self._pidfd, os.WEXITED | os.WNOWAIT | os.WNOHANG)
                     _require(observed is not None and observed.si_pid == self._child.pid and observed.si_code == os.CLD_EXITED)
                     self._read_stderr()
                     _require(self._stderr_eof and self._stderr.endswith(b"\n") and self._stderr.count(b"\n") == 1)
-                    result = interactive.check_terminal(p.document(bytes(self._stderr[:-1]), _RESULT_MAX),
-                        action=self._interactive_action, origin_handoff=self._interactive_origin,
-                        deadline_boottime_ns=self._interactive_deadline, now_boottime_ns=_clock(),
-                        now_unix_ns=time.time_ns())
-                    _require(result["apiVersion"] == "serverware.nativePilotAuthorityCoordinatorResult/v1"
+                    terminal_raw = bytes(self._stderr[:-1])
+                    candidate = p.document(terminal_raw, _RESULT_MAX)
+                    successor = self._adopted and candidate.get("status") == "stopped-cleanup-complete"
+                    if successor:
+                        _require(complete and self._final_request_raw is not None)
+                        result = completion_value(terminal_raw, request_raw=self._final_request_raw,
+                            input_raw=self._approved_inputs[("shutdown", "stop")],
+                            input_sha256=self._replies[("shutdown", "stop")]["inputSha256"],
+                            now_boottime_ns=_clock(), now_unix_ns=time.time_ns())
+                    else:
+                        result = interactive.check_terminal(candidate, action=self._interactive_action,
+                            origin_handoff=self._interactive_origin, deadline_boottime_ns=self._interactive_deadline,
+                            now_boottime_ns=_clock(), now_unix_ns=time.time_ns())
+                    _require(result["apiVersion"] == (ADOPTED_RESULT_API if successor else "serverware.nativePilotAuthorityCoordinatorResult/v1")
                         and result["pilotAcceptanceVerified"] is False and result["productionReleaseEligible"] is False
                         and result["phase"] in ("open", "starting", *STAGES))
                     _require((result["status"] == "stopped-cleanup-complete" and complete
@@ -676,12 +770,19 @@ class AuthorityCoordinatorProcess:
                         or (result["status"] == "failed-cleanup-complete" and observed.si_status == 1)
                         or (result["status"] == "not-started" and not complete and observed.si_status == 1
                             and result["phase"] in ("open", "starting")))
-                    _require(_clock() < deadline)
+                    if successor:
+                        _require(self._channel is not None)
+                        _require(pipe._identity(self._child.stdout.fileno()) == self._channel._ids[0]
+                            and os.read(self._child.stdout.fileno(), 1) == b"")
+                        self._stdout_eof = True
+                    self._terminal_clock(deadline)
                     reaped = os.waitid(os.P_PIDFD, self._pidfd, os.WEXITED)
                     _require(reaped is not None and (reaped.si_pid, reaped.si_code, reaped.si_status)
                         == (observed.si_pid, observed.si_code, observed.si_status))
                     self._child.returncode = reaped.si_status
                     self._result = result
+                    if successor: self._completion = terminal_raw
+                    self._terminal_clock(deadline)
                     break
                 now = _clock(); _require(now < deadline)
                 try:
@@ -694,5 +795,6 @@ class AuthorityCoordinatorProcess:
         # Unknown cleanup never reaches here; _LIVE retains the actual owner,
         # originals and capabilities, without a destructor or retry path.
         self._release_handles()
+        if self._completion is not None: self._terminal_clock(deadline)
         self._closed = True; _LIVE = None
         return copy.deepcopy(self._result)

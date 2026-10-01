@@ -272,12 +272,12 @@ class ReceivedApproval:
 class _Connection:
     @classmethod
     def open_lifecycle(cls, fd, *, peer_pid, peer_uid, peer_gid,
-                       deadline_boottime_ns, expires_at_unix_ns, check):
-        _require(callable(check))
+                       deadline_boottime_ns, expires_at_unix_ns, check, completions=False):
+        _require(callable(check) and type(completions) is bool)
         p.integer(deadline_boottime_ns, maximum=p.MAX_U64)
         p.integer(expires_at_unix_ns, maximum=p.MAX_I64)
         return cls._open(fd, peer_pid=peer_pid, peer_uid=peer_uid, peer_gid=peer_gid,
-            lifecycle=(deadline_boottime_ns, expires_at_unix_ns, check))
+            lifecycle=(deadline_boottime_ns, expires_at_unix_ns, check, completions))
 
     @classmethod
     def open_adopted(cls, fd, *, peer_pid, peer_uid, peer_gid):
@@ -318,9 +318,10 @@ class _Connection:
         owner._incoming, owner._loose = [], []
         owner._close_attempted = owner._close_uncertain = owner._receipt_committed = False
         owner._context, owner._lifecycle_header = {}, None
+        owner._completions, owner._completion_count, owner._completion_header = False, 0, None
         owner._callback = owner._lifecycle_deadline = None
         if owner._lifecycle:
-            owner._lifecycle_deadline, owner._epoch_limit, owner._callback = lifecycle
+            owner._lifecycle_deadline, owner._epoch_limit, owner._callback, owner._completions = lifecycle
         held = None
         try:
             if owner._lifecycle:
@@ -406,6 +407,41 @@ class _Connection:
         self._epoch_limit = min(p.integer(expires_at_unix_ns, maximum=p.MAX_I64), self._epoch_limit)
         self._receipt_committed = False
         self.check()
+
+    def _lifecycle_exchange_ready(self):
+        from serverware import native_pilot_lifecycle_approval_wire as wire
+        _require(self._lifecycle and self._completion_header is None)
+        wire.stage_at(self._index)
+        if self._completions:
+            _require(self._completion_count == (0 if self._index < 2 + len(wire.COLD) else 1))
+
+    def _send_lifecycle_originals(self, header, raws):
+        from serverware import native_pilot_lifecycle_approval_wire as wire
+        binding = p.sha(p.canonical(header))
+        self._send(header)
+        for name, raw in raws.items():
+            for offset in range(0, len(raw), CHUNK_BYTES):
+                self._send(dict(apiVersion=wire.CHUNK_API, requestBindingSha256=binding,
+                    field=name, offset=offset, dataBase64url=p.encoded(raw[offset:offset + CHUNK_BYTES])))
+
+    def _receive_lifecycle_originals(self, header, names):
+        from serverware import native_pilot_lifecycle_approval_wire as wire
+        binding, raws = p.sha(p.canonical(header)), {}
+        for name in names:
+            meta = header["originals"][name]
+            raw, size = bytearray(), meta["length"]
+            while len(raw) < size:
+                chunk, _ = self._receive(0)
+                p.fields(chunk, wire.CHUNK_FIELDS)
+                _require(chunk["apiVersion"] == wire.CHUNK_API
+                    and chunk["requestBindingSha256"] == binding and chunk["field"] == name
+                    and type(chunk["offset"]) is int and chunk["offset"] == len(raw))
+                value = p.decoded(chunk["dataBase64url"], maximum=CHUNK_BYTES)
+                _require(len(value) == min(CHUNK_BYTES, size - len(raw)))
+                raw.extend(value)
+            _require(p.sha(raw) == meta["sha256"])
+            raws[name] = bytes(raw)
+        return raws
 
     def _wait(self, reading, *, receipt=False):
         while True:
@@ -546,21 +582,18 @@ class ApprovalChannel(_Connection):
         acquired = self._lock.acquire(blocking=False)
         try:
             _require(acquired and self._lifecycle and not self._incoming)
+            self._lifecycle_exchange_ready()
             self._lifecycle_begin(deadline_boottime_ns=deadline_boottime_ns,
                 expires_at_unix_ns=expires_at_unix_ns, check=check)
             header, raws, context = lifecycle.request(stage, pending, self._index,
                 deadline_boottime_ns=self._active, expires_at_unix_ns=self._epoch_limit,
-                context=self._context, boot=self._boot, now_boottime_ns=self._last)
+                context=self._context, boot=self._boot, now_boottime_ns=self._last,
+                completions=self._completions)
             self._active, self._epoch_limit = p.ns(header["deadlineBoottimeNs"]), p.ns(header["expiresAtUnixNanos"])
             self.check()
             _require(not select.select([self._socket], [], [], 0)[0])
             binding = p.sha(p.canonical(header))
-            self._send(header)
-            for name in lifecycle.ORIGINALS[stage]:
-                raw = raws[name]
-                for offset in range(0, len(raw), CHUNK_BYTES):
-                    self._send(dict(apiVersion=lifecycle.CHUNK_API, requestBindingSha256=binding,
-                        field=name, offset=offset, dataBase64url=p.encoded(raw[offset:offset + CHUNK_BYTES])))
+            self._send_lifecycle_originals(header, raws)
             limits = lifecycle.descriptor_limits(self._index)
             reply, fds = self._receive(len(limits), received=self._incoming)
             lifecycle.reply(reply, header, self._index)
@@ -583,6 +616,34 @@ class ApprovalChannel(_Connection):
             self._failed = True
             # Incoming/accepted handles remain owned here even after an
             # ambiguous receipt. No fallible close is hidden in this path.
+            raise ApprovalChannelError(self) from error
+        finally:
+            if acquired: self._lock.release()
+
+    def send_completion(self, stage, terminal_original, *, deadline_boottime_ns, expires_at_unix_ns, check):
+        """Forward actual post-reap result bytes; the receipt is not approval."""
+        from serverware import native_pilot_lifecycle_approval_wire as wire
+        acquired = self._lock.acquire(blocking=False)
+        try:
+            _require(acquired and self._lifecycle and self._completions and not self._incoming
+                and self._lifecycle_header is None and self._completion_header is None
+                and stage == wire.completion_stage(self._index, self._completion_count))
+            self._lifecycle_begin(deadline_boottime_ns=deadline_boottime_ns,
+                expires_at_unix_ns=expires_at_unix_ns, check=check)
+            header, raws = wire.completion(terminal_original, self._index, self._completion_count,
+                deadline_boottime_ns=self._active, expires_at_unix_ns=self._epoch_limit, context=self._context)
+            self._active, self._epoch_limit = p.ns(header["deadlineBoottimeNs"]), p.ns(header["expiresAtUnixNanos"])
+            self.check()
+            _require(not select.select([self._socket], [], [], 0)[0])
+            self._send_lifecycle_originals(header, raws)
+            expected = dict(apiVersion=wire.COMPLETION_RECEIPT_API,
+                completionBindingSha256=p.sha(p.canonical(header)), terminalSha256=p.sha(terminal_original))
+            self._receive(0, receipt_expected=expected)
+            self._check(peer_live=False)
+            self._completion_count += 1
+            self._active = None
+        except BaseException as error:
+            self._failed = True
             raise ApprovalChannelError(self) from error
         finally:
             if acquired: self._lock.release()
@@ -650,36 +711,77 @@ class ApprovalPeer(_Connection):
         acquired = self._lock.acquire(blocking=False)
         try:
             _require(acquired and self._lifecycle and self._lifecycle_header is None)
+            self._lifecycle_exchange_ready()
             self._lifecycle_begin(deadline_boottime_ns=deadline_boottime_ns,
                 expires_at_unix_ns=expires_at_unix_ns, check=check)
             header, _ = self._receive(0)
             stage, self._active, self._epoch_limit = lifecycle.header(header, self._index,
-                deadline_boottime_ns=self._active, expires_at_unix_ns=self._epoch_limit)
+                deadline_boottime_ns=self._active, expires_at_unix_ns=self._epoch_limit,
+                completions=self._completions)
             self.check()
-            binding, raws = p.sha(p.canonical(header)), {}
-            for name in lifecycle.ORIGINALS[stage]:
-                meta = header["originals"][name]
-                raw, size = bytearray(), meta["length"]
-                while len(raw) < size:
-                    chunk, _ = self._receive(0)
-                    p.fields(chunk, lifecycle.CHUNK_FIELDS)
-                    _require(chunk["apiVersion"] == lifecycle.CHUNK_API
-                        and chunk["requestBindingSha256"] == binding and chunk["field"] == name
-                        and type(chunk["offset"]) is int and chunk["offset"] == len(raw))
-                    value = p.decoded(chunk["dataBase64url"], maximum=CHUNK_BYTES)
-                    _require(len(value) == min(CHUNK_BYTES, size - len(raw)))
-                    raw.extend(value)
-                _require(p.sha(raw) == meta["sha256"])
-                raws[name] = bytes(raw)
+            raws = self._receive_lifecycle_originals(header, lifecycle.ORIGINALS[stage])
             pending = lifecycle.pending(stage, raws)
             expected, originals_raw, context = lifecycle.request(stage, pending, self._index,
                 deadline_boottime_ns=self._active, expires_at_unix_ns=self._epoch_limit,
-                context=self._context, boot=self._boot, now_boottime_ns=self._last)
+                context=self._context, boot=self._boot, now_boottime_ns=self._last,
+                completions=self._completions)
             _require(p.canonical(expected) == p.canonical(header) and originals_raw == raws
                 and not select.select([self._socket], [], [], 0)[0])
             self.check()
             self._lifecycle_header, self._lifecycle_context = header, context
             return stage, pending
+        except BaseException as error:
+            self._failed = True
+            raise ApprovalChannelError(self) from error
+        finally:
+            if acquired: self._lock.release()
+
+    def receive_completion(self, *, deadline_boottime_ns, expires_at_unix_ns, check):
+        """Read a bound terminal original; caller validates it before receipt."""
+        from serverware import native_pilot_lifecycle_approval_wire as wire
+        acquired = self._lock.acquire(blocking=False)
+        try:
+            _require(acquired and self._lifecycle and self._completions
+                and self._lifecycle_header is None and self._completion_header is None)
+            wire.completion_stage(self._index, self._completion_count)
+            self._lifecycle_begin(deadline_boottime_ns=deadline_boottime_ns,
+                expires_at_unix_ns=expires_at_unix_ns, check=check)
+            header, _ = self._receive(0)
+            stage, self._active, self._epoch_limit = wire.completion_header(header, self._index,
+                self._completion_count, deadline_boottime_ns=self._active, expires_at_unix_ns=self._epoch_limit)
+            self.check()
+            raws = self._receive_lifecycle_originals(header, ("terminal",))
+            expected, checked = wire.completion(raws["terminal"], self._index, self._completion_count,
+                deadline_boottime_ns=self._active, expires_at_unix_ns=self._epoch_limit, context=self._context)
+            _require(p.canonical(header) == p.canonical(expected) and raws == checked
+                and not select.select([self._socket], [], [], 0)[0])
+            self.check()
+            self._completion_header = header
+            return stage, raws["terminal"]
+        except BaseException as error:
+            self._failed = True
+            raise ApprovalChannelError(self) from error
+        finally:
+            if acquired: self._lock.release()
+
+    def acknowledge_completion(self):
+        """Receipt only: does not approve jobs or assert this peer has exited."""
+        from serverware import native_pilot_lifecycle_approval_wire as wire
+        acquired = self._lock.acquire(blocking=False)
+        try:
+            _require(acquired and self._lifecycle and self._completions
+                and self._completion_header is not None and self._lifecycle_header is None
+                and self._active is not None)
+            self.check()
+            header = self._completion_header
+            wire.completion_header(header, self._index, self._completion_count,
+                deadline_boottime_ns=self._active, expires_at_unix_ns=self._epoch_limit)
+            self._send(dict(apiVersion=wire.COMPLETION_RECEIPT_API,
+                completionBindingSha256=p.sha(p.canonical(header)),
+                terminalSha256=header["originals"]["terminal"]["sha256"]), receipt=True)
+            self._completion_count += 1
+            self._completion_header = None
+            self._active = None
         except BaseException as error:
             self._failed = True
             raise ApprovalChannelError(self) from error

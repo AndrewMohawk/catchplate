@@ -72,6 +72,7 @@ class AdoptedPhaseExecution(base.PhaseExecution):
         self._endpoint_publication = None
         self._public_fds = []
         self._prepared = None
+        self._final_stop = self._final_stop_expiry = None
         self._job_deadline = self._job_expiry = None
         self._last_boot, self._last_wall = base.originals._clock(), time.time_ns()
         self._close_attempted = False
@@ -123,10 +124,37 @@ class AdoptedPhaseExecution(base.PhaseExecution):
             super().execute(reply)
             self._prior[self._previous["job"]] = {"input": self._inputs[self._previous["job"]],
                 "result": copy.deepcopy(self._previous["result"])}
+            if self._previous["job"] == "stop":
+                p.require(self._previous["phase"] == "shutdown" and self._final_stop is None)
+                actual = p.canonical(self._previous["result"])
+                p.require(actual == p.canonical(self._installations["stop"]))
+                self._final_stop = {"finalResult": {"job": "stop", "inputSha256": p.sha(self._inputs["stop"]),
+                    "resultOriginal": actual.decode("ascii"), "resultSha256": p.sha(actual)},
+                    "deadlineBoottimeNs": str(self._request.deadline_boottime_ns),
+                    "expiresAtUnixNanos": str(self._request.expires_at_unix_ns)}
+                self._final_stop_expiry = min(self._request.expires_at_unix_ns,
+                    self._job_expiry if self._job_expiry is not None else self._request.expires_at_unix_ns)
             self._during()
         except BaseException:
             self._failed = True
             raise
+
+    def final_result(self):
+        """Actual last result only after this executor's conductor is retired."""
+        p.require(base._LIVE is self and not self._closed and not self._failed and not self._close_attempted
+            and os.getpid() == self._pid and base.originals._boot() == self._boot
+            and self._process._closed and self._process._result["status"] == "stopped-cleanup-complete"
+            and self._phase_index == len(base.STAGES) and self._request is None and self._final_stop is not None)
+        for original in self._held: original.check()
+        result = copy.deepcopy(self._final_stop)
+        p.require(result["finalResult"]["inputSha256"] == p.sha(self._inputs["stop"])
+            and result["finalResult"]["resultOriginal"].encode("ascii") == p.canonical(self._previous["result"])
+            == p.canonical(self._installations["stop"]))
+        now, wall = base.originals._clock(), time.time_ns()
+        p.require(self._last_boot <= now < p.ns(result["deadlineBoottimeNs"])
+            and self._last_wall <= wall < self._final_stop_expiry)
+        self._last_boot, self._last_wall = now, wall
+        return result
 
     def _public_fd(self, raw):
         p.require(type(raw) is bytes and 0 < len(raw) <= profile.MAX_FRAME

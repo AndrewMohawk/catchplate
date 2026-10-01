@@ -2,8 +2,9 @@
 """Actual local kernel transport controls, not commissioning or approval.
 
 Real forked root peers create their own connection and transfer sealed public
-memfds. Observation contents are explicitly synthetic. No lifecycle, helper,
-runtime admission, signer or successful service owner is fabricated.
+memfds. Observation and completion contents are explicitly synthetic. Even
+the full ordered exchange control proves transport only, not job execution,
+independent approval, native admission or a successful lifecycle owner.
 """
 from __future__ import annotations
 
@@ -72,11 +73,13 @@ def request(value, stage="bootstrap", pending=None, index=0, context=None, **cap
 
 
 @contextmanager
-def originals():
+def originals(extra=None):
     rows = {}
     try:
-        for name in (*wire.BOOTSTRAP, "input", "approval"):
-            raw = p.canonical({"syntheticTransportOriginal": name})
+        raws = {name: p.canonical({"syntheticTransportOriginal": name})
+            for name in (*wire.BOOTSTRAP, "input", "approval")}
+        raws.update({} if extra is None else extra)
+        for name, raw in raws.items():
             fd = os.memfd_create("lifecycle-transport-control", os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING)
             rows[name] = (fd, raw)
             if os.write(fd, raw) != len(raw): raise RuntimeError("short fixture write")
@@ -94,7 +97,7 @@ def kwargs(rows, names):
 
 
 @contextmanager
-def session(value, action):
+def session(value, action, *, completions=False):
     """One real child peer, actual accepted SO_PEERCRED and consuming reap."""
     listener = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
     address = b"\0native-pilot-lifecycle-control-" + str(os.getpid()).encode("ascii") + b"-" + os.urandom(8).hex().encode("ascii")
@@ -114,7 +117,7 @@ def session(value, action):
             try:
                 peer = channel.ApprovalPeer.open_lifecycle(connected.fileno(), peer_pid=parent_pid,
                     peer_uid=0, peer_gid=0, deadline_boottime_ns=value["lifetime"],
-                    expires_at_unix_ns=value["expiry"], check=lambda: None)
+                    expires_at_unix_ns=value["expiry"], check=lambda: None, completions=completions)
             except channel.ApprovalChannelError as error:
                 peer = error.owner
                 raise
@@ -147,7 +150,7 @@ def session(value, action):
         try:
             client = channel.ApprovalChannel.open_lifecycle(accepted.fileno(), peer_pid=pid,
                 peer_uid=0, peer_gid=0, deadline_boottime_ns=value["lifetime"],
-                expires_at_unix_ns=value["expiry"], check=lambda: None)
+                expires_at_unix_ns=value["expiry"], check=lambda: None, completions=completions)
         except channel.ApprovalChannelError as error:
             client = error.owner
             raise
@@ -186,6 +189,85 @@ def exchange(client, value, stage="bootstrap", pending=None, **caps):
 def receive(peer, value):
     return peer.receive_lifecycle(deadline_boottime_ns=value["deadline"],
         expires_at_unix_ns=value["expiry"], check=lambda: None)
+
+
+def completion_fixture(value):
+    """Literal synthetic terminal framing; deliberately not native admission."""
+    from scripts.test_native_pilot_genesis_completion import fixture as cold_fixture
+    from scripts.test_native_pilot_adopted_completion import fixture as adopted_fixture
+    cold, adopted = cold_fixture(), adopted_fixture()
+    configuration = p.document(value["configuration_raw"], 4096)
+    receiver = p.document(value["receiver_raw"], 8192)["receiver"]
+    execution_raw = p.canonical(configuration | {"apiVersion": wire.cold_install.wire.HANDOFF_CONFIGURATION_API,
+        "coreHandoff": dict(peerPid=receiver["pid"], peerUid=receiver["uid"], peerGid=receiver["gid"])})
+    cold["value"].update(configurationSha256=p.sha(execution_raw),
+        deadlineBoottimeNs=str(value["deadline"]), expiresAtUnixNanos=value["expiry"])
+    adopted["value"].update(deadlineBoottimeNs=str(value["deadline"]), expiresAtUnixNanos=str(value["expiry"]))
+    return dict(execution=execution_raw, cold_input=cold["kwargs"]["final_input_raw"],
+        stop_input=adopted["input_raw"], cold_terminal=p.canonical(cold["value"]),
+        adopted_terminal=p.canonical(adopted["value"]))
+
+
+def cold_transcript(value):
+    """All genuine catalogue positions, with clearly synthetic result bytes."""
+    result, previous = [("bootstrap", value["bootstrap"]), ("rendezvous", value["request_raw"])], None
+    for sequence, selected in enumerate(wire.COLD, 1):
+        raw = p.canonical(dict(apiVersion=wire.cold_install.wire.HANDOFF_REQUEST_API,
+            sequence=sequence, job=selected.name, deadlineBoottimeNs=str(value["deadline"]),
+            observation={}, previousResult=previous))
+        result.append(("cold", raw))
+        result_raw = p.canonical({"syntheticTransportResult": selected.name})
+        previous = dict(job=selected.name, resultOriginal=result_raw.decode("ascii"), resultSha256=p.sha(result_raw))
+    return tuple(result)
+
+
+def adopted_transcript(value, rows):
+    """No phase producer is run: only exact public request/observation grammar."""
+    result, previous, sequence = [], None, 0
+    for conductor_sequence, (phase, jobs) in enumerate(wire.adopted.JOBS.items(), 1):
+        conductor = dict(apiVersion="serverware.nativePilotOperatorRequest/v2", sequence=conductor_sequence,
+            phase=phase, payload={"syntheticTransportPayload": True},
+            deadlineBoottimeNs=str(value["deadline"]), expiresAtUnixNanos=str(value["expiry"]))
+        conductor_raw = p.canonical(conductor)
+        observation_raw = p.canonical(dict(apiVersion="serverware.nativePilotAdoptedSupervisorObservation/v1",
+            policySha256=p.sha(rows["policy"][1]), catalogueSha256=p.sha(wire.policy.catalogue_original()),
+            intakeConfigurationSha256=p.sha(rows["intake_configuration"][1]),
+            conductorRequestOriginal=conductor_raw.decode("ascii"), measuredConfiguration=None, recipeOriginals=None))
+        for job_index, selected in enumerate(jobs, 1):
+            sequence += 1
+            request_raw = p.canonical(dict(apiVersion=wire.adopted.API, sequence=sequence,
+                conductorSequence=conductor_sequence, conductorRequestSha256=p.sha(conductor_raw),
+                phase=phase, jobIndex=job_index, job=selected.name, deadlineBoottimeNs=str(value["deadline"]),
+                expiresAtUnixNanos=str(value["expiry"]), conductorRequest=conductor if job_index == 1 else None,
+                previousResult=previous))
+            result.append(("adopted", wire.pending("adopted", {"request": request_raw, "observation": observation_raw})))
+            previous = dict(phase=phase, job=selected.name, result={"syntheticTransportResult": selected.name})
+    return tuple(result)
+
+
+def respond_transcript(peer, value, rows, expected):
+    for stage, pending in expected:
+        if receive(peer, value) != (stage, pending):
+            raise RuntimeError("literal synthetic transport transcript differs")
+        supplied = rows
+        if stage == "rendezvous": supplied = rows | {"input": rows["execution"]}
+        elif stage == "cold" and p.document(pending, 4096)["job"] == wire.COLD[-1].name:
+            supplied = rows | {"input": rows["cold_input"]}
+        elif stage == "adopted" and pending["job"] == wire.ADOPTED[-1][1].name:
+            supplied = rows | {"input": rows["stop_input"]}
+        peer.respond_lifecycle(**kwargs(supplied, wire.BOOTSTRAP if stage == "bootstrap" else ("input", "approval")))
+
+
+def send_completion(client, value, stage, raw):
+    client.send_completion(stage, raw, deadline_boottime_ns=value["deadline"],
+        expires_at_unix_ns=value["expiry"], check=lambda: None)
+
+
+def receive_completion(peer, value, stage, raw):
+    actual = peer.receive_completion(deadline_boottime_ns=value["deadline"],
+        expires_at_unix_ns=value["expiry"], check=lambda: None)
+    if actual != (stage, raw): raise RuntimeError("literal terminal transport differs")
+    peer.acknowledge_completion()
 
 
 class LifecycleWireControls(unittest.TestCase):
@@ -235,6 +317,67 @@ class LifecycleWireControls(unittest.TestCase):
 
 @unittest.skipUnless(os.getuid() == 0 and os.getgid() == 0, "these controls create real root-owned public originals")
 class LifecycleKernelTransportControls(unittest.TestCase):
+    def test_actual_selected_244_exchanges_and_both_literal_completion_receipts(self):
+        value = fixture(current=True); tail = completion_fixture(value)
+        with originals({name: tail[name] for name in ("execution", "cold_input", "stop_input")}) as rows:
+            cold, adopted = cold_transcript(value), adopted_transcript(value, rows)
+            self.assertEqual((len(cold), len(adopted)), (68, 176))
+            def peer_action(peer):
+                respond_transcript(peer, value, rows, cold)
+                receive_completion(peer, value, "cold", tail["cold_terminal"])
+                respond_transcript(peer, value, rows, adopted)
+                receive_completion(peer, value, "adopted", tail["adopted_terminal"])
+                with self.assertRaises(channel.ApprovalChannelError) as caught:
+                    peer.receive_completion(deadline_boottime_ns=value["deadline"],
+                        expires_at_unix_ns=value["expiry"], check=lambda: None)
+                self.assertIs(caught.exception.owner, peer)
+            with session(value, peer_action, completions=True) as client:
+                for stage, pending in cold: exchange(client, value, stage, pending)
+                send_completion(client, value, "cold", tail["cold_terminal"])
+                for stage, pending in adopted: exchange(client, value, stage, pending)
+                send_completion(client, value, "adopted", tail["adopted_terminal"])
+                with self.assertRaises(channel.ApprovalChannelError) as caught:
+                    send_completion(client, value, "adopted", tail["adopted_terminal"])
+                self.assertIs(caught.exception.owner, client)
+            for name in ("policy", "execution", "cold_input", "stop_input"):
+                self.assertEqual(copies(rows[name][0]), {rows[name][0]})
+
+    def test_actual_cold_completion_cannot_be_skipped_or_repeated(self):
+        for mistake in ("skip", "repeat"):
+            with self.subTest(mistake=mistake):
+                value = fixture(current=True); tail = completion_fixture(value)
+                with originals({name: tail[name] for name in ("execution", "cold_input", "stop_input")}) as rows:
+                    cold, adopted = cold_transcript(value), adopted_transcript(value, rows)
+                    def peer_action(peer):
+                        respond_transcript(peer, value, rows, cold)
+                        if mistake == "repeat": receive_completion(peer, value, "cold", tail["cold_terminal"])
+                        with self.assertRaises(channel.ApprovalChannelError) as caught:
+                            if mistake == "skip": receive(peer, value)
+                            else: peer.receive_completion(deadline_boottime_ns=value["deadline"],
+                                expires_at_unix_ns=value["expiry"], check=lambda: None)
+                        self.assertIs(caught.exception.owner, peer)
+                    with session(value, peer_action, completions=True) as client:
+                        for stage, pending in cold: exchange(client, value, stage, pending)
+                        if mistake == "repeat": send_completion(client, value, "cold", tail["cold_terminal"])
+                        with self.assertRaises(channel.ApprovalChannelError) as caught:
+                            if mistake == "skip": exchange(client, value, *adopted[0])
+                            else: send_completion(client, value, "cold", tail["cold_terminal"])
+                        self.assertIs(caught.exception.owner, client)
+
+    def test_actual_completion_refuses_premature_and_legacy_modes(self):
+        for completions in (True, False):
+            with self.subTest(completions=completions):
+                value = fixture(current=True); tail = completion_fixture(value)
+                def peer_action(peer):
+                    with self.assertRaises(channel.ApprovalChannelError) as caught:
+                        peer.receive_completion(deadline_boottime_ns=value["deadline"],
+                            expires_at_unix_ns=value["expiry"], check=lambda: None)
+                    self.assertIs(caught.exception.owner, peer)
+                with session(value, peer_action, completions=completions) as client:
+                    with self.assertRaises(channel.ApprovalChannelError) as caught:
+                        send_completion(client, value, "cold", tail["cold_terminal"])
+                    self.assertIs(caught.exception.owner, client)
+
     def test_actual_bootstrap_five_rendezvous_pair_and_chunked_first_cold_request(self):
         value = fixture(current=True)
         cold_raw = p.canonical(dict(apiVersion=wire.rendezvous.wire.HANDOFF_REQUEST_API, sequence=1,

@@ -39,10 +39,10 @@ def expected(observed, ids):
     return value
 
 
-def fixture(*, fresh_helper=False):
+def fixture(*, fresh_helper=False, lifetime_boottime_ns=9_000_000):
     if fresh_helper:
         from test_native_pilot_helper_initial import fixture as helper_fixture, export as helper_export
-        _, contexts, kw = helper_fixture()
+        _, contexts, kw = helper_fixture(lifetime_boottime_ns=lifetime_boottime_ns)
     else:
         _, contexts, kw = request_fixture()
     selected = profile.requests_profile.select(contexts, **kw)

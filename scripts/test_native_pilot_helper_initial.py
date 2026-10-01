@@ -64,19 +64,19 @@ def refresh(wrapper, *, endpoint_role=None):
     return wrapper
 
 
-def fixture():
+def fixture(*, lifetime_boottime_ns=9_000_000):
     """Same three-value interface as initial_requests fixture; all facts synthetic."""
     f, _, _ = single_fixture()
     for item in (f["window"], f["launch"], f["preparation"]):
-        item["lifetimeDeadlineBoottimeNs"] = "9000000"
+        item["lifetimeDeadlineBoottimeNs"] = str(lifetime_boottime_ns)
     f["preparation"]["configurationSha256"] = sha(canonical(f["launch"]))
     f["resources"]["preparationSha256"] = sha(canonical(f["preparation"]))
     for role in ROLES:
         wrapper = json.loads(f["histories"][role])
-        wrapper["initialState"].update(lifetimeDeadlineBoottimeNs="9000000",
+        wrapper["initialState"].update(lifetimeDeadlineBoottimeNs=str(lifetime_boottime_ns),
             preparationSha256=sha(canonical(f["preparation"])), resourcesSha256=sha(canonical(f["resources"])),
             launchSha256=sha(canonical(f["launch"])))
-        wrapper["initialCheckpoint"]["payload"]["validUntilBoottime"]["absoluteBoottimeNanos"] = 9000000
+        wrapper["initialCheckpoint"]["payload"]["validUntilBoottime"]["absoluteBoottimeNanos"] = lifetime_boottime_ns
         f["histories"][role] = canonical(refresh(wrapper))
     primary = json.loads(f["histories"][HELPER])
     members = {role: canonical(refresh(copy.deepcopy(primary), endpoint_role=role)) for role in HELPER_ROLES}

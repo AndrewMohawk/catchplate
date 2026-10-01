@@ -45,10 +45,10 @@ def selection():
         "targets": [job.name for job in execution.CURRENT_HEAD_JOBS]}
 
 
-@lru_cache(maxsize=1)
-def _fixture():
+@lru_cache(maxsize=2)
+def _fixture(lifetime_boottime_ns=9_000_000):
     """Authentic test signatures over public synthetic originals, never owners."""
-    f, contexts, kw = helper_fixture()
+    f, contexts, kw = helper_fixture(lifetime_boottime_ns=lifetime_boottime_ns)
     source = generation_context()
     files = plan(f, f["runtimes"])
     ordinary = {}
@@ -69,17 +69,17 @@ def _fixture():
         delivery_raw = canonical(delivery)
         _, guest = grants._admit_delivery(signed_raw=delivery_raw, cold_raw=cold_raw,
             cold_sha=sha(cold_raw), role=role, activation=payload["activation"], boot=kw["boot"],
-            startup=5000, lifetime=9000000, now=1300, **services._flags(role))
+            startup=5000, lifetime=lifetime_boottime_ns, now=1300, **services._flags(role))
         grant = {"apiVersion": "serverware.custodyServiceGenerationGrant/v1",
             "purpose": "cold-service-generation-admission", "serviceRole": role, "guest": guest,
             "runtimeConfigurationSha256": sha(f["runtimes"][role]),
             "authorityHistoryManifestSha256": json.loads(f["histories"][role])["history"]["manifestSha256"],
-            "scope": scope_fixture(), "issuedAtBoottimeNanos": 1200, "expiresAtBoottimeNanos": 9000000}
+            "scope": scope_fixture(), "issuedAtBoottimeNanos": 1200, "expiresAtBoottimeNanos": lifetime_boottime_ns}
         ordinary[role] = {"configurationOriginal": cold_raw.decode("ascii"), "configurationSha256": sha(cold_raw),
             "deliveryOriginal": delivery_raw.decode("ascii"), "runtimeOriginal": f["runtimes"][role].decode("ascii"),
             "historyOriginal": f["histories"][role].decode("ascii"),
             "generationGrantOriginal": grant_result(role, grant)["original"]}
-    bridge, runtime, _ = bridge_fixture(fresh_helper=True)
+    bridge, runtime, _ = bridge_fixture(fresh_helper=True, lifetime_boottime_ns=lifetime_boottime_ns)
     peers = json.loads(bridge["ordinaryPeerPreparationOriginal"])
     peers["configurationSha256"] = sha(kw["launch_original"])
     for role in ROLES:
@@ -132,8 +132,8 @@ def _fixture():
         clocks=dict(boot=kw["boot"], now_boottime_ns=1400), fixture=f)
 
 
-def fixture():
-    return copy.deepcopy(_fixture())
+def fixture(*, lifetime_boottime_ns=9_000_000):
+    return copy.deepcopy(_fixture(lifetime_boottime_ns))
 
 
 class CurrentHeadIntakeControls(unittest.TestCase):

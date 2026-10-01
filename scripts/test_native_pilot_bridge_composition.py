@@ -65,7 +65,9 @@ def fragment():
 @lru_cache(maxsize=1)
 def _projection_fixture():
     """Real test signatures plus explicitly synthetic prechecked projection data."""
-    f = current_fixture()
+    # Preserve the real C9 continuation margin without renewing a live window.
+    # These complete synthetic originals/signatures are created with this lifetime.
+    f = current_fixture(lifetime_boottime_ns=500_000_000)
     args, boot, now = f["args"], f["clocks"]["boot"], f["clocks"]["now_boottime_ns"]
     launch, startup, lifetime = services._launch(args["launch_raw"], boot, now)
     ordinary = {role: services._service(row, role, launch, boot, startup, lifetime, now, granted=True)

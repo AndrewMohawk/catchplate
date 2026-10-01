@@ -226,6 +226,11 @@ services:
       - serverware-data:/data
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=32m
+    healthcheck:
+      test: ["CMD", "python", "-c", "import json,ssl,urllib.request; context=ssl.create_default_context(cafile='/data/demo-upstream/ca.pem'); opener=urllib.request.build_opener(urllib.request.ProxyHandler({}), urllib.request.HTTPSHandler(context=context)); response=opener.open('https://demo-upstream:8443/_test/request-count?method=GET&path=%2Fecho', timeout=2); body=response.read(65537); payload=json.loads(body) if len(body) <= 65536 else {}; raise SystemExit(0 if response.status == 200 and type(payload.get('count')) is int and payload['count'] >= 0 else 1)"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
 
   custody-runtime:
     profiles: ["custody"]

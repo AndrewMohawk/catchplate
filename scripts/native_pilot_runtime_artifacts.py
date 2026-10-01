@@ -41,6 +41,33 @@ AUTHORITY_FILES = (
     "scripts/authority/native_pilot_authority_io.py",
 )
 AUTHORITY_COMMAND = ["/" + INTERPRETER, "-I", "-B", "/" + AUTHORITY_ENTRYPOINT, "--run-native-pilot"]
+SUPERVISOR_API_VERSION = "serverware.nativePilotSupervisorRuntime/v1"
+SUPERVISOR_TARGET = "native-pilot-supervisor-artifact"
+SUPERVISOR_ENTRYPOINT = "supervisor/app/scripts/native_pilot_supervisor_runtime_entrypoint.py"
+SUPERVISOR_FILES = (
+    "scripts/native_pilot_supervisor_runtime_entrypoint.py",
+    "scripts/run_native_pilot_supervisor.py",
+)
+SUPERVISOR_COMMAND = ["/" + INTERPRETER, "-I", "-B", "/" + SUPERVISOR_ENTRYPOINT, "--run-native-pilot"]
+SUPERVISOR_REQUIRED_ARGUMENTS = {
+    "supervisorInventory": ["--supervisor-inventory-fd", "--supervisor-inventory-sha256"],
+    "policy": ["--policy-fd", "--policy-sha256"],
+    "recipe": ["--recipe-fd", "--recipe-sha256"],
+    "conductorInventory": ["--conductor-inventory-fd", "--conductor-inventory-sha256"],
+    "authorityInventory": ["--authority-inventory-fd", "--authority-inventory-sha256"],
+    "approvalChannel": ["--approval-fd", "--approval-peer-pid", "--approval-peer-uid", "--approval-peer-gid"],
+    "authorityKeys": "--authority-key PURPOSE=FD repeated for the exact source-selected KEY_PURPOSES",
+    "inventoryKinds": {"supervisor": SUPERVISOR_API_VERSION, "conductor": API_VERSION,
+                       "authority": AUTHORITY_API_VERSION},
+    "childInventoriesDerived": False,
+    "currentnessDecisionsDerived": False,
+}
+SUPERVISOR_BOUNDARY = (
+    "Offline supervisor package/source observations only. No execution, DSO-resolution proof, "
+    "independent approval, installed owner, keys, protected inputs, currentness decisions or native "
+    "pilot acceptance is produced. Separate approved conductor and authority inventories, protected "
+    "policy/recipe originals and an independently operated approval channel remain required."
+)
 READ_FLAGS = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
 
@@ -239,7 +266,9 @@ def _object(pairs):
     return result
 
 
-def _bind_source(observed, source, *, authority=False):
+def _bind_source(observed, source, *, authority=False, supervisor=False):
+    _require(not (authority and supervisor), "runtime source profile must be selected explicitly")
+    with_authority = authority or supervisor
     raw = observed.manifest
     _require(raw is not None and _sha(raw) == source["source_manifest_digest"],
              "exported source manifest does not match the build's exact original pin")
@@ -273,28 +302,34 @@ def _bind_source(observed, source, *, authority=False):
         _path(path)
         _require(path not in seen, "runtime source manifest contains duplicate paths")
         seen.add(path)
-        if path.startswith("serverware/") or path in (ENTRYPOINT[4:], CONDUCTOR[4:]) or (authority and path in AUTHORITY_FILES):
+        if (path.startswith("serverware/") or path in (ENTRYPOINT[4:], CONDUCTOR[4:])
+                or (with_authority and path in AUTHORITY_FILES) or (supervisor and path in SUPERVISOR_FILES)):
             _require(entry.get("type") == "file" and entry.get("mode") in ("100644", "100755")
                      and type(entry.get("bytes")) is int and 0 <= entry["bytes"] <= MAX_FILE_BYTES
                      and isinstance(entry.get("sha256"), str) and DIGEST.fullmatch(entry["sha256"]) is not None,
                      "installed source entry is not an admitted regular original")
-            prefix = "authority/app/" if authority and path in AUTHORITY_FILES else "app/"
+            prefix = ("supervisor/app/" if supervisor and path in SUPERVISOR_FILES else
+                      "authority/app/" if with_authority and path in AUTHORITY_FILES else "app/")
             installed[prefix + path] = entry
+    namespaces = ("app",) + (("authority",) if with_authority else ()) + (("supervisor",) if supervisor else ())
+    def application_path(path):
+        return any(path == namespace or path.startswith(namespace + "/") for namespace in namespaces)
     actual = {path for path, record in observed.records.items()
-              if (path.startswith("app/") or (authority and path.startswith("authority/")))
-              and record["type"] != "directory"}
+              if application_path(path) and record["type"] != "directory"}
     _require(actual == set(installed) and ENTRYPOINT in installed and CONDUCTOR in installed,
              "runtime application files differ from the complete source-selected package/scripts")
-    if authority:
+    if with_authority:
         _require(all("authority/app/" + path in installed for path in AUTHORITY_FILES),
                  "authority runtime lacks a fixed source original")
+    if supervisor:
+        _require(all("supervisor/app/" + path in installed for path in SUPERVISOR_FILES),
+                 "supervisor runtime lacks a fixed source original")
     expected_directories = {"app"}
     for path in installed:
         parts = path.split("/")
         expected_directories.update("/".join(parts[:index]) for index in range(1, len(parts)))
     _require({path for path, record in observed.records.items()
-              if (path == "app" or path.startswith("app/") or (authority and (path == "authority" or path.startswith("authority/"))))
-              and record["type"] == "directory"}
+              if application_path(path) and record["type"] == "directory"}
              == expected_directories, "runtime application directories differ from the exact source package")
     for path, entry in installed.items():
         record = observed.records[path]
@@ -323,7 +358,17 @@ def authority_inventory(root: Path, metadata: dict) -> dict:
     return _inventory(root, metadata, authority=True)
 
 
-def _inventory(root: Path, metadata: dict, *, authority: bool) -> dict:
+def supervisor_inventory(root: Path, metadata: dict) -> dict:
+    """Observe the distinct supervisor package, including both fixed child trees.
+
+    Their presence does not supply the separately admitted child inventories,
+    policy/recipe originals, keys or independent late currentness decisions.
+    """
+    return _inventory(root, metadata, authority=False, supervisor=True)
+
+
+def _inventory(root: Path, metadata: dict, *, authority: bool, supervisor=False) -> dict:
+    _require(not (authority and supervisor), "runtime inventory profile must be selected explicitly")
     source = _source(metadata)
     _require(isinstance(root, Path) and root.is_absolute() and root != Path("/")
              and root.resolve(strict=True) == root, "runtime export needs an explicit real absolute directory")
@@ -343,10 +388,14 @@ def _inventory(root: Path, metadata: dict, *, authority: bool) -> dict:
         _require(observed.children["app"] == {"serverware", "scripts"}
                  and observed.children["app/scripts"] == {"run_native_pilot.py", "native_pilot_runtime_entrypoint.py"},
                  "conductor application layout differs from the source-fixed target")
-        if authority:
+        if authority or supervisor:
             for path in ("authority", "authority/app", "authority/app/scripts", "authority/app/scripts/authority"):
                 _require(observed.records.get(path, {}).get("type") == "directory"
                          and observed.records[path]["mode"] == "0555", "authority runtime directory is absent")
+        if supervisor:
+            for path in ("supervisor", "supervisor/app", "supervisor/app/scripts"):
+                _require(observed.records.get(path, {}).get("type") == "directory"
+                         and observed.records[path]["mode"] == "0555", "supervisor runtime directory is absent")
         for path, mode in ((INTERPRETER, "0555"), (SOURCE_MANIFEST, "0444"),
                            (ENTRYPOINT, "0444"), (CONDUCTOR, "0444")):
             record = observed.records.get(path, {})
@@ -357,7 +406,7 @@ def _inventory(root: Path, metadata: dict, *, authority: bool) -> dict:
                  and int.from_bytes(head[16:18], "little") in (2, 3)
                  and int.from_bytes(head[18:20], "little") == 62,
                  "runtime interpreter is not a Linux/amd64 executable ELF")
-        _bind_source(observed, source, authority=authority)
+        _bind_source(observed, source, authority=authority, supervisor=supervisor)
         observed.walk(descriptor, recheck=True)
         _require(_identity(root.lstat()) == _identity(before), "runtime export root name changed")
     finally:
@@ -383,5 +432,10 @@ def _inventory(root: Path, metadata: dict, *, authority: bool) -> dict:
                 "authorityKeys": "--authority-key PURPOSE=FD repeated for the exact source-selected KEY_PURPOSES",
                 "inventoryKind": API_VERSION, "conductorInventoryDerived": False},
             boundary="Offline authority-coordinator package/source observations only. No execution, DSO-resolution proof, independent approval, installed owner, keys, protected inputs or native pilot acceptance is produced. The original separate conductor inventory remains required.")
+    if supervisor:
+        result.update(apiVersion=SUPERVISOR_API_VERSION, target=SUPERVISOR_TARGET,
+            command=SUPERVISOR_COMMAND[:],
+            requiredArguments=json.loads(_canonical(SUPERVISOR_REQUIRED_ARGUMENTS)),
+            boundary=SUPERVISOR_BOUNDARY)
     _require(len(_canonical(result)) <= MAX_MANIFEST_BYTES, "runtime inventory manifest exceeds its bound")
     return result

@@ -58,24 +58,30 @@ class _Runtime:
         self.protected_directories = set()
         self.manifest = self.interpreter_head = None
         self._authority = False
+        self._supervisor = False
 
-    def admit(self, raw, *, authority=False):
-        _require(type(authority) is bool)
+    def admit(self, raw, *, authority=False, supervisor=False):
+        _require(type(authority) is bool and type(supervisor) is bool and not (authority and supervisor))
         self._authority = authority
+        self._supervisor = supervisor
         _require(0 < len(raw) <= artifact.MAX_MANIFEST_BYTES)
         value = json.loads(raw.decode("ascii"), object_pairs_hook=p._pairs, parse_float=p._reject, parse_constant=p._reject)
-        p.fields(value, _INVENTORY_FIELDS + (("requiredArguments",) if authority else ()))
-        if authority:
+        p.fields(value, _INVENTORY_FIELDS + (("requiredArguments",) if authority or supervisor else ()))
+        if supervisor:
+            _require(artifact._canonical(value["requiredArguments"]) == artifact._canonical(artifact.SUPERVISOR_REQUIRED_ARGUMENTS))
+        elif authority:
             _require(artifact._canonical(value["requiredArguments"]) == artifact._canonical({
                 "runtimeInventory": ["--runtime-inventory-fd", "--runtime-inventory-sha256"],
                 "authorityKeys": "--authority-key PURPOSE=FD repeated for the exact source-selected KEY_PURPOSES",
                 "inventoryKind": artifact.API_VERSION, "conductorInventoryDerived": False}))
         boundary = ("Offline authority-coordinator package/source observations only. No execution, DSO-resolution proof, independent approval, installed owner, keys, protected inputs or native pilot acceptance is produced. The original separate conductor inventory remains required."
             if authority else "Offline package/source observations only. No execution, DSO-resolution proof, independent approval, installation, authority coordinator, or native service readiness is produced.")
+        if supervisor:
+            boundary = artifact.SUPERVISOR_BOUNDARY
         _require(artifact._canonical(value) == raw
-            and value["apiVersion"] == (artifact.AUTHORITY_API_VERSION if authority else artifact.API_VERSION)
-            and value["target"] == (artifact.AUTHORITY_TARGET if authority else "native-pilot-conductor-artifact")
-            and value["command"] == (artifact.AUTHORITY_COMMAND if authority else artifact.COMMAND)
+            and value["apiVersion"] == (artifact.SUPERVISOR_API_VERSION if supervisor else artifact.AUTHORITY_API_VERSION if authority else artifact.API_VERSION)
+            and value["target"] == (artifact.SUPERVISOR_TARGET if supervisor else artifact.AUTHORITY_TARGET if authority else "native-pilot-conductor-artifact")
+            and value["command"] == (artifact.SUPERVISOR_COMMAND if supervisor else artifact.AUTHORITY_COMMAND if authority else artifact.COMMAND)
             and artifact._canonical(value["intendedInstalledOwnership"]) == artifact._canonical({"uid": 0, "gid": 0})
             and value["exportOwnership"] == "Host-export UID/GID are checked for stability, not interpreted as installed ownership."
             and value["boundary"] == boundary
@@ -134,7 +140,7 @@ class _Runtime:
             _require(info.st_uid == info.st_gid == 0 and stat.S_IMODE(info.st_mode) == int(record["mode"], 8))
             if record["type"] == "directory":
                 _require(stat.S_ISDIR(info.st_mode))
-                if path in self.protected_directories or path.split("/", 1)[0] in ("app", "vendor", "runtime", "authority"):
+                if path in self.protected_directories or path.split("/", 1)[0] in ("app", "vendor", "runtime", "authority", "supervisor"):
                     _require(not info.st_mode & 0o022)
                 child = os.open(name, _FLAGS | os.O_DIRECTORY, dir_fd=fd)
                 self.directories[path] = child
@@ -171,8 +177,12 @@ class _Runtime:
             _require(self.records.get(path, {}).get("type") == "directory")
         _require(self.children["app"] == {"serverware", "scripts"}
             and self.children["app/scripts"] == {"run_native_pilot.py", "native_pilot_runtime_entrypoint.py"})
-        if authority:
+        if authority or supervisor:
             for path in ("authority", "authority/app", "authority/app/scripts", "authority/app/scripts/authority"):
+                _require(self.records.get(path, {}).get("type") == "directory"
+                    and self.records[path]["mode"] == "0555")
+        if supervisor:
+            for path in ("supervisor", "supervisor/app", "supervisor/app/scripts"):
                 _require(self.records.get(path, {}).get("type") == "directory"
                     and self.records[path]["mode"] == "0555")
         for path, mode in ((artifact.INTERPRETER, "0555"), (artifact.ENTRYPOINT, "0444"),
@@ -182,7 +192,7 @@ class _Runtime:
         head = self.interpreter_head
         _require(head is not None and len(head) == 64 and head[:7] == b"\x7fELF\x02\x01\x01"
             and int.from_bytes(head[16:18], "little") in (2, 3) and int.from_bytes(head[18:20], "little") == 62)
-        artifact._bind_source(self, source, authority=authority)
+        artifact._bind_source(self, source, authority=authority, supervisor=supervisor)
         self.check()
 
     def check(self):
@@ -194,7 +204,9 @@ class _Runtime:
             _require(identity == self.identities[path])
             if record["type"] == "directory":
                 _require(_structural(os.fstat(self.directories[path])) == identity)
-                if path.split("/", 1)[0] in (("app", "vendor", "runtime", "authority") if self._authority else ("app", "vendor", "runtime")):
+                namespaces = (("app", "vendor", "runtime", "authority", "supervisor") if self._supervisor
+                    else ("app", "vendor", "runtime", "authority") if self._authority else ("app", "vendor", "runtime"))
+                if path.split("/", 1)[0] in namespaces:
                     _require(not info.st_mode & 0o022)
                     scan = os.open(".", _FLAGS | os.O_DIRECTORY, dir_fd=self.directories[path])
                     try:

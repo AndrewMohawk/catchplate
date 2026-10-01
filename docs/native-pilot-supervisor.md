@@ -1,6 +1,9 @@
 # Native pilot commissioning supervisor
 
-This is a partial source implementation, not a runnable or deployed supervisor.
+The `.392` source adds the [fixed executable, approval descriptor channel and
+separate runtime package](native-pilot-supervisor-executable.md). Verification is
+pending; this is not a provisioned or deployed supervisor.
+
 The `.391` source connects the [six final decisions](native-pilot-final-continuations.md)
 under explicit policy/v18: **164/164** jobs, **113** selectors and no missing
 source routes. The source coverage check now passes; a separate pre-child v18

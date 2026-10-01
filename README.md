@@ -145,14 +145,16 @@ checks and native compilation, but live initialization remains unverified.
 
 Policy/v18 connects the [final release, publication and shutdown decisions](docs/native-pilot-final-continuations.md).
 All current jobs are now connected in source; this batch passed all 25 focused
-controls ([evidence and limits](docs/native-pilot-final-continuations.md#focused-verification)). Executable packaging, real cleanup ownership and connected
+controls ([evidence and limits](docs/native-pilot-final-continuations.md#focused-verification)). The new
+[supervisor executable and package](docs/native-pilot-supervisor-executable.md)
+are awaiting focused verification. Real cleanup ownership and connected
 runtime verification are still needed. These counts are not a percentage of
 product readiness or permission to deploy.
 Protected deployment is not provisioned. This is not
 yet an interactive quickstart or running pilot.
 The [persistent workload sidecar](docs/native-workload-sidecar.md) supports ordinary
 HTTPS libraries without direct proxy mTLS; provider credentials stay out of the
-application. Remaining pilot work is that supervisor, native guest assembly with
+application. Remaining pilot work includes native guest assembly with
 approved inputs, service provisioning and the connected application allow/deny/cleanup run.
 Broad testing follows that assembly.
 

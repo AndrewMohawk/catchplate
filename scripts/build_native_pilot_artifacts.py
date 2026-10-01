@@ -361,6 +361,7 @@ def export_fixed_runtime(metadata, output, target):
     dockerfiles = {
         build.NATIVE_PILOT_CONDUCTOR_TARGET: "Dockerfile.production",
         build.NATIVE_PILOT_AUTHORITY_TARGET: "Dockerfile.production",
+        build.NATIVE_PILOT_SUPERVISOR_TARGET: "Dockerfile.production",
         build.NATIVE_PILOT_OPERATOR_TARGET: DOCKERFILE,
         build.NATIVE_WORKLOAD_SIDECAR_TARGET: DOCKERFILE,
     }
@@ -437,6 +438,34 @@ def assemble_authority_runtime(metadata, output):
     })
 
 
+def assemble_supervisor_runtime(metadata, output):
+    """Package the complete fixed supervisor, never exercise its authority."""
+    profile = build.native_pilot_build_resource_profile(metadata)
+    source = {key: metadata[key] for key in conductor_runtime.SOURCE_FIELDS}
+    target = build.NATIVE_PILOT_SUPERVISOR_TARGET
+    write_original(output / "attempt.json", {
+        "apiVersion": "serverware.nativePilotSupervisorBuildAttempt/v1", "source": source,
+        "target": target, "buildResourceProfile": profile,
+        "releaseAuthority": False, "liveReady": False, "launchPrepared": False,
+    })
+    root, exported = export_fixed_runtime(metadata, output, target)
+    runtime = conductor_runtime.supervisor_inventory(root, metadata)
+    package = conductor_package.package_supervisor(root, runtime, output / "package")
+    write_original(output / "supervisor-runtime.json", {
+        "apiVersion": "serverware.nativePilotSupervisorArtifacts/v1", "artifactBuildComplete": True,
+        "source": source, "target": target, "buildResourceProfile": profile,
+        "rawExport": exported,
+        "runtimeInventorySha256": package["inventorySha256"], "package": package,
+        "profiles": {
+            "supervisorPolicy": "serverware.nativePilotSupervisorCommissioningPolicy/v18",
+            "bridgeLaunch": "serverware.nativeProofBridgeLaunch/v7",
+            "bridgeRuntime": "serverware.policyCustodyProductionRpcRuntime/v11",
+        },
+        "releaseAuthority": False, "liveReady": False, "launchPrepared": False, "executionAccepted": False,
+        "boundary": "Unsigned local supervisor rootfs and portable package only. Independent admission of three inventories, protected v18 policy and measured recipe, exact purpose keys, authenticated late-approval peer and original live resources remain required. No approval, signing, provisioning, pilot or service was executed.",
+    })
+
+
 def assemble(args, metadata, plan, output):
     raw = read_original(args.preparation, 128 * 1024)
     if raw != build.canonical_json(plan).encode("ascii"):
@@ -491,6 +520,8 @@ def main():
     conductor.add_argument("--out", type=Path, required=True)
     authority = sub.add_parser("authority-runtime", help="build and package the separate fixed authority coordinator; no approvals, keys, signing, installation or launch")
     authority.add_argument("--out", type=Path, required=True)
+    supervisor = sub.add_parser("supervisor-runtime", help="build and package the fixed commissioning supervisor; no approvals, keys, signing, installation or launch")
+    supervisor.add_argument("--out", type=Path, required=True)
     sidecar = sub.add_parser("workload-sidecar", help="build and inventory the fixed static workload sidecar and unit-output helper; no guest inputs, credentials, installation or launch")
     sidecar.add_argument("--out", type=Path, required=True)
     public_inputs = sub.add_parser("public-inputs", help="copy operator public originals and measure an unapproved manifest; never build or sign")
@@ -507,13 +538,15 @@ def main():
     compile_command.add_argument("--public-inputs-sha256", required=True)
     args = parser.parse_args()
     metadata = build.build_metadata()  # strict clean committed source, no dirty-tree escape
-    if args.command in ("operator-tools", "conductor-runtime", "authority-runtime", "workload-sidecar"):
+    if args.command in ("operator-tools", "conductor-runtime", "authority-runtime", "supervisor-runtime", "workload-sidecar"):
         if args.command == "operator-tools":
             assemble_operator_tools(metadata, new_output(args.out))
         elif args.command == "conductor-runtime":
             assemble_conductor_runtime(metadata, new_output(args.out))
         elif args.command == "authority-runtime":
             assemble_authority_runtime(metadata, new_output(args.out))
+        elif args.command == "supervisor-runtime":
+            assemble_supervisor_runtime(metadata, new_output(args.out))
         else:
             assemble_sidecar(metadata, new_output(args.out))
         print(build.canonical_json({"apiVersion": "serverware.nativePilotBuildCommand/v1", "command": args.command,

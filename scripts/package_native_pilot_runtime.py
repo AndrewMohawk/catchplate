@@ -191,9 +191,17 @@ def package_authority(root: Path, inventory: dict, output: Path) -> dict:
     return _package(root, inventory, output, authority=True)
 
 
-def _package(root: Path, inventory: dict, output: Path, *, authority: bool) -> dict:
-    inventory_api = runtime.AUTHORITY_API_VERSION if authority else runtime.API_VERSION
-    observe = runtime.authority_inventory if authority else runtime.inventory
+def package_supervisor(root: Path, inventory: dict, output: Path) -> dict:
+    """Package the explicit supervisor profile; no child inventory is approved or derived."""
+    return _package(root, inventory, output, authority=False, supervisor=True)
+
+
+def _package(root: Path, inventory: dict, output: Path, *, authority: bool, supervisor=False) -> dict:
+    require(not (authority and supervisor), "runtime package profile must be selected explicitly")
+    inventory_api = (runtime.SUPERVISOR_API_VERSION if supervisor else
+                     runtime.AUTHORITY_API_VERSION if authority else runtime.API_VERSION)
+    observe = (runtime.supervisor_inventory if supervisor else
+               runtime.authority_inventory if authority else runtime.inventory)
     require(type(inventory) is dict
             and inventory.get("apiVersion") == inventory_api
             and type(inventory.get("source")) is dict,
@@ -253,6 +261,9 @@ def _package(root: Path, inventory: dict, output: Path, *, authority: bool) -> d
             if authority:
                 report.update(apiVersion="serverware.nativePilotAuthorityPackage/v1",
                     boundary="Unsigned transferable authority-coordinator rootfs bytes only. Independent package approval, protected installation, the separate approved conductor inventory, all purpose-key capabilities and per-job approvals remain required. No provisioning, signing, execution or pilot acceptance occurred.")
+            if supervisor:
+                report.update(apiVersion="serverware.nativePilotSupervisorPackage/v1",
+                    boundary="Unsigned transferable supervisor rootfs bytes only. Independent package approval, protected installation, separate approved conductor/authority inventories, policy/recipe originals, purpose-key capabilities and independent late decisions remain required. No provisioning, approval, signing, execution or pilot acceptance occurred.")
             raw = canonical(report)
             require(len(raw) <= MAX_METADATA_BYTES, "runtime package metadata exceeds its bound")
             descriptor = os.open("package.json", os.O_WRONLY | os.O_CREAT | os.O_EXCL

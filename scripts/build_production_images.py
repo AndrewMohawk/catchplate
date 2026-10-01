@@ -72,6 +72,7 @@ PRODUCTION_ARTIFACT_TARGETS = {
     # Fixed Python conductor rootfs, separate from seccomp and native guests.
     ("Dockerfile.production", "native-pilot-conductor-artifact"),
     ("Dockerfile.production", "native-pilot-authority-artifact"),
+    ("Dockerfile.production", "native-pilot-supervisor-artifact"),
     # Separately installed in the admitted application network namespace.
     ("data-plane/decision-gate-rs/Dockerfile.production", "native-workload-sidecar-artifact"),
     # Separately installed independent authorities; never part of the claimant
@@ -91,10 +92,12 @@ NATIVE_PILOT_TARGET = "native-pilot-artifacts"
 NATIVE_PILOT_OPERATOR_TARGET = "native-pilot-operator-artifact"
 NATIVE_PILOT_CONDUCTOR_TARGET = "native-pilot-conductor-artifact"
 NATIVE_PILOT_AUTHORITY_TARGET = "native-pilot-authority-artifact"
+NATIVE_PILOT_SUPERVISOR_TARGET = "native-pilot-supervisor-artifact"
 NATIVE_WORKLOAD_SIDECAR_TARGET = "native-workload-sidecar-artifact"
 ENGINEERING_RAW_ARTIFACT_TARGETS = {
     ("Dockerfile.production", NATIVE_PILOT_CONDUCTOR_TARGET),
     ("Dockerfile.production", NATIVE_PILOT_AUTHORITY_TARGET),
+    ("Dockerfile.production", NATIVE_PILOT_SUPERVISOR_TARGET),
     # Source-fixed, credential-free exports only; never the guest/public-input
     # bundle or independently operated issuer/runtime targets.
     ("data-plane/decision-gate-rs/Dockerfile.production", NATIVE_PILOT_OPERATOR_TARGET),
@@ -614,7 +617,8 @@ def artifact_build_command(
         ]
     if native_pilot_bounded_build:
         if target not in {NATIVE_PILOT_TARGET, NATIVE_PILOT_OPERATOR_TARGET, NATIVE_PILOT_CONDUCTOR_TARGET,
-                          NATIVE_PILOT_AUTHORITY_TARGET, NATIVE_WORKLOAD_SIDECAR_TARGET}:
+                          NATIVE_PILOT_AUTHORITY_TARGET, NATIVE_PILOT_SUPERVISOR_TARGET,
+                          NATIVE_WORKLOAD_SIDECAR_TARGET}:
             raise RuntimeError("native pilot resource limits require a fixed pilot artifact target")
         pilot_resources = _native_pilot_resource_arguments(metadata)
     if target == NATIVE_PILOT_TARGET:
@@ -767,7 +771,7 @@ def main() -> None:
         engineering_destination: Path | None = None
         if args.engineering_bounded_build:
             if (args.dockerfile, args.target) not in ENGINEERING_RAW_ARTIFACT_TARGETS:
-                parser.error("engineering raw artifact export supports only the fixed conductor, authority, operator-tool and workload-sidecar targets")
+                parser.error("engineering raw artifact export supports only the fixed conductor, authority, supervisor, operator-tool and workload-sidecar targets")
             engineering_destination = _engineering_artifact_destination(args.output)
         metadata = build_metadata(development_dirty_tree=args.development_dirty_tree)
         engineering_result: dict[str, Any] = {}

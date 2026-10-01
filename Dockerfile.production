@@ -339,6 +339,26 @@ COPY --from=native-pilot-authority-files --chown=0:0 /authority-runtime-root/ /
 FROM scratch AS native-pilot-authority-artifact
 COPY --from=native-pilot-authority-rootfs / /
 
+# Separate commissioning supervisor. Child runtime source populations stay
+# unchanged; all three inventories and independent authority remain required.
+FROM verified-production-source AS native-pilot-supervisor-files
+
+ARG SOURCE_DATE_EPOCH="0"
+RUN --network=none set -eu; \
+    install -d -m 0555 /supervisor-runtime-root/supervisor/app/scripts; \
+    install -m 0444 /source/scripts/native_pilot_supervisor_runtime_entrypoint.py /supervisor-runtime-root/supervisor/app/scripts/native_pilot_supervisor_runtime_entrypoint.py; \
+    install -m 0444 /source/scripts/run_native_pilot_supervisor.py /supervisor-runtime-root/supervisor/app/scripts/run_native_pilot_supervisor.py; \
+    test -z "$(find /supervisor-runtime-root -type l -print -quit)"; \
+    find /supervisor-runtime-root -type d -exec chmod 0555 {} +; \
+    find /supervisor-runtime-root -type f -exec chmod 0444 {} +; \
+    find /supervisor-runtime-root -exec touch -h -d "@${SOURCE_DATE_EPOCH}" {} +
+
+FROM native-pilot-authority-rootfs AS native-pilot-supervisor-rootfs
+COPY --from=native-pilot-supervisor-files --chown=0:0 /supervisor-runtime-root/ /
+
+FROM scratch AS native-pilot-supervisor-artifact
+COPY --from=native-pilot-supervisor-rootfs / /
+
 FROM gcr.io/distroless/python3-debian12:nonroot@sha256:7d1042ce588ab97019fe95c24ffca7bc5a82ccdac572511d5e09bda4435c89c5
 
 ARG SERVERWARE_IMAGE_SOURCE="https://github.com/example/private-deployment"

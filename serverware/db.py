@@ -24851,40 +24851,44 @@ def _sqlite_storage_crypto_required(conn: Any | None = None) -> bool:
             conn.close()
 
 
-def _postgres_metadata_crypto_required() -> bool:
-    if not metadata_uses_postgres():
-        return False
-    with connect() as conn:
-        for table in (
-            "rate_limit_counters",
-            "release_authorization_quota_reservations",
-        ):
-            exists = conn.execute(
-                "SELECT pg_catalog.to_regclass(?) IS NOT NULL AS present",
+def _postgres_metadata_crypto_required(conn: PostgresMetadataConnection) -> bool:
+    """Inspect storage using the caller's admitted offline transaction.
+
+    A fresh schema cannot yet satisfy normal runtime connection admission.
+    This reader neither opens a fallback connection nor owns a commit/close.
+    """
+    if not isinstance(conn, PostgresMetadataConnection):
+        raise MetadataStoreError("metadata crypto inspection requires its PostgreSQL transaction")
+    for table in (
+        "rate_limit_counters",
+        "release_authorization_quota_reservations",
+    ):
+        exists = conn.execute(
+            "SELECT pg_catalog.to_regclass(?) IS NOT NULL AS present",
+            (table,),
+        ).fetchone()
+        if not exists or not bool(exists["present"]):
+            continue
+        columns = {
+            str(row["column_name"])
+            for row in conn.execute(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_schema = pg_catalog.current_schema() "
+                "AND table_name = ?",
                 (table,),
-            ).fetchone()
-            if not exists or not bool(exists["present"]):
-                continue
-            columns = {
-                str(row["column_name"])
-                for row in conn.execute(
-                    "SELECT column_name FROM information_schema.columns "
-                    "WHERE table_schema = pg_catalog.current_schema() "
-                    "AND table_name = ?",
-                    (table,),
-                ).fetchall()
-            }
-            encrypted_clause = (
-                " OR encrypted_operation IS NOT NULL"
-                if "encrypted_operation" in columns
-                else ""
-            )
-            row = conn.execute(
-                f"SELECT EXISTS (SELECT 1 FROM {table} WHERE operation IS NOT NULL "
-                f"{encrypted_clause} LIMIT 1) AS required"
-            ).fetchone()
-            if row and bool(row["required"]):
-                return True
+            ).fetchall()
+        }
+        encrypted_clause = (
+            " OR encrypted_operation IS NOT NULL"
+            if "encrypted_operation" in columns
+            else ""
+        )
+        row = conn.execute(
+            f"SELECT EXISTS (SELECT 1 FROM {table} WHERE operation IS NOT NULL "
+            f"{encrypted_clause} LIMIT 1) AS required"
+        ).fetchone()
+        if row and bool(row["required"]):
+            return True
     return False
 
 
@@ -26431,8 +26435,6 @@ def init_db(
         crypto_required = _sqlite_storage_crypto_required(
             borrowed_offline_connection
         )
-    if metadata_uses_postgres():
-        crypto_required = crypto_required or _postgres_metadata_crypto_required()
     keyring = load_bound_secret_keyring() if crypto_required else None
     if borrowed_offline_connection is None:
         init_recovery_witness_store(
@@ -26460,6 +26462,8 @@ def init_db(
             # high-water matches the normal authority writer order.
             _lock_policy_candidate_authority(conn)
             _lock_policy_high_water(conn)
+            if _postgres_metadata_crypto_required(conn):
+                keyring = load_bound_secret_keyring()
         elif not conn.in_transaction:
             conn.execute("BEGIN EXCLUSIVE")
         conn.execute(
@@ -64904,6 +64908,53 @@ def finalize_oidc_browser_session_activation(
         "challenge_id": str(challenge_row["id"]),
         "assertion_digest": activation_assertion_digest,
     }
+
+
+def consume_oidc_session_activation_delivery(
+    *,
+    delivery_id: str,
+    session_id: str,
+    user_id: str,
+    credential_id: str,
+    credential_record_id: str,
+    challenge_id: str,
+    old_token_digest: str,
+    new_token_digest: str,
+    assertion_digest: str,
+) -> dict[str, Any]:
+    """Dispatch semantic locators only; never consume or release a token here.
+
+    The installed legacy wrapper still refuses this typed successor. Actual
+    consumption remains the independently admitted original/proof and owner SQL
+    path. This unwrapped facade uses the real dispatcher, including its
+    privileged-process guard, rather than a second local writer implementation.
+    """
+    operation = "oidc.session.activation-delivery.consume"
+    arguments = {
+        "delivery_id": _oidc_browser_session_text("delivery_id", delivery_id, maximum_bytes=128),
+        "session_id": _oidc_browser_session_text("session_id", session_id, maximum_bytes=128),
+        "user_id": _oidc_browser_session_text("user_id", user_id, maximum_bytes=1024),
+        "credential_id": _oidc_browser_session_text("credential_id", credential_id, maximum_bytes=1366),
+        "credential_record_id": _oidc_browser_session_text("credential_record_id", credential_record_id, maximum_bytes=1024),
+        "challenge_id": _oidc_browser_session_text("challenge_id", challenge_id, maximum_bytes=1024),
+        "old_token_digest": _oidc_browser_session_digest("old_token_digest", old_token_digest),
+        "new_token_digest": _oidc_browser_session_digest("new_token_digest", new_token_digest),
+        "assertion_digest": _oidc_browser_session_digest("assertion_digest", assertion_digest),
+    }
+    if hmac.compare_digest(arguments["old_token_digest"], arguments["new_token_digest"]):
+        raise MetadataStoreError("OIDC activation delivery consumption requires token rotation")
+    try:
+        # The authority service derives businessIntent from these locators;
+        # caller-supplied intent or proof/connection authority is never accepted.
+        authority_contract.synthesize_business_intent(operation, arguments)
+    except ValueError as exc:
+        raise MetadataStoreError("OIDC activation delivery arguments are not canonical") from exc
+    return dispatch_policy_authority_operation(operation, {
+        "schema": "serverware.policyAuthorityControlledWriterInput/v1",
+        "handler": "consume_oidc_session_activation_delivery",
+        "operationManifestDigest": authority_contract.OPERATION_MANIFEST_DIGEST,
+        "arguments": arguments,
+    })
 
 
 def recover_oidc_session_activation_delivery(

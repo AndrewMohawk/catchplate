@@ -145,6 +145,60 @@ class AuthoritySchemaSourceTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             require_metadata_schema_program(value, legacy_completed_v9_receipt=True)
 
+    def test_bootstrap_crypto_reads_only_the_supplied_transaction(self):
+        _, tree = read_source("serverware/db.py", 16 * 1024 * 1024)
+        reader = function(tree, "_postgres_metadata_crypto_required")
+        self.assertEqual([arg.arg for arg in reader.args.args], ["conn"])
+        self.assertEqual(reader.args.defaults, [])
+        self.assert_shape(reader.body[1].test, "not isinstance(conn, PostgresMetadataConnection)")
+        self.assertIsInstance(reader.body[1].body[0], ast.Raise)
+        for forbidden in ("connect", "_metadata_pg_connect_raw", "_metadata_pg_bootstrap_connect_raw",
+                          "commit", "rollback", "close", "load_bound_secret_keyring"):
+            self.assertEqual(calls(reader, forbidden), [])
+        self.assertEqual(len(calls(reader, "execute")), 3)
+        for call in calls(reader, "execute"):
+            self.assert_shape(call.func.value, "conn")
+
+    def test_bootstrap_crypto_runs_under_the_existing_installation_locks(self):
+        _, tree = read_source("serverware/db.py", 16 * 1024 * 1024)
+        init = function(tree, "init_db")
+        transaction = next(node for node in init.body if isinstance(node, ast.With)
+                           and isinstance(node.items[0].context_expr, ast.Name)
+                           and node.items[0].context_expr.id == "initialization_connection")
+        self.assertIsInstance(transaction.items[0].optional_vars, ast.Name)
+        self.assertEqual(transaction.items[0].optional_vars.id, "conn")
+        postgres = transaction.body[0]
+        self.assert_shape(postgres.test, "isinstance(conn, PostgresMetadataConnection)")
+        crypto = calls(init, "_postgres_metadata_crypto_required")
+        self.assertEqual(len(crypto), 1)
+        self.assertIn(crypto[0], list(ast.walk(postgres)))
+        self.assert_shape(crypto[0], "_postgres_metadata_crypto_required(conn)")
+        for lock in ("_lock_policy_candidate_authority", "_lock_policy_high_water"):
+            self.assertLess(calls(postgres, lock)[0].lineno, crypto[0].lineno)
+        needed = next(node for node in postgres.body if isinstance(node, ast.If)
+                      and node.test is crypto[0])
+        self.assertEqual(len(calls(needed, "load_bound_secret_keyring")), 1)
+        self.assertLess(calls(init, "_metadata_pg_bootstrap_connect_raw")[0].lineno,
+                        transaction.lineno)
+
+    def test_runtime_readiness_and_offline_contract_guards_are_not_bypassed(self):
+        _, tree = read_source("serverware/db.py", 16 * 1024 * 1024)
+        init = function(tree, "init_db")
+        readiness = next(node for node in init.body if isinstance(node, ast.If)
+                         and calls(node, "_assert_postgres_metadata_runtime_ready"))
+        self.assert_shape(readiness.test,
+                          "metadata_uses_postgres() and borrowed_offline_connection is None "
+                          "and bootstrap_contract_id is None")
+        self.assertIsInstance(readiness.body[-1], ast.Return)
+        bootstrap = calls(init, "_metadata_pg_bootstrap_connect_raw")[0]
+        self.assert_shape(keyword(bootstrap, "contract_id"), "str(bootstrap_contract_id)")
+        self.assertLess(readiness.end_lineno, bootstrap.lineno)
+        admission = function(tree, "_metadata_pg_bootstrap_connect_raw")
+        self.assert_shape(admission.body[0].test,
+                          "contract_id != _METADATA_STORE_BOOTSTRAP_CONTRACT_ID or "
+                          "os.environ.get('SERVERWARE_PROCESS_MODE', '').strip() != 'metadata-bootstrap'")
+        self.assertIsInstance(admission.body[0].body[0], ast.Raise)
+
     def test_complete_program_is_exact_base_plus_rendered_extension(self):
         for value in (self.base, self.extension, self.complete):
             self.assertIs(type(value), str)

@@ -248,14 +248,16 @@ from serverware.policy_bundle import (
     adapter_operation_query_fields,
     compile_policy_bundle,
     credential_injection_target,
-    demo_policy_bundle,
     get_policy_snapshot,
     policy_public_key_hash,
     policy_public_key_pem,
     sign_policy_bundle,
     strict_json_loads,
     validate_discard_headers,
-    write_policy_bundle,
+)
+from serverware.demo_seed_policy import (
+    DemoSeedPolicyError,
+    require_commissioned_demo_policy,
 )
 from serverware.constraints import (
     shared_durable_budget_claims,
@@ -21937,33 +21939,21 @@ def seed_demo(_: AdminIdentity = Depends(require_role("admin"))) -> dict[str, An
         "test",
     }:
         raise HTTPException(status_code=404, detail="not found")
-    current_snapshot = get_policy_snapshot()
-    bundle = demo_policy_bundle("cred-demo-bearer")
-    high_water = db.get_policy_high_water()
-    next_sequence = int(bundle["metadata"]["sequence"])
-    next_rollback_epoch = int(bundle["metadata"]["rollbackEpoch"])
-    if current_snapshot is not None:
-        current_metadata = current_snapshot.raw.get("metadata") or {}
-        next_sequence = max(
-            next_sequence, int(current_metadata.get("sequence") or 0) + 1
-        )
-        next_rollback_epoch = max(
-            next_rollback_epoch,
-            int(current_metadata.get("rollbackEpoch") or 0),
-        )
-    if high_water is not None:
-        if high_water["policy_id"] != bundle["metadata"]["id"]:
-            raise HTTPException(
-                status_code=409,
-                detail="demo policy id conflicts with persisted high-water state",
-            )
-        next_sequence = max(next_sequence, int(high_water["sequence"]) + 1)
-        next_rollback_epoch = max(
-            next_rollback_epoch, int(high_water["rollback_epoch"])
-        )
-    bundle["metadata"]["sequence"] = next_sequence
-    bundle["metadata"]["rollbackEpoch"] = next_rollback_epoch
-    policy_snapshot = write_policy_bundle(bundle)
+    try:
+        policy_snapshot = require_commissioned_demo_policy()
+    except DemoSeedPolicyError:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "demo_policy_commissioning_required",
+                "message": (
+                    "Commission and materialize a signed, committed policy with "
+                    "the exact serverware-demo semantics before seeding demo data. "
+                    "This endpoint does not publish or advance policy authority."
+                ),
+                "dataWritten": False,
+            },
+        ) from None
     credential = db.upsert_credential_with_id(
         "cred-demo-bearer",
         "Demo bearer token",

@@ -114,3 +114,14 @@ choose helper-child topology merely to make an existing boolean pass.
    Unknown outcomes retain their real owners and fail closed. Only then verify
    the connected execution and failure paths; source completeness, helper
    registration, and thread/service shutdown remain insufficient evidence.
+
+The next source pass must not mistake existing terminal append for complete
+retirement. In `spool_head.rs`, terminal allocation checks pending allocations,
+but does not require all retained effect barriers consumed; regular reservation
+also lacks the terminal-ingress guard already used by effect allocation.
+Consumption can include `OutcomeUnknown` or `ReconcileRequired`, so even a
+consumed barrier does not prove resolved effects. Native signer `used`/`finished`
+sets and cleared flights likewise do not provide durable restart-safe retirement.
+Implement authenticated close-before-settle transitions and an exact outstanding
+effect inventory, with explicit unresolved refusal, before producing a successor
+terminal statement. These findings are source review, not live failure evidence.

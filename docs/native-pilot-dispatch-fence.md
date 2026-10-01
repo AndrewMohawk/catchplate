@@ -2,7 +2,7 @@
 
 The `.393` work addresses the actual selected RPC bridge, not the unconstructed
 legacy watchdog driver. It fixes v11 active-effect selection and adds durable
-pre-contact request ownership. Verification is pending for this source batch.
+pre-contact request ownership. The native compile and eight reducer controls pass.
 Source checkpoints remain **36/46** and independent production acceptance **0/6**.
 
 ## Selected runtime and interrupted requests
@@ -64,8 +64,32 @@ equivalent late-effect guarantees; it cannot silently relabel one as the other.
 
 ## Verification boundary
 
-The source is being assembled before one focused check. No live authority,
-protected signing service, privileged worker launch, cloud resource or paid
-test is involved in this batch. A compiler or local state-machine test cannot
-establish journal crash durability, complete native authentication, connected
-application allow/deny/cleanup behavior or the independent production gates.
+Exact source `46821ad7bf00f94207d3d6aaa71cfae2a57f4785` passed one cached,
+offline/locked/frozen Rust 1.88 check of `serverware-decision-gate` (exit **0**,
+compiler-reported **57.08 seconds**). The pinned container used one CPU, 8 GiB,
+no additional swap, no network and read-only source/vendor mounts. Existing
+warnings remain: 312 library and 2,430 binary warnings, including duplicates.
+
+The exact std-only production reducer and its adjacent companion were compiled
+separately; all **8 controls passed**. Synthetic byte inputs exercise ordering,
+failure fencing, recovery pairing, legacy-prefix handling and physical capacity.
+These are executable reducer controls, not real journal I/O, marker-codec,
+signature, socket or native-constructor tests. The marker/bridge integration and
+v11 selection were source-reviewed and typechecked, not run against real owners.
+Six documentation files passed **623 distinct local file targets**; anchors and
+external URLs were not checked.
+
+The initial preflight stopped before compilation because the cached image
+reference was missing. Restoring the same pinned Rust digest found both layers
+already present; the successful runner also verified the unchanged image ID.
+No source/dependency change or duplicate compile was needed. That restoration
+used registry access; only the verification container was network-isolated.
+
+Exact source, scripts, complete logs, the test binary, results and checksums are
+retained at `codex-offload/serverware/engineering-builds/46821ad7-dispatch-fence-MjQRSL/`.
+The source archive SHA-256 is
+`7f4809b2df94aec010431a8baaecfe5ad7911a707e8352be7dad3e74b60896e8`.
+No live authority, protected signing service, privileged worker launch, cloud
+resource or paid test ran. Journal crash durability, complete native
+authentication, connected application allow/deny/cleanup and the independent
+production gates remain unverified.

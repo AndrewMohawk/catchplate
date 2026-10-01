@@ -149,7 +149,8 @@ controls ([evidence and limits](docs/native-pilot-final-continuations.md#focused
 [supervisor executable and package](docs/native-pilot-supervisor-executable.md)
 passed 29 focused controls and an engineering artifact build. The
 [current dispatch work](docs/native-pilot-dispatch-fence.md) fixes v11 effect
-selection and interrupted-request ownership; its verification is pending.
+selection and interrupted-request ownership; compilation and eight focused
+reducer controls pass, but actual service/journal execution remains unverified.
 [Real terminal cleanup](docs/native-pilot-operation-ownership.md) and connected
 runtime verification are still needed. These counts are not a percentage of
 product readiness or permission to deploy.

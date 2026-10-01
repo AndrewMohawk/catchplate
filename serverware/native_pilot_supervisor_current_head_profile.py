@@ -239,10 +239,18 @@ def observed_original(job_name, context):
     return raw
 
 
-def prepare_input(job_name, input_raw, *, context, boot, now_boottime_ns):
-    """Bind an independently supplied COMPLETE input, without constructing it."""
+def _prepared_input(job_name, input_raw, *, context, boot, now_boottime_ns):
+    """Internal same-call projection after _refresh, not a public admission.
+
+    Complete builders may share one authenticated source graph at exactly the
+    same supplied clock. This dictionary is not a live capability. Public
+    prepare_input and checked_result always refresh all sources themselves.
+    """
     p.require(job_name in JOB_NAMES)
-    context = _refresh(context, boot=boot, now_boottime_ns=now_boottime_ns)
+    p.fields(context, _CONTEXT_FIELDS)
+    p.require(type(boot) is tuple and boot == tuple(context["window"][name] for name in
+        ("bootIdBase64url", "timeNamespaceDevice", "timeNamespaceInode"))
+        and key._uint(context["validatedAtBoottimeNanos"]) == key._uint(now_boottime_ns))
     sources, target = context["sources"], context["targets"][job_name]
     helper = target["serviceRole"] == g.ROLES[-1]
     value = p.fields(p.document(input_raw, MAX_INPUT), head.INPUT_FIELDS
@@ -264,6 +272,13 @@ def prepare_input(job_name, input_raw, *, context, boot, now_boottime_ns):
     _same(prepared["authority"], target["checkpointAuthority"])
     p.require(prepared["deadline"] == target["deadline"] and now_boottime_ns < context["deadline"])
     return prepared
+
+
+def prepare_input(job_name, input_raw, *, context, boot, now_boottime_ns):
+    """Bind an independently supplied COMPLETE input, without constructing it."""
+    p.require(job_name in JOB_NAMES)
+    checked = _refresh(context, boot=boot, now_boottime_ns=now_boottime_ns)
+    return _prepared_input(job_name, input_raw, context=checked, boot=boot, now_boottime_ns=now_boottime_ns)
 
 
 def checked_result(job_name, input_raw, result, *, context, boot, now_boottime_ns):

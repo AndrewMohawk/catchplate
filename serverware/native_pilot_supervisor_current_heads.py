@@ -97,6 +97,7 @@ class CurrentHeadIntake:
         self._index = self._next = self._retained_bytes = 0
         self._attempted = set()
         self._failed = self._closed = self._close_attempted = False
+        self._runtime_handoff_attempted = False
         self._last, self._last_wall = originals._clock(), time.time_ns()
 
     def _reserve(self, count):
@@ -335,6 +336,30 @@ def require_heads(policy, *, process, request):
         owner._request, owner._index = request, len(JOB_NAMES)
         owner.check()
         return {name: {"inputOriginal": owner._inputs[name], "headOriginal": owner._outputs[name]} for name in JOB_NAMES}
+    except BaseException:
+        owner._failed = True
+        raise
+
+
+def require_runtime_context(policy, *, process, request):
+    """Transfer verified immutable data once, only at runtime installation.
+
+    The receiving owner retains these originals and their actual process joins;
+    this does not reopen completed material/service owners or authorize writes.
+    """
+    _owners(policy, process, request)
+    owner = _LIVE
+    p.require(owner is not None and not owner._runtime_handoff_attempted)
+    owner._runtime_handoff_attempted = True
+    try:
+        heads = require_heads(policy, process=process, request=request)
+        return {"context": copy.deepcopy(owner._context), "heads": heads,
+            "material": copy.deepcopy(owner._material), "bootstrapOriginals": owner._bootstrap.copy(),
+            "sourceInputs": owner._sources | {(PHASE, name): owner._inputs[name] for name in JOB_NAMES},
+            "sourceResults": owner._source_results | {(PHASE, name): owner._results[name] for name in JOB_NAMES},
+            "conductorOriginals": {PHASE: owner._phase_raw, "service-originals": owner._service_phase_raw,
+                "bootstrap-admission": owner._bootstrap_phase_raw},
+            "deadline": owner._deadline, "epochLimit": owner._epoch_limit}
     except BaseException:
         owner._failed = True
         raise

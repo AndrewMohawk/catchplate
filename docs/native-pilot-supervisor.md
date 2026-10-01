@@ -1,12 +1,21 @@
 # Native pilot commissioning supervisor
 
 This is a partial source implementation, not a runnable or deployed supervisor.
-The `.388` source connects [protected current-head intake](native-pilot-current-head-intake.md)
+The `.389` source adds [complete bridge runtime composition](native-pilot-bridge-composition.md)
+under explicit policy/v16. Actual current-head, peer, C9 and service originals
+feed the complete runtime/outgoing bundle and retained installation handoff.
+**151/159** jobs are handled: 143 fixed composition decisions and eight late
+intakes, with **108** signing selectors and **eight current missing slots**.
+Five additional bridge authorization jobs remain omitted. Focused verification
+is pending; startup still refuses before child creation. Complete positive
+multi-service authentication and live owner execution remain unverified.
+
+The preceding `.388` source connects [protected current-head intake](native-pilot-current-head-intake.md)
 under explicit policy/v15. Eight fixed jobs pause for independently approved
 complete inputs after actual request acquisition. They reuse existing checkpoint
-keys and never enter the static approval serializer. **150/159** current jobs
-are handled: 142 composers and eight late-intake jobs. There are **108** signing
-selectors, nine current missing slots and five further bridge prerequisites
+keys and never enter the static approval serializer. At that checkpoint, **150/159** jobs
+were handled: 142 composers and eight late-intake jobs, with **108** signing
+selectors, nine then-missing slots and five further bridge prerequisites
 not yet in that inventory. Full coverage still refuses before child creation.
 Source `65744b94` passes 107 focused controls; `9dbdb9f5` passes the one new
 retained-result reuse control without rerunning those 107.

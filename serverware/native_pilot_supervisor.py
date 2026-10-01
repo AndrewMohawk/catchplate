@@ -1,6 +1,6 @@
 """Fixed commissioning decisions joined to their real process and installer.
 
-The initial 150 of 159 jobs have fixed composers or protected late intake. The complete-coverage check refuses
+The initial 151 of 159 jobs have fixed composers or protected late intake. The complete-coverage check refuses
 startup before spawning a child, not after a live attempt reaches a missing job.
 There is no executable entrypoint, configurable dispatcher, approval callback,
 signer, new deadline or source of deployment approval in this module.
@@ -24,6 +24,7 @@ from serverware import native_pilot_supervisor_launch_authorizations as launch_a
 from serverware import native_pilot_supervisor_endpoint_launches as endpoint_launches
 from serverware import native_pilot_supervisor_service_material as service_material
 from serverware import native_pilot_supervisor_current_heads as current_heads
+from serverware import native_pilot_supervisor_bridge_runtime as bridge_runtime
 from serverware import custody_generation_grants as generation
 from serverware import native_shadow_nitro_originals as originals
 from serverware import native_shadow_nitro_profile as p
@@ -50,7 +51,8 @@ SUPPORTED_JOBS = (("bootstrap-admission", "driver-bootstrap"),
     *(("service-originals", name) for name in launch_authorizations.JOB_NAMES),
     *(("service-originals", name) for name in endpoint_launches.JOB_NAMES),
     (service_material.PHASE, service_material.JOB),
-    *(("bridge-runtime", job.name) for job in CURRENT_HEAD_JOBS))
+    *(("bridge-runtime", job.name) for job in CURRENT_HEAD_JOBS),
+    (bridge_runtime.PHASE, bridge_runtime.JOB))
 _LATE_JOBS = tuple(("bridge-runtime", job.name) for job in CURRENT_HEAD_JOBS)
 _COMPOSER_GROUPS = (
     ("endpoint-inputs", ("endpoint-inputs",), endpoint_inputs.compose),
@@ -65,6 +67,7 @@ _COMPOSER_GROUPS = (
     ("service-originals", launch_authorizations.JOB_NAMES, launch_authorizations.compose),
     ("service-originals", endpoint_launches.JOB_NAMES, endpoint_launches.compose),
     (service_material.PHASE, (service_material.JOB,), service_material.compose),
+    (bridge_runtime.PHASE, (bridge_runtime.JOB,), bridge_runtime.compose),
 )
 _COMPOSERS = {(phase, name): composer for phase, names, composer in _COMPOSER_GROUPS for name in names}
 _ORDER = tuple((phase, job.name) for phase in STAGES for job in JOBS[phase])
@@ -76,7 +79,8 @@ _LIVE = None
 def missing_jobs():
     """Source coverage only, never acceptance or a percentage of remaining effort."""
     p.require(tuple(JOBS) == STAGES and _ORDER[:len(SUPPORTED_JOBS)] == SUPPORTED_JOBS)
-    p.require(tuple(_COMPOSERS) + _LATE_JOBS == SUPPORTED_JOBS[3:]
+    p.require(tuple(_COMPOSERS) == tuple(slot for slot in SUPPORTED_JOBS[3:] if slot not in _LATE_JOBS)
+        and tuple(slot for slot in SUPPORTED_JOBS if slot in _LATE_JOBS) == _LATE_JOBS
         and not set(_COMPOSERS).intersection(_LATE_JOBS)
         and len(_COMPOSERS) == sum(len(names) for _, names, _ in _COMPOSER_GROUPS))
     return tuple(item for item in _ORDER if item not in SUPPORTED_JOBS)

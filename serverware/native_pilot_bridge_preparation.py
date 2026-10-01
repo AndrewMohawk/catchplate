@@ -87,8 +87,13 @@ def _peer(expected, observed, ids):
         p.require(expected[target] == observed["targetExecutable"][source])
     for target, source in (("cgroupPathSha256", "pathSha256"), ("cgroupMountId", "mountId"), ("cgroupInode", "inode")):
         p.require(expected[target] == observed["cgroup"][source])
-    # Exact native common::ExpectedPeerCredentials v4 recipe. Independently
-    # approving these remaining expectations is still a separate obligation.
+    p.require(expected["processIdentitySha256"] == peer_identity(
+        {name: expected[name] for name in outgoing._PEER_FIELDS if name != "processIdentitySha256"}))
+
+
+def peer_identity(expected):
+    """Exact native v4 digest; a projection, never observation or approval."""
+    p.fields(expected, tuple(name for name in outgoing._PEER_FIELDS if name != "processIdentitySha256"))
     parts = []
     for name, width in (("uid", 4), ("gid", 4), ("pid", 4), ("startTimeTicks", 8),
             ("executableDevice", 8), ("executableInode", 8), ("executableLength", 8)):
@@ -100,7 +105,7 @@ def _peer(expected, observed, ids):
         parts.append(p.integer(expected[name], maximum=(1 << 64) - 1).to_bytes(8, "big"))
     for name in ("securityLabelSha256", "configurationGenerationSha256"):
         parts.append(p.digest(expected[name]).encode("ascii"))
-    p.require(expected["processIdentitySha256"] == p.framed(b"serverware.policyCustodyPeerProcessIdentity/v4", parts))
+    return p.framed(b"serverware.policyCustodyPeerProcessIdentity/v4", parts)
 
 
 def require_runtime(raw, runtime_raw, *, driver_observation_raw, cohort_observation_raw, peer_ids):

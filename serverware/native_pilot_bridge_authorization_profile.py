@@ -37,7 +37,7 @@ def _selection(fragment, delivery_input_raw):
     _, config = keys.c9._original(source["ownerConfigurationOriginal"], 65536)
     cold_raw, _ = keys.c9._original(source["configurationOriginal"], 65536)
     _, operational = runtime.original(source["runtimeOriginal"])
-    p.require(runtime.version(operational) == 11)
+    p.require(runtime.version(operational) in (11, 12))
     selected = policy.validate_policy(fragment, bootstrap_configuration=config, cold_original=cold_raw)
     _, payload = keys.c9._original(source["payloadOriginal"], keys.delivery.MAX_DELIVERY)
     keys.c9._same(payload["credentials"], selected["deliveryCredentials"])

@@ -16,6 +16,7 @@ from serverware import native_shadow_driver_outgoing as outgoing
 
 p = generation.p
 API = "serverware.nativePilotSupervisorBridgeRuntimePolicy/v1"
+TERMINAL_API = "serverware.nativePilotSupervisorBridgeRuntimePolicy/v2"
 MAX_POLICY = 65536
 FIELDS = ("apiVersion", "startupTimeoutMillis", "peerExpectations", "historyCredentials",
     "authorityBindings", "externalSignerEndpoints")
@@ -54,7 +55,7 @@ def _peer(value):
 
 def validate_policy(fragment):
     p.fields(fragment, FIELDS)
-    p.require(fragment["apiVersion"] == API and len(generation.canonical(fragment)) <= MAX_POLICY)
+    p.require(fragment["apiVersion"] in (API, TERMINAL_API) and len(generation.canonical(fragment)) <= MAX_POLICY)
     p.integer(fragment["startupTimeoutMillis"], maximum=30000)
     expectations = p.fields(fragment["peerExpectations"], peers.ROLES)
     for kind, roles in peers.ROLES.items():

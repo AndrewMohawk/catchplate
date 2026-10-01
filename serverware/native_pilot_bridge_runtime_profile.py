@@ -1,4 +1,4 @@
-"""Compose the explicit v11 bridge from actual prior public originals.
+"""Compose explicit v11/v12 bridges from actual prior public originals.
 
 Independent policy supplies only final peer expectations, credential names,
 external endpoints and bounded startup configuration. All observations and
@@ -246,7 +246,9 @@ def _project(fragment, *, current_context, heads, ordinary, native, transition_o
         "rootKeySpkiSha256": item["header"]["authorityHistoryRootKeySpkiSha256"]} for role, item in ordinary.items()]
     helper_deadline = min((row["request"]["deadline"] for row in sessions[-1]["handshakes"]),
         key=lambda value: value["absoluteBoottimeNanos"])
-    runtime = {"apiVersion": "serverware.policyCustodyProductionRpcRuntime/v11",
+    terminal = fragment["apiVersion"] == policy.TERMINAL_API
+    launch_api = "serverware.nativeProofBridgeLaunch/v8" if terminal else "serverware.nativeProofBridgeLaunch/v7"
+    runtime = {"apiVersion": "serverware.policyCustodyProductionRpcRuntime/v12" if terminal else "serverware.policyCustodyProductionRpcRuntime/v11",
         "startupTimeoutMillis": fragment["startupTimeoutMillis"], "listenerSocketPath": resources.LISTENER_PATH,
         "expectedFacadePeer": expected["gate"]["gate"], "journalDirectoryIdentity": copy.deepcopy(bridge_journal),
         "expectedHelperEndpointRoles": list(helper.ROLES), "expectedDriverProcessIdentitySha256": peer["processIdentitySha256"],
@@ -270,11 +272,12 @@ def _project(fragment, *, current_context, heads, ordinary, native, transition_o
                 ("headGrantOriginal", "ordinary-head"), ("cleanupGrantOriginal", "ordinary-cleanup"),
                 ("currentGrantOriginal", "ordinary-current"))}},
         "ordinaryInitialHistories": {role: {"runtimeOriginal": item["runtime_raw"].decode("ascii"),
-            "generationGrantOriginal": item["grant_raw"].decode("ascii")} for role, item in ordinary.items()},
+            "generationGrantOriginal": item["grant_raw"].decode("ascii"),
+            **({"historyOriginal": item["history_raw"].decode("ascii")} if terminal else {})} for role, item in ordinary.items()},
         "helperBootstrap": helper.shape(helper.build(ordinary[g.ROLES[-1]]["runtime_raw"], deadline=helper_deadline))}
     runtime_raw = p.canonical(runtime)
     install.shape("bridge-runtime", runtime_raw)
-    outgoing._selection(runtime_raw, "serverware.nativeProofBridgeLaunch/v7", cold["uid"])
+    outgoing._selection(runtime_raw, launch_api, cold["uid"])
     outgoing._peer(runtime["expectedFacadePeer"], cold["uid"])
     preparation.require_runtime(sources["bridge_preparation_raw"], runtime_raw,
         driver_observation_raw=driver_observation_raw, cohort_observation_raw=cohort_observation_raw, peer_ids=ids)
@@ -283,7 +286,7 @@ def _project(fragment, *, current_context, heads, ordinary, native, transition_o
         "driverWindowSha256": p.sha(bootstrap_originals["window"]), "driverObservationSha256": p.sha(driver_observation_raw),
         "invocationId": window["invocationId"], "deliveryConfiguration": config["deliveryConfiguration"],
         "runtime": {"path": install.RUNTIME_DESTINATION, "sha256": p.sha(runtime_raw)},
-        "bridgeLaunchVersion": "serverware.nativeProofBridgeLaunch/v7"}
+        "bridgeLaunchVersion": launch_api}
     outgoing_raw = p.canonical(selected)
     install.shape("bridge-outgoing", outgoing_raw)
     bundle = p.canonical({"apiVersion": API, "driverControlSha256": p.sha(bootstrap_originals["control"]),
@@ -315,6 +318,7 @@ def prepare(*, fragment, current_context, heads, bootstrap_originals, driver_obs
             cohort_observation_raw, gate_binding_raw, bridge_journal, transition_context,
             native_context, native_delivery_context, boot, now_boottime_ns, now_unix_ns):
     """Authenticate the complete literal source graph before public projection."""
+    fragment = policy.validate_policy(fragment)
     _size((fragment, current_context, heads, bootstrap_originals, driver_observation_raw,
         cohort_observation_raw, gate_binding_raw, bridge_journal, transition_context, native_context, native_delivery_context))
     clocks = dict(boot=boot, now_boottime_ns=now_boottime_ns, now_unix_ns=now_unix_ns)
@@ -353,6 +357,8 @@ def prepare(*, fragment, current_context, heads, bootstrap_originals, driver_obs
             continue
         native[role] = {"guest": admitted["guest"], "key": keys[p.ROLES.index(_KEY_ROLE[role])],
             "expectedPeer": prepared["payload"]["expectedPeer"]}
+    expected_persistence = native_profile.authority.persistence.COMPLETED_GRANT_API if fragment["apiVersion"] == policy.TERMINAL_API else native_profile.authority.PROFILES["persistence"][0]
+    p.require(payloads["persistence"]["apiVersion"] == expected_persistence)
     sources = checked["sources"]
     ordinary_context = {"launchOriginal": sources["launch_raw"].decode("ascii"), "services": sources["ordinary_context"]}
     ordinary = transitions._services(ordinary_context, native_inputs, payloads, clocks)

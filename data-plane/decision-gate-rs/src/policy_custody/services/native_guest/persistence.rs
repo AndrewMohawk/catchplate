@@ -17,11 +17,14 @@ use std::os::fd::OwnedFd;
 #[path="persistence_receipts.rs"] mod receipts;
 #[path="persistence_store.rs"] mod store;
 #[path="persistence_invocations.rs"] mod invocations;
+#[path="persistence_completed.rs"] mod completed;
+pub(in crate::policy_shadow::policy_custody) use store::Head as PersistenceHead;
 const GRANT_DOMAIN:&str="serverware.nativeShadowPersistenceServiceAssignment.signature/v1";
-const COMMIT_DOMAIN:&str="serverware.nativeShadowPersistenceCommit.signature/v1";
+const COMPLETED_GRANT_DOMAIN:&str="serverware.nativeShadowPersistenceServiceAssignment.signature/v2";
+pub(in crate::policy_shadow::policy_custody) const COMMIT_DOMAIN:&str="serverware.nativeShadowPersistenceCommit.signature/v1";
 #[derive(Clone,Copy,PartialEq,Eq,Serialize,Deserialize)]
 #[serde(rename_all="kebab-case")]
-enum Permission {StoreDispatchOriginal,VerifyPersistence}
+enum Permission {StoreDispatchOriginal,VerifyPersistence,VerifyCompletedInvocation}
 #[derive(Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 struct Payload {
@@ -37,9 +40,14 @@ pub(crate) struct Configuration {payload:Payload,signature:CanonicalEd25519Signa
 impl Configuration {
     pub(in crate::policy_shadow::policy_custody::services) fn validate_shape(&self)->Result<(),ShadowError>{
         let p=&self.payload;
-        require(p.api_version=="serverware.nativeShadowPersistenceServiceAssignment/v1"
-            && p.purpose=="native-shadow-receipt-persistence" && p.guest.service_role=="production-bridge"
-            && matches!(p.permissions.as_slice(),[Permission::VerifyPersistence]|[Permission::StoreDispatchOriginal,Permission::VerifyPersistence])
+        let permissions=match p.api_version.as_str() {
+            "serverware.nativeShadowPersistenceServiceAssignment/v1"=>matches!(p.permissions.as_slice(),
+                [Permission::VerifyPersistence]|[Permission::StoreDispatchOriginal,Permission::VerifyPersistence]),
+            "serverware.nativeShadowPersistenceServiceAssignment/v2"=>p.permissions==[
+                Permission::StoreDispatchOriginal,Permission::VerifyPersistence,Permission::VerifyCompletedInvocation],
+            _=>false,
+        };
+        require(permissions && p.purpose=="native-shadow-receipt-persistence" && p.guest.service_role=="production-bridge"
             && p.expected_peer.uid!=0 && p.expected_peer.uid!=p.guest.uid && p.expected_peer.gid!=0
             && !p.proof_scope_original_base64url.is_empty() && p.proof_scope_original_base64url.len()<=21846)?;
         p.expected_peer.checked().map_err(fail)?;Ok(())
@@ -62,7 +70,8 @@ impl Configuration {
         let key=trust.resolve_ed25519_key(&checkpoint,authority_role_signature_domain(AuthorityRole::CustodySupervisorCapability),
             &binding.key_id,&binding.key_spki_sha256)?;
         require(ed25519_public_key_material_sha256(&key)==binding.key_material_sha256)?;
-        key.verify_strict(&signature_preimage(GRANT_DOMAIN,&canonical_json_bytes(p)?),&Signature::from_bytes(&self.signature.decode()?))
+        let domain=if p.api_version=="serverware.nativeShadowPersistenceServiceAssignment/v2" {COMPLETED_GRANT_DOMAIN}else{GRANT_DOMAIN};
+        key.verify_strict(&signature_preimage(domain,&canonical_json_bytes(p)?),&Signature::from_bytes(&self.signature.decode()?))
             .map_err(|_|ShadowError::SignatureInvalid)?;
         scope.check(keys)?;
         let local=keys.keys.get(&AuthorityRole::CustodyStoreResponse).ok_or(ShadowError::SignerBindingMismatch)?;
@@ -74,14 +83,27 @@ impl Configuration {
 }
 #[derive(Clone,Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
-struct CommitPayload {
-    api_version:String,guest:GuestClosureBinding,proof_scope_sha256:Sha256Digest,sequence:u64,previous_head_sha256:Sha256Digest,
-    request_original_sha256:Sha256Digest,request_original_base64url:String,reply_original_base64url:String,
-    original_deadline_boottime_nanos:u64,stored_at_boottime_nanos:u64,receipt:Option<receipts::Receipt>,signing_key_id:Sha256Digest,signing_key_spki_sha256:Sha256Digest,
+pub(in crate::policy_shadow::policy_custody) struct CommitPayload {
+    pub(in crate::policy_shadow::policy_custody) api_version:String,
+    pub(in crate::policy_shadow::policy_custody) guest:GuestClosureBinding,
+    pub(in crate::policy_shadow::policy_custody) proof_scope_sha256:Sha256Digest,
+    pub(in crate::policy_shadow::policy_custody) sequence:u64,
+    pub(in crate::policy_shadow::policy_custody) previous_head_sha256:Sha256Digest,
+    pub(in crate::policy_shadow::policy_custody) request_original_sha256:Sha256Digest,
+    pub(in crate::policy_shadow::policy_custody) request_original_base64url:String,
+    pub(in crate::policy_shadow::policy_custody) reply_original_base64url:String,
+    pub(in crate::policy_shadow::policy_custody) original_deadline_boottime_nanos:u64,
+    pub(in crate::policy_shadow::policy_custody) stored_at_boottime_nanos:u64,
+    receipt:Option<receipts::Receipt>,
+    pub(in crate::policy_shadow::policy_custody) signing_key_id:Sha256Digest,
+    pub(in crate::policy_shadow::policy_custody) signing_key_spki_sha256:Sha256Digest,
 }
 #[derive(Clone,Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
-struct Commit {payload:CommitPayload,signature:CanonicalEd25519Signature}
+pub(in crate::policy_shadow::policy_custody) struct Commit {
+    pub(in crate::policy_shadow::policy_custody) payload:CommitPayload,
+    pub(in crate::policy_shadow::policy_custody) signature:CanonicalEd25519Signature,
+}
 fn original<T:for<'de> Deserialize<'de>+Serialize>(encoded:&str)->Result<(T,Vec<u8>),ShadowError>{
     require(!encoded.is_empty() && encoded.len()<=services::common::MAX_SERVICE_FRAME_BYTES)?;
     let raw=URL_SAFE_NO_PAD.decode(encoded).map_err(fail)?;
@@ -96,7 +118,7 @@ fn assigned_key(keys:&AdmittedKeys,trust:&dyn EnvelopeKeyTrust,role:AuthorityRol
     let key=trust.resolve_ed25519_key(&checkpoint,domain,key_id,spki)?;
     require(ed25519_public_key_material_sha256(&key)==binding.key_material_sha256 && trust.current_checkpoint()?==checkpoint)?;Ok(key)
 }
-fn final_dispatch(request:&Request)->Result<&ClosedProductionDispatchRequestV4,ShadowError>{
+pub(in crate::policy_shadow::policy_custody) fn final_dispatch(request:&Request)->Result<&ClosedProductionDispatchRequestV4,ShadowError>{
     match &request.request {
         Body::Dispatch(dispatch)=>Ok(dispatch),
         Body::FinishCommitRequest{computation,..}=>Ok(&computation.request),
@@ -350,6 +372,8 @@ impl Service {
                     require(inner.replay_id_sha256==request.replay_id_sha256 && inner.deadline_boottime_nanos==request.deadline_boottime_nanos)?;
                     self.verify(inner)?;ResultBody::Verified
                 },
+                Body::VerifyCompletedInvocation{query}=>ResultBody::CompletedInvocation(
+                    self.completed_invocation(&request,query,keys,trust,time)?),
                 _=>return Err(ShadowError::BindingDrift),
             };
             check()?;self.check(keys,trust,time)?;

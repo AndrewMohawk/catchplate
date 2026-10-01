@@ -5361,6 +5361,8 @@ _coder-build-all-locked: _coder-require-lock _coder-require-clean
 				schemas/native-policy-activation-custody.v1.schema.json \
 				schemas/native-shadow-trusted-time-service.v1.schema.json \
 				schemas/native-shadow-persistence-service.v1.schema.json \
+				schemas/native-shadow-persistence-service.v2.schema.json \
+				schemas/native-invocation-settlement.v1.schema.json \
 				schemas/native-shadow-persistence-inputs.v1.schema.json \
 				schemas/native-shadow-proof-cohort.v1.schema.json \
 				schemas/native-shadow-proof-cohort.v2.schema.json \

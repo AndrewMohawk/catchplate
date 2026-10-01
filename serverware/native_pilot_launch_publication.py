@@ -132,7 +132,7 @@ def shape(purpose: str, raw: bytes) -> dict:
         role = purpose[len("native-launch-"):]
         api, field, _ = LAUNCHES[role]
         p.fields(value, ("apiVersion", "keyAdmission", field))
-        p.require(value["apiVersion"] in (("serverware." + api, "serverware.nativeProofBridgeLaunch/v6", "serverware.nativeProofBridgeLaunch/v7")
+        p.require(value["apiVersion"] in (("serverware." + api, "serverware.nativeProofBridgeLaunch/v6", "serverware.nativeProofBridgeLaunch/v7", "serverware.nativeProofBridgeLaunch/v8")
             if role == "bridge" else ("serverware." + api,)))
         _inner(value["keyAdmission"], role)
         delivery._pin(value[field])

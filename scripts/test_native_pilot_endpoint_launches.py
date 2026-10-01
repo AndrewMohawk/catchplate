@@ -208,6 +208,40 @@ class EndpointLaunchControls(unittest.TestCase):
         args["fragment"]["endpoints"]["trustedTime"]["parentPort"] += 1
         with self.assertRaises(ValueError): profile.build("trustedTime", **args)
 
+    def test_explicit_persistence_successor_authenticates_fixed_domain_and_launch(self):
+        # Complete public TEST signatures, not a persistence store or a terminal
+        # receipt. The old input cannot acquire the new permission by payload.
+        args = copy.deepcopy(self.arguments("persistence"))
+        record = args["service_context"]
+        value = json.loads(record["inputOriginal"])
+        value["apiVersion"] = services.authority.COMPLETED_PERSISTENCE_INPUT_API
+        value["permissions"] = list(services.authority.persistence.COMPLETED_PERMISSIONS)
+        input_raw = canonical(value)
+        payload = json.loads(record["grantOriginal"])["payload"]
+        payload.update(apiVersion=services.authority.persistence.COMPLETED_GRANT_API,
+            permissions=list(value["permissions"]))
+        key = key_fixture("custody-supervisor-capability")[0]
+        grant = canonical({"payload": payload, "signature": encoded(key.sign(signed_message(
+            services.authority.persistence.COMPLETED_GRANT_DOMAIN, payload)))})
+        record.update(inputOriginal=input_raw, grantOriginal=grant)
+        result = {"original": grant.decode("ascii"), "sha256": sha(grant)}
+        self.assertEqual(services.checked_result("persistence", input_raw, result, **clocks(self.f)), grant)
+        raw = profile.build("persistence", **args)
+        options = self.options("persistence") | {"service_grant_original": grant}
+        self.assertEqual(launch.prepare_endpoint_bundle(raw, **options)["role"], "persistence")
+        wrong = canonical({"payload": payload, "signature": encoded(key.sign(signed_message(
+            services.authority.persistence.GRANT_DOMAIN, payload)))})
+        with self.assertRaises(InvalidSignature):
+            services.checked_result("persistence", input_raw,
+                {"original": wrong.decode("ascii"), "sha256": sha(wrong)}, **clocks(self.f))
+        value["apiVersion"] = "serverware.nativePilotNativeServiceAuthorityInput/v1"
+        with self.assertRaises(ValueError):
+            services.prepare_input("persistence", canonical(value), **clocks(self.f))
+        value["apiVersion"] = services.authority.COMPLETED_PERSISTENCE_INPUT_API
+        value["operation"] = "trustedTime"
+        with self.assertRaises(ValueError):
+            services.authority.input_shape("trustedTime", canonical(value))
+
     def test_actual_grant_and_authorization_signatures_and_context_are_required(self):
         base = self.arguments("trustedTime")
         for target in ("grant", "authorization", "different-role", "missing", "companion"):

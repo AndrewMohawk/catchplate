@@ -171,7 +171,7 @@ def _project(context, endpoint_images, operation_raw, clocks):
 
     runtime_input = p.document(_bytes(retained["inputOriginal"], MAX_INPUT), MAX_INPUT)
     runtime_raw, operational = bridge_runtime.original(runtime_input["runtimeOriginal"])
-    p.require(bridge_runtime.version(operational) == 11)
+    p.require(bridge_runtime.version(operational) in (11, 12))
     runtime_record, runtime_result = _record(context, "bridge-runtime", "install-bridge-runtime", MAX_INPUT)
     p.require(runtime_record == retained["inputOriginal"]); _same(runtime_result, retained["result"])
     bridge_c9 = context["records"][BRIDGE_JOBS[0]]

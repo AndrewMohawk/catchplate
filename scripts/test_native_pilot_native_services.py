@@ -73,6 +73,19 @@ def fixture():
 
 
 class NativeServicePolicyTests(unittest.TestCase):
+    def test_completed_persistence_requires_explicit_policy_and_exact_permission_order(self):
+        selected = fixture(); selected["apiVersion"] = profile.COMPLETED_API
+        selected["persistence"]["permissions"] = list(profile.authority.persistence.COMPLETED_PERMISSIONS)
+        self.assertEqual(profile.validate_policy(selected), selected)
+        for api, permissions in ((fixture()["apiVersion"], selected["persistence"]["permissions"]),
+                (profile.COMPLETED_API, ["store-dispatch-original", "verify-persistence"]),
+                (profile.COMPLETED_API, list(reversed(selected["persistence"]["permissions"]))),
+                (profile.COMPLETED_API, selected["persistence"]["permissions"] + ["unknown"])):
+            value = copy.deepcopy(selected); value["apiVersion"] = api
+            value["persistence"]["permissions"] = permissions
+            with self.subTest(api=api, permissions=permissions), self.assertRaises(ValueError):
+                profile.validate_policy(value)
+
     def test_closed_eight_field_policy_ten_verifiers_eleven_windows(self):
         value = fixture()
         checked = profile.validate_policy(value)

@@ -205,7 +205,7 @@ class Operator:
         release = self._exchange("release", {"operationOriginal": _text(operation.operation_original())},
             ("endpointRelease", "phaseTwoScope", "phaseTwoPublic"))
         from serverware import native_pilot_bridge_runtime as bridge_runtime
-        public_maximum = (bridge_runtime.MAX_BRIDGE_INPUT if bridge_runtime.runtime_version(operation._runtime_raw) in (10, 11)
+        public_maximum = (bridge_runtime.MAX_BRIDGE_INPUT if bridge_runtime.runtime_version(operation._runtime_raw) in (10, 11, 12)
             else 1024 * 1024)
         self._bridge_preparation.consume()
         continuation = pilot.release(operational_inputs=operation,

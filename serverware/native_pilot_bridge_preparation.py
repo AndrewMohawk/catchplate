@@ -118,7 +118,7 @@ def require_runtime(raw, runtime_raw, *, driver_observation_raw, cohort_observat
     runtime = runtime_profile.shape(runtime_raw)
     version = runtime_profile.version(runtime)
     p.require(((version == 10 and value["apiVersion"] == API)
-            or (version == 11 and value["apiVersion"] == HELPER_API))
+            or (version in (11, 12) and value["apiVersion"] == HELPER_API))
         and p.sha(driver_observation_raw) == value["driverObservationSha256"]
         and p.sha(cohort_observation_raw) == peers["native-endpoints"]["sourceOriginalSha256"])
     _peer(runtime["expectedFacadePeer"], peers["gate"]["peers"]["gate"], peer_ids["gate"]["gate"])
@@ -134,7 +134,7 @@ def require_runtime(raw, runtime_raw, *, driver_observation_raw, cohort_observat
         member = runtime["ordinaryInitialHistories"][role]
         _peer(session["expectedPeer"], peers["ordinary-services"]["peers"][role], peer_ids["ordinary-services"][role])
         p.require(type(session["handshakes"]) is list and bool(session["handshakes"]))
-        if version == 11 and role == "bounded-cleanup-helper":
+        if version in (11, 12) and role == "bounded-cleanup-helper":
             p.require([item["endpointRole"] for item in session["handshakes"]] == list(helper_bootstrap.ROLES))
         for handshake in session["handshakes"]:
             selected_key = (role, handshake["endpointRole"])
@@ -159,7 +159,7 @@ def require_runtime(raw, runtime_raw, *, driver_observation_raw, cohort_observat
                 and pending["requestedAtBoottimeNanos"] <= statement["issuedAtBoottimeNanos"]
                 and statement["deadline"] == pending["deadline"] == request["deadline"])
     p.require(consumed == set(pending_rows))
-    if version == 11:
+    if version in (11, 12):
         helper = runtime["ordinaryInitialHistories"]["bounded-cleanup-helper"]["runtimeOriginal"].encode("ascii")
         pending = [head.request(row["requestOriginal"].encode("ascii"))
             for (role, _), row in pending_rows.items() if role == "bounded-cleanup-helper"]

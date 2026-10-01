@@ -20,6 +20,8 @@ CommitRequest additionally verifies an independently approved genuine fleet
 startup receipt and its pinned generation trust, never an invented evidence hash.
 Retrieval Input/v4 keeps the fresh-ledger output wire, but requires all six new
 history-bearing grants and permits their bounded 32-MiB aggregate input.
+Input/v5 is persistence-only: it explicitly authorizes the v2 grant's completed
+invocation verification permission, under the unchanged 4-MiB input bound.
 """
 from __future__ import annotations
 
@@ -96,6 +98,7 @@ PAYLOAD_FIELDS = {
 }
 FRESH_INPUT_API = "serverware.nativePilotNativeServiceAuthorityInput/v2"
 HISTORY_RETRIEVAL_INPUT_API = "serverware.nativePilotNativeServiceAuthorityInput/v4"
+COMPLETED_PERSISTENCE_INPUT_API = "serverware.nativePilotNativeServiceAuthorityInput/v5"
 FRESH_RETRIEVAL_PROFILE = ("serverware.nativeLedgerSpoolRetrievalGrant/v4",
     "native-ledger-spool-retrieval", "serverware.nativeLedgerSpoolRetrievalGrant.signature/v4")
 _ENDPOINT = {"ingress": "ingressAdmission", "ledger": "commitRequest", "terminal": "terminalAppend",
@@ -114,14 +117,17 @@ def input_shape(operation, input_original):
     history_retrieval = value.get("apiVersion") == HISTORY_RETRIEVAL_INPUT_API
     fresh = history_retrieval or value.get("apiVersion") == FRESH_INPUT_API
     history = value.get("apiVersion") == HISTORY_INPUT_API
+    completed = value.get("apiVersion") == COMPLETED_PERSISTENCE_INPUT_API
     p.require(history or history_retrieval or len(input_original) <= MAX_LEGACY_INPUT)
     p.require(not history or operation in HISTORY_OPERATIONS)
     p.require(not fresh or operation == "retrieval")
+    p.require(not completed or operation == "persistence")
     p.fields(value, INPUT_FIELDS + EXTRA_FIELDS[operation] + (("retrievalManifestOriginal",) if fresh else ())
         + (HISTORY_INPUT_FIELDS if history else ())
         + (EVIDENCE_INPUT_FIELDS if history and operation == "commitRequest" else ()))
     p.require(value["apiVersion"] == (HISTORY_INPUT_API if history else HISTORY_RETRIEVAL_INPUT_API if history_retrieval
-        else FRESH_INPUT_API if fresh else "serverware.nativePilotNativeServiceAuthorityInput/v1")
+        else FRESH_INPUT_API if fresh else COMPLETED_PERSISTENCE_INPUT_API if completed
+        else "serverware.nativePilotNativeServiceAuthorityInput/v1")
         and value["operation"] == operation)
     if fresh:
         manifest_raw, manifest = _original(value["retrievalManifestOriginal"], retrieval.MAX_MANIFEST)
@@ -136,10 +142,14 @@ def grant_shape(operation, payload):
     p.require(operation in OPERATIONS and type(payload) is dict)
     fresh = operation == "retrieval" and payload.get("apiVersion") == FRESH_RETRIEVAL_PROFILE[0]
     history = operation in HISTORY_PROFILES and payload.get("apiVersion") == HISTORY_PROFILES[operation][0]
+    completed = operation == "persistence" and payload.get("apiVersion") == persistence.COMPLETED_GRANT_API
     p.fields(payload, PAYLOAD_FIELDS[operation] + (("initialization",) if fresh else ())
         + (("ordinaryServices",) if history else ()))
-    api, purpose, domain = HISTORY_PROFILES[operation] if history else FRESH_RETRIEVAL_PROFILE if fresh else PROFILES[operation]
+    api, purpose, domain = (persistence.COMPLETED_GRANT_API, PROFILES[operation][1], persistence.COMPLETED_GRANT_DOMAIN) if completed else (
+        HISTORY_PROFILES[operation] if history else FRESH_RETRIEVAL_PROFILE if fresh else PROFILES[operation])
     p.require(payload["apiVersion"] == api and payload["purpose"] == purpose)
+    if operation == "persistence":
+        persistence.require_permissions(payload["permissions"], completed_invocations=completed)
     if history:
         for row in p.fields(payload["ordinaryServices"], generation.ROLES).values():
             p.fields(row, HISTORY_ROW_FIELDS)
@@ -482,8 +492,9 @@ def prepare_input(operation, input_original, *, boot, now_boottime_ns, now_unix_
             peer_original=peer_raw, peer_sha256=value["peerSha256"], guest=guest,
             journal_original=journal_raw, journal_sha256=p.sha(journal_raw), permissions=value["permissions"],
             issued_at=issued, expires_at=expires, now=now,
-            assignment_payload_original=assignment_raw)
-        domain = persistence.GRANT_DOMAIN
+            assignment_payload_original=assignment_raw,
+            completed_invocations=value["apiVersion"] == COMPLETED_PERSISTENCE_INPUT_API)
+        domain = persistence.COMPLETED_GRANT_DOMAIN if value["apiVersion"] == COMPLETED_PERSISTENCE_INPUT_API else persistence.GRANT_DOMAIN
     else:
         p.require(operation == "trustedTime")
         bootstrap_raw, _ = _original(value["bootstrapOriginal"], 65536)

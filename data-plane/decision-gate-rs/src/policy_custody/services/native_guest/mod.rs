@@ -93,7 +93,7 @@ struct EndpointRuntime {api_version:String,role:String}
 enum SelectedService {None,Retrieval(Pin),LedgerRetrieval(Pin),RetrievalBridge,Activation(Pin),Persistence(Pin),PersistenceLocked(Pin),
     TrustedTime(Pin),ProofBridge(Pin),Generation(Pin),CommitmentBridge(Pin),SpoolBridge(Pin),CommitRequest(Pin),LedgerSpool(Pin),Ingress(Pin),
     TerminalSpool(Pin),CompletionLedgerSpool(Pin),CompletionRetrieval(Pin),TerminalBridge(Pin),
-    DispatchSpool(Pin),ActiveEffectBarrier(Pin),ActiveEffectCommit(Pin),EffectRetrieval(Pin),ActiveEffectBridge(Pin),InitialHistoryBridge(Pin,bool)}
+    DispatchSpool(Pin),ActiveEffectBarrier(Pin),ActiveEffectCommit(Pin),EffectRetrieval(Pin),ActiveEffectBridge(Pin),InitialHistoryBridge(Pin,bool,bool)}
 impl SelectedService {
     fn endpoint_runtime_role(&self)->Option<&'static str>{
         self.closure_set_role().filter(|role|*role!="bridge")
@@ -176,9 +176,11 @@ fn selection(raw:&[u8])->Result<(Launch,SelectedService),ShadowError> {
             } else if value.api_version=="serverware.nativeProofBridgeLaunch/v5" {
                 (value.key_admission,SelectedService::ActiveEffectBridge(value.trusted_time))
             } else if value.api_version=="serverware.nativeProofBridgeLaunch/v6" {
-                (value.key_admission,SelectedService::InitialHistoryBridge(value.trusted_time,false))
+                (value.key_admission,SelectedService::InitialHistoryBridge(value.trusted_time,false,false))
             } else if value.api_version=="serverware.nativeProofBridgeLaunch/v7" {
-                (value.key_admission,SelectedService::InitialHistoryBridge(value.trusted_time,true))
+                (value.key_admission,SelectedService::InitialHistoryBridge(value.trusted_time,true,false))
+            } else if value.api_version=="serverware.nativeProofBridgeLaunch/v8" {
+                (value.key_admission,SelectedService::InitialHistoryBridge(value.trusted_time,true,true))
             } else {
                 require(value.api_version=="serverware.nativeShadowTrustedTimeGuestLaunch/v1")?;
                 (value.key_admission,SelectedService::TrustedTime(value.trusted_time))
@@ -333,8 +335,8 @@ impl AdmittedGuest {
                 let (prepared,grant)=proof_client::Prepared::open_effects(&mut delivery,channel,&pin)?;
                 (None,None,None,None,None,Some(prepared),Some(grant),None,None)
             }
-            (SelectedService::InitialHistoryBridge(pin,helper_initial),Some(channel))=>{
-                let (prepared,grant)=proof_client::Prepared::open_initial_history(&mut delivery,channel,&pin,helper_initial)?;
+            (SelectedService::InitialHistoryBridge(pin,helper_initial,native_terminal),Some(channel))=>{
+                let (prepared,grant)=proof_client::Prepared::open_initial_history(&mut delivery,channel,&pin,helper_initial,native_terminal)?;
                 (None,None,None,None,None,Some(prepared),Some(grant),None,None)
             }
             (SelectedService::CommitRequest(pin),Some(channel))=>(None,None,None,None,None,None,None,None,

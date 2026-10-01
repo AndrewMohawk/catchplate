@@ -1,7 +1,8 @@
 """Closed public bridge runtime versions and bounds; never runtime admission.
 
 The explicit v10 carries actual ordinary runtime/generation originals; v11
-also requires the helper bootstrap manifest. Shape checks do not authenticate their roots,
+also requires the helper bootstrap manifest. The selected terminal v12 adds
+literal histories to each row. Shape checks do not authenticate their roots,
 signatures, process identities, credentials or successful service startup.
 """
 from __future__ import annotations
@@ -14,7 +15,7 @@ MAX_RUNTIME = 4 * 1024 * 1024
 MAX_BRIDGE_INPUT = 16 * 1024 * 1024
 PREFIX = "serverware.policyCustodyProductionRpcRuntime/v"
 LAUNCH_RUNTIME = {"serverware.nativeProofBridgeLaunch/v" + str(version): version + 4
-    for version in range(1, 8)}
+    for version in range(1, 9)}
 BASE_FIELDS = ("apiVersion", "startupTimeoutMillis", "listenerSocketPath", "expectedFacadePeer",
     "journalDirectoryIdentity", "expectedHelperEndpointRoles", "expectedDriverProcessIdentitySha256",
     "expectedDriverConfigurationGenerationSha256", "expectedOperationGeneration", "expectedSharedConfigurationSha256",
@@ -26,14 +27,14 @@ BASE_FIELDS = ("apiVersion", "startupTimeoutMillis", "listenerSocketPath", "expe
 
 def version(value):
     p.require(type(value) is dict)
-    selected = {PREFIX + str(number): number for number in range(4, 12)}.get(value.get("apiVersion"))
+    selected = {PREFIX + str(number): number for number in range(4, 13)}.get(value.get("apiVersion"))
     p.require(selected is not None)
     return selected
 
 
 def maximum_for_version(number):
-    p.require(type(number) is int and 4 <= number <= 11)
-    return MAX_RUNTIME if number in (10, 11) else MAX_LEGACY_RUNTIME
+    p.require(type(number) is int and 4 <= number <= 12)
+    return MAX_RUNTIME if number in (10, 11, 12) else MAX_LEGACY_RUNTIME
 
 
 def maximum_for_launch(api):
@@ -51,16 +52,16 @@ def shape(raw):
     # Relabelling a large document also cannot widen the legacy byte bound.
     value = p.document(raw, MAX_RUNTIME)
     selected = version(value)
-    if selected not in (10, 11):
+    if selected not in (10, 11, 12):
         p.require(len(raw) <= MAX_LEGACY_RUNTIME)
     extra = (() if selected == 4 else ("generationAdmission",))
     if selected >= 6:
         extra += ("commitRequest",)
     if selected >= 7:
         extra += ("spool",)
-    if selected in (10, 11):
+    if selected in (10, 11, 12):
         extra += ("ordinaryInitialHistories",)
-    if selected == 11:
+    if selected in (11, 12):
         extra += ("helperBootstrap",)
     p.fields(value, BASE_FIELDS + extra)
     p.integer(value["startupTimeoutMillis"], maximum=30000)
@@ -85,10 +86,12 @@ def shape(raw):
             and row["originFdName"] == "generation-origin")
         _original(row["headGrantOriginal"], 65536)
         for field in ("currentGrantOriginal",) + (("cleanupGrantOriginal",) if effect else ()):
-            _original(row[field], 131072 if selected in (10, 11) else 65536)
-    if selected in (10, 11):
+            _original(row[field], 131072 if selected in (10, 11, 12) else 65536)
+    if selected in (10, 11, 12):
         for role, row in p.fields(value["ordinaryInitialHistories"], generation.ROLES).items():
-            p.fields(row, ("runtimeOriginal", "generationGrantOriginal"))
+            p.fields(row, ("runtimeOriginal", "generationGrantOriginal") + (("historyOriginal",) if selected == 12 else ()))
+            if selected == 12:
+                _original(row["historyOriginal"], 1024 * 1024)
             runtime = _original(row["runtimeOriginal"], generation.MAX_BYTES)
             p.require(type(runtime.get("runtime")) is dict)
             grant = p.fields(_original(row["generationGrantOriginal"], 65536), ("payload", "signatureBase64url"))
@@ -96,7 +99,7 @@ def shape(raw):
             p.require(payload["apiVersion"] == "serverware.custodyServiceGenerationGrant/v1"
                 and payload["serviceRole"] == role)
             p.decoded(grant["signatureBase64url"], size=64)
-    if selected == 11:
+    if selected in (11, 12):
         from serverware import native_pilot_helper_bootstrap_profile as helper
         helper.shape(p.canonical(value["helperBootstrap"]))
     return value

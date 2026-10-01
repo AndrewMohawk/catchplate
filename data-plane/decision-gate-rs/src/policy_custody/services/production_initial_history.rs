@@ -12,13 +12,20 @@ use crate::policy_shadow::{AuthorityRole, ProductionCustodyConfiguration, Sha256
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct Member {
-    runtime_original: String,
-    generation_grant_original: String,
+    pub(super) runtime_original: String,
+    pub(super) generation_grant_original: String,
+    #[serde(default, skip_serializing_if="Option::is_none", deserialize_with="history_original")]
+    pub(super) history_original: Option<String>,
+}
+
+fn history_original<'de,D:serde::Deserializer<'de>>(decoder:D)->Result<Option<String>,D::Error>{
+    // Missing is legacy-only; explicit null is never an original.
+    String::deserialize(decoder).map(Some)
 }
 
 pub(super) type Members = BTreeMap<TrustedHostServiceRoleV3, Member>;
 
-fn ordinary_header(role: TrustedHostServiceRoleV3, raw: &[u8]) -> Result<RuntimeConfigHeaderV3, ServiceRunnerError> {
+pub(super) fn ordinary_header(role: TrustedHostServiceRoleV3, raw: &[u8]) -> Result<RuntimeConfigHeaderV3, ServiceRunnerError> {
     // Literal ordinary originals are flat {runtime, ...role-specific fields}.
     // Decode the actual closed consumer type; never invent a `service` wrapper.
     use super::super::*;
@@ -85,6 +92,10 @@ pub(super) fn validate(runtime: &ProductionRpcRuntimeConfigV4) -> Result<(), Ser
         && runtime.expected_service_authority_history_manifest_sha256.keys().copied().collect::<BTreeSet<_>>() == roles
         && encode_canonical_frame(runtime)?.len() <= super::super::MAX_CONFIG_BYTES)?;
     for member in members.values() {
+        require(runtime.native_terminal_selected() == member.history_original.is_some())?;
+        if let Some(raw)=&member.history_original {
+            require(raw.is_ascii() && !raw.is_empty() && raw.len()<=1024*1024)?;
+        }
         for (raw, bound) in [(&member.runtime_original, super::super::MAX_CONFIG_BYTES),
             (&member.generation_grant_original, 65536)] {
             require(raw.is_ascii() && !raw.is_empty() && raw.len() <= bound)?;
@@ -98,7 +109,7 @@ fn equal(value: &serde_json::Value, name: &str, expected: &impl Serialize)
     require(value.get(name) == Some(&serde_json::to_value(expected).map_err(error)?))
 }
 
-fn scope_binding(scope: &serde_json::Value, configuration: &ProductionCustodyConfiguration)
+pub(super) fn scope_binding(scope: &serde_json::Value, configuration: &ProductionCustodyConfiguration)
     -> Result<(), ServiceRunnerError> {
     require(scope.as_object().is_some_and(|value| value.len() == 18)
         && scope.get("previousConfigurationBindingSha256") == Some(&serde_json::Value::Null))?;
@@ -185,6 +196,7 @@ pub(super) fn load(runtime: &ProductionRpcRuntimeConfigV4,
             && header.expected_peer.uid == guest.uid && header.expected_peer.gid == guest.gid
             && header.expected_peer.pid == std::process::id() as i32)?;
         let exact = credentials.read(&configured.manifest_credential, super::super::MAX_CONFIG_BYTES)?;
+        if let Some(original)=&member.history_original {require(original.as_bytes()==exact.as_slice())?;}
         require(super::super::initial_history::selected(&exact)?)?;
         let history = header.history_from_original(&exact, role)?;
         let grant = RemoteGrant::admit(member.generation_grant_original.as_bytes(), history, role, &guest)?;

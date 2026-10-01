@@ -60,6 +60,10 @@ use super::guest::native_guest::{self, retrieval_client};
 mod initial_history;
 #[path = "production_replay.rs"]
 mod replay_journal;
+#[path = "production_native_terminal.rs"]
+mod native_terminal_producer;
+#[path = "../native_terminal_verify.rs"]
+pub(in crate::policy_shadow) mod native_terminal_verify;
 
 const PRODUCTION_RPC_SESSION_COUNT: usize = 4;
 const PRODUCTION_RPC_WORKER_COUNT: usize = 4;
@@ -101,6 +105,13 @@ impl ProductionPrimitiveRejectionV4 {
 /// signed service transitions; unavailable artifacts must use a typed
 /// rejection rather than synthesized bytes.
 pub(super) trait ExistingFiveServiceProductionAuthoritiesV4: Send {
+    fn native_terminal_selected(&self)->bool {false}
+    fn settle_native_completed(&mut self,_request:&ProductionRpcRequestV4,
+        _dispatch_original:&[u8],_response_original:&[u8])
+        ->Result<CanonicalProductionArtifactV4,ProductionPrimitiveRejectionV4> {
+        Err(ProductionPrimitiveRejectionV4::rejected(ProductionRpcRejectionCodeV4::CleanupUnauthorized,
+            "native successful invocation settlement is not selected"))
+    }
     fn take_native_commitment_original(&mut self,_request:&ClosedProductionDispatchRequestV4,
         _response:&ClosedProductionDispatchResponseV4)->Result<Option<serde_json::Value>,ProductionPrimitiveRejectionV4>{Ok(None)}
     // Legacy profiles keep their existing independently owned clock contract.
@@ -327,10 +338,13 @@ pub(super) struct ProductionRpcRuntimeConfigV4 {
 impl ProductionRpcRuntimeConfigV4 {
     pub(super) fn initial_history_selected(&self) -> bool {
         matches!(self.api_version.as_str(), super::spool_head_client::INITIAL_HISTORY_RUNTIME
-            |super::spool_head_client::HELPER_INITIAL_RUNTIME)
+            |super::spool_head_client::HELPER_INITIAL_RUNTIME|super::super::native_terminal::RUNTIME)
     }
     pub(super) fn helper_initial_selected(&self) -> bool {
-        self.api_version == super::spool_head_client::HELPER_INITIAL_RUNTIME
+        matches!(self.api_version.as_str(),super::spool_head_client::HELPER_INITIAL_RUNTIME|super::super::native_terminal::RUNTIME)
+    }
+    pub(super) fn native_terminal_selected(&self)->bool {
+        self.api_version == super::super::native_terminal::RUNTIME
     }
     pub(super) fn native_driver_selection(&self)->Result<(super::super::super::Sha256Digest,super::super::super::Sha256Digest),ServiceRunnerError>{
         self.validate()?;Ok((self.expected_driver_process_identity_sha256.clone(),
@@ -380,12 +394,13 @@ impl ProductionRpcRuntimeConfigV4 {
             |(super::spool_head_client::COMPLETION_RUNTIME,Some(_),Some(_),Some(_))
             |(super::spool_head_client::EFFECTS_RUNTIME,Some(_),Some(_),Some(_))
             |(super::spool_head_client::INITIAL_HISTORY_RUNTIME,Some(_),Some(_),Some(_))
-            |(super::spool_head_client::HELPER_INITIAL_RUNTIME,Some(_),Some(_),Some(_)))
+            |(super::spool_head_client::HELPER_INITIAL_RUNTIME,Some(_),Some(_),Some(_))
+            |(super::super::native_terminal::RUNTIME,Some(_),Some(_),Some(_)))
             || self.spool.as_ref().is_some_and(|value|value.completion_selected())
                 != matches!(self.api_version.as_str(),super::spool_head_client::COMPLETION_RUNTIME
-                    |super::spool_head_client::EFFECTS_RUNTIME|super::spool_head_client::INITIAL_HISTORY_RUNTIME|super::spool_head_client::HELPER_INITIAL_RUNTIME)
+                    |super::spool_head_client::EFFECTS_RUNTIME|super::spool_head_client::INITIAL_HISTORY_RUNTIME|super::spool_head_client::HELPER_INITIAL_RUNTIME|super::super::native_terminal::RUNTIME)
             || self.spool.as_ref().is_some_and(|value|value.effects_selected())
-                != matches!(self.api_version.as_str(),super::spool_head_client::EFFECTS_RUNTIME|super::spool_head_client::INITIAL_HISTORY_RUNTIME|super::spool_head_client::HELPER_INITIAL_RUNTIME)
+                != matches!(self.api_version.as_str(),super::spool_head_client::EFFECTS_RUNTIME|super::spool_head_client::INITIAL_HISTORY_RUNTIME|super::spool_head_client::HELPER_INITIAL_RUNTIME|super::super::native_terminal::RUNTIME)
             || self.startup_timeout_millis == 0
             || self.startup_timeout_millis > 30_000
             || !self.listener_socket_path.is_absolute()
@@ -602,6 +617,9 @@ pub(super) enum ProductionAuthorityEndpointRequestBodyV4 {
         request_original_base64url: String,
         reply_original_base64url: String,
     },
+    /// Read-only final-original export; requires the independently signed
+    /// persistence v2 grant. Legacy VerifyProof never selects this command.
+    VerifyCompletedInvocation {query:super::super::native_terminal::Query},
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -672,6 +690,7 @@ impl ProductionAuthorityEndpointRequestV4 {
 pub(super) enum ProductionAuthorityEndpointResultV4 {
     TrustedTimeInterval(native_guest::trusted_time_sample::Sample),
     PersistenceCommitted { commit_original_sha256: super::super::super::Sha256Digest },
+    CompletedInvocation(super::super::native_terminal::Proof),
     Dispatch(ClosedProductionDispatchResponseV4),
     CommitRequestPrepared(super::dispatch_commitment::Computation),
     LedgerCoreStored(super::ledger_spool_values::Stored),
@@ -818,6 +837,7 @@ pub(super) struct ConcreteFiveV3ProductionAuthoritiesV4 {
     generation_admission:Option<std::sync::Mutex<super::generation_service_client::Client>>,
     commit_request:Option<std::sync::Mutex<super::dispatch_service::client::Client>>,
     spool:Option<std::sync::Mutex<super::spool_head_client::Client>>,
+    native_terminal:bool,
 }
 
 impl ConcreteFiveV3ProductionAuthoritiesV4 {
@@ -874,6 +894,7 @@ impl ConcreteFiveV3ProductionAuthoritiesV4 {
             generation_admission:None,
             commit_request:None,
             spool:None,
+            native_terminal:false,
         })
     }
 
@@ -1486,6 +1507,12 @@ impl AuthenticatedTimeReply {
 impl ExistingFiveServiceProductionAuthoritiesV4
     for ConcreteFiveV3ProductionAuthoritiesV4
 {
+    fn native_terminal_selected(&self)->bool {self.native_terminal}
+    fn settle_native_completed(&mut self,request:&ProductionRpcRequestV4,
+        dispatch_original:&[u8],response_original:&[u8])
+        ->Result<CanonicalProductionArtifactV4,ProductionPrimitiveRejectionV4> {
+        self.native_completed_artifact(request,dispatch_original,response_original)
+    }
     fn take_native_commitment_original(&mut self,request:&ClosedProductionDispatchRequestV4,
         response:&ClosedProductionDispatchResponseV4)->Result<Option<serde_json::Value>,ProductionPrimitiveRejectionV4>{
         let Some(owner)=&self.commit_request else{return Ok(None);};
@@ -1563,6 +1590,10 @@ impl ExistingFiveServiceProductionAuthoritiesV4
         &mut self,
         request: &ProductionRpcRequestV4,
     ) -> Result<(), ProductionPrimitiveRejectionV4> {
+        if self.native_terminal {
+            return Err(ProductionPrimitiveRejectionV4::rejected(ProductionRpcRejectionCodeV4::CleanupUnauthorized,
+                "native uncertain invocation recovery is not a process-termination proof"));
+        }
         self.require_all_services_current()?;
         let endpoint = self.proof_endpoint(
             ProductionProofEndpointKindV4::GenerationInstallEnvelope,
@@ -1617,7 +1648,8 @@ impl ExistingFiveServiceProductionAuthoritiesV4
             wire,
             ProductionRpcRejectionCodeV4::CleanupUnauthorized,
         )? {
-            ProductionAuthorityEndpointResultV4::Settlement(artifact) => {
+            ProductionAuthorityEndpointResultV4::Settlement(artifact)
+                if artifact.kind==super::super::production_dispatch::ProductionArtifactKindV4::TerminalCleanupAttestation => {
                 Ok(artifact)
             }
             ProductionAuthorityEndpointResultV4::Rejected(rejection) => {
@@ -1853,6 +1885,11 @@ where
             response
                 .validate_for_request(&request)
                 .map_err(ServiceRunnerError::invalid)?;
+            if !authority.native_terminal_selected() && matches!(&response.response,
+                ProductionRpcResponseBodyV4::Settlement(artifact) if artifact.kind==
+                    super::super::production_dispatch::ProductionArtifactKindV4::NativeInvocationSettlement) {
+                return Err(ServiceRunnerError::invalid("native settlement cannot be recovered by a legacy runtime"));
+            }
             validate_authority_response(
                 &histories.borrowed(),
                 &request,
@@ -1875,11 +1912,13 @@ where
             dispatch_identities.remember(&request)?;
             pending = None;
             if matches!(
-                response.response,
+                &response.response,
                 ProductionRpcResponseBodyV4::Dispatch(_)
                     | ProductionRpcResponseBodyV4::NativeCommitRequest{..}
                     | ProductionRpcResponseBodyV4::Generation(_)
-            ) {
+            ) || (authority.native_terminal_selected() && matches!(&response.response,
+                ProductionRpcResponseBodyV4::Settlement(artifact) if artifact.kind==
+                    super::super::production_dispatch::ProductionArtifactKindV4::NativeInvocationSettlement)) {
                 replay.insert(
                     key,
                     ReplayedProductionResponse {
@@ -2015,6 +2054,11 @@ where
         response
             .validate_for_request(request)
             .map_err(ServiceRunnerError::invalid)?;
+        if !self.authority.native_terminal_selected() && matches!(&response.response,
+            ProductionRpcResponseBodyV4::Settlement(artifact) if artifact.kind==
+                super::super::production_dispatch::ProductionArtifactKindV4::NativeInvocationSettlement) {
+            return Err(ServiceRunnerError::invalid("native settlement is not selected by this runtime"));
+        }
         validate_authority_response(
             &self.histories.borrowed(),
             request,
@@ -2142,9 +2186,11 @@ where
                 Ok(ProductionRpcResponseBodyV4::TerminationRequested)
             }
             ProductionRpcRequestBodyV4::Settle { .. } => {
-                self.authority
+                if self.authority.native_terminal_selected() {
+                    self.settle_native_original(request).map(ProductionRpcResponseBodyV4::Settlement)
+                }else{self.authority
                     .settle_cleanup(request)
-                    .map(ProductionRpcResponseBodyV4::Settlement)
+                    .map(ProductionRpcResponseBodyV4::Settlement)}
             }
             ProductionRpcRequestBodyV4::VerifyPersistence { .. }
             | ProductionRpcRequestBodyV4::VerifyAssignmentBoundPersistence { .. } => {
@@ -2214,9 +2260,9 @@ fn validate_authority_response(
         (
             ProductionRpcRequestBodyV4::Settle { .. },
             ProductionRpcResponseBodyV4::Settlement(artifact),
-        ) if artifact.kind
-            == super::super::production_dispatch::
-                ProductionArtifactKindV4::TerminalCleanupAttestation => {
+        ) if matches!(artifact.kind,
+            super::super::production_dispatch::ProductionArtifactKindV4::TerminalCleanupAttestation
+                |super::super::production_dispatch::ProductionArtifactKindV4::NativeInvocationSettlement) => {
             artifact
                 .exact_bytes()
                 .map(|_| ())
@@ -2823,6 +2869,7 @@ fn run_production_rpc_service_loaded_inner(
         proof_endpoints,
     )?;
     if let Some(owner)=native_proof_owner {
+        authority.native_terminal=loaded.value.native_terminal_selected();
         if let Some(selection)=loaded.value.spool.clone(){
             authority.spool=Some(std::sync::Mutex::new(super::spool_head_client::Client::new(selection,
                 load_bridge_histories(&loaded.value,&loaded.credentials,&bootstrap)?,Arc::clone(&owner),

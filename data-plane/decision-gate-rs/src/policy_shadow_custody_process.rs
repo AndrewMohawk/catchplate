@@ -831,6 +831,9 @@ struct RpcProductionPolicyShadowCustodyProcess {
     prepared_generations: Mutex<Vec<PreparedGenerationRpcState>>,
     ingress_publication: Mutex<IngressPublicationState>,
     generation_ambiguous: Arc<AtomicBool>,
+    // Only the explicitly selected native successor retains successful exact
+    // RPC originals. These are not reconstructed from a caller's result hash.
+    native_completed: Mutex<BTreeMap<String, (Vec<u8>, Vec<u8>)>>,
 }
 
 impl RpcProductionPolicyShadowCustodyProcess {
@@ -847,6 +850,15 @@ impl RpcProductionPolicyShadowCustodyProcess {
         replay_id_sha256: Sha256Digest,
         deadline_boottime_nanos: u64,
     ) -> Result<ProductionRpcResponseBodyV4, ShadowError> {
+        Ok(self.call_originals(request, replay_id_sha256, deadline_boottime_nanos)?.1.response)
+    }
+
+    fn call_originals(
+        &self,
+        request: ProductionRpcRequestBodyV4,
+        replay_id_sha256: Sha256Digest,
+        deadline_boottime_nanos: u64,
+    ) -> Result<(ProductionRpcRequestV4, ProductionRpcResponseV4), ShadowError> {
         self.process_config.validate(self.key_trust.as_ref(),self.trusted_time.as_ref())?;
         self.process_config.deadline(deadline_boottime_nanos)?;
         if self.generation_ambiguous.load(Ordering::Acquire)
@@ -860,12 +872,10 @@ impl RpcProductionPolicyShadowCustodyProcess {
             deadline_boottime_nanos,
         )?;
         let response = self.rpc.call(&envelope)?;
-        match response.response {
-            ProductionRpcResponseBodyV4::Rejected(_) => {
-                Err(ShadowError::CustodyUnavailable)
-            }
-            response => Ok(response),
+        if matches!(response.response, ProductionRpcResponseBodyV4::Rejected(_)) {
+            return Err(ShadowError::CustodyUnavailable);
         }
+        Ok((envelope, response))
     }
 
     fn generation_call(
@@ -1877,6 +1887,15 @@ impl RpcProductionPolicyShadowCustodyProcess {
             permit.operation(),
             permit.operation_id_sha256(),
         )?;
+        let native = match &self.process_config.authority {
+            ProcessAuthority::Native(owner) if owner.native_terminal_selected() => Some(owner),
+            _ => None,
+        };
+        // This successor proves only an actually successful native invocation.
+        // It never turns a failed dispatch into an asserted process reap.
+        if native.is_some() && result_disposition != ProductionCustodyResultDisposition::ResultCommitted {
+            return Err(ShadowError::CustodyUnavailable);
+        }
         let cleanup_deadline_boottime_nanos = permit
             .operation_deadline()
             .cleanup_deadline_boottime_nanos();
@@ -1905,6 +1924,20 @@ impl RpcProductionPolicyShadowCustodyProcess {
             ProductionRpcResponseBodyV4::Settlement(artifact) => artifact,
             _ => return Err(ShadowError::CustodyUnavailable),
         };
+        if let Some(owner) = native {
+            let expected_binding = self.dispatch_binding(permit)?;
+            let mut completed = self.native_completed.lock().map_err(|_| ShadowError::CustodyUnavailable)?;
+            let (request, response) = completed.get(permit.operation_id_sha256().as_str())
+                .ok_or(ShadowError::CustodyUnavailable)?;
+            let wire = Self::decode_artifact::<super::native_terminal::Wire>(
+                &artifact, ProductionArtifactKindV4::NativeInvocationSettlement)?;
+            let configuration = self.active_configuration.read().map_err(|_| ShadowError::CustodyUnavailable)?;
+            let evidence = super::services::production::native_terminal_verify::verify(
+                wire, request, response, &expected_binding, permit, Arc::clone(owner),
+                &configuration, self.key_trust.as_ref(), self.trusted_time.as_ref())?;
+            completed.remove(permit.operation_id_sha256().as_str());
+            return Ok(ProductionCustodyTerminalCleanupAttestation::from_native_success(evidence));
+        }
         let wire = Self::decode_artifact::<
             ProductionTerminalCleanupResultWireV4,
         >(
@@ -2282,11 +2315,17 @@ impl RpcProductionPolicyShadowCustodyProcess {
             .binding()
             .operation_deadline_boottime_nanos;
         drop(configuration_guard);
-        let (response,native_computation) = match self.call_body(
+        let (rpc_request, rpc_response) = self.call_originals(
             ProductionRpcRequestBodyV4::Dispatch(closed.clone()),
             replay,
             deadline,
-        )? {
+        )?;
+        let retained_originals = match &self.process_config.authority {
+            ProcessAuthority::Native(owner) if owner.native_terminal_selected() =>
+                Some((canonical_json_bytes(&rpc_request)?, canonical_json_bytes(&rpc_response)?)),
+            _ => None,
+        };
+        let (response,native_computation) = match rpc_response.response {
             ProductionRpcResponseBodyV4::Dispatch(response) => (response,None),
             ProductionRpcResponseBodyV4::NativeCommitRequest{dispatch,computation}
                 if parent_operation==PolicyShadowCustodyOperation::CommitRequest => (dispatch,Some(computation)),
@@ -2320,14 +2359,23 @@ impl RpcProductionPolicyShadowCustodyProcess {
             response.result,
             &expected_configuration_binding_sha256,
         )?;
-        match result {
+        let result = match result {
             ProductionCustodyDispatchResponse::RequestCommitted(mut commitment)=>{
                 commitment.native_computation=native_original;
                 Ok(ProductionCustodyDispatchResponse::RequestCommitted(commitment))
             },
             other if native_original.is_none()=>Ok(other),
             _=>Err(ShadowError::CustodyUnavailable),
+        }?;
+        if let Some(originals) = retained_originals {
+            let mut completed = self.native_completed.lock().map_err(|_| ShadowError::CustodyUnavailable)?;
+            if completed.len() >= usize::from(self.process_config.maximum_in_flight_calls)
+                || completed.contains_key(permit.operation_id_sha256().as_str()) {
+                return Err(ShadowError::CustodyUnavailable);
+            }
+            completed.insert(permit.operation_id_sha256().as_str().to_owned(), originals);
         }
+        Ok(result)
     }
 }
 
@@ -2918,6 +2966,7 @@ pub(super) fn install_retained_generation(
         prepared_generations: Mutex::new(Vec::new()),
         ingress_publication: Mutex::new(IngressPublicationState::default()),
         generation_ambiguous,
+        native_completed: Mutex::new(BTreeMap::new()),
     });
     let supervisor = ProductionPolicyShadowCustodyRpcSupervisor::install(
         configuration,
@@ -2986,7 +3035,8 @@ pub(crate) fn install_native_custody_generation_from_retained_owner(
         persistence_verifier:RpcPersistenceVerifier{rpc,maximum_rpc_nanos:factory.settings.maximum_rpc_nanos,
             generation_ambiguous:Arc::clone(&generation_ambiguous)},
         sealed_references:Mutex::new(BTreeMap::new()),prepared_generations:Mutex::new(Vec::new()),
-        ingress_publication:Mutex::new(IngressPublicationState::default()),generation_ambiguous});
+        ingress_publication:Mutex::new(IngressPublicationState::default()),generation_ambiguous,
+        native_completed:Mutex::new(BTreeMap::new())});
     // This invokes the same real generation recovery/prepare/commit authorities;
     // constructed admission is not substituted for their actual signed result.
     let supervisor=ProductionPolicyShadowCustodyRpcSupervisor::install(factory.configuration.clone(),process,key_trust,trusted_time)?;

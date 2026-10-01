@@ -270,7 +270,8 @@ impl PhaseTwo {
             && Sha256Digest::compute(originals.runtime_original.as_bytes())==s.originals.runtime_sha256
             && Sha256Digest::compute(originals.delivery_original.as_bytes())==s.originals.delivery_sha256)?;
         let initial_history=matches!(runtime.get("apiVersion").and_then(serde_json::Value::as_str),
-            Some("serverware.policyCustodyProductionRpcRuntime/v10"|"serverware.policyCustodyProductionRpcRuntime/v11"));
+            Some("serverware.policyCustodyProductionRpcRuntime/v10"|"serverware.policyCustodyProductionRpcRuntime/v11"
+                |crate::policy_shadow::policy_custody::native_terminal::RUNTIME));
         let bundle_bound=if initial_history {
             require(s.api_version=="serverware.nativeShadowDriverScope/v4"
                 && cold.config.api_version=="serverware.nativeShadowDriverBootstrapConfiguration/v4")?;

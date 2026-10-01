@@ -13,6 +13,8 @@ pub(super) mod protocol;
 pub(super) mod receipt_arena;
 pub(super) mod services;
 pub(super) mod native_remote_factory;
+pub(super) mod native_terminal;
+pub(super) use services::production::native_terminal_verify;
 #[path="native_request_commitment.rs"]
 pub(super) mod native_request_commitment;
 pub(super) mod terminal_settlement;

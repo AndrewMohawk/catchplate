@@ -177,7 +177,7 @@ def bridge_owner(cold, cold_raw, config_raw, window_raw, signed, observed, *, bo
 
 
 def _bridge_inventory(runtime_raw, cold):
-    p.require(bridge_runtime.runtime_version(runtime_raw) in (9, 10, 11))
+    p.require(bridge_runtime.runtime_version(runtime_raw) in (9, 10, 11, 12))
     runtime, other, native = outgoing._selection(runtime_raw, bridge_runtime.launch_for_runtime(runtime_raw), cold["uid"])
     p.require(runtime["listenerSocketPath"] == "/run/serverware-native-pilot-bridge/listener.sock"
         and len(other) == 9 and len(native) == 10)
@@ -241,7 +241,7 @@ def input_document(input_original: bytes) -> dict:
     role = value["role"]
     p.require(value["apiVersion"] == "serverware.nativePilotDeliverySigningInput/v1"
         and type(role) is str and role in (*ENDPOINTS, "bridge"))
-    successor = role == "bridge" and bridge_runtime.version(bridge_runtime.original(value["runtimeOriginal"])[1]) in (10, 11)
+    successor = role == "bridge" and bridge_runtime.version(bridge_runtime.original(value["runtimeOriginal"])[1]) in (10, 11, 12)
     p.require(successor or len(input_original) <= MAX_INPUT)
     return value
 

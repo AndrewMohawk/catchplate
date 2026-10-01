@@ -47,7 +47,7 @@ def _installed(bundle_raw, result, bootstrap, *, boot, now):
     observation_raw, _ = c9._original(bundle["driverObservationOriginal"], 65536)
     config, cold, window, observed = runtime_builder._bootstrap(bootstrap, observation_raw, boot=boot, now=now)
     raw, runtime = runtime_profile.original(bundle["runtimeOriginal"])
-    p.require(runtime_profile.version(runtime) == 11)
+    p.require(runtime_profile.version(runtime) in (11, 12))
     install.shape("bridge-runtime", raw)
     selected_raw, _ = c9._original(bundle["outgoingOriginal"], 8192)
     selected = install.shape("bridge-outgoing", selected_raw)
@@ -56,7 +56,7 @@ def _installed(bundle_raw, result, bootstrap, *, boot, now):
         "driverWindowSha256": p.sha(bootstrap["window"]), "driverObservationSha256": p.sha(observation_raw),
         "invocationId": window["invocationId"], "deliveryConfiguration": config["deliveryConfiguration"],
         "runtime": {"path": install.RUNTIME_DESTINATION, "sha256": p.sha(raw)},
-        "bridgeLaunchVersion": "serverware.nativeProofBridgeLaunch/v7"})
+        "bridgeLaunchVersion": runtime_profile.launch_for_runtime(raw)})
     expected = {"apiVersion": "serverware.nativePilotBridgeRuntimeInstallation/v1",
         "bundleSha256": p.sha(bundle_raw), "configurationSha256": p.sha(bootstrap["configuration"]),
         "windowSha256": p.sha(bootstrap["window"]), "observationSha256": p.sha(observation_raw),
@@ -108,6 +108,8 @@ def _metadata(credentials, runtime, history_originals, keys):
         raw = history_originals[role]
         p.require(type(raw) is bytes and 0 < len(raw) <= generation.MAX_BYTES)
         generation.document(raw, generation.MAX_BYTES)
+        if runtime_profile.version(runtime) == 12:
+            p.require(runtime["ordinaryInitialHistories"][role]["historyOriginal"].encode("ascii") == raw)
         row = rows[name]
         p.require(row["original"]["sha256"] == p.sha(raw) and row["length"] == len(raw) and row["signing"] is None)
     p.require(seen == set(generation.ROLES))

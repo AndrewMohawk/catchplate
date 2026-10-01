@@ -135,6 +135,11 @@ pub(super) fn selected(raw: &[u8]) -> Result<bool, ServiceRunnerError> {
 
 fn authenticate(raw: &[u8], runtime: &RuntimeConfigHeaderV3, role: TrustedHostServiceRoleV3)
     -> Result<Authenticated, ServiceRunnerError> {
+    authenticate_window(raw, runtime, role, true)
+}
+
+fn authenticate_window(raw: &[u8], runtime: &RuntimeConfigHeaderV3, role: TrustedHostServiceRoleV3,
+    startup_admission: bool) -> Result<Authenticated, ServiceRunnerError> {
     let wrapper: Wrapper = decode_canonical_frame(raw)?;
     require(wrapper.api_version == API)?;
     let state = wrapper.initial_state;
@@ -199,13 +204,26 @@ fn authenticate(raw: &[u8], runtime: &RuntimeConfigHeaderV3, role: TrustedHostSe
     let now = boottime_now_nanos().map_err(error)?;
     require(payload.valid_from_boottime.absolute_boottime_nanos() <= now
         && now < payload.valid_until_boottime.absolute_boottime_nanos()
-        && now < ns(&state.startup_deadline_boottime_ns)?)?;
+        && now < ns(if startup_admission { &state.startup_deadline_boottime_ns }
+            else { &state.lifetime_deadline_boottime_ns })?)?;
     Ok(Authenticated { state, checkpoint, history })
 }
 
 pub(super) fn load(raw: &[u8], runtime: &RuntimeConfigHeaderV3, role: TrustedHostServiceRoleV3)
     -> Result<RuntimeAuthorityHistory, ServiceRunnerError> {
     Ok(authenticate(raw, runtime, role)?.history)
+}
+
+/// Operational signature verification of the exact original already pinned by
+/// an authenticated v12 Factory. This performs no initial directory admission
+/// and grants no new startup permission. Checkpoint currentness, boot/domain,
+/// original lifetime, independent root and every wrapper signature still hold.
+pub(super) fn load_retained_completed_invocation(raw: &[u8], runtime: &RuntimeConfigHeaderV3,
+    role: TrustedHostServiceRoleV3) -> Result<(RuntimeAuthorityHistory, u64), ServiceRunnerError> {
+    let owner = authenticate_window(raw, runtime, role, false)?;
+    let deadline = owner.checkpoint.payload.valid_until_boottime.absolute_boottime_nanos()
+        .min(ns(&owner.state.lifetime_deadline_boottime_ns)?);
+    Ok((owner.history, deadline))
 }
 
 pub(super) struct HelperAuthorization {
@@ -303,6 +321,19 @@ pub(super) fn require_remote_guest(raw: &[u8], runtime: &RuntimeConfigHeaderV3,
     -> Result<(), ServiceRunnerError> {
     if !selected(raw)? { return Ok(()); }
     let owner = authenticate(raw, runtime, role)?;
+    require_remote_guest_owner(&owner, grant)
+}
+
+pub(super) fn require_retained_completed_guest(raw: &[u8], runtime: &RuntimeConfigHeaderV3,
+    role: TrustedHostServiceRoleV3, grant: &generation_service::RemoteGrant)
+    -> Result<(), ServiceRunnerError> {
+    require(selected(raw)?)?;
+    let owner = authenticate_window(raw, runtime, role, false)?;
+    require_remote_guest_owner(&owner, grant)
+}
+
+fn require_remote_guest_owner(owner: &Authenticated, grant: &generation_service::RemoteGrant)
+    -> Result<(), ServiceRunnerError> {
     let state = &owner.state;
     let binding = grant.guest();
     let identity = &owner.history.current_epoch().map_err(error)?.statement().endpoint_process_identity;

@@ -17,7 +17,12 @@ pub(super) struct Admission {pub(super) genesis_sha256:Sha256Digest,pub(super) h
 struct Genesis {api_version:String,proof_scope_sha256:Sha256Digest,guest:GuestClosureBinding}
 #[derive(Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
-struct Head {api_version:String,sequence:u64,previous_head_sha256:Sha256Digest,commit_original_sha256:Sha256Digest}
+pub(in crate::policy_shadow::policy_custody) struct Head {
+    pub(in crate::policy_shadow::policy_custody) api_version:String,
+    pub(in crate::policy_shadow::policy_custody) sequence:u64,
+    pub(in crate::policy_shadow::policy_custody) previous_head_sha256:Sha256Digest,
+    pub(in crate::policy_shadow::policy_custody) commit_original_sha256:Sha256Digest,
+}
 #[derive(PartialEq,Eq)]
 struct Identity {device:u64,inode:u64,mode:u32,uid:u32,gid:u32}
 fn identity(fd:BorrowedFd<'_>)->Result<Identity,ShadowError>{
@@ -140,6 +145,24 @@ impl Store {
         self.names()
     }
     pub(super) fn originals(&self)->&[Commit]{&self.originals}
+    /// Export only named originals already retained by this checked owner.
+    /// The target head is not signed separately; the endpoint reply attests
+    /// this exact lookup and the current retained chain position.
+    pub(super) fn completed_originals(&self,sequence:u64)->Result<(Vec<u8>,Vec<u8>,u64,Sha256Digest),ShadowError>{
+        self.check()?;require(sequence>0 && sequence<=self.sequence)?;
+        let retained=|name:String|self.held.iter().find(|held|held.name==name)
+            .map(|held|held.bytes.clone()).ok_or(ShadowError::CustodyUnavailable);
+        let commit=retained(format!("commit-{sequence:020}.json"))?;
+        let head=retained(format!("head-{sequence:020}.json"))?;
+        let value:Head=guest::exact(&head)?;
+        let original=self.originals.get((sequence-1) as usize).ok_or(ShadowError::CustodyUnavailable)?;
+        require(value.api_version=="serverware.nativeShadowPersistenceHead/v1" && value.sequence==sequence
+            && value.previous_head_sha256==original.payload.previous_head_sha256
+            && value.commit_original_sha256==Sha256Digest::compute(&commit)
+            && commit==canonical_json_bytes(original)?
+            && (sequence!=self.sequence || Sha256Digest::compute(&head)==self.head))?;
+        self.check()?;Ok((commit,head,self.sequence,self.head.clone()))
+    }
     pub(super) fn replay(&self,request:&str,reply:&str)->Result<bool,ShadowError>{
         self.check()?;self.invocations.replay(&invocation_identity(request,reply)?).map_err(fail)
     }

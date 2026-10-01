@@ -258,6 +258,30 @@ class BridgeCompositionControls(unittest.TestCase):
                 ("currentGrantOriginal", "ordinary-current")):
             self.assertEqual(runtime["spool"][field], args["transition_originals"][job].decode("ascii"))
 
+    def test_explicit_v12_projection_retains_literal_histories_and_requires_launch_v8(self):
+        # Internal projection only: native/transition inputs remain explicitly
+        # synthetic prechecked data, not a full build() authentication transcript.
+        args = projection_fixture()
+        args["fragment"]["apiVersion"] = policy.TERMINAL_API
+        policy.validate_policy(args["fragment"])
+        bundle = json.loads(profile._project(**args))
+        raw = bundle["runtimeOriginal"].encode("ascii")
+        runtime, other, native = outgoing._selection(raw, "serverware.nativeProofBridgeLaunch/v8", 1001)
+        self.assertEqual(runtime["apiVersion"], "serverware.policyCustodyProductionRpcRuntime/v12")
+        self.assertEqual((len(other), len(native)), (9, 10))
+        self.assertEqual(json.loads(bundle["outgoingOriginal"])["bridgeLaunchVersion"],
+            "serverware.nativeProofBridgeLaunch/v8")
+        for role, item in args["ordinary"].items():
+            self.assertEqual(runtime["ordinaryInitialHistories"][role], {
+                "runtimeOriginal": item["runtime_raw"].decode("ascii"),
+                "generationGrantOriginal": item["grant_raw"].decode("ascii"),
+                "historyOriginal": item["history_raw"].decode("ascii")})
+        with self.assertRaises(ValueError):
+            outgoing._selection(raw, "serverware.nativeProofBridgeLaunch/v7", 1001)
+        runtime["apiVersion"] = "serverware.policyCustodyProductionRpcRuntime/v11"
+        with self.assertRaises(ValueError):
+            outgoing._selection(canonical(runtime), "serverware.nativeProofBridgeLaunch/v7", 1001)
+
     def test_projection_refuses_substituted_authority_peer_journal_and_head(self):
         original = projection_fixture()
         for change in ("authority", "peer", "journal", "head", "transition-inventory"):

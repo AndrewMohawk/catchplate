@@ -115,6 +115,7 @@ pub(super) enum ProductionArtifactKindV4 {
     GenerationAbortSettlement,
     NativeGenerationRecovery,
     TerminalCleanupAttestation,
+    NativeInvocationSettlement,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -3240,8 +3241,8 @@ impl ProductionRpcResponseV4 {
         if let ProductionRpcResponseBodyV4::Settlement(artifact) =
             &self.response
         {
-            if artifact.kind
-                    != ProductionArtifactKindV4::TerminalCleanupAttestation
+            if !matches!(artifact.kind, ProductionArtifactKindV4::TerminalCleanupAttestation
+                    | ProductionArtifactKindV4::NativeInvocationSettlement)
                 || artifact.exact_bytes().is_err()
             {
                 return Err(

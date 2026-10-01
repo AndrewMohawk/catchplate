@@ -9748,12 +9748,15 @@ impl EnvelopePayload for ProductionCustodyTerminalCleanupReceiptPayload {
     }
 }
 
-pub(in crate::policy_shadow) struct
+pub(in crate::policy_shadow) enum
     ProductionCustodyTerminalCleanupAttestation
 {
-    process_termination: ProductionCustodyTerminationProof,
-    signed_settlement:
-        SignedEnvelope<ProductionCustodyTerminalCleanupReceiptPayload>,
+    Legacy {
+        process_termination: ProductionCustodyTerminationProof,
+        signed_settlement: SignedEnvelope<ProductionCustodyTerminalCleanupReceiptPayload>,
+    },
+    #[cfg(target_os="linux")]
+    NativeSuccess(policy_custody::native_terminal_verify::NativeEvidence),
 }
 
 impl ProductionCustodyTerminalCleanupAttestation {
@@ -9762,11 +9765,16 @@ impl ProductionCustodyTerminalCleanupAttestation {
         signed_settlement:
             SignedEnvelope<ProductionCustodyTerminalCleanupReceiptPayload>,
     ) -> Self {
-        Self {
+        Self::Legacy {
             process_termination,
             signed_settlement,
         }
     }
+
+    #[cfg(target_os="linux")]
+    pub(in crate::policy_shadow) fn from_native_success(
+        evidence: policy_custody::native_terminal_verify::NativeEvidence,
+    ) -> Self { Self::NativeSuccess(evidence) }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -9794,10 +9802,21 @@ impl VerifiedProductionCustodyTerminalCleanupEvidence {
             trusted_time,
         )?;
         manifest.validate(configuration)?;
+        let (process_termination, signed_settlement) = match attestation {
+            ProductionCustodyTerminalCleanupAttestation::Legacy { process_termination, signed_settlement } =>
+                (process_termination, signed_settlement),
+            #[cfg(target_os="linux")]
+            ProductionCustodyTerminalCleanupAttestation::NativeSuccess(evidence) => {
+                let (completed_at_boottime_nanos, signed_settlement_sha256) = evidence.finish(
+                    permit, result_disposition, configuration, expected_key_history, key_trust, trusted_time)?;
+                return Ok(Self { operation_id_sha256: permit.operation_id_sha256().clone(), result_disposition,
+                    completed_at_boottime_nanos, signed_settlement_sha256 });
+            },
+        };
         let cleanup_authority = configuration
             .authority_binding(AuthorityRole::CustodyResultEnvelope)?;
         let verified = verify_envelope(
-            attestation.signed_settlement,
+            signed_settlement,
             ExpectedSigner {
                 key_id: cleanup_authority.key_id(),
                 key_spki_sha256:
@@ -9814,7 +9833,7 @@ impl VerifiedProductionCustodyTerminalCleanupEvidence {
             manifest,
             &verified.trust_checkpoint,
             expected_key_history,
-            &attestation.process_termination,
+            &process_termination,
         )?;
         let current_checkpoint = key_trust.current_checkpoint()?;
         if current_checkpoint != verified.trust_checkpoint {

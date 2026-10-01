@@ -28,6 +28,7 @@ from serverware import native_shadow_retrieval_artifacts as retrieval
 from serverware.native_shadow_time_profile import public_key, key_live
 
 API = "serverware.nativePilotNativeServicePolicy/v1"
+COMPLETED_API = "serverware.nativePilotNativeServicePolicy/v2"
 OPERATIONS = ("commitRequest", "ingress", "ledger", "terminal", "dispatchBarrier", "activeEffectBarrier",
     "activeEffectCommit", "retrieval", "persistence", "trustedTime", "generationInstall")
 ENDPOINT_ROLES = {name: authority._ENDPOINT[name] for name in authority.OPERATIONS} | {"generationInstall": "generationInstall"}
@@ -68,7 +69,7 @@ def _verifier(value, *, now=None):
 def validate_policy(fragment):
     """Closed independent selections; no observed identity or permissions added."""
     p.fields(fragment, FIELDS)
-    p.require(fragment["apiVersion"] == API and len(p.canonical(fragment)) <= MAX_POLICY)
+    p.require(fragment["apiVersion"] in (API, COMPLETED_API) and len(p.canonical(fragment)) <= MAX_POLICY)
     for value in p.fields(fragment["verifierSettings"], key_profile.ROLES).values():
         _verifier(value)
     for window in p.fields(fragment["operationWindows"], OPERATIONS).values():
@@ -78,8 +79,8 @@ def validate_policy(fragment):
     p.digest(spool["generationId"]); public_key(spool["originVerifier"])
     evidence.validate_policy(fragment["commitment"])
     persistence = p.fields(fragment["persistence"], ("initialization", "permissions"))
-    p.require(persistence["initialization"] == "fresh-persistence" and type(persistence["permissions"]) is list
-        and persistence["permissions"] in (["verify-persistence"], ["store-dispatch-original", "verify-persistence"]))
+    p.require(persistence["initialization"] == "fresh-persistence")
+    authority.persistence.require_permissions(persistence["permissions"], completed_invocations=fragment["apiVersion"] == COMPLETED_API)
     clock = p.fields(fragment["trustedTime"], ("parentPort", "maximumBracketNanos", "timestampErrorNanos", "maximumClockRateErrorPpm"))
     p.integer(clock["parentPort"], minimum=1024, maximum=(1 << 32) - 2)
     p.require(p.ns(clock["maximumBracketNanos"]) <= 1_000_000_000)
@@ -251,6 +252,8 @@ def build(operation, *, fragment, pair_context, ordinary_context, peer_raw, retr
                     endpointDeliveryResultOriginal=endpoint_delivery_result_raw.decode("ascii"),
                     nativeGrantOriginals={name: raw.decode("ascii") for name, raw in prior_native_originals.items()})
         elif operation == "persistence":
+            if fragment["apiVersion"] == COMPLETED_API:
+                value["apiVersion"] = authority.COMPLETED_PERSISTENCE_INPUT_API
             # Authorization to initialize is explicit; only the retained native
             # receiver can prove that its actual resource is still fresh.
             genesis = p.canonical({"apiVersion": "serverware.nativeShadowPersistenceGenesis/v1",

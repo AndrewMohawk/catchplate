@@ -155,7 +155,7 @@ class OperationalInputs:
             p.require(launch["apiVersion"] in allowed
                 or (outgoing is not None and launch["apiVersion"] in ("serverware.nativeProofBridgeLaunch/v3",
                     "serverware.nativeProofBridgeLaunch/v4", "serverware.nativeProofBridgeLaunch/v5", "serverware.nativeProofBridgeLaunch/v6",
-                    "serverware.nativeProofBridgeLaunch/v7")))
+                    "serverware.nativeProofBridgeLaunch/v7", "serverware.nativeProofBridgeLaunch/v8")))
             inner = p.fields(launch["keyAdmission"], ("apiVersion", "deliveryConfiguration", "delivery", "trust", "timeBootstrap",
                 "assignment", "closure", "keys", "encryptedKeys", "admission", "verifierTransport"))
             p.require(inner["apiVersion"] == "serverware.nativeShadowGuestLaunch/v1"
@@ -196,7 +196,7 @@ class OperationalInputs:
                 owner._public(name, inner[field], bound)
             verifier_paths = ("/etc/serverware/native-shadow-public-exchange.json",)
             if launch["apiVersion"] in ("serverware.nativeProofBridgeLaunch/v5", "serverware.nativeProofBridgeLaunch/v6",
-                    "serverware.nativeProofBridgeLaunch/v7"):
+                    "serverware.nativeProofBridgeLaunch/v7", "serverware.nativeProofBridgeLaunch/v8"):
                 verifier_paths += ("/etc/serverware/native-pilot-inputs/native-bridge-verifier.json",)
             p.require(inner["verifierTransport"]["path"] in verifier_paths)
             owner._public("time-grant", launch["trustedTime"], 65536)

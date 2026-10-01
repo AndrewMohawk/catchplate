@@ -21,6 +21,9 @@ pub(super) struct DispatchIdentities {
 }
 
 impl DispatchIdentities {
+    pub(super) fn replay_for_operation(&self,operation:&crate::policy_shadow::Sha256Digest)->Option<&str> {
+        self.operations.get(operation.as_str()).map(String::as_str)
+    }
     /// Check at most three originals, before any authority contact. Distinct
     /// invocations may consume earlier outputs. This is not remote quiescence.
     pub(super) fn require(

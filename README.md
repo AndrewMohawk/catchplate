@@ -151,11 +151,15 @@ passed 29 focused controls and an engineering artifact build. The
 [dispatch durability work](docs/native-pilot-dispatch-fence.md) fixes v11 effect
 selection and interrupted-request ownership; compilation and eight focused
 reducer controls pass, but actual service/journal execution remains unverified.
-The latest [invocation fences](docs/native-pilot-invocation-fences.md) reject
+The [invocation fences](docs/native-pilot-invocation-fences.md) reject
 conflicting reuse of operation, replay or fence identities; compilation and
 13 focused controls pass.
-[Real terminal cleanup](docs/native-pilot-operation-ownership.md) and connected
-runtime verification are still needed. These counts are not a percentage of
+The new [native invocation settlement](docs/native-pilot-native-terminal.md)
+connects stored final replies to an explicitly selected verifier, without
+claiming process termination or upstream business success. Compilation and 42
+focused Python controls pass; live settlement remains unverified. Uncertain-operation
+cleanup, external signer paths and connected runtime verification remain open.
+These counts are not a percentage of
 product readiness or permission to deploy.
 Protected deployment is not provisioned. This is not
 yet an interactive quickstart or running pilot.

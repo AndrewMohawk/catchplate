@@ -5,6 +5,10 @@ gates and native persistence. It does not implement terminal settlement or claim
 a running pilot. Source checkpoints remain **36/46**; independent production
 acceptance remains **0/6**.
 
+The following `.395` [native settlement source](native-pilot-native-terminal.md)
+now connects the successful-invocation producer and receiver described below.
+This does not change `.394`'s recorded verification boundary.
+
 ## One invocation, one original result
 
 The replay identity includes request content. Checking only that identity lets

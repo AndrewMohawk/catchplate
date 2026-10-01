@@ -1,8 +1,11 @@
+> Publication note: deployment-specific addresses, identities and paths in this document are example placeholders, not a public service or release-verification evidence.
+
 # Native completed-invocation settlement
 
 `.395` adds an explicit successful-native-invocation protocol. It does not
 report process death, global retirement, or successful upstream business effects.
-This is a source-design handoff; verification results remain pending below.
+This is a source-design handoff with bounded local verification, not a running
+pilot or production acceptance claim.
 
 ## Explicit selection
 
@@ -28,8 +31,8 @@ The [shared wire](../data-plane/decision-gate-rs/src/policy_custody/native_termi
 uses a closed completed-invocation query, proof, and settlement artifact. The
 query contains the full closed dispatch request, the canonical closed-response
 SHA, and the original cleanup-not-before boundary. The artifact binds the
-literal outer RPC originals separately; these are different hash domains and
-cannot be substituted for one another.
+literal outer RPC originals separately; their hashes cover different originals
+and cannot be substituted for one another.
 
 The [persistence owner](../data-plane/decision-gate-rs/src/policy_custody/services/native_guest/persistence.rs)
 rechecks its actual held chain and resolves one signed commit containing the
@@ -102,7 +105,28 @@ dispatch fit; such an invocation is not promised settleable by this format.
 Persistence heads remain bounded to 128 records, and gate retention remains
 bounded by the original maximum-in-flight count.
 
-Root's assembled verification is pending. No full positive retained-Factory
-receiver transcript, end-to-end native runtime settlement, uncertain-operation
-recovery, or production readiness is claimed here. Passing source/primitive
-controls or a compiler check would not establish those stronger properties.
+Exact source [`0e1894b1`](https://github.com/example/private-deployment)
+passed one offline Rust 1.88 binary check in **60.46 seconds**, with 312 library
+and 2,347 binary warnings including duplicates. The container had no network,
+one CPU, 8 GiB RAM, a read-only source/vendor/root and a 20-minute cap. Existing
+cached engineering dependencies were reused; no dependency approval changed.
+
+All **42 focused Python controls across five suites** passed in **21.143 seconds**.
+The frozen-source runner also checked 28 changed Python files against both Make
+inventories and parsed three selected schemas plus eleven local dependencies,
+resolving 779 local references without network access. The first harness attempt
+passed grammar/schema checks but stopped before tests because its vendor path
+was wrong. Only the harness path was corrected; that failure log is preserved.
+
+These tests include synthetic signed persistence-assignment/launch verification,
+version and permission refusals, and explicitly internal runtime projection.
+They do not construct the full retained-Factory receiver or complete eleven-native
+startup transcript. Six typed Rust query controls are authored but were **not
+compiled in test mode or executed** by the binary compiler check.
+
+The exact source archive, commands, manifest, logs and checksums are retained in
+`codex-offload/serverware/engineering-builds/0e1894b1-native-terminal-rsjJ1v/`.
+No end-to-end native runtime settlement, uncertain-operation recovery, external
+signer completion or production readiness is claimed. Source **36/46**, production
+**0/6**, commissioning **164/164** and **113 selectors** are unchanged. No cloud
+or paid action was performed.

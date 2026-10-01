@@ -6,6 +6,11 @@ process-termination settlement contract currently describe different ownership
 models. Neither a durable request fence nor successful service shutdown closes
 that gap. No tests or live operations are reported by this note.
 
+The `.395` [native settlement successor](native-pilot-native-terminal.md) now
+implements the successful-invocation route under explicit runtime/v12. The
+legacy process-specific requirements described here remain unchanged; aborted
+invocations, external signer paths and live runtime evidence remain open.
+
 ## What the selected path actually owns
 
 [production.rs](../data-plane/decision-gate-rs/src/policy_custody/services/production.rs)
